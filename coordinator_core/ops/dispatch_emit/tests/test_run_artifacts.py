@@ -198,6 +198,30 @@ def test_landable_withholds_peer_held_and_unclaimed(graph, monkeypatch):
     assert out.contest_unknown and not out.withheld
 
 
+def test_landable_names_ignored_candidates_and_prompts_without_landing_them(graph):
+    a = ra.candidate_paths(graph, RUN)
+    prompt = f"state/warp/{RUN}/prompts/review-1.md"
+    _w(graph, prompt)
+    out = ra.landable(graph, a, a.paths(), ["state/handoffs/h.md", prompt], session_id=None)
+    assert out.ignored_excluded == tuple(sorted(["state/handoffs/h.md", prompt]))
+    assert "state/handoffs/h.md" not in out.present
+    assert SIZING in out.present
+
+
+def test_landable_names_nothing_when_nothing_is_ignored(graph):
+    a = ra.candidate_paths(graph, RUN)
+    _w(graph, f"state/warp/{RUN}/prompts/review-1.md")
+    assert ra.landable(graph, a, a.paths(), [], session_id=None).ignored_excluded == ()
+
+
+def test_ignored_probe_adds_prompt_files_to_the_candidates(graph):
+    a = ra.candidate_paths(graph, RUN)
+    prompt = f"state/warp/{RUN}/prompts/sub/p.md"
+    _w(graph, prompt)
+    probe = ra.ignored_probe(graph, a)
+    assert prompt in probe and set(a.paths()) <= set(probe)
+
+
 def test_landable_splits_deletions(graph, monkeypatch):
     from coordinator_core.git import commit
 
@@ -301,3 +325,17 @@ def test_record_dir_walk_skips_prompts_dir_but_keeps_siblings(tmp_path):
     (rd / "other" / "keep.md").write_text("x", encoding="utf-8")
     (rd / "halted.json").write_text("x", encoding="utf-8")
     assert _tree_files(tmp_path, "state/warp/r1") == ["state/warp/r1/halted.json", "state/warp/r1/other/keep.md"]
+
+
+def test_write_tracked_outcome_round_trips_outside_run_state(tmp_path):
+    run_id = "warp-x-20261102T000000-abcdef"
+    rec = tmp_path / "state" / "warp" / run_id
+    rec.mkdir(parents=True)
+    (rec / "run.json").write_text('{"sizing_rel": "state/sizings/x.yaml"}', encoding="utf-8")
+    rel = ra.write_tracked_outcome(tmp_path, run_id, "halted", halt_kind="abandoned")
+    assert rel == f"state/run-evidence/{run_id}/outcome.json"
+    assert not ra.is_run_state(rel)
+    got = ra.read_tracked_outcome(tmp_path, run_id)
+    assert got["state"] == "halted" and got["sizing_rel"] == "state/sizings/x.yaml"
+    assert ra.write_tracked_outcome(tmp_path, "../evil", "landed") is None
+    assert ra.read_tracked_outcome(tmp_path, "../evil") == {}

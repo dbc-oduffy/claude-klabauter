@@ -31,6 +31,14 @@ def _no_real_remote_snapshot(monkeypatch):
     monkeypatch.setattr(watch.read_pass, "read_remote_snapshot", lambda directory=None: {})
 
 
+@pytest.fixture(autouse=True)
+def _quiet_host_memory(monkeypatch):
+    """A tick never reads this host's RAM or process table; memory cases patch these seams."""
+    monkeypatch.setattr(watch, "_memory_floor_mb", lambda: None)
+    monkeypatch.setattr(watch, "_process_census", lambda: None)
+    monkeypatch.setattr(watch, "_reap_orphans", lambda: [])
+
+
 def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
     """The ARMED label tracks --repo-root, and a hardcoded repo name is the defect.
 
@@ -986,6 +994,94 @@ def test_tick_once_load_unavailable_is_silent_and_never_raises(tmp_path, monkeyp
     monkeypatch.setattr(watch.box_load, "read_load5", mock.Mock(side_effect=RuntimeError("x")))
     with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
         assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=io.StringIO()) == 0
+
+
+class _Reading:
+    def __init__(self, avail_mb, trusted=True):
+        self.avail_mb = avail_mb
+        self.trusted = trusted
+
+
+class _Proc:
+    def __init__(self, name):
+        self.name = name
+
+
+def _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, floor=4096, procs=(), reaped=(), trusted=True):
+    monkeypatch.setattr(watch, "_read_memory", lambda: _Reading(avail_mb, trusted))
+    monkeypatch.setattr(watch, "_memory_floor_mb", lambda: floor)
+    monkeypatch.setattr(watch, "_process_census", lambda: [_Proc(n) for n in procs])
+    monkeypatch.setattr(watch, "_reap_orphans", lambda: list(reaped))
+    stream = io.StringIO()
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=stream) == 0
+    return [l for l in stream.getvalue().splitlines() if l.startswith("MEMORY")]
+
+
+def test_tick_once_below_floor_emits_memory_line_naming_the_trim(tmp_path, monkeypatch):
+    lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)
+    assert len(lines) == 1
+    assert lines[0].startswith("MEMORY low-memory")
+    assert "trim-file-cache.py" in lines[0] and "--apply" in lines[0]
+
+
+def test_tick_once_above_floor_emits_no_memory_line(tmp_path, monkeypatch):
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000) == []
+
+
+def test_tick_once_memory_line_fires_once_per_transition_and_rearms(tmp_path, monkeypatch):
+    assert len(_memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)) == 1
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=900) == []
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000) == []
+    assert len(_memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)) == 1
+
+
+def test_tick_once_untrusted_reading_neither_fires_nor_clears(tmp_path, monkeypatch):
+    assert len(_memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)) == 1
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, trusted=False) == []
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000) == []
+
+
+def test_tick_once_unconfigured_floor_is_silent(tmp_path, monkeypatch):
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1, floor=None) == []
+
+
+def test_tick_once_storm_emits_grep_storm_line_naming_the_reap(tmp_path, monkeypatch):
+    lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000, procs=["grep.exe"] * 9 + ["python.exe"])
+    assert len(lines) == 1
+    assert lines[0].startswith("MEMORY grep-storm")
+    assert "orphan_reap" in lines[0]
+
+
+def test_tick_once_below_storm_threshold_stays_quiet(tmp_path, monkeypatch):
+    assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000, procs=["grep.exe"] * 2) == []
+
+
+def test_tick_once_low_with_storm_names_both_remedies_in_one_line(tmp_path, monkeypatch):
+    lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000, procs=["find.exe"] * 9)
+    low = [l for l in lines if l.startswith("MEMORY low-memory")]
+    assert len(low) == 1 and "--apply" in low[0] and "orphan_reap" in low[0]
+
+
+def test_tick_once_reports_reaped_pids_while_pressured_only(tmp_path, monkeypatch):
+    lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000, reaped=[11, 12])
+    assert any(l == "MEMORY reaped orphaned grep/find pids=11,12" for l in lines)
+    calm = tmp_path / "calm"
+    calm.mkdir()
+    called = []
+    monkeypatch.setattr(watch, "_reap_orphans", lambda: called.append(1) or [1])
+    monkeypatch.setattr(watch, "_read_memory", lambda: _Reading(9000))
+    with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
+        watch.tick_once(str(calm), caller_session_id="w", group_em_session_id="c", stream=io.StringIO())
+    assert called == []
+
+
+def test_tick_once_memory_probe_failure_never_fails_the_wake(tmp_path, monkeypatch):
+    monkeypatch.setattr(watch, "_read_memory", mock.Mock(side_effect=RuntimeError("probe")))
+    monkeypatch.setattr(watch, "_memory_floor_mb", lambda: 4096)
+    with mock.patch.object(watch, "poll_once", return_value=({"p": True}, [], {}, 0)):
+        assert watch.tick_once(str(tmp_path), caller_session_id="w", group_em_session_id="c", stream=io.StringIO()) == 0
+    assert watch.load_prev_parked(str(tmp_path)) == {"p": True}
 
 
 def test_tick_once_exits_nonzero_and_loud_when_the_poll_raises(tmp_path):

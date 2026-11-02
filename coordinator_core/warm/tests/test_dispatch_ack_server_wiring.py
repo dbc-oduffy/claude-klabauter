@@ -249,6 +249,9 @@ def test_successful_cancel_stamps_not_dispatched_never_executing(_fresh_ack_stor
     fut = _CancellableFuture()
 
     ctx = server._ServerContext.__new__(server._ServerContext)
+    import threading as _threading
+
+    ctx._dispatch_pool_lock = _threading.Lock()
     ctx._pool_outstanding = server.InFlightCounter()
     monkeypatch.setattr(ctx, "_ensure_dispatch_pool", lambda: _Pool(fut), raising=False)
 

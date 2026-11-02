@@ -35,10 +35,9 @@ group (POSIX `start_new_session=True`; Windows
 spawns a grandchild (a daemon supervisor, a `sleep_forever.py`) is reachable
 for cleanup even after the immediate child exits or is killed. A `finally`
 block always terminates then kills the whole group -- `_terminate_group` sends
-SIGTERM to the process group (POSIX, via `os.killpg`) or `taskkill /T /F`
-(Windows) first, gives it `_GROUP_KILL_GRACE_S` seconds, then force-kills
-anything left (`SIGKILL`/`os.killpg` again, or a second `taskkill /T /F`,
-which is already forceful) -- this runs whether the pytest/vitest subprocess
+SIGTERM to the process group (POSIX, via `os.killpg`), gives it
+`_GROUP_KILL_GRACE_S` seconds, then force-kills anything left (`SIGKILL`); on
+Windows the capped Job Object `close()` reaps the tree -- this runs whether the pytest/vitest subprocess
 returned normally, was killed by the per-test-file timeout below, or raised.
 
 A per-group wall-clock budget (`group_timeout_s`, default
@@ -92,6 +91,7 @@ from pathlib import Path
 
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.temp_layout import managed_tempdir
+from coordinator_core.testing import spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
 
 from .gate_report import parse_junitxml, parse_vitest_json
@@ -125,11 +125,8 @@ def _no_console_group_popen_kwargs() -> dict:
     stay reachable for cleanup as a unit even after the immediate child exits
     or is killed. POSIX: `start_new_session=True` (new session + process
     group, survives the immediate child dying). Windows:
-    `CREATE_NEW_PROCESS_GROUP` (the taskkill `/T` tree-kill below is what
-    actually reaches descendants there -- process groups on Windows don't map
-    onto job-object-style descendant tracking the way POSIX pgids do, but the
-    flag is still required for `_terminate_group`'s Windows leg to target the
-    right console group)."""
+    `CREATE_NEW_PROCESS_GROUP` (descendants are reached by the capped Job
+    Object the caller closes, not by the process group)."""
     if _IS_WINDOWS:
         # One `creationflags` kwarg only: the caller also needs
         # CREATE_NO_WINDOW, and splatting two dicts that both carry the key
@@ -145,19 +142,12 @@ def _terminate_group(proc: subprocess.Popen) -> None:
     called from a `finally`, whether `proc` already exited normally, was
     killed by the per-group timeout, or the caller raised. POSIX:
     `os.killpg(pgid, SIGTERM)`, a grace period, then `os.killpg(pgid,
-    SIGKILL)` for anything still alive. Windows: `taskkill /PID <pid> /T /F`
-    -- already forceful (no separate soft-kill leg; `taskkill` without `/F`
-    can hang waiting on a console prompt), so it is issued once, tolerantly
-    (a process that already exited makes `taskkill` fail harmlessly)."""
+    SIGKILL)` for anything still alive. Windows: a no-op; the caller's
+    capped-job `close()` reaps the tree, so no `taskkill` is spawned."""
     if proc.poll() is not None:
         return
     if _IS_WINDOWS:
-        subprocess.run(
-            ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
-            capture_output=True,
-            **no_console_creationflags(),
-        )
-        return
+        return  # the caller's capped-job close() reaps the tree; no taskkill spawn
     try:
         pgid = os.getpgid(proc.pid)
     except ProcessLookupError:
@@ -268,16 +258,29 @@ def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> "bool 
     matching the pre-existing `subprocess.run` contract of never raising on a
     non-zero test-runner exit), `False` on a timeout (the caller's cue to
     treat this the same as a crashed/unparseable run). Returns `None` without spawning when an
-    xdist run is not admitted on measured memory."""
+    xdist run is not admitted on measured memory, or a pytest argv is nested past the depth
+    sentinel or selects the calling test's own file."""
+    is_pytest = "pytest" in argv
+    if is_pytest and (
+        spawn_depth.refusal_for_spawn(os.environ)
+        or spawn_depth.selection_includes_spawner(argv[argv.index("pytest") + 1 :], os.environ, cwd)
+    ):
+        return None
     admission = _admit_xdist(argv)
     if admission is not None and not admission.admitted:
         return None
-    proc = subprocess.Popen(
+    from coordinator_core.diagnostics import contained_run as cr
+    from coordinator_core.testing import nested_session_guard
+
+    proc, close = cr.spawn_in_capped_job(
         argv,
-        cwd=cwd,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        **_no_console_group_popen_kwargs(),
+        popen_kwargs={
+            "cwd": cwd,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            **({"env": nested_session_guard.guarded_child_env(os.environ)} if is_pytest else {}),
+            **_no_console_group_popen_kwargs(),
+        },
     )
     if admission is not None:
         from coordinator_core.bash_guards._heavy_command_class import register_spawn
@@ -290,6 +293,8 @@ def _run_with_group_cleanup(argv: list, *, cwd: str, timeout_s: float) -> "bool 
         return False
     finally:
         _terminate_group(proc)
+        if _IS_WINDOWS or proc.poll() is None:
+            close()
         if admission is not None:
             from coordinator_core.bash_guards._heavy_command_class import release_spawn
 

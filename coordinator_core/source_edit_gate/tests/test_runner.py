@@ -27,6 +27,27 @@ def _tmp_dirs_matching(prefix: str) -> list:
     return glob.glob(os.path.join(__import__("tempfile").gettempdir(), f"{prefix}*"))
 
 
+@pytest.fixture(autouse=True)
+def _top_level_depth(monkeypatch):
+    """Ambient depth is whatever launched this suite; pin it to 0 so the runner sees a top-level caller."""
+    monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "0")
+
+
+@pytest.fixture(autouse=True)
+def _capped_job_over_patched_popen(monkeypatch):
+    """Routes `spawn_in_capped_job` to whatever `subprocess.Popen` the test installed (no real job), recording its kwargs."""
+    from coordinator_core.diagnostics import contained_run as cr
+
+    seen = {}
+
+    def fake_capped(argv, *, popen_kwargs=None, **kw):
+        seen["popen_kwargs"] = dict(popen_kwargs or {})
+        return subprocess.Popen(argv, **(popen_kwargs or {})), lambda: seen.setdefault("closed", True)
+
+    monkeypatch.setattr(cr, "spawn_in_capped_job", fake_capped)
+    return seen
+
+
 class _FakeProc:
     """Stand-in for `subprocess.Popen` -- already "exited" by the time
     `.wait()` returns, so `_terminate_group`'s `proc.poll() is not None`
@@ -270,7 +291,7 @@ def test_run_selected_pytest_group_timeout_returns_none_and_kills_group(tmp_path
 
 
 @pytest.mark.parametrize("timed_out", [False, True])
-def test_run_with_group_cleanup_frees_its_admission_reservation_on_exit_and_on_timeout(monkeypatch, timed_out):
+def test_run_with_group_cleanup_frees_its_admission_reservation_on_exit_and_on_timeout(monkeypatch, tmp_path, timed_out):
     from coordinator_core.bash_guards import _heavy_command_class as hcc
 
     released = []
@@ -286,7 +307,7 @@ def test_run_with_group_cleanup_frees_its_admission_reservation_on_exit_and_on_t
 
     monkeypatch.setattr(runner_module.subprocess, "Popen", _Proc)
 
-    result = runner_module._run_with_group_cleanup(["pytest", "-n", "2"], cwd=".", timeout_s=1)
+    result = runner_module._run_with_group_cleanup(["pytest", "t.py", "-n", "2"], cwd=str(tmp_path), timeout_s=1)
     assert result is (not timed_out)
     assert released == [("k1", 999999)]
 
@@ -374,3 +395,63 @@ def test_terminate_group_kills_grandchild_spawned_under_child(tmp_path):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
+
+
+def _boom_popen(*a, **k):
+    raise AssertionError("spawned")
+
+
+def test_run_with_group_cleanup_refuses_nested_pytest_without_spawn(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "1")
+    monkeypatch.setattr(runner_module.subprocess, "Popen", _boom_popen)
+    assert runner_module._run_with_group_cleanup([sys.executable, "-m", "pytest", "t.py"], cwd=".", timeout_s=1) is None
+
+
+def test_run_with_group_cleanup_refuses_selection_holding_the_calling_test(monkeypatch, tmp_path):
+    monkeypatch.delenv("COORDINATOR_PYTEST_DEPTH", raising=False)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_self.py::test_x (call)")
+    monkeypatch.setattr(runner_module.subprocess, "Popen", _boom_popen)
+    for target in ("tests/test_self.py", "tests", "."):
+        argv = [sys.executable, "-m", "pytest", target, "-n", "2"]
+        assert runner_module._run_with_group_cleanup(argv, cwd=str(tmp_path), timeout_s=1) is None
+
+
+def test_run_with_group_cleanup_spawns_pytest_child_one_level_deeper(monkeypatch, tmp_path):
+    monkeypatch.delenv("COORDINATOR_PYTEST_DEPTH", raising=False)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_self.py::test_x (call)")
+    seen = {}
+
+    def fake_popen(argv, cwd=None, stdout=None, stderr=None, **kwargs):
+        seen.update(kwargs)
+        return _FakeProc(argv, cwd=cwd, **kwargs)
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
+    argv = [sys.executable, "-m", "pytest", "tests/test_other.py"]
+    assert runner_module._run_with_group_cleanup(argv, cwd=str(tmp_path), timeout_s=1) is True
+    assert seen["env"]["COORDINATOR_PYTEST_DEPTH"] == "1"
+    assert "PYTEST_CURRENT_TEST" not in seen["env"]
+
+
+def test_run_with_group_cleanup_pytest_child_carries_guard_plugin_and_closes_job(
+    monkeypatch, tmp_path, _capped_job_over_patched_popen
+):
+    monkeypatch.setattr(runner_module.subprocess, "Popen", lambda argv, cwd=None, **kw: _FakeProc(argv, cwd=cwd, **kw))
+    argv = [sys.executable, "-m", "pytest", "tests/test_other.py"]
+    assert runner_module._run_with_group_cleanup(argv, cwd=str(tmp_path), timeout_s=1) is True
+    env = _capped_job_over_patched_popen["popen_kwargs"]["env"]
+    assert "coordinator_core.testing.nested_session_guard" in env["PYTEST_ADDOPTS"]
+    if runner_module._IS_WINDOWS:
+        assert _capped_job_over_patched_popen.get("closed") is True
+
+
+def test_run_with_group_cleanup_leaves_non_pytest_env_alone(monkeypatch, tmp_path):
+    monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "1")
+    seen = {}
+
+    def fake_popen(argv, cwd=None, stdout=None, stderr=None, **kwargs):
+        seen.update(kwargs)
+        return _FakeProc(argv, cwd=cwd, **kwargs)
+
+    monkeypatch.setattr(runner_module.subprocess, "Popen", fake_popen)
+    assert runner_module._run_with_group_cleanup(["pnpm", "vitest", "run"], cwd=str(tmp_path), timeout_s=1) is True
+    assert "env" not in seen

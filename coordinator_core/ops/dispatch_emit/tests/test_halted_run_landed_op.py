@@ -61,7 +61,8 @@ def launches(monkeypatch):
     return calls
 
 
-NO_CLOSE = {"close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
+def _no_close(sha: str) -> dict:
+    return {"close": {"status": "not-applicable", "detail": op._NEVER_HALTED.format(sha=sha[:12])}, "blocking_rows": []}
 JOB_NA_SOLO = {"close": {"status": "not-applicable", "detail": "halt record names no plan"}, "blocking_rows": []}
 
 
@@ -92,7 +93,8 @@ def test_second_call_same_sha_is_idempotent(repo):
     _call(root, run_id="A", sha=first)
     before = (root / c.status_rel("A")).read_bytes()
     out = _call(root, run_id="A", sha=first)
-    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **NO_CLOSE}
+    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **_no_close(first)}
+    assert "never halted" in out["close"]["detail"]
     assert (root / c.status_rel("A")).read_bytes() == before
 
 
@@ -304,7 +306,7 @@ def test_abbreviated_sha_idempotent_after_landing(repo):
     _seed(root, {"A": {"status": "halted"}})
     _call(root, run_id="A", sha=first[:10])
     out = _call(root, run_id="A", sha=first[:10])
-    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **NO_CLOSE}
+    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **_no_close(first)}
 
 
 def test_ambiguous_abbreviation_refuses_by_name(repo, monkeypatch):
@@ -514,6 +516,36 @@ def test_sha_set_covering_withheld_is_accepted_and_insufficient_or_unrelated_ref
     assert out["ok"] and out["written"] is True and out["sha"] == two
     again = _call(root, run_id=rid, shas=[one, two])
     assert again["ok"] and again["written"] is False and again["sha"] == two
+
+
+@pytest.mark.parametrize("solo", [True, False])
+@pytest.mark.parametrize("field", ["shas", "sha+shas"])
+def test_ceremony_split_landing_closes_with_both_shas_in_either_order(repo, solo, field):
+    root, first, _ = repo
+    rid = SOLO if solo else "A"
+    if solo:
+        marker = _solo(root)
+    else:
+        _seed(root, {"A": {"status": "halted"}})
+        marker = _plan_marker(root, "A")
+    _withhold(marker, "state/register.yaml", "scripts/s.py", "scripts/test_s.py")
+    register = _commit_files(root, {"state/register.yaml": "r"})
+    script = _commit_files(root, {"scripts/s.py": "s", "scripts/test_s.py": "t"})
+    before = marker.read_bytes()
+    for lone in (register, script):
+        out = _call(root, run_id=rid, sha=lone)
+        assert not out["ok"] and "did not change withheld" in out["error"]
+    assert marker.read_bytes() == before
+    if field == "shas":
+        out = _call(root, run_id=rid, shas=[script, register])
+    else:
+        out = _call(root, run_id=rid, sha=script, shas=[register])
+    assert out["ok"] and out["written"] is True and out["sha"] == script
+    assert set(out["shas"]) == {register, script}
+    assert out["covers"] == {
+        register: ["state/register.yaml"], script: ["scripts/s.py", "scripts/test_s.py"],
+    }
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"
 
 
 @pytest.mark.parametrize("solo", [True, False])

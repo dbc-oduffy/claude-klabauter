@@ -255,6 +255,7 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
     _OPS + "grind_ops:VerifyRefusalError": _pending("C8"),
     _OPS + "queue_promote:_OssMirrorWriteRefused": _pending("C8"),
     _OPS + "review_stamp:MintRefusal": _pending("C8"),
+    _OPS + "daily_summary_gap:GapRefusal": _pending("822520"),
 }
 
 _RAISE_REFUSAL = re.compile(r"^\s*raise\s+(?:\w+\.)*(\w*Refus\w*)", re.M)

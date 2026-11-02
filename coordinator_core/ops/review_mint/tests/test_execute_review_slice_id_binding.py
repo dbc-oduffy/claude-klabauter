@@ -9,7 +9,7 @@ from coordinator_core.ops.review_mint.tests.test_execute_review import (
 )
 
 _BIND_SEPARATE = "r.slice_id = g.map(s => s.id).join('+')"
-_BIND_IN_WAVE = "r.review.slice_id = _own.map(s => s.id).join('+')"
+_BIND_IN_WAVE = "r.review.slice_id = _own.map(_sid).join('+')"
 
 
 def test_no_clause_asks_an_agent_to_join_slice_ids():
@@ -56,6 +56,34 @@ def test_every_prep_naming_exactly_its_dispatched_group_is_rebound_without_halt(
     result = _run_in_wave(_FULL, 9)
     assert "halted" not in result and "error" not in result
     assert result["wave"][0]["slice_id"] == "s0+s1"
+
+
+def _bound_group_one(body):
+    result = _run_in_wave(_FULL, 9, patch=_prep_rewrite(body))
+    assert "halted" not in result and "error" not in result
+    return result["wave"][1]["slice_id"]
+
+
+def test_a_prep_naming_one_member_is_bound_to_the_whole_dispatched_group():
+    expected = _bound_group_one("r.prep.slices")
+    assert _bound_group_one("r.prep.slices.slice(0, 1)") == expected
+    assert _bound_group_one("r.prep.slices.slice(1, 2)") == expected
+
+
+def test_a_prep_naming_reordered_members_is_bound_in_group_order():
+    expected = _bound_group_one("r.prep.slices")
+    assert _bound_group_one("[...r.prep.slices].reverse()") == expected
+
+
+def test_a_prep_listing_member_ids_as_strings_is_bound_to_the_group():
+    expected = _bound_group_one("r.prep.slices")
+    assert _bound_group_one("r.prep.slices.map(s => s.id)") == expected
+
+
+def test_a_prep_naming_a_non_member_alongside_a_member_still_halts():
+    result = _run_in_wave(_FULL, 9, patch=_prep_rewrite("[r.prep.slices[0], _full.slices[_full.slices.length - 1]]"))
+    assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+    assert "outside its dispatched group" in result["halted"]
 
 
 def test_unbound_reply_still_falls_back_to_resolution_and_halt():

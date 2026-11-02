@@ -11,6 +11,15 @@ from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit import retest_targeted
 from coordinator_core.testing.git_write import write_seen_by_git
 
+
+@pytest.fixture(autouse=True)
+def _ambient_spawn_depth_is_zero(monkeypatch):
+    """A suite run by an engine spawner carries depth 1; these tests set their own depth."""
+    from coordinator_core.testing import spawn_depth
+
+    monkeypatch.delenv(spawn_depth.ENV_KEY, raising=False)
+    monkeypatch.delenv(spawn_depth.COUNTED_KEY, raising=False)
+
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 RUN_ID = "run-abc"
@@ -435,6 +444,8 @@ def test_runner_tier_option_is_dropped_so_no_default_collection_is_added(repo, t
     (repo / "tests" / "conftest.py").write_text("", encoding="utf-8")
     (repo / "tests" / "test_default.py").write_text("def test_default():\n    assert False\n", encoding="utf-8")
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python scripts/run-tests.py --tier fast")
+    # The runner child sits in a capped job; OpenBLAS sizes per-thread buffers by core count.
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "1")
     rc, record = _run_two_roots(repo, tmp_path)
     assert rc == 0 and record["status"] == "pass", record
 
@@ -1094,6 +1105,91 @@ def test_run_argv_frees_its_admission_reservation_on_exit_and_on_timeout(tmp_pat
 
     assert retest_targeted._run_argv([sys.executable, "-c", code], tmp_path, timeout=timeout) == expected
     assert released == ["k1"]
+
+
+def _patched_popen(monkeypatch):
+    from coordinator_core.bash_guards import _heavy_command_class as hcc
+
+    monkeypatch.setattr(hcc, "admit_before_spawn", lambda *a, **k: hcc.SpawnAdmission(True, "", "k1", 1.0))
+    monkeypatch.setattr(hcc, "register_spawn", lambda *a, **k: None)
+    monkeypatch.setattr(hcc, "release_spawn", lambda *a, **k: None)
+    class _Spawned(list):
+        pass
+
+    spawned = _Spawned()
+    spawned_closes = []
+    spawned_wait = []
+
+    class FakeProc:
+        pid = 1
+
+        def wait(self, timeout=None):
+            if spawned_wait:
+                raise spawned_wait.pop()
+            return 0
+
+    def fake_spawn(argv, *, popen_kwargs=None, **kw):
+        spawned.append((list(argv), dict(popen_kwargs or {})))
+        return FakeProc(), lambda: spawned_closes.append(1)
+
+    from coordinator_core.diagnostics import contained_run
+
+    monkeypatch.setattr(contained_run, "spawn_in_capped_job", fake_spawn)
+    spawned.closes = spawned_closes
+    spawned.wait_raises = spawned_wait
+    return spawned
+
+
+def test_run_argv_stamps_child_depth_and_strips_current_test(tmp_path, monkeypatch):
+    from coordinator_core.testing import nested_session_guard, spawn_depth
+
+    spawned = _patched_popen(monkeypatch)
+    monkeypatch.delenv(spawn_depth.ENV_KEY, raising=False)
+    monkeypatch.setenv(spawn_depth.CURRENT_TEST_KEY, "elsewhere/test_other.py::test_x (call)")
+    assert retest_targeted._run_argv(["python", "-m", "pytest", "test_a.py"], tmp_path) == 0
+    env = spawned[0][1]["env"]
+    assert env[spawn_depth.ENV_KEY] == "1" and spawn_depth.CURRENT_TEST_KEY not in env
+    assert nested_session_guard.PLUGIN_MODULE in env["PYTEST_ADDOPTS"]
+    assert spawned.closes == [1]
+
+
+def test_run_argv_timeout_closes_the_whole_job(tmp_path, monkeypatch):
+    import subprocess
+
+    from coordinator_core.testing import spawn_depth
+
+    spawned = _patched_popen(monkeypatch)
+    monkeypatch.delenv(spawn_depth.ENV_KEY, raising=False)
+    spawned.wait_raises.append(subprocess.TimeoutExpired("x", 1))
+    got = retest_targeted._run_argv(["python", "-m", "pytest", "test_a.py"], tmp_path, timeout=0.01)
+    assert got == retest_targeted.LAUNCH_TIMED_OUT
+    assert len(spawned.closes) >= 1
+
+
+def test_run_argv_refuses_at_depth_and_spawns_nothing(tmp_path, monkeypatch):
+    from coordinator_core.testing import spawn_depth
+
+    spawned = _patched_popen(monkeypatch)
+    monkeypatch.setenv(spawn_depth.ENV_KEY, "1")
+    with pytest.raises(OSError, match="refused"):
+        retest_targeted._run_argv(["python", "-m", "pytest", "test_a.py"], tmp_path)
+    assert spawned == []
+
+
+def test_run_argv_refuses_selection_containing_calling_test(tmp_path, monkeypatch):
+    from coordinator_core.testing import spawn_depth
+
+    spawned = _patched_popen(monkeypatch)
+    monkeypatch.delenv(spawn_depth.ENV_KEY, raising=False)
+    own = tmp_path / "test_self.py"
+    monkeypatch.setenv(spawn_depth.CURRENT_TEST_KEY, f"{own}::test_self (call)")
+    with pytest.raises(OSError, match="includes the calling test file"):
+        retest_targeted._run_argv(["python", "-m", "pytest", str(own)], tmp_path)
+    with pytest.raises(OSError, match="includes the calling test file"):
+        retest_targeted._run_argv(["python", "-m", "pytest", str(tmp_path)], tmp_path)
+    assert spawned == []
+    assert retest_targeted._run_argv(["python", "-m", "pytest", str(tmp_path / "test_o.py")], tmp_path) == 0
+    assert len(spawned) == 1
 
 
 def test_release_spawn_frees_the_pair_and_never_raises():

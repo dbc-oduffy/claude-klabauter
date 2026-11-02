@@ -1356,8 +1356,29 @@ def test_wave_schema_requires_only_prep_and_the_consumer_enforces_review():
     assert '"required": ["prep"]' in _wave_schema_literal("{}")
 
 
-def test_a_wave_return_with_no_review_beside_a_clean_prep_is_refused():
+def test_an_empty_wave_slot_is_retried_once_and_a_retry_that_returns_a_review_is_used():
+    first = _run_in_wave(_FULL, 9)
+    spawned = len(first["spawned"])
     result = _run_in_wave(_FULL, 9, patch="(r, n) => n === 0 ? { prep: r.prep } : r")
+    assert "halted" not in result and "error" not in result
+    assert len(result["spawned"]) == spawned + 1
+    assert result["wave"][0] is not None and result["notRun"] == []
+
+
+def test_a_slot_still_empty_after_its_retry_is_dropped_with_advisory_telemetry_and_the_run_proceeds():
+    spawned = len(_run_in_wave(_FULL, 9)["spawned"])
+    result = _run_in_wave(_FULL, 9, patch=f"(r, n) => (n === 0 || n === {spawned}) ? {{ prep: r.prep }} : r")
+    assert "halted" not in result and "error" not in result
+    assert len(result["spawned"]) == spawned + 1
+    assert result["wave"][0] is None and sum(v is not None for v in result["wave"]) == len(result["wave"]) - 1
+    [entry] = result["notRun"]
+    assert entry["slot"] == 0 and entry["agent_type"] == "coordinator:code-reviewer"
+    assert entry["reason"].startswith("returned no review after one retry (slices: ")
+    assert _FULL["slices"][0]["id"] in entry["reason"]
+
+
+def test_a_wave_with_no_review_in_any_slot_still_halts():
+    result = _run_in_wave(_FULL, 9, patch="(r, n) => ({ prep: r.prep })")
     assert result["halted"] == REVIEW_MISSING_HALT
 
 
@@ -1374,14 +1395,14 @@ def test_a_whole_diff_slot_replying_prep_alone_records_returned_no_review():
     base = _run_in_wave(_FULL, 9)
     assert base["notRun"] == []
     first_whole = base["spawned"].index("whole")
-    result = _run_in_wave(_FULL, 9, patch=f"(r, n) => (n === {first_whole} ? {{ prep: r.prep }} : r)")
-    assert result["notRun"] == [
-        {
-            "slot": len(base["wave"]) - 3,
-            "agent_type": "coordinator:overengineering-reviewer",
-            "reason": "returned no review",
-        }
-    ]
+    retry = len(base["spawned"])
+    result = _run_in_wave(
+        _FULL, 9, patch=f"(r, n) => ((n === {first_whole} || n === {retry}) ? {{ prep: r.prep }} : r)"
+    )
+    [entry] = result["notRun"]
+    assert entry["slot"] == len(base["wave"]) - 3
+    assert entry["agent_type"] == "coordinator:overengineering-reviewer"
+    assert entry["reason"].startswith("returned no review after one retry (slices: ")
 
 
 def test_six_groups_over_three_slices_record_three_skipped_no_slices_in_group():
@@ -1398,11 +1419,11 @@ def test_six_groups_over_three_slices_record_three_skipped_no_slices_in_group():
     assert all(e["agent_type"] == "coordinator:code-reviewer" for e in empty)
 
 
-def test_a_slice_slot_with_slices_and_no_review_records_returned_no_review():
-    result = _run_in_wave(_FULL, 9, patch="(r, n) => (n === 0 ? { prep: r.prep, review: null } : r)")
+def test_every_slot_with_slices_and_no_review_records_returned_no_review_and_halts():
+    result = _run_in_wave(_FULL, 9, patch="(r, n) => ({ prep: r.prep, review: null })")
     assert result["halted"] == REVIEW_MISSING_HALT
-    assert [e["reason"] for e in result["notRun"]] == ["returned no review"]
-    assert result["notRun"][0]["slot"] == 0
+    assert result["notRun"] and all(e["reason"].startswith("returned no review") for e in result["notRun"])
+    assert 0 in [e["slot"] for e in result["notRun"]]
 
 
 def test_a_wave_agent_whose_group_got_no_slices_may_return_prep_alone():

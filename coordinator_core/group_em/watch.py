@@ -1128,8 +1128,11 @@ def save_prev_parked(
     parked: dict[str, bool],
     peers: Optional[dict[str, dict[str, Any]]] = None,
     load: Optional[dict[str, Any]] = None,
+    memory: Optional[dict[str, Any]] = None,
 ) -> bool:
     payload: dict[str, Any] = {"parked": dict(parked)}
+    if memory is not None:
+        payload["memory"] = dict(memory)
     if peers is not None:
         payload["peers"] = dict(peers)
     if load is not None:
@@ -1236,6 +1239,88 @@ def _load_alarm_tick(
         return None
 
 
+def _read_memory():
+    from coordinator_core.bash_guards._host_probe import read_available_mb
+
+    return read_available_mb()
+
+
+def _memory_floor_mb() -> Optional[int]:
+    """The machine-local RAM floor the admission guard denies under, or None when unconfigured."""
+    from coordinator_core import machine_resolver
+    from coordinator_core.bash_guards._heavy_admission_contract import KEY_FREE_RAM_FLOOR_MB
+
+    try:
+        value = int(machine_resolver.merged_flat_registry().get(KEY_FREE_RAM_FLOOR_MB))
+    except (TypeError, ValueError):
+        return None
+    return value if value > 0 else None
+
+
+def _process_census():
+    from coordinator_core.bash_guards._host_probe import HostPrimitives
+
+    return HostPrimitives.snapshot()
+
+
+def _reap_orphans() -> list:
+    """PIDs `orphan_reap.reap` terminated (dead-parent grep/find only); [] when it cannot run."""
+    from coordinator_core.bash_guards._host_probe import HostPrimitives
+    from coordinator_core.box_memory import orphan_reap
+
+    return list(orphan_reap.reap(HostPrimitives) or [])
+
+
+def _memory_tick(
+    repo_root: str, emit: Callable[[str], None]
+) -> Optional[dict[str, bool]]:
+    """Emit `MEMORY` lines on a pressure TRANSITION (low available RAM, grep storm), each naming its
+    remedy; reap dead-parent grep/find while either holds. Returns the flags to persist, or None.
+
+    The watch reports and reaps; it never trims (the trim needs elevation and sits at the guard).
+    One in-process memory read and one process-table read, no spawn. Never raises.
+    """
+    from coordinator_core.box_memory import pressure
+
+    try:
+        prev = _load_prev_record(repo_root).get("memory")
+        prev = prev if isinstance(prev, dict) else {}
+        was_low, was_storm = bool(prev.get("low")), bool(prev.get("storm"))
+
+        reading = _read_memory()
+        floor = _memory_floor_mb()
+        verdict = pressure.classify(reading, floor) if floor else pressure.UNKNOWN
+        low = was_low if verdict == pressure.UNKNOWN else verdict == pressure.LOW
+
+        census = _process_census()
+        count = pressure.storm_count(census) if census is not None else None
+        storming = was_storm if count is None else count >= pressure.DEFAULT_STORM_THRESHOLD
+
+        if low and not was_low:
+            line = (
+                f"MEMORY low-memory avail={reading.avail_mb}MB floor={floor}MB "
+                f"remedy: {pressure.remedy_text(pressure.KIND_LOW_MEMORY)}"
+            )
+            if storming:
+                line += f"; {pressure.remedy_text(pressure.KIND_GREP_STORM)}"
+            emit(line)
+        if storming and not was_storm:
+            emit(
+                f"MEMORY grep-storm count={count} threshold={pressure.DEFAULT_STORM_THRESHOLD} "
+                f"remedy: {pressure.remedy_text(pressure.KIND_GREP_STORM)}"
+            )
+        if low or storming:
+            try:
+                reaped = _reap_orphans()
+            except Exception:
+                reaped = []
+            if reaped:
+                emit("MEMORY reaped orphaned grep/find pids=" + ",".join(str(p) for p in reaped))
+        return {"low": low, "storm": storming}
+    except Exception:
+        return None
+
+
 def tick_once(
     repo_root: str,
     caller_session_id: Optional[str] = None,
@@ -1326,7 +1411,10 @@ def tick_once(
     # today; see `test_gone_emits_even_when_persistence_raises` below, which
     # pins that emission does not depend on persistence succeeding).
     load_state = _load_alarm_tick(repo_root, emit)
-    save_prev_parked(repo_root, cur_parked, peers=peer_notes, load=load_state)
+    memory_state = _memory_tick(repo_root, emit)
+    save_prev_parked(
+        repo_root, cur_parked, peers=peer_notes, load=load_state, memory=memory_state
+    )
     watch_heartbeat.stamp(
         repo_root,
         holder_session_id=group_em_session_id or "",

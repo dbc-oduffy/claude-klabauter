@@ -72,8 +72,8 @@ def _build(tmp_path: Path, monkeypatch) -> Path:
     return root
 
 
-def _fire(root: Path, path: str) -> dict:
-    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=(path,)),))
+def _fire(root: Path, *paths: str) -> dict:
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t1", paths=tuple(paths)),))
     marker = root / RUN_DIR_ROOT / RUN / "commit-request.txt"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text(render_marker(request) + "\n", encoding="utf-8")
@@ -100,16 +100,90 @@ def test_declared_path_without_baseline_lands(tmp_path, monkeypatch):
     assert _git(["show", f"HEAD:{DECLARED}"], root).splitlines()[1] == "b = 3"
 
 
-def test_undeclared_path_without_baseline_still_refuses(tmp_path, monkeypatch):
+def test_undeclared_path_without_baseline_is_excluded_as_residue(tmp_path, monkeypatch):
     root = _build(tmp_path, monkeypatch)
     seed = _git(["rev-parse", "HEAD"], root)
-    (root / UNDECLARED).write_text("a = 1\nb = 3\n", encoding="utf-8")
+    (root / DECLARED).write_text("a = 1\nb = 3\n", encoding="utf-8")
+    (root / UNDECLARED).write_text("a = 1\nb = 9\n", encoding="utf-8")
 
-    out = _fire(root, UNDECLARED)
+    out = _fire(root, DECLARED, UNDECLARED)
+
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert _git(["rev-parse", "HEAD"], root) != seed
+    assert _git(["show", f"HEAD:{DECLARED}"], root).splitlines()[1] == "b = 3"
+    assert _git(["show", f"HEAD:{UNDECLARED}"], root).splitlines()[1] == "b = 2"
+    assert (root / UNDECLARED).read_text(encoding="utf-8").splitlines()[1] == "b = 9"
+    assert UNDECLARED in out["foreign_excluded"], out
+    assert [p for p in out["provenance"] if p["path"] == UNDECLARED][0]["reason"] == "foreign-path-no-baseline"
+
+
+def test_new_undeclared_path_without_baseline_still_refuses(tmp_path, monkeypatch):
+    root = _build(tmp_path, monkeypatch)
+    seed = _git(["rev-parse", "HEAD"], root)
+    (root / "pkg" / "fresh.py").write_text("a = 1\n", encoding="utf-8")
+
+    out = _fire(root, "pkg/fresh.py")
 
     assert out.get("committed") is False, out
     assert out["refused"] == "foreign-hunk-unproduced", out
     assert _git(["rev-parse", "HEAD"], root) == seed
+
+
+def _measure_own_write(root: Path) -> str:
+    """The run writes DECLARED, records the write and measures it; returns the measured blob sha."""
+    from coordinator_core.ops.dispatch_emit import measured_rev
+    from coordinator_core.session import touch_record
+
+    (root / DECLARED).write_text("a = 1\nb = 3\n", encoding="utf-8")
+    touch_record.append_event(
+        touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF), session_id=SELF, agent_id=None,
+        verb="T", path=DECLARED, content_hash=touch_record.compute_content_hash(root / DECLARED), kind="w",
+    )
+    return measured_rev.measured_rev(RUN, [DECLARED], root)["blobs"][DECLARED]
+
+
+def test_peer_edit_after_measure_lands_the_measured_blob_and_keeps_the_peer_bytes(tmp_path, monkeypatch):
+    root = _build(tmp_path, monkeypatch)
+    seed = _git(["rev-parse", "HEAD"], root)
+    measured = _measure_own_write(root)
+    (root / DECLARED).write_text("a = 1\nb = 3\nc = 4  # peer\n", encoding="utf-8")
+
+    out = _fire(root, DECLARED)
+
+    assert out["committed"] is True, out
+    assert _git(["rev-parse", "HEAD"], root) != seed
+    assert _git(["rev-parse", f"HEAD:{DECLARED}"], root) == measured
+    assert out["measured_blob_landed"] == [DECLARED], out
+    assert (root / DECLARED).read_text(encoding="utf-8").splitlines()[2] == "c = 4  # peer"
+    assert DECLARED in _git(["status", "--porcelain"], root)
+
+
+def test_peer_edit_after_measure_with_head_moved_on_the_path_does_not_land_the_measured_blob(tmp_path, monkeypatch):
+    root = _build(tmp_path, monkeypatch)
+    measured = _measure_own_write(root)
+    (root / DECLARED).write_text("a = 1\nb = 7\n", encoding="utf-8")
+    _git(["commit", "-q", "-am", "peer lands the path"], root)
+    (root / DECLARED).write_text("a = 1\nb = 7\nc = 4  # peer\n", encoding="utf-8")
+
+    out = _fire(root, DECLARED)
+
+    assert "measured_blob_landed" not in out, out
+    assert _git(["rev-parse", f"HEAD:{DECLARED}"], root) != measured
+    assert "b = 3" not in _git(["show", f"HEAD:{DECLARED}"], root)
+
+
+def test_peer_edit_after_measure_with_unreadable_record_does_not_land_a_measured_blob(tmp_path, monkeypatch):
+    root = _build(tmp_path, monkeypatch)
+    _measure_own_write(root)
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    measured_rev_record_path(root, RUN).write_text("{", encoding="utf-8")
+    (root / DECLARED).write_text("a = 1\nb = 3\nc = 4  # peer\n", encoding="utf-8")
+
+    out = _fire(root, DECLARED)
+
+    assert "measured_blob_landed" not in out, out
 
 
 def test_unreadable_provenance_on_declared_path_is_advisory(tmp_path, monkeypatch):

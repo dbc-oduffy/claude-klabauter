@@ -25,9 +25,16 @@ from __future__ import annotations
 
 import os
 
+from coordinator_core.testing import spawn_depth
+
 
 def pytest_child_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
-    env = dict(os.environ)
+    """Env for an op-spawned pytest child: nesting depth + 1, PYTEST_CURRENT_TEST stripped.
+
+    The caller checks ``spawn_depth.refusal_for_spawn`` / ``selection_includes_spawner`` on
+    ``os.environ`` BEFORE calling this; the strip here erases the calling-test name they read.
+    """
+    env = spawn_depth.child_env(os.environ)
     if overrides:
         env.update(overrides)
     return env

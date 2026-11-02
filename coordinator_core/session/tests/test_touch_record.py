@@ -1025,10 +1025,10 @@ def test_a_failed_index_append_keeps_the_claim_and_invalidates_the_index(tmp_pat
     Path(stamp).write_text("v1\n", encoding="utf-8")
     real = touch_record.atomic_append.append_line
 
-    def _fail_for_index(target, encoded):
+    def _fail_for_index(target, encoded, **kw):
         if "-claim-index" in str(target):
             raise OSError("index volume full")
-        real(target, encoded)
+        return real(target, encoded, **kw)
 
     monkeypatch.setattr(touch_record.atomic_append, "append_line", _fail_for_index)
     sink = base / "sid1" / "touch-record.jsonl"

@@ -854,6 +854,9 @@ def _run_joining_handler(coro):
 #: caller's -32004 is minted.
 STALL_DUMP_SECS = 10.0
 
+#: Consecutive saturated-by-stalled-holders checks before the pool is recycled.
+_STALL_RECYCLE_CHECKS = 2
+
 _CLAIMS_DIRNAME = "dispatch-claims"
 
 
@@ -930,21 +933,33 @@ class _AdmissionGate:
     size-1 pool lets hooks hold its only slot); the caller passes the same `hook` flag to
     `acquire` and to the matching `release`."""
 
-    def __init__(self, size: int) -> None:
+    def __init__(self, size: int, reserve: int = 0) -> None:
+        """`reserve` extra slots exist beyond `size` that only hook-class and `light` callers
+        can take: heavy (mutating or read-only, non-light) holders are capped at `size`, so
+        wedged heavy ops can never occupy the slots light callers need."""
         size = max(1, int(size))
-        self._free = size
+        reserve = max(0, int(reserve))
+        self._free = size + reserve
+        self._heavy_cap = size
+        self._heavy_held = 0
         self._hook_cap = max(1, size - 1)
         self._hook_held = 0
         self._lock = threading.Lock()
+        self._light: "collections.deque[threading.Event]" = collections.deque()
         self._mutating: "collections.deque[threading.Event]" = collections.deque()
         self._reading: "collections.deque[threading.Event]" = collections.deque()
         self._hooks: "collections.deque[threading.Event]" = collections.deque()
 
     def _grant_waiters_locked(self) -> None:
         while self._free > 0:
-            if self._mutating:
+            heavy_ok = self._heavy_held < self._heavy_cap
+            if self._light:
+                self._light.popleft().set()
+            elif self._mutating and heavy_ok:
+                self._heavy_held += 1
                 self._mutating.popleft().set()
-            elif self._reading:
+            elif self._reading and heavy_ok:
+                self._heavy_held += 1
                 self._reading.popleft().set()
             elif self._hooks and self._hook_held < self._hook_cap:
                 self._hook_held += 1
@@ -953,11 +968,22 @@ class _AdmissionGate:
                 return
             self._free -= 1
 
-    def acquire(self, mutating: bool, timeout: float, hook: bool = False) -> Optional[float]:
+    def acquire(
+        self, mutating: bool, timeout: float, hook: bool = False, light: bool = False
+    ) -> Optional[float]:
         """Seconds waited for a slot (0.0 when one was free), or None when `timeout` elapsed."""
         granted = threading.Event()
+        queue = (
+            self._hooks
+            if hook
+            else self._light
+            if light
+            else self._mutating
+            if mutating
+            else self._reading
+        )
         with self._lock:
-            (self._hooks if hook else self._mutating if mutating else self._reading).append(granted)
+            queue.append(granted)
             self._grant_waiters_locked()
             if granted.is_set():
                 return 0.0
@@ -967,16 +993,18 @@ class _AdmissionGate:
         with self._lock:
             if granted.is_set():
                 return time.monotonic() - t0
-            for q in (self._mutating, self._reading, self._hooks):
+            for q in (self._light, self._mutating, self._reading, self._hooks):
                 if granted in q:
                     q.remove(granted)
         return None
 
-    def release(self, hook: bool = False) -> None:
+    def release(self, hook: bool = False, light: bool = False) -> None:
         with self._lock:
             self._free += 1
             if hook:
                 self._hook_held = max(0, self._hook_held - 1)
+            elif not light:
+                self._heavy_held = max(0, self._heavy_held - 1)
             self._grant_waiters_locked()
 
 
@@ -1537,6 +1565,37 @@ def _is_hook_lane(method: Any) -> bool:
     )
 
 
+#: Short mutating ops that take a reserved slot like a hook, so heavy wedged holders cannot starve them.
+_LIGHT_MUTATING_OPS = frozenset({"memo.send"})
+
+#: Pool workers beyond `DISPATCH_PROCESS_POOL_SIZE` that only hook-class and light ops may use.
+_LIGHT_RESERVE_WORKERS = 2
+
+
+def _is_light_mutating(method: Any) -> bool:
+    """True for a hook-prefixed op the fail-closed mutation predicate classifies as mutating
+    (e.g. `hooks.preuse_write_dispatch`), or a named short mutating op."""
+    return isinstance(method, str) and (
+        method in _LIGHT_MUTATING_OPS or method.startswith(_HOOK_LANE_PREFIXES)
+    )
+
+
+def _stall_arm_secs(deadline: float) -> float:
+    """Stall-dump arming delay: `STALL_DUMP_SECS`, or half this op's withdrawal budget when that is
+    shorter, so an op that crosses its budget always has a dump on disk first."""
+    return min(STALL_DUMP_SECS, deadline * 0.5) if deadline > 0 else STALL_DUMP_SECS
+
+
+def _name_stall_dump(data: dict, dump_note: str) -> None:
+    """Put the dump path in `error.data` as `stall_dump`, or the reason none exists as
+    `stall_dump_absent_reason`. `dump_note` is `_ensure_overdue_stall_dump`'s sentence."""
+    diagnosis = data.get("diagnosis") if isinstance(data.get("diagnosis"), dict) else {}
+    if dump_note.startswith("Stall dump:") and diagnosis.get("stall_dump"):
+        data["stall_dump"] = diagnosis["stall_dump"]
+    else:
+        data["stall_dump_absent_reason"] = dump_note.replace("No stall dump written: ", "", 1)
+
+
 _POOL_BROKEN_INDETERMINATE_MESSAGE = (
     "warm dispatch indeterminate: this MUTATING op was submitted to the warm "
     "engine's dispatch process pool, and the worker executing it died "
@@ -1612,6 +1671,30 @@ def _pool_saturated_envelope(msg: dict, holders: list, stall_dump) -> dict:
             "data": {"diagnosis": diagnosis},
         },
     }
+
+
+def _ensure_overdue_stall_dump(diagnosis: dict, stall_dir, dispatch_key: Optional[str], elapsed: float) -> str:
+    """Make sure a budget-crossing stall has a durable record. Reuses the worker's record when
+    `diagnosis` names one under `stall_dir`, else writes this thread's all-thread dump. Returns
+    the sentence appended to the -32004 message: the dump path, or that none was written."""
+    existing = diagnosis.get("stall_dump")
+    if existing and stall_dir and str(existing).endswith(".txt") and Path(existing).parent == Path(stall_dir):
+        return f"Stall dump: {existing}."
+    if not stall_dir:
+        return "No stall dump written: no stall directory is configured."
+    key = f"overdue-{dispatch_key if _is_safe_dispatch_key(dispatch_key) else 'nokey'}"
+    written = _write_stall_record(
+        stall_dir,
+        None,
+        key=key,
+        leg=json.dumps({"leg": "coordinator_core/warm/server.py::_pool_dispatch:result", "kind": "wait"}),
+        op_ident=threading.get_ident(),
+        elapsed=elapsed,
+    )
+    if written is None:
+        return "No stall dump written: the stall directory refused the write."
+    diagnosis["stall_dump"] = str(written)
+    return f"Stall dump: {written}."
 
 
 def _running_phase_diagnosis(claim: Optional[Path], stderr_dir, stall_dir=None) -> dict:
@@ -2228,6 +2311,44 @@ def _start_telemetry_drain(q) -> threading.Event:
     return stop
 
 
+#: POSIX only: the pre-boost nice, exported so spawned pool workers can undo the inherited boost.
+_BASE_NICE_ENV = "COORDINATOR_WARM_BASE_NICE"
+_WINDOWS_HIGH_PRIORITY_CLASS = 0x00000080
+_POSIX_ENGINE_NICE = -5
+
+
+def _raise_engine_priority() -> bool:
+    """Run the accept process above its pool workers and git children: HIGH_PRIORITY_CLASS
+    on Windows (not inherited by children), nice -5 on POSIX where permitted (the base nice is
+    recorded so `_worker_process_init` restores it). Never raises; True when raised."""
+    try:
+        if sys.platform == "win32":
+            import ctypes
+
+            kernel32 = ctypes.windll.kernel32
+            kernel32.GetCurrentProcess.restype = ctypes.c_void_p
+            kernel32.SetPriorityClass.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+            return bool(
+                kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), _WINDOWS_HIGH_PRIORITY_CLASS)
+            )
+        base = os.getpriority(os.PRIO_PROCESS, 0)
+        os.setpriority(os.PRIO_PROCESS, 0, min(base, _POSIX_ENGINE_NICE))
+        os.environ[_BASE_NICE_ENV] = str(base)
+        return True
+    except Exception:  # noqa: BLE001 -- priority is best-effort
+        return False
+
+
+def _restore_worker_priority() -> None:
+    """POSIX nice is inherited; put a pool worker back at the recorded base. Never raises."""
+    try:
+        base = os.environ.get(_BASE_NICE_ENV)
+        if base is not None and sys.platform != "win32":
+            os.setpriority(os.PRIO_PROCESS, 0, int(base))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) -> None:
     global _worker_pristine_environ, _WORKER_STALL_DIR
     _WORKER_STALL_DIR = Path(stall_dir) if stall_dir else None
@@ -2241,6 +2362,7 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) ->
         forward_queue.cancel_join_thread()
         atomic_append.set_forwarder(lambda sink, encoded, retain: forward_queue.put_nowait((sink, encoded, retain)))
 
+    _restore_worker_priority()
     polite_io.lower_own_priority()
     _bind_null_std_streams()
     _bind_worker_stderr_log(stderr_dir)
@@ -3134,7 +3256,7 @@ class _ServerContext:
                     forward_queue = mp_context.Queue(maxsize=_FORWARD_QUEUE_MAX)
                     self._telemetry_drain_stop = _start_telemetry_drain(forward_queue)
                     self._dispatch_pool = concurrent.futures.ProcessPoolExecutor(
-                        max_workers=DISPATCH_PROCESS_POOL_SIZE,
+                        max_workers=DISPATCH_PROCESS_POOL_SIZE + _LIGHT_RESERVE_WORKERS,
                         mp_context=mp_context,
                         initializer=_worker_process_init,
                         initargs=(str(stderr_dir), str(self._stall_dir), forward_queue),
@@ -3145,13 +3267,21 @@ class _ServerContext:
         """Per-context slot gate sized `DISPATCH_PROCESS_POOL_SIZE`, built on first use."""
         gate = self.__dict__.get("_pool_gate")
         if gate is None:
-            gate = self.__dict__.setdefault("_pool_gate", _AdmissionGate(DISPATCH_PROCESS_POOL_SIZE))
+            gate = self.__dict__.setdefault(
+                "_pool_gate", _AdmissionGate(DISPATCH_PROCESS_POOL_SIZE, _LIGHT_RESERVE_WORKERS)
+            )
         return gate
 
-    def _track_pool_task(self, future: "concurrent.futures.Future", op: Optional[str]) -> None:
-        """Record `future` (op, submit time) until it resolves; feeds `_stalled_holders`."""
+    def _track_pool_task(
+        self,
+        future: "concurrent.futures.Future",
+        op: Optional[str],
+        dispatch_key: Optional[str] = None,
+    ) -> None:
+        """Record `future` (op, submit time, dispatch key) until it resolves; feeds
+        `_stalled_holders` and `_recycle_stalled_pool`."""
         tasks = self.__dict__.setdefault("_pool_tasks", {})
-        tasks[future] = (op, time.monotonic())
+        tasks[future] = (op, time.monotonic(), dispatch_key)
         future.add_done_callback(lambda f: tasks.pop(f, None))
 
     def _stalled_holders(self) -> list:
@@ -3159,9 +3289,65 @@ class _ServerContext:
         now = time.monotonic()
         return [
             op
-            for op, started in list(self.__dict__.get("_pool_tasks", {}).values())
+            for op, started, _key in list(self.__dict__.get("_pool_tasks", {}).values())
             if now - started > STALL_DUMP_SECS
         ]
+
+    def _saturation_confirmed(self, saturated: bool) -> bool:
+        """True on the `_STALL_RECYCLE_CHECKS`-th consecutive saturated check; any
+        unsaturated check resets the count."""
+        with self._dispatch_pool_lock:
+            if not saturated:
+                self.__dict__["_saturated_checks"] = 0
+                return False
+            count = self.__dict__.get("_saturated_checks", 0) + 1
+            self.__dict__["_saturated_checks"] = count
+            return count >= _STALL_RECYCLE_CHECKS
+
+    def _recycle_stalled_pool(self, stuck_pool: Any, holders: list) -> None:
+        """Swap out `stuck_pool`, reconcile exactly the dispatch keys tracked on it
+        to engine-restarted, then terminate its worker processes. The next
+        `_ensure_dispatch_pool` builds the replacement. A no-op if a peer thread
+        already swapped the pool. `AckStore.boot_ns` is untouched, so finished keys
+        keep their outcomes."""
+        with self._dispatch_pool_lock:
+            if self._dispatch_pool is not stuck_pool:
+                return
+            self._dispatch_pool = None
+            self.__dict__["_saturated_checks"] = 0
+            tasks = self.__dict__.setdefault("_pool_tasks", {})
+            keys = [key for _op, _started, key in list(tasks.values()) if key is not None]
+            tasks.clear()
+        _ack_store.reconcile_restarted(keys)
+        procs = list((getattr(stuck_pool, "_processes", None) or {}).values())
+        try:
+            stuck_pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:  # noqa: BLE001
+            pass
+        for proc in procs:
+            try:
+                proc.terminate()
+            except Exception:  # noqa: BLE001
+                pass
+        self._write_recycle_line(holders, len(keys))
+
+    def _write_recycle_line(self, holders: list, key_count: int) -> None:
+        """One line in the stall dir naming the holders and reconciled key count.
+        Never raises."""
+        try:
+            stall_dir = getattr(self, "_stall_dir", None)
+            if stall_dir is None:
+                return
+            stall_dir = Path(stall_dir)
+            stall_dir.mkdir(parents=True, exist_ok=True)
+            stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+            (stall_dir / f"{stamp}-{os.getpid()}-recycle.txt").write_text(
+                f"pool recycled: holders={holders} reconciled_keys={key_count}\n",
+                encoding="utf-8",
+                newline="\n",
+            )
+        except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+            pass
 
     def _pool_dispatch(
         self,
@@ -3191,26 +3377,34 @@ class _ServerContext:
         try:
             pool = self._ensure_dispatch_pool()
             holders = self._stalled_holders()
-            if len(holders) >= DISPATCH_PROCESS_POOL_SIZE:
+            saturated = len(holders) >= DISPATCH_PROCESS_POOL_SIZE
+            if self._saturation_confirmed(saturated):
+                self._recycle_stalled_pool(pool, holders)
+                pool = self._ensure_dispatch_pool()
+            elif saturated and not (
+                _is_hook_lane(msg.get("method")) or _is_light_mutating(msg.get("method"))
+            ):
                 return _pool_saturated_envelope(
                     msg, holders, getattr(self, "_worker_stderr_dir", None)
                 )
             claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
             _phase = ["gate"]
+            _method = msg.get("method")
+            _deadline = _withdrawal_deadline_secs(_method, msg)
+            _arm_secs = _stall_arm_secs(_deadline)
             _disarm_accept = _arm_accept_stall(
                 getattr(self, "_stall_dir", None),
-                STALL_DUMP_SECS,
+                _arm_secs,
                 claim,
                 dispatch_key if _is_safe_dispatch_key(dispatch_key) else None,
                 _phase,
             )
             gate = self._admission_gate()
-            _method = msg.get("method")
-            _deadline = _withdrawal_deadline_secs(_method, msg)
             _hook = _is_hook_lane(_method)
+            _light = _is_light_mutating(_method)
             if dispatch_key is not None:
                 _ack_store.mark_queued(dispatch_key)
-            _gate_wait = gate.acquire(_op_may_mutate(_method), _deadline, _hook)
+            _gate_wait = gate.acquire(_op_may_mutate(_method), _deadline, _hook, _light)
             if _gate_wait is not None and dispatch_key is not None:
                 _ack_store.mark_dispatched(dispatch_key)
             if _gate_wait is None:
@@ -3238,13 +3432,13 @@ class _ServerContext:
                         caller,
                         dispatch_key,
                         str(claim.parent),
-                        STALL_DUMP_SECS,
+                        _arm_secs,
                     )
             except BaseException:
-                gate.release(_hook)
+                gate.release(_hook, _light)
                 raise
-            future.add_done_callback(lambda _f: gate.release(_hook))
-            self._track_pool_task(future, msg.get("method"))
+            future.add_done_callback(lambda _f: gate.release(_hook, _light))
+            self._track_pool_task(future, msg.get("method"), dispatch_key)
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:
@@ -3303,6 +3497,21 @@ class _ServerContext:
                         )
                     )
                     _record_pool_timeout(msg, _t_submit, data["diagnosis"])
+                    dump_note = _ensure_overdue_stall_dump(
+                        data["diagnosis"],
+                        getattr(self, "_stall_dir", None),
+                        dispatch_key,
+                        time.time() - _t_submit,
+                    )
+                else:
+                    dump_note = "No stall dump written: no diagnosis block."
+                error = envelope.get("error")
+                if isinstance(error, dict):
+                    if isinstance(data, dict) and isinstance(data.get("diagnosis"), dict):
+                        error["message"] = f"{error.get('message', '')} {dump_note}".strip()
+                    if not isinstance(error.get("data"), dict):
+                        error["data"] = {}
+                    _name_stall_dump(error["data"], dump_note)
                 return _with_reconcile_route(envelope, dispatch_key)
         except BrokenProcessPool:
             # A ProcessPoolExecutor whose worker died is broken PERMANENTLY --
@@ -3992,6 +4201,7 @@ def _run_guarded() -> int:
     therefore not a second server that happens to resemble this one; it is
     this one with a different endpoint under it.
     """
+    _raise_engine_priority()
     repo_root = _engine_clone_root()
     if idle.ladder_gone_tombstoned(Path(repo_root)):
         print(f"[warm-server] ladder gone for {repo_root}; not starting", file=sys.stderr)

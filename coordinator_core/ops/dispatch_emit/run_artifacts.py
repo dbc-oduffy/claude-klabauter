@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from typing import Iterable, Mapping, Optional, Sequence
 
@@ -58,12 +58,15 @@ _SCALAR = r"^{key}:[ \t]*(?P<v>[^\r\n#]+?)[ \t]*(?:#.*)?$"
 class Landable:
     """``present`` files and ``deleted`` (tracked-at-HEAD, gone) paths to stage; ``withheld`` maps
     path to ``peer-held`` or ``not-claimed``; ``contest_unknown`` is set when peer contest could
-    not be established (speculative: no caller reads it yet)."""
+    not be established (speculative: no caller reads it yet); ``ignored_excluded`` names every run
+    artifact (candidates and ``prompts/`` files) left out for being gitignored — advisory, it never
+    changes whether a landing succeeds."""
 
     present: tuple[str, ...] = ()
     deleted: tuple[str, ...] = ()
     withheld: Mapping[str, str] = field(default_factory=dict)
     contest_unknown: bool = False
+    ignored_excluded: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -518,6 +521,108 @@ def runs_of_artifacts(worktree_root: Path, changed: Iterable[str]) -> dict[str, 
     return out
 
 
+def _prompt_files(root: Path, artifacts: RunArtifacts) -> list[str]:
+    """Every file under a ``prompts/`` dir of a record dir of ``artifacts`` (local scratch the
+    candidate walk skips by design), sorted."""
+    out: list[str] = []
+    for rec in artifacts.record_dirs:
+        stack = [f"{rec}/{PROMPTS_DIR}"]
+        while stack:
+            cur = stack.pop()
+            try:
+                with os.scandir(root / cur) as it:
+                    for entry in it:
+                        rel = f"{cur}/{entry.name}"
+                        if entry.is_file():
+                            out.append(rel)
+                        elif entry.is_dir(follow_symlinks=False):
+                            stack.append(rel)
+            except OSError:
+                continue
+    return sorted(out)
+
+
+def ignored_probe(worktree_root: Path, artifacts: RunArtifacts) -> list[str]:
+    """The paths a caller asks git about before ``landable``: every candidate plus the record dirs'
+    ``prompts/`` files, so ``Landable.ignored_excluded`` can name the ignored ones."""
+    return sorted({*artifacts.paths(), *_prompt_files(Path(worktree_root), artifacts)})
+
+
+def is_run_state(path: str) -> bool:
+    """True when ``path`` is under the warp record root: local run state, gitignored and never committed."""
+    rel = _norm_rel(str(path))
+    return rel is not None and rel.startswith(_RECORD_ROOT + "/")
+
+
+def split_run_state(paths: Iterable[str]) -> tuple[list[str], list[str]]:
+    """``(landable, run_state)`` halves of ``paths``, order kept."""
+    keep: list[str] = []
+    state: list[str] = []
+    for p in paths:
+        (state if is_run_state(p) else keep).append(p)
+    return keep, state
+
+
+EVIDENCE_ROOT = "state/run-evidence"
+OUTCOME_FILE = "outcome.json"
+
+
+def outcome_rel(run_id: str) -> str:
+    """The tracked cross-box summary of a run: ``state/run-evidence/<run_id>/outcome.json``."""
+    return f"{EVIDENCE_ROOT}/{run_id}/{OUTCOME_FILE}"
+
+
+def write_tracked_outcome(worktree_root: Path, run_id: str, state: str, **extra: object) -> Optional[str]:
+    """Write the run's tracked ``outcome.json`` (``run_id``, ``state``, sizing and plan pointers read
+    from the local record dir, plus ``extra``) and return its repo-relative path; ``None`` when
+    ``run_id`` is not a safe name or the write fails. One small file per run, never a copy of the run dir."""
+    if not _safe_run_id(run_id):
+        return None
+    root = Path(worktree_root)
+    local = _read_json(root, f"{_RECORD_ROOT}/{run_id}/run-outcome.json") or {}
+    run = _read_json(root, f"{_RECORD_ROOT}/{run_id}/{_RUN_FILE}") or {}
+    body = {"run_id": run_id, "state": state}
+    if isinstance(run.get("sizing_rel"), str):
+        body["sizing_rel"] = run["sizing_rel"]
+    for key in ("plan_path", "landed_chunks", "incomplete_chunks", "ledger_verdict"):
+        if key in local:
+            body[key] = local[key]
+    body.update({k: v for k, v in extra.items() if v is not None})
+    rel = outcome_rel(run_id)
+    target = root / rel
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        os.replace(tmp, target)
+    except OSError:
+        return None
+    return rel
+
+
+def read_tracked_outcome(worktree_root: Path, run_id: str) -> dict:
+    """The run's tracked ``outcome.json``, ``{}`` when absent, unreadable or ``run_id`` unsafe."""
+    if not _safe_run_id(run_id):
+        return {}
+    return _read_json(Path(worktree_root), outcome_rel(run_id)) or {}
+
+
+def exclude_run_state(land: Landable) -> Landable:
+    """``land`` without run-state paths (tracked legacy run dirs that still show as changed); each
+    one moves to ``ignored_excluded``, so a dropped run record is named, never silent."""
+    present, state_present = split_run_state(land.present)
+    deleted, state_deleted = split_run_state(land.deleted)
+    if not (state_present or state_deleted):
+        return land
+    return replace(
+        land,
+        present=tuple(present),
+        deleted=tuple(deleted),
+        withheld={p: r for p, r in land.withheld.items() if not is_run_state(p)},
+        ignored_excluded=tuple(sorted({*land.ignored_excluded, *state_present, *state_deleted})),
+    )
+
+
 def landable(
     worktree_root: Path,
     artifacts: RunArtifacts,
@@ -527,11 +632,16 @@ def landable(
     session_id: Optional[str],
 ) -> Landable:
     """Split the changed, un-ignored candidates into present files and tracked deletions, and
-    withhold peer-held paths and docs-stage paths this session does not claim."""
+    withhold peer-held paths and docs-stage paths this session does not claim. Ignored candidates
+    and ignored ``prompts/`` files are named in ``ignored_excluded``, never dropped silently."""
     root = Path(worktree_root)
     changed_set = {str(p).replace("\\", "/") for p in changed}
     ignored_set = {str(p).replace("\\", "/") for p in ignored}
     cands = [p for p in artifacts.paths() if p in changed_set and p not in ignored_set and not _is_scratch(p)]
+    ignored_excluded = tuple(sorted(
+        p for p in {*artifacts.paths(), *(_prompt_files(root, artifacts) if ignored_set else ())}
+        if p in ignored_set and not _is_scratch(p)
+    ))
     withheld: dict[str, str] = {}
     contest_unknown = False
 
@@ -572,6 +682,7 @@ def landable(
         deleted=tuple(deleted),
         withheld=withheld,
         contest_unknown=contest_unknown,
+        ignored_excluded=ignored_excluded,
     )
 
 
@@ -592,6 +703,6 @@ def residue(
     out: dict[str, str] = {}
     for raw in still_changed:
         path = str(raw).replace("\\", "/")
-        if path in cands and path not in done:
+        if path in cands and path not in done and not is_run_state(path):
             out[path] = artifacts.class_of(path) or ""
     return dict(sorted(out.items()))

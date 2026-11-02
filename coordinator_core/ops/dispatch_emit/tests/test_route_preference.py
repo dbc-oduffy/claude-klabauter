@@ -57,6 +57,13 @@ def test_normalize_leaves_an_unusable_preference_for_refusal_to_name():
     assert rp.refusal("ask", pref, None) is not None
 
 
+def test_research_lean_is_carried_as_rationale_not_refused():
+    pref, why = rp.normalize("Research", "corpus survey of four repos")
+    assert pref is None and why == "EM leans research. corpus survey of four repos"
+    assert rp.refusal("ask", pref, why) is None
+    assert rp.normalize({"route_preference": "research"}, None) == (None, "EM leans research.")
+
+
 def test_diverges():
     assert rp.diverges(rp.parse("goal", None), "goal-setting") is False
     assert rp.diverges(rp.parse("roadmap", None), "plan") is True

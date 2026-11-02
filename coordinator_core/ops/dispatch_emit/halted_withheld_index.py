@@ -20,6 +20,7 @@ from typing import Iterable, Mapping, NamedTuple, Optional
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.git import call_io_scope
+from coordinator_core.git.git_objects import PACK_READ_DEADLINE_SECS as READ_DEADLINE_SECS
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
@@ -29,6 +30,7 @@ INDEX_DIR = ".coordinator-local/halt-withheld"
 SENTINEL = ".built-v2"
 _PRINTS_FILE = "withheld-prints.json"
 _MANIFEST_FILE = "manifest.json"
+_clock = time.monotonic  # one in-flight read cannot be pre-empted; the bound is between files
 
 
 class RunEntry(NamedTuple):
@@ -236,8 +238,11 @@ def entries(repo_root: Path) -> dict:
     except OSError:
         return {}
     out: dict = {}
+    deadline = _clock() + READ_DEADLINE_SECS
     for name in names:
         if name.endswith(".json"):
+            if _clock() >= deadline:
+                break  # a stalled disk: the remaining run files read as unreadable
             entry = _parse(index / name)
             if entry is not None:
                 out[name[: -len(".json")]] = entry
@@ -276,8 +281,11 @@ def run_ids(repo_root: Path) -> list[str]:
     except OSError:
         return []
     out = []
+    deadline = _clock() + READ_DEADLINE_SECS
     for name in names:
         if name.endswith(".json"):
+            if _clock() >= deadline:
+                break
             entry = _parse(_dir(root) / name)
             if entry is not None and entry.paths:
                 out.append(name[: -len(".json")])

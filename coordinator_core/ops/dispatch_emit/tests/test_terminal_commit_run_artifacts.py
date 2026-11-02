@@ -118,10 +118,14 @@ def test_an_ask_run_lands_sidecar_baton_slice_and_superseded_record(repo):
         p for p in _dirty(repo) - {"run.mjs", f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt"}
         if not p.startswith(".coordinator-local/")
     }
-    assert left == set(), left
+    assert left and all(p.startswith(f"{RECORD_DIR_ROOT}/") for p in left), left
     landed = set(out["run_artifacts"]["landed"])
-    assert {EVIDENCE, BATON, SLICE, f"{RECORD_DIR_ROOT}/{OLD_RUN}/ask.md"} <= landed
+    assert {EVIDENCE, BATON, SLICE} <= landed
+    assert not [p for p in landed if p.startswith(f"{RECORD_DIR_ROOT}/")]
+    assert not [p for p in _git(["ls-files"], repo).splitlines() if p.startswith(f"{RECORD_DIR_ROOT}/")]
     assert out["run_artifacts"]["withheld"] == {}
+    named = set(out["run_artifacts"]["ignored_excluded"])
+    assert {f"{RECORD_DIR_ROOT}/{RUN}/run.json", f"{RECORD_DIR_ROOT}/{OLD_RUN}/ask.md"} <= named
 
 
 def test_a_peer_held_candidate_is_withheld_and_named(repo, monkeypatch):
@@ -167,6 +171,41 @@ def test_a_gitignored_plan_stays_out(repo):
 
     assert out["committed"] is True, out
     assert ignored_plan not in _git(["ls-files"], repo)
+    assert "run_artifact_residue" not in out
+
+
+def test_an_ignored_run_prompt_is_named_in_the_reply_and_the_landing_still_succeeds(repo):
+    _write(repo, ".gitignore", f"{RECORD_DIR_ROOT}/\n")
+    _git(["add", ".gitignore"], repo)
+    _git(["commit", "-q", "-m", "ignore"], repo)
+    _stage_graph(repo)
+    prompt = f"{RECORD_DIR_ROOT}/{RUN}/prompts/review-1.md"
+    _write(repo, prompt, "p\n")
+
+    out = _fire(repo)
+
+    assert out["committed"] is True and out.get("ok") is not False, out
+    named = out["run_artifacts"]["ignored_excluded"]
+    assert prompt in named and f"{RECORD_DIR_ROOT}/{RUN}/run.json" in named
+    assert not [p for p in _git(["ls-files"], repo).splitlines() if p.startswith(f"{RECORD_DIR_ROOT}/")]
+    assert "run_artifact_residue" not in out
+
+
+def test_a_tracked_legacy_run_record_edit_is_named_not_committed(repo):
+    _write(repo, ".gitignore", f"{RECORD_DIR_ROOT}/\n")
+    legacy = f"{RECORD_DIR_ROOT}/{OLD_RUN}/ask.md"
+    _write(repo, legacy, "old\n")
+    _git(["add", ".gitignore"], repo)
+    _git(["add", "-f", legacy], repo)
+    _git(["commit", "-q", "-m", "legacy tracked record"], repo)
+    _stage_graph(repo)
+
+    out = _fire(repo)
+
+    assert out["committed"] is True and out.get("ok") is not False, out
+    assert legacy in out["run_artifacts"]["ignored_excluded"]
+    assert legacy not in _git(["show", "--name-only", "--format=", "HEAD"], repo)
+    assert _git(["show", "HEAD:" + legacy], repo) == "old\n"
     assert "run_artifact_residue" not in out
 
 
@@ -288,19 +327,21 @@ def _warp_dirty(root: Path) -> set:
     }
 
 
-def test_a_terminal_run_leaves_no_ask_dir_file_dirty_and_reports_push(repo):
+def test_a_terminal_run_commits_no_ask_dir_file_and_reports_push(repo):
     _stage_ask_dir(repo)
 
     out = _fire(repo)
 
     assert out["committed"] is True, out
     assert "run_artifact_residue" not in out
-    assert _warp_dirty(repo) == set()
+    assert _warp_dirty(repo)
+    assert not [p for p in _git(["ls-files"], repo).splitlines() if p.startswith(f"{RECORD_DIR_ROOT}/")]
+    assert f"{RECORD_DIR_ROOT}/{ASK}/notes/x.md" not in out["run_artifacts"]["landed"]
     assert out["push"]["status"] in {"nudged", "not_pushed"}
     assert out["push"]["reason"]
 
 
-def test_a_file_written_after_the_landing_is_relanded_in_the_same_op(repo, monkeypatch):
+def test_a_run_state_file_written_after_the_landing_is_never_relanded(repo, monkeypatch):
     _stage_ask_dir(repo)
     late = f"{RECORD_DIR_ROOT}/{ASK}/notes/late.md"
     real = terminal_commit._commit_residue
@@ -314,10 +355,10 @@ def test_a_file_written_after_the_landing_is_relanded_in_the_same_op(repo, monke
     out = _fire(repo)
 
     assert out["committed"] is True, out
-    assert late in out["late_reland"]["paths"], out
-    assert late in out["run_artifacts"]["landed"]
+    assert "late_reland" not in out, out
+    assert late not in out["run_artifacts"]["landed"]
     assert "run_artifact_residue" not in out
-    assert _warp_dirty(repo) == set()
+    assert late in _warp_dirty(repo)
 
 
 def test_a_late_file_a_live_peer_holds_is_not_swept(repo, monkeypatch):

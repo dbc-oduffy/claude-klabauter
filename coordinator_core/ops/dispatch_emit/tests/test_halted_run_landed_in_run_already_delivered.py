@@ -72,7 +72,9 @@ def test_solo_markerless_running_run_closes_landed_and_writes_nothing(repo):
     before = _tree(root)
     out = op._handler({"run_id": SOLO, "sha": second, "in_run": True}, root)
     assert out["ok"] and out["written"] is True and out["sha"] == second, out
-    assert out["close"] == NO_RECORD and "recorded" not in out
+    close = out["close"]
+    assert close["status"] == NO_RECORD["status"] and close["detail"].startswith(NO_RECORD["detail"]), out
+    assert second[:12] in close["detail"] and "recorded" not in out
     assert _tree(root) == before
     assert not (root / "state" / "warp" / SOLO / "halted.json").exists()
 

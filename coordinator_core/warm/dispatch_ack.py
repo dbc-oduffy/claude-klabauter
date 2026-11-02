@@ -268,6 +268,8 @@ class AckStore:
                 and outcome in _FINISHED_OUTCOMES
             ):
                 return
+            if record.get("restarted") and outcome in _UNKNOWABLE_OUTCOMES:
+                return
             record["state"] = _STAMPED
             record["outcome"] = outcome
             record["error_code"] = error_code
@@ -283,6 +285,25 @@ class AckStore:
                 else:
                     record["result_dropped"] = dropped
             self._changed.notify_all()
+
+    def reconcile_restarted(self, keys: Optional[Any] = None) -> int:
+        """Mark every still-admitted record (or only `keys`) engine-restarted and
+        return the count marked. A later result/error stamp still lands; a
+        worker-lost/abandoned stamp on a marked record is dropped, so tearing
+        down the old pool cannot overwrite the reason. Wakes `wait` callers."""
+        wanted = None if keys is None else set(keys)
+        count = 0
+        with self._lock:
+            for key, record in self._records.items():
+                if record["state"] != _ADMITTED or record.get("restarted"):
+                    continue
+                if wanted is not None and key not in wanted:
+                    continue
+                record["restarted"] = True
+                count += 1
+            if count:
+                self._changed.notify_all()
+        return count
 
     def mark_queued(self, key: str) -> None:
         """The admitted request is waiting for a pool slot: `status` reads `queued`.
@@ -311,7 +332,7 @@ class AckStore:
         with self._changed:
             while True:
                 record = self._records.get(key)
-                if record is None or record["state"] != _ADMITTED:
+                if record is None or record["state"] != _ADMITTED or record.get("restarted"):
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -365,6 +386,8 @@ class AckStore:
             if record["state"] == _TOMBSTONED:
                 return {"state": STATE_NOT_RECEIVED, "outcome": OUTCOME_NOT_DISPATCHED}
             if record["state"] == _ADMITTED:
+                if record.get("restarted"):
+                    return {"state": STATE_UNKNOWABLE, "reason": REASON_ENGINE_RESTARTED}
                 if record.get("queued"):
                     return {"state": STATE_QUEUED}
                 bound_secs = record.get("bound_secs")

@@ -99,6 +99,10 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "_deny_log_path", lambda: tmp_path / "would-deny.jsonl")
     monkeypatch.setattr(guard, "_working_set_mb", lambda pid: h.working_sets.get(pid))
     h.working_sets = {}
+    monkeypatch.setattr(guard, "_trim_supported", lambda: False)
+    monkeypatch.setattr(guard, "_trim_stamp_path", lambda: tmp_path / "last-trim.json")
+    monkeypatch.setattr(guard, "_group_em_live", lambda: True)
+    monkeypatch.setattr(guard, "_fire_cache_trim", lambda: pytest.fail("trim fired outside a trim test"))
     return h
 
 
@@ -230,8 +234,7 @@ class TestRamLeg:
         holders = [json.loads(p.read_text(encoding="utf-8"))["holder_pid"] for p in _lease_files(tmp_path)]
         assert holders == [CLAUDE.pid]
 
-    def test_another_sessions_unattributed_lease_reserves_memory(self, host, tmp_path):
-        host.avail = 1400
+    def _other_session_lease(self, host):
         leases.write_lease(
             leases.LeaseRecord(
                 holder_pid=777, holder_ctime=7, session_pid=777, session_ctime=7,
@@ -239,8 +242,19 @@ class TestRamLeg:
             )
         )
         host.rows = host.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+
+    def test_another_sessions_unattributed_lease_is_a_hint_when_raw_memory_clears_the_floor(self, host, tmp_path):
+        host.avail = 1400  # raw clears floor 1000; 1400 - 500 reserved does not
+        self._other_session_lease(host)
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        assert [l for l in _log_lines(tmp_path) if l.get("kind") == "ram-floor-advisory"]
+
+    def test_another_sessions_unattributed_lease_does_not_rescue_raw_memory_under_the_floor(self, host, tmp_path):
+        host.avail = 900
+        self._other_session_lease(host)
         out = _enveloped(guard.check)(_payload("pnpm build"))
         assert out is not None and "ram-floor" in _reason(out)
+        assert "BLOCKED" not in _reason(out) and "wait for a holder" in _reason(out).lower()
         assert len(_lease_files(tmp_path)) == 1
 
     def test_requesting_sessions_own_unattributed_lease_never_blocks_it(self, host, tmp_path):
@@ -268,6 +282,111 @@ class TestRamLeg:
     def test_malformed_floor_denies(self, host, bad):
         host.config[KEY_FREE_RAM_FLOOR_MB] = bad
         assert _enveloped(guard.check)(_payload("pnpm build")) is not None
+
+
+class TestFileCacheTrim:
+    """Below the floor, the RAM leg trims the file cache once per window before it denies."""
+
+    @pytest.fixture()
+    def trimming(self, host, monkeypatch):
+        host.avail = 900
+        host.fired = 0
+        host.cache = 2000
+        host.after = None
+        monkeypatch.setattr(guard, "_trim_supported", lambda: True)
+        monkeypatch.setattr(guard, "_file_cache_mb", lambda: host.cache)
+
+        def fire():
+            host.fired += 1
+            if host.after is not None:
+                host.avail = host.after
+            return True
+
+        monkeypatch.setattr(guard, "_fire_cache_trim", fire)
+        return host
+
+    def _own_lease_blocked(self):
+        leases.write_lease(
+            leases.LeaseRecord(
+                holder_pid=777, holder_ctime=7, session_pid=777, session_ctime=7,
+                heavy_class="build", admitted_at=time.time(),
+            )
+        )
+
+    def test_trim_that_clears_the_floor_admits_and_logs_before_and_after(self, trimming, tmp_path):
+        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+        self._own_lease_blocked()
+        trimming.after = 9000
+        assert _enveloped(guard.check)(_payload("pnpm build")) is None
+        assert trimming.fired == 1
+        (rec,) = [l for l in _log_lines(tmp_path) if l.get("kind") == "file-cache-trim"]
+        assert rec["status"] == "fired" and rec["before_mb"] == 900 and rec["after_mb"] == 9000
+
+    def test_trim_that_does_not_clear_denies_with_both_numbers(self, trimming):
+        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+        self._own_lease_blocked()
+        trimming.after = 1450
+        out = _enveloped(guard.check)(_payload("pnpm build"))
+        assert out is not None and "ram-floor" in _reason(out)
+        assert "before 900 MB, after 1450 MB" in _reason(out)
+
+    def test_second_call_inside_the_interval_does_not_trim(self, trimming):
+        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+        self._own_lease_blocked()
+        trimming.after = 1450
+        _enveloped(guard.check)(_payload("pnpm build"))
+        trimming.avail = 900  # the fired trim moved avail to 1450, which now clears the raw floor
+        out = _enveloped(guard.check)(_payload("pnpm build"))
+        assert trimming.fired == 1
+        assert "rate-limited, last trim before 900 MB after 1450 MB" in _reason(out)
+
+    def test_cache_smaller_than_the_shortfall_does_not_trim(self, trimming):
+        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+        self._own_lease_blocked()
+        trimming.cache = 10
+        out = _enveloped(guard.check)(_payload("pnpm build"))
+        assert trimming.fired == 0 and "cache-too-small" in _reason(out)
+
+    def test_absent_task_is_a_reported_noop_not_a_deny_reason(self, trimming, monkeypatch):
+        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+        self._own_lease_blocked()
+        monkeypatch.setattr(guard, "_fire_cache_trim", lambda: False)
+        out = _enveloped(guard.check)(_payload("pnpm build"))
+        assert "task-absent" in _reason(out)
+
+    def test_no_live_group_em_skips_the_trim_and_says_so(self, trimming, monkeypatch):
+        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+        self._own_lease_blocked()
+        monkeypatch.setattr(guard, "_group_em_live", lambda: False)
+        out = _enveloped(guard.check)(_payload("pnpm build"))
+        assert trimming.fired == 0
+        assert "trim skipped: no live group-em" in _reason(out)
+
+    def test_ram_deny_text_carries_no_blocked_prefix(self, host):
+        host.avail = 900
+        assert "BLOCKED" not in _reason(_enveloped(guard.check)(_payload("pnpm build")))
+
+    def test_non_windows_is_a_reported_noop(self, host):
+        host.avail = 900
+        host.rows = host.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
+        leases.write_lease(
+            leases.LeaseRecord(
+                holder_pid=777, holder_ctime=7, session_pid=777, session_ctime=7,
+                heavy_class="build", admitted_at=time.time(),
+            )
+        )
+        out = _enveloped(guard.check)(_payload("pnpm build"))
+        assert "noop-platform" in _reason(out)
+
+    def test_trim_leg_stays_under_the_process_time_bar(self, trimming):
+        trimming.after = 1500
+        start = time.process_time()
+        guard._trim_file_cache(900, 600)
+        assert (time.process_time() - start) * 1000 < 500
+
+    def test_task_name_mirrors_the_trim_library(self):
+        lib = Path(guard.__file__).resolve().parents[2] / "coordinator" / "bin" / "lib" / "file_cache_trim.py"
+        assert 'TRIM_TASK = "%s"' % guard._TRIM_TASK in lib.read_text(encoding="utf-8")
 
 
 class TestScopedCarveOut:
@@ -325,6 +444,33 @@ class TestXdistPytest:
     def test_single_worker_scoped_run_stays_scoped(self, host):
         cmd = "python -m pytest -n 1 coordinator_core/bash_guards/tests/test_host_probe.py"
         assert _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor")) is None
+
+
+class TestFewFileScopedPytest:
+    CMD = ("python -m pytest -p no:cacheprovider -q -n 0 "
+           "coordinator_core/bash_guards/tests/test_host_probe.py coordinator_core/bash_guards/tests/test_other.py")
+    EXEC = {"agent_id": "deadbeef0123", "agent_type": "coordinator:executor"}
+
+    def test_a_two_file_scoped_run_is_admitted_for_an_executor_without_the_ram_leg(self, host, tmp_path):
+        host.avail = 1
+        assert _enveloped(guard.check)(_payload(self.CMD, **self.EXEC)) is None
+        assert host.ram_reads == 0 and _lease_files(tmp_path) == []
+
+    def test_a_file_count_past_the_cap_stays_heavy(self, host):
+        files = " ".join("coordinator_core/t/test_%d.py" % i for i in range(30))
+        out = _enveloped(guard.check)(_payload("python -m pytest -n 0 " + files, **self.EXEC))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_a_directory_target_stays_heavy(self, host):
+        out = _enveloped(guard.check)(_payload("python -m pytest -n 0 coordinator_core a.py", **self.EXEC))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_an_executor_bounded_test_tier_command_is_admitted(self, host, monkeypatch):
+        from coordinator_core.bash_guards import _heavy_admission_contract as contract
+
+        cls = contract.Classification(contract.HeavyClass.TEST_TIER, False, False, False, True, False)
+        monkeypatch.setattr(guard, "classify", lambda *a, **k: cls)
+        assert _enveloped(guard.check)(_payload("python -m pytest -n 0 x.py y.py", **self.EXEC)) is None
 
 
 class TestOverlayPythonCli:
@@ -823,7 +969,10 @@ class TestNoThresholdLiterals:
             n.value.lineno
             for n in ast.walk(tree)
             if isinstance(n, ast.Assign)
-            and any(isinstance(t, ast.Name) and t.id == "_LOG_CMD_CHARS" for t in n.targets)
+            and any(
+                isinstance(t, ast.Name) and t.id in ("_LOG_CMD_CHARS", "_TRIM_SPAWN_TIMEOUT_S", "_MB_BYTES")
+                for t in n.targets
+            )
         }
         offenders = [
             (n.lineno, n.value)
@@ -838,8 +987,18 @@ class TestNoThresholdLiterals:
 
     def test_no_spawn_api_in_the_guard_source(self):
         src = (Path(guard.__file__)).read_text(encoding="utf-8")
-        for needle in ("subprocess", "os.system", "os.popen", "posix_spawn", "os.spawn"):
+        for needle in ("os.system", "os.popen", "posix_spawn", "os.spawn"):
             assert needle not in src
+        tree = ast.parse(src)
+        users = [
+            fn.name
+            for fn in ast.walk(tree)
+            if isinstance(fn, ast.FunctionDef)
+            and any(isinstance(n, ast.Name) and n.id == "subprocess" for n in ast.walk(fn))
+        ]
+        assert users == ["_fire_cache_trim"]
+        assert not [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
+                    and any(a.name.split(".")[0] == "subprocess" for a in getattr(n, "names", []))]
 
 
 class TestWouldDenyLog:
@@ -1242,7 +1401,7 @@ class TestFinishedLeaseRelease:
         leases.write_lease(LeaseRecord(session[0], session[1], session[0], session[1], "test_tier", time.time(), launch))
 
     def test_the_sessions_finished_lease_is_freed_and_another_sessions_stays(self, host):
-        host.avail = 1200
+        host.avail = 900
         host.rows = host.rows + [ProcRow(900, 1, 90, "claude.exe")]
         self._lease((CLAUDE.pid, CLAUDE.ctime), 5)  # launching shell (ctime 5) is gone
         self._lease((900, 90), 6)
@@ -1251,7 +1410,7 @@ class TestFinishedLeaseRelease:
         assert {r.session_pid for r in leases.live_leases()} == {900}
 
     def test_a_lease_whose_launching_shell_is_alive_is_kept(self, host):
-        host.avail = 1200
+        host.avail = 900
         host.rows = host.rows + [ProcRow(900, 1, 90, "claude.exe")]
         self._lease((CLAUDE.pid, CLAUDE.ctime), CALLER.ctime)
         self._lease((900, 90), 6)
@@ -1268,7 +1427,7 @@ class TestBarePytestLeg:
         monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
         out = _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123", agent_type="coordinator:executor"))
         assert out is not None
-        assert "coordinator_core.testing.scoped_pytest" in _reason(out)
+        assert "scoped-pytest --allow" in _reason(out)
         assert "bare-pytest leg" in _reason(out)
 
     def test_an_unresolved_run_fails_closed(self, host, monkeypatch):
@@ -1288,3 +1447,59 @@ class TestBarePytestLeg:
         monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
         out = _enveloped(guard.check)(_payload("python -m pytest a.py", agent_id="deadbeef0123"))
         assert out is None or "bare-pytest leg" not in _reason(out)
+
+
+class TestWorkflowInlinePythonProbe:
+    PROBES = [
+        "python -",
+        "python - <<'EOF'\nimport os\nEOF",
+        "python <<'EOF'\nprint(1)\nEOF",
+        "python3 -c 'print(1)'",
+        "cat x | python -",
+    ]
+
+    @pytest.fixture()
+    def workflow(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
+
+    @pytest.mark.parametrize("cmd", PROBES)
+    def test_a_workflow_executor_probe_is_identity_denied(self, host, workflow, cmd):
+        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor"))
+        assert out is not None and "identity" in _reason(out)
+
+    @pytest.mark.parametrize("cmd", PROBES)
+    def test_the_main_thread_probe_keeps_its_light_verdict(self, host, cmd):
+        assert _enveloped(guard.check)(_payload(cmd)) is None
+        assert host.ram_reads == 0
+
+    @pytest.mark.parametrize("cmd", PROBES)
+    def test_an_agent_tool_dispatch_probe_stays_light(self, host, cmd):
+        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor"))
+        assert out is None
+
+    @pytest.mark.parametrize("cmd", ["python -m json.tool", "python scripts/x.py", "python -m pytest a.py"])
+    def test_a_file_or_module_run_is_not_a_probe(self, host, workflow, cmd):
+        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor"))
+        assert out is None
+
+    def test_a_test_runner_probe_is_not_admitted_as_a_verifier(self, host, workflow):
+        out = _enveloped(guard.check)(_payload("python -", agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        assert out is not None and "identity" in _reason(out)
+
+    def test_an_unreadable_hold_record_denies_a_workflow_scoped_test(self, host, workflow, monkeypatch):
+        def boom():
+            raise OSError("locked")
+
+        monkeypatch.setattr(guard, "_read_box_hold", boom)
+        cmd = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"
+        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        assert out is not None and "box-hold" in _reason(out) and "unreadable" in _reason(out)
+
+    def test_an_unreadable_hold_record_still_raises_for_the_main_thread(self, host, monkeypatch):
+        def boom():
+            raise OSError("locked")
+
+        monkeypatch.setattr(guard, "_read_box_hold", boom)
+        cmd = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"
+        with pytest.raises(OSError):
+            _enveloped(guard.check)(_payload(cmd))

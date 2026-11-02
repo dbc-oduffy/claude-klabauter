@@ -9,7 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
+from coordinator_core.testing import spawn_depth
 from coordinator_core.testing.collect import Suite
+from coordinator_core.testing.nested_session_guard import guarded_child_env
 from coordinator_core.win_portability import no_console_creationflags
 
 DEFAULT_TIMEOUT: int = 300
@@ -32,31 +35,45 @@ class SuiteResult:
 
 
 def _run_subprocess(
-    command: Sequence[str], repo_root: Path, timeout: int
+    command: Sequence[str], repo_root: Path, timeout: int, env: dict | None = None
 ) -> tuple[int, float, str]:
+    """Run `command` in a capped job (killpg session off Windows).
+
+    `env` is the child env as given (None inherits `os.environ`); only the pytest batch passes a guarded one. Both the timeout and the normal exit close the job, so
+    no grandchild outlives the call.
+    """
     start = time.monotonic()
+    close = None
     try:
-        proc = subprocess.run(
+        proc, close = spawn_in_capped_job(
             list(command),
-            cwd=str(repo_root),
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            timeout=timeout,
-            text=True,
-            **_NO_CONSOLE,
+            popen_kwargs=dict(
+                cwd=str(repo_root),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                **_NO_CONSOLE,
+            ),
         )
+        try:
+            stdout, _ = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:
+            close()
+            duration = time.monotonic() - start
+            partial = exc.output
+            if isinstance(partial, bytes):
+                partial = partial.decode("utf-8", errors="replace")
+            try:
+                rest, _ = proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                rest = None
+            captured = rest or partial or ""
+            captured += f"\n[TIMEOUT] suite exceeded timeout={timeout}s\n"
+            return 124, duration, captured
         duration = time.monotonic() - start
-        return proc.returncode, duration, proc.stdout or ""
-    except subprocess.TimeoutExpired as exc:
-        duration = time.monotonic() - start
-        captured = ""
-        if exc.output:
-            captured = exc.output if isinstance(exc.output, str) else exc.output.decode(
-                "utf-8", errors="replace"
-            )
-        captured += f"\n[TIMEOUT] suite exceeded timeout={timeout}s\n"
-        return 124, duration, captured
+        return proc.returncode, duration, stdout or ""
     except FileNotFoundError as exc:
         duration = time.monotonic() - start
         captured = f"[RUNNER MISSING] {command[0]!r} not found: {exc}\n"
@@ -65,6 +82,9 @@ def _run_subprocess(
         duration = time.monotonic() - start
         captured = f"[SPAWN ERROR] {command[0]!r}: {exc}\n"
         return 127, duration, captured
+    finally:
+        if close is not None:
+            close()
 
 
 def _build_py_native_command(paths: Sequence[Path]) -> list[str]:
@@ -84,7 +104,14 @@ def _dispatch_py_native_batch(
     suites: Sequence[Suite], repo_root: Path, timeout: int
 ) -> SuiteResult:
     command = _build_py_native_command([s.path for s in suites])
-    exit_code, duration, captured = _run_subprocess(command, repo_root, timeout)
+    refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        command[3:], os.environ, str(repo_root)
+    )
+    if refusal:
+        return SuiteResult(suite=None, exit_code=2, duration=0.0, captured_output=refusal + "\n")
+    exit_code, duration, captured = _run_subprocess(
+        command, repo_root, timeout, env=guarded_child_env(os.environ)
+    )
     return SuiteResult(
         suite=None, exit_code=exit_code, duration=duration, captured_output=captured
     )

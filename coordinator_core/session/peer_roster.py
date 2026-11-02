@@ -120,6 +120,45 @@ class PeerRow:
     is_self: bool
     self_determination: str
     messaging_available: bool
+    kind: str = "claude"
+    pid: Optional[int] = None
+
+
+def _worker_rows(
+    repo_root: str, box_wide: bool, messaging_available: bool, now: float
+) -> List[PeerRow]:
+    """Live codex worker records as `kind="codex"` rows; any read failure yields no rows."""
+    try:
+        from coordinator_core.codex_runner import roster
+
+        records = roster.live_records()
+    except Exception:
+        return []
+    rows: List[PeerRow] = []
+    for rec in records:
+        try:
+            cwd = rec.get("cwd")
+            if not box_wide and not _cwd_within_repo(cwd, repo_root):
+                continue
+            rows.append(
+                PeerRow(
+                    session_id=f"codex:{rec['run_id']}",
+                    address=None,
+                    name=f"codex-{rec.get('mode')}",
+                    ref=None,
+                    cwd=cwd,
+                    status="running",
+                    running_seconds=max(0.0, now - float(rec.get("start_epoch") or now)),
+                    is_self=False,
+                    self_determination="resolved",
+                    messaging_available=messaging_available,
+                    kind="codex",
+                    pid=int(rec["pid"]),
+                )
+            )
+        except Exception:
+            continue
+    return rows
 
 
 def _normalize_path(path: str) -> str:
@@ -339,4 +378,5 @@ def build_roster(
                 messaging_available=harness_messaging_available,
             )
         )
+    rows.extend(_worker_rows(effective_root, box_wide, harness_messaging_available, now))
     return rows

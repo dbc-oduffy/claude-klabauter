@@ -14,6 +14,12 @@ resumes everything it paused, newest first, and prints one line. Every printed l
 the Group EM relays to the command's owner; nothing else is printed, so the waiter wakes nobody
 for a warn and its output is never filtered.
 
+Process pressure pauses too, whatever the memory verdict: when the box's python plus conhost count
+passes `--proc-ceiling`, or grows by more than `--proc-growth` between two samples, it suspends the
+tree whose python/conhost count grew most (protected and guarded trees exempt) and prints the same
+PAUSED line with procs/growth/total. Commit exhaustion from a recursive spawner reads as calm
+memory until the box is gone; the count is read from the tick's one process snapshot.
+
 Independently of pressure, every `--runaway-every` samples it reads each process's full footprint
 (resident plus compressed plus swapped) and prints one RUNAWAY line, once per pid, for any process
 over `--runaway-mb`. Pausing never frees memory, and a process paging itself out reads as a tiny
@@ -959,7 +965,24 @@ def fire_cache_trim(bin_dir: Path) -> Optional[str]:
         from file_cache_trim import fire_box_cache_trim
     except ImportError:
         return None
-    return fire_box_cache_trim()
+    return fire_box_cache_trim(live_fn=group_em_live)
+
+
+#: Consecutive samples with no live group-em holder before the governor exits (~60s at the default 10s interval).
+GEM_ABSENT_EXIT_SAMPLES = 6
+
+
+def group_em_live() -> bool:
+    """True when a live box-wide group-em holder exists; any failure reads as not live."""
+    try:
+        root = str(Path(__file__).resolve().parents[2])
+        if root not in sys.path:
+            sys.path.insert(0, root)
+        from coordinator_core.group_em import gem_home
+
+        return gem_home.gem_holder() is not None
+    except Exception:
+        return False
 
 
 def _governor_disk():
@@ -979,6 +1002,69 @@ def new_runaways(foot: dict[int, float], flagged: set[int], runaway_mb: float,
     flagged.intersection_update(foot)
     return {pid: mb for pid, mb in foot.items()
             if mb >= runaway_mb and pid not in flagged and pid != self_pid}
+
+
+#: Does the box hold more python plus conhost processes than fifty busy sessions explain? Commit
+#: exhaustion from a recursive spawner is invisible to the memory verdict until it is too late.
+PROC_CEILING = 600
+#: Did the python plus conhost count jump by more than any burst of hook and test spawns between
+#: two samples (10 s)? A self-respawning runner adds hundreds in that window.
+PROC_GROWTH = 80
+_PY_EXE = re.compile(r"pythonw?[\d.]*")
+_WRAPPER_EXE = frozenset({"bash", "sh", "zsh", "cmd", "powershell", "pwsh"})
+
+
+def _is_py_or_conhost(p: Proc) -> bool:
+    exe = _exe(p)
+    return exe == "conhost" or bool(_PY_EXE.fullmatch(exe))
+
+
+def python_conhost_trees(procs: list[Proc]) -> tuple[int, dict[int, int]]:
+    """(box-wide python+conhost count, count per tree root).
+
+    A root is the top of the contiguous python/conhost/shell-wrapper chain above a counted process;
+    one pass over the table, no spawn."""
+    by_pid = {p.pid: p for p in procs}
+    total = 0
+    roots: dict[int, int] = {}
+    for p in procs:
+        if not _is_py_or_conhost(p):
+            continue
+        total += 1
+        cur, seen = p, {p.pid}
+        while True:  # Trap: a stale ppid after pid reuse makes a cycle
+            parent = by_pid.get(cur.ppid)
+            if (parent is None or parent.pid in seen
+                    or not (_is_py_or_conhost(parent) or _exe(parent) in _WRAPPER_EXE)):
+                break
+            seen.add(parent.pid)
+            cur = parent
+        roots[cur.pid] = roots.get(cur.pid, 0) + 1
+    return total, roots
+
+
+def choose_process_victim(procs: list[Proc], roots: dict[int, int], prev_roots: Optional[dict[int, int]],
+                          paused: set[int], self_pid: int, ntree: frozenset = frozenset(),
+                          guarded: frozenset = frozenset()) -> Optional[tuple[Proc, int, int]]:
+    """(root, python+conhost count, growth since the previous sample) of the tree that grew most,
+    ties to the larger count then the younger; None when every root is protected, guarded, paused
+    or holds this process. Growth is 0 on the first sample (no baseline)."""
+    by_pid = {p.pid: p for p in procs}
+    prot = protected_pids(procs, ntree, guarded)
+    best: Optional[tuple[tuple, Proc, int, int]] = None
+    for pid, count in roots.items():
+        root = by_pid.get(pid)
+        if root is None or pid in paused or pid in prot or pid in guarded or pid == self_pid:
+            continue
+        if self_pid in descendants(pid, procs):
+            continue
+        growth = 0 if prev_roots is None else count - prev_roots.get(pid, 0)
+        if prev_roots is not None and growth <= 0:
+            continue  # a steady tree is not the spawner; freezing it never lowers the count
+        key = (growth, count, -root.age_s)
+        if best is None or key > best[0]:
+            best = (key, root, count, growth)
+    return None if best is None else best[1:]
 
 
 class DiskWatch:
@@ -1037,6 +1123,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
         shortfall_fn: Optional[Callable[[], float]] = None,
         cache_gib_fn: Optional[Callable[[], Optional[float]]] = None,
         trim_log_path: Optional[Path] = None,
+        group_em_live_fn: Optional[Callable[[], bool]] = None,
         clock: Callable[[], float] = time.monotonic) -> None:
     last_trim: Optional[float] = None
     bin_dir = bin_dir if bin_dir is not None else Path(__file__).resolve().parent
@@ -1055,12 +1142,48 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
     gave_up = False
     low_gib: Optional[float] = None
     pause_recovery = False
+    proc_ceiling = getattr(args, "proc_ceiling", PROC_CEILING)
+    proc_growth = getattr(args, "proc_growth", PROC_GROWTH)
+    prev_total: Optional[int] = None
+    prev_roots: Optional[dict[int, int]] = None
+    proc_streak = 0
+    live_fn = group_em_live_fn or group_em_live
+    absent = 0
+    skip_noted = False
+
+    def note_skip() -> None:
+        nonlocal skip_noted
+        if not skip_noted:
+            skip_noted = True
+            emit("GOVERNOR CACHE-TRIM skipped: no live group-em")
+
+    def freeze(victim: Proc, procs: list[Proc], prot: set[int]) -> list[int]:
+        # A pid with no readable start time cannot be recorded, so it is never frozen:
+        # an unrecorded freeze is one no later thaw can find.
+        tree = [t for t in descendants(victim.pid, procs) if t not in prot and start_time_fn(t) is not None]
+        _write_frozen(pidfile, paused + [(victim, tree)], start_times_fn)
+        signal_fn(tree, True)
+        paused.append((victim, tree))
+        return tree
+
     # A governor that exits (session end, SIGTERM) must never leave a peer's command frozen.
     # A hard kill (Windows TerminateProcess, SIGKILL) skips this finally; the pids are in `pidfile`
     # before the freeze signal, and the next governor or waiter start thaws them.
     try:
         while max_ticks is None or ticks < max_ticks:
             ticks += 1
+            try:
+                gem_live = bool(live_fn())
+            except Exception:
+                gem_live = False
+            if gem_live:
+                absent = 0
+                skip_noted = False
+            else:
+                absent += 1
+                if ticks == 1 or absent >= GEM_ABSENT_EXIT_SAMPLES:
+                    emit("GOVERNOR EXIT: no live group-em")
+                    break
             if ticks % RETENTION_EVERY == 1 % RETENTION_EVERY:
                 if retention_fn is not None:
                     try:
@@ -1096,11 +1219,42 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                         flagged.add(pid)
                         emit(f"GOVERNOR RUNAWAY pid={pid} footprint={mb:.0f}MB "
                              f"cmd={cmds.get(pid, '?')[:160]}")
+            proc_hot = False
+            if proc_ceiling > 0 or proc_growth > 0:
+                procs = procs_fn()
+                total, roots = python_conhost_trees(procs)
+                over_ceiling = proc_ceiling > 0 and total > proc_ceiling
+                over_growth = (proc_growth > 0 and prev_total is not None
+                               and total - prev_total > proc_growth)
+                proc_hot = over_ceiling or over_growth
+                if proc_hot:
+                    proc_streak += 1
+                    # First pause on the first hot sample; each further pause waits two more.
+                    if (not paused or proc_streak >= 3) and len(paused) < args.max_pauses:
+                        guarded = guard_fn(guard_path, procs, time.time())
+                        noticed = notice_fn(notice_path, procs)
+                        ntree = noticed_tree(noticed, procs)
+                        pick = choose_process_victim(procs, roots, prev_roots, {p.pid for p, _ in paused},
+                                                     self_pid, ntree, guarded)
+                        if pick:
+                            victim, count, growth = pick
+                            tree = freeze(victim, procs, protected_pids(procs, ntree, guarded))
+                            proc_streak = 0
+                            pause_recovery = True
+                            emit(f"GOVERNOR PAUSED pid={victim.pid} rss={victim.rss_mb:.0f}MB "
+                                 f"tree={len(tree)} procs={count} growth={growth:+d} "
+                                 f"total={total} cmd={victim.cmd[:160]}")
+                else:
+                    proc_streak = 0
+                prev_total, prev_roots = total, roots
             if sample():
                 calm = 0
                 crit_streak += 1
                 fire_trim = hint_armed and sys.platform == "win32"
                 hint_armed = False
+                if fire_trim and not gem_live:
+                    note_skip()
+                    fire_trim = False
                 # First pause on the first critical sample; each further pause waits two more.
                 due = not paused or crit_streak >= 3
                 if due and len(paused) < args.max_pauses:
@@ -1111,14 +1265,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                     victim = choose_victim(procs, {p.pid for p, _ in paused}, self_pid, noticed, ntree,
                                            shortfall_fn() if shortfall_fn else 0.0, guarded)
                     if victim:
-                        prot = protected_pids(procs, ntree, guarded)
-                        # A pid with no readable start time cannot be recorded, so it is never frozen:
-                        # an unrecorded freeze is one no later thaw can find.
-                        tree = [t for t in descendants(victim.pid, procs)
-                                if t not in prot and start_time_fn(t) is not None]
-                        _write_frozen(pidfile, paused + [(victim, tree)], start_times_fn)
-                        signal_fn(tree, True)
-                        paused.append((victim, tree))
+                        tree = freeze(victim, procs, protected_pids(procs, ntree, guarded))
                         crit_streak = 0
                         pause_recovery = True
                         emit(f"GOVERNOR PAUSED pid={victim.pid} rss={victim.rss_mb:.0f}MB "
@@ -1143,7 +1290,7 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
             else:
                 crit_streak = 0
                 hint_armed = True
-                calm += 1
+                calm = 0 if proc_hot else calm + 1
                 if paused and calm >= args.resume_after:
                     for victim, tree in reversed(paused):
                         signal_fn(tree, False)
@@ -1158,7 +1305,9 @@ def run(args: argparse.Namespace, emit: Callable[[str], None] = print,
                     and (last_trim is None or clock() - last_trim >= LOW_TRIM_COOLDOWN_S)):
                 read_cache = cache_gib_fn or (lambda: cache_gib(bin_dir))
                 cache = read_cache()
-                if cache is not None and cache >= LOW_TRIM_CACHE_GB:
+                if cache is not None and cache >= LOW_TRIM_CACHE_GB and not gem_live:
+                    note_skip()
+                elif cache is not None and cache >= LOW_TRIM_CACHE_GB:
                     t0 = last_trim = clock()
                     emit(f"GOVERNOR LOW available={avail:.1f} cache={cache:.1f}")
                     try:
@@ -1252,6 +1401,10 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--resume-after", type=int, default=6, help="non-critical samples before resume")
     ap.add_argument("--psi-full", type=float, default=10.0, help="Linux PSI full avg10 threshold")
     ap.add_argument("--avail-pct", type=float, default=5.0, help="fallback available-memory floor")
+    ap.add_argument("--proc-ceiling", type=int, default=PROC_CEILING,
+                    help="python+conhost process count that pauses the fastest-growing tree; 0 disables")
+    ap.add_argument("--proc-growth", type=int, default=PROC_GROWTH,
+                    help="python+conhost growth per sample that pauses the fastest-growing tree; 0 disables")
     ap.add_argument("--runaway-mb", type=float, default=12288.0,
                     help="footprint that flags one process as a runaway; 0 disables")
     ap.add_argument("--runaway-every", type=int, default=6, help="samples between footprint reads")

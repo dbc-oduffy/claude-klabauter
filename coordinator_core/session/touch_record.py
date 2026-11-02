@@ -280,6 +280,10 @@ MAX_ENCODED_LINE_LEN = 4096
 # trips at roughly an order of magnitude below that measured failure point.
 MAX_RECORD_BYTES = 256 * 1024
 
+#: Longest an event append holds its caller. The line is a claim and is never dropped: past
+#: this the job stays queued on the sink's writer and lands when the sink returns.
+APPEND_WAIT_SECS = 1.0
+
 # AC23: spawn-free containment check applied to a path AFTER
 # ``canonicalize_relative_path`` has already separator-normalized and
 # ``posixpath.normpath``-collapsed it. A POSIX-absolute (``/...``), a
@@ -1124,7 +1128,8 @@ def append_event(
     # ``claims.self_claim`` deliberately skips on an absent session dir).
     sink_path.parent.mkdir(parents=True, exist_ok=True)
     _maybe_rotate(sink_path)
-    atomic_append.append_line(sink_path, encoded)
+    if not atomic_append.append_line(sink_path, encoded, wait_secs=APPEND_WAIT_SECS):
+        _note_degrade("append_pending", str(sink_path))
     note_claim_in_index(sink_path, canonicalize_relative_path(path))
 
 
@@ -1241,12 +1246,17 @@ def note_claim_in_index(sink: "Path | str", key: str) -> None:
         if attributed is not None:
             sid_memo = (index_dir, sink_name, attributed[0])
             if sid_memo not in _INDEXED:
-                atomic_append.append_line(
+                if not atomic_append.append_line(
                     claim_index_file(index_dir, "s", attributed[0]),
                     (sink_name + "\n").encode("utf-8"),
-                )
+                    wait_secs=APPEND_WAIT_SECS,
+                ):
+                    raise TimeoutError("claim index session append pending")
                 _INDEXED.add(sid_memo)
-        atomic_append.append_line(stream, (sink_name + "\n").encode("utf-8"))
+        if not atomic_append.append_line(
+            stream, (sink_name + "\n").encode("utf-8"), wait_secs=APPEND_WAIT_SECS
+        ):
+            raise TimeoutError("claim index path append pending")
         if len(_INDEXED) >= _INDEXED_MAX:
             _INDEXED.clear()
         _INDEXED.add((stream, sink_name))

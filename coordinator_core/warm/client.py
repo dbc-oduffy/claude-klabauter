@@ -1114,6 +1114,41 @@ def _poll_command_for(dispatch_key: str) -> str:
     return f"python3 -m coordinator_core.invoke {_RECONCILE_POLL_METHOD} '{params}' --bare"
 
 
+_STALL_DUMPS_DIRNAME = "stall-dumps"
+_SAFE_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
+
+
+def _stall_dump_sentence(dispatch_key: Optional[str]) -> "tuple[str, Optional[str], Optional[str]]":
+    """`(sentence, dump_path, absent_reason)` naming the engine's stall dump for
+    `dispatch_key`, or why none is on disk. Failure-path only: `breadcrumb` is imported
+    here, never at module scope (cold-start preamble). Globs one bounded directory
+    (`STALL_DUMP_KEEP` files); never raises."""
+    reason = "no stall dump matches this request"
+    try:
+        from coordinator_core.warm import breadcrumb
+        from coordinator_core.warm.engine_root import current_engine_clone
+
+        dump_dir = breadcrumb.svc_dir(current_engine_clone()) / _STALL_DUMPS_DIRNAME
+    except Exception:  # noqa: BLE001 -- diagnostics never mask the envelope
+        reason = "the stall directory could not be resolved"
+        return f"No stall dump named: {reason}.", None, reason
+    if not dispatch_key or not set(dispatch_key) <= _SAFE_KEY_CHARS:
+        reason = "this request carries no dispatch key to match a dump"
+    else:
+        try:
+            hits = sorted(dump_dir.glob(f"*-*{dispatch_key}*.txt"), reverse=True)
+        except OSError:
+            hits = []
+            reason = "the stall directory is unreadable"
+        if hits:
+            return f"Stall dump: {hits[0]}.", str(hits[0]), None
+    return (
+        f"No stall dump named: {reason}; the engine writes dumps under {dump_dir}.",
+        None,
+        reason,
+    )
+
+
 def _indeterminate_envelope(
     msg: dict,
     detail: str,
@@ -1159,6 +1194,12 @@ def _indeterminate_envelope(
         error["message"] = f"{message} Reconcile: {_poll_command_for(dispatch_key)}"
         data["dispatch_key"] = dispatch_key
         data["reconcile"] = _RECONCILE_POLL_METHOD
+        sentence, dump, absent = _stall_dump_sentence(dispatch_key)
+        error["message"] = f"{error['message']} {sentence}"
+        if dump:
+            data["stall_dump"] = dump
+        else:
+            data["stall_dump_absent_reason"] = absent
     if data:
         error["data"] = data
     return {

@@ -69,6 +69,7 @@ _TSC_BUILD_FLAGS = frozenset({"-b", "--build"})
 _NOEMIT = "noemit"
 _UNBOUNDED = "unbounded"
 _BARE_PYTEST = "bare_pytest"
+_INLINE_PROBE = "inline_python_probe"
 _VERIFY_CLASSES = frozenset({HeavyClass.TEST_TIER, HeavyClass.TYPECHECK})
 _MAX_WORKERS_CONFIG_RE = re.compile(r"\bmaxWorkers\s*:\s*(\d+)?")
 
@@ -424,6 +425,10 @@ def _pytest_targets(args: Sequence[str]) -> List[str]:
     return targets
 
 
+#: A pytest naming more explicit test files than this is a suite by another name.
+_SCOPED_PYTEST_MAX_FILES = 12
+
+
 def _is_unscoped_plain_pytest(argv: Sequence[str]) -> bool:
     """argv runs pytest as its command with no more than one worker and other than exactly one
     file target (a lone directory is unbounded).
@@ -437,6 +442,40 @@ def _is_unscoped_plain_pytest(argv: Sequence[str]) -> bool:
         return False
     targets = _pytest_targets(args)
     return len(targets) != 1 or not targets[0].split("::", 1)[0].lower().endswith(".py")
+
+
+def _is_few_file_pytest(argv: Sequence[str]) -> bool:
+    """argv runs pytest on 2..N explicit `.py` file targets (nodeids allowed) with no xdist
+    fan-out: a bounded run, light for admission though still a bare multi-file pytest."""
+    args = _pytest_args(argv)
+    if args is None or _xdist_workers(args):
+        return False
+    targets = _pytest_targets(args)
+    return 1 < len(targets) <= _SCOPED_PYTEST_MAX_FILES and all(
+        t.split("::", 1)[0].lower().endswith(".py") for t in targets)
+
+
+def _is_inline_python_probe(argv: Sequence[str]) -> bool:
+    """argv runs python on code that is not a file: `python -`, `python -c ...`, or a bare `python`
+    fed by a heredoc or pipe. `python -m mod` and `python script.py` are not probes.
+
+    TRAP: the segment tokenizer drops a heredoc, so a bare `python` is the heredoc shape."""
+    if not argv or not _suite._base(argv[0]).lower().startswith("python"):
+        return False
+    rest = list(argv[1:])
+    if "-m" in rest:
+        return False
+    # Only interpreter flags (before the first positional) decide: `python x.py -c cfg` is a script run.
+    leading: List[str] = []
+    for tok in rest:
+        if tok and not tok.startswith("-") or tok == "-":
+            break
+        leading.append(tok)
+    if "-c" in leading or "-" in rest[len(leading):len(leading) + 1]:
+        return True
+    if len(leading) < len(rest):
+        return False
+    return not any(f in leading for f in ("--version", "-V", "--help", "-h"))
 
 
 def _wrapped_command(argv: Sequence[str]) -> Optional[str]:
@@ -484,7 +523,10 @@ def _scan(
             ) or _jest_unbounded(argv, worker_cap):
                 found.append(_UNBOUNDED)
             continue
-        if _is_xdist_pytest(argv) or _is_unscoped_plain_pytest(argv):
+        if _is_few_file_pytest(argv):
+            found.append("scoped")
+            found.append(_BARE_PYTEST)
+        elif _is_xdist_pytest(argv) or _is_unscoped_plain_pytest(argv):
             found.append(HeavyClass.TEST_TIER)
             found.append(_UNBOUNDED)
             found.append(_BARE_PYTEST)
@@ -494,6 +536,8 @@ def _scan(
                 found.append(_UNBOUNDED)
         elif _suite._runner_recognized(argv):
             found.append("scoped")
+        elif _is_inline_python_probe(argv):
+            found.append(_INLINE_PROBE)
 
 
 _PRECEDENCE = (
@@ -506,18 +550,20 @@ def classify(
     tool_input: Any = None,
     cwd: Optional[str] = None,
     vitest_worker_cap: Optional[int] = None,
+    workflow_agent: bool = False,
 ) -> Classification:
     """Heavy class of `command`; `scoped` is True only for a command whose sole runner footprint
     is an explicit test-target run or a worker-capped vitest run. `background` mirrors
     `tool_input["run_in_background"]`. `cwd` is the payload's; `vitest_worker_cap` None makes
-    every vitest run heavy."""
+    every vitest run heavy. `workflow_agent` True classes an inline python probe (no memory cap,
+    no declared peak) as an unbounded TEST_TIER command; for any other caller it stays light."""
     ti = tool_input if isinstance(tool_input, dict) else {}
     background = ti.get("run_in_background") is True
     light = Classification(None, False, background)
     if not isinstance(command, str) or not command.strip():
         return light
     low = command.lower()
-    if not any(s in low for s in _PREFILTER + _ue._PY_PREFILTER):
+    if not any(s in low for s in _PREFILTER + _ue._PY_PREFILTER) and not (workflow_agent and "python" in low):
         return light
     try:
         if _ue.launches_heavy(command):
@@ -528,6 +574,8 @@ def classify(
         _scan(command, _suite._read_testpaths(cwd), cwd, 0, found, vitest_worker_cap)
     except Exception:
         return light
+    if workflow_agent and _INLINE_PROBE in found:
+        found.extend((HeavyClass.TEST_TIER, _UNBOUNDED))
     heavies = [f for f in found if isinstance(f, HeavyClass)]
     noemit = bool(heavies) and all(f is HeavyClass.TYPECHECK for f in heavies) and (
         found.count(_NOEMIT) == len(heavies)
@@ -536,7 +584,7 @@ def classify(
     for cls in _PRECEDENCE:
         if cls in found:
             return Classification(cls, False, background, noemit, bounded, _BARE_PYTEST in found)
-    return Classification(None, "scoped" in found, background)
+    return Classification(None, "scoped" in found, background, False, False, _BARE_PYTEST in found)
 
 
 @dataclass(frozen=True)

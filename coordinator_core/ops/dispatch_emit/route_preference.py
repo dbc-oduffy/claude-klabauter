@@ -14,6 +14,8 @@ from typing import Optional
 ROUTE_PREFERENCES = ("goal", "roadmap", "plan")
 #: The sizing `route` value each preference names.
 PREFERENCE_ROUTES = {"goal": "goal-setting", "roadmap": "roadmap", "plan": "plan"}
+#: Lanes the sizing scout infers from the ask itself; naming one is a lean, not a refusal.
+INFERRED_LANES = ("research",)
 EM_RATIONALE_MAX_CHARS = 2000
 #: Run record file under `record_dir(root, run_id)`.
 ROUTE_PREFERENCE_FILE = "route-preference.json"
@@ -51,7 +53,7 @@ def refusal(where: str, route_preference: object, em_rationale: object) -> Optio
     ):
         return (
             f'{where}.route_preference: not one of {", ".join(ROUTE_PREFERENCES)} '
-            f'(e.g. route_preference: "plan").'
+            f'(e.g. route_preference: "plan"); omit it to let the sizing pick the lane.'
         )
     if isinstance(em_rationale, str) and len(em_rationale.strip()) > EM_RATIONALE_MAX_CHARS:
         return (
@@ -85,6 +87,12 @@ def normalize(route_preference: object, em_rationale: object) -> tuple[object, o
         pref = next((pref[k] for k in _NESTED_PREFERENCE_KEYS if pref.get(k) is not None), None)
         if em_rationale is None:
             em_rationale = nested_why
+    if isinstance(pref, str) and pref.strip().lower() in INFERRED_LANES:
+        # The research lane comes from the scout's research block, not the preference; the lean
+        # still reaches the scout through the rationale.
+        lean = f"EM leans {pref.strip().lower()}."
+        why = _rationale_text(em_rationale)
+        return None, _rationale_text(f"{lean} {why}" if isinstance(why, str) else lean)
     if isinstance(pref, str):
         key = pref.strip().lower()
         by_route = {route: name for name, route in PREFERENCE_ROUTES.items()}

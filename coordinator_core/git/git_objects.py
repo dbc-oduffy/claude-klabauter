@@ -443,6 +443,18 @@ class _GitReadModelError(Exception):
     pass
 
 
+class PackReadDeadline(_GitReadModelError):
+    """A pack read ran past `PACK_READ_DEADLINE_SECS` on both the first attempt and its
+    retry against a freshly opened map. Never means "object missing"."""
+
+
+# Per attempt; two attempts must stay below the warm server's STALL_DUMP_SECS (10s), and
+# git must not import coordinator_core.warm, so the figure is pinned by a test instead.
+PACK_READ_DEADLINE_SECS = 4.0
+_pack_clock = time.monotonic
+_PACK_DEADLINE = threading.local()
+
+
 _PACK_TYPE_NAMES = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
 _PACK_TYPE_NUMS = {v: k for k, v in _PACK_TYPE_NAMES.items()}
 
@@ -1101,6 +1113,9 @@ def _zlib_decompress_bounded(pack_bytes: bytes, pos: int, size_hint: int) -> byt
     cur = pos
     window = max(64, size_hint + 64) if size_hint else 4096
     while True:
+        deadline = getattr(_PACK_DEADLINE, "at", None)
+        if deadline is not None and _pack_clock() > deadline:
+            raise PackReadDeadline(f"pack read past deadline at offset {pos}")
         end = min(cur + window, n)
         if end <= cur:
             raise _GitReadModelError(f"truncated zlib stream in pack object at offset {pos}")
@@ -1175,6 +1190,41 @@ def packed_contains(common_dir: Path, sha: str) -> bool:
     return _locate_packed(Path(common_dir), sha, revalidate=False) is not None
 
 
+def _drop_scoped_pack_map(pack_path: Path) -> None:
+    if not call_io_scope.scope_open():
+        return
+    holder = call_io_scope.memo(_PACK_MAPS_NAMESPACE, "", _ScopedPackMaps)
+    stale = holder.maps.pop(str(pack_path), None)
+    close = getattr(stale, "close", None)
+    if close is not None:
+        try:
+            close()
+        except (BufferError, ValueError):
+            pass
+
+
+def _read_pack_object_deadlined(
+    common_dir: Path, pack_path: Path, pack_bytes: bytes, offset: int
+) -> tuple[int, bytes]:
+    """Outermost pack read owns the deadline; a nested REF_DELTA base read inherits it.
+    One expiry re-opens the pack and retries; a second raises `PackReadDeadline`."""
+    if getattr(_PACK_DEADLINE, "at", None) is not None:
+        return _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
+    try:
+        for attempt in (0, 1):
+            _PACK_DEADLINE.at = _pack_clock() + PACK_READ_DEADLINE_SECS
+            try:
+                return _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
+            except PackReadDeadline:
+                if attempt:
+                    raise
+                _drop_scoped_pack_map(pack_path)
+                pack_bytes = _read_pack_bytes(pack_path)
+        raise AssertionError("unreachable")
+    finally:
+        _PACK_DEADLINE.at = None
+
+
 def _search_packs_for_sha(
     common_dir: Path, sha: str, *, revalidate: bool
 ) -> Optional[tuple[Optional[tuple[str, bytes]]]]:
@@ -1194,7 +1244,7 @@ def _search_packs_for_sha(
                 return None
             _PACK_LISTING_CACHE.pop(str(common_dir), None)
             revalidate = True
-    type_num, content = _read_pack_object_at(common_dir, pack_path, pack_bytes, offset)
+    type_num, content = _read_pack_object_deadlined(common_dir, pack_path, pack_bytes, offset)
     type_name = _PACK_TYPE_NAMES.get(type_num)
     if type_name is None:
         return (None,)
@@ -1264,6 +1314,8 @@ def _read_local_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]
         return result
     try:
         return _read_pack_object_by_sha(common_dir, sha)
+    except PackReadDeadline:
+        raise
     except (_GitReadModelError, zlib.error, struct.error):
         return None
 
@@ -1373,15 +1425,38 @@ def _log_all_ref_updates(gitdir: Path) -> bool:
     return True
 
 
-def append_reflog(gitdir: Path, ref: str, old: Optional[str], new: str, committer: str, message: str) -> None:
+#: A reflog line is a recoverable audit trail; the append never holds a commit past this.
+REFLOG_APPEND_DEADLINE_SECS = 1.0
+
+
+def append_reflog(gitdir: Path, ref: str, old: Optional[str], new: str, committer: str, message: str) -> bool:
+    """Append one reflog line; False when the write outlived `REFLOG_APPEND_DEADLINE_SECS`
+    (the caller moves on; the line may still land later, out of order with later appends).
+    The in-repo callers (`write_ref`-style paths) do not read the result: a late line is accepted loss."""
     if not _log_all_ref_updates(gitdir):
-        return
+        return True
     log_path = gitdir / "logs" / ref
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     old_hex = old if old else "0" * 40
     line = f"{old_hex} {new} {committer}\t{message}\n".encode("utf-8")
-    with open(log_path, "ab") as fh:
-        fh.write(line)
+
+    failure: list = []
+
+    def _write() -> None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "ab") as fh:
+                fh.write(line)
+        except OSError as exc:
+            failure.append(exc)
+
+    worker = threading.Thread(target=_write, name="append-reflog", daemon=True)
+    worker.start()
+    worker.join(REFLOG_APPEND_DEADLINE_SECS)
+    if worker.is_alive():
+        return False
+    if failure:
+        raise failure[0]
+    return True
 
 
 def _head_symref_target(head_gitdir: Path) -> Optional[str]:

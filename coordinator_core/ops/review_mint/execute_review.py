@@ -598,6 +598,28 @@ _REVIEW_MISSING_REFUSAL = (
     "A review-wave agent returned a prep reply with a null error and no review. Re-run the review wave."
 )
 
+#: A wave reply with a clean prep over slices and no review: an empty slot. It is re-dispatched once
+#: (`_WAVE_RETRY_EMPTY_JS`); one still empty is dropped and noted, and the wave halts with
+#: REVIEW_MISSING_HALT only when no reply carried a review.
+_EMPTY_WAVE_SLOT_JS = (
+    "r && r.prep && !r.prep.error && (Array.isArray(r.prep.slices) ? r.prep.slices : []).length "
+    "&& (r.review === undefined || r.review === null)"
+)
+
+#: Runs straight after the wave, before `_reviewWave` is derived. `_dropNote` maps a wave index still
+#: empty after its one retry to the suffix its not-run reason carries (slice ids).
+_WAVE_RETRY_EMPTY_JS = (
+    f"  const _emptyAt = _waveRaw.flatMap((r, i) => ({_EMPTY_WAVE_SLOT_JS}) ? [i] : []);\n"
+    "  const _dropNote = new Map();\n"
+    "  if (_emptyAt.length) {\n"
+    "    const _again = await parallel(_emptyAt.map(i => _waveThunks[i]));\n"
+    "    _emptyAt.forEach((i, k) => {\n"
+    "      if (_again[k] && _again[k].review !== undefined && _again[k].review !== null) _waveRaw[i] = _again[k];\n"
+    "      else _dropNote.set(i, ' after one retry (slices: ' + _waveRaw[i].prep.slices.map(s => s.id).join(', ') + ')');\n"
+    "    });\n"
+    "  }\n"
+)
+
 #: With `prep_in_wave` the review-wave block binds these after the wave, from the replies the
 #: agents returned beside their reviews. `_reviewPrep` is the first reply without an error with
 #: every reply's slices merged by id (when the relayed slices are all empty, the slice ids the wave reviews name stand in -- the stored reply, not the relay, is authoritative); when every reply errored it is the first reply, else null.
@@ -617,19 +639,24 @@ _PREP_FROM_WAVE_JS = (
     "_waveRaw.length + ' wave agents)', "
     f"reason: {_js_string_literal(_PREP_MALFORMED_REFUSAL)}, "
     "prep: { ..._malformed[0], slices: [] }, wave: null, integration: null }; }\n"
-    "  if (_waveRaw.some(r => r && r.prep && !r.prep.error && (Array.isArray(r.prep.slices) ? r.prep.slices : []).length && (r.review === undefined || r.review === null))) { "
+    f"  if (_waveRaw.some(r => {_EMPTY_WAVE_SLOT_JS}) && !_waveRaw.some(r => r && r.review !== undefined && r.review !== null)) {{ "
     f"return {{ halted: {_js_string_literal(REVIEW_MISSING_HALT)}, "
     f"reason: {_js_string_literal(_REVIEW_MISSING_REFUSAL)}, "
     "prep: _prepReplies[0] ?? null, wave: null, integration: null }; }\n"
     "  const _truthReply = _waveRaw.find(r => r && !r._dispatched && r.prep && !r.prep.error && "
     "Array.isArray(r.prep.slices) && r.prep.slices['length']);\n"
-    "  const _outOfGroupAt = !_truthReply ? -1 : _waveRaw.findIndex(r => {\n"
-    "    if (!(r && r._dispatched && r.prep && !r.prep.error && Array.isArray(r.prep.slices) && r.prep.slices['length'])) return false;\n"
-    "    const all = _truthReply.prep.slices.map(s => s.id);\n"
+    "  const _sid = (s) => (typeof s === 'string' ? s : s && s.id);\n"
+    "  const _groupOf = (r) => {\n"
+    "    const all = _truthReply.prep.slices.map(_sid);\n"
     "    const g = Math.max(1, Math.min(all.length, r._dispatched.n));\n"
     "    let at = 0; for (let k = 0; k < r._dispatched.i && k < g; k++) at += Math.floor(all.length / g) + (k < all.length % g ? 1 : 0);\n"
     "    const size = r._dispatched.i < g ? Math.floor(all.length / g) + (r._dispatched.i < all.length % g ? 1 : 0) : 0;\n"
-    "    return all.slice(at, at + size).join('+') !== r.prep.slices.map(s => s.id).join('+');\n"
+    "    return all.slice(at, at + size);\n"
+    "  };\n"
+    "  const _outOfGroupAt = !_truthReply ? -1 : _waveRaw.findIndex(r => {\n"
+    "    if (!(r && r._dispatched && r.prep && !r.prep.error && Array.isArray(r.prep.slices) && r.prep.slices['length'])) return false;\n"
+    "    const own = _groupOf(r);\n"
+    "    return !r.prep.slices.every(s => own.includes(_sid(s)));\n"
     "  });\n"
     "  if (_outOfGroupAt >= 0) { "
     f"return {{ halted: {_js_string_literal(SLICE_ID_UNKNOWN_HALT)} + ' (wave agent ' + _outOfGroupAt + "
@@ -640,7 +667,8 @@ _PREP_FROM_WAVE_JS = (
     "  // A reply whose prep lists slices is rebound to them, so SLICE_ID_UNKNOWN fires only for an empty prep.\n"
     "  for (const r of _waveRaw) if (r && r.review && typeof r.review === 'object' && r.prep && !r.prep.error) {\n"
     "    const _own = Array.isArray(r.prep.slices) ? r.prep.slices : [];\n"
-    "    if (_own.length) r.review.slice_id = _own.map(s => s.id).join('+');\n"
+    "    if (r._dispatched && _truthReply && _own.length) r.review.slice_id = _groupOf(r).join('+');\n"
+    "    else if (_own.length) r.review.slice_id = _own.map(_sid).join('+');\n"
     "  }\n"
     "  const _reviewPrep = (() => {\n"
     "    const ok = _prepReplies.find(p => !p.error);\n"
@@ -1919,6 +1947,9 @@ def compose_execute_review(
         wave_lines.append(_GROUP_SLICES_JS)
     if delivery_index is not None:
         wave_lines.append(f"  let {_DELIVERY_REASON_VAR} = null;")
+    def _drop_note_js(index_js: str) -> str:
+        return f" + (_dropNote.get({index_js}) ?? '')" if prep_in_wave else ""
+
     tracked = [
         (i - len(whole_diff_agents), a)
         for i, a in enumerate(whole_diff_agents)
@@ -1927,7 +1958,9 @@ def compose_execute_review(
     if tracked or slice_agents:
         wave_lines.append(f"  {WAVE_NOT_RUN_VAR} = [];")
     if prep_in_wave:
-        wave_lines.append(f"  const _waveRaw = await parallel([\n{map_lines}\n  ]);")
+        wave_lines.append(f"  const _waveThunks = [\n{map_lines}\n  ];")
+        wave_lines.append("  const _waveRaw = await parallel(_waveThunks);")
+        wave_lines.append(_WAVE_RETRY_EMPTY_JS.rstrip("\n"))
         wave_lines.append("  const _reviewWave = _waveRaw.map(r => (r ? (r.review ?? null) : null));")
     elif active_groups:
         wave_lines.append(f"  const _wholeWave = await parallel([\n{map_lines}\n  ]);")
@@ -1943,7 +1976,11 @@ def compose_execute_review(
             wave_lines.append(
                 f"  if (!_reviewWave[_reviewWave.length - {-slot}] && "
                 f"!{WAVE_NOT_RUN_VAR}.some(n => n.slot === {slot})) {{ "
-                + _not_run_entry_js(str(slot), a.agent_type, _js_string_literal(_WAVE_NO_REVIEW))
+                + _not_run_entry_js(
+                    str(slot),
+                    a.agent_type,
+                    _js_string_literal(_WAVE_NO_REVIEW) + _drop_note_js(f"_reviewWave.length + {slot}"),
+                )
                 + " }"
             )
         wave_lines.append(f"  {WAVE_NOT_RUN_VAR}.forEach(n => {{ n.slot += _reviewWave.length; }});")
@@ -1967,7 +2004,7 @@ def compose_execute_review(
                 "i",
                 slice_types,
                 f"({empty_group} ? {_js_string_literal(_WAVE_SKIPPED + 'no slices in group')} "
-                f": {_js_string_literal(_WAVE_NO_REVIEW)})",
+                f": {_js_string_literal(_WAVE_NO_REVIEW)}{_drop_note_js('i')})",
             )
             + " } }"
         )

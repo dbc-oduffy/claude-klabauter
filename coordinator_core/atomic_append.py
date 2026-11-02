@@ -172,7 +172,10 @@ def _release_held(sink_str: str, held: "list[bytes]", dropped: int) -> None:
             pass
 
 
-def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False, *, hold: bool = False) -> None:
+def append_line(
+    sink: "Path | str", encoded: bytes, droppable: bool = False, *, hold: bool = False,
+    wait_secs: "float | None" = None,
+) -> "bool | None":
     """Atomically append ``encoded`` (already newline-terminated) to ``sink``.
 
     A single write of one pre-encoded line, using the platform's genuinely
@@ -203,6 +206,11 @@ def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False, *, 
     ``hold=True`` (with ``droppable``) is for the drain worker: a line arriving while
     the sink is already stalled is parked in memory, bounded by ``_RETAIN_MAX``, and
     re-enqueued when the sink's writer returns.
+
+    ``wait_secs`` (non-droppable only) bounds the caller's wait without bounding the
+    write: past it the call returns ``False`` and the job stays queued, so the line
+    still lands, in order, once the sink's writer returns. ``True`` means it landed.
+    For a record that must not be lost but whose caller must not hang on a wedged sink.
     """
     sink_str = str(sink)
     if droppable and _forward(sink_str, encoded, hold):
@@ -225,10 +233,11 @@ def append_line(sink: "Path | str", encoded: bytes, droppable: bool = False, *, 
         if _stalled:
             budget = max(0.0, APPEND_DEADLINE_SECS - (time.monotonic() - min(_stalled.values())))
     if not droppable:
-        job.done.wait()
+        if not job.done.wait(wait_secs):
+            return False
         if job.error is not None:
             raise job.error
-        return
+        return True
     if budget <= 0.0:
         for _ in range(_FRESH_SINK_YIELDS):
             if job.done.is_set():
@@ -277,36 +286,57 @@ def _write_once(sink_str: str, encoded: bytes) -> None:
 
 
 def _writer_loop(sink_str: str, w: "queue.SimpleQueue") -> None:
-    while True:
-        try:
-            job = w.get(timeout=_WRITER_IDLE_SECS)
-        except queue.Empty:
+    """Drain ``w``; however this thread ends, its registry entry is removed and any job
+    still queued is failed, so ``append_line`` never leaves a job without a consumer."""
+    try:
+        while True:
+            try:
+                job = w.get(timeout=_WRITER_IDLE_SECS)
+            except queue.Empty:
+                with _registry_lock:
+                    if w.empty():
+                        _writers.pop(sink_str, None)
+                        return
+                continue
             with _registry_lock:
-                if w.empty():
-                    _writers.pop(sink_str, None)
-                    return
-            continue
+                _in_flight[sink_str] = _in_flight.get(sink_str, 0) + 1
+            held: "list[bytes]" = []
+            dropped = 0
+            try:
+                _write_once(sink_str, job.encoded)
+            except Exception as exc:
+                job.error = exc
+            finally:
+                try:
+                    with _registry_lock:
+                        if _in_flight[sink_str] <= 1:
+                            del _in_flight[sink_str]
+                        else:
+                            _in_flight[sink_str] -= 1
+                        if w.empty():
+                            _stalled.pop(sink_str, None)
+                            held = _held.pop(sink_str, [])
+                            dropped = _held_dropped.pop(sink_str, 0)
+                finally:
+                    job.done.set()
+            if held or dropped:
+                _release_held(sink_str, held, dropped)
+    except BaseException as exc:
+        try:
+            sys.stderr.write(f"atomic_append: writer for {sink_str} died: {exc!r}\n")
+        except Exception:
+            pass
+    finally:
         with _registry_lock:
-            _in_flight[sink_str] = _in_flight.get(sink_str, 0) + 1
-        held: "list[bytes]" = []
-        dropped = 0
-        try:
-            _write_once(sink_str, job.encoded)
-        except Exception as exc:
-            job.error = exc
-        finally:
-            with _registry_lock:
-                if _in_flight[sink_str] <= 1:
-                    del _in_flight[sink_str]
-                else:
-                    _in_flight[sink_str] -= 1
-                if w.empty():
-                    _stalled.pop(sink_str, None)
-                    held = _held.pop(sink_str, [])
-                    dropped = _held_dropped.pop(sink_str, 0)
-            job.done.set()
-        if held or dropped:
-            _release_held(sink_str, held, dropped)
+            if _writers.get(sink_str) is w:
+                del _writers[sink_str]
+        while True:
+            try:
+                orphan = w.get_nowait()
+            except queue.Empty:
+                break
+            orphan.error = RuntimeError(f"atomic_append writer for {sink_str} died before this line was written")
+            orphan.done.set()
 
 
 def in_flight_sinks() -> "tuple[str, ...]":

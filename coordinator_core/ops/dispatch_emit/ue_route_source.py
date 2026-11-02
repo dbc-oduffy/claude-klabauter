@@ -6,9 +6,11 @@ process; `clear_caches()` resets them.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.git.git_objects import PACK_READ_DEADLINE_SECS as READ_DEADLINE_SECS
 from coordinator_core.ops.dispatch_emit.plugin_review_overlay import (
     PLUGIN_ROOTS_ENV,
     _plugin_name,
@@ -27,6 +29,7 @@ _WALK_SKIP = SKIP_SEGMENTS | {
     "Binaries", "Intermediate", "Saved", "DerivedDataCache",
 }
 
+_clock = time.monotonic
 _UE_REPO_CACHE: dict[str, bool] = {}
 _TABLE_PATH_CACHE: dict[tuple[str, str], Optional[Path]] = {}
 _ROSTER_CACHE: dict[str, frozenset[str]] = {}
@@ -38,24 +41,45 @@ def clear_caches() -> None:
     _ROSTER_CACHE.clear()
 
 
-def _has_ue_marker(dir_path: str, depth: int) -> bool:
+# A UE project root is a handful of entries; a directory past this is a data tree (a photo
+# corpus wedged the warm engine for every peer, 2026-11-02), so it is neither read past the cap
+# nor descended. The total cap bounds a wide tree of small directories the same way.
+_MAX_DIR_ENTRIES = 256
+_MAX_TOTAL_ENTRIES = 4096
+
+
+def _has_ue_marker(dir_path: str, depth: int, deadline: Optional[float] = None,
+                   budget: Optional[list] = None) -> bool:
+    """Marker walk bounded by depth, per-directory and total entry caps, and `deadline`
+    (monotonic); whatever lies past a bound reads as no marker."""
+    if deadline is None:
+        deadline = _clock() + READ_DEADLINE_SECS
+    elif _clock() >= deadline:
+        return False
+    if budget is None:
+        budget = [_MAX_TOTAL_ENTRIES]
+    subdirs: list[str] = []
+    seen = 0
     try:
-        entries = list(os.scandir(dir_path))
+        with os.scandir(dir_path) as it:
+            for entry in it:
+                seen += 1
+                budget[0] -= 1
+                if seen > _MAX_DIR_ENTRIES or budget[0] < 0:
+                    return False
+                try:
+                    is_dir = entry.is_dir(follow_symlinks=False)
+                except OSError:
+                    continue
+                if is_dir:
+                    if not entry.name.startswith(".") and entry.name not in _WALK_SKIP:
+                        subdirs.append(entry.path)
+                elif entry.name.endswith(_UE_SUFFIXES):
+                    return True
     except OSError:
         return False
-    subdirs: list[str] = []
-    for entry in entries:
-        try:
-            is_dir = entry.is_dir(follow_symlinks=False)
-        except OSError:
-            continue
-        if is_dir:
-            if not entry.name.startswith(".") and entry.name not in _WALK_SKIP:
-                subdirs.append(entry.path)
-        elif entry.name.endswith(_UE_SUFFIXES):
-            return True
     if depth < _MAX_DEPTH:
-        return any(_has_ue_marker(sub, depth + 1) for sub in sorted(subdirs))
+        return any(_has_ue_marker(sub, depth + 1, deadline, budget) for sub in sorted(subdirs))
     return False
 
 

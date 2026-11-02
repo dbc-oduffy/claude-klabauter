@@ -11,6 +11,7 @@ from coordinator_core.install.runtime_ignore_apply import HEADER, apply_runtime_
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 TEMPLATE = "# managed\n.coordinator-local/\nstate/watch.json\nscratch/\n"
+WARP = "state/warp/*/prompts/"
 
 
 def _git(root: Path, *args: str) -> str:
@@ -50,7 +51,7 @@ def _tracked(root: Path) -> set[str]:
 def test_appends_only_missing_and_second_run_is_noop(repo, template):
     _write(repo, ".gitignore", "scratch/\n")
     res = apply_runtime_ignore(repo, template)
-    assert res.appended == (".coordinator-local/", "state/watch.json")
+    assert res.appended == (".coordinator-local/", "state/watch.json", WARP)
     text = (repo / ".gitignore").read_text(encoding="utf-8")
     assert text.count(HEADER) == 1
     assert text.count("scratch/") == 1
@@ -98,7 +99,7 @@ UNREAL_TEMPLATE = TEMPLATE + "Intermediate/\n"
 def test_non_unreal_repo_gets_no_unreal_rule_and_gitignore_unchanged(repo, tmp_path):
     tmpl = tmp_path / "tmpl-unreal"
     tmpl.write_text(UNREAL_TEMPLATE, encoding="utf-8")
-    original = ".coordinator-local/\nstate/watch.json\nscratch/\n"
+    original = f".coordinator-local/\nstate/watch.json\nscratch/\n{WARP}\n"
     (repo / ".gitignore").write_bytes(original.encode())
     res = apply_runtime_ignore(repo, tmpl)
     assert res.appended == ()
@@ -124,11 +125,38 @@ def test_unreal_repo_still_gets_intermediate(repo, tmp_path, name):
     assert "Intermediate/" in (repo / ".gitignore").read_text(encoding="utf-8")
 
 
-def test_template_none_is_skipped(repo, monkeypatch):
+def test_template_none_still_applies_engine_rule(repo, monkeypatch):
     monkeypatch.setattr(mod, "resolve_template_path", lambda: None)
+    _write(repo, "state/warp/run1/prompts/a.md")
+    _git(repo, "add", "-f", "-A")
     res = apply_runtime_ignore(repo)
-    assert res.skipped and res.appended == () and res.untracked == ()
-    assert not (repo / ".gitignore").exists()
+    assert res.skipped == "template not found"
+    assert res.appended == (WARP,)
+    assert res.untracked == ("state/warp/run1/prompts/a.md",)
+    assert WARP in (repo / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_warp_prompts_ignored_and_untracked_keeping_other_run_artifacts(repo, template):
+    _write(repo, "state/warp/run1/prompts/reword.md")
+    _write(repo, "state/warp/run1/prompts/sub/b.md")
+    _write(repo, "state/warp/run1/halted.json", "{}\n")
+    _git(repo, "add", "-f", "-A")
+    res = apply_runtime_ignore(repo, template)
+    assert WARP in res.appended
+    assert set(res.untracked) == {
+        "state/warp/run1/prompts/reword.md",
+        "state/warp/run1/prompts/sub/b.md",
+    }
+    assert "state/warp/run1/halted.json" in _tracked(repo)
+    assert (repo / "state/warp/run1/prompts/reword.md").exists()
+    assert apply_runtime_ignore(repo, template).appended == ()
+
+
+def test_warp_rule_not_duplicated_when_template_carries_it(repo, tmp_path):
+    tmpl = tmp_path / "tmpl-warp"
+    tmpl.write_text(TEMPLATE + WARP + "\n", encoding="utf-8")
+    apply_runtime_ignore(repo, tmpl)
+    assert (repo / ".gitignore").read_text(encoding="utf-8").count(WARP) == 1
 
 
 def test_one_git_spawn_when_tracked(repo, template, monkeypatch):

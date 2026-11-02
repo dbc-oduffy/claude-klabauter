@@ -680,6 +680,16 @@ def _deep_roster(sources: Sequence[str]) -> list[dict[str, str]]:
     return roster
 
 
+def roster_gaps(roster: Sequence[Mapping[str, str]], pipelines: Sequence[str]) -> list[str]:
+    """Source slugs the run's own pipelines name that have a specialist yet no roster member.
+
+    A source whose corpus pipeline runs ahead of the unblock team feeds the challenge stage, which
+    may then address it by slug; a roster without that member crashes the run mid-flight.
+    """
+    on_roster = {m["slug"] for m in roster}
+    return [p for p in pipelines if p in rc.SOURCE_SPECIALIST and p not in on_roster]
+
+
 def _has_local_target(question: str | Mapping) -> bool:
     """Whether a raw or normalised question names a local target (any input form)."""
     if not isinstance(question, Mapping):
@@ -737,7 +747,15 @@ def segments_for(
                 lists[rc.PROBES_LIST] = (rc.COMBINED_SCOUT_ITEM,) if mode == "combine" else tuple(local)
                 flags[rc.LOCAL_PROBE_FLAG] = True
         elif pipeline == rc.DEEP_PIPELINE:
-            lists[_ROSTER_LIST] = tuple(_deep_roster(sources))
+            roster = _deep_roster(sources)
+            gaps = roster_gaps(roster, shape["pipelines"])
+            if gaps:
+                raise PipelineEmitRefused([
+                    f"unblock roster ({', '.join(m['slug'] for m in roster)}) lacks source slug(s) the run "
+                    f"addresses: {', '.join(gaps)}; add them to research.sources "
+                    f"(sizing-assemble --research-source {','.join([*sources, *gaps])})"
+                ])
+            lists[_ROSTER_LIST] = tuple(roster)
         elif pipeline == _NOTEBOOKLM_PIPELINE:
             refs = tuple(t["ref"] for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE)
             if refs:

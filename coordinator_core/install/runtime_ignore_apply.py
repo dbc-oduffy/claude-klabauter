@@ -2,15 +2,17 @@
 
 `apply_runtime_ignore` appends the template rules the root `.gitignore` does not cover and
 untracks (`git rm --cached`, index only) the tracked runtime files they match. Paths under
-`UNTRACK_EXEMPT_PREFIXES` (memo-outbox) are never untracked. `UNREAL_ONLY_RULES` apply only to a
-repo root carrying a `.uproject`/`.uplugin`. Never commits.
+`UNTRACK_EXEMPT_PREFIXES` (memo-outbox) are never untracked. `ENGINE_RULES` (engine-owned, e.g.
+warp run prompts) apply in addition to the template and even when the template is absent.
+`UNREAL_ONLY_RULES` apply only to a repo root carrying a `.uproject`/`.uplugin`. Never commits.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
 from coordinator_core.git.run import run_git
+from coordinator_core.session import record_homes
 from coordinator_core.install.write_surface import (
     ShapedClause,
     StaticClause,
@@ -59,6 +61,8 @@ class ApplyResult:
     skipped: str | None = None
 
 
+# Derived from the warp record home, so a relocated home moves the rule with it; posix for gitignore.
+ENGINE_RULES: tuple[str, ...] = (PurePath(record_homes.home_dir("", "warp")).as_posix() + "/*/prompts/",)
 UNREAL_ONLY_RULES = frozenset({"Intermediate/"})
 _UNREAL_SUFFIXES = frozenset({".uproject", ".uplugin"})
 
@@ -93,12 +97,10 @@ def apply_runtime_ignore(repo_root: Path, template: Path | None = None) -> Apply
     """Raises `IndexParseError` on an unreadable index and `RuntimeError` on a failed untrack."""
     root = Path(repo_root)
     template = template or resolve_template_path()
-    if template is None:
-        return ApplyResult((), (), "template not found")
-
-    rules = load_template_rules(template)
+    rules = load_template_rules(template) if template is not None else ()
     if not _is_unreal_repo(root):
         rules = tuple(r for r in rules if r not in UNREAL_ONLY_RULES)
+    rules += tuple(r for r in ENGINE_RULES if r not in rules)
     findings = runtime_ignore_findings(root, rules)
     if findings.missing:
         _append_rules(root, findings.missing)
@@ -111,4 +113,5 @@ def apply_runtime_ignore(repo_root: Path, template: Path | None = None) -> Apply
         )
         if done.returncode != 0:
             raise RuntimeError(f"git rm --cached failed ({done.returncode}): {done.stderr.strip()}")
-    return ApplyResult(findings.missing, findings.tracked)
+    skipped = "template not found" if template is None else None
+    return ApplyResult(findings.missing, findings.tracked, skipped)

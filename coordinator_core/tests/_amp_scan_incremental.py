@@ -65,12 +65,15 @@ class IncrementalScanStats:
 
 
 def gate_cache_dir(config: pytest.Config) -> pathlib.Path | None:
-    """Cache directory for the gate, or None when the cacheprovider plugin is disabled."""
+    """Cache directory for the gate: pytest's cache provider when active, else the gitignored
+    repo-local `.coordinator-local/amp-scan`. None only when neither is creatable."""
     cache = getattr(config, "cache", None)
-    if cache is None:
-        return None
     try:
-        return pathlib.Path(cache.mkdir("amp-scan"))
+        if cache is not None:
+            return pathlib.Path(cache.mkdir("amp-scan"))
+        local = gate._REPO_ROOT / ".coordinator-local" / "amp-scan"
+        local.mkdir(parents=True, exist_ok=True)
+        return local
     except OSError:
         return None
 

@@ -54,6 +54,22 @@ def _isolated_instance_lock(monkeypatch, tmp_path):
     monkeypatch.setattr(gov, "instance_lockfile", lambda: tmp_path / "instance-lock.json")
 
 
+_DEFAULT_PROC_CEILING = gov.PROC_CEILING
+_DEFAULT_PROC_GROWTH = gov.PROC_GROWTH
+
+
+@pytest.fixture(autouse=True)
+def _process_leg_off(monkeypatch):
+    # Tests that wire no proc table would read the real box and could signal real processes.
+    monkeypatch.setattr(gov, "PROC_CEILING", 0)
+    monkeypatch.setattr(gov, "PROC_GROWTH", 0)
+
+
+@pytest.fixture(autouse=True)
+def _group_em_live_by_default(monkeypatch):
+    monkeypatch.setattr(gov, "group_em_live", lambda: True)
+
+
 def _args(**kw):
     base = dict(interval=0, max_pauses=3, resume_after=2, psi_full=10.0, avail_pct=5.0,
                 runaway_mb=0, runaway_every=1)
@@ -1447,3 +1463,184 @@ def test_release_leaves_another_owners_lock(tmp_path):
     _write_lock(lock, 99999, 1.0)
     gov.release_instance_lock(lock)
     assert lock.exists()
+
+
+# --- process-pressure leg: python+conhost count and growth pause with memory calm ---
+
+
+@pytest.fixture
+def _default_proc_thresholds(monkeypatch):
+    monkeypatch.setattr(gov, "PROC_CEILING", _DEFAULT_PROC_CEILING)
+    monkeypatch.setattr(gov, "PROC_GROWTH", _DEFAULT_PROC_GROWTH)
+
+
+def _spawner_tree(root: int, n: int, name: str = "python.exe", base_pid: int = 10000) -> list:
+    """A runner tree: `root` python with `n` python children, each with a conhost."""
+    out = [P(root, 1, 30, 50, f"{name} -m pytest -p adhoc", name)]
+    for i in range(n):
+        pid = base_pid + root * 10 + i * 2
+        out.append(P(pid, root, 5, 40, f"{name} -m pytest -p adhoc", name))
+        out.append(P(pid + 1, pid, 5, 5, "conhost.exe 0x4", "conhost.exe"))
+    return out
+
+
+def _proc_run(tables, args=None, **kw):
+    it = iter(tables)
+    lines, calls = [], []
+    last = [tables[0]]
+
+    def procs():
+        last[0] = next(it, last[0])
+        return last[0]
+
+    gov.run(args or _args(), emit=lines.append, sample=lambda: False, procs_fn=procs,
+            signal_fn=lambda pids, stop: calls.append((tuple(pids), stop)),
+            sleep=lambda s: None, max_ticks=len(tables), **kw)
+    return lines, calls
+
+
+def test_count_over_default_ceiling_pauses_with_memory_calm(_default_proc_thresholds):
+    table = PROCS + _spawner_tree(7, (gov.PROC_CEILING // 2) + 5)
+    lines, calls = _proc_run([table])
+    assert lines[0].startswith("GOVERNOR PAUSED pid=7 ")
+    assert "procs=" in lines[0] and "total=" in lines[0]
+    assert calls[0][1] is True and 7 in calls[0][0]
+
+
+def test_growth_over_default_rate_pauses_the_fastest_growing_tree(_default_proc_thresholds):
+    quiet = _spawner_tree(7, 20, base_pid=20000) + _spawner_tree(8, 2, base_pid=30000)
+    storm = _spawner_tree(7, 20, base_pid=20000) + _spawner_tree(8, gov.PROC_GROWTH, base_pid=30000)
+    lines, calls = _proc_run([quiet, storm])
+    assert [x.split()[1] for x in lines] == ["PAUSED", "RESUMED-ON-EXIT"]
+    assert lines[0].startswith("GOVERNOR PAUSED pid=8 ")
+    assert f"growth=+{(gov.PROC_GROWTH * 2 + 1) - 5}" in lines[0]
+    assert 8 in calls[0][0] and 7 not in calls[0][0]
+
+
+def test_below_both_thresholds_is_silent(_default_proc_thresholds):
+    quiet = _spawner_tree(7, 20, base_pid=20000)
+    lines, calls = _proc_run([quiet, quiet, quiet])
+    assert lines == [] and calls == []
+
+
+def test_first_sample_has_no_growth_baseline(_default_proc_thresholds):
+    # A box that starts already above the growth rate but under the ceiling is not a storm.
+    big = _spawner_tree(7, gov.PROC_GROWTH * 2, base_pid=20000)
+    assert len(big) < gov.PROC_CEILING
+    lines, _ = _proc_run([big])
+    assert lines == []
+
+
+def test_protected_tree_stays_exempt_even_over_ceiling(_default_proc_thresholds):
+    n = gov.PROC_CEILING
+    table = [P(7, 1, 30, 50, "python.exe /x/example_retrieval_repo/server.py", "python.exe")]
+    table += [P(20000 + i, 7, 5, 5, "python.exe /x/example_retrieval_repo/w.py", "python.exe") for i in range(n)]
+    lines, calls = _proc_run([table])
+    assert lines == [] and calls == []
+
+
+def test_guarded_tree_stays_exempt(_default_proc_thresholds):
+    table = _spawner_tree(7, gov.PROC_CEILING)
+    guarded = frozenset(t for t in gov.descendants(7, table))
+    lines, calls = _proc_run([table], guard_path=Path("x"), guard_fn=lambda *a: guarded)
+    assert lines == [] and calls == []
+
+
+def test_process_pause_resumes_after_calm(_default_proc_thresholds):
+    hot = _spawner_tree(7, gov.PROC_CEILING)
+    lines, calls = _proc_run([hot, [], [], []], args=_args(resume_after=2))
+    assert lines[0].startswith("GOVERNOR PAUSED pid=7 ")
+    assert lines[-1] == "GOVERNOR RESUMED pid=7"
+    assert calls[-1][1] is False
+
+
+def test_process_leg_disabled_by_zero_thresholds(_default_proc_thresholds):
+    hot = _spawner_tree(7, gov.PROC_CEILING)
+    lines, _ = _proc_run([hot], args=_args(proc_ceiling=0, proc_growth=0))
+    assert lines == []
+
+
+def test_process_leg_spawns_nothing(_default_proc_thresholds, monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("spawned")
+    monkeypatch.setattr(gov.subprocess, "run", boom)
+    monkeypatch.setattr(gov.subprocess, "Popen", boom)
+    _proc_run([_spawner_tree(7, gov.PROC_CEILING)])
+
+
+def test_no_live_group_em_skips_the_critical_trim_with_one_line(tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")
+    monkeypatch.setattr(gov.sys, "platform", "win32")
+    it = iter([True, True, True])
+    lines = []
+    # A holder that vanishes after tick 1 stays inside the exit window, so the loop keeps sampling.
+    live = iter([True, False, False])
+    gov.run(_args(resume_after=1), emit=lines.append, sample=lambda: next(it), procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=3, bin_dir=tmp_path,
+            cache_gib_fn=lambda: 46.0, group_em_live_fn=lambda: next(live))
+    assert calls == [1]
+    live = iter([True, False, False])
+    calls.clear()
+    lines.clear()
+    it = iter([False, True, True])
+    gov.run(_args(resume_after=1), emit=lines.append, sample=lambda: next(it), procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=3, bin_dir=tmp_path,
+            cache_gib_fn=lambda: 46.0, group_em_live_fn=lambda: next(live))
+    assert calls == []
+    assert lines.count("GOVERNOR CACHE-TRIM skipped: no live group-em") == 1
+
+
+def test_no_live_group_em_skips_the_low_trim(tmp_path, monkeypatch):
+    monkeypatch.setattr(gov.sys, "platform", "win32")
+    calls = []
+    monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "trimmed")
+    live = iter([True, False, False])
+    lines = []
+    gov.run(_args(), emit=lines.append, sample=lambda: False, procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=3, bin_dir=tmp_path,
+            avail_fn=lambda: 10.0, cache_gib_fn=lambda: 48.0, group_em_live_fn=lambda: next(live),
+            clock=_tick(1000))
+    assert calls == [1]  # tick 1 live; ticks 2-3 not live
+    assert lines.count("GOVERNOR CACHE-TRIM skipped: no live group-em") == 1
+
+
+def test_liveness_probe_error_reads_as_not_live():
+    lines = []
+
+    def boom():
+        raise OSError("x")
+
+    gov.run(_args(), emit=lines.append, sample=lambda: False, procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=5, group_em_live_fn=boom)
+    assert lines == ["GOVERNOR EXIT: no live group-em"]
+
+
+def test_startup_without_a_holder_exits_on_the_first_tick():
+    lines, ticks = [], []
+    gov.run(_args(), emit=lines.append, sample=lambda: ticks.append(1) or False, procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=50, group_em_live_fn=lambda: False)
+    assert lines == ["GOVERNOR EXIT: no live group-em"] and ticks == []
+
+
+def test_sustained_absence_exits_and_resumes_paused_trees():
+    live = iter([True] + [False] * 20)
+    lines, calls = [], []
+    gov.run(_args(resume_after=99), emit=lines.append, sample=lambda: True, procs_fn=lambda: PROCS,
+            signal_fn=lambda pids, stop: calls.append((tuple(pids), stop)), sleep=lambda s: None,
+            max_ticks=100, group_em_live_fn=lambda: next(live))
+    assert lines[-2] == "GOVERNOR EXIT: no live group-em"
+    assert lines[-1].startswith("GOVERNOR RESUMED-ON-EXIT") and "pid=20" in lines[-1]
+    paused = {pids for pids, stop in calls if stop}
+    resumed = {pids for pids, stop in calls if not stop}
+    assert paused and paused == resumed
+
+
+def test_holder_returning_inside_the_window_keeps_the_loop_running():
+    pattern = ([True] + [False] * (gov.GEM_ABSENT_EXIT_SAMPLES - 1)) * 3
+    live = iter(pattern)
+    lines = []
+    gov.run(_args(), emit=lines.append, sample=lambda: False, procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=len(pattern),
+            group_em_live_fn=lambda: next(live))
+    assert lines == []

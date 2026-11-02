@@ -1588,10 +1588,10 @@ def test_a_failed_index_append_leaves_the_claim_written_and_the_next_lookup_corr
     claim_index.lookup(["a.py"], sessions_dir=base)
     real = touch_record.atomic_append.append_line
 
-    def _fail_for_index(target, encoded):
+    def _fail_for_index(target, encoded, **kw):
         if "-claim-index" in str(target):
             raise OSError("index volume full")
-        real(target, encoded)
+        return real(target, encoded, **kw)
 
     monkeypatch.setattr(touch_record.atomic_append, "append_line", _fail_for_index)
     _session_touched(base, "late", [_touch_line("T", "b.py")])

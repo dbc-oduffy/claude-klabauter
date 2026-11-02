@@ -208,6 +208,7 @@ SETTINGS_HOME_WRITER_CARVE_OUT = (
     "uninstall_legs",
     "scripts/setup.py::_record_homebrew_removal",
     "scripts/setup.py::ensure_percolate_identity",
+    "scripts/setup.py::install_write_hook_plane_verdict",
     "scripts/setup.py::write_rule_surface",
 )
 

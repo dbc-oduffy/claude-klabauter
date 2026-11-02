@@ -568,6 +568,47 @@ def _kept_blob_supply(
     return {path: blobs[path] for path, _holder in holds if path in blobs}
 
 
+def _measured_blob_supply(
+    worktree_root: Path, art_run_id: object, landing: Sequence[str], expected: dict,
+) -> dict:
+    """``{path: blob}`` for each landing path whose worktree bytes drifted from the run's
+    ``measured-rev.json`` blob while the run's own latest write (``expected`` sha256) still equals
+    that blob (a peer edited the path after the measure) and no commit since the record's
+    ``base_sha`` changed the path: the measured blob lands, the peer's bytes stay dirty. A path with
+    no expectation, a moved HEAD path or an unreadable record is absent and keeps its usual gate."""
+    if not isinstance(art_run_id, str) or not art_run_id or not landing or not expected:
+        return {}
+    import hashlib
+
+    from coordinator_core.git import commit
+    from coordinator_core.git.git_objects import _read_object
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    try:
+        data = json.loads(ask_contract.measured_rev_record_path(worktree_root, art_run_id).read_text(encoding="utf-8"))
+        blobs = data["blobs"]
+        base = data["base_sha"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return {}
+    if not isinstance(blobs, dict) or not isinstance(base, str):
+        return {}
+    drifted = [
+        p for p in landing
+        if isinstance(blobs.get(p), str) and expected.get(p) and commit.checkin_blob_sha(worktree_root, p) != blobs[p]
+    ]
+    if not drifted:
+        return {}
+    moved = set(_paths_committed_since(worktree_root, base, drifted))
+    common = resolve_git_common_dir(worktree_root)
+    out: dict = {}
+    for p in drifted:
+        stored = _read_object(common, blobs[p]) if p not in moved else None
+        if stored is not None and stored[0] == "blob" and hashlib.sha256(stored[1]).hexdigest() == expected[p]:
+            out[p] = blobs[p]
+    return out
+
+
 KEPT_BLOB_STALE = "kept-blob-stale"
 
 
@@ -749,7 +790,11 @@ def _reland_late_artifacts(
     swept; a live peer's claim is never swept. A refusal is recorded under ``late_reland`` and never
     un-lands the commit."""
     classes = {p: (fresh.class_of(p) or artifacts.class_of(p)) for p in {*fresh.paths(), *artifacts.paths()}}
-    cands = sorted(p for p, cls in classes.items() if cls in _RELAND_CLASSES and p not in skip)
+    from coordinator_core.ops.dispatch_emit.run_artifacts import is_run_state
+
+    cands = sorted(
+        p for p, cls in classes.items() if cls in _RELAND_CLASSES and p not in skip and not is_run_state(p)
+    )
     if not cands:
         return []
     dirty = _changed_paths(worktree_root, cands)
@@ -2289,16 +2334,18 @@ def _terminal_commit_inner(
                 ),
                 RECORD_DIR_ROOT,
             )
-        art_landable = run_artifacts.landable(
-            worktree_root, artifacts, snapshot.changed, snapshot.ignored_among(list(artifacts.paths())),
+        art_landable = run_artifacts.exclude_run_state(run_artifacts.landable(
+            worktree_root, artifacts, snapshot.changed,
+            snapshot.ignored_among(run_artifacts.ignored_probe(worktree_root, artifacts)),
             session_id=session_id,
-        )
+        ))
         art_classes = _PRODUCT_ARTIFACT_CLASSES | ({"plan"} if product_only else frozenset())
         art_landable = run_artifacts.Landable(
             present=tuple(p for p in art_landable.present if artifacts.class_of(p) in art_classes),
             deleted=tuple(p for p in art_landable.deleted if artifacts.class_of(p) in art_classes),
             withheld=art_landable.withheld,
             contest_unknown=art_landable.contest_unknown,
+            ignored_excluded=art_landable.ignored_excluded,
         )
 
     known_ids = {chunk.id for chunk in request.chunks}
@@ -2692,10 +2739,15 @@ def _terminal_commit_inner(
                     deleted=tuple(p for p in art_landable.deleted if p not in wh_map),
                     withheld=art_landable.withheld,
                     contest_unknown=art_landable.contest_unknown,
+                    ignored_excluded=art_landable.ignored_excluded,
                 )
 
     def _with_withheld(reply: dict) -> dict:
         _with_process_withheld(reply)
+        if art_landable is not None and art_landable.ignored_excluded:
+            reply.setdefault("run_artifacts", {"landed": [], "withheld": {}})["ignored_excluded"] = list(
+                art_landable.ignored_excluded
+            )
         if wh_chunks:
             reply["withheld_chunks"] = wh_chunks
         if wh_unmatched:
@@ -3158,6 +3210,28 @@ def _terminal_commit_inner(
                 _ls.FOREIGN_EXCLUDED_KEY: foreign_excluded,
             }))
 
+    # Run state (state/warp) is local and gitignored: it never reaches a commit, and each path held
+    # back here is named in the reply's ignored_excluded.
+    all_paths, state_paths = run_artifacts.split_run_state(all_paths)
+    deleted_paths, state_deleted = run_artifacts.split_run_state(deleted_paths)
+    if state_paths or state_deleted:
+        if art_landable is not None:
+            art_landable = dataclasses.replace(
+                art_landable,
+                ignored_excluded=tuple(sorted({*art_landable.ignored_excluded, *state_paths, *state_deleted})),
+            )
+        if not all_paths and not deleted_paths and not (
+            anchor_only or request.review_only or params.get("allow_empty") is True or marker_anchor
+        ):
+            _remove(worktree_root, receipt_paths)
+            if close_ctx is not None:
+                close_ctx.clear()
+            return _with_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
+
+    if ask_run_dir is not None:
+        outcome_path = run_artifacts.write_tracked_outcome(worktree_root, ask_run_dir.name, "landed")
+        if outcome_path and outcome_path not in all_paths:
+            all_paths = [*all_paths, outcome_path]
     merge_plan = _merge_landing_plan(
         worktree_root, all_paths, deleted_paths,
         product={*declared_writes, *run_owned},
@@ -3217,7 +3291,8 @@ def _terminal_commit_inner(
                 stage_rel = (
                     _ac_stage.record_dir(worktree_root, art_run_id) / _ac_stage.RUN_STAGE_FILE
                 ).relative_to(worktree_root).as_posix()
-                if stage_rel not in all_paths and not stage_rel.startswith(RUN_DIR_ROOT.rstrip("/") + "/"):
+                if (stage_rel not in all_paths and not stage_rel.startswith(RUN_DIR_ROOT.rstrip("/") + "/")
+                        and not run_artifacts.is_run_state(stage_rel)):
                     all_paths.append(stage_rel)
         except (ValueError, OSError):
             stage_before = None
@@ -3296,6 +3371,12 @@ def _terminal_commit_inner(
         worktree_root, art_run_id, _run_id_of(params, ask_run_dir, script_path_raw),
         [p for p in all_paths if p in carried], sorted(declared_writes), request.plan_path, own_seniority,
     )
+    measured_supplied = _measured_blob_supply(
+        worktree_root, art_run_id,
+        [p for p in all_paths if p in carried and p not in kept_supplied and p not in deleted_paths],
+        commit_params.get("expected_content_sha256") or {},
+    )
+    kept_supplied = {**measured_supplied, **kept_supplied}
     if kept_supplied:
         # The run's own blob lands, not the worktree bytes a peer also edited: the gate's co-declared
         # arm skips these paths. The run's own-write sha256 is checked against the blob's bytes here
@@ -3347,6 +3428,19 @@ def _terminal_commit_inner(
 
     if integrity_extra.get("supplied_blobs"):
         settled_supplied = integrity_extra.pop("supplied_blobs")
+        from coordinator_core.ops.dispatch_emit.hunk_provenance import is_no_baseline_detail
+
+        no_baseline = sorted(
+            e["path"] for e in integrity_extra.get("provenance", ())
+            if e.get("reason") == "foreign-hunk-settled" and is_no_baseline_detail(e.get("detail", ""))
+        )
+        if no_baseline:
+            # HEAD's blob lands for these: the path is a peer's dirt, reported as residue, never staged.
+            for e in integrity_extra["provenance"]:
+                if e["path"] in no_baseline:
+                    e["reason"] = "foreign-path-no-baseline"
+                    e["detail"] = "run has no write_baseline for the path: left dirty in the worktree, not committed"
+            foreign_excluded = sorted({*foreign_excluded, *no_baseline})
         commit_params["supplied_blobs"] = {**commit_params.get("supplied_blobs", {}), **settled_supplied}
         if "expected_content_sha256" in commit_params:
             commit_params["expected_content_sha256"] = {
@@ -3570,6 +3664,8 @@ def _terminal_commit_inner(
         reply["sibling_withheld"] = dict(sibling_withheld)
     if foreign_excluded:
         reply[_ls.FOREIGN_EXCLUDED_KEY] = foreign_excluded
+    if measured_supplied:
+        reply["measured_blob_landed"] = sorted(measured_supplied)
     if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
         reply["error"] = _remedy.blob_drift_remedy(
             reply["error"], worktree_root, _run_id_of(params, ask_run_dir, script_path_raw),

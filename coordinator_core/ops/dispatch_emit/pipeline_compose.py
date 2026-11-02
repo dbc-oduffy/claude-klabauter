@@ -280,19 +280,24 @@ def _agent_call(
 
 
 def _roster_guard(stage: Stage) -> str:
-    """Fails a runtime roster fan-out loud, naming each slug the roster lacks, before any agent spawns.
+    """Drops each runtime slug the roster lacks, logging it by name, before any agent spawns.
 
-    The slugs arrive from an upstream return (mail addressed by name); an invented name would
-    otherwise reject one agent at a time as an anonymous per-item null.
+    The slugs arrive from an upstream return (mail addressed by name); an invented name must not
+    lose the on-roster agents' work, nor reject one agent at a time as an anonymous per-item null.
+    Reassigns `items`, so the caller declares it with `let`.
     """
     if stage.agent_type_from is None:
         return ""
     roster = f"rosterTypes[{_js_string_literal(stage.agent_type_from.split('.', 1)[1])}]"
     return (
         f"      const unknown = items.filter((x) => !Object.hasOwn({roster}, x));\n"
-        f"      if (unknown.length) throw new Error({_js_string_literal(stage.id)} + "
-        f"': slug(s) not on the roster: ' + unknown.join(', ') + "
+        f"      if (unknown.length) {{\n"
+        f"        log({_js_string_literal(stage.id)} + "
+        f"': dropped slug(s) not on the roster: ' + unknown.join(', ') + "
         f"' (roster: ' + Object.keys({roster}).join(', ') + ')');\n"
+        f"        items = items.filter((x) => Object.hasOwn({roster}, x));\n"
+        f"        if (items.length === 0) return [];\n"
+        f"      }}\n"
     )
 
 
@@ -395,7 +400,7 @@ def _stage_expression(
             call = _agent_call(stage, manifest, inputs, agent_type_host, fill_at("i"), item_label, "item", finish)
             expr = (
                 "(async () => {\n"
-                f"      const items = {items};\n"
+                f"      {'let' if stage.agent_type_from else 'const'} items = {items};\n"
                 "      if (items.length === 0) return [];\n"
                 f"{_roster_guard(stage)}"
                 f"      return {fan}(items, (item, i) =>\n"

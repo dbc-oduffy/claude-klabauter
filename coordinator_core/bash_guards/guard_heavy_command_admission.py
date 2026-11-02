@@ -28,7 +28,8 @@ key is untrusted and denies. No caller-supplied field (justification, priority, 
 is read. The COORDINATOR_ALLOW_HEAVY_* keys are operator pre-launch overrides and every bypass
 is logged. The lease is written only after every leg has passed.
 
-Spawn-free: this module creates no process and calls no git; every process fact comes from
+Spawn-free except one path: the ram-floor leg may start the BoxCacheTrim task once per rate-limit
+window (`_fire_cache_trim`) before it denies; it calls no git, and every process fact comes from
 in-process host reads.
 """
 
@@ -229,15 +230,16 @@ def _log_bypass(leg: str, key: str, payload: Dict[str, Any], command: str) -> No
         print("%s: failed to write override audit log: %s" % (GUARD_NAME, exc), file=sys.stderr)
 
 
-def _deny_text(leg: str, fact: str, *members: Any, legacy: str) -> Any:
+def _deny_text(leg: str, fact: str, *members: Any, legacy: str, blocked: bool = True) -> Any:
     from coordinator_core._hook_envelope import _stamp
     from coordinator_core.bash_guards._rewrite_support import _deny_record
 
+    head = "BLOCKED " if blocked else ""
     return _deny_record(
         GUARD_NAME,
-        "BLOCKED %s (%s leg): %s." % (GUARD_NAME, leg, fact),
+        "%s%s (%s leg): %s." % (head, GUARD_NAME, leg, fact),
         members,
-        em_text=_stamp("BLOCKED %s (%s leg): %s. %s." % (GUARD_NAME, leg, fact, legacy)),
+        em_text=_stamp("%s%s (%s leg): %s. %s." % (head, GUARD_NAME, leg, fact, legacy)),
     )
 
 
@@ -390,7 +392,10 @@ def _identity_leg(payload: Dict[str, Any], command: str, heavy_name: str, cls) -
     # session-cap leg's one-typecheck rule still bounds it.
     if payload.get("agent_type") == _EXECUTOR_TYPE and payload.get("agent_id") and cls.noemit_tsc:
         return None
-    if payload.get("agent_type") in _VERIFIER_TYPES and payload.get("agent_id") and cls.bounded_verify:
+    verifier = payload.get("agent_type") in _VERIFIER_TYPES or (
+        payload.get("agent_type") == _EXECUTOR_TYPE and cls.heavy_class is HeavyClass.TEST_TIER
+    )
+    if verifier and payload.get("agent_id") and cls.bounded_verify:
         # Logged so a run's verifier traffic is attributable: a clean run shows admits, not silence.
         _append_log(_record(payload, command, cls, ADMITTED_VERIFIER, verdict.reason))
         return None
@@ -419,8 +424,24 @@ def _bare_pytest_deny() -> Any:
     )
 
 
+def _is_workflow_agent(payload: Mapping[str, Any]) -> bool:
+    return bool(payload.get("agent_id")) and bool(_workflow_runs_of(payload))
+
+
 def _box_hold_leg(payload: Mapping[str, Any]) -> Any:
-    hold = _read_box_hold()
+    try:
+        hold = _read_box_hold()
+    except Exception as exc:
+        # A workflow-spawned agent that cannot read the grant record stops; it never proceeds uncapped.
+        if not _is_workflow_agent(payload):
+            raise
+        return _deny_text(
+            LEG_BOX_HOLD,
+            "the box-hold record is unreadable (%s)" % type(exc).__name__,
+            _retry("retry the command", "the timing, once the record is readable"),
+            _route("the command as an owed gate (gate-blocker: guard-denied)", "running it once the record reads"),
+            legacy="Report the command as an owed gate (gate-blocker: guard-denied) and continue",
+        )
     if hold is None or hold.set_by_session == payload.get("session_id"):
         return None
     expires = time.strftime("%H:%M:%SZ", time.gmtime(hold.expires_at))
@@ -474,20 +495,149 @@ def _ram_leg(config: Mapping[str, Any], primitives, payload: Mapping[str, Any]) 
     effective = reading.avail_mb - reserved
     if effective >= floor:
         return None
+    if reading.avail_mb >= floor:
+        # Unattributed lease reservations are a scheduling hint; raw available memory decides.
+        _append_log({
+            "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "kind": "ram-floor-advisory",
+            "reason": "%d MB available clears floor %d MB; %d MB reserved by unattributed leases"
+            % (reading.avail_mb, floor, reserved),
+            "session_id": payload.get("session_id"),
+            "agent_type": payload.get("agent_type"),
+        })
+        return None
     own = _requester_session(payload, primitives)
     if own is not None:
         _release_finished_own(own, primitives)
         reserved = leases.unattributed_count(exclude_session=own) * reserve
         if reading.avail_mb - reserved >= floor:
             return None
+    trim = _trim_file_cache(reading.avail_mb, floor - (reading.avail_mb - reserved))
+    if trim.get("after_mb") is not None and trim["after_mb"] - reserved >= floor:
+        return None
     held = leases.holders()
     return _deny_text(
         LEG_RAM_FLOOR,
-        "%d MB available, %d MB reserved by unattributed leases, floor %d MB; holders: %s"
-        % (reading.avail_mb, reserved, floor, "; ".join(held) if held else "none"),
+        "%d MB available, %d MB reserved by unattributed leases, floor %d MB; holders: %s; file-cache trim: %s"
+        % (reading.avail_mb, reserved, floor, "; ".join(held) if held else "none", _trim_summary(trim)),
         _retry("wait for a holder to finish, then retry"),
         legacy="Wait for a holder to finish, then retry",
+        blocked=False,
     )
+
+
+_TRIM_TASK = "BoxCacheTrim"  # mirrors coordinator/bin/lib/file_cache_trim.py TRIM_TASK
+_TRIM_SPAWN_TIMEOUT_S = 1.0
+_MB_BYTES = 1024 * 1024
+
+
+def _trim_supported() -> bool:
+    """The BoxCacheTrim task exists on Windows only; elsewhere the trim is a reported no-op."""
+    return sys.platform == "win32"
+
+
+def _group_em_live() -> bool:
+    """True when a live box-wide group-em holder exists; any failure reads as not live."""
+    from coordinator_core.group_em import gem_home
+
+    return gem_home.gem_holder() is not None
+
+
+def _trim_stamp_path():
+    from coordinator_core.box_memory import pressure
+
+    return pressure.default_stamp_path()
+
+
+def _file_cache_mb() -> Optional[int]:
+    """System file cache in MB (Windows GetPerformanceInfo, in-process); None elsewhere or on failure."""
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class _PerfInfo(ctypes.Structure):
+            _fields_ = [("cb", wintypes.DWORD)] + [
+                (n, ctypes.c_size_t)
+                for n in (
+                    "CommitTotal", "CommitLimit", "CommitPeak", "PhysicalTotal", "PhysicalAvailable",
+                    "SystemCache", "KernelTotal", "KernelPaged", "KernelNonpaged", "PageSize",
+                )
+            ] + [("HandleCount", wintypes.DWORD), ("ProcessCount", wintypes.DWORD), ("ThreadCount", wintypes.DWORD)]
+
+        info = _PerfInfo()
+        info.cb = ctypes.sizeof(info)
+        if not ctypes.windll.psapi.GetPerformanceInfo(ctypes.byref(info), info.cb):
+            return None
+        return int(info.SystemCache * info.PageSize // _MB_BYTES)
+    except Exception:
+        return None
+
+
+def _fire_cache_trim() -> bool:
+    """Start the on-demand BoxCacheTrim task and return at once (no wait, no log poll).
+    The single process this module may create; False when the task is absent or would not start."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    try:
+        done = subprocess.run(
+            ["schtasks", "/run", "/tn", _TRIM_TASK],
+            capture_output=True,
+            timeout=_TRIM_SPAWN_TIMEOUT_S,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
+def _trim_file_cache(before_mb: int, shortfall_mb: int) -> Dict[str, Any]:
+    """Rate-limited file-cache trim ahead of a RAM deny. Returns a record: `status`, `before_mb`,
+    and `after_mb` (the immediate re-read) when a trim fired. The trim is asynchronous, so the
+    re-read usually shows the prior state; the next call inside the window reports the settled one."""
+    from coordinator_core.box_memory import pressure
+
+    rec: Dict[str, Any] = {"kind": "file-cache-trim", "before_mb": before_mb, "shortfall_mb": shortfall_mb}
+    if not _trim_supported():
+        rec["status"] = "noop-platform"
+    elif not _group_em_live():
+        rec["status"] = "no-live-group-em"
+    else:
+        stamp = _trim_stamp_path()
+        cache = _file_cache_mb()
+        rec["cache_mb"] = cache
+        if cache is None or cache < shortfall_mb:
+            rec["status"] = "cache-too-small"
+        elif not pressure.trim_due(stamp):
+            rec["status"] = "rate-limited"
+            last = pressure.last_trim(stamp) or {}
+            rec["last_before_mb"] = last.get("before_mb")
+            rec["last_after_mb"] = last.get("after_mb")
+        elif not _fire_cache_trim():
+            rec["status"] = "task-absent"
+        else:
+            reading = _read_available()
+            rec["status"] = "fired"
+            rec["after_mb"] = reading.avail_mb if reading.trusted else None
+            pressure.stamp_trim(stamp, before_mb, rec["after_mb"])
+    if rec["status"] != "noop-platform":
+        _append_log(rec)
+    return rec
+
+
+def _trim_summary(trim: Mapping[str, Any]) -> str:
+    status = trim.get("status")
+    if status == "fired":
+        return "fired, before %s MB, after %s MB" % (trim.get("before_mb"), trim.get("after_mb"))
+    if status == "rate-limited":
+        return "rate-limited, last trim before %s MB after %s MB" % (
+            trim.get("last_before_mb"), trim.get("last_after_mb"))
+    if status == "no-live-group-em":
+        return "trim skipped: no live group-em"
+    return "not run (%s)" % status
 
 
 def _release_finished_own(own: Tuple[int, int], primitives) -> None:
@@ -783,7 +933,8 @@ def check(
     if not isinstance(command, str) or not command.strip():
         return None
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
-    cls = classify(command, tool_input, cwd)
+    workflow = "python" in command.lower() and _is_workflow_agent(payload)
+    cls = classify(command, tool_input, cwd, workflow_agent=workflow)
     if cls.heavy_class is None and not cls.background and not cls.scoped:
         return None
 
@@ -792,7 +943,9 @@ def check(
     # beside a `tsc --noEmit` must not hold the executor carve-out shut.
     if cls.heavy_class is not None and ("vitest" in command.lower() or "jest" in command.lower()):
         config = _read_config()
-        cls = classify(command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS))
+        cls = classify(
+            command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS), workflow_agent=workflow
+        )
         if cls.heavy_class is None and not cls.background and not cls.scoped:
             return None
 

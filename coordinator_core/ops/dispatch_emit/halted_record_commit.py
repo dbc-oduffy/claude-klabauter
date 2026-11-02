@@ -29,6 +29,7 @@ from typing import Optional
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops._path_guard import contained_path, safe_id
+from coordinator_core.session import landing_hold
 from coordinator_core.ops.dispatch_emit import halt_product_gates, process_artifact_policy, review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit import halted_run
@@ -137,6 +138,16 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
         if siblings is not None:
             refusal["siblings"] = siblings
         return refusal
+    hold_sid = params.get("session_id")
+    if landing_hold.is_held(str(worktree_root), hold_sid):
+        landing_hold.defer(str(worktree_root), hold_sid, "halted_record", params)
+        deferred = {
+            "committed": False, "deferred": "session-landing-hold", "record_dir": record_dir_rel,
+            "halted": halted.get("halted"),
+        }
+        if siblings is not None:
+            deferred["siblings"] = siblings
+        return deferred
     reply = _land(worktree_root, repo_root, params, run_id, record_dir_rel, halted)
     if token is not None:
         reply = _reconcile_landing(worktree_root, run_id, token, script_path, halted, reply)
@@ -253,9 +264,27 @@ def _baton_cascade(worktree_root: Path, repo_root: Path, run_id: str) -> dict:
     return {"run_baton_cascade": fire_for_batons(worktree_root, repo_root, [rel], None)}
 
 
+def _stamp_ignored_excluded(record_dir: Path, names: list) -> None:
+    """Merge ``names`` into the halted marker's ``run_artifacts.ignored_excluded``; no write when
+    ``names`` is empty or the marker is absent. Advisory: never fails the landing."""
+    if not names:
+        return
+    try:
+        marker = halted_run._read(record_dir)
+        if marker is None:
+            return
+        block = marker.get(halted_run.HALT_RUN_ARTIFACTS_FIELD)
+        block = dict(block) if isinstance(block, dict) else {}
+        block["ignored_excluded"] = sorted({*(block.get("ignored_excluded") or ()), *names})
+        halted_run._write(record_dir, {**marker, halted_run.HALT_RUN_ARTIFACTS_FIELD: block})
+    except Exception:  # noqa: BLE001 -- an advisory stamp must not fail the landing
+        pass
+
+
 def _reland_late_writes(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict,
     sizing_rel: Optional[str], session_id: Optional[str], withheld: dict, process_withheld: dict,
+    ignored_out: Optional[list] = None,
 ) -> Optional[tuple]:
     """After the halt commit, land run-artifact candidates written during the op (file pathspecs only).
 
@@ -284,7 +313,12 @@ def _reland_late_writes(
     )
     fresh, more = process_artifact_policy.withhold_process_artifacts(worktree_root, fresh)
     blocked = {**withheld, **process_withheld, **more}
-    land = run_artifacts.landable(worktree_root, fresh, snap.changed, snap.ignored, session_id=session_id)
+    land = run_artifacts.exclude_run_state(run_artifacts.landable(
+        worktree_root, fresh, snap.changed,
+        snap.ignored_among(run_artifacts.ignored_probe(worktree_root, fresh)), session_id=session_id,
+    ))
+    if ignored_out is not None:
+        ignored_out.extend(land.ignored_excluded)
     withheld.update({p: r for p, r in land.withheld.items() if p not in withheld})
     present = [p for p in land.present if p not in blocked and not halt_product_gates.is_scratch(p)]
     gone = [p for p in land.deleted if p not in blocked and not halt_product_gates.is_scratch(p)]
@@ -471,19 +505,22 @@ def _land(
 
     handled = set(paths) | set(deleted) | set(declared)
     own_record = {p for p in artifacts.paths() if artifacts.class_of(p) == "record-dir"}
-    extra_artifacts = run_artifacts.landable(
-        worktree_root,
-        run_artifacts.RunArtifacts(
-            run_id=run_id,
-            by_class={
-                cls: tuple(p for p in ps if p not in handled and p not in own_record)
-                for cls, ps in artifacts.by_class.items()
-            },
-            record_dirs=artifacts.record_dirs,
-            root=artifacts.root,
-        ),
-        snapshot.changed, (), session_id=session_id,
+    extra_set = run_artifacts.RunArtifacts(
+        run_id=run_id,
+        by_class={
+            cls: tuple(p for p in ps if p not in handled and p not in own_record)
+            for cls, ps in artifacts.by_class.items()
+        },
+        record_dirs=artifacts.record_dirs,
+        root=artifacts.root,
     )
+    probed_ignored = snapshot.ignored_among(
+        [*run_artifacts.ignored_probe(worktree_root, extra_set), *sorted(own_record)]
+    )
+    extra_artifacts = run_artifacts.landable(
+        worktree_root, extra_set, snapshot.changed, probed_ignored, session_id=session_id,
+    )
+    ignored_excluded = [*extra_artifacts.ignored_excluded, *(p for p in sorted(own_record) if p in probed_ignored)]
     withheld.update(extra_artifacts.withheld)
     art_paths = [p for p in extra_artifacts.present if not halt_product_gates.is_scratch(p)]
     art_deleted = [p for p in extra_artifacts.deleted if not halt_product_gates.is_scratch(p)]
@@ -595,6 +632,9 @@ def _land(
         product = [p for p in product if p not in withheld]
     paths = paths + product + art_paths
     deleted = deleted + gone + art_deleted
+    paths, state_paths = run_artifacts.split_run_state(paths)
+    deleted, state_gone = run_artifacts.split_run_state(deleted)
+    ignored_excluded.extend(state_paths + state_gone)
     landed_classes: dict = {}
     for p in art_paths + art_deleted:
         cls = artifacts.class_of(p)
@@ -634,16 +674,20 @@ def _land(
         process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
 
     if not paths and not deleted:
+        _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
             **({"withheld": withheld} if withheld else {}), **peer_held_by,
+            **({"run_artifacts": {"landed": [], "withheld": withheld, "ignored_excluded": sorted(set(ignored_excluded))}}
+               if ignored_excluded else {}),
             **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply,
             **baton_reply, **coded_reply, **_baton_cascade(worktree_root, repo_root, run_id), **base,
         }
 
     if (worktree_root / record_dir_rel).is_dir():
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
+        _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
         _record_withheld_prints(worktree_root, record_dir_rel, withheld, paths)
     kept_reply = _record_kept(
         worktree_root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
@@ -651,6 +695,13 @@ def _land(
         post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
         common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
     )
+    paths[:], kept_state = run_artifacts.split_run_state(paths)
+    ignored_excluded.extend(kept_state)
+    outcome_path = run_artifacts.write_tracked_outcome(
+        worktree_root, run_id, "halted", halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
+    )
+    if outcome_path and outcome_path not in paths:
+        paths.append(outcome_path)
     message = halted_record_message(run_id, halted)
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import run_halted_trailer_lines
 
@@ -718,6 +769,7 @@ def _land(
             deleted = [p for p in deleted if p not in drifted]
             if (worktree_root / record_dir_rel).is_dir():
                 halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
+                _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
             commit_params["paths"] = paths
             commit_params["message"] = compose_message(deleted)
             for key in ("deleted_paths", "declared_reverts"):
@@ -744,7 +796,7 @@ def _land(
         extra.update(_baton_cascade(worktree_root, repo_root, run_id))
         late = _reland_late_writes(
             worktree_root, repo_root, params, run_id, record_dir_rel, halted, sizing_rel,
-            session_id, withheld, process_withheld,
+            session_id, withheld, process_withheld, ignored_out=ignored_excluded,
         )
         if late is not None:
             artifacts, still_changed, relanded = late
@@ -758,6 +810,8 @@ def _land(
     # A halt record stamps no chunk coded; the key stays so callers reading it never KeyError.
     extra["lands_chunks_stamp"] = None
     extra["run_artifacts"] = {"landed": sorted(paths + deleted), "withheld": withheld}
+    if ignored_excluded:
+        extra["run_artifacts"]["ignored_excluded"] = sorted(set(ignored_excluded))
     if withheld:
         extra["withheld"] = withheld
     if dropped:

@@ -1500,6 +1500,23 @@ def _classify_pytest(args: Sequence[str], testpaths: Sequence[str],
     return None if scoped else label
 
 
+def _single_dir_is_bounded(dir_args: Sequence[str], cwd: Optional[str],
+                           repo_root: Optional[str]) -> bool:
+    """Is exactly one non-glob directory named, holding at most ``_DIR_TEST_FILE_THRESHOLD``
+    tracked test files? An uncountable directory is not bounded."""
+    if len(dir_args) != 1 or _has_glob_magic(dir_args[0]):
+        return False
+    root = repo_root or _cheap_repo_root(cwd)
+    if not (root and cwd):
+        return False
+    try:
+        rel = os.path.relpath(os.path.join(cwd, dir_args[0]), root).replace("\\", "/")
+    except ValueError:
+        return False
+    count = _tracked_test_file_count([rel], root)
+    return count is not None and count <= _DIR_TEST_FILE_THRESHOLD
+
+
 def _em_dirs_over_threshold(positionals: Sequence[str], testpaths: Sequence[str],
                             cwd: Optional[str]) -> bool:
     """For the EM: do the plain directory positionals strictly under a testpaths
@@ -3791,7 +3808,7 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if _is_node_id_baseline_rerun(cmd, dialect):
             return None
         dir_args =_pytest_directory_args(segments_argv, cwd)
-        if dir_args:
+        if dir_args and not _single_dir_is_bounded(dir_args, cwd, repo_root):
             return _deny(
                 _deny_reason_subagent_directory(
                     dir_args,

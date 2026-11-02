@@ -56,10 +56,19 @@ def fire_box_cache_trim(
     run: Callable[..., "subprocess.CompletedProcess"] = subprocess.run,
     log_path: Optional[Path] = None,
     sleep: Callable[[float], None] = time.sleep,
+    live_fn: Optional[Callable[[], bool]] = None,
 ) -> Optional[str]:
     """Fire the BoxCacheTrim task. None when the task is absent or would not start (caller falls
     back); else the trim.log tail line, waiting up to LOG_WAIT_SECONDS for the run to append one
-    ("" when the log is unreadable)."""
+    ("" when the log is unreadable). An automatic caller passes `live_fn`: None is returned, with
+    nothing spawned, unless it reports a live group-em (a raising probe reads as not live). No
+    `live_fn` is an explicit manual trim and is never gated."""
+    if live_fn is not None:
+        try:
+            if not live_fn():
+                return None
+        except Exception:
+            return None
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
     def _schtasks(verb: str):

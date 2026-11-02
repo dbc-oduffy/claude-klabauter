@@ -81,6 +81,35 @@ def test_no_recorded_turn_mints_relayed(repo):
     assert validate_frontmatter(doc, mod._SIZING_SCHEMA_PATH) == []
 
 
+@pytest.mark.parametrize("text,expect", [
+    ('the ask said "sources repo+web".', ["repo", "web"]),
+    ("sources: web, repo and structured please", ["web", "repo", "structured"]),
+    ("Sources repo", ["repo"]),
+    ("sources repo+repo", ["repo"]),
+    ("look at the repo and the web", []),
+    ("", []),
+])
+def test_named_sources(text, expect):
+    assert mod.named_sources(text) == expect
+
+
+def test_ask_naming_repo_and_web_mints_both_sources(repo):
+    out = _mint(repo, source="relayed", relayed_text='run with "sources repo+web" please')
+    doc = _doc(repo, out)
+    assert doc["research"]["sources"] == ["repo", "web"]
+    assert validate_frontmatter(doc, mod._SIZING_SCHEMA_PATH) == []
+
+
+def test_ask_naming_only_repo_keeps_a_repo_only_source_list(repo):
+    _turns("use sources repo for this")
+    assert _doc(repo, _mint(repo))["research"]["sources"] == ["repo"]
+
+
+def test_ask_naming_no_source_mints_no_research_block(repo):
+    _turns("an ask about the repo and the web")
+    assert "research" not in _doc(repo, _mint(repo))
+
+
 def test_turnless_ask_without_source_is_relayed(repo):
     out = _mint(repo)
     assert out["exit_code"] == 0 and out["provenance"] == "relayed"

@@ -13,6 +13,22 @@ from typing import Optional, Sequence
 
 FOREIGN_HUNK_UNPRODUCED = "foreign-hunk-unproduced"
 UNKNOWN_OWNER = "unknown"
+NO_BASELINE_OWNER = "no-write-baseline"
+
+
+def is_no_baseline_detail(detail: str) -> bool:
+    """True when a `foreign-hunk-settled` provenance detail names `NO_BASELINE_OWNER`; the detail text
+    is built at the emit site in `terminal_commit_refusals` as `... belong to run {owner} (not live)...`."""
+    return f"run {NO_BASELINE_OWNER} " in (detail or "")
+
+
+class NoWriteBaseline(ValueError):
+    """The run has no write_baseline for a dirty path it neither declared nor produced; carries the
+    HEAD blob sha (None when the path is absent from HEAD) so a caller can land HEAD for it."""
+
+    def __init__(self, head_sha: Optional[str]) -> None:
+        super().__init__("run has no write_baseline for the path")
+        self.head_sha = head_sha
 
 
 def unproduced_hunks(
@@ -29,7 +45,9 @@ def unproduced_hunks(
     co-declaring sibling run, else `unknown`). Paths with no change against HEAD yield nothing.
     With `settled` given, a path whose every probable owner is not live (`_non_live`) yields no
     finding: `settled[path] = {"blob", "owner", "lines"}` carries the sha of HEAD plus only the run's
-    own hunks (the peer's stay dirty in the worktree) and the peer it names.
+    own hunks (the peer's stay dirty in the worktree) and the peer it names. A tracked path the run
+    has no write_baseline for, never declared and did not produce settles to its HEAD blob with owner
+    `NO_BASELINE_OWNER`: excluded from the landing, left dirty.
     Never raises: a read failure is a finding, except on a path the run's own record produced
     (its write_baseline names it, or it is a run-own artifact): there the unattributable read is
     appended to `advisories` as `{"path", "detail"}` and yields no finding. DR-467: a path the run
@@ -45,6 +63,12 @@ def unproduced_hunks(
         try:
             bad, own, head_bytes = _unproduced(Path(root), run_id, path)
         except Exception as exc:  # noqa: BLE001 -- unknown holds
+            if (
+                isinstance(exc, NoWriteBaseline) and settled is not None and exc.head_sha
+                and not _run_produced(Path(root), run_id, path)
+            ):
+                settled[path] = {"blob": exc.head_sha, "owner": NO_BASELINE_OWNER, "lines": ""}
+                continue
             detail = f"provenance unreadable: {type(exc).__name__}: {exc}"
             if advisories is not None and _run_produced(Path(root), run_id, path):
                 advisories.append({"path": path, "detail": detail})
@@ -196,7 +220,7 @@ def _unproduced(root: Path, run_id: str, path: str) -> tuple:
     if base is None or path not in base:
         if _is_run_own_artifact(root, run_id, path):
             return "", [], head_bytes
-        raise ValueError("run has no write_baseline for the path")
+        raise NoWriteBaseline(entry[1] if entry is not None else None)
     old: list = []
     if base[path] is not None:
         obj = git_objects.read_object(common, base[path])

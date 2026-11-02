@@ -15,11 +15,19 @@ from pathlib import Path
 import psutil
 import pytest
 
+from coordinator_core.testing import spawn_depth
 from coordinator_core.testing import scoped_pytest as sp
 from coordinator_core.testing import watch_parent
 
 _REPO = Path(__file__).resolve().parents[2]
 _GIB = 1 << 30
+
+
+@pytest.fixture(autouse=True)
+def _top_level_depth(monkeypatch):
+    """Ambient depth is whatever launched this suite (scoped-pytest makes it 1); pin it to 0 so
+    the launcher under test sees a top-level caller."""
+    monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "0")
 
 
 def _host(avail_gib):
@@ -229,3 +237,61 @@ def _parent_death_survivors(tmp_path, depth):
 @pytest.mark.parametrize("depth", [1, 2])
 def test_parent_death_kills_the_pytest_tree(tmp_path, depth):
     assert _parent_death_survivors(tmp_path, depth) == []
+
+
+def test_nested_depth_exits_64_without_spawn(monkeypatch, tmp_path, capsys):
+    _no_spawn(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "1")
+    host, _ = _host(avail_gib=99)
+    assert sp.main(["--allow", "test_a.py", "--", "test_a.py"], host=host) == sp.EXIT_TARGET_REFUSED
+    assert "nesting depth" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("target", ["tests/test_self.py", "tests/test_self.py::test_x", "tests", "."])
+def test_selection_holding_the_calling_test_exits_64_without_spawn(monkeypatch, tmp_path, capsys, target):
+    _no_spawn(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("COORDINATOR_PYTEST_DEPTH", raising=False)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_self.py::test_x (call)")
+    (tmp_path / "tests").mkdir()
+    host, _ = _host(avail_gib=99)
+    assert sp.main(["--allow", ".", "--", target], host=host) == sp.EXIT_TARGET_REFUSED
+    assert "includes the calling test" in capsys.readouterr().err
+
+
+def test_other_selection_inside_a_test_is_spawned_with_child_env(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("COORDINATOR_PYTEST_DEPTH", raising=False)
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_self.py::test_x (call)")
+    seen = {}
+
+    def fake_spawn(argv):
+        seen["env"] = spawn_depth.child_env(os.environ)
+        return types.SimpleNamespace(wait=lambda: 0, poll=lambda: 0), lambda: None
+
+    monkeypatch.setattr(sp, "_spawn", fake_spawn)
+    monkeypatch.setattr(sp, "ancestor_chain", lambda: [])
+    host, _ = _host(avail_gib=99)
+    assert sp.main(["--allow", "test_other.py", "--", "test_other.py"], host=host) == 0
+    assert seen["env"]["COORDINATOR_PYTEST_DEPTH"] == "1"
+
+
+def test_spawn_passes_child_env_to_popen(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "0")
+    monkeypatch.setenv("PYTEST_CURRENT_TEST", "t.py::t (call)")
+    from coordinator_core.diagnostics import contained_run as cr
+
+    seen = {}
+
+    def fake_capped(argv, *, popen_kwargs=None, **kw):
+        seen.update(popen_kwargs)
+        return types.SimpleNamespace(pid=1), lambda: None
+
+    monkeypatch.setattr(cr, "spawn_in_capped_job", fake_capped)
+    sp._spawn(["x"])
+    assert seen["env"]["COORDINATOR_PYTEST_DEPTH"] == "1"
+    assert "PYTEST_CURRENT_TEST" not in seen["env"]
+    assert "coordinator_core.testing.nested_session_guard" in seen["env"]["PYTEST_ADDOPTS"]
+    if sp._IS_WINDOWS:
+        assert seen["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP

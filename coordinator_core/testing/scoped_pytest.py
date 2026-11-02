@@ -3,10 +3,10 @@
     python -m coordinator_core.testing.scoped_pytest --allow <target> [--allow <target> ...] -- <pytest args and targets>
 
 Exit codes: pytest's own; 75 admission refused (nothing spawned); 64 target outside --allow or none
-named (nothing spawned); 137 an ancestor of the launcher died and the tree was killed.
+named, nesting depth exceeded, or selection includes the calling test (nothing spawned); 137 an ancestor of the launcher died and the tree was killed.
 
-The pytest child runs in its own process group (POSIX) or a kill-on-close Job Object (Windows), so
-launcher death kills it too. A watchdog watches the launcher's recorded ancestor chain, not just
+The pytest child runs in its own process group (POSIX) or a process- and memory-capped kill-on-close
+Job Object (Windows), with the nested-session guard env, so launcher death kills it too. A watchdog watches the launcher's recorded ancestor chain, not just
 its parent: a dead intermediate shell leaves the immediate parent alive.
 """
 
@@ -22,7 +22,7 @@ from typing import Any, Optional, Sequence
 
 import psutil
 
-from coordinator_core.testing import watch_parent
+from coordinator_core.testing import nested_session_guard, spawn_depth, watch_parent
 
 ADMIT_KEY = "test-runner-pytest"
 # Cold-start floor only: admit_before_spawn takes max(this, the peak recorded for ADMIT_KEY).
@@ -103,49 +103,25 @@ def check_allowed(allow: Sequence[str], pytest_args: Sequence[str]) -> Optional[
 
 def _spawn(argv: list) -> tuple:
     """Start the child contained; returns (proc, kill) where kill() ends the whole tree."""
+    from coordinator_core.diagnostics import contained_run as cr
+
+    kwargs: dict = {"env": nested_session_guard.guarded_child_env(os.environ)}
     if _IS_WINDOWS:
-        from coordinator_core.diagnostics import contained_run as cr
         from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-        job = cr._create_kill_on_close_job()
-        flags = cr.CREATE_NO_WINDOW | cr.CREATE_SUSPENDED | subprocess.CREATE_NEW_PROCESS_GROUP
         # Passthrough fds: without a std-stream kwarg a CREATE_NO_WINDOW child's pytest output is lost.
-        proc = subprocess.Popen(argv, **{**no_console_passthrough_kwargs(), "creationflags": flags})
-        try:
-            cr._assign_to_job(job, int(proc._handle))
-        except Exception:
-            proc.kill()
-            cr._kernel32.CloseHandle(job)
-            raise
-        cr._resume_suspended_process(proc.pid)
-        state = {"job": job}
+        kwargs.update(no_console_passthrough_kwargs())
+        kwargs["creationflags"] = cr.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
 
-        def kill() -> None:
-            if state["job"] is not None:
-                cr._kernel32.CloseHandle(state["job"])
-                state["job"] = None
-            try:
-                proc.kill()
-            except OSError:
-                pass
+        def pdeathsig() -> None:
+            if sys.platform.startswith("linux"):
+                import ctypes
 
-        return proc, kill
+                ctypes.CDLL(None).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
 
-    def pdeathsig() -> None:
-        if sys.platform.startswith("linux"):
-            import ctypes
-
-            ctypes.CDLL(None).prctl(1, signal.SIGKILL)  # PR_SET_PDEATHSIG
-
-    proc = subprocess.Popen(argv, start_new_session=True, preexec_fn=pdeathsig)
-
-    def kill() -> None:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except OSError:
-            pass
-
-    return proc, kill
+        kwargs["preexec_fn"] = pdeathsig
+    return cr.spawn_in_capped_job(argv, popen_kwargs=kwargs)
 
 
 def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
@@ -160,7 +136,11 @@ def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
     parser.add_argument("--allow", action="append", default=[])
     opts, _ = parser.parse_known_args(head)
 
-    refusal = check_allowed(opts.allow, pytest_args)
+    refusal = (
+        spawn_depth.refusal_for_spawn(os.environ)
+        or spawn_depth.selection_includes_spawner(pytest_args, os.environ, os.getcwd())
+        or check_allowed(opts.allow, pytest_args)
+    )
     if refusal:
         print("scoped_pytest: %s" % refusal, file=sys.stderr)
         return EXIT_TARGET_REFUSED

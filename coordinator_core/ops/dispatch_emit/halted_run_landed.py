@@ -59,6 +59,9 @@ _SHA_PREFIX = re.compile(r"[0-9a-f]{4,40}")
 MET_BY_FIELD = "met_by"
 
 
+#: Close detail for a landing recorded on a run that never halted (stalled or staged): no marker exists to flip.
+_NEVER_HALTED = "no halt record: the run never halted, so there is no marker to flip; landing {sha} verified and stands, nothing more to close"
+
 #: close_background.BACKGROUND_LEGS order; review-stamp precedes plan-reconciliation, which fails
 #: "no review stamp minted" without it.
 CLOSE_LEGS = (
@@ -237,7 +240,7 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) 
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
             out.update(_commit_records(root, run_id, record_dir, sha))
     if marker is None:
-        return {**out, "close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
+        return {**out, "close": {"status": "not-applicable", "detail": _NEVER_HALTED.format(sha=sha[:12])}, "blocking_rows": []}
     if run_close.resolve_close_job_stem(root, run_id) is not None:
         return {**out, "close": {"status": "not-applicable", "detail": "close job already recorded"}, "blocking_rows": _withheld(marker)}
     return {**out, **_queue_close(root, run_id, sha, marker, session_id)}

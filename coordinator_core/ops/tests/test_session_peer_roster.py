@@ -65,11 +65,30 @@ def test_row_shape(monkeypatch):
         "is_self",
         "self_determination",
         "messaging_available",
+        "kind",
+        "pid",
     }
+    assert row["kind"] == "claude"
+    assert row["pid"] is None
     assert row["is_self"] is True
     assert re.fullmatch(r"claude-klabauter-57 \[[0-9a-f]{6,12}\]", row["address"])
     assert row["self_determination"] == "resolved"
     assert row["messaging_available"] is True
+
+
+def test_codex_worker_row_on_the_wire(monkeypatch, tmp_path):
+    from coordinator_core.codex_runner import roster
+
+    snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter")}
+    monkeypatch.setattr(hr, "snapshot", lambda: snap)
+    monkeypatch.setattr(hr, "self_record", lambda: None)
+    monkeypatch.setattr(roster, "settings_home", lambda: tmp_path)
+    roster.write_record(os.getpid(), "run9", "review", "/repo/claude-klabauter")
+
+    rows = _session_peer_roster({"repo_root": "/repo/claude-klabauter"})["rows"]
+    codex = [r for r in rows if r["kind"] == "codex"]
+    assert len(codex) == 1 and codex[0]["pid"] == os.getpid()
+    assert [r["kind"] for r in rows if r["kind"] != "codex"] == ["claude"]
 
 
 def test_null_address_rows_say_the_harness_inbox_is_unbound(monkeypatch):

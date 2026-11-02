@@ -105,6 +105,21 @@ def test_fire_returns_new_log_tail_after_run(tmp_path):
     assert calls == ["/query", "/run"]
 
 
+def test_fire_refuses_without_a_live_group_em_and_spawns_nothing(tmp_path):
+    fake, calls = _fake_schtasks()
+    for live in (lambda: False, lambda: 1 / 0):
+        assert fire_box_cache_trim(fake, tmp_path / "trim.log", lambda s: None, live_fn=live) is None
+    assert calls == []
+
+
+def test_fire_proceeds_with_a_live_group_em(tmp_path):
+    log = tmp_path / "trim.log"
+    log.write_text("old line\n")
+    fake, calls = _fake_schtasks(log=log, log_after="old line\nnew: system cache 11.6 -> 3.0 GB\n")
+    assert fire_box_cache_trim(fake, log, lambda s: None, live_fn=lambda: True) == "new: system cache 11.6 -> 3.0 GB"
+    assert calls == ["/query", "/run"]
+
+
 def test_fire_task_absent_returns_none_without_running(tmp_path):
     fake, calls = _fake_schtasks(query_rc=1)
     assert fire_box_cache_trim(fake, tmp_path / "trim.log", lambda s: None) is None

@@ -212,6 +212,7 @@ import ast
 import asyncio
 import datetime
 import json
+import os
 import re
 import subprocess
 import time
@@ -230,6 +231,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch_async
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._pytest_child_env import pytest_child_env
+from coordinator_core.testing import spawn_depth
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 #: Repo-relative path (coordinator-content-repo-relative) of the vendored cutover schema —
@@ -1217,6 +1219,11 @@ def _run_pytest_batch(
     bound = _pytest_batch_timeout(len(refs))
     if timeout_secs is not None:
         bound = min(bound, timeout_secs)
+    refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        list(refs), os.environ, str(root)
+    )
+    if refusal:
+        return {ref: (False, f"test-node-id {ref!r}: {refusal}") for ref in refs}
     try:
         proc = subprocess.run(
             [sys.executable, "-m", "pytest", *refs, "-q", "--no-header", "-rA"],

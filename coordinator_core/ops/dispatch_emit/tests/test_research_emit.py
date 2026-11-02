@@ -143,6 +143,21 @@ def test_deep_yields_the_roster_roles_plus_a_specialist_per_source():
     _validate_all(segs)
 
 
+def test_deep_roster_missing_a_seeded_source_is_refused_naming_the_slug():
+    research = {"value_class": "deep", "seeds": [{"kind": "repo", "url": "x"}]}
+    assert research_shape.shape(research)["pipelines"] == ["repo", "unblock"]
+    with pytest.raises(PipelineEmitRefused, match="lacks source slug.*: repo"):
+        _segments(research)
+
+
+def test_deep_roster_with_every_addressed_source_is_accepted():
+    research = {"value_class": "deep", "sources": ["repo"], "seeds": [{"kind": "repo", "url": "x"}]}
+    _, segs = _segments(research, sources=["repo"])
+    assert [m["slug"] for m in segs[-1][1].lists["roster"]][-1] == "repo"
+    _, segs = _segments({"value_class": "deep"}, sources=["repo"])
+    assert [m["slug"] for m in segs[0][1].lists["roster"]] == ["diagnose", "decompose", "challenge", "repo"]
+
+
 def test_notebooklm_targets_become_its_notebooks_list():
     targets = [{"source": "notebooklm", "ref": "A"}, {"source": "web", "ref": "x"}, {"source": "notebooklm", "ref": "B"}]
     _, segs = _segments({"value_class": "corpus", "sources": ["notebooklm"]}, targets=targets)
@@ -282,7 +297,7 @@ def _emit_from_sizing(monkeypatch, tmp_path, capsys, *research_flags):
     monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)
     monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: CONTENT)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-research-gate")
-    rel = _write_sizing(tmp_path, "--research-class", "corpus", "--research-source", "notebooklm", *research_flags)
+    rel = _write_sizing(tmp_path, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "podcast", *research_flags)
     capsys.readouterr()
     assert cli_module.main(["--from-sizing", rel]) == cli_module.EXIT_OK
     return json.loads(capsys.readouterr().out)
@@ -311,7 +326,7 @@ def test_a_notebooklm_manifest_missing_a_gated_id_is_refused_at_emit(monkeypatch
     monkeypatch.setattr(op_module, "_pipeline_content_root", lambda: CONTENT)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-research-gate")
     rel = _write_sizing(
-        tmp_path, "--research-class", "corpus", "--research-source", "notebooklm", "--research-target", "notebooklm=A"
+        tmp_path, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "podcast", "--research-target", "notebooklm=A"
     )
     capsys.readouterr()
     assert cli_module.main(["--from-sizing", rel]) != cli_module.EXIT_OK

@@ -511,6 +511,65 @@ def test_marks_are_noops_on_unknown_tombstoned_and_stamped_keys():
     }
 
 
+_RESTARTED = {
+    "state": dispatch_ack.STATE_UNKNOWABLE,
+    "reason": dispatch_ack.REASON_ENGINE_RESTARTED,
+}
+
+
+def test_reconcile_restarted_marks_admitted_and_keeps_finished_outcome():
+    store = _store()
+    live, queued, done = _key(1, 1_000_100), _key(1, 1_000_200), _key(1, 1_000_300)
+    for k in (live, queued, done):
+        store.admit(k, "m")
+    store.mark_queued(queued)
+    store.stamp(done, dispatch_ack.OUTCOME_RESULT, result={"v": 1})
+    assert store.reconcile_restarted() == 2
+    assert store.status(live) == _RESTARTED
+    assert store.status(queued) == _RESTARTED
+    assert store.status(done)["state"] == dispatch_ack.STATE_FINISHED
+    assert store.reconcile_restarted() == 0
+
+
+def test_reconcile_restarted_only_named_keys():
+    store = _store()
+    a, b = _key(1, 1_000_100), _key(1, 1_000_200)
+    store.admit(a, "m")
+    store.admit(b, "m")
+    assert store.reconcile_restarted([a]) == 1
+    assert store.status(a) == _RESTARTED
+    assert store.status(b) == {"state": dispatch_ack.STATE_EXECUTING}
+
+
+def test_worker_lost_stamp_after_reconcile_keeps_engine_restarted():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.reconcile_restarted()
+    store.stamp(key, dispatch_ack.OUTCOME_WORKER_LOST)
+    store.stamp(key, dispatch_ack.OUTCOME_ABANDONED)
+    assert store.status(key) == _RESTARTED
+
+
+def test_late_result_after_reconcile_still_lands():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.reconcile_restarted()
+    store.stamp(key, dispatch_ack.OUTCOME_RESULT, result={"v": 1})
+    assert store.status(key)["state"] == dispatch_ack.STATE_FINISHED
+
+
+def test_wait_on_reconciled_key_returns_immediately():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.reconcile_restarted()
+    t0 = time.monotonic()
+    assert store.wait(key, 5.0) == _RESTARTED
+    assert time.monotonic() - t0 < 1.0
+
+
 def test_stamp_from_queued_lands_and_a_late_queued_mark_cannot_unfinish_it():
     store = _store()
     key = _key(1, 1_000_100)

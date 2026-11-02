@@ -11,6 +11,8 @@ Negative spec:
     `sized_through_turn` mark, so cost does not grow with the corpus.
   - Does NOT spawn a process (no git).
   - Does NOT block on a missing or blank brief.
+  - Does NOT judge research: an ask naming "sources X+Y" seeds only `research.sources` (with a
+    placeholder `value_class` that the schema requires); no other research field.
 """
 
 from __future__ import annotations
@@ -28,6 +30,7 @@ from coordinator_core.frontmatter.schema_validate import (
 )
 from coordinator_core.ipc import register_op
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops import baton_pm_turns
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.session_context import resolve_current_session_id
@@ -43,6 +46,25 @@ _SIZING_SCHEMA_PATH: Path = (
     Path(__file__).parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
 _SLUG_MAX = 60
+
+
+_SOURCE_ALT = "|".join(rc.SOURCES)
+_SOURCES_NAMED = re.compile(
+    rf"\bsources?\b\s*[:=]?\s*((?:{_SOURCE_ALT})(?:\s*(?:\+|,|/|&|\band\b)\s*(?:{_SOURCE_ALT}))*)\b",
+    re.IGNORECASE,
+)
+_SOURCE_SPLIT = re.compile(rf"\b({_SOURCE_ALT})\b", re.IGNORECASE)
+_NAMED_SOURCES_VALUE_CLASS = "corpus"
+
+
+def named_sources(text: str) -> list[str]:
+    """Every research source the ask text names after the word `sources` ("sources repo+web"), in order, deduplicated; [] when it names none."""
+    found: list[str] = []
+    for match in _SOURCES_NAMED.finditer(text or ""):
+        for token in _SOURCE_SPLIT.findall(match.group(1)):
+            if token.lower() not in found:
+                found.append(token.lower())
+    return found
 
 
 def _err(msg: str) -> dict:
@@ -101,6 +123,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         record = relayed_intake_record(name=slug, text=text, sender=sender or "", today=today)
     else:
         record = intake_record(name=slug, turn=turn, today=today)
+    sources = named_sources(record["intent"])
+    if sources:
+        record["research"] = {"value_class": _NAMED_SOURCES_VALUE_CLASS, "sources": sources}
     if em_brief and em_brief.strip():
         record["em_analysis"][EM_BRIEF_KEY] = em_brief.strip()
     errors = validate_frontmatter(record, _SIZING_SCHEMA_PATH)

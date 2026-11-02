@@ -348,6 +348,16 @@ ASK_STAGE_RECONCILE_CLAUSE = (
     "reply verbatim. A -32004 is never itself the stage's failure."
 )
 
+#: Reconcile clause for prompts that run `dispatch.ask_gate`; the gate's re-run is the retry path
+#: when its first call never landed.
+ASK_GATE_RECONCILE_CLAUSE = (
+    f"If the {OP_ASK_GATE} command replies with error code -32004 and its error.data carries "
+    "reconcile_command, run reconcile_command once: a status whose state is finished with outcome "
+    "result is the gate's reply. In every other -32004 case, run the same "
+    f"{OP_ASK_GATE} command exactly once more and return its reply verbatim. "
+    "A -32004 is never itself the gate's failure."
+)
+
 
 _ROW_EFFORT = "medium"
 #: Labels that re-read or relay rather than author: low even on a sonnet type.
@@ -392,6 +402,10 @@ def _agent(
             reconcile = LAND_RUN_RECONCILE_CLAUSE
         elif OP_ASK_STAGE in prompt_expr:
             reconcile = ASK_STAGE_RECONCILE_CLAUSE
+            if OP_ASK_GATE in prompt_expr:
+                reconcile += " " + ASK_GATE_RECONCILE_CLAUSE
+        elif OP_ASK_GATE in prompt_expr:
+            reconcile = ASK_GATE_RECONCILE_CLAUSE
         else:
             reconcile = _emit._INDETERMINATE_RECONCILE_CLAUSE
         if reconcile not in prompt_expr:
@@ -6373,7 +6387,7 @@ def _append_docs_and_commit(
     )
     b.append(
         "      else { _nextAction = { kind: 'close_job', op: null, "
-        "params: { run_id: _runId, close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] } }; } }"
+        "params: { run_id: _commit.close?.run_id ?? _runId, close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] } }; } }"
     )
     b.append(
         "    else { if (!_halted) _halted = { halted: 'commit', refused: _commit?.refused ?? null, "

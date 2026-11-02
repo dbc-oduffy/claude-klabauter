@@ -382,15 +382,18 @@ def test_corrupt_head_blob_reads_as_a_cold_cache(tree):
     assert not stats.tree_hit
 
 
-def test_cacheprovider_disabled_yields_no_cache_dir(pytester, tree):
+def test_cacheprovider_disabled_yields_repo_local_cache_dir(pytester, tree):
     root, _, _ = tree
+    expected = (gate._REPO_ROOT / ".coordinator-local" / "amp-scan").resolve()
     pytester.makepyfile(
         test_inner=f"""
         import pathlib
         from coordinator_core.tests._amp_scan_incremental import gate_cache_dir, scan_incremental
 
         def test_inner(pytestconfig):
-            assert gate_cache_dir(pytestconfig) is None
+            assert getattr(pytestconfig, "cache", None) is None
+            d = gate_cache_dir(pytestconfig)
+            assert d is not None and d.resolve() == pathlib.Path({str(expected)!r})
             sites, stats = scan_incremental((pathlib.Path({str(root)!r}),), None)
             assert sites and not stats.tree_hit
         """

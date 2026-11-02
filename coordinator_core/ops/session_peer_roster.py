@@ -49,6 +49,8 @@ def _row_to_dict(row: "peer_roster.PeerRow") -> Dict[str, Any]:
         "is_self": row.is_self,
         "self_determination": row.self_determination,
         "messaging_available": row.messaging_available,
+        "kind": row.kind,
+        "pid": row.pid,
     }
 
 

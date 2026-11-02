@@ -73,6 +73,7 @@ Negative-spec:
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 from coordinator_core.win_portability import no_console_creationflags
@@ -83,6 +84,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._pytest_child_env import pytest_child_env
 from coordinator_core.content_root import read_content_root
+from coordinator_core.testing import spawn_depth
 
 _TEMPLATE_REL = Path("coordinator") / "tests" / "templates" / "test_no_bare_console_subprocess.py"
 
@@ -111,6 +113,11 @@ def _resolve_template_path() -> Path:
 
 
 def _run_pytest(dest: Path, cwd: Path) -> bool:
+    refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        [str(dest)], os.environ, str(cwd)
+    )
+    if refusal:
+        raise TripwireCopyError(f"repo_setup.copy_console_subprocess_tripwire: {refusal}")
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", str(dest)],
         cwd=str(cwd),

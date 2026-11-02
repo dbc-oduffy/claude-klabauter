@@ -9,6 +9,7 @@ any tier. `tests/test_runner_shapes_admitted.py::ADMITTED_HEADS` pins the head t
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 import shutil
@@ -30,6 +31,7 @@ from coordinator_core.bug_blitz.contract import (
 )
 from coordinator_core.bug_blitz.foreign_edits import foreign_dirty, head_tree, holders_of
 from coordinator_core.git.run import run_git
+from coordinator_core.testing import spawn_depth
 from coordinator_core.win_portability import no_console_creationflags
 
 DEFAULT_TIMEOUT = 300
@@ -190,12 +192,27 @@ def _failing_ids(output: str) -> list[str]:
     return list(dict.fromkeys(ids))
 
 
+def _is_pytest_argv(argv: Sequence[str]) -> bool:
+    return list(argv[1:3]) == ["-m", "pytest"]
+
+
+def _pytest_spawn_refusal(argv: Sequence[str], repo_root: Path) -> str | None:
+    """Depth or self-inclusion refusal for a pytest argv, else None; read before the child env strips the calling test."""
+    if not _is_pytest_argv(argv):
+        return None
+    return spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        argv[3:], os.environ, str(repo_root)
+    )
+
+
 def _spawn(argv: Sequence[str], cwd: Path, timeout: int) -> tuple[int, str]:
     resolved = [shutil.which(argv[0]) or argv[0], *argv[1:]]
+    env = spawn_depth.child_env(os.environ) if _is_pytest_argv(argv) else None
     try:
         proc = subprocess.run(
             resolved,
             cwd=str(cwd),
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -269,6 +286,10 @@ def run(
                 argv=argv,
                 selected=selected,
             )
+        refusal = _pytest_spawn_refusal(argv, repo_root)
+        if refusal:
+            print(f"targeted-test-run: {refusal}", file=sys.stderr)
+            return record(OUTCOME_REFUSED, runner=plans[0][0], argv=argv, selected=selected)
 
     runner = "+".join(label for label, _ in plans)
     flat_argv = [tok for i, (_, a) in enumerate(plans) for tok in ([";"] if i else []) + a]

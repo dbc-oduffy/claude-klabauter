@@ -82,9 +82,17 @@ def _run_argv(
     argv: list[str], cwd: Path, *, log: Optional[Path] = None, timeout: Optional[float] = None,
     append: bool = False,
 ):
-    """Exit code, or ``LAUNCH_TIMED_OUT``. Trap: the timeout kills only the direct child; the log is a
+    """Exit code, or ``LAUNCH_TIMED_OUT``. The child runs in a capped job (a killpg session off
+    Windows); the timeout and the normal exit both close it, so no grandchild survives. The log is a
     file so a surviving grandchild never blocks this call."""
     limit = RETEST_CHILD_TIMEOUT_SECS if timeout is None else timeout
+    from coordinator_core.testing import spawn_depth
+
+    refusal = spawn_depth.refusal_for_spawn(os.environ) or spawn_depth.selection_includes_spawner(
+        argv[argv.index("pytest") + 1 :] if "pytest" in argv else argv, os.environ, str(cwd)
+    )
+    if refusal:
+        raise OSError(refusal)
     from coordinator_core.bash_guards._heavy_command_class import (
         admit_before_spawn, register_spawn, release_spawn,
     )
@@ -97,20 +105,29 @@ def _run_argv(
     from coordinator_core.testing import baseline_export
 
     # An export carries no .git of its own: confine git there so it cannot adopt an enclosing repo.
-    env = None if (Path(cwd) / ".git").exists() else baseline_export.export_env(cwd)
+    from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
+    from coordinator_core.testing.nested_session_guard import guarded_child_env
+
+    env = guarded_child_env(
+        os.environ if (Path(cwd) / ".git").exists() else baseline_export.export_env(cwd)
+    )
     try:
-        proc = subprocess.Popen(
-            argv, cwd=str(cwd), env=env, creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL,
-            stdout=sink, stderr=subprocess.STDOUT,
+        proc, close = spawn_in_capped_job(
+            argv,
+            popen_kwargs=dict(
+                cwd=str(cwd), env=env, creationflags=_NO_WINDOW, stdin=subprocess.DEVNULL,
+                stdout=sink, stderr=subprocess.STDOUT,
+            ),
         )
         register_spawn(admission.key, admission.peak_gib, proc.pid)
         try:
             return proc.wait(timeout=limit)
         except subprocess.TimeoutExpired:
-            proc.kill()
+            close()
             proc.wait()
             return LAUNCH_TIMED_OUT
         finally:
+            close()
             release_spawn(admission.key, proc.pid)
     finally:
         if log is not None:

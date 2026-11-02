@@ -182,6 +182,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.ops.claude_home_census import DEFAULT_MAX_AGE_HOURS as _CENSUS_DEFAULT_MAX_AGE_HOURS
 from coordinator_core.ops.claude_home_census import DEFAULT_MAX_MB as _CENSUS_DEFAULT_MAX_MB
 from coordinator_core.session.declared_writes import declare_write
+from coordinator_core.session.machinery_paths import ledgers_dir
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.wire_paths import rel_id
 from coordinator_core.win_portability import (
@@ -1987,6 +1988,121 @@ def sweep_warp_prompts(
     return total_bytes, total_items
 
 
+# Homes whose text may name a run id; a run named in any of them is evidence and is kept.
+def _warp_run_citation_homes(repo_root: Path) -> Tuple[Path, ...]:
+    root = str(repo_root)
+    return (Path(ledgers_dir(root)), repo_root / "docs", Path(home_dir(root, "handoffs")))
+_WARP_RUN_CITATION_SUFFIXES = frozenset({".md", ".json", ".jsonl", ".yaml", ".yml", ".txt"})
+_WARP_RUN_ID_RE = re.compile(r"(?:ask|warp)-[0-9A-Za-z]+(?:-[0-9A-Za-z]+)*")
+
+
+def _cited_warp_run_ids(repo_root: Path, candidates: frozenset, wd: "_Watchdog") -> Optional[set]:
+    """Run ids from `candidates` named anywhere under the citation homes: one read
+    pass, no spawn. None when the watchdog expired mid-scan (a partial scan must not
+    authorise a delete). Cost grows with docs/ size; only the watchdog bounds it."""
+    cited: set = set()
+    for home in _warp_run_citation_homes(repo_root):
+        for dirpath, _dirs, files in os.walk(home):
+            if not wd.check():
+                return None
+            for fn in files:
+                if os.path.splitext(fn)[1].lower() not in _WARP_RUN_CITATION_SUFFIXES:
+                    continue
+                try:
+                    with open(os.path.join(dirpath, fn), "r", encoding="utf-8", errors="replace") as fh:
+                        text = fh.read()
+                except OSError:
+                    continue
+                for token in _WARP_RUN_ID_RE.findall(text):
+                    # A run id followed by "-word" in prose still names the run.
+                    while True:
+                        if token in candidates:
+                            cited.add(token)
+                            break
+                        if "-" not in token:
+                            break
+                        token = token.rsplit("-", 1)[0]
+            if len(cited) == len(candidates):
+                return cited
+    return cited
+
+
+def _tracked_warp_run_names(repo_root: Path) -> Optional[set]:
+    """Run-dir names holding any tracked file, from one `git ls-files state/warp`.
+    Empty outside a git work tree; None when git fails (callers delete nothing)."""
+    if git_dir(str(repo_root)) is None:
+        return set()
+    warp_rel = os.path.relpath(home_dir(str(repo_root), "warp"), str(repo_root)).replace(os.sep, "/")
+    res = run_git(["ls-files", "-z", "--", warp_rel], cwd=str(repo_root))
+    if res.returncode != 0:
+        return None
+    names: set = set()
+    for entry in res.stdout.split("\0"):
+        parts = entry.split("/")
+        if len(parts) > 3:
+            names.add(parts[2])
+    return names
+
+
+def sweep_warp_runs(
+    repo_root: Path,
+    *,
+    now: float,
+    dry_run: bool,
+    quiet: bool,
+    watchdog_ceiling_secs: Optional[float] = None,
+) -> Tuple[int, int]:
+    """Delete whole `state/warp/<run>/` dirs whose outcome file is older than
+    WARP_PROMPTS_RETENTION_DAYS, that hold no tracked file, and whose id no ledger,
+    doc or handoff names. A run with no outcome file is open and skipped. Returns
+    (bytes, items); dry_run counts without deleting."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_OUTCOME_FILE
+
+    warp_root = Path(home_dir(str(repo_root), "warp"))
+    window = WARP_PROMPTS_RETENTION_DAYS * 86400
+    wd = _Watchdog(watchdog_ceiling_secs)
+    try:
+        with os.scandir(warp_root) as it:
+            runs = sorted(e.path for e in it if e.is_dir(follow_symlinks=False))
+    except OSError:
+        return 0, 0
+    due: dict = {}
+    for run in runs:
+        try:
+            outcome_mtime = os.stat(os.path.join(run, RUN_OUTCOME_FILE)).st_mtime
+        except OSError:
+            continue
+        if now - outcome_mtime > window:
+            due[os.path.basename(run)] = Path(run)
+    if not due:
+        return 0, 0
+    tracked = _tracked_warp_run_names(repo_root)
+    if tracked is None:
+        _banner("[cruft-sweep] warp runs sweep skipped: git ls-files state/warp failed", quiet=quiet)
+        return 0, 0
+    cands = frozenset(n for n in due if n not in tracked)
+    if not cands:
+        return 0, 0
+    cited = _cited_warp_run_ids(repo_root, cands, wd)
+    if cited is None:
+        _banner("[cruft-sweep] wall-clock ceiling bail on warp runs citation scan; will finish next run", quiet=quiet)
+        return 0, 0
+    targets = [(due[n], _dir_size_bytes(due[n])) for n in sorted(cands - cited)]
+    if dry_run:
+        return sum(s for _, s in targets), len(targets)
+    if not targets:
+        return 0, 0
+    results = _delete_paths_batch([p for p, _ in targets], watchdog=wd)
+    total_bytes = total_items = 0
+    for path, size in targets:
+        if not results.get(str(path), False):
+            _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {path}", quiet=quiet)
+            continue
+        total_bytes += size
+        total_items += 1
+    return total_bytes, total_items
+
+
 def sweep_scratch(
     repo_root: Path,
     scratch_age_days: int,
@@ -3021,8 +3137,14 @@ def _run_all_phases(
         )
         if apply and warp_items > 0:
             _append_log_row(log_path, "warp-prompts", warp_bytes, warp_items)
-        sandbox_bytes += warp_bytes
-        sandbox_items += warp_items
+        runs_bytes, runs_items = sweep_warp_runs(
+            _resolve_repo_root(repo_root_override), now=time.time(),
+            dry_run=not apply, quiet=quiet,
+        )
+        if apply and runs_items > 0:
+            _append_log_row(log_path, "warp-runs", runs_bytes, runs_items)
+        sandbox_bytes += warp_bytes + runs_bytes
+        sandbox_items += warp_items + runs_items
     if class_ in ("orphans", "all"):
         orphans_bytes, orphans_items = sweep_orphans(
             parent_roots, whitelist,

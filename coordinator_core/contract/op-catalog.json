@@ -420,7 +420,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC changelog.backfill_gaps handler.\n\nMUTATING (writes state/week-changelog/{date}-{host}-backfill.md per gap date).\nAdvisory: errors return a non-fatal dict (matches oracle's trap 'exit 0' ERR).\n\nOptional params:\n    host (str) — machine/host name. Defaults to COORDINATOR_MACHINE env or hostname.\n                 Must be the calling session's machine (preserve legacy attribution).\n    today (str, YYYY-MM-DD) — override for 'today'; defaults to the coordinator local day.\n    through (str, YYYY-MM-DD) — last day the backfill may write; default: today.\n\nReturns:\n    {backfilled: [str, ...], skipped: [str, ...]}",
+      "description": "JSON-RPC changelog.backfill_gaps handler.\n\nMUTATING (writes state/week-changelog/{date}-{host}-backfill.md per gap date).\nAdvisory: errors return a non-fatal dict (matches oracle's trap 'exit 0' ERR).\n\nOptional params:\n    host (str) — machine/host name. Defaults to COORDINATOR_MACHINE env or hostname.\n                 Must be the calling session's machine (preserve legacy attribution).\n    today (str, YYYY-MM-DD) — override for 'today'; defaults to the coordinator local day.\n    through (str, YYYY-MM-DD) — last day the backfill may write; default: today.\n    week (str, YYYY-MM-DD, a Monday) — COMPOSE ONLY: returns\n                 {composed: [{path, text}]} for archive/week-changelogs/<week>/<day>.md\n                 from all refs, header-free, and writes nothing; see `backfill_gaps`.\n\nReturns:\n    {backfilled: [str, ...], skipped: [str, ...]}",
       "module": "coordinator_core.ops.changelog_ops",
       "name": "changelog.backfill_gaps",
       "op_class": "mutating",
@@ -2067,17 +2067,6 @@
         "type": "object"
       },
       "summary": "handoff.discharge_landed — scoped resolve, batch stamp+archive, lock,",
-      "timeout_s": 30.0
-    },
-    {
-      "description": "JSON-RPC 'handoff.human_gate_clear': `human_gate_clear_sync` on a worker thread.\n\ncoordinator_core.ops.handoff_human_gate_clear -- the human-leg sibling of gate-recheck (DR-266).\n\nPurpose: `handoff.human_gate_clear` discharges the `kind: human` legs of an awaiting_gate\nhandoff's `gate_evidence` on a validated PM citation (a recorded `baton.pm_turns` turn, or a\ncommit whose message carries the PM's verbatim words), stamps the citation into\n`gate_cleared_by`, flips to ready_to_fire when no other leg is left open, and commits that one\nfile. Any refusal writes nothing and commits nothing.\n\nSelf-registration: importing this module fires @register_op(\"handoff.human_gate_clear\").",
-      "module": "coordinator_core.ops.handoff_human_gate_clear",
-      "name": "handoff.human_gate_clear",
-      "op_class": "mutating",
-      "params_schema": {
-        "type": "object"
-      },
-      "summary": "JSON-RPC 'handoff.human_gate_clear': `human_gate_clear_sync` on a worker thread.",
       "timeout_s": 30.0
     },
     {
@@ -4457,7 +4446,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"rea_ledger.write\" handler.\n\nParams:\n    kind (str) -- one of RECORD_KINDS.\n    records (list[str]) -- each the submitted JSON text of one record; must be its own\n        canonical serialisation.\n\nReturns:\n    {\"written\": int, \"kind\": str} or {\"error\": str}. A refusal writes nothing.",
+      "description": "JSON-RPC \"rea_ledger.write\" handler.\n\nParams:\n    kind (str) -- one of RECORD_KINDS: \"claim\", \"evidence_record\", \"unknown_revision\".\n    records (list[str]) -- non-empty; each the submitted JSON text of one record, which must\n        equal its canonical re-serialisation byte for byte.\n\nReturns:\n    {\"written\": int, \"kind\": str} (``written`` counts files created or lines appended;\n    an identical existing claim or evidence file is a no-op) or {\"error\": str}, in which\n    case nothing was written.",
       "module": "coordinator_core.ops.rea_ledger_write",
       "name": "rea_ledger.write",
       "op_class": "mutating",
@@ -5004,17 +4993,6 @@
         "type": "object"
       },
       "summary": "JSON-RPC \"session.incident_peers\" handler.",
-      "timeout_s": 30.0
-    },
-    {
-      "description": "JSON-RPC \"session.landing_hold\" handler.\n\nParams:\n    action (str) -- \"set\", \"clear\" or \"status\".\n    session_id (str) -- required, path-safe.\n\nReturns:\n    set:    {\"action\": \"set\", \"held\": True}\n    status: {\"action\": \"status\", \"held\": bool, \"deferred_count\": int}\n    clear:  {\"action\": \"clear\", \"cleared\": bool, \"replayed\": [{\"kind\", \"sha\"}],\n             \"failed\": [{\"kind\", \"error\"}]}\n    or {\"error\": str} on an invalid param.",
-      "module": "coordinator_core.ops.session_landing_hold",
-      "name": "session.landing_hold",
-      "op_class": "mutating",
-      "params_schema": {
-        "type": "object"
-      },
-      "summary": "JSON-RPC \"session.landing_hold\" handler.",
       "timeout_s": 30.0
     },
     {

@@ -233,9 +233,6 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ("coordinator_core/benchmarks/prefire_launch_lookup_cost.py", "mkdtemp"): (
         "fixture under <repo>/scratch (or operator --workdir); synthetic fixture, not an engine clone"
     ),
-    ("coordinator_core/benchmarks/rea_ledger_write_bench.py", "mkdtemp"): (
-        "git-init fixture under <source_root>/scratch; synthetic fixture, not an engine clone"
-    ),
     ("coordinator_core/benchmarks/submit_engine_ask_process_budget.py", "mkdtemp"): (
         "scratch under _scratch_parent(), removed after measure; synthetic fixture, not an engine clone"
     ),

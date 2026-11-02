@@ -2595,6 +2595,34 @@ def test_subagent_directory_argument_denied(repo_with_test_dir, free_mutex, comm
     assert "DR-088 R9" in reason
 
 
+def test_subagent_single_bounded_directory_is_allowed_and_a_broad_one_still_denied(
+    repo_with_test_dir, free_mutex, monkeypatch
+):
+    command = "pytest coordinator_core/frontmatter/tests/sub"
+    n = guard._DIR_TEST_FILE_THRESHOLD
+    monkeypatch.setattr(guard, "_tracked_test_file_count", lambda dirs, root: n)
+    _assert_allowed(_enveloped(guard.check)(_payload(command, repo_with_test_dir, agent_id=_AGENT_ID)))
+
+    monkeypatch.setattr(guard, "_tracked_test_file_count", lambda dirs, root: n + 1)
+    assert "Directory arg" in _reason(_enveloped(guard.check)(
+        _payload(command, repo_with_test_dir, agent_id=_AGENT_ID)))
+
+    monkeypatch.setattr(guard, "_tracked_test_file_count", lambda dirs, root: None)
+    assert "Directory arg" in _reason(_enveloped(guard.check)(
+        _payload(command, repo_with_test_dir, agent_id=_AGENT_ID)))
+
+
+def test_subagent_two_directories_are_still_denied_even_when_each_is_small(
+    repo_with_test_dir, free_mutex, monkeypatch
+):
+    (repo_with_test_dir / "coordinator_core" / "frontmatter" / "tests" / "sub2").mkdir()
+    monkeypatch.setattr(guard, "_tracked_test_file_count", lambda dirs, root: 1)
+    reason = _reason(_enveloped(guard.check)(_payload(
+        "pytest coordinator_core/frontmatter/tests/sub coordinator_core/frontmatter/tests/sub2",
+        repo_with_test_dir, agent_id=_AGENT_ID)))
+    assert "Directory arg" in reason
+
+
 def test_r9_deny_instructs_reporting_the_substitution_to_the_dispatcher(
     repo_with_test_dir, free_mutex
 ):
