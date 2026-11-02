@@ -1200,9 +1200,12 @@ def attribute_sink(base: str, sink_name: str, owner_of=None) -> "tuple[Optional[
 def append_index_names(file_path: str, names: "Iterable[str]") -> None:
     """Append ``names`` to an index file in one atomic write; the build's bulk form of
     ``note_claim_in_index``. Raises ``OSError`` for the caller to turn into a missing stamp."""
-    atomic_append.append_line(
-        file_path, ("".join(f"{name}\n" for name in sorted(names))).encode("utf-8")
-    )
+    if not atomic_append.append_line(
+        file_path,
+        ("".join(f"{name}\n" for name in sorted(names))).encode("utf-8"),
+        wait_secs=APPEND_WAIT_SECS,
+    ):
+        raise TimeoutError("claim index bulk append pending")
 
 
 def invalidate_claim_index(index_dir: str) -> None:

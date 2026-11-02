@@ -1072,6 +1072,23 @@ def _read_parent(root: Path, parent_id: str):
         return None
 
 
+def _reserved_token_spent(root: Path, run_id: str) -> bool:
+    """Whether the gate already refused `run_id` for a spent token.
+
+    TRAP: a fan-out slice's sizing pins its original run id via `ask_parent`; re-reserving it
+    after the gate marked the token spent re-emits the same id, the gate refuses the same way,
+    and the refusal's own remedy (this {sizing} call) loops forever. A spent reservation is
+    dropped so the emit mints a fresh run id.
+    """
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.ask_gate import TOKEN_SPENT_FILE
+
+    try:
+        return (record_dir(root, run_id) / TOKEN_SPENT_FILE).is_file()
+    except (OSError, ValueError):
+        return False
+
+
 def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
     """Why a slice sizing may not start now: an unlanded `after` predecessor."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
@@ -2042,8 +2059,11 @@ def _evaluate(
             why = _slice_deny(root, marker)
             if why:
                 return deny("PreToolUse", why)
-            reserved_run_id = marker[1]
+            if not _reserved_token_spent(root, marker[1]):
+                reserved_run_id = marker[1]
             ask_parent_id = marker[0]
+    if reserved_run_id and _reserved_token_spent(root, reserved_run_id):
+        reserved_run_id = None
 
     clash = None
     with warp_live.listing_scope():

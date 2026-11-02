@@ -87,3 +87,18 @@ def test_wait_secs_returns_true_when_the_line_lands_in_time(tmp_path):
     sink = tmp_path / "s.jsonl"
     assert atomic_append.append_line(sink, b"a\n", wait_secs=5) is True
     assert sink.read_bytes() == b"a\n"
+
+
+def test_bulk_claim_index_append_raises_instead_of_waiting_on_a_stalled_sink(tmp_path, monkeypatch):
+    from coordinator_core.session import touch_record
+
+    seen = {}
+
+    def stalled(path, data, *, wait_secs=None, **kw):
+        seen["wait_secs"] = wait_secs
+        return False
+
+    monkeypatch.setattr(touch_record.atomic_append, "append_line", stalled)
+    with pytest.raises(TimeoutError):
+        touch_record.append_index_names(str(tmp_path / "idx.txt"), ["b", "a"])
+    assert seen["wait_secs"] == touch_record.APPEND_WAIT_SECS

@@ -218,6 +218,50 @@ def fresh_git_clone(source_root: Path, *, prefix: str, label: str) -> Iterator[P
         rmtree_or_raise(tmp, label=label, reaped=reaped)
 
 
+@contextlib.contextmanager
+def record_fixture_repo(source_root: Path, paths, *, prefix: str, label: str) -> Iterator[Path]:
+    """Yield a fresh repo in the OS temp dir holding only `paths` (copied from `source_root`,
+    skipping any that is not a file) in one commit; take it back down on exit.
+
+    No clone, no alternates, no scratch/benchmark-clones: the write is the size of `paths`, not of
+    the source tree. Teardown reaps processes rooted in the repo and raises `CloneTeardownLeak`
+    if anything survives.
+    """
+    from coordinator_core.git.run import run_git
+
+    tmp = Path(tempfile.mkdtemp(prefix=_short_clone_prefix(prefix)))
+    try:
+        dest = tmp / "c"
+        dest.mkdir()
+
+        def git(*args: str):
+            result = run_git(
+                ["-c", "core.fsmonitor=false", "-c", "core.longpaths=true", *args], cwd=str(dest)
+            )
+            if not result.ok:
+                raise RuntimeError(f"{label}: git {args[0]} failed rc={result.returncode}: {result.stderr.strip()}")
+
+        git("init", "-q", "-b", "main")
+        _silence_clone_git_daemons(dest)
+        copied = []
+        for rel in paths:
+            src = source_root / rel
+            if src.is_file():
+                (dest / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dest / rel)
+                copied.append(str(rel))
+        if copied:
+            git("add", "--", *copied)
+        git(
+            "-c", "user.email=t@example.com", "-c", "user.name=t", "-c", "commit.gpgsign=false",
+            "commit", "-q", "--allow-empty", "-m", "record fixture base",
+        )
+        yield dest
+    finally:
+        reaped = reap_processes_under(tmp)
+        rmtree_or_raise(tmp, label=label, reaped=reaped)
+
+
 def _normalized(path: Path) -> str:
     resolved = os.path.realpath(str(path))
     return resolved.casefold() if sys.platform in ("win32", "darwin") else resolved

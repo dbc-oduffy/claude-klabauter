@@ -149,6 +149,40 @@ if IS_WINDOWS:
             raise ctypes.WinError(ctypes.get_last_error())
         return job
 
+    JOB_OBJECT_LIMIT_ACTIVE_PROCESS = 0x00000008
+    JOB_OBJECT_LIMIT_JOB_MEMORY = 0x00000200
+    CREATE_BREAKAWAY_FROM_JOB = 0x01000000
+
+    def create_capped_job(active_process_limit: int, job_memory_limit_bytes: int):
+        """Kill-on-close Job Object that also bounds live process count and committed memory.
+
+        A fork bomb inside the job fails at CreateProcess instead of exhausting the box.
+        """
+        job = _kernel32.CreateJobObjectW(None, None)
+        if not job:
+            raise ctypes.WinError(ctypes.get_last_error())
+        info = _JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+        info.BasicLimitInformation.LimitFlags = (
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            | JOB_OBJECT_LIMIT_ACTIVE_PROCESS
+            | JOB_OBJECT_LIMIT_JOB_MEMORY
+        )
+        # TRAP: the kernel admits one process past ActiveProcessLimit (measured: limit N lets N+1 live),
+        # so the stored limit is N-1 and the tree never exceeds the N the caller asked for.
+        info.BasicLimitInformation.ActiveProcessLimit = max(1, int(active_process_limit) - 1)
+        info.JobMemoryLimit = int(job_memory_limit_bytes)
+        ok = _kernel32.SetInformationJobObject(
+            job,
+            JobObjectExtendedLimitInformation,
+            ctypes.byref(info),
+            ctypes.sizeof(info),
+        )
+        if not ok:
+            err = ctypes.get_last_error()
+            _kernel32.CloseHandle(job)
+            raise ctypes.WinError(err)
+        return job
+
     def _assign_to_job(job, process_handle):
         ok = _kernel32.AssignProcessToJobObject(job, process_handle)
         if not ok:
@@ -212,6 +246,97 @@ def derive_worker_cap() -> int:
         cap = min(cap, avail / 150)
 
     return max(1, int(cap))
+
+
+DEFAULT_ACTIVE_PROCESS_LIMIT = 50
+_MIN_JOB_MEMORY_BYTES = 512 * 1024 * 1024
+_FALLBACK_JOB_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+
+
+def default_job_memory_limit_bytes() -> int:
+    """One runner's share of usable RAM: available MB split across `derive_worker_cap` runners."""
+    try:
+        from coordinator_core.telemetry import host_sampler
+
+        avail = host_sampler.avail_mb()[0]
+        if avail is None:
+            return _FALLBACK_JOB_MEMORY_BYTES
+        share = int(avail) * 1024 * 1024 // max(1, derive_worker_cap())
+        return max(_MIN_JOB_MEMORY_BYTES, share)
+    except Exception:
+        return _FALLBACK_JOB_MEMORY_BYTES
+
+
+def spawn_in_capped_job(
+    argv,
+    *,
+    popen_kwargs=None,
+    active_process_limit: int = DEFAULT_ACTIVE_PROCESS_LIMIT,
+    job_memory_limit_bytes=None,
+):
+    """Start `argv` inside a process-count- and memory-capped tree; returns `(proc, close)`.
+
+    `close()` is idempotent and ends the whole tree: a Job Object close on Windows, a killpg of
+    the new session on POSIX. Windows spawns CREATE_SUSPENDED, assigns, then resumes, so the
+    child cannot fork before it is a job member.
+
+    Trap: POSIX takes no process or memory cap here (the new session plus killpg bounds lifetime
+    only). RLIMIT_NPROC is deliberately not used: it counts per user, so one runner's cap would
+    refuse fork for every peer session of the same user.
+    """
+    kwargs = dict(popen_kwargs or {})
+    if not IS_WINDOWS:
+        kwargs["start_new_session"] = True
+        proc = subprocess.Popen(argv, **kwargs)
+
+        def close_posix() -> None:
+            import signal
+
+            try:
+                os.killpg(proc.pid, signal.SIGKILL)
+            except OSError:
+                pass
+
+        return proc, close_posix
+
+    if job_memory_limit_bytes is None:
+        job_memory_limit_bytes = default_job_memory_limit_bytes()
+    job = create_capped_job(active_process_limit, job_memory_limit_bytes)
+    base_flags = kwargs.pop("creationflags", CREATE_NO_WINDOW) | CREATE_SUSPENDED
+    proc = None
+    try:
+        proc = subprocess.Popen(argv, creationflags=base_flags, **kwargs)
+        try:
+            _assign_to_job(job, int(proc._handle))
+        except OSError:
+            # Parent already in a job that forbids nesting assignment: retry once, broken away.
+            proc.kill()
+            proc.wait()
+            proc = subprocess.Popen(
+                argv, creationflags=base_flags | CREATE_BREAKAWAY_FROM_JOB, **kwargs
+            )
+            _assign_to_job(job, int(proc._handle))
+        _resume_suspended_process(proc.pid)
+    except BaseException:
+        if proc is not None and proc.poll() is None:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        _kernel32.CloseHandle(job)
+        raise
+    state = {"job": job}
+
+    def close_windows() -> None:
+        if state["job"] is not None:
+            _kernel32.CloseHandle(state["job"])
+            state["job"] = None
+        try:
+            proc.kill()
+        except OSError:
+            pass
+
+    return proc, close_windows
 
 
 def run_contained(cmd, timeout, cwd=None, stdin_data=None):
