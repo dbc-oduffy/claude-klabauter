@@ -95,7 +95,29 @@ def test_poll_after_timeout_answers_from_store_without_waiting_on_the_op():
     assert wall < 0.5
 
 
-@pytest.mark.parametrize("params", [{}, {"key": ""}, {"key": None}])
+def test_dispatch_key_alias_answers_like_key():
+    assert wrs._warm_request_status({"dispatch_key": "1234-5678"}, repo_root=None) == wrs._warm_request_status(
+        {"key": "1234-5678"}, repo_root=None
+    )
+
+
+def test_store_poll_dispatch_key_alias_matches_key():
+    from coordinator_core.warm import dispatch_ack, server
+
+    original = server._ack_store
+    store = dispatch_ack.AckStore()
+    server._ack_store = store
+    try:
+        key = dispatch_ack.mint_key()
+        assert store.admit(key, "ceremony.commit_v2")
+        by_key = server._store_poll({"key": key})
+        by_alias = server._store_poll({"dispatch_key": key})
+    finally:
+        server._ack_store = original
+    assert by_alias is not None and by_alias == by_key
+
+
+@pytest.mark.parametrize("params", [{}, {"key": ""}, {"key": None}, {"dispatch_key": ""}])
 def test_missing_or_blank_key_is_value_error(params):
     with pytest.raises(ValueError):
         wrs._warm_request_status(params, repo_root=None)

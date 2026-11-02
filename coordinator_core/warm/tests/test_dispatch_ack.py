@@ -462,3 +462,60 @@ def test_failure_text_falls_back_to_stdout_for_an_invoke_from_argv_op():
     out = '{"jsonrpc": "2.0", "id": 1, "error": {"code": -32603, "message": "rollback refused"}}'
     text = dispatch_ack._failure_text_of({"exit_code": 1, "stderr": "", "stdout": out})
     assert text is not None and "rollback refused" in text
+
+
+def test_queued_mark_reads_queued_and_dispatched_mark_reads_executing_again():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.mark_queued(key)
+    assert store.status(key) == {"state": dispatch_ack.STATE_QUEUED}
+    store.mark_dispatched(key)
+    assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING}
+
+
+def test_queued_record_does_not_age_and_dispatch_restarts_the_bound(monkeypatch):
+    store = _bounded(10.0)
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.mark_queued(key)
+    clock = time.monotonic()
+    far = clock + 10.0 * dispatch_ack.OVERDUE_CEILING_FACTOR + 5.0
+    monkeypatch.setattr(time, "monotonic", lambda: far)
+    assert store.status(key) == {"state": dispatch_ack.STATE_QUEUED}
+    store.mark_dispatched(key)
+    assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING}
+    monkeypatch.setattr(time, "monotonic", lambda: far + 10.0)
+    assert store.status(key) == {"state": dispatch_ack.STATE_EXECUTING, "overdue": True}
+
+
+def test_marks_are_noops_on_unknown_tombstoned_and_stamped_keys():
+    store = _store()
+    unknown = _key(1, 1_000_100)
+    store.mark_queued(unknown)
+    store.mark_dispatched(unknown)
+    assert store.status(unknown)["state"] == dispatch_ack.STATE_NOT_RECEIVED
+
+    tomb = _key(1, 1_000_200)
+    store.status(tomb)
+    store.mark_queued(tomb)
+    assert store.status(tomb)["state"] == dispatch_ack.STATE_NOT_RECEIVED
+
+    done = _key(1, 1_000_300)
+    store.admit(done, "m")
+    store.stamp(done, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+    store.mark_queued(done)
+    assert store.status(done) == {
+        "state": dispatch_ack.STATE_NOT_RECEIVED,
+        "outcome": dispatch_ack.OUTCOME_NOT_DISPATCHED,
+    }
+
+
+def test_stamp_from_queued_lands_and_a_late_queued_mark_cannot_unfinish_it():
+    store = _store()
+    key = _key(1, 1_000_100)
+    store.admit(key, "m")
+    store.mark_queued(key)
+    store.stamp(key, dispatch_ack.OUTCOME_RESULT, result={"v": 1})
+    store.mark_queued(key)
+    assert store.status(key)["state"] == dispatch_ack.STATE_FINISHED

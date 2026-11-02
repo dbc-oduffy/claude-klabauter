@@ -368,6 +368,38 @@ COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY = "mutation-deadline-cold-replay"
 #: blobs use `atomic_write_bytes`. Re-verify the op against this invariant before adding a name.
 _COLD_REPLAY_SAFE = frozenset({"review.prep"})
 
+_FROM_ARGV_VALUE_FLAGS = frozenset({"--repo", "--params-file", "--from-task-output"})
+
+
+def _replay_op_name(msg: dict) -> Any:
+    """The op a frame runs, for `_COLD_REPLAY_SAFE` membership.
+
+    A door-form frame is `invoke.from_argv` with the op as the first positional
+    of `params.argv`; a frame naming an `entrypoint` runs a CLI script, never an op.
+    Anything unparsable answers the wrapper method, which is never replay-safe.
+    """
+    method = msg.get("method")
+    if method != "invoke.from_argv":
+        return method
+    params = msg.get("params")
+    if not isinstance(params, dict) or params.get("entrypoint"):
+        return method
+    argv = params.get("argv")
+    if not isinstance(argv, list):
+        return method
+    skip = False
+    for token in argv:
+        if skip:
+            skip = False
+        elif not isinstance(token, str):
+            return method
+        elif token in _FROM_ARGV_VALUE_FLAGS:
+            skip = True
+        elif not token.startswith("-"):
+            return token
+    return method
+
+
 #: The bucket classification of THIS call's own `return None` inside
 #: `_try_warm_dispatch_inner`, read back by `_cold_bucket_for_row()`
 #: immediately after that call returns. Reset to `None` at the top of every
@@ -674,6 +706,25 @@ def _spawn_once() -> None:
         SERVER_ENTRY_SCRIPT,
         env_extra={SPAWN_EPOCH_ENV: repr(time.time())},
     )
+
+
+def _drain_publish_hold() -> "Optional[bool]":
+    """Queue this caller behind a publish copy instead of failing it.
+
+    None: no publish marker held (caller proceeds to its normal spawn path).
+    True: marker was held and released within `breadcrumb.DRAIN_WAIT_SECS`
+    (caller retries the pipe once). False: still held at the deadline (caller
+    spawns nothing and goes cold). Never raises.
+    """
+    try:
+        from coordinator_core.warm import breadcrumb
+
+        root = _engine_clone_root()
+        if not breadcrumb.publish_marker_held(breadcrumb.svc_dir(root)):
+            return None
+        return breadcrumb.wait_for_publish_release(root)
+    except Exception:  # noqa: BLE001 -- the preamble never fails the op
+        return None
 
 
 #: How long a POSIX `connect()` may take before the server counts as
@@ -1358,6 +1409,7 @@ def _try_warm_dispatch_inner(
     # At most 2 attempts: the original open, plus the table's single
     # "BrokenPipeError mid-request -> one re-open" retry. Anything else
     # returns (cold) without looping.
+    drained = False
     for attempt in range(2):
         try:
             fh = _open_pipe(pipe)
@@ -1372,6 +1424,14 @@ def _try_warm_dispatch_inner(
             # client that unlinked on refusal would race a peer's live
             # socket. Spawning is the correct and sufficient response, and
             # `should_spawn` still rate-limits it.
+            if not drained:
+                drained = True
+                outcome = _drain_publish_hold()
+                if outcome is True and attempt == 0:
+                    continue
+                if outcome is False:
+                    _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
+                    return None
             _spawn_once()
             _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
             return None
@@ -1452,10 +1512,10 @@ def _try_warm_dispatch_inner(
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
-                    if msg.get("method") in _COLD_REPLAY_SAFE:
+                    if _replay_op_name(msg) in _COLD_REPLAY_SAFE:
                         _last_cold_bucket = COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
                         print(
-                            f"[warm-client] {msg.get('method')} got no warm response within "
+                            f"[warm-client] {_replay_op_name(msg)} got no warm response within "
                             f"{mutation_deadline}s; re-running cold once (replay-safe op)",
                             file=sys.stderr,
                         )

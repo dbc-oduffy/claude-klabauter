@@ -919,6 +919,9 @@ def _lookup_from_index(base: str, paths: List[str]) -> "Optional[_LookupResult]"
     rows: List[tuple] = []
     try:
         for key in keys:
+            if time.process_time() > state["deadline"]:
+                _degrade(ABORT_CAUSE_CAP_EXCEEDED)
+                break
             names = _read_index_names(
                 touch_record.claim_index_file(index_dir, "p", key)
             )

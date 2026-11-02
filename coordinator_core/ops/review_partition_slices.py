@@ -22,12 +22,16 @@ from __future__ import annotations
 
 MUTATES = ["state/review-trail/diffs/*.diff", "state/review-trail/diffs/*.head.sha"]
 
+import re
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.review_brightline_gate import (
+    _CHAIN_NUMSTAT_RE,
     RangeMeasureError,
+    _count_measured_row,
+    _resolve_numstat_row_path,
     _run_git,
     _verdict,
     range_measure,
@@ -116,6 +120,118 @@ def _effective_base(path: str, base: str, path_bases: Dict[str, str]) -> str:
     return result
 
 
+_DIFF_SECTION = re.compile(r"(?m)^(?=diff --git )")
+
+
+def _diff_sections(diff_text: str) -> List[tuple]:
+    """``[(covered_paths, section_text)]`` for each ``diff --git`` section of `diff_text`."""
+    from coordinator_core.ops.review_freeze_diff import _covered_paths_from_diff
+
+    return [(_covered_paths_from_diff(s), s) for s in _DIFF_SECTION.split(diff_text) if s.startswith("diff --git ")]
+
+
+def _write_slice(repo_root: Path, slice_id: str, text: str, sha_content: str) -> dict:
+    """Write a slice's diff and head.sha pair from text already held (no git), with `freeze_diff`'s
+    collision rule: a differing occupant is shelved for a run-keyed prep id, an error otherwise."""
+    from coordinator_core.ops.review_freeze_diff import (
+        _error,
+        _is_run_keyed_prep_id,
+        _shelve_prior_attempt,
+        _validate_slice_id,
+        declare_write,
+        register_diff_targets,
+    )
+
+    bad = _validate_slice_id(slice_id)
+    if bad is not None:
+        return _error(bad)
+    diffs_dir = repo_root / "state" / "review-trail" / "diffs"
+    diffs_dir.mkdir(parents=True, exist_ok=True)
+    diff_path, sha_path = diffs_dir / f"{slice_id}.diff", diffs_dir / f"{slice_id}.head.sha"
+    if diff_path.exists() and diff_path.read_bytes().decode("utf-8") != text:
+        if not _is_run_keyed_prep_id(slice_id):
+            return _error(
+                f"slice_id '{slice_id}' already names a frozen diff at {diff_path} with different content"
+            )
+        _shelve_prior_attempt(diff_path, sha_path)
+    diff_path.write_text(text, encoding="utf-8", newline="\n")
+    declare_write(diff_path)
+    sha_path.write_text(sha_content + "\n", encoding="utf-8", newline="\n")
+    declare_write(sha_path)
+    register_diff_targets(repo_root, text)
+    return {"diff_path": str(diff_path), "error": None}
+
+
+def _untracked_in_process(repo_root: Path, paths: List[str]) -> Optional[set]:
+    """The `paths` that `git ls-files --others --exclude-standard` would list, decided from the index,
+    the worktree and the ignore rules with no spawn; None when any path is a directory, magic or
+    symlink, or an ignore verdict is git's alone: the caller asks git."""
+    from coordinator_core.git.ignore_match import IgnoreMatcher
+    from coordinator_core.ops.dispatch_emit.landing_halted_view import index_identity
+
+    try:
+        if any(p != p.strip("/") or "\\" in p or any(c in p for c in "*?[:") for p in paths):
+            return None
+        for p in paths:
+            f = repo_root / p
+            if f.is_symlink() or f.is_dir():
+                return None
+        indexed = index_identity(repo_root, paths)
+        matcher, out = None, set()
+        for p in paths:
+            if p in indexed or not (repo_root / p).is_file():
+                continue
+            matcher = matcher or IgnoreMatcher(repo_root)
+            verdict = matcher.ignored(p, False)
+            if verdict is None:
+                return None
+            if verdict is False:
+                out.add(p)
+        return out
+    except Exception:  # noqa: BLE001 -- undecided here: git decides
+        return None
+
+
+def _worktree_measure(base: str, paths: List[str], repo_root: Path) -> tuple:
+    """`worktree_measure`, with the untracked split decided in process when it can be: one `diff
+    --numstat` spawn instead of two. Same rows, same filters."""
+    untracked = _untracked_in_process(repo_root, paths)
+    if untracked is None:
+        return worktree_measure(base, paths, str(repo_root))
+    loc, surfaces, files = 0, set(), set()
+    tracked = [p for p in paths if p not in untracked]
+    if tracked:
+        numstat_out, _ = _run_git(["diff", "--numstat", base, "--", *tracked], str(repo_root))
+        for line in numstat_out.splitlines():
+            m = _CHAIN_NUMSTAT_RE.match(line)
+            if m:
+                a, d = m.group(1), m.group(2)
+                loc += _count_measured_row(
+                    _resolve_numstat_row_path(m.group(3)),
+                    (int(a) if a.isdigit() else 0) + (int(d) if d.isdigit() else 0),
+                    surfaces,
+                    files,
+                )
+    for path in sorted(untracked):
+        try:
+            with open(repo_root / path, "r", encoding="utf-8", errors="replace") as fh:
+                added = sum(1 for _ in fh)
+        except OSError:
+            continue
+        loc += _count_measured_row(path, added, surfaces, files)
+    return loc, surfaces, files
+
+
+def _dirty_in_process(repo_root: Path, paths: List[str]) -> Optional[set]:
+    """The `paths` whose worktree bytes differ from HEAD, read from the index, HEAD's tree and the
+    worktree with no spawn; None when they cannot be decided there (the caller asks git). A path git
+    status would list for any reason (staged, modified, untracked) counts: toward dirty."""
+    from coordinator_core.ops.dispatch_emit.landing_halted_view import dirty_status
+
+    found = dirty_status(repo_root, paths)
+    return None if found is None else found & set(paths)
+
+
 def _partition(
     repo_root: Path,
     base: str,
@@ -125,6 +241,7 @@ def _partition(
     head: Optional[str] = None,
     path_bases: Optional[Dict[str, str]] = None,
     head_fallback: Optional[List[str]] = None,
+    whole_diff: Optional[Callable[[dict], dict]] = None,
 ) -> dict:
     """Gate verdict over `paths`, and the frozen slices when partitioned.
 
@@ -139,6 +256,11 @@ def _partition(
     `head_fallback` (range mode only) lists own paths; those with no range delta are measured and
     frozen as HEAD->worktree slices (withheld, untracked, or peer-held edits), always, and are
     named in `fallback_paths`.
+
+    `whole_diff` (optional) is called once, with the result so far, when a slice is first needed;
+    it returns the caller's frozen whole diff (`{diff_path, error}`). Each slice is then cut from
+    that text in-process (a file's section goes to the slice naming it) instead of one git freeze
+    per slice, so spawns do not grow with the slice count. The slice pairs are written uncommitted.
 
     Public `partition_slices` also takes `roster` (the roster fragment's review-wave stage) and
     `rostered` (agent types in the wave): an agent `merge` rule adds `reviewer_groups`, the
@@ -165,7 +287,7 @@ def _partition(
                 out["error"] = str(exc)
                 return out
         else:
-            g_loc, g_surfaces, g_files = worktree_measure(b, group_declared, str(repo_root))
+            g_loc, g_surfaces, g_files = _worktree_measure(b, group_declared, repo_root)
         loc += g_loc
         surfaces |= g_surfaces
         files |= g_files
@@ -185,11 +307,16 @@ def _partition(
     dirty: set = set()
     own_ranged = sorted(set(head_fallback or []) & files) if head else []
     if own_ranged:
-        # One extra spawn, only when an own path has a range delta: such a path may also carry
-        # uncommitted bytes, which a base..head freeze would drop; those freeze base..worktree.
-        names, rc = _run_git(["diff", "--name-only", "HEAD", "--", *own_ranged], str(repo_root))
-        if rc == 0:
-            dirty = {ln.strip() for ln in names.splitlines() if ln.strip()} & set(own_ranged)
+        # Only when an own path has a range delta: such a path may also carry uncommitted bytes,
+        # which a base..head freeze would drop; those freeze base..worktree. Decided in process
+        # when the index and HEAD's tree allow, else one git spawn.
+        decided = _dirty_in_process(repo_root, own_ranged)
+        if decided is not None:
+            dirty = decided
+        else:
+            names, rc = _run_git(["diff", "--name-only", "HEAD", "--", *own_ranged], str(repo_root))
+            if rc == 0:
+                dirty = {ln.strip() for ln in names.splitlines() if ln.strip()} & set(own_ranged)
     verdict = _verdict(loc, 0, len(surfaces))
     out.update(
         worktree_paths=sorted(dirty),
@@ -200,13 +327,37 @@ def _partition(
         fallback_paths=sorted(fb_files),
     )
     n = 0
+    held: dict = {}
+
+    def freeze(rev: str, slice_id: str, group: List[str], *, worktree: bool, ranged: bool = False) -> dict:
+        if whole_diff is None:
+            return freeze_diff(repo_root, rev, slice_id, group, worktree=worktree)
+        if "sections" not in held:
+            whole = whole_diff(out)
+            if whole.get("error"):
+                return {"error": whole["error"], "whole_error": True}
+            whole_path = Path(whole["diff_path"])
+            held["sections"] = _diff_sections(whole_path.read_bytes().decode("utf-8"))
+            try:
+                held["sha"] = whole_path.with_name(whole_path.name[: -len(".diff")] + ".head.sha").read_text(
+                    encoding="utf-8").strip()
+            except OSError:
+                held["sha"] = head or ""
+        wanted = set(group)
+        text = "".join(s for covered, s in held["sections"] if covered & wanted)
+        sha = held["sha"] if ranged else f"{rev} worktree"
+        return _write_slice(repo_root, slice_id, text, sha)
+
+    def refusal(frozen: dict, slice_id: str) -> str:
+        return f"freeze of {slice_prefix if frozen.get('whole_error') else slice_id} failed: {frozen['error']}"
+
     if fb_files:
         for group in group_paths(sorted(fb_files)):
             n += 1
             slice_id = f"{slice_prefix}-{n}"
-            frozen = freeze_diff(repo_root, head_sha, slice_id, group, worktree=True)
+            frozen = freeze(head_sha, slice_id, group, worktree=True)
             if frozen.get("error"):
-                out["error"] = f"freeze of {slice_id} failed: {frozen['error']}"
+                out["error"] = refusal(frozen, slice_id)
                 return out
             out["slices"].append({"slice_id": slice_id, "paths": group, "diff_path": frozen["diff_path"]})
     if verdict != "PARTITION-MANDATORY" or not files:
@@ -219,13 +370,14 @@ def _partition(
             n += 1
             slice_id = f"{slice_prefix}-{n}"
             if head and not (set(sub_group) & dirty):
-                frozen = freeze_diff(repo_root, f"{b}..{head}", slice_id, sub_group)
-            elif head:
-                frozen = freeze_diff(repo_root, b, slice_id, sub_group, worktree=True)
+                if whole_diff is None:
+                    frozen = freeze_diff(repo_root, f"{b}..{head}", slice_id, sub_group)
+                else:
+                    frozen = freeze(b, slice_id, sub_group, worktree=False, ranged=True)
             else:
-                frozen = freeze_diff(repo_root, b, slice_id, sub_group, worktree=True)
+                frozen = freeze(b, slice_id, sub_group, worktree=True)
             if frozen.get("error"):
-                out["error"] = f"freeze of {slice_id} failed: {frozen['error']}"
+                out["error"] = refusal(frozen, slice_id)
                 return out
             out["slices"].append({"slice_id": slice_id, "paths": sub_group, "diff_path": frozen["diff_path"]})
     return out

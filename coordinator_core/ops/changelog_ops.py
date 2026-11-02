@@ -62,7 +62,7 @@ from coordinator_core.win_portability import no_console_creationflags
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 from coordinator_core.daily_day import local_day
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
@@ -79,6 +79,7 @@ from coordinator_core.ops.records_query import (
     _matches_where,
     _parse_where,
 )
+from coordinator_core.ops.workday_complete_backfill_scan import _dir_has_day_file
 from coordinator_core.ops.workday_complete_backfill_scan import _run_git as _wcbs_run_git
 from coordinator_core.wire_paths import rel_id
 
@@ -673,6 +674,18 @@ _RECORD_SEP = "\x1e"
 _COMMIT_RECORD_FORMAT = "--format=%H%x09%s%x1f%N%x1e"
 
 
+def _run_git_log(repo_path: str, args: List[str]) -> str:
+    """Run `git -C repo_path log <args>` and return stdout. The one spawn site of
+    changelog.backfill_gaps' git reads (static pin 2); raises OSError/TimeoutExpired."""
+    return subprocess.run(
+        ["git", "-C", repo_path, "log", *args],
+        capture_output=True,
+        text=True,
+        timeout=_SUBPROCESS_TIMEOUT,
+        **no_console_creationflags(),
+    ).stdout
+
+
 def _git_log_for_date(repo_path: str, date: str, next_date: str) -> str:
     """Get git log body for the date window. Mirrors oracle's body= git log call.
 
@@ -682,23 +695,16 @@ def _git_log_for_date(repo_path: str, date: str, next_date: str) -> str:
     Returns stripped output (trailing newlines removed), matching oracle's $() capture.
     """
     try:
-        r = subprocess.run(
+        stdout = _run_git_log(
+            repo_path,
             [
-                "git",
-                "-C",
-                repo_path,
-                "log",
                 f"--after={_iso_utc(date)}",
                 f"--before={_iso_utc(next_date)}",
                 f"--format=%h %s{_NOTE_FIELD_SEP}%N{_RECORD_SEP}",
             ],
-            capture_output=True,
-            text=True,
-            timeout=_SUBPROCESS_TIMEOUT,
-            **no_console_creationflags(),
         )
         lines = []
-        for record in r.stdout.split(_RECORD_SEP):
+        for record in stdout.split(_RECORD_SEP):
             head, _, note = record.strip("\n").partition(_NOTE_FIELD_SEP)
             if not head:
                 continue
@@ -728,8 +734,14 @@ def backfill_gaps(
     today_override: Optional[str] = None,
     dry_run: bool = False,
     through: Optional[str] = None,
-) -> dict:
+    week: Optional[str] = None,
+) -> Union[dict, List[Tuple[Path, str]]]:
     """Backfill synthesized daily changelog blocks for any date gap since WEEK_START.
+
+    `week` (a Monday, YYYY-MM-DD) switches to compose-only: returns
+    `[(path, text)]` for `archive/week-changelogs/<week>/<day>.md` and writes
+    nothing (the bin writes, DR-216 § 5). See `compose_week_gaps`. Weekday
+    validation lives in the callers (`_backfill_gaps_handler`, the bin).
 
     Byte-parity port of backfill-week-changelog-gaps.sh.
     Advisory: errors do not propagate (matches oracle's `trap 'exit 0' ERR`).
@@ -760,6 +772,14 @@ def backfill_gaps(
     worktree = main_worktree_root(repo_root)
     week_changelog_dir = worktree / "state" / "week-changelog"
     header_file = week_changelog_dir / "HEADER.md"
+
+    if week is not None:
+        return compose_week_gaps(
+            worktree,
+            week,
+            today=today_override or local_day(str(worktree)),
+            through=through,
+        )
 
     week_start: Optional[str] = None
     if header_file.exists():
@@ -827,6 +847,88 @@ def backfill_gaps(
     return {"backfilled": backfilled, "skipped": skipped}
 
 
+def _is_monday(value: object) -> bool:
+    """True for a calendar-valid YYYY-MM-DD string that falls on a Monday."""
+    return _is_iso_date(value) and datetime.date.fromisoformat(value).weekday() == 0
+
+
+def _collect_week_commits(
+    worktree: Path, week: str, last_day: str
+) -> Dict[str, List[Tuple[str, str]]]:
+    """Bucket the week's all-refs, non-merge commits by local committer day.
+
+    ONE `git log --all` over week 00:00 .. last_day 23:59:59 (changelog.backfill_gaps
+    spawn pin is 2); never a per-day loop. Records are newest-first per day.
+    """
+    args = [
+        "--format=%cd%x09%H%x09%s%x1f%N%x1e",
+        "--date=format-local:%Y-%m-%d",
+        f"--after={_yesterday(week)}T23:59:59",
+        f"--before={last_day}T23:59:59",
+        "--no-merges",
+        "--all",
+    ]
+    by_day: Dict[str, List[Tuple[str, str]]] = {}
+    try:
+        out = _run_git_log(str(worktree), args)
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    for record in out.split(_RECORD_SEP):
+        head, _, note = record.strip("\n").partition(_NOTE_FIELD_SEP)
+        parts = head.split("\t", 2)
+        if len(parts) != 3 or not parts[1]:
+            continue
+        day, chash, csubj = parts
+        csubj = parse_note(note) or csubj
+        if _SELF_COMMIT_PATTERN.search(csubj):
+            continue
+        by_day.setdefault(day, []).append((chash, csubj))
+    return by_day
+
+
+def compose_week_gaps(
+    worktree: Path, week: str, *, today: str, through: Optional[str]
+) -> List[Tuple[Path, str]]:
+    """Compose `(path, text)` for each commit-bearing gap day of `week`; writes nothing.
+
+    Paths are `archive/week-changelogs/<week>/<day>.md`. A day with a
+    `<day>*.md` already in the week dir, or with no commits on any ref, is omitted.
+    """
+    week_dir = worktree / "archive" / "week-changelogs" / week
+    last_day = min(today, through) if through else today
+    if week > last_day:
+        return []
+    by_day = _collect_week_commits(worktree, week, last_day)
+    composed: List[Tuple[Path, str]] = []
+    d = week
+    for _ in range(7):
+        if d > last_day:
+            break
+        commits = by_day.get(d)
+        if commits and not _dir_has_day_file(str(week_dir), d):
+            _, block = compose_day_block(
+                worktree=worktree,
+                date=d,
+                machine=BACKFILL_MACHINE,
+                is_backfill=True,
+                branch="all refs",
+                commit_count=len(commits),
+                commit_range=_commit_range([c[0] for c in commits])[2],
+                scope="",
+                plans_touched="none",
+                handoffs_list="none",
+                decisions="none",
+                blockers="none",
+                rc_validate="skipped",
+                rc_plugin_suite="n/a",
+                reviewed_lines=[],
+                has_non_trivial=any(not _TRIVIAL_PATTERN.search(c[1]) for c in commits),
+            )
+            composed.append((week_dir / f"{d}.md", block + "\n"))
+        d = _next_day(d)
+    return composed
+
+
 @register_op("changelog.backfill_gaps")
 async def _backfill_gaps_handler(
     params: dict, repo_root: Optional[Path] = None
@@ -841,6 +943,9 @@ async def _backfill_gaps_handler(
                      Must be the calling session's machine (preserve legacy attribution).
         today (str, YYYY-MM-DD) — override for 'today'; defaults to the coordinator local day.
         through (str, YYYY-MM-DD) — last day the backfill may write; default: today.
+        week (str, YYYY-MM-DD, a Monday) — COMPOSE ONLY: returns
+                     {composed: [{path, text}]} for archive/week-changelogs/<week>/<day>.md
+                     from all refs, header-free, and writes nothing; see `backfill_gaps`.
 
     Returns:
         {backfilled: [str, ...], skipped: [str, ...]}
@@ -865,13 +970,20 @@ async def _backfill_gaps_handler(
     # _next_day finally raises. Calendar-validate via date.fromisoformat to reject
     # this before it ever reaches the loop.
     through = params.get("through")
-    for label, value in (("today", today_override), ("through", through)):
+    week = params.get("week")
+    for label, value in (("today", today_override), ("through", through), ("week", week)):
         if value is not None and not _is_iso_date(value):
             return {
                 "backfilled": [],
                 "skipped": [],
                 "error": f"backfill_gaps: '{label}' param is not a valid YYYY-MM-DD date: {value!r}",
             }
+    if week is not None and not _is_monday(week):
+        return {
+            "backfilled": [],
+            "skipped": [],
+            "error": f"backfill_gaps: 'week' param is not a Monday: {week!r}",
+        }
 
     # Require explicit host to prevent silent attribution flip to
     #   daemon hostname when caller omits host and COORDINATOR_MACHINE is unset. Matches
@@ -899,13 +1011,21 @@ async def _backfill_gaps_handler(
         }
 
     try:
-        return await asyncio.to_thread(
+        result = await asyncio.to_thread(
             backfill_gaps,
             repo_root=repo_root,
             host=host,
             today_override=today_override,
             through=through,
+            week=week,
         )
+        if week is not None:
+            return {
+                "backfilled": [],
+                "skipped": [],
+                "composed": [{"path": str(p), "text": t} for p, t in result],
+            }
+        return result
     except Exception as exc:  # advisory — never abort the caller
         logger.warning("changelog.backfill_gaps: advisory error (non-fatal): %s", exc)
         return {"backfilled": [], "skipped": [], "error": str(exc)}
@@ -2532,6 +2652,8 @@ def main(argv: List[str]) -> int:
     Usage (unchanged surface — zero caller repoints):
         backfill-week-changelog-gaps.sh [repo-root] [--dry-run] [--through YYYY-MM-DD]
         --through bounds the last day written (malformed: exit 2, stderr).
+        --week is handled by the bin (coordinator/bin/backfill-week-changelog-gaps.py),
+        which writes what `backfill_gaps(week=)` composes.
         NOTE: the optional [repo-root] positional is accepted but IGNORED —
         matches the legacy/facade contract exactly (repo root is always
         resolved from $PWD via git, never from argv).
@@ -2606,7 +2728,9 @@ def main(argv: List[str]) -> int:
     host = compute_machine()
 
     try:
-        result = backfill_gaps(repo_root=common_dir, host=host, dry_run=dry_run, through=through)
+        result = backfill_gaps(
+            repo_root=common_dir, host=host, dry_run=dry_run, through=through
+        )
     except Exception as exc:  # advisory — never fail the caller (DR-216 D2 legacy parity)
         logger.warning("backfill_gaps CLI: advisory error (non-fatal): %s", exc)
         result = {"backfilled": [], "skipped": [], "error": str(exc)}

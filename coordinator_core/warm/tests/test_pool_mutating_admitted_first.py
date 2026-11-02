@@ -76,6 +76,46 @@ def test_gate_timeout_withdraws_the_waiter_and_a_free_slot_is_reusable():
     assert gate.acquire(False, 0.05) == 0.0
 
 
+def test_hook_lane_never_holds_the_last_slot_and_a_mutating_waiter_takes_it():
+    gate = server._AdmissionGate(2)
+    assert gate.acquire(False, 1.0, True) == 0.0
+    assert gate.acquire(False, 0.05, True) is None
+    assert gate.acquire(True, 0.05) == 0.0
+
+
+def test_release_skips_hook_waiters_at_the_cap_and_serves_them_below_it():
+    gate = server._AdmissionGate(2)
+    assert gate.acquire(False, 1.0, True) == 0.0
+    assert gate.acquire(True, 1.0) == 0.0
+    got = []
+    waiter = threading.Thread(target=lambda: got.append(gate.acquire(False, 5.0, True)))
+    waiter.start()
+    time.sleep(0.1)
+    gate.release()
+    time.sleep(0.1)
+    assert got == []
+    gate.release(True)
+    waiter.join(5)
+    assert got and got[0] is not None
+
+
+def test_hook_methods_classify_as_hook_lane_and_mutators_do_not(monkeypatch):
+    monkeypatch.setattr(server, "_op_may_mutate", lambda method: method == "session.commit")
+    for method in ("hooks.pre_tool_use", "warm_guard.check", "bash_guards.check", "session.read"):
+        assert server._is_hook_lane(method)
+    assert not server._is_hook_lane("session.commit")
+    assert not server._is_hook_lane("dispatch.land_run")
+    assert not server._is_hook_lane(None)
+
+
+def test_withdrawal_deadline_is_strictly_inside_the_per_op_client_deadline(monkeypatch):
+    monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 30.0)
+    monkeypatch.setattr(server._ipc, "mutation_read_deadline_for", lambda method, msg=None: 10.0)
+    assert 0.0 < server._withdrawal_deadline_secs("x") < 10.0
+    monkeypatch.setattr(server._ipc, "mutation_read_deadline_for", lambda method, msg=None: 90.0)
+    assert server._withdrawal_deadline_secs("x") < 30.0
+
+
 def test_pool_dispatch_admits_waiting_land_before_waiting_read_and_stamps_submit(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 5.0)

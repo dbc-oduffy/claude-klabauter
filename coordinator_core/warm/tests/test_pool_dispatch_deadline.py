@@ -52,7 +52,8 @@ def test_the_wait_is_bounded_at_the_clients_mutation_deadline(monkeypatch):
     fut = _Future(cancellable=True)
     _ctx_with(fut, monkeypatch)._pool_dispatch(_msg("ping"))
 
-    assert fut.result_timeout == server._POOL_RESULT_DEADLINE_SECS
+    assert 0 < fut.result_timeout < MUTATION_READ_DEADLINE_SECS
+    assert fut.result_timeout <= server._POOL_RESULT_DEADLINE_SECS
     assert server._POOL_RESULT_DEADLINE_SECS == MUTATION_READ_DEADLINE_SECS
 
 

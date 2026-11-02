@@ -69,6 +69,7 @@ MUTATES = [
     "state/review-trail/diffs/*.diff",
     "state/review-trail/diffs/*.head.sha",
     ".coordinator-local/subagent-share/*/*.review-prep.md",
+    ".coordinator-local/subagent-share/*/*.review-prep-ptr.json",
     ".coordinator-local/subagent-share/*/*.review-prep.lock",
     ".coordinator-local/subagent-share/*/*.pre-review/*",
 ]
@@ -163,6 +164,39 @@ def _plan_frontmatter_str(repo_root: Path, plan_path: str, key: str) -> Optional
 def _plan_id(repo_root: Path, plan_path: str) -> str:
     """The plan's frontmatter ``plan_id``, else its file stem."""
     return _plan_frontmatter_str(repo_root, plan_path, "plan_id") or Path(plan_path).stem
+
+
+def _unparseable_py_at_native(repo_root: Path, head: str, paths: List[str]) -> Optional[list]:
+    """`unparseable_py_at` with the blobs read from the object store in process (no `cat-file` spawn).
+    None when `head` is not a full sha or a tree or blob is unreadable here: the caller asks git."""
+    wanted = [p for p in paths if p.endswith(".py")]
+    if not wanted:
+        return []
+    if not re.fullmatch(r"[0-9a-f]{40}", head):
+        return None
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.ops.dispatch_emit.landing_halted_view import tree_entries
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _cached_parse_finding
+
+    try:
+        entries = tree_entries(repo_root, head, wanted)
+        if entries is None:
+            return None
+        common = resolve_git_common_dir(repo_root)
+        out = []
+        for rel in wanted:
+            if rel not in entries:
+                continue
+            blob = read_object(common, entries[rel][1])
+            if blob is None or blob[0] != "blob":
+                return None
+            found = _cached_parse_finding(repo_root, rel, blob[1])
+            if found:
+                out.append(found)
+        return out
+    except Exception:  # noqa: BLE001 -- undecided here: git decides
+        return None
 
 
 def _peer_bases(repo_root: Path, base: str, head: Optional[str], paths: List[str], session: str, plan_path: str) -> dict:
@@ -401,6 +435,49 @@ def _stored_reply(
     return reply
 
 
+_POINTER_SUFFIX = ".review-prep-ptr.json"
+_UNSAFE_NAME = re.compile(r"[^A-Za-z0-9_.-]")
+
+
+def _pointer_name(run_key: Optional[str], base: Optional[str]) -> str:
+    """The fixed file name of the pointer to the reply stored for ``run_key`` at ``base``."""
+    if run_key:
+        safe = _UNSAFE_NAME.sub("-", run_key)
+        return f"ptr-run-{safe}-{base[:12]}{_POINTER_SUFFIX}" if base else f"ptr-run-{safe}{_POINTER_SUFFIX}"
+    return f"ptr-base-{(base or '')[:12]}{_POINTER_SUFFIX}"
+
+
+def _read_pointer(path: Path) -> Optional[dict]:
+    try:
+        got = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return got if isinstance(got, dict) else None
+
+
+def _write_pointers(share: Path, sidecar: Path, base: str, slice_prefix: str, plan_path: str) -> None:
+    """Point the run-keyed, run-only and base-only names at ``sidecar``. A name already pointing at
+    another existing sidecar is marked ``ambiguous``, which the reader answers ``None``. Written
+    only for a prefix of the ``<plan stem>-<run key>-<base[:12]>-prep`` shape."""
+    tail = f"-{base[:12]}-prep"
+    if not slice_prefix.endswith(tail):
+        return
+    stem = _UNSAFE_NAME.sub("-", Path(plan_path.replace("\\", "/")).stem)
+    head = slice_prefix[: -len(tail)]
+    run_key = head[len(stem) + 1:] if head.startswith(stem + "-") else ""
+    names = {_pointer_name(None, base)}
+    if run_key:
+        names.update({_pointer_name(run_key, base), _pointer_name(run_key, None)})
+    for name in sorted(names):
+        path = share / name
+        old = _read_pointer(path)
+        other = old.get("sidecar") if old else None
+        ambiguous = bool(old and old.get("ambiguous")) or (
+            isinstance(other, str) and other != sidecar.name and (share / other).exists()
+        )
+        atomic_write_bytes(path, json.dumps({"sidecar": sidecar.name, "ambiguous": ambiguous}).encode("utf-8"))
+
+
 def stored_reply_for_run(
     repo_root: Path,
     session_id: str,
@@ -412,31 +489,39 @@ def stored_reply_for_run(
 ) -> Optional[dict]:
     """The reply ``review.prep`` stored for one run, found without its slice prefix, or ``None``.
 
-    Globs the session's share dir for ``*-<base[:12]>-prep.review-prep.md`` (the suffix shape of
-    ``review_slice_id.prep_slice_id_for``, not imported). A file is kept when
-    its name contains ``run_key`` (if given), its ``agent_type`` is ``engine:prep-freeze``, its
-    ``run_base_sha`` is ``base`` and, when ``within`` is non-empty, every ``paths`` entry is in it.
+    Never walks the share dir: it opens the run-keyed pointer ``_write_pointers`` wrote when the
+    reply was stored (``ptr-run-<run_key>-<base[:12]>``, ``ptr-run-<run_key>`` when ``base`` is
+    ``None``, ``ptr-base-<base[:12]>`` when ``run_key`` is ``None``) and the sidecar it names, plus the
+    ask route's canonical ``manifest-<run_key>-<base[:12]>-prep`` sidecar. A candidate is kept when
+    its ``agent_type`` is ``engine:prep-freeze``, its ``run_base_sha`` is ``base`` and, when
+    ``within`` is non-empty, every ``paths`` entry is in it.
     ``covering=True`` (keyword-only, default off) flips that check: a file is kept when every
     ``within`` entry is in its ``paths``, so a review that read extra paths is still found. It has
     no effect when ``within`` is empty.
     Exactly one kept file returns; none, several or an unreadable one return ``None``.
 
-    ``base`` may be ``None`` only together with ``run_key``: the glob is then
-    ``*-prep.review-prep.md`` and the base check is skipped, so two kept replies for one run
-    (different bases) return ``None``. Trap: ``run_key`` is a substring match on the file name, so a
-    run id that prefixes another run's id keeps both and returns ``None``."""
+    ``base`` may be ``None`` only together with ``run_key``: the base check is skipped, so two
+    replies for one run (different bases) return ``None``. Trap: a reply stored by an engine that
+    wrote no pointer, under a plan-route prefix, is not found."""
     if not session_id or not (base or run_key):
         return None
     share = Path(share_dir(str(repo_root), session_id))
     allowed = set(within)
     kept: List[dict] = []
-    try:
-        candidates = sorted(share.glob(f"*-{base[:12]}-prep.review-prep.md" if base else "*-prep.review-prep.md"))
-    except OSError:
+    pointer = _read_pointer(share / _pointer_name(run_key, base))
+    if pointer is not None and pointer.get("ambiguous"):
         return None
+    candidates: List[Path] = []
+    named = pointer.get("sidecar") if pointer else None
+    if isinstance(named, str) and named and Path(named).name == named:
+        candidates.append(share / named)
+    if run_key and base:
+        from coordinator_core.ops.review_slice_id import run_prep_slice_prefix
+
+        canonical = share / f"{run_prep_slice_prefix(run_key, base)}.review-prep.md"
+        if canonical not in candidates and canonical.is_file():
+            candidates.append(canonical)
     for sidecar in candidates:
-        if run_key and run_key not in sidecar.name:
-            continue
         try:
             split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
             fm = yaml.safe_load(split.fm_text) if split else None
@@ -556,7 +641,11 @@ def review_prep(
     from coordinator_core.ops.review_peer_bases import _has_object_store
 
     if head:
-        broken = unparseable_py_at(repo_root, head, paths) if _has_object_store(repo_root) else []
+        broken = []
+        if _has_object_store(repo_root):
+            broken = _unparseable_py_at_native(repo_root, head, paths)
+            if broken is None:
+                broken = unparseable_py_at(repo_root, head, paths)
     else:
         broken = unparseable_py(repo_root, paths)
     if broken:
@@ -650,6 +739,37 @@ def _compute(
         error=None,
     )
 
+    rev_range = f"{base}..{head or 'HEAD'}"
+    frozen_whole: List[dict] = []
+
+    def freeze_whole(part: Optional[dict]) -> dict:
+        # Frozen once: the partition cuts its slices from this same diff instead of re-freezing.
+        if frozen_whole:
+            return frozen_whole[0]
+        fb = list(part.get("fallback_paths") or []) if part else []
+        wt = list(part.get("worktree_paths") or []) if part else []
+        rest = paths
+        if fb:
+            # Trap: with a fallback, only declared paths the partition saw as product are frozen in the whole diff.
+            seen = part.get("product_paths") or []
+            fb_index, seen_index = _cover_index(fb), _cover_index(seen)
+            rest = [p for p in paths if not _covers(p, fb_index) and _covers(p, seen_index)]
+        try:
+            if fb or wt:
+                got = _freeze_whole_by_base(
+                    repo_root, base, head, rest, peer_bases or {}, slice_prefix, fallback=fb, worktree_paths=wt
+                )
+            elif peer_bases:
+                got = _freeze_whole_by_base(repo_root, base, head, paths, peer_bases, slice_prefix)
+            elif head:
+                got = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
+            else:
+                got = _heavy("freeze_diff")(repo_root, base, slice_prefix, paths, worktree=True)
+        except ValueError as exc:
+            got = {"error": str(exc)}
+        frozen_whole.append(got)
+        return got
+
     def run_partition() -> dict:
         # Range mode: an own file with no `base..head` delta (withheld edit, untracked, peer-held)
         # is measured and frozen HEAD->worktree. Directory and magic declarations are left to range.
@@ -661,6 +781,7 @@ def _compute(
             repo_root, base, paths, slice_prefix, head=head or None,
             **({"path_bases": peer_bases} if peer_bases else {}),
             **({"head_fallback": fallback} if fallback else {}),
+            whole_diff=freeze_whole,
         )
 
     # Trap: range mode partitions first; the whole-diff freeze needs the fallback paths it names.
@@ -668,28 +789,7 @@ def _compute(
     if part is not None and part["error"]:
         out["error"] = part["error"]
         return out
-    fb = list(part.get("fallback_paths") or []) if part else []
-    wt = list(part.get("worktree_paths") or []) if part else []
-    rest = paths
-    if fb:
-        # Trap: with a fallback, only declared paths the partition saw as product are frozen in the whole diff.
-        seen = part.get("product_paths") or []
-        rest = [p for p in paths if not _covers(p, fb) and _covers(p, seen)]
-
-    rev_range = f"{base}..{head or 'HEAD'}"
-    try:
-        if fb or wt:
-            whole = _freeze_whole_by_base(
-                repo_root, base, head, rest, peer_bases or {}, slice_prefix, fallback=fb, worktree_paths=wt
-            )
-        elif peer_bases:
-            whole = _freeze_whole_by_base(repo_root, base, head, paths, peer_bases, slice_prefix)
-        elif head:
-            whole = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
-        else:
-            whole = _heavy("freeze_diff")(repo_root, base, slice_prefix, paths, worktree=True)
-    except ValueError as exc:
-        whole = {"error": str(exc)}
+    whole = freeze_whole(part)
     if whole.get("error"):
         out["error"] = f"freeze of {slice_prefix} failed: {whole['error']}"
         return out
@@ -750,22 +850,37 @@ def _compute(
                 f"review prep sliced nothing from a non-empty frozen diff of {len(paths)} declared path(s); "
                 f"product delta with no ---/+++ lines: {', '.join(unsliced[:5])}"
             )
+    sliced_index = _cover_index(sliced)
     out["excluded"].extend(
         {"path": p, "reason": "no-delta"}
         for p in paths
-        if not is_magic_pathspec(p) and not _covers(p, sliced)
+        if not is_magic_pathspec(p) and not _covers(p, sliced_index)
     )
     out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session)
     out["sidecar_path"] = _rel(sidecar, repo_root)
     _write_sidecar(sidecar, out, session, paths, head)
+    _write_pointers(share, sidecar, base, slice_prefix, plan_path)
     out.pop("declared_sha256", None)
     out.pop("peer_bases", None)
     return out
 
 
-def _covers(declared: str, files: Sequence[str]) -> bool:
-    """True when ``declared`` names one of ``files`` or a directory holding one."""
+def _cover_index(files: Sequence[str]) -> frozenset:
+    """Every file in ``files`` and every directory above one: `_covers` against it is one set lookup."""
+    held = set()
+    for f in files:
+        while f and f not in held:
+            held.add(f)
+            f = f.rpartition("/")[0]
+    return frozenset(held)
+
+
+def _covers(declared: str, files: "Sequence[str] | frozenset") -> bool:
+    """True when ``declared`` names one of ``files`` or a directory holding one. Pass a `_cover_index`
+    when asking many declared paths of the same files."""
     d = declared.rstrip("/")
+    if isinstance(files, frozenset):
+        return d in files
     return any(f == d or f.startswith(d + "/") for f in files)
 
 
@@ -882,7 +997,9 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
         "paths": paths,
     }
     sidecar.parent.mkdir(parents=True, exist_ok=True)
-    text = yaml.safe_dump(fm, default_flow_style=False, sort_keys=False).strip()
+    text = yaml.dump(
+        fm, Dumper=getattr(yaml, "CSafeDumper", yaml.SafeDumper), default_flow_style=False, sort_keys=False
+    ).strip()
     atomic_write_bytes(
         sidecar,
         f"---\n{text}\n---\n\n## Review prep\n\nMechanical, no-agent record: review_prep.review_prep.\n".encode("utf-8"),

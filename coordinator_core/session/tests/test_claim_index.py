@@ -1894,3 +1894,16 @@ def test_dir_claim_listing_distinguishes_live_only_from_rotated(tmp_path):
     assert touch_record.dir_claim_listing(str(both)) == (True, False, False)
     assert touch_record.dir_claim_listing(str(empty)) == (False, False, False)
     assert touch_record.dir_claim_listing(str(tmp_path / "missing")) == (False, False, False)
+
+
+def test_served_lookup_cap_exceeded_in_key_loop_is_unanswerable_not_unclaimed(tmp_path, monkeypatch):
+    base = str(tmp_path)
+    _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
+    assert claim_index.lookup(["foo.py"], sessions_dir=base) == {"foo.py": ["sess-a"]}
+
+    monkeypatch.setattr(claim_index, "REBUILD_PROCESS_TIME_CAP_SECS", -1.0)
+    result = claim_index.lookup(["foo.py", "bar.py"], sessions_dir=base)
+
+    assert result == {"foo.py": [claim_index.UNANSWERABLE], "bar.py": [claim_index.UNANSWERABLE]}
+    assert result.complete is False
+    assert result.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED

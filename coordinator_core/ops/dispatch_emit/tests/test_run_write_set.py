@@ -86,6 +86,25 @@ def test_live_peer_claim_excluded_own_and_unanswerable_kept(tmp_path, monkeypatc
     assert "pkg/a.py" in got and "pkg/w.py" in got
 
 
+@pytest.mark.parametrize("n_declared", [3, 400])
+def test_peer_held_is_one_claim_lookup_over_the_whole_set(tmp_path, monkeypatch, n_declared):
+    declared = [f"pkg/d{i}.py" for i in range(n_declared)]
+    _record(tmp_path, declared=declared)
+    _claims(monkeypatch, {"pkg/d1.py": ["other"]})
+    calls = []
+    inner = claim_index.lookup
+
+    def counting(paths, **kw):
+        calls.append(list(paths))
+        return inner(paths, **kw)
+
+    monkeypatch.setattr(claim_index, "lookup", counting)
+    got = rws.run_write_set(tmp_path, RUN, "me")
+    assert len(calls) == 1
+    assert set(declared) - {"pkg/d1.py"} <= set(got) and "pkg/d1.py" not in got
+    assert set(declared) <= set(calls[0])
+
+
 def test_dead_session_leftover_claim_keeps_path(tmp_path, monkeypatch):
     _record(tmp_path)
     _claims(monkeypatch, {"pkg/f.py": ["gone"], "pkg/a.py": ["live"]}, dead=("gone",))

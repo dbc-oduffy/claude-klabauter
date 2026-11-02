@@ -194,6 +194,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, NamedTuple, Optional
 
 from coordinator_core import _engine_landing
+from coordinator_core import ipc as _ipc
 from coordinator_core.ipc import (
     INTERNAL_ERROR,
     INVALID_REQUEST,
@@ -207,6 +208,7 @@ from coordinator_core.warm import (
     breadcrumb,
     caller_context,
     election,
+    hook_http,
     idle,
     lifecycle,
     push_cadence,
@@ -546,7 +548,42 @@ def _spawn_delta(start: Optional[int], end: Optional[int]) -> Optional[int]:
     return end - start
 
 
+_EMBEDDED_ENVELOPE_PARSE_BYTES = 64 * 1024
+
+
+def _handler_still_running(late: Any) -> bool:
+    """True when `late`'s op already got its timeout envelope and its handler thread
+    has not finished: the record stays `executing` and the sink stamps the real
+    outcome, instead of an `abandoned` stamp the poll would read as indeterminate.
+    Reads the capture's own lock so it cannot race `complete`."""
+    try:
+        with late._lock:
+            return bool(late._timed_out and not late._done)
+    except AttributeError:
+        return False
+
+
+def _is_embedded_indeterminate(response: Any) -> bool:
+    """True for an `invoke.from_argv` reply whose stdout is a -32004 envelope: the
+    wrapper returned, but the op it re-dispatched timed out and may still run, so
+    the reply is not that op's outcome."""
+    result = response.get("result") if isinstance(response, dict) else None
+    if not _is_from_argv_result(result) or result["exit_code"] == 0:
+        return False
+    stdout = result["stdout"]
+    if len(stdout) > _EMBEDDED_ENVELOPE_PARSE_BYTES or not stdout.lstrip().startswith("{"):
+        return False
+    try:
+        parsed = json.loads(stdout)
+    except (ValueError, RecursionError):
+        return False
+    error = parsed.get("error") if isinstance(parsed, dict) else None
+    return isinstance(error, dict) and error.get("code") == WARM_DISPATCH_INDETERMINATE
+
+
 def _stamp_dispatch_outcome(dispatch_key: str, response: Any) -> None:
+    if _is_embedded_indeterminate(response):
+        return
     error = response.get("error") if isinstance(response, dict) else None
     if isinstance(error, dict):
         if error.get("code") == WARM_DISPATCH_INDETERMINATE:
@@ -775,7 +812,7 @@ def _run_dispatch(
         _stderr_lines.append(_captured_stderr)
     if _stderr_lines and isinstance(response, dict):
         response = {**response, "_stderr": "\n".join(_stderr_lines)}
-    if dispatch_key is not None:
+    if dispatch_key is not None and not _handler_still_running(_late):
         _stamp_dispatch_outcome(dispatch_key, _late_envelope or response)
     return response
 
@@ -888,40 +925,59 @@ def _declare_queue_wait(stamp: Any, method: Optional[str] = None) -> None:
 
 
 class _AdmissionGate:
-    """Counting gate over pool slots; waiters are served mutating-first, FIFO within a class."""
+    """Counting gate over pool slots; waiters are served mutating, then read-only, then hook
+    class, FIFO within a class. Hook-class holders are capped at `size - 1` (at least 1, so a
+    size-1 pool lets hooks hold its only slot); the caller passes the same `hook` flag to
+    `acquire` and to the matching `release`."""
 
     def __init__(self, size: int) -> None:
-        self._free = max(1, int(size))
+        size = max(1, int(size))
+        self._free = size
+        self._hook_cap = max(1, size - 1)
+        self._hook_held = 0
         self._lock = threading.Lock()
         self._mutating: "collections.deque[threading.Event]" = collections.deque()
         self._reading: "collections.deque[threading.Event]" = collections.deque()
+        self._hooks: "collections.deque[threading.Event]" = collections.deque()
 
-    def acquire(self, mutating: bool, timeout: float) -> Optional[float]:
+    def _grant_waiters_locked(self) -> None:
+        while self._free > 0:
+            if self._mutating:
+                self._mutating.popleft().set()
+            elif self._reading:
+                self._reading.popleft().set()
+            elif self._hooks and self._hook_held < self._hook_cap:
+                self._hook_held += 1
+                self._hooks.popleft().set()
+            else:
+                return
+            self._free -= 1
+
+    def acquire(self, mutating: bool, timeout: float, hook: bool = False) -> Optional[float]:
         """Seconds waited for a slot (0.0 when one was free), or None when `timeout` elapsed."""
+        granted = threading.Event()
         with self._lock:
-            if self._free > 0 and not self._mutating and not self._reading:
-                self._free -= 1
+            (self._hooks if hook else self._mutating if mutating else self._reading).append(granted)
+            self._grant_waiters_locked()
+            if granted.is_set():
                 return 0.0
-            granted = threading.Event()
-            (self._mutating if mutating else self._reading).append(granted)
         t0 = time.monotonic()
         if granted.wait(max(0.0, timeout)):
             return time.monotonic() - t0
         with self._lock:
             if granted.is_set():
                 return time.monotonic() - t0
-            for q in (self._mutating, self._reading):
+            for q in (self._mutating, self._reading, self._hooks):
                 if granted in q:
                     q.remove(granted)
         return None
 
-    def release(self) -> None:
+    def release(self, hook: bool = False) -> None:
         with self._lock:
-            for q in (self._mutating, self._reading):
-                if q:
-                    q.popleft().set()
-                    return
             self._free += 1
+            if hook:
+                self._hook_held = max(0, self._hook_held - 1)
+            self._grant_waiters_locked()
 
 
 def _pool_dispatch_worker(
@@ -1228,12 +1284,42 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
 
 
 #: Ceiling on how long `_pool_dispatch` blocks its connection thread waiting for
-#: a pool worker's result. NEGATIVE SPEC: never longer than the client's own
-#: `MUTATION_READ_DEADLINE_SECS` -- a longer server deadline just holds a
-#: thread for a caller that already gave up. ONE ceiling for every op,
-#: deliberately: per-op ceilings would shave the abandoned-read residue at the
-#: cost of a second deadline table that can disagree with the client's.
+#: a pool worker's result. NEGATIVE SPEC: strictly shorter than the client's own
+#: read deadline (`_withdrawal_deadline_secs` takes the margin off it) -- an equal
+#: or longer server deadline replies after the caller gave up, so a withdrawn
+#: request reads `indeterminate`. This constant stays the ceiling and the
+#: executing bound (`_executing_bound_secs`); the per-op client deadline only narrows it.
 _POOL_RESULT_DEADLINE_SECS = MUTATION_READ_DEADLINE_SECS
+
+#: Room left for the server's determinate reply to reach the client: the server
+#: withdraws this long (at most a quarter of the client's deadline) before the
+#: client gives up, so a withdrawn request reads `not started`, never `indeterminate`.
+_WITHDRAW_MARGIN_SECS = 2.0
+
+
+def _withdrawal_deadline_secs(method: Optional[str], msg: Any = None) -> float:
+    """Seconds `_pool_dispatch` may spend at the gate plus waiting on the result:
+    strictly inside this op's client read deadline. Taken off the per-op deadline
+    (which can be below `_POOL_RESULT_DEADLINE_SECS`), never off the constant alone."""
+    try:
+        client = float(_ipc.mutation_read_deadline_for(method, msg))
+    except Exception:  # noqa: BLE001 -- fall back to the constant ceiling
+        client = float(_POOL_RESULT_DEADLINE_SECS)
+    client = min(client, float(_POOL_RESULT_DEADLINE_SECS))
+    return max(0.0, client - min(_WITHDRAW_MARGIN_SECS, client * 0.25))
+
+
+#: Hook-class methods (`hooks.`, `session.`, `warm_guard.` from the hook fence, plus
+#: `bash_guards.`): non-mutating members of these share the capped hook lane.
+_HOOK_LANE_PREFIXES = hook_http.ROUTABLE_OP_PREFIXES + ("bash_guards.",)
+
+
+def _is_hook_lane(method: Any) -> bool:
+    return (
+        isinstance(method, str)
+        and method.startswith(_HOOK_LANE_PREFIXES)
+        and not _op_may_mutate(method)
+    )
 
 
 _POOL_BROKEN_INDETERMINATE_MESSAGE = (
@@ -2852,7 +2938,14 @@ class _ServerContext:
                 )
             claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
             gate = self._admission_gate()
-            _gate_wait = gate.acquire(_op_may_mutate(msg.get("method")), _POOL_RESULT_DEADLINE_SECS)
+            _method = msg.get("method")
+            _deadline = _withdrawal_deadline_secs(_method, msg)
+            _hook = _is_hook_lane(_method)
+            if dispatch_key is not None:
+                _ack_store.mark_queued(dispatch_key)
+            _gate_wait = gate.acquire(_op_may_mutate(_method), _deadline, _hook)
+            if _gate_wait is not None and dispatch_key is not None:
+                _ack_store.mark_dispatched(dispatch_key)
             if _gate_wait is None:
                 if dispatch_key is not None:
                     _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
@@ -2865,7 +2958,7 @@ class _ServerContext:
                 )
             _t_submit = time.time()
             _stamp = time.monotonic()
-            _wait_left = max(0.0, _POOL_RESULT_DEADLINE_SECS - _gate_wait)
+            _wait_left = max(0.0, _deadline - _gate_wait)
             _stamped_msg = {**msg, _SUBMIT_STAMP_KEY: _stamp}
             try:
                 if claim is None:
@@ -2880,9 +2973,9 @@ class _ServerContext:
                         STALL_DUMP_SECS,
                     )
             except BaseException:
-                gate.release()
+                gate.release(_hook)
                 raise
-            future.add_done_callback(lambda _f: gate.release())
+            future.add_done_callback(lambda _f: gate.release(_hook))
             self._track_pool_task(future, msg.get("method"))
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())

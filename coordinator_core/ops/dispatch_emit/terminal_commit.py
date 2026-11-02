@@ -1155,6 +1155,32 @@ def _paths_committed_since(worktree_root: Path, entry_head: Optional[str], paths
     return [p for p in paths if p in changed]
 
 
+def _release_own_index_lock(repo_root: Optional[Path]) -> None:
+    """Free an ``index.lock`` this thread still holds when the handler exits (deadline, abandon or
+    an exception left a splice unfinished). Own means the lock's owner record names this pid and
+    thread and the in-process holder registry still lists its token; a peer's lock is never touched."""
+    import threading
+
+    from coordinator_core.git import index_write
+
+    try:
+        lock = index_write.resolve_git_dir(repo_root or Path.cwd()) / "index.lock"
+        owner = index_write._owner_path(lock)
+        token = json.loads(owner.read_text(encoding="utf-8")).get("token")
+        if not isinstance(token, str) or not token.startswith(f"{os.getpid()}-{threading.get_ident()}-"):
+            return
+        with index_write._HOLDERS_GUARD:
+            if index_write._HOLDERS.pop(token, None) is None:
+                return
+        for path in (owner, lock):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    except Exception:  # noqa: BLE001 -- a cleanup in a finally never masks the handler's own outcome
+        return
+
+
 @register_op("dispatch.terminal_commit")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
@@ -1319,6 +1345,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 reply = _handler_body(params, repo_root)
         except land_deadline.LandDeadlineExceeded as exc:
             reply = _deadline_reply(exc)
+        finally:
+            _release_own_index_lock(repo_root)
     if isinstance(reply, dict) and reply.get("committed") and reply.get("sha"):
         _fire_index_refresh(repo_root)
     return reply

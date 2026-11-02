@@ -14,6 +14,10 @@ pool worker cannot see the accept process's memory, so this registered
 handler always answers `unknowable(no-resident-engine)` and never
 `not_received` — the only claim this handler is in a position to make.
 
+Status `queued` (answered by the accept process, never this handler): the
+request is admitted but has not reached a worker. Poll again; do not re-run.
+It matches the `phase: queued` of the not-started envelope.
+
 Self-registration: importing this module calls register_op(...) as a
 side-effect, mirroring `coordinator_core.ops.ping`.
 
@@ -36,7 +40,7 @@ def _warm_request_status(params: dict, repo_root: Path | None = None) -> dict:
     This leg never sees a resident `AckStore`, so it always answers
     `unknowable(no-resident-engine)` with no engine boot/pid to report.
     """
-    key = params.get("key")
+    key = params.get("key") or params.get("dispatch_key")
     if not key or not isinstance(key, str):
         raise ValueError("warm.request_status requires 'key' (non-empty string)")
     return {

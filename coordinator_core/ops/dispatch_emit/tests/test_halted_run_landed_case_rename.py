@@ -112,6 +112,20 @@ def test_directory_case_difference_is_covered(repo, solo):
 
 
 @pytest.mark.parametrize("solo", [True, False])
+def test_an_em_withheld_path_is_voided_not_owed(repo, solo):
+    from coordinator_core.ops.dispatch_emit import run_withhold
+
+    rid, marker = _marker(repo, solo, ("own.py", "shared.py"))
+    _write(repo, "own.py", "x")
+    sha = _commit_all(repo)
+    assert not _call(repo, run_id=rid, sha=sha).get("ok")
+    run_withhold.record(marker.parent, [{"path": "shared.py", "reason": "peer hunks only"}], "t")
+    out = _call(repo, run_id=rid, sha=sha)
+    assert out["ok"] and out["covers"] == {sha: ["own.py"]}
+    assert "shared.py" in out["voided"]
+
+
+@pytest.mark.parametrize("solo", [True, False])
 def test_unrelated_commit_still_refuses_and_leaves_marker_untouched(repo, solo):
     rid, marker = _marker(repo, solo, ("docs/T/A-HEAVY.md",))
     _write(repo, "docs/T/a-heavy.md", "x")

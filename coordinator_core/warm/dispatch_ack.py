@@ -44,6 +44,7 @@ _STAMPED = "stamped"
 _TOMBSTONED = "tombstoned"
 
 STATE_NOT_RECEIVED = "not_received"
+STATE_QUEUED = "queued"
 STATE_EXECUTING = "executing"
 STATE_FINISHED = "finished"
 STATE_UNKNOWABLE = "unknowable"
@@ -283,6 +284,25 @@ class AckStore:
                     record["result_dropped"] = dropped
             self._changed.notify_all()
 
+    def mark_queued(self, key: str) -> None:
+        """The admitted request is waiting for a pool slot: `status` reads `queued`.
+        A no-op on an unknown or non-admitted key; never raises."""
+        with self._lock:
+            record = self._records.get(key)
+            if record is not None and record["state"] == _ADMITTED:
+                record["queued"] = True
+
+    def mark_dispatched(self, key: str) -> None:
+        """A slot was granted: the record reads `executing` again and its bound
+        starts now, so queue time never ages it. A no-op on an unknown or
+        non-admitted key; never raises."""
+        with self._lock:
+            record = self._records.get(key)
+            if record is not None and record["state"] == _ADMITTED:
+                record.pop("queued", None)
+                if "admitted_mono" in record:
+                    record["admitted_mono"] = time.monotonic()
+
     def wait(self, key: str, timeout_secs: float) -> dict:
         """Block until `key` leaves `executing` or `timeout_secs` passes, then
         answer `status(key)`. Condition-driven: no polling, no settle interval.
@@ -345,6 +365,8 @@ class AckStore:
             if record["state"] == _TOMBSTONED:
                 return {"state": STATE_NOT_RECEIVED, "outcome": OUTCOME_NOT_DISPATCHED}
             if record["state"] == _ADMITTED:
+                if record.get("queued"):
+                    return {"state": STATE_QUEUED}
                 bound_secs = record.get("bound_secs")
                 # TRAP: the pool done-callback may never fire -- a worker blocked
                 # in `_run_joining_handler` never resolves its future -- so this

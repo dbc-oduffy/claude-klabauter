@@ -298,3 +298,48 @@ def test_op_is_registered_with_a_handler_and_complete_registration():
 
     assert get_op_handler("review.partition_slices") is not None
     assert OP_MODULE_MAP["review.partition_slices"] == "coordinator_core.ops.review_partition_slices"
+
+
+def test_dirty_in_process_names_the_modified_path_and_not_the_clean_one(repo):
+    from coordinator_core.ops.review_partition_slices import _dirty_in_process
+
+    _write(repo, ["a.py", "b.py"], 3)
+    _git(repo, "add", "a.py", "b.py")
+    _git(repo, "commit", "-q", "-m", "ab")
+    assert _dirty_in_process(repo, ["a.py", "b.py"]) == set()
+    (repo / "b.py").write_text("changed = 1\n", encoding="utf-8")
+    assert _dirty_in_process(repo, ["a.py", "b.py"]) == {"b.py"}
+    assert _dirty_in_process(repo, ["a.py", "b.py"]) == set(_git(repo, "diff", "--name-only", "HEAD").split())
+
+
+def test_untracked_in_process_matches_ls_files_others_and_defers_a_directory(repo):
+    from coordinator_core.ops.review_partition_slices import _untracked_in_process
+
+    _write(repo, ["t.py", "new.py", "skip.log"], 2)
+    (repo / ".gitignore").write_text("*.log\n", encoding="utf-8")
+    _git(repo, "add", "t.py", ".gitignore")
+    _git(repo, "commit", "-q", "-m", "t")
+    paths = ["t.py", "new.py", "skip.log"]
+    others = set(_git(repo, "ls-files", "--others", "--exclude-standard", "--", *paths).split())
+    assert others == {"new.py"}
+    assert _untracked_in_process(repo, paths) == others
+    (repo / "sub").mkdir()
+    assert _untracked_in_process(repo, ["sub"]) is None
+    assert _untracked_in_process(repo, ["sub/"]) is None
+
+
+def test_worktree_measure_in_process_split_agrees_with_the_gate_and_spawns_one_git(repo, monkeypatch):
+    from coordinator_core.ops import review_partition_slices as ps
+    from coordinator_core.ops.review_brightline_gate import worktree_measure
+
+    _write(repo, ["m.py"], 2)
+    _git(repo, "add", "m.py")
+    _git(repo, "commit", "-q", "-m", "m")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _write(repo, ["m.py", "u.py"], 5)
+    paths = ["m.py", "u.py"]
+    seen: list = []
+    real = ps._run_git
+    monkeypatch.setattr(ps, "_run_git", lambda argv, cwd: (seen.append(argv), real(argv, cwd))[1])
+    assert ps._worktree_measure(base, paths, repo) == worktree_measure(base, paths, str(repo))
+    assert [a[0] for a in seen] == ["diff"]

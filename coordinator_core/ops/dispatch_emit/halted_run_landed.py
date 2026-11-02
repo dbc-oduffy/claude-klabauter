@@ -605,6 +605,14 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
         voided_list += [p for p in unchanged if p in unauthored]
         unchanged = [p for p in unchanged if p not in unauthored]
     if unchanged:
+        # A path the EM withheld by `workflow.revise withhold_paths` is left out on purpose: owing it
+        # makes a hand-landing that skips a peer's hunks in a shared file unrecordable.
+        from coordinator_core.ops.dispatch_emit import run_withhold
+
+        em_held = run_withhold.read([record_dir])
+        voided_list += [p for p in unchanged if p in em_held]
+        unchanged = [p for p in unchanged if p not in em_held]
+    if unchanged:
         more = f" (+{len(unchanged) - 1} more)" if len(unchanged) > 1 else ""
         who = shas[0] if len(shas) == 1 else "shas together"
         return (

@@ -796,3 +796,25 @@ def test_a_run_whose_only_path_is_peer_withheld_gets_one_slice(repo, ranged):
     assert result["error"] is None
     assert [f for s in result["slices"] for f in s["files"]] == ["a/theirs.py"]
     assert result["peer_held"] == ["a/theirs.py"]
+
+
+def test_cover_index_answers_like_the_sequence_form():
+    files = ["src/a/x.py", "src/b/y.py", "top.py"]
+    index = rp._cover_index(files)
+    for declared in ["src", "src/", "src/a", "src/a/x.py", "src/c", "top.py", "to", "src/a/x.py/", ""]:
+        assert rp._covers(declared, index) == rp._covers(declared, files), declared
+
+
+def test_native_blob_parse_finds_the_broken_py_at_head_and_defers_a_non_sha_head(repo):
+    from coordinator_core.ops.dispatch_emit.landing_integrity import unparseable_py_at
+
+    _write(repo, ["ok.py"], 2)
+    (repo / "bad.py").write_text("def (:\n", encoding="utf-8")
+    _git(repo, "add", "ok.py", "bad.py")
+    _git(repo, "commit", "-q", "-m", "bad")
+    head = _git(repo, "rev-parse", "HEAD").strip()
+    paths = ["ok.py", "bad.py", "absent.py", "note.md"]
+    native = rp._unparseable_py_at_native(repo, head, paths)
+    assert [f.path for f in native] == ["bad.py"]
+    assert native == unparseable_py_at(repo, head, paths)
+    assert rp._unparseable_py_at_native(repo, "HEAD", paths) is None

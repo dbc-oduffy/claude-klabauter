@@ -93,7 +93,6 @@ def _phase(out):
     return ((out.get("error") or {}).get("data") or {}).get("diagnosis", {}).get("phase")
 
 
-@pytest.mark.xfail(strict=True, reason="awaits ae17d1 impl")
 def test_gate_waiter_is_withdrawn_before_the_client_deadline_as_queued(tmp_path):
     pool = _ManualPool()
     ctx = _ctx(tmp_path, pool)
@@ -112,7 +111,6 @@ def test_gate_waiter_is_withdrawn_before_the_client_deadline_as_queued(tmp_path)
     gate.release()
 
 
-@pytest.mark.xfail(strict=True, reason="awaits ae17d1 impl")
 def test_gate_withdrawn_request_is_never_submitted_after_the_holders_release(tmp_path):
     pool = _ManualPool()
     ctx = _ctx(tmp_path, pool)
@@ -131,7 +129,6 @@ def test_gate_withdrawn_request_is_never_submitted_after_the_holders_release(tmp
     assert server._ack_store.status(key)["state"] == dispatch_ack.STATE_NOT_RECEIVED
 
 
-@pytest.mark.xfail(strict=True, reason="awaits ae17d1 impl")
 def test_claim_withdrawn_request_replies_before_the_client_deadline_and_body_never_runs(
     tmp_path, monkeypatch
 ):
@@ -156,7 +153,6 @@ def test_claim_withdrawn_request_replies_before_the_client_deadline_and_body_nev
     assert ran == []
 
 
-@pytest.mark.xfail(strict=True, reason="awaits ae17d1 impl")
 def test_status_reads_queued_while_waiting_then_executing_once_a_slot_is_granted(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 5.0)
     pool = _ManualPool()
@@ -193,7 +189,6 @@ def test_a_withdrawn_gate_waiter_reads_not_received(tmp_path):
     gate.release()
 
 
-@pytest.mark.xfail(strict=True, reason="awaits ae17d1 impl")
 def test_hook_class_waiters_leave_a_slot_for_a_mutating_request(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 2)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 5.0)
