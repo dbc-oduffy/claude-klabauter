@@ -177,7 +177,12 @@ def test_single_target_and_launcher_and_mentions_are_not_heavy(cmd):
 def test_remedy_names_the_launcher():
     from coordinator_core.bash_guards._heavy_command_class import SCOPED_PYTEST_REMEDY
 
-    assert "coordinator_core.testing.scoped_pytest" in SCOPED_PYTEST_REMEDY
+    assert SCOPED_PYTEST_REMEDY.startswith("scoped-pytest ")
+    assert "python -m" not in SCOPED_PYTEST_REMEDY
+    inventory = (_REPO / "docs/install/bin-inventory.json").read_text(encoding="utf-8")
+    assert '"scoped-pytest"' in inventory
+    assert classify("scoped-pytest --allow a.py -- a.py::t", CWD).heavy_class is None
+    assert classify("pytest", CWD).heavy_class is H.TEST_TIER
 
 
 def test_bare_tier_and_marker_forms_stay_heavy():
@@ -629,6 +634,8 @@ _SUPERVISED = {
     "coordinator/bin/scip-rebuild-at-ceremony.py": "coordinator/bin/publish-repo-bundle-at-ceremony.py",
 }
 _NOT_HEAVY = {
+    "coordinator_core/ops/agent_pipe.py": "detached relay worker over one vendor CLI (agy or codex), network-bound, not a memory-heavy job",
+    "coordinator_core/ops/codex_runner.py": "detached worker over one codex or agy CLI run, network-bound, not a memory-heavy job",
     "coordinator_core/ops/app_session.py": "app launch, not a memory-heavy job",
     "coordinator_core/ops/_app_session_validate_run.py": "app launch, not a memory-heavy job",
     "coordinator_core/ops/ceremony/detached_spawn.py": "light housekeeping scripts",

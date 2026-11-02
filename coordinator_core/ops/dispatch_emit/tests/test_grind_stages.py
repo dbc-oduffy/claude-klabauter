@@ -1422,3 +1422,11 @@ def test_the_ledger_sweep_relay_stays_on_the_haiku_floor():
     # The floor legs are haiku-bound (leg_register ratchet); record fidelity is the op's to own.
     assert grind_stages.STAGE_MODELS["ledger-sweep"] == "haiku"
     assert "model: 'haiku'" in _sweep_call()
+
+
+def test_triage_schema_admits_optional_items_and_does_not_require_them():
+    call = grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r")
+    assert '"items"' in call
+    assert '"required": ["title"]' in call
+    assert "items" not in grind_stages.TRIAGE_RECORD_FIELDS
+    assert "Fill `items`" in call

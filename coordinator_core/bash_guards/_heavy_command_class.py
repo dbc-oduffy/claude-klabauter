@@ -383,7 +383,7 @@ def _is_xdist_pytest(argv: Sequence[str]) -> bool:
     return False
 
 
-SCOPED_PYTEST_REMEDY = "python -m coordinator_core.testing.scoped_pytest --allow ... -- ..."
+SCOPED_PYTEST_REMEDY = "scoped-pytest --allow <test file> -- <test file>[::node]"
 
 _PYTEST_VALUE_FLAGS = frozenset((
     "-n", "--numprocesses", "--dist", "-k", "-m", "-p", "-c", "-o", "-W", "-r", "--tb", "--rootdir", "--maxfail", "--ignore", "--ignore-glob",

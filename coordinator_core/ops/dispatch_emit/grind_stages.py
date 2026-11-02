@@ -480,7 +480,9 @@ def compose_triage_call(
             "read it before the row body, cite it in `evidence`, and never issue "
             "a fresh park or no-action verdict against it. If the ruled step "
             "cannot be done here, say so against the ruling. "
-            "Name every file your triage declares the row touches. As you finish "
+            "Name every file your triage declares the row touches. Fill `items` "
+            "({title, evidence, declared_files} each) only when the row lists "
+            "several independent failures; leave it out otherwise. As you finish "
             "each row, run `" + ASSEMBLE_CMD + " grind-row append --profile "
             f"{profile} --row-id <its row_id> --digest <its digest> --stage "
             "triage --verdict <its verdict> --outcome <its verdict> "
@@ -543,6 +545,18 @@ def compose_triage_call(
             "ruling_on_tradeoff": {"type": "string", "enum": list(RULING_ON_TRADEOFF)},
             "declared_files": {"type": "array", "items": {"type": "string"}},
             "fix_plan": {"type": "string"},
+            "items": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["title"],
+                    "properties": {
+                        "title": {"type": "string"},
+                        "evidence": {"type": "string"},
+                        "declared_files": {"type": "array", "items": {"type": "string"}},
+                    },
+                },
+            },
         },
     }
     schema = {

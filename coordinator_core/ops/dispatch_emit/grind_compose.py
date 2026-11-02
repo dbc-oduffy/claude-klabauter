@@ -97,11 +97,13 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
+from coordinator_core.backlog_grind_assemble.grind_split import MAX_SPLIT_ITEMS
 from coordinator_core.contract import grind_vocab as vocab
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 from coordinator_core.ops.dispatch_emit import grind_stages as stages
@@ -321,6 +323,7 @@ def triage_fix_verdict(routing: Mapping[str, dict], triage_node_id: str) -> Opti
 _SIZE_CHECK_KEYS = (
     "triaged",
     "triage_handback",
+    "split",
     "size_confirmed",
     "size_collapsed",
     "fix_needs_plan",
@@ -773,6 +776,24 @@ def run_admission(
     def _batch_done(batch: _Batch) -> bool:
         return all(rows[rid].done for rid in batch.row_ids)
 
+    def _split_row(row: Row) -> None:
+        """Mint one backlog row per triaged item and close the parent; the parent and the children
+        queue for the terminal commit. Twin: ``_splitRow``."""
+        row.origin = "triage:split"
+        try:
+            reply = _record_call("split", row.row_id) or {}
+        except Exception as err:  # noqa: BLE001 -- a split that throws is a split that did not land
+            reply = {"outcome": "split-failed", "reason": str(err)}
+        children = reply.get("children") if reply.get("outcome") == "split" else None
+        if not isinstance(children, list) or len(children) < 2:
+            _handback(row, "stage-dead", f"split failed: {reply.get('reason') or 'no children returned'}")
+            return
+        by_triage_check["split"] += 1
+        parent_dir = posixpath.dirname(row.path)
+        row.touched_files = [row.path]
+        row.created_files = [posixpath.join(parent_dir, f"{child}.yaml") for child in children]
+        _queue_commit(row)
+
     def _triage_batch(batch: _Batch) -> None:
         batch.triaged = True
         seen: set[str] = set()
@@ -791,6 +812,17 @@ def run_admission(
             if rec.get("declared_files"):
                 row.declared_files = list(rec["declared_files"])
             row.origin = f"triage:{rec['verdict']}"
+            items = rec.get("items") or []
+            if len(items) > MAX_SPLIT_ITEMS:
+                by_triage_check["triage_handback"] += 1
+                _handback_row(
+                    row, "needs-judgment",
+                    f"triage named {len(items)} independent items, over the split cap of {MAX_SPLIT_ITEMS}",
+                )
+                return
+            if len(items) >= 2:
+                _split_row(row)
+                return
             tradeoff = rec.get("tradeoff", "") if rec.get("has_tradeoff") else ""
             on_tradeoff = rec.get("ruling_on_tradeoff", "")
             action = route_after_triage(
@@ -1543,6 +1575,103 @@ def _indent_block(text: str, indent: str) -> str:
     return indent + f"\n{indent}".join(text.splitlines())
 
 
+_SPLIT_PIECE_CHARS = 3000
+
+
+def _compose_split_call(
+    *,
+    models: Optional[Mapping[str, str]],
+    agent_type_host: Optional[str],
+    run_key: str,
+    preamble_expr: Optional[str],
+) -> str:
+    """The `split` op-runner call: the row's items arrive as a JS array `items` and a JS string `_file`
+    in the enclosing function; the agent writes them to `_file` in sub-``BASH_COMMAND_CAP`` pieces, then
+    runs ONE `grind-row split` over that file. Returns `split` plus `children`, or `split-failed`."""
+    pieces = (
+        f"_json.replace(/.{{1,{_SPLIT_PIECE_CHARS}}}/g, "
+        "c => '```\\nprintf %s ' + _shq(c) + ' >> ' + _shq(_file) + '\\n```\\n')"
+    )
+    parts: list[tuple[str, str]] = [
+        *stages._preamble_parts(preamble_expr),
+        (
+            "lit",
+            f"The Bash tool drops any command longer than {stages.BASH_COMMAND_CAP} characters, so the items "
+            "travel in pieces. Run each command below, in order, exactly as written, as its OWN Bash call, "
+            "and run every one:\n```\nmkdir -p scratch && : > ",
+        ),
+        ("expr", "_shq(_file)"),
+        ("lit", "\n```\n"),
+        ("expr", pieces),
+        ("lit", f"```\n{stages.ASSEMBLE_CMD} grind-row split --profile "),
+        ("expr", "PROFILE_NAME"),
+        ("lit", " --row-id "),
+        ("expr", "_shq(row.rowId)"),
+        ("lit", " --items-file "),
+        ("expr", "_shq(_file)"),
+        ("lit", " --repo-root "),
+        stages._shq_part("REPO_ROOT"),
+        (
+            "lit",
+            "\n```\nReturn `split` as outcome and the `children` array of the last command's JSON output "
+            "when it exits 0, else `split-failed` with the verbatim stderr in `reason`. " + stages._NO_STAGING_CLAUSE,
+        ),
+    ]
+    schema = {
+        "type": "object",
+        "required": ["outcome"],
+        "properties": {
+            "outcome": {"type": "string", "enum": ["split", "split-failed"]},
+            "children": {"type": "array", "items": {"type": "string"}},
+            "reason": {"type": "string"},
+        },
+    }
+    return stages._agent_call(
+        stages._join_prompt_parts(parts),
+        stage="ledger-sweep",
+        models=models,
+        label="split",
+        phase_title="Grind",
+        agent_type=stages.GENERAL_PURPOSE_AGENT_TYPE,
+        agent_type_host=agent_type_host,
+        run_key=run_key,
+        effort="low",
+        schema=schema,
+        is_expr=True,
+    )
+
+
+def _split_js(split_raw: str) -> str:
+    """`_splitCall`/`_splitRow`. Twin: ``run_admission``'s ``_split_row``."""
+    return (
+        "async function _splitCall(row, items) {\n"
+        "  const _json = JSON.stringify(items.map((it) => ({ title: String(it.title || ''), "
+        "evidence: String(it.evidence || '').slice(0, 800), declared_files: Array.isArray(it.declared_files) ? it.declared_files : [] })))"
+        ".replace(/[\\u007f-\\uffff]/g, (c) => '\\\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'));\n"
+        "  const _file = 'scratch/split-' + RUN_ID + '-' + row.rowId + '.json';\n"
+        + _indent_block(_capture(split_raw, "split"), "  ")
+        + "\n}\n"
+        "async function _splitRow(rowId, row, items) {\n"
+        "  row.origin = 'triage:split';\n"
+        "  let _sp;\n"
+        "  try { _sp = await _issue(row.batchId, rowId, () => _splitCall(row, items)); }\n"
+        "  catch (err) { _sp = { outcome: 'split-failed', reason: err && err.message ? err.message : String(err) }; }\n"
+        "  _sp = _sp || {};\n"
+        "  if (_sp.outcome !== 'split' || !Array.isArray(_sp.children) || _sp.children.length < 2) {\n"
+        "    row.done = true;\n"
+        "    _handBack(rowId, 'stage-dead', 'split failed: ' + (_sp.reason || 'no children returned'));\n"
+        "    return;\n"
+        "  }\n"
+        "  _byTriageCheck.split += 1;\n"
+        "  const _dir = row.path.replace(/[^/]*$/, '');\n"
+        "  row.touchedFiles = [row.path];\n"
+        "  row.createdFiles = _sp.children.map((c) => _dir + c + '.yaml');\n"
+        "  row.done = true;\n"
+        "  _queueCommit(rowId);\n"
+        "}"
+    )
+
+
 def _run_close_block(
     *,
     profile_name: str,
@@ -1778,6 +1907,7 @@ def compose_grind_script(
     )
     lines.append(f"const TRIAGE_NODE_ID = {_js_string_literal(triage_node_id)};")
     lines.append(f"const PLAN_WEIGHT_FLOOR_RANK = {_PLAN_WEIGHT_FLOOR_RANK};")
+    lines.append(f"const MAX_SPLIT_ITEMS = {MAX_SPLIT_ITEMS};")
     lines.append(f"const RETIRE_VERDICTS = {json.dumps(sorted(vocab.RETIRE_VERDICTS))};")
     lines.append(f"const SIZE_FIX_TARGET = {json.dumps(size_fix_target)};")
     lines.append(_MUTEX_HELPERS)
@@ -1919,6 +2049,9 @@ def compose_grind_script(
         )
         + "\n}"
     )
+    lines.append(_split_js(_compose_split_call(
+        models=stage_models, agent_type_host=agent_type_host, run_key=run_key, preamble_expr=preamble_expr,
+    )))
 
     size_raw = stages.compose_size_call(
         models=stage_models,
@@ -2172,6 +2305,9 @@ def compose_grind_script(
         "      if (rec.declared_files && rec.declared_files.length) { row.declaredFiles = rec.declared_files; }\n"
         "      _byTriageCheck.triaged += 1;\n"
         "      row.origin = `triage:${rec.verdict}`;\n"
+        "      const _items = Array.isArray(rec.items) ? rec.items : [];\n"
+        "      if (_items.length > MAX_SPLIT_ITEMS) { _byTriageCheck.triage_handback += 1; await _handBackRow(recRow, 'needs-judgment', `triage named ${_items.length} independent items, over the split cap of ${MAX_SPLIT_ITEMS}`); continue; }\n"
+        "      if (_items.length >= 2) { await _splitRow(recRow, row, _items); continue; }\n"
         "      const tradeoff = rec.has_tradeoff ? (rec.tradeoff || '') : '';\n"
         "      const route = routeAfterTriage(rec.verdict, rec.tshirt_size, tradeoff, row.pmRuling, rec.ruling_on_tradeoff);\n"
         "      if (route.kind === 'handback' && route.value === 'baton') { _toSize.push(recRow); continue; }\n"

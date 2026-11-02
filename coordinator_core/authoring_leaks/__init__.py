@@ -187,13 +187,17 @@ def _resolve_default_detectors(names: Sequence[str]) -> Tuple[List[Any], List[st
 
     Trap: `PUBLISHER_ONLY_DETECTORS` guard text against the publish scrub and read its private
     tables, so they never ship. A distribution without the publisher (`percolate`) has no scrub for
-    them to guard and does not wire them; with the publisher present, their absence still refuses.
+    them to guard and does not wire them; an engine copy whose publish scrub dropped the module file
+    skips it too. A publisher-only module that is present but fails to import still refuses, as does
+    any absent non-publisher-only detector.
     """
     detectors: List[Any] = []
     failures: List[str] = []
     publisher_present = importlib.util.find_spec("coordinator_core.percolate") is not None
     for name in names:
-        if name in PUBLISHER_ONLY_DETECTORS and not publisher_present:
+        if name in PUBLISHER_ONLY_DETECTORS and (
+            not publisher_present or importlib.util.find_spec(f"{__name__}.{name}") is None
+        ):
             continue
         try:
             detectors.append(importlib.import_module(f"{__name__}.{name}"))

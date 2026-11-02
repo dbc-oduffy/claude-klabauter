@@ -1800,3 +1800,57 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert code == grind_rows.EXIT_OK, captured.err
         assert "state/sizings/s.yaml" in json.loads(captured.out)["landed"]
         assert list(spawns) == []
+
+
+class TestSplitVerb:
+    PARENT = "2026-11-01-three-failures-abc123def456"
+
+    @pytest.fixture(autouse=True)
+    def _no_output_override(self, monkeypatch):
+        monkeypatch.delenv("QUEUE_APPEND_OUTPUT_ROOT", raising=False)
+
+    def _seed(self, root: Path) -> None:
+        d = root / "state" / "bug-backlog"
+        d.mkdir(parents=True)
+        (d / f"{self.PARENT}.yaml").write_text(
+            "created: 2026-11-01\ntitle: three failures\nbody: |-\n  a, b, c\n"
+            "status: open\nsurface: a/test_x.py\nseverity: P2\n",
+            encoding="utf-8",
+        )
+
+    def _split(self, root: Path, items, capsys):
+        f = root / "items.json"
+        f.write_text(json.dumps(items), encoding="utf-8")
+        code = grind_rows.main([
+            "split", "--profile", "bug", "--row-id", self.PARENT,
+            "--items-file", str(f), "--repo-root", str(root),
+        ])
+        return code, capsys.readouterr()
+
+    def test_split_writes_children_and_a_rerun_returns_the_same_ids(self, tmp_path, capsys):
+        self._seed(tmp_path)
+        items = [{"title": f"item {i}", "evidence": "e", "declared_files": [f"p/f{i}.py"]} for i in range(3)]
+        code, out = self._split(tmp_path, items, capsys)
+        assert code == grind_rows.EXIT_OK, out.err
+        children = json.loads(out.out)["children"]
+        assert len(children) == 3
+        for cid in children:
+            assert (tmp_path / "state" / "bug-backlog" / f"{cid}.yaml").is_file()
+        code, again = self._split(tmp_path, items, capsys)
+        assert code == grind_rows.EXIT_OK
+        assert json.loads(again.out)["children"] == children
+
+    def test_one_item_is_refused_and_mints_nothing(self, tmp_path, capsys):
+        self._seed(tmp_path)
+        code, _out = self._split(tmp_path, [{"title": "only"}], capsys)
+        assert code == grind_rows.EXIT_REFUSAL
+        assert len(list((tmp_path / "state" / "bug-backlog").glob("*.yaml"))) == 1
+
+    def test_non_array_items_is_a_usage_error(self, tmp_path, capsys):
+        self._seed(tmp_path)
+        code, _out = self._split(tmp_path, {"title": "x"}, capsys)
+        assert code == grind_rows.EXIT_USAGE
+
+    def test_split_is_listed_in_the_verb_usage(self, capsys):
+        assert grind_rows.main([]) == grind_rows.EXIT_USAGE
+        assert "split" in capsys.readouterr().err

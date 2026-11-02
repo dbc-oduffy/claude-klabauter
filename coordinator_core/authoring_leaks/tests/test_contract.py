@@ -183,6 +183,42 @@ def test_publisher_only_detectors_unwired_without_the_publisher(monkeypatch):
     assert names == set(al.WIRED_DETECTORS) - al.PUBLISHER_ONLY_DETECTORS
 
 
+def test_absent_publisher_only_modules_skipped_even_with_the_publisher(monkeypatch):
+    real = al.importlib.util.find_spec
+    absent = {f"{al.__name__}.{n}" for n in al.PUBLISHER_ONLY_DETECTORS}
+    monkeypatch.setattr(
+        al.importlib.util, "find_spec", lambda name, *a: None if name in absent else real(name, *a)
+    )
+    detectors, failures = al._resolve_default_detectors(al.WIRED_DETECTORS)
+    assert failures == []
+    assert [d.__name__.rsplit(".", 1)[-1] for d in detectors] == ["import_closure"]
+
+
+def test_absent_non_publisher_only_detector_still_refuses(monkeypatch):
+    real = al.importlib.util.find_spec
+    monkeypatch.setattr(
+        al.importlib.util,
+        "find_spec",
+        lambda name, *a: None if name.endswith(".import_closure") else real(name, *a),
+    )
+    monkeypatch.setitem(sys.modules, f"{al.__name__}.import_closure", None)
+    _, failures = al._resolve_default_detectors(al.WIRED_DETECTORS)
+    assert len(failures) == 1 and "import_closure" in failures[0]
+
+
+def test_present_publisher_only_module_failing_import_still_refuses(monkeypatch):
+    real = al.importlib.import_module
+
+    def boom(name, *a):
+        if name.endswith(".payload_locality"):
+            raise ImportError("broken dependency")
+        return real(name, *a)
+
+    monkeypatch.setattr(al.importlib, "import_module", boom)
+    _, failures = al._resolve_default_detectors(al.WIRED_DETECTORS)
+    assert len(failures) == 1 and "payload_locality" in failures[0]
+
+
 def test_publisher_only_detectors_wired_with_the_publisher():
     detectors, failures = al._resolve_default_detectors(al.WIRED_DETECTORS)
     assert failures == []

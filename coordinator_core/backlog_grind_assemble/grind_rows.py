@@ -42,6 +42,8 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
   `state/queue-grind/<P>/<R>.jsonl` if present — idempotent (already-settled
   is not an error). Only the committer calls this, immediately before the
   settling commit (§ Design § Stage library, `commit` (ledger-only)).
+- `split --profile P --row-id R --items-file F|- --repo-root D`: mints per-item child
+  backlog rows and closes R through `grind_split.split_row`; prints `{"children": [...]}`.
 - `sweep --profile-dir D --profile P --queue Q [--queue Q ...] --repo-root R`:
   settles (deletes) every ledger and `_handback` mark whose row id the named
   queue dirs no longer yield — the settle for a row that left the queue by a
@@ -697,6 +699,49 @@ def cmd_settle(rest: list[str]) -> int:
     if ledger_path.is_file():
         _declare_before_unlink(ledger_path, repo_root)
         ledger_path.unlink()
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# split
+# ---------------------------------------------------------------------------
+
+
+def cmd_split(rest: list[str]) -> int:
+    """`split --profile P --row-id R --items-file F|- --repo-root D`: mints one child
+    backlog row per item of the JSON array at F (stdin when `-`) and closes R, through
+    `grind_split.split_row`. Idempotent: a row already split prints its existing child ids.
+    Prints `{"children": [...]}`. A bad item count, an untitled item or a missing row
+    is a refusal (exit 1)."""
+    from coordinator_core.backlog_grind_assemble.grind_split import split_row
+
+    flags = _parse_flags(rest, required=("profile", "row-id", "items-file", "repo-root"))
+    if flags is None:
+        return _usage("usage: grind-row split --profile P --row-id R --items-file F|- --repo-root D")
+    try:
+        _check_row_id(flags["row-id"])
+    except RowIdEscapeError as exc:
+        return _usage(str(exc))
+    source = flags["items-file"]
+    if source == "-":
+        raw = sys.stdin.read()
+    else:
+        items_path = Path(source)
+        if not items_path.is_file():
+            return _usage(f"grind-row split: --items-file not found: {items_path}")
+        raw = items_path.read_text(encoding="utf-8")
+    try:
+        items = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return _usage(f"grind-row split: items are not valid JSON: {exc}")
+    if not isinstance(items, list):
+        return _usage("grind-row split: items must be a JSON array")
+    try:
+        children = split_row(Path(flags["repo-root"]), flags["profile"], flags["row-id"], items)
+    except ValueError as exc:
+        print(f"grind-row split: {exc}", file=sys.stderr)
+        return EXIT_REFUSAL
+    print(json.dumps({"children": children}, sort_keys=True))
     return EXIT_OK
 
 
@@ -1426,6 +1471,7 @@ _VERBS = {
     "append": cmd_append,
     "close": cmd_close,
     "settle": cmd_settle,
+    "split": cmd_split,
     "sweep": cmd_sweep,
     "run-record": cmd_run_record,
     "undo": cmd_undo,
@@ -1437,7 +1483,7 @@ _VERBS = {
 
 def main(argv: list[str]) -> int:
     if not argv:
-        return _usage("usage: grind-row image|check|append|close|settle|sweep|run-record|undo|settle-run|size-chain|size-fail [...]")
+        return _usage("usage: grind-row image|check|append|close|settle|split|sweep|run-record|undo|settle-run|size-chain|size-fail [...]")
     verb, rest = argv[0], argv[1:]
     handler = _VERBS.get(verb)
     if handler is None:

@@ -1706,6 +1706,7 @@ def test_by_triage_check_counts_each_branch_and_a_straight_hand_back():
     assert result["by_triage_check"] == {
         "triaged": 4,
         "triage_handback": 1,
+        "split": 0,
         "size_confirmed": 1,
         "size_collapsed": 2,
         "fix_needs_plan": 1,
@@ -2917,3 +2918,89 @@ def test_emitted_size_call_makes_the_scout_check_the_sizing_file_exists():
     assert "test -f " in call and check in call
     assert gc.SIZE_SKIPPED_MESSAGE in call
     assert call.index(check) < call.index("label:")
+
+
+# ---------------------------------------------------------------------------
+# Triage split: a record naming 2+ independent items mints per-item rows
+# ---------------------------------------------------------------------------
+
+
+def _items(n):
+    return [{"title": f"item {i}", "evidence": f"e{i}", "declared_files": [f"f{i}.py"]} for i in range(n)]
+
+
+def _split_run(items, *, split_reply=None, size="M"):
+    record = {"verdict": "confirmed-bug", "tshirt_size": size, "tradeoff": ""}
+    if items is not None:
+        record["items"] = items
+    sink = []
+    calls = []
+
+    def _split(rid):
+        calls.append(rid)
+        return split_reply if split_reply is not None else {"outcome": "split", "children": ["c0", "c1"]}
+
+    script_by_kind = {
+        "triage": lambda bid: [{"row": "r0", **record}],
+        "split": _split,
+        "size": lambda rid: _scout("M", exit_code=0),
+        "commit": lambda _unit: {"committed": True, "sha": "abc"},
+    }
+    routing, triage_node = _fixture_routing()
+    budget = _StubBudgetSpender()
+    result = gc.run_admission(
+        [("b0", ["r0"])], routing, triage_node, reserve=gc.batch_reserve(1),
+        budget=budget, agent=_agent_stub(script_by_kind, budget), commit_params_sink=sink,
+    )
+    return result, calls, sink
+
+
+def test_split_record_routes_no_baton_records_one_split_call_and_queues_parent_and_children():
+    result, calls, sink = _split_run(_items(2))
+    assert calls == ["r0"]
+    assert not [h for h in result["handed_back"] if h["row"] == "r0"]
+    assert result["by_triage_check"]["split"] == 1
+    assert [c for c in result["call_log"] if c[0] == "size"] == []
+    queued = sink[0]["grind"]["rows"][0]
+    assert queued["row_id"] == "r0"
+    assert queued["paths"] == ["r0", "c0.yaml", "c1.yaml"]
+
+
+def test_record_without_items_or_with_one_item_still_batons_and_never_splits():
+    for items in (None, [], _items(1)):
+        result, calls, _ = _split_run(items)
+        assert calls == []
+        assert result["by_triage_check"]["split"] == 0
+        assert any(h["type"] == "baton" and h["row"] == "r0" for h in result["handed_back"])
+
+
+def test_nine_items_hand_back_needs_judgment_and_mint_nothing():
+    result, calls, _ = _split_run(_items(gc.MAX_SPLIT_ITEMS + 1))
+    assert calls == []
+    assert result["by_triage_check"]["split"] == 0
+    assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["needs-judgment"]
+
+
+def test_max_items_split():
+    result, calls, _ = _split_run(_items(gc.MAX_SPLIT_ITEMS))
+    assert calls == ["r0"] and result["by_triage_check"]["split"] == 1
+
+
+def test_failed_split_hands_back_stage_dead_and_counts_no_split():
+    result, calls, _ = _split_run(_items(3), split_reply={"outcome": "split-failed", "reason": "no row"})
+    assert calls == ["r0"]
+    assert result["by_triage_check"]["split"] == 0
+    hand = next(h for h in result["handed_back"] if h["row"] == "r0")
+    assert hand["type"] == "stage-dead" and "no row" in hand["reason"]
+
+
+def test_emitted_script_carries_the_split_branch_before_routing():
+    script = _compose()
+    start = script.index("async function _triageBatch")
+    ingest = script[start : script.index("for (const staleRef", start)]
+    assert f"const MAX_SPLIT_ITEMS = {gc.MAX_SPLIT_ITEMS};" in script
+    assert ingest.index("_splitRow(recRow, row, _items)") < ingest.index("routeAfterTriage(")
+    assert "_items.length > MAX_SPLIT_ITEMS" in ingest and "'needs-judgment'" in ingest
+    call = script[script.index("async function _splitCall") : script.index("async function _splitRow")]
+    assert "grind-row split --profile" in call and "--items-file" in call and "label: 'split'" in call
+    assert "split: 0" in script
