@@ -575,14 +575,20 @@ def _apply_derived_readiness(fm: str, worktree: Path) -> str:
     every verb's own `deployment_state` stamp carries zero enum-narrowing
     risk (C6 dispatch brief).
 
-    Reads the full live+archived handoff corpus via `handoff_corpus.
-    _collect_all_handoffs_for_gate_index` (C2a-extracted out of
-    `handoff_reconcile.py`) — the ONE shared walker for that corpus (see
-    that function's own docstring) — imported function-locally to avoid
-    the import cycle `handoff_reconcile` already has with this module (it
-    imports `_handoff_transition_handler` from here at its own top level;
-    see `_read_gate_evidence_resolved`'s docstring for the same cycle
-    already documented at this file's other `handoff_reconcile` seam).
+    Reads NO corpus. Every caller runs this inside a `locked_rmw` mutate
+    closure, so a read here is read-heavy work under the record lock; the
+    live+archived walk it once did parsed thousands of handoffs and held the
+    lock for 30s+. The verdict this seam can ACT on never needs a blocker's
+    state: TIGHTEN-ONLY (below) turns every non-empty-`blocked_by` verdict
+    into `awaiting_gate`, and an empty `blocked_by` resolves nothing.
+    `derive_readiness` therefore runs over an EMPTY resolution index — every
+    blocker id reads unresolved, which parks, which is the verdict the old
+    walk reached for any non-empty `blocked_by`. The one divergence: a record
+    carrying a prose `gate_dependency` whose blockers have ALL shipped used to
+    read `review-due` (no opinion, record left as stamped); it now parks. That
+    prompt for a human is surfaced by the reconcile/aging sweeps, which do
+    walk the corpus outside any lock; `worktree` is retained for the callers'
+    signature and read by nothing here.
 
     Overrides `deployment_state` (replace — every caller of this helper has
     already stamped one) and `pickup_ready` (replace-if-present, insert-if-
@@ -590,13 +596,8 @@ def _apply_derived_readiness(fm: str, worktree: Path) -> str:
     insert-if-absent precedent for this field) ONLY when the verdict is
     non-None. Returns `fm` unchanged on a `(None, None)` verdict.
     """
-    from coordinator_core.reconcile.handoff_corpus import (
-        _collect_all_handoffs_for_gate_index,
-    )
-
     fm_dict = yaml.safe_load(fm) or {}
-    all_handoffs, _scan_errors = _collect_all_handoffs_for_gate_index(worktree)
-    verdict = derive_readiness(fm_dict, all_handoffs)
+    verdict = derive_readiness(fm_dict, ())
     derived_deployment = verdict["deployment_state"]
     if derived_deployment is None:
         return fm
@@ -1541,6 +1542,9 @@ def build_implemented_plan_index(worktree: Path) -> dict:
     return index
 
 
+_PLAN_DELIVERABLE_ID_LINE_RE = re.compile(rb"^deliverable_id:[ \t]*(.*?)[ \t]*$", re.MULTILINE)
+
+
 def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Optional[dict]:
     """The plan carrying this deliverable_id, when that plan is stamped
     status: implemented.
@@ -1562,7 +1566,65 @@ def _find_implemented_governing_plan(worktree: Path, deliverable_id: str) -> Opt
     """
     if not deliverable_id:
         return None
-    return build_implemented_plan_index(worktree).get(deliverable_id)
+    from coordinator_core.reconcile.handoff_corpus import _frontmatter_head_bytes
+
+    plans_dir = worktree / "docs" / "plans"
+    if not plans_dir.is_dir():
+        return None
+    try:
+        entries = sorted(plans_dir.iterdir())
+    except OSError:
+        return None
+    needle = deliverable_id.encode("utf-8")
+    for path in entries:
+        if path.suffix != ".md":
+            continue
+        # A head read rules out every plan not naming this id, so only a
+        # candidate pays the full YAML parse (`build_implemented_plan_index`
+        # parses all of them).
+        head = _frontmatter_head_bytes(path)
+        if head is not None and not any(
+            needle in match.group(1)
+            for match in _PLAN_DELIVERABLE_ID_LINE_RE.finditer(head)
+        ):
+            continue
+        try:
+            fm = _read_meta(str(path))
+        except Exception:  # noqa: BLE001 — quarantine an unreadable/malformed plan
+            continue
+        if not fm or fm.get("status") != "implemented":
+            continue
+        plan_did = fm.get("deliverable_id")
+        if not isinstance(plan_did, str) or plan_did.strip() != deliverable_id:
+            continue
+        title = fm.get("title")
+        return {
+            "path": str(path),
+            "title": title if isinstance(title, str) and title.strip() else path.name,
+        }
+    return None
+
+
+def _preread_governing_plan(
+    path: Path, worktree: Path
+) -> "Tuple[Optional[str], Optional[dict]]":
+    """`(deliverable_id, implemented governing plan)` for the handoff at `path`,
+    read WITHOUT its lock; `(None, None)` when the handoff is unreadable, a
+    spinoff, or carries no deliverable_id — the cases `_unclaim`'s in-lock
+    check also skips."""
+    try:
+        split = split_frontmatter(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return None, None
+    if split is None:
+        return None, None
+    deliverable_id = read_fm_field_unquoted(split.fm_text, "deliverable_id")
+    if canonical_kind(read_fm_field_unquoted(split.fm_text, "kind")) in _SPINOFF_KINDS:
+        return None, None
+    if not isinstance(deliverable_id, str) or not deliverable_id.strip():
+        return None, None
+    deliverable_id = deliverable_id.strip()
+    return deliverable_id, _find_implemented_governing_plan(worktree, deliverable_id)
 
 
 def _unclaim_session_ledger_notice(body_text: str, session_id: Optional[str]) -> Optional[str]:
@@ -1727,6 +1789,11 @@ def _unclaim(
 
     _state: dict = {"applied": False, "message": ""}
 
+    # The governing-plan scan reads docs/plans/: resolved here, before the
+    # lock is taken. `mutate` reuses it while the deliverable_id it reads
+    # under the lock is the one resolved here, and re-resolves otherwise.
+    _pre_deliverable_id, _pre_governing_plan = _preread_governing_plan(path, worktree)
+
     def mutate(old_text: str) -> str:
         split = split_frontmatter(old_text)
         if split is None:
@@ -1759,7 +1826,12 @@ def _unclaim(
             and isinstance(deliverable_id, str)
             and deliverable_id.strip()
         ):
-            governing_plan = _find_implemented_governing_plan(worktree, deliverable_id.strip())
+            if deliverable_id.strip() == _pre_deliverable_id:
+                governing_plan = _pre_governing_plan
+            else:
+                governing_plan = _find_implemented_governing_plan(
+                    worktree, deliverable_id.strip()
+                )
             if governing_plan is not None:
                 # Determinate cascade statement, not a hedge (docs/plans/2026-09-26-
                 # plan-implemented-does-not-close-its-handoff.md § C2). The writer

@@ -129,6 +129,7 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import AGENT_CALL_RE, Fanout
 from coordinator_core.ops.dispatch_emit.grind_admission import ROW_OUTPUT_TOKENS
 from coordinator_core.ops.dispatch_emit.grind_profile import Profile
 from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEntry
+from coordinator_core.session.output_tree_layout import write_rel
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 __all__ = [
@@ -348,7 +349,10 @@ def _slug(text: Any) -> str:
 def _sizing_path(run_id: str, scouted: Mapping[str, Any], row_id: str) -> str:
     """Repo-relative sizing path for one row. Twin: ``_sizingPath`` in the emitted script."""
     d = str(run_id).replace("-", "")[:8]
-    return f"state/sizings/{d[:4]}-{d[4:6]}-{d[6:8]}-{_slug(scouted.get('name')) or 'sizing'}-{_slug(row_id) or 'row'}.yaml"
+    return write_rel(
+        "state/sizings",
+        f"{d[:4]}-{d[4:6]}-{d[6:8]}-{_slug(scouted.get('name')) or 'sizing'}-{_slug(row_id) or 'row'}.yaml",
+    )
 
 
 #: `grind_size_chain.SKIP_MESSAGE`: the chain exits 0 having written no sizing; a test pins the equality.
@@ -1769,7 +1773,7 @@ _SIZE_PATH_JS = (
     ".replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, ''); }\n"
     "function _sizingPathFor(nameSlug, rowId) {\n"
     "  const d = String(RUN_ID).replace(/-/g, '').slice(0, 8);\n"
-    "  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8)"
+    "  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8)"
     " + '-' + nameSlug + '-' + (_slug(rowId) || 'row') + '.yaml';\n"
     "}\n"
     "function _sizingPath(scouted, rowId) { return _sizingPathFor(_slug(scouted.name) || 'sizing', rowId); }"

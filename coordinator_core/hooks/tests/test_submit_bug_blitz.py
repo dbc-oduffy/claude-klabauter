@@ -150,9 +150,11 @@ def _porcelain_state(root: Path) -> list[str]:
     return [ln for ln in _git(root, "status", "--porcelain", "--", "state/bug-backlog").splitlines() if ln]
 
 
-def test_default_mint_lands_every_minted_row_in_one_commit_naming_the_run(real_repo):
+def test_default_mint_lands_every_minted_row_in_one_commit_naming_the_run(real_repo, monkeypatch):
     before = int(_git(real_repo, "rev-list", "--count", "HEAD").strip())
-    env = _call(real_repo, {"targets": "red-set"}, mint=None)
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        env = _call(real_repo, {"targets": "red-set"}, mint=None)
+    assert not [s.argv for s in spawns], "the settle commit runs in process; no git spawn"
 
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
     rows = sorted(p.name for p in (real_repo / "state" / "bug-backlog").glob("*.yaml"))

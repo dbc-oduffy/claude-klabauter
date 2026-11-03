@@ -95,7 +95,7 @@ def test_export_holds_base_content_in_counterpart_cwd(repo, monkeypatch, capsys,
     seen = json.loads(out.read_text())
     assert seen["a"] == "one\n" and seen["b"] == "bee\n"
     parts = Path(seen["cwd"]).parts
-    assert parts[-1] == "pkg" and parts[-3] == "scratch" and parts[-2].startswith(be.ROOT_PREFIX)
+    assert parts[-1] == "pkg" and parts[-3] == "baseline-cache" and parts[-2] == _base(repo)
     assert _exports(repo) == []
 
 
@@ -114,7 +114,7 @@ def test_non_hex_sha_spawns_no_git(repo, monkeypatch, capsys):
     assert code == be.EXIT_EXPORT_FAILED and calls == []
 
 
-def test_exactly_two_git_spawns(repo, monkeypatch, capsys):
+def _count_spawns(monkeypatch):
     real = be._git_popen
     seen = []
 
@@ -123,9 +123,62 @@ def test_exactly_two_git_spawns(repo, monkeypatch, capsys):
         return real(args, cwd, **kw)
 
     monkeypatch.setattr(be, "_git_popen", counting)
+    return seen
+
+
+def test_a_miss_is_two_git_spawns_and_a_hit_is_one(repo, monkeypatch, capsys):
+    seen = _count_spawns(monkeypatch)
     code, res, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
     assert code == 0 and res["export"] == "ok"
     assert seen == ["rev-parse", "archive"]
+    seen.clear()
+    code, res, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+    assert code == 0 and res["export"] == "ok" and res["removed"] is True
+    assert seen == ["rev-parse"]
+
+
+def test_link_run_spawns_archive_every_time_in_a_per_pid_root(repo, monkeypatch, capsys, tmp_path):
+    (repo / "node_modules").mkdir()
+    seen = _count_spawns(monkeypatch)
+    out = tmp_path / "cwd.txt"
+    probe = "import os, sys; open(sys.argv[1], 'w').write(os.getcwd())"
+    for _ in range(2):
+        code, res, _ = _run(repo, ["--sha", _base(repo), "--link", "node_modules", *_py(probe, str(out))], monkeypatch, capsys)
+        assert code == 0 and res["removed"] is True
+        assert Path(out.read_text()).parent.name == "scratch" and Path(out.read_text()).name.startswith(be.ROOT_PREFIX)
+    assert seen == ["rev-parse", "archive", "rev-parse", "archive"]
+    assert _exports(repo) == [] and not (repo / "scratch" / "baseline-cache").exists()
+
+
+def test_runner_in_the_cache_entry_gets_write_redirects_and_read_only_files(repo, monkeypatch, capsys, tmp_path):
+    out = tmp_path / "env.json"
+    probe = (
+        "import json, os, sys\n"
+        "try:\n"
+        "    open('a.txt', 'w')\n"
+        "    refused = False\n"
+        "except PermissionError:\n"
+        "    refused = True\n"
+        "json.dump({'bc': os.environ.get('PYTHONDONTWRITEBYTECODE'), 'opts': os.environ.get('PYTEST_ADDOPTS'),"
+        " 'refused': refused}, open(sys.argv[1], 'w'))\n"
+    )
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-q")
+    code, _, _ = _run(repo, ["--sha", _base(repo), *_py(probe, str(out))], monkeypatch, capsys)
+    assert code == 0
+    seen = json.loads(out.read_text())
+    assert seen["bc"] == "1" and seen["opts"] == "-q -p no:cacheprovider" and seen["refused"] is True
+
+
+def test_a_run_that_adds_a_file_deep_in_the_entry_evicts_it(repo, monkeypatch, capsys, tmp_path):
+    sha = _base(repo)
+    seen = _count_spawns(monkeypatch)
+    entry = repo / "scratch" / "baseline-cache" / sha
+    code, _, _ = _run(repo, ["--sha", sha, *_py("open('pkg/new.txt', 'w').write('x')")], monkeypatch, capsys)
+    assert code == 0
+    assert not entry.exists()
+    seen.clear()
+    code, _, _ = _run(repo, ["--sha", sha, *_py("pass")], monkeypatch, capsys)
+    assert code == 0 and seen == ["rev-parse", "archive"] and entry.is_dir()
 
 
 def test_archive_stream_failure_exits_3_without_spawning_runner(repo, monkeypatch, capsys, tmp_path):
@@ -153,8 +206,9 @@ def test_member_rejected_by_data_filter_exits_3(repo, monkeypatch, capsys, tmp_p
 
 
 def test_removal_failure_exits_4_naming_the_path(repo, monkeypatch, capsys):
+    (repo / "node_modules").mkdir()
     monkeypatch.setattr(be, "_remove_tree", lambda root: None)
-    code, res, err = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+    code, res, err = _run(repo, ["--sha", _base(repo), "--link", "node_modules", *_py("pass")], monkeypatch, capsys)
     left = [repo / "scratch" / n for n in _exports(repo)]
     try:
         assert code == be.EXIT_REMOVAL_FAILED
@@ -169,9 +223,10 @@ def test_removal_failure_after_export_failure_is_still_exit_4(repo, monkeypatch,
     def boom(*a, **k):
         raise tarfile.ReadError("stream broke")
 
+    (repo / "node_modules").mkdir()
     monkeypatch.setattr(be.tarfile, "open", boom)
     monkeypatch.setattr(be, "_remove_tree", lambda root: None)
-    code, res, err = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+    code, res, err = _run(repo, ["--sha", _base(repo), "--link", "node_modules", *_py("pass")], monkeypatch, capsys)
     left = [repo / "scratch" / n for n in _exports(repo)]
     try:
         assert code == be.EXIT_REMOVAL_FAILED and res["export"] == "failed" and str(left[0]) in err
@@ -185,7 +240,8 @@ def test_existing_root_is_refused_and_untouched(repo, monkeypatch, capsys):
     root = be.export_root(repo, sha, os.getpid())
     root.mkdir(parents=True)
     (root / "keep.txt").write_text("x")
-    code, res, _ = _run(repo, ["--sha", sha, *_py("pass")], monkeypatch, capsys)
+    (repo / "node_modules").mkdir()
+    code, res, _ = _run(repo, ["--sha", sha, "--link", "node_modules", *_py("pass")], monkeypatch, capsys)
     assert code == be.EXIT_EXPORT_FAILED and res["export"] == "failed"
     assert (root / "keep.txt").read_text() == "x"
 
@@ -251,6 +307,7 @@ def test_no_ref_index_or_head_write(repo, monkeypatch, capsys):
 
 @POSIX_ONLY
 def test_sigterm_runs_the_finally_and_kills_the_group(repo, tmp_path):
+    (repo / "node_modules").mkdir()
     pidfile = tmp_path / "grandchild.pid"
     runner = (
         "import subprocess, sys, time\n"
@@ -260,7 +317,7 @@ def test_sigterm_runs_the_finally_and_kills_the_group(repo, tmp_path):
     )
     env = {**os.environ, "PYTHONPATH": str(ENGINE_ROOT)}
     proc = subprocess.Popen(
-        [sys.executable, "-m", "coordinator_core.testing.baseline_export", "--sha", _base(repo), *_py(runner, str(pidfile))],
+        [sys.executable, "-m", "coordinator_core.testing.baseline_export", "--sha", _base(repo), "--link", "node_modules", *_py(runner, str(pidfile))],
         cwd=repo, env=env, stdout=subprocess.PIPE, text=True, **_NO_CONSOLE,
     )
     try:
@@ -368,7 +425,8 @@ def _hold_all_slots():
     return held
 
 
-def test_no_free_slot_is_refused_without_a_tree_or_git_archive(repo, monkeypatch, capsys, tmp_path):
+def test_a_miss_with_the_slot_held_is_refused_without_a_tree_or_git_archive(repo, monkeypatch, capsys, tmp_path):
+    assert be.EXPORT_SLOT_CAP == 1
     held = _hold_all_slots()
     marker = tmp_path / "ran"
     calls = []
@@ -379,18 +437,35 @@ def test_no_free_slot_is_refused_without_a_tree_or_git_archive(repo, monkeypatch
     assert res["export"] == "refused" and "no free export slot" in res["why"]
     assert res["runner_exit"] is None
     assert not marker.exists() and _exports(repo) == []
-    assert "archive" not in calls and not (repo / "scratch").exists()
+    assert "archive" not in calls
+    assert os.listdir(repo / "scratch" / "baseline-cache") == []
     for s in held:
         be._release_slot(s)
 
 
+def test_a_hit_runs_while_the_slot_is_held(repo, monkeypatch, capsys, tmp_path):
+    code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+    assert code == 0
+    held = _hold_all_slots()
+    try:
+        seen = _count_spawns(monkeypatch)
+        marker = tmp_path / "ran"
+        code, res, _ = _run(repo, ["--sha", _base(repo), *_py("import sys; open(sys.argv[1], 'w')", str(marker))], monkeypatch, capsys)
+        assert code == 0 and res["export"] == "ok" and marker.exists()
+        assert seen == ["rev-parse"]
+    finally:
+        for s in held:
+            be._release_slot(s)
+
+
 def test_slot_is_released_after_a_run_and_after_an_export_failure(repo, monkeypatch, capsys):
-    for _ in range(be.EXPORT_SLOT_CAP + 1):
-        code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
-        assert code == 0
+    code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+    assert code == 0
+    for s in _hold_all_slots():
+        be._release_slot(s)
     monkeypatch.setattr(be.tarfile, "open", lambda *a, **k: (_ for _ in ()).throw(tarfile.TarError("x")))
     for _ in range(be.EXPORT_SLOT_CAP + 1):
-        code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
+        code, _, _ = _run(repo, ["--sha", _git(repo, "rev-parse", "HEAD"), *_py("pass")], monkeypatch, capsys)
         assert code == be.EXIT_EXPORT_FAILED
     held = _hold_all_slots()
     for s in held:

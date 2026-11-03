@@ -1209,7 +1209,24 @@ def _pipeline_scratch_rel(root: Path, scratch_dir: Optional[str], run_id: str) -
     guarded = contained_path(given if given.is_absolute() else Path(root) / given, [Path(root)])
     if guarded is None:
         raise PathEscapeError(f"scratch_dir escapes repo root: {scratch_dir!r} not under {Path(root).as_posix()!r}")
-    return guarded.relative_to(Path(root).resolve()).as_posix()
+    rel = guarded.relative_to(Path(root).resolve()).as_posix()
+    _refuse_research_non_workdir(rel, scratch_dir)
+    return rel
+
+
+def _refuse_research_non_workdir(rel: str, scratch_dir: str) -> None:
+    """A scratch binding under docs/research must be a run dir's ``workdir/`` (or below it)."""
+    from coordinator_core.ops import _research_layout as layout
+
+    parts = [p for p in rel.split("/") if p]
+    if parts[:2] != ["docs", "research"]:
+        return
+    inner = "/".join(parts[2:])
+    if not (layout.classify(inner) == layout.RUN_CHILD and parts[4] == "workdir"):
+        raise PipelineEmitRefused(
+            [f"scratch_dir {scratch_dir!r} is under docs/research but not a run dir's workdir: "
+             "use docs/research/<topic>/<date>-<run-slug>/workdir"]
+        )
 
 
 def _output_landed(root: Path, rel: str) -> bool:

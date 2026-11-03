@@ -6,10 +6,13 @@ Purpose: Native replacement for the relay-protocol repeat-topic restructure fenc
 (coordinator/pipelines/relay-protocol.md:147 — ``mkdir -p docs/research/{topic}``
 then two ``mv``s), invoked when the PM indicates a research topic will be
 revisited: the dated result markdown and the archived paper-trail dir are moved
-into a persistent per-topic structure ``docs/research/{topic_slug}/``:
+into the run-dir layout (``_research_layout``) under ``docs/research/{topic_slug}/``;
+the run slug is the result basename after its date prefix:
 
-    docs/research/{topic_slug}/{YYYY-MM-DD}-result.md
-    docs/research/{topic_slug}/{YYYY-MM-DD}-paper-trail/
+    docs/research/{topic_slug}/{YYYY-MM-DD}-{run_slug}/synthesis.md
+    docs/research/{topic_slug}/{YYYY-MM-DD}-{run_slug}/workdir/
+
+``new_dir`` is the run dir. Both destinations must classify as run-child.
 
 Crash/rerun story (Wave-3 settlement A5, AMENDS — implemented exactly as settled,
 docs/plans/2026-07-22-wave-3-design-settlements-15-design-bear.md § A5): the two
@@ -83,6 +86,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.ipc import register_op
+from coordinator_core.ops import _research_layout as _layout
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.session.core import resolve_session_id
@@ -163,8 +167,20 @@ def _restructure_sync(
             f"date prefix: {str(trail_src)!r} (caller premise failed; CC-7)"
         )
 
-    result_dest = topic_dir / f"{result_date}-result.md"
-    trail_dest = topic_dir / f"{trail_date}-paper-trail"
+    run_slug = result_src.stem[len(result_date) + 1:] or topic_dir.name
+    run_name = f"{result_date}-{run_slug}"
+    if not _layout.RUN_RE.match(run_name):
+        return _err(
+            f"dated_result_path yields an invalid run name {run_name!r} "
+            "(want YYYY-MM-DD-<lowercase-slug>; caller premise failed; CC-7)"
+        )
+    run_dir = topic_dir / run_name
+    result_dest = run_dir / "synthesis.md"
+    trail_dest = run_dir / "workdir"
+    for dest in (result_dest, trail_dest):
+        rel = dest.relative_to(research_dir).as_posix()
+        if _layout.classify(rel) != _layout.RUN_CHILD:
+            return _err(f"destination is not a run-dir child: {rel!r}")
 
     steps = [
         (_STEP_DATED_RESULT, result_src, result_dest),
@@ -195,7 +211,7 @@ def _restructure_sync(
     cwd = str(worktree)
     steps_applied: List[str] = []
     if any(state == "pending" for state in states.values()):
-        topic_dir.mkdir(parents=True, exist_ok=True)
+        run_dir.mkdir(parents=True, exist_ok=True)
         for step_name, src, dest in steps:
             if states[step_name] != "pending":
                 continue
@@ -210,7 +226,7 @@ def _restructure_sync(
     return {
         "exit_code": 0,
         "restructured": bool(steps_applied),
-        "new_dir": str(topic_dir),
+        "new_dir": str(run_dir),
         "steps_applied": steps_applied,
     }
 

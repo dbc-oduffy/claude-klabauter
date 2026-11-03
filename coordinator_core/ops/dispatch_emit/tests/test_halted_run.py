@@ -317,6 +317,56 @@ def test_index_follows_mark_landed(tmp_path):
     assert _indexed(tmp_path) == {}
 
 
+def _live_row_present(root, run_id):
+    from coordinator_core.ops.dispatch_emit import live_run_index as lri
+
+    path = lri.index_path(root)
+    return path is not None and run_id in lri._load(root, path)
+
+
+@pytest.fixture
+def _live_root(tmp_path, monkeypatch):
+    from coordinator_core import _settings_home
+
+    monkeypatch.setattr(_settings_home, "machine_local_dir", lambda: tmp_path / "ml-home")
+    (tmp_path / ".git").mkdir()
+    return tmp_path
+
+
+@pytest.mark.parametrize("how", ["resumed", "superseded", "landed", "closed"])
+def test_marker_leaving_halted_drops_the_live_run_row(_live_root, how):
+    tmp_path = _live_root
+    from coordinator_core.ops.dispatch_emit import live_run_index as lri
+
+    d = _dir(tmp_path, "20261016T010000-eeeeee")
+    peer = _dir(tmp_path, "20261016T020000-ffffff")
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    assert lri.stage(tmp_path, d.name, ["a.py"], 1.0) and lri.stage(tmp_path, peer.name, ["b.py"], 1.0)
+    assert _live_row_present(tmp_path, d.name)
+    if how == "resumed":
+        assert hr.mark_resumed(d)
+    elif how == "superseded":
+        assert hr.mark_superseded(d, hr._read(d), {"e": 1})
+    elif how == "landed":
+        assert hr.mark_landed(d, "a" * 40)
+    else:
+        assert hr.mark_closed(d, "gone", "2026-11-03T00:00:00Z")
+    assert not _live_row_present(tmp_path, d.name)
+    assert _live_row_present(tmp_path, peer.name)
+
+
+def test_a_refused_transition_keeps_the_live_run_row(_live_root):
+    tmp_path = _live_root
+    from coordinator_core.ops.dispatch_emit import live_run_index as lri
+
+    d = _dir(tmp_path, "20261016T010000-aabbcc")
+    hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    lri.stage(tmp_path, d.name, ["a.py"], 1.0)
+    assert hr.mark_superseded(d, {"status": "halted", "other": 1}, {"e": 1}) is False
+    assert hr.mark_closed(d, "", "t") is False
+    assert _live_row_present(tmp_path, d.name)
+
+
 def test_nothing_withheld_or_not_halted_leaves_index_untouched(tmp_path):
     d = _dir(tmp_path, "20261016T010000-cccccc")
     assert hr.record_withheld(d, {"a.py": "r"}) is False

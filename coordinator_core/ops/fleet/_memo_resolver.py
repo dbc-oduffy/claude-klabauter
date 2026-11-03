@@ -145,9 +145,8 @@ Functions:
         same conditions `resolve_receiver_inbox` does (shared fan-in logic).
   - `resolve_receiver_inbox(receiver_em_id: str) -> tuple[Optional[Path], Optional[Path], dict[str, str]]`
         A Group EM id (`group_em.gem_home.RECEIVER_IDS`) or a path inside the G-EM home
-        reroutes to the central receiver's inbox, else `<claude-config-dir>/state/cross-repo/inbox`
-        (A-GROUP-EM-SENDS-MEMOS-AND-NEVER-RECEIVES-THEM). `resolve_self_em_id` signs the home
-        as `gem_home.SENDER_ID`.
+        resolves to the home's own inbox, `<home>/state/cross-repo/inbox`. `resolve_self_em_id`
+        signs the home as `gem_home.SENDER_ID`.
         Resolve a receiver EM identity to `(inbox_dir, receiver_repo_path,
         all_repos)`:
           - `inbox_dir`: `<receiver_repo_path>/cross-repo/inbox` when resolved,
@@ -186,14 +185,12 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from coordinator_core._settings_home import (
-    claude_config_dir,
     machine_local_dir,
     normalize_native_path,
 )
 from coordinator_core.data_root import content_root_for
 from coordinator_core.content_root import read_content_root
 from coordinator_core.group_em import gem_home
-from coordinator_core.session import record_homes
 from coordinator_core.machine_resolver import (
     canonical_repo_key_for_root,
     external_workspace_containing,
@@ -772,16 +769,7 @@ def canonical_receiver_id(receiver_em_id: str) -> str:
 def reroute_owner(receiver_em_id: str) -> Optional[str]:
     normalized = receiver_em_id.strip().lower()
     if gem_home.is_group_em_receiver(normalized):
-        central_ids = read_central_receiver_ids()
-        if not central_ids:
-            return None
-        try:
-            matched_keys = _central_fan_in_matches(central_ids, read_registry_repos())
-            if len(matched_keys) != 1:
-                return None
-            return canonical_receiver_id(sorted(central_ids)[0])
-        except RegistryReadError:
-            return None
+        return None
     if normalized in read_redirect_aliases():
         try:
             central = canonical_receiver_id(normalized)
@@ -835,24 +823,15 @@ def _refuse_external_workspace(receiver: str, repo_root: str) -> None:
 
 
 def _group_em_target() -> Tuple[Optional[Path], Optional[Path], dict[str, str]]:
-    """The inbox that receives for the G-EM: the central receiver's when the manifest's
-    central fan-in resolves to a registered repo, else `<claude-config-dir>/state/cross-repo/inbox`.
-    The fallback root is never required to be a checkout here; the delivery gates refuse it."""
+    """The G-EM's own inbox: `<home>/state/cross-repo/inbox`, with the home as the receiver
+    root. The home is never a `repos.*` entry. A home refused as inside a checkout resolves
+    to no receiver (the UNKNOWN shape)."""
     all_repos = read_registry_repos()
-    central_ids = read_central_receiver_ids()
-    if central_ids:
-        matched_keys = _central_fan_in_matches(central_ids, all_repos)
-        if len(matched_keys) > 1:
-            raise AmbiguousReceiverError("group-em-em", matched_keys.keys())
-        if matched_keys:
-            inbox, root, repos = resolve_receiver_inbox(sorted(central_ids)[0])
-            if inbox is not None:
-                return inbox, root, repos
-    config_dir = claude_config_dir()
-    corpus_root = Path(receiver_inbox_root(str(config_dir))[0])
-    if not (config_dir / "cross-repo").is_dir():
-        corpus_root = Path(record_homes.home_dir(str(config_dir), "cross-repo"))
-    return corpus_root / "inbox", config_dir, all_repos
+    try:
+        home = gem_home.resolve_home()
+    except gem_home.HomeRefused:
+        return None, None, all_repos
+    return gem_home.home_inbox_dirs(home)[0], home, all_repos
 
 
 def resolve_receiver_inbox(
@@ -860,9 +839,8 @@ def resolve_receiver_inbox(
 ) -> Tuple[Optional[Path], Optional[Path], dict[str, str]]:
     """Resolve receiver EM identity → (inbox_dir, receiver_repo_path, all_repos_registry).
 
-    The Group EM never receives: a G-EM id (`group-em-em`) or a
-    receiver path inside the G-EM home resolves to the central receiver's inbox, else to the
-    claude-config-dir inbox (`_group_em_target`).
+    A G-EM id (`group-em-em`) or a receiver path inside the G-EM home resolves to the home's
+    own inbox, `<home>/state/cross-repo/inbox` (`_group_em_target`).
 
     A publish mirror or a redirect alias is never a receiver. A memo addressed
     to one routes to its owner (`reroute_owner`): `claude-klabauter-em` resolves

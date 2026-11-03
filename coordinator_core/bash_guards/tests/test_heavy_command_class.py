@@ -153,11 +153,42 @@ def test_single_or_no_worker_scoped_run_stays_scoped(cmd):
         "pytest -- a.py b.py",
     ],
 )
-def test_plain_multi_target_pytest_is_heavy(cmd):
+def test_plain_few_file_pytest_is_scoped_and_marked_bare(cmd):
     c = classify(cmd, CWD)
-    assert c.heavy_class is H.TEST_TIER
-    assert c.scoped is False
-    assert c.bounded_verify is False
+    assert c.heavy_class is None
+    assert c.scoped is True
+    assert c.bare_pytest is True
+
+
+@pytest.mark.parametrize(
+    "cmd,expected",
+    [
+        ("python -I -c 'print(1)'", True),
+        ("python3 -I -c 'import json'", True),
+        ("python scripts/parse.py in.pdf", True),
+        ("python -", True),
+        ("cat x | python -", True),
+        ("pytest a/test_a.py", True),
+        ("cd /x && python -m pytest -q a.py 2>&1 | tail -5", True),
+        ("python -m pytest", True),
+        ("pwsh -Command \"python -m pytest a.py\"", True),
+        ("python x.py && tsc --noEmit", False),
+        ("python x.py; pnpm build", False),
+        ("git status", False),
+        ("echo python", False),
+        ("", False),
+    ],
+)
+def test_runs_python_only(cmd, expected):
+    from coordinator_core.bash_guards._heavy_command_class import runs_python_only
+
+    assert runs_python_only(cmd, None, ".") is expected
+
+
+def test_an_inline_probe_is_light_for_every_caller():
+    for cmd in ("python -", "python3 -c 'print(1)'", "python <<'EOF'\nprint(1)\nEOF"):
+        c = classify(cmd, CWD)
+        assert c.heavy_class is None and c.scoped is False
 
 
 @pytest.mark.parametrize(

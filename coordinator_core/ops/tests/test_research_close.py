@@ -62,14 +62,22 @@ def _trail_files(repo: Path) -> set[str]:
     return set(_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
 
 
+def _run(slug: str = "topic", topic: str | None = None) -> str:
+    return f"docs/research/{topic or slug}/{datetime.date.today().isoformat()}-{slug}"
+
+
+_TRAIL = f"{_run()}/trail.yaml"
+
+
 def test_scouts_commits_the_digest_and_trail_record(repo, scratch):
     before = _count(repo)
     out = _close(repo, scratch, "scouts")
     assert out["exit_code"] == 0 and out["committed"] is True, out
     assert (scratch / "digest.md").read_text() == "alpha\n\nbeta\n"
     assert _count(repo) == before + 1
-    digest = f"docs/research/{datetime.date.today().isoformat()}-topic/digest.md"
-    assert _trail_files(repo) == {digest, "docs/research/trail/r1.yaml"}
+    digest = f"{_run()}/synthesis.md"
+    assert _trail_files(repo) == {digest, _TRAIL}
+    assert out["run_dir"] == _run() and out["workdir"] == f"{_run()}/workdir"
     assert _git(repo, "show", f"HEAD:{digest}") == "alpha\n\nbeta"
     assert _git(repo, "status", "--porcelain") == ""
 
@@ -126,8 +134,8 @@ def test_trail_record_is_in_the_commit_with_repo_relative_paths(repo, scratch, t
     _write_sizing(repo)
     out = _close(repo, scratch, tier, sizing="state/sizings/x.yaml")
     assert out["exit_code"] == 0, out
-    assert "docs/research/trail/r1.yaml" in _trail_files(repo)
-    text = _git(repo, "show", "HEAD:docs/research/trail/r1.yaml")
+    assert _TRAIL in _trail_files(repo)
+    text = _git(repo, "show", f"HEAD:{_TRAIL}")
     assert f"value_class: \"{tier}\"" in text and f"tier: \"{tier}\"" in text
     assert 'destination: "repo"' in text and 'sizing: "state/sizings/x.yaml"' in text
     assert "\\" not in text and ":/" not in text and "paths:\n  - \"docs/research/" in text
@@ -138,7 +146,7 @@ def test_value_class_param_is_named_in_the_record_and_validated(repo, scratch):
     assert not (repo / "docs").exists()
     out = _close(repo, scratch, "corpus", value_class="scouts", outputs=["final.md"])
     assert out["exit_code"] == 0
-    assert 'value_class: "scouts"' in _git(repo, "show", "HEAD:docs/research/trail/r1.yaml")
+    assert 'value_class: "scouts"' in _git(repo, "show", f"HEAD:{_TRAIL}")
 
 
 def test_an_absolute_sizing_is_refused_with_no_commit(repo, scratch):
@@ -152,10 +160,12 @@ def test_a_differing_existing_trail_record_is_refused(repo, scratch):
     trail = repo / "docs" / "research" / "trail" / "r1.yaml"
     trail.parent.mkdir(parents=True)
     trail.write_text("run_id: \"other\"\n", encoding="utf-8")
+    _git(repo, "add", "docs")
+    _git(repo, "commit", "-q", "-m", "legacy trail")
     out = _close(repo, scratch, "corpus", outputs=["final.md"])
     assert out["exit_code"] == 1 and "trail record exists with different content" in out["error"]
     assert trail.read_text(encoding="utf-8") == "run_id: \"other\"\n"
-    assert not any((repo / "docs" / "research").glob("20*"))
+    assert not (repo / "docs" / "research" / "topic").exists()
 
 
 def test_a_later_day_reclose_is_refused_as_differing(repo, scratch, monkeypatch):
@@ -182,7 +192,7 @@ def test_one_commit_whose_delta_is_the_copied_paths(repo, scratch, tier):
     assert _count(repo) == before + 1
     assert _git(repo, "rev-parse", "HEAD") == out["sha"]
     changed = set(_git(repo, "diff-tree", "--no-commit-id", "--name-only", "-r", "HEAD").splitlines())
-    assert changed == set(out["paths"]) | {"docs/research/trail/r1.yaml"}
+    assert changed == set(out["paths"]) | {_TRAIL}
     assert len(changed) == 3 and all(p.startswith("docs/research/") for p in changed)
     assert _git(repo, "log", "-1", "--format=%s").startswith("research(topic): close r1")
 
@@ -196,7 +206,7 @@ def test_second_close_is_noop_returning_same_sha(repo, scratch):
 
 
 def test_uncommitted_destination_is_committed_not_reported_landed(repo, scratch):
-    dest = repo / "docs" / "research" / f"{datetime.date.today().isoformat()}-topic"
+    dest = repo / _run() / "outputs"
     dest.mkdir(parents=True)
     shutil.copyfile(scratch / "final.md", dest / "final.md")
     before = _count(repo)
@@ -254,13 +264,24 @@ def test_a_recorded_key_name_is_not_a_secret(repo, scratch):
     assert _close(repo, scratch, "corpus", outputs=["final.md"])["exit_code"] == 0
 
 
-def test_an_untracked_research_file_written_during_the_run_is_reported(repo, scratch):
+def test_an_untracked_research_file_written_during_the_run_refuses_the_close_with_no_write(repo, scratch):
     stray = repo / "docs" / "research" / "2026-10-09-elsewhere.md"
     stray.parent.mkdir(parents=True)
     stray.write_text("duplicate\n", encoding="utf-8")
+    head = _git(repo, "rev-parse", "HEAD")
     out = _close(repo, scratch, "corpus", outputs=["final.md"])
-    assert out["exit_code"] == 0
+    assert out["exit_code"] == 1 and out["committed"] is False and out["deliverable"] is False, out
     assert out["strays"] == ["docs/research/2026-10-09-elsewhere.md"]
+    assert _git(repo, "rev-parse", "HEAD") == head
+    assert sorted(p.name for p in (repo / "docs" / "research").iterdir()) == ["2026-10-09-elsewhere.md"]
+
+
+def test_a_file_inside_the_run_dir_is_not_a_stray(repo, scratch):
+    kept = repo / _run() / "workdir" / "notes.md"
+    kept.parent.mkdir(parents=True)
+    kept.write_text("scratch\n", encoding="utf-8")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert out["exit_code"] == 0 and "strays" not in out, out
 
 
 def test_strays_then_the_printed_remedy_then_reclose_records_every_output(repo, scratch):
@@ -270,18 +291,18 @@ def test_strays_then_the_printed_remedy_then_reclose_records_every_output(repo, 
     for n in names:
         (research / n).write_text(f"{n} body\n", encoding="utf-8")
     first = _close(repo, scratch, "corpus", outputs=["final.md"])
-    assert first["exit_code"] == 0 and sorted(first["strays"]) == sorted(f"docs/research/{n}" for n in names)
-    assert "move each into the run's scratch dir and re-close" in first["warning"]
+    assert first["exit_code"] == 1 and sorted(first["strays"]) == sorted(f"docs/research/{n}" for n in names)
+    assert "move each into the run's scratch dir and re-close" in first["error"]
 
     for n in names:
         shutil.move(str(research / n), str(scratch / n))
     again = _close(repo, scratch, "corpus", outputs=["final.md", *names])
     assert again["exit_code"] == 0 and again["committed"] is True, again
     assert "strays" not in again
-    dest = f"docs/research/{datetime.date.today().isoformat()}-topic"
+    dest = f"{_run()}/outputs"
     expected = [f"{dest}/final.md", *(f"{dest}/{n}" for n in names)]
     assert sorted(again["paths"]) == sorted(expected)
-    trail = (research / "trail" / "r1.yaml").read_text(encoding="utf-8")
+    trail = (repo / _TRAIL).read_text(encoding="utf-8")
     assert "output_count: 3" in trail and all(p in trail for p in expected)
     assert _git(repo, "status", "--porcelain") == ""
     assert _close(repo, scratch, "corpus", outputs=["final.md", *names])["sha"] == again["sha"]
@@ -308,9 +329,60 @@ def test_every_segment_dir_is_archived_at_its_relative_path(repo, scratch):
     (scratch / "mail" / "_em.jsonl").write_text("{}\n")
     out = _close(repo, scratch, "corpus", segment_dirs=["web"])
     assert out["exit_code"] == 0, out
-    names = {p.split("/", 3)[-1] for p in out["paths"]}
-    assert {"final.md", "web/synthesis.md"} <= names
-    assert not any(n.startswith("mail/") for n in names)
+    names = {p.removeprefix(_run() + "/") for p in out["paths"]}
+    assert {"outputs/final.md", "outputs/web/synthesis.md"} <= names
+    assert not any(n.startswith("outputs/mail/") for n in names)
+
+
+def test_default_close_writes_only_classifying_run_children(repo, scratch):
+    from coordinator_core.ops import _research_layout as layout
+
+    (scratch / "synthesis.md").write_text("syn\n")
+    (scratch / "verdict.md").write_text("ver\n")
+    out = _close(repo, scratch, "corpus", outputs=["final.md", "synthesis.md", "verdict.md"])
+    assert out["exit_code"] == 0, out
+    written = _trail_files(repo)
+    assert written == {f"{_run()}/{c}" for c in ("outputs/final.md", "synthesis.md", "verdict.md", "trail.yaml")}
+    assert all(layout.classify(p.removeprefix("docs/research/")) == layout.RUN_CHILD for p in written)
+    assert not (repo / "docs" / "research" / "trail").exists()
+
+
+def test_topic_param_names_the_topic_dir_and_a_bad_topic_is_refused(repo, scratch):
+    assert _close(repo, scratch, "corpus", outputs=["final.md"], topic="Bad Topic")["exit_code"] == 1
+    assert _close(repo, scratch, "corpus", outputs=["final.md"], topic="trail")["exit_code"] == 1
+    assert not (repo / "docs").exists()
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], topic="game-ai")
+    assert out["exit_code"] == 0 and out["run_dir"] == _run("topic", "game-ai"), out
+
+
+def test_a_known_suffix_slug_folds_to_its_base_topic_and_an_odd_slug_files_under_misc(repo, scratch):
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], topic_slug="head-nlm-advisory")
+    assert out["run_dir"] == _run("head-nlm-advisory", "head-nlm")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], run_id="r2", topic_slug="2026-10-01-x")
+    assert out["exit_code"] == 0 and out["run_dir"] == _run("2026-10-01-x", "misc"), out
+
+
+def test_a_slug_with_uppercase_or_underscore_is_normalized_into_the_run_name(repo, scratch):
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], topic_slug="My_Topic")
+    assert out["exit_code"] == 0 and out["run_dir"] == _run("my-topic"), out
+
+
+def test_synthesis_and_digest_outputs_colliding_on_one_child_are_refused(repo, scratch):
+    (scratch / "synthesis.md").write_text("syn\n")
+    (scratch / "digest.md").write_text("dig\n")
+    out = _close(repo, scratch, "corpus", outputs=["synthesis.md", "digest.md"])
+    assert out["exit_code"] == 1 and "same run-dir child" in out["error"]
+    assert not (repo / "docs").exists()
+
+
+def test_a_legacy_flat_trail_for_the_run_refuses_a_new_layout_close(repo, scratch):
+    legacy = repo / "docs" / "research" / "trail" / "r1.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('run_id: "r1"\n', encoding="utf-8")
+    _git(repo, "add", "docs")
+    _git(repo, "commit", "-q", "-m", "legacy trail")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert out["exit_code"] == 1 and "docs/research/trail/r1.yaml" in out["error"]
 
 
 def test_a_missing_or_unsafe_segment_dir_is_refused(repo, scratch):
@@ -325,11 +397,12 @@ def test_local_only_archives_outside_the_repo_and_commits_only_the_trail_record(
     out = _close(repo, scratch, "corpus", local_root=local.as_posix())
     assert out["exit_code"] == 0 and out["committed"] is True and out["local_only"] is True, out
     dest = Path(out["destination"])
-    assert dest.parent == local.resolve() and (dest / "final.md").read_text() == "final body\n"
+    assert dest.parent.parent == local.resolve() and dest.parent.name == "topic"
+    assert (dest / "outputs" / "final.md").read_text() == "final body\n"
     assert out["claims_out"] == (dest / "topic").as_posix()
     assert _count(repo) == before + 1 and _git(repo, "status", "--porcelain") == ""
-    assert _trail_files(repo) == {"docs/research/trail/r1.yaml"}
-    text = _git(repo, "show", "HEAD:docs/research/trail/r1.yaml")
+    assert _trail_files(repo) == {_TRAIL}
+    text = _git(repo, "show", f"HEAD:{_TRAIL}")
     assert 'destination: "local-only"' in text and "paths" not in text
     assert "output_count: 3" in text
     assert str(local) not in text and local.as_posix() not in text and "final body" not in text
@@ -398,9 +471,9 @@ def test_halted_segment_is_excused_and_named_in_the_reply(repo, scratch):
     )
     assert out["exit_code"] == 0 and out["committed"] is True and out["deliverable"] is True, out
     assert out["halted_segments"] == ["nlm-preflight", "notebooklm"]
-    names = {p.split("/", 3)[-1] for p in out["paths"]}
-    assert {"web/synthesis.md", "repo/synthesis.md"} <= names
-    assert not any(n.startswith("notebooklm/") for n in names)
+    names = {p.removeprefix(_run() + "/") for p in out["paths"]}
+    assert {"outputs/web/synthesis.md", "outputs/repo/synthesis.md"} <= names
+    assert not any(n.startswith("outputs/notebooklm/") for n in names)
 
 
 def test_same_run_without_halted_segments_is_refused(repo, scratch):
@@ -485,8 +558,8 @@ def test_absolute_scratch_and_worktree_paths_are_committed_repo_relative(repo, s
     outside = _absolute_output(repo, scratch)
     out = _close(repo, scratch, "corpus")
     assert out["exit_code"] == 0, out
-    dest = f"docs/research/{datetime.date.today().isoformat()}-topic"
-    body = _git(repo, "show", f"HEAD:{dest}/final.md")
+    dest = _run()
+    body = _git(repo, "show", f"HEAD:{dest}/outputs/final.md")
     assert body == f"see {dest}/x.md and docs/y.md and {outside}"
     assert str(repo) not in body and str(scratch) not in body
 
@@ -505,7 +578,7 @@ def test_non_utf8_output_is_archived_byte_identical(repo, scratch):
     (scratch / "final.md").write_bytes(raw)
     out = _close(repo, scratch, "corpus")
     assert out["exit_code"] == 0, out
-    dest = repo / f"docs/research/{datetime.date.today().isoformat()}-topic/final.md"
+    dest = repo / _run() / "outputs" / "final.md"
     assert dest.read_bytes() == raw
 
 
@@ -515,11 +588,11 @@ def test_local_only_keeps_absolute_paths_byte_identical(repo, scratch, tmp_path)
     local.mkdir()
     out = _close(repo, scratch, "corpus", local_root=local.as_posix())
     assert out["exit_code"] == 0, out
-    assert (Path(out["destination"]) / "final.md").read_bytes() == (scratch / "final.md").read_bytes()
+    assert (Path(out["destination"]) / "outputs" / "final.md").read_bytes() == (scratch / "final.md").read_bytes()
 
 
 def _digest_path() -> str:
-    return f"docs/research/{datetime.date.today().isoformat()}-topic/digest.md"
+    return f"{_run()}/synthesis.md"
 
 
 _GOOD = (
@@ -576,7 +649,7 @@ def test_all_grounded_report_with_a_real_ruling_commits_digest_and_trail(repo, s
     _report(scratch, _GOOD)
     out = _close(repo, scratch, "scouts")
     assert out["exit_code"] == 0 and out["deliverable"] is True, out
-    assert _trail_files(repo) == {_digest_path(), "docs/research/trail/r1.yaml"}
+    assert _trail_files(repo) == {_digest_path(), _TRAIL}
 
 
 def test_ungrounded_report_fixed_then_reclosed_commits(repo, scratch):
@@ -645,7 +718,7 @@ def test_grounding_report_is_the_last_section_of_the_committed_digest(repo, scra
     assert _git(repo, "show", f"HEAD:{_digest_path()}") == (
         "alpha\n\nbeta\n\n## Grounding\n\n" + _GOOD.rstrip("\n")
     )
-    assert _trail_files(repo) == {_digest_path(), "docs/research/trail/r1.yaml"}
+    assert _trail_files(repo) == {_digest_path(), _TRAIL}
 
 
 @pytest.mark.parametrize("body", [None, "", "  \n\t\n"])
@@ -677,7 +750,7 @@ def test_grounding_run_never_commits_probe_or_grounding_files(repo, scratch):
     (scratch / "probe-1.md").write_text("probe body\n", encoding="utf-8")
     out = _close(repo, scratch, "scouts")
     assert out["exit_code"] == 0, out
-    assert _trail_files(repo) == {_digest_path(), "docs/research/trail/r1.yaml"}
+    assert _trail_files(repo) == {_digest_path(), _TRAIL}
 
 
 @pytest.mark.parametrize("bad", ["true", 1, None, []])

@@ -128,14 +128,79 @@ def test_missing_repo_is_skipped(tmp_path):
     assert live_runs.find_live_runs({"repos.x": str(tmp_path / "nope")}, now=NOW) == []
 
 
-def test_format_handover_is_one_line_per_run_and_carries_no_override_key():
-    lines = live_runs.format_handover(
-        [live_runs.LiveRun("r1", "a", "staged", "t1"), live_runs.LiveRun("r2", "b", "x", "t2")]
+def test_format_refusal_names_every_run_id_and_repo_and_carries_no_override_key():
+    text = live_runs.format_refusal(
+        [live_runs.LiveRun("r1", "a", "staged", "t1"), live_runs.LiveRun("r2", "b", "x", "t2")], 7.0
     )
-    assert len(lines) == 2
-    assert "r1 a stage=staged" in lines[0] and "r2 b stage=x" in lines[1]
-    assert all("--allow" not in line for line in lines)
-    assert live_runs.format_handover([]) == []
+    assert "r1 a stage=staged" in text and "r2 b stage=x" in text
+    assert "2 run(s)" in text and "holding 7s" in text
+    assert "--allow" not in text
+
+
+def test_token_free_find_lists_a_staged_run_between_ops(tmp_path):
+    repo = tmp_path / "r1"
+    _run(repo, "between-ops", "staged", 2, token=None)
+
+    assert live_runs.find_live_runs({"repos.r1": str(repo)}, now=NOW) == []
+    got = live_runs.find_live_runs({"repos.r1": str(repo)}, now=NOW, require_token=False)
+    assert got == [live_runs.LiveRun("r1", "between-ops", "staged", _ts(2))]
+
+
+def _fresh_staged_run(root, run_id):
+    """A real run-stage.json stamped now, no token, owner live."""
+    d = root / "state" / "warp" / run_id
+    d.mkdir(parents=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (d / "run-stage.json").write_text(
+        json.dumps({"stage": "staged", "last_activity_at": stamp, "session_id": "sess1"}), encoding="utf-8"
+    )
+    return d / "run-stage.json"
+
+
+def test_hold_refuses_for_a_foreign_repo_staged_run_after_the_bound(tmp_path, monkeypatch):
+    foreign = tmp_path / "foreign"
+    _fresh_staged_run(foreign, "run-foreign")
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.foreign": str(foreign)})
+    clock = [0.0]
+    sleeps: list[float] = []
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        clock[0] += s
+
+    runs, held = live_runs.hold_for_mid_stage_runs(
+        bound_s=5.0, poll_s=2.0, sleep=fake_sleep, monotonic=lambda: clock[0]
+    )
+
+    assert [(r.repo, r.run_id, r.stage) for r in runs] == [("foreign", "run-foreign", "staged")]
+    assert held >= 5.0 and sleeps == [2.0, 2.0, 1.0]
+    assert "foreign run-foreign" in live_runs.format_refusal(runs, held)
+
+
+def test_hold_returns_clear_once_the_run_reaches_a_terminal_stage(tmp_path, monkeypatch):
+    foreign = tmp_path / "foreign"
+    rec = _fresh_staged_run(foreign, "run-foreign")
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.foreign": str(foreign)})
+    clock = [0.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+        rec.write_text(json.dumps({"stage": "complete", "session_id": "sess1"}), encoding="utf-8")
+
+    runs, held = live_runs.hold_for_mid_stage_runs(
+        bound_s=60.0, poll_s=2.0, sleep=fake_sleep, monotonic=lambda: clock[0]
+    )
+
+    assert runs == [] and held == 2.0
+
+
+def test_hold_with_no_mid_stage_run_returns_without_sleeping(tmp_path, monkeypatch):
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.empty": str(tmp_path / "empty")})
+
+    def no_sleep(_s):
+        raise AssertionError("slept with nothing to wait for")
+
+    assert live_runs.hold_for_mid_stage_runs(bound_s=5.0, sleep=no_sleep)[0] == []
 
 
 def test_window_boundary_is_inclusive(tmp_path):

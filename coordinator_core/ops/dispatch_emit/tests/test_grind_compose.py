@@ -3065,3 +3065,12 @@ def test_emitted_script_carries_the_split_branch_before_routing():
     call = script[script.index("async function _splitCall") : script.index("async function _splitRow")]
     assert "grind-row split --profile" in call and "--items-file" in call and "label: 'split'" in call
     assert "split: 0" in script
+
+
+def test_sizing_path_carries_the_month_shard_in_python_and_js_twin():
+    assert gc._sizing_path("20260101T000000Z", {"name": "Scout Name"}, "r0") == (
+        "state/sizings/2026-01/2026-01-01-scout-name-r0.yaml"
+    )
+    assert (
+        "'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '/' + d.slice(0, 4)" in gc._SIZE_PATH_JS
+    )

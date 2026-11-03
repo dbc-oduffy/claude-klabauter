@@ -235,6 +235,39 @@ def test_dispatch_timeout_reply_is_not_an_acknowledgement(monkeypatch):
     assert pair_stop._ask_server_to_stop("p") is True
 
 
+def test_wedged_envelope_is_signalled_without_waiting_the_confirm_grace(tmp_path, monkeypatch):
+    root = tmp_path / "mirror"
+    w = _World()
+    srv = w.add(40, "python.exe", [sys.executable, _script(root, SRV)])
+    monkeypatch.setattr(
+        breadcrumb, "read_breadcrumb", lambda r=None: {"pid": 40, "pipe": "p", "stable_pid_start_epoch": 1}
+    )
+    monkeypatch.setattr(pair_stop, "stable_pid_alive", lambda pid, stored_start_epoch="": srv.alive)
+    monkeypatch.setattr(pair_stop, "_confirm_grace_secs", lambda: 30.0)
+    wedged = b'{"jsonrpc": "2.0", "id": 1, "error": {"code": -32004, "message": "t"}}\n'
+    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(wedged))
+
+    started = pair_stop.time.monotonic()
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert pair_stop.time.monotonic() - started < 5.0
+    assert ("terminate", 40) in w.log and result.ok()
+
+
+def test_wedged_envelope_with_stubborn_server_is_killed_and_reported(tmp_path, monkeypatch):
+    root = tmp_path / "mirror"
+    w = _World()
+    srv = w.add(40, "python.exe", [sys.executable, _script(root, SRV)], stubborn=True)
+    monkeypatch.setattr(
+        breadcrumb, "read_breadcrumb", lambda r=None: {"pid": 40, "pipe": "p", "stable_pid_start_epoch": 1}
+    )
+    monkeypatch.setattr(pair_stop, "stable_pid_alive", lambda pid, stored_start_epoch="": srv.alive)
+    monkeypatch.setattr(pair_stop, "_confirm_grace_secs", lambda: 30.0)
+    wedged = b'{"jsonrpc": "2.0", "id": 1, "error": {"code": -32004, "message": "t"}}\n'
+    monkeypatch.setattr(pair_stop, "_open_pipe", lambda pipe: _Pipe(wedged))
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert ("kill", 40) in w.log and not result.ok()
+
+
 def _spawn_argv(parent):
     return [
         sys.executable, "-c",

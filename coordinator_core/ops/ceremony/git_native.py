@@ -125,6 +125,7 @@ from coordinator_core.git.git_state import (
     read_index_stat_identity,
     read_tree_spine,
 )
+from coordinator_core import dispatch_abandon
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.git.run import REMOTE_BUDGET_SECS
@@ -517,12 +518,18 @@ def _git(
     run_kwargs: Dict[str, Any] = {}
     if capture:
         run_kwargs["capture_output"] = True
+    effective_timeout = timeout
+
     def _invoke() -> "subprocess.CompletedProcess[str]":
+        # The child never outlives the caller's request deadline; unbound (CLI, tests) is unchanged.
+        nonlocal effective_timeout
+        left = dispatch_abandon.remaining()
+        effective_timeout = timeout if left is None else min(timeout, left)
         return subprocess.run(
             full_args,
             cwd=str(cwd),
             text=True,
-            timeout=timeout,
+            timeout=effective_timeout,
             **no_console_creationflags(),
             env=env,
             **run_kwargs,
@@ -554,7 +561,7 @@ def _git(
         return GitResult(
             returncode=-1,
             stdout="",
-            stderr=f"git {' '.join(args)}: timed out after {timeout}s ({exc})"[:500],
+            stderr=f"git {' '.join(args)}: timed out after {effective_timeout}s ({exc})"[:500],
         )
     except OSError as exc:
         return GitResult(

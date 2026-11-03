@@ -86,9 +86,36 @@ def test_writer_exception_inside_deadline_reraises(tmp_path):
 def test_a_record_line_waits_out_a_stall_and_lands(tmp_path, blocked_write):
     sink = tmp_path / "notes.jsonl"
     atomic_append.append_line(sink, b"a\n", droppable=True)
-    threading.Timer(atomic_append.APPEND_DEADLINE_SECS * 2, blocked_write.set).start()
-    atomic_append.append_line(sink, b"b\n")
+    assert atomic_append.append_line(sink, b"b\n") is False
+    blocked_write.set()
+    deadline = time.monotonic() + 3
+    while atomic_append.in_flight_sinks() and time.monotonic() < deadline:
+        time.sleep(0.01)
     assert sink.read_bytes() == b"a\nb\n"
+
+
+@pytest.mark.deliberate_wall_clock(reason="a record append to a wedged sink returns False at the default bound and the line still lands")
+def test_record_append_default_wait_is_bounded_and_line_survives(tmp_path, blocked_write):
+    sink = tmp_path / "notes.jsonl"
+    t0 = time.perf_counter()
+    assert atomic_append.append_line(sink, b"a\n") is False
+    assert time.perf_counter() - t0 < atomic_append.RECORD_WAIT_SECS + 0.5
+    blocked_write.set()
+    deadline = time.monotonic() + 3
+    while atomic_append.in_flight_sinks() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert sink.read_bytes() == b"a\n"
+    assert atomic_append.append_line(sink, b"b\n") is True
+    assert sink.read_bytes() == b"a\nb\n"
+
+
+@pytest.mark.deliberate_wall_clock(reason="an explicit wait_secs=None still waits out the stall")
+def test_explicit_none_wait_is_unbounded(tmp_path, blocked_write, monkeypatch):
+    monkeypatch.setattr(atomic_append, "RECORD_WAIT_SECS", 0.05)
+    sink = tmp_path / "notes.jsonl"
+    threading.Timer(0.3, blocked_write.set).start()
+    assert atomic_append.append_line(sink, b"a\n", wait_secs=None) is True
+    assert sink.read_bytes() == b"a\n"
 
 
 def test_normal_append_registers_nothing(tmp_path):

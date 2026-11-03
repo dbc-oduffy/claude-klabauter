@@ -29,8 +29,10 @@ def _emit_recorder(tmp_path: Path, seen: list):
 
 
 def _live(root: Path, footprints: dict) -> None:
-    """Write the index: a None footprint is a minted run that has not staged."""
+    """Write the index: a None footprint is a minted run that has not staged. Each run gets its record dir
+    (a row whose dir is gone is a ghost, released by the guard)."""
     for run_id, footprint in footprints.items():
+        (root / "state" / "warp" / run_id).mkdir(parents=True, exist_ok=True)
         if footprint is None:
             live_run_index.add(root, run_id, 1.0)
         else:
@@ -133,7 +135,7 @@ def _staged_unmarked_run(root: Path, run_id: str, sizing_rel: str) -> None:
     import json
 
     rd = root / "state" / "warp" / run_id
-    rd.mkdir(parents=True)
+    rd.mkdir(parents=True, exist_ok=True)
     (rd / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
     (rd / "run.json").write_text(json.dumps({"sizing_rel": sizing_rel}), encoding="utf-8")
 
@@ -217,7 +219,7 @@ def test_a_halted_run_still_in_the_index_denies_nothing(tmp_path):
     tool_input = {"args": {"writes": ["pkg/mod.py"]}}
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {})
     rd = tmp_path / "state" / "warp" / "ask-20261029T080212-46892a"
-    rd.mkdir(parents=True)
+    rd.mkdir(parents=True, exist_ok=True)
     (rd / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None
 
@@ -248,16 +250,33 @@ def _marker(root: Path, run_id: str, status: str) -> None:
     (rd / "halted.json").write_text(json.dumps({"status": status}), encoding="utf-8")
 
 
-def test_superseded_and_closed_markers_release_but_a_resumed_one_stays_live(tmp_path):
+def test_every_ended_marker_including_resumed_releases(tmp_path):
     (tmp_path / ".git").mkdir()
     run_id = "ask-20261101T173854-9a093a"
-    _live(tmp_path, {run_id: {"pkg/mod.py"}})
     tool_input = {"args": {"writes": ["pkg/mod.py"]}}
-    _marker(tmp_path, run_id, "resumed")
-    assert mod._live_write_overlap_deny(tmp_path, tool_input, {})
-    for status in ("superseded", "closed", "halted", "landed"):
+    for status in ("resumed", "superseded", "closed", "halted", "landed"):
+        _live(tmp_path, {run_id: {"pkg/mod.py"}})
         _marker(tmp_path, run_id, status)
         assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None, status
+
+
+def test_a_resumed_or_ghost_row_is_dropped_from_the_index_but_a_halted_one_stays(tmp_path):
+    (tmp_path / ".git").mkdir()
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    resumed, ghost, halted = "ask-20261101T173854-aaaaaa", "ask-20261101T173854-bbbbbb", "ask-20261101T173854-cccccc"
+    _live(tmp_path, {resumed: {"pkg/mod.py"}, halted: {"pkg/mod.py"}})
+    live_run_index.stage(tmp_path, ghost, {"pkg/mod.py"}, minted_at=1.0)
+    _marker(tmp_path, resumed, "resumed")
+    _marker(tmp_path, halted, "halted")
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {}) is None
+    rows = live_run_index.read(tmp_path, 1000.0)
+    assert resumed not in rows and ghost not in rows and halted in rows
+
+
+def test_a_dir_less_ghost_row_denies_nothing(tmp_path):
+    (tmp_path / ".git").mkdir()
+    live_run_index.stage(tmp_path, "ask-20261103T130000-dddddd", {"pkg/mod.py"}, minted_at=1.0)
+    assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {}) is None
 
 
 def test_a_run_that_ended_on_harness_evidence_without_halted_json_denies_nothing(tmp_path, monkeypatch):

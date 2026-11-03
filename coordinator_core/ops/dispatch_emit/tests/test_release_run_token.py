@@ -58,6 +58,28 @@ def test_handler_round_trip(tmp_path):
     assert again["ok"] is True and again["released"] is False and again["record"] is None
 
 
+def test_handler_names_token_and_index_entry_removed(tmp_path):
+    repo = _repo(tmp_path)
+    _mint(repo)
+    reply = release_run_token._handler({"run_id": "ask-1"}, repo_root=repo)
+    assert reply["token_removed"] is True
+    assert reply["index_entry_removed"] is True
+    again = release_run_token._handler({"run_id": "ask-1"}, repo_root=repo)
+    assert again["released"] is False and again["index_entry_removed"] is False
+
+
+def test_handler_reports_index_only_release(tmp_path):
+    repo = _repo(tmp_path)
+    _mint(repo)
+    run_token.discard(repo, "ask-1")
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    assert live_run_index.add(repo, "ask-1", 1.0)
+    reply = release_run_token._handler({"run_id": "ask-1"}, repo_root=repo)
+    assert reply["released"] is True and reply["token_removed"] is False
+    assert reply["index_entry_removed"] is True and reply["record"] is None
+
+
 @pytest.mark.parametrize("params", [{}, {"run_id": ""}, {"run_id": 7}, {"run_id": None}])
 def test_handler_refuses_bad_run_id_and_removes_nothing(tmp_path, params):
     repo = _repo(tmp_path)

@@ -10,6 +10,9 @@ What this guard is, in four points (DoE tripwire A-BOX-CAP-COUNTS-COMMANDS-NOT-A
      every-workspace runs, UE launches, reindexes.
   4. A caller's claim of need never admits. No justification, priority or "light" field is read.
 
+An agent's python or pytest run (`runs_python_only`) skips every leg below: it is logged and, for a
+broad suite, advised; it is never denied.
+
 Legs, in order, each denying once (no hold, sleep or retry):
   identity     the main thread, or an agent_type exactly on heavy_command_allowlist.txt that a
                workflow did not spawn (read off where the agent's own transcript lives); a
@@ -28,9 +31,9 @@ key is untrusted and denies. No caller-supplied field (justification, priority, 
 is read. The COORDINATOR_ALLOW_HEAVY_* keys are operator pre-launch overrides and every bypass
 is logged. The lease is written only after every leg has passed.
 
-Spawn-free except one path: the ram-floor leg may start the BoxCacheTrim task once per rate-limit
-window (`_fire_cache_trim`) before it denies; it calls no git, and every process fact comes from
-in-process host reads.
+Spawn-free: it calls no git, and every process fact comes from in-process host reads. The
+file-cache trim belongs to the group-em memory governor, which fires it at a higher available-RAM
+threshold than this guard's floor; a guard-side trim on the hook path would only duplicate it.
 """
 
 from __future__ import annotations
@@ -49,7 +52,6 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     KEY_SESSION_HEAVY_CAP,
     KEY_VITEST_MAX_WORKERS,
     KEY_WORKER_RSS_CEILING_MB,
-    LEG_BARE_PYTEST,
     LEG_BOX_HOLD,
     LEG_IDENTITY,
     LEG_RAM_FLOOR,
@@ -59,7 +61,7 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     HeavyClass,
     LeaseRecord,
 )
-from coordinator_core.bash_guards._heavy_command_class import classify
+from coordinator_core.bash_guards._heavy_command_class import classify, runs_python_only
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "hard-deny"
@@ -413,15 +415,21 @@ def _read_box_hold():
     return box_hold.read_hold()
 
 
-def _bare_pytest_deny() -> Any:
+PYTHON_ADMITTED = "python-admitted"
+_BROAD_SUITE_ADVISORY = (
+    "Advisory: a broad or full pytest suite is the EM's run. Scope it with %s."
+)
+
+
+def _python_admitted(payload: Mapping[str, Any], command: str, cls) -> Any:
+    """An agent's python or pytest run is never denied: it is logged, and a broad suite draws an
+    advisory record. Memory admission for it is the START/END protocol's."""
     from coordinator_core.bash_guards._heavy_command_class import SCOPED_PYTEST_REMEDY
 
-    return _deny_text(
-        LEG_BARE_PYTEST,
-        "a bare pytest in a workflow run leaves orphans when its shell is reaped",
-        _retry(SCOPED_PYTEST_REMEDY, "the --allow paths and the test targets"),
-        legacy="Run %s" % SCOPED_PYTEST_REMEDY,
-    )
+    _append_log(_record(payload, command, cls, PYTHON_ADMITTED, "python run admitted"))
+    if cls.heavy_class is not HeavyClass.TEST_TIER or cls.scoped:
+        return None
+    return _shell_cap_warning(_BROAD_SUITE_ADVISORY % SCOPED_PYTEST_REMEDY)
 
 
 def _is_workflow_agent(payload: Mapping[str, Any]) -> bool:
@@ -512,132 +520,15 @@ def _ram_leg(config: Mapping[str, Any], primitives, payload: Mapping[str, Any]) 
         reserved = leases.unattributed_count(exclude_session=own) * reserve
         if reading.avail_mb - reserved >= floor:
             return None
-    trim = _trim_file_cache(reading.avail_mb, floor - (reading.avail_mb - reserved))
-    if trim.get("after_mb") is not None and trim["after_mb"] - reserved >= floor:
-        return None
     held = leases.holders()
     return _deny_text(
         LEG_RAM_FLOOR,
-        "%d MB available, %d MB reserved by unattributed leases, floor %d MB; holders: %s; file-cache trim: %s"
-        % (reading.avail_mb, reserved, floor, "; ".join(held) if held else "none", _trim_summary(trim)),
+        "%d MB available, %d MB reserved by unattributed leases, floor %d MB; holders: %s"
+        % (reading.avail_mb, reserved, floor, "; ".join(held) if held else "none"),
         _retry("wait for a holder to finish, then retry"),
         legacy="Wait for a holder to finish, then retry",
         blocked=False,
     )
-
-
-_TRIM_TASK = "BoxCacheTrim"  # mirrors coordinator/bin/lib/file_cache_trim.py TRIM_TASK
-_TRIM_SPAWN_TIMEOUT_S = 1.0
-_MB_BYTES = 1024 * 1024
-
-
-def _trim_supported() -> bool:
-    """The BoxCacheTrim task exists on Windows only; elsewhere the trim is a reported no-op."""
-    return sys.platform == "win32"
-
-
-def _group_em_live() -> bool:
-    """True when a live box-wide group-em holder exists; any failure reads as not live."""
-    from coordinator_core.group_em import gem_home
-
-    return gem_home.gem_holder() is not None
-
-
-def _trim_stamp_path():
-    from coordinator_core.box_memory import pressure
-
-    return pressure.default_stamp_path()
-
-
-def _file_cache_mb() -> Optional[int]:
-    """System file cache in MB (Windows GetPerformanceInfo, in-process); None elsewhere or on failure."""
-    if sys.platform != "win32":
-        return None
-    try:
-        import ctypes
-        from ctypes import wintypes
-
-        class _PerfInfo(ctypes.Structure):
-            _fields_ = [("cb", wintypes.DWORD)] + [
-                (n, ctypes.c_size_t)
-                for n in (
-                    "CommitTotal", "CommitLimit", "CommitPeak", "PhysicalTotal", "PhysicalAvailable",
-                    "SystemCache", "KernelTotal", "KernelPaged", "KernelNonpaged", "PageSize",
-                )
-            ] + [("HandleCount", wintypes.DWORD), ("ProcessCount", wintypes.DWORD), ("ThreadCount", wintypes.DWORD)]
-
-        info = _PerfInfo()
-        info.cb = ctypes.sizeof(info)
-        if not ctypes.windll.psapi.GetPerformanceInfo(ctypes.byref(info), info.cb):
-            return None
-        return int(info.SystemCache * info.PageSize // _MB_BYTES)
-    except Exception:
-        return None
-
-
-def _fire_cache_trim() -> bool:
-    """Start the on-demand BoxCacheTrim task and return at once (no wait, no log poll).
-    The single process this module may create; False when the task is absent or would not start."""
-    import subprocess
-
-    from coordinator_core.win_portability import no_console_creationflags
-
-    try:
-        done = subprocess.run(
-            ["schtasks", "/run", "/tn", _TRIM_TASK],
-            capture_output=True,
-            timeout=_TRIM_SPAWN_TIMEOUT_S,
-            **no_console_creationflags(),
-        )
-    except (OSError, subprocess.SubprocessError):
-        return False
-    return done.returncode == 0
-
-
-def _trim_file_cache(before_mb: int, shortfall_mb: int) -> Dict[str, Any]:
-    """Rate-limited file-cache trim ahead of a RAM deny. Returns a record: `status`, `before_mb`,
-    and `after_mb` (the immediate re-read) when a trim fired. The trim is asynchronous, so the
-    re-read usually shows the prior state; the next call inside the window reports the settled one."""
-    from coordinator_core.box_memory import pressure
-
-    rec: Dict[str, Any] = {"kind": "file-cache-trim", "before_mb": before_mb, "shortfall_mb": shortfall_mb}
-    if not _trim_supported():
-        rec["status"] = "noop-platform"
-    elif not _group_em_live():
-        rec["status"] = "no-live-group-em"
-    else:
-        stamp = _trim_stamp_path()
-        cache = _file_cache_mb()
-        rec["cache_mb"] = cache
-        if cache is None or cache < shortfall_mb:
-            rec["status"] = "cache-too-small"
-        elif not pressure.trim_due(stamp):
-            rec["status"] = "rate-limited"
-            last = pressure.last_trim(stamp) or {}
-            rec["last_before_mb"] = last.get("before_mb")
-            rec["last_after_mb"] = last.get("after_mb")
-        elif not _fire_cache_trim():
-            rec["status"] = "task-absent"
-        else:
-            reading = _read_available()
-            rec["status"] = "fired"
-            rec["after_mb"] = reading.avail_mb if reading.trusted else None
-            pressure.stamp_trim(stamp, before_mb, rec["after_mb"])
-    if rec["status"] != "noop-platform":
-        _append_log(rec)
-    return rec
-
-
-def _trim_summary(trim: Mapping[str, Any]) -> str:
-    status = trim.get("status")
-    if status == "fired":
-        return "fired, before %s MB, after %s MB" % (trim.get("before_mb"), trim.get("after_mb"))
-    if status == "rate-limited":
-        return "rate-limited, last trim before %s MB after %s MB" % (
-            trim.get("last_before_mb"), trim.get("last_after_mb"))
-    if status == "no-live-group-em":
-        return "trim skipped: no live group-em"
-    return "not run (%s)" % status
 
 
 def _release_finished_own(own: Tuple[int, int], primitives) -> None:
@@ -933,8 +824,7 @@ def check(
     if not isinstance(command, str) or not command.strip():
         return None
     cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) else None
-    workflow = "python" in command.lower() and _is_workflow_agent(payload)
-    cls = classify(command, tool_input, cwd, workflow_agent=workflow)
+    cls = classify(command, tool_input, cwd)
     if cls.heavy_class is None and not cls.background and not cls.scoped:
         return None
 
@@ -943,9 +833,7 @@ def check(
     # beside a `tsc --noEmit` must not hold the executor carve-out shut.
     if cls.heavy_class is not None and ("vitest" in command.lower() or "jest" in command.lower()):
         config = _read_config()
-        cls = classify(
-            command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS), workflow_agent=workflow
-        )
+        cls = classify(command, tool_input, cwd, _positive_int(config, KEY_VITEST_MAX_WORKERS))
         if cls.heavy_class is None and not cls.background and not cls.scoped:
             return None
 
@@ -968,8 +856,8 @@ def _admit(payload: Dict[str, Any], command: str, cls, config) -> Any:
             _flag_runaway_workers(config, payload, command, cls, anchor, census, snapshot[0] if snapshot else ())
         return envelope
 
-    if cls.bare_pytest and payload.get("agent_id") and _workflow_runs_of(payload):
-        return denied(LEG_BARE_PYTEST, _bare_pytest_deny())
+    if payload.get("agent_id") and runs_python_only(command, payload.get("tool_input"), payload.get("cwd")):
+        return _python_admitted(payload, command, cls)
 
     if heavy and not _bypassed(LEG_IDENTITY, payload, command):
         envelope = _identity_leg(payload, command, heavy_name, cls)

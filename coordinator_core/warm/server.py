@@ -1025,7 +1025,7 @@ def _pool_dispatch_worker(
     if claim is not None and not _take_claim(claim, os.getpid()):
         return {_NOT_DISPATCHED_MARKER: True}
     _declare_queue_wait(stamp, msg.get("method") if isinstance(msg, dict) else None)
-    disarm = _arm_stall_dump(stall_secs, claim)
+    disarm = _arm_stall_dump(stall_secs, claim, _op_repo_root(msg))
     try:
         return _pool_dispatch_worker_body(msg, caller)
     finally:
@@ -1200,6 +1200,45 @@ def _fs_probe_ms(stall_dir) -> str:
     return f"{(time.perf_counter() - t0) * 1000:.2f}"
 
 
+def _op_repo_root(msg) -> Optional[Path]:
+    """The op's repo root from its envelope, or None. Never raises. Reads the raw field:
+    `resolve_request_repo` calls `Path.resolve()`, a realpath on the very drive a stall
+    probe must not touch before the stall timer is armed."""
+    try:
+        for field in ("_origin_worktree", "_caller_cwd"):
+            raw = msg.get(field)
+            if raw and isinstance(raw, str):
+                return Path(raw)
+        return None
+    except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+        return None
+
+
+def _repo_drive_probe_ms(repo_root) -> str:
+    """Milliseconds to list `repo_root` and read a byte of its `.git` entry, `unavailable`
+    when no root is known, or `error:<errno>`. Read-only and spawn-free: a create in the
+    repo would dirty a tree peers are using. Never raises."""
+    if not repo_root:
+        return "unavailable"
+    t0 = time.perf_counter()
+    try:
+        root = Path(repo_root)
+        with os.scandir(root) as it:
+            next(it, None)
+        git = root / ".git"
+        target = git / "HEAD" if git.is_dir() else git
+        try:
+            with open(target, "rb") as fh:
+                fh.read(1)
+        except FileNotFoundError:
+            pass
+    except OSError as exc:
+        return f"error:{exc.errno}"
+    except Exception:  # noqa: BLE001
+        return "unavailable"
+    return f"{(time.perf_counter() - t0) * 1000:.2f}"
+
+
 def _stall_timing_lines(op_ident, elapsed, cpu_delta) -> str:
     """`op-elapsed-s`, `process-cpu-s` and `thread-elapsed-s` header lines.
 
@@ -1226,8 +1265,10 @@ def _write_stall_record(
     op_ident: Optional[int] = None,
     elapsed: Optional[float] = None,
     cpu_delta: Optional[float] = None,
+    repo_root=None,
 ) -> Optional[Path]:
-    """One file per stall: sink line, blocked leg json, fs probe, op timing, every
+    """One file per stall: sink line, blocked leg json, fs probe, repo-drive probe
+    (`repo_root`, the op's repo), op timing, every
     thread's stack (temp + `os.replace`), then keep the newest `STALL_DUMP_KEEP`.
     `key`/`leg` name a record that has no claim (an accept-side hang). Returns the
     record path, or None when nothing was written. Never raises."""
@@ -1255,13 +1296,14 @@ def _write_stall_record(
         stall_dir = Path(stall_dir)
         stall_dir.mkdir(parents=True, exist_ok=True)
         probe = _fs_probe_ms(stall_dir)
+        repo_probe = _repo_drive_probe_ms(repo_root)
         if key is None:
             key = claim.name if claim is not None else "nokey"
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
         final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
         tmp = final.with_name(final.name + ".tmp")
         tmp.write_text(
-            f"sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\n"
+            f"sinks: {sinks}\nleg: {leg}\nfs-probe-ms: {probe}\nrepo-drive-probe-ms: {repo_probe}\n"
             f"{_stall_timing_lines(op_ident, elapsed, cpu_delta)}--- threads ---\n{threads}",
             encoding="utf-8",
             newline="\n",
@@ -1274,7 +1316,9 @@ def _write_stall_record(
         return None
 
 
-def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable[[], None]:
+def _arm_stall_dump(
+    stall_secs: float, claim: Optional[Path] = None, repo_root=None
+) -> Callable[[], None]:
     """Dump every thread's stack to the worker stderr log once `stall_secs`
     pass, and (with a `claim`) write the op thread's blocked leg beside it; the
     returned callable disarms it. Never raises.
@@ -1323,6 +1367,7 @@ def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable
                 op_ident=op_ident,
                 elapsed=time.monotonic() - t0,
                 cpu_delta=time.process_time() - cpu0,
+                repo_root=repo_root,
             )
         if stderr is None:
             return record
@@ -1355,7 +1400,12 @@ def _arm_stall_dump(stall_secs: float, claim: Optional[Path] = None) -> Callable
 
 
 def _arm_accept_stall(
-    stall_dir, stall_secs: float, claim: Optional[Path], key: Optional[str], phase: list
+    stall_dir,
+    stall_secs: float,
+    claim: Optional[Path],
+    key: Optional[str],
+    phase: list,
+    repo_root=None,
 ) -> Callable[[], None]:
     """Accept-process twin of `_arm_stall_dump`: a request still without a worker
     claim after `stall_secs` writes a record naming `phase[0]` (`gate`, `submit` or
@@ -1397,6 +1447,7 @@ def _arm_accept_stall(
                 op_ident=conn_ident,
                 elapsed=time.monotonic() - t0,
                 cpu_delta=time.process_time() - cpu0,
+                repo_root=repo_root,
             )
         except Exception:  # noqa: BLE001 -- diagnostics never stop an op
             pass
@@ -1677,7 +1728,9 @@ def _pool_saturated_envelope(msg: dict, holders: list, stall_dump) -> dict:
     }
 
 
-def _ensure_overdue_stall_dump(diagnosis: dict, stall_dir, dispatch_key: Optional[str], elapsed: float) -> str:
+def _ensure_overdue_stall_dump(
+    diagnosis: dict, stall_dir, dispatch_key: Optional[str], elapsed: float, repo_root=None
+) -> str:
     """Make sure a budget-crossing stall has a durable record. Reuses the worker's record when
     `diagnosis` names one under `stall_dir`, else writes this thread's all-thread dump. Returns
     the sentence appended to the -32004 message: the dump path, or that none was written."""
@@ -1694,6 +1747,7 @@ def _ensure_overdue_stall_dump(diagnosis: dict, stall_dir, dispatch_key: Optiona
         leg=json.dumps({"leg": "coordinator_core/warm/server.py::_pool_dispatch:result", "kind": "wait"}),
         op_ident=threading.get_ident(),
         elapsed=elapsed,
+        repo_root=repo_root,
     )
     if written is None:
         return "No stall dump written: the stall directory refused the write."
@@ -3427,6 +3481,7 @@ class _ServerContext:
                 claim,
                 dispatch_key if _is_safe_dispatch_key(dispatch_key) else None,
                 _phase,
+                _op_repo_root(msg),
             )
             gate = self._admission_gate()
             _hook = _is_hook_lane(_method)
@@ -3531,9 +3586,12 @@ class _ServerContext:
                         getattr(self, "_stall_dir", None),
                         dispatch_key,
                         time.time() - _t_submit,
+                        _op_repo_root(msg),
                     )
                 else:
                     dump_note = "No stall dump written: no diagnosis block."
+                if dispatch_key is not None:
+                    _ack_store.mark_withdrawn(dispatch_key)
                 error = envelope.get("error")
                 if isinstance(error, dict):
                     if isinstance(data, dict) and isinstance(data.get("diagnosis"), dict):

@@ -99,6 +99,17 @@ class GoalSeedScaffoldParityTest(unittest.TestCase):
         self.assertTrue(str(resolved).startswith(str(_REPO_ROOT.resolve()) + os.sep))
 
 
+class GoalSeedOutShardTest(unittest.TestCase):
+    def test_default_out_is_the_month_shard(self):
+        result = goals.brief(goal_seed_title="Deferred vision slice")
+        directive = _directive(result["directives"], "d-scaffold-goal-seed")
+        out = _parser.parse_args(directive["args"]).out.replace("\\", "/")
+        parts = out.split("/")
+        self.assertEqual(parts[:2], ["state", "handoffs"])
+        self.assertRegex(parts[2], r"^\d{4}-\d{2}$")
+        self.assertEqual(len(parts), 4)
+
+
 class NeitherEmittedWithoutTriggeringInputTest(unittest.TestCase):
 
     def test_neither_supplied_emits_no_directive(self):

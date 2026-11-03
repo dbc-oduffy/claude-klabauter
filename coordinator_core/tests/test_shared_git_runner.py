@@ -940,7 +940,6 @@ _GRANDFATHERED_RUNNER_MODULES: frozenset[str] = frozenset(
         "coordinator_core/ops/release_tagging.py",
         "coordinator_core/ops/renormalize_index.py",
         "coordinator_core/ops/resolve_swept_baton.py",
-        "coordinator_core/ops/review_brightline_gate.py",
         "coordinator_core/ops/review_coverage_core.py",
         "coordinator_core/ops/rollup_derive.py",
         "coordinator_core/ops/run_semgrep_scan.py",
@@ -1079,7 +1078,7 @@ _GRANDFATHERED_DIALS: frozenset = frozenset(
 #: all. Lowering either is free and is the point; raising either is the
 #: deliberate, reviewable act of arguing that the tree needs one more private
 #: git runner than it had yesterday.
-_PINNED_RUNNER_CEILING = 190
+_PINNED_RUNNER_CEILING = 189
 _PINNED_DIAL_CEILING = 71
 
 #: Frozen inventory of destructive-verb call sites (plan AC2/AC3). FROZEN

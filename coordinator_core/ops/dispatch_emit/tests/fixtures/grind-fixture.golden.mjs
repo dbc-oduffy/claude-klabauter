@@ -199,7 +199,7 @@ const _sizeAssembleWhen = () => (SIZE_FIX_TARGET && ROUTING[SIZE_FIX_TARGET]) ? 
 function _slug(text) { return String(text == null ? '' : text).toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, ''); }
 function _sizingPathFor(nameSlug, rowId) {
   const d = String(RUN_ID).replace(/-/g, '').slice(0, 8);
-  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + '-' + nameSlug + '-' + (_slug(rowId) || 'row') + '.yaml';
+  return 'state/sizings/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '/' + d.slice(0, 4) + '-' + d.slice(4, 6) + '-' + d.slice(6, 8) + '-' + nameSlug + '-' + (_slug(rowId) || 'row') + '.yaml';
 }
 function _sizingPath(scouted, rowId) { return _sizingPathFor(_slug(scouted.name) || 'sizing', rowId); }
 

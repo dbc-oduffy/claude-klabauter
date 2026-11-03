@@ -18,7 +18,6 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
-import subprocess
 import sys
 import time
 from pathlib import Path
@@ -30,6 +29,7 @@ if str(_REPO_ROOT) not in sys.path:
 import yaml  # noqa: E402
 
 from coordinator_core.frontmatter import primitives, schema_validate, yaml_load  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 
 _REAL_SAFE_LOAD = yaml.safe_load
 _SHARED_LOADER = yaml_load.SAFE_LOADER
@@ -103,13 +103,10 @@ _DOORS = {
 
 
 def _tracked_markdown(root: Path) -> list[str]:
-    out = subprocess.run(
-        ["git", "-C", str(root), "ls-files", "-z", "--", "*.md"],
-        capture_output=True,
-        check=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout
-    return sorted(p for p in out.decode("utf-8").split("\0") if p)
+    done = run_git(["ls-files", "-z", "--", "*.md"], cwd=str(root), binary=True)
+    if not done.ok:
+        raise RuntimeError(f"git ls-files failed ({done.returncode}): {done.stderr.strip()}")
+    return sorted(p for p in done.stdout_bytes.decode("utf-8").split("\0") if p)
 
 
 def _digest(call, path: str, text: str) -> str:

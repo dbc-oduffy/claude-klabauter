@@ -1276,7 +1276,8 @@ def test_sizing_object_schema_version_and_bump_class():
     # Moved 1.45.0 -> 1.46.0: optional `tie_break`; 1.46.0 -> 1.47.0: `fan_out` joins `xl_exit`.
     # Moved 1.47.0 -> 1.48.0: optional `provenance`; 1.48.0 -> 1.49.0: optional `writes` (DoE 8e14712c0c).
     # Moved 1.49.0 -> 1.50.0: claude-klabauter-first optional `research.notebooklm_need`.
-    assert schema["x-schema-version"] == "1.50.0"
+    # Moved 1.50.0 -> 1.51.0: claude-klabauter-first enum-value-additive; `research` joins the route enums.
+    assert schema["x-schema-version"] == "1.51.0"
     # NEGATIVE SPEC: `x-bump-class` is asserted ABSENT, not equal to
     # `nested-field-additive` — and absent is the PERMANENT answer for this
     # schema, not a waiting state. DoE's `9f4c0c17b` (2026-08-10, "schemas: drop
@@ -1295,7 +1296,7 @@ def test_sizing_object_schema_version_and_bump_class():
     # they will not do (memo
     # 2026-08-13-coordinator-content-repo-em-bump-class-deliberately-absent.md).
     # Re-introduced at 1.45.0 by the claude-klabauter-first enum-value-additive bump; 1.49.0 is additive.
-    assert schema["x-bump-class"] == "nested-field-additive"
+    assert schema["x-bump-class"] == "enum-value-additive"
 
 
 def test_completion_entry_schema_version_and_bump_class():
@@ -2209,3 +2210,12 @@ def test_express_lane_fires_the_ask_not_a_hand_dispatch():
 
     assert decision["fire"] == warp_fire.fire_command()
     assert "Dispatch directly" not in decision["next_move"]
+
+
+def test_scaffold_directive_out_is_month_sharded():
+    from datetime import date
+
+    today = date.today().isoformat()
+    directive = sa._sizing_object_scaffold_directive("an intent", "shard probe")
+    outs = [a for a in directive["args"] if a.startswith("--out=")]
+    assert outs and outs[0].startswith(f"--out=state/sizings/{today[:7]}/{today}-"), outs

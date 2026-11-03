@@ -18,14 +18,45 @@ def _repo(**kw):
     return rt.record(**base)
 
 
-def test_trail_rel():
-    assert rt.trail_rel("r-1") == "docs/research/trail/r-1.yaml"
+def test_trail_rel_is_the_run_dir_trail():
+    assert rt.trail_rel("docs/research/misc/2026-11-03-x") == "docs/research/misc/2026-11-03-x/trail.yaml"
+
+
+@pytest.mark.parametrize("bad", ["", "/abs/run", "a/../b", "a\\b"])
+def test_trail_rel_refuses_an_unsafe_run_dir(bad):
+    with pytest.raises(ValueError):
+        rt.trail_rel(bad)
 
 
 @pytest.mark.parametrize("bad", ["", "a/b", "..", "a b", "a\\b"])
-def test_trail_rel_refuses_unsafe_id(bad):
+def test_record_refuses_unsafe_run_id(bad):
     with pytest.raises(ValueError):
-        rt.trail_rel(bad)
+        _repo(run_id=bad)
+
+
+def _write(root, rel, text):
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text, encoding="utf-8")
+
+
+def test_locate_trail_finds_a_run_dir_trail_by_run_id(tmp_path):
+    _write(tmp_path, "docs/research/misc/2026-11-03-x/trail.yaml", rt.render(_repo(run_id="r-1")))
+    _write(tmp_path, "docs/research/misc/2026-11-03-y/trail.yaml", rt.render(_repo(run_id="r-10")))
+    assert rt.locate_trail(tmp_path, "r-1") == "docs/research/misc/2026-11-03-x/trail.yaml"
+    assert rt.locate_trail(tmp_path, "r-10") == "docs/research/misc/2026-11-03-y/trail.yaml"
+    assert rt.locate_trail(tmp_path, "r-2") is None
+
+
+def test_locate_trail_finds_a_legacy_flat_trail(tmp_path):
+    _write(tmp_path, "docs/research/trail/r-1.yaml", rt.render(_repo()))
+    assert rt.locate_trail(tmp_path, "r-1") == "docs/research/trail/r-1.yaml"
+
+
+def test_locate_trail_is_none_without_a_research_dir_and_refuses_an_unsafe_id(tmp_path):
+    assert rt.locate_trail(tmp_path, "r-1") is None
+    with pytest.raises(ValueError):
+        rt.locate_trail(tmp_path, "a/b")
 
 
 def test_repo_record_field_set_and_count():

@@ -125,6 +125,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from coordinator_core.bounded_slug import bounded_slug
+from coordinator_core.session.output_tree_layout import write_rel
 from coordinator_core.contract.decision_object.envelope import (
     build_envelope,
     _emit as _envelope_emit,
@@ -201,7 +202,7 @@ def _roadmap_baton_and_seed_directives(
     directives: list[dict[str, Any]] = []
 
     if entry_point == "B" and stub_id is not None and resolved_run_id is not None:
-        out_path = f"state/handoffs/{today}_000000_roadmap-{stub_id}.md"
+        out_path = write_rel("state/handoffs", f"{today}_000000_roadmap-{stub_id}.md")
         resolved = {
             "roadmap_id": resolved_run_id,
             "stub_id": stub_id,
@@ -224,7 +225,10 @@ def _roadmap_baton_and_seed_directives(
 
     if goals:
         goal_slug_source = problem_set_path or resolved_run_id or "roadmap"
-        out_path = f"state/handoffs/{today}-roadmap-seed-{bounded_slug(goal_slug_source, _SEED_SLUG_MAX_BYTES)}.md"
+        out_path = write_rel(
+            "state/handoffs",
+            f"{today}-roadmap-seed-{bounded_slug(goal_slug_source, _SEED_SLUG_MAX_BYTES)}.md",
+        )
         resolved = {
             "goals": ",".join(goals),
             "out": out_path,

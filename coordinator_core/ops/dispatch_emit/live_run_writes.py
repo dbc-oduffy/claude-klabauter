@@ -98,9 +98,10 @@ def prune_index(root: Path, *, deep: bool = False, now: Optional[float] = None) 
     """Drop index entries whose run is over; return the dropped run ids. Background use only.
 
     An entry with no submission record goes once `warp_live.UNLAUNCHED_GRACE_SECONDS` have passed
-    since `minted_at`; a launched entry (one with a submission record) stays however old, until
-    consume, discard or an ended marker removes it. `deep` also walks the transcript-tail
-    liveness (`warp_live._record_live`, which consumes on evidence and so removes the entry)."""
+    since `minted_at`; a launched entry (one with a submission record) goes on an ended or
+    `resumed` marker (halted included) or once its owner session has exited, and otherwise stays
+    until consume or discard. `deep` also walks the transcript-tail liveness
+    (`warp_live._record_live`, which consumes on evidence and so removes the entry)."""
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     root = Path(root)
@@ -114,8 +115,12 @@ def prune_index(root: Path, *, deep: bool = False, now: Optional[float] = None) 
     dirs = warp_live._launch_dirs(None) if deep else []
     for run_id, entry in runs.items():
         minted = entry.get("minted_at") if isinstance(entry, dict) else None
-        launched = warp_live._read_json(warp_live._submission_path(root, run_id)) is not None
-        over = warp_live._holds_ended_marker(root, run_id)
+        submission = warp_live._read_json(warp_live._submission_path(root, run_id))
+        launched = submission is not None
+        over = warp_live.run_is_over(root, run_id)
+        if not over and launched and isinstance(minted, (int, float)):
+            owner = submission.get("session_id")
+            over = isinstance(owner, str) and bool(owner) and warp_live._owner_exited(owner, float(minted))
         if not over and not launched:
             over = isinstance(minted, (int, float)) and now - minted > warp_live.UNLAUNCHED_GRACE_SECONDS
         if not over and deep and launched:
@@ -139,7 +144,7 @@ def live_footprints(root: Path, *, exclude_run_id: Optional[str]) -> dict[str, O
             run_id = record["run_id"]
             if run_id == exclude_run_id or run_id in out:
                 continue
-            if warp_live._record_live(root, record, None, None, dirs):
+            if not warp_live.run_is_over(root, run_id) and warp_live._record_live(root, record, None, None, dirs):
                 out[run_id] = _footprint(root, run_id)
     return out
 

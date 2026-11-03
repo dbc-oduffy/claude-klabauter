@@ -124,8 +124,8 @@ def test_worktree_freeze_spawns_git_exactly_once(
     real_git = review_freeze_diff._git
 
     def _counting_git(args, **kwargs):
-        if args and args[0] == "diff":
-            diff_calls.append(args)
+        if "diff" in args[:2]:
+            diff_calls.append(list(args))
         return real_git(args, **kwargs)
 
     monkeypatch.setattr(review_freeze_diff, "_git", _counting_git)
@@ -143,6 +143,24 @@ def test_worktree_freeze_spawns_git_exactly_once(
         f"expected exactly one 'git diff' spawn for the worktree freeze, got "
         f"{len(diff_calls)}: {diff_calls!r}"
     )
+    assert diff_calls[0][0] == "--no-optional-locks", diff_calls[0]
+
+
+def test_worktree_freeze_diff_never_takes_index_lock_against_a_held_lock(
+    tmp_path: Path,
+) -> None:
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "tracked.txt", "line one\n", "add tracked.txt")
+    (tmp_path / "tracked.txt").write_text("line one\nline two\n")
+    (tmp_path / ".git" / "index.lock").write_bytes(b"")
+    before = _index_bytes(tmp_path)
+
+    result = freeze_diff(tmp_path, base, "locked-index", paths=["tracked.txt"], worktree=True)
+
+    assert result["error"] is None, result["error"]
+    assert "line two" in Path(result["diff_path"]).read_text()
+    assert _index_bytes(tmp_path) == before
+    assert (tmp_path / ".git" / "index.lock").exists()
 
 
 def test_worktree_freeze_leaves_git_index_byte_identical(tmp_path: Path) -> None:

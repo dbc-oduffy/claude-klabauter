@@ -123,7 +123,7 @@ def test_paper_trail_partial_failure_moves_the_tracked_files_and_reports_the_res
     assert _files(root, "docs/research/run1-workdir") == {
         "docs/research/run1-workdir/untracked.md"
     }
-    assert len(_files(root, "docs/research/archive")) == 2
+    assert len(_files(root, "docs/research/t")) == 2
 
 
 def test_paper_trail_drops_untracked_emission_ephemera_instead_of_failing(tmp_path: Path) -> None:
@@ -138,7 +138,7 @@ def test_paper_trail_drops_untracked_emission_ephemera_instead_of_failing(tmp_pa
 
     assert not result.get("failed")
     assert not workdir.exists() or not _files(root, "docs/research/run1-workdir")
-    assert len(_files(root, "docs/research/archive")) == 2
+    assert len(_files(root, "docs/research/t")) == 2
 
 
 def test_paper_trail_rerun_after_partial_failure_names_what_is_stranded(tmp_path: Path) -> None:

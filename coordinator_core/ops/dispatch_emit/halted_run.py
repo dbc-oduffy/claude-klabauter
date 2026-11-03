@@ -409,6 +409,19 @@ def _index_call(fn: str, record_dir: Path, *args, **kwargs) -> None:
         pass
 
 
+def _live_index_drop(record_dir: Path) -> None:
+    """Drop the run's row from the live-run index of the checkout holding `record_dir`, so a run whose
+    marker left `halted` stops refusing overlapping asks. Never raises (`index_remove` swallows)."""
+    from coordinator_core.ops.dispatch_emit import live_run_writes
+
+    rd = Path(record_dir)
+    try:
+        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
+    except IndexError:
+        return
+    live_run_writes.index_remove(root, rd.name)
+
+
 def _withheld_prints(record_dir: Path, withheld: dict) -> dict:
     """Blob id of each withheld path as it stands in the checkout holding `record_dir`; a path that
     is absent or unreadable is left out. The same fingerprint `_record_withheld_prints` records."""
@@ -523,6 +536,7 @@ def mark_resumed(record_dir: Path) -> bool:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_RESUMED})
     _index_call("remove_run", record_dir)
+    _live_index_drop(record_dir)
     return True
 
 
@@ -538,6 +552,7 @@ def mark_superseded(record_dir: Path, expected: dict, evidence: dict, dispositio
     if dispositions is not None:
         updated[PATH_DISPOSITIONS_FIELD] = dispositions
     _write(Path(record_dir), updated)
+    _live_index_drop(record_dir)
     return True
 
 
@@ -551,6 +566,7 @@ def mark_landed(record_dir: Path, sha: str) -> bool:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha})
     _index_call("remove_run", record_dir)
+    _live_index_drop(record_dir)
     stamp_run_stage_at(Path(record_dir), "landed")
     return True
 
@@ -563,6 +579,7 @@ def mark_closed(record_dir: Path, reason: str, at: str) -> bool:
         return False
     _write(Path(record_dir), {**marker, "status": STATUS_CLOSED, "closed": {"reason": reason, "at": at}})
     _index_call("remove_run", record_dir)
+    _live_index_drop(record_dir)
     return True
 
 

@@ -478,3 +478,19 @@ def test_subject_with_archived_plan_is_reported_and_not_a_candidate(root):
     report = gate_v2.compute_gate_report(root, subject="a")
     assert by_id(report)["a"]["candidate"] is False and by_id(report)["a"]["needs_plan"] is False
     assert [e["id"] for e in report["shipped_unstamped"]] == ["a"]
+
+
+def test_month_shard_batons_are_live_and_keep_their_shard_in_rel(root, monkeypatch):
+    baton(root, "top")
+    shard = root / "state/handoffs/2026-11"
+    shard.mkdir()
+    (shard / "sharded.md").write_text(
+        _fm(stub_id="sharded", baton_role="work", status="open", deployment_state="ready_to_fire"), encoding="utf-8"
+    )
+    other = root / "state/handoffs/drafts"
+    other.mkdir()
+    (other / "not-live.md").write_text(_fm(stub_id="not-live", baton_role="work", status="open"), encoding="utf-8")
+    monkeypatch.setattr(gate_v2, "read_index_paths", lambda repo: frozenset({"state/handoffs/top.md"}))
+    report = gate_v2.compute_gate_report(root)
+    assert set(by_id(report)) == {"top"}
+    assert report["untracked"] == ["state/handoffs/2026-11/sharded.md"]

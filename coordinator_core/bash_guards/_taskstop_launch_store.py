@@ -92,9 +92,24 @@ def delete_record(task_id: str) -> None:
 
 
 def _prune(now_s: float) -> None:
-    for rec in all_records():
-        if _age_s(rec.mark, now_s) > RECORD_TTL_S:
-            delete_record(rec.task_id)
+    # Trap: this runs on every launch hook. Opening each record to read its mark stalled the warm
+    # engine past 10s at ~900 records (2026-11-03 stall dumps); scandir's stat carries the write
+    # time with no open, and a record is written once, so mtime is its mark.
+    import os
+
+    try:
+        entries = list(os.scandir(_store_dir()))
+    except OSError:
+        return
+    for entry in entries:
+        if not entry.name.endswith(".json"):
+            continue
+        try:
+            stale = now_s - entry.stat().st_mtime > RECORD_TTL_S
+        except OSError:
+            continue
+        if stale:
+            delete_record(entry.name[: -len(".json")])
 
 
 def write_record(rec: LaunchRecord, *, now_s: Optional[float] = None) -> bool:

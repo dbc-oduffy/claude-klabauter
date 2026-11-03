@@ -186,6 +186,7 @@ def _delta_spans(baseline: list[bytes], tree: list[bytes]) -> list[tuple[int, in
 
 def _claimant_delta(
     root: Path, common_dir: Path, claimant: str, path: str, tree: list[bytes], *, coarse_ok: bool = False,
+    absent_claims_all: bool = False,
 ) -> Optional[list[tuple[int, int]]]:
     """Delta spans of `claimant`, or None when its baseline cannot explain anything.
 
@@ -195,8 +196,12 @@ def _claimant_delta(
     from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
 
     base = hha._baseline(root, claimant)
-    if base is None or path not in base:
+    if base is None:
         return None
+    if path not in base:
+        # A revision added the path after stage: the lander's baseline never saw it, so every hunk
+        # is its own unless a competing claimant also claims it (two owners hold, as everywhere).
+        return [(0, 1 << 62)] if absent_claims_all else None
     sha = base[path]
     if sha is None:
         old: list[bytes] = []
@@ -210,6 +215,21 @@ def _claimant_delta(
     return _delta_spans(old, tree)
 
 
+def _released_holders(root: Path, run_id: str, path: str, holders: Mapping[str, bool]) -> set[str]:
+    """Holders whose delta on `path` is not a competing claim: a halted run that stopped before `run_id`
+    started and staged against the same bytes (`halted_hunk_attribution` rule 4) left nothing of its own,
+    so the tree delta is `run_id`'s. Its baseline equals the lander's, so without this release it would
+    claim every hunk the lander does and the path would read unattributed. Unknown holds: a live holder,
+    an unreadable record or a kept print matching the tree stays a claimant."""
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+
+    others = [h for h in holders if h != run_id]
+    if not others:
+        return set()
+    attributable = hha.reader(root, run_id)
+    return {h for h in others if not attributable(h, [path])}
+
+
 def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mapping[str, bool]) -> HunkSplit:
     from coordinator_core.git.git_dir import resolve_git_common_dir
 
@@ -218,8 +238,12 @@ def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mappi
         tree = (root / path).read_bytes().splitlines(keepends=True)
     except FileNotFoundError:
         tree = []
-    claimants = [run_id, *[h for h in holders if h != run_id]]
-    deltas = {c: _claimant_delta(root, common_dir, c, path, tree, coarse_ok=c != run_id) for c in claimants}
+    released = _released_holders(root, run_id, path, holders)
+    claimants = [run_id, *[h for h in holders if h != run_id and h not in released]]
+    deltas = {
+        c: _claimant_delta(root, common_dir, c, path, tree, coarse_ok=c != run_id, absent_claims_all=c == run_id)
+        for c in claimants
+    }
 
     split = HunkSplit()
     attributed: dict[str, list[Hunk]] = {}

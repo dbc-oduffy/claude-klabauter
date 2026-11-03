@@ -37,10 +37,11 @@ DIGEST_DIR_REL = f"{RUN_DIR_ROOT}/ask-digest"
 
 
 class Reusable(NamedTuple):
-    """A minted-not-started parent a resubmission may launch again: `ready` is `(run_id, slice_sizing)` per ready run."""
+    """A minted-not-started parent a resubmission may launch again: `ready` is `(run_id, slice_sizing)` per ready run.
+    `launcher` is None when the earlier attempt minted the slices but wrote no launcher; the caller writes one."""
 
     parent_id: str
-    launcher: Path
+    launcher: Optional[Path]
     ready: tuple[tuple[str, str], ...]
 
 
@@ -115,8 +116,8 @@ def _entry(path: Path) -> Optional[tuple[str, float]]:
 
 
 def find_reusable(root: Any, digest: str, now: float) -> Optional[Reusable]:
-    """The parent a submission with `digest` may reuse, else None: a fresh index entry, its parent record and
-    launcher on disk, and every run still minted-not-started."""
+    """The parent a submission with `digest` may reuse, else None: a fresh index entry, its parent record, and
+    every run still minted-not-started. The launcher is optional (see `Reusable`)."""
     wt = main_worktree_root(Path(root))
     entry = _entry(wt / digest_rel(digest))
     if entry is None or now - entry[1] >= REUSE_TTL_S:
@@ -124,10 +125,10 @@ def find_reusable(root: Any, digest: str, now: float) -> Optional[Reusable]:
     parent_id = entry[0]
     record = _parent(wt, parent_id)
     launcher = wt / launcher_rel(parent_id)
-    if record is None or not record.runs or not launcher.is_file() or _started_run(wt, record) is not None:
+    if record is None or not record.runs or _started_run(wt, record) is not None:
         return None
     ready = tuple((r.run_id, r.slice_sizing) for r in record.runs if r.status == contract.STATUS_READY)
-    return Reusable(parent_id, launcher, ready) if ready else None
+    return Reusable(parent_id, launcher if launcher.is_file() else None, ready) if ready else None
 
 
 def _remove(path: Path) -> None:

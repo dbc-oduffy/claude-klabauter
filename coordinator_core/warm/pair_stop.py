@@ -189,11 +189,26 @@ def _is_stop_acknowledgement(line: "bytes | None") -> bool:
     return True
 
 
-def _ask_server_to_stop(pipe: str) -> bool:
-    """Graceful ask over the warm pipe. True iff the server answered within the read deadline
-    with something other than the -32004 dispatch-timeout envelope; False on a transport
-    failure, an unanswered ask, or a wedged-dispatch answer, the caller's cue to
-    signal directly instead of waiting out the confirm grace."""
+def _is_wedged_reply(line: "bytes | None") -> bool:
+    if not line:
+        return False
+    try:
+        reply = json.loads(line)
+    except ValueError:
+        return False
+    error = reply.get("error") if isinstance(reply, dict) else None
+    return isinstance(error, dict) and error.get("code") == _DISPATCH_TIMEOUT_CODE
+
+
+_ASK_ACKNOWLEDGED = "acknowledged"
+_ASK_WEDGED = "wedged"
+_ASK_UNANSWERED = "unanswered"
+
+
+def _ask_server_outcome(pipe: str) -> str:
+    """Graceful ask over the warm pipe: _ASK_ACKNOWLEDGED, _ASK_WEDGED (the -32004 envelope: the
+    server proved its dispatch is stuck, so no drain is coming), or _ASK_UNANSWERED (transport
+    failure or no reply within the read deadline)."""
     request = {
         "jsonrpc": "2.0",
         "id": "warm-engine-stop",
@@ -205,19 +220,36 @@ def _ask_server_to_stop(pipe: str) -> bool:
     try:
         fh = _open_pipe(pipe)
     except OSError:
-        return False
+        return _ASK_UNANSWERED
     try:
         try:
             fh.write(payload)
             fh.flush()
         except OSError:
-            return False
-        return _is_stop_acknowledgement(_read_line_with_deadline(fh, _ASK_READ_DEADLINE_SECS))
+            return _ASK_UNANSWERED
+        line = _read_line_with_deadline(fh, _ASK_READ_DEADLINE_SECS)
+        if _is_wedged_reply(line):
+            return _ASK_WEDGED
+        return _ASK_ACKNOWLEDGED if _is_stop_acknowledgement(line) else _ASK_UNANSWERED
     finally:
         try:
             fh.close()
         except OSError:
             pass
+
+
+def _ask_server_to_stop(pipe: str) -> bool:
+    """True iff the server answered within the read deadline with something other than the
+    -32004 dispatch-timeout envelope."""
+    return _ask_server_outcome(pipe) == _ASK_ACKNOWLEDGED
+
+
+def _ask_server_with_wedge_signal(pipe: str):
+    """_ASK_WEDGED, True (acknowledged) or False (unanswered); stop_warm_pair's default ask."""
+    outcome = _ask_server_outcome(pipe)
+    if outcome == _ASK_WEDGED:
+        return _ASK_WEDGED
+    return outcome == _ASK_ACKNOWLEDGED
 
 
 def _pid_confirmed_gone(pid: int, stored_epoch_str: str) -> bool:
@@ -435,7 +467,7 @@ def stop_warm_pair(
     """
     from coordinator_core.warm import front_door, supervisor
 
-    ask = ask_server if ask_server is not None else _ask_server_to_stop
+    ask = ask_server if ask_server is not None else _ask_server_with_wedge_signal
     ask_door = ask_front_door if ask_front_door is not None else front_door.ask_front_door_to_stop
     engine_root = Path(engine_root)
     before = find_pair_processes(engine_root, psutil_module=psutil_module)
@@ -469,9 +501,12 @@ def stop_warm_pair(
             # An unanswered ask is not a refusal: the server may be mid-request. Ask twice, then
             # wait the grace while it is alive, and signal only after. No pipe means no ask was
             # made, so there is no drain to wait for.
-            if not ask(pipe):
-                ask(pipe)
-            gone = _wait_for_pid_gone(pid, epoch_str, deadline_secs=_confirm_grace_secs())
+            # A -32004 answer proves a wedged dispatch: nothing will drain, so signal at once.
+            outcome = ask(pipe)
+            if outcome is not _ASK_WEDGED and not outcome:
+                outcome = ask(pipe)
+            if outcome is not _ASK_WEDGED:
+                gone = _wait_for_pid_gone(pid, epoch_str, deadline_secs=_confirm_grace_secs())
         if not gone:
             _terminate_pid(pid, psutil_module=psutil_module)
 

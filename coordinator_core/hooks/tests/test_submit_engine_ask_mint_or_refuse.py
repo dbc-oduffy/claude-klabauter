@@ -61,9 +61,10 @@ def _reason(env: dict) -> str:
 def test_overrun_after_mint_with_the_script_on_disk_starts_that_run(repo, monkeypatch):
     env = _overrun(repo, monkeypatch, mint=True, script=True)
     assert _decision(env) == "allow", env
-    updated = env["hookSpecificOutput"]["updatedInput"]
-    assert Path(updated["scriptPath"]) == repo / RUN_DIR_ROOT / f"{RUN_ID}.workflow.mjs"
-    assert updated["args"]["repoRoot"] == repo.as_posix()
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    text = script.read_text(encoding="utf-8")
+    assert script.parent == repo / "scratch" / "warp" and "_startLoop" in text
+    assert f"{RUN_DIR_ROOT}/{RUN_ID}.workflow.mjs" in text and repo.as_posix() in text  # the run script and its fire_args
     assert RUN_ID in env["hookSpecificOutput"]["additionalContext"]
 
 
@@ -108,7 +109,8 @@ def test_answer_deadline_with_a_minted_run_is_an_allow_not_a_deny(repo):
     call = {"t0": time.monotonic(), "wall0": time.time() - 5, "roots": [repo], "minted": [RUN_ID]}
     env = mod._answer_overran(call)
     assert _decision(env) == "allow", env
-    assert Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"]).name == f"{RUN_ID}.workflow.mjs"
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    assert f"{RUN_DIR_ROOT}/{RUN_ID}.workflow.mjs" in script.read_text(encoding="utf-8")
 
 
 def test_answer_deadline_with_a_minted_run_and_no_root_names_the_op(repo):

@@ -53,7 +53,9 @@ Negative-spec:
       ceremony retry loop around `baton-assemble apply spinoff` minted a
       new timestamped artifact per attempt, since `already_satisfied` never
       fires against a freshly-created path).
-    - Imports stdlib plus `time` only — no import from `coordinator_core.
+    - Starts no attempt and no backoff sleep past the request deadline
+      (`dispatch_abandon.remaining()`); unbound deadline keeps the schedule.
+    - Imports stdlib, `time` and the stdlib-only `dispatch_abandon` — no import from `coordinator_core.
       ops.*`, `coordinator_core.contract.*`, or any assembler package. This
       is a leaf module every commit seam (including future ones) can depend
       on without a layering cycle.
@@ -62,6 +64,8 @@ from __future__ import annotations
 
 import time
 from typing import Callable, TypeVar
+
+from coordinator_core import dispatch_abandon
 
 #: Substrings that identify a `.git/index.lock` contention failure in git's
 #: own stderr -- the ONLY class of failure `run_with_lock_retry` retries.
@@ -183,6 +187,13 @@ def run_with_lock_retry(
     for attempt in range(2, max_attempts + 1):
         if result.returncode == 0 or not is_lock_contention(result.stderr):
             return result
-        time.sleep(backoff_schedule_s[attempt - 2])
+        left = dispatch_abandon.remaining()
+        if left is not None and left <= 0.0:
+            return result
+        delay = backoff_schedule_s[attempt - 2]
+        time.sleep(delay if left is None else min(delay, left))
+        left = dispatch_abandon.remaining()
+        if left is not None and left <= 0.0:
+            return result
         result = invoke()
     return result

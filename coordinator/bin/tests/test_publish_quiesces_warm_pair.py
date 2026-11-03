@@ -347,26 +347,25 @@ def test_survivor_at_refresh_stop_refuses_before_refresh_and_gates(tmp_path, mon
     assert not env.held()
 
 
-def test_live_midstage_runs_are_logged_then_publish_proceeds_without_override(tmp_path, monkeypatch):
+def test_live_midstage_runs_refuse_the_handover_naming_each_run(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
+    monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
     env = _setup(tmp_path, monkeypatch, True)
     env.live_runs[:] = [
         live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z"),
         live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z"),
     ]
     rc, text = _run(env)
-    assert rc == 0, text
-    assert "ask-be779d" in text and "ask-aaaaaa" in text and "FATAL" not in text
+    assert rc == 1, text
+    assert "example-game-repo ask-be779d" in text and "claude-klabauter ask-aaaaaa" in text
     assert "--allow" not in text and "--cut-run" not in text
-    assert env.names("land_diff") == [("land_diff", True)]
+    assert env.names("land_diff") == []
+    assert env.names("stop") == []
 
 
 def test_live_midstage_run_does_not_bypass_survivor_refusal(tmp_path, monkeypatch):
-    from coordinator_core.warm import live_runs
-
     env = _setup(tmp_path, monkeypatch, True)
-    env.live_runs[:] = [live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
     env.stop_results[:] = [env.survivor_result()]
     rc, err = _run(env)
     assert rc == 1 and env.names("land_diff") == [] and "pid=4242" in err

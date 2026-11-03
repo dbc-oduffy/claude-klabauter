@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.halted_run import _is_shell, write_halt_marker
@@ -110,11 +111,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return reply(shown, None, refusal=f'{REFUSAL_BAD_PARAMS}: run_id must be a run id; pass {{"run_id": "<id>", "action": "start|abandon"}}')
     if action not in ACTIONS:
         return reply(run_id, None, refusal=f"{REFUSAL_BAD_PARAMS}: action must be one of {', '.join(ACTIONS)}")
-    run_dir = Path(repo_root) / RECORD_DIR_ROOT / run_id
+    # Trap: the engine keys this op `common_dir`, so repo_root arrives as `<repo>/.git`, not the worktree root.
+    root = main_worktree_root(Path(repo_root))
+    run_dir = root / RECORD_DIR_ROOT / run_id
     if not run_dir.is_dir():
         return reply(run_id, action, refusal=f"{REFUSAL_NOT_FOUND}: no {RECORD_DIR_ROOT}/{run_id}")
     if not is_minted_only(run_dir):
         return reply(run_id, action, refusal=f"{REFUSAL_PAST_MINTED}: {run_id} is past stage minted or halt-marked")
     if action == ACTION_START:
-        return _start(Path(repo_root), run_id)
-    return _abandon(Path(repo_root), run_id, bool(p.get("dry_run")))
+        return _start(root, run_id)
+    return _abandon(root, run_id, bool(p.get("dry_run")))

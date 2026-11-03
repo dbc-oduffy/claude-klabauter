@@ -44,9 +44,12 @@ from coordinator_core.ops.dispatch_emit import run_token as _run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir as _ask_record_dir
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED as _STATUS_HALTED
 from coordinator_core.ops.dispatch_emit.halted_run import (
-    HALTED_FILE as _HALTED_FILE, STATUS_LANDED as _STATUS_LANDED,
+    HALTED_FILE as _HALTED_FILE, STATUS_CLOSED as _STATUS_CLOSED, STATUS_LANDED as _STATUS_LANDED,
+    STATUS_RESUMED as _STATUS_RESUMED, STATUS_SUPERSEDED as _STATUS_SUPERSEDED,
 )
 from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
+
+_ENDED_STATUSES = (_STATUS_HALTED, _STATUS_LANDED, _STATUS_SUPERSEDED, _STATUS_CLOSED)
 
 SUBMISSION_FILE = "submission.json"
 
@@ -606,10 +609,18 @@ def size_stage_run(
 
 
 def _holds_ended_marker(root: Path, run_id: str) -> bool:
-    """True when the run's record dir holds a `halted` or `landed` marker: such a run is never
-    working, whatever an unconsumed token says. A `resumed` marker is live again."""
+    """True when the run's record dir holds a `halted`, `landed`, `superseded` or `closed` marker:
+    such a run is never working, whatever an unconsumed token says. A `resumed` marker is live
+    again here; the index sweep and `live_footprints` use `run_is_over`."""
     marker = _read_json(_ask_record_dir(root, run_id) / _HALTED_FILE)
-    return bool(marker) and marker.get("status") in (_STATUS_HALTED, _STATUS_LANDED)
+    return bool(marker) and marker.get("status") in _ENDED_STATUSES
+
+
+def run_is_over(root: Path, run_id: str) -> bool:
+    """True when a run holds no write claim: an ended marker, or a `resumed` one (a successor run
+    owns the work). One `halted.json` read; an unreadable or absent marker answers False."""
+    marker = _read_json(_ask_record_dir(root, run_id) / _HALTED_FILE)
+    return bool(marker) and marker.get("status") in _ENDED_STATUSES + (_STATUS_RESUMED,)
 
 
 def _has_launch(record: dict, dirs: list[str]) -> bool:

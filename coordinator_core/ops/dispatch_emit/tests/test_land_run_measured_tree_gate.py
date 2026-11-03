@@ -152,6 +152,45 @@ def test_mismatch_compares_removals(repo):  # noqa: F811
     assert land_run._measured_mismatch(repo, {"blobs": {}, "removed": []}, [], ["README.md"], {}) == ["README.md"]
 
 
+def test_detail_for_an_omitted_path_names_full_ids_and_the_omission_not_end_of_file(repo):  # noqa: F811
+    _write(repo, "p.py", "p = 1\n")
+    blob = _blob(repo, "p.py")
+    record = {"blobs": {"p.py": blob}, "removed": []}
+
+    assert land_run._measured_mismatch(repo, record, [], [], {}) == ["p.py"]
+    detail = land_run._mismatch_detail(repo, "p.py", record["blobs"], {}, RUN2, omitted=True)
+
+    assert f"measured {blob}, landing {blob}" in detail
+    assert "<end of file>" not in detail
+    assert "the commit omits this path" in detail and "bytes are identical" in detail
+
+
+def test_detail_names_the_line_ending_cause_when_every_line_is_equal(repo):  # noqa: F811
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    _write(repo, "p.py", "a = 1\nb = 2\n")
+    common = resolve_git_common_dir(repo)
+    landing = git_objects.write_object(common, b"blob", b"a = 1\nb = 2\n")
+    crlf = git_objects.write_object(common, b"blob", b"a = 1\r\nb = 2\r\n")
+    nonl = git_objects.write_object(common, b"blob", b"a = 1\nb = 2")
+
+    by_eol = land_run._mismatch_detail(repo, "p.py", {"p.py": crlf}, {"p.py": landing})
+    by_newline = land_run._mismatch_detail(repo, "p.py", {"p.py": nonl}, {"p.py": landing})
+
+    assert crlf in by_eol and landing in by_eol and "line endings differ" in by_eol and "<end of file>" not in by_eol
+    assert "the trailing newline differs" in by_newline and "<end of file>" not in by_newline
+
+
+def test_equal_full_blob_id_in_the_landing_set_never_refuses(repo):  # noqa: F811
+    _write(repo, "p.py", "p = 1\n")
+    blob = _blob(repo, "p.py")
+    record = {"blobs": {"p.py": blob}, "removed": []}
+
+    assert land_run._measured_mismatch(repo, record, ["p.py"], [], {"p.py": blob}) == []
+    assert land_run._measured_mismatch(repo, record, ["p.py"], [], {}) == []
+
+
 def test_settled_blob_overrides_the_worktree_blob(repo):  # noqa: F811
     _write(repo, "p.py", "p = 1\n")
     record = {"blobs": {"p.py": "a" * 40}, "removed": []}

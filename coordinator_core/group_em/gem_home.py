@@ -4,14 +4,15 @@ Port of coordinator-content-repo `coordinator/hooks/scripts/_gem_home.py`. A cha
 to both. The resolve path is zero spawn, zero write (registry TOML read directly); only
 `ensure_home` writes, and spawns `git init`.
 
-Also carries the G-EM memo identity (A-GROUP-EM-SENDS-MEMOS-AND-NEVER-RECEIVES-THEM): the
-home signs as SENDER_ID and never receives; RECEIVER_IDS name the addresses that reroute.
+Also carries the G-EM memo identity: the home signs as SENDER_ID and receives at its own
+`state/cross-repo/inbox`; RECEIVER_IDS name the addresses that resolve to it.
 `machine_resolver` imports this module lazily to avoid a cycle.
 """
 
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -26,8 +27,24 @@ DEFAULT_DIRNAME = "group-em"
 LEGACY_DIRNAME = "general-work"
 SENDER_ID = "group-em-em"
 RECEIVER_IDS = frozenset({SENDER_ID})
-# Machine-local runtime state the home never commits.
-_IGNORED = (".coordinator-local/",)
+REMOTE_URL_KEY = "coordinator.group_em_home_remote_url"
+REMOTE_BRANCH_KEY = "coordinator.group_em_home_remote_branch"
+REMOTE_DECLINED_KEY = "coordinator.group_em_home_remote_declined"
+DEFAULT_REMOTE_BRANCH = "main"
+OPT_OUTS = ("gh-absent", "gh-unauthenticated", "declined")
+# Per-box runtime the home never commits; `state/cross-repo/` stays tracked (the memo inbox).
+_IGNORED = (
+    ".coordinator-local/",
+    "state/group-em-watch*",  # watch json, its lock sidecar, spool, parked map
+    "scratch/",  # governor.log and governor-reaps.jsonl live under <home>/scratch
+    "governor.log*",
+    "governor-reaps.jsonl",
+    "pm_turns.jsonl",
+    "state/residue/",
+    Path(record_homes.home_dir(".", "audits")).as_posix().removeprefix("./") + "/",
+    "state/block-discharge/",
+    "block-discharge/",
+)
 
 
 class HomeRefused(Exception):
@@ -185,12 +202,63 @@ def ensure_home(template: Path | None = None, refresh: bool = False) -> Path:
     return ensure_home_outcome(template, refresh)[0]
 
 
-def ensure_home_outcome(template: Path | None = None, refresh: bool = False) -> tuple[Path, str]:
-    """Migrate a legacy home when safe, then create the home, `git init` it, add `state/`, ignore
-    `.coordinator-local/`, seed CLAUDE.md when absent (or on refresh, which overwrites it).
+def remote_status() -> tuple[str | None, str | None]:
+    """`(url, opt_out)`: the recorded remote URL, else None plus why there is none.
 
-    The template defaults to `default_template()`. Outcome is one of seeded, kept (CLAUDE.md
-    present, no refresh), no-template (none resolved or not a file; nothing written)."""
+    opt_out is one of OPT_OUTS, or None when a URL is recorded. The gh probe runs only when no
+    URL is recorded: `declined` (the declined key is set, or gh is ready and nothing asked for a
+    remote), `gh-absent` (no gh on PATH), `gh-unauthenticated` (`gh auth status` non-zero).
+    Never raises."""
+    try:
+        url = machine_resolver.registry_get(REMOTE_URL_KEY)
+        if url:
+            return url, None
+        declined = (machine_resolver.registry_get(REMOTE_DECLINED_KEY) or "").strip().lower()
+        if declined in ("1", "true", "yes"):
+            return None, "declined"
+        if not shutil.which("gh"):
+            return None, "gh-absent"
+        res = subprocess.run(
+            ["gh", "auth", "status"],
+            capture_output=True,
+            timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return None, ("declined" if res.returncode == 0 else "gh-unauthenticated")
+    except Exception:
+        return None, "gh-unauthenticated"
+
+
+def _attach_remote(home: Path, url: str) -> None:
+    """Attach `url` as origin of a commit-less home: fetch and check out the recorded branch.
+    The URL lands only in `.git/config`. Best-effort: a fetch or checkout failure leaves the
+    home as it was."""
+    cwd = str(home)
+    if run_git(["rev-parse", "--verify", "-q", "HEAD"], cwd=cwd).returncode == 0:
+        return
+    if run_git(["remote", "get-url", "origin"], cwd=cwd).returncode != 0:
+        run_git(["remote", "add", "origin", url], cwd=cwd)
+    branch = machine_resolver.registry_get(REMOTE_BRANCH_KEY) or DEFAULT_REMOTE_BRANCH
+    if run_git(["fetch", "-q", "origin", branch], cwd=cwd, remote=True).returncode != 0:
+        return
+    run_git(["checkout", "-q", "-B", branch, "--track", f"origin/{branch}"], cwd=cwd)
+
+
+def ensure_home_outcome(template: Path | None = None, refresh: bool = False) -> tuple[Path, str]:
+    """`ensure_home_report` narrowed to `(home, seed)` for callers that ignore the remote."""
+    rep = ensure_home_report(template, refresh)
+    return rep["home"], rep["seed"]
+
+
+def ensure_home_report(template: Path | None = None, refresh: bool = False) -> dict:
+    """Migrate a legacy home when safe, then create the home, `git init` it, attach the recorded
+    remote when the home has no commits, add `state/`, write the ignore list, seed CLAUDE.md when
+    absent (or on refresh, which overwrites it).
+
+    Returns `{home, seed, remote, remote_opt_out}`. The template defaults to `default_template()`.
+    `seed` is one of seeded, kept (CLAUDE.md present, no refresh), no-template (none resolved or
+    not a file; nothing written). `remote` is the recorded URL or None; with no URL,
+    `remote_opt_out` names why (see `remote_status`) and the home stays local-only."""
     migrate_legacy_home()
     home = resolve_home()
     home.mkdir(parents=True, exist_ok=True)
@@ -200,16 +268,22 @@ def ensure_home_outcome(template: Path | None = None, refresh: bool = False) -> 
             raise subprocess.CalledProcessError(
                 res.returncode, ["git", "init", "-q", str(home)], res.stdout, res.stderr
             )
+    url, opt_out = remote_status()
+    if url:
+        _attach_remote(home, url)
     (home / "state").mkdir(exist_ok=True)
     _ensure_ignored(home)
+    report = {"home": home, "seed": "no-template", "remote": url, "remote_opt_out": opt_out}
     src = template or default_template()
     if src is None or not src.is_file():
-        return home, "no-template"
+        return report
     seed = home / "CLAUDE.md"
     if not refresh and seed.exists():
-        return home, "kept"
+        report["seed"] = "kept"
+        return report
     seed.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
-    return home, "seeded"
+    report["seed"] = "seeded"
+    return report
 
 
 _receiver_ids_cache: frozenset[str] | None = None

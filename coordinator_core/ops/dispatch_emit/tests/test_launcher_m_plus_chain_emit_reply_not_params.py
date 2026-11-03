@@ -81,4 +81,5 @@ def test_a_reply_whose_path_is_no_run_script_is_refused_whatever_its_run_id(tmp_
     reply = {"path": f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.mjs", "run_id": "ask-r2", "ok": True}
     out = _drive(_script(tmp_path), [_handoff(reply)], {})
     assert out["r"]["status"] == "failed"
-    assert "not a fresh run id" in out["r"]["error"]
+    assert "yields an empty run id" in out["r"]["error"]
+    assert len(out["calls"]) == 1

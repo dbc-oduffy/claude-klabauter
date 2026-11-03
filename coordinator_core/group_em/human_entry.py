@@ -56,6 +56,10 @@ def _parse_iso(value: object) -> float | None:
 
 _FINAL_STATUSES = ("verified", "rejected")
 
+#: The one home-start rejection a later read can overturn (the transcript's first cwd line may land
+#: after the pending window); never cached, and a cached one is ignored.
+_NO_START_ENTRY = "no-start-entry"
+
 HOME_START = "home-start"
 HOME_START_REFUSAL_MESSAGE = (
     f"{REFUSAL}: this session did not start interactively in the group-em home; "
@@ -152,11 +156,16 @@ def resolve_entry_evidence(
         return {"status": "rejected", "reason": "bad-session-id"}
     session_id, prompt_id, kind = key
     cached = _read_cache(cache_path, key)
-    if cached is not None and cached.get("status") in _FINAL_STATUSES:
+    if (
+        cached is not None
+        and cached.get("status") in _FINAL_STATUSES
+        and not (kind == HOME_START and cached.get("reason") == _NO_START_ENTRY)
+    ):
         return {k: v for k, v in cached.items() if k not in ("session_id", "offsets")}
     if kind == HOME_START:
         verdict = _home_start_verdict(session_id, key[1], now, projects_root)
-        _write_cache(cache_path, key, verdict, {})
+        if verdict.get("reason") != _NO_START_ENTRY:
+            _write_cache(cache_path, key, verdict, {})
         return verdict
     prior_offsets = (cached or {}).get("offsets")
     found, offsets = _scan_transcripts(
@@ -260,7 +269,7 @@ def _home_start_verdict(
         claimed = _parse_iso(claimed_at)
         if claimed is not None and 0 <= now - claimed < PENDING_WINDOW_SECONDS:
             return {"status": "pending", **base}
-        return {"status": "rejected", "reason": "no-start-entry", **base}
+        return {"status": "rejected", "reason": _NO_START_ENTRY, **base}
     reason = _home_start_reason(entry)
     if reason is not None:
         return {"status": "rejected", "reason": reason, **base}

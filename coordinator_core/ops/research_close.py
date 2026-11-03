@@ -5,12 +5,17 @@ Purpose: closes a research run by tier. Scouts first concatenates the run's ``di
 files, then a ``## Grounding`` section holding ``grounding.md`` when it has text, into
 ``<scratch_dir>/digest.md`` and archives that as its only output (``probe-*.md`` and
 ``grounding.md`` are never archived separately). Every tier
-copies the run's declared final outputs into ``docs/research/<YYYY-MM-DD>-<topic_slug>/``
-and makes exactly one ``commit_paths`` call over the copied paths plus the trail record
-``docs/research/trail/<run_id>.yaml`` (built by ``_research_trail``).
+copies the run's declared final outputs into the run dir
+``docs/research/<topic>/<YYYY-MM-DD>-<run-slug>/`` (``_research_layout``: ``synthesis.md`` and
+scouts' ``digest.md`` land at ``synthesis.md``, ``verdict.md`` at ``verdict.md``, every other
+output, segment dirs included, under ``outputs/<scratch-relative path>``) and makes exactly one
+``commit_paths`` call over the copied paths plus the trail record ``<run dir>/trail.yaml``
+(built by ``_research_trail``). The run slug is ``topic_slug`` lowercased, non-``[a-z0-9]``
+runs folded to ``-``; ``<run dir>/workdir/`` is the run's scratch home, never created here.
 
 Params: ``scratch_dir`` (absolute), ``tier`` (scouts|corpus|deep), ``run_id``,
-``topic_slug`` (both safe single path segments), ``value_class`` (optional, in
+``topic_slug`` (both safe single path segments), ``topic`` (optional, a valid
+``_research_layout.TOPIC_RE`` topic; absent, the folded ``topic_slug`` when valid, else ``misc``), ``value_class`` (optional, in
 ``rc.VALUE_CLASSES``, default ``tier``), ``sizing`` (optional repo-relative path named in the
 record; it must exist on disk, else the close is refused before any copy or commit, and it
 lands in the same commit as the trail record; the close removes its ``research`` block first
@@ -20,9 +25,9 @@ scratch-relative file paths; default is every regular file directly in scratch_d
 directly in each ``segment_dirs`` subdirectory), ``segment_dirs`` (optional safe single
 path segments: a multi-pipeline run writes every segment after the first under
 ``<scratch_dir>/<pipeline>/``, archived at the same relative path), ``local_root``
-(optional, absolute: a local-only run archives to ``<local_root>/<YYYY-MM-DD>-<topic_slug>/``
-outside every git checkout and commits only its trail record, which carries no paths and no
-content; the reply's ``claims_out`` is the ``claims-emit --out`` stem there), ``require_claims`` (optional list of non-empty scratch-relative paths, each of
+(optional, absolute: a local-only run archives to ``<local_root>/<topic>/<YYYY-MM-DD>-<run-slug>/``
+outside every git checkout and commits only its in-repo ``<run dir>/trail.yaml``, which carries no
+paths and no content; the reply's ``claims_out`` is the ``claims-emit --out`` stem there), ``require_claims`` (optional list of non-empty scratch-relative paths, each of
 which must hold a non-empty JSON array; otherwise the close is refused with
 ``deliverable: false`` before any copy or commit), ``halted_segments`` (optional list of safe
 path segments naming pipelines whose leg halted: an entry that is also in ``segment_dirs``
@@ -55,22 +60,23 @@ never excused.
 
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
-pattern, never the value. After the commit, untracked files under ``docs/research/`` written
-since the run began and outside the destination are reported as ``strays``: a member that
-wrote its output elsewhere left it uncommitted and unarchived.
+pattern, never the value. Before any copy, untracked files under ``docs/research/`` written
+since the run began and outside the run dir refuse the close (``deliverable: false``, ``strays``
+listed, nothing written): a member that wrote its output elsewhere left it uncommitted and
+unarchived; move each into scratch and re-close.
 
 Idempotency: a re-run whose destination dir already holds byte-equal copies of every
 output and the identical trail record returns the sha of the commit that landed them (found
 by walking HEAD for the close subject); when no such commit is found, missing files are
 written and the commit is made. A destination file or trail record holding different bytes
 is refused, never overwritten, except a trail record the new one extends (same keys, old paths a
-subset of the new, count not smaller): a re-close after moving strays into scratch adds them
-and commits the extended record; a re-close on a later day names a new destination dir, so
-its record differs and is refused.
+subset of the new, count not smaller): a re-close after adding outputs extends and commits the
+record. A run id whose trail already sits at another path (a later-day run dir, or the legacy
+``docs/research/trail/<run_id>.yaml``, found by ``_research_trail.locate_trail``) is refused.
 
 ``group_runs`` (optional list of safe run ids, must include ``run_id``; per-group research fan-out):
 with a ``sizing``, the research block is dropped after this run's trail is written and only when
-every listed sibling's trail file is on disk; otherwise the sizing is left untouched and the reply
+every listed sibling's trail file (run-dir or legacy path) is on disk; otherwise the sizing is left untouched and the reply
 carries ``research_block: "kept (<n> of <m> groups closed)"``. A sibling counts closed by its trail
 file, not its landed commit. Absent ``group_runs`` the drop precedes the trail write.
 
@@ -111,6 +117,7 @@ from coordinator_core.git.index_write import IndexStaleAfterCommit, IndexWriteEr
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops import _research_grounding
+from coordinator_core.ops import _research_layout as layout
 from coordinator_core.ops import _research_trail
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops._research_sizing import ResearchSizingRefused, drop_research_block
@@ -449,11 +456,32 @@ def _close_archived(
         )
     since = min(p.stat().st_mtime for p in sources)
 
-    dest_dir = archive_root / f"{datetime.date.today().isoformat()}-{topic_slug}"
+    run_slug = re.sub(r"[^a-z0-9]+", "-", topic_slug.lower()).strip("-")
+    try:
+        run_rel = layout.run_dir(
+            layout.topic_for(run_slug, meta.get("topic")), datetime.date.today().isoformat(), run_slug
+        )
+    except ValueError as exc:
+        return _err(f"run dir refused: {exc}")
+    repo_run_dir = _RESEARCH_DIR / run_rel
+    run_dir_rel = repo_run_dir.as_posix()
+    dest_dir = archive_root / run_rel
     if contained_path(dest_dir, [archive_root]) is None:
         return _err(f"destination escapes {str(archive_root)!r}: {str(dest_dir)!r}")
+    if not local:
+        strays = _strays(worktree, dest_dir, since)
+        if strays:
+            return _err(
+                f"run is not deliverable: {len(strays)} untracked docs/research file(s) written "
+                f"during this run sit outside {run_dir_rel}; move each into the run's scratch dir "
+                "and re-close, or delete it",
+                deliverable=False,
+                strays=strays,
+            )
 
-    pairs = [(src, dest_dir / src.relative_to(scratch)) for src in sources]
+    pairs = [(src, dest_dir / layout.child_for(src.relative_to(scratch).as_posix())) for src in sources]
+    if len({dst for _, dst in pairs}) != len(pairs):
+        return _err("two outputs land at the same run-dir child (synthesis.md and digest.md); rename one")
     roots = [] if local else [
         (str(scratch), dest_dir.relative_to(worktree).as_posix()),
         (str(worktree), ""),
@@ -461,7 +489,7 @@ def _close_archived(
     payload = {dst: _archived_bytes(src, roots) for src, dst in pairs}
     rel_paths = [] if local else [dst.relative_to(worktree).as_posix() for _, dst in pairs]
     try:
-        trail_rel = _research_trail.trail_rel(run_id)
+        trail_rel = _research_trail.trail_rel(run_dir_rel)
         trail_text = _research_trail.render(
             _research_trail.record(
                 run_id=run_id,
@@ -478,6 +506,13 @@ def _close_archived(
     trail_path = worktree / trail_rel
     trail_bytes = trail_text.encode("utf-8")
     extend = False
+    elsewhere = None if trail_path.is_file() else _research_trail.locate_trail(worktree, run_id)
+    if elsewhere is not None:
+        return _err(
+            f"trail record exists with different content: run {run_id} is already closed at "
+            f"{elsewhere}, refusing to overwrite: {trail_rel}",
+            dest=elsewhere,
+        )
     if trail_path.exists() and (not trail_path.is_file() or trail_path.read_bytes() != trail_bytes):
         extend = trail_path.is_file() and _extends(
             trail_path.read_text(encoding="utf-8", errors="replace"), trail_text
@@ -527,7 +562,7 @@ def _close_archived(
             return _err(f"cannot write the close outputs: {exc}")
         if meta.get("sizing_rel") and group_runs:
             siblings = [g for g in group_runs if g != run_id]
-            closed = 1 + sum(1 for g in siblings if (worktree / _research_trail.trail_rel(g)).is_file())
+            closed = 1 + sum(1 for g in siblings if _research_trail.locate_trail(worktree, g) is not None)
             if closed == len(group_runs):
                 try:
                     pre_drop = drop_research_block(worktree, meta["sizing_rel"])
@@ -561,29 +596,27 @@ def _close_archived(
         released_runs = _release_build_sibling(worktree, run_id, trail_rel, meta.get("sizing_rel"))
         if released_runs is not None:
             note["released_runs"] = released_runs
+    shared = {
+        **note,
+        "exit_code": 0,
+        "committed": True,
+        "research_block_dropped": dropped,
+        "sha": sha or "",
+        "trail": trail_rel,
+        "run_dir": run_dir_rel,
+        "workdir": f"{run_dir_rel}/workdir",
+        "deliverable": True,
+    }
     if local:
         return {
-            **note,
-            "exit_code": 0,
-            "committed": True,
-            "research_block_dropped": dropped,
-            "sha": sha or "",
+            **shared,
             "local_only": True,
             "destination": dest_dir.as_posix(),
             "paths": [dst.as_posix() for _, dst in pairs],
-            "trail": trail_rel,
             "claims_out": (dest_dir / topic_slug).as_posix(),
             "run_id": run_id,
-            "deliverable": True,
         }
-    return _with_strays(
-        {
-            **note,
-            "exit_code": 0, "committed": True, "deliverable": True, "sha": sha or "",
-            "paths": rel_paths, "trail": trail_rel, "research_block_dropped": dropped,
-        },
-        worktree, dest_dir, since,
-    )
+    return {**shared, "paths": rel_paths}
 
 
 def _split_ask_run(worktree: Path, sizing_rel: str) -> Optional[tuple[str, str]]:
@@ -644,18 +677,6 @@ def _release_build_sibling(
     return [r.run_id for r in parent.runs if fire_command(r.slice_sizing) in fired]
 
 
-def _with_strays(result: dict, worktree: Path, dest_dir: Path, since: float) -> dict:
-    strays = _strays(worktree, dest_dir, since)
-    if strays:
-        result["strays"] = strays
-        result["warning"] = (
-            f"{len(strays)} untracked docs/research file(s) written during this run sit outside "
-            f"{dest_dir.relative_to(worktree).as_posix()}; move each into the run's scratch dir "
-            "and re-close, or delete it"
-        )
-    return result
-
-
 def _missing_claims(scratch: Path, require_claims) -> Optional[dict]:
     """A refusal reply when a ``require_claims`` path is not a non-empty JSON array, else None."""
     if require_claims is None:
@@ -706,7 +727,10 @@ def _close_sync(worktree: Path, params: dict) -> dict:
     outputs = params.get("outputs")
     value_class = str(params.get("value_class") or tier)
     sizing = params.get("sizing")
+    topic = params.get("topic")
 
+    if topic is not None and not (isinstance(topic, str) and layout.TOPIC_RE.match(topic)):
+        return _err(f"topic is not a valid research topic: {topic!r}")
     if tier not in rc.TIERS:
         return _err(f"tier must be one of {list(rc.TIERS)}: {tier!r}")
     if value_class not in rc.VALUE_CLASSES:
@@ -828,7 +852,7 @@ def _close_sync(worktree: Path, params: dict) -> dict:
         sizing_rel = os.path.normpath(sizing).replace("\\", "/")
     meta = {
         "tier": tier, "value_class": value_class, "sizing": sizing, "sizing_rel": sizing_rel,
-        "group_runs": group_runs,
+        "group_runs": group_runs, "topic": topic,
     }
     local_root_raw = params.get("local_root")
     result = _close_committed(
@@ -846,11 +870,11 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     Params: see the module docstring; ``run_id`` and ``topic_slug`` are required for every tier.
 
-    Returns (exit_code 0): ``{committed: true, deliverable: true, sha, paths, trail}`` plus
+    Returns (exit_code 0): ``{committed: true, deliverable: true, sha, paths, trail, run_dir, workdir}`` plus
     ``open`` (count of ``## Open questions`` grounding lines, passed not graded) when non-zero;
     local-only adds ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
     ``{committed: false, error}``; a ``require_claims``, ``require_outputs`` or ``require_grounding``
-    refusal adds ``deliverable: false``; a grounding-verdict refusal also adds ``grounding`` (the
+    refusal adds ``deliverable: false``, as does a ``strays`` refusal (which also lists ``strays``); a grounding-verdict refusal also adds ``grounding`` (the
     five verdict counts); when a ``digest-*.md`` is newer than ``grounding.md`` that refusal also
     adds ``next_action: {op: "research.reground", params: {run_id, scratch_dir}}`` (absolute
     ``scratch_dir``).

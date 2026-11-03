@@ -85,6 +85,30 @@ def test_unknown_run_is_a_named_refusal(tmp_path):
     assert out["ok"] is False and out["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
 
 
+def test_start_given_the_common_dir_key_finds_the_run_from_another_cwd(tmp_path, monkeypatch):
+    """The engine hands a common_dir-scoped op `<repo>/.git`, not the worktree root; cwd is elsewhere."""
+    from coordinator_core.ipc import resolve_op_repo_key
+
+    _repo(tmp_path)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+    key = resolve_op_repo_key(minted_run.OP_NAME, tmp_path)
+    out = minted_run._handler({"run_id": RUN, "action": "start"}, key)
+    assert out["ok"] is True, out
+    assert out["fire_args"] == {"repoRoot": tmp_path.as_posix()}
+    assert out["script_path"] == f"scratch/warp/{RUN}.workflow.mjs"
+
+
+def test_unknown_run_is_still_refused_given_the_common_dir_key(tmp_path):
+    from coordinator_core.ipc import resolve_op_repo_key
+
+    (tmp_path / ".git").mkdir()
+    key = resolve_op_repo_key(minted_run.OP_NAME, tmp_path)
+    out = minted_run._handler({"run_id": "nope", "action": "start"}, key)
+    assert out["ok"] is False and out["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
+
+
 def test_bad_params_are_named_refusals(tmp_path):
     assert minted_run._handler({"run_id": RUN, "action": "x"}, tmp_path)["refusal"].startswith(minted_run.REFUSAL_BAD_PARAMS)
     assert minted_run._handler({"run_id": "../x", "action": "start"}, tmp_path)["refusal"].startswith(minted_run.REFUSAL_BAD_PARAMS)

@@ -77,11 +77,15 @@ silent-inherit hole this module exists to close. Mirrors
 `enforce_agent_model_pin`'s own fail-closed stance on pin-resolution
 failure, applied to the parent-model question instead of the pin question.
 
-RUNG 3 IS REWRITTEN, RUNG 1 IS DENIED. A gated tier resolved by inheritance
-is rewritten to `model: "sonnet"` via `updatedInput` and proceeds, with one
-advisory line. A gated tier from an explicit `model` param is denied: the
-caller asked for a model, and a rewrite shown only as hook context ran a
-judge silently on Sonnet. The refusal names the opus-pinned personas. Rung 2 -- a gated non-`opus` frontmatter pin -- is a
+RUNGS 1 AND 3 ARE REWRITTEN, NEVER DENIED. A gated tier resolved by inheritance
+or by an explicit `model` param is rewritten to `model: "sonnet"` via
+`updatedInput` and proceeds, with one advisory line naming the override key and
+(for rung 1) the opus-pinned personas. OPUS OVERRIDE: the dispatch passes
+unrewritten only when `tool_input` carries `_OVERRIDE_KEY` with a non-empty
+stated reason (a bare flag value is no reason); one JSON line (ts, session,
+subagent_type, model, reason) is then appended to
+`<settings-home>/state/agent-model-overrides.jsonl`. A rewrite drops the key
+from `updatedInput`. Rung 2 -- a gated non-`opus` frontmatter pin -- is a
 human-authored declaration, so it hard-denies at every guard level rather
 than being quietly overridden.
 
@@ -170,6 +174,7 @@ import json
 import os
 import re
 import sys
+import time
 from typing import Any, Dict, Optional
 
 from coordinator_core._hook_envelope import deny, rewrite_input
@@ -186,6 +191,11 @@ CLASS = "hard-deny"
 MATCHERS = ("Agent",)
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_AGENT_MODEL_GUARD"
+
+#: Per-dispatch Opus override: a `tool_input` key whose value is the stated reason. Empty or
+#: bare-flag values are no reason and the dispatch is rewritten to sonnet.
+_OVERRIDE_KEY = "COORDINATOR_OVERRIDE_AGENT_MODEL_GUARD_REASON"
+_BARE_FLAG_VALUES = frozenset({"1", "true", "yes", "y", "on"})
 
 
 def _resolved_deny(envelope: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -347,10 +357,10 @@ def _deny_reason(subagent_type: str, resolved_model: str, note: str) -> str:
     )
 
 
-def _explicit_request_reason(
+def _explicit_request_advisory(
     subagent_type: str, passed_model: str, pins: Dict[str, Any]
 ) -> str:
-    """Refusal for an explicit gated `model` request; names opus-pinned personas, never the grant mechanism."""
+    """Advisory for an explicit gated `model` request rewritten to sonnet; names the opus-pinned personas and the reason key."""
     personas = sorted(
         name
         for name, entry in pins.items()
@@ -358,10 +368,47 @@ def _explicit_request_reason(
     )
     routes = ", ".join(personas[:3]) if personas else "coordinator:staff-eng"
     return (
-        f"AGENT DISPATCH BLOCKED: subagent_type={subagent_type!r} requested "
-        f"model {passed_model!r}; it needs a PM grant. Opus-pinned: {routes}. "
-        "Or pass model \"sonnet\"/\"haiku\"."
+        f"MODEL SWITCHED: subagent_type={subagent_type!r} requested model "
+        f"{passed_model!r}; runs as {_INHERITED_REWRITE_MODEL}. Opus-pinned: {routes}. "
+        f"Or set {_OVERRIDE_KEY} to the reason Opus is needed."
     )
+
+
+def _stated_reason(tool_input: Dict[str, Any]) -> Optional[str]:
+    """The dispatch's stated Opus reason, else None. A bare flag value is not a reason."""
+    value = tool_input.get(_OVERRIDE_KEY)
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or text.lower() in _BARE_FLAG_VALUES:
+        return None
+    return text
+
+
+def _record_override(
+    payload: Dict[str, Any], subagent_type: str, model: str, reason: str
+) -> None:
+    """Append one JSON line per granted override to the settings-home log; a failed write never blocks the dispatch."""
+    try:
+        from coordinator_core.atomic_append import append_line
+        from coordinator_core.group_em.atomic_record import settings_home
+
+        sink = settings_home() / "state" / "agent-model-overrides.jsonl"
+        sink.parent.mkdir(parents=True, exist_ok=True)
+        line = json.dumps(
+            {
+                "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "session": _clean_str(payload.get("session_id")) or "no-session",
+                "subagent_type": subagent_type,
+                "model": model,
+                "reason": reason,
+            },
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        append_line(sink, (line + "\n").encode("utf-8"))
+    except Exception:
+        pass
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -455,21 +502,28 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not gated:
         return None
 
+    if passed_model is not None or effective_model is None:
+        reason = _stated_reason(tool_input)
+        if reason is not None:
+            _record_override(payload, subagent_type, passed_model or resolved_model, reason)
+            return None
+        clean_input = {k: v for k, v in tool_input.items() if k != _OVERRIDE_KEY}
+
     if passed_model is not None:
-        return _resolved_deny(
-            deny(
-                "PreToolUse",
-                _explicit_request_reason(subagent_type, passed_model, pins),
-            )
+        return rewrite_input(
+            "PreToolUse",
+            {**clean_input, "model": _INHERITED_REWRITE_MODEL},
+            _explicit_request_advisory(subagent_type, passed_model, pins),
         )
 
     if effective_model is None:
         return rewrite_input(
             "PreToolUse",
-            {**tool_input, "model": _INHERITED_REWRITE_MODEL},
+            {**clean_input, "model": _INHERITED_REWRITE_MODEL},
             f"MODEL SWITCHED: {subagent_type!r} runs as {_INHERITED_REWRITE_MODEL}, not "
             f"the inherited {resolved_model!r} -- {_INHERITED_REWRITE_MODEL} fits most "
-            f"agent work. For Opus-grade judgment, dispatch a named persona.",
+            f"agent work. For Opus-grade judgment, dispatch a named persona, or set "
+            f"{_OVERRIDE_KEY} to the reason Opus is needed.",
         )
 
     return _resolved_deny(deny("PreToolUse", _deny_reason(subagent_type, resolved_model, note)))

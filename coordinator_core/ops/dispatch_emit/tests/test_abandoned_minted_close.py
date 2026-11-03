@@ -103,6 +103,22 @@ def test_bounded_by_limit_and_second_call_finishes(repo):
     assert amc.close_abandoned(repo, NOW) == []
 
 
+def test_kept_markers_ahead_do_not_consume_the_default_limit(repo):
+    kept = [_abandoned(repo, f"ask-20261101T00000{i}-aaaaa1", run_artifacts={"withheld": {"x": "d"}}) for i in range(amc.DEFAULT_LIMIT + 2)]
+    ids = [f"ask-20261102T00000{i}-bbbbb2" for i in range(3)]
+    dirs = [_abandoned(repo, rid) for rid in ids]
+    assert amc.close_abandoned(repo, NOW) == ids
+    assert all(_status(d) == "closed" for d in dirs)
+    assert all(_status(d) == "halted" for d in kept)
+
+
+def test_scan_budget_bounds_kept_markers(repo, monkeypatch):
+    rdir = _abandoned(repo, "ask-20261101T000000-ccccc3")
+    monkeypatch.setattr(amc, "SCAN_BUDGET_SECONDS", -1.0)
+    assert amc.close_abandoned(repo, NOW) == []
+    assert _status(rdir) == "halted"
+
+
 def test_skipped_run_ids_stay_halted(repo):
     rdir = _abandoned(repo, "ask-20261101T000000-333333")
     assert amc.close_abandoned(repo, NOW, skip={"ask-20261101T000000-333333"}) == []

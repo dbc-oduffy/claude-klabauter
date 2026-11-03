@@ -2,29 +2,14 @@
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.authoring_leaks import HeadView, import_closure, leak_gate
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.authoring_leaks.tests._git_fixture import git as _git, write as _write
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
-
-
-
-def _git(root: Path, *args: str) -> None:
-    subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
-        cwd=root, check=True, capture_output=True, **no_console_creationflags(),
-    )
-
-
-def _write(root: Path, rel: str, text: str) -> None:
-    p = root / rel
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_bytes(text.encode("utf-8"))
 
 
 @pytest.fixture
@@ -393,3 +378,9 @@ def test_stdlib_and_third_party_yield_no_finding_in_flat_layout(bare):
     _write(bare, "scripts/helper.py", "y = 1\n")
     _write(bare, "scripts/a.py", "import json\nimport yaml\nfrom os import path\n")
     assert _gate(bare, ["scripts/a.py"]).passed
+
+
+def test_public_discovery_helpers(tmp_path):
+    assert import_closure.module_files("a.b", ("", "src/")) == ["a/b.py", "a/b/__init__.py", "src/a/b.py", "src/a/b/__init__.py"]
+    assert import_closure.prefixes("pkg/x.py") == ("", "pkg/", "src/")
+    assert import_closure.read_text(tmp_path / "absent.py") is None

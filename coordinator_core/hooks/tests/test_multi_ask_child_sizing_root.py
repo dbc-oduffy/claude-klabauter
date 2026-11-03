@@ -116,6 +116,44 @@ def test_a_reported_sizing_missing_under_the_writer_root_is_refused_before_any_e
     assert not any(kind == "emit" for kind, _ in events)
 
 
+def test_sibling_sizing_reads_each_complete_when_every_read_is_slow(tmp_path, monkeypatch):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
+
+    root = _repo(tmp_path, "r")
+    rels = []
+    for i in range(3):
+        rel = f"state/sizings/s{i}.yaml"
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("x: 1\n", encoding="utf-8")
+        rels.append(rel)
+    real = sizing_fire.load_sizing
+
+    def slow(r, rel):
+        time.sleep(0.2)
+        return real(r, rel)
+
+    monkeypatch.setattr(sizing_fire, "load_sizing", slow)
+    monkeypatch.setattr(mod, "_BUDGET", [mod._READ_DEADLINE_MS])
+    docs = mod._load_sizing_docs(root, rels)
+    assert all(docs[rel] is not STALLED for rel in rels)
+    assert all(docs[rel] == {"x": 1} for rel in rels)
+
+
+def test_a_sizing_read_past_the_batch_deadline_is_stalled(tmp_path, monkeypatch):
+    import time
+
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
+
+    root = _repo(tmp_path, "r")
+    monkeypatch.setattr(sizing_fire, "load_sizing", lambda r, rel: time.sleep(1.0) or {})
+    monkeypatch.setattr(mod, "_SIZING_BATCH_DEADLINE_MS", 100.0)
+    assert mod._load_sizing_docs(root, ["state/sizings/a.yaml"])["state/sizings/a.yaml"] is STALLED
+
+
 def test_a_reply_without_writer_root_falls_back_to_the_submitting_root(tmp_path):
     submitting = _repo(tmp_path, "submitting")
 

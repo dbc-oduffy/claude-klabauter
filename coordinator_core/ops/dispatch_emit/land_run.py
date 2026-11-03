@@ -1254,6 +1254,32 @@ def foreign_halted_withheld(
         return {p: UNREADABLE_HALT_RECORD for p in wanted}
 
 
+def _measured_released_holds(
+    root: Path, measured: Optional[dict], foreign_held: Mapping, holders: Mapping,
+) -> dict:
+    """`{path: [halted holder ids]}` of the `foreign_held` paths whose worktree blob is the blob the run's
+    measured-rev record carries: the verified tree already contains the halted holders' hunks, so the
+    path lands whole. A path whose bytes differ from the record, or a record that is absent or
+    unreadable, stays held. Hash-only: spawns nothing."""
+    blobs = measured.get("blobs") if isinstance(measured, dict) and not measured.get("unreadable") else None
+    if not isinstance(blobs, dict) or not foreign_held:
+        return {}
+    from coordinator_core.git.commit import checkin_blob_sha
+
+    out: dict = {}
+    for p in foreign_held:
+        want = blobs.get(p)
+        if not want or foreign_held[p] == UNREADABLE_HALT_RECORD:
+            continue
+        try:
+            same = checkin_blob_sha(root, p) == want
+        except Exception:  # noqa: BLE001 -- unknown bytes keep the hold
+            same = False
+        if same:
+            out[p] = list(holders.get(p) or [foreign_held[p]])
+    return out
+
+
 def _merge_in_progress(root: Path) -> bool:
     """A merge commit cannot carry own-hunk staging, so a narrowed halted hold is not attempted over one."""
     try:
@@ -2788,9 +2814,23 @@ def _measured_rev_call(run_id: Optional[str]) -> str:
     return "coordinator-invoke dispatch.measured_rev '" + json.dumps({"run_id": run_id or "<run_id>", "paths": []}) + "'"
 
 
-def _mismatch_detail(root: Path, rel: str, blobs: Mapping, settled: Mapping, run_id: Optional[str] = None) -> str:
-    """One path's refusal line: measured vs landing blob, the first differing line, and the one
-    remedy for the cause (worktree drifted since measure, or the staged blob dropped measured bytes)."""
+def _byte_cause(old: bytes, new: bytes) -> str:
+    """Why two byte strings whose lines compare equal still differ; empty when they are identical."""
+    if old == new:
+        return ""
+    if old.replace(b"\r\n", b"\n") == new.replace(b"\r\n", b"\n"):
+        return "line endings differ (CRLF vs LF)"
+    if old.rstrip(b"\r\n") == new.rstrip(b"\r\n"):
+        return "the trailing newline differs"
+    return "bytes differ within the lines"
+
+
+def _mismatch_detail(
+    root: Path, rel: str, blobs: Mapping, settled: Mapping, run_id: Optional[str] = None, omitted: bool = False,
+) -> str:
+    """One path's refusal line: full measured vs landing blob ids, the first differing line (or, when
+    every line is equal, the byte cause or the omission), and the one remedy for the cause. *omitted*:
+    the commit does not carry *rel* at all."""
     from coordinator_core.git import git_objects
     from coordinator_core.git.commit import checkin_blob_sha
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -2803,31 +2843,40 @@ def _mismatch_detail(root: Path, rel: str, blobs: Mapping, settled: Mapping, run
     landing = landing or worktree
     common = resolve_git_common_dir(root)
 
-    def lines(blob: object) -> Optional[list]:
+    def raw(blob: object) -> Optional[bytes]:
         obj = git_objects.read_object(common, blob) if isinstance(blob, str) else None
-        return None if obj is None else obj[1].splitlines()
+        return None if obj is None else obj[1]
 
-    old, new = lines(measured), lines(landing)
-    if new is None and not settled.get(rel):
+    old_raw, new_raw = raw(measured), raw(landing)
+    if new_raw is None and not settled.get(rel):
         try:
             from coordinator_core.ops.dispatch_emit import kept_work
 
             form = kept_work.checkin_form(root, rel, (root / rel).read_bytes())
-            new = None if form is None else form.splitlines()
+            new_raw = None if form is None else form
         except OSError:
             pass
     first = ""
-    if old is not None and new is not None:
+    if measured and measured == landing:
+        first = "; the bytes are identical"
+    elif old_raw is not None and new_raw is not None:
+        old, new = old_raw.splitlines(), new_raw.splitlines()
         at = next((i for i, (a, b) in enumerate(zip(old, new)) if a != b), min(len(old), len(new)))
-        def got(seq: list) -> str:
-            return seq[at].decode("utf-8", "replace")[:80] if at < len(seq) else "<end of file>"
+        if at >= len(old) and at >= len(new):
+            cause = _byte_cause(old_raw, new_raw)
+            first = f"; every line is equal ({cause})" if cause else "; the bytes are identical"
+        else:
+            def got(seq: list) -> str:
+                return seq[at].decode("utf-8", "replace")[:80] if at < len(seq) else "<end of file>"
 
-        first = f"; first difference at line {at + 1}: measured {got(old)!r}, landing {got(new)!r}"
+            first = f"; first difference at line {at + 1}: measured {got(old)!r}, landing {got(new)!r}"
+    if omitted:
+        first += "; the commit omits this path, which the measured record carries and HEAD does not hold"
     if measured and worktree == measured:
         remedy = "the worktree still holds the measured bytes, so hand-commit this path whole"
     else:
         remedy = f"re-run dispatch.measured_rev over the landing set with {_measured_rev_call(run_id)} and re-verify"
-    return f"{rel}: measured {str(measured)[:10]}, landing {str(landing)[:10]}{first}; remedy: {remedy}"
+    return f"{rel}: measured {measured}, landing {landing}{first}; remedy: {remedy}"
 
 
 def _measured_mismatch(
@@ -3372,6 +3421,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     )
     if auto_landed_holders:
         foreign_held = {}
+    measured_released = _measured_released_holds(root, measured, foreign_held, foreign_holders)
+    for p in measured_released:
+        foreign_held.pop(p)
     # A halted holder keeps only its own hunks: the landing's hunks that overlap none of them land.
     halted_clear: dict = {}  # path -> (clear hunks, holder id, some hunk stays withheld)
     if foreign_held and not _merge_in_progress(root):
@@ -3673,7 +3725,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             root, params, paths, deleted, record_abs, sibling_run_id, request.plan_path, residue_py=residue_py,
             own_declared=declared, session_id=session_id, minted_before=own_seniority,
             deleted_notes=deleted_notes,
-            released_holders=frozenset(auto_landed_holders or ()) | {h for _hunks, h, _p in halted_clear.values()},
+            released_holders=(
+                frozenset(auto_landed_holders or ()) | {h for _hunks, h, _p in halted_clear.values()}
+                | {h for hs in measured_released.values() for h in hs}
+            ),
             settled=settled_stage,
         )
     except land_deadline.LandDeadlineExceeded:
@@ -4006,7 +4061,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             return _error(
                 "landing refused: the product changes this commit would introduce differ from the measured-rev "
                 "record: " + " | ".join(
-                    d if measured.get("unreadable") else _mismatch_detail(root, d, mblobs, settled_blobs, measured_run)
+                    d if measured.get("unreadable") else _mismatch_detail(
+                        root, d, mblobs, settled_blobs, measured_run, omitted=d not in commit_set,
+                    )
                     for d in differing
                 ),
                 refused=LANDING_TREE_DIFFERS, paths=differing,

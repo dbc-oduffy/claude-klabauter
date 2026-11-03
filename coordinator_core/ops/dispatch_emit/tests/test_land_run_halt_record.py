@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -180,6 +181,26 @@ def test_reply_names_run_deleted_targets_and_keeps_the_check(repo, verdict, chec
     assert out["targeted_tests"]["findings"] == []
     assert "test_gone.py" in out["targeted_tests"]["note"]
     assert out["withheld"] == {"done.py": land_run_halt.HALT_RECORD_ONLY}
+
+
+def _marker(root: Path) -> dict:
+    return json.loads((root / RECORD_DIR_ROOT / RUN / "halted.json").read_text(encoding="utf-8"))
+
+
+def test_a_commit_halt_records_the_refusal_text_as_the_marker_reason(repo):
+    _record(repo)
+
+    _call(repo, {"halted": "commit", "refused": "terminal_commit params file was  never\nwritten"})
+
+    assert _marker(repo)["reason"] == "terminal_commit params file was never written"
+
+
+def test_a_refusal_halt_still_records_no_marker_reason(repo):
+    _record(repo)
+
+    _call(repo, {"halted": "refusal", "reason": "estimate L needs a PM touchpoint"})
+
+    assert "reason" not in _marker(repo)
 
 
 def test_a_halt_other_than_ledger_check_lands_the_record_only(repo):

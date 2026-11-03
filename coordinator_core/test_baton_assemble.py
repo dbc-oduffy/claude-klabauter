@@ -1474,7 +1474,9 @@ class TestD1OutAndTitleThreading:
         assert out_value != str(artifact)
         import re
 
-        assert re.search(r"state[/\\]handoffs[/\\]\d{4}-\d{2}-\d{2}-h1\.md$", out_value)
+        assert re.search(
+            r"state[/\\]handoffs[/\\]\d{4}-\d{2}[/\\]\d{4}-\d{2}-\d{2}-h1\.md$", out_value
+        )
 
     def test_d1_args_contain_title_when_supplied(self, tmp_path):
         artifact = _write_artifact(
@@ -1736,7 +1738,7 @@ class TestSameDayChainOutputPathDisambiguation:
         # Disambiguated via the established `<date>_<HHMMSS>_<slug>.md`
         # same-day-chain convention.
         assert re.search(
-            rf"state[/\\]handoffs[/\\]{today}_\d{{6}}_priority-ledger-execute\.md$",
+            rf"state[/\\]handoffs[/\\]{today[:7]}[/\\]{today}_\d{{6}}_priority-ledger-execute\.md$",
             out_value,
         )
 
@@ -1773,9 +1775,35 @@ class TestSameDayChainOutputPathDisambiguation:
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         out_value = ba._compute_fresh_output_path(f"state/handoffs/{today}-x.md")
-        assert out_value == f"state/handoffs/{today}-x.md" or out_value == str(
-            Path("state") / "handoffs" / f"{today}-x.md"
+        assert out_value == f"state/handoffs/{today[:7]}/{today}-x.md"
+
+    def test_flat_same_day_handoff_still_forces_disambiguation_of_the_sharded_candidate(
+        self, tmp_path
+    ):
+        import datetime
+
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        flat = _write_artifact(
+            tmp_path / "state" / "handoffs" / f"{today}-flat-twin.md",
+            ["deliverable_id: DEL-1", 'predecessor: "none"'],
         )
+        out_value = ba._compute_fresh_output_path(str(flat), tmp_path)
+        assert re.search(
+            rf"^state/handoffs/{today[:7]}/{today}_\d{{6}}_flat-twin\.md$", out_value
+        ), out_value
+
+    def test_sharded_same_day_handoff_forces_disambiguation(self, tmp_path):
+        import datetime
+
+        today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        sharded = _write_artifact(
+            tmp_path / "state" / "handoffs" / today[:7] / f"{today}-shard-twin.md",
+            ["deliverable_id: DEL-1", 'predecessor: "none"'],
+        )
+        out_value = ba._compute_fresh_output_path(str(sharded), tmp_path)
+        assert re.search(
+            rf"^state/handoffs/{today[:7]}/{today}_\d{{6}}_shard-twin\.md$", out_value
+        ), out_value
 
     def test_brief_end_to_end_same_day_chain_succeeds(self, tmp_path):
         """Brief-level reproduction matching the dispatch brief's literal
@@ -1808,7 +1836,7 @@ class TestStandaloneHandoffSlugFromTitle:
             "", tmp_path, title="Some Standalone Title!"
         )
         assert out_value == (
-            Path("state") / "handoffs" / f"{today}-some-standalone-title.md"
+            Path("state") / "handoffs" / today[:7] / f"{today}-some-standalone-title.md"
         ).as_posix()
 
     def test_empty_artifact_path_and_no_title_falls_back_to_untitled(self, tmp_path):
@@ -1833,7 +1861,7 @@ class TestStandaloneHandoffSlugFromTitle:
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         out_value = ba._compute_fresh_output_path("", tmp_path)
         assert re.fullmatch(
-            rf"state/handoffs/{today}-untitled-[0-9a-f]{{8}}\.md", out_value
+            rf"state/handoffs/{today[:7]}/{today}-untitled-[0-9a-f]{{8}}\.md", out_value
         ), out_value
         assert not out_value.endswith("-.md")
 
@@ -1861,7 +1889,7 @@ class TestStandaloneHandoffSlugFromTitle:
         out_value = ba._compute_fresh_output_path(
             str(artifact), tmp_path, title="Totally Different Title"
         )
-        assert out_value == (Path("state") / "handoffs" / f"{today}-some-plan.md").as_posix()
+        assert out_value == f"state/handoffs/{today[:7]}/{today}-some-plan.md"
 
     def test_brief_end_to_end_standalone_handoff_succeeds_with_slugified_title(
         self, tmp_path, monkeypatch
@@ -1882,7 +1910,7 @@ class TestStandaloneHandoffSlugFromTitle:
         d1 = next(d for d in decision["directives"] if d["id"] == "d1")
         out_arg = next(a for a in d1["args"] if a.startswith("--out="))
         out_value = out_arg[len("--out="):]
-        assert out_value == f"state/handoffs/{today}-stamp-the-scope-guard.md"
+        assert out_value == f"state/handoffs/{today[:7]}/{today}-stamp-the-scope-guard.md"
 
 
 # ---------------------------------------------------------------------------
@@ -1930,7 +1958,7 @@ class TestSuccessorDerivationSurvivesPredecessorArchival:
         assert not (tmp_path / out_value).exists()
         assert out_value != f"state/handoffs/{today}-{slug}.md"
         assert re.search(
-            rf"state[/\\]handoffs[/\\]{today}_\d{{6}}_{slug}\.md$", out_value
+            rf"state[/\\]handoffs[/\\]{today[:7]}[/\\]{today}_\d{{6}}_{slug}\.md$", out_value
         )
 
     def test_derivation_rule_is_identical_whether_predecessor_is_live_or_archived(
@@ -1965,7 +1993,7 @@ class TestSuccessorDerivationSurvivesPredecessorArchival:
             str(archived_live_named_path), archived_repo
         )
 
-        pattern = rf"state[/\\]handoffs[/\\]{today}_\d{{6}}_{slug}\.md$"
+        pattern = rf"state[/\\]handoffs[/\\]{today[:7]}[/\\]{today}_\d{{6}}_{slug}\.md$"
         assert re.search(pattern, live_out), live_out
         assert re.search(pattern, archived_out), archived_out
 
@@ -2117,7 +2145,7 @@ class TestArchiveScanIsMemoizedAndDegradesOnUnreadableSubdir:
             str(tmp_path / "state" / "handoffs" / "2026-01-01-unreadable-archive.md"),
             tmp_path,
         )
-        assert out_value == f"state/handoffs/{today}-unreadable-archive.md"
+        assert out_value == f"state/handoffs/{today[:7]}/{today}-unreadable-archive.md"
 
 
 class TestArchiveProbeIsNarrowedToNeededBasenames:
@@ -3350,7 +3378,7 @@ class TestApplyUsesNormalizedArtifactPathForCommitAndBasename:
         exit_code, report, captured = self._run_apply(tmp_path, monkeypatch, "my-bare-slug")
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-        expected_path = f"state/handoffs/{today}-my-bare-slug.md"
+        expected_path = f"state/handoffs/{today[:7]}/{today}-my-bare-slug.md"
 
         assert exit_code == ba_apply.APPLY_EXIT_OK
         assert captured["artifact_rel_path"] == expected_path
@@ -3402,7 +3430,7 @@ class TestApplyUsesNormalizedArtifactPathForCommitAndBasename:
         exit_code, report, captured = self._run_apply(tmp_path, monkeypatch, qualified)
 
         today = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-        assert captured["artifact_rel_path"] == f"state/handoffs/{today}-existing-plan.md"
+        assert captured["artifact_rel_path"] == f"state/handoffs/{today[:7]}/{today}-existing-plan.md"
         assert captured["artifact_rel_path"] != qualified
         assert captured["basename"] == f"{today}-existing-plan.md"
 
@@ -5394,7 +5422,7 @@ class _ReplayHarness:
     # -- disk oracles ----------------------------------------------------
     def live_handoffs(self) -> list[str]:
         live = self.repo / "state" / "handoffs"
-        return sorted(p.name for p in live.glob("*.md")) if live.is_dir() else []
+        return sorted(p.name for p in live.rglob("*.md")) if live.is_dir() else []
 
     def archived_predecessor(self) -> Path | None:
         archive_root = self.repo / "archive" / "handoffs"
@@ -7202,8 +7230,8 @@ class TestStandaloneHandoffApplyEndToEnd:
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
         assert report["landed"] == ["d1", "d2"]
-        assert d1_calls == [f"state/handoffs/{today}-some-title-here.md"]
-        assert (repo / "state" / "handoffs" / f"{today}-some-title-here.md").is_file()
+        assert d1_calls == [f"state/handoffs/{today[:7]}/{today}-some-title-here.md"]
+        assert (repo / "state" / "handoffs" / today[:7] / f"{today}-some-title-here.md").is_file()
 
 
 # ---------------------------------------------------------------------------
@@ -7580,15 +7608,14 @@ class TestSuccessorSideFanInDownEdge:
         `report["replayed"]` tells the operator exactly what to add by hand.
         """
         _init_repo(tmp_path)
-        # A prior attempt of this same run got as far as d6: it scaffolded a
-        # successor and recorded it on the primary predecessor. That
-        # predecessor-side evidence -- claimed/shipped + deployment_state:
-        # continued + continued_into -- is what `_resume_recorded_successor_
-        # path` reads (DR-242: never the successor's own `predecessor:`
-        # pointer), and it is the ONLY way d1 becomes already_satisfied. A
-        # bare file on disk does not do it: `_compute_fresh_output_path`
-        # deliberately disambiguates away from any existing path.
-        recorded_successor = "state/handoffs/2026-07-22-prior-attempt-successor.md"
+        # A prior attempt of this same run scaffolded the successor (in its
+        # month shard) and aborted before d6. The predecessor-side
+        # `continued_into` route is not used here: the predecessor resolver
+        # follows `continued_into` to the live leaf, so a recorded successor
+        # becomes the predecessor itself. The scaffold's own `predecessor:`
+        # pointer plus this session's `authoring_session` is what makes d1
+        # `already_satisfied` (`_adopt_prior_attempt_scaffold_path`).
+        recorded_successor = "state/handoffs/2026-07/2026-07-22-prior-attempt-successor.md"
         primary = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-21-second-alpha.md",
             [
@@ -7596,15 +7623,20 @@ class TestSuccessorSideFanInDownEdge:
                 "handoff_id: hnd-primary-1a2b46",
                 "claimed_at: 2026-07-20T10:00:00Z",
                 "claimed_by: sid-fanin",
-                "deployment_state: continued",
-                f"continued_into: {recorded_successor}",
             ],
         )
         extra = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-first-alpha.md",
             ["deliverable_id: DEL-1", "handoff_id: hnd-extra-1a2b50"],
         )
-        _write_artifact(tmp_path / recorded_successor, ["kind: session-handoff"])
+        _write_artifact(
+            tmp_path / recorded_successor,
+            [
+                "kind: session-handoff",
+                "predecessor: state/handoffs/2026-07-21-second-alpha.md",
+                "authoring_session: sid-fanin",
+            ],
+        )
         self._seed_handoff_claim(tmp_path, "sid-fanin", primary.name, "2026-07-20T09:00:00Z")
         self._seed_handoff_claim(tmp_path, "sid-fanin", extra.name, "2026-07-20T10:00:00Z")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-fanin")

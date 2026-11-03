@@ -67,49 +67,47 @@ def _no_spawn(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", boom)
 
 
-def test_gem_ids_and_home_path_reroute_to_central(env, monkeypatch):
+def test_gem_ids_and_home_path_resolve_to_the_home_inbox(env, monkeypatch):
     doe = env / "doe"
     (doe / "state" / "cross-repo").mkdir(parents=True)
     _registry(env, {"content_root": doe})
     _central(env, doe)
     home = _home(env)
     _no_spawn(monkeypatch)
-    baseline = resolve_receiver_inbox("coordinator-content-repo-em")
-    assert baseline[0] == doe / "state" / "cross-repo" / "inbox"
+    assert resolve_receiver_inbox("coordinator-content-repo-em")[0] == doe / "state" / "cross-repo" / "inbox"
     for rid in (*GEM_IDS, str(home)):
-        got = resolve_receiver_inbox(rid)
-        assert got[:2] == baseline[:2], rid
-    assert reroute_owner("group-em-em") == "coordinator-content-repo-em"
-
-
-def test_no_central_reroutes_to_claude_config_dir(env, monkeypatch):
-    _registry(env, {})
-    home = _home(env)
-    cfg = env / "cfg"
-    _no_spawn(monkeypatch)
-    for rid in (*GEM_IDS, str(home)):
-        inbox, root, _ = resolve_receiver_inbox(rid)
-        assert root == cfg
-        assert inbox == cfg / "state" / "cross-repo" / "inbox"
+        inbox, root, repos = resolve_receiver_inbox(rid)
+        assert inbox == home / "state" / "cross-repo" / "inbox", rid
+        assert root == home, rid
+        assert "repos.doe_claude" in repos
     assert reroute_owner("group-em-em") is None
 
 
-def test_fallback_without_config_dir_env_uses_dot_claude_under_home(env, monkeypatch):
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR")
+def test_no_central_still_resolves_to_the_home_inbox(env, monkeypatch):
     _registry(env, {})
-    fake_home = env / "home"
-    monkeypatch.setenv("USERPROFILE", str(fake_home))
-    monkeypatch.setenv("HOME", str(fake_home))
-    inbox, root, _ = resolve_receiver_inbox("group-em-em")
-    assert root == fake_home / ".claude"
-    assert inbox == fake_home / ".claude" / "state" / "cross-repo" / "inbox"
+    home = _home(env)
+    _no_spawn(monkeypatch)
+    for rid in (*GEM_IDS, str(home)):
+        inbox, root, _ = resolve_receiver_inbox(rid)
+        assert root == home
+        assert inbox == home / "state" / "cross-repo" / "inbox"
+    assert reroute_owner("group-em-em") is None
 
 
-def test_legacy_claude_root_layout_is_honoured(env):
+def test_default_home_under_settings_is_the_target(env):
     _registry(env, {})
-    (env / "cfg" / "cross-repo").mkdir(parents=True)
     inbox, root, _ = resolve_receiver_inbox("group-em-em")
-    assert inbox == env / "cfg" / "cross-repo" / "inbox"
+    assert root == env / "settings" / "group-em"
+    assert inbox == root / "state" / "cross-repo" / "inbox"
+
+
+def test_home_refused_inside_a_checkout_resolves_to_no_receiver(env):
+    checkout = env / "checkout"
+    (checkout / ".git").mkdir(parents=True)
+    _registry(env, {}, f'"coordinator.group_em_home" = {json.dumps(str(checkout / "home"))}\n')
+    inbox, root, repos = resolve_receiver_inbox("group-em-em")
+    assert (inbox, root) == (None, None)
+    assert repos == {}
 
 
 def test_ordinary_receivers_unchanged(env):
@@ -121,12 +119,14 @@ def test_ordinary_receivers_unchanged(env):
     assert resolve_receiver_inbox("coordinator-content-repo-em")[:2] == (None, None)
 
 
-def test_check_addressee_matches_from_central_repo(env):
+def test_check_addressee_matches_from_the_home_only(env):
     doe = env / "doe"
     (doe / ".git").mkdir(parents=True)
     _registry(env, {"content_root": doe})
     _central(env, doe)
-    assert compute_check_addressee_candidate(doe, "group-em-em")["verdict"] == "MATCH"
+    home = _home(env)
+    assert compute_check_addressee_candidate(home, "group-em-em")["verdict"] == "MATCH"
+    assert compute_check_addressee_candidate(doe, "group-em-em")["verdict"] != "MATCH"
 
 
 def test_resolve_self_em_id_home_signs_group_em(env):

@@ -20,6 +20,7 @@ import contextlib
 import dataclasses
 import os
 import re
+import shlex
 from dataclasses import dataclass
 from typing import Any, List, Optional, Sequence
 
@@ -69,7 +70,6 @@ _TSC_BUILD_FLAGS = frozenset({"-b", "--build"})
 _NOEMIT = "noemit"
 _UNBOUNDED = "unbounded"
 _BARE_PYTEST = "bare_pytest"
-_INLINE_PROBE = "inline_python_probe"
 _VERIFY_CLASSES = frozenset({HeavyClass.TEST_TIER, HeavyClass.TYPECHECK})
 _MAX_WORKERS_CONFIG_RE = re.compile(r"\bmaxWorkers\s*:\s*(\d+)?")
 
@@ -449,27 +449,53 @@ def _is_few_file_pytest(argv: Sequence[str]) -> bool:
         t.split("::", 1)[0].lower().endswith(".py") for t in targets)
 
 
-def _is_inline_python_probe(argv: Sequence[str]) -> bool:
-    """argv runs python on code that is not a file: `python -`, `python -c ...`, or a bare `python`
-    fed by a heredoc or pipe. `python -m mod` and `python script.py` are not probes.
+_PYTEST_LAUNCHERS = frozenset({"pytest", "py.test", "scoped-pytest", "scoped_pytest"})
 
-    TRAP: the segment tokenizer drops a heredoc, so a bare `python` is the heredoc shape."""
-    if not argv or not _suite._base(argv[0]).lower().startswith("python"):
+
+def _is_python_argv(argv: Sequence[str]) -> bool:
+    """argv launches the python interpreter or a pytest runner as its command."""
+    if not argv:
         return False
-    rest = list(argv[1:])
-    if "-m" in rest:
+    base = _suite._base(argv[0]).lower()
+    return base.startswith("python") or base in _PYTEST_LAUNCHERS
+
+
+def _flat_argvs(command: str, depth: int = 0) -> List[List[str]]:
+    """Every segment's argv, with prefixes stripped, launchers unwrapped and shell wrappers expanded."""
+    out: List[List[str]] = []
+    for segment in _suite._segment_argvs(command):
+        argv = _suite._strip_command_prefix(segment)
+        if not argv:
+            continue
+        inner = _wrapped_command(argv) if depth < _MAX_DEPTH else None
+        if inner is not None:
+            out.extend(_flat_argvs(inner, depth + 1))
+        else:
+            out.append(_unwrap_launcher(argv))
+    return out
+
+
+def runs_python_only(command: Any, tool_input: Any = None, cwd: Optional[str] = None) -> bool:
+    """True when `command` launches python or pytest and every other segment is light.
+
+    Admission never denies an agent's python run (`guard_heavy_command_admission._admit`). A
+    segment that is not python is judged by the classifier alone, so `python x.py && tsc` is not
+    python-only and its typecheck still meets the gates."""
+    if not isinstance(command, str) or not command.strip():
         return False
-    # Only interpreter flags (before the first positional) decide: `python x.py -c cfg` is a script run.
-    leading: List[str] = []
-    for tok in rest:
-        if tok and not tok.startswith("-") or tok == "-":
-            break
-        leading.append(tok)
-    if "-c" in leading or "-" in rest[len(leading):len(leading) + 1]:
-        return True
-    if len(leading) < len(rest):
+    try:
+        argvs = _flat_argvs(command)
+        if not any(_is_python_argv(a) for a in argvs):
+            return False
+        for argv in argvs:
+            if _is_python_argv(argv):
+                continue
+            rest = classify(" ".join(shlex.quote(t) for t in argv), tool_input, cwd)
+            if rest.heavy_class is not None or rest.scoped:
+                return False
+    except Exception:
         return False
-    return not any(f in leading for f in ("--version", "-V", "--help", "-h"))
+    return True
 
 
 def _wrapped_command(argv: Sequence[str]) -> Optional[str]:
@@ -530,8 +556,6 @@ def _scan(
                 found.append(_UNBOUNDED)
         elif _suite._runner_recognized(argv):
             found.append("scoped")
-        elif _is_inline_python_probe(argv):
-            found.append(_INLINE_PROBE)
 
 
 _PRECEDENCE = (
@@ -544,20 +568,18 @@ def classify(
     tool_input: Any = None,
     cwd: Optional[str] = None,
     vitest_worker_cap: Optional[int] = None,
-    workflow_agent: bool = False,
 ) -> Classification:
     """Heavy class of `command`; `scoped` is True only for a command whose sole runner footprint
     is an explicit test-target run or a worker-capped vitest run. `background` mirrors
     `tool_input["run_in_background"]`. `cwd` is the payload's; `vitest_worker_cap` None makes
-    every vitest run heavy. `workflow_agent` True classes an inline python probe (no memory cap,
-    no declared peak) as an unbounded TEST_TIER command; for any other caller it stays light."""
+    every vitest run heavy. An inline python probe is light."""
     ti = tool_input if isinstance(tool_input, dict) else {}
     background = ti.get("run_in_background") is True
     light = Classification(None, False, background)
     if not isinstance(command, str) or not command.strip():
         return light
     low = command.lower()
-    if not any(s in low for s in _PREFILTER + _ue._PY_PREFILTER) and not (workflow_agent and "python" in low):
+    if not any(s in low for s in _PREFILTER + _ue._PY_PREFILTER):
         return light
     try:
         if _ue.launches_heavy(command):
@@ -568,8 +590,6 @@ def classify(
         _scan(command, _suite._read_testpaths(cwd), cwd, 0, found, vitest_worker_cap)
     except Exception:
         return light
-    if workflow_agent and _INLINE_PROBE in found:
-        found.extend((HeavyClass.TEST_TIER, _UNBOUNDED))
     heavies = [f for f in found if isinstance(f, HeavyClass)]
     noemit = bool(heavies) and all(f is HeavyClass.TYPECHECK for f in heavies) and (
         found.count(_NOEMIT) == len(heavies)

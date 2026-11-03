@@ -21,6 +21,7 @@ subprocess anywhere.
 from __future__ import annotations
 
 import asyncio
+import datetime
 import errno
 import os
 import subprocess
@@ -47,7 +48,12 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 RUN_ID = "run-20260722-abc123"
 TOPIC = "warp-core-ejection"
 WORKDIR_NAME = f"{RUN_ID}-{TOPIC}-workdir"
-DEST_NAME = f"{RUN_ID}-{TOPIC}"
+RUN_NAME = f"{datetime.date.today().isoformat()}-{TOPIC}"
+DEST_REL = f"docs/research/{TOPIC}/{RUN_NAME}/workdir"
+
+
+def _dest(worktree: Path) -> Path:
+    return worktree / DEST_REL
 
 
 def _call(params: dict, repo_root) -> dict:
@@ -73,7 +79,7 @@ def test_normal_archive_moves_workdir_into_archive(tmp_path):
     worktree = _mk_worktree(tmp_path)
     src = _mk_workdir(worktree)
     result = _call({"run_id": RUN_ID}, worktree / ".git")
-    dest = worktree / "docs" / "research" / "archive" / DEST_NAME
+    dest = _dest(worktree)
     assert result["exit_code"] == 0
     assert result["archived"] is True
     assert result["already_archived"] is False
@@ -81,16 +87,75 @@ def test_normal_archive_moves_workdir_into_archive(tmp_path):
     assert not src.exists()
     assert (dest / "synthesis.md").read_text(encoding="utf-8") == "findings\n"
     assert (dest / "phase-1" / "notes.md").exists()
+    assert not any((worktree / "docs" / "research" / "archive").iterdir())
+
+
+def test_topic_param_selects_topic_dir(tmp_path):
+    worktree = _mk_worktree(tmp_path)
+    _mk_workdir(worktree)
+    result = _call({"run_id": RUN_ID, "topic": "ue-gas"}, worktree / ".git")
+    assert result["exit_code"] == 0
+    assert result["dest"] == str(
+        worktree / "docs" / "research" / "ue-gas" / RUN_NAME / "workdir"
+    )
+    assert _call({"run_id": RUN_ID, "topic": "Bad Topic"}, worktree / ".git")["exit_code"] == 1
+
+
+def test_trail_run_dir_wins_and_later_day_rerun_finds_dest(tmp_path):
+    """The run dir comes from the close's trail, not today's date: a rerun on
+    a later day still resolves the archived dest (already-archived no-op)."""
+    worktree = _mk_worktree(tmp_path)
+    _mk_workdir(worktree)
+    run_dir = worktree / "docs" / "research" / "ue-gas" / "2026-01-02-warp-core-ejection"
+    run_dir.mkdir(parents=True)
+    (run_dir / "trail.yaml").write_text(f'run_id: "{RUN_ID}"\n', encoding="utf-8")
+    first = _call({"run_id": RUN_ID}, worktree / ".git")
+    assert first["exit_code"] == 0
+    assert first["dest"] == str(run_dir / "workdir")
+    assert (run_dir / "workdir" / "synthesis.md").exists()
+    second = _call({"run_id": RUN_ID}, worktree / ".git")
+    assert second["already_archived"] is True
+    assert second["dest"] == str(run_dir / "workdir")
+    assert not (worktree / "docs" / "research" / "ue-gas" / RUN_NAME).exists()
+
+
+def test_legacy_flat_trail_falls_back_to_topic_today_slug(tmp_path):
+    worktree = _mk_worktree(tmp_path)
+    _mk_workdir(worktree)
+    legacy = worktree / "docs" / "research" / "trail"
+    legacy.mkdir()
+    (legacy / f"{RUN_ID}.yaml").write_text(f'run_id: "{RUN_ID}"\n', encoding="utf-8")
+    result = _call({"run_id": RUN_ID}, worktree / ".git")
+    assert result["exit_code"] == 0
+    assert result["dest"] == str(_dest(worktree))
+
+
+def test_legacy_archived_dir_still_reads_as_already_archived(tmp_path):
+    worktree = _mk_worktree(tmp_path)
+    legacy = worktree / "docs" / "research" / "archive" / f"{RUN_ID}-{TOPIC}"
+    legacy.mkdir(parents=True)
+    result = _call({"run_id": RUN_ID}, worktree / ".git")
+    assert result["exit_code"] == 0
+    assert result["already_archived"] is True
+    assert result["dest"] == str(legacy)
+
+
+def _mk_trail(worktree: Path) -> None:
+    """The trail ``research.close`` leaves in the run dir; a rerun resolves the dest through it."""
+    run_dir = _dest(worktree).parent
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "trail.yaml").write_text(f'run_id: "{RUN_ID}"\n', encoding="utf-8")
 
 
 def test_double_invocation_is_already_archived_noop(tmp_path):
     """CC-4: second identical call is a safe no-op with the documented shape."""
     worktree = _mk_worktree(tmp_path)
     _mk_workdir(worktree)
+    _mk_trail(worktree)
     first = _call({"run_id": RUN_ID}, worktree / ".git")
     assert first["archived"] is True
     second = _call({"run_id": RUN_ID}, worktree / ".git")
-    dest = worktree / "docs" / "research" / "archive" / DEST_NAME
+    dest = _dest(worktree)
     assert second["exit_code"] == 0
     assert second["archived"] is True
     assert second["already_archived"] is True
@@ -111,22 +176,21 @@ def test_crash_window_a_stale_tmp_self_cleaned_before_recopy(tmp_path):
     """Settlement A1 window (a): a rerun deletes ITS OWN stale tmp first."""
     worktree = _mk_worktree(tmp_path)
     _mk_workdir(worktree)
-    archive = worktree / "docs" / "research" / "archive"
-    stale = archive / f".tmp-archive-{RUN_ID}"
+    stale = _dest(worktree).parent / f".tmp-archive-{RUN_ID}"
     (stale / "partial").mkdir(parents=True)
     (stale / "partial" / "halfcopied.md").write_text("junk", encoding="utf-8")
     result = _call({"run_id": RUN_ID}, worktree / ".git")
     assert result["exit_code"] == 0
     assert result["archived"] is True
     assert not stale.exists()
-    assert (archive / DEST_NAME / "synthesis.md").exists()
+    assert (_dest(worktree) / "synthesis.md").exists()
 
 
 def test_crash_window_b_content_equal_completes_pending_rmtree(tmp_path):
     """Settlement A1 window (b): both exist + equal → finish rmtree(src)."""
     worktree = _mk_worktree(tmp_path)
     src = _mk_workdir(worktree)
-    dest = worktree / "docs" / "research" / "archive" / DEST_NAME
+    dest = _dest(worktree)
     # Simulate crash-after-rename-before-rmtree: dest is a full equal copy.
     import shutil
     shutil.copytree(src, dest)
@@ -142,7 +206,7 @@ def test_both_exist_content_unequal_is_structured_error_nothing_deleted(tmp_path
     """CC-7 exception boundary: unequal both-exist never clobbers either side."""
     worktree = _mk_worktree(tmp_path)
     src = _mk_workdir(worktree)
-    dest = worktree / "docs" / "research" / "archive" / DEST_NAME
+    dest = _dest(worktree)
     dest.mkdir(parents=True)
     (dest / "different.md").write_text("other content", encoding="utf-8")
     result = _call({"run_id": RUN_ID}, worktree / ".git")
@@ -163,7 +227,8 @@ def test_exdev_fallback_copytree_tmp_rename_rmtree(tmp_path, monkeypatch):
     """EXDEV on the direct rename falls back to copy→atomic-rename→rmtree."""
     worktree = _mk_worktree(tmp_path)
     src = _mk_workdir(worktree)
-    dest = worktree / "docs" / "research" / "archive" / DEST_NAME
+    _mk_trail(worktree)
+    dest = _dest(worktree)
     real_rename = os.rename
     calls = []
 
@@ -205,10 +270,10 @@ def test_dry_run_normal_state_performs_zero_writes(tmp_path):
     """CC-6: resolve+validate everything, zero writes, mutation flag false."""
     worktree = _mk_worktree(tmp_path)
     src = _mk_workdir(worktree)
-    stale = worktree / "docs" / "research" / "archive" / f".tmp-archive-{RUN_ID}"
+    stale = _dest(worktree).parent / f".tmp-archive-{RUN_ID}"
     stale.mkdir(parents=True)
     result = _call({"run_id": RUN_ID, "dry_run": True}, worktree / ".git")
-    dest = worktree / "docs" / "research" / "archive" / DEST_NAME
+    dest = _dest(worktree)
     assert result["exit_code"] == 0
     assert result["dry_run"] is True
     assert result["archived"] is False
@@ -222,6 +287,7 @@ def test_dry_run_normal_state_performs_zero_writes(tmp_path):
 def test_dry_run_already_archived_reports_none_action(tmp_path):
     worktree = _mk_worktree(tmp_path)
     _mk_workdir(worktree)
+    _mk_trail(worktree)
     _call({"run_id": RUN_ID}, worktree / ".git")
     result = _call({"run_id": RUN_ID, "dry_run": True}, worktree / ".git")
     assert result["exit_code"] == 0
@@ -233,7 +299,7 @@ def test_dry_run_already_archived_reports_none_action(tmp_path):
 def test_dry_run_pending_cleanup_reports_and_defers(tmp_path):
     worktree = _mk_worktree(tmp_path)
     src = _mk_workdir(worktree)
-    dest = worktree / "docs" / "research" / "archive" / DEST_NAME
+    dest = _dest(worktree)
     import shutil
     shutil.copytree(src, dest)
     result = _call({"run_id": RUN_ID, "dry_run": True}, worktree / ".git")
@@ -332,7 +398,7 @@ def test_claimed_nested_file_is_claimed_at_new_path_after_archive(
     # release_committed_claims to retire once the tree's deletion lands in a
     # commit — this test's job is only to confirm the NEW path is claimed,
     # not that the old one vanished.
-    new_rel = f"docs/research/archive/{DEST_NAME}/phase-1/notes.md"
+    new_rel = f"{DEST_REL}/phase-1/notes.md"
     offer = safe_commit_offer.compute_offer(sid, cwd=str(worktree))
     assert new_rel in offer["safe_paths"]
 

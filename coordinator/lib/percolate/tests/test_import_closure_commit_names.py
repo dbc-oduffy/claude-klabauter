@@ -63,6 +63,20 @@ def test_clean_commit_passes_and_reports_denominator(tmp_path):
     assert examined == 2
 
 
+def test_blob_read_spans_chunks_and_still_resolves_every_importer(tmp_path, monkeypatch):
+    import percolate.import_closure as ic
+
+    repo = _repo(tmp_path, "from coordinator_core.helpers import present, absent_name\n")
+    reads = []
+    real = ic._git_bytes
+    monkeypatch.setattr(ic, "_CAT_FILE_CHUNK", 2)
+    monkeypatch.setattr(ic, "_git_bytes", lambda r, a, s=None: reads.append(a[0]) or real(r, a, s))
+    examined, violations = find_commit_from_import_name_violations(repo, _head(repo))
+    assert examined == 2
+    assert violations == [("coordinator_core/user.py", "coordinator_core.helpers.absent_name")]
+    assert reads.count("cat-file") == 3
+
+
 def test_name_only_in_worktree_hunk_is_refused_naming_importer_and_name(tmp_path):
     repo = _repo(tmp_path, "from coordinator_core.helpers import present, spawn_in_capped_job\n")
     _write(

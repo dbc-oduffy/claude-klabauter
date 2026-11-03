@@ -677,3 +677,27 @@ def test_a_repeat_roster_resolve_parses_no_yaml_and_still_sees_an_edit(
     executor_md.write_text("---\nname: renamed-executor\n---\nbody longer\n", encoding="utf-8")
     renamed, _ = mod.resolve_roster(content_root=str(content_root), home=None)
     assert "coordinator:renamed-executor" in renamed
+
+
+@pytest.mark.parametrize("subagent_type", ["general-purpose", "claude", "Explore"])
+def test_composed_check_rewrites_unmodeled_builtin_on_opus_parent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, subagent_type: str
+) -> None:
+    """Builtin type, no model, parent model read from the transcript: rewritten, never denied."""
+    monkeypatch.setattr(mod, "resolve_roster", lambda **_: (mod._HARNESS_BUILTIN_TYPES, None))
+    monkeypatch.setattr(opus_gate_mod, "resolve_model_pins", lambda **_: ({}, None))
+    import coordinator_core.hooks.enforce_agent_model_pin as pin_mod
+
+    monkeypatch.setattr(pin_mod, "resolve_model_pins", lambda **_: ({}, None))
+    transcript = tmp_path / "transcript.jsonl"
+    transcript.write_text(
+        json.dumps({"type": "assistant", "message": {"model": "claude-opus-5-5[1m]"}}) + "\n",
+        encoding="utf-8",
+    )
+    tool_input = {"subagent_type": subagent_type, "prompt": "map the landmarks", "description": "x"}
+    payload = {"tool_name": "Agent", "tool_input": tool_input, "transcript_path": str(transcript)}
+
+    hso = mod.check(payload)["hookSpecificOutput"]
+
+    assert "permissionDecision" not in hso
+    assert hso["updatedInput"] == {**tool_input, "model": "sonnet"}

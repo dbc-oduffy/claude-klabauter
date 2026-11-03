@@ -945,6 +945,9 @@ def test_write_guard_roundtrip_and_cli_flag(tmp_path, monkeypatch):
         gov.write_guard(82, tmp_path)
 
 
+OLD = gov.OWNER_GONE_GRACE_S + 60
+
+
 def _reap_run(procs, tmp_path, guard_path=None, ticks=1, counter=None):
     log = tmp_path / "reaps.jsonl"
     lines, killed = [], []
@@ -963,14 +966,14 @@ def _reap_run(procs, tmp_path, guard_path=None, ticks=1, counter=None):
 
 
 def test_orphaned_grep_pipeline_is_reaped_whole_and_logged(tmp_path):
-    procs = [P(100, 999, 60, 10, "bash.exe -c grep -r foo / | grep -v bar"),
-             P(101, 100, 60, 700, "grep -r foo /"), P(102, 100, 60, 5, "grep -v bar"),
-             P(103, 101, 60, 1, "conhost.exe 0x4")]
+    procs = [P(100, 999, OLD, 10, "bash.exe -c grep -r foo / | grep -v bar"),
+             P(101, 100, OLD, 700, "grep -r foo /"), P(102, 100, OLD, 5, "grep -v bar"),
+             P(103, 101, OLD, 1, "conhost.exe 0x4")]
     lines, killed, recs = _reap_run(procs, tmp_path)
     assert sorted(killed[0]) == [100, 101, 102, 103]
     assert lines == ["GOVERNOR REAPED pid=100 reason=owner-gone"]
     assert recs[0]["pid"] == 100 and recs[0]["reason"] == "owner-gone"
-    assert recs[0]["rss_mb"] == 716 and recs[0]["age_s"] == 60 and recs[0]["cmd_head"].startswith("bash.exe")
+    assert recs[0]["rss_mb"] == 716 and recs[0]["age_s"] == round(OLD) and recs[0]["cmd_head"].startswith("bash.exe")
     assert recs[0]["ts"]
 
 
@@ -988,8 +991,8 @@ def test_exe_reads_a_spaced_windows_path_a_quoted_head_and_an_image_name():
 def test_orphaned_spaced_path_pipeline_with_parent_absent_is_reaped_whole(tmp_path):
     # Real Windows snapshot fields: psutil cmdline joined (no quotes, spaced image path), parent
     # pid absent from the snapshot, one member with an unreadable cmdline (image name only).
-    procs = [P(22648, 4242, 60, 20, f"{_GIT}\\usr\\bin\\grep.exe -rn _TEST_ENV_PREFIXES --include=*.py ."),
-             P(36728, 4242, 60, 5, "grep.exe"),
+    procs = [P(22648, 4242, OLD, 20, f"{_GIT}\\usr\\bin\\grep.exe -rn _TEST_ENV_PREFIXES --include=*.py ."),
+             P(36728, 4242, OLD, 5, "grep.exe"),
              P(5, 1, 9000, 10, "node claude-session")]
     lines, killed, recs = _reap_run(procs, tmp_path)
     assert sorted(killed) == [(22648,), (36728,)]
@@ -997,8 +1000,8 @@ def test_orphaned_spaced_path_pipeline_with_parent_absent_is_reaped_whole(tmp_pa
 
 
 def test_orphaned_spaced_path_bash_wrapper_pipeline_is_reaped_whole(tmp_path):
-    procs = [P(100, 999, 60, 10, f"{_GIT}\\bin\\bash.exe -c grep -rn x . | grep -v ^./scratch"),
-             P(101, 100, 60, 700, f"{_GIT}\\usr\\bin\\grep.exe -rn x ."), P(102, 100, 60, 5, "grep.exe")]
+    procs = [P(100, 999, OLD, 10, f"{_GIT}\\bin\\bash.exe -c grep -rn x . | grep -v ^./scratch"),
+             P(101, 100, OLD, 700, f"{_GIT}\\usr\\bin\\grep.exe -rn x ."), P(102, 100, OLD, 5, "grep.exe")]
     lines, killed, recs = _reap_run(procs, tmp_path)
     assert sorted(killed[0]) == [100, 101, 102]
 
@@ -1036,13 +1039,13 @@ def test_wrapper_around_a_non_search_tool_is_never_reaped(tmp_path):
 def test_fresh_guard_registration_exempts_an_orphan_and_stale_does_not(tmp_path):
     import time as _t
     now = _t.time()
-    procs = [P(100, 999, 5, 10, "bash.exe -c grep -r x"), P(101, 100, 5, 99, "grep -r x")]
+    procs = [P(100, 999, OLD, 10, "bash.exe -c grep -r x"), P(101, 100, OLD, 99, "grep -r x")]
     gdir = tmp_path / "g"
     gdir.mkdir()
     reg = gdir / "100.json"
-    reg.write_text(json.dumps({"pid": 100, "create_time": now - 5, "heartbeat": now - 5}))
+    reg.write_text(json.dumps({"pid": 100, "create_time": now - OLD, "heartbeat": now - 5}))
     assert _reap_run(procs, tmp_path, guard_path=gdir)[1] == []
-    reg.write_text(json.dumps({"pid": 100, "create_time": now - 5,
+    reg.write_text(json.dumps({"pid": 100, "create_time": now - OLD,
                                "heartbeat": now - gov.GUARD_FRESH_S - 30}))
     assert len(_reap_run(procs, tmp_path, guard_path=gdir)[1]) == 1
 
@@ -1064,7 +1067,7 @@ def test_calm_ticks_scan_once_per_reap_interval_and_never_take_the_full_snapshot
 
 
 def test_reap_logs_rss_from_rss_fn_read_before_the_kill(tmp_path):
-    procs = [P(7, 999, 60, 0, "grep -r x /")]
+    procs = [P(7, 999, OLD, 0, "grep -r x /")]
     order = []
     log = tmp_path / "r.jsonl"
     gov.run(_args(), emit=lambda l: None, sample=lambda: False, scan_fn=lambda: procs,
@@ -1179,7 +1182,7 @@ def test_list_procs_unreadable_cmdline_falls_back_to_image_name_and_is_reaped(mo
 
     class _Pr:
         def __init__(self, pid, name):
-            self.info = {"pid": pid, "ppid": 4242, "create_time": time.time() - 60,
+            self.info = {"pid": pid, "ppid": 4242, "create_time": time.time() - OLD,
                          "memory_info": _Mem(), "cmdline": [], "name": name}
 
     class _Ps:
@@ -1196,13 +1199,34 @@ def test_list_procs_unreadable_cmdline_falls_back_to_image_name_and_is_reaped(mo
 
 
 def test_empty_cmdline_with_image_name_and_absent_parent_is_reaped_whole(tmp_path):
-    procs = [P(22648, 4242, 60, 20, "", "grep.exe"), P(36728, 4242, 60, 5, "", "grep.exe"),
+    procs = [P(22648, 4242, OLD, 20, "", "grep.exe"), P(36728, 4242, OLD, 5, "", "grep.exe"),
              P(5, 1, 9000, 10, "", "node.exe")]
     lines, killed, recs = _reap_run(procs, tmp_path)
     assert sorted(killed) == [(22648,), (36728,)]
     assert sorted(r["reason"] for r in recs) == ["owner-gone", "owner-gone"]
     assert gov._exe(P(1, 0, 1, 1, "", "")) == ""
-    assert _reap_run([P(9, 4242, 60, 5, "", "")], tmp_path)[1] == []
+    assert _reap_run([P(9, 4242, OLD, 5, "", "")], tmp_path)[1] == []
+
+
+def test_young_pipe_tail_grep_with_absent_parent_is_spared(tmp_path):
+    procs = [P(7, 4242, 5, 1, "grep -E passed|failed")]
+    assert _reap_run(procs, tmp_path)[1] == []
+
+
+def test_old_pipe_tail_with_a_live_writer_sibling_is_spared(tmp_path):
+    procs = [P(7, 4242, OLD, 1, "grep -E passed|failed"),
+             P(8, 4242, OLD, 300, "python.exe -m pytest x")]
+    assert _reap_run(procs, tmp_path)[1] == []
+    assert _reap_run(procs[:1], tmp_path)[1] == [(7,)]
+
+
+def test_no_reap_flag_disables_reaping_and_default_still_reaps(tmp_path, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(gov, "run", lambda args, **kw: seen.update(kw))
+    gov.main(["--log", str(tmp_path / "gov.log"), "--no-reap"])
+    assert seen["reap_path"] is None
+    gov.main(["--log", str(tmp_path / "gov.log")])
+    assert seen["reap_path"] == tmp_path / "governor-reaps.jsonl"
 
 
 # ---- report-only disk signal wiring ----
@@ -1624,7 +1648,7 @@ def test_startup_without_a_holder_exits_on_the_first_tick():
 
 
 def test_sustained_absence_exits_and_resumes_paused_trees():
-    live = iter([True] + [False] * 20)
+    live = iter([True] + [False] * (gov.GEM_ABSENT_EXIT_SAMPLES + 5))
     lines, calls = [], []
     gov.run(_args(resume_after=99), emit=lines.append, sample=lambda: True, procs_fn=lambda: PROCS,
             signal_fn=lambda pids, stop: calls.append((tuple(pids), stop)), sleep=lambda s: None,
@@ -1644,6 +1668,26 @@ def test_holder_returning_inside_the_window_keeps_the_loop_running():
             signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=len(pattern),
             group_em_live_fn=lambda: next(live))
     assert lines == []
+
+
+def test_handover_gap_keeps_sampling_then_exits_after_the_grace_window():
+    """A holderless gap longer than the old 6-sample window keeps sampling; the full window ends it."""
+    gap = 7  # old exit point was 6
+    assert gov.GEM_ABSENT_EXIT_SAMPLES > 6 * 10
+    live = iter([True] + [False] * gap + [True] * 3)
+    samples, lines = [], []
+    gov.run(_args(), emit=lines.append, sample=lambda: samples.append(1) or False,
+            procs_fn=lambda: PROCS, signal_fn=lambda *a: None, sleep=lambda s: None,
+            max_ticks=1 + gap + 3, group_em_live_fn=lambda: next(live))
+    assert lines == [] and len(samples) == 1 + gap + 3
+
+    live = iter([True] + [False] * (gov.GEM_ABSENT_EXIT_SAMPLES + 10))
+    samples, lines = [], []
+    gov.run(_args(), emit=lines.append, sample=lambda: samples.append(1) or False,
+            procs_fn=lambda: PROCS, signal_fn=lambda *a: None, sleep=lambda s: None,
+            max_ticks=500, group_em_live_fn=lambda: next(live))
+    assert lines == ["GOVERNOR EXIT: no live group-em"]
+    assert len(samples) == gov.GEM_ABSENT_EXIT_SAMPLES  # tick 1 live + (N-1) absent sampled, Nth absent exits
 
 
 def _boom():

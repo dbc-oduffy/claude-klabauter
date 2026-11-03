@@ -167,7 +167,6 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import sys
 from typing import Dict, Iterable, List, Mapping, Optional, Set, Tuple
 
@@ -180,7 +179,6 @@ from coordinator_core.coverage import (
     _is_planning_artifact_path,
     _resolve_numstat_row_path,
 )
-from coordinator_core.win_portability import no_console_creationflags
 
 _PROG = "review-brightline-gate.sh"
 
@@ -335,18 +333,14 @@ def _run_git(args: List[str], cwd: Optional[str] = None) -> Tuple[str, int]:
     ever `cd`-ing the process itself. `None` (the default) preserves the
     original process-cwd behavior every prior caller relies on.
     """
-    try:
-        proc = subprocess.run(
-            ["git", *args],
-            capture_output=True,
-            text=True,
-            cwd=cwd,
-            **no_console_creationflags(),
-        )
-    except OSError:
-        print(f"skip: _run_git: proc = subprocess.run( failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return "", 127
-    return proc.stdout, proc.returncode
+    from coordinator_core.git.run import run_git
+
+    res = run_git(["--no-optional-locks", *args], cwd=cwd)
+    if res.timed_out:
+        print(f"skip: _run_git: git {' '.join(args[:2])} timed out", file=sys.stderr)
+    elif res.returncode == 127:
+        print(f"skip: _run_git: git did not start: {res.stderr}", file=sys.stderr)
+    return res.stdout, res.returncode
 
 
 def classify_surface(path: str) -> str:

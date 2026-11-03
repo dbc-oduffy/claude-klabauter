@@ -31,7 +31,7 @@ from coordinator_core.git.git_state import read_tree_spine
 from coordinator_core.ops.ceremony.commit_gates import GateOutcome
 
 #: Default detector module names under this package, in run order.
-WIRED_DETECTORS: Tuple[str, ...] = ("import_closure", "payload_locality", "foreign_identity")
+WIRED_DETECTORS: Tuple[str, ...] = ("import_closure", "call_signature", "payload_locality", "foreign_identity")
 
 #: Detectors that read the publisher's private scrub tables; see `_resolve_default_detectors`.
 PUBLISHER_ONLY_DETECTORS: frozenset = frozenset({"payload_locality", "foreign_identity"})
@@ -208,7 +208,7 @@ def _resolve_default_detectors(names: Sequence[str]) -> Tuple[List[Any], List[st
 
 #: Path suffixes a detector judges; `detect` receives only matching paths. A detector absent here sees all.
 #: Keep in step with `import_closure`'s own `.py` filter.
-JUDGED_SUFFIXES: Dict[str, Tuple[str, ...]] = {"import_closure": (".py",)}
+JUDGED_SUFFIXES: Dict[str, Tuple[str, ...]] = {"import_closure": (".py",), "call_signature": (".py",)}
 
 
 def _judged_paths(detector: Any, paths: List[str]) -> List[str]:

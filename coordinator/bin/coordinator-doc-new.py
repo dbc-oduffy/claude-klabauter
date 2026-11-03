@@ -4974,7 +4974,7 @@ def _baton_rel_for_sizing(sizing_rel: str) -> str:
     stem = os.path.splitext(os.path.basename(sizing_rel))[0]
     if not re.match(r"\d{4}-\d{2}-\d{2}-", stem):
         stem = f"{_today()}-{stem}"
-    return f"state/handoffs/{stem}.md"
+    return _shard_rel("state/handoffs", f"{stem}.md").replace(os.sep, "/")
 
 
 def _write_baton_file(out_abs: str, content: str) -> None:
@@ -5215,8 +5215,11 @@ def mint_baton_from_sizing(
     join_edge = False
     if not baton and not existing:
         _derived = _baton_rel_for_sizing(sizing_rel)
+        _flat = "state/handoffs/" + _derived.rsplit("/", 1)[-1]
         if os.path.isfile(os.path.join(repo_root, _derived)):
             baton = _derived
+        elif os.path.isfile(os.path.join(repo_root, _flat)):
+            baton = _flat
     if baton:
         baton = _repo_relative_posix(baton, repo_root)
         _bparts = baton.split("/")
@@ -6882,7 +6885,7 @@ def _default_output_path(
         # Canonical path includes real HHMMSS (see SKILL.md § Step 2.1); 000000 is the
         # best-effort fallback when --out is omitted. Use --out to supply the full path.
         id_slug = stub_id if stub_id else _slug(title)
-        return os.path.join("state", "handoffs", f"{today}_000000_roadmap-{id_slug}.md")
+        return _shard_rel("state/handoffs", f"{today}_000000_roadmap-{id_slug}.md")
     elif doc_type == "memo":
         # `.coordinator-local/memo-outbox/<topic>.md` — the CANONICAL outbox
         # dir `coordinator_core.ops.fleet.memo_draft.outbox_dir` writes (its

@@ -91,14 +91,48 @@ def clear_refusal(params_path: str) -> None:
         pass
 
 
-def missing_file_diagnosis(path: str) -> Optional[str]:
-    """Message naming the params file's writer when `path` is a run's canonical params path.
+def is_canonical_params_path(path: str) -> bool:
+    """True when `path` has the canonical `<RUN_DIR_ROOT>/<run_id>/<PARAMS_FILE_NAME>` tail."""
+    return _canonical_run_id(path) is not None
 
-    One path parse plus one best-effort read of the refusal note `note_refusal` left beside
-    it. None for any other path.
+
+_MAX_ROOT_WALK = 16
+
+
+def find_existing(path: str, cwd: object = None) -> Optional[Path]:
+    """The canonical params file `path` names, resolved against `cwd` and then its ancestors.
+
+    A relative typed path misses when the caller's cwd is below the repo root; the run's
+    canonical tail then resolves against an ancestor. Stats only, no git spawn. None for a
+    non-canonical path or when no candidate is a file.
     """
     run_id = _canonical_run_id(path)
     if run_id is None:
+        return None
+    typed = Path(path) if cwd is None else Path(cwd, path)
+    if typed.is_file():
+        return typed
+    if cwd is None or Path(path).is_absolute():
+        return None
+    tail = Path(RUN_DIR_ROOT) / run_id / PARAMS_FILE_NAME
+    base = Path(cwd)
+    for root in [base, *list(base.parents)[:_MAX_ROOT_WALK]]:
+        if (root / tail).is_file():
+            return root / tail
+    return None
+
+
+def missing_file_diagnosis(path: str, cwd: object = None) -> Optional[str]:
+    """Message naming the params file's writer when `path` is a run's canonical params path.
+
+    One path parse, one existence check (`find_existing`; None when the file is there, so the
+    message never claims absence of a present file) and one best-effort read of the refusal
+    note `note_refusal` left beside it. None for any other path.
+    """
+    run_id = _canonical_run_id(path)
+    if run_id is None:
+        return None
+    if find_existing(path, cwd) is not None:
         return None
     try:
         leg = Path(path).with_name(REFUSAL_FILE_NAME).read_text(encoding="utf-8").strip()[:200]

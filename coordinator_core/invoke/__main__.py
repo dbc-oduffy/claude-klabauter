@@ -803,12 +803,20 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             # Relative to `cwd` (the caller's cwd) — NOT this process's own
             # os.getcwd(), which is meaningless when served warm.
             try:
-                params_json_str = Path(cwd, args.params_file).read_text(encoding="utf-8")
+                try:
+                    params_json_str = Path(cwd, args.params_file).read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel
+
+                    found = terminal_commit_params_channel.find_existing(args.params_file, cwd)
+                    if found is None:
+                        raise
+                    params_json_str = found.read_text(encoding="utf-8")
             except FileNotFoundError as exc:
                 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel
 
                 diagnosis = terminal_commit_params_channel.missing_file_diagnosis(
-                    args.params_file
+                    args.params_file, cwd
                 )
                 _fatal_stderr(
                     diagnosis
@@ -835,7 +843,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         )
         if (
             args.params_file not in (None, "-")
-            and _tcpc.missing_file_diagnosis(args.params_file) is not None
+            and _tcpc.is_canonical_params_path(args.params_file)
         ):
             message += (
                 f" The params file {args.params_file} is empty."
@@ -886,7 +894,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
         )
         if (
             args.params_file not in (None, "-")
-            and _tcpc.missing_file_diagnosis(args.params_file) is not None
+            and _tcpc.is_canonical_params_path(args.params_file)
         ):
             message += (
                 f" The params file {args.params_file} is empty."

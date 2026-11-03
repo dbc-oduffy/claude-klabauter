@@ -64,26 +64,93 @@ def _assert_rewritten_to_sonnet(envelope, payload: dict) -> None:
     assert "model" not in payload["tool_input"]
 
 
-def _assert_explicit_denied(envelope, payload: dict, requested: str) -> None:
+def _assert_explicit_rewritten(envelope, payload: dict, requested: str) -> None:
+    """An explicit gated request is defaulted to sonnet, never denied; the advisory names the reason key."""
     assert envelope is not None
     hso = envelope["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "updatedInput" not in hso
+    assert "permissionDecision" not in hso
+    assert hso["updatedInput"] == {**payload["tool_input"], "model": "sonnet"}
     assert payload["tool_input"]["model"] == requested
-    reason = hso["permissionDecisionReason"]
-    assert repr(requested) in reason
-    assert "coordinator:staff-eng" in reason
+    advisory = hso["additionalContext"]
+    assert repr(requested) in advisory
+    assert "coordinator:staff-eng" in advisory
+    assert mod._OVERRIDE_KEY in advisory
 
 
-def test_explicit_denial_names_pinned_opus_personas(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.fixture()
+def override_sink(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    return tmp_path / "settings" / "state" / "agent-model-overrides.jsonl"
+
+
+def test_explicit_rewrite_names_pinned_opus_personas(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_pins(
         monkeypatch,
         {"coordinator:apm": {"model": "opus"}, "coordinator:executor": {"model": "sonnet"}},
     )
     envelope = mod.check(_agent_payload("general-purpose", model="opus"))
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "coordinator:apm" in reason
-    assert "coordinator:executor" not in reason
+    advisory = envelope["hookSpecificOutput"]["additionalContext"]
+    assert "coordinator:apm" in advisory
+    assert "coordinator:executor" not in advisory
+
+
+@pytest.mark.parametrize("reason", [None, "", "   ", "1", "true"])
+def test_explicit_opus_without_a_real_reason_is_rewritten_and_key_stripped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, override_sink: Path, reason
+) -> None:
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
+    payload = _agent_payload("general-purpose", model="opus", transcript_path=transcript)
+    if reason is not None:
+        payload["tool_input"][mod._OVERRIDE_KEY] = reason
+    envelope = mod.check(payload)
+    hso = envelope["hookSpecificOutput"]
+    assert "permissionDecision" not in hso
+    assert hso["updatedInput"]["model"] == "sonnet"
+    assert mod._OVERRIDE_KEY not in hso["updatedInput"]
+    assert not override_sink.exists()
+
+
+@pytest.mark.parametrize("model", ["opus", None])
+def test_stated_reason_passes_and_is_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, override_sink: Path, model
+) -> None:
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
+    payload = _agent_payload("general-purpose", model=model or "", transcript_path=transcript)
+    payload["session_id"] = "sess-123"
+    payload["tool_input"][mod._OVERRIDE_KEY] = "needs cross-file architectural judgment"
+    assert mod.check(payload) is None
+    import coordinator_core.atomic_append as aa
+
+    aa.flush(5.0)
+    record = json.loads(override_sink.read_text(encoding="utf-8").splitlines()[-1])
+    assert record["subagent_type"] == "general-purpose"
+    assert record["reason"] == "needs cross-file architectural judgment"
+    assert record["session"] == "sess-123"
+    assert record["ts"]
+
+
+def test_inherited_opus_with_empty_reason_still_rewrites(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, override_sink: Path
+) -> None:
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
+    payload = _agent_payload("general-purpose", transcript_path=transcript)
+    payload["tool_input"][mod._OVERRIDE_KEY] = ""
+    hso = mod.check(payload)["hookSpecificOutput"]
+    assert hso["updatedInput"]["model"] == "sonnet"
+    assert mod._OVERRIDE_KEY not in hso["updatedInput"]
+
+
+@pytest.mark.parametrize("subagent_type", ["claude", "Explore"])
+def test_other_builtin_types_default_to_sonnet(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, subagent_type: str
+) -> None:
+    _patch_pins(monkeypatch, {})
+    transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
+    payload = _agent_payload(subagent_type, transcript_path=transcript)
+    _assert_rewritten_to_sonnet(mod.check(payload), payload)
 
 
 def test_general_purpose_no_model_under_opus_parent_rewrites_to_sonnet(
@@ -98,18 +165,18 @@ def test_general_purpose_no_model_under_opus_parent_rewrites_to_sonnet(
 
 
 @pytest.mark.parametrize("level", ["warn", "strict"])
-def test_general_purpose_explicit_model_opus_denies_at_every_level(
+def test_general_purpose_explicit_model_opus_rewrites_at_every_level(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, level: str
 ) -> None:
     monkeypatch.setattr("coordinator_core.machine_profile.guard_level", lambda name: level)
     _patch_pins(monkeypatch, {})
     transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
     payload = _agent_payload("general-purpose", model="opus", transcript_path=transcript)
-    _assert_explicit_denied(mod.check(payload), payload, "opus")
+    _assert_explicit_rewritten(mod.check(payload), payload, "opus")
 
 
 @pytest.mark.parametrize("profile", ["author", "consumer"])
-def test_explicit_model_opus_denies_at_the_unset_default_level(
+def test_explicit_model_opus_rewrites_at_the_unset_default_level(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, profile: str
 ) -> None:
     import coordinator_core.machine_profile as mp
@@ -120,7 +187,7 @@ def test_explicit_model_opus_denies_at_the_unset_default_level(
     _patch_pins(monkeypatch, {})
     transcript = _write_transcript(tmp_path, model="claude-opus-4-1-20250805")
     payload = _agent_payload("general-purpose", model="opus", transcript_path=transcript)
-    _assert_explicit_denied(mod.check(payload), payload, "opus")
+    _assert_explicit_rewritten(mod.check(payload), payload, "opus")
 
 
 def test_fable_pinned_type_with_no_model_param_still_denies(
@@ -145,13 +212,13 @@ def test_general_purpose_explicit_model_sonnet_passes(
     assert envelope is None
 
 
-def test_general_purpose_explicit_model_fable_denies(
+def test_general_purpose_explicit_model_fable_rewrites(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _patch_pins(monkeypatch, {})
     transcript = _write_transcript(tmp_path, model="claude-sonnet-4-5")
     payload = _agent_payload("general-purpose", model="fable", transcript_path=transcript)
-    _assert_explicit_denied(mod.check(payload), payload, "fable")
+    _assert_explicit_rewritten(mod.check(payload), payload, "fable")
 
 
 def test_sonnet_parent_inherit_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -410,13 +477,13 @@ def test_payload_level_model_field_used_before_transcript(monkeypatch: pytest.Mo
     assert envelope is None
 
 
-def test_sonnet_pinned_type_with_explicit_opus_override_denies(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_sonnet_pinned_type_with_explicit_opus_override_rewrites(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_pins(
         monkeypatch,
         {"coordinator:executor": {"model": "sonnet", "_source_path": "x"}},
     )
     payload = _agent_payload("coordinator:executor", model="opus")
-    _assert_explicit_denied(mod.check(payload), payload, "opus")
+    _assert_explicit_rewritten(mod.check(payload), payload, "opus")
 
 
 def test_composed_seam_rewrites_via_opus_gate_when_pin_leg_is_silent(
@@ -466,7 +533,7 @@ def test_composed_seam_rewrites_absent_subagent_type(
     _assert_rewritten_to_sonnet(unenumerated_mod.check(payload), payload)
 
 
-def test_composed_seam_pin_is_advisory_so_the_opus_gate_denies(
+def test_composed_seam_pin_is_advisory_so_the_opus_gate_rewrites(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     def _fake_resolve_roster(*, content_root=None, home=None):
@@ -493,9 +560,10 @@ def test_composed_seam_pin_is_advisory_so_the_opus_gate_denies(
     }
     envelope = unenumerated_mod.check(payload)
     assert envelope is not None
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
-    assert "sonnet" in reason and "opus" in reason
-    assert "AGENT DISPATCH BLOCKED" in reason and "PM grant" in reason
+    hso = envelope["hookSpecificOutput"]
+    assert "permissionDecision" not in hso
+    assert hso["updatedInput"]["model"] == "sonnet"
+    assert "opus" in hso["additionalContext"]
 
 
 def test_composed_seam_passes_clean_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

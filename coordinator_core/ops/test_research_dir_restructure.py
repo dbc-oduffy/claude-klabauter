@@ -46,6 +46,7 @@ TOPIC = "warp-core-ejection"
 DATE = "2026-07-22"
 RESULT_NAME = f"{DATE}-{TOPIC}.md"
 TRAIL_NAME = f"{DATE}-{TOPIC}"
+RUN = f"{DATE}-{TOPIC}"
 
 
 def _call(params: dict, repo_root) -> dict:
@@ -121,11 +122,9 @@ def test_claimed_result_and_trail_descendant_restated_at_new_paths(tmp_path, mon
     assert result["restructured"] is True
     assert result["steps_applied"] == ["dated_result", "paper_trail"]
 
-    topic_dir = worktree / "docs" / "research" / TOPIC
-    new_result_rel = str((topic_dir / f"{DATE}-result.md").relative_to(worktree))
-    new_decisions_rel = str(
-        (topic_dir / f"{DATE}-paper-trail" / "decisions.md").relative_to(worktree)
-    )
+    run = worktree / "docs" / "research" / TOPIC / RUN
+    new_result_rel = (run / "synthesis.md").relative_to(worktree).as_posix()
+    new_decisions_rel = (run / "workdir" / "decisions.md").relative_to(worktree).as_posix()
 
     offer = safe_commit_offer.compute_offer("mine", cwd=str(worktree))
     assert new_result_rel in offer["safe_paths"]
@@ -153,16 +152,39 @@ def test_fresh_restructure_applies_both_steps(tmp_path):
     worktree = _mk_worktree(tmp_path)
     result_md, trail = _mk_substrate(worktree)
     result = _call(_params(worktree), worktree / ".git")
-    topic_dir = worktree / "docs" / "research" / TOPIC
+    run = worktree / "docs" / "research" / TOPIC / RUN
     assert result["exit_code"] == 0
     assert result["restructured"] is True
     assert result["steps_applied"] == ["dated_result", "paper_trail"]
-    assert result["new_dir"] == str(topic_dir)
+    assert result["new_dir"] == str(run)
     assert not result_md.exists()
     assert not trail.exists()
-    assert (topic_dir / f"{DATE}-result.md").read_text(encoding="utf-8") == "# synthesis\n"
-    assert (topic_dir / f"{DATE}-paper-trail" / "decisions.md").exists()
-    assert (topic_dir / f"{DATE}-paper-trail" / "prompts").is_dir()
+    assert (run / "synthesis.md").read_text(encoding="utf-8") == "# synthesis\n"
+    assert (run / "workdir" / "decisions.md").exists()
+    assert (run / "workdir" / "prompts").is_dir()
+
+
+def test_destinations_classify_as_run_child(tmp_path):
+    from coordinator_core.ops import _research_layout as layout
+
+    worktree = _mk_worktree(tmp_path)
+    _mk_substrate(worktree)
+    _call(_params(worktree), worktree / ".git")
+    research = worktree / "docs" / "research"
+    for dest in (research / TOPIC / RUN / "synthesis.md", research / TOPIC / RUN / "workdir"):
+        assert layout.classify(dest.relative_to(research).as_posix()) == layout.RUN_CHILD
+
+
+def test_topic_slug_outside_layout_is_refused_with_zero_writes(tmp_path):
+    worktree = _mk_worktree(tmp_path)
+    result_md, trail = _mk_substrate(worktree)
+    params = _params(worktree)
+    params["topic_slug"] = "evidence"
+    result = _call(params, worktree / ".git")
+    assert result["exit_code"] == 1
+    assert "run-dir child" in result["error"]
+    assert result_md.exists() and trail.exists()
+    assert not (worktree / "docs" / "research" / "evidence").exists()
 
 
 def test_double_invocation_full_rerun_is_noop(tmp_path):
@@ -172,12 +194,12 @@ def test_double_invocation_full_rerun_is_noop(tmp_path):
     first = _call(_params(worktree), worktree / ".git")
     assert first["restructured"] is True
     second = _call(_params(worktree), worktree / ".git")
-    topic_dir = worktree / "docs" / "research" / TOPIC
+    run = worktree / "docs" / "research" / TOPIC / RUN
     assert second["exit_code"] == 0
     assert second["restructured"] is False
     assert second["steps_applied"] == []
-    assert second["new_dir"] == str(topic_dir)
-    assert (topic_dir / f"{DATE}-result.md").exists()
+    assert second["new_dir"] == str(run)
+    assert (run / "synthesis.md").exists()
 
 
 def test_crash_between_renames_rerun_completes_pending_step(tmp_path):
@@ -185,25 +207,25 @@ def test_crash_between_renames_rerun_completes_pending_step(tmp_path):
     worktree = _mk_worktree(tmp_path)
     result_md, trail = _mk_substrate(worktree)
     # Simulate the crash: step 1 (dated result) already landed, step 2 did not.
-    topic_dir = worktree / "docs" / "research" / TOPIC
-    topic_dir.mkdir(parents=True)
-    result_md.rename(topic_dir / f"{DATE}-result.md")
+    run = worktree / "docs" / "research" / TOPIC / RUN
+    run.mkdir(parents=True)
+    result_md.rename(run / "synthesis.md")
     result = _call(_params(worktree), worktree / ".git")
     assert result["exit_code"] == 0
     assert result["restructured"] is True
     assert result["steps_applied"] == ["paper_trail"]
     assert not trail.exists()
-    assert (topic_dir / f"{DATE}-paper-trail" / "decisions.md").exists()
-    assert (topic_dir / f"{DATE}-result.md").exists()
+    assert (run / "workdir" / "decisions.md").exists()
+    assert (run / "synthesis.md").exists()
 
 
 def test_step_both_present_is_structured_error_with_zero_writes(tmp_path):
     """CC-7: src+dest both exist on a step → error naming both; other step untouched."""
     worktree = _mk_worktree(tmp_path)
     result_md, trail = _mk_substrate(worktree)
-    topic_dir = worktree / "docs" / "research" / TOPIC
-    topic_dir.mkdir(parents=True)
-    dup = topic_dir / f"{DATE}-result.md"
+    run = worktree / "docs" / "research" / TOPIC / RUN
+    run.mkdir(parents=True)
+    dup = run / "synthesis.md"
     dup.write_text("divergent copy\n", encoding="utf-8")
     result = _call(_params(worktree), worktree / ".git")
     assert result["exit_code"] == 1
@@ -217,7 +239,7 @@ def test_step_both_present_is_structured_error_with_zero_writes(tmp_path):
     # zero writes: both sides of the erroring step intact, pending step NOT applied
     assert result_md.exists() and dup.exists()
     assert trail.exists()
-    assert not (topic_dir / f"{DATE}-paper-trail").exists()
+    assert not (run / "workdir").exists()
 
 
 def test_step_both_absent_is_structured_error(tmp_path):

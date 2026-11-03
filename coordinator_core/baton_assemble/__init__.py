@@ -242,6 +242,7 @@ from coordinator_core.resolve_coordinator_clone import (
     resolve_content_root,
 )
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
+from coordinator_core.session.output_tree_layout import is_month_dir, write_rel
 from coordinator_core.session.touch_record import project_live_claims
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -444,6 +445,28 @@ def _repo_rel_handoff_path(basename: str) -> str:
     return (Path("state") / "handoffs" / basename).as_posix()
 
 
+def _repo_rel_handoff_out_path(basename: str) -> str:
+    """Where a NEW handoff is written: `state/handoffs/<YYYY-MM>/<basename>`
+    (flat when the name carries no date). Output paths only; INPUT
+    predecessor resolution stays on `_repo_rel_handoff_path`."""
+    return write_rel("state/handoffs", basename)
+
+
+def _placed_handoff_out_path(out: str, root: Optional[Path]) -> str:
+    """The path `coordinator-doc-new --out=<out>` actually writes: a flat
+    `state/handoffs/<name>` that does not yet exist lands in its month shard
+    (same `write_rel` rule doc-new places by); an existing flat file stays put,
+    an already-sharded or foreign path passes through. Every consumer of d1's
+    output (d1 `--out`, d1b/d1c/d2.., d6 `continued_into`) takes this one value."""
+    norm = out.replace("\\", "/")
+    parent, _, name = norm.rpartition("/")
+    if parent != "state/handoffs" or not name:
+        return out
+    if root is not None and _exists_under(norm, root):
+        return norm
+    return write_rel("state/handoffs", name)
+
+
 def _normalize_artifact_path(artifact_path: str) -> str:
     """Normalizes a bare slug -- no path separator, no `.md` extension --
     into `state/handoffs/<YYYY-MM-DD>-<slug>.md`. Anything that already
@@ -478,7 +501,7 @@ def _normalize_artifact_path(artifact_path: str) -> str:
     if "/" in artifact_path or "\\" in artifact_path or artifact_path.endswith(".md"):
         return artifact_path
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    return _repo_rel_handoff_path(f"{date_str}-{artifact_path}.md")
+    return _repo_rel_handoff_out_path(f"{date_str}-{artifact_path}.md")
 
 
 def _resolve_additional_predecessor_paths(
@@ -670,7 +693,7 @@ def _compute_fresh_output_path(
             sizing_slug = _resolve_session_sizing_slug(root) if root is not None else None
             slug = sizing_slug or _mint_last_resort_slug()
     date_str = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
-    candidate = _repo_rel_handoff_path(f"{date_str}-{slug}.md")
+    candidate = _repo_rel_handoff_out_path(f"{date_str}-{slug}.md")
     if root is None:
         return candidate
 
@@ -753,7 +776,7 @@ def _compute_fresh_output_path(
         fs_path = Path(rel)
         if not fs_path.is_absolute():
             fs_path = root / rel
-        if fs_path.exists():
+        if fs_path.exists() or (root / _repo_rel_handoff_path(fs_path.name)).exists():
             return True
         return _archive_has_basename(fs_path.name)
 
@@ -761,13 +784,13 @@ def _compute_fresh_output_path(
         return candidate
 
     time_str = datetime.datetime.now(datetime.timezone.utc).strftime("%H%M%S")
-    candidate = _repo_rel_handoff_path(f"{date_str}_{time_str}_{slug}.md")
+    candidate = _repo_rel_handoff_out_path(f"{date_str}_{time_str}_{slug}.md")
     if not _exists(candidate):
         return candidate
 
     counter = 2
     while True:
-        candidate = _repo_rel_handoff_path(f"{date_str}_{time_str}_{slug}-{counter}.md")
+        candidate = _repo_rel_handoff_out_path(f"{date_str}_{time_str}_{slug}-{counter}.md")
         if not _exists(candidate):
             return candidate
         counter += 1
@@ -1461,7 +1484,10 @@ def _adopt_prior_attempt_scaffold_path(
     live_dir = root / "state" / "handoffs"
     try:
         pred_resolved = pred_path.resolve()
-        if pred_resolved.parent != live_dir.resolve():
+        live_resolved = live_dir.resolve()
+        if pred_resolved.parent != live_resolved and not (
+            pred_resolved.parent.parent == live_resolved and is_month_dir(pred_resolved.parent.name)
+        ):
             return None
     except OSError:
         return None
@@ -1484,7 +1510,7 @@ def _adopt_prior_attempt_scaffold_path(
     pred_handoff_id = _fm_field(pred_fm, "handoff_id") or predecessor_id or ""
 
     candidates: list[str] = []
-    for candidate in sorted(live_dir.glob("*.md")):
+    for candidate in sorted([*live_dir.glob("*.md"), *live_dir.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]/*.md")]):
         try:
             if candidate.resolve() == pred_resolved:
                 continue
@@ -1521,7 +1547,7 @@ def _adopt_prior_attempt_scaffold_path(
         candidate_session = (_fm_field(fm, "authoring_session") or "").strip()
         if not candidate_session or candidate_session != current_session:
             continue
-        candidates.append(candidate.name)
+        candidates.append(candidate.relative_to(live_dir).as_posix())
 
     if len(candidates) != 1:
         return None
@@ -1593,7 +1619,11 @@ def _adopt_prior_attempt_mint_path(
     if not candidate.is_file():
         return None
     try:
-        if candidate.resolve().parent != (root / "state" / "handoffs").resolve():
+        live_resolved = (root / "state" / "handoffs").resolve()
+        cand_parent = candidate.resolve().parent
+        if cand_parent != live_resolved and not (
+            cand_parent.parent == live_resolved and is_month_dir(cand_parent.name)
+        ):
             return None
     except OSError:
         return None
@@ -1612,7 +1642,7 @@ def _adopt_prior_attempt_mint_path(
         return None
     if (_fm_field(fm, "authoring_session") or "").strip() != current_session:
         return None
-    return _repo_rel_handoff_path(candidate.name)
+    return _repo_rel_handoff_path(candidate.resolve().relative_to(live_resolved).as_posix())
 
 
 def _assert_no_directive_writes_over_input(
@@ -1985,7 +2015,7 @@ def _scan_deliverable_collision(
         except OSError:
             excluded.add(exclude_path)
     excluded |= _walk_deliverable_ancestor_set(lineage_source, additional_predecessor_paths, root)
-    for candidate in sorted(handoffs_dir.glob("*.md")):
+    for candidate in sorted([*handoffs_dir.glob("*.md"), *handoffs_dir.glob("[0-9][0-9][0-9][0-9]-[0-9][0-9]/*.md")]):
         try:
             if candidate.resolve() in excluded:
                 continue
@@ -3260,6 +3290,8 @@ def resolve_lineage(
     else:
         raise ValueError(f"baton_assemble: unrecognized kind {kind!r} (expected one of {KINDS})")
 
+    lineage["output_path"] = _placed_handoff_out_path(lineage["output_path"], root)
+
     # Additive-only, warn-never-block (AC4): this key is attached AFTER every
     # existing key above is finalized and changes none of them -- a
     # collision hit alters no directive, no exit code, and no scaffolded
@@ -3939,8 +3971,10 @@ def _build_directives(
     # its own path from a placeholder title, so d2 would lint a file d1
     # never created. `--title` is optional and omitted entirely when absent,
     # leaving `coordinator-doc-new`'s default-placeholder title in force.
-    d1_out = lineage.get("output_path") or _compute_fresh_output_path(
-        lineage.get("artifact_path") or "", title=title
+    d1_out = _placed_handoff_out_path(
+        lineage.get("output_path")
+        or _compute_fresh_output_path(lineage.get("artifact_path") or "", title=title),
+        root,
     )
     d1_args.append(f"--out={d1_out}")
     if title:
@@ -4408,7 +4442,7 @@ def _build_directives(
             # `--out` fix above ("d6's own (out-of-scope, concurrent-
             # investigation) `successor_path` argument"); that investigation
             # is complete and did not cover it, so this closes it.
-            successor_path = lineage.get("output_path") or ""
+            successor_path = d1_out if lineage.get("output_path") else ""
             # N-predecessor fan-in (2026-07-29): one d6 PER predecessor --
             # primary first (id "d6", UNCHANGED from before this fix, so a
             # single-predecessor brief stays byte-identical), then one

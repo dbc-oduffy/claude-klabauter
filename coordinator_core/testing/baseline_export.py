@@ -1,8 +1,11 @@
 """baseline-export: export a commit, run a runner argv inside it, remove the export in a finally.
 
-The CLI owns the export root name, the `git archive` extraction (tarfile data filter), the
-`--link` links, the runner's process group (POSIX) or job object (Windows), and the removal.
-Two git spawns per run: one `rev-parse` (toplevel + commit check), one `archive`.
+The CLI owns the `git archive` extraction (tarfile data filter), the runner's process group
+(POSIX) or job object (Windows), and the tree the runner runs in. Without `--link` that tree is
+the shared read-only `baseline_cache` entry for the sha (extracted once, leased for the run,
+evicted on drift); with `--link` it is a per-pid root with the links, removed afterwards.
+Git spawns per run: one `rev-parse`, plus one `archive` only on a cache miss (or any `--link` run).
+A cache miss holds the single box-wide extract slot; a hit needs none.
 Runs as `python -m coordinator_core.testing.baseline_export`.
 """
 from __future__ import annotations
@@ -30,8 +33,8 @@ EXIT_REMOVAL_FAILED = 4
 EXIT_REFUSED = 5
 
 ROOT_PREFIX = "test-base-"
-#: Box-wide cap on concurrent exports: extraction is disk-bound, so more than two only queue on the disk.
-EXPORT_SLOT_CAP = 2
+#: One extract box-wide (extraction is disk-bound); a cache hit needs no slot.
+EXPORT_SLOT_CAP = 1
 SLOTS_DIRNAME = "baseline-export-slots"
 _ROOT_RE = re.compile(re.escape(ROOT_PREFIX) + r"[0-9a-f]{8}-(\d+)")
 USAGE = "usage: baseline-export --sha <sha> [--link <repo-relative-path>]... -- <runner argv...>"
@@ -139,13 +142,19 @@ def render_result_line(sha: str, export: str, why: str | None, runner_exit: int 
     )
 
 
-def export_env(root: PurePath | str, base: dict[str, str] | None = None) -> dict[str, str]:
+def export_env(root: PurePath | str, base: dict[str, str] | None = None, *, shared: bool = False) -> dict[str, str]:
     """Environment for a process running inside the export `root`: git discovery cannot climb to an
-    enclosing repository (ceiling = root's parent) and no inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR."""
+    enclosing repository (ceiling = root's parent) and no inherited GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/GIT_COMMON_DIR.
+    `shared` (a cache entry) also redirects bytecode and pytest-cache writes away from the tree."""
     env = dict(os.environ if base is None else base)
     for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
         env.pop(key, None)
     env["GIT_CEILING_DIRECTORIES"] = os.fspath(Path(root).parent)
+    if shared:
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        opts = env.get("PYTEST_ADDOPTS", "")
+        if "no:cacheprovider" not in opts:
+            env["PYTEST_ADDOPTS"] = f"{opts} -p no:cacheprovider".strip()
     return env
 
 
@@ -303,10 +312,10 @@ class _Group:
         self.proc: subprocess.Popen | None = None
         self._job = None
 
-    def spawn(self, argv: tuple[str, ...], cwd: Path, root: Path) -> subprocess.Popen:
+    def spawn(self, argv: tuple[str, ...], cwd: Path, root: Path, shared: bool = False) -> subprocess.Popen:
         if not _IS_NT:
             self.proc = subprocess.Popen(
-                list(argv), cwd=cwd, start_new_session=True, env=export_env(root),
+                list(argv), cwd=cwd, start_new_session=True, env=export_env(root, shared=shared),
                 **no_console_passthrough_kwargs(),
             )
             return self.proc
@@ -321,7 +330,7 @@ class _Group:
         try:
             passthrough = no_console_passthrough_kwargs()
             passthrough["creationflags"] = flags
-            self.proc = subprocess.Popen(list(argv), cwd=cwd, env=export_env(root), **passthrough)
+            self.proc = subprocess.Popen(list(argv), cwd=cwd, env=export_env(root, shared=shared), **passthrough)
         except OSError:
             self.close_job()
             raise
@@ -420,6 +429,50 @@ def _release_slot(slot: tuple[int, str]) -> None:
         suite_mutex.release(slot[1], path=_slot_path(slot[0]))
 
 
+def _no_slot_why() -> str:
+    return f"no free export slot (cap {EXPORT_SLOT_CAP}); retry later"
+
+
+class _SlotRefused(ExportError):
+    """A cache miss found the box-wide extract slot held."""
+
+
+class _AlreadyBuilt(Exception):
+    """Another process published the entry while this one waited for the slot."""
+
+
+def _cache_extractor(toplevel: str, sha40: str, entry: Path):
+    """The `ensure_entry` extractor: takes the slot only here (a miss), skips if a peer published meanwhile."""
+
+    def extract(partial: Path) -> None:
+        from coordinator_core.testing import baseline_cache as bc
+
+        slot = _acquire_slot()
+        if slot is None:
+            raise _SlotRefused(_no_slot_why())
+        try:
+            if entry.is_dir() and bc._manifest(entry).exists():
+                raise _AlreadyBuilt
+            export(toplevel, sha40, partial)
+            data = tuple(d for d in DATA_DIRS if os.path.isdir(os.path.join(toplevel, d)))
+            link(toplevel, partial, data)
+        finally:
+            _release_slot(slot)
+
+    return extract
+
+
+def _evict_if_drifted(toplevel: str, sha40: str, entry: Path | None) -> None:
+    """Evict the shared entry when the run changed its directory tree; the next call re-extracts."""
+    if entry is None:
+        return
+    from coordinator_core.testing import baseline_cache as bc
+
+    with contextlib.suppress(Exception):
+        if bc.check_drift(entry) and bc._evict_one(bc.cache_root(toplevel), sha40):
+            print(f"baseline-export: cache entry {sha40[:8]} drifted during the run; evicted", file=sys.stderr)
+
+
 def reap_dead_exports(toplevel: str) -> list[str]:
     """Remove scratch/test-base-<sha8>-<pid> trees whose pid is dead; returns the names removed."""
     from coordinator_core.testing import suite_mutex
@@ -462,11 +515,14 @@ def main(argv: list[str]) -> int:
         print(f"baseline-export: {exc}", file=sys.stderr)
         return _finish(inv.sha, "failed", str(exc), None, True, EXIT_EXPORT_FAILED)
 
-    slot = _acquire_slot()
-    if slot is None:
-        why = f"no free export slot (cap {EXPORT_SLOT_CAP}); retry later"
-        print(f"baseline-export: {why}", file=sys.stderr)
-        return _finish(sha40, "refused", why, None, True, EXIT_REFUSED)
+    cached = not inv.links
+    slot = None
+    if not cached:
+        slot = _acquire_slot()
+        if slot is None:
+            why = _no_slot_why()
+            print(f"baseline-export: {why}", file=sys.stderr)
+            return _finish(sha40, "refused", why, None, True, EXIT_REFUSED)
 
     root = export_root(toplevel, sha40, os.getpid())
     sigs = _handled_signals()
@@ -485,31 +541,54 @@ def main(argv: list[str]) -> int:
     export_state, why, runner_exit = "failed", None, None
     interrupted: int | None = None
     refused = False
+    slot_refused = False
+    entry: Path | None = None
+    lease_cm = None
     try:
         try:
             reap_dead_exports(toplevel)
-            with _signals_blocked(sigs):
-                root.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    root.mkdir()
-                    owned = True
-                except FileExistsError:
-                    refused = True
-            if refused:
-                raise ExportError(f"export root already exists: {root}")
-            export(toplevel, sha40, root)
-            data = tuple(d for d in DATA_DIRS if os.path.isdir(os.path.join(toplevel, d)))
-            links = tuple(p for p in inv.links if p.split("/", 1)[0] not in data)
-            link(toplevel, root, data + links)
+            if cached:
+                from coordinator_core.testing import baseline_cache as bc
+
+                entry = bc.entry_path(toplevel, sha40)
+                lease_cm = bc.lease(entry)
+                lease_cm.__enter__()
+                for _attempt in range(2):
+                    try:
+                        bc.ensure_entry(toplevel, sha40, _cache_extractor(toplevel, sha40, entry))
+                        break
+                    except _AlreadyBuilt:
+                        if _attempt:
+                            raise ExportError("cache entry kept vanishing between peers' publish and this run's lease")
+                run_root = entry
+            else:
+                with _signals_blocked(sigs):
+                    root.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        root.mkdir()
+                        owned = True
+                    except FileExistsError:
+                        refused = True
+                if refused:
+                    raise ExportError(f"export root already exists: {root}")
+                export(toplevel, sha40, root)
+                data = tuple(d for d in DATA_DIRS if os.path.isdir(os.path.join(toplevel, d)))
+                links = tuple(p for p in inv.links if p.split("/", 1)[0] not in data)
+                link(toplevel, root, data + links)
+                run_root = root
             export_state = "ok"
-            run_cwd = counterpart_cwd(toplevel, cwd, root)
+            run_cwd = counterpart_cwd(toplevel, cwd, run_root)
             try:
                 with _signals_blocked(sigs):
-                    proc = group.spawn(inv.runner, run_cwd, root)
+                    proc = group.spawn(inv.runner, run_cwd, run_root, shared=cached)
             except OSError as exc:
                 why = f"runner spawn failed: {inv.runner[0]}: {exc}"
             else:
                 runner_exit = proc.wait()
+        except _SlotRefused as exc:
+            slot_refused = True
+            why = str(exc)
+            print(f"baseline-export: {why}", file=sys.stderr)
         except ExportError as exc:
             why = str(exc)
             print(f"baseline-export: {why}", file=sys.stderr)
@@ -521,12 +600,21 @@ def main(argv: list[str]) -> int:
                 signal.signal(s, signal.SIG_IGN)
         group.terminate()
         removed = remove(root) if owned else True
-        _release_slot(slot)
+        if slot is not None:
+            _release_slot(slot)
+        if lease_cm is not None:
+            with contextlib.suppress(Exception):
+                lease_cm.__exit__(None, None, None)
+            if group.proc is not None:
+                _evict_if_drifted(toplevel, sha40, entry)
         if interrupted is None and group.proc is not None and runner_exit is None:
             runner_exit = group.proc.poll()
         for s, handler in previous.items():
             with contextlib.suppress(ValueError, OSError, TypeError):
                 signal.signal(s, handler)
+
+    if slot_refused:
+        return _finish(sha40, "refused", why, None, True, EXIT_REFUSED)
 
     if interrupted is not None:
         why = f"interrupted: {signal.Signals(interrupted).name}"

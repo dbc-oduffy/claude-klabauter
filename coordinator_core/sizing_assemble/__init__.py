@@ -262,6 +262,7 @@ from typing import Any, Callable, Optional
 
 from coordinator_core import warp_fire as _warp_fire
 from coordinator_core.bounded_slug import bounded_slug
+from coordinator_core.session.output_tree_layout import locate, write_rel
 
 from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped  # noqa: F401 -- ENGINE_SIZE_RULE re-exported
 from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
@@ -328,7 +329,7 @@ def _derive_register_cli(
     try:
         sizing_rel = target.resolve().relative_to(root.resolve()).as_posix()
     except ValueError:
-        sizing_rel = f"state/sizings/{target.name}"
+        sizing_rel = locate(str(root), f"state/sizings/{target.name}")
     register = _derived_register_block(rows, unrelated, refs, sizing_rel)
     if dropped:
         print(
@@ -393,7 +394,7 @@ def _sizing_object_scaffold_directive(
     slug = bounded_slug(title or "", _SLUG_MAX_CHARS)
     resolved: dict[str, Any] = {
         "title": title,
-        "out": f"state/sizings/{today}-{slug}.yaml",
+        "out": write_rel("state/sizings", f"{today}-{slug}.yaml"),
         "exit_criterion": exit_criterion,
         "interaction_mode": interaction_mode,
         "tshirt": tshirt,
@@ -1951,7 +1952,7 @@ def _write_back(
     try:
         sizing_rel = target.relative_to(root).as_posix()
     except ValueError:
-        sizing_rel = f"state/sizings/{target.name}"
+        sizing_rel = locate(str(root), f"state/sizings/{target.name}")
 
     def mutate(old: str) -> str:
         try:

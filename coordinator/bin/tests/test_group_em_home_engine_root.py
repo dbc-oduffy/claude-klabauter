@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -46,11 +48,13 @@ def test_ensure_prints_no_template_notice_exit_0(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
     monkeypatch.setattr(gem_home, "migrate_legacy_home", lambda: "none")
     monkeypatch.setattr(gem_home, "default_template", lambda: None)
+    monkeypatch.setattr(gem_home, "remote_status", lambda: (None, "gh-absent"))
     assert mod.main(["ensure"]) == 0
     cap = capsys.readouterr()
     assert cap.out.strip() == str(home)
-    assert cap.err.count("\n") == 1
+    assert cap.err.count("\n") == 2
     assert "CLAUDE_PLUGIN_ROOT" in cap.err and "repos.content_root" in cap.err
+    assert "local-only" in cap.err and "gh-absent" in cap.err
 
 
 def test_ensure_with_template_prints_no_notice(tmp_path, monkeypatch, capsys):
@@ -63,8 +67,9 @@ def test_ensure_with_template_prints_no_notice(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
     monkeypatch.setattr(gem_home, "migrate_legacy_home", lambda: "none")
     monkeypatch.setattr(gem_home, "default_template", lambda: tpl)
+    monkeypatch.setattr(gem_home, "remote_status", lambda: (None, "gh-absent"))
     assert mod.main(["ensure"]) == 0
-    assert capsys.readouterr().err == ""
+    assert "CLAUDE_PLUGIN_ROOT" not in capsys.readouterr().err
     assert (home / "CLAUDE.md").read_text(encoding="utf-8") == "seed"
 
 
@@ -88,6 +93,100 @@ def test_unresolved_engine_exits_2(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(engine_bootstrap, "_resolve_engine_root", lambda caller_file=None: "")
     assert mod.main(["path"]) == 2
     assert "unresolvable" in capsys.readouterr().err
+
+
+def _git(cwd, *args):
+    return subprocess.run(
+        ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd, capture_output=True, text=True
+    )
+
+
+def _stub_home(gem_home, monkeypatch, home, remote):
+    monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
+    monkeypatch.setattr(gem_home, "migrate_legacy_home", lambda: "none")
+    monkeypatch.setattr(gem_home, "default_template", lambda: None)
+    monkeypatch.setattr(gem_home, "remote_status", lambda: remote)
+
+
+def test_ensure_json_reports_opt_out_installs_guard(tmp_path, monkeypatch, capsys):
+    from coordinator_core.group_em import gem_home
+
+    mod = _load_mirror(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    _stub_home(gem_home, monkeypatch, home, (None, "gh-absent"))
+    monkeypatch.setattr(shutil, "which", lambda name, *a, **k: None)
+    assert mod.main(["ensure", "--json", "--create-remote"]) == 0
+    rep = json.loads(capsys.readouterr().out)
+    assert rep["remote"] is None and rep["remote_opt_out"] == "gh-absent"
+    assert rep["sync"]["sync"] == "noop"
+    assert (home / ".git" / "hooks" / "pre-commit").is_file()
+    assert "state/cross-repo" not in (home / ".gitignore").read_text(encoding="utf-8")
+
+
+def test_sync_push_to_bare_remote_then_pull(tmp_path, monkeypatch, capsys):
+    from coordinator_core.group_em import gem_home
+
+    mod = _load_mirror(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    bare = tmp_path / "remote.git"
+    assert _git(tmp_path, "init", "--bare", "-q", str(bare)).returncode == 0
+    _stub_home(gem_home, monkeypatch, home, (str(bare), None))
+    assert mod.main(["ensure", "--json"]) == 0
+    capsys.readouterr()
+    inbox = home / "state" / "cross-repo" / "inbox"
+    inbox.mkdir(parents=True)
+    (inbox / "m.md").write_text("memo", encoding="utf-8")
+    for k in ("AUTHOR", "COMMITTER"):
+        monkeypatch.setenv(f"GIT_{k}_NAME", "t")
+        monkeypatch.setenv(f"GIT_{k}_EMAIL", "t@t")
+    assert mod.main(["sync", "--push"]) == 0
+    assert json.loads(capsys.readouterr().out)["sync"] == "ok"
+    assert _git(bare, "log", "--all", "--oneline").stdout.strip()
+    assert mod.main(["sync"]) == 0
+    assert json.loads(capsys.readouterr().out)["sync"] == "ok"
+
+
+def test_sync_without_remote_is_noop_exit_0(tmp_path, monkeypatch, capsys):
+    from coordinator_core.group_em import gem_home
+
+    mod = _load_mirror(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    home.mkdir()
+    _git(home, "init", "-q")
+    _stub_home(gem_home, monkeypatch, home, (None, "gh-absent"))
+    assert mod.main(["sync", "--push"]) == 0
+    rep = json.loads(capsys.readouterr().out)
+    assert rep["sync"] == "noop" and rep["remote_opt_out"] == "gh-absent"
+
+
+def test_sync_conflict_exits_5_naming_paths(tmp_path, monkeypatch, capsys):
+    from coordinator_core.group_em import gem_home, gem_home_sync
+
+    mod = _load_mirror(tmp_path, monkeypatch)
+    monkeypatch.setattr(gem_home, "resolve_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        gem_home_sync, "pull_on_entry", lambda h: {"sync": "conflict", "paths": ["a.md"], "remote_opt_out": None}
+    )
+    assert mod.main(["sync"]) == 5
+    err = capsys.readouterr().err
+    assert "conflict" in err and "a.md" in err
+
+
+def test_prune_verb_calls_prune(tmp_path, monkeypatch, capsys):
+    from coordinator_core.group_em import gem_home, gem_home_prune
+
+    mod = _load_mirror(tmp_path, monkeypatch)
+    monkeypatch.setattr(gem_home, "resolve_home", lambda: tmp_path)
+    monkeypatch.setattr(
+        gem_home_prune,
+        "prune",
+        lambda h, fix_paths=False: {"removed": [], "archived": [], "backup": [], "refused": [], "fix_paths": fix_paths},
+    )
+    assert mod.main(["prune"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["removed"] == [] and out["fix_paths"] is False
+    assert mod.main(["prune", "--fix-paths"]) == 0
+    assert json.loads(capsys.readouterr().out)["fix_paths"] is True
 
 
 def test_script_has_no_legacy_imports():

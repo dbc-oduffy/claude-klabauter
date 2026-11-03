@@ -53,6 +53,9 @@ IS_WINDOWS = os.name == "nt"
 
 #: One telemetry line takes ms; a write still pending here is wedged, not slow.
 APPEND_DEADLINE_SECS = 0.2
+#: Default caller wait of a non-droppable append; the write itself is never bounded. Pass ``wait_secs=None`` to wait indefinitely.
+RECORD_WAIT_SECS = 0.25
+_DEFAULT_WAIT: "object" = object()
 _WRITER_IDLE_SECS = 5.0
 _registry_lock = threading.Lock()
 _writers: "dict[str, queue.SimpleQueue]" = {}
@@ -174,7 +177,7 @@ def _release_held(sink_str: str, held: "list[bytes]", dropped: int) -> None:
 
 def append_line(
     sink: "Path | str", encoded: bytes, droppable: bool = False, *, hold: bool = False,
-    wait_secs: "float | None" = None,
+    wait_secs: "float | None | object" = _DEFAULT_WAIT,
 ) -> "bool | None":
     """Atomically append ``encoded`` (already newline-terminated) to ``sink``.
 
@@ -192,10 +195,10 @@ def append_line(
     concurrency test can observe a real failure if the atomicity guarantee
     is ever violated.
 
-    The write runs on a per-sink daemon writer thread. By default the caller waits
-    for it to land however long that takes: a record line (a run note, a ledger row)
-    lost to a slow sink is silent data loss, and a wedged sink must surface as a
-    slow op, not as a write reported done that never happened.
+    The write runs on a per-sink daemon writer thread. A record line (a run note, a
+    ledger row) is never dropped: the caller waits ``RECORD_WAIT_SECS`` by default,
+    then gets ``False`` and the job stays queued to land, in order, once the sink's
+    writer returns. A failure raised after that wait is not seen by the caller.
 
     ``droppable=True`` is for telemetry only: the caller waits
     ``APPEND_DEADLINE_SECS``; on expiry the sink is marked stalled, one stderr
@@ -210,7 +213,7 @@ def append_line(
     ``wait_secs`` (non-droppable only) bounds the caller's wait without bounding the
     write: past it the call returns ``False`` and the job stays queued, so the line
     still lands, in order, once the sink's writer returns. ``True`` means it landed.
-    For a record that must not be lost but whose caller must not hang on a wedged sink.
+    Omitted it is ``RECORD_WAIT_SECS``; ``None`` waits indefinitely.
     """
     sink_str = str(sink)
     if droppable and _forward(sink_str, encoded, hold):
@@ -233,7 +236,7 @@ def append_line(
         if _stalled:
             budget = max(0.0, APPEND_DEADLINE_SECS - (time.monotonic() - min(_stalled.values())))
     if not droppable:
-        if not job.done.wait(wait_secs):
+        if not job.done.wait(RECORD_WAIT_SECS if wait_secs is _DEFAULT_WAIT else wait_secs):
             return False
         if job.error is not None:
             raise job.error

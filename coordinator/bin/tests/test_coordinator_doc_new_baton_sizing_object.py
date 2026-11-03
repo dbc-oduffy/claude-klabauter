@@ -268,6 +268,18 @@ def test_handoff_without_the_flag_is_unaffected(cli, monkeypatch, tmp_path):
     assert "sizing_object:" not in out_path.read_text(encoding="utf-8")
 
 
+def test_baton_path_for_a_sizing_is_the_month_shard(cli):
+    rel = cli._baton_rel_for_sizing("state/sizings/2026-11/2026-11-03-some-work-aaaaaa.yaml")
+    assert rel == "state/handoffs/2026-11/2026-11-03-some-work-aaaaaa.md"
+    assert "\\" not in rel
+
+
+def test_roadmap_baton_default_path_is_the_month_shard(cli, monkeypatch):
+    monkeypatch.setattr(cli, "_today", lambda: "2026-11-03")
+    out = cli._default_output_path("roadmap-baton", "t", None, stub_id="s1").replace("\\", "/")
+    assert out == "state/handoffs/2026-11/2026-11-03_000000_roadmap-s1.md"
+
+
 def test_no_sizing_object_is_refused_on_handoff(cli, monkeypatch, tmp_path):
     """`--no-sizing-object` only ever declares absence against the plan/
     roadmap-baton explicit-answer gate — handoff/spinoff have no such gate

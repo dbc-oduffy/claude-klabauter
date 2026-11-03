@@ -169,6 +169,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -2028,19 +2029,24 @@ def _cited_warp_run_ids(repo_root: Path, candidates: frozenset, wd: "_Watchdog")
 
 
 def _tracked_warp_run_names(repo_root: Path) -> Optional[set]:
-    """Run-dir names holding any tracked file, from one `git ls-files state/warp`.
-    Empty outside a git work tree; None when git fails (callers delete nothing)."""
+    """Run-dir names holding any tracked file, read from the index in process (no git spawn).
+    Empty outside a git work tree; None when the index is unreadable (callers delete nothing)."""
+    from coordinator_core.git.git_state import IndexParseError, read_index_paths
+
     if git_dir(str(repo_root)) is None:
         return set()
     warp_rel = os.path.relpath(home_dir(str(repo_root), "warp"), str(repo_root)).replace(os.sep, "/")
-    res = run_git(["ls-files", "-z", "--", warp_rel], cwd=str(repo_root))
-    if res.returncode != 0:
+    prefix = warp_rel + "/"
+    try:
+        tracked = read_index_paths(repo_root)
+    except (IndexParseError, OSError):
         return None
     names: set = set()
-    for entry in res.stdout.split("\0"):
-        parts = entry.split("/")
-        if len(parts) > 3:
-            names.add(parts[2])
+    for entry in tracked:
+        if entry.startswith(prefix):
+            name, sep, _ = entry[len(prefix):].partition("/")
+            if sep:
+                names.add(name)
     return names
 
 
@@ -2103,6 +2109,90 @@ def sweep_warp_runs(
     return total_bytes, total_items
 
 
+_EXPORT_TREE_KEEP_NAMES = frozenset({"unit4", "warp"})
+_EXPORT_TREE_PID_RE = re.compile(r"(?:^|[-_.])(\d+)$")
+_SHA40_RE = re.compile(r"[0-9a-f]{40}")
+
+
+def _export_tree_mtime(tree: Path) -> Optional[int]:
+    """Newest mtime of `tree`, `tree/coordinator_core` and `tree/pyproject.toml` when the
+    tree holds both markers (a full-repo export or clone); None otherwise. Three stats,
+    no walk -- a directory's own mtime ignores nested edits, so the markers' mtimes join it."""
+    try:
+        top = os.stat(tree)
+        core = os.stat(tree / "coordinator_core")
+        proj = os.stat(tree / "pyproject.toml")
+    except OSError:
+        return None
+    if not stat.S_ISDIR(core.st_mode) or not stat.S_ISREG(proj.st_mode):
+        return None
+    return int(max(top.st_mtime, core.st_mtime, proj.st_mtime))
+
+
+def _export_tree_owner_alive(name: str) -> bool:
+    """True when a pid is encoded at the end of `name` and may be alive (unknown counts as alive)."""
+    from coordinator_core.testing import baseline_cache
+
+    m = _EXPORT_TREE_PID_RE.search(name)
+    return m is not None and baseline_cache._pid_alive(int(m.group(1))) is not False
+
+
+def _stale_export_trees(
+    scratch_root: Path, now: int, threshold_sec: int
+) -> Tuple[List[Tuple[Path, int]], List[Tuple[Path, int, str]], set]:
+    """Shape-keyed scan of the direct children of `scratch_root`.
+
+    Returns (stale trees, stale baseline-cache entries, paths the scratch walk must not
+    enter). A tree qualifies when it holds its own `coordinator_core/` and `pyproject.toml`,
+    has no `.git` (clones keep their own recoverability proof), is past the age bound, and
+    has no live owner (pid at the end of its name; for a cache entry, a live lease).
+    `unit4` and `warp` are never touched; links are never followed.
+    """
+    from coordinator_core.testing import baseline_cache
+
+    trees: List[Tuple[Path, int]] = []
+    entries: List[Tuple[Path, int, str]] = []
+    walk_skip: set = set()
+    try:
+        names = sorted(os.listdir(scratch_root))
+    except OSError:
+        return trees, entries, walk_skip
+    bound = max(threshold_sec, _MTIME_FLOOR_SECS)
+    is_junction = getattr(os.path, "isjunction", lambda _p: False)
+
+    def _linked(path: Path) -> bool:
+        return path.is_symlink() or is_junction(str(path))
+
+    for name in names:
+        if name in _EXPORT_TREE_KEEP_NAMES:
+            continue
+        child = scratch_root / name
+        if _linked(child):
+            continue
+        if name == baseline_cache.CACHE_DIRNAME:
+            for sha in sorted(baseline_cache._listdir(child)):
+                entry = child / sha
+                if not _SHA40_RE.fullmatch(sha) or _linked(entry):
+                    continue
+                walk_skip.add(str(entry))
+                mtime = _export_tree_mtime(entry)
+                if mtime is None:
+                    continue
+                mtime = max(mtime, baseline_cache._used_ns(child, sha) // 1_000_000_000)
+                if now - mtime <= bound or baseline_cache._live_leases(child, sha):
+                    continue
+                entries.append((entry, mtime, sha))
+            continue
+        if (child / ".git").exists():
+            continue
+        mtime = _export_tree_mtime(child)
+        if mtime is None or now - mtime <= bound or _export_tree_owner_alive(name):
+            continue
+        trees.append((child, mtime))
+        walk_skip.add(str(child))
+    return trees, entries, walk_skip
+
+
 def sweep_scratch(
     repo_root: Path,
     scratch_age_days: int,
@@ -2139,9 +2229,14 @@ def sweep_scratch(
     def _onerror(exc: OSError) -> None:
         walk_errors.append(f"{getattr(exc, 'filename', repo_root)}: {exc}")
 
+    scratch_root = repo_root / "scratch"
+    stale_trees, stale_cache_entries, walk_skip = _stale_export_trees(scratch_root, now, threshold_sec)
+
     for root, dirs, _files in os.walk(repo_root, onerror=_onerror):
         for d in dirs:
             all_dirs.append(Path(root) / d)
+        if walk_skip:
+            dirs[:] = [d for d in dirs if str(Path(root) / d) not in walk_skip]
     all_dirs.sort(key=lambda p: str(p))
 
     if walk_errors:
@@ -2165,12 +2260,23 @@ def sweep_scratch(
     # design (a dir later skipped by an earlier gate, or dropped by the
     # watchdog, still has an entry here) — that costs nothing beyond a dict
     # lookup, and keeps this a single query shape independent of loop state.
-    scratch_root = repo_root / "scratch"
     untracked_by_dir = _batch_is_untracked_dirs(
         repo_root,
         [d for d in all_dirs if _is_auto_prune_name(d.name) or _is_scratch_clone_root(d, scratch_root)],
     )
     clone_candidates: set = set()
+    export_candidates: set = set()
+    cache_entry_shas: dict = {}
+
+    for tree, tree_mtime in stale_trees:
+        scratch_candidates.append((tree, tree.name, tree_mtime, now - tree_mtime, 0, max(threshold_sec, _MTIME_FLOOR_SECS)))
+        pruned_parents.append(str(tree))
+        export_candidates.add(str(tree))
+    for entry, entry_mtime, sha in stale_cache_entries:
+        scratch_candidates.append((entry, entry.name, entry_mtime, now - entry_mtime, 0, max(threshold_sec, _MTIME_FLOOR_SECS)))
+        pruned_parents.append(str(entry))
+        export_candidates.add(str(entry))
+        cache_entry_shas[str(entry)] = sha
 
     for dir_path in all_dirs:
         if not wd.check():
@@ -2293,13 +2399,26 @@ def sweep_scratch(
             scratch_candidates.append((dir_path, dir_name, mtime, age_sec, size_bytes, effective_threshold))
             pruned_parents.append(dir_str)
 
-    scratch_delete_results = (
-        _delete_paths_batch([c[0] for c in scratch_candidates], watchdog=wd) if apply else {}
-    )
+    scratch_delete_results: dict = {}
+    if apply:
+        from coordinator_core.testing import baseline_cache
+
+        scratch_delete_results = _delete_paths_batch(
+            [c[0] for c in scratch_candidates if str(c[0]) not in cache_entry_shas], watchdog=wd
+        )
+        # Sealed cache entries need unsealing and a lease re-check; baseline_cache owns that.
+        for cache_path, sha in cache_entry_shas.items():
+            baseline_cache._evict_one(Path(cache_path).parent, sha)
+            scratch_delete_results[cache_path] = not Path(cache_path).exists()
 
     for cand_path, cand_name, cand_mtime, cand_age_sec, cand_size_bytes, cand_threshold in scratch_candidates:
         cand_str = str(cand_path)
-        why = "recoverable scratch clone" if cand_str in clone_candidates else "name in auto-prune list"
+        if cand_str in clone_candidates:
+            why = "recoverable scratch clone"
+        elif cand_str in export_candidates:
+            why = "stale export tree (own coordinator_core + pyproject.toml, no live owner)"
+        else:
+            why = "name in auto-prune list"
         if apply:
             if not scratch_delete_results.get(cand_str, False):
                 _banner(f"[cruft-sweep] WARNING: delete failed, not counted as pruned: {cand_str}", quiet=quiet)

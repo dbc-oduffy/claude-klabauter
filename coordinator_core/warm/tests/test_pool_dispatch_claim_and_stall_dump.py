@@ -406,3 +406,50 @@ def test_a_claimed_or_disarmed_request_writes_no_accept_record(tmp_path):
     server._arm_accept_stall(stall_dir, 0.1, tmp_path / "other", "k2", ["gate"])()
     time.sleep(0.6)
     assert not list(stall_dir.glob("*.txt")) if stall_dir.exists() else True
+
+
+def test_stall_record_carries_a_timed_probe_of_the_op_repo_root(tmp_path, monkeypatch):
+    stall_dir = tmp_path / "stall-dumps"
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    monkeypatch.setattr(server, "_WORKER_STDERR_FILE", None)
+    monkeypatch.setattr(server, "_WORKER_STALL_DIR", stall_dir)
+    claim = tmp_path / "k1"
+    claim.write_text("1")
+    disarm = server._arm_stall_dump(0.1, claim, repo)
+    assert _wait_for(lambda: stall_dir.is_dir() and any(stall_dir.glob("*.txt")))
+    disarm()
+
+    (record,) = stall_dir.glob("*.txt")
+    header = _header(record)
+    assert float(header["repo-drive-probe-ms"]) >= 0
+    assert float(header["fs-probe-ms"]) >= 0
+
+
+def test_repo_drive_probe_is_unavailable_without_a_root_and_error_for_a_missing_one(tmp_path):
+    assert server._repo_drive_probe_ms(None) == "unavailable"
+    assert server._repo_drive_probe_ms(tmp_path / "missing").startswith("error:")
+
+
+def test_stall_record_without_a_repo_root_marks_the_probe_unavailable(tmp_path):
+    stall_dir = tmp_path / "stall-dumps"
+    record = server._write_stall_record(stall_dir, None, key="k", leg="x")
+    assert _header(record)["repo-drive-probe-ms"] == "unavailable"
+
+
+def test_accept_side_stall_record_probes_the_repo_root(tmp_path):
+    stall_dir = tmp_path / "stall-dumps"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    disarm = server._arm_accept_stall(stall_dir, 0.1, tmp_path / "unclaimed", "k1", ["gate"], repo)
+    assert _wait_for(lambda: stall_dir.is_dir() and any(stall_dir.glob("*.txt")))
+    disarm()
+    (record,) = stall_dir.glob("*.txt")
+    assert float(_header(record)["repo-drive-probe-ms"]) >= 0
+
+
+def test_op_repo_root_reads_the_envelope_and_never_raises(tmp_path):
+    assert server._op_repo_root({"_caller_cwd": str(tmp_path)}) == tmp_path
+    assert server._op_repo_root(None) is None
+    assert server._op_repo_root({"_origin_worktree": str(tmp_path), "_caller_cwd": "x"}) == tmp_path

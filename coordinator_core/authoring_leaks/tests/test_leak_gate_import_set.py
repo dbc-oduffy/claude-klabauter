@@ -1,7 +1,8 @@
 """Pins the import set of `leak_gate` on a terminal-commit-shaped path set.
 
-Probe result: with `commit_gates` already loaded (it owns `GateOutcome`), the three wired
+Probe result: with `commit_gates` already loaded (it owns `GateOutcome`), the four wired
 detectors add only themselves and `coordinator_core.pyimports`; nothing else is thinnable.
+`coordinator_core.pycallsig` and `coordinator_core.percolate` stay unloaded.
 """
 
 from __future__ import annotations
@@ -31,6 +32,7 @@ print(json.dumps({"passed": out.passed, "added": added}))
 
 _ABSENT = (
     "coordinator_core.authoring_leaks.ts_import_closure",
+    "coordinator_core.pycallsig",
     "coordinator_core.percolate",
     "coordinator_core.percolate.engine",
     "coordinator_core.percolate.store",

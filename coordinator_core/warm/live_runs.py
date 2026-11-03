@@ -1,4 +1,4 @@
-"""Detect live mid-stage Workflow runs across registered repos, so a warm-pair handover can log them.
+"""Detect live mid-stage Workflow runs across registered repos, so a warm-pair handover can hold, then refuse, for them.
 
 Pure file reads: globs each registered repo's state/warp/*/run-stage.json; spawns nothing.
 """
@@ -7,12 +7,17 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Callable, Mapping, Optional
 
 from coordinator_core.session import record_homes
+
+# How long a handover waits for mid-stage runs to end before it refuses, and how often it re-reads.
+HOLD_BOUND_S = 120.0
+HOLD_POLL_S = 2.0
 
 # A run-stage.json whose last_activity_at is older than this is abandoned, not live.
 FRESHNESS_WINDOW = timedelta(minutes=30)
@@ -192,11 +197,13 @@ def find_live_runs(
     *,
     now: Optional[datetime] = None,
     window: timedelta = FRESHNESS_WINDOW,
+    require_token: bool = True,
 ) -> list[LiveRun]:
     """Return runs `run_is_live` accepts: not halted/complete, owner session live, own stage activity inside the window, run token held.
 
-    `repos` maps registry key to repo root (default: the registry). Unreadable repos or
-    records are skipped. Result is sorted by repo then run_id.
+    `require_token=False` is the `run_stage_live` bar: a staged run between ops holds no token and
+    still counts. `repos` maps registry key to repo root (default: the registry). Unreadable repos
+    or records are skipped. Result is sorted by repo then run_id.
     """
     if repos is None:
         repos = _registered_repos()
@@ -218,7 +225,10 @@ def find_live_runs(
             data = _read_stage(rec)
             if data is None:
                 continue
-            stage = _live_stage(data, cutoff, owner_memo, repo_root=Path(root), run_id=rec.parent.name)
+            stage = _live_stage(
+                data, cutoff, owner_memo, repo_root=Path(root), run_id=rec.parent.name,
+                require_token=require_token,
+            )
             if stage is None:
                 continue
             found.append(LiveRun(name, rec.parent.name, stage, str(data.get("last_activity_at") or "")))
@@ -226,10 +236,38 @@ def find_live_runs(
     return found
 
 
-def format_handover(runs: list[LiveRun]) -> list[str]:
-    """One log line per live run the warm-pair handover passes over; never a refusal."""
-    return [
-        f"warm handover: live run {r.repo} {r.run_id} stage={r.stage} "
-        f"last_activity={r.last_activity_at}; in-flight ops drain, run continues"
+def format_refusal(runs: list[LiveRun], held_s: float = 0.0) -> str:
+    """The refusal text for a warm-pair handover held up by mid-stage runs: one line per run, id and repo."""
+    lines = [
+        f"  {r.repo} {r.run_id} stage={r.stage} last_activity={r.last_activity_at}"
         for r in runs
     ]
+    return (
+        f"warm handover refused: {len(runs)} run(s) mid-stage after holding {held_s:.0f}s; "
+        "a staged run's next leg is an engine op, so the server is not stopped under it:\n"
+        + "\n".join(lines)
+    )
+
+
+def hold_for_mid_stage_runs(
+    *,
+    bound_s: Optional[float] = None,
+    poll_s: Optional[float] = None,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[list[LiveRun], float]:
+    """Wait up to `bound_s` for every registered repo's mid-stage runs (own included, token or not) to end.
+
+    Returns (runs still mid-stage, seconds held): the runs empty means the handover may stop the
+    server; non-empty means the bound lapsed and the caller refuses with `format_refusal`. Reads
+    only; spawns nothing.
+    """
+    bound = HOLD_BOUND_S if bound_s is None else bound_s
+    poll = HOLD_POLL_S if poll_s is None else poll_s
+    start = monotonic()
+    while True:
+        runs = find_live_runs(require_token=False)
+        held = monotonic() - start
+        if not runs or held >= bound:
+            return runs, held
+        sleep(min(poll, max(bound - held, 0.0)))

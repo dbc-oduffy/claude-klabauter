@@ -91,6 +91,24 @@ def test_two_sibling_closes_in_either_order_drop_exactly_once(repo, tmp_path, or
     assert _git(repo, "status", "--porcelain") == ""
 
 
+def test_a_legacy_flat_trail_sibling_counts_closed(repo, tmp_path):
+    legacy = repo / "docs" / "research" / "trail" / "ra.yaml"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text('run_id: "ra"\n', encoding="utf-8")
+    _git(repo, "add", "docs")
+    _git(repo, "commit", "-q", "-m", "legacy trail")
+    out = _close(repo, tmp_path, "rb", group_runs=["ra", "rb"])
+    assert out["exit_code"] == 0 and out["research_block_dropped"] is True, out
+    assert not _has_block(repo)
+
+
+def test_a_run_dir_trail_sibling_counts_closed(repo, tmp_path):
+    _close(repo, tmp_path, "ra", group_runs=["ra", "rb"])
+    assert (repo / "docs" / "research" / "topic-ra").is_dir()
+    out = _close(repo, tmp_path, "rb", group_runs=["ra", "rb"])
+    assert out["research_block_dropped"] is True, out
+
+
 def test_a_run_id_outside_group_runs_is_refused_with_no_commit(repo, tmp_path):
     head = _git(repo, "rev-parse", "HEAD")
     out = _close(repo, tmp_path, "ra", group_runs=["rb", "rc"])

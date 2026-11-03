@@ -46,12 +46,13 @@ def candidates(gate_paths: Sequence[str]) -> Iterable[str]:
 _ROOT_ONLY: Tuple[str, ...] = ("",)
 
 
-def _module_files(module: str, prefixes: Sequence[str] = _ROOT_ONLY) -> List[str]:
+def module_files(module: str, prefixes: Sequence[str] = _ROOT_ONLY) -> List[str]:
+    """Candidate repo-relative files (`m.py`, `m/__init__.py`) of dotted `module` under each import-root prefix."""
     base = module.replace(".", "/")
     return [f for p in prefixes for f in (f"{p}{base}.py", f"{p}{base}/__init__.py")]
 
 
-def _prefixes(rel: str) -> Tuple[str, ...]:
+def prefixes(rel: str) -> Tuple[str, ...]:
     """Import roots for an absolute import in `rel`: repo root, the importer's own directory, `src/`."""
     out: List[str] = [""]
     here = rel.rpartition("/")[0]
@@ -70,6 +71,11 @@ def _read_text(path: Path) -> Optional[str]:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
         return None
+
+
+def read_text(path: Path) -> Optional[str]:
+    """UTF-8 text of `path`, None when unreadable. Trap: `_read_text` stays the instrumented name (land_deadline leg, outside tests patch it); this delegates."""
+    return _read_text(path)
 
 
 @functools.lru_cache(maxsize=8)
@@ -167,12 +173,12 @@ def _needed_paths(records: Iterable[Tuple[str, ImportRecord]]) -> Set[str]:
         base = _absolute_base(rec, rel)
         if not base:
             continue
-        pfx = _prefixes(rel)
-        needed.update(_module_files(base.split(".")[0], pfx))
-        needed.update(_module_files(base, pfx))
+        pfx = prefixes(rel)
+        needed.update(module_files(base.split(".")[0], pfx))
+        needed.update(module_files(base, pfx))
         for name in rec.names:
             if name != "*":
-                needed.update(_module_files(f"{base}.{name}", pfx))
+                needed.update(module_files(f"{base}.{name}", pfx))
     return needed
 
 
@@ -201,13 +207,13 @@ class _Closure:
         return self.view.in_head(path)
 
     def locate(self, module: str, has, pfx: Sequence[str] = _ROOT_ONLY) -> Optional[str]:
-        for cand in _module_files(module, pfx):
+        for cand in module_files(module, pfx):
             if has(cand):
                 return cand
         return None
 
     def first_party(self, top: str, pfx: Sequence[str] = _ROOT_ONLY) -> bool:
-        return any(self.post_has(c) or self.worktree_has(c) for c in _module_files(top, pfx))
+        return any(self.post_has(c) or self.worktree_has(c) for c in module_files(top, pfx))
 
     def first_party_import(self, base: str, rec: ImportRecord, pfx: Sequence[str]) -> bool:
         """Top-level package/module on an import root, or (namespace package) a located module file."""
@@ -230,7 +236,7 @@ class _Closure:
         base = _absolute_base(rec, rel)
         if not base:
             return []
-        pfx = _prefixes(rel)
+        pfx = prefixes(rel)
         if not self.first_party_import(base, rec, pfx):
             return []
         post_file = self.locate(base, self.post_has, pfx)
@@ -291,7 +297,7 @@ def _alias_hits(wt_text: str, rel: str, added: List[Tuple[int, str]]) -> Dict[st
 
 
 def _check_attr(closure: _Closure, rel: str, ref: AttrRef) -> Optional[LeakFinding]:
-    pfx = _prefixes(rel)
+    pfx = prefixes(rel)
     if not closure.first_party(ref.module.split(".")[0], pfx):
         return None
     target = closure.locate(ref.module, closure.post_has, pfx)
@@ -342,7 +348,7 @@ class _ResidueClosure(_Closure):
         return path not in self.deleted and super().worktree_has(path)
 
     def first_party(self, top: str, pfx: Sequence[str] = _ROOT_ONLY) -> bool:
-        return super().first_party(top, pfx) or any(self.view.in_head(c) for c in _module_files(top, pfx))
+        return super().first_party(top, pfx) or any(self.view.in_head(c) for c in module_files(top, pfx))
 
 
 def residue_findings(
@@ -379,7 +385,7 @@ def residue_findings(
         mod = module_name_for_file(rel)
         if mod:
             probe.add(f"{mod.split('.')[0]}/__init__.py")
-            probe.update(_module_files(mod))
+            probe.update(module_files(mod))
     if not probe:
         return []
     view = HeadView(root, probe)
@@ -489,12 +495,12 @@ def detect(
     for rel, alias_map in hits.items():
         for mods in alias_map.values():
             for mod in mods:
-                probe.update(f for f in _module_files(mod, _prefixes(rel)) if (root / f).is_file())
+                probe.update(f for f in module_files(mod, prefixes(rel)) if (root / f).is_file())
     probe_view = HeadView(root, probe) if probe else None
     attr_files: Set[str] = set()
     if probe_view is not None:
         for rel, alias_map in hits.items():
-            if any(f in gate or probe_view.worktree_differs(f) for mods in alias_map.values() for mod in mods for f in _module_files(mod, _prefixes(rel)) if f in probe):
+            if any(f in gate or probe_view.worktree_differs(f) for mods in alias_map.values() for mod in mods for f in module_files(mod, prefixes(rel)) if f in probe):
                 attr_files.add(rel)
     parsed: List[Tuple[str, ImportRecord]] = []
     refs: List[Tuple[str, AttrRef]] = []
@@ -511,10 +517,10 @@ def detect(
         return []
     needed = _needed_paths(parsed)
     for rel, ref in refs:
-        pfx = _prefixes(rel)
-        needed.update(_module_files(ref.module.split(".")[0], pfx))
-        needed.update(_module_files(ref.module, pfx))
-        needed.update(_module_files(f"{ref.module}.{ref.name}", pfx))
+        pfx = prefixes(rel)
+        needed.update(module_files(ref.module.split(".")[0], pfx))
+        needed.update(module_files(ref.module, pfx))
+        needed.update(module_files(f"{ref.module}.{ref.name}", pfx))
     closure = _Closure(root, gate, HeadView(root, needed), landed_text)
     if landed_text is None:
         closure._wt_texts.update(texts)

@@ -579,7 +579,7 @@ def _freeze_diff_worktree(
             "untracked additions from."
         )
 
-    diff_argv = ["diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--", *(_git_pathspec(p) for p in paths)]
+    diff_argv = ["--no-optional-locks", "diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--", *(_git_pathspec(p) for p in paths)]
     dr = _git(diff_argv, cwd=repo_root)
     if not dr.ok:
         # Trap: git can exit non-zero with empty stderr (example-stats-repo 2026-11-01 got a bare base), so

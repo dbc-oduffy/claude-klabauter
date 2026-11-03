@@ -159,10 +159,12 @@ def rotate_if_needed(
     *,
     threshold_bytes: int = _ROTATE_THRESHOLD_BYTES,
     max_generations: int = _MAX_GENERATIONS,
+    join_bound_secs: "float | None" = None,
 ) -> bool:
     """Rotate ``sink`` if at or above ``threshold_bytes``; True only when the rename chain finished.
 
-    Trap: the chain runs on a daemon thread joined for at most ``_JOIN_BOUND_SECS``, because a peer
+    Trap: the chain runs on a daemon thread joined for at most ``join_bound_secs`` (default
+    ``_JOIN_BOUND_SECS``), because a peer
     holding the sink open stalls ``os.replace``. On expiry the thread is abandoned and keeps its
     single-flight slot, so a later call returns False at once instead of interleaving renames."""
     try:
@@ -191,11 +193,12 @@ def rotate_if_needed(
             with _in_flight_lock:
                 _in_flight.discard(key)
             raise
-        worker.join(_JOIN_BOUND_SECS)
+        bound = _JOIN_BOUND_SECS if join_bound_secs is None else max(0.0, join_bound_secs)
+        worker.join(bound)
         if worker.is_alive():
             _log().debug(
                 "coordinator_core.telemetry.log_rotation: rotation of %r exceeded %.0fms; abandoned",
-                sink, _JOIN_BOUND_SECS * 1000,
+                sink, bound * 1000,
             )
             return False
         return bool(out)
@@ -219,6 +222,9 @@ _KNOWN_SINK_NAMES = (
 )
 
 
+_walk_start = 0
+
+
 def rotate_all_known_sinks(
     logs_dir: Path,
     *,
@@ -234,14 +240,29 @@ def rotate_all_known_sinks(
     wired to. Never raises (each sink's ``rotate_if_needed`` call already
     swallows its own exceptions; this function does not add new failure
     modes). Returns the count of sinks actually rotated.
+
+    The whole walk shares one ``_JOIN_BOUND_SECS`` budget; once spent the remaining sinks are
+    skipped and the next walk starts at the first skipped one, so a stalled sink never starves
+    a later one.
     """
+    global _walk_start
     rotated = 0
-    for name in _KNOWN_SINK_NAMES:
+    n = len(_KNOWN_SINK_NAMES)
+    start = _walk_start % n
+    deadline = time.monotonic() + _JOIN_BOUND_SECS
+    for step in range(n):
+        idx = (start + step) % n
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _walk_start = idx
+            break
+        name = _KNOWN_SINK_NAMES[idx]
         try:
             if rotate_if_needed(
                 logs_dir / name,
                 threshold_bytes=threshold_bytes,
                 max_generations=max_generations,
+                join_bound_secs=remaining,
             ):
                 rotated += 1
         except Exception:

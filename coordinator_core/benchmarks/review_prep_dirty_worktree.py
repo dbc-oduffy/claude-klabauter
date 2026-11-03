@@ -11,7 +11,8 @@ modified, half untracked) plus as many undeclared untracked peer files, then cal
   (`cpu_ms` is the child's own process CPU and excludes spawned git, so rank stages by spawns and wall).
 
     python coordinator_core/benchmarks/review_prep_dirty_worktree.py [--dirty 500] [--small 10]
-        [--mode worktree|range|runid|both] [--enforce]
+        [--mode worktree|range|runid|both] [--enforce] [--concurrent-writer]
+    python -m coordinator_core.benchmarks.review_prep_dirty_worktree --opl [--since EPOCH] [--json]
 
 `--enforce` exits 1 when `process_ms` >= `PROCESS_BAR_MS`, `spawn_count` > `SPAWN_BOUND`, or the spawn
 count differs between `--small` and `--dirty` declared files.
@@ -20,10 +21,12 @@ count differs between `--small` and `--dirty` declared files.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -68,6 +71,8 @@ _RUNID_STAGES = {
     "claim_index": [("lookup", "claim_index_lookup"), ("_read_index_names", "read_index_names")],
 }
 RUN_ID = "warp-bench-review-prep-0001"
+OPL_OP = "review.prep"
+OPL_SCOPE = "per_op_handler"
 
 
 def _git(repo: Path, *args: str) -> str:
@@ -270,15 +275,52 @@ def _run_child(repo: Path, params_path: Path, out_dir: Path, tag: str, setup_onl
     return measured
 
 
-def measure(mode: str, dirty: int, tree: bool) -> dict:
+WRITER_REL = "src/d0/m0.py"
+
+
+@contextlib.contextmanager
+def concurrent_writer(repo: Path, rel: str = WRITER_REL):
+    """Yield a stats dict while a thread repeatedly rewrites tracked `rel` and runs `git add` on it
+    (takes index.lock), the second-run shape of the review.prep stall. Stats: `iterations` (completed
+    adds) and `failures` (adds git refused, e.g. a lock held by the measured child)."""
+    stats = {"iterations": 0, "failures": 0}
+    stop = threading.Event()
+
+    def loop() -> None:
+        n = 0
+        while not stop.is_set():
+            n += 1
+            _write(repo, rel, f"v = {n}\n" * 3)
+            try:
+                _git(repo, "add", "--", rel)
+                stats["iterations"] += 1
+            except RuntimeError:
+                stats["failures"] += 1
+            stop.wait(0.005)
+
+    thread = threading.Thread(target=loop, daemon=True)
+    thread.start()
+    try:
+        yield stats
+    finally:
+        stop.set()
+        thread.join(timeout=70)
+
+
+def measure(mode: str, dirty: int, tree: bool, writer: bool = False) -> dict:
     from coordinator_core.benchmarks.isolated_clone import record_fixture_repo
 
+    writer_stats = None
     with record_fixture_repo(_REPO_ROOT, [], prefix="rp-dirty", label="review_prep_dirty") as repo:
         params = seed(repo, dirty, mode)
         params_path = repo.parent / "params.json"
         params_path.write_text(json.dumps(params), encoding="utf-8")
         setup = _run_child(repo, params_path, repo.parent, "setup", True) if tree else None
-        full = _run_child(repo, params_path, repo.parent, "full", False)
+        if writer:
+            with concurrent_writer(repo) as writer_stats:
+                full = _run_child(repo, params_path, repo.parent, "full", False)
+        else:
+            full = _run_child(repo, params_path, repo.parent, "full", False)
     payload = full["payload"]
     if payload["error"]:
         raise RuntimeError(f"review.prep ({mode}, dirty={dirty}) errored: {payload['error']}")
@@ -291,6 +333,8 @@ def measure(mode: str, dirty: int, tree: bool) -> dict:
         "slices": payload["slices"],
         "stages": payload["stages"],
     }
+    if writer_stats is not None:
+        result["writer"] = writer_stats
     if tree:
         result["process_ms"] = round(full["process_time_ms"] - setup["process_time_ms"], 1)
         result["procs"] = full["procs"] - setup["procs"]
@@ -300,12 +344,72 @@ def measure(mode: str, dirty: int, tree: bool) -> dict:
     return result
 
 
+def _pctile(sorted_vals: list, q: float):
+    if not sorted_vals:
+        return None
+    return sorted_vals[min(len(sorted_vals) - 1, int(q * len(sorted_vals)))]
+
+
+def measure_opl(repo_root: Path, since_epoch=None, op: str = OPL_OP, scope: str = OPL_SCOPE) -> dict:
+    """Production baseline: `process_ms` of `op` `kind: process_time` rows of `scope` in the live OPL
+    sink and its rotated generations, rows with `t_start >= since_epoch` only. `over_bar_legs` counts,
+    per leg name, the over-bar rows whose `legs` field names it (empty until review.prep attaches legs)."""
+    from coordinator_core.telemetry.op_latency import sink_generations
+
+    vals: list = []
+    over_bar_legs: dict = {}
+    paths = sink_generations(repo_root)
+    for path in paths:
+        try:
+            fh = open(path, "r", encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with fh:
+            for line in fh:
+                if op not in line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or row.get("kind") != "process_time" or row.get("op") != op:
+                    continue
+                if row.get("measurement_scope") != scope:
+                    continue
+                t_start, ms = row.get("t_start"), row.get("process_ms")
+                if not isinstance(ms, (int, float)) or isinstance(ms, bool):
+                    continue
+                if since_epoch is not None and (not isinstance(t_start, (int, float)) or t_start < since_epoch):
+                    continue
+                vals.append(float(ms))
+                if ms > PROCESS_BAR_MS:
+                    legs = row.get("legs")
+                    for leg in legs if isinstance(legs, list) else ():
+                        name = leg.get("name") if isinstance(leg, dict) else None
+                        if isinstance(name, str):
+                            over_bar_legs[name] = over_bar_legs.get(name, 0) + 1
+    vals.sort()
+    return {
+        "op": op, "measurement_scope": scope, "since_epoch": since_epoch, "sinks": len(paths),
+        "calls": len(vals), "over_bar": sum(1 for v in vals if v > PROCESS_BAR_MS), "bar_ms": PROCESS_BAR_MS,
+        "process_ms_p50": _pctile(vals, 0.5), "process_ms_p95": _pctile(vals, 0.95),
+        "process_ms_max": vals[-1] if vals else None,
+        "legs_histogram": over_bar_legs,
+    }
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--opl", action="store_true",
+                    help="read the live OPL sink (review.prep per_op_handler process_time rows) instead of seeding")
+    ap.add_argument("--json", action="store_true", help="OPL arm: print one JSON object")
+    ap.add_argument("--since", type=float, default=None, help="OPL arm: only rows with t_start >= this epoch")
     ap.add_argument("--dirty", type=int, default=500)
     ap.add_argument("--small", type=int, default=10)
     ap.add_argument("--mode", choices=("worktree", "range", "runid", "both"), default="both")
     ap.add_argument("--enforce", action="store_true")
+    ap.add_argument("--concurrent-writer", action="store_true",
+                    help="run a writer loop (modify a tracked file, git add) in the clone while review.prep runs")
     ap.add_argument("--child", action="store_true")
     ap.add_argument("--setup-only", action="store_true")
     ap.add_argument("--repo")
@@ -313,6 +417,11 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
     if args.child:
         return child_main(Path(args.repo), json.loads(Path(args.params).read_text(encoding="utf-8")), args.setup_only)
+    if args.opl:
+        report = measure_opl(_REPO_ROOT, args.since)
+        print(json.dumps(report, indent=1) if args.json else
+              " ".join(f"{k}={v}" for k, v in report.items()))
+        return 0
 
     from coordinator_core.benchmarks import declare_benchmark_origin
 
@@ -321,8 +430,9 @@ def main(argv=None) -> int:
     failures = []
     report = []
     for mode in modes:
-        small = measure(mode, args.small, tree=False)
-        large = sorted((measure(mode, args.dirty, tree=True) for _ in range(RUNS)), key=lambda r: r["process_ms"])[RUNS // 2]
+        small = measure(mode, args.small, tree=False, writer=args.concurrent_writer)
+        large = sorted((measure(mode, args.dirty, tree=True, writer=args.concurrent_writer) for _ in range(RUNS)),
+                       key=lambda r: r["process_ms"])[RUNS // 2]
         large["spawn_count_small"] = small["spawn_count"]
         large["spawn_constant"] = small["spawn_count"] == large["spawn_count"]
         large["within_bar"] = large["process_ms"] < PROCESS_BAR_MS
@@ -332,7 +442,8 @@ def main(argv=None) -> int:
         report.append(large)
         print(f"[{mode}] process_ms={large['process_ms']} spawn_count={large['spawn_count']} "
               f"(dirty={small['dirty_declared']}: {small['spawn_count']}) procs={large['procs']} "
-              f"dominant_stage={large['dominant_stage']}")
+              f"dominant_stage={large['dominant_stage']}"
+              + (f" writer={large['writer']}" if "writer" in large else ""))
         for name, b in sorted(large["stages"].items(), key=lambda kv: -kv[1]["wall_ms"]):
             print(f"  {name:22s} calls={b['calls']:<4d} spawns={b['spawns']:<5d} wall_ms={b['wall_ms']:<9} "
                   f"cpu_ms={b['cpu_ms']:<8} git={b['git']}")

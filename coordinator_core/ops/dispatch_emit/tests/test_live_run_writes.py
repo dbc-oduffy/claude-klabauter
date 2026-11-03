@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 
@@ -67,7 +68,7 @@ def test_unlaunched_entry_ages_out_launched_entry_stays(repo):
     run_token.mint(repo, "launched", SCRIPT, session_id="s")
     _submit(repo, "launched")
     assert live_run_writes.prune_index(repo) == []
-    past = __import__("time").time() + warp_live.UNLAUNCHED_GRACE_SECONDS + 60
+    past = time.time() + warp_live.UNLAUNCHED_GRACE_SECONDS + 60
     assert live_run_writes.prune_index(repo, now=past) == ["unlaunched"]
     assert set(_index(repo)) == {"launched"}
     run_token.consume(repo, "launched")
@@ -81,6 +82,83 @@ def test_ended_marker_drops_a_launched_entry(repo):
     marker.mkdir(parents=True, exist_ok=True)
     (marker / warp_live._HALTED_FILE).write_text(json.dumps({"status": warp_live._STATUS_HALTED}), encoding="utf-8")
     assert live_run_writes.prune_index(repo) == ["r1"]
+
+
+def _mark(root, run_id, status):
+    d = warp_live._ask_record_dir(root, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / warp_live._HALTED_FILE).write_text(json.dumps({"status": status}), encoding="utf-8")
+
+
+@pytest.mark.parametrize("status", ["resumed", "superseded", "closed", "landed", "halted"])
+def test_prune_drops_a_launched_row_whose_marker_is_over(repo, status):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s")
+    _submit(repo, "r1")
+    _mark(repo, "r1", status)
+    assert live_run_writes.prune_index(repo) == ["r1"]
+    assert _index(repo) == {}
+
+
+def test_prune_keeps_a_launched_row_with_an_unknown_marker_status(repo):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s")
+    _submit(repo, "r1")
+    _mark(repo, "r1", "mystery")
+    assert live_run_writes.prune_index(repo) == []
+
+
+def test_deep_prune_drops_a_resumed_row_without_the_transcript_walk(repo, monkeypatch):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s")
+    _submit(repo, "r1")
+    _mark(repo, "r1", "resumed")
+
+    def boom(*a, **k):
+        raise AssertionError("transcript liveness walked for an over run")
+
+    monkeypatch.setattr(warp_live, "_record_live", boom)
+    assert live_run_writes.prune_index(repo, deep=True) == ["r1"]
+
+
+def test_resumed_run_holds_no_footprint_but_stays_live_to_session_readers(repo):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s")
+    _submit(repo, "r1")
+    live_run_writes.index_stage(repo, "r1", {"rows": [{"writes": ["a.py"]}]})
+    _mark(repo, "r1", "resumed")
+    assert live_run_writes.live_footprints(repo, exclude_run_id=None) == {}
+    assert warp_live.live_run_for_session(repo, "s") == "r1"
+
+
+def test_halted_run_holds_no_footprint_and_keeps_its_record(repo):
+    run_token.mint(repo, "h1", SCRIPT, session_id="s")
+    run_token.mint(repo, "live", SCRIPT, session_id="s2")
+    for rid in ("h1", "live"):
+        _stage(repo, rid, rows=[["chain/__main__.py"]])
+    _mark(repo, "h1", "halted")
+    got = live_run_writes.live_footprints(repo, exclude_run_id=None)
+    assert set(got) == {"live"}
+    assert live_run_writes.overlaps(["chain/__main__.py"], got) == {"live": ["chain/__main__.py"]}
+    assert (warp_live._ask_record_dir(repo, "h1") / warp_live._HALTED_FILE).is_file()
+
+
+def test_prune_drops_a_launched_row_whose_owner_exited_and_keeps_a_live_owner(repo, monkeypatch):
+    for rid, sid in (("dead", "gone"), ("alive", "here")):
+        run_token.mint(repo, rid, SCRIPT, session_id=sid)
+        _submit_as(repo, rid, sid)
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda session_id, minted_at: session_id == "gone")
+    assert live_run_writes.prune_index(repo) == ["dead"]
+    assert set(_index(repo)) == {"alive"}
+
+
+def _submit_as(root, run_id, session_id):
+    warp_live.record_submission(
+        root, run_id, session_id=session_id, transcript_path=None, script_path=SCRIPT, sizing_rel=None
+    )
+
+
+def test_dirless_ghost_row_ages_out(repo):
+    run_token.mint(repo, "ghost", SCRIPT, session_id="s")
+    assert not warp_live._ask_record_dir(repo, "ghost").exists()
+    past = time.time() + warp_live.UNLAUNCHED_GRACE_SECONDS + 60
+    assert live_run_writes.prune_index(repo, now=past) == ["ghost"]
 
 
 @pytest.mark.spawns_process

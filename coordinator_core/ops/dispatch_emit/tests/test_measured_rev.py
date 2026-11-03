@@ -258,7 +258,7 @@ def _stage_manifest(repo, run_id, declared, row_writes):
     (run_dir / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
 
-def test_measure_unions_the_runs_own_manifest_writes_with_the_given_paths(repo):
+def test_measure_unions_the_runs_own_manifest_writes_with_the_given_paths(repo, monkeypatch):
     """An empty `paths` re-measures the run's landing set: a row appended after the declared list was fixed
     is carried; a dirty path the run never wrote stays out of the record."""
     _stage_manifest(repo, "run-landing", ["edit.txt"], ["edit.txt", "sub/deep.txt", "scratch/warp/x.json"])
@@ -266,7 +266,9 @@ def test_measure_unions_the_runs_own_manifest_writes_with_the_given_paths(repo):
     (repo / "sub" / "deep.txt").write_bytes(b"deeper\n")
     (repo / "keep.txt").write_bytes(b"foreign\n")
 
+    _no_spawn(monkeypatch)
     out = mr.measured_rev("run-landing", [], repo_root=repo)
+    monkeypatch.undo()
 
     assert out["paths"] == ["edit.txt", "sub/deep.txt"]
     assert "keep.txt" not in out["blobs"]

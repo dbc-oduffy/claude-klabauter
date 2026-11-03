@@ -174,17 +174,77 @@ def _run_git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 # ---------------------------------------------------------------------------
 
 
-def _dispatch_coordinator_doc_new(args: list[str], repo_root: Path) -> dict[str, Any]:
-    from coordinator_core.resolution.facade import resolve_operator_config
+_DOC_NEW_RUN_LOCK = threading.RLock()
 
-    claude_klabauter_bin = resolve_operator_config()["claude_klabauter_bin"]
-    cli = str(Path(claude_klabauter_bin) / "coordinator-doc-new.py")
-    proc = subprocess.run(
-        [sys.executable, cli, *args], cwd=repo_root, capture_output=True, text=True, **_NO_CONSOLE
-    )
-    if proc.returncode != 0:
-        raise RuntimeError(f"coordinator-doc-new {args}: failed (rc={proc.returncode}): {proc.stderr.strip()}")
-    return {"cli": "coordinator-doc-new", "args": args, "stdout": proc.stdout.strip()}
+
+def _doc_new_reported_path(stdout: str, repo_root: Path) -> Optional[str]:
+    """The path coordinator-doc-new printed as its last stdout line, repo-relative
+    POSIX when it lies under `repo_root`, else as printed (POSIX-normalised)."""
+    lines = [ln.strip() for ln in stdout.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    printed = lines[-1]
+    candidate = Path(printed)
+    if candidate.is_absolute():
+        try:
+            return candidate.resolve().relative_to(repo_root.resolve()).as_posix()
+        except (OSError, ValueError):
+            return printed.replace("\\", "/")
+    return printed.replace("\\", "/")
+
+
+def _state_root_in_process(central: bool = False) -> Optional[str]:
+    """The generator's `_resolve_state_root` without its child interpreter: this
+    engine's own `coordinator_core.state_root`, which that child would import.
+    None on any failure, the generator's own degrade contract."""
+    from coordinator_core.state_root import coordinator_state_root
+
+    try:
+        return coordinator_state_root(central=central) or None
+    except RuntimeError:
+        return None
+
+
+def _dispatch_coordinator_doc_new(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """Runs `coordinator-doc-new` IN-PROCESS (never a child interpreter) and
+    returns the path it ACTUALLY wrote as `output_path` -- the month-sharded
+    path, which can differ from the `--out=` token d1 was handed.
+
+    The generator is cwd-anchored (repo root, safe-write roots, schema
+    validation all key off the process cwd) and peeks `sys.argv` for `--type`,
+    so both are pinned to the target repo for the call under
+    `_DOC_NEW_RUN_LOCK` and restored in `finally`.
+
+    Negative-spec: does NOT recompute the month shard -- the output path is the
+    one the generator reported.
+    """
+    import os
+
+    from coordinator_core.ceremony_common.cli_dispatch import invoke_cli_main
+
+    repo_root = Path(repo_root)
+    module = _load_doc_new_module()
+    with _DOC_NEW_RUN_LOCK:
+        saved_cwd = os.getcwd()
+        saved_argv = sys.argv
+        saved_state_root = module._resolve_state_root
+        os.chdir(repo_root)
+        sys.argv = ["coordinator-doc-new", *args]
+        module._resolve_state_root = _state_root_in_process
+        try:
+            exit_code, stdout, stderr, _exit_class = invoke_cli_main(module, list(args))
+        finally:
+            module._resolve_state_root = saved_state_root
+            sys.argv = saved_argv
+            os.chdir(saved_cwd)
+    if exit_code != 0:
+        raise RuntimeError(f"coordinator-doc-new {args}: failed (rc={exit_code}): {stderr.strip()}")
+    return {
+        "cli": "coordinator-doc-new",
+        "args": args,
+        "stdout": stdout.strip(),
+        "output_path": _doc_new_reported_path(stdout, repo_root),
+    }
 
 
 def _dispatch_lint_frontmatter(args: list[str], repo_root: Path) -> dict[str, Any]:

@@ -1,9 +1,10 @@
 """
 coordinator_core.ops.fleet.memo_migrate_group_em_inbox — memo.migrate_group_em_inbox MUTATING op.
 
-Purpose: the Group EM home never receives memos (A-GROUP-EM-SENDS-MEMOS-AND-NEVER-RECEIVES-THEM).
-Memos already sitting in the home's inbox move to the inbox `resolve_receiver_inbox(SENDER_ID)`
-names — the same call `memo.send` makes, so the reroute rule and the migration rule cannot drift.
+Purpose: drain the home's inbox into whatever inbox `resolve_receiver_inbox(SENDER_ID)` names.
+That target is now the home's own inbox, so the op is a no-op (nothing moves, nothing is removed)
+whenever the target resolves to the home; the delivery machinery below runs only for a target
+outside the home, which no resolver path produces today. Retire the op with its setup.py caller.
 Each memo is delivered like a `memo.send` delivery (landing ref, O_EXCL write, zero-hook commit
 in the receiver repo, anchor) and only then removed from the home.
 
@@ -209,6 +210,8 @@ def migrate_group_em_inbox(dry_run: bool = False) -> dict:
         inbox_dir, receiver, _ = resolve_receiver_inbox(gem_home.SENDER_ID)
     except (AmbiguousReceiverError, RegistryReadError) as exc:
         return build_setup_error_result(_MODE, dry_run, f"memo.migrate_group_em_inbox: {exc}")
+    if receiver is not None and gem_home.is_home(receiver):
+        return build_dry_run_result(_MODE, []) if dry_run else build_act_result(_MODE, [], [], [])
     refusal = (
         never_inbox_mirror_refusal(gem_home.SENDER_ID, receiver)
         or undeliverable_checkout_refusal(gem_home.SENDER_ID, receiver)

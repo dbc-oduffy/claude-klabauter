@@ -2,7 +2,7 @@
 
 A run the stale-minted reaper halted `abandoned_at_minted` was a shell (nothing withheld, no live run
 token). Its marker stays `halted` forever unless closed; `close_abandoned` rewrites it `closed` through `halted_run.mark_closed`, except while a descendant run is active (`_descendant_activity_epoch`).
-Stat and marker reads only: no git, no subprocess. At most `limit` markers are examined per call.
+Stat and marker reads only: no git, no subprocess. At most `limit` markers are closed per call, and the scan stops at `SCAN_BUDGET_SECONDS`.
 
 `python -m coordinator_core.ops.dispatch_emit.abandoned_minted_close --root <repo>` closes one bounded batch.
 """
@@ -30,13 +30,12 @@ from coordinator_core.ops.warp_run_deliverable import (
 
 CLOSE_REASON = "abandoned_at_minted: shell run with nothing withheld and no live descendant; closed"
 DEFAULT_LIMIT = 8
+SCAN_BUDGET_SECONDS = 0.2
 
 
 def _closable(wt: Path, run_id: str, marker: dict, now: float) -> bool:
-    """A halted `abandoned_at_minted` marker (the reaper wrote it on a shell run) with nothing withheld, no live
+    """A halted `abandoned_at_minted` marker (the caller filtered on both) with nothing withheld, no live
     token and no active descendant."""
-    if marker.get("status") != "halted" or marker.get("halted") != ABANDONED_AT_MINTED:
-        return False
     if halted_run._withheld_of(marker):
         return False
     if run_token.is_live(wt, run_id):
@@ -49,19 +48,20 @@ def close_abandoned(
     root: Any, now: Optional[float] = None, limit: int = DEFAULT_LIMIT, skip: Collection[str] = (),
 ) -> list[str]:
     """Close up to `limit` dead `abandoned_at_minted` markers (oldest run id first); returns the closed run ids.
-    A marker kept because it is not closable counts against `limit`, so one call touches at most `limit` markers.
+    Only closes count against `limit`; a kept (not closable) marker is bounded by `SCAN_BUDGET_SECONDS` instead,
+    so unclosable markers at the oldest end never starve the closable ones behind them.
     Run ids in `skip` are never touched (the caller just halted them)."""
     wt = main_worktree_root(Path(root))
     current = time.time() if now is None else now
+    deadline = time.process_time() + SCAN_BUDGET_SECONDS
     at = datetime.fromtimestamp(current, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     try:
         names = sorted(e.name for e in os.scandir(wt / RECORD_DIR_ROOT) if e.is_dir())
     except OSError:
         return []
     closed: list[str] = []
-    touched = 0
     for name in names:
-        if touched >= limit:
+        if len(closed) >= limit or time.process_time() > deadline:
             break
         if name in skip or not safe_id(name):
             continue
@@ -69,7 +69,6 @@ def close_abandoned(
         marker = halted_run._read(rdir)
         if marker is None or marker.get("halted") != ABANDONED_AT_MINTED or marker.get("status") != "halted":
             continue
-        touched += 1
         if _closable(wt, name, marker, current) and halted_run.mark_closed(rdir, CLOSE_REASON, at):
             closed.append(name)
     return closed

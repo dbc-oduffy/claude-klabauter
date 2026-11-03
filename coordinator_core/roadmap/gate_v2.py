@@ -68,6 +68,9 @@ REPORT_KEYS = frozenset({
 
 _HEAD_BYTES = 6144
 _PLAN_HEAD_BYTES = 2048
+# The plan-index sweep reads most plan headers past 2048 bytes (2281 of 2515 live plans): one
+# window that closes the block replaces the widen-and-reread.
+_PLAN_SCAN_BYTES = 8192
 # A frontmatter block that outgrows the first window is read whole up to this cap before the
 # slow line scanner is considered; a block past the cap still falls back, so no field drops.
 _LONG_HEAD_BYTES = 65536
@@ -121,13 +124,24 @@ def _head_fields(path, nbytes: int, wanted: frozenset) -> Dict[str, Any]:
     file or does not close inside the window falls back to the full narrow scanner, so a long
     header can never drop a field silently.
     """
+    return _fields_from_text(path, _read_head(path, nbytes), wanted)
+
+
+def _read_head(path, nbytes: int) -> str:
+    """The first ``nbytes`` of ``path`` as text, widened (to ``_LONG_HEAD_BYTES``) while a
+    leading frontmatter block is still open, and cut after the block's closing delimiter (the
+    body is never read from it). Raises OSError."""
     with open(path, "rb") as fh:
         want = nbytes
         data = fh.read(want)
         while data.startswith(b"---") and data.find(b"\n---", 3) == -1 and len(data) == want < _LONG_HEAD_BYTES:
             want = min(want * 4, _LONG_HEAD_BYTES)
             data += fh.read(want - len(data))
-    return _fields_from_text(path, data.decode("utf-8", "replace"), wanted)
+    if data.startswith(b"---"):
+        end = data.find(b"\n---", 3)
+        if end != -1:
+            data = data[: end + 4]
+    return data.decode("utf-8", "replace")
 
 
 def _fields_from_text(path, text: str, wanted: frozenset) -> Dict[str, Any]:
@@ -135,15 +149,22 @@ def _fields_from_text(path, text: str, wanted: frozenset) -> Dict[str, Any]:
     if text.startswith("---"):
         end = text.find("\n---", 3)
         if end != -1:
-            out: Dict[str, Any] = {}
-            for m in _key_re(wanted).finditer(text, 3, end + 1):
-                key = m.group(1)
-                if key not in out:
-                    raw = m.group(2).lstrip()
-                    if raw[:1] in ("|", ">"):
-                        return pg._scan_fields(path, wanted)
-                    out[key] = _val(raw)
-            return out
+            # One C-speed find per wanted key beats a regex pass over every line of the block;
+            # the first occurrence wins, as it does in the narrow scanner.
+            hits: List[Tuple[int, str, Any]] = []
+            for key in wanted:
+                sub = "\n" + key + ":"
+                i = text.find(sub, 3, end)
+                if i == -1:
+                    continue
+                j = i + len(sub)
+                nl = text.find("\n", j, end + 1)
+                raw = text[j:nl if nl != -1 else end].lstrip(" \t")
+                if raw[:1] in ("|", ">"):
+                    return pg._scan_fields(path, wanted)
+                hits.append((i, key, _val(raw)))
+            hits.sort()
+            return {key: val for _i, key, val in hits}
     return pg._scan_fields(path, wanted)
 
 
@@ -160,6 +181,31 @@ def _baton_fields(path) -> Dict[str, Any]:
             text = fh.read(_LONG_HEAD_BYTES).decode("utf-8", "replace")
     except OSError:
         return {}
+    return _baton_fields_from_text(path, text)
+
+
+def _block_list(text: str, pos: int, stop: int) -> List[str]:
+    """The ``- item`` entries under a bare ``key:`` whose line ends at ``pos``, read as
+    ``pg._scan_fields`` reads them: indented (or ``-``-led) lines continue the list, blank and
+    ``#`` lines are skipped, and the first other column-zero line ends it."""
+    items: List[str] = []
+    while pos < stop:
+        nl = text.find("\n", pos + 1, stop)
+        line = text[pos + 1 : nl if nl != -1 else stop]
+        pos = nl if nl != -1 else stop
+        s = line.strip()
+        if not s or s[0] == "#":
+            continue
+        if line[:1] not in (" ", "\t", "-"):
+            break
+        if s.startswith("- "):
+            items.append(pg._unquote(s[2:]))
+    return items
+
+
+def _baton_fields_from_text(path, text: str) -> Dict[str, Any]:
+    """``_baton_fields`` over already-read ``text`` (the file's first window, long enough to
+    hold its closed frontmatter block, or the whole file); ``path`` is only the fallback's."""
     if text.startswith("---"):
         end = text.find("\n---", 3)
         if end != -1:
@@ -168,22 +214,37 @@ def _baton_fields(path) -> Dict[str, Any]:
                 key = m.group(1)
                 raw = m.group(2).strip()
                 cv = pg._strip_comment(raw) if "#" in raw else raw
-                if (
-                    key in out
-                    or not cv
-                    or cv[0] in "|>"
-                    or (cv[0] in "\"'" and ("''" in cv or "\\" in cv))
-                ):
+                if key in out:
+                    return pg._scan_fields(path, pg._BATON_FIELDS)
+                if not cv:
+                    out[key] = _block_list(text, m.end(), end + 1)
+                    continue
+                if cv[0] in "|>" or (cv[0] in "\"'" and ("''" in cv or "\\" in cv)):
                     return pg._scan_fields(path, pg._BATON_FIELDS)
                 out[key] = _val(raw)
             return out
     return pg._scan_fields(path, pg._BATON_FIELDS)
 
 
+def _baton_ids(fm: Dict[str, Any], stem: str) -> List[str]:
+    """``plan_gate._baton_ids`` over an already-split filename stem."""
+    out: List[str] = []
+    for field in ("stub_id", "handoff_id", "deliverable_id"):
+        for value in pg._as_list(fm.get(field)):
+            if value and value not in out:
+                out.append(value)
+    if stem and stem not in out:
+        out.append(stem)
+    return out
+
+
 def _s(value: Any) -> str:
     if isinstance(value, list):
         value = value[0] if value else ""
     return str(value or "").strip()
+
+
+_MONTH_SHARD = re.compile(r"\d{4}-\d{2}")
 
 
 def _list_md(directory: str, recursive: bool) -> List[Tuple[str, str]]:
@@ -205,13 +266,22 @@ def _list_md(directory: str, recursive: bool) -> List[Tuple[str, str]]:
     return out
 
 
+# Warm-engine head cache: full path -> ((mtime_ns, size), head text, wanted fields). A changed
+# stat key re-reads; the cached head dicts are read-only to every consumer.
+# The fourth slot memoises the baton-field parse of the same text.
+_HEAD_CACHE: Dict[str, list] = {}
+_HEAD_CACHE_MAX = 20000
+_PLAN_CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
+
+
 class _Rec:
-    __slots__ = ("path", "rel", "live")
+    __slots__ = ("path", "rel", "live", "stem")
 
     def __init__(self, path: Path, rel: str, live: bool) -> None:
         self.path = path
         self.rel = rel
         self.live = live
+        self.stem = rel.rsplit("/", 1)[-1][:-3] if rel.endswith(".md") else path.stem
 
 
 class _Info:
@@ -247,8 +317,18 @@ def _fill_plans(idx: pg.PlanIndex, root: Path, subdir: str) -> None:
         return
     for dp, fn in _list_md(target, True):
         rel = (dp.replace("\\", "/") + "/" + fn)[len(base):]
+        full = base + rel
         try:
-            fm = _head_fields(base + rel, _PLAN_HEAD_BYTES, _PLAN_WANT)
+            st = os.stat(full)
+            key = (st.st_mtime_ns, st.st_size)
+            hit = _PLAN_CACHE.get(full)
+            if hit is not None and hit[0] == key:
+                fm = hit[1]
+            else:
+                fm = _head_fields(full, _PLAN_SCAN_BYTES, _PLAN_WANT)
+                if len(_PLAN_CACHE) > _HEAD_CACHE_MAX:
+                    _PLAN_CACHE.clear()
+                _PLAN_CACHE[full] = (key, fm)
         except OSError:
             continue
         if fm and pg.is_plan_record(fm):
@@ -270,6 +350,8 @@ class _Gate:
         self.arch_stems: Dict[str, Path] = {}
         self.arch_ids: Optional[Dict[str, Path]] = None
         self.fms: Dict[str, Dict[str, Any]] = {}
+        self.texts: Dict[str, str] = {}
+        self.entries: Dict[str, list] = {}
         self.resolved: Dict[str, Optional[_Rec]] = {}
         self.states: Dict[str, str] = {}
         self.disps: Dict[str, str] = {}
@@ -278,6 +360,8 @@ class _Gate:
         self._tracked: Any = False
         self._plans: Optional[_PlanIndexFast] = None
         self._arch_sizings: Optional[Dict[str, str]] = None
+        self._dir_files: Dict[str, Set[str]] = {}
+        self.sizing_routes: Dict[Tuple[str, ...], Optional[str]] = {}
         self.replan_sources: Set[str] = set()
         self._scan_live()
         self._scan_archive_names()
@@ -287,23 +371,55 @@ class _Gate:
 
     def _scan_live(self) -> None:
         live_dir = Path(home_dir(str(self.root), "handoffs")).as_posix()
-        rel_dir = live_dir[len(self.base):]
         try:
-            names = _list_md(live_dir, False)
+            # Live batons sit at the top level or in a `<YYYY-MM>` month shard; no other subdir is live.
+            names: List[Tuple[str, str, Tuple[int, int]]] = []
+            shards: List[str] = []
+            with os.scandir(live_dir) as it:
+                for e in it:
+                    n = e.name
+                    if n.endswith(".md"):
+                        if e.is_file():
+                            st = e.stat()
+                            names.append((live_dir, n, (st.st_mtime_ns, st.st_size)))
+                    elif _MONTH_SHARD.fullmatch(n) and e.is_dir():
+                        shards.append(n)
+            names.sort(key=lambda p: p[1])
+            for shard in sorted(shards):
+                sub = f"{live_dir}/{shard}"
+                with os.scandir(sub) as it:
+                    found = []
+                    for e in it:
+                        if e.name.endswith(".md") and e.is_file():
+                            st = e.stat()
+                            found.append((sub, e.name, (st.st_mtime_ns, st.st_size)))
+                found.sort(key=lambda p: p[1])
+                names.extend(found)
         except OSError as exc:
             raise GateReadRefused(f"live handoff dir unreadable: {exc}") from exc
-        for dp, fn in names:
+        for dp, fn, key in names:
             full = dp + "/" + fn
             path = Path(full)
-            rel = f"{rel_dir}/{fn}"
-            try:
-                head = _head_fields(full, _HEAD_BYTES, _HEAD_WANT)
-            except OSError as exc:
-                raise GateReadRefused(f"live handoff unreadable: {rel}: {exc}") from exc
+            rel = full[len(self.base):]
+            hit = _HEAD_CACHE.get(full)
+            if hit is not None and hit[0] == key:
+                text, head = hit[1], hit[2]
+            else:
+                try:
+                    text = _read_head(full, _HEAD_BYTES)
+                except OSError as exc:
+                    raise GateReadRefused(f"live handoff unreadable: {rel}: {exc}") from exc
+                head = _fields_from_text(full, text, _HEAD_WANT)
+                if len(_HEAD_CACHE) > _HEAD_CACHE_MAX:
+                    _HEAD_CACHE.clear()
+                hit = [key, text, head, None]
+                _HEAD_CACHE[full] = hit
+            self.texts[rel] = text
+            self.entries[rel] = hit
             rec = _Rec(path, rel, True)
             self.recs.append(rec)
             self.heads[rel] = head
-            self.id_live.setdefault(path.stem, rec)
+            self.id_live.setdefault(rec.stem, rec)
             for ident in pg._as_list(head.get("stub_id")) + pg._as_list(head.get("handoff_id")) + pg._as_list(head.get("deliverable_id")):
                 self.id_live.setdefault(ident, rec)
             src = _s(head.get("replan_of"))
@@ -319,7 +435,7 @@ class _Gate:
 
     def ids_of(self, rec: _Rec) -> List[str]:
         head = self.heads[rec.rel]
-        out = [rec.path.stem]
+        out = [rec.stem]
         for ident in pg._as_list(head.get("stub_id")) + pg._as_list(head.get("handoff_id")) + pg._as_list(head.get("deliverable_id")):
             if ident not in out:
                 out.append(ident)
@@ -328,9 +444,35 @@ class _Gate:
     def fm(self, rec: _Rec) -> Dict[str, Any]:
         cached = self.fms.get(rec.rel)
         if cached is None:
-            cached = _baton_fields(rec.path)
+            entry = self.entries.get(rec.rel)
+            cached = entry[3] if entry is not None else None
+            if cached is None:
+                text = self.texts.pop(rec.rel, None)
+                cached = _baton_fields(rec.path) if text is None else _baton_fields_from_text(rec.path, text)
+                if entry is not None:
+                    entry[3] = cached
             self.fms[rec.rel] = cached
         return cached
+
+    def is_file(self, rel: str) -> bool:
+        """``(root / rel).is_file()`` answered from one cached listing per directory, so the
+        per-baton sizing/plan citations cost a set lookup instead of a stat each. A listing
+        miss (or a path that leaves the tree) falls back to the real stat."""
+        norm = rel.replace("\\", "/")
+        head, sep, name = norm.rpartition("/")
+        if sep and name and ".." not in norm and ":" not in norm and not norm.startswith("/"):
+            names = self._dir_files.get(head)
+            if names is None:
+                names = set()
+                try:
+                    with os.scandir(self.base + head) as it:
+                        names = {e.name for e in it if e.is_file()}
+                except OSError:
+                    pass
+                self._dir_files[head] = names
+            if name in names:
+                return True
+        return (self.root / rel).is_file()
 
     def tracked(self):
         """The index snapshot, or None when it is absent or unreadable (withholds nothing)."""
@@ -406,7 +548,7 @@ def _link(g: _Gate, rec: _Rec) -> Tuple[Optional[dict], Optional[dict]]:
     gp = _s(fm.get("governing_plan")).replace("\\", "/")
     if gp and not pg._as_list(fm.get("deliverable_id")) and not pg._as_list(fm.get("deliverable_ids")):
         gp_path = g.root / gp
-        if gp_path.is_file():
+        if g.is_file(gp):
             try:
                 pfm = _head_fields(gp_path, _PLAN_HEAD_BYTES, _PLAN_WANT)
             except OSError:
@@ -547,9 +689,9 @@ def _classify(g: _Gate, rec: _Rec) -> str:
 
 def _is_withdrawn(g: _Gate, rec: _Rec, fm: Dict[str, Any]) -> bool:
     """Replanned (a live record replaces it) or resurrected (its archived namesake is terminal)."""
-    if any(i in g.replan_sources for i in pg._baton_ids(fm, rec.path)):
+    if any(i in g.replan_sources for i in _baton_ids(fm, rec.stem)):
         return True
-    archived = g.arch_stems.get(rec.path.stem)
+    archived = g.arch_stems.get(rec.stem)
     if archived is None:
         return False
     try:
@@ -600,6 +742,14 @@ def _shipped_plan(g: _Gate, rec: _Rec) -> Optional[dict]:
     return None
 
 
+def _resolve_cites(g: _Gate, cites: List[str]) -> List[str]:
+    """``pg._resolve_sizing_citations`` resolved list: a citation counts when its file is on
+    disk or an archived sizing carries its name; the archive index is built only on a live miss."""
+    live = [(c.strip(), g.is_file(c.strip())) for c in cites if isinstance(c, str) and c.strip()]
+    archive = g.arch_sizings() if not all(ok for _c, ok in live) else {}
+    return [c for c, ok in live if ok or Path(c).name in archive]
+
+
 def _info(g: _Gate, rec: _Rec) -> _Info:
     """The report row for one record plus its gate internals (requirements 5, 7, 8)."""
     cached = g.infos.get(rec.rel)
@@ -613,19 +763,19 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
     else:
         planning, execution, unresolved = _gates(g, rec)
     cites = pg._as_list(fm.get("sizing_object")) + pg._as_list(fm.get("sizing_objects"))
-    archive_index: Dict[str, str] = {}
-    if any(not (g.root / c).is_file() for c in cites):
-        archive_index = g.arch_sizings()
-    resolved, _missing = pg._resolve_sizing_citations(g.root, cites, archive_index)
+    resolved = _resolve_cites(g, cites)
     exec_auth = bool(_s(fm.get("execution_authorized_by"))) or _s(fm.get("handoff_phase")) == "execution"
     waiting = False
     if state == "candidate" and execution and resolved:
-        waiting = pg._sizing_route(g.root, resolved) in _NO_PLAN_ROUTES
+        key = tuple(resolved)
+        if key not in g.sizing_routes:
+            g.sizing_routes[key] = pg._sizing_route(g.root, resolved)
+        waiting = g.sizing_routes[key] in _NO_PLAN_ROUTES
     candidate = state == "candidate" and not waiting and _shipped_plan(g, rec) is None
     plan_approved = plan is not None and _plan_approved(g, plan)
     gp = _s(fm.get("governing_plan"))
     row = {
-        "id": pg._baton_ids(fm, rec.path)[0],
+        "id": _baton_ids(fm, rec.stem)[0],
         "path": rec.rel,
         "title": fm.get("title"),
         "stub_id": fm.get("stub_id") or None,
@@ -732,7 +882,7 @@ def _shipped_entries(g: _Gate, recs: List[_Rec]) -> List[dict]:
         plan = _shipped_plan(g, rec)
         if plan is not None:
             out.append({
-                "id": pg._baton_ids(g.fm(rec), rec.path)[0],
+                "id": _baton_ids(g.fm(rec), rec.stem)[0],
                 "path": rec.rel,
                 "plan_path": plan["path"],
                 "plan_status": plan["status"],

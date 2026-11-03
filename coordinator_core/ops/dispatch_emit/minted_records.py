@@ -66,6 +66,23 @@ def _live_peer_held(main_root: Path, paths: list[str]) -> set[str]:
     return held(main_root, paths)
 
 
+def _carried_by_head(root: Path, paths: list[str]) -> set[str]:
+    """Those of `paths` HEAD's tree carries as a non-directory entry, read in process. An unreadable
+    HEAD tree answers every path (nothing is reaped on a read it could not make)."""
+    from coordinator_core.git.git_state import read_tree_spine
+
+    spine = read_tree_spine(root, paths)
+    if spine is None:
+        return set(paths)
+    out: set[str] = set()
+    for p in paths:
+        parent, _, name = p.rpartition("/")
+        entry = spine.get(parent, {}).get(name)
+        if entry is not None and entry[0] != 0o40000:
+            out.add(p)
+    return out
+
+
 def settle(
     main_root: Path,
     repo_root: Path,
@@ -83,8 +100,7 @@ def settle(
     deleted, ``refused`` carries the reason, and a reused (tracked or ``created: False``) path stays.
     ``repo_root`` is the caller's common dir, kept for signature parity with ``commit_grind_rows``;
     the commit and every read go through ``main_root``. ``run_id`` is for the caller's message."""
-    from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths, hash_worktree_blobs_via_spawn
-    from coordinator_core.git.git_state import head_blobs
+    from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths
 
     entries = read(run_dir)
     paths = [e["path"] for e in entries]
@@ -96,17 +112,12 @@ def settle(
     if not landable:
         return {"sha": None, "reaped": [], "withheld": withheld}
     try:
-        outcome = commit_paths(
-            main_root,
-            landable,
-            message,
-            blob_fallback=lambda paths_: hash_worktree_blobs_via_spawn(paths_, cwd=main_root),
-        )
+        outcome = commit_paths(main_root, landable, message)
     except NothingToCommit:
         return {"sha": None, "reaped": [], "withheld": withheld}
     except CommitRefused as err:
         created = {e["path"] for e in entries if e["created"]}
-        in_head = head_blobs(main_root, landable)
+        in_head = _carried_by_head(main_root, landable)
         reaped: list[str] = []
         for p in landable:
             if p in created and p not in in_head:

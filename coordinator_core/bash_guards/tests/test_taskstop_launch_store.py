@@ -37,10 +37,31 @@ def test_round_trip():
     assert store.read_record("abc123") is None
 
 
-def test_ttl_prune_drops_expired():
+def _age_file(home, tid, age_s):
+    import os
+
+    p = home / "taskstop-reaper" / "launches" / f"{tid}.json"
+    t = time.time() - age_s
+    os.utime(p, (t, t))
+
+
+def test_ttl_prune_drops_expired(_home):
     store.write_record(_rec("old", age_s=RECORD_TTL_S + 60))
+    _age_file(_home, "old", RECORD_TTL_S + 60)
     store.write_record(_rec("new"))
     assert [r.task_id for r in store.all_records()] == ["new"]
+
+
+def test_prune_never_opens_a_record(_home, monkeypatch):
+    for i in range(50):
+        store.write_record(_rec(f"r{i}"))
+    _age_file(_home, "r0", RECORD_TTL_S + 60)
+    opened = []
+    real = store._load
+    monkeypatch.setattr(store, "_load", lambda p: opened.append(p) or real(p))
+    store.write_record(_rec("fresh"))
+    assert opened == []
+    assert store.read_record("r0") is None and store.read_record("r1") is not None
 
 
 def test_record_older_than_an_hour_survives_prune():

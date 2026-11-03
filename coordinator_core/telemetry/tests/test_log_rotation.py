@@ -227,6 +227,58 @@ def test_stalled_chain_is_single_flight_and_later_call_returns_at_once(tmp_path:
     assert rotate_if_needed(sink, threshold_bytes=1, max_generations=2) is True
 
 
+def _stall_all_replaces(monkeypatch, release):
+    real_replace = os.replace
+
+    def stalled(src, dst):
+        release.wait(5)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", stalled)
+
+
+def test_rotate_all_known_sinks_shares_one_budget_and_resumes_at_first_skipped(tmp_path: Path, monkeypatch) -> None:
+    import threading
+    import time
+
+    from coordinator_core.telemetry import log_rotation
+
+    names = log_rotation._KNOWN_SINK_NAMES
+    for name in names:
+        _write(tmp_path / name, b"a" * 100)
+    release = threading.Event()
+    _stall_all_replaces(monkeypatch, release)
+    monkeypatch.setattr(log_rotation, "_in_flight", set())
+    monkeypatch.setattr(log_rotation, "_walk_start", 0)
+    try:
+        t0 = time.monotonic()
+        assert rotate_all_known_sinks(tmp_path, threshold_bytes=1, max_generations=2) == 0
+        assert time.monotonic() - t0 < 0.35
+        assert log_rotation._in_flight == {str(tmp_path / names[0])}
+        assert log_rotation._walk_start == 1
+
+        t1 = time.monotonic()
+        rotate_all_known_sinks(tmp_path, threshold_bytes=1, max_generations=2)
+        assert time.monotonic() - t1 < 0.35
+        assert str(tmp_path / names[1]) in log_rotation._in_flight
+    finally:
+        release.set()
+        deadline = time.monotonic() + 5
+        while log_rotation._in_flight and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+
+def test_rotate_all_known_sinks_unstalled_visits_every_sink(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.telemetry import log_rotation
+
+    monkeypatch.setattr(log_rotation, "_walk_start", 3)
+    for name in log_rotation._KNOWN_SINK_NAMES:
+        _write(tmp_path / name, b"a" * 100)
+    assert rotate_all_known_sinks(tmp_path, threshold_bytes=1, max_generations=2) == len(
+        log_rotation._KNOWN_SINK_NAMES
+    )
+
+
 def test_detached_rotation_never_blocks_the_caller_and_starts_one_sweep_per_window(tmp_path: Path, monkeypatch) -> None:
     import threading
     import time

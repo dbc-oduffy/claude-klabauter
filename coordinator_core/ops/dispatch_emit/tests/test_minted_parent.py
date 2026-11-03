@@ -97,13 +97,26 @@ def test_find_reusable_returns_the_minted_parent_with_its_launcher_and_ready_run
     assert [r for r, _ in hit.ready] == _run_ids(out)
 
 
-def test_find_reusable_refuses_an_unknown_digest_an_aged_entry_and_a_missing_launcher(repo):
-    out, _ = _mint(repo)
+def test_find_reusable_refuses_an_unknown_digest_and_an_aged_entry(repo):
+    _mint(repo)
     digest = mp.asks_digest(PARAMS)
     assert mp.find_reusable(repo, "0" * 64, NOW) is None
     assert mp.find_reusable(repo, digest, NOW + mp.REUSE_TTL_S) is None
+
+
+def test_find_reusable_returns_a_launcherless_minted_parent_with_no_launcher(repo):
+    out, _ = _mint(repo)
     (repo / launcher_rel(out["parent_id"])).unlink()
-    assert mp.find_reusable(repo, digest, NOW + 60) is None
+    hit = mp.find_reusable(repo, mp.asks_digest(PARAMS), NOW + 60)
+    assert hit is not None and hit.parent_id == out["parent_id"] and hit.launcher is None
+    assert [r for r, _ in hit.ready] == _run_ids(out)
+
+
+def test_find_reusable_refuses_a_launcherless_parent_whose_run_started(repo):
+    out, _ = _mint(repo)
+    (repo / launcher_rel(out["parent_id"])).unlink()
+    write_run_stage_at(record_dir(repo, _run_ids(out)[0]), "staged")
+    assert mp.find_reusable(repo, mp.asks_digest(PARAMS), NOW + 60) is None
 
 
 @pytest.mark.parametrize("how", ["staged", "halted", "live-token"])

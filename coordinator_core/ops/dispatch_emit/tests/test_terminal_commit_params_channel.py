@@ -260,6 +260,23 @@ def test_missing_file_diagnosis_accepts_forward_slash_and_relative():
     assert ch.missing_file_diagnosis("scratch/warp/run-1/" + ch.PARAMS_FILE_NAME) is not None
 
 
+def test_missing_file_diagnosis_is_none_when_the_file_exists(tmp_path):
+    path = tmp_path / "scratch" / "warp" / "run-1" / ch.PARAMS_FILE_NAME
+    path.parent.mkdir(parents=True)
+    path.write_text("{}", encoding="utf-8")
+    assert ch.missing_file_diagnosis(str(path)) is None
+    below = tmp_path / "sub"
+    below.mkdir()
+    rel = "scratch/warp/run-1/" + ch.PARAMS_FILE_NAME
+    assert ch.missing_file_diagnosis(rel, below) is None
+    assert ch.find_existing(rel, below) == tmp_path / rel
+
+
+def test_missing_file_diagnosis_still_fires_when_absent_under_cwd(tmp_path):
+    rel = "scratch/warp/run-1/" + ch.PARAMS_FILE_NAME
+    assert "was never written" in ch.missing_file_diagnosis(rel, tmp_path)
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="PurePosixPath does not split on backslash")
 def test_missing_file_diagnosis_accepts_backslash_separators():
     assert ch.missing_file_diagnosis("r\\scratch\\warp\\run-1\\" + ch.PARAMS_FILE_NAME) is not None

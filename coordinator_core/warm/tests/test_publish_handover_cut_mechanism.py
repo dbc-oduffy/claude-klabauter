@@ -29,7 +29,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.warm import breadcrumb, client, lifecycle, pair_stop
+from coordinator_core.warm import breadcrumb, client, election, lifecycle, pair_stop
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -38,7 +38,10 @@ INFLIGHT_SECS = 1.5
 SWAP_FILES = 4
 SWAP_STEP_SECS = 0.4
 LOOP_GAP_SECS = 0.05
-_BOOT_DEADLINE_SECS = 90.0
+# A served op answers in ~1s (fixture op 1.5s in flight); a wait past these is a hang, never load.
+_BOOT_DEADLINE_SECS = 5.0
+_WAIT_SECS = 5.0
+_JOIN_SECS = 10.0
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 assert SWAP_FILES * SWAP_STEP_SECS > breadcrumb.DRAIN_WAIT_SECS
@@ -158,8 +161,11 @@ def state(engine_root: Path, monkeypatch: pytest.MonkeyPatch) -> _State:
     st = _State()
     monkeypatch.setenv("COORDINATOR_WARM", "1")
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "2")
+    # A test-marked client reaches no server unless it names a test-isolated runtime base.
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(engine_root.parent / "rt"))
     monkeypatch.setattr(client, "_engine_clone_root", lambda: engine_root)
     monkeypatch.setattr(breadcrumb, "_default_engine_clone", lambda: engine_root)
+    monkeypatch.setattr(election, "_default_engine_clone", lambda: engine_root)
     monkeypatch.setattr(client, "engine_token", lambda: TOKEN)
     monkeypatch.setattr(client, "_configured_root_is_foreign", lambda: False)
     monkeypatch.setattr(client, "_sidecar_keyed_clone", lambda: None)
@@ -208,7 +214,7 @@ class _RunLoop:
 
     def stop(self) -> None:
         self._halt.set()
-        self._thread.join(30)
+        self._thread.join(_JOIN_SECS)
         assert not self._thread.is_alive()
 
     def _loop(self) -> None:
@@ -254,7 +260,7 @@ def _publish_sequence(engine_root: Path, spawned: list, st: _State) -> pair_stop
             inflight.start()
             _wait(lambda: (engine_root / "dispatch-entered.flag").exists(), "in-flight op in dispatch")
             result = pair_stop.stop_warm_pair(engine_root)
-            inflight.join(30)
+            inflight.join(_JOIN_SECS)
             st.phase = "swap"
             _swap(engine_root, st)
         st.phase = "rewarm"
@@ -267,7 +273,7 @@ def _publish_sequence(engine_root: Path, spawned: list, st: _State) -> pair_stop
     return result
 
 
-def _wait(predicate, what: str, *, deadline_secs: float = 60.0, detail=lambda: "") -> None:
+def _wait(predicate, what: str, *, deadline_secs: float = _WAIT_SECS, detail=lambda: "") -> None:
     deadline = time.monotonic() + deadline_secs
     while time.monotonic() < deadline:
         if predicate():

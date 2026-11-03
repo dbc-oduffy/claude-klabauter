@@ -595,7 +595,7 @@ def _land(
     root = worktree_root
     base = {"record_dir": record_dir_rel, "halted": halted["halted"]}
     kind = halted["halted"]
-    halt_reason = _held_reason(halted) if kind == HALT_DEPENDENTS_UNSTARTED else None
+    halt_reason = _held_reason(halted) if kind in (HALT_DEPENDENTS_UNSTARTED, "commit") else None
     run_base = landing_integrity.run_base_for(root, run_id, params)
     session_id = params.get("session_id")
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):

@@ -75,6 +75,18 @@ def test_long_brief_defer_emits_accepted_keys_only(tmp_path, monkeypatch):
     assert "context line." in spilled.text
 
 
+def test_mid_length_brief_spills_and_emits_accepted_keys_only(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    brief = "x" * 1500
+    assert mod.DEFERRED_BRIEF_INLINE_MAX < len(brief) < 2000
+    text = _defer(root, {"ask": "build it", "source": "relayed", "em_context": brief}, monkeypatch)
+
+    keys = _emit_keys(text, root)
+    assert keys <= _accepted(), keys - _accepted()
+    assert "ask_brief_file" in keys and "ask_brief" not in keys
+    assert brief not in text
+
+
 def test_oversize_params_ride_a_params_file_the_command_names(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     monkeypatch.setattr(mod, "DEFERRED_PARAMS_INLINE_MAX", 100)

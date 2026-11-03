@@ -13,11 +13,10 @@ from __future__ import annotations
 
 import datetime
 import re
-import subprocess
 from pathlib import Path
 from typing import Callable, Optional
 
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import GitResult, run_git
 
 _SEP = "\x1f"
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -27,15 +26,8 @@ class GapRefusal(ValueError):
     """The day cannot be composed (bad date, file exists, no commits, diverged tips)."""
 
 
-def _git(worktree: Path, *args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        ["git", "-C", str(worktree), *args],
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        **no_console_creationflags(),
-    )
+def _git(worktree: Path, *args: str) -> GitResult:
+    return run_git(["-C", str(worktree), *args])
 
 
 def existing_summary(worktree: Path, date: str) -> Optional[Path]:

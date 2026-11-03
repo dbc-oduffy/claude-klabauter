@@ -13,6 +13,19 @@ def test_exit_codes():
     assert (be.EXIT_OK, be.EXIT_USAGE, be.EXIT_EXPORT_FAILED, be.EXIT_REMOVAL_FAILED) == (0, 2, 3, 4)
 
 
+def test_one_extract_slot_box_wide():
+    assert be.EXPORT_SLOT_CAP == 1
+
+
+def test_export_env_shared_redirects_writes_and_keeps_inherited_pytest_options(tmp_path):
+    env = be.export_env(tmp_path / "e", {"PYTEST_ADDOPTS": "-q"}, shared=True)
+    assert env["PYTHONDONTWRITEBYTECODE"] == "1" and env["PYTEST_ADDOPTS"] == "-q -p no:cacheprovider"
+    again = be.export_env(tmp_path / "e", env, shared=True)
+    assert again["PYTEST_ADDOPTS"] == "-q -p no:cacheprovider"
+    plain = be.export_env(tmp_path / "e", {}, shared=False)
+    assert "PYTHONDONTWRITEBYTECODE" not in plain and "PYTEST_ADDOPTS" not in plain
+
+
 def test_parse_ok():
     inv = be.parse_argv(["--sha", "abc1", "--link", "node_modules", "--link", "a/b", "--", "pytest", "-q"])
     assert inv.sha == "abc1"

@@ -331,6 +331,17 @@ class AckStore:
                 if "admitted_mono" in record:
                     record["admitted_mono"] = time.monotonic()
 
+    def mark_withdrawn(self, key: str) -> None:
+        """The caller's wait ended while the handler still runs: `status` reads
+        `unknowable/abandoned` at once. The record stays _ADMITTED, so a late
+        result/error `stamp` still lands. A no-op on an unknown or non-admitted
+        key; never raises."""
+        with self._lock:
+            record = self._records.get(key)
+            if record is not None and record["state"] == _ADMITTED:
+                record["withdrawn"] = True
+                self._changed.notify_all()
+
     def wait(self, key: str, timeout_secs: float, expect_engine: Optional[dict] = None) -> dict:
         """Block until `key` leaves `executing` or `timeout_secs` passes, then
         answer `status(key)`. Condition-driven: no polling, no settle interval.
@@ -339,7 +350,12 @@ class AckStore:
         with self._changed:
             while True:
                 record = self._records.get(key)
-                if record is None or record["state"] != _ADMITTED or record.get("restarted"):
+                if (
+                    record is None
+                    or record["state"] != _ADMITTED
+                    or record.get("restarted")
+                    or record.get("withdrawn")
+                ):
                     break
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
@@ -430,6 +446,8 @@ class AckStore:
             if record["state"] == _ADMITTED:
                 if record.get("restarted"):
                     return {"state": STATE_UNKNOWABLE, "reason": REASON_ENGINE_RESTARTED}
+                if record.get("withdrawn"):
+                    return {"state": STATE_UNKNOWABLE, "reason": OUTCOME_ABANDONED}
                 if record.get("queued"):
                     return {"state": STATE_QUEUED}
                 bound_secs = record.get("bound_secs")

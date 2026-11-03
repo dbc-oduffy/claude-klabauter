@@ -38,6 +38,14 @@ import pytest
 from coordinator_core import baton_assemble as ba
 from coordinator_core.baton_assemble import apply as ba_apply
 
+
+def _live_handoff_path(harness, name: str):
+    """The one live handoff named `name`. Trap: d1 scaffolds into a <YYYY-MM> month shard, and
+    `live_handoffs()` returns bare names, so joining a name to `state/handoffs/` misses it."""
+    found = list((harness.repo / "state" / "handoffs").rglob(name))
+    assert len(found) == 1, found
+    return found[0]
+
 # The whole-ceremony harness has ONE home -- `coordinator_core/
 # test_baton_assemble.py`'s `_ReplayHarness`, which drives a real `apply()` run
 # against a real git repo and the REAL `handoff.archive_transition` op, faking
@@ -145,7 +153,7 @@ class TestADegradeCompensatesNothing:
             "the minted successor must survive an anticipated decline -- it is "
             f"the irreversible artifact of the ceremony; report={report}"
         )
-        assert (harness.repo / "state" / "handoffs" / successors[0]).is_file()
+        assert _live_handoff_path(harness, successors[0]).is_file()
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
         # d7 (`handoff-carry-gate`) is a precondition gate that runs BEFORE d1
         # scaffolds the successor -- see `_build_directives`'s d7 block in
@@ -239,9 +247,9 @@ class TestAGenuineFailureStillCompensates:
 
         stranded = [n for n in harness.live_handoffs() if n != "predecessor.md"]
         assert len(stranded) == 1
-        assert "Real operator prose." in (
-            harness.repo / "state" / "handoffs" / stranded[0]
-        ).read_text(encoding="utf-8")
+        assert "Real operator prose." in _live_handoff_path(harness, stranded[0]).read_text(
+            encoding="utf-8"
+        )
 
 
 class TestTheReportDistinguishesTheTwoCases:

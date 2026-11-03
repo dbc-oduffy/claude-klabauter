@@ -10,6 +10,7 @@ dispatch.ask_stage; the script only interprets the manifest. Pure composition: n
 from __future__ import annotations
 
 import json
+import posixpath
 import re
 import shlex
 from datetime import date
@@ -237,6 +238,7 @@ from coordinator_core.roadmap.post_stamp_clause import (
     REMEDIATION_MARKER,
     SUITE_TIER_REMEDIATION,
 )
+from coordinator_core.session import output_tree_layout
 from coordinator_core.session.record_homes import home_dir
 
 _OWNER_ROWS_JS = "_crossRepoRows"
@@ -3745,11 +3747,13 @@ def compose_ask_script(
             b.append("  let _rewordStaged = false;")
             b.append("  if (!_STAGED_RESUME) {")
         b.append("  phase('size');")
-        _sizings_prefix = Path(home_dir(".", "sizings")).as_posix() + "/"
         # One path form for both the scout's `--write` template and the runtime `_sizingPathFor`: a
         # template without the run suffix lets the file land where `_sizingRel` (refire line, stage
         # and plan legs) does not look.
         _sizing_stem_head = f"{date.today().isoformat()}-"
+        _sizings_prefix = posixpath.dirname(
+            output_tree_layout.write_rel(Path(home_dir(".", "sizings")).as_posix(), f"{_sizing_stem_head}x.yaml")
+        ) + "/"
         _sizing_stem_tail = f"-{run_id.rsplit('-', 1)[-1]}.yaml"
         sizing_write_rel = (
             sizing_rel if intake is not None

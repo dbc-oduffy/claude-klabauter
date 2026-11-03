@@ -4,6 +4,8 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Optional, Sequence
 
+from coordinator_core.session.output_tree_layout import write_rel
+
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     Flag,
     build_scaffold_directive,
@@ -62,7 +64,7 @@ def _goal_seed_directive(title: str, goals: Optional[Sequence[str]]) -> dict[str
     YYYY-MM-DD-<slug>.md`)."""
     root = Path.cwd()
     today = date.today().isoformat()
-    out_path = f"state/handoffs/{today}-{_slug(title)}.md"
+    out_path = write_rel("state/handoffs", f"{today}-{_slug(title)}.md")
     resolved: dict[str, Any] = {"title": title, "out": out_path}
     if goals:
         resolved["goals"] = ",".join(goals)

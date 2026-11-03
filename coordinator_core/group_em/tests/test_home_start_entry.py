@@ -109,6 +109,35 @@ def test_no_entry_pending_then_rejected(projects):
     assert verdict["status"] == "rejected" and verdict["reason"] == "no-start-entry"
 
 
+def test_late_cwd_line_overturns_no_start_entry_rejection(projects, tmp_path):
+    cache = tmp_path / "cache.json"
+    late = CLAIMED_TS + 120
+    first = _verdict(projects, now=late, cache=cache)
+    assert first["status"] == "rejected" and first["reason"] == "no-start-entry"
+    assert not cache.exists()
+    _write(projects, _cwd_line())
+    assert _verdict(projects, now=late + 5, cache=cache)["status"] == "verified"
+
+
+def test_poisoned_no_start_entry_cache_is_ignored(projects, tmp_path):
+    cache = tmp_path / "cache.json"
+    cache.write_text(
+        json.dumps({"session_id": SID, "claimed_at": CLAIMED, "kind": human_entry.HOME_START,
+                    "offsets": {}, "status": "rejected", "reason": "no-start-entry"}),
+        encoding="utf-8",
+    )
+    _write(projects, _cwd_line())
+    assert _verdict(projects, now=CLAIMED_TS + 120, cache=cache)["status"] == "verified"
+
+
+def test_other_home_start_rejections_stay_cached(projects, tmp_path):
+    cache = tmp_path / "cache.json"
+    path = _write(projects, _cwd_line(cwd="/elsewhere"))
+    assert _verdict(projects, cache=cache)["reason"] == "cwd-outside-home"
+    path.unlink()
+    assert _verdict(projects, cache=cache)["reason"] == "cwd-outside-home"
+
+
 def test_pending_becomes_verified_once_line_appears(projects, tmp_path):
     cache = tmp_path / "cache.json"
     assert _verdict(projects, cache=cache)["status"] == "pending"

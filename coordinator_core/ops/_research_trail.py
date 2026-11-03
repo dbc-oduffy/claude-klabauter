@@ -1,7 +1,9 @@
 """coordinator_core.ops._research_trail -- the research trail record as data.
 
-Purpose: build and render the docs/research/trail/<run-id>.yaml record every research close
-leaves behind. Pure: no I/O, no op registration.
+Purpose: build and render the <run dir>/trail.yaml record every research close leaves behind
+(run dir = docs/research/<topic>/<date>-<run-slug>), and find a run's trail by run id across the
+run-dir layout and the legacy docs/research/trail/<run-id>.yaml. Pure except ``locate_trail``,
+which only reads; no op registration.
 
 Negative-spec: writes and commits nothing; a record never carries an absolute path, a
 local_root value or output content, and a local-only record carries no `paths` key.
@@ -11,21 +13,45 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops._path_guard import safe_id
 
-TRAIL_DIR = Path("docs/research/trail")
+LEGACY_TRAIL_DIR = Path("docs/research/trail")
+TRAIL_NAME = "trail.yaml"
 
 _KEYS = ("run_id", "sizing", "value_class", "tier", "destination", "output_count", "paths")
 
 
-def trail_rel(run_id: str) -> str:
-    """Repo-relative POSIX path of the trail record for ``run_id``; ValueError on an unsafe id."""
+def trail_rel(run_dir_rel: str) -> str:
+    """Repo-relative POSIX path of the trail record inside ``run_dir_rel`` (a repo-relative run dir)."""
+    if not isinstance(run_dir_rel, str) or not run_dir_rel:
+        raise ValueError(f"run dir must be a non-empty string: {run_dir_rel!r}")
+    return _check_rel(run_dir_rel, "run dir").rstrip("/") + "/" + TRAIL_NAME
+
+
+def locate_trail(worktree: Path, run_id: str) -> Optional[str]:
+    """Repo-relative POSIX path of ``run_id``'s trail record, or None when none is on disk.
+
+    Checks the legacy ``docs/research/trail/<run_id>.yaml`` with one stat, then globs
+    ``docs/research/*/*/trail.yaml`` for a ``run_id:`` line naming it. ValueError on an unsafe id.
+    """
     if not isinstance(run_id, str) or not safe_id(run_id):
         raise ValueError(f"run_id not a safe id: {run_id!r}")
-    return f"{TRAIL_DIR.as_posix()}/{run_id}.yaml"
+    legacy = f"{LEGACY_TRAIL_DIR.as_posix()}/{run_id}.yaml"
+    if (worktree / legacy).is_file():
+        return legacy
+    want = f"run_id: {json.dumps(run_id)}"
+    for path in sorted((worktree / "docs" / "research").glob(f"*/*/{TRAIL_NAME}")):
+        try:
+            with path.open(encoding="utf-8") as fh:
+                head = fh.readline().strip()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if head == want:
+            return path.relative_to(worktree).as_posix()
+    return None
 
 
 def _check_rel(path: str, what: str) -> str:
@@ -52,7 +78,8 @@ def record(
 ) -> dict[str, Any]:
     """Build a trail record. ``paths`` is the repo-relative artifact list (repo only);
     ``output_count`` is the caller's count for a local-only run and ignored for repo."""
-    trail_rel(run_id)
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        raise ValueError(f"run_id not a safe id: {run_id!r}")
     if destination not in rc.DESTINATIONS:
         raise ValueError(f"destination not in {rc.DESTINATIONS}: {destination!r}")
     if not isinstance(value_class, str) or not safe_id(value_class):

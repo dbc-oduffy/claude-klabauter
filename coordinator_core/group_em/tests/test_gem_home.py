@@ -156,6 +156,7 @@ def test_case_differing_path_not_contained_on_posix(tmp_path):
 @pytest.fixture
 def migrate_env(env, tmp_path, monkeypatch):
     settings, _, _ = env
+    monkeypatch.setattr(gem_home.shutil, "which", lambda name: None)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     monkeypatch.chdir(elsewhere)
@@ -256,12 +257,12 @@ def test_ensure_home_seeds_and_is_idempotent(migrate_env, tmp_path):
     assert home == migrate_env / "group-em"
     assert (home / ".git").is_dir() and (home / "state").is_dir()
     assert (home / "CLAUDE.md").read_text() == "seed v1"
-    assert (home / ".gitignore").read_text().splitlines() == [".coordinator-local/"]
+    assert (home / ".gitignore").read_text().splitlines() == list(gem_home._IGNORED)
     (home / "CLAUDE.md").write_text("local edit")
     tpl.write_text("seed v2", encoding="utf-8")
     gem_home.ensure_home(template=tpl)
     assert (home / "CLAUDE.md").read_text() == "local edit"
-    assert (home / ".gitignore").read_text().splitlines() == [".coordinator-local/"]
+    assert (home / ".gitignore").read_text().splitlines() == list(gem_home._IGNORED)
     gem_home.ensure_home(template=tpl, refresh=True)
     assert (home / "CLAUDE.md").read_text() == "seed v2"
 
@@ -302,6 +303,93 @@ def test_ensure_home_migrates_legacy_first(migrate_env, tmp_path):
     home = gem_home.ensure_home(template=tmp_path / "absent.md")
     assert home == migrate_env / "group-em"
     assert not (migrate_env / "general-work").exists()
+
+
+def _git(cwd, *args):
+    import subprocess
+
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
+
+
+def test_ignore_list_ignores_box_runtime_and_tracks_inbox(migrate_env):
+    home = gem_home.ensure_home()
+    for rel in (
+        "state/group-em-watch.json",
+        "state/group-em-watch-spool.jsonl",
+        "state/group-em-watch-parked.json",
+        "scratch/governor.log",
+        "pm_turns.jsonl",
+        "state/residue/inbox-blitz/x.md",
+        "state/audits/a.md",
+        "state/block-discharge/s.jsonl",
+        ".coordinator-local/x",
+    ):
+        assert _git(home, "check-ignore", "-q", rel).returncode == 0, rel
+    for rel in ("state/cross-repo/inbox/m.md", "state/handoffs/h.md", "CLAUDE.md"):
+        assert _git(home, "check-ignore", "-q", rel).returncode == 1, rel
+
+
+def test_remote_status_recorded_url_skips_gh_probe(env, monkeypatch):
+    _, _, write = env
+    write('[coordinator]\ngroup_em_home_remote_url = "https://example.invalid/g.git"\n')
+
+    def boom(*a, **k):
+        raise AssertionError("gh probed")
+
+    monkeypatch.setattr(gem_home.shutil, "which", boom)
+    assert gem_home.remote_status() == ("https://example.invalid/g.git", None)
+
+
+def test_remote_status_gh_absent(env, monkeypatch):
+    monkeypatch.setattr(gem_home.shutil, "which", lambda n: None)
+    assert gem_home.remote_status() == (None, "gh-absent")
+
+
+def test_remote_status_gh_unauthenticated_and_ready(env, monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(gem_home.shutil, "which", lambda n: "gh")
+    monkeypatch.setattr(gem_home.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=1))
+    assert gem_home.remote_status() == (None, "gh-unauthenticated")
+    monkeypatch.setattr(gem_home.subprocess, "run", lambda *a, **k: SimpleNamespace(returncode=0))
+    assert gem_home.remote_status() == (None, "declined")
+
+
+def test_remote_status_declined_key_skips_probe(env, monkeypatch):
+    _, _, write = env
+    write('[coordinator]\ngroup_em_home_remote_declined = "true"\n')
+    monkeypatch.setattr(gem_home.shutil, "which", lambda n: "gh")
+    assert gem_home.remote_status() == (None, "declined")
+
+
+def test_ensure_report_without_gh_is_local_only(migrate_env):
+    rep = gem_home.ensure_home_report()
+    assert rep["remote"] is None and rep["remote_opt_out"] == "gh-absent"
+    assert rep["seed"] == "no-template"
+    assert rep["home"] == migrate_env / "group-em"
+    assert gem_home.ensure_home_outcome() == (rep["home"], rep["seed"])
+    assert _git(rep["home"], "remote").stdout.strip() == ""
+
+
+def test_ensure_report_attaches_recorded_remote(migrate_env, env, tmp_path):
+    _, _, write = env
+    seed_repo = tmp_path / "seed"
+    seed_repo.mkdir()
+    _git(seed_repo, "init", "-q", "-b", "main")
+    (seed_repo / "state").mkdir()
+    (seed_repo / "state" / "note.md").write_text("from remote")
+    _git(seed_repo, "add", "-A")
+    _git(seed_repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "x")
+    bare = tmp_path / "remote.git"
+    _git(tmp_path, "clone", "-q", "--bare", str(seed_repo), str(bare))
+    write(f'[coordinator]\ngroup_em_home_remote_url = "{_toml_path(bare)}"\n')
+    rep = gem_home.ensure_home_report()
+    assert rep["remote"] == _toml_path(bare) and rep["remote_opt_out"] is None
+    assert (rep["home"] / "state" / "note.md").read_text() == "from remote"
+    assert _git(rep["home"], "remote", "get-url", "origin").stdout.strip() == _toml_path(bare)
+    assert str(bare) not in (rep["home"] / ".gitignore").read_text()
+    again = gem_home.ensure_home_report()
+    assert again["remote"] == rep["remote"]
 
 
 def test_ensure_home_refuses_checkout(env, tmp_path):

@@ -8,6 +8,10 @@ birth — so `_apply_derived_readiness` is that mutating-path call site and this
 file is its pin. The chunk shipped its implementation without this test surface;
 until it existed, AC3 was implemented but unverified.
 
+The seam reads no corpus (it runs inside `locked_rmw`; see
+test_handoff_transition_readiness_no_corpus_walk.py), so no test here installs
+a blocker record: a non-empty `blocked_by` parks whatever its blockers' state.
+
 NEGATIVE-SPEC exercised here, not merely described:
   - `blocking_notes` derives nothing. A record carrying only a gate note stays
     pickup-ready (the plan's § Anti-scope "single most likely wrong turn").
@@ -39,50 +43,31 @@ def _fm_text(**fields) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _blocker(handoff_id: str, deployment_state: str) -> dict:
-    return {
-        "handoff_id": handoff_id,
-        "id": handoff_id,
-        "kind": "session-handoff",
-        "deployment_state": deployment_state,
-        "shipped_in": "a" * 40 if deployment_state == "shipped" else None,
-    }
+@pytest.fixture(autouse=True)
+def _corpus_walker_is_forbidden(monkeypatch):
+    """Fail any test that reaches the corpus walker from the readiness seam.
 
-
-@pytest.fixture
-def corpus(monkeypatch):
-    """Pin the gate index the helper walks, so no test reads live state/.
-
-    Patches the walker on `reconcile.handoff_corpus`, its defining module —
-    NOT on a module that merely re-exports it. `_derive_and_stamp_readiness`
-    imports the name function-locally at call time, so only a rebind on the
-    defining module is observed; patching a re-exporting namespace rebinds a
-    name nothing reads and silently unpins the corpus.
+    Patches the walker on `reconcile.handoff_corpus`, its defining module.
     """
+    import coordinator_core.reconcile.handoff_corpus as hc
 
-    def _install(records):
-        import coordinator_core.reconcile.handoff_corpus as hc
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("readiness derivation walked the handoff corpus")
 
-        monkeypatch.setattr(
-            hc,
-            "_collect_all_handoffs_for_gate_index",
-            lambda _worktree: (records, []),
-        )
-
-    return _install
+    monkeypatch.setattr(hc, "_collect_all_handoffs_for_gate_index", _boom)
+    monkeypatch.setattr(hc, "_walk_archive_md_files", _boom)
 
 
 class TestClearingAGateFlipsReadinessBack:
     """AC3 proper — the criterion the whole chunk exists for."""
 
-    def test_shipped_blocker_does_not_free_while_blocked_by_still_names_it(self, corpus):
+    def test_shipped_blocker_does_not_free_while_blocked_by_still_names_it(self):
         """TIGHTEN-ONLY. Even with the blocker shipped, `ready_to_fire` cannot
         be written while `blocked_by` still names it — the schema holds a
         union invariant across `blocked_by`/`no_longer_blocked_by` (a resolved
         blocker MOVES, never vanishes) and the cross-field rule refuses the
         combination outright. `gate_cascade_clear` owns that move; this seam
         declines rather than writing a record the validator rejects."""
-        corpus([_blocker("hnd-blocker-000001", "shipped")])
         fm = _fm_text(
             deployment_state="awaiting_gate",
             pickup_ready=False,
@@ -95,10 +80,9 @@ class TestClearingAGateFlipsReadinessBack:
         assert "pickup_ready: false" in result
         assert "hnd-blocker-000001" in result
 
-    def test_drained_blocked_by_frees_the_baton(self, corpus):
+    def test_drained_blocked_by_frees_the_baton(self):
         """The freed direction it CAN legally take: nothing left in
         `blocked_by`, so no move is owed and `ready_to_fire` is honest."""
-        corpus([])
         fm = _fm_text(
             deployment_state="awaiting_gate",
             pickup_ready=False,
@@ -110,12 +94,27 @@ class TestClearingAGateFlipsReadinessBack:
         assert "deployment_state: ready_to_fire" in result
         assert "pickup_ready: true" in result
 
-    def test_blocker_still_open_keeps_the_baton_parked(self, corpus):
-        corpus([_blocker("hnd-blocker-000001", "awaiting_gate")])
+    @pytest.mark.parametrize("stamped", ["ready_to_fire", "awaiting_gate"])
+    def test_blocked_baton_is_parked_whatever_the_caller_stamped(self, stamped):
+        fm = _fm_text(
+            deployment_state=stamped,
+            pickup_ready=stamped == "ready_to_fire",
+            blocked_by=["hnd-blocker-000001"],
+        )
+
+        result = _apply_derived_readiness(fm, Path("."))
+
+        assert "deployment_state: awaiting_gate" in result
+        assert "pickup_ready: false" in result
+
+    def test_prose_gate_with_blocked_by_is_parked_not_left_as_stamped(self):
+        """A prose `gate_dependency` over a non-empty `blocked_by` parks, so a
+        caller's hardcoded `ready_to_fire` cannot survive to the validator."""
         fm = _fm_text(
             deployment_state="ready_to_fire",
             pickup_ready=True,
             blocked_by=["hnd-blocker-000001"],
+            gate_dependency="'hnd-blocker-000001 shipped'",
         )
 
         result = _apply_derived_readiness(fm, Path("."))
@@ -123,27 +122,10 @@ class TestClearingAGateFlipsReadinessBack:
         assert "deployment_state: awaiting_gate" in result
         assert "pickup_ready: false" in result
 
-    @pytest.mark.parametrize("state", ["continued", "closed"])
-    def test_terminal_but_not_shipped_blocker_does_not_free_the_baton(self, corpus, state):
-        """The claude-klabauter-d3 correction, pinned at THIS call site too:
-        FREED is strictly `shipped`; continued/closed are terminal but not done."""
-        corpus([_blocker("hnd-blocker-000001", state)])
-        fm = _fm_text(
-            deployment_state="awaiting_gate",
-            pickup_ready=False,
-            blocked_by=["hnd-blocker-000001"],
-        )
-
-        result = _apply_derived_readiness(fm, Path("."))
-
-        assert "deployment_state: awaiting_gate" in result
-        assert "pickup_ready: false" in result
-
-    def test_pickup_ready_is_inserted_when_absent(self, corpus):
+    def test_pickup_ready_is_inserted_when_absent(self):
         """The seed scaffolds omit `pickup_ready`; when the derivation does have
         a verdict, the field is inserted after `deployment_state` rather than
         silently dropped."""
-        corpus([])
         fm = _fm_text(
             deployment_state="awaiting_gate",
             blocked_by=[],
@@ -208,7 +190,7 @@ class TestAc3ThroughTheLiveReparkVerb:
         return p
 
     def test_repark_does_not_free_a_baton_whose_blocked_by_is_still_populated(
-        self, tmp_path, corpus
+        self, tmp_path
     ):
         """TIGHTEN-ONLY, and this test is why it exists rather than being a
         preference. Even with every blocker shipped, writing `ready_to_fire`
@@ -222,7 +204,6 @@ class TestAc3ThroughTheLiveReparkVerb:
         """
         from coordinator_core.ops.handoff_transition import _repark
 
-        corpus([_blocker("hnd-blocker-000001", "shipped")])
         p = self._handoff(tmp_path, ["hnd-blocker-000001"])
 
         result = _repark(str(p), tmp_path, tmp_path)
@@ -233,12 +214,11 @@ class TestAc3ThroughTheLiveReparkVerb:
         assert "deployment_state: awaiting_gate" in text
         assert "pickup_ready: false" in text
 
-    def test_repark_frees_a_baton_with_no_blockers_left(self, tmp_path, corpus):
+    def test_repark_frees_a_baton_with_no_blockers_left(self, tmp_path):
         """The freed direction the derivation CAN legally take: nothing in
         `blocked_by`, so no MOVE is owed and `ready_to_fire` is honest."""
         from coordinator_core.ops.handoff_transition import _repark
 
-        corpus([])
         p = self._handoff(tmp_path, [])
 
         result = _repark(str(p), tmp_path, tmp_path)
@@ -248,31 +228,13 @@ class TestAc3ThroughTheLiveReparkVerb:
         assert "deployment_state: ready_to_fire" in text
         assert "pickup_ready: true" in text
 
-    def test_repark_keeps_the_baton_parked_while_its_blocker_is_open(self, tmp_path, corpus):
-        """The half that matters most: repark hardcoded ready_to_fire, an
-        assertion it cannot make. A baton handed back with an unresolved
-        blocker is not ready to fire, and stamping it so is the exact lie
-        this plan exists to stop."""
-        from coordinator_core.ops.handoff_transition import _repark
-
-        corpus([_blocker("hnd-blocker-000001", "awaiting_gate")])
-        p = self._handoff(tmp_path, ["hnd-blocker-000001"])
-
-        result = _repark(str(p), tmp_path, tmp_path)
-
-        assert result.get("exit_code", 0) == 0, result
-        text = p.read_text(encoding="utf-8")
-        assert "deployment_state: awaiting_gate" in text
-        assert "pickup_ready: false" in text
-
 
 class TestDerivationHasNoOpinionAndLeavesTheRecordAlone:
     """The `(None, None)` returns are what make the C6 wiring safe to call
     unconditionally after every verb's own stamp — zero enum-narrowing risk."""
 
     @pytest.mark.parametrize("state", ["in_flight", "shipped", "continued", "closed"])
-    def test_off_gate_axis_states_are_returned_untouched(self, corpus, state):
-        corpus([])
+    def test_off_gate_axis_states_are_returned_untouched(self, state):
         fm = _fm_text(deployment_state=state, pickup_ready=False, blocked_by=[])
 
         assert _apply_derived_readiness(fm, Path(".")) == fm
@@ -284,8 +246,7 @@ class TestGateNotesDeriveNothingAtThisCallSite:
     — nothing can ever clear an inert prose field, so gating on it would park
     the baton permanently."""
 
-    def test_gate_note_alone_does_not_park_the_baton(self, corpus):
-        corpus([])
+    def test_gate_note_alone_does_not_park_the_baton(self):
         fm = _fm_text(
             deployment_state="ready_to_fire",
             pickup_ready=True,

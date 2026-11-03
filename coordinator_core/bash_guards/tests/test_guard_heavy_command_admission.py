@@ -99,10 +99,6 @@ def host(tmp_path, monkeypatch):
     monkeypatch.setattr(guard, "_deny_log_path", lambda: tmp_path / "would-deny.jsonl")
     monkeypatch.setattr(guard, "_working_set_mb", lambda pid: h.working_sets.get(pid))
     h.working_sets = {}
-    monkeypatch.setattr(guard, "_trim_supported", lambda: False)
-    monkeypatch.setattr(guard, "_trim_stamp_path", lambda: tmp_path / "last-trim.json")
-    monkeypatch.setattr(guard, "_group_em_live", lambda: True)
-    monkeypatch.setattr(guard, "_fire_cache_trim", lambda: pytest.fail("trim fired outside a trim test"))
     return h
 
 
@@ -133,6 +129,10 @@ def _log_lines(tmp_path) -> List[dict]:
 
 def _reason(result) -> str:
     return result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def _is_deny(result) -> bool:
+    return result is not None and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 
 def _lease_files(tmp_path) -> List[Path]:
@@ -284,109 +284,15 @@ class TestRamLeg:
         assert _enveloped(guard.check)(_payload("pnpm build")) is not None
 
 
-class TestFileCacheTrim:
-    """Below the floor, the RAM leg trims the file cache once per window before it denies."""
-
-    @pytest.fixture()
-    def trimming(self, host, monkeypatch):
-        host.avail = 900
-        host.fired = 0
-        host.cache = 2000
-        host.after = None
-        monkeypatch.setattr(guard, "_trim_supported", lambda: True)
-        monkeypatch.setattr(guard, "_file_cache_mb", lambda: host.cache)
-
-        def fire():
-            host.fired += 1
-            if host.after is not None:
-                host.avail = host.after
-            return True
-
-        monkeypatch.setattr(guard, "_fire_cache_trim", fire)
-        return host
-
-    def _own_lease_blocked(self):
-        leases.write_lease(
-            leases.LeaseRecord(
-                holder_pid=777, holder_ctime=7, session_pid=777, session_ctime=7,
-                heavy_class="build", admitted_at=time.time(),
-            )
-        )
-
-    def test_trim_that_clears_the_floor_admits_and_logs_before_and_after(self, trimming, tmp_path):
-        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
-        self._own_lease_blocked()
-        trimming.after = 9000
-        assert _enveloped(guard.check)(_payload("pnpm build")) is None
-        assert trimming.fired == 1
-        (rec,) = [l for l in _log_lines(tmp_path) if l.get("kind") == "file-cache-trim"]
-        assert rec["status"] == "fired" and rec["before_mb"] == 900 and rec["after_mb"] == 9000
-
-    def test_trim_that_does_not_clear_denies_with_both_numbers(self, trimming):
-        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
-        self._own_lease_blocked()
-        trimming.after = 1450
-        out = _enveloped(guard.check)(_payload("pnpm build"))
-        assert out is not None and "ram-floor" in _reason(out)
-        assert "before 900 MB, after 1450 MB" in _reason(out)
-
-    def test_second_call_inside_the_interval_does_not_trim(self, trimming):
-        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
-        self._own_lease_blocked()
-        trimming.after = 1450
-        _enveloped(guard.check)(_payload("pnpm build"))
-        trimming.avail = 900  # the fired trim moved avail to 1450, which now clears the raw floor
-        out = _enveloped(guard.check)(_payload("pnpm build"))
-        assert trimming.fired == 1
-        assert "rate-limited, last trim before 900 MB after 1450 MB" in _reason(out)
-
-    def test_cache_smaller_than_the_shortfall_does_not_trim(self, trimming):
-        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
-        self._own_lease_blocked()
-        trimming.cache = 10
-        out = _enveloped(guard.check)(_payload("pnpm build"))
-        assert trimming.fired == 0 and "cache-too-small" in _reason(out)
-
-    def test_absent_task_is_a_reported_noop_not_a_deny_reason(self, trimming, monkeypatch):
-        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
-        self._own_lease_blocked()
-        monkeypatch.setattr(guard, "_fire_cache_trim", lambda: False)
-        out = _enveloped(guard.check)(_payload("pnpm build"))
-        assert "task-absent" in _reason(out)
-
-    def test_no_live_group_em_skips_the_trim_and_says_so(self, trimming, monkeypatch):
-        trimming.rows = trimming.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
-        self._own_lease_blocked()
-        monkeypatch.setattr(guard, "_group_em_live", lambda: False)
-        out = _enveloped(guard.check)(_payload("pnpm build"))
-        assert trimming.fired == 0
-        assert "trim skipped: no live group-em" in _reason(out)
-
+class TestRamDenyText:
     def test_ram_deny_text_carries_no_blocked_prefix(self, host):
         host.avail = 900
         assert "BLOCKED" not in _reason(_enveloped(guard.check)(_payload("pnpm build")))
 
-    def test_non_windows_is_a_reported_noop(self, host):
+    def test_the_guard_never_trims_the_file_cache(self, host):
+        """The governor owns the trim; the hook path names no trim and spawns nothing."""
         host.avail = 900
-        host.rows = host.rows + [ProcRow(pid=777, ppid=1, ctime=7, name="claude.exe")]
-        leases.write_lease(
-            leases.LeaseRecord(
-                holder_pid=777, holder_ctime=7, session_pid=777, session_ctime=7,
-                heavy_class="build", admitted_at=time.time(),
-            )
-        )
-        out = _enveloped(guard.check)(_payload("pnpm build"))
-        assert "noop-platform" in _reason(out)
-
-    def test_trim_leg_stays_under_the_process_time_bar(self, trimming):
-        trimming.after = 1500
-        start = time.process_time()
-        guard._trim_file_cache(900, 600)
-        assert (time.process_time() - start) * 1000 < 500
-
-    def test_task_name_mirrors_the_trim_library(self):
-        lib = Path(guard.__file__).resolve().parents[2] / "coordinator" / "bin" / "lib" / "file_cache_trim.py"
-        assert 'TRIM_TASK = "%s"' % guard._TRIM_TASK in lib.read_text(encoding="utf-8")
+        assert "trim" not in _reason(_enveloped(guard.check)(_payload("pnpm build")))
 
 
 class TestScopedCarveOut:
@@ -401,9 +307,10 @@ class TestScopedCarveOut:
         cmd = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py"
         assert _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor")) is None
 
-    def test_bare_tier_run_stays_heavy(self, host):
+    def test_bare_tier_run_by_a_subagent_is_advised_not_denied(self, host):
         out = _enveloped(guard.check)(_payload("python -m pytest", agent_id="deadbeef0123", agent_type="coordinator:executor"))
-        assert out is not None and "identity" in _reason(out)
+        assert not _is_deny(out)
+        assert out is not None and "EM's run" in json.dumps(out)
 
 
 class TestLikenessSpecialistPytest:
@@ -415,13 +322,13 @@ class TestLikenessSpecialistPytest:
     @pytest.mark.parametrize("cmd", CMDS)
     def test_likeness_specialist_is_admitted(self, host, cmd):
         payload = _payload(cmd, agent_id="deadbeef0123", agent_type="example-game-repo-control:ue-metahuman-likeness-specialist")
-        assert _enveloped(guard.check)(payload) is None
+        assert not _is_deny(_enveloped(guard.check)(payload))
 
-    def test_unlisted_neighbour_agent_stays_refused_for_a_bare_tier_run(self, host):
+    def test_unlisted_neighbour_agent_is_not_denied_for_a_bare_tier_run(self, host):
         out = _enveloped(guard.check)(
             _payload("python -m pytest", agent_id="deadbeef0123", agent_type="example-game-repo-control:ue-other-specialist")
         )
-        assert out is not None and "identity" in _reason(out)
+        assert not _is_deny(out)
 
 
 class TestXdistPytest:
@@ -437,9 +344,11 @@ class TestXdistPytest:
         assert host.ram_reads == 1
         assert len(_lease_files(tmp_path)) == 1
 
-    def test_executor_xdist_run_is_identity_denied(self, host):
+    def test_executor_xdist_run_is_admitted_without_the_ram_leg(self, host, tmp_path):
+        host.avail = 1
         out = _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123", agent_type="coordinator:executor"))
-        assert out is not None and "identity" in _reason(out)
+        assert not _is_deny(out)
+        assert host.ram_reads == 0 and _lease_files(tmp_path) == []
 
     def test_single_worker_scoped_run_stays_scoped(self, host):
         cmd = "python -m pytest -n 1 coordinator_core/bash_guards/tests/test_host_probe.py"
@@ -456,21 +365,21 @@ class TestFewFileScopedPytest:
         assert _enveloped(guard.check)(_payload(self.CMD, **self.EXEC)) is None
         assert host.ram_reads == 0 and _lease_files(tmp_path) == []
 
-    def test_a_file_count_past_the_cap_stays_heavy(self, host):
+    def test_a_file_count_past_the_cap_is_advised_not_denied(self, host):
         files = " ".join("coordinator_core/t/test_%d.py" % i for i in range(30))
         out = _enveloped(guard.check)(_payload("python -m pytest -n 0 " + files, **self.EXEC))
-        assert out is not None and "identity" in _reason(out)
+        assert not _is_deny(out) and "EM's run" in json.dumps(out)
 
-    def test_a_directory_target_stays_heavy(self, host):
+    def test_a_directory_target_is_advised_not_denied(self, host):
         out = _enveloped(guard.check)(_payload("python -m pytest -n 0 coordinator_core a.py", **self.EXEC))
-        assert out is not None and "identity" in _reason(out)
+        assert not _is_deny(out) and "EM's run" in json.dumps(out)
 
     def test_an_executor_bounded_test_tier_command_is_admitted(self, host, monkeypatch):
         from coordinator_core.bash_guards import _heavy_admission_contract as contract
 
         cls = contract.Classification(contract.HeavyClass.TEST_TIER, False, False, False, True, False)
         monkeypatch.setattr(guard, "classify", lambda *a, **k: cls)
-        assert _enveloped(guard.check)(_payload("python -m pytest -n 0 x.py y.py", **self.EXEC)) is None
+        assert not _is_deny(_enveloped(guard.check)(_payload("python -m pytest -n 0 x.py y.py", **self.EXEC)))
 
 
 class TestOverlayPythonCli:
@@ -480,10 +389,9 @@ class TestOverlayPythonCli:
         "--out-key 2026-10-27-dv01-end/png-kane > scratch/dv01-c3-overlay.log 2>&1"
     )
 
-    def test_executor_is_refused_at_the_identity_leg(self, host):
+    def test_executor_is_admitted(self, host):
         out = _enveloped(guard.check)(_payload(self.CMD, agent_id="a1", agent_type="coordinator:executor"))
-        assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
-        assert "identity" in _reason(out)
+        assert not _is_deny(out)
         assert host.ram_reads == 0
 
     def test_main_thread_passes_identity_and_meets_the_ram_leg(self, host, tmp_path):
@@ -511,13 +419,18 @@ class TestBoxHoldLeg:
         t = time.time()
         return Hold(session, "swap pressure", t, t + 600 if expires is None else expires)
 
-    def test_a_workflow_test_runner_scoped_test_is_denied_under_a_live_hold(self, host, monkeypatch):
+    def test_a_scoped_test_from_another_session_is_denied_under_a_live_hold(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold())
-        out = _enveloped(guard.check)(_payload(self.SCOPED, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        out = _enveloped(guard.check)(_payload(self.SCOPED))
         text = _reason(out)
         assert "box-hold" in text and "sess-em" in text and "swap pressure" in text
         assert "gate-blocker: guard-denied" in text
         assert host.ram_reads == 0
+
+    def test_an_agent_python_test_is_admitted_under_a_live_hold(self, host, monkeypatch):
+        monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold())
+        out = _enveloped(guard.check)(_payload(self.SCOPED, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
+        assert not _is_deny(out)
 
     def test_the_holder_session_is_admitted(self, host, monkeypatch):
         monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold("sess-heavy"))
@@ -970,7 +883,7 @@ class TestNoThresholdLiterals:
             for n in ast.walk(tree)
             if isinstance(n, ast.Assign)
             and any(
-                isinstance(t, ast.Name) and t.id in ("_LOG_CMD_CHARS", "_TRIM_SPAWN_TIMEOUT_S", "_MB_BYTES")
+                isinstance(t, ast.Name) and t.id == "_LOG_CMD_CHARS"
                 for t in n.targets
             )
         }
@@ -996,7 +909,7 @@ class TestNoThresholdLiterals:
             if isinstance(fn, ast.FunctionDef)
             and any(isinstance(n, ast.Name) and n.id == "subprocess" for n in ast.walk(fn))
         ]
-        assert users == ["_fire_cache_trim"]
+        assert users == []
         assert not [n for n in tree.body if isinstance(n, (ast.Import, ast.ImportFrom))
                     and any(a.name.split(".")[0] == "subprocess" for a in getattr(n, "names", []))]
 
@@ -1418,82 +1331,98 @@ class TestFinishedLeaseRelease:
         assert {r.session_pid for r in leases.live_leases()} == {CLAUDE.pid, 900}
 
 
-class TestBarePytestLeg:
-    """A subagent spawned by a workflow run may not run a bare multi-file pytest."""
-
-    CMD = "python -m pytest a.py b.py"  # two file targets: not the lone-file scoped form
-
-    def test_a_workflow_subagent_is_denied_with_the_remedy(self, host, monkeypatch):
-        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
-        out = _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123", agent_type="coordinator:executor"))
-        assert out is not None
-        assert "scoped-pytest --allow" in _reason(out)
-        assert "bare-pytest leg" in _reason(out)
-
-    def test_an_unresolved_run_fails_closed(self, host, monkeypatch):
-        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: [guard._UNRESOLVED_RUN])
-        assert _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123")) is not None
-
-    def test_an_agent_tool_dispatch_is_not_denied_by_the_leg(self, host):
-        out = _enveloped(guard.check)(_payload(self.CMD, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
-        assert out is None or "bare-pytest leg" not in _reason(out)
-
-    def test_the_main_session_is_not_denied_by_the_leg(self, host, monkeypatch):
-        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: [guard._UNRESOLVED_RUN])
-        out = _enveloped(guard.check)(_payload(self.CMD))
-        assert out is None or "bare-pytest leg" not in _reason(out)
-
-    def test_a_single_file_pytest_in_a_workflow_run_is_not_denied_by_the_leg(self, host, monkeypatch):
-        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
-        out = _enveloped(guard.check)(_payload("python -m pytest a.py", agent_id="deadbeef0123"))
-        assert out is None or "bare-pytest leg" not in _reason(out)
+AGENT_TYPES = [
+    "coordinator:executor",
+    "coordinator:test-runner",
+    "game-dev:staff-game-dev",
+    "coordinator:staff-eng",
+    "general-purpose",
+]
+SCRIPT = "python coordinator/tests/test_schema_version_pin.py --regen"
+PYTHON_RUNS = [
+    "python -I -c 'print(1)'",
+    "python3 -I -c 'import json; print(json.dumps({}))'",
+    "python -",
+    "python - <<'EOF'\nimport os\nEOF",
+    "cat x | python -",
+    "python scripts/parse_pdf.py in.pdf",
+    "python -m json.tool",
+    "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py",
+    "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x",
+    "pytest coordinator_core/bash_guards/tests/test_host_probe.py",
+    "cd tools/x && pytest -q tests/test_a.py 2>&1 | tail -5",
+    "python -m pytest a.py b.py",
+    "python -m pytest -n 4 coordinator_core/bash_guards/tests/test_host_probe.py",
+    "python -m pytest",
+    "pytest coordinator_core",
+]
 
 
-class TestWorkflowInlinePythonProbe:
-    PROBES = [
-        "python -",
-        "python - <<'EOF'\nimport os\nEOF",
-        "python <<'EOF'\nprint(1)\nEOF",
-        "python3 -c 'print(1)'",
-        "cat x | python -",
-    ]
+class TestAgentPythonIsNeverDenied:
+    """Every python form from every agent type is admitted: no deny, no RAM read, no lease."""
 
-    @pytest.fixture()
-    def workflow(self, host, monkeypatch):
-        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: ["wf_1"])
+    @pytest.fixture(params=["agent-tool", "workflow"])
+    def spawn(self, request, host, monkeypatch):
+        runs = [] if request.param == "agent-tool" else ["wf_1"]
+        monkeypatch.setattr(guard, "_workflow_runs_of", lambda payload: runs)
 
-    @pytest.mark.parametrize("cmd", PROBES)
-    def test_a_workflow_executor_probe_is_identity_denied(self, host, workflow, cmd):
+    @pytest.mark.parametrize("agent_type", AGENT_TYPES)
+    @pytest.mark.parametrize("cmd", PYTHON_RUNS + [SCRIPT])
+    def test_python_is_admitted(self, host, spawn, tmp_path, agent_type, cmd):
+        host.avail = 1
+        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type=agent_type))
+        assert not _is_deny(out)
+        assert host.ram_reads == 0 and _lease_files(tmp_path) == []
+
+    @pytest.mark.parametrize("cmd", PYTHON_RUNS)
+    def test_python_is_admitted_under_a_live_box_hold(self, host, spawn, monkeypatch, cmd):
+        from coordinator_core.group_em.box_hold import Hold
+
+        t = time.time()
+        monkeypatch.setattr(guard, "_read_box_hold", lambda: Hold("sess-em", "swap", t, t + 600))
         out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor"))
-        assert out is not None and "identity" in _reason(out)
+        assert not _is_deny(out)
 
-    @pytest.mark.parametrize("cmd", PROBES)
-    def test_the_main_thread_probe_keeps_its_light_verdict(self, host, cmd):
-        assert _enveloped(guard.check)(_payload(cmd)) is None
-        assert host.ram_reads == 0
-
-    @pytest.mark.parametrize("cmd", PROBES)
-    def test_an_agent_tool_dispatch_probe_stays_light(self, host, cmd):
+    @pytest.mark.parametrize("cmd", ["python -m pytest", "pytest coordinator_core", "python -m pytest -n 4 a.py"])
+    def test_a_broad_suite_is_advised_not_denied(self, host, spawn, cmd):
         out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor"))
-        assert out is None
+        assert not _is_deny(out) and "EM's run" in json.dumps(out)
 
-    @pytest.mark.parametrize("cmd", ["python -m json.tool", "python scripts/x.py", "python -m pytest a.py"])
-    def test_a_file_or_module_run_is_not_a_probe(self, host, workflow, cmd):
-        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor"))
-        assert out is None
+    @pytest.mark.parametrize("cmd", ["python -I -c 'print(1)'", SCRIPT, "pytest coordinator_core/bash_guards/tests/test_host_probe.py"])
+    def test_a_scoped_run_draws_no_advisory(self, host, spawn, cmd):
+        assert _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:executor")) is None
 
-    def test_a_test_runner_probe_is_not_admitted_as_a_verifier(self, host, workflow):
-        out = _enveloped(guard.check)(_payload("python -", agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
-        assert out is not None and "identity" in _reason(out)
-
-    def test_an_unreadable_hold_record_denies_a_workflow_scoped_test(self, host, workflow, monkeypatch):
+    def test_an_unreadable_hold_record_does_not_deny_python(self, host, spawn, monkeypatch):
         def boom():
             raise OSError("locked")
 
         monkeypatch.setattr(guard, "_read_box_hold", boom)
-        cmd = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"
-        out = _enveloped(guard.check)(_payload(cmd, agent_id="deadbeef0123", agent_type="coordinator:test-runner"))
-        assert out is not None and "box-hold" in _reason(out) and "unreadable" in _reason(out)
+        out = _enveloped(guard.check)(
+            _payload("python -m pytest a.py", agent_id="deadbeef0123", agent_type="coordinator:test-runner")
+        )
+        assert not _is_deny(out)
+
+    def test_python_beside_a_typecheck_still_meets_the_gates(self, host, spawn):
+        out = _enveloped(guard.check)(
+            _payload("python x.py && tsc --noEmit -p a; pnpm build", agent_id="deadbeef0123", agent_type="general-purpose")
+        )
+        assert _is_deny(out) and "identity" in _reason(out)
+
+    def test_the_main_thread_keeps_its_ram_leg(self, host):
+        host.avail = 1
+        out = _enveloped(guard.check)(_payload("python -m pytest -n 4 a.py"))
+        assert _is_deny(out) and "ram-floor" in _reason(out)
+
+    def test_an_agent_python_run_is_logged(self, host, tmp_path):
+        _enveloped(guard.check)(_payload("python -m pytest", agent_id="deadbeef0123", agent_type="coordinator:executor"))
+        assert [r["kind"] for r in _log_lines(tmp_path)] == [guard.PYTHON_ADMITTED]
+
+
+class TestMainThreadProbe:
+    @pytest.mark.parametrize("cmd", ["python -", "python3 -c 'print(1)'", "cat x | python -"])
+    def test_the_main_thread_probe_keeps_its_light_verdict(self, host, cmd):
+        assert _enveloped(guard.check)(_payload(cmd)) is None
+        assert host.ram_reads == 0
 
     def test_an_unreadable_hold_record_still_raises_for_the_main_thread(self, host, monkeypatch):
         def boom():
@@ -1546,6 +1475,6 @@ class TestTargetedRunsInAWorkflow:
         "python -m pytest coordinator_core/bash_guards/tests",
         "python -m pytest -q --reruns 2 coordinator_core",
     ])
-    def test_an_unscoped_pytest_from_a_workflow_agent_stays_refused(self, workflow, tmp_path, cmd):
+    def test_an_unscoped_pytest_from_a_workflow_agent_is_advised_not_denied(self, workflow, tmp_path, cmd):
         out = self._run(cmd, "coordinator:test-runner", workflow, tmp_path)
-        assert out is not None and "bare-pytest leg" in _reason(out)
+        assert not _is_deny(out) and "EM's run" in json.dumps(out)

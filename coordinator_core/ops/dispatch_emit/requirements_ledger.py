@@ -443,18 +443,47 @@ def _refuse_additions(
     (`_note_uncovered_paths` handles it per note, never by raising)."""
     sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
     declared: list[str] = []
+    row_widens: list[dict] = []
     for entry in add_paths:
         raw = entry.get("path") if isinstance(entry, Mapping) else entry
         if not isinstance(raw, str) or not raw.strip():
             raise LedgerRefused("add_paths must be a list of repo-relative path strings")
         declared.append(raw.strip().replace("\\", "/").removeprefix("./"))
+        row = entry.get("row") if isinstance(entry, Mapping) else None
+        if isinstance(row, str) and row.strip():
+            row_widens.append({"row": row.strip(), "path": declared[-1]})
     outside: list[str] = []
     if declared:
         footprint = run_footprint(root, dir_, sizing_rel)
         files, dirs = footprint if footprint is not None else (_sizing_writes(root, sizing_rel), [])
         outside = [p for p in dict.fromkeys(declared) if p not in files and not any(p.startswith(d + "/") for d in dirs)]
-    if outside and not _widen_footprint(root, run, run_id, outside, "add_paths: " + ", ".join(outside), outcome):
-        raise LedgerRefused(_addition_route(run_id, outside))
+    row_paths = {w["path"] for w in row_widens}
+    plain = [p for p in outside if p not in row_paths]
+    if plain and not _widen_footprint(root, run, run_id, plain, "add_paths: " + ", ".join(plain), outcome):
+        raise LedgerRefused(_addition_route(run_id, plain))
+    planned: list[tuple[list[str], tuple[str, list]]] = []
+    unstamped: set[str] = set()
+    for row_id in dict.fromkeys(w["row"] for w in row_widens):
+        row_wanted = [w["path"] for w in row_widens if w["row"] == row_id]
+        stamp = _stamp_for_row_writes(root, run, row_id, row_wanted)
+        if stamp is None:
+            unstamped.update(row_wanted)
+        elif stamp[1]:
+            planned.append((row_wanted, stamp))
+    fallback = [p for p in outside if p in unstamped]
+    if fallback and not _widen_footprint(root, run, run_id, fallback, "add_paths: " + ", ".join(fallback), outcome):
+        raise LedgerRefused(_addition_route(run_id, fallback))
+    for row_wanted, stamp in planned:
+        if not _apply_row_writes(root, stamp):
+            late = [p for p in outside if p in row_wanted]
+            if late and not _widen_footprint(root, run, run_id, late, "add_paths: " + ", ".join(late), outcome):
+                raise LedgerRefused(_addition_route(run_id, late))
+    if row_widens:
+        from coordinator_core.ops.dispatch_emit import in_run_widen
+
+        recorded = in_run_widen.record_widens(dir_, row_widens)
+        if outcome is not None and recorded:
+            outcome["widened"] = outcome.get("widened", 0) + recorded
 
 
 def paths_outside_footprint(
@@ -492,6 +521,42 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
                 wanted.append(raw.strip().replace("\\", "/").removeprefix("./"))
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     return paths_outside_footprint(root, dir_, sizing_rel, wanted)
+
+
+def _stamp_for_row_writes(
+    root: Path, run: Optional[Mapping], row_id: str, paths: Sequence[str]
+) -> Optional[tuple[str, list]]:
+    """Reads, never writes, what appending `paths` to row `row_id`'s `writes` takes in the plan the run's
+    sizing names: `(plan_rel, updates)` for `_apply_row_writes` (`updates` empty when every path is
+    already there); None when the sizing names no readable plan or the plan has no such row or declares
+    its `writes` unknown, so the caller falls back to `_widen_footprint`."""
+    sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
+    plan_rel, plan, _ = _sizing_plan(root, sizing_rel)
+    if plan_rel is None or plan is None:
+        return None
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+    try:
+        located = locate_fenced_block(plan.read_text(encoding="utf-8", errors="replace"))
+        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+    except (OSError, yaml.YAMLError):
+        return None
+    row = next((r for r in rows if isinstance(r, dict) and r.get("id") == row_id), None) if isinstance(rows, list) else None
+    if row is None or not isinstance(row.get("writes"), list):
+        return None
+    have = [w for w in row["writes"] if isinstance(w, str)]
+    seen = {w.replace("\\", "/") for w in have}
+    added = [p for p in dict.fromkeys(paths) if p not in seen]
+    return plan_rel, ([{"id": row_id, "writes": [*have, *added]}] if added else [])
+
+
+def _apply_row_writes(root: Path, stamp: tuple[str, list]) -> bool:
+    """Stamps a `_stamp_for_row_writes` result through `plan.tasks.mutate`; False when the stamp is refused."""
+    from coordinator_core.ops import plan_tasks_mutate
+
+    return bool(plan_tasks_mutate._stamp(stamp[0], stamp[1], root, root).get("applied"))
 
 
 def _widen_footprint(
@@ -1246,7 +1311,7 @@ def revise(
     withhold_paths: Sequence = (), credit_chunks: Sequence = (), build_only: bool = False,
     outcome: Optional[dict] = None, stop_after: Optional[str] = None, retract_note: Optional[dict] = None,
     claim: bool = False, owned_red: Sequence = (), add_paths: Sequence = (), retract_row: Optional[dict] = None,
-    widened: Sequence = (), accept_partial: Sequence = (),
+    widened: Sequence = (), accept_partial: Sequence = (), ledger_verdict: Optional[dict] = None,
 ) -> tuple[Ledger, Path, Optional[str]]:
     """Append the EM's revision (and/or set the flag) on an emitted run: a register row when the
     run's sizing is bound, else a queued revision `bind` folds in. `note` is free text that is
@@ -1359,11 +1424,11 @@ def revise(
     if (
         not text and all_of_pm_ask is None and not has_note and not withheld_entries and not credit_entries
         and not accept_entries and not red_entries and not build_only and stop_after is None and retraction is None and not add_paths
-        and not widened and row_retraction is None
+        and not widened and row_retraction is None and not ledger_verdict
     ):
         raise LedgerRefused(
             "workflow.revise needs a non-empty verbatim, note, all_of_pm_ask, withhold_paths, "
-            "accept_partial, credit_chunks, retract_note, retract_row, build_only, stop_after, or a combination"
+            "accept_partial, credit_chunks, retract_note, retract_row, build_only, stop_after, ledger_verdict, or a combination"
         )
     if named and not text:
         raise LedgerRefused("out_of_scope needs a non-empty verbatim: the ruling carries its words")
@@ -2022,7 +2087,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             retract_note=params.get("retract_note"), claim=bool(params.get(CLAIM_PARAM)),
             owned_red=params.get("owned_red") or (), add_paths=params.get("add_paths") or (),
             retract_row=params.get("retract_row"), widened=params.get("widened") or (),
-            accept_partial=params.get("accept_partial") or (),
+            accept_partial=params.get("accept_partial") or (), ledger_verdict=params.get("ledger_verdict"),
         )
     except LedgerRefused as exc:
         return {"error": str(exc)}
@@ -2055,6 +2120,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     from coordinator_core.ops.dispatch_emit import halted_run, run_token
 
     widen_refused: list[dict] = []
+    landed_sha, verdict_refused = None, None
+    if isinstance(params.get("ledger_verdict"), dict):
+        landed_sha, verdict_refused = _land_on_verdict(root, params["run_id"], dir_, ledger, params["ledger_verdict"])
+        if verdict_refused:
+            widen_refused.append({"input": "ledger_verdict", "reason": verdict_refused})
     halted_run.mark_revised(dir_, _now())
     halted = halted_run.revised_halt(dir_) is not None
     live = _run_driven(root, params["run_id"], ledger.sizing_rel, halted, run_token)
@@ -2074,6 +2144,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["claimed"] = outcome["claimed"]
     if "footprint_widened" in outcome:
         out["footprint_widened"] = outcome["footprint_widened"]
+    if outcome.get("widened"):
+        out["widened"] = outcome["widened"]
     if params.get("stop_after"):
         out["stop_after"] = params["stop_after"]
     if params.get("widened"):
@@ -2081,7 +2153,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         recorded = in_run_widen.record_widens(dir_, params["widened"])
         if recorded:
-            out["widened"] = recorded
+            out["widened"] = out.get("widened", 0) + recorded
         if recorded < len(params["widened"]):
             widen_refused.append({
                 "input": "widened",
@@ -2130,7 +2202,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         refused.append({"input": "build_only", "reason": "the bound sizing holds no research block to remove"})
     if warnings:
         out["warning"] = " ".join(warnings)
-    if not live and _sizing_shipped(root, ledger.sizing_rel):
+    if landed_sha:
+        out["landed"] = landed_sha
+        out["note"] = f"run closed landed at {landed_sha[:12]}: every row is met by that commit; no refire is owed."
+    elif not live and _sizing_shipped(root, ledger.sizing_rel):
         out["note"] = "run closes: the sizing is shipped, every row is credited, and no refire is owed."
     elif not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
@@ -2151,6 +2226,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
     applied = [f"row {added}"] if added else []
     applied += [k for k in _APPLIED_KEYS if out.get(k)]
+    if landed_sha:
+        applied.append("ledger_verdict")
     note_refused = outcome.get("note_refused")
     if note_refused:
         refused.append({"input": "note", "paths": note_refused["paths"], "reason": note_refused["reason"]})
@@ -2159,6 +2236,41 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if params.get(k) is not None and params.get(k) != "" and not (k == "note" and note_refused)
     ]
     return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
+
+
+def _land_on_verdict(
+    root: Path, run_id: str, dir_: Path, ledger: Ledger, verdict: Mapping,
+) -> tuple[Optional[str], Optional[str]]:
+    """`(sha, None)` after closing a halted/resumed run as landed at `verdict["landed_sha"]`, else
+    `(None, reason)`; `(None, None)` when the run is not halted/resumed. Closes only when the
+    verdict passes `judge` with every row `met` and no open row, and the sha is a verified
+    ancestor of HEAD that carries the run's withheld paths (`halted_run_landed._verify`)."""
+    from coordinator_core.ops.dispatch_emit import halted_run, halted_run_landed
+
+    marker = halted_run._read(dir_)
+    if marker is None or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
+        return None, None
+    sha = verdict.get("landed_sha")
+    if not isinstance(sha, str) or not sha.strip():
+        return None, "verdict names no `landed_sha`: the commit that met the rows"
+    judged = judge(ledger, verdict, repo_root=root, note_ids=note_ids(dir_))
+    normalized = normalize_verdict(verdict)
+    items = normalized.get("items") if isinstance(normalized, Mapping) else None
+    if not judged["pass"] or judged["open"] or not isinstance(items, list) or any(
+        not isinstance(i, Mapping) or i.get("status") != "met" for i in items
+    ):
+        return None, "verdict does not pass with every row met: " + (
+            "; ".join(f"{f.get('id')}: {f['reason']}" for f in judged["failures"])
+            or "a row is open or not met"
+        )
+    full, problem, _echo = halted_run_landed._verify(root, run_id, [sha.strip().lower()])
+    if problem:
+        return None, problem
+    if not halted_run.mark_landed(dir_, full):
+        return None, "halt marker changed under the write; retry"
+    if ledger.sizing_rel:
+        apply_verdict(root, ledger.sizing_rel, verdict, run_id=run_id, sha=full)
+    return full, None
 
 
 _APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "retracted_note", "withheld")

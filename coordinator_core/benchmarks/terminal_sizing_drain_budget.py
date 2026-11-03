@@ -45,6 +45,7 @@ if str(_REPO) not in sys.path:
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 
 BAR_MS = 500.0
 MOVABLE = 701
@@ -204,8 +205,9 @@ def measure_promote_leg(root: Path) -> Dict[str, Any]:
 def _init_git(root: Path) -> None:
     for args in (["init", "-q"], ["config", "user.email", "bench@example.invalid"], ["config", "user.name", "bench"],
                  ["config", "commit.gpgsign", "false"], ["add", "-A"], ["commit", "-q", "-m", "seed"]):
-        subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
-                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        done = run_git(list(args), cwd=str(root))
+        if not done.ok:
+            raise RuntimeError(f"git {' '.join(args)} failed ({done.returncode}): {done.stderr.strip()}")
 
 
 def _rmtree(path: Path) -> None:

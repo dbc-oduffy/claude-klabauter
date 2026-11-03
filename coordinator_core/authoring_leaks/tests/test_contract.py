@@ -191,7 +191,7 @@ def test_absent_publisher_only_modules_skipped_even_with_the_publisher(monkeypat
     )
     detectors, failures = al._resolve_default_detectors(al.WIRED_DETECTORS)
     assert failures == []
-    assert [d.__name__.rsplit(".", 1)[-1] for d in detectors] == ["import_closure"]
+    assert [d.__name__.rsplit(".", 1)[-1] for d in detectors] == ["import_closure", "call_signature"]
 
 
 def test_absent_non_publisher_only_detector_still_refuses(monkeypatch):

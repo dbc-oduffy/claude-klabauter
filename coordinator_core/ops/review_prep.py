@@ -93,6 +93,7 @@ from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
 from coordinator_core.git.run import run_git
 from coordinator_core.ipc import register_op
+from coordinator_core.ops import review_prep_legs
 from coordinator_core.ops.dispatch_emit.run_ownership import LiveRun, blocks, holders_from_held, owns_path
 from coordinator_core.session import claim_index
 from coordinator_core.session.core import resolve_session_id
@@ -640,14 +641,15 @@ def review_prep(
 
     from coordinator_core.ops.review_peer_bases import _has_object_store
 
-    if head:
-        broken = []
-        if _has_object_store(repo_root):
-            broken = _unparseable_py_at_native(repo_root, head, paths)
-            if broken is None:
-                broken = unparseable_py_at(repo_root, head, paths)
-    else:
-        broken = unparseable_py(repo_root, paths)
+    with review_prep_legs.leg("parse_gate"):
+        if head:
+            broken = []
+            if _has_object_store(repo_root):
+                broken = _unparseable_py_at_native(repo_root, head, paths)
+                if broken is None:
+                    broken = unparseable_py_at(repo_root, head, paths)
+        else:
+            broken = unparseable_py(repo_root, paths)
     if broken:
         return _fail(
             "review.prep refused: py-unparseable: " + "; ".join(f"{f.path} {f.detail}" for f in broken)
@@ -664,11 +666,13 @@ def review_prep(
 
     def peer_bases() -> dict:
         if not fresh_bases:
-            fresh_bases.append(_peer_bases(repo_root, base, head, paths, session, plan_path))
+            with review_prep_legs.leg("peer_bases"):
+                fresh_bases.append(_peer_bases(repo_root, base, head, paths, session, plan_path))
         return fresh_bases[0]
 
     def served() -> Optional[dict]:
-        return _stored_reply(repo_root, sidecar, base, paths, head, peer_bases)
+        with review_prep_legs.leg("stored_reply"):
+            return _stored_reply(repo_root, sidecar, base, paths, head, peer_bases)
 
     def compute_locked() -> dict:
         try:
@@ -755,16 +759,17 @@ def _compute(
             fb_index, seen_index = _cover_index(fb), _cover_index(seen)
             rest = [p for p in paths if not _covers(p, fb_index) and _covers(p, seen_index)]
         try:
-            if fb or wt:
-                got = _freeze_whole_by_base(
-                    repo_root, base, head, rest, peer_bases or {}, slice_prefix, fallback=fb, worktree_paths=wt
-                )
-            elif peer_bases:
-                got = _freeze_whole_by_base(repo_root, base, head, paths, peer_bases, slice_prefix)
-            elif head:
-                got = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
-            else:
-                got = _heavy("freeze_diff")(repo_root, base, slice_prefix, paths, worktree=True)
+            with review_prep_legs.leg("freeze_whole"):
+                if fb or wt:
+                    got = _freeze_whole_by_base(
+                        repo_root, base, head, rest, peer_bases or {}, slice_prefix, fallback=fb, worktree_paths=wt
+                    )
+                elif peer_bases:
+                    got = _freeze_whole_by_base(repo_root, base, head, paths, peer_bases, slice_prefix)
+                elif head:
+                    got = _heavy("freeze_diff")(repo_root, rev_range, slice_prefix, paths)
+                else:
+                    got = _heavy("freeze_diff")(repo_root, base, slice_prefix, paths, worktree=True)
         except ValueError as exc:
             got = {"error": str(exc)}
         frozen_whole.append(got)
@@ -777,12 +782,13 @@ def _compute(
             p for p in paths
             if head and not is_magic_pathspec(p) and not p.endswith("/") and not (repo_root / p).is_dir()
         ]
-        return _heavy("partition_slices")(
-            repo_root, base, paths, slice_prefix, head=head or None,
-            **({"path_bases": peer_bases} if peer_bases else {}),
-            **({"head_fallback": fallback} if fallback else {}),
-            whole_diff=freeze_whole,
-        )
+        with review_prep_legs.leg("partition"):
+            return _heavy("partition_slices")(
+                repo_root, base, paths, slice_prefix, head=head or None,
+                **({"path_bases": peer_bases} if peer_bases else {}),
+                **({"head_fallback": fallback} if fallback else {}),
+                whole_diff=freeze_whole,
+            )
 
     # Trap: range mode partitions first; the whole-diff freeze needs the fallback paths it names.
     part = run_partition() if head else None
@@ -798,16 +804,20 @@ def _compute(
     out["product_files"] = len(product)
     # Trap: hashed after the freeze, so a write landing between the two is recorded as reviewed
     # though the frozen diff lacks it; the moved-bytes check then serves that stale freeze.
-    contents = {rel: _read_or_none(repo_root / rel) for rel in product}
-    out["reviewed_sha256"] = {
-        rel: eol_folded_sha256(data) for rel, data in contents.items() if data is not None
-    }
+    with review_prep_legs.leg("hash_contents"):
+        contents = {rel: _read_or_none(repo_root / rel) for rel in product}
+        out["reviewed_sha256"] = {
+            rel: eol_folded_sha256(data) for rel, data in contents.items() if data is not None
+        }
     if head:
-        contents = _range_blob_bytes(repo_root, head, contents)
+        with review_prep_legs.leg("range_blob_bytes"):
+            contents = _range_blob_bytes(repo_root, head, contents)
     else:
         out["declared_sha256"] = _declared_hashes(repo_root, paths)
-    hashes = {rel: None if data is None else hashlib.sha256(data).hexdigest() for rel, data in contents.items()}
-    _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
+    with review_prep_legs.leg("hash_contents"):
+        hashes = {rel: None if data is None else hashlib.sha256(data).hexdigest() for rel, data in contents.items()}
+    with review_prep_legs.leg("pre_review_snapshot"):
+        _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
     out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
 
     out["peer_bases"] = peer_bases
@@ -856,10 +866,12 @@ def _compute(
         for p in paths
         if not is_magic_pathspec(p) and not _covers(p, sliced_index)
     )
-    out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session)
+    with review_prep_legs.leg("foreign_claims"):
+        out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session)
     out["sidecar_path"] = _rel(sidecar, repo_root)
-    _write_sidecar(sidecar, out, session, paths, head)
-    _write_pointers(share, sidecar, base, slice_prefix, plan_path)
+    with review_prep_legs.leg("write_sidecar"):
+        _write_sidecar(sidecar, out, session, paths, head)
+        _write_pointers(share, sidecar, base, slice_prefix, plan_path)
     out.pop("declared_sha256", None)
     out.pop("peer_bases", None)
     return out
@@ -1069,6 +1081,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``review_slice_id.run_prep_slice_prefix(run_id, base)``: a typed ``slice_prefix`` is ignored
     and may be omitted; with ``paths`` it is required. Optional ``group_index`` / ``group_count`` (ints,
     together) return only that slice group. Keying scope: show_top."""
+    return review_prep_legs.run(lambda: _handle(params, repo_root))
+
+
+def _handle(params: dict, repo_root: Optional[Path]) -> dict:
     if repo_root is None:
         return _fail("review.prep requires a show_top-keyed dispatch; repo_root was not supplied")
     paths = params.get("paths")
@@ -1082,12 +1098,14 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if leg is not None and not isinstance(leg, bool):
             return _fail("review.prep leg must be a boolean")
         try:
-            paths = declared_paths_for_run(
-                repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
-            )
+            with review_prep_legs.leg("handler.declared_paths"):
+                paths = declared_paths_for_run(
+                    repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
+                )
         except ValueError as exc:
             return _fail(str(exc))
-        undeclared = undeclared_edits_for_run(repo_root, run_id, paths, str(params.get("session_id") or ""))
+        with review_prep_legs.leg("handler.undeclared_edits"):
+            undeclared = undeclared_edits_for_run(repo_root, run_id, paths, str(params.get("session_id") or ""))
         paths = [*paths, *undeclared]
     else:
         undeclared = []
@@ -1117,7 +1135,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if live_runs is None and run_id:
         from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
 
-        held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
+        with review_prep_legs.leg("handler.halted_withheld"):
+            held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
         live_runs = holders_from_held(held) or None
     return review_prep(
         repo_root,

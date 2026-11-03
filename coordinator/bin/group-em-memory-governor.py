@@ -502,6 +502,22 @@ def _is_search_wrapper(p: Proc) -> bool:
     return bool(_SHELL.fullmatch(_exe(p))) and bool(_SEARCH_WORD.search(p.cmd))
 
 
+#: An absent parent is evidence of an orphan only after this long: under Git Bash a pipeline element's
+#: Windows parent can be a fork stub that exits while the pipeline lives.
+OWNER_GONE_GRACE_S = 300.0
+
+
+def _live_pipe_peer(root: Proc, tree: list[int], procs: list[Proc]) -> bool:
+    """True when a process outside `root`'s tree shares its (absent) parent and is neither a shell, a
+    search tool nor conhost: the live writer a pipe-tail search is reading from."""
+    members = set(tree)
+    for q in procs:
+        if q.ppid == root.ppid and q.pid not in members and q.pid != root.pid:
+            if not (_is_search_tool(q) or _SHELL.fullmatch(_exe(q)) or _exe(q) == "conhost"):
+                return True
+    return False
+
+
 def orphan_trees(procs: list[Proc], guarded: frozenset = frozenset()) -> list[tuple[Proc, str]]:
     """(root, reason) for each reapable search tree.
 
@@ -525,7 +541,8 @@ def orphan_trees(procs: list[Proc], guarded: frozenset = frozenset()) -> list[tu
                                     or _exe(by_pid[t]) == "conhost") for t in tree):
             continue
         if parent is None:
-            out.append((p, "owner-gone"))
+            if p.age_s > OWNER_GONE_GRACE_S and not _live_pipe_peer(p, tree, procs):
+                out.append((p, "owner-gone"))
         elif p.age_s > REAP_AGE_S:
             out.append((p, "age"))
     return out
@@ -976,8 +993,10 @@ def fire_cache_trim(bin_dir: Path) -> Optional[str]:
     return fire_box_cache_trim(live_fn=group_em_live)
 
 
-#: Consecutive samples with no live group-em holder before the governor exits (~60s at the default 10s interval).
-GEM_ABSENT_EXIT_SAMPLES = 6
+#: Consecutive samples with no live box-wide group-em holder before the governor exits (~15 min at the
+#: default 10s interval). A G-EM handover leaves the box holderless for minutes; a shorter window
+#: ended the governor mid-handover while memory-queued work still needed it.
+GEM_ABSENT_EXIT_SAMPLES = 90
 
 
 def group_em_live() -> bool:
@@ -1571,6 +1590,8 @@ def main(argv: Optional[list[str]] = None) -> None:
     ap.add_argument("--reap-log", type=Path, default=None,
                     help="jsonl the governor appends one record per reaped search tree to "
                          "(default governor-reaps.jsonl beside --log)")
+    ap.add_argument("--no-reap", action="store_true",
+                    help="never reap search trees (overrides the default --reap-log location)")
     ap.add_argument("--guard", type=int, default=None, metavar="PID",
                     help="register or heartbeat PID as a guarded tree the governor never pauses, then exit")
     args = ap.parse_args(argv)
@@ -1623,7 +1644,7 @@ def _serve(args: argparse.Namespace, log: Path) -> None:
     while True:
         try:
             run(args, notice_path=resolve_notice_path(), guard_path=guard_dir(),
-                reap_path=args.reap_log or log.parent / "governor-reaps.jsonl",
+                reap_path=None if args.no_reap else args.reap_log or log.parent / "governor-reaps.jsonl",
                 trim_log_path=log.parent / "governor-trims.jsonl", pidfile=default_pidfile(),
                 avail_fn=avail_gib, rss_fn=tree_rss_mb,
                 retention_fn=spawn_retention_if_due, scratch_fn=scratch_over_budget,

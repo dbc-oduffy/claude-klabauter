@@ -158,6 +158,22 @@ class TestSprintOnlyRowsExcluded(unittest.TestCase):
         self.assertTrue(cli_values.isdisjoint(forbidden_ops))
 
 
+class TestScaffoldOutPathsAreMonthSharded(unittest.TestCase):
+    def test_baton_and_seed_out_carry_the_month_segment(self):
+        from datetime import date
+
+        today = date.today().isoformat()
+        directives = rpa._roadmap_baton_and_seed_directives(
+            "B", "run-1", "stub-1", None, None, ["g1"]
+        )
+        outs = [a for d in directives for a in d["args"] if a.startswith("--out=")]
+        self.assertEqual(len(outs), 2)
+        for out in outs:
+            self.assertTrue(
+                out.startswith(f"--out=state/handoffs/{today[:7]}/{today}"), out
+            )
+
+
 class TestMainCli(unittest.TestCase):
     def test_help_returns_ok(self):
         self.assertEqual(rpa.main(["--help"]), rpa.EXIT_OK)

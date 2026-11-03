@@ -615,25 +615,22 @@ _COMMIT_FROM_IMPORT_RE = re.compile(r"^\s*from\s+" + PACKAGE_NAME + r"[\w.]*\s+i
 _TEST_DIR_NAMES = frozenset({"tests", "test"})
 
 
+_CAT_FILE_CHUNK = 400
+"""Blobs per `cat-file --batch` spawn in `_read_commit_py_blobs`."""
+
+
 class CommitReadError(RuntimeError):
     """A git object read for the published commit failed; the gate fails closed."""
 
 
 def _git_bytes(repo: Path, args: list[str], stdin: bytes | None = None) -> bytes:
-    import subprocess
+    from coordinator_core.git.run import run_git
 
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args],
-        input=stdin,
-        capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    if proc.returncode != 0:
-        raise CommitReadError(
-            f"git {' '.join(args[:2])} failed ({proc.returncode}): "
-            f"{proc.stderr.decode('utf-8', 'replace').strip()}"
-        )
-    return proc.stdout
+    r = run_git(args, cwd=str(repo), input=stdin, binary=True)
+    if not r.ok:
+        why = "timed out" if r.timed_out else f"({r.returncode}): {r.stderr.strip()}"
+        raise CommitReadError(f"git {' '.join(args[:2])} failed {why}")
+    return r.stdout_bytes
 
 
 def _read_commit_py_blobs(repo: Path, commit: str, roots: tuple[str, ...]) -> tuple[dict[str, str], set[str]]:
@@ -656,10 +653,14 @@ def _read_commit_py_blobs(repo: Path, commit: str, roots: tuple[str, ...]) -> tu
         if kind == "blob" and mode != "120000" and path.endswith(".py"):
             wanted.append((path, sha))
     sources: dict[str, str] = {}
-    if wanted:
-        stream = _git_bytes(repo, ["cat-file", "--batch"], "".join(f"{s}\n" for _, s in wanted).encode("ascii"))
+    # Trap: one cat-file over every blob (~2400 at 2026-11) measured 1.6-1.8s alone and timed out
+    # at 19s under publish load against run_git's 2s local budget, refusing the engine row.
+    # Chunks keep each spawn inside that budget; the budget is never widened.
+    for start in range(0, len(wanted), _CAT_FILE_CHUNK):
+        chunk = wanted[start : start + _CAT_FILE_CHUNK]
+        stream = _git_bytes(repo, ["cat-file", "--batch"], "".join(f"{s}\n" for _, s in chunk).encode("ascii"))
         pos = 0
-        for path, _sha in wanted:
+        for path, _sha in chunk:
             eol = stream.index(b"\n", pos)
             header = stream[pos:eol].split()
             if len(header) != 3 or header[1] != b"blob":
