@@ -108,6 +108,13 @@ def test_advisory_band_deny_reaches_the_caller(monkeypatch) -> None:
     monkeypatch.setattr(
         _dc_commit, "_bt_compound_add_bare_commit", lambda *a, **k: True
     )
+    # A rewritable compound commit is now scoped to its own `git add` and allowed; the deny branch
+    # is the unrewritable one, and its delivery is what this pins.
+    from coordinator_core.bash_guards import commit_scope_rewrite
+
+    monkeypatch.setattr(
+        commit_scope_rewrite, "_bt_scope_compound_commit_to_its_add", lambda *a, **k: None
+    )
     out = dispatch.evaluate_payload_json(_payload(_SWEEP_SHAPE_CMD))
     assert isinstance(out, dict), (
         "the chain returned nothing for a deny-shaped verdict"
@@ -115,9 +122,13 @@ def test_advisory_band_deny_reaches_the_caller(monkeypatch) -> None:
         else "collect_advisories was never requested; a list here means the "
         "dispatcher's single-envelope contract moved"
     )
+    # The entry's deny_registry class is "nudge; no side effect", so its deny reaches the caller as
+    # an advisory (North star: only an irreversible class may deny). What this pins is delivery: the
+    # verdict's text arrives, never silently dropped on the probe-budget path.
     hso = out["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "names no scope" in hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow"
+    assert out.get("guardLevel") == "log"
+    assert "names no scope" in hso["additionalContext"]
 
 
 def test_probe_budget_declines_unspawned_once_spent(monkeypatch) -> None:

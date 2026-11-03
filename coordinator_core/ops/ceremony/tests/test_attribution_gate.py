@@ -302,6 +302,20 @@ def test_vacated_without_the_source_still_refuses_moved_attribution(tmp_path):
     outcome = attribution_gate(repo, ["old_path.py", "new_path.py"], vacated=[])
 
     assert not outcome.passed
+    # The refusal names the declaration that pools the old text, so a pure rename is one retry.
+    assert "deleted_paths" in outcome.diagnostics[-1]
+
+
+def test_an_edit_in_place_refusal_does_not_suggest_deleted_paths(tmp_path):
+    repo = _init_repo(tmp_path)
+    _seed_file(repo, "foo.py", "x = 1\n")
+    _commit(repo, ["foo.py"])
+    _seed_file(repo, "foo.py", f"x = 1\n{_ATTR_LINE}\n")
+
+    outcome = attribution_gate(repo, ["foo.py"], vacated=[])
+
+    assert not outcome.passed
+    assert not any("deleted_paths" in d for d in outcome.diagnostics)
 
 
 def test_vacated_gate_spawns_no_subprocess(tmp_path):

@@ -158,6 +158,8 @@ if IS_WINDOWS:
 
         A fork bomb inside the job fails at CreateProcess instead of exhausting the box.
         """
+        if int(active_process_limit) < 2:
+            raise ValueError(f"active_process_limit must be >= 2, got {active_process_limit}")
         job = _kernel32.CreateJobObjectW(None, None)
         if not job:
             raise ctypes.WinError(ctypes.get_last_error())
@@ -169,7 +171,8 @@ if IS_WINDOWS:
         )
         # TRAP: the kernel admits one process past ActiveProcessLimit (measured: limit N lets N+1 live),
         # so the stored limit is N-1 and the tree never exceeds the N the caller asked for.
-        info.BasicLimitInformation.ActiveProcessLimit = max(1, int(active_process_limit) - 1)
+        # N=1 is unrepresentable (stored 1 admits 2), hence the refusal above.
+        info.BasicLimitInformation.ActiveProcessLimit = int(active_process_limit) - 1
         info.JobMemoryLimit = int(job_memory_limit_bytes)
         ok = _kernel32.SetInformationJobObject(
             job,

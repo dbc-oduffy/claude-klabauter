@@ -270,3 +270,15 @@ def test_unscheduled_suite_run_with_variable_held_paths_denies_at_every_level(mo
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
         mp.reset_cache()
         assert mp.apply_guard_level("check-test-suite-invocation", env) is env, level
+
+
+def test_uncapped_pytest_plugin_guard_is_box_degrading_and_keeps_its_deny_at_every_level(monkeypatch):
+    from coordinator_core.bash_guards import guard_uncapped_pytest_plugin as guard
+
+    assert dr.GUARD_DENY_CLASS["guard-uncapped-pytest-plugin"] == dr.BOX_DEGRADING
+    env = guard.check({"tool_name": "Bash", "tool_input": {"command": "pytest -p myplugin tests/"}})
+    assert env is not None
+    for level in ("strict", "warn", "off"):
+        monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
+        mp.reset_cache()
+        assert mp.apply_guard_level("guard-uncapped-pytest-plugin", env) is env, level

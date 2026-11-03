@@ -271,9 +271,12 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: float = 2.0,
             "probe was never spawned" % _GIT_PROBE_BUDGET_SECONDS
         )
         return _GIT_PROBE_BUDGET_SPENT_RC, ""
-    env = None
+    # A probe never takes an optional lock: `git diff`/`status` otherwise refresh the index under
+    # index.lock, and a probe killed at its timeout left a 0-byte lock that refused the user's own
+    # next `git add` (example-stats-repo, 2026-11-02 23:44:54). Required locks are unaffected.
+    env = dict(os.environ)
+    env["GIT_OPTIONAL_LOCKS"] = "0"
     if extra_env:
-        env = dict(os.environ)
         for _k, _v in extra_env.items():
             if _v is None:
                 env.pop(_k, None)

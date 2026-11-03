@@ -44,6 +44,7 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-whole-filesystem-scan": BOX_DEGRADING,
     "guard-disk-fill": BOX_DEGRADING,
     "guard-heavy-command-admission": BOX_DEGRADING,
+    "guard-uncapped-pytest-plugin": BOX_DEGRADING,
     "block-external-workspace-vcs-write": BOX_DEGRADING,
     "block-editor-kill-by-name": BOX_DEGRADING,
     "blanket-git-add": DISRUPTIVE,

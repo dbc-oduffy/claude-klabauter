@@ -329,6 +329,10 @@ preserved there as the historical record; this port carries only the CURRENT pin
   12.1.0 (2026-10-22) MINOR: additive enum widen of the `plan` liveness mapping by the
     terminal `closed` status (DONE, beside `abandoned`). Constant-moves-first — DoE
     regenerates against this stamp.
+  12.2.0 (2026-11-03) MINOR: additive glob widen — DoE c97530993e lets eight
+    `x-coordinator-applies_to` globs match flat-or-sharded layouts (research run dirs:
+    claims.json, *.md, coverage-audit, gap-report; C8 month shards: state/sizings,
+    state/handoffs, docs/plans, docs/plans/*.seam.yaml). Constant-moves-first.
 Bump rule (unchanged from JS): additive $defs/enum-widen changes stay minor; any
 non-additive change (enum-narrow, field/required removal) bumps MAJOR regardless of
 whether a vendored consumer version-asserts yet — two different bundle bodies must
@@ -390,7 +394,7 @@ from coordinator_core.ops.records_query import liveness as _records_liveness
 from coordinator_core.session.declared_writes import declare_write
 
 
-CONTRACT_VERSION = "12.1.0"
+CONTRACT_VERSION = "12.2.0"
 
 GENERATES = []
 

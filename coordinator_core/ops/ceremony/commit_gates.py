@@ -695,6 +695,10 @@ def carry_gate(
 _ATTRIBUTION_GATE_REMEDY = (
     "state the purpose, invariant or trap without naming the reviewer."
 )
+#: Appended when a hit path is new at HEAD: a moved file's old path pools only when declared.
+_ATTRIBUTION_GATE_MOVE_REMEDY = (
+    "a moved file: name its old path in deleted_paths so the old text is pooled."
+)
 
 
 def _head_text(
@@ -763,7 +767,7 @@ def attribution_gate(
     `read_index` rename scan; an attribution line moved into an unrelated new file then passes.
 
     Diagnostics are `<path>:<line_no>: adds reviewer attribution ("<match>")`, every hit uncapped, then one
-    remedy line. No override key, no bypass.
+    remedy line (two when a hit path is new at HEAD). No override key, no bypass.
     """
     root = Path(worktree_root)
     remaining = [p for p in gate_paths if not is_exempt_path(p)]
@@ -830,6 +834,7 @@ def attribution_gate(
         index_identities = {}
 
     diagnostics: List[str] = []
+    head_absent_hit = False
 
     for path in suspects:
         head_text = _head_text(spine, common_dir, path)
@@ -867,6 +872,7 @@ def attribution_gate(
 
         for new_text in candidates:
             for match in scan_added_lines(new_text, old_text, path):
+                head_absent_hit = head_absent_hit or head_text is None
                 diagnostics.append(
                     f'{path}:{match.line_no}: adds reviewer attribution ("{match.text}")'
                 )
@@ -875,6 +881,8 @@ def attribution_gate(
         return GateOutcome(passed=True, skipped=False, diagnostics=[])
 
     diagnostics.append(_ATTRIBUTION_GATE_REMEDY)
+    if head_absent_hit:
+        diagnostics.append(_ATTRIBUTION_GATE_MOVE_REMEDY)
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
 
 

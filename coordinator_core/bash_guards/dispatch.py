@@ -2405,6 +2405,10 @@ def _build_guard_chain(
         check as _check_whole_filesystem_scan,
         MATCHERS as _matchers_whole_filesystem_scan,
     )
+    from coordinator_core.bash_guards.guard_uncapped_pytest_plugin import (
+        check as _check_uncapped_pytest_plugin,
+        MATCHERS as _matchers_uncapped_pytest_plugin,
+    )
     from coordinator_core.bash_guards.block_stash_destruction import (
         check as _check_stash_destruction,
         check_apply_advisory as _check_stash_apply_advisory,
@@ -2751,6 +2755,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_whole_filesystem_scan),
+        ),
+        # pytest -p <ad-hoc plugin> outside the capped launcher: an uncapped recursive spawn.
+        GuardEntry(
+            "guard-uncapped-pytest-plugin",
+            lambda: _check_uncapped_pytest_plugin(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_uncapped_pytest_plugin),
         ),
         GuardEntry(
             "block-noncanonical-branch-creation",

@@ -71,6 +71,11 @@ def test_default_head_ships_committed_content_not_the_dirty_tree(publish_mod, re
 
 def test_named_ref_ships_that_commit_and_the_stamp_names_it(publish_mod, round_mod, repo, monkeypatch):
     root, first = repo
+    # --commit names claude-klabauter's own commit, so it pins only rows sourced from the engine's toplevel
+    # (3c9871f946); the fixture repo stands in for that toplevel here.
+    monkeypatch.setattr(
+        publish_mod, "_engine_toplevel_key", lambda: str(Path(_git(root, "rev-parse", "--show-toplevel")))
+    )
     monkeypatch.setattr(publish_mod, "_source_ref_override", first)
     monkeypatch.setattr(publish_mod, "_MATERIALIZED_REF_CACHE", {})
     sha = publish_mod._round_pin_source_sha(root, {})

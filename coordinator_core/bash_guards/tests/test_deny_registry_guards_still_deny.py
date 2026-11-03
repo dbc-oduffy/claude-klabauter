@@ -43,6 +43,7 @@ _BASH_CASES = {
     "block-whole-filesystem-scan": ("grep -r needle /", False),
     "guard-disk-fill": ("dd if=/dev/zero of=big.bin bs=1M count=999999", False),
     "guard-heavy-command-admission": ("cargo build --release", False),
+    "guard-uncapped-pytest-plugin": ("python -m pytest -p myplugin tests/", False),
     "block-external-workspace-vcs-write": ("git -C {other} commit --allow-empty -m x", False),
     "block-editor-kill-by-name": ("taskkill /F /IM UnrealEditor.exe", False),
     "blanket-git-add": ("git -C {repo} add -A", False),
@@ -54,7 +55,12 @@ _BASH_CASES = {
 
 #: Registered guards that are hook handlers, not Bash-dispatcher entries.
 _HOOK_GUARDS = frozenset(
-    {"block-dispatch-suite-invocation", "block-worktree-tool", "block-workflow-foreign-emission"}
+    {
+        "block-dispatch-suite-invocation",
+        "block-worktree-tool",
+        "block-workflow-foreign-emission",
+        "guard-doctrine-surface-edits",
+    }
 )
 
 
@@ -113,6 +119,16 @@ def _deny_reason(out) -> str:
     return str(hso.get("permissionDecisionReason", ""))
 
 
+def _doctrine_payload(claude_md: Path, cwd: Path) -> dict:
+    return {
+        "tool_name": "Edit",
+        "tool_input": {"file_path": str(claude_md), "old_string": "# existing", "new_string": "# changed"},
+        "agent_id": _AGENT_ID,
+        "cwd": str(cwd),
+        "session_id": "sess-deny-doctrine",
+    }
+
+
 def _hook_output(name: str, tmp_path: Path) -> dict:
     if name == "block-worktree-tool":
         from coordinator_core.hooks import block_worktree_tool as mod
@@ -129,6 +145,12 @@ def _hook_output(name: str, tmp_path: Path) -> dict:
                 "env": {},
             }
         )
+    if name == "guard-doctrine-surface-edits":
+        from coordinator_core.write_guards import guard_doctrine_surface_edits as gds
+
+        claude_md = tmp_path / "CLAUDE.md"
+        claude_md.write_text("# existing\n", encoding="utf-8")
+        return gds.check(_doctrine_payload(claude_md, tmp_path))
     from coordinator_core.hooks import block_workflow_foreign_emission as mod
 
     return mod._handler(
@@ -148,9 +170,10 @@ def test_every_registered_guard_has_a_case():
 
 
 @pytest.mark.parametrize("guard", _registered())
-def test_registered_guard_denies_a_live_harmful_input(guard, world, tmp_path):
+def test_registered_guard_denies_a_live_harmful_input(guard, world, tmp_path, monkeypatch):
     if guard in _HOOK_GUARDS:
-        out = _hook_output(guard, tmp_path)
+        monkeypatch.chdir(world["repo"])
+        out = _hook_output(guard, Path(world["repo"]))
     else:
         cmd, subagent = _BASH_CASES[guard]
         if guard == "p4-verb-fence":
