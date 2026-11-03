@@ -2223,7 +2223,7 @@ def _run_driven(root: Path, run_id: str, sizing_rel: Optional[str], halted: bool
 
     if live_runs.run_is_live(root, run_id):
         return True
-    if not halted and run_token.is_live(root, run_id):
+    if not halted and run_token.is_live(root, run_id) and not _token_not_a_runner(root, run_id):
         return True
     if not sizing_rel:
         return False
@@ -2232,9 +2232,26 @@ def _run_driven(root: Path, run_id: str, sizing_rel: Optional[str], halted: bool
         return any(
             record["run_id"] != run_id
             and run_token.normalize_sizing_rel(root, str(record.get("sizing_rel") or "")) == want
+            and not _token_not_a_runner(root, record["run_id"])
             for record in run_token.live_records(root)
         )
     except OSError:
+        return False
+
+
+def _token_not_a_runner(root: Path, run_id: str) -> bool:
+    """True when an unredeemed token proves no runner: the run holds an abandoned-at-minted halt
+    marker, or `warp_live.runner_unproven`. A read failure answers False (unknown is not dead)."""
+    try:
+        from coordinator_core import warp_live
+        from coordinator_core.ops.dispatch_emit import halted_run
+        from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED
+
+        marker = halted_run._read(record_dir(root, run_id))
+        if marker and ABANDONED_AT_MINTED in (marker.get("halted"), marker.get(halted_run.HALT_REASON_FIELD)):
+            return True
+        return bool(warp_live.runner_unproven(root, run_id))
+    except Exception:  # noqa: BLE001 -- unknown never reports a run dead
         return False
 
 

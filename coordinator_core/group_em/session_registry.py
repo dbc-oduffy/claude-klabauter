@@ -122,6 +122,8 @@ def _pid_alive_windows(pid: int) -> bool:
 
 
 def _pid_alive_posix(pid: int) -> bool:
+    """Signal 0 probes only and kills nothing. Trap: on Windows `os.kill(pid, 0)` calls
+    TerminateProcess, so `pid_alive` routes `nt` to `_pid_alive_windows` and never here."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

@@ -56,8 +56,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "f05f7369f4f5683cda411cef4d9608e23b49e128",
-    "doe_commit": "ccd0645b195c55122837d6e98f6c749e4d17c363"
+    "blob": "5bed1365cf49b6e8fe26e8efe771f202864c2b14",
+    "doe_commit": "c600c919fbe92fdb483d467e896924cddeb1833f"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
@@ -120,8 +120,8 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "research-claim.schema.json": {
-    "blob": "e870dccedc2b2b923da9884c2e15600813b7a62f",
-    "doe_commit": "bdeabeb260b3bc566f157e7e01c2f5a625e3a6a7"
+    "blob": "7f3441ee29d933e6bf250ea14a662a3663b0fc3f",
+    "doe_commit": "a26895be69bf267bcec451d0c5952e61e0005bac"
   },
   "research-synthesis.schema.json": {
     "blob": "d9070c6c1878823a4511e1f3acb75a4c9eba819c",

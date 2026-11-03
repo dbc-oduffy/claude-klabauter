@@ -15,8 +15,9 @@ process killed between `redeem` and `release` strands the claim until its holder
 gone, or in the same process its thread exited); the next `redeem` then adopts it. A live holder
 past any age keeps its claim: it may still be committing. Every other subagent commit stays denied.
 
-Invariants: the record lives in the git common dir (never the worktree, so no commit can carry
-it); only a sha256 of the token is stored, except a launcher child's escrow
+Invariants: the record lives under `engine_record_dir` in the settings home (never the worktree,
+so no commit can carry it; off the repo's drive, so a stalled drive cannot hold a write); only a
+sha256 of the token is stored, except a launcher child's escrow
 (`escrow/<run_id>.json`), which only the stage-time twin write reads (`escrowed`) and which dies
 with the record; the record names the run's script and a token admits nothing without that
 script; a record older than `TTL_SECONDS` admits nothing. In-process file I/O only: no spawn.
@@ -49,7 +50,12 @@ import time
 from pathlib import Path
 from typing import Iterator, Optional
 
+from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir, legacy_record_dir
+from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_read
+
 TTL_SECONDS = 24 * 3600
+#: Deadline for a read of the legacy in-`.git` home (the stalling drive); a stall reads as absent.
+LEGACY_READ_DEADLINE_MS = 150.0
 KINDS = ("ask", "grind")
 #: A legacy claim (no holder pid recorded) older than this is adopted by the next `redeem`
 #: (twice the dispatcher's 30s backstop: the original op's reply is long abandoned).
@@ -150,12 +156,96 @@ def _record_path(
 ) -> Optional[Path]:
     if not _RUN_ID_RE.match(run_id or ""):
         return None
-    common = _common_dir(repo_root)
-    if common is None:
+    home = engine_record_dir(repo_root)
+    if home is None:
         return None
-    base = common / _DIR
+    return _under(home / _DIR, run_id, claimed, spent, halted, escrow, retired)
+
+
+def _under(base: Path, run_id: str, claimed: bool, spent: bool, halted: bool, escrow: bool, retired: bool) -> Path:
     sub = _SPENT if spent else _HALTED if halted else _ESCROW if escrow else _RETIRED if retired else _CLAIMED if claimed else None
     return (base / sub if sub else base) / f"{run_id}.json"
+
+
+def _legacy_path(repo_root: Path, run_id: str, **kind: bool) -> Optional[Path]:
+    """The record's pre-relocation path under the git common dir; None for a malformed id or no common dir."""
+    if not _RUN_ID_RE.match(run_id or ""):
+        return None
+    common = legacy_record_dir(repo_root)
+    if common is None:
+        return None
+    flags = {k: bool(kind.get(k)) for k in ("claimed", "spent", "halted", "escrow", "retired")}
+    return _under(common / _DIR, run_id, **flags)
+
+
+def _read_legacy(repo_root: Path, run_id: str, **kind: bool) -> Optional[dict]:
+    """Legacy-home read through `bounded_read`: the old home is on the drive that stalls.
+
+    Sunset: records are written only under `engine_record_dir`, and a record dies after
+    `TTL_SECONDS`, so once one TTL has passed since this lands no live token is legacy-only;
+    delete `_read_legacy`, `_read_rec`, `_drop_legacy`, `_present` and the legacy listing then."""
+    path = _legacy_path(repo_root, run_id, **kind)
+    if path is None:
+        return None
+    raw = bounded_read(path, LEGACY_READ_DEADLINE_MS)
+    if not isinstance(raw, bytes):
+        return None
+    try:
+        record = json.loads(raw.decode("utf-8"))
+    except ValueError:
+        return None
+    return record if isinstance(record, dict) else None
+
+
+def _read_rec(repo_root: Path, run_id: str, **kind: bool) -> Optional[dict]:
+    """The record under the settings home; only when that is missing, the legacy copy (new root wins)."""
+    record = _read(_record_path(repo_root, run_id, **kind))
+    return record if record is not None else _read_legacy(repo_root, run_id, **kind)
+
+
+def _present(repo_root: Path, run_id: str, **kind: bool) -> bool:
+    path = _record_path(repo_root, run_id, **kind)
+    return (path is not None and path.exists()) or _read_legacy(repo_root, run_id, **kind) is not None
+
+
+def _drop_legacy(repo_root: Path, run_id: str, **kind: bool) -> None:
+    """Unlink the legacy copy of a record, only when a bounded read finds one: a removed record
+    must not resurface through the read fallback."""
+    if _read_legacy(repo_root, run_id, **kind) is None:
+        return
+    path = _legacy_path(repo_root, run_id, **kind)
+    try:
+        if path is not None:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _unlink_both(repo_root: Path, run_id: str, **kind: bool) -> None:
+    path = _record_path(repo_root, run_id, **kind)
+    if path is not None:
+        path.unlink(missing_ok=True)
+    _drop_legacy(repo_root, run_id, **kind)
+
+
+def _bounded_glob(directory: Path, deadline_ms: float) -> list[Path]:
+    """`directory`'s `*.json`, [] when the listing outlives `deadline_ms` or fails."""
+    box: list[list[Path]] = []
+    done = threading.Event()
+
+    def work() -> None:
+        try:
+            box.append(sorted(directory.glob("*.json")))
+        except OSError:
+            box.append([])
+        finally:
+            done.set()
+
+    try:
+        threading.Thread(target=work, daemon=True).start()
+    except RuntimeError:
+        return []
+    return box[0] if done.wait(deadline_ms / 1000.0) and box else []
 
 
 def _digest(token: str) -> str:
@@ -242,7 +332,7 @@ def mint(
         return token
     # Receipt first: unlinking first would erase the remint case's receipt. The spent receipt stays:
     # it matches only the landed token's digest, so a re-mint still answers that token already_landed.
-    replaced = _read(path)
+    replaced = _read_rec(repo_root, run_id)
     if (
         carry_prior and replaced is not None and _fresh(replaced)
         and replaced.get("script_path") == script_path and isinstance(replaced.get("sha256"), str)
@@ -252,16 +342,9 @@ def mint(
     if replaced is not None:
         _write_retired(repo_root, run_id, replaced)
     else:
-        stale_retired = _record_path(repo_root, run_id, retired=True)
-        if stale_retired is not None:
-            stale_retired.unlink(missing_ok=True)
-    for stale in (
-        _record_path(repo_root, run_id, claimed=True),
-        _record_path(repo_root, run_id, halted=True),
-        _record_path(repo_root, run_id, escrow=True),
-    ):
-        if stale is not None:
-            stale.unlink(missing_ok=True)
+        _unlink_both(repo_root, run_id, retired=True)
+    for stale in ({"claimed": True}, {"halted": True}, {"escrow": True}):
+        _unlink_both(repo_root, run_id, **stale)
     # A params file left by the prior mint carries its token; a no-prompt-block land_run would
     # read it back and be refused as "spent, expired or not the one minted". A carry_prior record
     # still admits that token, so its params file stays. Deferred: the channel module imports this one.
@@ -272,6 +355,7 @@ def mint(
             if stale_params is not None:
                 stale_params.unlink(missing_ok=True)
     _publish_record(path, json.dumps(record, sort_keys=True))
+    _drop_legacy(repo_root, run_id)
     _index("index_mint", repo_root, run_id, record["minted_at"])
     return token
 
@@ -309,7 +393,7 @@ def _write_retired(repo_root: Path, run_id: str, record: Optional[dict]) -> None
     from coordinator_core.atomic_replace import atomic_write_bytes
 
     receipt = {k: record.get(k) for k in _RECEIPT_KEYS if record.get(k) is not None}
-    chain = _retired_chain(record, _read(target))
+    chain = _retired_chain(record, _read_rec(repo_root, run_id, retired=True))
     if chain:
         receipt[_PRIOR] = chain
     else:
@@ -350,10 +434,10 @@ def _index(fn: str, repo_root: Path, *args) -> None:
 
 def escrow(repo_root: Path, run_id: str, token: str) -> bool:
     """Keep `token` in plaintext at `escrow/<run_id>.json` so the stage-time twin write can read it
-    back without an agent. False when no common dir resolves or the run id is malformed.
+    back without an agent. False when no record dir resolves or the run id is malformed.
 
-    Trap: the plaintext token sits on disk from emit, not from stage. It lives under the git common
-    dir (never the worktree, never the script's bytes), so the invariant that no commit or script
+    Trap: the plaintext token sits on disk from emit, not from stage. It lives under the settings
+    home (never the worktree, never the script's bytes), so the invariant that no commit or script
     carries the token still holds; do not move it into the script."""
     path = _record_path(repo_root, run_id, escrow=True)
     if path is None or not isinstance(token, str):
@@ -375,11 +459,11 @@ def escrowed(repo_root: Path, run_id: str) -> Optional[str]:
     admits (`redeem` dropped the plaintext twins; a later write must not re-create one); a
     `release` restores the live record, so the token is readable again."""
     try:
-        held = _read(_record_path(repo_root, run_id, escrow=True))
+        held = _read_rec(repo_root, run_id, escrow=True)
         token = held.get("token") if held else None
         if not isinstance(token, str) or not TOKEN_RE.match(token):
             return None
-        live = _read(_record_path(repo_root, run_id))
+        live = _read_rec(repo_root, run_id)
         if live is None or not _fresh(live):
             return None
         if not hmac.compare_digest(str(live.get("sha256") or ""), _digest(token)):
@@ -391,14 +475,15 @@ def escrowed(repo_root: Path, run_id: str) -> Optional[str]:
 
 def sweep_expired_escrows(repo_root: Path, now: Optional[float] = None) -> int:
     """Unlink escrow files older than `TTL_SECONDS` (a run that died without consume/discard);
-    return the count. Age is the escrow's own `minted_at`, else file mtime. Never raises."""
-    common = _common_dir(repo_root)
-    if common is None:
+    return the count. Age is the escrow's own `minted_at`, else file mtime. Never raises. Sweeps the
+    settings-home dir only: a legacy escrow ages out with its record and is never listed."""
+    home = engine_record_dir(repo_root)
+    if home is None:
         return 0
     cutoff = (time.time() if now is None else now) - TTL_SECONDS
     removed = 0
     try:
-        paths = list((common / _DIR / _ESCROW).glob("*.json"))
+        paths = list((home / _DIR / _ESCROW).glob("*.json"))
     except OSError:
         return 0
     for path in paths:
@@ -437,7 +522,7 @@ def admits(repo_root: Path, run_id: object, token: object, script_path: object) 
     no record; two racing invocations can both pass here and `redeem` refuses the loser."""
     if not _well_formed(run_id, token, script_path):
         return False
-    return _matches(_read(_record_path(repo_root, run_id)), run_id, token, script_path)
+    return _matches(_read_rec(repo_root, run_id), run_id, token, script_path)
 
 
 def halt_admits(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
@@ -447,7 +532,7 @@ def halt_admits(repo_root: Path, run_id: object, token: object, script_path: obj
     if not _well_formed(run_id, token, script_path):
         return False
     return any(
-        _matches(_read(_record_path(repo_root, run_id, **kind)), run_id, token, script_path)
+        _matches(_read_rec(repo_root, run_id, **kind), run_id, token, script_path)
         for kind in ({}, {"claimed": True}, {"retired": True})
     )
 
@@ -464,15 +549,9 @@ def readmit_reviewed(repo_root: Path, run_id: object, token: object, script_path
     if not _well_formed(run_id, token, script_path):
         return False
     live = _record_path(repo_root, run_id)
-    paths = (
-        live,
-        _record_path(repo_root, run_id, claimed=True),
-        _record_path(repo_root, run_id, spent=True),
-        _record_path(repo_root, run_id, retired=True),
-    )
-    if any(p is None for p in paths) or any(p.exists() for p in paths[:3]):
+    if live is None or any(_present(repo_root, run_id, **k) for k in ({}, {"claimed": True}, {"spent": True})):
         return False
-    receipt = _read(paths[3])
+    receipt = _read_rec(repo_root, run_id, retired=True)
     if not _matches(receipt, run_id, token, script_path):
         return False
     record = {k: receipt.get(k) for k in _RECEIPT_KEYS if receipt.get(k) is not None}
@@ -499,9 +578,9 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
     claimed = _record_path(repo_root, run_id, claimed=True)
     if live is None or claimed is None:
         return False
-    record = _read(live)
+    record = _read_rec(repo_root, run_id)
     if not _matches(record, run_id, token, script_path):
-        held = _read(claimed)
+        held = _read_rec(repo_root, run_id, claimed=True)
         if held is None:
             return False
         adopted, aside = _adopt_expired_claim(claimed, held, run_id, token, script_path)
@@ -520,6 +599,7 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
             break
         except PermissionError:  # a racing reader holds the live record open (Windows)
             time.sleep(0.005)
+    _drop_legacy(repo_root, run_id)
     _drop_staged_twins(repo_root, run_id)
     return True
 
@@ -605,7 +685,7 @@ def release(repo_root: Path, run_id: object, token: object, script_path: object)
     claimed = _record_path(repo_root, run_id, claimed=True)
     if live is None or claimed is None:
         return False
-    if not _matches(_read(claimed), run_id, token, script_path) or live.exists():
+    if not _matches(_read_rec(repo_root, run_id, claimed=True), run_id, token, script_path) or live.exists():
         return False
     try:
         os.replace(claimed, live)
@@ -616,22 +696,37 @@ def release(repo_root: Path, run_id: object, token: object, script_path: object)
 
 def is_live(repo_root: Path, run_id: str) -> bool:
     """True while the run's record is unclaimed and inside its TTL."""
-    record = _read(_record_path(repo_root, run_id))
+    record = _read_rec(repo_root, run_id)
     return record is not None and _fresh(record)
 
 
-def live_records(repo_root: Path) -> Iterator[dict]:
-    """Every unclaimed, unexpired record, in path order."""
-    common = _common_dir(repo_root)
-    if common is None:
-        return
+def _listed(repo_root: Path, *, claimed: bool) -> list[dict]:
+    """Records in the settings-home dir (`claimed/` or the live dir), then those only the legacy
+    dir holds (bounded listing; sunset per `_read_legacy`). A run id in both reads from the new root."""
+    home = engine_record_dir(repo_root)
+    if home is None:
+        return []
+    sub = (_CLAIMED,) if claimed else ()
     try:
-        paths = sorted((common / _DIR).glob("*.json"))
+        new_paths = sorted((home / _DIR).joinpath(*sub).glob("*.json"))
     except OSError:
-        return
-    for path in paths:
-        record = _read(path)
-        if record is not None and isinstance(record.get("run_id"), str) and _fresh(record):
+        new_paths = []
+    records = [r for r in (_read(p) for p in new_paths) if r is not None]
+    seen = {p.stem for p in new_paths}
+    common = legacy_record_dir(repo_root)
+    if common is not None:
+        for path in _bounded_glob((common / _DIR).joinpath(*sub), LEGACY_READ_DEADLINE_MS):
+            if path.stem not in seen:
+                legacy = _read_legacy(repo_root, path.stem, claimed=claimed)
+                if legacy is not None:
+                    records.append(legacy)
+    return records
+
+
+def live_records(repo_root: Path) -> Iterator[dict]:
+    """Every unclaimed, unexpired record, new root first then legacy-only ones."""
+    for record in _listed(repo_root, claimed=False):
+        if isinstance(record.get("run_id"), str) and _fresh(record):
             yield record
 
 
@@ -640,16 +735,7 @@ def held_records(repo_root: Path) -> list[dict]:
     claimed one (a run mid terminal-commit). One directory listing each; no spawn. A claimed
     record is not freshness-checked here."""
     records = list(live_records(repo_root))
-    common = _common_dir(repo_root)
-    if common is not None:
-        try:
-            claimed = sorted((common / _DIR / _CLAIMED).glob("*.json"))
-        except OSError:
-            claimed = []
-        for path in claimed:
-            record = _read(path)
-            if record is not None and isinstance(record.get("run_id"), str):
-                records.append(record)
+    records.extend(r for r in _listed(repo_root, claimed=True) if isinstance(r.get("run_id"), str))
     return records
 
 
@@ -659,7 +745,7 @@ def spent_receipt(repo_root: Path, run_id: object, token: object, script_path: o
     (wrong token or script, expired, re-minted since, never landed). Claims nothing, lists nothing."""
     if not _well_formed(run_id, token, script_path):
         return None
-    receipt = _read(_record_path(repo_root, run_id, spent=True))
+    receipt = _read_rec(repo_root, run_id, spent=True)
     if not _matches(receipt, run_id, token, script_path):
         return None
     landed = receipt.get("landed")
@@ -673,7 +759,7 @@ def claim_pending(repo_root: Path, run_id: object, token: object, script_path: o
     if not _well_formed(run_id, token, script_path):
         return False
     path = _record_path(repo_root, run_id, claimed=True)
-    record = _read(path)
+    record = _read_rec(repo_root, run_id, claimed=True)
     return _matches(record, run_id, token, script_path) and not _claim_expirable(record, path)
 
 
@@ -683,7 +769,7 @@ def note_halt_landing(repo_root: Path, run_id: object, token: object, script_pat
     still redeem. Writes nothing when the token no longer matches the live record."""
     if not _well_formed(run_id, token, script_path):
         return
-    record = _read(_record_path(repo_root, run_id))
+    record = _read_rec(repo_root, run_id)
     target = _record_path(repo_root, run_id, halted=True)
     if not _matches(record, run_id, token, script_path) or target is None:
         return
@@ -703,7 +789,7 @@ def halt_landing(repo_root: Path, run_id: object, token: object, script_path: ob
     rule as `spent_receipt`; else None."""
     if not _well_formed(run_id, token, script_path):
         return None
-    receipt = _read(_record_path(repo_root, run_id, halted=True))
+    receipt = _read_rec(repo_root, run_id, halted=True)
     if not _matches(receipt, run_id, token, script_path):
         return None
     landed = receipt.get("landed")
@@ -716,7 +802,7 @@ def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> N
 
     `landed` (a dict: sha, rows, paths) first writes the spent receipt `spent_receipt` reads, from
     the claimed record (else the live one). No record to copy, no receipt."""
-    record = _read(_record_path(repo_root, run_id, claimed=True)) or _read(_record_path(repo_root, run_id))
+    record = _read_rec(repo_root, run_id, claimed=True) or _read_rec(repo_root, run_id)
     if landed is None:
         _write_retired(repo_root, run_id, record)
     else:
@@ -732,12 +818,8 @@ def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> N
             except OSError:  # the commit already landed; a missing receipt only costs the repeat-call answer
                 pass
     for claimed in (False, True):
-        path = _record_path(repo_root, run_id, claimed=claimed)
-        if path is not None:
-            path.unlink(missing_ok=True)
-    held = _record_path(repo_root, run_id, escrow=True)
-    if held is not None:
-        held.unlink(missing_ok=True)
+        _unlink_both(repo_root, run_id, claimed=claimed)
+    _unlink_both(repo_root, run_id, escrow=True)
     _index("index_remove", repo_root, run_id)
 
 
@@ -750,12 +832,10 @@ def discard(repo_root: Path, run_id: str) -> Optional[dict]:
     path = _record_path(repo_root, run_id)
     if path is None:
         return None
-    record = _read(path)
+    record = _read_rec(repo_root, run_id)
     _write_retired(repo_root, run_id, record)
-    path.unlink(missing_ok=True)
-    held = _record_path(repo_root, run_id, escrow=True)
-    if held is not None:
-        held.unlink(missing_ok=True)
+    _unlink_both(repo_root, run_id)
+    _unlink_both(repo_root, run_id, escrow=True)
     _index("index_remove", repo_root, run_id)
     return record
 
@@ -764,8 +844,8 @@ def bind_sizing(repo_root: Path, run_id: str, sizing_rel: str) -> bool:
     """Record the sizing a raw ask's run minted on its live record (the gate calls this once the
     sizing exists). A record already naming a sizing is left as it is. True on a write."""
     path = _record_path(repo_root, run_id)
-    record = _read(path)
-    if record is None or not _fresh(record) or record.get("sizing_rel"):
+    record = _read_rec(repo_root, run_id)
+    if path is None or record is None or not _fresh(record) or record.get("sizing_rel"):
         return False
     from coordinator_core.atomic_replace import atomic_write_bytes
 

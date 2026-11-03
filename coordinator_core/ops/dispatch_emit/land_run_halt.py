@@ -557,6 +557,32 @@ def _run_left_nothing(root: Path, run_id: str, paths: list) -> set:
         return set()
 
 
+def _withhold_importers_of_withheld(root: Path, product: list, removed: list, owner: dict, withheld: dict) -> bool:
+    """Withhold, to a fixpoint, each chunk whose landing ``.py`` imports a name only a withheld path
+    binds (reason ``import-closure-untracked``); True when any chunk was added. A finding that names
+    no withheld path stays provenance. Bounded by the chunk count; zero spawns per pass."""
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+
+    changed = False
+    for _ in range(len({*owner.values()}) + 1):
+        live = [p for p in product if p not in withheld]
+        found = landing_integrity.withheld_closure_findings(
+            root, live, [p for p in removed if p not in withheld], withheld=sorted(withheld))
+        bad = {
+            owner[f.path] for f in found
+            if f.path in owner and owner[f.path] not in {owner[p] for p in withheld if p in owner}
+            and any(f"; {w} is " in (f.detail or "") for w in withheld)
+        }
+        if not bad:
+            return changed
+        withheld.update({
+            p: landing_integrity.IMPORT_CLOSURE_UNTRACKED
+            for p in product + removed if p not in withheld and owner.get(p) in bad
+        })
+        changed = True
+    return changed
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -575,21 +601,9 @@ def _land(
     if not (isinstance(session_id, str) and _UUID_RE.fullmatch(session_id)):
         session_id = None
 
-    owner: dict = {}  # declared path -> owning chunk id, first declarer wins
-    cache: dict = {}
-    for chunk in done_chunks(root, params):
-        for path in [*chunk.paths, *_own_prefix_files(root, chunk, cache)]:
-            owner.setdefault(path, chunk.id)
-    home, _siblings = split_sibling_paths(list(owner), root)
-    declared = [p for p in home if not p.startswith(record_dir_rel + "/")]
+    # Trap: the halt marker is written before any leg that reads the tree or the claims, so a land
+    # that never returns still leaves the record dispatch.record_halted_run_landed accepts.
     sizing_rel = record_sizing_rel(root, run_id)
-    if (
-        sizing_rel and not Path(sizing_rel).is_absolute()
-        and contained_path(root / sizing_rel, [root]) is not None
-        and sizing_rel not in owner and not sizing_rel.startswith(record_dir_rel + "/")
-    ):
-        declared.append(sizing_rel)
-
     outcome_rel = _persist_run_outcome(root, run_id, halted, params)
     plan_rel = None
     if (root / record_dir_rel).is_dir():
@@ -605,6 +619,21 @@ def _land(
             next_action=halted.get("next_action") if isinstance(halted.get("next_action"), dict) else None,
             held_rows=held_rows_for(repo_root, run_id, plan_rel),
         )
+
+    owner: dict = {}  # declared path -> owning chunk id, first declarer wins
+    cache: dict = {}
+    for chunk in done_chunks(root, params):
+        for path in [*chunk.paths, *_own_prefix_files(root, chunk, cache)]:
+            owner.setdefault(path, chunk.id)
+    home, _siblings = split_sibling_paths(list(owner), root)
+    declared = [p for p in home if not p.startswith(record_dir_rel + "/")]
+    if (
+        sizing_rel and not Path(sizing_rel).is_absolute()
+        and contained_path(root / sizing_rel, [root]) is not None
+        and sizing_rel not in owner and not sizing_rel.startswith(record_dir_rel + "/")
+    ):
+        declared.append(sizing_rel)
+
     raw_docs = params.get(run_artifacts.DOC_PATHS_PARAM)
     artifacts = within_handoffs_home(root, run_artifacts.candidate_paths(
         root, run_id, sizing_rel=sizing_rel,
@@ -728,13 +757,15 @@ def _land(
             plan = getattr(request, "plan_path", None)
         live = [p for p in product if p not in withheld]
         integrity = landing_integrity.unparseable_py(root, live)
-        integrity += landing_integrity.import_closure_findings(
-            root, live, [p for p in removed if p not in withheld])
+        integrity += landing_integrity.withheld_closure_findings(
+            root, live, [p for p in removed if p not in withheld], withheld=sorted(withheld))
         if run_base is not None and live:
             integrity += landing_integrity.since_base_findings(root, live, run_base, run_id=run_id, plan=plan)
         integrity, claim_provenance = landing_integrity.split_claim_provenance(integrity)
         bad = {owner[f.path]: f.reason for f in reversed(integrity) if f.path in owner}
         withheld.update({p: bad[owner[p]] for p in product + removed if p not in withheld and owner.get(p) in bad})
+        _withhold_importers_of_withheld(root, product, removed, owner, withheld)
+        claim_provenance = [f for f in claim_provenance if f.path not in withheld]
     product = [p for p in product if p not in withheld]
     removed = [p for p in removed if p not in withheld]
     unlanded_chunks = {owner[p] for p in withheld if p in owner}
@@ -760,6 +791,13 @@ def _land(
         own_differ, own_gone = _differs(root, written_entries, run_written)
         own_changed = own_differ | own_gone
     _withhold_run_dirt(withheld, run_written, own_changed, set(paths) | set(deleted))
+    if _withhold_importers_of_withheld(root, product, removed, owner, withheld):
+        product = [p for p in product if p not in withheld]
+        removed = [p for p in removed if p not in withheld]
+        paths = [p for p in paths if p not in withheld]
+        deleted = [p for p in deleted if p not in withheld]
+        unlanded_chunks = {owner[p] for p in withheld if p in owner}
+        landed_chunks = sorted({owner[p] for p in product + removed if p in owner} - unlanded_chunks)
     from coordinator_core.ops.dispatch_emit.halted_record_commit import plan_tree_eviction
 
     eviction = plan_tree_eviction(

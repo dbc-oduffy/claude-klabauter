@@ -16,6 +16,10 @@ Three arms:
             (one string, one path per line); the ask, intent and pm_verbatims are never touched.
             An entry's `stop_after` ("plan" only; else refused naming asks[i].stop_after) lands as
             `em_analysis.stop_after` on its slice sizing alone; the top-level default is the hook's.
+            An asks-arm `join` ({ask, inputs: [{run_id, repo?}], label?, ...JOIN_ITEM_KEYS}) appends a final
+            slice labelled `join` that follows every ask and waits on each input not yet landed
+            (`after_external`); a local input also gets this parent id in its `join-waiters.json`. A
+            foreign input is read only. Refused on any other arm.
   - slices: {slices: [{label, ask, rows, writes?}], parent_sizing, confirm_split?} -- the parent
             register is the parent sizing's own rows; each slice carries its rows byte for byte.
             With `fan_out: true` each slice also names `estimate` (M or L) and `exit_criterion`, is
@@ -48,6 +52,7 @@ import os
 import re
 import shutil
 import threading
+import time
 import uuid
 from datetime import date, datetime
 from pathlib import Path
@@ -62,8 +67,9 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import baton_pm_turns
 from coordinator_core.ops import requirement_register as rr
-from coordinator_core.ops._path_guard import contained_path
+from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+from coordinator_core.ops.dispatch_emit import minted_parent
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_SOURCE_PM,
     ASK_SOURCE_RELAYED,
@@ -393,6 +399,103 @@ def _fan_out_mode(parent: Mapping, params: Mapping) -> str:
     return mode.strip()
 
 
+_JOIN_INPUT_KEYS = ("run_id", "repo")
+
+
+def _in_a_parent_record(base: Path, run_id: str) -> bool:
+    """True when some parent record under *base* lists *run_id* as one of its runs. Reads files only."""
+    for rec in base.glob(contract.parent_record_rel("ask-parent-*")):
+        try:
+            text = rec.read_text(encoding="utf-8")
+            if run_id not in text:
+                continue
+            runs = json.loads(text).get("runs", ())
+        except (OSError, ValueError, AttributeError):
+            continue
+        if any(isinstance(r, Mapping) and r.get("run_id") == run_id for r in runs):
+            return True
+    return False
+
+
+def _join_input(item: Any, i: int, base: Path) -> contract.ExternalInput:
+    """One validated `join.inputs[i]`; a `repo` naming this repo reads as local (repo None)."""
+    where = f"join.inputs[{i}]"
+    if not isinstance(item, Mapping):
+        raise _Refused(f"{where}: must be an object")
+    unknown = contract.unknown_keys_refusal(where, item, _JOIN_INPUT_KEYS)
+    if unknown:
+        raise _Refused(unknown)
+    run_id, repo = item.get("run_id"), item.get("repo")
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        raise _Refused(f"{where}: run_id must be a safe run id, got {run_id!r}")
+    foreign: Optional[Path] = None
+    if repo is not None:
+        if not isinstance(repo, str) or not repo.strip() or not Path(repo).is_absolute() or not Path(repo).is_dir():
+            raise _Refused(f"{where}: repo must be an existing absolute directory, got {repo!r}")
+        try:
+            same = Path(repo).resolve() == base.resolve()
+        except OSError:
+            same = False
+        foreign = None if same else Path(repo)
+    if foreign is not None:
+        status = foreign / contract.status_rel(run_id)
+        if not status.is_file():
+            raise _Refused(
+                f"{where}: run {run_id!r} is not known in {repo}; a foreign input is known only by {status.as_posix()}"
+            )
+        return contract.ExternalInput(run_id, str(foreign))
+    if not (
+        (base / contract.status_rel(run_id)).is_file()
+        or (base / "scratch" / "warp" / run_id).is_dir()
+        or _in_a_parent_record(base, run_id)
+    ):
+        raise _Refused(f"{where}: run {run_id!r} is not known in this repo (no status file, run directory or parent record)")
+    return contract.ExternalInput(run_id)
+
+
+def _read_join(params: Mapping, base: Path) -> tuple[dict, tuple[contract.ExternalInput, ...]]:
+    """The asks arm's top-level `join` as (the join's asks item, its unlanded inputs).
+
+    The item is a normal asks entry after every submitted ask; its inputs are validated before any write
+    and only those not already landed are kept."""
+    join, asks = params[contract.JOIN_PARAM], params.get("asks")
+    if not isinstance(join, Mapping):
+        raise _Refused("join: must be an object")
+    if not isinstance(asks, list) or not asks:
+        raise _Refused("asks/slices must be a non-empty list")
+    unknown = contract.unknown_keys_refusal("join", join, contract.JOIN_ITEM_KEYS)
+    if unknown:
+        raise _Refused(unknown)
+    inputs = join.get("inputs")
+    if not isinstance(inputs, list) or not inputs:
+        raise _Refused("join.inputs must be a non-empty list of {run_id, repo?}")
+    refs: dict[str, contract.ExternalInput] = {}
+    for i, raw in enumerate(inputs):
+        ref = _join_input(raw, i, base)
+        refs.setdefault(contract.external_key(ref), ref)
+    label = join.get("label")
+    if label is not None and not isinstance(label, str):
+        raise _Refused("join: label must be a string")
+    label = (label or "").strip() or contract.JOIN_LABEL
+    if any(isinstance(a, Mapping) and str(a.get("label") or "").strip() == label for a in asks):
+        raise _Refused(f"join: label {label!r} is already an asks label")
+    item = {k: v for k, v in join.items() if k != "inputs"}
+    item["label"] = label
+    item["after"] = list(range(len(asks)))
+    pending = tuple(r for r in refs.values() if contract.external_status(base, r) != contract.STATUS_LANDED)
+    return item, pending
+
+
+def _merged_waiters(target: Path, parent_id: str) -> list[str]:
+    """The parent ids a run's `join-waiters.json` lists once *parent_id* is merged in (a JSON list)."""
+    try:
+        held = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        held = []
+    ids = [p for p in held if isinstance(p, str)] if isinstance(held, list) else []
+    return ids if parent_id in ids else [*ids, parent_id]
+
+
 STAGING_REL = ".coordinator-local/fanout-staging"
 FANOUT_ABORTED = "The submission was not taken: the fan-out outran the hook budget and wrote nothing. Re-submit."
 
@@ -628,6 +731,8 @@ def _fanout(
     confirm = params.get("confirm_split", False)
     if not isinstance(confirm, bool):
         raise _Refused("confirm_split must be a boolean")
+    if params.get(contract.JOIN_PARAM) is not None and params.get("asks") is None:
+        raise _Refused(f"{contract.JOIN_PARAM} rides the asks arm only")
     if params.get("sizings") is not None:
         if params.get("asks") is not None or params.get("slices") is not None:
             raise _Refused("pass exactly one of asks, slices or sizings")
@@ -637,9 +742,14 @@ def _fanout(
         raise _Refused(f"{contract.FAN_OUT_PARAM} must be a boolean")
     if fan_out and params.get("slices") is None:
         raise _Refused(f"{contract.FAN_OUT_PARAM} needs the slices arm")
+    worktree = main_worktree_root(root)
+    digest = minted_parent.asks_digest(params) if params.get("asks") is not None and not fan_out else None
+    join_pending: tuple[contract.ExternalInput, ...] = ()
+    if params.get(contract.JOIN_PARAM) is not None:
+        join_item, join_pending = _read_join(params, worktree)
+        params = {**params, "asks": [*params["asks"], join_item]}
     slices, parent_rel = _read_slices(params, fan_out)
     cwd = str(root)
-    worktree = main_worktree_root(root)
 
     parent_doc: Optional[dict] = None
     if parent_rel is None:
@@ -730,12 +840,19 @@ def _fanout(
             after=tuple(run_ids[j] for j in edges[i]),
             slice_sizing=records[i][0],
             status=contract.STATUS_AFTER if edges[i] else contract.STATUS_READY,
+            after_external=join_pending if join_pending and i == len(slices) - 1 else (),
         )
         for i, sl in enumerate(slices)
     )
+    waiters: dict[Path, str] = {}
+    for ref in join_pending:
+        if ref.repo is None:
+            target = worktree / contract.join_waiters_rel(ref.run_id)
+            waiters[target] = json.dumps(_merged_waiters(target, parent_id)) + "\n"
 
     ledger = ledger or FanoutLedger()
     parent_path = worktree / contract.parent_record_rel(parent_id)
+    digest_path = worktree / minted_parent.digest_rel(digest) if digest is not None else None
 
     def _check_abort() -> None:
         if abort is not None and abort():
@@ -759,10 +876,25 @@ def _fanout(
         staged.append((stage_dir / "parent.json", parent_path))
         record_json = contract.ParentRecord(parent_id, runs, confirm).to_json()
         _stage(staged[-1][0], json.dumps(record_json, indent=2) + "\n")
+        for n, (dest, text) in enumerate(waiters.items()):
+            staged.append((stage_dir / f"w{n}.json", dest))
+            _stage(staged[-1][0], text)
+        if digest_path is not None:
+            staged.append((stage_dir / "digest.json", digest_path))
+            _stage(staged[-1][0], json.dumps({"parent_id": parent_id, "minted_at": time.time()}) + "\n")
+            ledger.claim_dir(digest_path.parent)
         ledger.claim_dir(parent_path.parent)
         for src, dest in staged:
             _check_abort()
             dest.parent.mkdir(parents=True, exist_ok=True)
+            if dest in waiters or dest == digest_path:
+                # a waiters file may predate this call and hold other parents; a digest entry may name a parent
+                # that cannot be reused; rollback must not unlink one that predates this call
+                if not dest.exists():
+                    ledger.claim(dest)
+                os.replace(src, dest)
+                ledger.verify(dest)
+                continue
             ledger.claim(dest)
             if dest.exists():
                 raise _Refused(f"already exists: {dest.name}")

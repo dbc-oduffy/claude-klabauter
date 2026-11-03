@@ -1028,6 +1028,7 @@ RUN_STAGES = ("minted", "staged", "halted", "landed")
 
 def write_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, now: str | None = None,
+    warp_run: str | None = None,
 ) -> Path:
     """Atomically write `stage` into `<record_path>/run-stage.json` and return the path. One read of
     the prior file, one write. `session_id`/`started_at` come from the prior file; the first stamp of
@@ -1051,6 +1052,8 @@ def write_run_stage_at(
     data["last_activity_at"] = stamp
     if steps_planned is not None:
         data["steps_planned"] = int(steps_planned)
+    if warp_run:
+        data["warp_run"] = warp_run
     atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return path
 
@@ -1098,10 +1101,12 @@ def stamp_run_stage(repo_root: Path, run_id: str, stage: str, *, steps_planned: 
         pass
 
 
-def stamp_run_stage_at(record_path: Path, stage: str, *, steps_planned: int | None = None) -> None:
+def stamp_run_stage_at(
+    record_path: Path, stage: str, *, steps_planned: int | None = None, warp_run: str | None = None,
+) -> None:
     """Best-effort `write_run_stage_at`: a ValueError or OSError never reaches the op it rides on."""
     try:
-        write_run_stage_at(record_path, stage, steps_planned=steps_planned)
+        write_run_stage_at(record_path, stage, steps_planned=steps_planned, warp_run=warp_run)
     except (ValueError, OSError):
         pass
 

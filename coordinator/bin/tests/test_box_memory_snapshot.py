@@ -189,6 +189,40 @@ def test_reservation_with_admit_peak_keeps_hold_exit_4(tmp_path, capsys):
     assert rc == 4 and "Reservation total: 16.0 GiB" in out and "reserved=16.0GiB" in out
 
 
+def _grant_layout(tmp_path, peak_mb, *, run="reseal", expires_in_s=1800):
+    import time
+    from datetime import datetime, timezone
+
+    def iso(t):
+        return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    now = time.time()
+    gdir = tmp_path / "state" / "group-em"
+    (gdir / "slot-grants" / "issuer").mkdir(parents=True)
+    (gdir / "slot-grants" / "issuer" / f"grantee.{run}.json").write_text(json.dumps({
+        "kind": "group-em-slot-grant", "grantee_session_id": "grantee", "run": run,
+        "declared_peak_mb": peak_mb, "issued_at": iso(now - 60), "expires_at": iso(now + expires_in_s),
+    }), encoding="utf-8")
+    return str(gdir / "box" / "admission.jsonl")
+
+
+def test_admit_peak_reserves_unregistered_slot_grant_and_holds(tmp_path, capsys):
+    path = _grant_layout(tmp_path, 19 * 1024)
+    # No admission file at all: only the grant reserves. avail 40, peak 20 + 25% cushion = 25.
+    rc = _run(["--admit-peak", "20", "--admission-file", path])
+    out = capsys.readouterr().out
+    assert rc == 4 and "reserved=19.0GiB" in out and "HOLD" in out
+    # Same admit with no grant is admitted: the HOLD comes from the grant.
+    empty = str(tmp_path / "other" / "box" / "admission.jsonl")
+    assert _run(["--admit-peak", "20", "--admission-file", empty]) == 0
+
+
+def test_expired_slot_grant_reserves_nothing(tmp_path, capsys):
+    path = _grant_layout(tmp_path, 19 * 1024, expires_in_s=-30)
+    assert _run(["--admit-peak", "20", "--admission-file", path]) == 0
+    assert "reserved=0.0GiB" in capsys.readouterr().out
+
+
 def test_admit(capsys):
     rc = _run(["--admit-peak", "10"])
     out = capsys.readouterr().out

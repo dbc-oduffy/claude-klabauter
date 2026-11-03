@@ -113,6 +113,33 @@ def test_abort_never_firing_writes_as_before(repo):
     assert out["exit_code"] == 0 and len(out["ready"]) == 1
 
 
+@pytest.mark.parametrize("trip_after", list(range(10)))
+def test_aborted_fanout_leaves_no_digest_entry_and_no_digest_dir(repo, trip_after):
+    polls = iter(range(100))
+    out = mod.fanout(
+        {"session_id": SID, "asks": [{"ask": f"fix {n}", "label": n, "writes": [f"pkg/{n}.py"]} for n in "abc"]},
+        repo,
+        lambda: next(polls) >= trip_after,
+    )
+    assert out["exit_code"] == 1, out
+    assert not (repo / "scratch" / "warp" / "ask-digest").exists()
+
+
+def test_fanout_indexes_the_parent_by_digest_and_a_second_identical_submission_replaces_the_entry(repo):
+    params = {"asks": [{"ask": "fix a", "writes": ["pkg/a.py"]}, {"ask": "fix b", "writes": ["pkg/b.py"]}]}
+    first, second = _go(repo, params), _go(repo, params)
+    assert first["exit_code"] == 0 and second["exit_code"] == 0, second
+    entries = list((repo / "scratch" / "warp" / "ask-digest").glob("*.json"))
+    assert len(entries) == 1
+    assert json.loads(entries[0].read_text(encoding="utf-8"))["parent_id"] == second["parent_id"]
+
+
+def test_sizings_arm_and_refused_submissions_write_no_digest_entry(repo):
+    out = _go(repo, {"asks": [{"ask": "x", "after": ["nobody"]}]})
+    assert out["exit_code"] == 1
+    assert not (repo / "scratch" / "warp" / "ask-digest").exists()
+
+
 def test_disjoint_pair_is_two_ready_runs_with_the_frozen_reply(repo):
     out = _go(repo, {"asks": [
         {"ask": "fix a", "label": "a", "writes": ["pkg/a.py"]},

@@ -76,6 +76,65 @@ def test_unmapped_source_selects_importing_test_via_closure(repo: Path) -> None:
     assert out["fully_mapped"] is True
 
 
+def test_importer_tests_are_selected_though_they_do_not_import_the_changed_module(repo: Path) -> None:
+    _write(repo, "pkg/gamma.py", "def load(root, path):\n    return path\n")
+    _write(repo, "pkg/delta.py", "from pkg import gamma\n\ndef prune(p):\n    return gamma.load(p)\n")
+    _write(repo, "pkg/tests/test_delta.py", "def test_d():\n    pass\n")
+    _write(repo, "pkg/tests/test_gamma.py", "def test_g():\n    pass\n")
+    _commit(repo)
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "pkg/gamma.py", "def load(root, path):\n    return root, path\n")
+    _commit(repo)
+    out = select_tests(repo, base)
+    assert out["tests"] == ["pkg/tests/test_delta.py", "pkg/tests/test_gamma.py"]
+    assert out["fully_mapped"] is True
+
+
+def test_unrelated_module_mentioning_leaf_name_is_not_an_importer(repo: Path) -> None:
+    _write(repo, "pkg/gamma.py", "Z = 1\n")
+    _write(repo, "pkg/delta.py", "# gamma is only mentioned here\n")
+    _write(repo, "pkg/tests/test_delta.py", "def test_d():\n    pass\n")
+    _write(repo, "pkg/tests/test_gamma.py", "def test_g():\n    pass\n")
+    _commit(repo)
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "pkg/gamma.py", "Z = 2\n")
+    _commit(repo)
+    assert select_tests(repo, base)["tests"] == ["pkg/tests/test_gamma.py"]
+
+
+_ORACLE_HEAD = "6011210b7d"
+_ORACLE_TEST = "coordinator_core/ops/dispatch_emit/tests/test_live_run_writes.py"
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_live_run_writes_miss_oracle_is_selected_in_one_pass(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    from coordinator_core.ops import reverify_scope
+
+    probe = subprocess.run(
+        ["git", "cat-file", "-e", f"{_ORACLE_HEAD}^{{commit}}"], cwd=_REPO_ROOT, capture_output=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if probe.returncode != 0:
+        pytest.skip(f"{_ORACLE_HEAD} not in this checkout")
+    spawns: list = []
+    real = reverify_scope.run_git
+
+    def counting(argv, *a, **kw):
+        spawns.append(list(argv))
+        return real(argv, *a, **kw)
+
+    monkeypatch.setattr(reverify_scope, "run_git", counting)
+    start = time.process_time()
+    out = select_tests(_REPO_ROOT, f"{_ORACLE_HEAD}~1", _ORACLE_HEAD)
+    elapsed_ms = (time.process_time() - start) * 1000
+    assert _ORACLE_TEST in out["tests"]
+    assert len([s for s in spawns if s[0] == "grep"]) == 1
+    assert [s[0] for s in spawns] == ["diff", "ls-files", "grep"]
+    assert elapsed_ms < 500, f"select_tests took {elapsed_ms:.0f}ms process time"
+
+
 def test_source_with_no_covering_test_is_not_fully_mapped(repo: Path) -> None:
     base = _git(repo, "rev-parse", "HEAD")
     _write(repo, "pkg/gamma.py", "Z = 1\n")

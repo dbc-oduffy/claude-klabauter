@@ -1739,7 +1739,8 @@ def _running_phase_diagnosis(claim: Optional[Path], stderr_dir, stall_dir=None) 
 
 _RECONCILE_COMMAND_TEMPLATE = (
     '"${{COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}}/bin/coordinator-invoke" '
-    "{method} '{{\"key\":\"{key}\",\"wait_secs\":{wait}}}' --bare"
+    "{method} '{{\"key\":\"{key}\",\"wait_secs\":{wait},"
+    "\"expect_engine\":{{\"pid\":{pid},\"boot_ns\":{boot_ns}}}}}' --bare"
 )
 
 
@@ -1756,8 +1757,14 @@ def _with_reconcile_route(envelope: dict, dispatch_key: Optional[str]) -> dict:
         error["data"] = data
     data["dispatch_key"] = dispatch_key
     data["reconcile"] = _REQUEST_STATUS_METHOD
+    data["engine_pid"] = os.getpid()
+    data["engine_boot_ns"] = _ack_store.boot_ns
     data["reconcile_command"] = _RECONCILE_COMMAND_TEMPLATE.format(
-        method=_REQUEST_STATUS_METHOD, key=dispatch_key, wait=int(_POOL_RESULT_DEADLINE_SECS)
+        method=_REQUEST_STATUS_METHOD,
+        key=dispatch_key,
+        wait=int(_POOL_RESULT_DEADLINE_SECS),
+        pid=os.getpid(),
+        boot_ns=_ack_store.boot_ns,
     )
     return envelope
 
@@ -2543,7 +2550,10 @@ def _store_poll(params: Mapping) -> Optional[dict]:
     if not isinstance(key, str) or not key:
         return None
     wait_secs = _clamped_wait_secs(params)
-    status = _ack_store.wait(key, wait_secs) if wait_secs > 0 else _ack_store.status(key)
+    claimed = params.get("expect_engine")
+    expect_engine = dict(claimed) if isinstance(claimed, Mapping) else None
+    extra = {"expect_engine": expect_engine} if expect_engine is not None else {}
+    status = _ack_store.wait(key, wait_secs, **extra) if wait_secs > 0 else _ack_store.status(key, **extra)
     return {**status, "engine_boot_ns": _ack_store.boot_ns, "engine_pid": os.getpid()}
 
 
@@ -4225,7 +4235,7 @@ def _run_guarded() -> int:
     if idle.ladder_gone_tombstoned(Path(repo_root)):
         print(f"[warm-server] ladder gone for {repo_root}; not starting", file=sys.stderr)
         return 0
-    if breadcrumb.publish_marker_held(breadcrumb.svc_dir(repo_root)):
+    if breadcrumb.publish_marker_blocks_boot(breadcrumb.svc_dir(repo_root)):
         print(
             f"[warm-server] publish in progress for {repo_root}; not starting",
             file=sys.stderr,

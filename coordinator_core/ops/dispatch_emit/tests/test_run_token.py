@@ -71,7 +71,7 @@ def test_release_returns_a_claimed_token_to_live_once(tmp_path):
 
 
 def _claimed_path(repo):
-    return repo / ".git" / "coordinator-warp-run-tokens" / "claimed" / "ask-1.json"
+    return run_token._record_path(repo, "ask-1", claimed=True)
 
 
 def test_a_live_in_budget_holder_keeps_its_claim(tmp_path):
@@ -137,7 +137,7 @@ def test_a_legacy_claim_without_pid_ages_by_file_mtime(tmp_path):
 
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
-    live = repo / ".git" / "coordinator-warp-run-tokens" / "ask-1.json"
+    live = run_token._record_path(repo, "ask-1")
     record = json.loads(live.read_text(encoding="utf-8"))
     path = _claimed_path(repo)
     path.parent.mkdir(parents=True)
@@ -190,7 +190,7 @@ def test_wrong_token_does_not_burn_a_live_record(tmp_path):
 def test_record_with_a_null_script_is_never_admitted(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
-    path = repo / ".git" / "coordinator-warp-run-tokens" / "ask-1.json"
+    path = run_token._record_path(repo, "ask-1")
     path.write_text(path.read_text(encoding="utf-8").replace('"a.mjs"', "null"), encoding="utf-8")
     assert not run_token.admits(repo, "ask-1", token, "a.mjs")
 
@@ -205,7 +205,7 @@ def test_a_cancelled_gate_before_the_write_mints_nothing(tmp_path):
             run_token.mint(repo, "ask-1", "a.mjs")
     finally:
         run_token.WRITE_GATE.reset(reset)
-    assert not list((repo / ".git" / "coordinator-warp-run-tokens").glob("*"))
+    assert not list(run_token._record_path(repo, "x").parent.glob("*"))
 
 
 def test_a_gate_cancelled_during_the_write_publishes_nothing_and_removes_its_temp_file(tmp_path, monkeypatch):
@@ -218,7 +218,7 @@ def test_a_gate_cancelled_during_the_write_publishes_nothing_and_removes_its_tem
             run_token.mint(repo, "ask-1", "a.mjs")
     finally:
         run_token.WRITE_GATE.reset(reset)
-    assert not list((repo / ".git" / "coordinator-warp-run-tokens").glob("*"))
+    assert not list(run_token._record_path(repo, "x").parent.glob("*"))
 
 
 def _cancel_then(gate, real_fdopen):
@@ -379,7 +379,7 @@ def test_a_landed_consume_leaves_a_spent_receipt_and_no_retired_one(tmp_path):
 
 
 def _tokens_dir_files(repo):
-    base = repo / ".git" / "coordinator-warp-run-tokens"
+    base = run_token._record_path(repo, "x").parent
     return sorted(p.relative_to(base).as_posix() for p in base.rglob("*.json"))
 
 
@@ -548,11 +548,64 @@ def test_halt_admits_reads_the_claimed_record_and_claims_nothing(tmp_path):
 def test_spent_receipts_are_never_listed_as_held(tmp_path):
     repo = _repo(tmp_path)
     _landed_run(repo)
-    assert (repo / ".git" / "coordinator-warp-run-tokens" / "spent" / "ask-1.json").is_file()
+    assert run_token._record_path(repo, "ask-1", spent=True).is_file()
     assert list(run_token.live_records(repo)) == []
     assert run_token.held_records(repo) == []
     assert not run_token.is_live(repo, "ask-1")
     assert run_token.discard(repo, "ask-1") is None
+
+
+def _plant_legacy(repo, run_id, token, script="a.mjs", **kind):
+    import json
+
+    path = run_token._legacy_path(repo, run_id, **kind)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"run_id": run_id, "sha256": run_token._digest(token), "script_path": script, "minted_at": time.time()}
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
+def test_mint_writes_under_the_settings_home_and_nothing_under_git(tmp_path):
+    from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir
+
+    repo = _repo(tmp_path)
+    run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token._record_path(repo, "ask-1").is_file()
+    assert engine_record_dir(repo) in run_token._record_path(repo, "ask-1").parents
+    assert not (repo / ".git" / "coordinator-warp-run-tokens").exists()
+
+
+def test_a_legacy_only_record_is_read_and_redeem_removes_it(tmp_path):
+    repo = _repo(tmp_path)
+    token = "a" * 32
+    legacy = _plant_legacy(repo, "ask-1", token)
+    assert run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert run_token.is_live(repo, "ask-1")
+    assert [r["run_id"] for r in run_token.live_records(repo)] == ["ask-1"]
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")
+    assert not legacy.exists()
+    assert not run_token.admits(repo, "ask-1", token, "a.mjs")
+    assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
+
+
+def test_the_new_root_wins_over_a_legacy_copy_and_a_mint_drops_the_legacy_one(tmp_path):
+    repo = _repo(tmp_path)
+    old = "b" * 32
+    legacy = _plant_legacy(repo, "ask-1", old)
+    fresh = run_token.mint(repo, "ask-1", "a.mjs")
+    assert not legacy.exists()
+    assert run_token.admits(repo, "ask-1", fresh, "a.mjs")
+    assert not run_token.admits(repo, "ask-1", old, "a.mjs")
+
+
+def test_a_stalled_legacy_read_reads_as_absent(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
+
+    repo = _repo(tmp_path)
+    token = "c" * 32
+    _plant_legacy(repo, "ask-1", token)
+    monkeypatch.setattr(run_token, "bounded_read", lambda path, deadline_ms: STALLED)
+    assert not run_token.admits(repo, "ask-1", token, "a.mjs")
 
 
 def test_command_params_parse_inline_and_heredoc():

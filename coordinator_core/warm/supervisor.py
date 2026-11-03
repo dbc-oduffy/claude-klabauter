@@ -727,7 +727,9 @@ def spawn_detached(repo_root: str, script_path: str, args: Optional[Any] = None)
         spawn_detached as _spawn_detached_impl,
     )
 
-    return _spawn_detached_impl(repo_root, script_path, args)
+    return _spawn_detached_impl(
+        repo_root, script_path, args, breadcrumb.publish_holder_env(Path(repo_root)) or None
+    )
 
 
 def _self_stable_pid_start_epoch() -> Optional[int]:
@@ -1303,7 +1305,7 @@ def main() -> int:
         print(f"[warm-http-supervisor] ladder gone for {root}; not starting", file=sys.stderr)
         return 0
 
-    if breadcrumb.publish_marker_held(breadcrumb.svc_dir(root)):
+    if breadcrumb.publish_marker_blocks_boot(breadcrumb.svc_dir(root)):
         print(
             f"[warm-http-supervisor] publish in progress for {root}; not starting",
             file=sys.stderr,

@@ -1047,6 +1047,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.",
+      "module": "coordinator_core.ops.dispatch_emit.minted_run",
+      "name": "dispatch.minted_run",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"dispatch.reap_abandoned_runs\": one status read, at most one commit.\n\nLands every abandoned run's top-level record files plus the dirty sizing its ``run.json``\nnames (unless a live or claimed run token names it) as one ``ceremony.commit_v2`` call.",
       "module": "coordinator_core.ops.dispatch_emit.abandoned_runs",
       "name": "dispatch.reap_abandoned_runs",

@@ -392,3 +392,81 @@ def test_resolve_after_accepts_label_and_index_of_earlier_siblings():
 def test_resolve_after_refuses_non_earlier_or_malformed_naming_the_key(refs):
     with pytest.raises(ValueError, match=r"asks\[2\]\.after"):
         c.resolve_after("asks[2]", refs, ["a", "b", "c"], 2)
+
+
+def _join_parent(*externals):
+    return c.ParentRecord(
+        parent_id="P",
+        runs=(
+            c.SiblingRun(run_id="A", label="a", status=c.STATUS_RUNNING),
+            c.SiblingRun(
+                run_id="J", label="join", after=("A",), status=c.STATUS_AFTER, after_external=tuple(externals)
+            ),
+        ),
+    )
+
+
+def test_parent_record_round_trips_after_external_and_omits_it_when_empty():
+    ext = (c.ExternalInput("X"), c.ExternalInput("Y", "/other/repo"))
+    data = _join_parent(*ext).to_json()
+    assert data["runs"][1]["after_external"] == [{"run_id": "X"}, {"run_id": "Y", "repo": "/other/repo"}]
+    assert "after_external" not in data["runs"][0]
+    assert c.ParentRecord.from_json(data).runs[1].after_external == ext
+
+
+def test_record_without_after_external_still_loads():
+    data = _join_parent().to_json()
+    assert "after_external" not in data["runs"][1]
+    assert c.ParentRecord.from_json(data).runs[1].after_external == ()
+
+
+def test_external_key_local_and_foreign():
+    assert c.external_key(c.ExternalInput("X")) == "X"
+    assert c.external_key(c.ExternalInput("X", "/r")) == "/r::X"
+
+
+def test_release_needs_every_after_and_after_external_landed():
+    p = _join_parent(c.ExternalInput("X"), c.ExternalInput("Y", "/r"))
+    landed = c.STATUS_LANDED
+    assert c.release(p, {"A": landed, "X": landed, "/r::Y": landed}) == ("J",)
+    assert c.release(p, {"A": landed, "X": landed}) == ()
+    assert c.release(p, {"A": landed, "X": landed, "/r::Y": c.STATUS_RUNNING}) == ()
+    assert c.release(p, {"A": c.STATUS_RUNNING, "X": landed, "/r::Y": landed}) == ()
+
+
+def _write_status(root, run_id, body):
+    import json
+
+    path = root / c.status_rel(run_id)
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(body), encoding="utf-8")
+
+
+def test_external_status_reads_foreign_root_without_spawning(tmp_path, monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    local, foreign = tmp_path / "local", tmp_path / "foreign"
+    _write_status(foreign, "Y", {"status": "running"})
+    _write_status(local, "X", {"status": "landed"})
+    assert c.external_status(local, c.ExternalInput("Y", str(foreign))) == "running"
+    assert c.external_status(local, c.ExternalInput("X")) == "landed"
+    assert c.external_status(local, c.ExternalInput("Y")) is None
+
+
+def test_external_status_closed_halted_reads_landed_plain_halt_does_not(tmp_path):
+    _write_status(tmp_path, "R", {"status": "halted", "rows_committed": True})
+    _write_status(tmp_path, "C", {"status": "halted", "closed_by": "abc"})
+    _write_status(tmp_path, "H", {"status": "halted"})
+    assert c.external_status(tmp_path, c.ExternalInput("R")) == "landed"
+    assert c.external_status(tmp_path, c.ExternalInput("C")) == "landed"
+    assert c.external_status(tmp_path, c.ExternalInput("H")) == "halted"
+
+
+def test_join_constants_and_waiters_path():
+    assert (c.JOIN_PARAM, c.JOIN_LABEL) == ("join", "join")
+    assert "inputs" in c.JOIN_ITEM_KEYS and "after" not in c.JOIN_ITEM_KEYS
+    assert c.join_waiters_rel("R") == "scratch/warp/R/join-waiters.json"

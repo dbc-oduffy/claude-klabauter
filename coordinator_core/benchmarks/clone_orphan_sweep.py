@@ -95,6 +95,10 @@ def _engine_root_of(proc) -> Optional[Path]:
 def _terminate_all(procs: list) -> List[int]:
     import psutil
 
+    from coordinator_core.box_memory.orphan_reap import protected_pids
+
+    protected = protected_pids()
+    procs = [p for p in procs if p.pid not in protected]
     for proc in procs:
         try:
             proc.terminate()
@@ -125,12 +129,14 @@ def sweep(
 
     base = Path(repo_root).joinpath(*CLONES_SUBDIR)
     base_norm = _normalized(base)
-    me = os.getpid()
+    from coordinator_core.box_memory.orphan_reap import protected_pids
+
+    protected = protected_pids()
     by_clone: Dict[str, List[tuple]] = {}
     try:
         for proc in psutil.process_iter(["pid", "name"]):
             try:
-                if proc.pid == me:
+                if proc.pid in protected:
                     continue
                 if not (proc.info.get("name") or "").lower().startswith("python"):
                     continue

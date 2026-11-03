@@ -17,9 +17,10 @@ Reference: docs/reference/multi-ask-submission-contract.md.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.session.record_homes import home_dir
@@ -78,6 +79,14 @@ SEAM_PASS_TSHIRT = "S"
 
 
 @dataclass(frozen=True)
+class ExternalInput:
+    """A run a join waits on that is not a sibling of the group; ``repo`` None means this repo."""
+
+    run_id: str
+    repo: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class SiblingRun:
     """One run of a fan-out: its reserved id, predecessors, slice sizing path and status."""
 
@@ -87,6 +96,7 @@ class SiblingRun:
     slice_sizing: str = ""
     status: str = STATUS_READY
     hold_reason: str = ""
+    after_external: tuple[ExternalInput, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -128,6 +138,16 @@ class ParentRecord:
                     "slice_sizing": r.slice_sizing,
                     "status": r.status,
                     **({"hold_reason": r.hold_reason} if r.hold_reason else {}),
+                    **(
+                        {
+                            "after_external": [
+                                {"run_id": x.run_id, **({"repo": x.repo} if x.repo else {})}
+                                for x in r.after_external
+                            ]
+                        }
+                        if r.after_external
+                        else {}
+                    ),
                 }
                 for r in self.runs
             ],
@@ -145,6 +165,10 @@ class ParentRecord:
                 slice_sizing=str(r.get("slice_sizing", "")),
                 status=str(r.get("status", STATUS_READY)),
                 hold_reason=str(r.get("hold_reason", "")),
+                after_external=tuple(
+                    ExternalInput(run_id=str(x["run_id"]), repo=(str(x["repo"]) if x.get("repo") else None))
+                    for x in r.get("after_external", ())
+                ),
             )
             for r in data.get("runs", ())
         )
@@ -189,6 +213,52 @@ def status_rel(run_id: str) -> str:
 
 CLOSED_BY_KEY = "closed_by"
 SUPERSEDED_BY_KEY = "superseded_by"
+ROWS_COMMITTED_KEY = "rows_committed"
+
+#: Join step: the submit param, the join slice's label, and the accepted ``join`` item keys.
+JOIN_PARAM = "join"
+JOIN_LABEL = "join"
+JOIN_ITEM_KEYS: tuple[str, ...] = (
+    "ask",
+    "label",
+    "inputs",
+    "source",
+    "sender",
+    "relayed_text",
+    "em_context",
+    "context",
+    "writes",
+    "stop_after",
+)
+
+
+def join_waiters_rel(run_id: str) -> str:
+    """Runtime-only list of the waiting joins registered against *run_id* (a run outside their group)."""
+    return f"scratch/warp/{run_id}/join-waiters.json"
+
+
+def external_key(ref: ExternalInput) -> str:
+    """The statuses-map key of an external input: ``run_id`` for this repo, ``<repo>::<run_id>`` else."""
+    return f"{ref.repo}::{ref.run_id}" if ref.repo else ref.run_id
+
+
+def external_status(local_root: Any, ref: ExternalInput) -> Optional[str]:
+    """The status an external input's own status file reads, None when absent or unreadable.
+
+    A halted run whose ``rows_committed`` is true or that names a ``closed_by`` reads ``landed``.
+    Pure file read under ``ref.repo`` (else *local_root*); spawns nothing.
+    """
+    base = Path(ref.repo) if ref.repo else Path(local_root)
+    try:
+        data = json.loads((base / status_rel(ref.run_id)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    status = data.get("status") if isinstance(data, dict) else None
+    if not isinstance(status, str):
+        return None
+    if status == STATUS_HALTED and (data.get(ROWS_COMMITTED_KEY) is True or data.get(CLOSED_BY_KEY)):
+        return STATUS_LANDED
+    return status
 
 
 def superseded_rel(run_id: str) -> str:
@@ -499,6 +569,8 @@ def release(
         if statuses.get(run.run_id, run.status) not in (STATUS_AFTER, STATUS_QUEUED) or run.run_id in skip:
             continue
         if any(statuses.get(p) != STATUS_LANDED for p in run.after):
+            continue
+        if any(statuses.get(external_key(x)) != STATUS_LANDED for x in run.after_external):
             continue
         freed.append(run.run_id)
     return tuple(freed)

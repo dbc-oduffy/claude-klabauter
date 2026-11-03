@@ -544,3 +544,121 @@ def test_ctx_shutdown_passes_its_own_pid_as_the_owner() -> None:
     source = inspect.getsource(_server._ServerContext._ctx_shutdown)
     assert "owner_pid=os.getpid()" in source
     assert _os.getpid  # the symbol the wiring depends on exists
+
+
+# ---------------------------------------------------------------------------
+# wait_for_new_pair_ready
+# ---------------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, secs: float) -> None:
+        self.now += secs
+
+
+def test_new_pair_ready_returns_true_on_the_first_answered_probe() -> None:
+    clock = _Clock()
+    assert breadcrumb.wait_for_new_pair_ready(None, 5.0, ping=lambda: True, sleep=clock.sleep, clock=clock)
+    assert clock.now == 0.0
+
+
+def test_new_pair_ready_polls_until_the_pair_answers() -> None:
+    clock = _Clock()
+    answers = iter([False, False, True])
+    assert breadcrumb.wait_for_new_pair_ready(
+        None, 5.0, ping=lambda: next(answers), sleep=clock.sleep, clock=clock
+    )
+    assert clock.now == 2 * breadcrumb.NEW_PAIR_POLL_SECS
+
+
+def test_new_pair_ready_gives_up_at_the_deadline() -> None:
+    clock = _Clock()
+    assert not breadcrumb.wait_for_new_pair_ready(
+        None, 0.2, ping=lambda: False, sleep=clock.sleep, clock=clock
+    )
+    assert clock.now == 0.2
+
+
+def test_new_pair_ready_probes_once_even_with_a_zero_budget() -> None:
+    calls = []
+    clock = _Clock()
+    assert not breadcrumb.wait_for_new_pair_ready(
+        None, 0.0, ping=lambda: calls.append(1) or False, sleep=clock.sleep, clock=clock
+    )
+    assert calls == [1]
+
+
+def test_new_pair_ready_reads_a_raising_probe_as_unanswered() -> None:
+    clock = _Clock()
+
+    def boom() -> bool:
+        raise RuntimeError("probe failed")
+
+    assert not breadcrumb.wait_for_new_pair_ready(None, 0.1, ping=boom, sleep=clock.sleep, clock=clock)
+
+
+def test_new_pair_ready_default_probe_needs_a_live_breadcrumb_and_endpoint(
+    tmp_path: Path, monkeypatch
+) -> None:
+    clock = _Clock()
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, **kw: True)
+    monkeypatch.setattr(breadcrumb, "_pipe_is_alive", lambda pipe, timeout_ms=5: True)
+
+    assert not breadcrumb.wait_for_new_pair_ready(tmp_path, 0.1, sleep=clock.sleep, clock=clock)
+
+    breadcrumb.write_breadcrumb(
+        pipe="pipe-N", pid=1234, stable_pid_start_epoch=1, engine_sha=None, engine_root=tmp_path
+    )
+    assert breadcrumb.wait_for_new_pair_ready(tmp_path, 0.1, sleep=clock.sleep, clock=clock)
+
+    monkeypatch.setattr(breadcrumb, "_pipe_is_alive", lambda pipe, timeout_ms=5: False)
+    assert not breadcrumb.wait_for_new_pair_ready(tmp_path, 0.1, sleep=clock.sleep, clock=clock)
+
+    monkeypatch.setattr(breadcrumb, "_pipe_is_alive", lambda pipe, timeout_ms=5: True)
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, **kw: False)
+    assert not breadcrumb.wait_for_new_pair_ready(tmp_path, 0.1, sleep=clock.sleep, clock=clock)
+
+
+def test_new_pair_ready_never_spawns(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.warm import client
+
+    spawned = []
+    monkeypatch.setattr(client, "spawn_detached", lambda *a, **k: spawned.append(a) or True)
+    clock = _Clock()
+    assert not breadcrumb.wait_for_new_pair_ready(tmp_path, 0.1, sleep=clock.sleep, clock=clock)
+    assert spawned == []
+
+
+def test_should_spawn_refuses_under_a_foreign_marker_and_allows_the_holder(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import os
+
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
+    monkeypatch.delenv(breadcrumb.PUBLISH_HOLDER_TOKEN_ENV, raising=False)
+    root = tmp_path / "engine"
+    root.mkdir()
+    with breadcrumb.hold_publish_marker(root, holder="t"):
+        assert not breadcrumb.should_spawn(root)
+        with breadcrumb.holder_successor_spawn():
+            assert breadcrumb.should_spawn(root)
+    path = breadcrumb.publish_marker_path(root)
+    record = {
+        "pid": os.getppid(),
+        "stable_pid_start_epoch": 0,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "holder_token": "tok",
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record), encoding="utf-8")
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, **kw: True)
+    assert not breadcrumb.should_spawn(root)
+    assert breadcrumb.publish_marker_blocks_boot(breadcrumb.svc_dir(root))
+    monkeypatch.setenv(breadcrumb.PUBLISH_HOLDER_TOKEN_ENV, "tok")
+    assert not breadcrumb.publish_marker_blocks_boot(breadcrumb.svc_dir(root))

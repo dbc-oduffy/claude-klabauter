@@ -2453,6 +2453,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The landed commit.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.reap_abandoned_runs": OpClass.MUTATING,
+    # dispatch.minted_run — MUTATING: abandon writes the run's halted.json and lands the record dir through
+    # abandoned_runs; start reads the run receipt and returns fire_args (ops/dispatch_emit/minted_run.py).
+    # DR-208 five-question affirmation (citing dispatch.minted_run handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      abandon writes halted.json and delegates one commit to dispatch.reap_abandoned_runs.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The halt marker, on abandon only.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The git index and history, through the reap path.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The marker and the landed commit.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.minted_run": OpClass.MUTATING,
     # dispatch.adopt_orphaned_run — MUTATING: rewrites a dead session's run-stage.json session_id to the
     # caller and writes the run's halted.json (ops/dispatch_emit/orphan_adopt.py).
     # DR-208 five-question affirmation (citing dispatch.adopt_orphaned_run handler):

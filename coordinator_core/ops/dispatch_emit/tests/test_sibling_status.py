@@ -88,6 +88,52 @@ def test_shares_computation_with_sibling_release(tmp_path):
     assert view["blocked"] == out["blocked"]
 
 
+def _join_seed(root: Path, foreign: Path):
+    ext = (c.ExternalInput("LOC"), c.ExternalInput("FOR", str(foreign)))
+    runs = [
+        _run("S1"),
+        c.SiblingRun("J", "join", ("S1",), "state/sizings/J.yaml", c.STATUS_AFTER, after_external=ext),
+    ]
+    _seed(root, runs, {"S1": c.STATUS_LANDED})
+    for base, rid, st in ((root, "LOC", c.STATUS_LANDED), (foreign, "FOR", c.STATUS_RUNNING)):
+        path = base / c.status_rel(rid)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"status": st}), encoding="utf-8")
+
+
+def test_join_inputs_listed_and_join_released_after_cross_repo_input_lands(tmp_path):
+    root, foreign = tmp_path / "root", tmp_path / "foreign"
+    _join_seed(root, foreign)
+    held = sibling_status.sibling_status({"parent_id": PARENT}, root)
+    assert held["join_inputs"] == [
+        {"run_id": "LOC", "status": "landed"},
+        {"run_id": "FOR", "repo": str(foreign), "status": "running"},
+    ]
+    assert held["released"] == []
+    (foreign / c.status_rel("FOR")).write_text(json.dumps({"status": "landed"}), encoding="utf-8")
+    before = _snapshot(root)
+    done = sibling_status.sibling_status({"parent_id": PARENT}, root)
+    assert done["released"] == [fire_command("state/sizings/J.yaml")]
+    assert done["join_inputs"][1]["status"] == "landed"
+    assert _snapshot(root) == before
+
+
+def test_join_input_missing_and_halted_unclosed_block_the_join(tmp_path):
+    root, foreign = tmp_path / "root", tmp_path / "foreign"
+    _join_seed(root, foreign)
+    (foreign / c.status_rel("FOR")).write_text(json.dumps({"status": "halted"}), encoding="utf-8")
+    out = sibling_status.sibling_status({"parent_id": PARENT}, root)
+    assert out["join_inputs"][1]["status"] == "halted"
+    assert out["blocked"] == [{"run_id": "J", "slice_sizing": "state/sizings/J.yaml"}]
+    (foreign / c.status_rel("FOR")).unlink()
+    assert sibling_status.sibling_status({"parent_id": PARENT}, root)["join_inputs"][1]["status"] == "missing"
+
+
+def test_no_join_inputs_key_without_after_external(tmp_path):
+    _fan(tmp_path)
+    assert "join_inputs" not in sibling_status.sibling_status({"parent_id": PARENT}, tmp_path)
+
+
 def test_registered_handler(tmp_path):
     _fan(tmp_path)
     out = sibling_status._handler({"parent_id": PARENT}, tmp_path)

@@ -319,10 +319,12 @@ _PRE_CUTOFF_OVERCAP_MEMO = (
 
 
 def _init_git_repo(path: Path) -> None:
-    """Initialise a minimal git repo at path (silent, no initial commit needed)."""
+    """Initialise a minimal git repo at path (silent, no initial commit needed).
+
+    The branch is a work branch: memo.transition refuses to commit on main/master."""
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(
-        ["git", "init", "-b", "main", str(path)],
+        ["git", "init", "-b", "work/parity", str(path)],
         capture_output=True, check=True,
         creationflags=_CFLAGS,
     )

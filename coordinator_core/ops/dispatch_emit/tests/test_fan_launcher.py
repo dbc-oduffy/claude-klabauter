@@ -191,6 +191,37 @@ def test_genuine_run_id_mismatch_still_refused(tmp_path):
     assert _refusal(script, "ask-r1", good) is None
 
 
+def _chain_refusal(script: str, child_id: str, reply: dict):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
+    assert m
+    prog = (
+        "const WARP_PREFIX='/r/scratch/warp/';const RUN_SCRIPT_SUFFIX='.workflow.mjs';"
+        + m.group(0)
+        + f"console.log(JSON.stringify(_emitRefusal({{run_id:{json.dumps(child_id)},sizing_rel:''}},{json.dumps(reply)},true)));"
+    )
+    out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return json.loads(out.stdout)
+
+
+@pytest.mark.spawns_process
+def test_chain_emit_path_with_empty_run_id_is_a_named_refusal(tmp_path):
+    _, script = _write(tmp_path)
+    base = {"run_id": "", "fire_args": {}}
+    empty = dict(base, path="/r/scratch/warp/x/not-a-run-script.js")
+    assert "yields an empty run id" in _chain_refusal(script, "ask-r1", empty)
+    same = dict(base, path="/r/scratch/warp/ask-r1.workflow.mjs")
+    assert "is not a fresh run id" in _chain_refusal(script, "ask-r1", same)
+    fresh = dict(base, path="/r/scratch/warp/ask-r2.workflow.mjs", fire_args={})
+    assert "run id" not in (_chain_refusal(script, "ask-r1", fresh) or "")
+
+
 @pytest.mark.spawns_process
 def test_doubled_separator_path_in_tree_accepted_outside_still_refused(tmp_path):
     _, script = _write(tmp_path)

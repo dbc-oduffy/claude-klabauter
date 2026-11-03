@@ -81,6 +81,21 @@ def sibling_status(params: dict, root: Path) -> dict:
         "released": view["released"],
         "blocked": view["blocked"],
     }
+    inputs: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for r in parent.runs:
+        for ref in r.after_external:
+            key = contract.external_key(ref)
+            if key in seen:
+                continue
+            seen.add(key)
+            item: dict[str, Any] = {"run_id": ref.run_id}
+            if ref.repo:
+                item["repo"] = ref.repo
+            item["status"] = statuses.get(key, "missing")
+            inputs.append(item)
+    if inputs:
+        reply["join_inputs"] = inputs
     if "superseded" in view:
         reply["superseded"] = view["superseded"]
     return reply

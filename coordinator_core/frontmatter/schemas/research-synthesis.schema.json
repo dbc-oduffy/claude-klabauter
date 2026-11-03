@@ -5,7 +5,7 @@
   "x-schema-version": "1.1.0",
   "x-bump-class": "nested-field-additive",
   "x-bump-note": "1.0.0 -> 1.1.0 is nested-field-additive: three new OPTIONAL top-level string properties (market_scope, target_uid, target_label), no `required` change. RE-VENDOR: coordinator_core/frontmatter/schemas/research-synthesis.schema.json (the engine repo) needs re-vendor from this commit.",
-  "applies_to": "docs/research/*.md",
+  "applies_to": "docs/research/**/*.md",
   "kinds": [
     "research-synthesis"
   ],

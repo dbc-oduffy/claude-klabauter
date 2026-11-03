@@ -74,6 +74,8 @@ class _World:
 def _fast(monkeypatch):
     monkeypatch.setattr(pair_stop, "_TERMINATE_GRACE_SECS", 0.02)
     monkeypatch.setattr(pair_stop, "_TERMINATE_POLL_INTERVAL_SECS", 0.005)
+    monkeypatch.setattr(pair_stop, "_SETTLE_SECS", 0.05)
+    monkeypatch.setattr(pair_stop, "_SETTLE_MAX_SECS", 1.0)
 
 
 def _script(root, parts):
@@ -568,3 +570,141 @@ def test_late_unaided_exit_settles_before_the_survivor_read(tmp_path, monkeypatc
     result = pair_stop.stop_warm_pair(root, psutil_module=w)
     assert result.ok(), result.render_survivors()
     assert len(reads) >= 4
+
+
+class _Clock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, secs):
+        self.now += secs
+
+
+class _DyingProc(_Proc):
+    """Ignores terminate and kill; exits at fake-clock time `die_at`."""
+
+    def __init__(self, world, pid, name, argv, clock, die_at):
+        super().__init__(world, pid, name, argv, stubborn=True)
+        self.clock = clock
+        self.die_at = die_at
+
+    @property
+    def alive(self):
+        return self.clock.now < self.die_at
+
+    @alive.setter
+    def alive(self, _value):
+        pass
+
+
+def _dying_world(root, clock, die_times):
+    w = _World()
+    for i, die_at in enumerate(die_times):
+        w.procs.append(_DyingProc(w, 60 + i, "python.exe", [sys.executable, _script(root, SRV)], clock, die_at))
+    return w
+
+
+def test_staggered_slow_exit_is_waited_out_while_progress_continues(tmp_path, monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(pair_stop, "time", clock)
+    w = _dying_world(tmp_path / "mirror", clock, [0.15, 0.19, 0.23])
+    result = pair_stop.stop_warm_pair(tmp_path / "mirror", psutil_module=w)
+    assert result.ok(), result.render_survivors()
+    assert clock.now >= 0.23
+
+
+def test_no_progress_survivor_is_reported_after_the_stall_window(tmp_path, monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(pair_stop, "time", clock)
+    w = _dying_world(tmp_path / "mirror", clock, [0.10, 99.0])
+    result = pair_stop.stop_warm_pair(tmp_path / "mirror", psutil_module=w)
+    assert [p.pid for p in result.survivors] == [61]
+    assert clock.now < 1.0
+
+
+def test_continuous_progress_is_still_capped(tmp_path, monkeypatch):
+    clock = _Clock()
+    monkeypatch.setattr(pair_stop, "time", clock)
+    monkeypatch.setattr(pair_stop, "_TERMINATE_GRACE_SECS", 0.005)
+    monkeypatch.setattr(pair_stop, "_SETTLE_MAX_SECS", 0.3)
+    w = _dying_world(tmp_path / "mirror", clock, [0.22 + 0.03 * i for i in range(20)])
+    result = pair_stop.stop_warm_pair(tmp_path / "mirror", psutil_module=w)
+    assert not result.ok()
+    assert clock.now < 0.6
+
+
+def test_kill_exit_wait_uses_the_process_handle(monkeypatch):
+    class _Handle(_Proc):
+        killed = False
+
+        def kill(self):
+            self.killed = True
+
+        def wait(self, timeout=None):
+            self.world.log.append(("wait", self.pid, timeout))
+            if self.killed:
+                self.alive = False
+
+    w = _World()
+    proc = _Handle(w, 70, "python.exe", [], stubborn=True)
+    w.procs.append(proc)
+    assert pair_stop._terminate_with_reason(70, psutil_module=w) is None
+    assert ("wait", 70, pair_stop._TERMINATE_GRACE_SECS) in w.log
+
+
+def _child_world(root, born_after_kill):
+    w = _World()
+    server = w.add(80, "python.exe", [sys.executable, _script(root, SRV)])
+    child = w.add(81, "python.exe", [], stubborn=True)
+    server.children = lambda recursive=True: [child]
+    born = {"t": 5.0}
+    child.create_time = lambda: born["t"]
+
+    def _kill():
+        w.log.append(("kill", 81))
+        if born_after_kill is not None:
+            born["t"] = born_after_kill
+
+    child.kill = _kill
+    return w
+
+
+def test_reused_child_pid_is_not_a_survivor(tmp_path):
+    root = tmp_path / "mirror"
+    result = pair_stop.stop_warm_pair(root, psutil_module=_child_world(root, 9.0))
+    assert result.ok(), result.render_survivors()
+
+
+def test_same_birth_child_still_survives(tmp_path):
+    root = tmp_path / "mirror"
+    result = pair_stop.stop_warm_pair(root, psutil_module=_child_world(root, None))
+    assert [p.pid for p in result.survivors] == [81]
+
+
+def test_stuck_counts_original_and_refused_pids_but_not_respawns():
+    from coordinator_core.warm.pair_stop import PairProcess, PairStopResult, ROLE_SERVER
+
+    orig, respawn, refused = (PairProcess(pid=p, role=ROLE_SERVER, cmdline="") for p in (1, 2, 3))
+    result = PairStopResult(
+        stopped=(), survivors=(orig, respawn, refused), failures=((3, "access denied"),),
+        initial_pids=frozenset({1}),
+    )
+    assert result.stuck() == (orig, refused)
+    assert PairStopResult(stopped=(), survivors=(respawn,)).stuck() == (respawn,)
+
+
+def test_stop_records_the_pids_it_set_out_to_end(monkeypatch, tmp_path):
+    from coordinator_core.warm import pair_stop
+
+    seen = [pair_stop.PairProcess(pid=11, role=pair_stop.ROLE_SERVER, cmdline="")]
+    monkeypatch.setattr(pair_stop, "find_pair_processes", lambda *a, **k: list(seen) if seen else [])
+    monkeypatch.setattr(pair_stop, "_terminate_pid", lambda *a, **k: seen.clear())
+    monkeypatch.setattr(pair_stop, "_terminate_with_reason", lambda *a, **k: None)
+    monkeypatch.setattr(pair_stop, "_pid_gone", lambda *a, **k: True)
+    monkeypatch.setattr(pair_stop, "_live_descendants", lambda *a, **k: set())
+    monkeypatch.setattr(pair_stop, "_pool_children", lambda *a, **k: [])
+    result = pair_stop.stop_warm_pair(tmp_path, ask_server=lambda p: True, ask_front_door=lambda r: True)
+    assert 11 in result.initial_pids

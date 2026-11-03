@@ -26,6 +26,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Union
 
+from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ROWS_COMMITTED_KEY
+
 #: Legs only a deferred close job pays: a close block that does not carry one reads it ``not-applicable``.
 LAND_RUN_ONLY_LEGS: tuple[str, ...] = (
     "review-stamp",
@@ -613,7 +615,6 @@ def _read_json(path: Path) -> Optional[dict[str, Any]]:
     return data if isinstance(data, dict) else None
 
 
-ROWS_COMMITTED_KEY = "rows_committed"
 STATUS_WRITE_KEY = "status_write"
 STATUS_WRITE_DEADLINE_MISSED = "deadline-missed"
 _MISSED: Any = object()
@@ -644,7 +645,9 @@ def sibling_release(
 ) -> Optional[dict[str, Any]]:
     """Close *run_id*'s sibling status and name what the close frees.
 
-    ``None`` unless the run's own status file exists (the slice bind wrote it). Otherwise rewrites only
+    ``None`` unless the run's own status file exists (the slice bind wrote it) or a join waits on it
+    (``join_waiters_rel``; the file is then created, and the waiting joins' released fire calls are
+    appended to ``released``, with ``join_parents`` naming them). Otherwise rewrites only
     that file (``landed`` with *landed_sha*, or ``halted`` when it is ``None``), reads the write-once
     parent record and every sibling's status file, and returns ``{parent_id, released: [fire call],
     blocked: [{run_id, slice_sizing}]}``. A halted run releases no ``after``
@@ -666,8 +669,12 @@ def sibling_release(
     prior = run_bounded(f"sibling-release-read:{own}", lambda: _read_json(own), default=_MISSED)
     if prior is _MISSED:
         return _status_write_missed(run_id, own, "read")
+    joins: list[str] = []
     if prior is None:
-        return None
+        joins = _join_waiters(base, run_id, contract)
+        if not joins:
+            return None
+        prior = {}
     if not landed_sha and prior.get("status") == contract.STATUS_LANDED:
         return None  # invariant: a landed run is never halted
     entry: dict[str, Any] = {"status": contract.STATUS_HALTED}
@@ -695,15 +702,74 @@ def sibling_release(
         return _status_write_missed(run_id, own, "write")
 
     parent_id = entry.get("parent_id") or _own_parent_id(base, run_id, contract)
-    parent_data = _read_json(base / contract.parent_record_rel(parent_id)) if parent_id else None
-    if parent_data is None:
+    parent = _load_parent(base, parent_id, contract) if parent_id else None
+    reply: Optional[dict[str, Any]] = None
+    if parent is not None:
+        _, reply = release_view(base, parent, own_run_id=run_id, reconcile=True)
+    if not joins:
+        joins = _join_waiters(base, run_id, contract)
+    for jid in joins:
+        if parent is not None and jid == parent.parent_id:
+            continue
+        jparent = _load_parent(base, jid, contract)
+        if jparent is None:
+            continue
+        _, jreply = release_view(base, jparent, own_run_id=run_id, reconcile=True)
+        if reply is None:
+            reply = {"released": [], "blocked": []}
+        reply["released"] = [*reply["released"], *jreply["released"]]
+        reply["blocked"] = [*reply["blocked"], *jreply["blocked"]]
+        reply.setdefault("join_parents", []).append(jid)
+    return reply
+
+
+def _load_parent(base: Path, parent_id: str, contract: Any) -> Optional[Any]:
+    from coordinator_core.ops._path_guard import safe_id
+
+    if not safe_id(parent_id):
+        return None
+    data = _read_json(base / contract.parent_record_rel(parent_id))
+    if data is None:
         return None
     try:
-        parent = contract.ParentRecord.from_json(parent_data)
+        return contract.ParentRecord.from_json(data)
     except (ValueError, KeyError, TypeError):
         return None
-    _, reply = release_view(base, parent, own_run_id=run_id, reconcile=True)
-    return reply
+
+
+def _join_waiters(base: Path, run_id: str, contract: Any) -> list[str]:
+    """Parent ids whose join waits on *run_id* (``join-waiters.json``: a list, or ``{parents: [...]}``)."""
+    path = base / contract.join_waiters_rel(run_id)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if isinstance(data, dict):
+        data = data.get("parents", data.get("waiters", []))
+    if not isinstance(data, list):
+        return []
+    return list(dict.fromkeys(x for x in data if isinstance(x, str) and x))
+
+
+def _external_state(
+    base: Path, ref: Any, own_run_id: Optional[str], reconcile: bool, contract: Any
+) -> Optional[str]:
+    """A join input's status. A LOCAL running input other than *own_run_id* is reconciled against HEAD
+    (written when *reconcile*, read-only otherwise); a foreign input is a status-file read, never git."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import sibling_hold
+
+    if not safe_id(ref.run_id):
+        return None
+    if not ref.repo and ref.run_id != own_run_id:
+        data = _read_json(base / contract.status_rel(ref.run_id))
+        if data and data.get("status") == contract.STATUS_RUNNING:
+            if reconcile:
+                if sibling_hold.reconcile_running(base, ref.run_id):
+                    return contract.STATUS_LANDED
+            elif sibling_hold._terminal_landing_head(base, ref.run_id):
+                return contract.STATUS_LANDED
+    return contract.external_status(base, ref)
 
 
 def release_view(
@@ -741,6 +807,18 @@ def release_view(
             data.get(ROWS_COMMITTED_KEY) is True or data.get(contract.CLOSED_BY_KEY)
         ):
             complete.add(run.run_id)
+    ext_dead: set[str] = set()
+    for run in parent.runs:
+        for ref in run.after_external:
+            key = contract.external_key(ref)
+            if key in statuses:
+                continue
+            ext = _external_state(base, ref, own_run_id, reconcile, contract)
+            if ext is None:
+                continue
+            statuses[key] = ext
+            if ext == contract.STATUS_HALTED:
+                ext_dead.add(key)
     as_landed = {rid: (contract.STATUS_LANDED if rid in complete else st) for rid, st in statuses.items()}
     waiting = (contract.STATUS_AFTER, contract.STATUS_QUEUED)
     superseded: list[dict[str, str]] = []
@@ -752,12 +830,18 @@ def release_view(
     skip = frozenset(item["run_id"] for item in superseded)
     freed = contract.release(parent, as_landed, skip)
     by_id = {r.run_id: r for r in parent.runs}
-    dead = {rid for rid, st in statuses.items() if st == contract.STATUS_HALTED and rid not in complete}
+    dead = {
+        rid
+        for rid, st in statuses.items()
+        if st == contract.STATUS_HALTED and rid not in complete and rid not in ext_dead
+    }
     blocked: list[dict[str, str]] = []
     for run in parent.runs:
         if statuses[run.run_id] not in waiting or run.run_id in skip:
             continue
-        if any(p in dead for p in run.after):
+        if any(p in dead for p in run.after) or any(
+            contract.external_key(x) in ext_dead for x in run.after_external
+        ):
             dead.add(run.run_id)
             blocked.append({"run_id": run.run_id, "slice_sizing": run.slice_sizing})
     reply: dict[str, Any] = {

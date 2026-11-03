@@ -74,6 +74,7 @@ except ImportError:  # pragma: no cover
     from hashlib import sha1 as _sha1
 import json
 import os
+import secrets
 import threading
 import time
 from contextlib import contextmanager
@@ -114,10 +115,15 @@ __all__ = [
     "PUBLISH_MARKER_MAX_AGE_SECS",
     "publish_marker_path",
     "publish_marker_held",
+    "publish_marker_blocks_boot",
+    "publish_holder_env",
+    "holder_successor_spawn",
+    "PUBLISH_HOLDER_TOKEN_ENV",
     "hold_publish_marker",
     "DRAIN_WAIT_SECS",
     "wait_for_publish_release",
     "wait_for_publish_swap",
+    "wait_for_new_pair_ready",
     "publish_marker_wedged",
     "publish_wedge_remedy",
 ]
@@ -168,6 +174,8 @@ DRAIN_WAIT_SECS = 0.5
 DRAIN_POLL_SECS = 0.02
 #: Poll cadence of `wait_for_publish_swap` once a swap outlasts a second.
 DRAIN_SWAP_POLL_SECS = 0.25
+#: Poll cadence of `wait_for_new_pair_ready`.
+NEW_PAIR_POLL_SECS = 0.05
 
 #: `transport` field values -- what shape the `pipe` field's endpoint is.
 #: See `write_breadcrumb` for why the field that carries the endpoint is
@@ -893,6 +901,81 @@ def publish_marker_held(svc: Path, *, now: Optional[float] = None) -> bool:
         return False
 
 
+#: Env var carrying the marker's `holder_token` to the holder's own successor spawn.
+PUBLISH_HOLDER_TOKEN_ENV = "COORDINATOR_PUBLISH_HOLDER_TOKEN"
+
+
+def _marker_holder_token(svc: Path) -> "tuple[Optional[str], Optional[int]]":
+    """`(holder_token, holder_pid)` from the marker record; `(None, None)` when unreadable."""
+    try:
+        record, _ = _read_marker(svc / PUBLISH_MARKER_FILENAME)
+    except OSError:
+        return None, None
+    if record is None:
+        return None, None
+    token = record.get("holder_token")
+    pid = record.get("pid")
+    return (token if isinstance(token, str) and token else None), (pid if isinstance(pid, int) else None)
+
+
+_successor_scope = threading.local()
+
+
+@contextmanager
+def holder_successor_spawn() -> Iterator[None]:
+    """Scope in which the publish holder (this process, holding the marker)
+    may spawn its own successor pair under the held marker. Outside it a held
+    marker refuses every spawn, the holder's included. Nests."""
+    depth = getattr(_successor_scope, "depth", 0)
+    _successor_scope.depth = depth + 1
+    try:
+        yield
+    finally:
+        _successor_scope.depth = depth
+
+
+def _in_successor_scope() -> bool:
+    return getattr(_successor_scope, "depth", 0) > 0
+
+
+def publish_holder_env(engine_root: Optional[Path] = None) -> "dict[str, str]":
+    """`{PUBLISH_HOLDER_TOKEN_ENV: token}` iff THIS process is the live holder of
+    the marker for `engine_root` and is inside `holder_successor_spawn`, else
+    `{}`. The holder merges it into the environment of its successor spawn so
+    that spawn passes the boot gates. Read-only, spawn-free, never raises."""
+    try:
+        if not _in_successor_scope():
+            return {}
+        svc = svc_dir(engine_root)
+        if not publish_marker_held(svc):
+            return {}
+        token, pid = _marker_holder_token(svc)
+        if token and pid == os.getpid():
+            return {PUBLISH_HOLDER_TOKEN_ENV: token}
+    except Exception:  # noqa: BLE001 -- a hint reader never raises
+        pass
+    return {}
+
+
+def publish_marker_blocks_boot(svc: Path, *, now: Optional[float] = None) -> bool:
+    """Whether a boot gate must refuse to start a pair into `svc`'s engine root.
+
+    `publish_marker_held`, minus the publish holder's own successor: the live
+    holder inside `holder_successor_spawn`, or a process carrying the marker's
+    `holder_token` (`PUBLISH_HOLDER_TOKEN_ENV`). Every other boot, including
+    the holder outside the scope and one carrying a token of an earlier hold,
+    still refuses. Read-only, spawn-free, never raises.
+    """
+    if not publish_marker_held(svc, now=now):
+        return False
+    token, pid = _marker_holder_token(svc)
+    if token is None:
+        return True
+    if pid == os.getpid():
+        return not _in_successor_scope()
+    return os.environ.get(PUBLISH_HOLDER_TOKEN_ENV) != token
+
+
 def wait_for_publish_release(
     engine_root: Optional[Path] = None,
     max_secs: float = DRAIN_WAIT_SECS,
@@ -988,6 +1071,57 @@ def wait_for_publish_swap(
         sleep(min(poll, remaining))
 
 
+def _breadcrumb_pair_answers(engine_root: Optional[Path]) -> bool:
+    """Whether the breadcrumb names a live server pid whose endpoint accepts a
+    connection. Sends no request: a request with a wrong engine token evicts
+    the server it reaches."""
+    record = read_breadcrumb(engine_root)
+    if record is None:
+        return False
+    pid = record.get("pid")
+    pipe = record.get("pipe")
+    if not isinstance(pid, int) or not isinstance(pipe, str) or not pipe:
+        return False
+    stored = record.get("stable_pid_start_epoch")
+    if not stable_pid_alive(pid, stored_start_epoch=str(stored) if stored is not None else ""):
+        return False
+    return _pipe_is_alive(pipe)
+
+
+def wait_for_new_pair_ready(
+    engine_root: Optional[Path] = None,
+    max_secs: float = DRAIN_WAIT_SECS,
+    *,
+    ping: Optional[Callable[[], bool]] = None,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Swap-side gate: poll up to `max_secs` until the engine pair for
+    `engine_root` answers. True on the first answered probe (at least one
+    probe is made even for `max_secs <= 0`); False if none answers by the
+    deadline.
+
+    `ping` overrides the probe (default: the breadcrumb names a live server
+    pid and its endpoint accepts a connection).
+
+    TRAP: spawn-free and read-only -- it waits for a pair someone else started
+    and never starts one, so a caller that needs the pair up spawns it first.
+    Never raises; a probe that raises reads as unanswered.
+    """
+    probe = ping if ping is not None else (lambda: _breadcrumb_pair_answers(engine_root))
+    deadline = clock() + max(0.0, float(max_secs))
+    while True:
+        try:
+            if probe():
+                return True
+        except Exception:  # noqa: BLE001 -- a hint reader never raises
+            pass
+        remaining = deadline - clock()
+        if remaining <= 0:
+            return False
+        sleep(min(NEW_PAIR_POLL_SECS, remaining))
+
+
 def _is_ancestor_pid(pid: int) -> bool:
     """Whether `pid` is a strict ancestor of this process. In-process
     psutil walk, no spawn; any failure reads False."""
@@ -1065,6 +1199,7 @@ def hold_publish_marker(engine_root: Path, *, holder: str) -> Iterator[Path]:
         "stable_pid_start_epoch": epoch,
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "holder": holder,
+        "holder_token": secrets.token_hex(8),
         "heartbeat_secs": PUBLISH_HEARTBEAT_SECS,
     }
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
@@ -1181,7 +1316,7 @@ def should_spawn_decision(
                         except Exception:
                             fully_alive = False
                         spawn = not fully_alive
-                        if spawn and publish_marker_held(lock_path.parent, now=now):
+                        if spawn and publish_marker_blocks_boot(lock_path.parent, now=now):
                             return False
                         return spawn
 
@@ -1189,7 +1324,7 @@ def should_spawn_decision(
     # this is exactly the succession window this chunk closes. Absence used
     # to mean unconditional True here; it now means "ask the boot-in-flight
     # primitive," which is the fix.
-    if publish_marker_held(lock_path.parent, now=now):
+    if publish_marker_blocks_boot(lock_path.parent, now=now):
         return False
     return try_claim_boot(lock_path, now=now)
 

@@ -71,6 +71,59 @@ def test_reports_recent_midstage_and_skips_others(tmp_path, monkeypatch):
     assert got == [live_runs.LiveRun("r1", "live", "staged", _ts(2))]
 
 
+def test_minted_run_with_unproven_runner_is_not_live(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    _run(tmp_path, "r1", "minted", 1)
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda root, rid, **k: True)
+    assert not live_runs.run_is_live(tmp_path, "r1", now=NOW)
+    assert not live_runs.run_stage_live(tmp_path, "r1", now=NOW)
+    assert live_runs.find_live_runs({"repos.x": str(tmp_path)}, now=NOW) == []
+
+
+def test_minted_run_with_proven_runner_stays_live_and_other_stages_skip_the_check(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    calls = []
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda root, rid, **k: calls.append(rid) or False)
+    _run(tmp_path, "r1", "minted", 1)
+    _run(tmp_path, "r2", "executing", 1)
+    assert live_runs.run_is_live(tmp_path, "r1", now=NOW)
+    assert live_runs.run_is_live(tmp_path, "r2", now=NOW)
+    assert calls == ["r1"]
+
+
+def test_a_real_minted_run_with_no_runner_is_not_live_and_a_launched_one_is(tmp_path, monkeypatch):
+    from coordinator_core import launch_records, warp_live
+
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(warp_live, "managed_tempdir", lambda: managed)
+    monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: managed / name)
+    for rid in ("r1", "r2"):
+        _run(tmp_path, rid, "minted", 1)
+        token = tmp_path / ".git" / "coordinator-warp-run-tokens" / f"{rid}.json"
+        token.write_text(
+            json.dumps(
+                {
+                    "run_id": rid,
+                    "minted_at": time.time() - 3600,
+                    "session_id": "sess1",
+                    "script_path": f"scratch/warp/{rid}.mjs",
+                }
+            ),
+            encoding="utf-8",
+        )
+    path = Path(launch_records.record_path(str(managed), "sess1", "task1"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"scriptPath": "scratch/warp/r2.mjs", "fired_at": time.time() - 3500}), encoding="utf-8"
+    )
+
+    assert not live_runs.run_is_live(tmp_path, "r1", now=NOW)
+    assert live_runs.run_is_live(tmp_path, "r2", now=NOW)
+
+
 def test_missing_repo_is_skipped(tmp_path):
     assert live_runs.find_live_runs({"repos.x": str(tmp_path / "nope")}, now=NOW) == []
 

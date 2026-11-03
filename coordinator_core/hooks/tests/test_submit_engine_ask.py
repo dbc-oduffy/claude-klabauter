@@ -1766,3 +1766,39 @@ def test_default_launch_stops_emitting_once_one_deadline_is_spent(tmp_path, monk
     assert seen == ["state/sizings/ask-r1.yaml"]
     text = script.read_text(encoding="utf-8")
     assert "outran the hook budget" in text and text.count("Not emitted") == 2
+
+
+def _deferred_params(root: Path, em_context: str, monkeypatch) -> dict:
+    import threading
+
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
+    release = threading.Event()
+    try:
+        env = mod.evaluate(
+            _payload(root, {"ask": "build the thing", "source": "relayed", "em_context": em_context}),
+            emit=lambda params, r: release.wait(30) and {},
+        )
+    finally:
+        release.set()
+        for worker in threading.enumerate()[1:]:
+            worker.join(10)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    (script,) = (root / "scratch" / "warp").glob("defer-*.workflow.mjs")
+    literal = re.search(r"^const PARAMS = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
+    return json.loads(json.loads(literal))
+
+
+def test_submit_engine_ask_deferred_long_brief_rides_a_repo_file(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_brief
+
+    root = _repo(tmp_path)
+    params = _deferred_params(root, "context line. " * (mod.DEFERRED_BRIEF_INLINE_MAX // 8), monkeypatch)
+    assert "ask_brief" not in params
+    loaded = ask_brief.load_em_brief(root, brief=None, brief_file=params["ask_brief_file"])
+    assert "context line." in loaded.text
+
+
+def test_submit_engine_ask_deferred_short_brief_stays_inline(tmp_path, monkeypatch):
+    params = _deferred_params(_repo(tmp_path), "short context", monkeypatch)
+    assert "short context" in params["ask_brief"]
+    assert "ask_brief_file" not in params

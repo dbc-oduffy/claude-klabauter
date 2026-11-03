@@ -150,7 +150,10 @@ function _emitRefusal(child, e, chained) {
   if (typeof e.error === 'string' && e.error !== '') return 'emit failed: ' + e.error;
   if (chained) {
     const pathRun = _pathRunId(e.path);
-    if (typeof e.path === 'string' && e.path !== '' && (pathRun === '' || pathRun === child.run_id)) {
+    if (typeof e.path === 'string' && e.path !== '' && pathRun === '') {
+      return 'chain emit reply path ' + JSON.stringify(e.path) + ' yields an empty run id';
+    }
+    if (typeof e.path === 'string' && e.path !== '' && pathRun === child.run_id) {
       return 'chain emit reply path run id ' + JSON.stringify(pathRun) + ' is not a fresh run id';
     }
   } else if (e.run_id !== child.run_id && !_isOwnRedirect(child, e) && !_isOwnRecompose(child, e)) return 'emit reply run_id ' + String(e.run_id) + ' is not ' + child.run_id;

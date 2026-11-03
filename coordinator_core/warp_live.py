@@ -58,6 +58,11 @@ UNLAUNCHED_GRACE_SECONDS = 15 * 60
 #: as an exited owner only after this long since the run was minted.
 OWNER_ROW_GRACE_SECONDS = 120
 
+#: A minted run (stage `minted` or absent) with no launch record and no recoverable launch result
+#: is taken to have no runner this long after the mint: the Workflow call writes its launch record
+#: within seconds of the emit.
+MINTED_RUNNER_GRACE_SECONDS = 120
+
 #: Transcript bytes searched for the terminal notification (the notification is appended after
 #: the launch, so the tail holds it unless the session has run long past the run's end).
 _TRANSCRIPT_TAIL_BYTES = 4 * 1024 * 1024
@@ -359,6 +364,59 @@ def _result_names_run(session_id: str, transcript_path: Optional[str], tail: str
         return False
 
 
+def _stage_minted(root: Path, run_id: str) -> bool:
+    """True when `run-stage.json` reads `minted` (or no stage) or is absent. Any other stage, an
+    unreadable or malformed file, or an unsafe run id is False: unknown never shortens a grace."""
+    try:
+        path = _ask_record_dir(root, run_id) / "run-stage.json"
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return True
+        return isinstance(data, dict) and data.get("stage") in (None, "minted")
+    except Exception:
+        return False
+
+
+@_scoped
+def runner_unproven(
+    repo_root: Path, run_id: str, *, now: Optional[float] = None, tmpdir: Optional[str] = None
+) -> bool:
+    """True only when `run_id` has a live token record, its stage is minted or absent, no launch is
+    recoverable (launch records, the submitting call's launch result, a terminal result naming the
+    run), and it was minted more than `MINTED_RUNNER_GRACE_SECONDS` before `now`. Every read
+    failure answers False. Never spends the token. No spawn."""
+    try:
+        root = Path(repo_root)
+        record = next((r for r in _token_records(root) if r.get("run_id") == run_id), None)
+        if record is None or not _stage_minted(root, run_id) or _holds_ended_marker(root, run_id):
+            return False
+        submission = _read_json(_submission_path(root, run_id)) or {}
+        session_id = submission.get("session_id") or record.get("session_id")
+        script = submission.get("script_path") or record.get("script_path")
+        if not (isinstance(session_id, str) and session_id and isinstance(script, str) and script):
+            return False
+        minted_at = float(record["minted_at"])
+        if (time.time() if now is None else now) - minted_at <= MINTED_RUNNER_GRACE_SECONDS:
+            return False
+        tool_use_id = submission.get("tool_use_id")
+        if _own_launch_ids(session_id, script, _launch_dirs(tmpdir), tool_use_id, minted_at):
+            return False
+        transcript = submission.get("transcript_path")
+        has_transcript = isinstance(transcript, str) and bool(transcript)
+        tail = _tail(transcript) if has_transcript else ""
+        has_call = isinstance(tool_use_id, str) and bool(tool_use_id)
+        if (has_transcript or has_call) and not tail:
+            return False
+        if has_call:
+            seen = tail if tool_use_id in tail else _earlier_lines(transcript, tool_use_id) + "\n" + tail
+            if _call_refused(seen, tool_use_id) or _launch_task_id(seen, tool_use_id):
+                return False
+        return not _result_names_run(session_id, transcript if has_transcript else None, tail, run_id)
+    except Exception:
+        return False
+
+
 def _run_ended(
     session_id: object,
     script_path: object,
@@ -368,10 +426,13 @@ def _run_ended(
     tool_use_id: object = None,
     snapshot: Optional[LaunchSnapshot] = None,
     run_id: Optional[str] = None,
+    repo_root: Optional[Path] = None,
 ) -> Optional[str]:
     """Why the run is over, else None while it is live: `_EVIDENCE` once the harness reported the
     run's task terminal (halted returns included) or the submitting call was refused; `_TIMER`
-    once the unlaunched grace has passed, which is not evidence and never spends the token.
+    once the unlaunched grace has passed, which is not evidence and never spends the token. A run
+    whose stage is minted (or absent) and that has no launch ages out on `MINTED_RUNNER_GRACE_SECONDS`
+    instead; it needs `repo_root` and `run_id` to read the stage.
 
     A run started inside a deferred-emit script has no launch record under its own script and no
     submission: its terminal notification is found by the `run_id` its result names."""
@@ -398,7 +459,10 @@ def _run_ended(
         if not task_ids:
             if run_id and _result_names_run(session_id, transcript_path if has_transcript else None, tail, run_id):
                 return _EVIDENCE
-            return _TIMER if time.time() - minted_at > UNLAUNCHED_GRACE_SECONDS else None
+            grace = UNLAUNCHED_GRACE_SECONDS
+            if run_id and repo_root is not None and _stage_minted(Path(repo_root), run_id):
+                grace = MINTED_RUNNER_GRACE_SECONDS
+            return _TIMER if time.time() - minted_at > grace else None
     if not tail:
         return None
     task_id = task_ids[-1]
@@ -598,6 +662,7 @@ def _record_live(
         submission.get("tool_use_id"),
         snapshot,
         run_id,
+        root,
     )
     if ended == _EVIDENCE:
         _run_token.consume(root, run_id)

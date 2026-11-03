@@ -12,6 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from percolate.dest_refresh import (  # noqa: E402
     default_remote_branch,
     fast_forward_consumer,
+    fast_forward_dest,
+    fetch_dest_upstream,
     refresh_dest_from_origin,
 )
 
@@ -372,6 +374,124 @@ def test_diverged_local_main_warns_but_does_not_block(origin_and_clone):
     assert len(result.warnings) == 1
     assert "could not be fast-forwarded to origin/main" in result.warnings[0]
     assert "WARNING" in err.getvalue()
+
+
+def _worktree_state(clone: Path) -> "tuple[str, str, str]":
+    return (
+        _git(clone, "rev-parse", "HEAD"),
+        _git(clone, "rev-parse", "main"),
+        _git(clone, "status", "--porcelain"),
+    )
+
+
+def test_fetch_when_behind_writes_nothing_and_records_the_upstream_tip_as_landing_tip(origin_and_clone):
+    origin, clone = origin_and_clone
+    _git(origin, "checkout", "candidate")
+    _commit(origin, "peer-landed")
+    _git(origin, "checkout", "main")
+    _commit(origin, "main-moved")
+    _git(origin, "checkout", "parked")
+    before = _worktree_state(clone)
+
+    out, err = _capture()
+    fetched = fetch_dest_upstream(clone, out=out, err=err)
+
+    assert fetched.ok and fetched.behind == 1 and fetched.fast_forwarded is False
+    assert fetched.landing_tip == _git(clone, "rev-parse", "origin/candidate")
+    assert _worktree_state(clone) == before
+    assert not (clone / "peer-landed").exists()
+
+    done = fast_forward_dest(fetched, out=out, err=err)
+    assert done.ok and done.fast_forwarded is True
+    assert _git(clone, "rev-parse", "HEAD") == fetched.landing_tip
+    assert _git(clone, "rev-parse", "main") == _git(clone, "rev-parse", "origin/main")
+
+
+def test_fetch_level_and_ahead_land_on_the_current_head(origin_and_clone):
+    _origin, clone = origin_and_clone
+    out, err = _capture()
+    level = fetch_dest_upstream(clone, out=out, err=err)
+    assert level.ok and level.landing_tip == _git(clone, "rev-parse", "HEAD")
+
+    _commit(clone, "local-only")
+    ahead = fetch_dest_upstream(clone, out=out, err=err)
+    assert ahead.ok and ahead.ahead == 1
+    assert ahead.landing_tip == _git(clone, "rev-parse", "HEAD")
+
+
+def test_fetch_refuses_divergence_and_unreachable_origin_without_writing(origin_and_clone, tmp_path):
+    origin, clone = origin_and_clone
+    _git(origin, "checkout", "candidate")
+    _commit(origin, "peer-landed")
+    _git(origin, "checkout", "parked")
+    _commit(clone, "local-only")
+    before = _worktree_state(clone)
+
+    out, err = _capture()
+    diverged = fetch_dest_upstream(clone, out=out, err=err)
+    assert not diverged.ok and "diverged" in diverged.reason
+    assert fast_forward_dest(diverged, out=out, err=err) is diverged
+    assert _worktree_state(clone) == before
+
+    _git(clone, "remote", "set-url", "origin", str(tmp_path / "nowhere"))
+    unreachable = fetch_dest_upstream(clone, out=out, err=err)
+    assert not unreachable.ok and "could not fetch origin" in unreachable.reason
+    assert _worktree_state(clone) == before
+
+
+def test_fetch_subsumed_divergence_defers_the_merge_to_fast_forward_dest(origin_and_clone, tmp_path):
+    origin, clone = origin_and_clone
+    src, peer = _source_with(tmp_path, merged=True)
+    _diverge_by_peer_publish(origin, clone, "percolate publish [source-head {0}]".format(peer[:12]))
+    before = _git(clone, "rev-parse", "HEAD")
+
+    out, err = _capture()
+    fetched = fetch_dest_upstream(clone, out=out, err=err, source_root=src)
+
+    assert fetched.ok and fetched.landing_tip == before
+    assert _git(clone, "rev-parse", "HEAD") == before
+    assert _git(clone, "rev-list", "--count", "HEAD..origin/candidate") == "1"
+
+    done = fast_forward_dest(fetched, out=out, err=err)
+    assert done.ok and done.fast_forwarded is True
+    assert _git(clone, "rev-list", "--count", "HEAD..origin/candidate") == "0"
+    assert _git(clone, "rev-parse", "HEAD") != before
+
+
+def test_fetch_defers_the_abort_of_an_own_interrupted_peer_merge(origin_and_clone):
+    from percolate.interrupted_op import PEER_MERGE_MARKER
+
+    origin, clone = origin_and_clone
+    _git(origin, "checkout", "candidate")
+    _commit(origin, "peer-landed")
+    _git(origin, "checkout", "parked")
+    _git(clone, "fetch", "--no-tags", "origin")
+    _git(clone, "merge", "--no-ff", "--no-commit", "-m",
+         PEER_MERGE_MARKER + " Merge origin/candidate into candidate", "origin/candidate")
+    merge_head = clone / ".git" / "MERGE_HEAD"
+    assert merge_head.is_file()
+
+    out, err = _capture()
+    fetched = fetch_dest_upstream(clone, out=out, err=err)
+    assert fetched.ok and fetched.pending_abort
+    assert merge_head.is_file()
+    assert "aborted" not in out.getvalue()
+
+    done = fast_forward_dest(fetched, out=out, err=err)
+    assert done.ok and not merge_head.exists()
+    assert "aborted an interrupted peer-merge" in out.getvalue()
+
+
+def test_refresh_dest_from_origin_is_fetch_then_fast_forward(origin_and_clone):
+    origin, clone = origin_and_clone
+    _git(origin, "checkout", "candidate")
+    _commit(origin, "peer-landed")
+    _git(origin, "checkout", "parked")
+
+    out, err = _capture()
+    composed = refresh_dest_from_origin(clone, out=out, err=err)
+    assert composed.ok and composed.fast_forwarded and composed.behind == 1
+    assert composed.landing_tip == _git(clone, "rev-parse", "HEAD")
 
 
 def _peer_lands(origin: Path, name: str) -> None:

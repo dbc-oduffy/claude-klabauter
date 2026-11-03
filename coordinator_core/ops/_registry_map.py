@@ -397,6 +397,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "dispatch.ask_fanout":                     "coordinator_core.ops.dispatch_emit.ask_fanout",
     "dispatch.sibling_status":                 "coordinator_core.ops.dispatch_emit.sibling_status",
     "dispatch.reap_abandoned_runs":            "coordinator_core.ops.dispatch_emit.abandoned_runs",
+    "dispatch.minted_run":                     "coordinator_core.ops.dispatch_emit.minted_run",
     "dispatch.commit_halted_rows":             "coordinator_core.ops.dispatch_emit.halted_rows_commit",
     "dispatch.commit_merge":                   "coordinator_core.ops.dispatch_emit.merge_commit",
     "dispatch.supersede_slice":                "coordinator_core.ops.dispatch_emit.slice_supersede",

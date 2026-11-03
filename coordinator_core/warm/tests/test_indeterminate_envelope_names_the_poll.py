@@ -29,9 +29,27 @@ from coordinator_core.warm import client
 _MSG = {"jsonrpc": "2.0", "id": 1, "method": "some.mutating.op", "params": {}}
 
 
-def test_envelope_without_a_key_omits_data() -> None:
+@pytest.fixture(autouse=True)
+def _no_ambient_breadcrumb(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "_delivering_engine", lambda: None)
+
+
+def test_envelope_names_the_delivering_engine_in_data_and_poll(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(client, "_delivering_engine", lambda: {"pid": 4242})
+    envelope = client._indeterminate_envelope(_MSG, "no response within 5s", "123-456")
+    assert envelope["error"]["data"]["engine_pid"] == 4242
+    assert json.dumps({"key": "123-456", "expect_engine": {"pid": 4242}}) in envelope["error"]["message"]
+
+
+def test_envelope_without_a_known_engine_carries_no_expect_engine() -> None:
+    envelope = client._indeterminate_envelope(_MSG, "no response within 5s", "123-456")
+    assert "engine_pid" not in envelope["error"]["data"]
+    assert "expect_engine" not in envelope["error"]["message"]
+
+
+def test_envelope_without_a_key_names_no_poll() -> None:
     envelope = client._indeterminate_envelope(_MSG, "no response within 5s")
-    assert "data" not in envelope["error"]
+    assert envelope["error"].get("data") == {"retry_safe": False}
 
 
 def test_envelope_with_a_key_carries_dispatch_key_and_reconcile() -> None:

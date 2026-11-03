@@ -106,3 +106,21 @@ def test_real_parent_predicate_keeps_live_parent(tmp_path, procs):
     assert psutil.pid_exists(child.pid)
     assert cos.sweep(str(tmp_path)) == []
     assert _alive(child)
+
+
+def test_terminate_all_skips_self_and_ancestor(monkeypatch):
+    from coordinator_core.box_memory import orphan_reap
+
+    class _P:
+        def __init__(self, pid):
+            self.pid = pid
+            self.terminated = False
+
+        def terminate(self):
+            self.terminated = True
+
+    monkeypatch.setattr(orphan_reap, "protected_pids", lambda self_pid=None: frozenset({1}))
+    mine, other = _P(1), _P(2)
+    monkeypatch.setattr(psutil, "wait_procs", lambda ps, timeout=None: ([], []))
+    cos._terminate_all([mine, other])
+    assert not mine.terminated and other.terminated

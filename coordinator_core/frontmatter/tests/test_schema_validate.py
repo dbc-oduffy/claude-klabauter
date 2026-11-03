@@ -2169,12 +2169,10 @@ class TestBatonUnificationSchemaBump:
         the bump, carrying only the singular deliverable_id/origin_plan_id,
         still validates unchanged against the bumped schema."""
         repo_root = Path(__file__).resolve().parents[3]
-        path = (
-            repo_root / 'state' / 'handoffs'
-            / '2026-07-22_162946_wsc-rebuild-port-regression-audit.md'
-        )
-        if not (repo_root / 'state' / 'handoffs').is_dir():
-            pytest.skip('state/handoffs absent (exported tree carries no corpus)')
+        archive_dir = repo_root / 'archive' / 'handoffs' / '2026-07'
+        path = archive_dir / '2026-07-22_162946_wsc-rebuild-port-regression-audit.md'
+        if not archive_dir.is_dir():
+            pytest.skip('archive/handoffs/2026-07 absent (exported tree carries no corpus)')
         assert path.exists(), f'corpus fixture missing: {path}'
         content = path.read_text(encoding='utf-8')
         fm = parse_frontmatter(content)['frontmatter']
@@ -4441,66 +4439,63 @@ _QUEUE_SCHEMA_PINS = {
 # an ordinary byte-pin through bin/claude-klabauter-revendor-schema.py. That is the whole
 # intended lifecycle: declare, gate, converge, remove.
 #
-# plan-tasks: claude-klabauter 3.20.0 lifts `history: false` on the apm and g-em/uhura signoff
-# branches and adds `$defs.pm_signoff_record`; DoE still reads 3.19.0 at the doe_ref.
-# Exit path: once DoE vendors 3.20.0, delete this entry and run
-# bin/claude-klabauter-revendor-schema.py plan-tasks so it returns to a plain byte-pin.
-_QUEUE_SCHEMA_AHEAD_PINS: dict = {
-    'handoff': {
-        'doe_ref': "86eb0e39a7ca45ceb432de9b3d828d9078f91d3e",
-        'reason': (
-            "claude-klabauter-first handoff 11.2.0 widens the `gate_cleared_by` item pattern to "
-            "admit `pm-turn:<session_id>#<turn>` beside hex SHAs; DoE's copy is 11.1.0 "
-            "and its own vendor of 11.2.0 is pending"
-        ),
-        'provenance': "claude-klabauter plan 2026-10-30-human-gate-clear-verb C1",
-        'exempt_paths': frozenset({
-            ('properties', 'gate_cleared_by', 'items', 'pattern'),
-            ('properties', 'gate_cleared_by', 'description'),
-        }),
-        'local_shape_hash': "239df7e4ecebe04ed5909f79d6eefeba99ae8810e2e73e9361fb56fa184e6229",
-    },
-    'sizing-object': {
-        'doe_ref': "4468a045eab3cd7d4ba8da59d3cb7cca7acbe196",
-        'reason': (
-            "claude-klabauter 1.49.0 merges DoE HEAD's top-level `writes` and keeps the "
-            "L `mechanically_uniform` field added by run 04b5ef, which DoE lacks; "
-            "DoE's copy is 1.48.0 and its own vendor of 1.49.0 is pending"
-        ),
-        'provenance': "claude-klabauter plan 2026-10-23-xl-xxl-fan-out-sizing-seam-pass C1",
-        'exempt_paths': frozenset({
-            ('properties', 'xl_exit', 'description'),
-            ('x-bump-note',),
-        }),
-        'local_shape_hash': "8aadeabeaadbebb988d1e3d5704180ae31f674d77c150da62c6583a76ccb7b59",
-    },
-    'plan-tasks': {
-        'doe_ref': "0626984094477e6c8f848f75c99d0f067a61e4c6",
-        'reason': (
-            "claude-klabauter-first plan-tasks 3.20.0 admits signoff history on apm, g-em and uhura "
-            "records and adds the pm_signoff_record history arm; DoE's copy is still 3.19.0 "
-            "and its own vendor of 3.20.0 is pending; 3.21.0 adds the optional row property "
-            "`acceptance` and 3.22.0 the optional row property `effort`, both claude-klabauter-first"
-        ),
-        'provenance': (
-            "claude-klabauter plan 2026-10-24-plan-signoff-same-delegate-widening C2; "
-            "3.22.0 `effort` property from plan 2026-10-25-a-refire-path-and-ea2e26-finish C16"
-        ),
-        'exempt_paths': frozenset({
-            ('$defs', 'signoff', 'allOf', 1, 'then', 'properties', 'history'),
-            ('$defs', 'signoff', 'allOf', 2, 'then', 'properties', 'history'),
-            ('$defs', 'signoff', 'description'),
-            ('$defs', 'signoff', 'properties', 'history', 'description'),
-            ('x-bump-note',),
-            ('x-bump-class',),
-        }),
-        'local_shape_hash': "ffff6e9a88b7109c9ec36992ff30a043f75979813f9251035d7b3000c840dbfb",
-    },
-}
+_QUEUE_SCHEMA_AHEAD_PINS: dict = {}
+
+# A claude-klabauter-first widening held under a version DoE has RESERVED and not yet
+# landed. The schema is byte-pinned to DoE HEAD while that holds; a worktree
+# carrying the widening is admitted only with the reserved marker present and a
+# version no lower than DoE's. Once DoE's version reaches `reserved_version`
+# the check fails: re-vendor, then delete the entry.
+_RESERVED_CLAUDE_KLABAUTER_FIRST_PINS: dict = {}
+
+
+def _schema_version_tuple(schema: dict) -> tuple:
+    parsed = _parse_semver_tuple(schema.get('x-schema-version', ''))
+    assert parsed is not None, f'unparseable x-schema-version in {schema.get("x-schema-name")}'
+    return parsed
+
+
+def _check_reserved_pin(name: str, schema_path: Path, entry: dict) -> None:
+    doe = subprocess.run(
+        ['git', '-C', str(_DOE_REPO), 'show', f'HEAD:coordinator/schemas/{name}.schema.json'],
+        capture_output=True,
+        text=True,
+        encoding='utf-8',
+        timeout=30,
+        **no_console_creationflags(),
+    )
+    assert doe.returncode == 0, f'Cannot read DoE HEAD {name}.schema.json: {doe.stderr.strip()}'
+    doe_schema = json.loads(doe.stdout)
+    assert _schema_version_tuple(doe_schema) < _parse_semver_tuple(entry['reserved_version']), (
+        f'DoE {name} reached the reserved {entry["reserved_version"]}: re-vendor it and '
+        f'delete the _RESERVED_CLAUDE_KLABAUTER_FIRST_PINS entry. Reason: {entry["reason"]}'
+    )
+    try:
+        check_schema_drift(schema_path, _DOE_REPO)
+        return
+    except SchemaProbeUnavailableError:
+        raise
+    except SchemaDriftError:
+        pass
+    local = json.loads(schema_path.read_text(encoding='utf-8'))
+    assert _schema_version_tuple(local) >= _schema_version_tuple(doe_schema), (
+        f'vendored {name} is below DoE HEAD and not byte-identical to it'
+    )
+    node = local
+    for key in entry['marker_path']:
+        node = node[key]
+    assert entry['marker'] in node, (
+        f'vendored {name} diverges from DoE HEAD without the reserved widening '
+        f'({entry["provenance"]}); re-vendor it from DoE'
+    )
 
 
 def _check_vendored_against_doe(name: str, schema_path: Path) -> None:
-    """Ahead-pinned schemas take the ahead check; every other one is byte-pinned to DoE HEAD."""
+    """Reserved widenings take the reservation check, ahead-pinned schemas the ahead check; every other one is byte-pinned to DoE HEAD."""
+    reserved = _RESERVED_CLAUDE_KLABAUTER_FIRST_PINS.get(name)
+    if reserved is not None:
+        _check_reserved_pin(name, schema_path, reserved)
+        return
     entry = _QUEUE_SCHEMA_AHEAD_PINS.get(name)
     if entry is None:
         check_schema_drift(schema_path, _DOE_REPO)
@@ -5431,9 +5426,10 @@ class TestAheadPinRegistryRouting:
     def test_every_ahead_pin_entry_is_routed_and_passes(self):
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
-        if not _QUEUE_SCHEMA_AHEAD_PINS:
+        names = [*_QUEUE_SCHEMA_AHEAD_PINS, *_RESERVED_CLAUDE_KLABAUTER_FIRST_PINS]
+        if not names:
             pytest.skip('ahead-pin registry is empty — the healthy resting state')
-        for name in _QUEUE_SCHEMA_AHEAD_PINS:
+        for name in names:
             _check_vendored_against_doe(name, _SCHEMAS_DIR / f'{name}.schema.json')
 
 
@@ -8310,10 +8306,10 @@ class TestArchiveSizingsGlobAlias:
 
     def test_yaml_loader_path_selects_schema(self, tmp_path):
         (tmp_path / 'sizing-object.yaml').write_text(
-            'schema: sizing-object\napplies_to: state/sizings/*.yaml\nrequired: []\n', encoding='utf-8')
+            'schema: sizing-object\napplies_to: state/sizings/**/*.yaml\nrequired: []\n', encoding='utf-8')
         schemas = load_schemas(tmp_path)
         globs = [(e['glob'], e['schemaName']) for e in schemas['_byGlob']]
-        assert ('state/sizings/*.yaml', 'sizing-object') in globs
+        assert ('state/sizings/**/*.yaml', 'sizing-object') in globs
         assert ('archive/sizings/*/*.yaml', 'sizing-object') in globs
         matched = match_schema(self._ARCHIVED, None, schemas)
         assert matched is not None and matched['schemaName'] == 'sizing-object'
@@ -8331,4 +8327,4 @@ class TestArchiveSizingsGlobAlias:
 
     def test_type_to_glob_keeps_primary_glob(self):
         from coordinator_core.frontmatter.schema_validate import build_type_to_glob
-        assert build_type_to_glob(_SCHEMAS_DIR)['sizing-object'] == 'state/sizings/*.yaml'
+        assert build_type_to_glob(_SCHEMAS_DIR)['sizing-object'] == 'state/sizings/**/*.yaml'

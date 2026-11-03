@@ -82,9 +82,10 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "repo", "route_preference", "sender", "sizing", "source", "stop_after", "supersedes",
-    "writes",
+    "em_rationale", "em_size", "join", "repo", "route_preference", "sender", "sizing", "source", "stop_after",
+    "supersedes", "writes",
 )
+_INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
 
 
 def _em_size_param(tool_input: Mapping[str, Any], multi_ask: bool) -> tuple[Optional[str], Optional[str]]:
@@ -490,11 +491,12 @@ _FANOUT_TAIL_GRACE_S = 0.25
 class _EmitOverran(Exception):
     """The emit outlived the caller's budget; `message` is the deny text."""
 
-    def __init__(self, message: str, minted: bool = False, stalled: bool = False) -> None:
+    def __init__(self, message: str, minted: bool = False, stalled: bool = False, run_ids: Sequence[str] = ()) -> None:
         super().__init__(message)
         self.message = message
         self.minted = minted
         self.stalled = stalled
+        self.run_ids = tuple(run_ids)
 
 
 def _caller_budget_s() -> float:
@@ -512,7 +514,7 @@ def _caller_budget_s() -> float:
 _ANSWER_SHARE = 0.85
 _SCAN_GRACE_S = 0.8
 _EMIT_FLOOR_S = 0.25
-_CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted"}
+_CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted", "gate", "gates", "answered"}
 
 
 def _emit_join_s() -> float:
@@ -566,20 +568,215 @@ def _minted_since_start(call: dict) -> Optional[list]:
     return None if thread.is_alive() else sorted(found)
 
 
+_MINTED_OP = "dispatch.minted_run"
+_ENVELOPE_GRACE_S = 0.35
+
+
 def _answer_overran(call: dict) -> dict:
-    """The deny for a call still running at the answer deadline: names every run it minted."""
+    """The answer for a call still running at the answer deadline. A run it minted rides an allow that
+    starts it (`_minted_start_envelope`); a deny only when no run was minted or the disk is stalled."""
+    import time
+
+    gate_state = _cancel_call_gates(call)
     minted = _minted_since_start(call)
+    deadline = time.monotonic() + _SCAN_GRACE_S
+    roots = call["roots"]
     if minted:
-        return _refuse(
-            f"The submission outran the hook budget after minting run {', '.join(minted)}. Do not re-submit: "
-            "the run exists; reconcile it by id (a re-submit duplicates it)."
-        )
+        return _minted_start_envelope(roots[0] if roots else None, minted, deadline)
     if minted is None:
         return _refuse(
             "The submission outran the hook budget and the disk is stalled, so whether a run was minted is unknown. "
-            "List recent runs under state/warp before re-submitting."
+            f"List recent runs under state/warp before re-submitting; start or abandon any at stage minted with {_MINTED_OP}."
         )
+    if gate_state == "committed":
+        ids = _token_run_ids_since(call, deadline) if roots else []
+        if ids:
+            return _minted_start_envelope(roots[0], ids, deadline)
+        return _refuse(f"The submission outran the hook budget as its run was minted. Do not re-submit. {_minted_remedy([])}")
+    if gate_state == "writing":
+        return _refuse(_STALLED_RECORD_WRITE)
     return _refuse("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
+
+
+_STALLED_RECORD_WRITE = (
+    "The submission was refused: the disk is stalled, so the run record could not be written within the hook "
+    "budget. Nothing was minted and no run will appear later; re-submitting is safe once the disk recovers."
+)
+
+
+def _cancel_call_gates(call: dict) -> str:
+    """Marks the call answered and cancels every emit gate it opened: "committed" when any had published its
+    token record, else "writing" when any was mid-write, else "idle". After it no emit of this call starts or publishes."""
+    call["answered"] = True
+    states = [g.cancel() for g in (call.get("gate"), *call.get("gates", ())) if g is not None]
+    for state in ("committed", "writing"):
+        if state in states:
+            return state
+    return "idle"
+
+
+def _token_run_ids_since(call: dict, deadline: float) -> list:
+    """Run ids whose token record this call published (minted after it began) under its roots; [] on a stalled read."""
+    from coordinator_core.ops.dispatch_emit.run_token import live_records
+
+    def read() -> list:
+        ids: list = []
+        for root in list(call["roots"]):
+            for record in live_records(root):
+                try:
+                    if float(record.get("minted_at") or 0) >= call["wall0"] - 1.0 and record["run_id"] not in ids:
+                        ids.append(record["run_id"])
+                except (TypeError, ValueError):
+                    continue
+        return ids
+
+    return _quick(read, deadline) or []
+
+
+def _quick(fn: Callable[[], Any], deadline: float) -> Any:
+    """`fn()` on a daemon thread joined until the monotonic `deadline`; None when it outlives that or raises."""
+    import time
+
+    box: list = []
+
+    def work() -> None:
+        try:
+            box.append(fn())
+        except Exception:
+            pass
+
+    thread = threading.Thread(target=_in_scope(work), daemon=True)
+    thread.start()
+    thread.join(max(deadline - time.monotonic(), 0.05))
+    return box[0] if box else None
+
+
+def _write_leg(label: str, fn: Callable[[], Any], gated: bool = False) -> tuple[str, Any]:
+    """A record write on a daemon thread joined to the remaining emit window: ("done", value),
+    ("raised", exception) or ("detached", None) for a thread still running at the window's end.
+    Detached is outcome-unknown (the hook process exiting kills the thread); `gated` cancels a
+    `run_token.mint` publish so it cannot land after the answer. The step is named on the call."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    gate = run_token.WriteGate() if gated else None
+    box: list = []
+
+    def work() -> None:
+        if gate is not None:
+            run_token.WRITE_GATE.set(gate)
+        try:
+            box.append(("done", fn()))
+        except Exception as exc:
+            box.append(("raised", exc))
+
+    thread = threading.Thread(target=_in_scope(work), daemon=True)
+    thread.start()
+    thread.join(_emit_join_s())
+    if box:
+        return box[0]
+    if gate is not None:
+        gate.cancel()
+    call = _CALL.get()
+    if call is not None and label not in call.setdefault("detached", []):
+        call["detached"].append(label)
+    return "detached", None
+
+
+def _write_or_detach(label: str, fn: Callable[[], Any]) -> bool:
+    """True when the write detached; a raise inside it propagates as it did unbounded."""
+    state, value = _write_leg(label, fn)
+    if state == "raised":
+        raise value
+    return state == "detached"
+
+
+def _detached_note(steps: Sequence[str]) -> str:
+    return (
+        f" Detached: {', '.join(steps)} did not finish within the hook budget, so whether it landed is unknown "
+        "and the run's commit is handed back."
+    )
+
+
+def _allow_rewrite(new_input: dict, context: str, reason: str) -> dict:
+    envelope = rewrite_input("PreToolUse", new_input, context)
+    hso = envelope["hookSpecificOutput"]
+    hso["permissionDecision"] = "allow"
+    hso["permissionDecisionReason"] = reason
+    return envelope
+
+
+def _minted_remedy(run_ids: Sequence[str]) -> str:
+    which = ", ".join(run_ids) if run_ids else "the run under state/warp left at stage minted"
+    return f"Start or abandon {which} with {_MINTED_OP} {{run_id, action: start|abandon}}."
+
+
+def _direct_start(root: Path, run_id: str, deadline: float) -> Optional[dict]:
+    """The rewrite onto a minted run's own script with the op's fire_args; None when the script is not on disk yet."""
+    def start() -> Any:
+        from coordinator_core.ops.dispatch_emit import minted_run
+
+        return minted_run._handler({"run_id": run_id, "action": "start"}, root)
+
+    reply = _quick(start, deadline)
+    if not (isinstance(reply, dict) and reply.get("ok") and reply.get("script_path")):
+        return None
+    new_input: dict = {"scriptPath": str(root / reply["script_path"])}
+    if reply.get("fire_args"):
+        new_input["args"] = reply["fire_args"]
+    return _allow_rewrite(
+        new_input,
+        f"Submitted to the engine as run {run_id}: its emit outran the hook budget after minting it, so the run starts "
+        f"from the script already on disk. It runs to its commit in the background; its completion notification is your "
+        f"one wake. Do not re-submit. End the turn: no polling, dispatch or verification meanwhile. {_revise_hint(run_id)}",
+        f"Engine submission: run {run_id} started after an emit overrun.",
+    )
+
+
+def _minted_start_envelope(root: Optional[Path], run_ids: Sequence[str], deadline: float) -> dict:
+    """The allow for runs the submission minted before the hook answered, never a deny.
+
+    A lone run whose script is on disk is started directly; any other rides a deferred script that starts
+    each through `dispatch.minted_run`, whose failure names the op's start and abandon. The deny is the
+    last resort (no root, no run id, or a script that cannot be written) and names the op."""
+    ids = sorted(run_ids)
+    if root is None or not ids:
+        return _refuse(f"The submission outran the hook budget after minting a run. {_minted_remedy(ids)}")
+    import time
+
+    if len(ids) == 1:
+        direct = _direct_start(root, ids[0], min(deadline, time.monotonic() + _ENVELOPE_GRACE_S / 2))
+        if direct is not None:
+            return direct
+    script = _quick(lambda: _write_minted_start_script(root, ids), max(deadline, time.monotonic() + 0.05))
+    if script is None:
+        return _refuse(f"The submission outran the hook budget after minting run {', '.join(ids)}. {_minted_remedy(ids)}")
+    return _allow_rewrite(
+        {"scriptPath": str(script)},
+        f"Submitted to the engine as run {', '.join(ids)}: its emit outran the hook budget after minting it, so a script "
+        f"starts it in the background through {_MINTED_OP}. Its completion notification is your one wake. "
+        "Do not re-submit. End the turn: no polling, dispatch or verification meanwhile.",
+        f"Engine submission: minted run {', '.join(ids)}, deferred start {script.name}.",
+    )
+
+
+def _runner_less_run(root: Path, sizing_rel: str, live: Optional[str]) -> Optional[str]:
+    """The run for `sizing_rel` that was minted, joined no launch past `warp_live.MINTED_RUNNER_GRACE_SECONDS`
+    and so has no runner: `live` itself when it proves none, else a token-held run of that sizing. Resumable
+    through `_MINTED_OP`, never "already working"."""
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if live:
+        return live if warp_live.runner_unproven(root, live) else None
+    rel = run_token.normalize_sizing_rel(root, sizing_rel)
+    if not rel:
+        return None
+    for record in run_token.live_records(root):
+        named = record.get("sizing_rel")
+        if isinstance(named, str) and run_token.normalize_sizing_rel(root, named) == rel:
+            if warp_live.runner_unproven(root, record["run_id"]):
+                return record["run_id"]
+    return None
 
 
 def _run_dirs(root: Path) -> set:
@@ -592,6 +789,28 @@ def _run_dirs(root: Path) -> set:
         return set()
 
 
+def _emit_gate(call: Optional[dict]) -> Any:
+    """The write gate for one emit: the call's own for its first emit, a registered extra for each later one,
+    so `_answer_overran` cancels them all. `_EmitOverran` (nothing minted) when the call has already answered."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    refusal = "The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once."
+    if call is None:
+        return run_token.WriteGate()
+    if call.get("answered"):
+        raise _EmitOverran(refusal)
+    if call.get("gate") is not None and not call.get("gate_used"):
+        call["gate_used"] = True
+        gate = call["gate"]
+    else:
+        gate = run_token.WriteGate()
+        call.setdefault("gates", []).append(gate)
+    if call.get("answered"):  # the answer landed between the check and the registration
+        gate.cancel()
+        raise _EmitOverran(refusal)
+    return gate
+
+
 def _emit_within_budget(
     emit: EmitFn, params: dict, root: Path, budget_s: Optional[float] = None, scan: bool = True
 ) -> dict:
@@ -601,6 +820,10 @@ def _emit_within_budget(
     the answer must land first or the caller denies with no run id and the EM re-submits.
     `scan=False` skips the `state/warp` directory walk: the emit writes only a run-token record, which
     the write gate alone reports."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    call = _CALL.get()
+    gate = _emit_gate(call)
     # Trap: a concurrent submission's run minted in the window is named as ours; over-naming is the safe side of "do not re-submit".
     before = _run_dirs(root) if scan else set()
     box: dict = {}
@@ -610,10 +833,6 @@ def _emit_within_budget(
             box["result"] = emit(params, root)
         except BaseException as exc:  # re-raised on the caller's thread
             box["error"] = exc
-
-    from coordinator_core.ops.dispatch_emit import run_token
-
-    gate = run_token.WriteGate()
 
     def gated() -> None:
         run_token.WRITE_GATE.set(gate)
@@ -630,20 +849,19 @@ def _emit_within_budget(
                 f"The submission outran the hook budget after minting run {names}. Do not re-submit: "
                 f"the run exists; reconcile it by id (a re-submit duplicates it).",
                 minted=True,
+                run_ids=minted,
             )
         # The cancel keeps the abandoned thread from publishing its record after this answer.
         cancelled_in = gate.cancel()
         if cancelled_in == "writing":
-            raise _EmitOverran(
-                "The submission was refused: the disk is stalled, so the run record could not be written within the hook "
-                "budget. Nothing was minted and no run will appear later; re-submitting is safe once the disk recovers.",
-                stalled=True,
-            )
+            raise _EmitOverran(_STALLED_RECORD_WRITE, stalled=True)
         if cancelled_in == "committed":  # the record published between the scan above and the cancel
+            late = sorted(_run_dirs(root) - before) if scan else []
             raise _EmitOverran(
                 "The submission outran the hook budget as its run was minted. Do not re-submit: "
                 "the run exists; reconcile it by listing runs (a re-submit duplicates it).",
                 minted=True,
+                run_ids=late,
             )
         raise _EmitOverran("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
     if "error" in box:
@@ -654,6 +872,7 @@ def _emit_within_budget(
 _DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: 'Emits and starts one submission whose emit outran the hook budget' }
 const REPO_ROOT = __REPO_ROOT__;
 const PARAMS = __PARAMS__;
+const PARAMS_FILE = __PARAMS_FILE__;
 const INVOKE = __INVOKE__;
 const EMIT_OP = __EMIT_OP__;
 const EMIT_SCHEMA = {
@@ -661,9 +880,11 @@ const EMIT_SCHEMA = {
   required: ['path', 'run_id', 'fire_args'],
   properties: { path: { type: 'string' }, run_id: { type: 'string' }, fire_args: { type: 'object' }, error: { type: 'string' } },
 };
+// Trap: a relay re-typing a long params JSON mangles its keys, so an oversize payload rides a file the command names.
+const EMIT_ARGS = PARAMS_FILE !== '' ? '--params-file "' + PARAMS_FILE + '"' : "'" + PARAMS.replace(/'/g, "'\\''") + "'";
 const reply = await agent(
   __AUTHORITY__
-  + ' Run `' + INVOKE + ' ' + EMIT_OP + " '" + PARAMS.replace(/'/g, "'\\''") + "'` once, with the command word exactly as written, and "
+  + ' Run `' + INVOKE + ' ' + EMIT_OP + ' ' + EMIT_ARGS + '` once, with the command word exactly as written, and '
   + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
   + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
   + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
@@ -743,13 +964,32 @@ if (!_blankPath(_rp)) {
 }
 if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
 const _chainRun = _pathRunId(chain.path);
-if (_chainRun === '' || _chainRun === reply.run_id) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id');
+if (_chainRun === '' || _chainRun === reply.run_id || _chainRun === _pathRunId(scriptPath)) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id');
 const chained = await _startLoop(_normPath(chain.path));
 if (!chained.ok) return _fail(chained.error);
 const r = chained.result;
 if (r !== null && typeof r === 'object' && r.__CHAIN_KEY__) return _fail('the chained run returned a second hand-off');
 return (r !== null && typeof r === 'object') ? { ...r, chained_from: reply.run_id } : { chained: r, chained_from: reply.run_id };
 """
+
+
+#: Longest inline `ask_brief` a deferred script re-types through its relay agent; a longer one rides a repo file.
+DEFERRED_BRIEF_INLINE_MAX = 2000
+
+#: Longest serialized params a deferred script re-types inline after the brief spill; a longer payload rides `--params-file`.
+DEFERRED_PARAMS_INLINE_MAX = 4000
+
+
+def _spill_long_brief(root: Path, params: dict) -> dict:
+    """`params` with an inline `ask_brief` past `DEFERRED_BRIEF_INLINE_MAX` moved to `scratch/warp/` as `ask_brief_file`,
+    so the relay's copied command stays short. Trap: a relay re-typing a long brief mangles the params keys."""
+    brief = params.get("ask_brief")
+    if not isinstance(brief, str) or len(brief) <= DEFERRED_BRIEF_INLINE_MAX or params.get("ask_brief_file"):
+        return params
+    spill = root / "scratch" / "warp" / f"defer-brief-{uuid.uuid4().hex[:12]}.md"
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text(brief, encoding="utf-8", newline="\n")
+    return {**{k: v for k, v in params.items() if k != "ask_brief"}, "ask_brief_file": spill.relative_to(root).as_posix()}
 
 
 def _write_deferred_script(root: Path, params: dict) -> Path:
@@ -766,6 +1006,7 @@ def _write_deferred_script(root: Path, params: dict) -> Path:
     # in-process, so a raw ask carries none and the CLI emit refuses "requires repo_root or target_root".
     if not params.get("target_root"):
         params = {**params, "target_root": Path(root).as_posix()}
+    params = _spill_long_brief(root, params)
     if params.get(LAUNCHER_CHILD_EMIT_PARAM) is True:
         start = f"return {{ {DEFERRED_EMIT_KEY}: {{ path: scriptPath, run_id: reply.run_id, fire_args: reply.fire_args || {{}} }} }};"
     else:
@@ -783,10 +1024,18 @@ def _write_deferred_script(root: Path, params: dict) -> Path:
             "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
         }
         start = re.sub("|".join(start_values), lambda m: start_values[m.group(0)], _DEFERRED_START_JS)
+    params_json = json.dumps(params, default=str, ensure_ascii=True)
+    params_file = ""
+    if len(params_json) > DEFERRED_PARAMS_INLINE_MAX:
+        spill = root / "scratch" / "warp" / f"defer-params-{uuid.uuid4().hex[:12]}.json"
+        spill.parent.mkdir(parents=True, exist_ok=True)
+        spill.write_text(params_json, encoding="utf-8", newline="\n")
+        params_file, params_json = spill.as_posix(), "{}"
     values = {
         "__START__": start,
         "__REPO_ROOT__": json.dumps(Path(root).as_posix()),
-        "__PARAMS__": json.dumps(json.dumps(params, default=str, ensure_ascii=True)),
+        "__PARAMS__": json.dumps(params_json),
+        "__PARAMS_FILE__": json.dumps(params_file),
         "__INVOKE__": json.dumps(_INVOKE),
         "__EMIT_OP__": json.dumps(_EMIT_OP),
         "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
@@ -794,6 +1043,67 @@ def _write_deferred_script(root: Path, params: dict) -> Path:
     script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text(re.sub("|".join(values), lambda m: values[m.group(0)], _DEFERRED_JS), encoding="utf-8")
+    return script
+
+
+_MINTED_START_JS = r"""export const meta = { name: 'engine-ask-minted-start', description: 'Starts runs a submission minted before its hook answered' }
+const REPO_ROOT = __REPO_ROOT__;
+const RUN_IDS = __RUN_IDS__;
+const INVOKE = __INVOKE__;
+const OP = __OP__;
+const RUN_SCRIPT_SUFFIX = __RUN_SCRIPT_SUFFIX__;
+const START_SCHEMA = {
+  type: 'object',
+  required: ['ok', 'script_path'],
+  properties: { ok: { type: 'boolean' }, script_path: { type: 'string' }, refusal: { type: 'string' } },
+};
+function _normPath(p) {
+  const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : REPO_ROOT + '/' + s.replace(/^\.\//, '');
+}
+const results = [];
+for (const rid of RUN_IDS) {
+  const params = JSON.stringify({ run_id: rid, action: 'start' });
+  const reply = await agent(
+    __AUTHORITY__
+    + ' Run `' + INVOKE + ' --repo "' + REPO_ROOT + '" ' + OP + " '" + params + "'` once, with the command word exactly as written, and "
+    + 'return ok, script_path and refusal from its JSON reply verbatim. When the command is denied or fails, '
+    + "return ok false, script_path as an empty string and the command's error text verbatim in refusal. "
+    + 'If you do not run the command for any reason, put that reason verbatim in refusal the same way.',
+    { label: 'minted-start', phase: 'start', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: START_SCHEMA },
+  );
+  const path = (reply && reply.ok === true && typeof reply.script_path === 'string') ? _normPath(reply.script_path) : '';
+  // Trap: the relay can mis-copy; the script path must be this run's own script.
+  if (path === '' || path.split('/').pop() !== rid + RUN_SCRIPT_SUFFIX) {
+    return {
+      status: 'failed', run_id: rid,
+      error: 'minted run ' + rid + ' did not start (' + ((reply && reply.refusal) || 'the op returned no run script') + '); start or abandon it with ' + OP + ' {"run_id":"' + rid + '","action":"start|abandon"}',
+    };
+  }
+  results.push(await workflow({ scriptPath: path }));
+}
+return results.length === 1 ? results[0] : { started: results };
+"""
+
+
+def _write_minted_start_script(root: Path, run_ids: Sequence[str]) -> Path:
+    """A script under `scratch/warp/` that starts each minted run through `dispatch.minted_run`."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.fan_launcher import _INVOKE, EMIT_RELAY_AUTHORITY
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import RUN_SCRIPT_SUFFIX
+
+    values = {
+        "__REPO_ROOT__": json.dumps(Path(root).as_posix()),
+        "__RUN_IDS__": json.dumps(list(run_ids)),
+        "__INVOKE__": json.dumps(_INVOKE),
+        "__OP__": json.dumps(_MINTED_OP),
+        "__RUN_SCRIPT_SUFFIX__": json.dumps(RUN_SCRIPT_SUFFIX),
+        "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
+    }
+    script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(re.sub("|".join(values), lambda m: values[m.group(0)], _MINTED_START_JS), encoding="utf-8")
     return script
 
 
@@ -809,13 +1119,13 @@ def _premintable(params: dict, sizing_rel: Optional[str], asks: Optional[list], 
     )
 
 
-def _premint_marker(params: dict, root: Path) -> dict:
-    """Mint the run id and publish its run-token marker (the one record write before the answer).
-    A marker whose deferred script never runs is reaped by the token TTL."""
+def _premint_marker(params: dict, root: Path, run_id: Optional[str] = None) -> dict:
+    """Mint the run id (`run_id` when the caller chose it first) and publish its run-token marker (the one
+    record write before the answer). A marker whose deferred script never runs is reaped by the token TTL."""
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
-    run_id = run_token.new_ask_run_id()
+    run_id = run_id or run_token.new_ask_run_id()
     run_token.mint(
         root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
         session_id=params.get("session_id") or None, marker=True,
@@ -1028,6 +1338,38 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
     return asks, None
 
 
+def _join(tool_input: Mapping[str, Any]) -> tuple[Optional[dict], Optional[str]]:
+    """(join, refusal) from `args.join`: `{ask, inputs: [{run_id, repo?}]}`, valid beside `asks` only."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import JOIN_ITEM_KEYS
+
+    args = tool_input.get("args")
+    if not isinstance(args, dict) or "join" not in args:
+        return None, None
+    join = args["join"]
+    if "asks" not in args:
+        return None, "join rides an asks submission, not a single ask or sizing."
+    if not isinstance(join, dict):
+        return None, "join must be an object {ask, inputs: [{run_id, repo?}]}."
+    unknown = unknown_keys_refusal("join", join, JOIN_ITEM_KEYS)
+    if unknown:
+        return None, unknown
+    if not isinstance(join.get("ask"), str) or not join["ask"].strip():
+        return None, "join carries no ask text."
+    inputs = join.get("inputs")
+    if not isinstance(inputs, list) or not inputs:
+        return None, "join.inputs must be a non-empty list of {run_id, repo?}."
+    for i, item in enumerate(inputs):
+        if not isinstance(item, dict) or not isinstance(item.get("run_id"), str) or not item["run_id"].strip():
+            return None, f"join.inputs[{i}] carries no run_id."
+        unknown = unknown_keys_refusal(f"join.inputs[{i}]", item, _INPUT_KEYS)
+        if unknown:
+            return None, unknown
+        repo = item.get("repo")
+        if repo is not None and (not isinstance(repo, str) or not repo.strip()):
+            return None, f"join.inputs[{i}].repo must be an absolute repo path (a string)."
+    return join, None
+
+
 def _status_of(root: Path, run_id: str) -> Optional[str]:
     """A run's `sibling-status.json` status; None when the run has not bound or the file is unreadable."""
     import json
@@ -1134,6 +1476,16 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
         return (
             f"Predecessor {pred} has not landed ({state}). "
             f"Resubmit {run_id} once its close lands it; no call releases it sooner."
+        )
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import external_status
+
+    for ref in mine.after_external:
+        if external_status(root, ref) == STATUS_LANDED:
+            continue
+        where = f" in {ref.repo}" if ref.repo else ""
+        return (
+            f"Join input {ref.run_id}{where} has not landed, so {run_id} cannot start. "
+            f"Check it: coordinator-invoke dispatch.sibling_status {{parent_id: {parent_id}}}."
         )
     return None
 
@@ -1486,12 +1838,10 @@ def _launch_all(
     """The rewrite to one launcher script that emits and starts every ready run of an asks submission.
 
     `sizing_root` is the root the fan-out wrote the child sizings under; each child emit resolves its sizing there."""
-    from coordinator_core import warp_live
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
     tool_input = payload["tool_input"]
     session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
-    transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
     try:
         children = [
             LaunchChild(
@@ -1508,6 +1858,17 @@ def _launch_all(
         script = (launch or _default_launch)(root, parent_id, children, session_id)
     except Exception as exc:  # the launcher's refusal text is the whole message
         return _refuse(f"The engine wrote no launcher: {exc}")
+    return _launch_envelope(root, payload, fan_reply, ready, script, advisory)
+
+
+def _launch_envelope(
+    root: Path, payload: Mapping[str, Any], fan_reply: Mapping[str, Any], ready: Sequence[Any], script: Any, advisory: str
+) -> dict:
+    """Bind `script` to each ready run and build the allow/rewrite envelope onto it."""
+    from coordinator_core import warp_live
+
+    session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+    transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
     call_id = payload.get("tool_use_id")
     for r in ready:
         try:
@@ -1533,6 +1894,31 @@ def _launch_all(
     hso["permissionDecision"] = "allow"
     hso["permissionDecisionReason"] = f"Engine submission: wrote {Path(script).name} this call."
     return envelope
+
+
+def _reusable_envelope(root: Path, payload: Mapping[str, Any], fan_params: Mapping[str, Any], advisory: str) -> Optional[dict]:
+    """Reap aged unstarted parents, then the rewrite onto the launcher of a minted-not-started parent for the
+    same submission; None mints a fresh parent. Both index reads are budget-bounded and fail open."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit import minted_parent
+
+    now = time.time()
+    digest = minted_parent.asks_digest(fan_params)
+    try:
+        _bounded_call(("reap", str(root)), lambda: minted_parent.reap_orphans(root, now))
+        hit = _bounded_call(("reuse", str(root), digest), lambda: minted_parent.find_reusable(root, digest, now))
+    except Exception:  # reuse is an optimisation: any read fault mints fresh
+        return None
+    if not isinstance(hit, minted_parent.Reusable):
+        return None
+    parent = _read_parent(root, hit.parent_id)
+    wanted = {run_id for run_id, _ in hit.ready}
+    ready = [r for r in (parent.runs if parent else ()) if r.run_id in wanted]
+    if not ready:
+        return None
+    note = f" Re-submission of {hit.parent_id}: its unstarted launcher is reused; nothing new minted."
+    return _launch_envelope(root, payload, {"parent_id": hit.parent_id}, ready, hit.launcher, note + advisory)
 
 
 def _spawn_recompose(root: Path, run_id: str) -> bool:
@@ -1610,12 +1996,19 @@ def _resume_fire_args(root: Path, run_id: str, sizing_rel: str, session_id: Opti
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
-    try:
-        token = run_token.mint(
+    state, token = _write_leg(
+        "run_token.mint",
+        lambda: run_token.mint(
             root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs", session_id=session_id, sizing_rel=sizing_rel
-        )
-    except (OSError, ValueError):
-        return {}
+        ),
+        gated=True,
+    )
+    if state == "detached":
+        return {"detached": ["run_token.mint"]}
+    if state == "raised":
+        if isinstance(token, (OSError, ValueError)):
+            return {}
+        raise token
     return {"fire_args": {"repoRoot": root.as_posix(), "runToken": token}}
 
 
@@ -1816,9 +2209,10 @@ def evaluate(
     _BUDGET = [_READ_DEADLINE_MS]
     try:
         if is_submission(payload):
+            from coordinator_core.ops.dispatch_emit.run_token import WriteGate
             from coordinator_core.ops.dispatch_emit.sizing_fire import sizing_memo
 
-            call = {"t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": []}
+            call = {"t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": []}
             box: dict = {}
 
             def body() -> None:
@@ -1869,6 +2263,9 @@ def _evaluate(
     asks, asks_refusal = _asks(payload["tool_input"])
     if asks_refusal:
         return _refuse(asks_refusal)
+    join, join_refusal = _join(payload["tool_input"])
+    if join_refusal:
+        return _refuse(join_refusal)
     if sum(x is not None for x in (ask, sizing_rel, asks)) != 1:
         return _refuse("Submit exactly one of ask, sizing, asks.")
     from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES
@@ -1903,7 +2300,7 @@ def _evaluate(
         ]
         if call_stop is not None:
             asks = [{**item, "stop_after": item.get("stop_after", call_stop)} for item in asks]
-        if len(asks) == 1 and not (
+        if len(asks) == 1 and join is None and not (
             asks[0].get("sender") or asks[0].get("relayed_text") or payload["tool_input"]["args"].get("sender")
         ):
             ask, source = asks[0]["ask"], asks[0].get("source")
@@ -2010,10 +2407,16 @@ def _evaluate(
         fan_params: dict = {"asks": fan_asks, "session_id": session_id or ""}
         if session_root:
             fan_params["session_root"] = session_root
+        if join is not None:
+            fan_params["join"] = join
         if isinstance(payload["tool_input"]["args"].get("sender"), str):
             fan_params["sender"] = payload["tool_input"]["args"]["sender"]
         if payload["tool_input"]["args"].get("confirm_split") is True:
             fan_params["confirm_split"] = True
+        if fanout is None:
+            reused = _reusable_envelope(root, payload, fan_params, memo_advisory)
+            if reused is not None:
+                return reused
         try:
             fan_reply = (fanout or _default_fanout)(fan_params, root)
         except Exception as exc:  # the engine's refusal text is the whole message
@@ -2072,10 +2475,19 @@ def _evaluate(
 
             stale = warp_live.unlaunched_run_for_sizing(root, sizing_rel, session_id)
             if stale:
-                run_token.consume(root, stale)
+                _write_or_detach("run_token.consume", lambda: run_token.consume(root, stale))
             live = warp_live.live_run_for_sizing(
                 root, sizing_rel, session_id=session_id, transcript_path=transcript
             )
+            stranded = _bounded_call(
+                ("runner_less", str(root), sizing_rel), lambda: _runner_less_run(root, sizing_rel, live)
+            )
+            if not isinstance(stranded, str):
+                stranded = None
+            if stranded:
+                import time
+
+                return _minted_start_envelope(root, [stranded], time.monotonic() + _ENVELOPE_GRACE_S)
             if live:
                 return deny(
                     "PreToolUse",
@@ -2146,9 +2558,15 @@ def _evaluate(
             return resume_envelope
     if result is None and emit is None and _premintable(params, sizing_rel, asks, supersedes):
         minted = None
+        from coordinator_core.ops.dispatch_emit import run_token as _rt
+
+        chosen = _rt.new_ask_run_id()
         try:
-            minted = _emit_within_budget(_premint_marker, params, root, scan=False)
+            minted = _emit_within_budget(lambda p, r: _premint_marker(p, r, chosen), params, root, scan=False)
         except _EmitOverran as over:
+            if over.minted:  # the marker published as the budget ran out: the chosen id is the run
+                _note_minted(chosen)
+                return _premint_deferred_envelope(root, params, chosen)
             return _refuse(over.message)
         except (OSError, ValueError):  # no git dir to hold the marker: the inline emit hands the commit back to the EM
             pass
@@ -2159,7 +2577,11 @@ def _evaluate(
         try:
             result = _emit_within_budget(emit or _default_emit, params, root)
         except _EmitOverran as over:
-            return _refuse(over.message) if over.minted or over.stalled else _deferred_envelope(root, params, over)
+            if over.minted:
+                import time
+
+                return _minted_start_envelope(root, over.run_ids, time.monotonic() + _ENVELOPE_GRACE_S)
+            return _refuse(over.message) if over.stalled else _deferred_envelope(root, params, over)
         except Exception as exc:  # the engine's refusal text is the whole message
             return _refuse(_name_root_tried(f"The engine refused the submission: {_cause(exc)}", root, sizing_rel))
 
@@ -2171,20 +2593,23 @@ def _evaluate(
         if stale:
             from coordinator_core.ops.dispatch_emit import run_token
 
-            run_token.consume(root, str(stale))
+            _write_or_detach("run_token.consume", lambda: run_token.consume(root, str(stale)))
         return _refuse(_name_root_tried(f"The engine emitted no run: {_no_run_detail(result)}", root, sizing_rel))
 
     run_id = result.get("run_id") or Path(script).name
     call_id = payload.get("tool_use_id")
     try:
-        warp_live.record_submission(
-            root,
-            str(run_id),
-            session_id=session_id,
-            transcript_path=transcript,
-            script_path=str(script),
-            sizing_rel=sizing_rel,
-            tool_use_id=call_id if isinstance(call_id, str) else None,
+        _write_or_detach(
+            "warp_live.record_submission",
+            lambda: warp_live.record_submission(
+                root,
+                str(run_id),
+                session_id=session_id,
+                transcript_path=transcript,
+                script_path=str(script),
+                sizing_rel=sizing_rel,
+                tool_use_id=call_id if isinstance(call_id, str) else None,
+            ),
         )
     except OSError:
         pass  # liveness then reads the run token alone
@@ -2250,12 +2675,21 @@ def _evaluate(
                 f" Research artifacts for this ask already exist: {', '.join(found)}. "
                 "Read them before the build reruns that work."
             )
+    detached_steps = list(result.get("detached") or []) if isinstance(result, dict) else []
+    call_now = _CALL.get()
+    for step in (call_now or {}).get("detached", ()):
+        if step not in detached_steps:
+            detached_steps.append(step)
+    detached_note = _detached_note(detached_steps) if detached_steps else ""
     envelope = rewrite_input(
         "PreToolUse",
         new_input,
-        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived}{retire_note} {tail} {_revise_hint(str(run_id))}",
+        f"{lead}Submitted to the engine as run {run_id}.{marked}{carries}{derived}{retire_note}{detached_note} {tail} {_revise_hint(str(run_id))}",
     )
     hso = envelope["hookSpecificOutput"]
+    if detached_steps:
+        hso["detached"] = True
+        hso["detachedSteps"] = detached_steps
     hso["permissionDecision"] = "allow"
     hso["permissionDecisionReason"] = f"Engine submission: emitted {Path(script).name} this call."
     return envelope

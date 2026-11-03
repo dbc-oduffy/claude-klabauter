@@ -34,7 +34,28 @@ def select(census: Sequence, primitives: Optional[ReapPrimitives] = None) -> Lis
     return [r for r in census if is_search_name(r.name) and _parent_dead(r, by_pid, primitives)]
 
 
+def protected_pids(self_pid: Optional[int] = None) -> frozenset:
+    """The current pid plus every ancestor. A kill path refuses these targets.
+
+    An unreadable ancestry yields the pid alone."""
+    me = os.getpid() if self_pid is None else self_pid
+    pids = {me}
+    try:
+        import psutil
+
+        pids.update(p.pid for p in psutil.Process(me).parents())
+    except Exception:  # noqa: BLE001 -- ancestry is best-effort; own pid always protected
+        pass
+    return frozenset(pids)
+
+
+def is_self_or_ancestor(pid: int, self_pid: Optional[int] = None) -> bool:
+    return pid in protected_pids(self_pid)
+
+
 def _terminate(pid: int) -> None:
+    if is_self_or_ancestor(pid):
+        return
     os.kill(pid, signal.SIGTERM)
 
 
@@ -45,10 +66,10 @@ def reap(primitives: ReapPrimitives, terminate: Callable[[int], None] = _termina
     census = primitives.snapshot()
     if not census:
         return []
-    me = os.getpid() if self_pid is None else self_pid
+    protected = protected_pids(self_pid)
     reaped: List[int] = []
     for row in select(census, primitives):
-        if row.pid == me:
+        if row.pid in protected:
             continue
         if row.ctime and primitives.creation_time(row.pid) != row.ctime:
             continue

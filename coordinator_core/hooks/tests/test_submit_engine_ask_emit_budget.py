@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -14,6 +15,13 @@ pytestmark = [pytest.mark.cadence]
 
 BAR_S = 0.5
 repo = real.repo
+
+
+def _token_dir(repo_root):
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir
+
+    return engine_record_dir(repo_root) / run_token._DIR
 
 
 def test_listing_scope_lists_each_session_dir_once_and_never_the_parent(tmp_path, monkeypatch):
@@ -100,11 +108,13 @@ def test_overrun_with_no_run_minted_is_taken_as_a_deferred_emit(repo, monkeypatc
     assert "nothing was taken" not in str(env)
 
 
-def test_overrun_after_a_run_was_minted_still_refuses_and_names_it(repo, monkeypatch):
+def test_overrun_after_a_run_was_minted_starts_it_and_names_it(repo, monkeypatch):
+    # A minted run is started, never denied: a deny here orphaned the run it had just minted.
     env = _overrun(repo, monkeypatch, mint=True)
     hso = env["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny", env
-    assert "ask-20261029T200000-e3414a" in hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow", env
+    assert "ask-20261029T200000-e3414a" in json.dumps(env)
+    assert "Do not re-submit" in json.dumps(env)
 
 
 def _stall_record_write(monkeypatch):
@@ -149,7 +159,7 @@ def test_stalled_record_write_refuses_naming_the_disk_and_leaves_no_late_run(rep
     reason = hso["permissionDecisionReason"]
     assert "disk is stalled" in reason and "re-submitting is safe" in reason
     assert done.wait(10)  # the stalled write has now returned
-    token_dir = repo / ".git" / "coordinator-warp-run-tokens"
+    token_dir = _token_dir(repo)
     assert not list(token_dir.glob("*.json")) and not list(token_dir.glob(".mint.*"))
     assert not list((repo / "scratch" / "warp").glob("defer-*"))  # no deferred emit onto the stalled disk
 
@@ -170,7 +180,7 @@ def test_default_ask_answers_with_a_run_id_before_any_bulk_io_on_a_slow_disk(rep
     assert found, hso["additionalContext"]
     assert charger.waited_ms + spent_ms < 0.8 * mod._caller_budget_s() * 1000.0, charger.report()
     assert not [s for s in charger.report() if s["bulk"]], charger.report()
-    assert (repo / ".git" / "coordinator-warp-run-tokens" / f"{found.group(0)}.json").is_file()
+    assert (_token_dir(repo) / f"{found.group(0)}.json").is_file()
     assert not (repo / "scratch" / "warp" / found.group(0)).exists()  # the prompts are the run's own emit, later
 
 
@@ -181,7 +191,7 @@ def test_unwritable_deferred_script_refuses_and_drops_the_minted_marker(repo, mo
     monkeypatch.setattr(mod, "_write_deferred_script", fail)
     env = mod.evaluate(real._payload(repo, {"ask": "build the thing", "source": "relayed"}))
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
-    token_dir = repo / ".git" / "coordinator-warp-run-tokens"
+    token_dir = _token_dir(repo)
     assert not list(token_dir.glob("ask-*.json"))
 
 
@@ -205,7 +215,7 @@ def test_non_stalled_emit_mints_its_record(repo, monkeypatch):
     real._put_sizing(repo)
     env = mod.evaluate(real._payload(repo, {"sizing": real.REL}))
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
-    assert list((repo / ".git" / "coordinator-warp-run-tokens").glob("*.json"))
+    assert list(_token_dir(repo).glob("*.json"))
 
 
 def _fan_children():

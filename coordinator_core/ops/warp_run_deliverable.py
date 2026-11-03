@@ -419,6 +419,7 @@ def _live_peer_run(
     """True when a held `record` is a live peer's run: fresh (claimed records included), a
     non-empty `session_id` other than `exclude_session` that is `touch_record.session_live`, not
     halted, not landed, not stale at stage `minted` (`_stale_at_minted`; such a run is halted here),
+    not minted with an unproven runner (`warp_live.runner_unproven`; resumable, not held),
     and (when given) strictly senior to `minted_before=(minted_at, run_id)`."""
     from coordinator_core.session import touch_record
 
@@ -433,7 +434,9 @@ def _live_peer_run(
     if _stale_at_minted(root, run_id):
         _halt_abandoned(root, run_id)
         return False
-    return True
+    from coordinator_core import warp_live
+
+    return not warp_live.runner_unproven(root, run_id)
 
 
 def live_record_dir_owners(

@@ -640,6 +640,11 @@ def spawn_detached(
         spawn_detached as _spawn_detached_impl,
     )
 
+    from coordinator_core.warm import breadcrumb
+
+    holder_env = breadcrumb.publish_holder_env(Path(repo_root))
+    if holder_env:
+        env_extra = {**(env_extra or {}), **holder_env}
     return _spawn_detached_impl(repo_root, script_path, args, env_extra)
 
 
@@ -708,7 +713,19 @@ def _spawn_once() -> None:
     )
 
 
-def _drain_publish_hold() -> "Optional[bool]":
+def _boot_wait_disabled() -> bool:
+    """True iff `COORDINATOR_WARM_BOOT_WAIT_SECS` parses to <= 0: the declaration
+    a hook path makes (see `invoke/warm_miss.py`) that blocking is unacceptable."""
+    raw = os.environ.get("COORDINATOR_WARM_BOOT_WAIT_SECS")
+    if raw is None or raw.strip() == "":
+        return False
+    try:
+        return float(raw) <= 0
+    except ValueError:
+        return False
+
+
+def _drain_publish_hold(hook_path: bool = False) -> "Optional[bool]":
     """Queue this caller behind a publish copy instead of failing it.
 
     None: no publish marker held (caller proceeds to its normal spawn path).
@@ -716,6 +733,10 @@ def _drain_publish_hold() -> "Optional[bool]":
     the pipe once). False: the holder is wedged (stale heartbeat) or the swap
     backstop elapsed; the runnable remedy goes to stderr, the caller spawns
     nothing and goes cold. Never raises.
+
+    `hook_path`: a hook-shaped caller waits at most `DRAIN_WAIT_SECS` for the
+    release, then gets False at once (its degraded answer) -- never the swap
+    backstop, never a spawn.
     """
     try:
         from coordinator_core.warm import breadcrumb
@@ -723,6 +744,8 @@ def _drain_publish_hold() -> "Optional[bool]":
         root = _engine_clone_root()
         if not breadcrumb.publish_marker_held(breadcrumb.svc_dir(root)):
             return None
+        if hook_path or _boot_wait_disabled():
+            return breadcrumb.wait_for_publish_release(root)
         released = breadcrumb.wait_for_publish_swap(root)
         if not released:
             try:
@@ -1101,7 +1124,21 @@ def _indeterminate_text_for(method: Any) -> str:
 _RECONCILE_POLL_METHOD = "warm.request_status"
 
 
-def _poll_command_for(dispatch_key: str) -> str:
+def _delivering_engine() -> Optional[dict]:
+    """`{"pid": int}` of the engine whose breadcrumb is on disk now, or None.
+    Failure-path only (a disk read; `breadcrumb` is imported here, never at module
+    scope -- cold-start preamble). Never raises."""
+    try:
+        from coordinator_core.warm import breadcrumb
+        from coordinator_core.warm.engine_root import current_engine_clone
+
+        pid = (breadcrumb.read_breadcrumb(current_engine_clone()) or {}).get("pid")
+    except Exception:  # noqa: BLE001 -- diagnostics never mask the envelope
+        return None
+    return {"pid": pid} if isinstance(pid, int) and not isinstance(pid, bool) else None
+
+
+def _poll_command_for(dispatch_key: str, engine: Optional[dict] = None) -> str:
     """The exact, runnable poll invocation for `dispatch_key` (C5).
 
     Follows the one precedent already in the tree for a printed CLI
@@ -1110,7 +1147,10 @@ def _poll_command_for(dispatch_key: str) -> str:
     --bare`. `--bare` prints just `result`, matching a poll's own shape (a
     caller wants the state dict, not a JSON-RPC envelope).
     """
-    params = json.dumps({"key": dispatch_key}, ensure_ascii=False)
+    poll: dict = {"key": dispatch_key}
+    if engine:
+        poll["expect_engine"] = engine
+    params = json.dumps(poll, ensure_ascii=False)
     return f"python3 -m coordinator_core.invoke {_RECONCILE_POLL_METHOD} '{params}' --bare"
 
 
@@ -1191,8 +1231,11 @@ def _indeterminate_envelope(
         "message": message,
     }
     if dispatch_key is not None:
-        error["message"] = f"{message} Reconcile: {_poll_command_for(dispatch_key)}"
+        engine = _delivering_engine()
+        error["message"] = f"{message} Reconcile: {_poll_command_for(dispatch_key, engine)}"
         data["dispatch_key"] = dispatch_key
+        if engine:
+            data["engine_pid"] = engine["pid"]
         data["reconcile"] = _RECONCILE_POLL_METHOD
         sentence, dump, absent = _stall_dump_sentence(dispatch_key)
         error["message"] = f"{error['message']} {sentence}"
@@ -1209,8 +1252,13 @@ def _indeterminate_envelope(
     }
 
 
-def try_warm_dispatch(msg: dict, *, read_deadline_secs: Optional[float] = None) -> Optional[dict]:
+def try_warm_dispatch(
+    msg: dict, *, read_deadline_secs: Optional[float] = None, hook_path: bool = False
+) -> Optional[dict]:
     """Attempt one warm-pipe request/response for JSON-RPC request `msg`.
+
+    `hook_path=True` (or `COORDINATOR_WARM_BOOT_WAIT_SECS<=0`) bounds a miss
+    under a held publish marker to `DRAIN_WAIT_SECS`: cold at once, no spawn.
 
     `read_deadline_secs`, when given, lowers the liveness read below
     `READ_DEADLINE_SECS` so a caller holding its own bound (the op/CLI door's
@@ -1238,7 +1286,7 @@ def try_warm_dispatch(msg: dict, *, read_deadline_secs: Optional[float] = None) 
     signal rather than propagated.
     """
     try:
-        result = _try_warm_dispatch_inner(msg, read_deadline_secs)
+        result = _try_warm_dispatch_inner(msg, read_deadline_secs, hook_path)
     except Exception as exc:  # noqa: BLE001 -- Backstop 2: never fail the op
         print(
             f"[warm-client] preamble failed, falling back to cold: {exc!r}",
@@ -1331,7 +1379,7 @@ def _record_cold_fallback(op: "str | None" = None) -> None:
 
 
 def _try_warm_dispatch_inner(
-    msg: dict, read_deadline_secs: Optional[float] = None
+    msg: dict, read_deadline_secs: Optional[float] = None, hook_path: bool = False
 ) -> Optional[dict]:
     global _last_cold_bucket
 
@@ -1474,7 +1522,7 @@ def _try_warm_dispatch_inner(
             # `should_spawn` still rate-limits it.
             if not drained:
                 drained = True
-                outcome = _drain_publish_hold()
+                outcome = _drain_publish_hold(hook_path)
                 if outcome is True and attempt == 0:
                     continue
                 if outcome is False:

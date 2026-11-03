@@ -276,7 +276,19 @@ def test_run_op_main_collection_opens_through_the_seam(tmp_path, monkeypatch):
 def _patch_try_warm_dispatch(monkeypatch, fn):
     from coordinator_core.warm import client
 
-    monkeypatch.setattr(client, "try_warm_dispatch", fn)
+    monkeypatch.setattr(client, "try_warm_dispatch", lambda msg, **kw: fn(msg))
+
+
+def test_try_warm_guard_dispatch_marks_the_call_hook_path(monkeypatch):
+    """A hook-shaped caller bounds a held publish marker to the drain wait."""
+    from coordinator_core.warm import client
+
+    seen: list = []
+    monkeypatch.setattr(client, "try_warm_dispatch", lambda msg, **kw: seen.append(kw) or None)
+
+    try_warm_guard_dispatch("some.guard.op", {})
+
+    assert seen == [{"hook_path": True}]
 
 
 def test_try_warm_guard_dispatch_reports_a_real_hit(monkeypatch):

@@ -7261,7 +7261,7 @@ def _apply_default_match_mode(parsed: dict) -> None:
 # applies_to glob -> extra glob routed to the same schema. Alias entries carry
 # `alias: True` so type->glob enumeration keeps the primary glob.
 _ARCHIVE_GLOB_ALIASES: dict[str, str] = {
-    'state/sizings/*.yaml': 'archive/sizings/*/*.yaml',
+    'state/sizings/**/*.yaml': 'archive/sizings/*/*.yaml',
 }
 
 
@@ -7389,6 +7389,9 @@ def load_schemas(schemas_dir: str | Path) -> dict[str, Any]:
             schemas['_byKind'][kind_value] = name
 
     def _specificity_key(entry: dict) -> tuple[int, int]:
+        # Overlap rule: a path matching two globs validates against the glob
+        # with fewer '*' characters ('**' counts two); on a tie the longer glob
+        # wins. match_schema takes the first hit in this order.
         glob = entry['glob']
         wildcard_count = glob.count('*')
         return (wildcard_count, -len(glob))

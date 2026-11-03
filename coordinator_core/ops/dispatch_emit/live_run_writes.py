@@ -109,7 +109,7 @@ def prune_index(root: Path, *, deep: bool = False, now: Optional[float] = None) 
         return []
     now = time.time() if now is None else now
     dropped: list[str] = []
-    runs = live_run_index._load(path)
+    runs = live_run_index._load(root, path)
     records = {r["run_id"]: r for r in warp_live._token_records(root)} if deep else {}
     dirs = warp_live._launch_dirs(None) if deep else []
     for run_id, entry in runs.items():

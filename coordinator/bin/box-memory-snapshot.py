@@ -117,7 +117,7 @@ def _render(snap: dict) -> str:
 def _render_reservation(res: dict) -> str:
     lines = ["Reservation (GO-admitted running jobs, max(0, declared peak - tree RSS)):"]
     for j in res["jobs"]:
-        lines.append(f"  {j['pid']:>7}  {j['reserved_gib']:>7.2f} GiB  {j['run']}")
+        lines.append(f"  {'grant' if j['pid'] is None else j['pid']:>7}  {j['reserved_gib']:>7.2f} GiB  {j['run']}")
     lines.append(f"Reservation total: {res['total_gib']} GiB")
     return "\n".join(lines)
 

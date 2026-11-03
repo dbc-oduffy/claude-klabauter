@@ -1,4 +1,5 @@
-"""The live-run index: one JSON file under the git common dir mapping run_id -> footprint.
+"""The live-run index: one JSON file under the settings-home engine record dir mapping run_id -> footprint.
+Reads fall back to the legacy in-`.git` file only while the new one is missing; writes go to the new one.
 
 Replaces a per-submit walk of run-token records and launch dirs with a single bounded read. A run
 that has not staged has a None footprint, which `overlaps` never reports (as `live_run_writes`).
@@ -15,7 +16,7 @@ from typing import Iterable, Mapping, Optional, Sequence, Union
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops.dispatch_emit import live_run_writes
 from coordinator_core.ops.dispatch_emit.halt_resume_record import MISSING, STALLED, bounded_read
-from coordinator_core.ops.dispatch_emit.run_token import _common_dir
+from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir, legacy_record_dir
 
 INDEX_FILE = "coordinator-warp-live-run-index.json"
 SCHEMA = "live-run-index/1"
@@ -25,12 +26,21 @@ _write_lock = threading.Lock()
 
 
 def index_path(root: Union[str, Path]) -> Optional[Path]:
-    common = _common_dir(Path(root))
-    return None if common is None else common / INDEX_FILE
+    record_dir = engine_record_dir(Path(root))
+    return None if record_dir is None else record_dir / INDEX_FILE
 
 
-def _load(path: Path) -> dict:
-    raw = bounded_read(path, WRITE_DEADLINE_MS)
+def _bounded_read_with_fallback(root: Union[str, Path], path: Path, deadline_ms: float):
+    """Read the settings-home index; only when it is MISSING, read the legacy in-`.git` file."""
+    raw = bounded_read(path, deadline_ms)
+    if raw is not MISSING:
+        return raw
+    legacy = legacy_record_dir(Path(root))
+    return raw if legacy is None else bounded_read(legacy / INDEX_FILE, deadline_ms)
+
+
+def _load(root: Union[str, Path], path: Path) -> dict:
+    raw = _bounded_read_with_fallback(root, path, WRITE_DEADLINE_MS)
     if raw is MISSING or raw is STALLED:
         return {}
     try:
@@ -51,7 +61,7 @@ def _mutate(root: Union[str, Path], fn) -> bool:
     if path is None:
         return False
     with _write_lock:
-        runs = _load(path)
+        runs = _load(root, path)
         fn(runs)
         _store(path, runs)
     return True
@@ -83,7 +93,7 @@ def read(root: Union[str, Path], deadline_ms: float, *, exclude_run_id: Optional
     path = index_path(root)
     if path is None:
         return MISSING
-    raw = bounded_read(path, deadline_ms)
+    raw = _bounded_read_with_fallback(root, path, deadline_ms)
     if raw is MISSING or raw is STALLED:
         return raw
     try:

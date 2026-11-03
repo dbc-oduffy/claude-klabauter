@@ -676,6 +676,20 @@ def import_closure_findings(
     return [Finding(f.path, IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}") for f in found]
 
 
+def withheld_closure_findings(
+    worktree_root: Path, paths: Sequence[str], deleted: Sequence[str], withheld: Sequence[str],
+    landed_text: Optional[Callable[[str], Optional[str]]] = None,
+) -> list[Finding]:
+    """``import_closure_findings`` over the landing set minus ``withheld``: a withheld path stays out
+    of the gate, so the detector reads it at HEAD (a withheld new file is absent, a modified one
+    keeps its HEAD names) and an importer of a name only the withheld bytes bind is a finding.
+    Zero spawns."""
+    out = set(withheld)
+    return import_closure_findings(
+        worktree_root, [p for p in paths if p not in out], [p for p in deleted if p not in out], landed_text,
+    )
+
+
 def since_base_findings(
     worktree_root: Path, paths: Sequence[str], base_sha: str, *, run_id: Optional[str],
     plan: Optional[str] = None,

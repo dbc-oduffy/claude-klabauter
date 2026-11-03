@@ -4117,6 +4117,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         merge_artifacts_reply = _land_merge_artifacts(root, merge_artifacts, message, sha)
     _exclude_withheld()
     token_state["landed"] = True
+    if ask_run_dir is not None and not incomplete and not review_gap:
+        from coordinator_core.ops.dispatch_emit.ask_contract import stamp_run_stage_at
+
+        stamp_run_stage_at(ask_run_dir, "landed", warp_run=sibling_run_id)
     _settle_token(token_state, landed=True, receipt={"sha": sha, "rows": credited_ids, "paths": list(paths)})
     if sibling_run_id:
         try:

@@ -1,14 +1,57 @@
+import json
 import threading
 import time
 
+import pytest
+
+from coordinator_core import _settings_home
+from coordinator_core.ops.dispatch_emit import engine_record_home as erh
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit import live_run_index as idx
 from coordinator_core.ops.dispatch_emit import live_run_writes
 
 
+@pytest.fixture(autouse=True)
+def _isolated_machine_local(tmp_path, monkeypatch):
+    monkeypatch.setattr(_settings_home, "machine_local_dir", lambda: tmp_path / "ml-home")
+
+
 def _root(tmp_path):
     (tmp_path / ".git").mkdir()
     return tmp_path
+
+
+def test_index_path_is_under_settings_home_not_git(tmp_path):
+    root = _root(tmp_path)
+    assert idx.index_path(root) == erh.engine_record_dir(root) / idx.INDEX_FILE
+    assert not (root / ".git") in idx.index_path(root).parents
+
+
+def test_legacy_fallback_read_then_store_moves_to_new_location(tmp_path):
+    root = _root(tmp_path)
+    legacy = root / ".git" / idx.INDEX_FILE
+    legacy.write_text(
+        json.dumps({"schema": idx.SCHEMA, "runs": {"old": {"footprint": ["a.py"], "minted_at": 1.0}}}),
+        encoding="utf-8",
+    )
+    assert idx.read(root, 1000) == {"old": frozenset({"a.py"})}
+    assert not idx.index_path(root).exists()
+    idx.add(root, "new", 2.0)
+    assert idx.index_path(root).is_file()
+    assert idx.read(root, 1000) == {"old": frozenset({"a.py"}), "new": None}
+    legacy.unlink()
+    assert idx.read(root, 1000) == {"old": frozenset({"a.py"}), "new": None}
+
+
+def test_new_file_wins_over_legacy_and_legacy_never_written(tmp_path):
+    root = _root(tmp_path)
+    legacy = root / ".git" / idx.INDEX_FILE
+    before = json.dumps({"schema": idx.SCHEMA, "runs": {"old": {"footprint": None, "minted_at": 1.0}}})
+    legacy.write_text(before, encoding="utf-8")
+    idx.add(root, "n1", 1.0)
+    idx.remove(root, "old")
+    assert idx.read(root, 1000) == {"n1": None}
+    assert legacy.read_text(encoding="utf-8") == before
 
 
 def test_add_stage_remove_read(tmp_path):

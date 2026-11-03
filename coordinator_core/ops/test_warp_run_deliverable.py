@@ -97,7 +97,7 @@ def test_expired_token_returns_empty(repo):
     _sizing(repo)
     _run(repo)
     _mint(repo)
-    record = repo / ".git" / "coordinator-warp-run-tokens" / "r1.json"
+    record = run_token._record_path(repo, "r1")
     data = json.loads(record.read_text(encoding="utf-8"))
     data["minted_at"] = time.time() - run_token.TTL_SECONDS - 10
     record.write_text(json.dumps(data), encoding="utf-8")
@@ -230,6 +230,35 @@ def test_commit_request_prefix_claims_child(repo, live):
     (run_dir / "commit-request.txt").write_text((marker or "") + "\n", encoding="utf-8")
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _claims(repo, ["pkg/tests/t.py", "pkg/testsx/t.py"]) == {"pkg/tests/t.py": [PEER]}
+
+
+def test_minted_run_with_unproven_runner_is_not_a_live_peer(repo, live, monkeypatch):
+    from coordinator_core import warp_live
+
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda root, rid, **k: True)
+    assert _claims(repo, ["a.py"]) == {}
+    assert _owners(repo, ["state/warp/p1/run.json"]) == {}
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda root, rid, **k: False)
+    assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+
+
+def test_a_real_minted_run_past_the_grace_with_no_launch_is_not_a_live_peer(repo, live, tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    managed = tmp_path / "managed"
+    managed.mkdir()
+    monkeypatch.setattr(warp_live, "managed_tempdir", lambda: managed)
+    monkeypatch.setattr(warp_live, "legacy_top_level_path", lambda name: managed / name)
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+    token = run_token._record_path(repo, "p1")
+    record = json.loads(token.read_text(encoding="utf-8"))
+    record["minted_at"] = time.time() - warp_live.MINTED_RUNNER_GRACE_SECONDS - 60
+    token.write_text(json.dumps(record), encoding="utf-8")
+    assert _claims(repo, ["a.py"]) == {}
 
 
 def test_own_session_excluded(repo, live):

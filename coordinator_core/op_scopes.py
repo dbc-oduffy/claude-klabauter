@@ -810,6 +810,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.sibling_status — reads the same parent record and status files under the caller's own worktree.
     "dispatch.sibling_status":                  "common_dir",
     "dispatch.reap_abandoned_runs":             "common_dir",
+    # dispatch.minted_run — starts or abandons one minted-only run under the caller's own worktree's state/warp/.
+    "dispatch.minted_run":                      "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
     "dispatch.commit_merge":                    "common_dir",
     "dispatch.supersede_slice":                 "common_dir",

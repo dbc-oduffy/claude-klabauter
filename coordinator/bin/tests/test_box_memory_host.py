@@ -416,3 +416,73 @@ def test_admit_and_register_holds_without_writing_a_reservation(tmp_path):
     verdict, _ = host.admit_and_register(adm, "k", 7, 4.0, status, cushion_pct=0.0)
     assert not verdict.admit
     assert not adm.exists()
+
+
+def _grant(tmp_path, grantee="g", run="reseal", peak_mb=19 * 1024, issued=500.0, expires=2000.0, **extra):
+    import json
+    from datetime import datetime, timezone
+
+    def iso(t):
+        return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    gdir = tmp_path / "state" / "group-em" / "slot-grants" / "issuer"
+    gdir.mkdir(parents=True, exist_ok=True)
+    rec = {"kind": "group-em-slot-grant", "grantee_session_id": grantee, "run": run,
+           "declared_peak_mb": peak_mb, "issued_at": iso(issued), "expires_at": iso(expires), **extra}
+    (gdir / f"{grantee}.{run}.json").write_text(json.dumps(rec), encoding="utf-8")
+    return tmp_path / "state" / "group-em" / "box" / "admission.jsonl"
+
+
+def test_live_grant_with_no_ledger_reserves_declared_peak(tmp_path):
+    adm = _grant(tmp_path)
+    assert host.reserved_bytes(adm, now_fn=lambda: 1000.0) == 19 * GIB
+    rows = host.top_holders(adm, now_fn=lambda: 1000.0)
+    assert rows[0]["session_id"] == "g" and rows[0]["pid"] is None
+
+
+def test_expired_or_not_yet_issued_or_malformed_grant_reserves_nothing(tmp_path):
+    adm = _grant(tmp_path)
+    assert host.reserved_bytes(adm, now_fn=lambda: 2000.0) == 0
+    assert host.reserved_bytes(adm, now_fn=lambda: 499.0) == 0
+    assert host.reserved_bytes(_grant(tmp_path, run="neg", peak_mb=-1), now_fn=lambda: 1000.0) == 19 * GIB
+    assert host.reserved_bytes(_grant(tmp_path, run="kind", kind="other", peak_mb=99999), now_fn=lambda: 1000.0) == 19 * GIB
+    assert host.reserved_bytes(_grant(tmp_path, run="ttl", expires=500.0 + 241 * 60, peak_mb=99999), now_fn=lambda: 1000.0) == 19 * GIB
+
+
+def test_registered_start_and_its_grant_count_once(tmp_path):
+    import json
+
+    adm = _grant(tmp_path)
+    adm.parent.mkdir(parents=True, exist_ok=True)
+    adm.write_text(json.dumps({
+        "phase": "START", "session_id": "g", "run": "reseal", "pids": [5],
+        "declared_peak_mb": 19 * 1024, "create_time": 10.0,
+    }) + "\n", encoding="utf-8")
+    kw = dict(rss_fn=lambda p: 4 * 1024.0, alive_fn=lambda p: True, create_time_fn=lambda p: 10.0,
+              image_fn=lambda p: "python.exe", now_fn=lambda: 1000.0)
+    assert host.reserved_bytes(adm, **kw) == 15 * GIB
+    with adm.open("a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"phase": "END", "session_id": "g", "run": "reseal", "pids": []}) + "\n")
+    assert host.reserved_bytes(adm, **kw) == 0
+
+
+def test_grant_is_added_to_other_registered_reservation(tmp_path):
+    import json
+
+    adm = _grant(tmp_path)
+    adm.parent.mkdir(parents=True, exist_ok=True)
+    adm.write_text(json.dumps({
+        "phase": "START", "session_id": "other", "run": "x", "pids": [5],
+        "declared_peak_mb": 2048, "create_time": 10.0,
+    }) + "\n", encoding="utf-8")
+    kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: True, create_time_fn=lambda p: 10.0,
+              image_fn=lambda p: "python.exe", now_fn=lambda: 1000.0)
+    assert host.reserved_bytes(adm, **kw) == 21 * GIB
+
+
+def test_admit_and_register_holds_on_unregistered_grant(tmp_path):
+    adm = _grant(tmp_path)
+    status = host.MemoryStatus(40 * GIB, 64 * GIB, 50 * GIB, 100 * GIB)
+    verdict, reserved = host.admit_and_register(adm, "k", 7, 20.0, status, now_fn=lambda: 1000.0)
+    assert reserved == 19 * GIB and not verdict.admit
+    assert not adm.exists()

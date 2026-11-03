@@ -746,7 +746,7 @@ def try_warm_guard_dispatch(
     }
 
     try:
-        response = try_warm_dispatch(msg)
+        response = try_warm_dispatch(msg, hook_path=True)
     except Exception:
         return WarmGuardOutcome(hit=False)
 

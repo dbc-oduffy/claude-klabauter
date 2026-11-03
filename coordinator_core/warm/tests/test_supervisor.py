@@ -434,6 +434,8 @@ def test_main_exits_zero_and_untouched_when_election_lost(
 
     skew.write_engine_stamp(tmp_path, "sha-supervisor-election-lost")
     monkeypatch.setattr(supervisor, "_default_engine_clone", lambda: tmp_path)
+    # An engine root leaked into os.environ by an earlier test trips the divergence refusal (rc 2) first.
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
 
     def _lose(name, *, user_sid=None):
         raise election.ElectionLost(name)

@@ -52,6 +52,7 @@ STATE_UNKNOWABLE = "unknowable"
 REASON_ENGINE_RESTARTED = "engine-restarted"
 REASON_EXPIRED = "expired"
 REASON_NO_RESIDENT_ENGINE = "no-resident-engine"
+REASON_FOREIGN_ENGINE = "foreign-engine"
 
 OUTCOME_RESULT = "result"
 OUTCOME_ERROR = "error"
@@ -208,6 +209,10 @@ class AckStore:
         self._results_bytes = 0
         self._order: "deque[str]" = deque()
         self._records: dict = {}
+        #: Finished keys not yet returned by `status`/`wait`, oldest first. Capacity
+        #: eviction and result-LRU eviction skip them while the set is within
+        #: RESULT_RETAIN_COUNT; a caller that timed out reads the result later.
+        self._pinned: "OrderedDict[str, None]" = OrderedDict()
 
     def admit(self, key: str, method: Optional[str]) -> bool:
         mint_ns = mint_ns_of(key)
@@ -284,6 +289,8 @@ class AckStore:
                     self._retain_result(key, result, size)
                 else:
                     record["result_dropped"] = dropped
+            if outcome in _FINISHED_OUTCOMES:
+                self._pin(key)
             self._changed.notify_all()
 
     def reconcile_restarted(self, keys: Optional[Any] = None) -> int:
@@ -324,7 +331,7 @@ class AckStore:
                 if "admitted_mono" in record:
                     record["admitted_mono"] = time.monotonic()
 
-    def wait(self, key: str, timeout_secs: float) -> dict:
+    def wait(self, key: str, timeout_secs: float, expect_engine: Optional[dict] = None) -> dict:
         """Block until `key` leaves `executing` or `timeout_secs` passes, then
         answer `status(key)`. Condition-driven: no polling, no settle interval.
         An unknown or tombstoned key answers at once."""
@@ -338,7 +345,7 @@ class AckStore:
                 if remaining <= 0:
                     break
                 self._changed.wait(remaining)
-        return self.status(key)
+        return self.status(key, expect_engine)
 
     @staticmethod
     def _measure(result: Any) -> "tuple[Optional[int], Optional[str]]":
@@ -351,21 +358,56 @@ class AckStore:
             return size, None
         return None, DROPPED_OVER_CAP
 
+    def _drop_result(self, key: str) -> None:
+        dropped = self._results.pop(key, None)
+        if dropped is not None:
+            self._results_bytes -= dropped[1]
+            record = self._records.get(key)
+            if record is not None:
+                record["result_dropped"] = DROPPED_EVICTED
+
+    def _pin(self, key: str) -> None:
+        """Pin a finished key until it is read. Past RESULT_RETAIN_COUNT pinned the
+        oldest is unpinned and its result dropped (`evicted`), never silently."""
+        self._pinned[key] = None
+        while len(self._pinned) > RESULT_RETAIN_COUNT:
+            oldest, _ = self._pinned.popitem(last=False)
+            self._drop_result(oldest)
+
     def _retain_result(self, key: str, result: Any, size: int) -> None:
         self._results[key] = (result, size)
         self._results_bytes += size
         while self._results and (
             len(self._results) > RESULT_RETAIN_COUNT or self._results_bytes > RESULT_RETAIN_BYTES
         ):
-            old_key, (_, old_size) = self._results.popitem(last=False)
-            self._results_bytes -= old_size
-            old_record = self._records.get(old_key)
-            if old_record is not None:
-                old_record["result_dropped"] = DROPPED_EVICTED
+            victim = next((k for k in self._results if k not in self._pinned and k != key), None)
+            if victim is None:
+                # Only pinned results (and this one) remain: the oldest pinned goes.
+                victim = next(iter(self._results))
+                self._pinned.pop(victim, None)
+            self._drop_result(victim)
 
-    def status(self, key: str) -> dict:
+    def _names_other_engine(self, expect_engine: Any) -> bool:
+        """True when `expect_engine` (`{"pid", "boot_ns"}`, either optional) names an
+        engine other than this one. Malformed or empty claims name nothing."""
+        if not isinstance(expect_engine, dict):
+            return False
+        pid = expect_engine.get("pid")
+        boot_ns = expect_engine.get("boot_ns")
+        if isinstance(pid, int) and not isinstance(pid, bool) and pid != os.getpid():
+            return True
+        return isinstance(boot_ns, int) and not isinstance(boot_ns, bool) and boot_ns != self.boot_ns
+
+    def status(self, key: str, expect_engine: Optional[dict] = None) -> dict:
+        """The poll answer for `key`. `expect_engine` is the delivering engine the
+        caller was told (`error.data.engine_pid`/`engine_boot_ns`): when it names a
+        different engine and this store holds no record of `key`, the answer is
+        `unknowable/foreign-engine` and nothing is tombstoned -- this engine cannot
+        prove it would have admitted the key."""
         mint_ns = mint_ns_of(key)
         with self._lock:
+            if key not in self._records and self._names_other_engine(expect_engine):
+                return {"state": STATE_UNKNOWABLE, "reason": REASON_FOREIGN_ENGINE}
             if mint_ns is not None and mint_ns < self.boot_ns:
                 return {"state": STATE_UNKNOWABLE, "reason": REASON_ENGINE_RESTARTED}
             if mint_ns is not None and mint_ns <= self.low_water_ns and key not in self._records:
@@ -426,6 +468,7 @@ class AckStore:
                     else:
                         payload["result_digest"] = record.get("result_digest") or {}
                         payload["result_dropped"] = record.get("result_dropped", DROPPED_EVICTED)
+                self._pinned.pop(key, None)
                 return payload
             if outcome in _UNKNOWABLE_OUTCOMES:
                 # No named reason in § 6 covers a stamped abandoned/worker-lost
@@ -435,8 +478,13 @@ class AckStore:
             return {"state": STATE_UNKNOWABLE, "reason": REASON_NO_RESIDENT_ENGINE}
 
     def _evict_if_needed(self) -> None:
-        while len(self._order) > self._capacity:
+        skipped = 0
+        while len(self._order) > self._capacity and skipped < len(self._order):
             evicted_key = self._order.popleft()
+            if evicted_key in self._pinned:
+                self._order.append(evicted_key)
+                skipped += 1
+                continue
             self._records.pop(evicted_key, None)
             dropped = self._results.pop(evicted_key, None)
             if dropped is not None:

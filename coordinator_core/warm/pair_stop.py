@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,8 +34,10 @@ _ROLE_SCRIPTS = {
 # in a later pass, not missed by a single one.
 _RESWEEP_DEADLINE_SECS = 15.0
 
-# Bounded settle before the survivor read: a boot refused by a marker exits unaided.
-_SETTLE_SECS = 1.0
+# Survivor settle: the stall window restarts whenever the live count drops, so a pair that is
+# visibly exiting under IO load is waited for; _SETTLE_MAX_SECS caps the marker-held window.
+_SETTLE_SECS = 10.0
+_SETTLE_MAX_SECS = 30.0
 
 _ASK_READ_DEADLINE_SECS = 2.0
 _TERMINATE_GRACE_SECS = 5.0
@@ -71,9 +74,20 @@ class PairStopResult:
     stopped: tuple[PairProcess, ...]
     survivors: tuple[PairProcess, ...]
     failures: tuple[tuple[int, str], ...] = ()
+    # Pids the stop set out to end; None means unknown, so every survivor counts as stuck.
+    initial_pids: Optional[frozenset[int]] = None
 
     def ok(self) -> bool:
         return not self.survivors
+
+    def stuck(self) -> tuple[PairProcess, ...]:
+        """Survivors the stop failed to end: present at its start, or a terminate refused. A pid
+        born after the start is a respawn by a peer's hook call while no marker was held, which
+        the marked stop takes; under load that respawn lands within milliseconds of any unmarked stop."""
+        if self.initial_pids is None:
+            return self.survivors
+        why = dict(self.failures)
+        return tuple(p for p in self.survivors if p.pid in self.initial_pids or p.pid in why)
 
     def render_survivors(self) -> str:
         why = dict(self.failures)
@@ -258,12 +272,27 @@ def _terminate_with_reason(pid: int, *, psutil_module=None) -> Optional[str]:
     except psutil.AccessDenied:
         return "kill denied (access denied)"
 
-    deadline = time.monotonic() + _TERMINATE_GRACE_SECS
-    while time.monotonic() < deadline:
-        if not proc.is_running():
-            return None
-        time.sleep(_TERMINATE_POLL_INTERVAL_SECS)
+    _wait_exit(proc, psutil, _TERMINATE_GRACE_SECS)
     return None if not proc.is_running() else "still running after terminate and kill"
+
+
+def _wait_exit(proc, psutil, secs: float) -> None:
+    """Block until `proc` exits or `secs` pass: a process-handle wait, not a poll, so a slow
+    teardown under IO load costs no wakeups. A proc object without wait() is polled."""
+    wait = getattr(proc, "wait", None)
+    if wait is not None:
+        try:
+            wait(timeout=secs)
+        except psutil.NoSuchProcess:
+            pass
+        except getattr(psutil, "TimeoutExpired", ()):
+            pass
+        except psutil.AccessDenied:
+            pass
+        return
+    deadline = time.monotonic() + secs
+    while time.monotonic() < deadline and proc.is_running():
+        time.sleep(_TERMINATE_POLL_INTERVAL_SECS)
 
 
 def _pid_gone(pid: int, *, psutil_module=None) -> bool:
@@ -345,6 +374,26 @@ def _pool_children(
     return found
 
 
+def _create_time(pid: int, psutil) -> Optional[float]:
+    try:
+        return psutil.Process(pid).create_time()
+    except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
+        return None
+
+
+def _gone_or_reused(pid: int, born: Optional[float], psutil_module=None) -> bool:
+    """Gone, or the pid now names a process born at another instant (pid reuse is no survivor)."""
+    if _pid_gone(pid, psutil_module=psutil_module):
+        return True
+    if born is None:
+        return False
+    psutil = psutil_module
+    if psutil is None:
+        import psutil
+    now = _create_time(pid, psutil)
+    return now is not None and now != born
+
+
 def _live_descendants(pid: int, *, psutil_module=None) -> list[int]:
     psutil = psutil_module
     if psutil is None:
@@ -403,10 +452,15 @@ def stop_warm_pair(
     verified = _record_pid(crumb)
     server_pids: set[int] = {p.pid for p in before if p.role == ROLE_SERVER}
     child_pids: set[int] = set()
+    children_seen: set[int] = set()
     if verified is not None:
         server_pids.add(verified[0])
     for spid in server_pids:
         child_pids.update(_live_descendants(spid, psutil_module=psutil_module))
+    births = psutil_module
+    if births is None:
+        import psutil as births
+    child_born = {c: _create_time(c, births) for c in child_pids}
     if verified is not None:
         pid, epoch_str = verified
         pipe = crumb.get("pipe") if isinstance(crumb, dict) else None
@@ -436,6 +490,7 @@ def stop_warm_pair(
             continue
         _terminate_pid(pid, psutil_module=psutil_module)
 
+    initial = frozenset(seen) | frozenset(sup_pids) | frozenset(server_pids) | frozenset(child_born) | frozenset(fd_pids)
     failures: dict[int, str] = {}
     order = {ROLE_SUPERVISOR: 0, ROLE_FRONT_DOOR: 1, ROLE_SERVER: 2, ROLE_POOL_CHILD: 3}
     deadline = time.monotonic() + _RESWEEP_DEADLINE_SECS
@@ -447,7 +502,9 @@ def stop_warm_pair(
             seen.setdefault(p.pid, p)
         targets = {p.pid: p.role for p in swept}
         for cpid in child_pids:
-            targets.setdefault(cpid, ROLE_POOL_CHILD)
+            if not _gone_or_reused(cpid, child_born.get(cpid), psutil_module):
+                targets.setdefault(cpid, ROLE_POOL_CHILD)
+        children_seen.update(child_pids)
         child_pids.clear()
         targets = {
             pid: role
@@ -467,14 +524,36 @@ def stop_warm_pair(
         if time.monotonic() >= deadline:
             break
 
-    settle_until = time.monotonic() + _SETTLE_SECS
+    settle_start = time.monotonic()
+    stall_until = settle_start + _SETTLE_SECS
+    hard_until = settle_start + _SETTLE_MAX_SECS
+    last_count: Optional[int] = None
     while True:
         found = find_pair_processes(engine_root, psutil_module=psutil_module) + _pool_children(
             server_pids, psutil_module=psutil_module
         )
-        live = [p for p in found if not _pid_gone(p.pid, psutil_module=psutil_module)]
-        if not live or time.monotonic() >= settle_until:
+        known = {p.pid for p in found}
+        found += [
+            PairProcess(pid=cpid, role=ROLE_POOL_CHILD, cmdline="")
+            for cpid in sorted(children_seen - known)
+        ]
+        live = [
+            p
+            for p in found
+            if not _gone_or_reused(p.pid, child_born.get(p.pid), psutil_module)
+        ]
+        now = time.monotonic()
+        if not live or now >= min(stall_until, hard_until):
             break
+        if last_count is None or len(live) < last_count:
+            if last_count is not None:
+                stall_until = now + _SETTLE_SECS
+            last_count = len(live)
+            print(
+                f"[pair_stop] waiting on {len(live)} process(es) to exit: "
+                + ", ".join(f"{p.role}={p.pid}" for p in live),
+                file=sys.stderr,
+            )
         time.sleep(_TERMINATE_POLL_INTERVAL_SECS)
     survivors = tuple(live)
     survivor_pids = {p.pid for p in survivors}
@@ -484,6 +563,7 @@ def stop_warm_pair(
         stopped=stopped,
         survivors=survivors,
         failures=tuple(sorted((pid, why) for pid, why in failures.items() if pid in survivor_pids)),
+        initial_pids=initial,
     )
     if result.ok():
         breadcrumb.unlink_breadcrumb(engine_root)

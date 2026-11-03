@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_hold_release as hr
+from coordinator_core.ops.dispatch_emit import run_token
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -145,7 +146,7 @@ def test_resumed_released_by_successor_spent_receipt(tmp_path):
     r, s = _rid("ask", 300, "aaaaaa"), _rid("ask", 100, "bbbbbb")
     _run(root, r, marker="resumed")
     _run(root, s)
-    _write(root / ".git/coordinator-warp-run-tokens/spent" / f"{s}.json", json.dumps({"landed": {"sha": "f" * 40}}))
+    _write(run_token._record_path(root, s, spent=True), json.dumps({"landed": {"sha": "f" * 40}}))
     assert hr.release_reason(root, r, None, None) == hr.RELEASE_SUCCESSOR_LANDED
 
 
@@ -184,7 +185,7 @@ def test_resumed_holds_when_successor_not_landed_even_sharing_sizing_and_plan(tm
     _run(root, r, marker="resumed")
     _run(root, s)
     _run(root, older, marker="landed")
-    _write(root / ".git/coordinator-warp-run-tokens/spent" / f"{s}.json", json.dumps({"note": "no landed"}))
+    _write(run_token._record_path(root, s, spent=True), json.dumps({"note": "no landed"}))
     assert hr.release_reason(root, r, s, PLAN) is None
 
 

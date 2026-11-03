@@ -270,6 +270,31 @@ def default_job_memory_limit_bytes() -> int:
         return _FALLBACK_JOB_MEMORY_BYTES
 
 
+def _refuses_kill(pid: int) -> bool:
+    """True when `pid` is this process or an ancestor; every kill below refuses such a target."""
+    from coordinator_core.box_memory.orphan_reap import is_self_or_ancestor
+
+    return is_self_or_ancestor(pid)
+
+
+def _killpg_guarded(pgid: int) -> bool:
+    """SIGKILL process group `pgid` unless it is our own pid, an ancestor, or our own group."""
+    import signal
+
+    if _refuses_kill(pgid) or pgid == os.getpgrp():
+        return False
+    os.killpg(pgid, signal.SIGKILL)
+    return True
+
+
+def _kill_child(proc) -> bool:
+    """`proc.kill()` unless the pid is this process or an ancestor."""
+    if _refuses_kill(proc.pid):
+        return False
+    proc.kill()
+    return True
+
+
 def spawn_in_capped_job(
     argv,
     *,
@@ -293,10 +318,8 @@ def spawn_in_capped_job(
         proc = subprocess.Popen(argv, **kwargs)
 
         def close_posix() -> None:
-            import signal
-
             try:
-                os.killpg(proc.pid, signal.SIGKILL)
+                _killpg_guarded(proc.pid)
             except OSError:
                 pass
 
@@ -313,7 +336,7 @@ def spawn_in_capped_job(
             _assign_to_job(job, int(proc._handle))
         except OSError:
             # Parent already in a job that forbids nesting assignment: retry once, broken away.
-            proc.kill()
+            _kill_child(proc)
             proc.wait()
             proc = subprocess.Popen(
                 argv, creationflags=base_flags | CREATE_BREAKAWAY_FROM_JOB, **kwargs
@@ -323,7 +346,7 @@ def spawn_in_capped_job(
     except BaseException:
         if proc is not None and proc.poll() is None:
             try:
-                proc.kill()
+                _kill_child(proc)
             except OSError:
                 pass
         _kernel32.CloseHandle(job)
@@ -335,7 +358,7 @@ def spawn_in_capped_job(
             _kernel32.CloseHandle(state["job"])
             state["job"] = None
         try:
-            proc.kill()
+            _kill_child(proc)
         except OSError:
             pass
 
@@ -386,14 +409,12 @@ def _run_contained_windows(cmd, timeout, cwd=None, stdin_data=None):
             _kernel32.CloseHandle(job)
         if proc is not None and proc.poll() is None:
             try:
-                proc.kill()
+                _kill_child(proc)
             except Exception:
                 pass
 
 
 def _run_contained_posix(cmd, timeout, cwd=None, stdin_data=None):
-    import signal
-
     from coordinator_core.win_portability import no_console_creationflags
 
     proc = subprocess.Popen(
@@ -410,7 +431,7 @@ def _run_contained_posix(cmd, timeout, cwd=None, stdin_data=None):
         return proc.returncode, stdout, stderr
     except subprocess.TimeoutExpired:
         try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            _killpg_guarded(os.getpgid(proc.pid))
         except ProcessLookupError:
             pass
         try:
@@ -421,7 +442,7 @@ def _run_contained_posix(cmd, timeout, cwd=None, stdin_data=None):
     finally:
         if proc.poll() is None:
             try:
-                proc.kill()
+                _kill_child(proc)
             except Exception:
                 pass
 
@@ -523,7 +544,7 @@ def self_test(hard_expiry: float = 25.0) -> dict:
         try:
             naive_proc.communicate(timeout=3)
         except subprocess.TimeoutExpired:
-            naive_proc.kill()
+            _kill_child(naive_proc)
         time.sleep(1.0)
         naive_survivors = _count_tagged_survivors(naive_tag)
         results["naive_survivors"] = naive_survivors

@@ -129,6 +129,13 @@ The serialised digest never exceeds `RESULT_DIGEST_BYTES = 2048`, so the digests
 a non-serialisable reply still digests. `result_dropped` names why the full reply is gone:
 `over-cap`, `not-serialisable`, or `evicted` (LRU count/bytes).
 
+**Pinned until read.** A key stamped `result` or `error` is pinned until `status`/`wait` has returned
+it once: capacity eviction (§ 5) re-queues a pinned key and the result LRU evicts unpinned results
+first, so a caller that got -32004 and polls later still reads the result. The engine cannot know
+which callers timed out, so the pin is "stamped and not yet read", not an indeterminate mark. The
+pinned set is capped at `RESULT_RETAIN_COUNT`; past it the oldest pinned is unpinned and reads
+`result_dropped: evicted`.
+
 ## 4. Poll states and the outcome → state mapping
 
 The poll answers exactly one of four states, always:
@@ -210,7 +217,7 @@ door has no basis for.
 
 ## 9. `warm.request_status` wire shape (D5)
 
-`{"key": str, "wait_secs": number (optional)}` in, COMPUTE_ONLY, scope `none`. `_serve_line`
+`{"key": str, "wait_secs": number (optional), "expect_engine": {"pid": int, "boot_ns": int} (optional)}` in (`dispatch_key` is accepted as an alias of `key`, matching `error.data.dispatch_key`), COMPUTE_ONLY, scope `none`. `_serve_line`
 intercepts and answers it from `AckStore` in the accept process — it is never submitted to the
 pool (a pool worker cannot see the accept process's memory and would answer from an empty
 store). The intercept matches both the bare `warm.request_status` frame and the door's frame
@@ -225,7 +232,7 @@ Every answer carries:
 | Field | Present when | Meaning |
 |---|---|---|
 | `state` | always | One of `not_received`, `executing`, `finished`, `unknowable` (§ 4). |
-| `reason` | `state == unknowable` | `engine-restarted`, `expired`, `no-resident-engine` (§ 6), or `abandoned` (past the overdue ceiling, § 4). |
+| `reason` | `state == unknowable` | `engine-restarted`, `expired`, `no-resident-engine` (§ 6), `abandoned` (past the overdue ceiling, § 4), or `foreign-engine`: `expect_engine` names another engine and this store holds no record of the key (nothing is tombstoned; `not_received` is never claimed for a key this engine cannot prove it would have admitted). |
 | `overdue` | `state == executing`, past the executing bound | `true`. A wait, not a failure; a late `result` or `error` supersedes (§ 3). |
 | `outcome` | `state == finished` | `result` or `error`, plus the error code for `error` (§ 3). Names the sibling contract's evidence class for the method; makes no claim of its own about the mutation. |
 | `result` | `state == finished`, outcome `result`, and the result was retained (§ 3a) | The handler's original reply. For an `invoke.from_argv` dispatch, a door-form poll replays its `{stdout, stderr, exit_code}`. |
@@ -233,6 +240,11 @@ Every answer carries:
 | `result_dropped` | with `result_digest` | `over-cap`, `not-serialisable`, or `evicted`: why the full reply is gone (§ 3a). |
 | `engine_boot_ns` | always | This engine's `boot_ns`, letting a caller detect a restart it hasn't otherwise noticed. |
 | `engine_pid` | always | This engine's pid. |
+
+`expect_engine` comes from the -32004's `error.data.engine_pid`/`engine_boot_ns` (the server's
+envelopes carry both; the client's carries `engine_pid` when its breadcrumb read names one) and is
+already embedded in the printed reconcile command. The key's `{pid}` field is the minter's pid, so
+the key alone never names the engine. A poll with no `expect_engine` answers as before.
 
 ## 10. What this contract does not cover
 

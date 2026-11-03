@@ -324,7 +324,7 @@ def test_sweep_expired_twins_also_sweeps_aged_escrows(tmp_path):
     from coordinator_core.ops.dispatch_emit import run_token
 
     _escrowed_run(tmp_path)
-    escrow_file = tmp_path / ".git" / "coordinator-warp-run-tokens" / "escrow" / "run1.json"
+    escrow_file = run_token._record_path(tmp_path, "run1", escrow=True)
     assert escrow_file.exists()
     twin.sweep_expired_twins(tmp_path, now=time.time() + run_token.TTL_SECONDS + 60)
     assert not escrow_file.exists()

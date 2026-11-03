@@ -225,8 +225,13 @@ def _await_successor_bind() -> bool:
 
 
 def _retire_stale_forwarder(pid: int) -> bool:
+    from coordinator_core.box_memory.orphan_reap import is_self_or_ancestor
+
     try:
-        os.kill(int(pid), signal.SIGTERM)
+        target = int(pid)
+        if is_self_or_ancestor(target):
+            return False
+        os.kill(target, signal.SIGTERM)
         return True
     except Exception:
         return False

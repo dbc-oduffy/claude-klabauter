@@ -28,7 +28,7 @@ def test_live_run_hands_over_with_stop_called_and_land_reached(tmp_path, monkeyp
     env.live_runs[:] = [live_runs.LiveRun(*_RUN)]
     rc, err = _q._run(env)
     assert rc == 0, err
-    assert len(env.names("stop")) == 2 and env.names("land_diff") == [("land_diff", True)]
+    assert len(env.names("stop")) == 1 and env.names("land_diff") == [("land_diff", True)]
 
 
 def test_live_runs_are_read_with_the_marker_held_immediately_before_the_land_stop(tmp_path, monkeypatch):

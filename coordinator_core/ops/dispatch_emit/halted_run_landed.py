@@ -625,6 +625,103 @@ def _carries_withheld(root: Path, run_id: str, shas: list) -> tuple[Optional[str
     return None, covers, voided_list
 
 
+class _ParentBaseline:
+    """The ``head`` the closure detector diffs landed text against: the landed path's text in the sha's first parent."""
+
+    def __init__(self, texts: dict) -> None:
+        self._texts = texts
+
+    def head_text(self, path: str) -> Optional[str]:
+        return self._texts.get(path)
+
+
+def _tree_py_delta(load_dir, before: Optional[str], after: str, prefix: str = "") -> list:
+    """``(path, after_oid, before_oid)`` of each ``.py`` blob that differs between two trees; equal subtrees are skipped unread."""
+    new = load_dir(after) or {}
+    old = (load_dir(before) if before else None) or {}
+    out: list = []
+    for name, (mode, oid) in new.items():
+        prior = old.get(name)
+        if prior is not None and prior[1] == oid:
+            continue
+        full = f"{prefix}{name}"
+        if mode == 0o40000:
+            out += _tree_py_delta(load_dir, prior[1] if prior and prior[0] == 0o40000 else None, oid, full + "/")
+        elif name.endswith(".py") and mode & 0o170000 == 0o100000:
+            out.append((full, oid, prior[1] if prior and prior[0] & 0o170000 == 0o100000 else None))
+    return out
+
+
+def _withheld_import_problem(root: Path, run_id: str, shas: list, covers: dict) -> Optional[str]:
+    """Refusal when a landed ``.py`` imports a name only a still-withheld path binds, else None.
+
+    The still-withheld set is the run's withheld paths no verified sha changed, less the revision-voided
+    ones. The landed text is each sha's own blob, judged against its first parent's, because HEAD often
+    is the sha and the detector only judges lines the landing adds. Zero spawns; nothing runs when
+    nothing is still withheld.
+
+    Trap: a withheld path with no delta (clean at HEAD) binds nothing the detector cannot already see at HEAD.
+    """
+    from coordinator_core.authoring_leaks import import_closure
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import _parse_tree_entries
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+
+    try:
+        record_dir = ask_contract.record_dir(root, run_id)
+        withheld = sorted(halted_run.halted_withheld_strict(record_dir))
+    except (ValueError, halted_run.UnreadableHaltRecord):
+        return None
+    covered = {p for paths in covers.values() for p in paths}
+    owed = [p for p in withheld if p not in covered]
+    if not owed:
+        return None
+    owed = [p for p in owed if p not in _voided_paths(root, halted_run._read(record_dir), owed)]
+    seen: dict = {}
+    tree_paths = [tp for tp in (_own_tree_path(root, p, seen) for p in owed) if tp]
+    if not tree_paths:
+        return None
+    common = resolve_git_common_dir(root)
+    dirs: dict = {}
+
+    def _dir(tree_sha: str):
+        if tree_sha not in dirs:
+            got = read_object(common, tree_sha)
+            dirs[tree_sha] = _parse_tree_entries(got[1]) if got and got[0] == "tree" else None
+        return dirs[tree_sha]
+
+    def _text(oid: Optional[str]) -> Optional[str]:
+        got = read_object(common, oid) if oid else None
+        if not got or got[0] != "blob":
+            return None
+        try:
+            return got[1].decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+    for sha in shas:
+        meta = commit_meta(common, sha)
+        parents = meta.get("parents") if meta else None
+        parent_meta = commit_meta(common, parents[0]) if parents else None
+        if not meta or not meta.get("tree"):
+            continue
+        delta = _tree_py_delta(_dir, parent_meta.get("tree") if parent_meta else None, meta["tree"])
+        landed = {path: _text(after) for path, after, _ in delta}
+        if not landed:
+            continue
+        found = import_closure.detect(
+            root, sorted(landed), _ParentBaseline({path: _text(before) for path, _, before in delta}),
+            landed_text=landed.get,
+        )
+        for f in found:
+            hit = next((p for p in tree_paths if f"; {p} is " in f.detail), None)
+            if hit:
+                return f"{f.path} (landed in {sha[:12]}) {f.detail}; withheld {hit} is not landed; land it or drop the import"
+    return None
+
+
 def _halt_commit(root: Path, record_dir: Path) -> Optional[str]:
     """The commit that first added the run's ``halted.json`` (the halt commit), else None; one git spawn."""
     from coordinator_core import git_ancestry
@@ -709,6 +806,9 @@ def _verify(
         if problem:
             return None, problem, {}
     problem, covers, voided = _carries_withheld(root, run_id, full)
+    if problem:
+        return None, problem, {}
+    problem = _withheld_import_problem(root, run_id, full, covers)
     if problem:
         return None, problem, {}
     echo = {

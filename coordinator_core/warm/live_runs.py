@@ -127,6 +127,11 @@ def _live_stage(
         return None
     if require_token and not _token_held(repo_root, run_id):
         return None
+    if stage == "minted":
+        from coordinator_core import warp_live
+
+        if warp_live.runner_unproven(repo_root, run_id):
+            return None
     return stage
 
 

@@ -14,7 +14,7 @@ def _repo(tmp_path):
 
 
 def _escrow_file(repo, run_id="ask-1"):
-    return repo / ".git" / "coordinator-warp-run-tokens" / "escrow" / f"{run_id}.json"
+    return run_token._record_path(repo, run_id, escrow=True)
 
 
 def test_escrowed_returns_the_token_for_a_fresh_record(tmp_path):
@@ -74,7 +74,7 @@ def test_aged_record_and_digest_mismatch_and_malformed_token_refuse(tmp_path):
     assert run_token.escrowed(repo, "ask-1") is None
     run_token.escrow(repo, "ask-1", token)
     assert run_token.escrowed(repo, "ask-1") == token
-    live = repo / ".git" / "coordinator-warp-run-tokens" / "ask-1.json"
+    live = run_token._record_path(repo, "ask-1")
     record = json.loads(live.read_text(encoding="utf-8"))
     record["minted_at"] = time.time() - run_token.TTL_SECONDS - 10
     live.write_text(json.dumps(record), encoding="utf-8")

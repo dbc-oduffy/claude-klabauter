@@ -245,6 +245,53 @@ def test_no_pipe_under_held_marker_spawns_nothing_when_the_swap_wait_expires(
     assert spawns == [], "a held publish marker must suppress the spawn even if should_spawn says yes"
 
 
+@pytest.mark.parametrize("via_env", [False, True])
+def test_hook_path_under_held_marker_answers_inside_drain_wait_and_spawns_nothing(
+    monkeypatch: pytest.MonkeyPatch, via_env: bool
+) -> None:
+    import time
+
+    from coordinator_core.warm import breadcrumb
+
+    def _raise_enoent(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
+    )
+    monkeypatch.setattr(breadcrumb, "should_spawn", lambda engine_root=None, **kw: True)
+    swaps = []
+    monkeypatch.setattr(breadcrumb, "wait_for_publish_swap", lambda root=None, **kw: swaps.append(1) or True)
+    if via_env:
+        monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0")
+    with breadcrumb.hold_publish_marker(client._engine_clone_root(), holder="t"):
+        started = time.monotonic()
+        if via_env:
+            result = client.try_warm_dispatch(_MSG)
+        else:
+            result = client.try_warm_dispatch(_MSG, hook_path=True)
+        elapsed = time.monotonic() - started
+    assert result is None
+    assert elapsed < breadcrumb.DRAIN_WAIT_SECS + 0.4
+    assert swaps == [], "a hook never parks on the op-path swap backstop"
+    assert spawns == []
+
+
+def test_hook_path_with_no_marker_still_spawns(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise_enoent(pipe):
+        raise FileNotFoundError(2, "no such pipe")
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_enoent)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
+    )
+    assert client.try_warm_dispatch(_MSG, hook_path=True) is None
+    assert len(spawns) == 1
+
+
 def test_no_pipe_waits_out_a_marker_released_inside_the_drain_window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -975,6 +1022,25 @@ def test_wedged_live_holder_returns_fast_with_runnable_remedy(
     assert elapsed < 1.0
     err = capsys.readouterr().err
     assert f"kill -9 {os.getpid()}" in err or f"taskkill /F /PID {os.getpid()}" in err
+
+
+def test_spawn_detached_carries_the_holder_token_only_for_the_holder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from coordinator_core.ops.ceremony import detached_spawn
+    from coordinator_core.warm import breadcrumb
+
+    seen: list = []
+    monkeypatch.setattr(detached_spawn, "spawn_detached", lambda r, s, a, e: seen.append(e) or True)
+    root = client._engine_clone_root()
+    client.spawn_detached(str(root), "x.py")
+    with breadcrumb.hold_publish_marker(root, holder="t"):
+        client.spawn_detached(str(root), "x.py", env_extra={"K": "v"})
+        with breadcrumb.holder_successor_spawn():
+            client.spawn_detached(str(root), "x.py", env_extra={"K": "v"})
+    assert seen[0] is None
+    assert seen[1] == {"K": "v"}
+    assert seen[2]["K"] == "v" and seen[2][breadcrumb.PUBLISH_HOLDER_TOKEN_ENV]
 
 
 def test_healthy_swap_still_drains(monkeypatch: pytest.MonkeyPatch) -> None:

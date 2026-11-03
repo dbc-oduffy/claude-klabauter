@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops import warp_run_deliverable as wrd
 from coordinator_core.ops.dispatch_emit import halted_hold_release as hr
+from coordinator_core.ops.dispatch_emit import run_token
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -67,7 +68,7 @@ def test_spent_landed_receipt_of_the_sibling_releases_the_halted_twin(tmp_path):
     twin, landed = _rid(900, "aaaaaa"), _rid(300, "bbbbbb")
     _run(root, twin, "halted")
     _run(root, landed)
-    _write(root / ".git/coordinator-warp-run-tokens/spent" / f"{landed}.json", json.dumps({"landed": {"sha": "f" * 40}}))
+    _write(run_token._record_path(root, landed, spent=True), json.dumps({"landed": {"sha": "f" * 40}}))
     assert hr.release_reason(root, twin, None, None) == hr.RELEASE_TWIN_LANDED
 
 

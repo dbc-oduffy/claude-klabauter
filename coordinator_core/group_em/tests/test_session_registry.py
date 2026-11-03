@@ -96,6 +96,22 @@ def test_pid_alive_true_for_this_process():
     assert sr.pid_alive(os.getpid()) is True
 
 
+def test_pid_alive_posix_arm_sends_only_signal_zero(monkeypatch):
+    sigs = []
+    monkeypatch.setattr(sr.os, "kill", lambda pid, sig: sigs.append(sig))
+    assert sr._pid_alive_posix(os.getpid()) is True
+    assert sigs == [0]
+
+
+def test_pid_alive_routes_nt_to_the_windows_arm_never_os_kill(monkeypatch):
+    monkeypatch.setattr(sr.os, "name", "nt")
+    monkeypatch.setattr(sr, "_pid_alive_windows", lambda pid: True)
+    monkeypatch.setattr(
+        sr, "_pid_alive_posix", lambda pid: (_ for _ in ()).throw(AssertionError("posix arm"))
+    )
+    assert sr.pid_alive(4242) is True
+
+
 def test_is_live_false_when_no_session_id_on_record():
     live, row = sr.is_live({})
     assert live is False
