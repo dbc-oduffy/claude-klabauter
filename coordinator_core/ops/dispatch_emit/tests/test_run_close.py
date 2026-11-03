@@ -639,3 +639,18 @@ def test_healthy_status_write_is_unchanged(tmp_path):
     assert rc.sibling_release(tmp_path, "run-healthy", None) is None  # no parent record
     assert '"halted"' in status.read_text(encoding="utf-8")
     assert rc.sibling_release(tmp_path, "run-absent", None) is None
+
+
+def test_close_block_decides_receipts_through_stage_receipts(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import stage_receipts
+
+    seen = []
+    monkeypatch.setattr(stage_receipts, "has_receipts", lambda d: seen.append(d) or False)
+    block = rc.build_close_block("r1", True, {}, run_dir=tmp_path)
+    assert seen == [tmp_path]
+    assert str(block["receipts"]).startswith("not-applicable")
+
+    monkeypatch.setattr(stage_receipts, "has_receipts", lambda d: True)
+    monkeypatch.setattr(stage_receipts, "missing", lambda d, a, t: ("plan",))
+    block = rc.build_close_block("r1", True, {}, run_dir=tmp_path)
+    assert block["outcome"] == "refused" and "plan" in block["missing_receipts"]

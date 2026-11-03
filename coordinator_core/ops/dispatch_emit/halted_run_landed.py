@@ -509,13 +509,13 @@ def _unauthored_paths(root: Path, run_id: str, record_dir: Path, paths: list) ->
     """
     from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
     from coordinator_core.ops.dispatch_emit import kept_work
-    from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR
+    from coordinator_core.ops.dispatch_emit.ask_contract import delivery_note_locate
 
     try:
         base = hha._baseline(root, run_id) or {}
         kept = kept_work.kept_fingerprints(record_dir)
         try:
-            blocks = _note_blocks((root / DELIVERY_NOTE_DIR / f"{run_id}.md").read_text(encoding="utf-8"))
+            blocks = _note_blocks((root / delivery_note_locate(root, run_id)).read_text(encoding="utf-8"))
         except OSError:
             blocks = []
         out: set = set()

@@ -48,7 +48,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     record_dir,
     stamp_run_stage,
 )
-from coordinator_core.ops.dispatch_emit import bug_close, review_floor
+from coordinator_core.ops.dispatch_emit import bug_close, review_floor, run_token
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, read_em_brief, read_em_context_paths
@@ -63,6 +63,11 @@ NOTES_FILE = "notes.jsonl"
 OWNED_RED_FILE = "owned_red.jsonl"
 #: run.json key naming the halted run a fresh fire resumed.
 RESUMED_FROM_FIELD = "resumed_from"
+#: run.json keys: the bound sizing's `run_token.sizing_stamp` at bind time, and the repo-relative
+#: sizings the run was bound to or offered earlier, for the sizing agent to check for validity.
+#: No engine reader yet: the sizing agent's validity check is the intended consumer (speculative).
+SIZING_STAMP_FIELD = "sizing_stamp"
+EARLIER_SIZINGS_FIELD = "earlier_sizings"
 #: Most `resumed_from` hops `carried_notes` follows.
 CARRIED_HOP_CAP = 16
 LEDGER_VIEW_FILE = "requirements.md"
@@ -430,10 +435,12 @@ def _addition_route(run_id: str, paths: Sequence[str]) -> str:
 
 def _refuse_additions(
     root: Path, dir_: Path, run_id: str, run: Optional[Mapping], add_paths: Sequence,
+    outcome: Optional[dict] = None,
 ) -> None:
-    """LedgerRefused naming every `add_paths` entry outside the run's write set. An unstaged run's
-    write set is its sizing's `writes` alone. A note is not checked here (`_note_uncovered_paths`
-    refuses it per note, never by raising). Writes nothing."""
+    """Widens the plan by an engine-written row (`_widen_footprint`) for every `add_paths` entry outside
+    the run's write set; LedgerRefused naming them when the sizing has no readable plan or the row is
+    refused. An unstaged run's write set is its sizing's `writes` alone. A note is not checked here
+    (`_note_uncovered_paths` handles it per note, never by raising)."""
     sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
     declared: list[str] = []
     for entry in add_paths:
@@ -446,7 +453,7 @@ def _refuse_additions(
         footprint = run_footprint(root, dir_, sizing_rel)
         files, dirs = footprint if footprint is not None else (_sizing_writes(root, sizing_rel), [])
         outside = [p for p in dict.fromkeys(declared) if p not in files and not any(p.startswith(d + "/") for d in dirs)]
-    if outside:
+    if outside and not _widen_footprint(root, run, run_id, outside, "add_paths: " + ", ".join(outside), outcome):
         raise LedgerRefused(_addition_route(run_id, outside))
 
 
@@ -485,6 +492,58 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
                 wanted.append(raw.strip().replace("\\", "/").removeprefix("./"))
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     return paths_outside_footprint(root, dir_, sizing_rel, wanted)
+
+
+def _widen_footprint(
+    root: Path, run: Optional[Mapping], run_id: str, paths: Sequence[str], why: str, outcome: Optional[dict],
+) -> bool:
+    """Write one `plan.tasks.mutate` add-task row covering `paths` on the plan the run's sizing names, so
+    `run_footprint` (via `_plan_row_writes`) covers them. True on success, recorded on
+    `outcome["footprint_widened"]` as `{row, paths}`; False (nothing written) when the sizing names no
+    readable plan or the add-task is refused, so the caller keeps its refusal."""
+    sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
+    plan_rel, plan, sizing_text = _sizing_plan(root, sizing_rel)
+    if plan_rel is None or plan is None or not paths:
+        return False
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops import plan_tasks_mutate
+
+    try:
+        located = locate_fenced_block(plan.read_text(encoding="utf-8", errors="replace"))
+        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+    except (OSError, yaml.YAMLError):
+        return False
+    taken = {r.get("id") for r in rows if isinstance(r, dict)} if isinstance(rows, list) else set()
+    n = 1
+    while f"W{n}" in taken:
+        n += 1
+    row_id = f"W{n}"
+    register = rr.read_register(sizing_text)
+    quoted = " ".join(why.split())[:240]
+    task = {
+        "id": row_id,
+        "title": f"Cover {', '.join(paths)} for run {run_id}"[:200],
+        "change_kind": "script-edit",
+        "surface": paths[0],
+        "writes": list(paths),
+        "register_rows": [str(register.rows[0][rr.ROW_ID]) if register is not None and register.rows else "R1"],
+        "traces_to_brief": f"workflow.revise on {run_id}: {quoted}",
+        "model": "sonnet",
+        "effort": "high",
+        "agent_type": "coordinator:executor",
+        "queue_scope": "project",
+        "disposition": "open",
+        "acceptance": f"The write footprint of run {run_id} covers {', '.join(paths)}.",
+        "body": f"Engine-written by workflow.revise on run {run_id} to widen its footprint.\nRevise: {quoted}\n",
+    }
+    reply = plan_tasks_mutate._add_task(plan_rel, task, root, root)
+    if not reply.get("applied"):
+        return False
+    if outcome is not None:
+        outcome.setdefault("footprint_widened", []).append({"row": row_id, "paths": list(paths)})
+    return True
 
 
 def _note_route(root: Path, run: Mapping, run_id: str, paths: Sequence[str]) -> str:
@@ -963,6 +1022,9 @@ def start(
         "sizing_rel": prior.get("sizing_rel"),
         "all_of_pm_ask": bool(all_of_pm_ask) or bool(prior.get("all_of_pm_ask")),
     }
+    for key in (SIZING_STAMP_FIELD, EARLIER_SIZINGS_FIELD):
+        if key in prior:
+            data[key] = prior[key]
     if resumed_from is not None:
         if not safe_id(resumed_from) or resumed_from == run_id:
             raise LedgerRefused(f"resumed_from {resumed_from!r} is not a safe run id distinct from {run_id!r}")
@@ -1105,6 +1167,12 @@ def _slice_entries(sizing: Mapping) -> list[tuple[str, str]]:
     return entries
 
 
+def _earlier_with(run: Mapping, rel: str, *, drop: str = "") -> list[str]:
+    """The run's `EARLIER_SIZINGS_FIELD` plus `rel` (deduped, arrival order), without `drop`."""
+    kept = [s for s in run.get(EARLIER_SIZINGS_FIELD) or [] if isinstance(s, str) and s != drop]
+    return kept if rel in kept else [*kept, rel]
+
+
 def bind(
     repo_root: Path, run_id: str, sizing_rel: str, *, ask_text: Optional[str] = None,
     relayed_text: Optional[str] = None, plan_rows: Sequence[tuple[str, str]] = (),
@@ -1112,22 +1180,33 @@ def bind(
     """Bind a ledger-bearing run to its sizing and seed that sizing's register: the PM's words,
     the raw ask, then every queued revision. `plan_rows` (`(row id, title)`, spine order) seed one
     `plan-row:<id>` row each, only when the register would otherwise hold no judged or withheld
-    row. Idempotent; a run without run.json is left alone
-    (None). Raises LedgerRefused when the run names another sizing or the write is refused."""
+    row. Idempotent; a run without run.json is left alone (None). A run already bound to another
+    sizing rebinds to `sizing_rel` when it is the newer (`run_token.sizing_stamp`, against the stamp
+    taken when the bound sizing was bound) and lists the prior one under `EARLIER_SIZINGS_FIELD`
+    for the sizing agent's validity check; an older `sizing_rel` is only listed there, the binding
+    and its register untouched; equal stamps rebind to `sizing_rel`. Raises LedgerRefused when a sizing is unreadable or the write is refused."""
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     if run is None:
         return None
     bound = run.get("sizing_rel")
-    if bound and bound != sizing_rel:
-        raise LedgerRefused(f"run {run_id} is bound to {bound}, not {sizing_rel}")
     import yaml
 
     try:
-        sizing = yaml.safe_load(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
+        incoming_path = _sizing_path(root, sizing_rel)
+        stamp = run_token.sizing_stamp(root, sizing_rel)
+        sizing = yaml.safe_load(incoming_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
+    rebinding = False
+    if bound and run_token.normalize_sizing_rel(root, bound) != run_token.normalize_sizing_rel(root, sizing_rel):
+        held = run.get(SIZING_STAMP_FIELD)
+        if stamp < (held if isinstance(held, int) else run_token.sizing_stamp(root, bound)):
+            earlier = _earlier_with(run, sizing_rel)
+            _write_run(dir_, {**run, EARLIER_SIZINGS_FIELD: earlier})
+            return _write_view(root, dir_, run_id)
+        rebinding = True
     sizing = sizing if isinstance(sizing, dict) else {}
     foreign = foreign_turns(root, sizing, ask_text, relayed_text)
     unbound = _unbound_followups(root, sizing, ask_text, relayed_text, foreign)
@@ -1151,8 +1230,11 @@ def bind(
     entries.extend((e["text"], _revision_anchor(str(e.get("at") or _now()), e.get("from"))) for e in queued)
     if entries or foreign or unbound or plan_rows:
         _append_rows(root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound, plan_rows=plan_rows)
-    if not bound:
-        _write_run(dir_, {**run, "sizing_rel": sizing_rel})
+    if not bound or rebinding:
+        updated = {**run, "sizing_rel": sizing_rel, SIZING_STAMP_FIELD: stamp}
+        if rebinding:
+            updated[EARLIER_SIZINGS_FIELD] = _earlier_with(run, bound, drop=sizing_rel)
+        _write_run(dir_, updated)
     if queued:
         (dir_ / INBOX_FILE).unlink(missing_ok=True)
     return _write_view(root, dir_, run_id)
@@ -1181,12 +1263,15 @@ def revise(
     out of the run's terminal commit: it is recorded to the run's `withhold.jsonl`, needs no bound
     sizing, adds no register row and no inbox entry, and alone satisfies the non-empty precondition.
     `add_paths` (repo-relative paths) names write paths the run was not sized for: any outside the run's
-    write set refuses, naming the routes (a new ask, or resize the sizing), and nothing is written.
-    A `note` with an edit-verb clause naming an existing repo file outside a staged run's footprint (or,
-    on a halted run, whose halt `self_correction.needs_paths` the footprint leaves uncovered) is never
-    stored and never raises: `outcome["note_refused"] = {paths, reason}` carries the paths and the
-    `plan.tasks.mutate` add-task call, and the rest of the call applies. A file named without an edit
-    verb (provenance, a tool to run) is not checked.
+    write set widens it through an engine-written row on the sizing's plan spine
+    (`outcome["footprint_widened"] = [{row, paths}]`); with no readable plan it refuses, naming the
+    routes (a new ask, or resize the sizing), and nothing is written. `withhold_paths` outside the
+    footprint and a `note` with an edit-verb clause naming an existing repo file outside a staged run's
+    footprint (or, on a halted run, whose halt `self_correction.needs_paths` the footprint leaves
+    uncovered) widen the same way. With no plan a note is never stored and never raises:
+    `outcome["note_refused"] = {paths, reason}` carries the paths and the `plan.tasks.mutate` add-task
+    call, and the rest of the call applies. A file named without an edit verb (provenance, a tool to
+    run) is not checked.
     `accept_partial` (`[{chunk, reason}]`, `run_accept_partial.validate` before any write) rules PARTIAL
     chunks good enough to release their dependents on the refire: recorded to the run's
     `accept_partial.jsonl`, same preconditions and effects as `withhold_paths`; a BLOCKED chunk stays held.
@@ -1287,7 +1372,7 @@ def revise(
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
-    _refuse_additions(root, dir_, run_id, run, add_paths)
+    _refuse_additions(root, dir_, run_id, run, add_paths, outcome)
     if run is None:
         from coordinator_core.ops.dispatch_emit import pipeline_run
         from coordinator_core.ops.dispatch_emit.pipeline_contract import RUN_ID_PREFIX
@@ -1383,7 +1468,10 @@ def revise(
         raise LedgerRefused(f"the run has staged; stop_after={STOP_AFTER_PLAN} can no longer park it")
     if withheld_entries:
         outside = paths_outside_footprint(root, dir_, run.get("sizing_rel"), [e["path"] for e in withheld_entries])
-        if outside:
+        if outside and not _widen_footprint(
+            root, run, run_id, outside,
+            "withhold_paths: " + "; ".join(f"{e['path']} ({e.get('reason', '')})" for e in withheld_entries), outcome,
+        ):
             raise LedgerRefused(_footprint_route(run_id, outside))
     if named and not run.get("sizing_rel"):
         raise LedgerRefused("out_of_scope needs a bound sizing: the run has no register yet")
@@ -1435,6 +1523,8 @@ def revise(
         )
         declare_write(dir_ / STOP_AFTER_FILE)
     note_uncovered = _note_uncovered_paths(root, dir_, run, note) if has_note else []
+    if note_uncovered and _widen_footprint(root, run, run_id, note_uncovered, note, outcome):
+        note_uncovered = []
     if note_uncovered:
         if outcome is not None:
             outcome["note_refused"] = {"paths": note_uncovered, "reason": _note_route(root, run, run_id, note_uncovered)}
@@ -1982,6 +2072,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["research_dropped"] = outcome["research_dropped"]
     if "claimed" in outcome:
         out["claimed"] = outcome["claimed"]
+    if "footprint_widened" in outcome:
+        out["footprint_widened"] = outcome["footprint_widened"]
     if params.get("stop_after"):
         out["stop_after"] = params["stop_after"]
     if params.get("widened"):
@@ -2069,7 +2161,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     return _mutation_reply(tuple(applied), tuple(refused), params["run_id"], **out)
 
 
-_APPLIED_KEYS = ("widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "retracted_note", "withheld")
+_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "retracted_note", "withheld")
 
 
 def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:

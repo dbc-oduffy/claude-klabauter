@@ -367,3 +367,18 @@ def test_dependents_unstarted_halt_carries_one_refire_call_with_the_hold_reason(
     env = c.dependents_unstarted_refire_next_action("C2 held on C1", run_id="ask-1", sizing_rel="state/sizings/s.yaml")
     assert halt_refire.is_refire_next_action(env)
     assert env["resume"]["halted"] == c.HALT_DEPENDENTS_UNSTARTED and env["detail"].startswith("C2 held on C1") and c.ACCEPT_PARTIAL_FORM.format(run_id="ask-1") in env["detail"]
+
+
+def test_delivery_note_rel_shards_ask_and_warp_ids_and_keeps_undated_flat():
+    assert c.delivery_note_rel("ask-20261103T072223-8a7c52") == "docs/delivery/2026-11/ask-20261103T072223-8a7c52.md"
+    assert c.delivery_note_rel("warp-2026-11-03-387be4-1-x-20261103T072122-bc1f3d").startswith("docs/delivery/2026-11/")
+    assert c.delivery_note_rel("run-1") == "docs/delivery/run-1.md"
+
+
+def test_delivery_note_locate_resolves_flat_and_sharded(tmp_path):
+    rid = "ask-20261103T072223-8a7c52"
+    assert c.delivery_note_locate(tmp_path, rid) == f"docs/delivery/2026-11/{rid}.md"
+    (tmp_path / "docs/delivery").mkdir(parents=True)
+    (tmp_path / f"docs/delivery/{rid}.md").write_text("x", encoding="utf-8")
+    assert c.delivery_note_locate(tmp_path, rid) == f"docs/delivery/{rid}.md"
+    assert c.delivery_note_locate(tmp_path, "run-1") == "docs/delivery/run-1.md"

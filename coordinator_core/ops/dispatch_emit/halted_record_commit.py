@@ -673,7 +673,20 @@ def _land(
     if process_withheld:
         process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
 
-    if not paths and not deleted:
+    # The tracked outcome is the halt's landable record when every record-dir file is run state.
+    record_present = (worktree_root / record_dir_rel).is_dir()
+    outcome_path = run_artifacts.write_tracked_outcome(
+        worktree_root, run_id, "halted", halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
+    ) if (record_present or paths or deleted) and process_artifact_policy.hosts_coordinator_state(worktree_root) else None
+    outcome_changed = False
+    if outcome_path:
+        if paths or deleted:
+            outcome_changed = True
+        else:
+            outcome_snap = _worktree_snapshot(worktree_root, [outcome_path], [], [])
+            outcome_changed = outcome_snap is not None and outcome_path in outcome_snap.changed
+
+    if not paths and not deleted and not outcome_changed:
         _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
@@ -697,9 +710,6 @@ def _land(
     )
     paths[:], kept_state = run_artifacts.split_run_state(paths)
     ignored_excluded.extend(kept_state)
-    outcome_path = run_artifacts.write_tracked_outcome(
-        worktree_root, run_id, "halted", halt_kind=halted.get("halted") if isinstance(halted, dict) else None,
-    )
     if outcome_path and outcome_path not in paths:
         paths.append(outcome_path)
     message = halted_record_message(run_id, halted)

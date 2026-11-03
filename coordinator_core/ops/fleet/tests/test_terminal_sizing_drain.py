@@ -76,6 +76,25 @@ def test_empty_params_acts_on_every_movable_in_one_commit_and_one_status(tmp_pat
     assert status_calls == [["state/sizings"]]
 
 
+def test_a_terminal_sharded_sizing_is_scanned_and_drains(tmp_path: Path) -> None:
+    worktree = tmp_path / "repo"
+    shard = worktree / "state" / "sizings" / "2026-10"
+    shard.mkdir(parents=True)
+    (shard / "2026-10-05-sharded.yaml").write_text("status: shipped\ntitle: s\n", encoding="utf-8")
+    _sizing(worktree, "2026-10-06-flat.yaml", "status: shipped\ntitle: f\n")
+
+    scan = terminal_sizing_drain.scan_sizings(worktree)
+    assert sorted(scan.records) == [
+        "state/sizings/2026-10-06-flat.yaml",
+        "state/sizings/2026-10/2026-10-05-sharded.yaml",
+    ]
+
+    result, mover, _ = _invoke(worktree, {})
+    assert result["exit_code"] == 0
+    assert sorted(a["id"] for a in result["acted"]) == sorted(scan.records)
+    assert len(mover.captured) == 2
+
+
 def test_default_act_still_refuses_forward_plan_not_terminal_and_names_each(tmp_path: Path) -> None:
     worktree = tmp_path / "repo"
     _seed(worktree)

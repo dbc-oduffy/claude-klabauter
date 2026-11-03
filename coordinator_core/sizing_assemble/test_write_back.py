@@ -15,6 +15,10 @@ SCHEMA = Path(sizing_assemble.__file__).resolve().parent.parent / "frontmatter" 
 
 _SIZING_NAME = "2026-10-02-x.yaml"
 
+
+def _rel(repo: Path) -> str:
+    return Path(record_homes.record_path(str(repo), "sizings", _SIZING_NAME)).relative_to(repo).as_posix()
+
 _DRAFT = """schema: sizing-object
 intent: "Ship the thing"
 estimate:
@@ -35,7 +39,7 @@ deliverable_id: null
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", _SIZING_NAME)).parent.mkdir(parents=True)
     return tmp_path
 
 
@@ -62,7 +66,7 @@ def test_write_sets_estimate_route_detents_and_status(repo: Path) -> None:
     decision = _decision("M", premise_provenance="read")
     sizing_assemble.write_back(
         repo,
-        Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix(),
+        _rel(repo),
         decision,
         premise_provenance="read",
         premise_evidence="tests/x.py:3",
@@ -79,7 +83,7 @@ def test_write_sets_estimate_route_detents_and_status(repo: Path) -> None:
 
 def test_write_joins_a_given_deliverable_id_and_never_rekeys(repo: Path) -> None:
     path = _sizing(repo)
-    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    rel = _rel(repo)
     sizing_assemble.write_back(repo, rel, _decision("M"), deliverable_id="dlv-a-111111")
     assert _load(path)["deliverable_id"] == "dlv-a-111111"
     with pytest.raises(sizing_assemble.SizingAssembleError):
@@ -326,7 +330,7 @@ def test_cli_write_persists_default_resolved_mode(
     rc = sizing_assemble.main(
         [
             "--tshirt", "M",
-            "--write", Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix(),
+            "--write", _rel(repo),
             "--premise-provenance", "read",
             "--premise-evidence", "tests/x.py:3",
         ]
@@ -339,7 +343,7 @@ def test_cli_write_persists_default_resolved_mode(
 
 def test_write_mints_a_deliverable_id_when_the_sizing_has_none(repo: Path) -> None:
     path = _sizing(repo)
-    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    rel = _rel(repo)
     sizing_assemble.write_back(repo, rel, _decision("M"))
     minted = _load(path)["deliverable_id"]
     assert minted.startswith("dlv-ship-the-thing-")
@@ -354,7 +358,7 @@ def test_write_embeds_pm_verbatims_once_and_keeps_em_curation(repo: Path, monkey
               {"turn": 0, "ts": "2026-10-08T09:00:00Z", "text": "hi"}]
     monkeypatch.setattr(pm_turns, "bound_window", lambda *_a, **_k: list(window))
     path = _sizing(repo)
-    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    rel = _rel(repo)
     sizing_assemble.write_back(repo, rel, _decision("M"))
     assert _load(path)["pm_verbatims"] == window
 
@@ -374,7 +378,7 @@ def test_relayed_ask_registers_only_its_text_and_lists_every_turn_unrelated(
               for n in range(44, 48)]
     monkeypatch.setattr(pm_turns, "bound_window", lambda *_a, **_k: list(window))
     path = _sizing(repo)
-    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    rel = _rel(repo)
     sizing_assemble.write_back(repo, rel, _decision("M"), relayed_ask_text="  fix the relayed thing\n")
     doc = _load(path)
     register = doc["requirement_register"]
@@ -403,7 +407,7 @@ def test_pm_verbatims_round_trip_yaml_hostile_prompts_from_the_real_log(
         pm_turns.append_turn(prompt, session_id="sid-wb")
 
     path = _sizing(repo)
-    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    rel = _rel(repo)
     sizing_assemble.write_back(repo, rel, _decision("M"))
     assert [e["text"] for e in _load(path)["pm_verbatims"]] == [prompts[-1]]
 
@@ -423,7 +427,7 @@ def test_a_one_turn_ask_in_a_many_turn_session_embeds_one_turn_and_clears_the_pr
         pm_turns.append_turn(f"unrelated instruction number {n}", session_id="sid-many")
 
     path = _sizing(repo)
-    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    rel = _rel(repo)
     sizing_assemble.write_back(repo, rel, _decision("M"))
     doc = _load(path)
     assert [e["turn"] for e in doc["pm_verbatims"]] == [10]
@@ -459,7 +463,7 @@ def test_name_is_truncated_to_sixty_chars(repo: Path) -> None:
 
 
 def test_name_on_an_existing_record_replaces_template_or_inserts_and_keeps_real(repo: Path) -> None:
-    rel = Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix()
+    rel = _rel(repo)
     path = _sizing(repo, "# name: PLACEHOLDER  # OPTIONAL\n" + _DRAFT)
     sizing_assemble.write_back(repo, rel, _decision("M"), name="First")
     assert _load(path)["name"] == "First"
@@ -491,7 +495,7 @@ def test_cli_write_carries_the_scouts_doc_consumers_and_ask_conflicts(
     rc = sizing_assemble.main(
         [
             "--tshirt", "M",
-            "--write", Path(record_homes.record_path("", "sizings", _SIZING_NAME)).as_posix(),
+            "--write", _rel(repo),
             "--doc-consumer", "README.md:12",
             "--doc-consumer", "docs" "/wiki/x.md#rule",
             "--ask-conflict", "state/cross-repo/memo.md=says keep the old bar",

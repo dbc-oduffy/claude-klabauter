@@ -34,7 +34,6 @@ EXEMPT: dict[str, str] = {
 PENDING_FIX: dict[str, str] = {
     "coordinator_core/ops/cutover_gate.py": "C8-FU1",
     "coordinator_core/ops/copy_plugin_template.py": "C8-FU1",
-    "coordinator_core/bug_blitz/targeted_run.py": "C8-FU1",
     "coordinator/bin/red-set-report.py": "C8-FU1",
     "coordinator/bin/stable-suite-run.py": "C8-FU1",
     "coordinator/bin/suite-verdict.py": "C8-FU1",
@@ -147,6 +146,17 @@ def test_exempt_and_pending_entries_are_live(census):
             assert module in census, f"{name}[{module}] is no longer a pytest spawner; delete the entry"
             assert not census[module], f"{name}[{module}] now adopts the capped launcher; delete the entry"
     assert not set(EXEMPT) & set(PENDING_FIX)
+
+
+def test_child_env_chokepoint_caps_blas_pools_unless_set():
+    from coordinator_core.ops._pytest_child_env import pytest_child_env
+    from coordinator_core.testing import nested_session_guard, spawn_depth
+
+    assert nested_session_guard.BLAS_THREAD_KEYS is spawn_depth.BLAS_THREAD_KEYS
+    capped = spawn_depth.child_env({})
+    assert all(capped[k] == "1" for k in spawn_depth.BLAS_THREAD_KEYS)
+    assert spawn_depth.child_env({"MKL_NUM_THREADS": "4"})["MKL_NUM_THREADS"] == "4"
+    assert all(pytest_child_env()[k] for k in spawn_depth.BLAS_THREAD_KEYS)
 
 
 def _write(root: Path, rel: str, body: str) -> None:

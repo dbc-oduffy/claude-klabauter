@@ -240,6 +240,17 @@ from coordinator_core.roadmap.post_stamp_clause import (
 from coordinator_core.session.record_homes import home_dir
 
 _OWNER_ROWS_JS = "_crossRepoRows"
+# A wave entry claiming applied findings while the re-verify recorded an empty run diff (`edited` and
+# `created` both empty) is demoted to applied 0, so findings > applied reaches the blocked halt. No
+# recorded diff (no `edited` list) or a reused wave leaves the reviewer's count standing; per-finding
+# file/hunk checks live in `wave_bookkeeping`.
+_WAVE_DIFF_RECONCILE_JS = (
+    "  if (!_reviewReused && _reviewReverify && typeof _reviewReverify === 'object' && Array.isArray(_reviewReverify.edited) "
+    "&& Array.isArray(_reviewWave) && !_reviewReverify.edited.length "
+    "&& !(Array.isArray(_reviewReverify.created) && _reviewReverify.created.length)) { "
+    "_reviewWave = _reviewWave.map((w) => (w && (w.applied ?? 0) > 0 "
+    "? { ...w, applied_claimed: w.applied, applied: 0, unapplied_reason: 'not in run diff' } : w)); }"
+)
 # Wave entries carrying a non-empty string verdict and a non-empty sidecar_path; mirrors
 # `review_floor.verdict_count` minus the file-exists check, which only the lander can make. An expression
 # over `_reviewWave` alone, so the halt and the digest receipt both evaluate it where `_reviewVerdicts`
@@ -5303,6 +5314,7 @@ def compose_ask_script(
     )
     # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
     b.append("  if (!_reverifyJoined) { _reviewReverify = await " + _JOIN_REVERIFY_JS + "; _reverifyJoined = true; }")
+    b.append(_WAVE_DIFF_RECONCILE_JS)
     b.append(
         _review_recover_js(
             head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id, stager=stager,

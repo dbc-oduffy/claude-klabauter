@@ -115,3 +115,49 @@ def test_read_path_never_raises_on_a_broken_state_dir(monkeypatch):
     monkeypatch.setattr(tier_t_slots, "slot_path", lambda i: (_ for _ in ()).throw(OSError("boom")))
     assert tier_t_slots.free_slots() >= 0
     assert tier_t_slots.occupancy()[0] == 0
+
+
+@pytest.fixture
+def foreign_suite_holder():
+    import subprocess
+    import sys
+
+    from coordinator_core.testing import suite_mutex
+
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    assert suite_mutex.acquire("other-session", "pytest -n 4", 0.0, pid=child.pid)
+    try:
+        yield child
+    finally:
+        suite_mutex.release("other-session")
+        child.kill()
+        child.wait()
+
+
+def test_acquire_takes_no_slot_while_a_foreign_session_holds_the_suite_mutex(foreign_suite_holder):
+    assert tier_t_slots.acquire_slot("late", "pytest a.py", 0.3) is None
+    assert tier_t_slots.free_slots() == tier_t_slots.slot_cap()
+
+
+def test_acquire_waits_then_succeeds_when_the_suite_mutex_is_released(foreign_suite_holder):
+    import threading
+
+    from coordinator_core.testing import suite_mutex
+
+    timer = threading.Timer(0.4, lambda: suite_mutex.release("other-session"))
+    timer.start()
+    try:
+        slot = tier_t_slots.acquire_slot("late", "pytest a.py", 10.0)
+    finally:
+        timer.join()
+    assert slot is not None
+
+
+def test_suite_mutex_holder_own_run_is_exempt():
+    from coordinator_core.testing import suite_mutex
+
+    assert suite_mutex.acquire("me", "pytest -n 4", 0.0, pid=os.getpid())
+    try:
+        assert tier_t_slots.acquire_slot("child-run", "pytest a.py", 0.0) is not None
+    finally:
+        suite_mutex.release("me")

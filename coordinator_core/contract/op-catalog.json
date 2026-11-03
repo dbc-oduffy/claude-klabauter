@@ -1014,6 +1014,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.\n\n``dispatch.minted_run``: start or abandon a run left at stage ``minted``.\n\nParams: ``{run_id: str, action: \"start\" | \"abandon\", dry_run?: bool}``.\nReply: ``{ok, run_id, action, fire_args | null, landed_sha | null, refusal | null}``; a refusal\ncarries ``ok: false`` and a one-line ``refusal`` naming the cause. ``start`` returns the\n``fire_args`` of the Workflow start plus ``script_path`` (the run's script under ``scratch/warp``;\n``runToken`` rides ``fire_args`` only while the run's token is escrowed); ``abandon`` writes the halt\nmarker, discards the run token and lands the record through ``abandoned_runs`` (``run_ids=[run_id]``).\nThe reap holds a run younger than its quiet window, so a fresh abandon replies ``landed_sha: null`` and\n``note`` names the reap's skip reason; the halt marker still blocks any start.\n\nA run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt\nmarker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file\nreads only; no git spawn on the refusal path or on ``start``.",
+      "module": "coordinator_core.ops.dispatch_emit.minted_run",
+      "name": "dispatch.minted_run",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "Params: ``run_id``, ``at`` (sizing|wave0), ``credited`` [{sha, repo_root, axes}].\n\nRuns the falsifier at the current tree (base) and at each credited sha; appends a wave-0\ncalibration loop line; pins falsifier_sha256 and pinned_at only on a passing verdict.",
       "module": "coordinator_core.ops.dispatch_emit.objective_calibrate",
       "name": "dispatch.objective_calibrate",
@@ -1044,17 +1055,6 @@
         "type": "object"
       },
       "summary": "Params: ``run_id``, ``verbatim`` (optional), ``falsifier_script``, ``axes``.",
-      "timeout_s": 30.0
-    },
-    {
-      "description": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.",
-      "module": "coordinator_core.ops.dispatch_emit.minted_run",
-      "name": "dispatch.minted_run",
-      "op_class": "mutating",
-      "params_schema": {
-        "type": "object"
-      },
-      "summary": "JSON-RPC \"dispatch.minted_run\": start or abandon one minted-only run.",
       "timeout_s": 30.0
     },
     {
@@ -1135,7 +1135,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"dispatch.write_receipt\": write the stage receipt of `run_id` under state/warp.\n\nPer-stage receipts of the ask run (P-B): write one, read them back, list the mandatory ones missing.\n\nA receipt is `<run_dir>/receipts/<stage>.json` with the `Receipt` fields of run_truth_contract; `run_dir`\nis the tracked `state/warp/<run_id>` directory. Pure file reads and one atomic write, no git, no\nsubprocess. Importing this module writes nothing: a stage leg of the composed ask script calls the\n`dispatch.write_receipt` op.",
+      "description": "JSON-RPC \"dispatch.write_receipt\": write the stage receipt of `run_id` under state/warp.\n\nPer-stage receipts of the ask run (P-B): write one, read them back, list the mandatory ones missing.\n\nA receipt is `<run_dir>/receipts/<stage>.json` with the `Receipt` fields of run_truth_contract; `run_dir`\nis the untracked `state/warp/<run_id>` directory, pruned on retention. Pure file reads and one atomic\nwrite, no git, no subprocess. Importing this module writes nothing: a stage leg of the composed ask\nscript calls the `dispatch.write_receipt` op.",
       "module": "coordinator_core.ops.dispatch_emit.stage_receipts",
       "name": "dispatch.write_receipt",
       "op_class": "mutating",
@@ -3376,6 +3376,17 @@
         "type": "object"
       },
       "summary": "Standalone Stop leg: params {\"payload\": {session_id, transcript_path,",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "coordinator_core.hooks.workflow_step_dispatch — SubagentStart/SubagentStop advisory op.\n\nDoE's hooks.json wires `hook-run --advisory hooks.workflow_step_dispatch` on both\nsubagent events. No workflow step is matched by this op today, so it answers the\nno-match case: an advisory success with no injection.\n\nNegative-spec:\n    Spawns no process and performs no file I/O: a hook that fires on every\n    subagent start and stop must cost one registry lookup, nothing more.\n    Adding a matcher here must keep that: no subprocess, no git, no disk read\n    on the no-match path.",
+      "module": "coordinator_core.hooks",
+      "name": "hooks.workflow_step_dispatch",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "coordinator_core.hooks.workflow_step_dispatch — SubagentStart/SubagentStop advisory op.",
       "timeout_s": 30.0
     },
     {

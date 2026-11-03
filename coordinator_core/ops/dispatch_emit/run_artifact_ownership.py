@@ -14,12 +14,15 @@ from pathlib import Path, PurePosixPath
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
-from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import delivery_note_locate, record_dir
 from coordinator_core.session.record_homes import home_dir
 
 
 def _warp_home() -> str:
     return str(PurePosixPath(home_dir("", "warp").replace(os.sep, "/")))
+
+
+_SHARD_DIR = re.compile(r"^\d{4}-\d{2}$")
 
 
 @dataclass(frozen=True)
@@ -34,11 +37,22 @@ class OwnArtifacts:
     # `<plan stem>.evidence.yaml` beside each plan the run names; the criterion-evidence stage writes it.
     plan_evidence: frozenset[str] = frozenset()
 
+    def _is_note(self, rel: str) -> bool:
+        """The run's note at its located path, or at the other of its flat and `<YYYY-MM>` shard homes."""
+        if rel == self.delivery_note:
+            return True
+        parts = rel.split("/")
+        mine = self.delivery_note.split("/")
+        return (
+            parts[:2] == mine[:2] == ["docs", "delivery"] and parts[-1] == mine[-1]
+            and (len(parts) == 3 or (len(parts) == 4 and _SHARD_DIR.match(parts[2]) is not None))
+        )
+
     def covers(self, rel: str) -> bool:
         """True for the run's sizings, plan evidence, delivery note, or anything under its record dir."""
         if not rel:
             return False
-        if rel in self.sizings or rel in self.plan_evidence or (self.delivery_note and rel == self.delivery_note):
+        if rel in self.sizings or rel in self.plan_evidence or (self.delivery_note and self._is_note(rel)):
             return True
         return bool(self.record_prefix) and rel.startswith(self.record_prefix)
 
@@ -110,5 +124,5 @@ def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
         plan_evidence=_plan_evidence(root, run_id, sizings),
         corrupt_parents=corrupt,
         record_prefix=f"{_warp_home()}/{run_id}/",
-        delivery_note=f"docs/delivery/{run_id}.md",
+        delivery_note=delivery_note_locate(root, run_id),
     )

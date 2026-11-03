@@ -60,6 +60,7 @@ from typing import Optional
 from coordinator_core._settings_home import normalize_native_path
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony.git_native import _git
+from coordinator_core.session.output_tree_layout import locate
 
 
 def _git_rev_parse(parent: Path, flag: str):
@@ -121,6 +122,12 @@ def _resolve_baton_path_and_repo(params: dict, repo_root: Optional[Path] = None)
         }
 
     git_relative_path = prefix + resolved.name
+
+    if not resolved.is_file():
+        located = locate(toplevel, git_relative_path)
+        if located != git_relative_path and (Path(toplevel) / located).is_file():
+            resolved = (Path(toplevel) / located).resolve()
+            git_relative_path = located
 
     return {
         "abs_path": str(resolved),

@@ -476,6 +476,37 @@ def test_baton_drain_fires_the_cascade_for_an_archived_shipped_baton(tmp_path, m
     assert asyncio.run(sweep_handler({"deliverable_id": _DID}, repo_root=repo / ".git"))["divergences"] == []
 
 
+@pytest.mark.parametrize("baton_rel", ["state/handoffs/2026-07-02_b.md", "state/handoffs/2026-07/2026-07-02_b.md"])
+def test_cited_baton_containment_accepts_flat_and_sharded_handoffs(tmp_path, baton_rel):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / "docs" / "plans" / "p.md").write_text(
+        "---\nplan_id: p\nsizing_object: state/sizings/s.yaml\n---\n", encoding="utf-8"
+    )
+    (tmp_path / "state" / "sizings" / "s.yaml").write_text(f"baton: {baton_rel}\n", encoding="utf-8")
+    (tmp_path / "state" / "handoffs" / "2026-07").mkdir(parents=True)
+    shard = tmp_path / "state" / "handoffs" / "2026-07" / "2026-07-02_b.md"
+    shard.write_text("x\n", encoding="utf-8")
+
+    sizing, baton = cb._cited(_ctx(tmp_path), "docs/plans/p.md")
+
+    assert sizing == "state/sizings/s.yaml"
+    assert baton == "state/handoffs/2026-07/2026-07-02_b.md"
+
+
+def test_cited_baton_in_the_flat_root_still_resolves(tmp_path):
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / "state" / "handoffs").mkdir(parents=True)
+    (tmp_path / "docs" / "plans" / "p.md").write_text(
+        "---\nplan_id: p\nsizing_object: state/sizings/s.yaml\n---\n", encoding="utf-8"
+    )
+    (tmp_path / "state" / "sizings" / "s.yaml").write_text("baton: state/handoffs/2026-07-02_b.md\n", encoding="utf-8")
+    (tmp_path / "state" / "handoffs" / "2026-07-02_b.md").write_text("x\n", encoding="utf-8")
+
+    assert cb._cited(_ctx(tmp_path), "docs/plans/p.md")[1] == "state/handoffs/2026-07-02_b.md"
+
+
 def test_baton_drain_skips_non_terminal_batons_without_calling_the_op(tmp_path, monkeypatch):
     import coordinator_core.warm.entry_seam as entry_seam
 

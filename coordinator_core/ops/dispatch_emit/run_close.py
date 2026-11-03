@@ -235,11 +235,11 @@ def build_close_block(
 
         block = with_parts(block, parts)
     if run_dir is not None:
-        if not (Path(run_dir) / "receipts").is_dir():
+        from coordinator_core.ops.dispatch_emit import stage_receipts
+
+        if not stage_receipts.has_receipts(run_dir):
             block["receipts"] = "not-applicable: run has no receipts dir (fired before the receipt writers)"
         else:
-            from coordinator_core.ops.dispatch_emit import stage_receipts
-
             gone = list(block.get("missing_receipts") or [])
             gone += [s for s in stage_receipts.missing(run_dir, arm, tshirt) if s not in gone]
             block["missing_receipts"] = gone
@@ -309,6 +309,36 @@ def close_job_path(run_id: str) -> str:
 
 def _job_file(root: Path, run_id: str) -> Path:
     return Path(root) / close_job_path(run_id)
+
+
+def settle_run_stage(root: Path, run_id: object) -> bool:
+    """Stamp the run's ``run-stage.json`` ``landed`` when it still reads ``minted`` or ``staged``;
+    True when it wrote. Never creates the record, never moves a ``halted`` or ``landed`` stage, never
+    raises. A landing or close that ran in a different engine process than the staging reaches the run
+    through its id, not through the manifest the staging process held."""
+    if not isinstance(run_id, str) or not run_id:
+        return False
+    try:
+        from coordinator_core.ops.dispatch_emit import ask_contract
+
+        bare = bare_run_id(run_id)
+        stage = (ask_contract.read_run_stage(Path(root), bare) or {}).get("stage")
+        if stage not in ("minted", "staged"):
+            return False
+        ask_contract.stamp_run_stage_at(ask_contract.record_dir(Path(root), bare), "landed", warp_run=bare)
+        return True
+    except (ValueError, OSError):
+        return False
+
+
+def _landed_clean(record: Mapping[str, Any]) -> bool:
+    """True when the close-job record names a terminal commit and no unfinished, unlanded or not-met work."""
+    inputs = record.get("inputs") if isinstance(record.get("inputs"), dict) else {}
+    criterion = record.get("criterion")
+    return bool(
+        record.get("terminal_sha") and not inputs.get("incomplete") and not inputs.get("unlanded")
+        and not (isinstance(criterion, Mapping) and criterion.get("status") == "not_met")
+    )
 
 
 def _write_atomic(path: Path, payload: Mapping[str, Any]) -> None:
@@ -390,6 +420,8 @@ def write_close_job(
             "inputs": {} if inputs is None else dict(inputs),
         },
     )
+    if _landed_clean({"terminal_sha": terminal_sha, "inputs": inputs, "criterion": criterion}):
+        settle_run_stage(root, run_id)
     return close_job_path(run_id)
 
 
@@ -519,6 +551,8 @@ def amend_close_job(
     for leg in queued:
         record["legs"][leg] = {"status": "queued", "detail": ""}
     _write_atomic(_job_file(root, run_id), record)
+    if _landed_clean(record):
+        settle_run_stage(root, run_id)
 
 
 def _load(root: Path, run_id: str) -> Optional[dict[str, Any]]:

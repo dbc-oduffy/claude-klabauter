@@ -41,6 +41,24 @@ def test_ambiguous_archive_refuses(tmp_path):
         load_sizing(tmp_path, "state/sizings/a.yaml")
 
 
+def test_flat_cite_loads_a_sharded_sizing_and_flat_still_loads(tmp_path):
+    _write(tmp_path / "state" / "sizings" / "2026-11" / "2026-11-03-a.yaml", "size: shard\n")
+    assert load_sizing(tmp_path, "state/sizings/2026-11-03-a.yaml") == {"size": "shard"}
+    _write(tmp_path / "state" / "sizings" / "2026-11-03-b.yaml", "size: flat\n")
+    assert load_sizing(tmp_path, "state/sizings/2026-11-03-b.yaml") == {"size": "flat"}
+
+
+def test_s_plan_path_names_the_shard_and_located_keeps_a_flat_plan(tmp_path):
+    from coordinator_core.ops.dispatch_emit.sizing_fire import PLAN_PATH_JS, s_plan_located, s_plan_path
+
+    sz = "state/sizings/2026-11-03-foo.yaml"
+    assert s_plan_path(sz) == "docs/plans/2026-11/2026-11-03-foo.md"
+    assert s_plan_located(tmp_path, sz) == "docs/plans/2026-11/2026-11-03-foo.md"
+    _write(tmp_path / "docs" / "plans" / "2026-11-03-foo.md", "x\n")
+    assert s_plan_located(tmp_path, sz) == "docs/plans/2026-11-03-foo.md"
+    assert "m[1] + '/'" in PLAN_PATH_JS
+
+
 def test_path_outside_both_homes_refuses(tmp_path):
     _write(tmp_path / "docs" / "a.yaml")
     with pytest.raises(SizingFireRefused, match="escapes"):

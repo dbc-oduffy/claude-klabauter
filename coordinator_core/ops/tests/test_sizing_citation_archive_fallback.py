@@ -126,3 +126,36 @@ def test_gate_still_fails_on_an_ambiguous_archive_match(tmp_path: Path, capsys):
     rc = main(["--root", str(tmp_path)])
     assert rc == 1
     assert "FAIL: 1 dangling" in capsys.readouterr().err
+
+
+def test_flat_cite_resolves_a_sharded_sizing(tmp_path: Path):
+    shard = _write(tmp_path, "state/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
+    assert resolve_sizing_citation(tmp_path, _CITED) == shard.resolve()
+
+
+def test_flat_file_wins_over_shard_and_archive(tmp_path: Path):
+    flat = _write(tmp_path, _CITED, _SIZING_BODY)
+    _write(tmp_path, "state/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
+    _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
+    assert resolve_sizing_citation(tmp_path, _CITED) == flat.resolve()
+
+
+def test_shard_wins_over_archive_and_archive_still_resolves(tmp_path: Path):
+    arch = _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
+    assert resolve_sizing_citation(tmp_path, _CITED) == arch.resolve()
+    shard = _write(tmp_path, "state/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
+    assert resolve_sizing_citation(tmp_path, _CITED) == shard.resolve()
+
+
+def test_absent_everywhere_is_none(tmp_path: Path):
+    assert resolve_sizing_citation(tmp_path, _CITED) is None
+
+
+def test_plan_path_bridge_extracts_a_sharded_plan_path():
+    from coordinator_core.hooks.support.plan_path_bridge import extract_plan_path
+
+    assert (
+        extract_plan_path("Execute docs/plans/2026-11/2026-11-03-x.md now")
+        == "docs/plans/2026-11/2026-11-03-x.md"
+    )
+    assert extract_plan_path("Execute docs/plans/2026-11-03-x.md now") == "docs/plans/2026-11-03-x.md"

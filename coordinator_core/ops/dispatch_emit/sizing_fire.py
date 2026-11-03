@@ -42,6 +42,7 @@ ALL_LANDED_NO_RUN = "none"
 RESUME_LEDGER_HALT_BLOCKING_FIELD = "halt_blocking"
 from coordinator_core.ops.sizing_acceptance import lacks_human_acceptance, sizing_acceptance_skipped
 from coordinator_core.session import record_homes
+from coordinator_core.session.output_tree_layout import locate, write_rel
 from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
@@ -124,7 +125,7 @@ def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     st = _regular_stat(p)
     if st is None:
         archived = resolve_sizing_citation(root, record_homes.record_path(str(root), "sizings", p.name))
-        archived = contained_path(archived, [archive_home]) if archived is not None else None
+        archived = contained_path(archived, [hot_home, archive_home]) if archived is not None else None
         if archived is not None:
             p = archived
             st = _regular_stat(p)
@@ -309,10 +310,18 @@ DATE_HEAD_PATTERN = r"\d{4}-\d{2}-\d{2}-"
 
 
 def s_plan_path(sizing_rel: str) -> str:
-    """Stage-1 plan location, `docs/plans/<sizing-stem>.md`; a repeated leading `YYYY-MM-DD-` collapses to one."""
+    """Stage-1 plan location a new plan is written at, `docs/plans/<YYYY-MM>/<sizing-stem>.md`; a repeated leading `YYYY-MM-DD-` collapses to one."""
+    return write_rel("docs/plans", f"{_s_plan_stem(sizing_rel)}.md")
+
+
+def _s_plan_stem(sizing_rel: str) -> str:
     stem = PurePosixPath(str(sizing_rel).replace(chr(92), "/")).stem
-    stem = re.sub(rf"^({DATE_HEAD_PATTERN})(?:{DATE_HEAD_PATTERN})+", r"\1", stem)
-    return f"docs/plans/{stem}.md"
+    return re.sub(rf"^({DATE_HEAD_PATTERN})(?:{DATE_HEAD_PATTERN})+", r"\1", stem)
+
+
+def s_plan_located(repo_root: str | Path, sizing_rel: str) -> str:
+    """Where the sizing's stage-1 plan lives now: a flat or REDIRECTS-named plan if present, else `s_plan_path`."""
+    return locate(str(repo_root), f"docs/plans/{_s_plan_stem(sizing_rel)}.md")
 
 
 def single_dated_plan_edge(plan_rel: str) -> str:
@@ -325,7 +334,8 @@ def single_dated_plan_edge(plan_rel: str) -> str:
 PLAN_PATH_JS = (
     "const _planPathFor = (rel) => { const s = String(rel).replace(/\\\\/g, '/').split('/').pop()"
     ".replace(/\\.[^.]*$/, '').replace(/^(" + DATE_HEAD_PATTERN + ")(?:" + DATE_HEAD_PATTERN
-    + ")+/, '$1'); return 'docs/plans/' + s + '.md'; };"
+    + ")+/, '$1'); const m = /^(\\d{4}-\\d{2})-\\d{2}(?!\\d)/.exec(s);"
+    " return 'docs/plans/' + (m ? m[1] + '/' : '') + s + '.md'; };"
 )
 
 
@@ -366,7 +376,7 @@ def resumable_plan(
 
     edge = sizing.get("plan")
     root = Path(repo_root)
-    plan_rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_path(sizing_rel) if arm == ARM_S else None)
+    plan_rel = edge if isinstance(edge, str) and edge.strip() else (s_plan_located(root, sizing_rel) if arm == ARM_S else None)
     if plan_rel is not None and plan_rel == edge:
         twin = single_dated_plan_edge(plan_rel)
         if twin != plan_rel and not (root / plan_rel).is_file():
@@ -912,7 +922,7 @@ def collect_fire_refusals(
             "name it as args.writes beside args.sizing"
         )
     if arm == ARM_S and repo_root is not None:
-        plan_rel = s_plan_path(sizing_rel)
+        plan_rel = s_plan_located(repo_root, sizing_rel)
         try:
             resumable = resumable_plan(sizing, sizing_rel, Path(repo_root), arm)
             if resumable is None and (Path(repo_root) / plan_rel).exists():

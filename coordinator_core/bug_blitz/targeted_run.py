@@ -207,12 +207,12 @@ def _pytest_spawn_refusal(argv: Sequence[str], repo_root: Path) -> str | None:
 
 def _spawn(argv: Sequence[str], cwd: Path, timeout: int) -> tuple[int, str]:
     resolved = [shutil.which(argv[0]) or argv[0], *argv[1:]]
-    env = spawn_depth.child_env(os.environ) if _is_pytest_argv(argv) else None
+    if _is_pytest_argv(argv):
+        return _spawn_pytest_capped(resolved, cwd, timeout)
     try:
         proc = subprocess.run(
             resolved,
             cwd=str(cwd),
-            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -225,6 +225,39 @@ def _spawn(argv: Sequence[str], cwd: Path, timeout: int) -> tuple[int, str]:
     except subprocess.TimeoutExpired as exc:
         out = exc.output if isinstance(exc.output, str) else (exc.output or b"").decode("utf-8", "replace")
         return _TIMEOUT_EXIT, out + f"\n[TIMEOUT] exceeded {timeout}s\n"
+
+
+def _spawn_pytest_capped(resolved: Sequence[str], cwd: Path, timeout: int) -> tuple[int, str]:
+    """Run a pytest argv inside a capped Job Object with the depth sentinel; `close` always runs, ending the tree."""
+    from coordinator_core.diagnostics import contained_run
+
+    proc, close = contained_run.spawn_in_capped_job(
+        list(resolved),
+        popen_kwargs=dict(
+            cwd=str(cwd),
+            env=spawn_depth.child_env(os.environ),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            errors="replace",
+            **no_console_creationflags(),
+        ),
+    )
+    try:
+        try:
+            out, _ = proc.communicate(timeout=timeout)
+            return proc.returncode, out or ""
+        except subprocess.TimeoutExpired as exc:
+            close()
+            tail = exc.output if isinstance(exc.output, str) else (exc.output or b"").decode("utf-8", "replace")
+            try:
+                rest, _ = proc.communicate(timeout=10)
+            except Exception:
+                rest = ""
+            return _TIMEOUT_EXIT, (tail or "") + (rest or "") + f"\n[TIMEOUT] exceeded {timeout}s\n"
+    finally:
+        close()
 
 
 def _group_by_language(files: Sequence[str]) -> list[list[str]]:

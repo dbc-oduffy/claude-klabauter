@@ -43,8 +43,8 @@ def test_ask_arm_script_has_a_test_stage_wired_to_the_digest(monkeypatch):
     )
     assert "_testResult = _verify.test" in script
     assert (
-        "const _testWanted = !!(((_gate.arm !== 'xs' && !_xsTail) || _reviewApplied > 0) "
-        "&& (_manifest.test_targets ?? []).length)"
+        "const _testWanted = !!(((_gate.arm !== 'xs' && !_xsTail) || _reviewApplied > 0 || "
+        f"{ask_compose.XS_TEST_TARGET_JS}) && (_manifest.test_targets ?? []).length)"
     ) in script
     assert "(_manifest.test_targets ?? []).join(', ')" in script
     assert "_testResult.status" in script and "(_testResult ? (" in script

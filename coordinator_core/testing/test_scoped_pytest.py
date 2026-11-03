@@ -277,6 +277,20 @@ def test_other_selection_inside_a_test_is_spawned_with_child_env(monkeypatch, tm
     assert seen["env"]["COORDINATOR_PYTEST_DEPTH"] == "1"
 
 
+def test_spawn_target_resolves_unpatched_on_contained_run():
+    """The launcher's call target must exist on the real module and accept the kwarg it passes;
+    the monkeypatched tests below would only say so by accident."""
+    import inspect
+
+    from coordinator_core.diagnostics import contained_run as cr
+
+    fn = getattr(cr, "spawn_in_capped_job", None)
+    assert callable(fn), "contained_run has no attribute spawn_in_capped_job"
+    params = inspect.signature(fn).parameters
+    assert "popen_kwargs" in params
+    assert params["popen_kwargs"].kind is inspect.Parameter.KEYWORD_ONLY
+
+
 def test_spawn_passes_child_env_to_popen(monkeypatch):
     monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "0")
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "t.py::t (call)")

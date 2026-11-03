@@ -37,7 +37,7 @@ _LIST = "do these:\n1. first thing\n2) second thing\n- third thing\n"
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", _NAME)).parent.mkdir(parents=True)
     return tmp_path
 
 
@@ -47,12 +47,16 @@ def _sizing(repo: Path, text: str = _DRAFT) -> Path:
     return path
 
 
+def _rel(repo: Path) -> str:
+    return Path(record_homes.record_path(str(repo), "sizings", _NAME)).relative_to(repo).as_posix()
+
+
 def _write(repo: Path, window, **kw) -> dict:
     import coordinator_core.ops.baton_pm_turns as pm_turns
 
     pm_turns.bound_window = lambda *_a, **_k: list(window)
     decision = sa.route(estimate={"tshirt": "M"}, intent="Ship the thing")
-    return sa.write_back(repo, f"state/sizings/{_NAME}", decision, **kw)
+    return sa.write_back(repo, _rel(repo), decision, **kw)
 
 
 @pytest.fixture(autouse=True)
@@ -82,7 +86,7 @@ def test_two_enumerated_lines_mint_one_row_per_clause(repo, capsys):
     row = reg["rows"][0]
     assert row["anchor"] == "pm_verbatims turn 7, clause 1"
     assert (row["surface"], row["status"], row["claimed_by"]) == ("internal", "open", [])
-    assert reg["sources"] == [{"doc": f"state/sizings/{_NAME}", "ref": "pm_verbatims turn 7"}]
+    assert reg["sources"] == [{"doc": _rel(repo), "ref": "pm_verbatims turn 7"}]
     assert doc["status"] == "routed"
     assert validate_frontmatter(doc, SCHEMA) == []
     err = capsys.readouterr().err
@@ -166,11 +170,11 @@ def test_pm_verbatim_intent_list_mints_intent_rows(repo, monkeypatch):
 
     monkeypatch.setattr(pm_turns, "bound_window", lambda *_a, **_k: [])
     decision = sa.route(estimate={"tshirt": "M"}, intent="Ship:\n1. a\n2. b")
-    sa.write_back(repo, f"state/sizings/{_NAME}", decision, intent_verbatim=True)
+    sa.write_back(repo, _rel(repo), decision, intent_verbatim=True)
     reg = _load(path)["requirement_register"]
     assert [r["id"] for r in reg["rows"]] == ["I.1", "I.2"]
     assert reg["rows"][0]["anchor"] == "intent, clause 1"
-    assert reg["sources"] == [{"doc": f"state/sizings/{_NAME}", "ref": "intent"}]
+    assert reg["sources"] == [{"doc": _rel(repo), "ref": "intent"}]
 
 
 def test_stubbed_mint_flags_uncovered_turns_and_never_refuses(repo, monkeypatch, capsys):

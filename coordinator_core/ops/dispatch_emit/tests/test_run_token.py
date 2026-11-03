@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import threading
 import time
 
@@ -37,7 +38,12 @@ def test_a_raw_ask_run_owns_only_the_sizing_its_gate_bound(tmp_path):
     assert run_token.run_owns_sizing(repo, "s1", "state/sizings/mine.yaml")
     assert not run_token.run_owns_sizing(repo, "s1", "state/sizings/unrelated.yaml")
     assert not run_token.run_owns_sizing(repo, "s2", "state/sizings/mine.yaml")
+    older = repo / "state" / "sizings" / "unrelated.yaml"
+    os.utime(older, ns=(1_000_000_000, 1_000_000_000))
     assert not run_token.bind_sizing(repo, "ask-1", "state/sizings/unrelated.yaml")
+    os.utime(older, ns=(time.time_ns() + 10**10, time.time_ns() + 10**10))
+    assert run_token.bind_sizing(repo, "ask-1", "state/sizings/unrelated.yaml")
+    assert run_token.run_owns_sizing(repo, "s1", "state/sizings/unrelated.yaml")
 
 
 def test_admits_checks_without_claiming(tmp_path):

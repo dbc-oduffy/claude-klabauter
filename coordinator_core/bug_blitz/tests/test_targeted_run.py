@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
@@ -156,6 +157,66 @@ def test_runner_holds_a_tier_t_slot_during_the_run(repo, monkeypatch):
     assert rec.outcome == "passed"
     assert seen == [1]
     assert tier_t_slots.occupancy()[0] == 0
+
+
+def test_pytest_spawn_runs_in_capped_job_with_depth_sentinel_and_closes(tmp_path, monkeypatch):
+    from coordinator_core.diagnostics import contained_run
+    from coordinator_core.testing import spawn_depth
+
+    seen = {"closed": 0}
+
+    class _P:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return "ok", None
+
+    def fake(argv, *, popen_kwargs=None, **kw):
+        seen["argv"], seen["kw"] = list(argv), dict(popen_kwargs)
+
+        def close():
+            seen["closed"] += 1
+
+        return _P(), close
+
+    monkeypatch.setattr(contained_run, "spawn_in_capped_job", fake)
+    rc, out = targeted_run._spawn([sys.executable, "-m", "pytest", "t.py"], tmp_path, 5)
+    assert (rc, out) == (0, "ok")
+    assert seen["kw"]["env"][spawn_depth.ENV_KEY] == str(spawn_depth.child_depth(os.environ))
+    assert seen["closed"] >= 1
+
+
+def test_pytest_spawn_timeout_closes_the_job_and_reports_124(tmp_path, monkeypatch):
+    from coordinator_core.diagnostics import contained_run
+
+    closed = []
+
+    class _P:
+        returncode = None
+
+        def __init__(self):
+            self.n = 0
+
+        def communicate(self, timeout=None):
+            self.n += 1
+            if self.n == 1:
+                raise subprocess.TimeoutExpired("x", timeout, output="partial")
+            return "", None
+
+    monkeypatch.setattr(contained_run, "spawn_in_capped_job", lambda a, **k: (_P(), lambda: closed.append(1)))
+    rc, out = targeted_run._spawn([sys.executable, "-m", "pytest", "t.py"], tmp_path, 1)
+    assert rc == 124 and "[TIMEOUT]" in out and "partial" in out
+    assert closed
+
+
+def test_non_pytest_spawn_bypasses_the_capped_job(tmp_path, monkeypatch):
+    from coordinator_core.diagnostics import contained_run
+
+    monkeypatch.setattr(
+        contained_run, "spawn_in_capped_job", lambda *a, **k: pytest.fail("capped job used for non-pytest")
+    )
+    rc, out = targeted_run._spawn([sys.executable, "-c", "print('hi')"], tmp_path, 30)
+    assert rc == 0 and "hi" in out
 
 
 def _ext_row(root):

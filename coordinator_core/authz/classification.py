@@ -199,6 +199,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # nudge_foreground_agent_dispatch and postuse_advisory_dispatch to MUTATING — adding
     # per-session suppression state here would both violate that spec and flip this class.
     "hooks.nudge_named_agent_report_delivery": OpClass.COMPUTE_ONLY,
+    # hooks.workflow_step_dispatch — COMPUTE_ONLY: no file I/O, no spawn; returns no_advisory().
+    "hooks.workflow_step_dispatch": OpClass.COMPUTE_ONLY,
     # hooks.nudge_autonomous_askuserquestion — COMPUTE_ONLY on the same five-question
     # checklist. All file I/O is read-only (a sentinel existence check under
     # tempfile.gettempdir(), and two read-only posture-file reads); it holds no

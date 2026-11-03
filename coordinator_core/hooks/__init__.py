@@ -5,9 +5,10 @@ Purpose: Namespace for coordinator_core hook op implementations. Each sub-module
 self-registers its handler via register_op() at import time under the "hooks.<name>"
 method namespace. Importing this bare package NEVER populates the op-registry —
 registration is lazy unconditionally, with no flag or channel to arm it: a caller
-must trigger a targeted per-op import itself (see coordinator_core.ipc's
-hooks-scoped registry-miss fallback, C2), or call _eager_import_all() directly for
-the rare full-registration need.
+must trigger a targeted per-op import itself (OP_MODULE_MAP maps each hooks.* key to
+its owning coordinator_core.hooks.<module>; coordinator_core.ipc's hooks-scoped
+registry-miss fallback fires only on map drift), or call _eager_import_all() directly
+for the rare full-registration need.
 
 Every hook module that calls register_op() MUST be listed in _EAGER_HOOK_MODULES
 below. A module left out of that list still registers its op whenever some
@@ -72,6 +73,7 @@ Bookkeeping hook ops (pcore-08, D1) — write .git/coordinator-sessions/ session
     track_touched_files      — dedup-append to touched.txt (session + agent); MUTATING
     agent_completion_log     — jsonl append to logs/agent-audit.jsonl; MUTATING
     track_dispatched_agents  — tab-delimited dedup + collision rewrite; MUTATING
+    workflow_step_dispatch   — SubagentStart/Stop advisory; no-match no_advisory, no I/O; COMPUTE_ONLY
 
 Bookkeeping hook op (W4b) — writes the PreCompact sentinel + state snapshot to tempdir:
     context_pressure_precompact — compaction sentinel + state file; MUTATING
@@ -159,6 +161,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.postuse_advisory_dispatch",
     "coordinator_core.hooks.track_touched_files",
     "coordinator_core.hooks.agent_completion_log",
+    "coordinator_core.hooks.workflow_step_dispatch",
     "coordinator_core.hooks.track_dispatched_agents",
     "coordinator_core.hooks.agent_postuse_dispatch",
     "coordinator_core.hooks.context_pressure_precompact",

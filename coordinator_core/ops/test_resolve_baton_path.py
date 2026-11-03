@@ -59,6 +59,39 @@ def test_baton_in_repo_subdir(repo):
     assert result["git_relative_path"] == "state/handoffs/2026-07-22_baton.md"
 
 
+def test_sharded_baton_cited_by_its_flat_path_resolves_to_the_shard(repo):
+    shard = repo / "state" / "handoffs" / "2026-07"
+    shard.mkdir(parents=True)
+    baton = shard / "2026-07-22_baton.md"
+    baton.write_text("baton\n", encoding="utf-8")
+
+    result = _resolve_baton_path_and_repo({"baton_path": str(repo / "state" / "handoffs" / "2026-07-22_baton.md")})
+
+    assert "error" not in result
+    assert result["abs_path"] == str(baton.resolve())
+    assert result["git_relative_path"] == "state/handoffs/2026-07/2026-07-22_baton.md"
+
+
+def test_sharded_baton_cited_by_shard_path_is_unchanged(repo):
+    shard = repo / "state" / "handoffs" / "2026-07"
+    shard.mkdir(parents=True)
+    baton = shard / "2026-07-22_baton.md"
+    baton.write_text("baton\n", encoding="utf-8")
+
+    result = _resolve_baton_path_and_repo({"baton_path": str(baton)})
+
+    assert result["git_relative_path"] == "state/handoffs/2026-07/2026-07-22_baton.md"
+
+
+def test_missing_baton_in_both_places_keeps_the_cited_flat_path(repo):
+    (repo / "state" / "handoffs").mkdir(parents=True)
+    ghost = repo / "state" / "handoffs" / "2026-07-22_ghost.md"
+
+    result = _resolve_baton_path_and_repo({"baton_path": str(ghost)})
+
+    assert result["git_relative_path"] == "state/handoffs/2026-07-22_ghost.md"
+
+
 def test_baton_at_repo_root_empty_prefix(repo):
     baton = repo / "baton.md"
     baton.write_text("baton\n", encoding="utf-8")

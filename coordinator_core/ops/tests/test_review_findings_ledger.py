@@ -646,3 +646,26 @@ def test_verify_still_refuses_open_status_on_a_normal_row(tmp_path):
     row = {"id": "finding-1", "file": "a.py", "before": "x", "after": "y", "status": "open"}
     sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[row])
     assert not m.verify(sidecar, repo_root=tmp_path).ok
+
+
+def test_run_diff_check_pins_both_sides_file_and_line():
+    diff = m.normalize_run_diff({"src\\a.py": [(5, 9)], "./b.py": None, "c.py": []})
+    assert set(diff) == {"src/a.py", "b.py", "c.py"}
+
+    assert m.applied_row_in_run_diff({"file": "src/a.py", "line": 7}, diff)
+    assert not m.applied_row_in_run_diff({"file": "src/a.py", "line": 12}, diff)
+    assert m.applied_row_in_run_diff({"file": "src/a.py"}, diff)  # no line named: file decides
+    assert m.applied_row_in_run_diff({"file": "b.py", "line": 99}, diff)  # no hunks known: file decides
+    assert not m.applied_row_in_run_diff({"file": "c.py", "line": 1}, diff)
+    assert not m.applied_row_in_run_diff({"file": "d.py"}, diff)
+
+
+def test_rows_not_in_run_diff_skips_other_statuses_and_peer_hunks():
+    rows = [
+        {"id": "a", "file": "gone.py"},
+        {"id": "b", "file": "gone.py", "status": "em-rejected", "reason": "no"},
+        {"id": "c", "file": "gone.py", "out_of_ask": True},
+        {"id": "d", "file": "here.py"},
+    ]
+    missing = m.rows_not_in_run_diff(rows, m.normalize_run_diff(["here.py"]))
+    assert [r["id"] for r in missing] == ["a"]

@@ -1503,3 +1503,49 @@ class TestWorkflowInlinePythonProbe:
         cmd = "python -m pytest coordinator_core/bash_guards/tests/test_host_probe.py::test_x"
         with pytest.raises(OSError):
             _enveloped(guard.check)(_payload(cmd))
+
+
+_REAL_WORKFLOW_RUNS = guard._workflow_runs_of
+_NODE = "coordinator_core/frontmatter/tests/test_vendored_research_contract.py::test_vendored_versions"
+_REGEN = "python coordinator/tests/test_schema_version_pin.py --regen"
+
+
+class TestTargetedRunsInAWorkflow:
+    """A literal node-id pytest run and a non-pytest test-file script run are not heavy commands."""
+
+    @pytest.fixture()
+    def workflow(self, host, monkeypatch, tmp_path):
+        monkeypatch.setattr(guard, "_workflow_runs_of", _REAL_WORKFLOW_RUNS)
+        return str(tmp_path / "proj" / "sess" / "subagents" / "workflows" / "wf_f2bec66c" / "agent-deadbeef0123.jsonl")
+
+    def _run(self, cmd, agent_type, transcript, cwd):
+        payload = _payload(cmd, agent_id="deadbeef0123", agent_type=agent_type, transcript_path=transcript, cwd=cwd)
+        return _enveloped(guard.check)(payload)
+
+    @pytest.mark.parametrize("agent_type", ["coordinator:test-runner", "coordinator:executor"])
+    @pytest.mark.parametrize("flags", [
+        "-q",
+        "-q --tb short",
+        "-q --cov-report term",
+        "-q --log-cli-level INFO",
+        "-q --show-capture no",
+        "-q --reruns 2",
+        "-q --durations-min 1",
+        "-q -p no:cacheprovider",
+    ])
+    def test_a_literal_node_id_run_is_admitted(self, workflow, tmp_path, agent_type, flags):
+        assert self._run("python -m pytest %s %s" % (_NODE, flags), agent_type, workflow, tmp_path) is None
+
+    @pytest.mark.parametrize("agent_type", ["coordinator:test-runner", "coordinator:executor"])
+    def test_a_test_file_script_run_is_admitted(self, workflow, tmp_path, agent_type):
+        assert self._run(_REGEN, agent_type, workflow, tmp_path) is None
+
+    @pytest.mark.parametrize("cmd", [
+        "python -m pytest",
+        "python -m pytest -q --cov-report term",
+        "python -m pytest coordinator_core/bash_guards/tests",
+        "python -m pytest -q --reruns 2 coordinator_core",
+    ])
+    def test_an_unscoped_pytest_from_a_workflow_agent_stays_refused(self, workflow, tmp_path, cmd):
+        out = self._run(cmd, "coordinator:test-runner", workflow, tmp_path)
+        assert out is not None and "bare-pytest leg" in _reason(out)

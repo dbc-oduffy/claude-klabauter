@@ -66,7 +66,13 @@ from coordinator_core.frontmatter.primitives import (
     rebuild,
     split_frontmatter,
 )
-from coordinator_core.ops.review_findings_ledger import LedgerError, verify as ledger_verify
+from coordinator_core.ops.review_findings_ledger import (
+    LedgerError,
+    _parse_ledger_rows,
+    normalize_run_diff,
+    rows_not_in_run_diff,
+    verify as ledger_verify,
+)
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
 
 _DATE_TOKEN_RE = re.compile(r"(?:^|-)\d{4}-\d{2}-\d{2}(?=-|$)")
@@ -311,10 +317,53 @@ def _max_severity(findings_section_text: Optional[str]) -> Optional[str]:
     return "unranked"
 
 
-def review_firing_rows(sidecar_paths: List[Path], plan_id: str) -> List[Dict[str, Any]]:
+def run_diff_from_stage_returns(stage_returns: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The run's diff the wave is checked against: the union of ``edited`` and ``created`` in
+    the relayed ``tests`` and ``reverify`` blocks (paths only, no hunks). ``None`` when neither
+    block carries an ``edited`` list, so a run that never recorded its diff is not demoted."""
+    blocks = [
+        b for b in ((stage_returns or {}).get(k) for k in ("tests", "reverify"))
+        if isinstance(b, dict) and isinstance(b.get("edited"), list)
+    ]
+    if not blocks:
+        return None
+    paths = [
+        p for b in blocks for key in ("edited", "created")
+        for p in (b.get(key) if isinstance(b.get(key), list) else [])
+    ]
+    return normalize_run_diff(paths)
+
+
+def landing_run_diff(
+    stage_returns: Optional[Dict[str, Any]], withheld: Optional[Dict[str, str]] = None
+) -> Optional[Dict[str, Any]]:
+    """The landed diff: `run_diff_from_stage_returns` minus the `withheld` paths, which stay dirty
+    and uncommitted. ``None`` when the run recorded no diff."""
+    diff = run_diff_from_stage_returns(stage_returns)
+    if diff is None or not withheld:
+        return diff
+    held = normalize_run_diff(list(withheld))
+    return {p: r for p, r in diff.items() if p not in held}
+
+
+def _not_in_diff(text: str, run_diff: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The sidecar's ``applied`` ledger rows the run diff lacks; ``[]`` with no diff or no ledger."""
+    if run_diff is None:
+        return []
+    try:
+        rows = _parse_ledger_rows(text)
+    except LedgerError:
+        return []
+    return rows_not_in_run_diff(rows or [], run_diff)
+
+
+def review_firing_rows(
+    sidecar_paths: List[Path], plan_id: str, run_diff: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
     """One ``{leg, plan_id, findings_count, max_severity, applied}`` summary row per
-    sidecar; a summary of the sidecar receipt, never a verdict. Unreadable sidecar:
-    leg from the stem, zero counts. Never raises."""
+    sidecar; a summary of the sidecar receipt, never a verdict. ``applied`` excludes an
+    applied row the ``run_diff`` (``normalize_run_diff`` shape) does not carry. Unreadable
+    sidecar: leg from the stem, zero counts. Never raises."""
     from coordinator_core.ops.review_findings_ledger import (
         _declared_findings_count,
         _extract_findings_section,
@@ -339,7 +388,7 @@ def review_firing_rows(sidecar_paths: List[Path], plan_id: str) -> List[Dict[str
             findings_count = declared if declared is not None else len(ledger or [])
             fm_applied = fm.get("applied")
             if ledger is not None:
-                applied = sum(1 for r in ledger if _row_status(r) == "applied")
+                applied = sum(1 for r in ledger if _row_status(r) == "applied") - len(_not_in_diff(text, run_diff))
             elif isinstance(fm_applied, int) and not isinstance(fm_applied, bool):
                 applied = fm_applied
             severity = _max_severity(_extract_findings_section(text))
@@ -353,12 +402,29 @@ def review_firing_rows(sidecar_paths: List[Path], plan_id: str) -> List[Dict[str
     return rows
 
 
+NOT_IN_RUN_DIFF = "not in run diff"
+
+
+def _not_in_diff_reason(row: Dict[str, Any], withheld: Optional[Dict[str, str]]) -> str:
+    """``not in run diff``, extended with the path and its reason when the row's file was withheld."""
+    file_rel = row.get("file")
+    if file_rel and withheld:
+        key = next(iter(normalize_run_diff([str(file_rel)])), None)
+        for raw, why in withheld.items():
+            if key is not None and key in normalize_run_diff([raw]):
+                return f"{NOT_IN_RUN_DIFF}: {key} withheld ({why})"
+    return NOT_IN_RUN_DIFF
+
+
 def _unapplied_findings(
-    stem: str, text: Optional[str], failures: Optional[List[str]]
+    stem: str, text: Optional[str], failures: Optional[List[str]], run_diff: Optional[Dict[str, Any]] = None,
+    withheld: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, str]]:
     """One ``{sidecar, finding, reason}`` entry per reviewer finding that is not an
-    applied ledger row: a non-applied row, a declared finding with no row, or every
-    declared finding when the ledger is unreadable. Never raises."""
+    applied ledger row: a non-applied row, an applied row the ``run_diff`` lacks
+    (reason ``not in run diff``, naming the path and its reason when ``withheld`` holds it),
+    a declared finding with no row, or every declared finding when the ledger is unreadable.
+    Never raises."""
     from coordinator_core.ops.review_findings_ledger import (
         _declared_findings_count,
         _extract_findings_section,
@@ -401,6 +467,8 @@ def _unapplied_findings(
     for row in rows:
         status = _row_status(row)
         if status == "applied":
+            if run_diff is not None and rows_not_in_run_diff([row], run_diff):
+                _entry(str(row.get("id") or "(no id)"), _not_in_diff_reason(row, withheld))
             continue
         why = row.get("reason")
         reason = why.strip() if isinstance(why, str) and why.strip() else f"status {status}"
@@ -422,10 +490,21 @@ def bookkeep_wave(
     record_stem: str,
     stage_returns: Optional[Dict[str, Any]] = None,
     plan_stem: Optional[str] = None,
+    run_diff: Optional[Any] = None,
+    withheld: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     """Run the mechanical bookkeeping step and write the ONE bookkeeping
     record. Returns the record dict (also the return value written to
     disk's frontmatter, minus the sidecar scaffold boilerplate).
+
+    `run_diff` (a path iterable or ``path -> line ranges`` mapping) is the run's own diff or
+    landing set; absent, it is read from `stage_returns` (`run_diff_from_stage_returns`). With a
+    diff, an ``applied`` ledger row whose file (and line, when both sides name one) the diff lacks
+    is counted open: an ``unapplied_findings`` entry (reason ``not in run diff``), one less in
+    `review_firings` ``applied`` and in `fixes_applied`. With none, the reviewer's count stands and
+    `applied_checked_against_run_diff` reads false. `withheld` (``path -> reason``) is the landing's
+    uncommitted set: dropped from a diff read off `stage_returns`, and named in the reason of a
+    finding whose file it holds (a caller-passed `run_diff` should already exclude it).
 
     `stage_returns` is the run's schema-validated stage results as the wake
     digest relayed them (`prep`, `delivery`, `tests`, `criterion`, and on the
@@ -516,12 +595,18 @@ def bookkeep_wave(
     }
     if stage_returns:
         record.update({k: v for k, v in stage_returns.items() if v is not None})
-    record["review_firings"] = review_firing_rows(kept, plan_id)
+    diff = normalize_run_diff(run_diff) if run_diff is not None else landing_run_diff(stage_returns, withheld)
+    texts = {_stem(p): _load_sidecar_text(p) for p in kept}
+    record["review_firings"] = review_firing_rows(kept, plan_id, diff)
     record["unapplied_findings"] = [
         entry
         for p in kept
-        for entry in _unapplied_findings(_stem(p), _load_sidecar_text(p), ledger_failures.get(_stem(p)))
+        for entry in _unapplied_findings(_stem(p), texts[_stem(p)], ledger_failures.get(_stem(p)), diff, withheld)
     ]
+    record["applied_checked_against_run_diff"] = diff is not None
+    demoted = sum(1 for e in record["unapplied_findings"] if e["reason"].startswith(NOT_IN_RUN_DIFF))
+    if demoted and isinstance(record.get("fixes_applied"), int):
+        record["fixes_applied"] = max(0, record["fixes_applied"] - demoted)
 
     record_path = (
         repo_root

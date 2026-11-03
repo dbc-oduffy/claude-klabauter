@@ -386,12 +386,6 @@ def _is_xdist_pytest(argv: Sequence[str]) -> bool:
 
 SCOPED_PYTEST_REMEDY = "scoped-pytest --allow <test file> -- <test file>[::node]"
 
-_PYTEST_VALUE_FLAGS = frozenset((
-    "-n", "--numprocesses", "--dist", "-k", "-m", "-p", "-c", "-o", "-W", "-r", "--tb", "--rootdir", "--maxfail", "--ignore", "--ignore-glob",
-    "--deselect", "--junitxml", "--basetemp", "--durations", "--color", "--confcutdir", "--import-mode",
-    "--log-level", "--capture", "--override-ini", "--config-file", "--cov", "--timeout",
-))
-
 
 def _pytest_args(argv: Sequence[str]) -> Optional[Sequence[str]]:
     """Arguments after pytest when argv runs it as its command (`pytest` or `python -m pytest`), else None."""
@@ -419,7 +413,7 @@ def _pytest_targets(args: Sequence[str]) -> List[str]:
         elif tok == "--":
             after_dashdash = True
         elif tok.startswith("-"):
-            skip = tok in _PYTEST_VALUE_FLAGS
+            skip = tok in _suite._PYTEST_VALUE_FLAGS
         else:
             targets.append(tok)
     return targets

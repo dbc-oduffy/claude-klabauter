@@ -12,6 +12,8 @@ import coordinator_core.sizing_assemble as sizing_assemble
 from coordinator_core.session import record_homes
 from coordinator_core.session_baton import store
 
+_NAME = "2026-10-11-x.yaml"
+
 _DRAFT = """schema: sizing-object
 intent: "Ship the thing"
 estimate:
@@ -35,7 +37,7 @@ _ARGS = ["--tshirt", "M", "--intent", "Ship the thing", "--premise-provenance", 
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", _NAME)).parent.mkdir(parents=True)
     return tmp_path
 
 
@@ -49,7 +51,7 @@ def sid(repo: Path, monkeypatch) -> str:
 
 
 def _sizing(repo: Path, text: str = _DRAFT) -> Path:
-    path = Path(record_homes.record_path(str(repo), "sizings", "2026-10-11-x.yaml"))
+    path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.write_text(text, encoding="utf-8")
     return path
 

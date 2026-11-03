@@ -101,6 +101,23 @@ def test_ledger_regradable_empty_when_no_review():
     assert cg.ledger_regradable(["C1"], set(), LEDGER_FILES, None) == []
 
 
+_REMNANT = {"status": "fixed", "footprint": ["a.py", "t.py", "pkg/"], "paths": [], "still_open": []}
+
+
+def test_remnant_supersedes_blocked_when_a_fixed_pass_covers_every_file():
+    assert cg.remnant_supersedes_blocked({"a.py", "pkg/x.py"}, _REMNANT) is True
+
+
+def test_remnant_does_not_supersede_when_not_fixed_open_breached_or_uncovered():
+    files = {"a.py"}
+    assert cg.remnant_supersedes_blocked(files, {**_REMNANT, "status": "exhausted"}) is False
+    assert cg.remnant_supersedes_blocked(files, {**_REMNANT, "still_open": [{"id": "R2"}]}) is False
+    assert cg.remnant_supersedes_blocked(files, {**_REMNANT, "paths": ["elsewhere.py"]}) is False
+    assert cg.remnant_supersedes_blocked({"a.py", "b.py"}, _REMNANT) is False
+    assert cg.remnant_supersedes_blocked(set(), _REMNANT) is False
+    assert cg.remnant_supersedes_blocked(files, None) is False
+
+
 def test_ledger_regradable_excludes_blocked_empty_and_outside():
     reviewed = {"a.py", "t.py"}
     assert cg.ledger_regradable(["C1"], {"C1"}, LEDGER_FILES, reviewed) == []

@@ -98,6 +98,12 @@ def test_a_legacy_invalid_sizing_still_drops(tmp_path):
     assert p.read_text(encoding="utf-8") == "size: S\n"
 
 
+def test_a_flat_cite_of_a_sharded_sizing_drops_the_block(tmp_path):
+    p = _sizing(tmp_path, "state/sizings/2026-11/2026-11-03-a.yaml", "size: S\n" + _RESEARCH)
+    assert drop_research_block(tmp_path, "state/sizings/2026-11-03-a.yaml") is not None
+    assert p.read_text(encoding="utf-8") == "size: S\n"
+
+
 def test_a_removal_that_introduces_a_schema_error_is_refused(tmp_path, monkeypatch):
     import coordinator_core.ops._research_sizing as mod
 

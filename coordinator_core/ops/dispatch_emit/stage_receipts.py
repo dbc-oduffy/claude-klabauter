@@ -22,6 +22,11 @@ OP_NAME = "dispatch.write_receipt"
 RECEIPTS_DIR = "receipts"
 
 
+def has_receipts(run_dir) -> bool:
+    """True when the run has a receipts directory."""
+    return (Path(run_dir) / RECEIPTS_DIR).is_dir()
+
+
 def receipt_path(run_dir, stage: str) -> Path:
     return Path(run_dir) / RECEIPTS_DIR / f"{stage}.json"
 

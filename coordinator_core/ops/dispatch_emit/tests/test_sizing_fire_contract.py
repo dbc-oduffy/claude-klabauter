@@ -71,16 +71,25 @@ def test_shipped_status_refuses():
 
 
 def test_s_plan_path():
-    assert sf.s_plan_path("state/sizings/2026-10-01-foo.yaml") == "docs/plans/2026-10-01-foo.md"
+    assert sf.s_plan_path("state/sizings/2026-10-01-foo.yaml") == "docs/plans/2026-10/2026-10-01-foo.md"
 
 
-def test_existing_s_plan_refuses_naming_plan_alternative(tmp_path):
+def test_existing_s_plan_resumes_instead_of_refusing(tmp_path):
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "docs" / "plans" / "a.md").write_text("x", encoding="utf-8")
+    sink: list = []
     out = sf.collect_fire_refusals(
-        _sizing(), sizing_rel="state/sizings/a.yaml", arm="s", writes=[], repo_root=tmp_path
+        _sizing(), sizing_rel="state/sizings/a.yaml", arm="s", writes=[], repo_root=tmp_path, resume_sink=sink
     )
-    assert len(out) == 1 and "emit-dispatch-workflow --plan docs/plans/a.md" in out[0]
+    assert out == [] and [p.plan_rel for p in sink] == ["docs/plans/a.md"]
+
+
+def test_s_arm_without_a_plan_on_disk_resumes_nothing(tmp_path):
+    sink: list = []
+    out = sf.collect_fire_refusals(
+        _sizing(), sizing_rel="state/sizings/a.yaml", arm="s", writes=[], repo_root=tmp_path, resume_sink=sink
+    )
+    assert out == [] and sink == [None]
 
 
 def test_load_sizing_contained(tmp_path):
@@ -93,6 +102,51 @@ def test_load_sizing_contained(tmp_path):
         sf.load_sizing(tmp_path, "outside.yaml")
     with pytest.raises(sf.SizingFireRefused):
         sf.load_sizing(tmp_path, "state/sizings/../../outside.yaml")
+
+
+def _write_sizing(root, **over):
+    d = root / "state" / "sizings"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "a.yaml").write_text(yaml.safe_dump(_sizing(**over)), encoding="utf-8")
+
+
+def test_sizing_memo_parses_once_per_scope_and_hands_out_independent_copies(tmp_path, monkeypatch):
+    _write_sizing(tmp_path)
+    parses: list = []
+    real = sf.yaml.safe_load
+    monkeypatch.setattr(sf.yaml, "safe_load", lambda text: parses.append(1) or real(text))
+    with sf.sizing_memo():
+        first = sf.load_sizing(tmp_path, "state/sizings/a.yaml")
+        first["route"] = "mutated"
+        second = sf.load_sizing(tmp_path, "state/sizings/a.yaml")
+    assert len(parses) == 1 and second["route"] == "spec-dispatch"
+
+
+def test_sizing_memo_does_not_outlive_its_scope_and_sees_a_rewrite_between_calls(tmp_path):
+    _write_sizing(tmp_path, route="spec-dispatch")
+    with sf.sizing_memo():
+        assert sf.load_sizing(tmp_path, "state/sizings/a.yaml")["route"] == "spec-dispatch"
+    _write_sizing(tmp_path, route="plan")
+    assert sf.load_sizing(tmp_path, "state/sizings/a.yaml")["route"] == "plan"
+    with sf.sizing_memo():
+        assert sf.load_sizing(tmp_path, "state/sizings/a.yaml")["route"] == "plan"
+
+
+def test_sizing_memo_rewrite_inside_a_scope_is_read_when_the_stat_key_moves(tmp_path):
+    _write_sizing(tmp_path, route="spec-dispatch")
+    with sf.sizing_memo():
+        sf.load_sizing(tmp_path, "state/sizings/a.yaml")
+        # A longer route changes the file size, which moves the memo's stat key even on a coarse-mtime filesystem.
+        _write_sizing(tmp_path, route="pm-decision-xxxxxxxx")
+        assert sf.load_sizing(tmp_path, "state/sizings/a.yaml")["route"] == "pm-decision-xxxxxxxx"
+
+
+def test_sizing_memo_still_refuses_a_missing_or_escaping_sizing(tmp_path):
+    with sf.sizing_memo():
+        with pytest.raises(sf.SizingFireRefused):
+            sf.load_sizing(tmp_path, "state/sizings/none.yaml")
+        with pytest.raises(sf.SizingFireRefused):
+            sf.load_sizing(tmp_path, "state/sizings/../../outside.yaml")
 
 
 @pytest.mark.parametrize(

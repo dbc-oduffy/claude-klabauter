@@ -141,7 +141,12 @@ def _handoff_claims(worktree_root: Path, session_id: Optional[str]) -> list[str]
 
     matches, _errors = list_claims_by_session_checked(session_id, str(worktree_root))
     return [
-        Path(record_homes.record_path("", "handoffs", name)).as_posix()
+        Path(
+            os.path.relpath(
+                record_homes.record_path(str(worktree_root), "handoffs", name),
+                str(worktree_root),
+            )
+        ).as_posix()
         for class_, name in matches
         if class_ == _HANDOFF_CLASS
     ]

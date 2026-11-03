@@ -128,6 +128,7 @@ HOMES = frozenset({
     "stand-downs",
     "strategic",
     "superseding-reviews",
+    "symbol-knowledge",
     "tasks",
     "test-red",
     "tests",
@@ -149,7 +150,22 @@ def home_dir(repo_root: str, kind: str) -> str:
     return os.path.join(repo_root, "state", _declared(kind))
 
 
+_SHARDED_KINDS = frozenset({"sizings", "handoffs"})
+
+
 def record_path(repo_root: str, kind: str, basename: str) -> str:
+    """Path of a record of `kind`. For a sharded kind with a real `repo_root`:
+    the flat path when that file exists, else the REDIRECTS target, else the
+    `<YYYY-MM>/` shard. An empty `repo_root` (a repo-relative string for an
+    existing record) has nothing to stat and keeps the flat join.
+    """
+    if repo_root and kind in _SHARDED_KINDS:
+        from coordinator_core.session import output_tree_layout
+
+        return os.path.join(
+            repo_root,
+            output_tree_layout.locate(repo_root, f"state/{_declared(kind)}/{basename}"),
+        )
     return os.path.join(home_dir(repo_root, kind), basename)
 
 
@@ -173,5 +189,5 @@ def home_pattern(kind: str) -> Pattern[str]:
     return re.compile(
         r"(?:^|[/\\])(?:state|\.coordinator-local)[/\\]"
         + re.escape(segment)
-        + r"(?:[/\\]|$)"
+        + r"(?:[/\\](?:[0-9]{4}-[0-9]{2}[/\\])?|$)"
     )

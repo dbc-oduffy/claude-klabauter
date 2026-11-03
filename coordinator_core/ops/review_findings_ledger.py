@@ -468,6 +468,59 @@ def _row_status(row: Dict[str, Any]) -> str:
     return row.get("status") or _STATUS_APPLIED
 
 
+_LineRanges = Optional[List[Tuple[int, int]]]
+RunDiff = Dict[str, _LineRanges]
+
+
+def _run_diff_key(raw: str) -> str:
+    path = _normalize_path(raw)
+    while path.startswith("./"):
+        path = path[2:]
+    return path
+
+
+def normalize_run_diff(source: Any) -> RunDiff:
+    """A run diff as ``{posix path: line ranges or None}``. ``source`` is a mapping
+    (``path -> [(start, end), ...]`` or ``None`` for "file changed, hunks unknown") or an
+    iterable of paths. ``None`` ranges mean only the file is checked. Separators fold the
+    way ``_normalize_path`` does; a leading ``./`` is dropped."""
+    items = source.items() if isinstance(source, dict) else ((p, None) for p in source)
+    out: RunDiff = {}
+    for raw, ranges in items:
+        if not isinstance(raw, str) or not raw.strip():
+            continue
+        path = _run_diff_key(raw.strip())
+        out[path] = None if ranges is None else [(int(a), int(b)) for a, b in ranges]
+    return out
+
+
+def applied_row_in_run_diff(row: Dict[str, Any], run_diff: RunDiff) -> bool:
+    """True when the run's diff carries an ``applied`` row's file and, where the row names an
+    integer ``line`` and the diff holds hunk ranges for that file, a hunk covering it. A row
+    with no ``file`` cannot be checked and passes; the caller screens ``out_of_ask`` rows."""
+    file_rel = row.get("file")
+    if not file_rel:
+        return True
+    path = _run_diff_key(str(file_rel))
+    if path not in run_diff:
+        return False
+    ranges = run_diff[path]
+    line = row.get("line")
+    if ranges is None or not isinstance(line, int) or isinstance(line, bool):
+        return True
+    return any(start <= line <= end for start, end in ranges)
+
+
+def rows_not_in_run_diff(rows: List[Dict[str, Any]], run_diff: RunDiff) -> List[Dict[str, Any]]:
+    """The ``applied`` rows (peer-hunk ``out_of_ask`` markers excluded) the run's diff does not carry."""
+    return [
+        r for r in rows
+        if _row_status(r) == _STATUS_APPLIED
+        and r.get("out_of_ask") is not True
+        and not applied_row_in_run_diff(r, run_diff)
+    ]
+
+
 def read_ledger(sidecar_path: Path) -> Optional[Tuple[bool, List[Dict[str, Any]]]]:
     """Read-only view of a sidecar's ledger: `(stamped, rows)`, or None when the
     file is unreadable or carries no parseable ledger. `stamped` is True iff

@@ -1670,6 +1670,22 @@ def _halt_marker_ended(root: Path, run_id: str) -> bool:
     )
 
 
+def _stage_halted(root: Path, run_id: str) -> bool:
+    """True when the run's `run-stage.json` reads `halted`: a halted run holds no write claim."""
+    import json
+
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+
+    if not safe_id(run_id):
+        return False
+    try:
+        stage = json.loads((root / RECORD_DIR_ROOT / run_id / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(stage, dict) and stage.get("stage") == "halted"
+
+
 def _ended_on_evidence(root: Path, run_id: str) -> bool:
     """True when the harness's own evidence shows the run ended though it wrote no `halted.json`
     (a run that refused at the nested-chain start). A run with no live token record reads not ended."""
@@ -1681,13 +1697,40 @@ def _ended_on_evidence(root: Path, run_id: str) -> bool:
     return False
 
 
+def _sibling_record_run_stopped(root: Path, run_id: str, deliverable_id: str) -> bool:
+    """True when `run_id` stopped between stages (run-stage `staged`) bound to another sizing record of
+    `deliverable_id`: a refire citing a different record of the deliverable resumes that run's footprint.
+    Reads only this run's record dir and its one bound sizing."""
+    import json
+
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+    from coordinator_core.ops.dispatch_emit.halted_run import bound_sizing_rel
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
+
+    if not safe_id(run_id):
+        return False
+    try:
+        stage = json.loads((root / RECORD_DIR_ROOT / run_id / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+        bound = bound_sizing_rel(root, run_id)
+        doc = load_sizing(root, bound) if bound else None
+    except (OSError, ValueError, SizingFireRefused):
+        return False
+    return (
+        isinstance(stage, dict)
+        and stage.get("stage") == "staged"
+        and isinstance(doc, dict)
+        and doc.get("deliverable_id") == deliverable_id
+    )
+
+
 def _live_write_overlap_deny(
     root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any], sizing_rel: Optional[str] = None
 ) -> Optional[str]:
     """Deny text when a single ask's declared writes overlap a live run's staged footprint; else None.
 
     Reads the live-run index once; a missing or stalled index denies nothing. The halted run a refire of
-    `sizing_rel` resumes is that refire's own footprint, never a clash."""
+    `sizing_rel` resumes (a marked halt, else an unmarked staged run) is that refire's own footprint, never a clash."""
     writes = _declared_writes(root, tool_input, sizing_doc)
     if not writes:
         return None
@@ -1699,6 +1742,9 @@ def _live_write_overlap_deny(
             from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
 
             own = _bounded_call(("halted", str(root), sizing_rel), lambda: halted_run_to_resume(root, sizing_rel))
+        if own is None and sizing_rel:
+            # A halt that wrote no halted.json leaves run-stage `staged`; the resume route refires that run.
+            own = _bounded_call(("emitted", str(root), sizing_rel), lambda: _unmarked_emitted_run(root, sizing_rel))
         own = own if isinstance(own, str) else None
         index = _bounded_call(
             ("index", str(root)), lambda: live_run_index.read(root, _READ_DEADLINE_MS, exclude_run_id=own)
@@ -1713,8 +1759,14 @@ def _live_write_overlap_deny(
     if hits:
         # The index is pruned in the background; an ended run holds nothing (read per hit only).
         # A fan-out child records its end in sibling-status.json, never halted.json.
+        deliverable = sizing_doc.get("deliverable_id") if sizing_rel else None
+
         def ended(rid: str) -> bool:
-            return _halt_marker_ended(root, rid) or _status_of(root, rid) in ("halted", "landed") or _ended_on_evidence(root, rid)
+            return (
+                _halt_marker_ended(root, rid) or _stage_halted(root, rid) or _status_of(root, rid) in ("halted", "landed")
+                or _ended_on_evidence(root, rid)
+                or (isinstance(deliverable, str) and _sibling_record_run_stopped(root, rid, deliverable))
+            )
 
         hits = {
             rid: paths

@@ -1569,6 +1569,42 @@ def test_a_declared_product_write_left_dirty_after_the_commit_is_not_ok(repo, mo
     assert "b.py" in out["error"] and "a.py" not in out["error"]
 
 
+def _blocked_met_chunk(tmp_path, remnant):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import terminal_commit_ledger as tcl
+
+    paths = ("a.py", "t.py")
+    (tmp_path / "C1.md").write_text("BLOCKED: gap already closed, no edit made\n", encoding="utf-8")
+    run_dir = tmp_path / "scratch" / "warp" / "run-x"
+    run_dir.mkdir(parents=True)
+    (run_dir / "recovery.json").write_text(json.dumps({"remnant": remnant}), encoding="utf-8")
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=paths, report="C1.md"),))
+    review = {
+        "prep": {"slice_files": list(paths)},
+        "integration": {"unresolved": [], "confinement_violations": []},
+    }
+    verdict = {"items": [{"id": "R1", "status": "met"}]}
+    return lambda held=(): tcl._ledger_met_regrades(
+        tmp_path, request, {"C1"}, review, {}, verdict, set(held), run_dir
+    ), list(paths)
+
+
+def test_ledger_met_credits_a_blocked_report_a_later_fixed_remnant_pass_covers(tmp_path):
+    regrade, paths = _blocked_met_chunk(
+        tmp_path, {"status": "fixed", "footprint": ["a.py", "t.py"], "paths": [], "still_open": []}
+    )
+    assert regrade()["C1"].startswith("ledger-met")
+    assert regrade(held=["C1"]) == {}
+
+
+def test_ledger_met_keeps_a_blocked_report_stranded_without_a_covering_fixed_pass(tmp_path):
+    regrade, _ = _blocked_met_chunk(
+        tmp_path, {"status": "exhausted", "footprint": ["a.py", "t.py"], "paths": [], "still_open": []}
+    )
+    assert regrade() == {}
+
+
 def test_every_declared_product_write_landed_carries_no_product_residue(repo):
     script = _write_script(repo, _two_product_request(repo))
 

@@ -15,8 +15,7 @@ from coordinator_core.testing import spawn_depth
 PLUGIN_MODULE = "coordinator_core.testing.nested_session_guard"
 REFUSAL_CODE = 70
 XDIST_WORKER_KEY = "PYTEST_XDIST_WORKER"
-# One BLAS thread: each extra pool allocates per-thread buffers that fail inside a memory-capped job.
-BLAS_THREAD_KEYS = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
+BLAS_THREAD_KEYS = spawn_depth.BLAS_THREAD_KEYS
 
 # Directory holding the ``coordinator_core`` package this module was imported from.
 ENGINE_ROOT = str(Path(__file__).resolve().parents[2])
@@ -29,8 +28,6 @@ def guarded_child_env(env: Mapping[str, str]) -> dict:
     ``coordinator_core`` of its own. Idempotent: applying it twice adds nothing more.
     """
     out = spawn_depth.child_env(env)
-    for key in BLAS_THREAD_KEYS:
-        out.setdefault(key, "1")
     addopts = out.get("PYTEST_ADDOPTS", "")
     if PLUGIN_MODULE not in addopts:
         out["PYTEST_ADDOPTS"] = f"{addopts} -p {PLUGIN_MODULE}".strip()

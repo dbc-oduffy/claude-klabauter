@@ -120,7 +120,21 @@ def _default_parse(spec: TargetSpec) -> ParseResult:
 def _default_mint(root: Path, run_id: str, tests: tuple, *, target_ref: str) -> list[str]:
     from coordinator_core.bug_blitz.mint import mint_tf_rows
 
-    return mint_tf_rows(root, run_id, tests, target_ref=target_ref)
+    return mint_tf_rows(root, run_id, tests, target_ref=target_ref, run_dir=_run_dir(root, run_id))
+
+
+def _run_dir(root: Path, run_id: str) -> Path:
+    return root / SCRATCH_ROOT / run_id
+
+
+def _settle_minted(root: Path, run_id: str) -> None:
+    """Land the rows this submission minted or reused in one commit; raises when the commit was refused
+    (the rows it created are reaped, so the emit would find none). An empty manifest commits nothing."""
+    from coordinator_core.ops.dispatch_emit.minted_records import settle
+
+    outcome = settle(root, root, run_id, _run_dir(root, run_id), message=f"bug-blitz {run_id}: mint TF rows")
+    if outcome.get("refused"):
+        raise ValueError(f"the mint commit was refused, minted rows removed: {outcome['refused']}")
 
 
 def _default_emit(params: dict, repo_root: Path) -> dict:
@@ -291,6 +305,7 @@ def _evaluate(
             if not parsed.tests:
                 raise ValueError("no failing test parsed")
             minted = (mint or _default_mint)(root, stamp, parsed.tests, target_ref=target_raw)
+            _settle_minted(root, stamp)
         except Exception as exc:  # the parse and mint refusal text is the whole message
             return _refuse(f"targets {target_raw}: {exc}")
         overrides["where"] = [[["status", "==", "open"], ["tags", "contains", run_tag(stamp)]]]

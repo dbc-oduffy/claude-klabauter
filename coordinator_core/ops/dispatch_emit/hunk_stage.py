@@ -6,6 +6,8 @@ of them. Zero spawns; stdlib only at module top, readers imported lazily (cold-i
 
 Invariant: every range is compared in one coordinate space, the worktree's lines. Baselines and
 the worktree are raw bytes and meet HEAD (checkin form) only through ``kept_work.checkin_form``.
+Invariant: pre-run dirt (HEAD against the baseline) that no foreign run claims and one of our
+hunks edits is the run's own rewrite; dirt we left untouched stays out of the staged blob.
 Trap: a foreign run whose baseline predates ours and that kept editing after our baseline is
 indistinguishable from us on those lines; its later hunks are read as ours.
 Trap: the staged blob is derived from worktree bytes at call time; the commit that consumes it
@@ -161,7 +163,9 @@ def split(
     postdating = [(r, fb, fr) for r, fb, fr in f_data if not predates(fb)]
     predating = [(r, fb, fr) for r, fb, fr in f_data if predates(fb)]
 
-    # Pre-run dirt: HEAD against our baseline, carried into worktree coordinates.
+    # Pre-run dirt: HEAD against our baseline, carried into worktree coordinates. A dirt hunk no
+    # foreign run claims and one of our hunks edits (shares its baseline lines) is adopted: the
+    # run rewrote it, so the worktree text there is the run's, not dirt.
     full_ob_w = _opcodes(own_base, work)
     full_h_ob = _changed(head_lines, own_base)
     for _, _, _, j1, j2 in full_h_ob:
@@ -169,6 +173,8 @@ def split(
         owner = next(
             (r for r, _, fr in predating if any(_touch(wr, f) for f in fr)), None
         )
+        if owner is None and any(_hit((op[1], op[2]), (j1, j2)) for op in own_ops):
+            continue
         foreign_rs.append((owner, wr))
 
     # Postdating runs: their baseline already carries our earlier edits.
@@ -224,12 +230,12 @@ def split(
             own_headers.append(_header(blk))
         elif not has_own:
             out.extend(head_lines[i1:i2])
-        elif i2 - i1 == j2 - j1 and j2 > j1:
+        elif (i2 - i1 == j2 - j1 or i1 == i2) and j2 > j1:
             for k in range(j2 - j1):
                 line = (j1 + k, j1 + k + 1)
                 if any(_hit(line, o) for o in own_rs):
                     out.append(work[j1 + k])
-                else:
+                elif i1 != i2:
                     out.append(head_lines[i1 + k])
             own_headers.append(_header(blk))
         else:

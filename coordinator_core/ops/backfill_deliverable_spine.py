@@ -547,40 +547,40 @@ def get_workstream_key(
 # ---------------------------------------------------------------------------
 
 
-def _list_md_files(directory: str, recursive: bool) -> List[str]:
+_MONTH_SHARD_RE = re.compile(r"^\d{4}-\d{2}$")
+
+
+def _list_suffix_files(directory: str, recursive: bool, suffix: str) -> List[str]:
+    """`suffix` files under `directory`. Non-recursive still descends into `<YYYY-MM>/` shard dirs
+    (the output-tree layout of plans, sizings and handoffs), so a sharded entry is never missed."""
     if not os.path.isdir(directory):
         return []
     out: List[str] = []
     if recursive:
         for dirpath, _dirnames, filenames in os.walk(directory):
             for name in filenames:
-                if name.endswith(".md"):
+                if name.endswith(suffix):
                     out.append(os.path.join(dirpath, name))
     else:
+        dirs = [directory]
         for name in os.listdir(directory):
-            full = os.path.join(directory, name)
-            if name.endswith(".md") and os.path.isfile(full):
-                out.append(full)
+            if _MONTH_SHARD_RE.match(name) and os.path.isdir(os.path.join(directory, name)):
+                dirs.append(os.path.join(directory, name))
+        for d in dirs:
+            for name in os.listdir(d):
+                full = os.path.join(d, name)
+                if name.endswith(suffix) and os.path.isfile(full):
+                    out.append(full)
     out.sort()
     return out
+
+
+def _list_md_files(directory: str, recursive: bool) -> List[str]:
+    return _list_suffix_files(directory, recursive, ".md")
 
 
 def _list_yaml_files(directory: str, recursive: bool) -> List[str]:
-    if not os.path.isdir(directory):
-        return []
-    out: List[str] = []
-    if recursive:
-        for dirpath, _dirnames, filenames in os.walk(directory):
-            for name in filenames:
-                if name.endswith(".yaml"):
-                    out.append(os.path.join(dirpath, name))
-    else:
-        for name in os.listdir(directory):
-            full = os.path.join(directory, name)
-            if name.endswith(".yaml") and os.path.isfile(full):
-                out.append(full)
-    out.sort()
-    return out
+    return _list_suffix_files(directory, recursive, ".yaml")
 
 
 def _find_named(directory: str, basename: str) -> List[str]:

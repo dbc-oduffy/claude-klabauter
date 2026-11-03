@@ -321,8 +321,15 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     paths: list[str] = []
     sizings: list[str] = []
     artifact_gone: list[str] = []
+    ignored_state: list[str] = []
     for run_id in reaped:
-        paths += files[run_id]
+        kept, state_files = run_artifacts.split_run_state(files[run_id])
+        paths += kept
+        ignored_state += state_files
+        if params.get("dry_run") is not True and process_artifact_policy.hosts_coordinator_state(root):  # a dry run writes nothing
+            outcome = run_artifacts.write_tracked_outcome(root, run_id, "abandoned", halt_kind=HALTED_KIND)
+            if outcome and outcome not in paths:
+                paths.append(outcome)
         sizing = sizing_of.get(run_id)
         if sizing and sizing in held_sizings:  # the record files still land; the graph beyond them waits
             base["skipped"].append({"run_id": run_id, "reason": "sizing-held-by-live-token", "path": sizing})
@@ -346,7 +353,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                 paths.append(path)
         if landing.present:
             base["artifacts"][run_id] = list(landing.present)
-    gone = [d for d in deleted if d.split("/")[len(RECORD_DIR_ROOT.split("/"))] in reaped] + artifact_gone
+    gone = run_artifacts.split_run_state(
+        [d for d in deleted if d.split("/")[len(RECORD_DIR_ROOT.split("/"))] in reaped] + artifact_gone
+    )[0]
+    if ignored_state:
+        base["ignored_excluded"] = sorted(set(ignored_state))
     base["reaped"], base["sizings"] = reaped, sizings
     if params.get("dry_run") is True:
         return base

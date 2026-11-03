@@ -145,6 +145,38 @@ def _unclaimed_dirty(main_root: Path, rows: list) -> list[str]:
     return sorted(p for p in snapshot.changed if p not in named and not p.startswith(LEDGER_ROOT))
 
 
+def _manifest_ledger_paths(run_dir: Path) -> list[str]:
+    """Ledger-root paths the run's own `minted.jsonl` names; other runs' ledger dirt is never read."""
+    from coordinator_core.ops.dispatch_emit import minted_records
+    from coordinator_core.ops.dispatch_emit.grind_commit_contract import LEDGER_ROOT
+
+    return [e["path"] for e in minted_records.read(run_dir) if e["path"].startswith(LEDGER_ROOT)]
+
+
+def record_run_ledgers(main_root: Path, profile: str, run_id: str, run_dir: Path) -> list[str]:
+    """Record into the run's `minted.jsonl` every `<profile>` ledger file with a line citing this run's evidence dir.
+
+    `grind-row append` writes ledgers without a manifest, so the run's ledgers are found by the
+    `/evidence/<run_id>/` path each line carries; another run's ledger is never named. Recorded
+    `created: False`, so a refused commit never deletes one. Returns the repo-relative paths."""
+    from coordinator_core.ops.dispatch_emit import minted_records
+    from coordinator_core.ops.dispatch_emit.grind_commit_contract import LEDGER_ROOT
+
+    marker = f"/evidence/{run_id}/"
+    ledger_dir = main_root / LEDGER_ROOT / profile
+    found: list[str] = []
+    for ledger in sorted(ledger_dir.glob("*.jsonl")):
+        try:
+            cites = marker in ledger.read_text(encoding="utf-8").replace("\\\\", "/")
+        except OSError:
+            continue
+        if cites:
+            found.append(f"{LEDGER_ROOT}{profile}/{ledger.name}")
+    if found:
+        minted_records.record(run_dir, [{"path": p, "created": False} for p in found])
+    return found
+
+
 def cmd_settle_run(rest: list[str]) -> int:
     parsed = _split_argv(rest)
     if parsed is None:
@@ -183,6 +215,7 @@ def cmd_settle_run(rest: list[str]) -> int:
         "run_id": run_id,
         "grind": {"profile": profile.name, "rows": rows, "halted": f"settled-after-run {run_id}"},
     }
-    reply = commit_grind_rows(main_root, repo_root, params)
+    record_run_ledgers(main_root, profile.name, run_id, run_dir)
+    reply = commit_grind_rows(main_root, repo_root, params, _manifest_ledger_paths(run_dir))
     print(json.dumps({**reply, "source": source}, sort_keys=True, default=str))
     return grind_rows.EXIT_REFUSAL if reply.get("refused") or reply.get("error") else grind_rows.EXIT_OK

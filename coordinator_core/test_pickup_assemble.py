@@ -7726,3 +7726,34 @@ class TestPlanFrontmatterIdFallback:
 
         assert result.exit_code == pa.EXIT_BUSINESS_FAIL
         assert "stub_id/plan_id/deliverable_id" in result.decision_object["error"]
+
+
+class TestShardedHandoffsAndPlansResolve:
+    """Live-dir listers reach a `<tree>/<YYYY-MM>/` shard as well as a flat entry."""
+
+    def test_listers_find_flat_and_sharded_handoffs_and_plans(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        flat = _seed_handoff(repo, "2026-07-01_flat-slug.md")
+        shard = _seed_handoff(repo, "2026-07/2026-07-02_shard-slug.md")
+        plan = repo / "docs" / "plans" / "2026-07" / "2026-07-03-sharded-plan.md"
+        plan.parent.mkdir(parents=True)
+        plan.write_text("---\nstatus: draft\n---\n\n# Plan\n", encoding="utf-8")
+
+        assert pa._live_fallback_search(repo, "2026-07-01_flat-slug.md") == [flat]
+        assert pa._live_fallback_search(repo, "2026-07-02_shard-slug.md") == [shard]
+        assert pa._live_fallback_search(repo, "2026-07-03-sharded-plan.md") == [plan]
+        assert pa._live_fallback_search_suffix(repo, "shard-slug") == [shard]
+        assert pa._live_fallback_search_suffix(repo, "flat-slug") == [flat]
+
+    def test_resolve_artifact_resolves_a_sharded_handoff_cited_flat_and_by_shard(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_handoff(repo, "2026-07/2026-07-02_shard-slug.md")
+        shard_rel = "state/handoffs/2026-07/2026-07-02_shard-slug.md"
+
+        by_flat = pb.resolve_artifact("state/handoffs/2026-07-02_shard-slug.md", repo)
+        by_shard = pb.resolve_artifact(shard_rel, repo)
+        by_slug = pb.resolve_artifact("shard-slug", repo)
+
+        assert by_flat["path"] == by_shard["path"] == by_slug["path"] == shard_rel

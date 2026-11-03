@@ -25,7 +25,7 @@ from typing import Any, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
-from coordinator_core.ops.dispatch_emit import halted_run, live_run_index, run_token
+from coordinator_core.ops.dispatch_emit import abandoned_minted_close, halted_run, live_run_index, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
 from coordinator_core.ops.dispatch_emit.fan_launcher import launcher_rel
 from coordinator_core.ops.fleet._common import main_worktree_root
@@ -176,14 +176,16 @@ def reap_parent(root: Any, parent_id: str) -> bool:
 
 def reap_orphans(root: Any, now: float, limit: int = REAP_PER_CALL) -> list[str]:
     """Reap up to `limit` index entries older than `REUSE_TTL_S`: a minted-not-started parent loses its files,
-    a started or unreadable one only its entry. Returns the parent ids whose files were deleted."""
+    a started or unreadable one only its entry. Then closes dead `abandoned_at_minted` markers with the rest of
+    `limit` (`abandoned_minted_close.close_abandoned`). Returns the parent ids whose files were deleted."""
     wt = main_worktree_root(Path(root))
     index = wt / DIGEST_DIR_REL
     try:
         names = sorted(e.name for e in os.scandir(index) if e.name.endswith(".json"))
     except OSError:
-        return []
+        names = []
     reaped: list[str] = []
+    just_halted: set[str] = set()
     handled = 0
     for name in names:
         if handled >= limit:
@@ -197,9 +199,17 @@ def reap_orphans(root: Any, now: float, limit: int = REAP_PER_CALL) -> list[str]
         if now - minted_at < REUSE_TTL_S:
             continue
         handled += 1
+        record = _parent(wt, entry[0]) if entry is not None else None
         if entry is not None and reap_parent(wt, entry[0]):
             reaped.append(entry[0])
+            if record is not None:
+                just_halted.update(r.run_id for r in record.runs)
         path.unlink(missing_ok=True)
+    if limit > handled:
+        try:
+            abandoned_minted_close.close_abandoned(wt, now, limit - handled, skip=just_halted)
+        except OSError:
+            pass
     return reaped
 
 

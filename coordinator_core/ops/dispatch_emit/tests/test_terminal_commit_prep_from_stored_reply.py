@@ -23,7 +23,7 @@ def _store(root, run=_RUN, base=_BASE, files=_FILES):
         "agent_type": "engine:prep-freeze", "plan_id": "p", "share_dir": "x", "run_base_sha": base,
         "verdict": "OK", "basis": "range", "whole_diff_path": "d", "product_files": len(files),
         "foreign_claims": [], "slices": [{"id": "s", "files": list(files)}], "whole_diff_sidecars": {},
-        "sidecar_path": "ignored", "head": "b" * 40, "paths": list(files),
+        "sidecar_path": "ignored", "excluded": [], "head": "b" * 40, "paths": list(files),
     }
     (share / name).write_text(f"---\n{yaml.safe_dump(fm)}---\n\nbody\n", encoding="utf-8")
     return f".coordinator-local/subagent-share/{_SESSION}/{name}"

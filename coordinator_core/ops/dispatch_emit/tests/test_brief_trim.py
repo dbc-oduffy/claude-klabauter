@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit import brief_trim
 from coordinator_core.ops.dispatch_emit.ask_stage import PM_INTENT_HEADING, stage
 from coordinator_core.ops.dispatch_emit.ask_contract import RELAYED_ASK_HEADING
 from coordinator_core.ops.dispatch_emit.executor_economy import EXCERPT_HEADING
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 
 FIXTURE_PLAN = Path(__file__).parent / "fixtures" / "brief_trim" / "plan.md"
 PLAN_REL = "docs/plans/2026-10-01-brief-trim-fixture.md"
@@ -36,6 +37,7 @@ def stage_fixture(root: Path):
     (root / "state" / "sizings").mkdir(parents=True)
     (root / PLAN_REL).write_text(FIXTURE_PLAN.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
     write_fixture_sources(root)
+    write_run_scripts(root, "r1")
     return stage(root, run_id="r1", plan_rel=PLAN_REL)
 
 

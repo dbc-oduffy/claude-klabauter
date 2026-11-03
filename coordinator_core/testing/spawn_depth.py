@@ -22,6 +22,8 @@ ENV_KEY = "COORDINATOR_PYTEST_DEPTH"
 COUNTED_KEY = "COORDINATOR_PYTEST_DEPTH_COUNTED"
 MAX_DEPTH = 1
 CURRENT_TEST_KEY = "PYTEST_CURRENT_TEST"
+# One BLAS thread per spawned pytest: each extra pool commits per-thread buffers (~750 MiB at 24 cores).
+BLAS_THREAD_KEYS = ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")
 
 # Pytest options whose NEXT argv token is a value, never a selection target.
 _VALUE_OPTIONS = frozenset(
@@ -164,8 +166,10 @@ def refusal_for_spawn(env: Mapping[str, str]) -> Optional[str]:
 
 
 def child_env(env: Mapping[str, str]) -> dict:
-    """Copy of ``env`` for a spawned pytest: ``child_depth`` stamped, PYTEST_CURRENT_TEST stripped."""
+    """Copy of ``env`` for a spawned pytest: ``child_depth`` stamped, PYTEST_CURRENT_TEST stripped, BLAS pools at one thread unless set."""
     out = dict(env)
+    for key in BLAS_THREAD_KEYS:
+        out.setdefault(key, "1")
     out[ENV_KEY] = str(child_depth(env))
     out.pop(CURRENT_TEST_KEY, None)
     out.pop(COUNTED_KEY, None)

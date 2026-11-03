@@ -89,3 +89,10 @@ def test_covers_three_classes_and_refuses_product(tmp_path):
     assert not got.covers(SIZ_B)
     assert not got.covers("coordinator_core/ops/x.py")
     assert not got.covers(f"state/warp/{B}/run.json")
+
+
+def test_delivery_note_follows_flat_or_shard(tmp_path):
+    assert own.own_artifact_paths(tmp_path, A).delivery_note == f"docs/delivery/2026-10/{A}.md"
+    (tmp_path / "docs/delivery").mkdir(parents=True)
+    (tmp_path / f"docs/delivery/{A}.md").write_text("x", encoding="utf-8")
+    assert own.own_artifact_paths(tmp_path, A).delivery_note == f"docs/delivery/{A}.md"

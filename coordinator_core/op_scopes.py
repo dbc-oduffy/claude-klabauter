@@ -68,6 +68,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.nudge_unauthorized_handoff":      "none",
     "hooks.idle_compact_advisory":           "none",
     "hooks.nudge_named_agent_report_delivery": "none",
+    "hooks.workflow_step_dispatch":           "none",
     "hooks.postuse_advisory_dispatch":       "none",
     "hooks.nudge_autonomous_askuserquestion": "none",
     "hooks.sessionend_archive_session": "none",
@@ -792,6 +793,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.land_verified_remainder":         "common_dir",
     # dispatch.write_receipt — MUTATING: one atomic stage receipt under state/warp/<run_id>/receipts.
     "dispatch.write_receipt":                   "common_dir",
+    # dispatch.run_terminality — COMPUTE_ONLY, but "common_dir": run_dir is repo-relative, read in the CALLING
+    # repo's state/warp (as fleet.handoffs_for_plan), so the warm engine must resolve the caller's worktree.
+    "dispatch.run_terminality":                 "common_dir",
     # close.background — MUTATING: pays the run's queued close legs; the caller's own worktree.
     "close.background":                         "common_dir",
     # close.review — MUTATING: pays the run's queued review leg; the caller's own worktree.

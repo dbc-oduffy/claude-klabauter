@@ -29,7 +29,7 @@ from coordinator_core.testing import spawn_depth
 
 
 def pytest_child_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
-    """Env for an op-spawned pytest child: nesting depth + 1, PYTEST_CURRENT_TEST stripped.
+    """Env for an op-spawned pytest child: nesting depth + 1, PYTEST_CURRENT_TEST stripped, BLAS pools capped (via ``child_env``).
 
     The caller checks ``spawn_depth.refusal_for_spawn`` / ``selection_includes_spawner`` on
     ``os.environ`` BEFORE calling this; the strip here erases the calling-test name they read.

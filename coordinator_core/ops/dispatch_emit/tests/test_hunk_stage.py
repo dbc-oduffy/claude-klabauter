@@ -135,15 +135,53 @@ def test_a_postdating_foreign_run_that_reedits_our_line_refuses_naming_it(repo):
     assert _headers_cover([h for _, h in got.overlaps], 60)
 
 
-def test_pre_run_dirt_under_our_hunk_refuses_unattributed(repo):
+def test_pre_run_dirt_the_run_rewrote_is_adopted_as_its_own(repo):
     _put(repo, _rows({60: "DIRT"}))
     base_b = wb.capture(repo, [P])[P]
     _put(repo, _rows({60: "B-EDIT"}))
 
     got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
 
+    assert got.overlaps == []
+    assert _staged_text(repo, got.staged_blob) == _rows({60: "B-EDIT"})
+
+
+def test_pre_run_dirt_beside_our_hunk_in_one_block_still_refuses_unattributed(repo):
+    _put(repo, _rows({60: "DIRT"}))
+    base_b = wb.capture(repo, [P])[P]
+    text = _rows({60: "DIRT"}).replace("x_61 = 61\n", "x_61 = 'B-1'\nx_61b = 'B-2'\n")
+    _put(repo, text)
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
+
     assert got.staged_blob is None
     assert [run for run, _ in got.overlaps] == [None]
+
+
+def test_dirt_a_foreign_run_owns_that_we_rewrote_still_refuses_naming_it(repo):
+    _put(repo, _rows({60: "A-EDIT"}))
+    base_a = wb.capture(repo, [P])[P]
+    base_b = wb.capture(repo, [P])[P]
+    _put(repo, _rows({60: "B-EDIT"}))
+
+    got = hunk_stage.split(
+        repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[(RUN_A, base_a)]
+    )
+
+    assert got.staged_blob is None
+    assert [run for run, _ in got.overlaps] == [RUN_A]
+
+
+def test_an_insertion_beside_pre_run_inserted_dirt_stages_only_our_lines(repo):
+    head = _rows({})
+    _put(repo, head + "dirt_1 = 1\ndirt_2 = 2\n")
+    base_b = wb.capture(repo, [P])[P]
+    _put(repo, head + "dirt_1 = 1\ndirt_2 = 2\nown_1 = 1\n")
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
+
+    assert got.overlaps == []
+    assert _staged_text(repo, got.staged_blob) == head + "own_1 = 1\n"
 
 
 def test_an_adjacent_foreign_hunk_is_not_an_overlap(repo):

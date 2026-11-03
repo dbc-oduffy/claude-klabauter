@@ -170,6 +170,58 @@ def test_no_declared_footprint_keeps_every_red_a_blocker():
     assert "out_of_ask" not in out["reverify"]
 
 
+def _reconcile(wave, reverify, reused=False) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    source = (
+        f"let _reviewReused = {json.dumps(reused)}; let _reviewWave = {json.dumps(wave)}; "
+        f"let _reviewReverify = {json.dumps(reverify)};\n"
+        + ask_compose._WAVE_DIFF_RECONCILE_JS
+        + "\nconsole.log(JSON.stringify(_reviewWave));\n"
+    )
+    proc = subprocess.run(
+        [node, "-"], input=source, capture_output=True, text=True, timeout=30, **no_console_creationflags()
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+_CLAIMED = {"slice_id": "s1", "verdict": "BLOCKED", "findings": 2, "applied": 2, "sidecar_path": "rev/s1.md"}
+
+
+def test_reconcile_runs_between_the_reverify_join_and_self_correction():
+    script = _compose()
+    join = script.index("if (!_reverifyJoined) { _reviewReverify = await")
+    assert join < script.index(ask_compose._WAVE_DIFF_RECONCILE_JS) < script.index("const _reviewRecover = async")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_claimed_applied_with_an_empty_run_diff_reports_applied_below_findings():
+    wave = _reconcile([_CLAIMED], {"edited": [], "created": []})
+
+    assert wave[0]["applied"] == 0 and wave[0]["applied_claimed"] == 2
+    assert wave[0]["unapplied_reason"] == "not in run diff"
+    assert wave[0]["findings"] > wave[0]["applied"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    "reverify, reused",
+    [
+        ({"edited": ["a.py"]}, False),
+        ({"edited": [], "created": ["n.py"]}, False),
+        ({"failing": []}, False),
+        (None, False),
+        ({"edited": [], "created": []}, True),
+    ],
+)
+def test_recorded_edits_an_absent_diff_or_a_reused_wave_leave_applied_standing(reverify, reused):
+    assert _reconcile([_CLAIMED], reverify, reused)[0]["applied"] == 2
+
+
 def test_unapplied_reverify_reruns_verify_once():
     script = _compose()
     assert "_reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }" in script

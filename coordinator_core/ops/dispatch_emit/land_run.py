@@ -1040,19 +1040,29 @@ def _leg_footprint_writes(root: Path, run_dir: Path) -> Optional[list]:
     return [w.replace("\\", "/") for w in writes if isinstance(w, str) and w]
 
 
-def _remnant_breach(root: Path, run_dir: Path) -> list:
-    """Paths the run's ``recovery.json`` ``remnant`` record shows the remnant-complete leg wrote
-    outside its recorded footprint (``ledger_recovery.remnant_breach``); ``[]`` when absent."""
+def _remnant_record(root: Path, run_dir: Optional[Path]) -> Optional[dict]:
+    """The run's ``recovery.json`` ``remnant`` object (its manifest dir, else its record dir); None when absent."""
     from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
 
+    if run_dir is None:
+        return None
     for d in (run_dir, root / RECORD_DIR_ROOT / run_dir.name):
         try:
             remnant = json.loads((d / lr.RECOVERY_RECORD_FILE).read_text(encoding="utf-8")).get("remnant")
         except (OSError, ValueError, AttributeError):
             continue
         if isinstance(remnant, dict):
-            return lr.remnant_breach(remnant)
-    return []
+            return remnant
+    return None
+
+
+def _remnant_breach(root: Path, run_dir: Path) -> list:
+    """Paths the run's ``recovery.json`` ``remnant`` record shows the remnant-complete leg wrote
+    outside its recorded footprint (``ledger_recovery.remnant_breach``); ``[]`` when absent."""
+    from coordinator_core.ops.dispatch_emit import ledger_recovery as lr
+
+    remnant = _remnant_record(root, run_dir)
+    return lr.remnant_breach(remnant) if remnant is not None else []
 
 
 def _resume_recorded_paths(root: Path, run_dir: Path, inline_review: object) -> list:
@@ -1810,10 +1820,16 @@ def _grade(
         if ledger is None or (text is not None and _is_delivered(text)):
             continue
         ledger_ids.append(chunk.id)
-        if text is None or _BLOCKED_REPORT_RE.search(text) or prefix_files is None:
+        if text is None or prefix_files is None:
+            blocked.add(chunk.id)
+            continue
+        own = set(chunk.paths) | set(prefix_files)
+        if _BLOCKED_REPORT_RE.search(text) and not credit_gate.remnant_supersedes_blocked(
+            own, _remnant_record(root, run_dir)
+        ):
             blocked.add(chunk.id)
         else:
-            ledger_files[chunk.id] = set(chunk.paths) | set(prefix_files)
+            ledger_files[chunk.id] = own
     reason = ("ledger-met: " + ", ".join(met))[:_UNDONE_CAP]
     if clean is not None:
         from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
@@ -2854,7 +2870,7 @@ def _reap_measured_export(root: Path, run_id: Optional[str]) -> None:
 def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token_state: dict) -> dict:
     from coordinator_core.git.commit_trailers import _UUID_RE
     from coordinator_core.git.git_state import head_branch
-    from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR, StageManifest
+    from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest, delivery_note_locate
     from coordinator_core.ops.dispatch_emit.commit_request import (
         MalformedCommitRequestError,
         parse_manifest_marker,
@@ -2922,6 +2938,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         answered = _redeem_or_answer(root, params.get("run_id"), params["run_token"], script_path)
         if answered is not None:
             if answered.get(ALREADY_LANDED_KEY):
+                if not incomplete:
+                    from coordinator_core.ops.dispatch_emit.run_close import settle_run_stage
+
+                    settle_run_stage(root, params.get("run_id"))
                 _requeue_close(root, params)
             return answered
         token_state["claim"] = (root, params.get("run_id"), params["run_token"], script_path)
@@ -3140,14 +3160,24 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 "params.session_id is missing or not canonical-UUID-shaped -- bookkeep_wave needs it to "
                 "place the record"
             )
-        from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
+        from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave, landing_run_diff
 
+        # The record dir's own withholds only: the superseded predecessors' dirs are read once `artifacts` exists.
+        try:
+            bk_withheld = {
+                **_withhold_reasons(root, None, record_dir_rel),
+                **param_withholds(params), **review_carried_withholds(request),
+            }
+        except ValueError:
+            bk_withheld = dict(param_withholds(params))
+        bk_withheld = {p: r for p, r in bk_withheld.items() if r not in SELF_APPLIED_WITHHOLDS}
         try:
             record = bookkeep_wave(
                 [root / p for p in inline_review["wave_sidecar_paths"] if isinstance(p, str)],
                 repo_root=root, session_id=session_id, plan_id=inline_review["plan_id"],
                 prep_sidecar=inline_review.get("prep_sidecar"),
                 record_stem=inline_review["integration_stem"], stage_returns=stage_returns,
+                run_diff=landing_run_diff(stage_returns, bk_withheld), withheld=bk_withheld,
             )
         except Exception as exc:  # noqa: BLE001 -- surfaced, never silently dropped
             return _error(f"review_mint.bookkeep_wave failed: {exc}")
@@ -3585,7 +3615,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 ledger_met = ("ledger-met: " + ", ".join(met_ids))[:_UNDONE_CAP] if met_ids else None
             if ask_run_dir is not None:
                 _tcl.rewrite_note_verdicts(
-                    root / DELIVERY_NOTE_DIR / f"{ask_run_dir.name}.md", downgraded, inline_review, root,
+                    root / delivery_note_locate(root, ask_run_dir.name), downgraded, inline_review, root,
                 )
 
     # A review that applied fixes anchors its trailer on the plan path even when the product matches HEAD.
@@ -3726,7 +3756,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     shipped_summary: dict = {}
     if ask_run_dir is not None and token_state.get("since_halt_close") is None:
         try:
-            note_text = (root / DELIVERY_NOTE_DIR / f"{ask_run_dir.name}.md").read_text(encoding="utf-8")
+            note_text = (root / delivery_note_locate(root, ask_run_dir.name)).read_text(encoding="utf-8")
         except (OSError, UnicodeError):
             note_text = None
         from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate
@@ -3795,7 +3825,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         fixes_at, wave_paths = _fixes_integrated_at(root, inline_review)
         if fixes_at is None:
             fixes_at, wave_paths = review_only_anchor(root, request, inline_review)
-        note_rel = f"{DELIVERY_NOTE_DIR}/{art_run_id}.md" if isinstance(art_run_id, str) and art_run_id else None
+        note_rel = delivery_note_locate(root, art_run_id) if isinstance(art_run_id, str) and art_run_id else None
         expected = _recorded_fingerprints(
             root, session_id, [p for c in done for p in c.paths], [*paths],
             excluded={*receipt_paths, bookkeeping_path, note_rel},

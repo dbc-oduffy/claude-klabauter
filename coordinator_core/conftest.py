@@ -71,6 +71,26 @@ for _mod_name in [
     if _mod_file and not os.path.abspath(_mod_file).startswith(_REPO_ROOT):
         del sys.modules[_mod_name]
 
+def _refuse_over_depth() -> None:
+    """Exit 4 when this session nests past ``spawn_depth.MAX_DEPTH``.
+
+    Runs at import, ahead of every heavy import below, and again in ``pytest_configure``:
+    ``enter_session`` is idempotent per process, so the second call only re-checks. The
+    root ``conftest.py`` loads this module too, so both rootdir regimes share one check.
+    """
+    from coordinator_core.testing import spawn_depth
+
+    depth = spawn_depth.enter_session(os.environ)
+    if depth > spawn_depth.MAX_DEPTH:
+        pytest.exit(
+            f"refused: pytest nesting depth {depth} exceeds {spawn_depth.MAX_DEPTH} "
+            f"({spawn_depth.ENV_KEY}); a pytest launched from a pytest-launched pytest is not allowed",
+            returncode=4,
+        )
+
+
+_refuse_over_depth()
+
 _ENGINE_ROOT_ASSERTED_MODULES = ("coordinator_core", "coordinator_core.sizing_assemble")
 
 
@@ -906,6 +926,7 @@ def _fail_on_environ_leak(request):
 
 
 def pytest_configure(config: pytest.Config) -> None:
+    _refuse_over_depth()
     from coordinator_core.ipc import PYTEST_UNSTAMPED_DISPATCH_ENV, allow_unstamped_dispatch
 
     allow_unstamped_dispatch()

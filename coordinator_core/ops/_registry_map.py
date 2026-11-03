@@ -72,6 +72,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "hooks.nudge_em_code_dispatch":           "coordinator_core.hooks",
     "hooks.track_touched_files":              "coordinator_core.hooks",
     "hooks.agent_completion_log":             "coordinator_core.hooks",
+    "hooks.workflow_step_dispatch":           "coordinator_core.hooks",
     "hooks.track_dispatched_agents":          "coordinator_core.hooks",
     "hooks.agent_postuse_dispatch":           "coordinator_core.hooks",
     "hooks.postuse_agent_dispatch":           "coordinator_core.hooks",

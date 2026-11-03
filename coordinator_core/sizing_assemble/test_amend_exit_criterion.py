@@ -46,7 +46,7 @@ _CRITERION = """exit_criterion:
 @pytest.fixture()
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", _NAME)).parent.mkdir(parents=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / _RULING).write_text("ruling\n", encoding="utf-8")
     monkeypatch.chdir(tmp_path)
@@ -56,7 +56,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _sizing(repo: Path, mode: str = "ceo", criterion: str = _CRITERION) -> tuple[Path, str]:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.write_text(_DOC.format(mode=mode, criterion=criterion), encoding="utf-8")
-    return path, Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    return path, Path(record_homes.record_path(str(repo), "sizings", _NAME)).relative_to(repo).as_posix()
 
 
 def test_amend_replaces_statement_keeps_acceptance_and_records_ruling(repo: Path) -> None:

@@ -81,6 +81,24 @@ def ledger_regradable(
     return out
 
 
+def remnant_supersedes_blocked(files: AbstractSet[str], remnant: object) -> bool:
+    """True when the run's ``recovery.json`` ``remnant`` record shows a verified ``fixed`` pass over ``files``.
+
+    The pass must have nothing still open, report no write outside its own footprint, and its
+    footprint (entries ending ``/`` are prefixes) must cover every one of ``files``. Such a pass
+    postdates the chunk's BLOCKED report, so the report no longer bars the ledger re-grade.
+    """
+    if not files or not isinstance(remnant, Mapping) or remnant.get("status") != "fixed":
+        return False
+    if remnant.get("still_open") or remnant.get("paths"):
+        return False
+    raw = remnant.get("footprint")
+    footprint = [f for f in (raw if isinstance(raw, list) else []) if isinstance(f, str)]
+    return all(
+        any(p.startswith(f) if f.endswith("/") else p == f for f in footprint) for p in files
+    )
+
+
 def credit_regradable(
     candidates: Iterable[str], credits: Mapping[str, str], held: AbstractSet[str]
 ) -> dict[str, str]:

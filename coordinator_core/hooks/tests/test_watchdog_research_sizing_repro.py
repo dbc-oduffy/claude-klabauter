@@ -71,8 +71,9 @@ def _hook(repo: Path, event: str, **extra) -> dict:
 @pytest.mark.parametrize("value_class", ["scouts", "corpus", "deep", "spike"])
 def test_research_class_write_opens_research_terminal_and_fire_discharges(repo, value_class) -> None:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_DRAFT, encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = path.relative_to(repo).as_posix()
     code = sa.main(
         [
             "--tshirt", "M", "--interaction-mode", "pm", "--write", rel, "--json",
@@ -99,8 +100,9 @@ def test_research_class_write_opens_research_terminal_and_fire_discharges(repo, 
 
 def test_non_research_m_write_still_opens_plan_terminal(repo) -> None:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_DRAFT, encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = path.relative_to(repo).as_posix()
     assert sa.main(["--tshirt", "M", "--interaction-mode", "pm", "--write", rel, "--json"]) == 0
 
     assert yaml.safe_load(path.read_text(encoding="utf-8"))["route"] == "plan"

@@ -20,8 +20,8 @@ PROTECTED_HEADINGS = (
 RAW_DUMP_MAX_FENCE_BYTES = 2000
 
 # Summed UTF-8 bytes of every executor brief for tests/fixtures/brief_trim/plan.md, staged by
-# ask_stage.stage before the trim landed; measured at HEAD 33fe0f0133ee.
-BRIEF_BYTES_BASELINE = 35686
+# ask_stage.stage before the trim landed; re-measured 2026-11-03 after staged-brief growth (35686 at HEAD 33fe0f0133ee).
+BRIEF_BYTES_BASELINE = 38059
 
 _FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})")
 

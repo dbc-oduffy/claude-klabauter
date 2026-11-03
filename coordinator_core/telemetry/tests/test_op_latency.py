@@ -1064,3 +1064,26 @@ def test_blocked_sink_parent_makedirs_does_not_hold_the_handler(tmp_path, monkey
     assert calls == []
 
 
+def _process_time_rows(tmp_path, monkeypatch, scope):
+    common = tmp_path / ".git"
+    common.mkdir()
+    monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common)
+    ipc.record_op_process_time(
+        op="x.y", process_ms=1.0, measurement_scope=scope, source_path="dispatch_chokepoint",
+        t_start=1.0, repo_root=tmp_path, extra_fields={"handler_thread_ms": 2.0, "process_ms": -1},
+    )
+    sink = _sink_for(common)
+    return [json.loads(l) for l in sink.read_text(encoding="utf-8").splitlines()]
+
+
+def test_process_time_row_merges_extra_fields_for_per_op_handler(tmp_path, monkeypatch):
+    (row,) = _process_time_rows(tmp_path, monkeypatch, ipc.MEASUREMENT_SCOPE_PER_OP_HANDLER)
+    assert row["handler_thread_ms"] == 2.0
+    assert row["process_ms"] == 1.0
+
+
+def test_process_time_row_drops_extra_fields_for_other_scopes(tmp_path, monkeypatch):
+    (row,) = _process_time_rows(tmp_path, monkeypatch, ipc.MEASUREMENT_SCOPE_PROCESS_WIDE)
+    assert "handler_thread_ms" not in row
+
+

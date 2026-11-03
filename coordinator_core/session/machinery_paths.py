@@ -53,6 +53,8 @@ import re
 from functools import lru_cache
 from typing import Any, Pattern
 
+from coordinator_core.session import output_tree_layout as _otl
+
 LEDGER_FILENAME = "next-move-ledger.jsonl"
 INTAKE_FILENAME = "obligations-inbound.jsonl"
 SEND_LOG_FILENAME = "group-em-send-log.jsonl"
@@ -208,6 +210,60 @@ def dispatch_briefs_dir(repo_root: str) -> str:
 
 def plan_sidecars_dir(repo_root: str) -> str:
     return os.path.join(machinery_root(repo_root), "plan-sidecars")
+
+
+#: Local (`.coordinator-local`) trees whose writer is one accessor join here and whose names lead with
+#: a date or an `ask-`/`warp-` stamp: new entries go to `<tree>/<YYYY-MM>/<name>`. Kept apart from
+#: `output_tree_layout.LAYOUT`, which stays the public tracked-tree rows. close-jobs, halt-withheld and
+#: retest build their paths inline (`run_close`, `halted_withheld_index`, `landing_retest`) and
+#: `ceremony/wsc` is a tracked `state/` tree, so none is the same shape and all stay flat.
+LOCAL_LAYOUT = ("review-trail", "plan-sidecars")
+
+
+def _local_month(name: str) -> str | None:
+    return _otl.month_for("docs/plans", name) or _otl.month_for("docs/delivery", name)
+
+
+def local_tree_dir(repo_root: str, leaf: str) -> str:
+    """Absolute root of a `LOCAL_LAYOUT` tree; raises KeyError for any other leaf."""
+    if leaf not in LOCAL_LAYOUT:
+        raise KeyError(f"no LOCAL_LAYOUT row for tree {leaf!r}")
+    return os.path.join(machinery_root(repo_root), leaf)
+
+
+def local_write_path(repo_root: str, leaf: str, name: str) -> str:
+    """Absolute path a writer puts `name` at: its `<YYYY-MM>` shard, or flat when the name carries no
+    date. Never creates a directory."""
+    base = name.replace("\\", "/").rsplit("/", 1)[-1]
+    month = _local_month(base)
+    root = local_tree_dir(repo_root, leaf)
+    return os.path.join(root, month, base) if month else os.path.join(root, base)
+
+
+def local_locate(repo_root: str, leaf: str, name: str) -> str:
+    """Absolute path of an existing entry: the flat file if present, else its shard. Neither present
+    returns the write path. At most two stats, no listing."""
+    base = name.replace("\\", "/").rsplit("/", 1)[-1]
+    flat = os.path.join(local_tree_dir(repo_root, leaf), base)
+    if os.path.isfile(flat):
+        return flat
+    return local_write_path(repo_root, leaf, base)
+
+
+def review_trail_entry_path(repo_root: str, name: str) -> str:
+    return local_write_path(repo_root, "review-trail", name)
+
+
+def locate_review_trail_entry(repo_root: str, name: str) -> str:
+    return local_locate(repo_root, "review-trail", name)
+
+
+def plan_sidecar_path(repo_root: str, name: str) -> str:
+    return local_write_path(repo_root, "plan-sidecars", name)
+
+
+def locate_plan_sidecar(repo_root: str, name: str) -> str:
+    return local_locate(repo_root, "plan-sidecars", name)
 
 
 def cache_dir(repo_root: str) -> str:

@@ -111,19 +111,44 @@ def test_stage_literal_in_ipc_matches_the_counter_constant():
     assert f'"{fbc.STAGE_SAFE_FALLBACK}"' in source
 
 
-def test_hooks_scoped_resolution_is_not_counted(monkeypatch):
-    """`hooks.*` keys all map to the shared coordinator_core.hooks package, so
-    step 1 is always a no-op and the hooks-scoped stage fires on 100% of
-    hooks.* dispatches BY DESIGN. Counting it would put a record on every tool
-    call and bury the ops-wide cliff this telemetry exists to surface —
-    measured firing on every hooks.* op before this was removed."""
+def test_hooks_mapped_resolution_is_not_counted(monkeypatch):
+    """A mapped hooks.* key is served by step 1 (its owning module), so the
+    hooks-scoped stage does not fire and nothing is recorded."""
     calls = []
     monkeypatch.setattr(ipc, "_record_registry_fallback", lambda *a, **k: calls.append(a))
+    import coordinator_core.hooks.track_touched_files  # noqa: F401 -- registers the op
 
-    handler = ipc.get_op_handler("hooks.track_touched_files")
+    handler = ipc._lazy_import_and_lookup("hooks.track_touched_files")
 
     assert handler is not None, "precondition: the hooks op resolves"
-    assert calls == [], f"hooks-scoped resolution must not count, got {calls}"
+    assert calls == [], f"step-1 resolution must not count, got {calls}"
+
+
+def test_hooks_scoped_stage_is_counted_on_map_drift(monkeypatch):
+    """A hooks.* key whose map value is stale falls to the hooks-scoped stage,
+    which records a registry-fallback event."""
+    from coordinator_core.ops import _registry_map
+
+    calls = []
+    monkeypatch.setattr(ipc, "_record_registry_fallback", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setitem(
+        _registry_map.OP_MODULE_MAP, "hooks.track_touched_files", "coordinator_core.hooks.agent_completion_log"
+    )
+    import coordinator_core.hooks as hooks_pkg
+    import coordinator_core.hooks.track_touched_files  # noqa: F401 -- registers the op
+
+    real = ipc._REGISTRY["hooks.track_touched_files"]
+    monkeypatch.delitem(ipc._REGISTRY, "hooks.track_touched_files")
+    monkeypatch.setattr(
+        hooks_pkg, "_eager_import_all",
+        lambda: ipc._REGISTRY.__setitem__("hooks.track_touched_files", real),
+    )
+
+    handler = ipc._lazy_import_and_lookup("hooks.track_touched_files")
+
+    assert handler is not None, "precondition: the drift path still resolves"
+    assert [c[0][:2] for c in calls] == [("hooks.track_touched_files", fbc.STAGE_HOOKS_SCOPED)]
+    assert calls[0][1]["mapped"] is True
 
 
 def test_fast_path_records_nothing(monkeypatch):
@@ -191,23 +216,13 @@ def test_unmapped_op_lands_a_real_record_on_disk_via_caller_cwd(tmp_path, monkey
     assert record["mapped"] is False
 
 
-def test_every_hooks_key_maps_to_the_shared_package_value():
-    """The hooks-stage exclusion is only safe while every `hooks.*` key maps to
-    the SAME shared package value, which makes step 1 a guaranteed no-op for
-    them and step 2 their designed path.
-
-    Nothing else enforces that. Point one future `hooks.*` entry at a per-module
-    path and it starts being served by step 1 sometimes and step 2 other times,
-    with step 2's genuine misses still uncounted — reintroducing, for a subset
-    of ops, exactly the blind spot this counter exists to close. Raised as
-    Finding 4 by the code-reviewer on the shared-dispatch-seam slice.
-    """
+def test_every_hooks_key_maps_to_an_owning_module_value():
+    """Every hooks.* key maps to a coordinator_core module: the shared package
+    (served by the hooks-scoped stage) or an owning module (served by step 1)."""
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     hooks_values = {v for k, v in OP_MODULE_MAP.items() if k.startswith("hooks.")}
     assert hooks_values, "precondition: the map carries hooks.* entries"
-    assert hooks_values == {"coordinator_core.hooks"}, (
-        "every hooks.* key must map to the shared coordinator_core.hooks package; "
-        f"found {sorted(hooks_values)}. A per-module value here silently un-counts "
-        "that op's registry-fallback escalations — see this test's docstring."
-    )
+    import importlib.util
+
+    assert all(v.startswith("coordinator_core.") and importlib.util.find_spec(v) for v in hooks_values)

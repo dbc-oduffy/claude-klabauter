@@ -172,7 +172,9 @@ class TestSizingAndPremiseThreading:
         out = next(
             a.split("=", 1)[1] for a in directive["args"] if a.startswith("--out=")
         )
-        text = (tmp_path / out).read_text(encoding="utf-8")
+        from coordinator_core.session import record_homes
+
+        text = Path(record_homes.record_path(str(tmp_path), "sizings", Path(out).name)).read_text(encoding="utf-8")
         assert "tshirt: M" in text
         assert "route: plan" in text
 

@@ -13,9 +13,14 @@ import threading
 from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence, Union
 
-from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops.dispatch_emit import live_run_writes
-from coordinator_core.ops.dispatch_emit.halt_resume_record import MISSING, STALLED, bounded_read
+from coordinator_core.ops.dispatch_emit.halt_resume_record import (
+    MISSING,
+    STALLED,
+    bounded_read,
+    bounded_write,
+    write_outstanding,
+)
 from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir, legacy_record_dir
 
 INDEX_FILE = "coordinator-warp-live-run-index.json"
@@ -51,9 +56,11 @@ def _load(root: Union[str, Path], path: Path) -> dict:
     return dict(runs) if isinstance(runs, dict) else {}
 
 
-def _store(path: Path, runs: dict) -> None:
+def _store(path: Path, runs: dict) -> bool:
+    """False when the write outlived `WRITE_DEADLINE_MS` (it may still land later)."""
     payload = {"schema": SCHEMA, "runs": runs}
-    atomic_write_bytes(path, (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    data = (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    return bounded_write(path, data, WRITE_DEADLINE_MS) is not STALLED
 
 
 def _mutate(root: Union[str, Path], fn) -> bool:
@@ -61,10 +68,11 @@ def _mutate(root: Union[str, Path], fn) -> bool:
     if path is None:
         return False
     with _write_lock:
+        if write_outstanding(path):
+            return False
         runs = _load(root, path)
         fn(runs)
-        _store(path, runs)
-    return True
+        return _store(path, runs)
 
 
 def add(root: Union[str, Path], run_id: str, minted_at: float) -> bool:

@@ -9,6 +9,8 @@ import pytest
 import coordinator_core.sizing_assemble as sizing_assemble
 from coordinator_core.session import record_homes
 
+_NAME = "2026-10-11-x.yaml"
+
 _DRAFT = """schema: sizing-object
 intent: "Ship the thing"
 estimate:
@@ -32,18 +34,18 @@ _ARGS = ["--tshirt", "M", "--intent", "Ship the thing", "--premise-provenance", 
 @pytest.fixture()
 def target(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
-    path = Path(record_homes.record_path(str(tmp_path), "sizings", "2026-10-11-x.yaml"))
+    Path(record_homes.record_path(str(tmp_path), "sizings", _NAME)).parent.mkdir(parents=True)
+    path = Path(record_homes.record_path(str(tmp_path), "sizings", _NAME))
     path.write_text(_DRAFT, encoding="utf-8")
     return path
 
 
-def test_write_prints_only_written_line(target, capsys):
+def test_write_prints_only_written_line(target, tmp_path, capsys):
     code = sizing_assemble.main([*_ARGS, "--write", str(target)])
     out = capsys.readouterr().out
     assert code == 0
     assert out.startswith("written: ")
-    assert out.strip() == f"written: {Path(record_homes.record_path('', 'sizings', '2026-10-11-x.yaml')).as_posix()}"
+    assert out.strip() == f"written: {target.relative_to(tmp_path).as_posix()}"
     assert len(out.strip().splitlines()) == 1
 
 

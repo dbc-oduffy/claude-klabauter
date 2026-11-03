@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from functools import partial
 from pathlib import Path
+from typing import Sequence
 
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
@@ -27,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.grind_commit_contract import (
     DROP_LEDGER_ROOT,
     DROP_UNSEEN_DELETION,
     GRIND_COMMIT_PARAM,
+    LEDGER_ROOT,
     REFUSED_IMPORT_CLOSURE,
     UNLANDED_KEY,
     partition_ledger_paths,
@@ -56,11 +58,14 @@ def land(worktree_root: Path, repo_root: Path, params: dict) -> dict:
     return commit_grind_rows(worktree_root, repo_root, params)
 
 
-def commit_grind_rows(main_root: Path, repo_root: Path, params: dict) -> dict:
+def commit_grind_rows(main_root: Path, repo_root: Path, params: dict, ledger_paths: Sequence[str] = ()) -> dict:
     """Land the finished rows in ``params[GRIND_COMMIT_PARAM]`` as one commit; the in-process entry
     ``grind_settle_run`` calls. Reply shape in ``grind_commit_contract``'s docstring plus ``stranded``
     (``[{row_id, path, reason}]``, the dropped paths of finished rows) and ``paths``. ``repo_root`` is
-    the caller's common dir; the commit and every read go through ``main_root``."""
+    the caller's common dir; the commit and every read go through ``main_root``.
+
+    ``ledger_paths`` are the run's own manifest-named ledger-root files: the ones still changed ride
+    in the same commit, except a landed row's ledger, which settle unlinks. They never hold a row."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     grind = params[GRIND_COMMIT_PARAM]
@@ -86,7 +91,7 @@ def commit_grind_rows(main_root: Path, repo_root: Path, params: dict) -> dict:
         )
     landed = None
     try:
-        reply = _land(main_root, repo_root, grind, params.get("deliverable_id"), run_id)
+        reply = _land(main_root, repo_root, grind, params.get("deliverable_id"), run_id, ledger_paths)
         if reply.get("committed") is True:
             landed = {"sha": reply.get("sha"), "rows": reply.get("rows") or [], "paths": reply.get("paths") or []}
         return reply
@@ -148,7 +153,10 @@ def _reopen_held_rows(main_root: Path, repo_root: Path, held_plans: list) -> lis
     return reopened
 
 
-def _land(main_root: Path, repo_root: Path, grind: dict, deliverable_id: object, run_id: str) -> dict:
+def _land(
+    main_root: Path, repo_root: Path, grind: dict, deliverable_id: object, run_id: str,
+    ledger_paths: Sequence[str] = (),
+) -> dict:
     from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths, hash_worktree_blobs_via_spawn
     from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
 
@@ -161,7 +169,14 @@ def _land(main_root: Path, repo_root: Path, grind: dict, deliverable_id: object,
         dropped += [{"row_id": row_id, "path": p, "reason": DROP_LEDGER_ROOT} for p in gone + gone_deleted]
         plans.append((row, paths, deleted))
 
-    literals = [p for _row, paths, deleted in plans for p in paths + deleted]
+    from coordinator_core.backlog_grind_assemble.grind_rows import _ledger_path
+
+    settled = {
+        _ledger_path(main_root, grind["profile"], row["row_id"]).relative_to(main_root).as_posix()
+        for row in grind["rows"]
+    }
+    ledger_extra = [p for p in dict.fromkeys(ledger_paths) if p.startswith(LEDGER_ROOT) and p not in settled]
+    literals = [p for _row, paths, deleted in plans for p in paths + deleted] + ledger_extra
     snapshot = worktree_snapshot(main_root, literals, [], []) if literals else None
     if literals and snapshot is None:
         return _error("git status over the grind rows failed", dropped=dropped, stranded=[], rows=[])
@@ -223,8 +238,9 @@ def _land(main_root: Path, repo_root: Path, grind: dict, deliverable_id: object,
             landing.append(row)
             commit_files += live
             commit_deleted += removed
-    commit_files = list(dict.fromkeys(commit_files))
     commit_deleted = list(dict.fromkeys(commit_deleted))
+    ledger_riders = [p for p in ledger_extra if landing and p in changed and (main_root / p).is_file()]
+    commit_files = list(dict.fromkeys(commit_files + ledger_riders))
     stranded = [dict(d) for d in dropped]
     unlanded = [
         {"row_id": i, "reason": "a declared product path was dropped from the landing; the row stays open"}

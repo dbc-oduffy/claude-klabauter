@@ -78,7 +78,11 @@ from __future__ import annotations
 import json
 import re
 import sys
+import time
 
+from coordinator_core.bash_guards import leg_attribution
+from coordinator_core.bash_guards.leg_attribution import leg
+from coordinator_core.telemetry import op_row_fields
 from coordinator_core.hooks._envelope import allow_advisory, context_only, deny, no_advisory, payload_of
 from coordinator_core.ipc import register_op
 
@@ -158,6 +162,24 @@ def _prefire_deny(params: dict) -> dict | None:
 
 @register_op("hooks.preuse_bash_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    """Run `_run_chain` under leg attribution and attach `legs` / `handler_thread_ms`
+    to this call's process_time row (`op_row_fields`; a no-op when no row is bound)."""
+    token = leg_attribution.begin()
+    t0 = time.thread_time()
+    try:
+        return _run_chain(params)
+    finally:
+        try:
+            fields = {"handler_thread_ms": round((time.thread_time() - t0) * 1000.0, 1)}
+            legs = leg_attribution.summary()
+            if legs:
+                fields["legs"] = legs
+            op_row_fields.attach(**fields)
+        finally:
+            leg_attribution.end(token)
+
+
+def _run_chain(params: dict) -> dict:
     """PreToolUse(Bash|PowerShell) op: run the full bash-guard chain against
     this payload and return its verdict; when the chain answers nothing, the
     turn-budget advisory (`nudge_em_turn_budget`) is the only possible output.
@@ -181,35 +203,36 @@ def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     try:
-        from coordinator_core.bash_guards.dispatch import evaluate_payload_json
-        from coordinator_core.ops.warm_guard_evaluate import (
-            _engine_resolution_class,
-            _policy_file_for,
-        )
+        with leg("prelude"):
+            from coordinator_core.bash_guards.dispatch import evaluate_payload_json
+            from coordinator_core.ops.warm_guard_evaluate import (
+                _engine_resolution_class,
+                _policy_file_for,
+            )
     except Exception as exc:
         return _cannot_evaluate(params, exc, "import")
 
     try:
-        raw = json.dumps(params)
-        out = evaluate_payload_json(
-            raw,
-            policy_file=_policy_file_for(params),
-            resolution_class=_engine_resolution_class(),
-        )
+        with leg("prelude"):
+            raw = json.dumps(params)
+            policy_file = _policy_file_for(params)
+            resolution_class = _engine_resolution_class()
+        out = evaluate_payload_json(raw, policy_file=policy_file, resolution_class=resolution_class)
     except Exception as exc:
         return _cannot_evaluate(params, exc, "evaluate")
 
-    if _is_deny(out):
-        return out
-    guard_deny = _prefire_deny(params)
-    if guard_deny:
-        return guard_deny
-    if isinstance(out, dict):
-        return out
-    try:
-        from coordinator_core.hooks import nudge_em_turn_budget
+    with leg("render"):
+        if _is_deny(out):
+            return out
+        guard_deny = _prefire_deny(params)
+        if guard_deny:
+            return guard_deny
+        if isinstance(out, dict):
+            return out
+        try:
+            from coordinator_core.hooks import nudge_em_turn_budget
 
-        text = nudge_em_turn_budget.advisory_text(params)
-        return context_only("PreToolUse", text) if text else no_advisory()
-    except Exception:
-        return no_advisory()
+            text = nudge_em_turn_budget.advisory_text(params)
+            return context_only("PreToolUse", text) if text else no_advisory()
+        except Exception:
+            return no_advisory()

@@ -27,7 +27,6 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import ask_stage_receipt, design_route, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
-    DELIVERY_NOTE_DIR,
     HALT_PARKED,
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
@@ -43,6 +42,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ManifestRow,
     OwedRow,
     StageManifest,
+    delivery_note_rel,
     record_dir,
     stamp_run_stage,
     rulable_ids,
@@ -287,7 +287,7 @@ def doc_writes(run_id: str, sizing: Optional[Mapping]) -> tuple[str, ...]:
     from coordinator_core.session.record_homes import home_dir
 
     process = (PurePosixPath(home_dir(".", "sizings")).as_posix() + "/", "docs/plans/")
-    out = [f"{DELIVERY_NOTE_DIR}/{run_id}.md"]
+    out = [delivery_note_rel(run_id)]
     for entry in raw:
         rel = PurePosixPath(_DOC_TARGET_SUFFIX.sub("", entry.strip()).replace("\\", "/")).as_posix()
         if (

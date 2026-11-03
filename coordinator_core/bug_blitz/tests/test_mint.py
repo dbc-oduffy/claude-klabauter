@@ -102,6 +102,37 @@ def test_same_run_recall_writes_and_declares_nothing(tmp_path, monkeypatch):
     assert _snapshot(tmp_path) == before and calls == []
 
 
+def test_run_dir_manifest_marks_new_rows_created_and_reused_rows_not(tmp_path):
+    from coordinator_core.ops.dispatch_emit.minted_records import read
+
+    first_dir, second_dir = tmp_path / "run1", tmp_path / "run2"
+    ids = mint_tf_rows(tmp_path, "r1", _tests(), target_ref="t", run_dir=first_dir)
+    paths = {f"state/bug-backlog/{i}.yaml" for i in ids}
+    assert {(e["path"], e["created"]) for e in read(first_dir)} == {(p, True) for p in paths}
+    mint_tf_rows(tmp_path, "r2", _tests(), target_ref="t", run_dir=second_dir)
+    assert {(e["path"], e["created"]) for e in read(second_dir)} == {(p, False) for p in paths}
+
+
+def test_reused_row_is_on_the_manifest_when_its_tag_write_crashes(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.minted_records import read
+
+    ids = mint_tf_rows(tmp_path, "r1", _tests()[:1], target_ref="t")
+
+    def boom(*_a):
+        raise OSError("disk")
+
+    monkeypatch.setattr("coordinator_core.bug_blitz.mint._write_reuse", boom)
+    run_dir = tmp_path / "run2"
+    with pytest.raises(OSError):
+        mint_tf_rows(tmp_path, "r2", _tests()[:1], target_ref="t", run_dir=run_dir)
+    assert [(e["path"], e["created"]) for e in read(run_dir)] == [(f"state/bug-backlog/{ids[0]}.yaml", False)]
+
+
+def test_no_run_dir_records_nothing(tmp_path):
+    mint_tf_rows(tmp_path, "r1", _tests(), target_ref="t")
+    assert not list(tmp_path.rglob("minted.jsonl"))
+
+
 def test_reuse_declares_the_edited_row(tmp_path, monkeypatch):
     ids = mint_tf_rows(tmp_path, "r1", _tests()[:1], target_ref="t")
     calls = []

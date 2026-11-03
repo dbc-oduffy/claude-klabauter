@@ -847,13 +847,15 @@ def _ledger_not_stamped_reason(ledger: object, verdict: object, open_rows: objec
 
 def _ledger_met_regrades(
     worktree_root: Path, request: CommitRequest, incomplete: set, inline_review: dict,
-    report_cache: dict, ledger_verdict: object, held: set,
+    report_cache: dict, ledger_verdict: object, held: set, run_dir: Optional[Path] = None,
 ) -> dict:
     """``{chunk id: "ledger-met: <met item ids>"}`` for incomplete chunks a passed requirements
-    ledger plus a clean review cover: the report is readable and not BLOCKED, the chunk is not held,
-    and every declared and own-prefix file sits in ``prep.slice_files``. Call only once the ledger
-    gate passed. The ledger is run-wide, not mapped to chunks: a PARTIAL report's undone text is not
-    weighed."""
+    ledger plus a clean review cover: the report is readable and not BLOCKED (unless the run's
+    ``recovery.json`` ``remnant`` record shows a later ``fixed`` pass over the chunk's files), the
+    chunk is not held, and every declared and own-prefix file sits in ``prep.slice_files``. Call only
+    once the ledger gate passed. The ledger is run-wide, not mapped to chunks: a PARTIAL report's
+    undone text is not weighed."""
+    from coordinator_core.ops.dispatch_emit.land_run import _remnant_record
     met = _ledger_met_ids(ledger_verdict)
     blocked = set(held)
     files: dict = {}
@@ -866,10 +868,16 @@ def _ledger_met_regrades(
             continue
         candidates.append(chunk)
         prefix_files = _own_prefix_files(worktree_root, chunk, report_cache)
-        if text is None or _BLOCKED_REPORT_RE.search(text) or prefix_files is None:
+        if text is None or prefix_files is None:
             blocked.add(chunk.id)
             continue
-        files[chunk.id] = set(chunk.paths) | set(prefix_files)
+        own = set(chunk.paths) | set(prefix_files)
+        if _BLOCKED_REPORT_RE.search(text) and not credit_gate.remnant_supersedes_blocked(
+            own, _remnant_record(worktree_root, run_dir)
+        ):
+            blocked.add(chunk.id)
+            continue
+        files[chunk.id] = own
     ids = credit_gate.ledger_regradable(
         [c.id for c in candidates], blocked, files, _clean_review_files(inline_review)
     )

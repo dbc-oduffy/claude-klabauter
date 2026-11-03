@@ -47,6 +47,30 @@ def test_deliverable_hit(repo):
     assert r == [{"baton": b, "sizing": s, "basis": "deliverable_id", "candidates": [s]}]
 
 
+def test_sharded_sizing_matches_by_deliverable_and_by_title(repo):
+    b = _baton(repo, "2026-11-03-thing", did="dlv-aaa")
+    rel = "state/sizings/2026-11/2026-11-03-other.yaml"
+    (repo / rel).parent.mkdir(parents=True)
+    (repo / rel).write_text("status: routed\ndeliverable_id: dlv-aaa\n", encoding="utf-8")
+    r = sm.match_sizings(repo, [b])[0]
+    assert (r["sizing"], r["basis"]) == (rel, "deliverable_id")
+    b2 = _baton(repo, "2026-11-03-slugonly")
+    rel2 = "state/sizings/2026-11/2026-11-03-slugonly-1a2b3c.yaml"
+    (repo / rel2).write_text("status: routed\n", encoding="utf-8")
+    r2 = sm.match_sizings(repo, [b2])[0]
+    assert (r2["sizing"], r2["basis"]) == (rel2, "title")
+
+
+def test_one_basename_flat_and_sharded_is_never_ambiguous(repo):
+    b = _baton(repo, "2026-11-03-thing", did="dlv-aaa")
+    flat = _sizing(repo, "2026-11-03-same", "status: routed\ndeliverable_id: dlv-aaa\n")
+    shard = repo / "state/sizings/2026-11/2026-11-03-same.yaml"
+    shard.parent.mkdir(parents=True)
+    shard.write_text("status: routed\ndeliverable_id: dlv-aaa\n", encoding="utf-8")
+    r = sm.match_sizings(repo, [b])[0]
+    assert (r["sizing"], r["basis"], r["candidates"]) == (flat, "deliverable_id", [flat])
+
+
 def test_title_fallback_strips_date_and_runid(repo):
     b = _baton(repo, "2026-10-22-liveness-reader-closeout")
     s = _sizing(repo, "2026-10-22-liveness-reader-closeout-1a2b3c", "name: x\nstatus: routed\n")

@@ -4,7 +4,7 @@ A row is identified by its file stem under `state/bug-backlog/`. An open `tf` ro
 is reused in place: the run tag is appended to the row's block-list `tags`, the id and every other
 byte stay, and nothing is deleted; a reused row still loads through `load_family_records`. Every
 reuse is validated before any write, so a row the edit cannot handle aborts the mint with nothing
-written. No git spawn.
+written. No git spawn. Given a `run_dir`, every row written is recorded in the run's minted manifest.
 """
 
 from __future__ import annotations
@@ -84,7 +84,16 @@ def _row_id(path: str) -> str:
 
 def _append(repo_root: Path, **fields: object) -> str:
     result = append_queue_entry(SCHEMA, caller_worktree=repo_root, **fields)
-    return _row_id(result["out_path"])
+    out = result["out_path"]
+    return (to_repo_relative(out, str(repo_root)) or out) if os.path.isabs(out) else out
+
+
+def _record(run_dir: Path | None, path: str, *, created: bool) -> None:
+    if run_dir is None:
+        return
+    from coordinator_core.ops.dispatch_emit.minted_records import record
+
+    record(run_dir, [{"path": path.replace("\\", "/"), "created": created}])
 
 
 def _with_tag(text: str, tag: str, rel: str) -> str:
@@ -142,11 +151,15 @@ def mint_tf_rows(
     tests: tuple[FailingTest, ...],
     *,
     target_ref: str,
+    run_dir: Path | None = None,
 ) -> list[str]:
     """Mint or reuse one open `tf` row per failing test file; returns row ids in first-seen file order.
 
     Reuse is keyed on `surface` plus the `tf` tag among open rows, so a second call for the same run
-    returns the same ids and writes nothing.
+    returns the same ids and writes nothing. With `run_dir`, each row is recorded in its
+    `minted.jsonl` (`created: True` for a new row, False for a reused one): a reused row before its
+    tag edit, a new row as it is written, so a crash mid-mint never leaves a modified row off the
+    manifest `minted_records.settle` lands or reaps.
     """
     repo_root = Path(repo_root)
     tag = run_tag(run_id)
@@ -169,12 +182,13 @@ def mint_tf_rows(
         rec = existing.get(file)
         if rec is not None:
             updated = planned[file]
+            _record(run_dir, rec["path"], created=False)
             if updated is not None:
                 _write_reuse(repo_root, rec["path"], updated)
             ids.append(_row_id(rec["path"]))
             continue
         severity = "P0" if any(is_crash_shaped(t.message) for t in group) else "P1"
-        row_id = _append(
+        row_path = _append(
             repo_root,
             title=f"TF: {file} ({len(group)} failing)",
             body=_body(file, group),
@@ -185,5 +199,6 @@ def mint_tf_rows(
             evidence=_evidence_ref(repo_root, target_ref),
             repro_steps=f"targeted-test-run --row {file}",
         )
-        ids.append(row_id)
+        _record(run_dir, row_path, created=True)
+        ids.append(_row_id(row_path))
     return ids

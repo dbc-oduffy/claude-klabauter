@@ -241,6 +241,66 @@ def halted_ask_run_for(repo_root: Path, sizing_rel: str, *, ignore_superseded: b
     return None
 
 
+def notes_predecessor(repo_root: Path, sizing_rel: str, *, exclude: Optional[str] = None) -> Optional[str]:
+    """Newest prior run of `sizing_rel`, in any terminal state, that holds a live revise note, else None.
+
+    Candidates are `warp-<stem>-<stamp>` dirs and dated `ask-<stamp>` dirs whose `halted.json` or
+    `run.json` names the sizing; `exclude` (the run being composed) is skipped. Resumes nothing:
+    the caller only reads its notes. One scandir of `scratch/warp`, no git.
+    """
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    norm = _norm(sizing_rel)
+    stem = PurePosixPath(norm).stem
+    dated = _DATE_PREFIX.match(stem)
+    floor = "".join(dated.groups()) if dated else None
+    prefix = f"warp-{stem}-"
+    root = Path(repo_root) / RECORD_DIR_ROOT
+    found = []
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                name = entry.name
+                if name == exclude or not entry.is_dir():
+                    continue
+                if name.startswith(prefix):
+                    stamp = name[len(prefix):]
+                elif name.startswith("ask-") and floor is not None:
+                    stamp = name[4:]
+                    if stamp[:8] < floor:
+                        continue
+                else:
+                    continue
+                if _STAMP.fullmatch(stamp) and safe_id(name):
+                    found.append((stamp, name))
+    except OSError:
+        return None
+    for _stamp, name in sorted(found, reverse=True):
+        rdir = root / name
+        bound = (_read(rdir) or {}).get("sizing_rel") or (rl.read_run(rdir) or {}).get("sizing_rel")
+        if not isinstance(bound, str) or _norm(bound) != norm:
+            continue
+        try:
+            if run_notes.live(rl.carried_notes(Path(repo_root), name)):
+                return name
+        except ValueError:
+            continue
+    return None
+
+
+def bound_sizing_rel(repo_root: Path, run_id: str) -> Optional[str]:
+    """The sizing a run is bound to (its `halted.json`, else its `run.json`), else None. Two small reads of
+    one run's record dir; `run_id` must be a safe id."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    if not safe_id(run_id):
+        return None
+    rdir = Path(repo_root) / RECORD_DIR_ROOT / run_id
+    bound = (_read(rdir) or {}).get("sizing_rel") or (rl.read_run(rdir) or {}).get("sizing_rel")
+    return _norm(bound) if isinstance(bound, str) and bound else None
+
+
 def _is_shell(run_dir: Path) -> bool:
     """A minted-only dir: no marker and a progress record that never left `minted` (or none).
 

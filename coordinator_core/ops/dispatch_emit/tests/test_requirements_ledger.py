@@ -3,6 +3,7 @@ the view stages read, the one pass rule, and the write-back after the commit."""
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 
@@ -95,12 +96,69 @@ def test_a_revision_before_the_sizing_exists_joins_the_register_at_bind(repo):
     assert not (repo / RECORD_DIR_ROOT / RUN / rl.INBOX_FILE).exists()
 
 
-def test_bind_refuses_a_second_sizing(run):
+def _other_sizing(repo, name, *, age_s):
+    """A second sizing whose mtime is `age_s` seconds after (negative: before) the run's bound one."""
+    rel = f"state/sizings/{name}.yaml"
+    (repo / rel).write_text(yaml.safe_dump(_sizing()), encoding="utf-8")
+    base = (repo / REL).stat().st_mtime + age_s
+    os.utime(repo / rel, (base, base))
+    return rel
+
+
+def test_bind_of_a_newer_second_sizing_rebinds_and_records_the_earlier(run):
+    repo, d = run
+    other = _other_sizing(repo, "newer", age_s=1000)
+    rl.bind(repo, RUN, other, ask_text="a raw ask")
+    record = rl.read_run(d)
+    assert record["sizing_rel"] == other and record[rl.EARLIER_SIZINGS_FIELD] == [REL]
+    assert rl.read_ledger(repo, d).sizing_rel == other
+    assert [r["source_text"] for r in rr.read_register((repo / other).read_text(encoding="utf-8")).rows][-1] == "a raw ask"
+    assert (repo / REL).is_file()
+
+
+def test_bind_of_an_older_sizing_keeps_the_newer_binding(run):
+    repo, d = run
+    newer = _other_sizing(repo, "newer", age_s=1000)
+    rl.bind(repo, RUN, newer)
+    older = _other_sizing(repo, "older", age_s=-1000)
+    before = (repo / older).read_text(encoding="utf-8")
+    rl.bind(repo, RUN, older, ask_text="a raw ask")
+    record = rl.read_run(d)
+    assert record["sizing_rel"] == newer and record[rl.EARLIER_SIZINGS_FIELD] == [REL, older]
+    assert (repo / older).read_text(encoding="utf-8") == before
+    assert rl.read_ledger(repo, d).sizing_rel == newer
+
+
+def test_rebinding_the_bound_sizing_records_no_earlier_sizing(run):
+    repo, d = run
+    rl.bind(repo, RUN, REL.replace("/", "\\"))
+    assert rl.EARLIER_SIZINGS_FIELD not in rl.read_run(d)
+
+
+def test_bind_of_an_unreadable_second_sizing_still_refuses(run):
     repo, _d = run
-    other = "state/sizings/other.yaml"
-    (repo / other).write_text(yaml.safe_dump(_sizing()), encoding="utf-8")
-    with pytest.raises(rl.LedgerRefused, match="is bound to"):
-        rl.bind(repo, RUN, other)
+    with pytest.raises(rl.LedgerRefused, match="not a file"):
+        rl.bind(repo, RUN, "state/sizings/missing.yaml")
+
+
+def test_start_keeps_the_earlier_sizings(run):
+    repo, d = run
+    rl.bind(repo, RUN, _other_sizing(repo, "newer", age_s=1000))
+    rl.start(repo, RUN)
+    assert rl.read_run(d)[rl.EARLIER_SIZINGS_FIELD] == [REL]
+
+
+def test_run_token_bind_sizing_follows_the_newest_sizing(run, monkeypatch):
+    repo, _d = run
+    session = "s-1"
+    run_token.mint(repo, RUN, "scratch/warp/x.workflow.mjs", session_id=session)
+    assert run_token.bind_sizing(repo, RUN, REL)
+    newer = _other_sizing(repo, "newer", age_s=1000)
+    rl.bind(repo, RUN, newer)
+    assert run_token.bind_sizing(repo, RUN, newer) and run_token.run_owns_sizing(repo, session, newer)
+    older = _other_sizing(repo, "older", age_s=-1000)
+    rl.bind(repo, RUN, older)
+    assert not run_token.bind_sizing(repo, RUN, older) and not run_token.run_owns_sizing(repo, session, older)
 
 
 def test_revise_sets_all_of_pm_ask_alone(run):

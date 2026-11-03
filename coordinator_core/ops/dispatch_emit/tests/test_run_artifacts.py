@@ -339,3 +339,17 @@ def test_write_tracked_outcome_round_trips_outside_run_state(tmp_path):
     assert got["state"] == "halted" and got["sizing_rel"] == "state/sizings/x.yaml"
     assert ra.write_tracked_outcome(tmp_path, "../evil", "landed") is None
     assert ra.read_tracked_outcome(tmp_path, "../evil") == {}
+
+
+def test_sharded_delivery_note_is_a_candidate_and_maps_back(graph):
+    shard = f"docs/delivery/2026-10/{RUN}.md"
+    (graph / f"docs/delivery/{RUN}.md").unlink()
+    assert "delivery-note" not in ra.candidate_paths(graph, RUN).by_class
+    _w(graph, shard)
+    assert ra.candidate_paths(graph, RUN).by_class["delivery-note"] == (shard,)
+    assert ra.runs_of_artifacts(graph, [shard]) == {shard: RUN}
+
+
+def test_flat_delivery_note_still_maps_back(graph):
+    flat = f"docs/delivery/{RUN}.md"
+    assert ra.runs_of_artifacts(graph, [flat]) == {flat: RUN}

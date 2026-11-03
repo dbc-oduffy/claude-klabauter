@@ -183,9 +183,70 @@ def test_dry_run_lands_nothing_and_lists_unclaimed_dirty(repo, tmp_path, capsys)
     assert (repo / f"state/queue-grind/{PROFILE}/r1.jsonl").exists()
 
 
+def test_manifest_named_ledger_files_ride_in_the_grind_commit_and_peer_ledger_stays(repo, tmp_path, capsys):
+    from coordinator_core.ops.dispatch_emit import minted_records
+
+    _finish_row(repo, "r1")
+    _triage(repo, {"r1": ["a.py"]})
+    own = f"state/queue-grind/{PROFILE}/own-run.jsonl"
+    peer = f"state/queue-grind/{PROFILE}/peer-run.jsonl"
+    _write(repo, own)
+    _write(repo, peer)
+    minted_records.record(
+        repo / "scratch" / "warp" / RUN,
+        [{"path": own, "created": True}, {"path": f"state/queue-grind/{PROFILE}/r1.jsonl", "created": True}],
+    )
+    code, reply = _run(capsys, _argv(tmp_path, repo))
+    assert code == 0 and reply["committed"] is True
+    assert own in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    status = _status(repo)
+    assert own not in status and peer in status
+
+
+def test_a_settled_row_ledger_named_by_the_manifest_is_unlinked_not_committed(repo, tmp_path, capsys):
+    from coordinator_core.ops.dispatch_emit import minted_records
+
+    _finish_row(repo, "r1")
+    _triage(repo, {"r1": ["a.py"]})
+    minted_records.record(
+        repo / "scratch" / "warp" / RUN, [{"path": f"state/queue-grind/{PROFILE}/r1.jsonl", "created": True}]
+    )
+    code, reply = _run(capsys, _argv(tmp_path, repo))
+    assert code == 0 and reply["committed"] is True
+    assert f"state/queue-grind/{PROFILE}/r1.jsonl" not in _status(repo)
+    assert not (repo / f"state/queue-grind/{PROFILE}/r1.jsonl").exists()
+
+
 def test_usage_error_without_a_queue(repo, tmp_path, capsys):
     code = grind_rows.main(
         ["settle-run", "--profile-dir", str(tmp_path / "profiles"), "--profile", PROFILE,
          "--run-id", RUN, "--repo-root", str(repo)]
     )
     assert code == grind_rows.EXIT_USAGE
+
+
+def _ledger_line(run: str, row_id: str) -> str:
+    return json.dumps({"row_id": row_id, "evidence_file": f"state/queue-grind/{PROFILE}/evidence/{run}/{row_id}.verify.md"}) + "\n"
+
+
+def test_unmanifested_run_ledgers_are_recorded_and_ride_the_commit_and_other_runs_stay(repo, tmp_path, capsys):
+    _finish_row(repo, "r1")
+    _triage(repo, {"r1": ["a.py"]})
+    own = f"state/queue-grind/{PROFILE}/open-row.jsonl"
+    other = f"state/queue-grind/{PROFILE}/other-run.jsonl"
+    _write(repo, own, _ledger_line(RUN, "open-row"))
+    _write(repo, other, _ledger_line("20200101T000000Z", "other-run"))
+    code, reply = _run(capsys, _argv(tmp_path, repo))
+    assert code == 0 and reply["committed"] is True
+    assert own in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
+    status = _status(repo)
+    assert own not in status and other in status
+
+
+def test_record_run_ledgers_names_nothing_for_a_run_with_no_ledger_citing_it(repo):
+    from coordinator_core.ops.dispatch_emit import minted_records
+
+    _write(repo, f"state/queue-grind/{PROFILE}/x.jsonl", _ledger_line("20200101T000000Z", "x"))
+    run_dir = repo / "scratch" / "warp" / RUN
+    assert grind_settle_run.record_run_ledgers(repo, PROFILE, RUN, run_dir) == []
+    assert minted_records.read(run_dir) == []

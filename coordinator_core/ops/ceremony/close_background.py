@@ -911,7 +911,9 @@ def _cited(ctx: JobContext, plan_rel: str) -> tuple:
     baton = doc.get("baton") if isinstance(doc, dict) else None
     if not isinstance(baton, str) or not baton:
         return sizing_rel, None
-    guarded = contained_path(ctx.root / baton, [Path(home_dir(str(ctx.root), "handoffs"))])
+    from coordinator_core.session.output_tree_layout import locate
+
+    guarded = contained_path(ctx.root / locate(str(ctx.root), baton), [Path(home_dir(str(ctx.root), "handoffs"))])
     if guarded is None or not guarded.is_file():
         return sizing_rel, None
     return sizing_rel, guarded.relative_to(ctx.root.resolve()).as_posix()

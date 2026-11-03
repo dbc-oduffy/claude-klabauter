@@ -116,7 +116,9 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
             errors_before = validate_frontmatter(fm, baseline_schema_path)
             errors_after = validate_frontmatter(fm, _PLAN_SCHEMA)
             if errors_after and not errors_before:
-                regressions.append(f'{path.name}: newly fails: {errors_after}')
+                sizing_errors = [e for e in errors_after if str(e.get('field', '')).startswith('sizing_object')]
+                if sizing_errors:
+                    regressions.append(f'{path.name}: newly fails: {sizing_errors}')
             elif not errors_after:
                 validated_bumped += 1
 

@@ -442,6 +442,17 @@ import importlib
 import os
 import sys as _sys
 
+
+def _cap_blas_threads() -> None:
+    # Engine and hook processes only (setdefault, process-local; never a profile or box-wide env):
+    # an uncapped OpenBLAS commits ~750 MiB per process at 24 cores. Keys mirror
+    # spawn_depth.BLAS_THREAD_KEYS (pinned by test_engine_blas_thread_cap); inline to add no import.
+    for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS"):
+        os.environ.setdefault(key, "1")
+
+
+_cap_blas_threads()
+
 # pathlib, typing, types and threading stay off the import path: this module's cold-start module
 # count is ceilinged in benchmarks/import-budget-manifest.json. Path is imported function-locally;
 # `ipc.Path` still resolves through `__getattr__` for callers that read it.
@@ -3095,6 +3106,11 @@ async def dispatch_message(
 
     _corr_token = _corr_id_var.set(corr_id)
     _op_token = _dispatch_op_var.set(method if isinstance(method, str) else None)
+    # Bound BEFORE the handler's to_thread hop (op_row_fields' trap): only mutation of
+    # this dict crosses back from the handler's context copy.
+    from coordinator_core.telemetry import op_row_fields as _op_row_fields
+
+    _row_fields_token = _op_row_fields.begin()
     try:
         response = await _dispatch_message_impl(msg)
         error = response.get("error") if isinstance(response, dict) else None
@@ -3116,6 +3132,7 @@ async def dispatch_message(
     finally:
         _corr_id_var.reset(_corr_token)
         _dispatch_op_var.reset(_op_token)
+        _row_fields = _op_row_fields.drain(_row_fields_token)
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
         span_ms = (_time.process_time() - process_start) * 1000.0
         uncontaminated = _exit_dispatch(_record)
@@ -3162,6 +3179,7 @@ async def dispatch_message(
                 caller=caller,
                 repo_root=telemetry_repo_root,
                 spawns=_spawns,
+                extra_fields=_row_fields,
             )
         except Exception:
             _log().debug(
@@ -3426,6 +3444,7 @@ def record_op_process_time(
     corr_id: Optional[str] = None,
     spawns: Optional[int] = None,
     caller: Optional[str] = None,
+    extra_fields: Optional[dict] = None,
 ) -> None:
     """Append one durable process-time sample, alongside (never replacing) the
     wall-clock `elapsed_ms` row `dispatch_message` already records.
@@ -3487,6 +3506,9 @@ def record_op_process_time(
         }
         if spawns is not None:
             entry["spawns"] = spawns
+        if extra_fields and scope == MEASUREMENT_SCOPE_PER_OP_HANDLER:
+            for key, value in extra_fields.items():
+                entry.setdefault(key, value)
         note_observed_process_ms(process_ms)
         _write_entry(entry, repo_root)
     except Exception:

@@ -842,16 +842,53 @@ def discard(repo_root: Path, run_id: str) -> Optional[dict]:
 
 def bind_sizing(repo_root: Path, run_id: str, sizing_rel: str) -> bool:
     """Record the sizing a raw ask's run minted on its live record (the gate calls this once the
-    sizing exists). A record already naming a sizing is left as it is. True on a write."""
+    sizing exists). A record naming another sizing is rebound to the newer one: the run's ledger
+    binding (`run.json`) decides when the run has one, else the newer `sizing_stamp` wins; the
+    older never displaces it. True on a write."""
     path = _record_path(repo_root, run_id)
     record = _read_rec(repo_root, run_id)
-    if path is None or record is None or not _fresh(record) or record.get("sizing_rel"):
+    if path is None or record is None or not _fresh(record):
         return False
+    held = record.get("sizing_rel")
+    if held and normalize_sizing_rel(repo_root, str(held)) == normalize_sizing_rel(repo_root, sizing_rel):
+        return False
+    stamp = sizing_stamp(repo_root, sizing_rel)
+    if held:
+        ledger_bound = _ledger_bound(repo_root, run_id)
+        if ledger_bound:
+            if normalize_sizing_rel(repo_root, ledger_bound) != normalize_sizing_rel(repo_root, sizing_rel):
+                return False
+        else:
+            kept = record.get("sizing_stamp")
+            if stamp < (kept if isinstance(kept, int) else sizing_stamp(repo_root, str(held))):
+                return False
     from coordinator_core.atomic_replace import atomic_write_bytes
 
     record["sizing_rel"] = sizing_rel
+    record["sizing_stamp"] = stamp
     atomic_write_bytes(path, json.dumps(record, sort_keys=True).encode("utf-8"), preserve_mode=False)
     return True
+
+
+def sizing_stamp(repo_root: Path, sizing_rel: str) -> int:
+    """The sizing file's mtime in ns, 0 when it is absent: the order two sizings were minted in.
+    A bind takes it before it writes the sizing's register."""
+    try:
+        return (Path(repo_root) / sizing_rel).stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+def _ledger_bound(repo_root: Path, run_id: str) -> str:
+    """The sizing the run's ledger (`run.json`) is bound to, '' when it has none."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        data = json.loads((record_dir(Path(repo_root), run_id) / "run.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return ""
+    bound = data.get("sizing_rel") if isinstance(data, dict) else None
+    return bound if isinstance(bound, str) else ""
 
 
 def normalize_sizing_rel(repo_root: Path, sizing_path: str) -> str:

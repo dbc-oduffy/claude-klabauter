@@ -21,7 +21,9 @@ from typing import Iterable, Mapping, Optional, Sequence
 from glob import escape as glob_escape
 
 from coordinator_core.ops.dispatch_emit import halt_product_gates
+from coordinator_core.ops.dispatch_emit.ask_contract import delivery_note_locate
 from coordinator_core.ops.dispatch_emit.ask_staged_prompts import PROMPTS_DIR
+from coordinator_core.session.output_tree_layout import _MONTH_DIR, locate
 from coordinator_core.session.record_homes import home_dir
 
 ARTIFACT_CLASSES = (
@@ -268,6 +270,7 @@ def candidate_paths(
     add("baton", _scalar(sizing_text, "baton"))
     plan = _resolve_plan(root, _norm_rel(plan_rel) or _norm_rel(_scalar(sizing_text, "plan")), sizing)
     if plan:
+        plan = locate(str(root), plan)
         add("plan", plan)
         stem = PurePosixPath(plan)
         if stem.suffix:
@@ -278,8 +281,8 @@ def candidate_paths(
             plan_dir = PurePosixPath(base).parent.as_posix()
             for wave_rel in _glob_files(root, plan_dir, f"{glob_escape(PurePosixPath(base).name)}.wave-*.seam.yaml"):
                 add("seam-sidecar", wave_rel)
-            add("handoff", f"{_HANDOFFS_REL}/{stem.stem}.md")
-    add("delivery-note", f"docs/delivery/{run_id}.md")
+            add("handoff", locate(str(root), f"{_HANDOFFS_REL}/{stem.stem}.md"))
+    add("delivery-note", delivery_note_locate(root, run_id))
 
     if sizing:
         sizing_path = PurePosixPath(sizing)
@@ -454,6 +457,15 @@ def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
     return None
 
 
+_DELIVERY_SHARD = _MONTH_DIR
+
+
+def _delivery_depth_ok(rel: str) -> bool:
+    """A delivery note sits flat (`docs/delivery/<id>.md`) or one `<YYYY-MM>` shard deep."""
+    parts = rel.split("/")
+    return len(parts) == 3 or (len(parts) == 4 and bool(_DELIVERY_SHARD.match(parts[2])))
+
+
 def runs_of_artifacts(worktree_root: Path, changed: Iterable[str]) -> dict[str, str]:
     """``{repo-relative artifact path: run_id}`` for each changed path of class plan,
     evidence-sidecar, seam-sidecar, handoff, delivery-note, sizing or slice-sizing whose owning
@@ -505,8 +517,8 @@ def runs_of_artifacts(worktree_root: Path, changed: Iterable[str]) -> dict[str, 
         return latest[sizing]
 
     for rel in wanted:
-        if rel.startswith("docs/delivery/") and rel.endswith(".md") and rel.count("/") == 2:
-            run_id: Optional[str] = rel[len("docs/delivery/"): -len(".md")]
+        if rel.startswith("docs/delivery/") and rel.endswith(".md") and _delivery_depth_ok(rel):
+            run_id: Optional[str] = PurePosixPath(rel).stem
             if not (_safe_run_id(run_id) and (root / _RECORD_ROOT / run_id).is_dir()):
                 continue
         else:

@@ -332,6 +332,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/publish/dry_refire_gate.py': ('outside-repo', 'built-in sample sizing, plan and halted run written into the caller-given throwaway root, never the repo: write_sample'),
     'coordinator_core/ops/claude_home_census.py': ('outside-repo', 'falsifier fixture of sparse files under a caller-given scratch root, never the repo: _sparse'),
     'coordinator_core/ops/dispatch_emit/in_run_widen.py': ('in-repo-non-state', 'widen record appended under the tracked run record dir state/warp/<run_id>/: record_widen'),
+    'coordinator_core/ops/dispatch_emit/minted_records.py': ('in-repo-non-state', 'minted-record manifest appended under the run record dir state/warp/<run_id>/minted.jsonl: record'),
     'coordinator_core/ops/retention_run.py': ('outside-repo', 'retention lock file under the Claude home dir, O_EXCL create and stale unlink: _acquire'),
     'coordinator_core/write_guards/_memory_evict.py': ('outside-repo', 'evicts a body file, rewrites MEMORY.md and appends memory-evictions.jsonl in a Claude-home project memory dir: evict_oldest'),
     'coordinator_core/session/deferred_release.py': ('git-internal', 'deferred claim-release record json via tmp + os.replace under <git-common-dir>/coordinator-sessions/deferred-release/<sid-hash>/: record'),

@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops import warp_run_deliverable
-from coordinator_core.ops.dispatch_emit import halted_run, land_run, review_edits, sibling_claims
+from coordinator_core.ops.dispatch_emit import halted_run, land_run, review_edits, run_artifacts, sibling_claims
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     RUN,
     _call,
@@ -112,12 +112,13 @@ def test_an_ignored_run_record_is_named_in_the_reply_and_the_halt_marker_and_nev
     out = _call(repo)
 
     assert not out.get("error") and not out.get("refused"), out
-    assert out["committed"] is False and out["nothing_to_commit"] is True
+    assert out["committed"] is True
+    assert _landed(repo, out, "--name-only") == [run_artifacts.outcome_rel(RUN)]
     named = out["run_artifacts"]["ignored_excluded"]
     assert prompt in named and f"state/warp/{RUN}/run.json" in named
     marker = json.loads((rec / halted_run.HALTED_FILE).read_text(encoding="utf-8"))
     assert prompt in marker[halted_run.HALT_RUN_ARTIFACTS_FIELD]["ignored_excluded"]
-    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+    assert _git(["rev-parse", "HEAD"], repo).strip() != head
     assert not [p for p in _git(["ls-files"], repo).splitlines() if p.startswith("state/warp")]
 
 
@@ -127,16 +128,15 @@ def test_a_tracked_legacy_run_record_edit_is_named_not_committed(repo):
     _write_record(repo, RUN, ("ask.md",))
     _git(["add", "-f", legacy], repo)
     _git(["commit", "-q", "-m", "legacy tracked record"], repo)
-    head = _git(["rev-parse", "HEAD"], repo).strip()
     _write_record(repo, RUN)
     (repo / legacy).write_text("edited after the tracked commit, longer\n", encoding="utf-8")
 
     out = _call(repo)
 
     assert not out.get("error") and not out.get("refused"), out
-    assert out["committed"] is False
+    assert out["committed"] is True
+    assert _landed(repo, out, "--name-only") == [run_artifacts.outcome_rel(RUN)]
     assert legacy in out["run_artifacts"]["ignored_excluded"]
-    assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
 def test_a_record_file_written_during_the_op_is_never_relanded(repo, monkeypatch):
@@ -156,7 +156,8 @@ def test_a_record_file_written_during_the_op_is_never_relanded(repo, monkeypatch
 
     out = _call(repo)
 
-    assert out["committed"] is False
-    assert "relanded" not in out
-    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+    assert out["committed"] is True
+    assert _landed(repo, out, "--name-only") == [run_artifacts.outcome_rel(RUN)]
+    assert out["relanded"] == []
+    assert _git(["rev-parse", "HEAD"], repo).strip() != head
     assert "run_artifact_residue" not in out

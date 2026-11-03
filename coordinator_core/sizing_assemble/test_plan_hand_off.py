@@ -13,14 +13,21 @@ from coordinator_core.session import record_homes
 from coordinator_core.session_baton import store
 
 _COMMON = ["--intent", "Ship the thing", "--premise-provenance", "read", "--premise-evidence", "read it"]
-_REL = "state/sizings/2026-10-12-x.yaml"
-_ENGINE_ASK_LINE = warp_fire.fire_command(_REL) + "\n"
+_NAME = "2026-10-12-x.yaml"
+
+
+def _rel(repo: Path) -> str:
+    return Path(record_homes.record_path(str(repo), "sizings", _NAME)).relative_to(repo).as_posix()
+
+
+def _engine_ask_line(repo: Path) -> str:
+    return warp_fire.fire_command(_rel(repo)) + "\n"
 
 
 @pytest.fixture()
 def repo(tmp_path: Path, monkeypatch) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", "2026-10-12-x.yaml")).parent.mkdir(parents=True)
     sdir = tmp_path / ".git" / "coordinator-sessions" / "sid-ho"
     sdir.mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
@@ -39,7 +46,7 @@ def _write(repo: Path, tshirt: str, capsys):
 def test_plan_at_m_prints_only_the_engine_ask_line(repo, capsys):
     code, out, _err, _path = _write(repo, "M", capsys)
     assert code == 0
-    assert out == _ENGINE_ASK_LINE
+    assert out == _engine_ask_line(repo)
     assert out.startswith('Workflow({name: "coordinator:engine-ask", args: {"sizing": "')
 
 
@@ -48,7 +55,7 @@ def test_a_live_run_refuses_naming_the_call_and_the_run(repo, monkeypatch, capsy
     code, out, err, _path = _write(repo, "M", capsys)
     assert code == sizing_assemble.EXIT_BUSINESS_FAIL
     assert "warp-live-1" in err
-    assert warp_fire.fire_command(_REL) in err
+    assert warp_fire.fire_command(_rel(repo)) in err
     assert json.loads(out)["route"] == "plan"
 
 
@@ -72,7 +79,7 @@ def test_xs_does_not_hand_off(repo, capsys):
 def test_s_and_l_print_the_engine_ask_line(repo, capsys, tshirt):
     code, out, _err, _path = _write(repo, tshirt, capsys)
     assert code == 0
-    assert out == _ENGINE_ASK_LINE
+    assert out == _engine_ask_line(repo)
 
 
 def test_plan_next_move_names_the_engine_ask_submission(repo, monkeypatch, capsys):

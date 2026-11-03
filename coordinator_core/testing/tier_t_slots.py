@@ -192,14 +192,35 @@ class Slot(NamedTuple):
     owner: str
 
 
+def _suite_mutex_blocks() -> bool:
+    """True while another session's suite run holds the machine-wide mutex.
+
+    A holder that is this process or one of its ancestors is the caller's own
+    run and never blocks. Never raises: an unreadable mutex blocks nothing.
+    """
+    try:
+        meta = suite_mutex.holder()
+        if meta is None:
+            return False
+        return not suite_mutex._holder_is_self_or_ancestor(int(meta.get("pid") or 0))
+    except Exception as exc:
+        _LOG.warning("tier_t_slots: suite-mutex read failed, not blocking: %s", exc)
+        return False
+
+
 def acquire_slot(owner: str, cmd: str, timeout: float = 0.0, *,
                  pid: Optional[int] = None) -> Optional[Slot]:
+    """Take a free slot, waiting up to ``timeout`` seconds.
+
+    Waits (never takes a slot) while a foreign session holds the suite mutex,
+    so scoped runs queue behind a suite run instead of stacking on it.
+    """
     import time
 
     deadline = time.monotonic() + max(0.0, timeout)
     interval = 0.1
     while True:
-        cap = slot_cap()
+        cap = 0 if _suite_mutex_blocks() else slot_cap()
         for i in range(cap):
             path = slot_path(i)
             try:

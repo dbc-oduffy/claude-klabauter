@@ -383,6 +383,21 @@ def test_day_coverage_sweep_local_evidence_outranks_sibling_homed(
     assert result["orphaned"] == []
 
 
+@pytest.mark.parametrize("handoff_rel", ["open.md", "2026-07/open.md"])
+def test_day_coverage_sweep_reads_claims_from_flat_and_sharded_handoffs(repo: Path, handoff_rel: str) -> None:
+    day = "2026-07-20"
+    sid = "88888888-aaaa-4bbb-8ccc-333333333333"
+    sha = _commit_on(
+        repo, "src/d.py", "d", "work: d", iso_date=f"{day}T12:00:00+00:00", trailer=f"Session-Id: {sid}"
+    )
+    _write_handoff(repo, handoff_rel, claimed_by=sid)
+
+    result = day_coverage_sweep(repo, day)
+
+    assert result["in_flight"] == [sha]
+    assert result["orphaned"] == []
+
+
 def test_day_coverage_sweep_sibling_homed_fails_closed(
     repo: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

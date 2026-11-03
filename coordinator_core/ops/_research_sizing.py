@@ -24,9 +24,13 @@ def _resolve(root: Path, sizing_rel: str) -> Path:
     from coordinator_core.ops._path_guard import contained_path
     from coordinator_core.session.record_homes import home_dir
 
-    found = contained_path(Path(root) / sizing_rel, [Path(home_dir(str(root), "sizings"))])
-    if found is not None and found.is_file():
-        return found
+    from coordinator_core.session.output_tree_layout import locate
+
+    home = [Path(home_dir(str(root), "sizings"))]
+    for cited in (sizing_rel, locate(str(root), sizing_rel)):
+        found = contained_path(Path(root) / cited, home)
+        if found is not None and found.is_file():
+            return found
     # The review stamp moves a sizing into the archive; the archived record is edited in place.
     from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 

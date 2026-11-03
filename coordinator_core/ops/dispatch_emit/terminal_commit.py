@@ -182,7 +182,6 @@ from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (  # noqa: E402
     CITED_DETAIL_KEY, cited_at_or_before, verified_post_commit_credit,
 )
 from coordinator_core.ops.dispatch_emit.ask_contract import (
-    DELIVERY_NOTE_DIR,
     RECORD_DIR_ROOT,
     RESUME_LEDGER_UNLANDED_FIELD,
     RESUMED_RUN_ID_KEY,
@@ -191,6 +190,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     TERMINAL_RESUME_LEDGER_PARAM,
     UNCHANGED_SINCE_HALT_REASON,
     StageManifest,
+    delivery_note_locate,
 )
 from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate  # noqa: E402
 from coordinator_core.ops.dispatch_emit.shipped_claims import refused_code, shipped_gate  # noqa: E402
@@ -2140,11 +2140,21 @@ def _terminal_commit_inner(
                 "plan_id present) but params.session_id is missing or "
                 "not canonical-UUID-shaped -- bookkeep_wave needs it to place the record"
             )
-        from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
+        from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave, landing_run_diff
+        from coordinator_core.ops.dispatch_emit.shipped_claims import SELF_APPLIED_WITHHOLDS as _SELF_APPLIED
 
         wave_sidecar_paths = [
             worktree_root / p for p in inline_review["wave_sidecar_paths"] if isinstance(p, str)
         ]
+        # The record dir's own withholds only: the superseded predecessors' dirs are read once `artifacts` exists.
+        try:
+            bk_withheld = {
+                **_withhold_reasons(worktree_root, None, record_dir_rel),
+                **param_withheld, **_remedy.review_carried_withholds(request),
+            }
+        except ValueError:
+            bk_withheld = dict(param_withheld)
+        bk_withheld = {p: r for p, r in bk_withheld.items() if r not in _SELF_APPLIED}
         try:
             record = bookkeep_wave(
                 wave_sidecar_paths,
@@ -2154,6 +2164,7 @@ def _terminal_commit_inner(
                 prep_sidecar=inline_review.get("prep_sidecar"),
                 record_stem=inline_review["integration_stem"],
                 stage_returns=stage_returns,
+                run_diff=landing_run_diff(stage_returns, bk_withheld), withheld=bk_withheld,
             )
         except Exception as exc:  # noqa: BLE001 -- surfaced, never silently dropped
             return _error(f"review_mint.bookkeep_wave failed: {exc}")
@@ -2220,7 +2231,7 @@ def _terminal_commit_inner(
         ask_baton = _cited_baton(worktree_root, cited_sizing if not anchor_only else None)
         if ask_baton:
             companions.append(ask_baton)
-        candidate = f"{DELIVERY_NOTE_DIR}/{ask_run_dir.name}.md"
+        candidate = delivery_note_locate(worktree_root, ask_run_dir.name)
         if (worktree_root / candidate).is_file():
             ask_note_rel = candidate
             _write_note_verdicts(worktree_root / candidate, params.get("ledger_verdict"), inline_review, worktree_root)
@@ -2363,7 +2374,7 @@ def _terminal_commit_inner(
     if ledger is not None:
         more_regraded.update(_ledger_met_regrades(
             worktree_root, request, incomplete_chunks, inline_review, report_cache,
-            params.get("ledger_verdict"), held_now,
+            params.get("ledger_verdict"), held_now, ask_run_dir,
         ))
     credited_regraded = _credit_regrades(
         worktree_root, artifacts, record_dir_rel, request, incomplete_chunks, held_now, ask_run_dir,
@@ -3403,6 +3414,10 @@ def _terminal_commit_inner(
         merge_open=merge_plan is not None,
         own_declared=sorted(declared_writes), session_id=session_id,
         carried_paths=[p for p in carried if p not in kept_supplied], minted_before=own_seniority,
+        withheld=sorted({
+            *(art_landable.withheld if art_landable is not None else ()),
+            *sibling_withheld, *held_paths, *proc_wh, *wh_map,
+        }),
     )
     if integrity_extra.get("refused"):
         _unstamp_landed()

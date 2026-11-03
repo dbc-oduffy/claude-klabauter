@@ -788,6 +788,20 @@ def carry_forward(
 DELIVERY_NOTE_DIR = "docs/delivery"
 
 
+def delivery_note_rel(run_id: str) -> str:
+    """Repo-relative path a run's delivery note is written at: its `<YYYY-MM>` shard, flat for an undated id."""
+    from coordinator_core.session.output_tree_layout import write_rel
+
+    return write_rel(DELIVERY_NOTE_DIR, f"{run_id}.md")
+
+
+def delivery_note_locate(root: Any, run_id: str) -> str:
+    """Repo-relative path a run's delivery note lives at now: the flat file when present, else its shard."""
+    from coordinator_core.session.output_tree_layout import locate
+
+    return locate(str(root), f"{DELIVERY_NOTE_DIR}/{run_id}.md")
+
+
 LEDGER_HALT_FILE = "ledger-halt.json"
 HALT_PLAN_FIELD = "plan"
 #: Commit trailer naming the plan a halt commit landed chunks for; `resume_landed_rows` reads it.

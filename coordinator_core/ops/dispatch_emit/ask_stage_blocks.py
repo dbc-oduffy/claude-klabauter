@@ -12,7 +12,7 @@ from typing import Mapping, Optional, Sequence
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ops._brief_premise import check_brief_claims, render_contradicted
 from coordinator_core.ops.dispatch_emit import requirements_ledger
-from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR, RELAYED_ASK_HEADING
+from coordinator_core.ops.dispatch_emit.ask_contract import RELAYED_ASK_HEADING, delivery_note_rel
 from coordinator_core.ops.dispatch_emit.pathspec import NoTestTargetError, NoWritesDeclaredError, terminal_test_scope
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
@@ -155,7 +155,7 @@ def doc_writes(run_id: str, sizing: Optional[Mapping]) -> tuple[str, ...]:
     from coordinator_core.session.record_homes import home_dir
 
     process = (PurePosixPath(home_dir(".", "sizings")).as_posix() + "/", "docs/plans/")
-    out = [f"{DELIVERY_NOTE_DIR}/{run_id}.md"]
+    out = [delivery_note_rel(run_id)]
     for entry in raw:
         rel = PurePosixPath(_DOC_TARGET_SUFFIX.sub("", entry.strip()).replace("\\", "/")).as_posix()
         if (

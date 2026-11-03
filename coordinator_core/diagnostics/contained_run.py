@@ -253,21 +253,29 @@ def derive_worker_cap() -> int:
 
 DEFAULT_ACTIVE_PROCESS_LIMIT = 50
 _MIN_JOB_MEMORY_BYTES = 512 * 1024 * 1024
-_FALLBACK_JOB_MEMORY_BYTES = 2 * 1024 * 1024 * 1024
+# Steady-state private commit (not RSS, not sessionstart) of one pytest process on a heavy
+# suite: collecting 80 dispatch_emit files peaks ~860 MiB per process; 8 workers died under a
+# 6.5 GiB job cap (<740 MiB each) after ~2.5 min while 4 workers fit 1.3 GiB each. Also covers an
+# uncapped-BLAS child (~790 MiB at sessionstart).
+PER_PROCESS_COMMIT_BYTES = 1536 * 1024 * 1024
 
 
-def default_job_memory_limit_bytes() -> int:
-    """One runner's share of usable RAM: available MB split across `derive_worker_cap` runners."""
+def default_process_count() -> int:
+    """Expected live processes of one pytest run: `derive_worker_cap` xdist workers plus the controller."""
     try:
-        from coordinator_core.telemetry import host_sampler
-
-        avail = host_sampler.avail_mb()[0]
-        if avail is None:
-            return _FALLBACK_JOB_MEMORY_BYTES
-        share = int(avail) * 1024 * 1024 // max(1, derive_worker_cap())
-        return max(_MIN_JOB_MEMORY_BYTES, share)
+        return derive_worker_cap() + 1
     except Exception:
-        return _FALLBACK_JOB_MEMORY_BYTES
+        return 1
+
+
+def default_job_memory_limit_bytes(process_count: int | None = None) -> int:
+    """Job commit cap: `PER_PROCESS_COMMIT_BYTES` x `process_count` (default `default_process_count`).
+
+    Commit, not RSS and not a share of available RAM: an 8-worker xdist run died with
+    MemoryError at sessionstart under a one-runner share. Never below `_MIN_JOB_MEMORY_BYTES`.
+    """
+    count = default_process_count() if process_count is None else int(process_count)
+    return max(_MIN_JOB_MEMORY_BYTES, PER_PROCESS_COMMIT_BYTES * max(1, count))
 
 
 def _refuses_kill(pid: int) -> bool:
@@ -301,8 +309,13 @@ def spawn_in_capped_job(
     popen_kwargs=None,
     active_process_limit: int = DEFAULT_ACTIVE_PROCESS_LIMIT,
     job_memory_limit_bytes=None,
+    process_count: int | None = None,
 ):
     """Start `argv` inside a process-count- and memory-capped tree; returns `(proc, close)`.
+
+    `process_count` is how many processes the caller expects live (e.g. xdist workers + 1); the
+    default memory cap is that many x `PER_PROCESS_COMMIT_BYTES`. Ignored when
+    `job_memory_limit_bytes` is given.
 
     `close()` is idempotent and ends the whole tree: a Job Object close on Windows, a killpg of
     the new session on POSIX. Windows spawns CREATE_SUSPENDED, assigns, then resumes, so the
@@ -326,7 +339,7 @@ def spawn_in_capped_job(
         return proc, close_posix
 
     if job_memory_limit_bytes is None:
-        job_memory_limit_bytes = default_job_memory_limit_bytes()
+        job_memory_limit_bytes = default_job_memory_limit_bytes(process_count)
     job = create_capped_job(active_process_limit, job_memory_limit_bytes)
     base_flags = kwargs.pop("creationflags", CREATE_NO_WINDOW) | CREATE_SUSPENDED
     proc = None

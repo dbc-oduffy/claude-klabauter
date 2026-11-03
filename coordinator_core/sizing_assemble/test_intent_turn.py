@@ -11,6 +11,8 @@ import coordinator_core.sizing_assemble as sizing_assemble
 from coordinator_core.session import record_homes
 from coordinator_core.session_baton import store
 
+_NAME = "2026-10-11-x.yaml"
+
 _DRAFT = """schema: sizing-object
 intent: "A real, non-placeholder intent"
 estimate:
@@ -34,7 +36,7 @@ _PROMPT = '- fix: the "thing" and more\n'
 @pytest.fixture()
 def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", _NAME)).parent.mkdir(parents=True)
     return tmp_path
 
 
@@ -50,7 +52,7 @@ def sid(repo: Path, monkeypatch) -> str:
 
 
 def _path(repo: Path) -> Path:
-    return Path(record_homes.record_path(str(repo), "sizings", "2026-10-11-x.yaml"))
+    return Path(record_homes.record_path(str(repo), "sizings", _NAME))
 
 
 def _run(path: Path, capsys, *extra: str):

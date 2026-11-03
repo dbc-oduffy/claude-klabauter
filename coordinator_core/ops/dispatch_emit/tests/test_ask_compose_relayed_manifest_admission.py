@@ -75,7 +75,7 @@ def test_each_pinned_field_is_checked(patch, field):
     assert _gap({**_WHOLE, **patch}) == field
 
 
-def test_every_adoption_site_admits_a_relay_only_through_the_wholeness_check():
+def test_every_adoption_site_admits_a_relay_only_through_the_wholeness_check(m_plus_known_arm):
     script = _compose()
     sites = re.findall(r"_stagedManifest\s*=\s*(?!null)[^;]*(?:readyOpReply|\.manifest)", script)
     assert sites == ["_stagedManifest = got.manifest"], sites
@@ -85,7 +85,7 @@ def test_every_adoption_site_admits_a_relay_only_through_the_wholeness_check():
     assert "_verifyReplyText(text, h)" in script[script.index("async function _readStageSidecar"):script.index("const _adoptStageReply")]
     assert "_diskRead" not in script and "_adoptManifest" not in script
     assert "Array.isArray(_ready.readyOpReply?.rows)" not in script
-    for site in ("_spineReview.stage_reply", "_revised.stage_reply", "_authored.stage_reply"):
+    for site in ("_spineReview.stage_reply", "_revised.stage_reply", "_pgReply"):
         assert f"await _adoptStageReply({site})" in script, site
     for site in ("_ready.readyOpReply", "_reready.readyOpReply"):
         assert f"await _adoptStageReply({site}, true)" in script, site
@@ -95,7 +95,7 @@ def test_a_not_whole_relay_halts_with_the_named_reason_before_execute():
     script = _compose()
     assert "'stage manifest relay is not whole: ' + _relayGap" in script
     assert "relayed stage manifest is not whole" not in script
-    assert "reason: _manifest.error" in script
+    assert "reason: String(_manifest.error)" in script
     assert script.index("stage manifest relay is not whole") < script.index("phase(" + repr(ask_compose._emit._EXECUTE_PHASE_TITLE))
 
 

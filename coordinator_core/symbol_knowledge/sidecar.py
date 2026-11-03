@@ -18,7 +18,10 @@ import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
-SIDECAR_REL = "state/symbol-knowledge/definitions.json"
+from coordinator_core.session import record_homes
+
+# Posix-separated: callers compare it against git's path output.
+SIDECAR_REL = record_homes.record_path("", "symbol-knowledge", "definitions.json").replace("\\", "/")
 ENTRY_FIELDS = ("definition", "sha", "traps")
 
 

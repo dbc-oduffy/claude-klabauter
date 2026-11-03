@@ -61,6 +61,7 @@ _SCAN_ROOT = os.path.join(_REPO_ROOT, "coordinator_core")
 
 _EXCLUDED_FILES = {
     os.path.join(_SCAN_ROOT, "session", "record_homes.py"),
+    os.path.join(_SCAN_ROOT, "session", "output_tree_layout.py"),
 }
 
 _KIND_ALTERNATION = "|".join(

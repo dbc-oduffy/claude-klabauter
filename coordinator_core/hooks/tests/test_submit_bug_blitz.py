@@ -114,6 +114,79 @@ def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypa
     _no_grant_records(repo)
 
 
+def _git(root: Path, *args: str) -> str:
+    import subprocess
+
+    return subprocess.run(
+        ["git", *args], cwd=root, check=True, capture_output=True, text=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ).stdout
+
+
+@pytest.fixture
+def real_repo(tmp_path, monkeypatch):
+    """A real git repo on a work branch, with the bug profile in place."""
+    for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
+                 "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID", "QUEUE_APPEND_OUTPUT_ROOT"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
+    root = tmp_path / "real"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "work/box/2026-10-15")
+    _git(root, "config", "user.email", "t@t")
+    _git(root, "config", "user.name", "t")
+    (root / "state" / "bug-backlog").mkdir(parents=True)
+    (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    _git(root, "add", "seed.txt")
+    _git(root, "commit", "-q", "-m", "seed")
+    profiles = tmp_path / "queue-profiles"
+    profiles.mkdir()
+    (profiles / "bug.yaml").write_text(_FIXTURE_PROFILE.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(mod, "_profile_dir", lambda: str(profiles))
+    return root
+
+
+def _porcelain_state(root: Path) -> list[str]:
+    return [ln for ln in _git(root, "status", "--porcelain", "--", "state/bug-backlog").splitlines() if ln]
+
+
+def test_default_mint_lands_every_minted_row_in_one_commit_naming_the_run(real_repo):
+    before = int(_git(real_repo, "rev-list", "--count", "HEAD").strip())
+    env = _call(real_repo, {"targets": "red-set"}, mint=None)
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    rows = sorted(p.name for p in (real_repo / "state" / "bug-backlog").glob("*.yaml"))
+    assert len(rows) == 2
+    assert _porcelain_state(real_repo) == []
+    assert int(_git(real_repo, "rev-list", "--count", "HEAD").strip()) == before + 1
+    assert RUN_ID in _git(real_repo, "log", "-1", "--format=%s")
+    assert sorted(_git(real_repo, "show", "--name-only", "--format=", "HEAD").split()) == [
+        f"state/bug-backlog/{r}" for r in rows
+    ]
+
+
+def test_second_run_reusing_rows_commits_their_new_tag(real_repo):
+    _call(real_repo, {"targets": "red-set"}, mint=None)
+    _call(real_repo, {"targets": "red-set"}, mint=None, run_id="20261015T130000Z")
+
+    assert _porcelain_state(real_repo) == []
+    assert len(list((real_repo / "state" / "bug-backlog").glob("*.yaml"))) == 2
+    assert "20261015T130000Z" in _git(real_repo, "log", "-1", "--format=%s")
+
+
+def test_a_refused_mint_commit_reaps_the_new_rows_and_denies(real_repo, monkeypatch):
+    from coordinator_core.git import commit as commit_mod
+
+    def _refuse(*a, **k):
+        raise commit_mod.CommitRefused("refused for test")
+
+    monkeypatch.setattr(commit_mod, "commit_paths", _refuse)
+    env = _call(real_repo, {"targets": "red-set"}, mint=None)
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
+    assert not list((real_repo / "state" / "bug-backlog").glob("*.yaml"))
+
+
 def _seed_busy_box(root: Path, *, rows: int, agents: int, events: int) -> None:
     """An open-row queue and a session whose spawned agents each left a touch record."""
     from coordinator_core.session import touch_record

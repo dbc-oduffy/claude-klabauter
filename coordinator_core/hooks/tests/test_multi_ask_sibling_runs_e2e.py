@@ -6,6 +6,7 @@ partition of the parent register, the budget queue, and the release on a predece
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -409,12 +410,22 @@ def _in_run_m_plus_block() -> str:
         wrap_stage=lambda text: ("", []), plan_blitz_text=None, **REVIEW_KW,
     )
     start = script.index("if (!_halted && _gate.arm === 'm_plus') {")
-    depth, i = 0, script.index("{", start)
-    for j in range(i, len(script)):
-        depth += script[j] == "{"
-        depth -= script[j] == "}"
-        if depth == 0:
-            return script[start:j + 1]
+    depth, quote, j = 0, "", script.index("{", start)
+    while j < len(script):
+        ch = script[j]
+        if quote:
+            if ch == "\\":
+                j += 1
+            elif ch == quote:
+                quote = ""
+        elif ch in "'\"":
+            quote = ch
+        else:
+            depth += ch == "{"
+            depth -= ch == "}"
+            if depth == 0:
+                return script[start:j + 1]
+        j += 1
     raise AssertionError("unbalanced m_plus block")
 
 
@@ -425,13 +436,15 @@ def _run_m_plus_block(tmp_path: Path, reply: dict) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
+    block = _in_run_m_plus_block()
+    fragments = "".join(f"const {n} = ''; " for n in sorted(set(re.findall(r"_PFC?\d+", block))))
     code = (
         f"const REPO_ROOT = {json.dumps(tmp_path.as_posix())}; const _SESSION_ID = 's'; const _crossRepoApproved = false;\n"
         "const _runId = 'run-1'; const _sizingRel = 'state/sizings/s.yaml'; let _halted = null; const _gate = { arm: 'm_plus', chain_emit: " + json.dumps(reply) + " };\n"
-        "const _agentDefsClause = () => ''; const _PFC7 = ''; const _PFC5 = ''; const phase = () => {};\n"
+        "const _agentDefsClause = () => ''; " + fragments + "const phase = () => {};\n"
         f"const agent = async () => ({json.dumps(reply)});\n"
         "const started = []; const workflow = async (o) => { started.push(o.scriptPath); return { done: true }; };\n"
-        "(async () => { const _out = await (async () => {\n" + _in_run_m_plus_block() + "\nreturn { halted: _halted }; })();\n"
+        "(async () => { const _out = await (async () => {\n" + block + "\nreturn { halted: _halted }; })();\n"
         "console.log(JSON.stringify({ out: _out, started })); })();\n"
     )
     done = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
@@ -441,16 +454,24 @@ def _run_m_plus_block(tmp_path: Path, reply: dict) -> dict:
 
 
 @pytest.mark.spawns_process
-def test_an_in_run_ask_that_sizes_m_plus_chains_to_the_emit_reply_run_id(tmp_path):
-    path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.workflow.mjs"
+def test_an_in_run_ask_that_sizes_m_plus_chains_to_the_path_derived_run_id(tmp_path):
+    path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs"
     got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "ask-r2", "fire_args": {}})
     assert got["started"] == [path]
     assert got["out"]["done"] is True and got["out"]["chained_from"] == "run-1"
 
 
 @pytest.mark.spawns_process
-def test_an_in_run_m_plus_chain_halts_by_name_on_a_reply_without_a_run_id(tmp_path):
-    path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.workflow.mjs"
-    got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "", "fire_args": {}})
+def test_an_in_run_m_plus_chain_starts_on_a_fresh_path_whose_relayed_run_id_is_the_asks_own(tmp_path):
+    path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs"
+    got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "run-1", "fire_args": {}})
+    assert got["started"] == [path]
+    assert got["out"]["chained_from"] == "run-1"
+
+
+@pytest.mark.spawns_process
+def test_an_in_run_m_plus_chain_halts_by_name_on_a_path_that_is_the_asks_own_script(tmp_path):
+    path = f"{tmp_path.as_posix()}/scratch/warp/run-1.workflow.mjs"
+    got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "ask-r2", "fire_args": {}})
     assert got["started"] == []
     assert "emit reply run_id is not a run id" in got["out"]["halted"]["reason"]

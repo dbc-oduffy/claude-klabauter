@@ -69,10 +69,18 @@ def test_pre_run_dirt_beside_own_hunk_is_left_out_of_the_blob(repo):
     assert _text(repo, blobs[P]) == _rows({115: "OWN"})
 
 
-def test_overlap_with_pre_run_dirt_refuses_naming_the_header(repo):
+def test_pre_run_dirt_the_run_rewrote_is_stageable_as_is(repo):
     _put(repo, _rows({60: "DIRT"}))
     base = wb.capture(repo, [P])
     _put(repo, _rows({60: "OWN"}))
+
+    assert uds.own_only_blobs(repo, RUN, [P], base) == ({}, [])
+
+
+def test_dirt_sharing_a_block_with_own_hunk_refuses_naming_the_header(repo):
+    _put(repo, _rows({60: "DIRT"}))
+    base = wb.capture(repo, [P])
+    _put(repo, _rows({60: "DIRT"}).replace("x_61 = 61\n", "x_61 = 'O-1'\nx_61b = 'O-2'\n"))
 
     blobs, refusals = uds.own_only_blobs(repo, RUN, [P], base)
 

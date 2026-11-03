@@ -78,6 +78,9 @@ from typing import Dict, Iterable, List, Optional, Tuple
 from coordinator_core.ipc import register_op
 from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops._fm_util import extract_frontmatter_scalar
+from coordinator_core.session import output_tree_layout
+
+_MONTH_SHARD_RE = output_tree_layout._MONTH_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -357,10 +360,24 @@ def _read_owning_text(root: Path, globs: Iterable[str] = _OWNING_GLOBS) -> Tuple
     """
     parts: List[str] = []
     scan_errors: List[str] = []
+    sharded_trees = set(output_tree_layout.trees())
+    scan_targets: List[Tuple[Path, str]] = []
     for pattern in globs:
         pattern_path = Path(pattern)
-        target_dir = root / pattern_path.parent
         name_pattern = pattern_path.name
+        base_dir = root / pattern_path.parent
+        scan_targets.append((base_dir, name_pattern))
+        if pattern_path.parent.as_posix() in sharded_trees and base_dir.is_dir():
+            try:
+                with os.scandir(base_dir) as it:
+                    months = sorted(
+                        e.name for e in it
+                        if _MONTH_SHARD_RE.match(e.name) and e.is_dir()
+                    )
+            except OSError:
+                months = []
+            scan_targets.extend((base_dir / m, name_pattern) for m in months)
+    for target_dir, name_pattern in scan_targets:
         if not target_dir.is_dir():
             continue
         try:

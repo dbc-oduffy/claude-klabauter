@@ -14,6 +14,7 @@ from pathlib import Path, PurePath
 from coordinator_core.git.run import run_git
 from coordinator_core.locked_write import MutateAbort, locked_rmw
 from coordinator_core.session import record_homes
+from coordinator_core.session.output_tree_layout import iter_entries
 
 # Repo-relative POSIX form: it is also a git pathspec and a rel-path prefix.
 SIZINGS_DIR = PurePath(record_homes.home_dir("", "sizings")).as_posix()
@@ -94,7 +95,6 @@ def match_sizings(worktree_root: Path, baton_rels: list[str]) -> list[dict]:
             slugs |= _slug_variants(slug_from_title(fm["title"]))
         batons.append({"rel": rel, "did": fm.get("deliverable_id", ""), "slugs": slugs})
 
-    sizing_dir = root / SIZINGS_DIR
     archive_dir = root / ARCHIVE_SIZINGS_DIR
     info_cache: dict[str, dict[str, str]] = {}
 
@@ -145,6 +145,20 @@ def match_sizings(worktree_root: Path, baton_rels: list[str]) -> list[dict]:
                 ]
         return stems
 
+    def hot_stem_entries() -> list[tuple[str, set[str]]]:
+        return [
+            (rel, _slug_variants(Path(rel).stem)) for rel in iter_entries(str(root), SIZINGS_DIR, ".yaml")
+        ]
+
+    def prefer_flat(rels: list[str]) -> list[str]:
+        # One basename maps to one month, so a hot flat copy and a hot shard copy are one sizing.
+        by_name: dict[str, str] = {}
+        for r in rels:
+            name = Path(r).name
+            if name not in by_name or r == f"{SIZINGS_DIR}/{name}":
+                by_name[name] = r
+        return list(by_name.values())
+
     def archive_dirs() -> list[Path]:
         if not archive_dir.is_dir():
             return []
@@ -183,8 +197,9 @@ def match_sizings(worktree_root: Path, baton_rels: list[str]) -> list[dict]:
     out: list[dict] = []
     for b in batons:
         if b["slugs"] and hot_stems is None:
-            hot_stems = scan_stems([sizing_dir])
+            hot_stems = hot_stem_entries()
         cands, basis = pick(b, hot_by_did, hot_stems, False)
+        cands = sorted(prefer_flat(cands))
         archived = False
         if not cands:
             # Hot-dir miss only: the baton's sizing may have been archived.

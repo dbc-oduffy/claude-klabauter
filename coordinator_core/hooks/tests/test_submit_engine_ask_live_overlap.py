@@ -129,6 +129,86 @@ def test_a_refire_is_never_denied_by_the_halted_run_it_resumes(tmp_path, monkeyp
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {}, "state/sizings/s.yaml") is None
 
 
+def _staged_unmarked_run(root: Path, run_id: str, sizing_rel: str) -> None:
+    import json
+
+    rd = root / "state" / "warp" / run_id
+    rd.mkdir(parents=True)
+    (rd / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
+    (rd / "run.json").write_text(json.dumps({"sizing_rel": sizing_rel}), encoding="utf-8")
+
+
+def test_a_refire_is_not_denied_by_its_own_staged_run_without_halted_json(tmp_path):
+    (tmp_path / ".git").mkdir()
+    sizing = "state/sizings/2026-11-02-own.yaml"
+    own = "warp-2026-11-02-own-20261102T183622-f3eaab"
+    _staged_unmarked_run(tmp_path, own, sizing)
+    _live(tmp_path, {own: {"pkg/mod.py"}, "run-other": {"x.py"}})
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {}, sizing) is None
+    assert own in (mod._live_write_overlap_deny(tmp_path, tool_input, {}) or "")
+    _live(tmp_path, {"run-other": {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, tool_input, {}, sizing)
+    assert why and "run-other" in why and own not in why
+
+
+def _sizing(root: Path, name: str, deliverable: str) -> str:
+    rel = f"state/sizings/{name}.yaml"
+    (root / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text(f"deliverable_id: {deliverable}\n", encoding="utf-8")
+    return rel
+
+
+def test_a_refire_citing_another_sizing_record_of_the_deliverable_is_not_denied_by_its_halted_run(tmp_path):
+    (tmp_path / ".git").mkdir()
+    old = _sizing(tmp_path, "2026-11-02-own", "dlv-x")
+    new = _sizing(tmp_path, "2026-11-03-own-v2", "dlv-x")
+    own = "warp-2026-11-02-own-20261102T183622-f3eaab"
+    _staged_unmarked_run(tmp_path, own, old)
+    _live(tmp_path, {own: {"pkg/mod.py"}})
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    new_doc = {"deliverable_id": "dlv-x"}
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, new_doc, new) is None
+    # Same pair the other way round: the newer record bound the run, the refire cites the older one.
+    older_doc = {"deliverable_id": "dlv-x"}
+    _staged_unmarked_run(tmp_path, "warp-2026-11-03-own-v2-20261103T100000-aaaaaa", new)
+    _live(tmp_path, {"warp-2026-11-03-own-v2-20261103T100000-aaaaaa": {"pkg/mod.py"}})
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, older_doc, old) is None
+
+
+def test_a_staged_run_of_another_deliverable_or_a_running_one_still_denies(tmp_path):
+    import json
+
+    (tmp_path / ".git").mkdir()
+    old = _sizing(tmp_path, "2026-11-02-own", "dlv-x")
+    new = _sizing(tmp_path, "2026-11-03-own-v2", "dlv-x")
+    other = _sizing(tmp_path, "2026-11-02-other", "dlv-y")
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    peer = "warp-2026-11-02-other-20261102T183622-f3eaab"
+    _staged_unmarked_run(tmp_path, peer, other)
+    _live(tmp_path, {peer: {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, tool_input, {"deliverable_id": "dlv-x"}, new)
+    assert why and peer in why
+    mine = "warp-2026-11-02-own-20261102T190000-bbbbbb"
+    _staged_unmarked_run(tmp_path, mine, old)
+    (tmp_path / "state" / "warp" / mine / "run-stage.json").write_text(json.dumps({"stage": "running"}), encoding="utf-8")
+    _live(tmp_path, {mine: {"pkg/mod.py"}, peer: {"x.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, tool_input, {"deliverable_id": "dlv-x"}, new)
+    assert why and mine in why
+
+
+def test_a_run_whose_stage_reads_halted_denies_nothing(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _staged_unmarked_run(tmp_path, "run-halted", "state/sizings/other.yaml")
+    import json
+
+    (tmp_path / "state" / "warp" / "run-halted" / "run-stage.json").write_text(
+        json.dumps({"stage": "halted"}), encoding="utf-8"
+    )
+    _live(tmp_path, {"run-halted": {"pkg/mod.py"}})
+    assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {}) is None
+
+
 def test_a_halted_run_still_in_the_index_denies_nothing(tmp_path):
     import json
 

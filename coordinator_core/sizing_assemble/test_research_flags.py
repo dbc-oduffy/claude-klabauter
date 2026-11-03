@@ -12,6 +12,12 @@ from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.session import record_homes
 
 _NAME = "2026-10-08-r.yaml"
+
+
+def _rel(repo: Path) -> str:
+    return Path(record_homes.record_path(str(repo), "sizings", _NAME)).relative_to(repo).as_posix()
+
+
 _SCHEMA = (
     Path(sa.__file__).resolve().parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
@@ -35,7 +41,7 @@ deliverable_id: null
 @pytest.fixture()
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", _NAME)).parent.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -43,7 +49,7 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 def _run(repo: Path, *extra: str) -> tuple[int, dict]:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.write_text(_DRAFT, encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     code = sa.main(["--tshirt", "XS", "--interaction-mode", "pm", "--write", rel, "--json", *extra])
     return code, yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -212,7 +218,7 @@ def test_a_research_sizing_is_written_with_the_research_route_and_validates(repo
 def test_a_non_research_write_still_routes_plan(repo: Path) -> None:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.write_text(_DRAFT, encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     code = sa.main(["--tshirt", "M", "--interaction-mode", "pm", "--write", rel, "--json"])
     assert code == sa.EXIT_OK
     assert yaml.safe_load(path.read_text(encoding="utf-8"))["route"] == "plan"
@@ -220,7 +226,7 @@ def test_a_non_research_write_still_routes_plan(repo: Path) -> None:
 
 def test_amend_research_changes_one_field_and_keeps_the_rest(repo: Path, capsys) -> None:
     _run(repo, "--research-class", "corpus", "--research-source", "repo", "--research-target", "repo=a/b")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
     doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
     assert doc["research"] == {
@@ -237,7 +243,7 @@ def test_research_primary_repo_is_written_kept_on_amend_and_validated(repo: Path
     assert code == sa.EXIT_OK
     assert doc["research"]["primary"] == "repo"
     assert validate_frontmatter(doc, _SCHEMA) == []
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
     doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
     assert doc["research"]["primary"] == "repo"
@@ -258,7 +264,7 @@ def test_research_questions_are_written_and_amended(repo: Path) -> None:
     assert code == sa.EXIT_OK
     assert doc["research"]["questions"] == ["What is X?", "Why Y?"]
     assert validate_frontmatter(doc, _SCHEMA) == []
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     assert sa.main(["--amend-research", rel, "--research-question", "Only Z?"]) == sa.EXIT_OK
     doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
     assert doc["research"] == {"value_class": "corpus", "questions": ["Only Z?"]}
@@ -271,7 +277,7 @@ def test_amend_research_from_a_subdirectory_resolves_the_repo_root(
     sub = repo / "scratch" / "deep"
     sub.mkdir(parents=True)
     monkeypatch.chdir(sub)
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     absolute = str(Path(record_homes.record_path(str(repo), "sizings", _NAME)))
     assert sa.main(["--amend-research", absolute, "--research-depth", "deeper"]) == sa.EXIT_OK
     assert sa.main(["--amend-research", rel, "--research-depth", "deepest"]) == sa.EXIT_OK
@@ -284,7 +290,7 @@ def test_research_destination_is_written_amended_and_validated(repo: Path) -> No
     assert code == sa.EXIT_OK
     assert doc["research"]["destination"] == "local-only"
     assert validate_frontmatter(doc, _SCHEMA) == []
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
     doc = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
     assert doc["research"]["destination"] == "local-only"
@@ -349,7 +355,7 @@ def test_amend_forwards_seeds_to_build_research_block(repo: Path, monkeypatch) -
     monkeypatch.setattr(sa, "build_research_block", spy)
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.write_text(_DRAFT + "research:\n  value_class: scouts\n", encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     sa.main(["--amend-research", rel, "--research-seed", "repo=https://h/o/r"])
     assert captured["args"][9] == ["repo=https://h/o/r"]
 
@@ -362,7 +368,7 @@ def test_amend_reopens_the_research_obligation(repo: Path, monkeypatch) -> None:
     monkeypatch.setattr("coordinator_core.session.touch_record.append_touch_claims", lambda *a, **k: None)
     _run(repo, "--research-class", "corpus")
     opened.clear()
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
     assert opened == [rel]
 
@@ -423,7 +429,7 @@ def test_question_mode_repeat_and_bad_target_are_cli_refusals(
 ) -> None:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
     path.write_text(_DRAFT, encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     base = ["--tshirt", "XS", "--interaction-mode", "pm", "--write", rel, "--research-class", "scouts"]
     code = sa.main([*base, "--research-question", "q?", "--research-question-mode", "split",
                     "--research-question-mode", "combine"])
@@ -453,7 +459,7 @@ def test_amend_question_target_merges_prior_targets_back_to_flag_spelling(repo: 
         "  question_targets:\n    - {question: 2, source: repo, ref: .}\n",
         encoding="utf-8",
     )
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     sa.main(["--amend-research", rel, "--research-question-mode", "combine"])
     assert captured["args"][7] == "combine"
     assert captured["args"][8] == ["2=repo:."]
@@ -525,7 +531,7 @@ def test_amend_of_a_notebooklm_record_needs_no_second_need_but_a_new_pick_does(
 ) -> None:
     _run(repo, "--research-class", "corpus", "--research-source", "notebooklm",
          "--research-notebooklm-need", "podcast")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     capsys.readouterr()
     assert sa.main(["--amend-research", rel, "--research-depth", "deeper"]) == sa.EXIT_OK
     kept = yaml.safe_load(Path(record_homes.record_path(str(repo), "sizings", _NAME)).read_text(encoding="utf-8"))
@@ -548,7 +554,7 @@ def test_bad_or_orphan_notebooklm_need_is_refused(need, sources, fragment) -> No
 def _seeded_video_sizing(repo: Path) -> tuple[str, Path]:
     _run(repo, "--research-class", "corpus", "--research-source", "notebooklm",
          "--research-seed", "video=https://youtu.be/x", "--research-seed", "repo=https://h/o/r")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     return rel, Path(record_homes.record_path(str(repo), "sizings", _NAME))
 
 

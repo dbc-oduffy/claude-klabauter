@@ -67,6 +67,7 @@ from coordinator_core.ops.ceremony.git_native import (
 from coordinator_core.ops.fleet import _index_resync_drain
 from coordinator_core.session import core as session_core
 from coordinator_core.session import record_homes
+from coordinator_core.session.output_tree_layout import iter_entries
 from coordinator_core.session import scope as session_scope
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.win_portability import no_console_creationflags
@@ -235,19 +236,12 @@ def _record_at(path: str, rel: str) -> Optional[SizingRecord]:
 
 
 def scan_sizings(repo_root: Path) -> SizingScan:
-    """One `os.scandir` pass over `state/sizings/*.yaml`, reading each file's head once. A missing
+    """One scandir pass over `state/sizings/*.yaml` and each `state/sizings/<YYYY-MM>/*.yaml`, reading each file's head once. A missing
     directory or unreadable file yields no record; no YAML parse and no git."""
     root = Path(repo_root)
     scan = SizingScan(repo_root=root)
-    try:
-        entries = sorted(os.scandir(record_homes.home_dir(str(root), "sizings")), key=lambda e: e.name)
-    except OSError:
-        return scan
-    for entry in entries:
-        if not entry.name.endswith(".yaml") or not entry.is_file():
-            continue
-        rel = f"{_SIZINGS_REL}/{entry.name}"
-        record = _record_at(entry.path, rel)
+    for rel in sorted(iter_entries(str(root), _SIZINGS_REL, ".yaml")):
+        record = _record_at(str(root / rel), rel)
         if record is not None:
             scan.records[rel] = record
     return scan

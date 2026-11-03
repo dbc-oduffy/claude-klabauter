@@ -1644,3 +1644,114 @@ def test_holder_returning_inside_the_window_keeps_the_loop_running():
             signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=len(pattern),
             group_em_live_fn=lambda: next(live))
     assert lines == []
+
+
+def _boom():
+    raise MemoryError("commit exhausted")
+
+
+def test_memory_error_in_enumeration_degrades_and_keeps_sampling():
+    """Every enumeration seam raises MemoryError: run() finishes its ticks, says so once, and recovers."""
+    lines, samples = [], []
+    state = {"bad": True}
+
+    def procs():
+        if state["bad"]:
+            _boom()
+        return PROCS
+
+    def sample():
+        samples.append(1)
+        state["bad"] = len(samples) < 3
+        return True
+
+    gov.run(_args(runaway_mb=100), emit=lines.append, sample=sample, procs_fn=procs,
+            footprint_fn=lambda: _boom() if state["bad"] else {},
+            scan_fn=_boom, reap_path=Path("unused.jsonl"), signal_fn=lambda *a: None,
+            sleep=lambda s: None, max_ticks=5)
+    assert len(samples) == 5
+    assert sum("DEGRADED" in line for line in lines) == 1
+    assert any("RECOVERED" in line for line in lines)
+    assert any("PAUSED" in line for line in lines)  # once readable, the pause still happens
+
+
+def test_memory_error_in_the_verdict_read_does_not_raise():
+    lines = []
+    gov.run(_args(), emit=lines.append, sample=_boom, procs_fn=lambda: PROCS,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=3)
+    assert sum("DEGRADED" in line for line in lines) == 1
+
+
+def test_stamped_stream_prefixes_every_line_including_split_writes(tmp_path):
+    log = tmp_path / "governor.log"
+    stream = gov.TimestampedStream(gov.open_log_or_exit(log), log, clock=lambda: 0)
+    print("GOVERNOR PAUSED pid=1", file=stream)  # print writes the text and the newline separately
+    stream.write("a\nb\n")
+    stream.close()
+    lines = log.read_text(encoding="utf-8").splitlines()
+    assert lines == ["1970-01-01T00:00:00Z GOVERNOR PAUSED pid=1", "1970-01-01T00:00:00Z a",
+                     "1970-01-01T00:00:00Z b"]
+
+
+def test_log_rotates_past_the_cap_and_stays_bounded(tmp_path):
+    log = tmp_path / "governor.log"
+    stream = gov.TimestampedStream(gov.open_log_or_exit(log), log, max_bytes=200)
+    for i in range(50):
+        stream.write(f"GOVERNOR LINE {i}\n")
+    stream.close()
+    backup = tmp_path / "governor.log.1"
+    assert backup.exists() and log.stat().st_size < 200 + 60
+    assert all(line[:4].isdigit() for line in log.read_text(encoding="utf-8").splitlines())
+    assert log.read_text(encoding="utf-8").splitlines()[-1].endswith("GOVERNOR LINE 49")
+
+
+def test_rotation_disabled_with_zero_cap(tmp_path):
+    log = tmp_path / "governor.log"
+    stream = gov.TimestampedStream(gov.open_log_or_exit(log), log, max_bytes=0)
+    for i in range(20):
+        stream.write(f"L{i}\n")
+    stream.close()
+    assert not (tmp_path / "governor.log.1").exists()
+
+
+_PYTEST_TREE = [
+    P(500, 1, 100, 200, "python -m pytest -n 8 tests"),
+    P(501, 500, 100, 3000, "python -m pytest worker"),
+    P(502, 500, 100, 3000, "python -m pytest worker"),
+]
+
+
+def _stuck(procs, *, ticks=3, **kw):
+    lines, killed = [], []
+    gov.run(_args(max_pauses=0, **kw.pop("args", {})), emit=lines.append, sample=lambda: True,
+            procs_fn=lambda: procs, signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=ticks,
+            kill_fn=lambda pids: killed.append(sorted(pids)), **kw)
+    return lines, killed
+
+
+def test_still_critical_kills_the_engine_owned_pytest_tree():
+    lines, killed = _stuck(PROCS + _PYTEST_TREE)
+    assert killed == [[500, 501, 502]]
+    assert any(line.startswith("GOVERNOR KILLED pid=500") for line in lines)
+
+
+def test_kill_never_touches_guarded_noticed_or_protected_trees(tmp_path):
+    guard = lambda path, procs, now: frozenset({500, 501, 502})
+    assert _stuck(PROCS + _PYTEST_TREE, guard_fn=guard)[1] == []
+    notice = lambda path, procs: frozenset({500})
+    assert _stuck(PROCS + _PYTEST_TREE, notice_fn=notice)[1] == []
+    protected = [P(600, 1, 5, 3000, "claude pytest-driver --mcp")]
+    assert _stuck(protected)[1] == []
+
+
+def test_kill_leaves_non_engine_and_small_trees_alone():
+    small = [P(700, 1, 5, 50, "python -m pytest tiny")]
+    assert _stuck(PROCS + small)[1] == []  # vitest trees are not engine-owned; the pytest tree is under the floor
+
+
+def test_kill_is_not_attempted_while_a_victim_is_pausable():
+    lines, killed = [], []
+    gov.run(_args(), emit=lines.append, sample=lambda: True, procs_fn=lambda: PROCS + _PYTEST_TREE,
+            signal_fn=lambda *a: None, sleep=lambda s: None, max_ticks=2,
+            kill_fn=lambda pids: killed.append(pids))
+    assert killed == []

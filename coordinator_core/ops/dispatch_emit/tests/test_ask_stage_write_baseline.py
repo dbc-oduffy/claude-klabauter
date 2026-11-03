@@ -378,13 +378,40 @@ def test_capture_survives_an_unwritable_object_store(tmp_path, monkeypatch):
     assert ask_stage._write_baseline.capture(tmp_path, ["a.py"]) == {"a.py": fingerprint(tmp_path, "a.py")}
 
 
-def test_run_base_blobs_persist_each_segment_body(tmp_path, fake_git):
+def test_run_base_blobs_persist_each_segment_body(tmp_path, monkeypatch):
+    """The git-filtered path stores each converted body: the store holds only the raw (CRLF) blob, so
+    the converted blob `BASE_EXTRA` is absent until `_run_base_blobs` persists it."""
+    from types import SimpleNamespace
+
     from coordinator_core.git.git_objects import read_object
 
-    (tmp_path / ".git").mkdir()
-    got = ask_stage._run_base_blobs(tmp_path, BASE, ["pkg/extra.py", "pkg/gone.py"])
+    raw = b"base content\r\n"
+    pkg_tree = b"100644 extra.py\0" + bytes.fromhex(blob_sha(raw))
+    root_tree = b"40000 pkg\0" + bytes.fromhex(_oid(b"tree", pkg_tree))
+    commit = b"tree " + _oid(b"tree", root_tree).encode() + b"\n\nbase\n"
+    base = _oid(b"commit", commit)
+    gitdir = tmp_path / ".git"
+    (gitdir / "objects").mkdir(parents=True)
+    (gitdir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8", newline="\n")
+    for kind, payload in ((b"blob", raw), (b"tree", pkg_tree), (b"tree", root_tree), (b"commit", commit)):
+        write_object(gitdir, kind, payload)
+    # Probe the loose file, not `read_object`: it caches a miss per (dir, sha).
+    loose = gitdir / "objects" / BASE_EXTRA[:2] / BASE_EXTRA[2:]
+    assert not loose.exists()
+
+    def fake_run_git(args, cwd=None, input=None, **_):
+        tok = input.decode("utf-8").splitlines()[1][:-1].encode()
+        b = base.encode()
+        out = b"%s commit 0\n%s\n%s0 missing\n" % (b, commit, tok)
+        out += b"%s blob %d\n%s\n%s1 missing\n" % (b, len(EXTRA_BYTES), EXTRA_BYTES, tok)
+        out += b"%s:pkg/gone.py missing\n%s2 missing\n" % (b, tok)
+        return SimpleNamespace(returncode=0, stdout_bytes=out)
+
+    monkeypatch.setattr(ask_stage, "_config_forces_git", lambda root: True)
+    monkeypatch.setattr("coordinator_core.git.run.run_git", fake_run_git)
+    got = ask_stage._run_base_blobs(tmp_path, base, ["pkg/extra.py", "pkg/gone.py"])
     assert got == {"pkg/extra.py": BASE_EXTRA, "pkg/gone.py": None}
-    assert read_object(tmp_path / ".git", BASE_EXTRA) == ("blob", EXTRA_BYTES)
+    assert read_object(gitdir, BASE_EXTRA) == ("blob", EXTRA_BYTES)
 
 
 def test_adopts_stranded_flag_is_deterministic():

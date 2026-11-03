@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from coordinator_core.ops.dispatch_emit import ask_compose, emit, prompt_fragments
+from coordinator_core.ops.dispatch_emit import agent_body_dedupe, ask_compose, emit, prompt_fragments
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
@@ -29,11 +29,23 @@ def _largest(monkeypatch, *, hoist: bool) -> str:
         return ask_compose.compose_ask_script(**kw, **_STUB_KW)
 
 
+def _single_quoted(script: str) -> str:
+    """Quote-neutral form: JSON-literal protection in `fold_literals` depends on whether a hoisted ref sat inside the object."""
+    out, last = [], 0
+    for s, e in prompt_fragments._scan_literals(script):
+        out += [script[last:s], "'" + prompt_fragments._single_quoted_content(script, s, e) + "'"]
+        last = e
+    return "".join(out) + script[last:]
+
+
 def test_hoisting_leaves_every_runtime_prompt_identical(monkeypatch):
     plain = _largest(monkeypatch, hoist=False)
     hoisted = _largest(monkeypatch, hoist=True)
     assert "const _PF0 = '" in hoisted and "const _PF" not in plain
-    assert prompt_fragments.resolve_fragment_refs(hoisted) == prompt_fragments.fold_literals(plain)
+    # Hoisting also strips code indentation, which is not a run-time string.
+    expected = agent_body_dedupe.strip_code_indentation(prompt_fragments.fold_literals(plain))
+    resolved = prompt_fragments.resolve_fragment_refs(agent_body_dedupe.resolve_schema_refs(hoisted))
+    assert _single_quoted(resolved) == _single_quoted(expected)
 
 
 def test_fragment_consts_precede_their_first_use(monkeypatch):

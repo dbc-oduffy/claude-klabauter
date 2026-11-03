@@ -501,8 +501,10 @@ def _landing_integrity_gate(
     own_declared: Sequence[str] = (), session_id: Optional[str] = None,
     carried_paths: Optional[Sequence[str]] = None, minted_before: Optional[tuple] = None,
     landed_text: Optional[Callable[[str], Optional[str]]] = None,
+    withheld: Sequence[str] = (),
 ) -> dict:
-    """Pre-commit integrity findings over the product landing set (unparseable ``.py``, an
+    """Pre-commit integrity findings over the product landing set (unparseable ``.py``, a landing
+    ``.py`` importing a name only a ``withheld`` path binds (``import-closure-untracked``), an
     import-closure hit where a ``.py`` the commit deletes (or a top-level def/class it removes) is
     still imported by a residue or landing ``.py``: ``import-closure-untracked`` naming the importer,
     with ``residue_import_check: "no-snapshot"`` when ``residue_known`` is false; a
@@ -533,6 +535,9 @@ def _landing_integrity_gate(
             pass
     paths = [p for p in all_paths if p not in skip]
     findings = li.unparseable_py(worktree_root, paths)
+    findings += li.withheld_closure_findings(
+        worktree_root, paths, deleted_paths, withheld, landed_text=landed_text,
+    )
     extra: dict = {}
     if not residue_known:
         # Fail-open by design: with no snapshot only landing importers are scanned; untested.

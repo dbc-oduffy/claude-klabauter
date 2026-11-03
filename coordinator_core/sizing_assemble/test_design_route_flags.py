@@ -11,6 +11,12 @@ from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.session import record_homes
 
 _NAME = "2026-10-08-d.yaml"
+
+
+def _rel(repo: Path) -> str:
+    return Path(record_homes.record_path(str(repo), "sizings", _NAME)).relative_to(repo).as_posix()
+
+
 _SCHEMA = (
     Path(sa.__file__).resolve().parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
 )
@@ -34,7 +40,7 @@ deliverable_id: null
 @pytest.fixture()
 def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
-    Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    Path(record_homes.record_path(str(tmp_path), "sizings", _NAME)).parent.mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
@@ -47,7 +53,7 @@ def _run(repo: Path, draft: str | None, *extra: str) -> tuple[int, dict]:
     path = _path(repo)
     if draft is not None:
         path.write_text(draft, encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = _rel(repo)
     code = sa.main(["--tshirt", "XS", "--interaction-mode", "pm", "--write", rel, "--json", *extra])
     return code, yaml.safe_load(path.read_text(encoding="utf-8"))
 

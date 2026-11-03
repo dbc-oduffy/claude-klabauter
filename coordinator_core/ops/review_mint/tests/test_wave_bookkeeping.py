@@ -406,3 +406,108 @@ def test_unapplied_findings_unreadable_ledger_names_every_finding(tmp_path):
     entries = record["unapplied_findings"]
     assert [e["finding"] for e in entries] == ["Finding 1: a", "Finding 2: b"]
     assert all(e["reason"].startswith("ledger unreadable:") for e in entries)
+
+
+def _two_applied_findings(tmp_path):
+    """A reviewer sidecar claiming two applied findings, each file really edited on disk."""
+    (tmp_path / ".git").mkdir()
+    (tmp_path / "a.py").write_text("x = 2\n", encoding="utf-8")
+    (tmp_path / "b.py").write_text("y = 2\n", encoding="utf-8")
+    sid = tmp_path / ".coordinator-local" / "subagent-share" / "s"
+    path = _findings_sidecar(
+        sid,
+        "dropped.md",
+        "### Finding 1: a\nx\n\n### Finding 2: b\ny\n",
+        [
+            {"id": "f1", "file": "a.py", "line": 1, "before": "x = 1", "after": "x = 2"},
+            {"id": "f2", "file": "b.py", "line": 1, "before": "y = 1", "after": "y = 2"},
+        ],
+    )
+    text = path.read_text(encoding="utf-8").replace("agent_type:", "applied: 2\nagent_type:", 1)
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _bookkeep(tmp_path, sidecar, **kw):
+    return bookkeep_wave(
+        [sidecar], repo_root=tmp_path, session_id="s", plan_id="pln-x-aaaaaa",
+        prep_sidecar=None, record_stem="rec", **kw,
+    )
+
+
+def test_applied_finding_absent_from_run_diff_is_reported_open(tmp_path):
+    record = _bookkeep(tmp_path, _two_applied_findings(tmp_path), run_diff=["a.py"])
+
+    assert record["unapplied_findings"] == [{"sidecar": "dropped", "finding": "f2", "reason": "not in run diff"}]
+    assert record["review_firings"][0]["findings_count"] == 2
+    assert record["review_firings"][0]["applied"] == 1
+    assert record["fixes_applied"] == 1
+    assert record["applied_checked_against_run_diff"] is True
+
+
+def test_run_diff_carrying_every_applied_finding_changes_nothing(tmp_path):
+    record = _bookkeep(tmp_path, _two_applied_findings(tmp_path), run_diff=["./a.py", "b.py"])
+
+    assert record["unapplied_findings"] == []
+    assert record["review_firings"][0]["applied"] == 2
+    assert record["fixes_applied"] == 2
+
+
+def test_run_diff_is_read_from_the_relayed_tests_block(tmp_path):
+    returns = {"tests": {"edited": ["a.py"], "created": []}}
+
+    record = _bookkeep(tmp_path, _two_applied_findings(tmp_path), stage_returns=returns)
+
+    assert [e["finding"] for e in record["unapplied_findings"]] == ["f2"]
+    assert record["review_firings"][0]["applied"] == 1
+
+
+def test_no_recorded_run_diff_leaves_the_reviewer_count_standing(tmp_path):
+    record = _bookkeep(tmp_path, _two_applied_findings(tmp_path), stage_returns={"tests": {"status": "pass"}})
+
+    assert record["unapplied_findings"] == []
+    assert record["review_firings"][0]["applied"] == 2
+    assert record["fixes_applied"] == 2
+    assert record["applied_checked_against_run_diff"] is False
+
+
+def test_hunk_ranges_decide_when_the_row_names_a_line(tmp_path):
+    sidecar = _two_applied_findings(tmp_path)
+
+    miss = _bookkeep(tmp_path, sidecar, run_diff={"a.py": [(10, 20)], "b.py": None})
+    hit = _bookkeep(tmp_path, sidecar, run_diff={"a.py": [(1, 3)], "b.py": None})
+
+    assert [e["finding"] for e in miss["unapplied_findings"]] == ["f1"]
+    assert hit["unapplied_findings"] == []
+
+
+def test_finding_whose_fix_file_is_withheld_is_reported_open_naming_the_path(tmp_path):
+    returns = {"tests": {"edited": ["a.py", "b.py"], "created": []}}
+
+    record = _bookkeep(
+        tmp_path, _two_applied_findings(tmp_path), stage_returns=returns, withheld={"b.py": "withhold_paths: peer"}
+    )
+
+    assert record["unapplied_findings"] == [
+        {"sidecar": "dropped", "finding": "f2", "reason": "not in run diff: b.py withheld (withhold_paths: peer)"}
+    ]
+    assert record["review_firings"][0]["applied"] == 1
+    assert record["fixes_applied"] == 1
+
+
+def test_a_caller_landing_diff_without_the_withheld_path_names_it(tmp_path):
+    record = _bookkeep(
+        tmp_path, _two_applied_findings(tmp_path), run_diff=["a.py"], withheld={"./b.py": "held"}
+    )
+
+    assert [e["reason"] for e in record["unapplied_findings"]] == ["not in run diff: b.py withheld (held)"]
+    assert record["review_firings"][0]["applied"] == 1
+
+
+def test_withheld_path_no_finding_cites_changes_nothing(tmp_path):
+    returns = {"tests": {"edited": ["a.py", "b.py"], "created": []}}
+
+    record = _bookkeep(tmp_path, _two_applied_findings(tmp_path), stage_returns=returns, withheld={"c.py": "held"})
+
+    assert record["unapplied_findings"] == []
+    assert record["review_firings"][0]["applied"] == 2

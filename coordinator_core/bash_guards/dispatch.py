@@ -198,6 +198,7 @@ from coordinator_core.session.guard_unlock_sentinel import (
     consume as _consume_unlock,
 )
 from coordinator_core.bash_guards import dispatch_checks as _dc
+from coordinator_core.bash_guards.leg_attribution import leg as _leg
 from coordinator_core.bash_guards._helpers import (
     _resolve_override_keys_doc_display as _override_keys_doc_display,
 )
@@ -1608,7 +1609,8 @@ def evaluate_payload_json(
         )
     finally:
         _dc._disarm_git_probe_deadline()
-    _record_bash_write_claims(raw, result)
+    with _leg("claims"):
+        _record_bash_write_claims(raw, result)
     return result
 
 
@@ -1983,7 +1985,9 @@ def _evaluate_payload_json_budgeted(
             continue
         _demoted = False
         try:
-            out = _admit_guard_result(name, fn(), payload)
+            with _leg(name):
+                _raw_out = fn()
+            out = _admit_guard_result(name, _raw_out, payload)
         except Exception as exc:  # noqa: BLE001 -- F1: isolate, do not propagate
             if fail_closed:
                 if _crash_deny_is_out_of_class(name, cmd):

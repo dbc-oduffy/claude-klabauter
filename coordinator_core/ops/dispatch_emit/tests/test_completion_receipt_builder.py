@@ -115,6 +115,22 @@ def test_plan_mode_with_claimed_baton(tmp_path, _isolate):
     assert "## Concluded\n\nC1" in prose and "## Remains\n\nnone" in prose
 
 
+def test_handoff_claims_name_flat_and_sharded_batons(tmp_path, _isolate):
+    _baton(tmp_path, "2026-10-05-flat.md", DLV_A, "hnd-flat-111111")
+    _write(
+        tmp_path,
+        "state/handoffs/2026-10/2026-10-06-sharded.md",
+        "---\nhandoff_id: hnd-shard-222222\ndeliverable_id: dlv-alpha-aaaaaa\n---\n\nbody\n",
+    )
+    _isolate.extend(["2026-10-05-flat.md", "2026-10-06-sharded.md", "undated.md"])
+    claims = cr._handoff_claims(tmp_path, SID)
+    assert claims == [
+        "state/handoffs/2026-10-05-flat.md",
+        "state/handoffs/2026-10/2026-10-06-sharded.md",
+        "state/handoffs/undated.md",
+    ]
+
+
 def test_plan_mode_no_claim_falls_back_to_sizing_baton(tmp_path):
     _plan_repo(tmp_path)
     _baton(tmp_path, "sized.md", DLV_A, "hnd-sized-333333")

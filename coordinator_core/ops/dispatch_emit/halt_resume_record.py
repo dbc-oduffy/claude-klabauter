@@ -80,6 +80,52 @@ def bounded_read(path: Union[str, Path], deadline_ms: float) -> Union[bytes, _Se
     return box[0]
 
 
+_write_inflight: set[str] = set()
+_write_inflight_lock = threading.Lock()
+
+
+def write_outstanding(path: Union[str, Path]) -> bool:
+    """True while a `bounded_write` to `path` is still running on its worker thread."""
+    with _write_inflight_lock:
+        return str(path) in _write_inflight
+
+
+def bounded_write(path: Union[str, Path], data: bytes, deadline_ms: float) -> Optional[_Sentinel]:
+    """Atomically write `data` to `path`: `None` on success, `STALLED` when the write outlives
+    `deadline_ms`; an `OSError` on the worker is re-raised here. The write keeps running on a daemon
+    thread after a stall (it may still land). At most one write per path is in flight, so a second
+    call while one is outstanding returns `STALLED` at once."""
+    key = str(path)
+    with _write_inflight_lock:
+        if key in _write_inflight:
+            return STALLED
+        _write_inflight.add(key)
+    box: list = []
+    done = threading.Event()
+
+    def work() -> None:
+        try:
+            atomic_write_bytes(Path(key), data)
+        except BaseException as exc:
+            box.append(exc)
+        finally:
+            with _write_inflight_lock:
+                _write_inflight.discard(key)
+            done.set()
+
+    try:
+        threading.Thread(target=work, daemon=True).start()
+    except BaseException:
+        with _write_inflight_lock:
+            _write_inflight.discard(key)
+        return STALLED
+    if not done.wait(max(deadline_ms, 0) / 1000.0):
+        return STALLED
+    if box:
+        raise box[0]
+    return None
+
+
 HINT_DIR = ".coordinator-local/halt-resume-hint"
 HINT_READ_DEADLINE_MS = 50.0
 

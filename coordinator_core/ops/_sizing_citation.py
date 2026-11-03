@@ -38,6 +38,7 @@ from typing import Optional
 
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.fleet.archive_sizings import _derive_yyyy_mm
+from coordinator_core.session.output_tree_layout import locate
 
 _ARCHIVE_SIZINGS_SUBDIR = ("archive", "sizings")
 
@@ -65,6 +66,9 @@ def resolve_sizing_citation(repo_root: str | os.PathLike[str], cited: str) -> Op
     resolved = contained_path(root / cited, [root])
     if resolved is not None and resolved.exists():
         return resolved
+    located = contained_path(root / locate(str(root), cited), [root])
+    if located is not None and located.is_file():
+        return located
     archived = _archive_sizings_fallback(root, cited)
     if archived is None:
         return None
