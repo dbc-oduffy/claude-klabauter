@@ -15,7 +15,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.git.run import run_git
 
 RUN_ID = "20261015T000000Z"
@@ -58,7 +58,12 @@ def main(argv: list[str]) -> int:
         print("usage: grind_terminal_commit_full_path <dir> [--setup-only]", file=sys.stderr)
         return 2
     declare_benchmark_origin()
-    repo = build_fixture(Path(args[0]))
+    with fixture_settings_home(Path(args[0])):
+        return _run(Path(args[0]), argv)
+
+
+def _run(parent: Path, argv: list[str]) -> int:
+    repo = build_fixture(parent)
     from coordinator_core.ops.dispatch_emit import land_run
 
     if "--setup-only" in argv:

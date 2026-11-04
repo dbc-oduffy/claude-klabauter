@@ -37,9 +37,11 @@ NEGATIVE SPEC:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
-from typing import NamedTuple, Optional
+from typing import List, NamedTuple, Optional, Tuple
 
+from coordinator_core.git import call_io_scope
 from coordinator_core.git.content_hash import _attributes_pattern_matches, _read_text_scoped
 from coordinator_core.git.git_dir import resolve_git_dir
 
@@ -51,6 +53,83 @@ UNRESOLVED = "unresolved"
 _LOCAL_ATTRIBUTES_FILENAME = ".gitattributes"
 
 
+def _candidates(root: Path, normalized: str) -> List[Tuple[Path, str]]:
+    """The attribute files that can govern `normalized`, shallow to deep, each with the path
+    relative to its own directory: `info/attributes` first, then every `.gitattributes`."""
+    directory = normalized.rpartition("/")[0]
+
+    def build() -> List[Path]:
+        parts = directory.split("/") if directory else []
+        files = [resolve_git_dir(root) / "info" / "attributes"]
+        for depth in range(len(parts) + 1):
+            files.append(root.joinpath(*parts[:depth]) / _LOCAL_ATTRIBUTES_FILENAME)
+        return files
+
+    files = call_io_scope.memo("checkin-attr-files", f"{root}\0{directory}", build)
+    segments = normalized.split("/")
+    return [(files[0], normalized)] + [
+        (file, "/".join(segments[depth:])) for depth, file in enumerate(files[1:])
+    ]
+
+
+def _readable_candidates(
+    root: Path, normalized: str
+) -> List[Tuple[Path, str, List[Tuple[str, List[str]]]]]:
+    """`_candidates` minus unreadable files, each with its parsed lines. Resolved once per path
+    per open `call_io_scope`, shared by the three walks below; the lists are shared, never mutate."""
+
+    def build() -> List[Tuple[Path, str, List[Tuple[str, List[str]]]]]:
+        out = []
+        for candidate, rel_to_attrs_dir in _candidates(root, normalized):
+            lines = _attribute_lines(candidate)
+            if lines is not None:
+                out.append((candidate, rel_to_attrs_dir, lines))
+        return out
+
+    return call_io_scope.memo("checkin-attr-readable", f"{root}\0{normalized}", build)
+
+
+def _attribute_lines(path: Path) -> Optional[List[Tuple[str, List[str]]]]:
+    """`(code, tokens)` for each non-blank line of `path` (comment stripped), None when
+    unreadable. Parsed once per open `call_io_scope`; the lists are shared, never mutate."""
+
+    def parse() -> Optional[List[Tuple[str, List[str]]]]:
+        text = _read_text_scoped(path)
+        if text is None:
+            return None
+        out = []
+        for line in text.splitlines():
+            code = line.split("#", 1)[0].strip()
+            if code:
+                out.append((code, code.split()))
+        return out
+
+    return call_io_scope.memo("checkin-attr-lines", os.fspath(path), parse)
+
+
+def clean_filter_may_apply(root: Path, normalized: str) -> Optional[str]:
+    """`content_hash._clean_filter_may_apply` over the per-pass parsed attribute lines: `None`
+    when no `filter=` line matches `normalized`, else the diagnostic. A `[attr]` macro carrying
+    `filter=` refuses repo-wide."""
+    for candidate, rel_to_attrs_dir, lines in _readable_candidates(root, normalized):
+        for code, tokens in lines:
+            if "filter=" not in code:
+                continue
+            if code.startswith("[attr]"):
+                return (
+                    f"{candidate} defines an `[attr]` macro carrying `filter=` "
+                    "-- macro expansion is not resolved here, so the path is "
+                    "refused rather than guessed"
+                )
+            if _attributes_pattern_matches(tokens[0], rel_to_attrs_dir):
+                return (
+                    f"{candidate} routes {tokens[0]!r} through a `filter=` "
+                    "attribute, and that pattern matches this path, so a "
+                    "`filter.*.clean` driver may apply to it"
+                )
+    return None
+
+
 def checkin_disposition(root: Path, normalized: str) -> str:
     """`TEXT` / `BINARY` / `UNSET` / `UNRESOLVED` for `normalized`.
 
@@ -58,28 +137,9 @@ def checkin_disposition(root: Path, normalized: str) -> str:
     same shallow-to-deep walk -- so the two never disagree about WHICH line
     matched, only about what to do with it.
     """
-    parent = Path(normalized).parent
-    parts = [] if parent == Path(".") else list(parent.parts)
-
-    candidates = [(resolve_git_dir(root) / "info" / "attributes", normalized)]
-    for depth in range(len(parts) + 1):
-        candidates.append(
-            (
-                root.joinpath(*parts[:depth]) / _LOCAL_ATTRIBUTES_FILENAME,
-                "/".join(normalized.split("/")[depth:]),
-            )
-        )
-
     verdict = UNSET
-    for candidate, rel_to_attrs_dir in candidates:
-        text = _read_text_scoped(candidate)
-        if text is None:
-            continue
-        for line in text.splitlines():
-            code = line.split("#", 1)[0].strip()
-            if not code:
-                continue
-            tokens = code.split()
+    for _candidate, rel_to_attrs_dir, lines in _readable_candidates(root, normalized):
+        for code, tokens in lines:
             attr_tokens = tokens[1:] if len(tokens) > 1 else []
             directives = [
                 tok
@@ -130,29 +190,10 @@ def resolve_text_pin(root: Path, normalized: str) -> Optional[TextPin]:
     """The `text` state and `eol` value that apply to `normalized`, per attribute, or None
     when a macro, an unmodelled spelling (`binary`, legacy `crlf`, `!text`) or an unknown
     value governs the path. Same candidate files and walk order as `checkin_disposition`."""
-    parent = Path(normalized).parent
-    parts = [] if parent == Path(".") else list(parent.parts)
-
-    candidates = [(resolve_git_dir(root) / "info" / "attributes", normalized)]
-    for depth in range(len(parts) + 1):
-        candidates.append(
-            (
-                root.joinpath(*parts[:depth]) / _LOCAL_ATTRIBUTES_FILENAME,
-                "/".join(normalized.split("/")[depth:]),
-            )
-        )
-
     text_state = TEXT_UNSPECIFIED
     eol: Optional[str] = None
-    for candidate, rel_to_attrs_dir in candidates:
-        content = _read_text_scoped(candidate)
-        if content is None:
-            continue
-        for line in content.splitlines():
-            code = line.split("#", 1)[0].strip()
-            if not code:
-                continue
-            tokens = code.split()
+    for _candidate, rel_to_attrs_dir, lines in _readable_candidates(root, normalized):
+        for code, tokens in lines:
             attr_tokens = tokens[1:]
             relevant = [
                 tok

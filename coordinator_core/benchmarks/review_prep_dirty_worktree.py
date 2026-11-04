@@ -415,14 +415,24 @@ def main(argv=None) -> int:
     ap.add_argument("--repo")
     ap.add_argument("--params")
     args = ap.parse_args(argv)
+    from coordinator_core.benchmarks import fixture_settings_home
+
     if args.child:
-        return child_main(Path(args.repo), json.loads(Path(args.params).read_text(encoding="utf-8")), args.setup_only)
+        with fixture_settings_home(Path(args.repo).parent):
+            return child_main(Path(args.repo), json.loads(Path(args.params).read_text(encoding="utf-8")), args.setup_only)
     if args.opl:
         report = measure_opl(_REPO_ROOT, args.since)
         print(json.dumps(report, indent=1) if args.json else
               " ".join(f"{k}={v}" for k, v in report.items()))
         return 0
 
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="review-prep-dirty-") as parent, fixture_settings_home(parent):
+        return _measure_modes(args)
+
+
+def _measure_modes(args) -> int:
     from coordinator_core.benchmarks import declare_benchmark_origin
 
     declare_benchmark_origin()

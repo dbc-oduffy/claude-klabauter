@@ -448,7 +448,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--repo-root", default=None)
     ap.add_argument("--skip-gates", action="store_true", help="skip measure (e)")
     args = ap.parse_args(argv)
+    import tempfile
 
+    from coordinator_core.benchmarks import fixture_settings_home
+
+    with tempfile.TemporaryDirectory(prefix="claim-spike-home-") as home, fixture_settings_home(home):
+        return _run(args)
+
+
+def _run(args) -> int:
     root = Path(args.repo_root).resolve() if args.repo_root else _repo_root(Path.cwd())
     rel = Path(args.work_dir)
     if rel.is_absolute() or rel.parts[:1] != ("scratch",) or ".." in rel.parts:

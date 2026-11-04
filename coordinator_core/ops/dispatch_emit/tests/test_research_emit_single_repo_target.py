@@ -1,4 +1,4 @@
-"""A one-repo-target research sizing with questions and no seeds names its target to the scope stage; zero resolved repo targets refuse."""
+"""A one-repo-target research sizing with questions and no seeds names its target to the scope stage; zero resolved repo targets default to the firing repo."""
 from __future__ import annotations
 
 import shutil
@@ -9,7 +9,6 @@ import pytest
 import coordinator_core.ops.dispatch_emit as _pkg
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit import research_emit as re_
-from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
 from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _Admitted, _write_sizing
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -71,11 +70,22 @@ def test_write_ask_without_a_research_block_is_unchanged(tmp_path):
     assert "## Research" not in (tmp_path / rel).read_text(encoding="utf-8")
 
 
-def test_zero_resolved_repo_targets_refuse_naming_the_sizing(repo):
+def test_zero_resolved_repo_targets_default_to_the_firing_repo(repo):
     rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "repo", *_questions())
-    with pytest.raises(PipelineEmitRefused) as exc:
-        op_module._research_route_setup({}, repo, rel, None)
-    assert any(
-        rel in r and "no resolved repo target" in r and "registered key" in r
-        for r in exc.value.reasons
+    ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
+    repo_inputs = next(i for m, i, _ in ctx["segments"] if m.pipeline == "repo")
+    brief = (repo / repo_inputs.brief).read_text(encoding="utf-8")
+    assert f"repo target: {repo}" in brief
+
+
+def test_an_explicit_repo_target_is_not_replaced_by_the_firing_repo(repo, tmp_path):
+    target = (tmp_path / "research" / "kythe").as_posix()
+    rel = _write_sizing(
+        repo, "--research-class", "corpus", "--research-source", "repo", "--research-target", f"repo={target}",
+        *_questions(),
     )
+    ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
+    repo_inputs = next(i for m, i, _ in ctx["segments"] if m.pipeline == "repo")
+    brief = (repo / repo_inputs.brief).read_text(encoding="utf-8")
+    assert f"repo target: {target}" in brief
+    assert f"repo target: {repo}" not in brief

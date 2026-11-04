@@ -1511,6 +1511,18 @@ def _research_route_setup(
         scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
     else:
         scratch_rel = _local_only_scratch(local_root, params.get("scratch_dir"), run_id)
+    if research_emit.REPO_PIPELINE in shape["pipelines"] and (research.get("targets") or questions) and not any(
+        t.get("source") == research_emit.REPO_PIPELINE for t in research.get("targets") or () if isinstance(t, dict)
+    ) and not any(
+        rc.SEED_KIND_SOURCE.get(s.get("kind")) == research_emit.REPO_PIPELINE
+        for s in research.get("seeds") or () if isinstance(s, dict)
+    ):
+        # A repo-sourced ask with no named target researches the repo it was fired from: the scout
+        # writes `sources: [repo]` without a target, and refusing here stranded the run post-mint.
+        research = {
+            **research,
+            "targets": [*(research.get("targets") or ()), {"source": research_emit.REPO_PIPELINE, "ref": str(root)}],
+        }
     if not from_sizing or (questions and not lists.get("questions")):
         ask_text = str(ask or "")
         if (raw_questions or from_sizing) and not ask_text.strip():
@@ -1530,11 +1542,6 @@ def _research_route_setup(
     seed_briefs = research_emit.bind_seed_briefs(root, scratch_rel, members_brief, seeds)
     repo_seeds = [s for s in seeds if rc.SEED_KIND_SOURCE.get(s.get("kind")) == research_emit.REPO_PIPELINE]
     repo_refs = sum(1 for t in targets if t.get("source") == research_emit.REPO_PIPELINE) + len(repo_seeds)
-    if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs == 0 and (targets or questions):
-        raise PipelineEmitRefused([
-            f"sizing {sizing_rel or '(research route)'}: the repo pipeline has no resolved repo target; "
-            "record one with sizing-assemble --research-target repo=<path or registered key> (list: research.targets) or a repo seed"
-        ])
     primary_repo = shape.get("primary") == research_emit.REPO_PIPELINE
     if research_emit.REPO_PIPELINE in shape["pipelines"] and repo_refs >= (1 if repo_seeds or primary_repo else 2):
         compare_name = research_emit.REPO_COMPARE_PIPELINE + MANIFEST_SUFFIX

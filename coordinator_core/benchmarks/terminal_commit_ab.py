@@ -44,7 +44,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Sequence
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks.interleave import Primitive, run_interleaved
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.benchmarks.terminal_commit_launch import _ONBOARDED_LAUNCH, ONBOARDED_PIN
@@ -557,6 +557,11 @@ def main(argv: Sequence[str]) -> int:
     if out_parent is not None:
         out_parent.mkdir(parents=True, exist_ok=True)
     work = Path(tempfile.mkdtemp(prefix="terminal-commit-ab-", dir=str(out_parent) if out_parent else None))
+    with fixture_settings_home(work):
+        return _measure(args, work)
+
+
+def _measure(args: argparse.Namespace, work: Path) -> int:
     try:
         from coordinator_core.git.git_state import head_sha
 

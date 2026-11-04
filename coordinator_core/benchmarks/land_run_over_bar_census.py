@@ -36,6 +36,7 @@ import os
 import re
 import statistics
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -234,7 +235,10 @@ def main(argv: Optional[list] = None) -> int:
     now = time.time()
     until = parse_time(args.until, now) if args.until else now
     since = parse_time(args.since, now) if args.since else until - DEFAULT_WINDOW_SECS
-    result = census(repo_root=Path(args.repo_root), since=since, until=until)
+    from coordinator_core.benchmarks import fixture_settings_home
+
+    with tempfile.TemporaryDirectory(prefix="land-run-census-") as parent, fixture_settings_home(parent):
+        result = census(repo_root=Path(args.repo_root), since=since, until=until)
     if args.json:
         print(json.dumps(result, indent=2))
         return 0

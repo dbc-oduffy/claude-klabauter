@@ -80,7 +80,7 @@ def test_index_snapshot_requested_once_per_pass_not_per_path(tmp_path, monkeypat
 
     monkeypatch.setattr(commit_mod, "read_index", counting)
     commit_paths(tmp_path / "repo", names, "pin loop")
-    assert len(calls) < len(names) // 2, (len(calls), len(names))
+    assert len(calls) == 1, (len(calls), len(names))
 
 
 def test_commit_blob_stays_the_git_blob(tmp_path):
@@ -108,3 +108,28 @@ def test_dispositions_unchanged_inside_a_scope(tmp_path):
         pin = checkin_attrs.resolve_text_pin(root, "sub/x.cmd")
     assert bare == scoped == cases
     assert pin == checkin_attrs.TextPin(checkin_attrs.TEXT_AUTO, "crlf")
+
+
+@pytest.mark.parametrize(
+    "attrs",
+    [
+        "* text=auto\n",
+        "*.png filter=lfs diff=lfs merge=lfs -text\n",
+        "*.txt filter=lfs\n",
+        "[attr]lfs filter=lfs -text\n*.bin lfs\n",
+        "sub/*.dat filter=x\n",
+    ],
+)
+@pytest.mark.parametrize("rel", ["a.txt", "b.png", "sub/c.dat", "sub/deep/d.txt"])
+def test_clean_filter_may_apply_matches_content_hash(tmp_path, attrs, rel):
+    from coordinator_core.git import content_hash
+
+    root = tmp_path / "r"
+    (root / ".git").mkdir(parents=True)
+    (root / "sub" / "deep").mkdir(parents=True)
+    (root / ".gitattributes").write_text(attrs, newline="\n")
+    (root / "sub" / ".gitattributes").write_text("*.txt filter=y\n", newline="\n")
+    want = content_hash._clean_filter_may_apply(root, rel)
+    assert checkin_attrs.clean_filter_may_apply(root, rel) == want
+    with call_io_scope.call_io_scope():
+        assert checkin_attrs.clean_filter_may_apply(root, rel) == want

@@ -37,7 +37,7 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home  # noqa: E402
 from coordinator_core.benchmarks import land_run_leg_budget_profile as base_profile  # noqa: E402
 from coordinator_core.benchmarks.land_run_slow_disk_profile import SELF, _bind_session  # noqa: E402
 
@@ -464,6 +464,13 @@ def main(argv: list) -> int:
     args = ap.parse_args(argv)
     source = Path(args.source_repo)
     report: dict = {"run_id": args.real_record, "halted_scale": args.halted_scale, "baseline_ref": BASELINE_REF}
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="lcp-home-") as home, fixture_settings_home(home):
+        return _main(args, source, report)
+
+
+def _main(args, source: Path, report: dict) -> int:
     try:
         if args.base_repeat:
             report["base"] = run_base(args.real_record, source, args.halted_scale, args.base_repeat)

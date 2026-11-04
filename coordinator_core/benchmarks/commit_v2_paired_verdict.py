@@ -202,6 +202,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     ap.add_argument("--paths-max", type=int, default=2)
     ap.add_argument("--min-rows", type=int, default=5)
     args = ap.parse_args(argv)
+    import tempfile
+
+    from coordinator_core.benchmarks import fixture_settings_home
+
+    with tempfile.TemporaryDirectory(prefix="cv2-verdict-home-") as home, fixture_settings_home(home):
+        return _report(args)
+
+
+def _report(args) -> int:
     since = _parse_since(args.since) if args.since else None
     allpaired, unpaired = _pair(Path(args.repo_root))
     rows = _filter(allpaired, since, args.paths_max)

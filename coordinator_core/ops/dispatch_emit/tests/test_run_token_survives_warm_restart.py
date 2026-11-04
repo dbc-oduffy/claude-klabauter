@@ -45,9 +45,11 @@ def _publish_quiesce(tmp_path, monkeypatch):
     _h._wire_common_fakes(publish_mod, monkeypatch, tmp_path, {"row-a": dest})
     monkeypatch.setattr(er, "is_engine_root", lambda p: True)
     monkeypatch.setattr(publish_mod, "_stale_index_lock", lambda root: None)
+    # A behind destination is the moving root: only it is quiesced across its fast-forward.
     monkeypatch.setattr(
-        dr, "refresh_dest_from_origin", lambda *a, **k: type("R", (), {"ok": True, "reason": ""})()
+        dr, "fetch_dest_upstream", lambda root, **k: dr.RefreshResult(repo_root=root, ok=True, behind=1)
     )
+    monkeypatch.setattr(dr, "fast_forward_dest", lambda result, **k: result)
     stops: list = []
     real_stop = pair_stop.stop_warm_pair
 

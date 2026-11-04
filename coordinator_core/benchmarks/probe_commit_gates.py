@@ -44,7 +44,7 @@ SRC = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(SRC))
 
 from coordinator_core.attribution import is_exempt_path
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks.process_time import LiveTreeAccountant
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.ceremony.commit_gates import (
@@ -295,6 +295,13 @@ def _print_attribution_vacated(results: dict) -> None:
 
 
 def main(n=12):
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="probe-commit-gates-") as parent, fixture_settings_home(parent):
+        return _main(n)
+
+
+def _main(n):
     declare_benchmark_origin()
     root = SRC
     dirty = _dirty_count(root)

@@ -34,3 +34,23 @@ def declare_benchmark_origin() -> None:
     from coordinator_core.telemetry import op_latency
 
     os.environ.setdefault(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
+
+
+def fixture_settings_home(parent):
+    """A context pinning ``COORDINATOR_SETTINGS_HOME`` to ``<parent>/settings-home``; restored on exit.
+
+    Trap: run tokens and the live-run index resolve under the settings home, never the
+    fixture repo, so a script-mode benchmark that mints without this writes into the
+    operator's REAL machine-local store, which every live engine scan reads (2026-11-04:
+    56 leaked fixture homes, 28k tokens, hook round-trips 3.3s). pytest runs are already
+    quarantined by ``conftest._quarantine_real_home``; a script run has no such harness.
+
+    ``parent`` must outlive every process that reads the fixture (a ``--build-only`` then
+    ``--prebuilt`` pair resolves the same ``parent``), and must not be inside a fixture repo.
+    Gate: ``tests/test_benchmark_mints_scope_settings_home.py``.
+    """
+    import os
+    from pathlib import Path
+    from unittest import mock
+
+    return mock.patch.dict(os.environ, {"COORDINATOR_SETTINGS_HOME": str(Path(parent).resolve() / "settings-home")})

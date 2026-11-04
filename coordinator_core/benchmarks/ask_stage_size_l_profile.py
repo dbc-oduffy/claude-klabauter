@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
@@ -182,15 +182,18 @@ def main() -> None:
     ap.add_argument("--handler", action="store_true")
     ap.add_argument("--plan", default=None)
     args = ap.parse_args()
-    result = profile(
-        args.rows,
-        args.tokens,
-        args.top,
-        dirty=args.dirty,
-        session_id=args.session_id,
-        handler=args.handler,
-        plan=args.plan,
-    )
+    from coordinator_core.temp_layout import managed_tempdir
+
+    with tempfile.TemporaryDirectory(prefix="ask-stage-home-", dir=managed_tempdir()) as home, fixture_settings_home(home):
+        result = profile(
+            args.rows,
+            args.tokens,
+            args.top,
+            dirty=args.dirty,
+            session_id=args.session_id,
+            handler=args.handler,
+            plan=args.plan,
+        )
     top = result.pop("top")
     for key, value in result.items():
         print(f"{key}: {value}")

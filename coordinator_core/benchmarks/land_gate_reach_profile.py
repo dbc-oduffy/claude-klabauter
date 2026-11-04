@@ -34,7 +34,7 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import fresh_git_clone  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
 from coordinator_core.benchmarks.land_run_leg_budget_profile import Profiler  # noqa: E402
@@ -357,7 +357,8 @@ def main(argv: list) -> int:
     args = ap.parse_args(argv)
     workdir = Path(tempfile.mkdtemp(prefix="lgrp-", dir=args.dir))
     try:
-        rows = run(Path(args.source_repo), workdir, tuple(args.overlay))
+        with fixture_settings_home(workdir):
+            rows = run(Path(args.source_repo), workdir, tuple(args.overlay))
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     print(json.dumps([asdict(r) for r in rows], indent=1) if args.json else render(rows, args.bar_ms))

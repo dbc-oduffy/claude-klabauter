@@ -476,29 +476,57 @@ def _refuse_additions(
     plain = [p for p in outside if p not in row_paths]
     if plain and not _widen_footprint(root, run, run_id, plain, "add_paths: " + ", ".join(plain), outcome):
         raise LedgerRefused(_addition_route(run_id, plain))
-    planned: list[tuple[list[str], tuple[str, list]]] = []
-    unstamped: set[str] = set()
-    for row_id in dict.fromkeys(w["row"] for w in row_widens):
-        row_wanted = [w["path"] for w in row_widens if w["row"] == row_id]
-        stamp = _stamp_for_row_writes(root, run, row_id, row_wanted)
-        if stamp is None:
-            unstamped.update(row_wanted)
-        elif stamp[1]:
-            planned.append((row_wanted, stamp))
+    wanted_by_row: dict[str, list[str]] = {}
+    for w in row_widens:
+        wanted_by_row.setdefault(w["row"], []).append(w["path"])
+    stamp = _stamp_for_rows(root, run, wanted_by_row) if wanted_by_row else None
+    unstamped = {p for r in (stamp[2] if stamp else wanted_by_row) for p in wanted_by_row[r]}
     fallback = [p for p in outside if p in unstamped]
     if fallback and not _widen_footprint(root, run, run_id, fallback, "add_paths: " + ", ".join(fallback), outcome):
         raise LedgerRefused(_addition_route(run_id, fallback))
-    for row_wanted, stamp in planned:
-        if not _apply_row_writes(root, stamp):
-            late = [p for p in outside if p in row_wanted]
-            if late and not _widen_footprint(root, run, run_id, late, "add_paths: " + ", ".join(late), outcome):
-                raise LedgerRefused(_addition_route(run_id, late))
+    if stamp is not None and stamp[1] and not _apply_row_writes(root, (stamp[0], stamp[1])):
+        stamped = {p for u in stamp[1] for p in wanted_by_row[u["id"]]}
+        late = [p for p in outside if p in stamped]
+        if late and not _widen_footprint(root, run, run_id, late, "add_paths: " + ", ".join(late), outcome):
+            raise LedgerRefused(_addition_route(run_id, late))
     if row_widens:
         from coordinator_core.ops.dispatch_emit import in_run_widen
 
         recorded = in_run_widen.record_widens(dir_, row_widens)
         if outcome is not None and recorded:
             outcome["widened"] = outcome.get("widened", 0) + recorded
+
+
+def _stamp_widened_rows(
+    root: Path, dir_: Path, run_id: str, run: Optional[Mapping], widened: Sequence, outcome: Optional[dict],
+) -> None:
+    """Appends each well-formed `widened` `{row, path}` to that plan row's `writes`, so the refire's leg
+    footprint covers a halt's proposed path. A row the plan lacks (or whose `writes` is unknown) falls back
+    to `_widen_footprint` for the paths the footprint does not cover. Never raises: the handler's
+    `record_widens` still records the item."""
+    from coordinator_core.ops.dispatch_emit import in_run_widen
+
+    entries = in_run_widen.well_formed_widens(list(widened))
+    sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
+    wanted_by_row: dict[str, list[str]] = {}
+    for e in entries:
+        row_paths = wanted_by_row.setdefault(e["row"], [])
+        if e["path"] not in row_paths:
+            row_paths.append(e["path"])
+    if not wanted_by_row:
+        return
+    stamp = _stamp_for_rows(root, run, wanted_by_row)
+    pending = set(wanted_by_row) if stamp is None else set(stamp[2])
+    if stamp is not None and stamp[1] and not _apply_row_writes(root, (stamp[0], stamp[1])):
+        pending.update(u["id"] for u in stamp[1])
+    wanted = list(dict.fromkeys(p for r in wanted_by_row if r in pending for p in wanted_by_row[r]))
+    if not wanted:
+        return
+    footprint = run_footprint(root, dir_, sizing_rel)
+    files, dirs = footprint if footprint is not None else (_sizing_writes(root, sizing_rel), [])
+    uncovered = [p for p in wanted if p not in files and not any(p.startswith(d + "/") for d in dirs)]
+    if uncovered:
+        _widen_footprint(root, run, run_id, uncovered, "widened: " + ", ".join(uncovered), outcome)
 
 
 def paths_outside_footprint(
@@ -538,13 +566,13 @@ def _note_uncovered_paths(root: Path, dir_: Path, run: Mapping, note: str) -> li
     return paths_outside_footprint(root, dir_, sizing_rel, wanted)
 
 
-def _stamp_for_row_writes(
-    root: Path, run: Optional[Mapping], row_id: str, paths: Sequence[str]
-) -> Optional[tuple[str, list]]:
-    """Reads, never writes, what appending `paths` to row `row_id`'s `writes` takes in the plan the run's
-    sizing names: `(plan_rel, updates)` for `_apply_row_writes` (`updates` empty when every path is
-    already there); None when the sizing names no readable plan or the plan has no such row or declares
-    its `writes` unknown, so the caller falls back to `_widen_footprint`."""
+def _stamp_for_rows(
+    root: Path, run: Optional[Mapping], wanted_by_row: Mapping[str, Sequence[str]]
+) -> Optional[tuple[str, list, list[str]]]:
+    """Reads, never writes, what appending each row's paths to its `writes` takes in the plan the run's
+    sizing names, in one plan read: `(plan_rel, updates, missing)` for `_apply_row_writes` (`updates`
+    holds only rows that gain a path; `missing` the row ids the plan lacks or whose `writes` is unknown,
+    so the caller falls back to `_widen_footprint`); None when the sizing names no readable plan."""
     sizing_rel = run.get("sizing_rel") if run is not None and isinstance(run.get("sizing_rel"), str) else None
     plan_rel, plan, _ = _sizing_plan(root, sizing_rel)
     if plan_rel is None or plan is None:
@@ -558,17 +586,24 @@ def _stamp_for_row_writes(
         rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
     except (OSError, yaml.YAMLError):
         return None
-    row = next((r for r in rows if isinstance(r, dict) and r.get("id") == row_id), None) if isinstance(rows, list) else None
-    if row is None or not isinstance(row.get("writes"), list):
-        return None
-    have = [w for w in row["writes"] if isinstance(w, str)]
-    seen = {w.replace("\\", "/") for w in have}
-    added = [p for p in dict.fromkeys(paths) if p not in seen]
-    return plan_rel, ([{"id": row_id, "writes": [*have, *added]}] if added else [])
+    by_id = {r.get("id"): r for r in rows if isinstance(r, dict)} if isinstance(rows, list) else {}
+    updates: list[dict] = []
+    missing: list[str] = []
+    for row_id, paths in wanted_by_row.items():
+        row = by_id.get(row_id)
+        if row is None or not isinstance(row.get("writes"), list):
+            missing.append(row_id)
+            continue
+        have = [w for w in row["writes"] if isinstance(w, str)]
+        seen = {w.replace("\\", "/") for w in have}
+        added = [p for p in dict.fromkeys(paths) if p not in seen]
+        if added:
+            updates.append({"id": row_id, "writes": [*have, *added]})
+    return plan_rel, updates, missing
 
 
 def _apply_row_writes(root: Path, stamp: tuple[str, list]) -> bool:
-    """Stamps a `_stamp_for_row_writes` result through `plan.tasks.mutate`; False when the stamp is refused."""
+    """Stamps a `_stamp_for_rows` `(plan_rel, updates)` through `plan.tasks.mutate`; False when the stamp is refused."""
     from coordinator_core.ops import plan_tasks_mutate
 
     return bool(plan_tasks_mutate._stamp(stamp[0], stamp[1], root, root).get("applied"))
@@ -1463,6 +1498,8 @@ def revise(
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
     _refuse_additions(root, dir_, run_id, run, add_paths, outcome)
+    if widened and run is not None:
+        _stamp_widened_rows(root, dir_, run_id, run, widened, outcome)
     if run is None:
         from coordinator_core.ops.dispatch_emit import pipeline_run
         from coordinator_core.ops.dispatch_emit.pipeline_contract import RUN_ID_PREFIX

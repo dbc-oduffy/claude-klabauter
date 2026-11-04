@@ -83,56 +83,13 @@ def _repo(tmp_path, packs=0, fresh_liveness=True):
     return repo, common
 
 
-@pytest.fixture
-def spawns(monkeypatch):
-    from coordinator_core.ops.ceremony import detached_spawn
-
-    calls = []
-    monkeypatch.setattr(
-        detached_spawn, "spawn_detached", lambda *a, **k: calls.append((a, k)) or True
-    )
-    return calls
-
-
-def test_commit_route_trigger_reads_no_store(tmp_path, spawns, monkeypatch):
-    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
-    scans = []
-
-    def tripwire(*a, **k):
-        scans.append(a)
-        raise AssertionError("store read on the commit route")
-
-    with monkeypatch.context() as m:
-        m.setattr(sh, "status", tripwire)
-        m.setattr(sh, "_owes_maintenance", tripwire)
-        m.setattr(os, "scandir", tripwire)
-        first = sh.maybe_refresh(repo, common)
-        second = sh.maybe_refresh(repo, common)
-    assert (first, second) == (True, False)
-    assert scans == [] and len(spawns) == 1
-
-
-def test_young_claim_refuses_without_firing(tmp_path, spawns):
-    repo, common = _repo(tmp_path, packs=3)
-    claim = common / "coordinator" / "store-hygiene.claim"
-    claim.parent.mkdir(parents=True, exist_ok=True)
-    claim.write_bytes(b"")
-    assert sh.maybe_refresh(repo, common) is False
-    assert spawns == []
+def test_no_commit_route_launcher_remains():
+    assert not hasattr(sh, "maybe_refresh") and not hasattr(sh, "_fire_daily")
 
 
 def test_healthy_store_owes_nothing(tmp_path):
     repo, common = _repo(tmp_path, packs=3)
     assert sh._owes_maintenance(repo, common) is False
-
-
-def test_midx_lag_fires_once_per_claim_interval(tmp_path, spawns):
-    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
-    _midx(common / "objects" / "pack", 1)
-    assert sh.maybe_refresh(repo, common) is True
-    assert sh.maybe_refresh(repo, common) is False
-    assert len(spawns) == 1
-    assert spawns[0][0][2] == ["--repo", str(repo), "--daily"]
 
 
 def test_midx_lag_is_owed(tmp_path):
@@ -194,41 +151,36 @@ def test_box_busy_reads_cpu_load(monkeypatch):
     assert sh._box_busy() is False
 
 
-def test_old_claim_is_reclaimed_and_young_claim_refuses(tmp_path, spawns):
-    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
-    _midx(common / "objects" / "pack", 1)
-    assert sh.maybe_refresh(repo, common) is True
+def test_old_claim_is_reclaimed_and_young_claim_refuses(tmp_path):
+    repo, common = _repo(tmp_path, packs=3)
+    assert sh._claim(common) is True
     claim = common / "coordinator" / "store-hygiene.claim"
     old = time.time() - sh.CLAIM_INTERVAL_S - 5
     os.utime(claim, (old, old))
-    assert sh.maybe_refresh(repo, common) is True
-    assert sh.maybe_refresh(repo, common) is False
-    assert len(spawns) == 2
+    assert sh._claim(common) is True
+    assert sh._claim(common) is False
 
 
-def test_concurrent_calls_produce_one_firing(tmp_path, spawns):
-    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
-    _midx(common / "objects" / "pack", 1)
+def test_concurrent_claims_produce_one_winner(tmp_path):
+    repo, common = _repo(tmp_path, packs=3)
     barrier = threading.Barrier(8)
+    wins = []
 
     def go():
         barrier.wait()
-        sh.maybe_refresh(repo, common)
+        wins.append(sh._claim(common))
 
     threads = [threading.Thread(target=go) for _ in range(8)]
     [t.start() for t in threads]
     [t.join() for t in threads]
-    assert len(spawns) == 1
+    assert wins.count(True) == 1
 
 
-def test_declined_spawn_releases_the_claim(tmp_path, monkeypatch):
-    from coordinator_core.ops.ceremony import detached_spawn
-
-    monkeypatch.setattr(detached_spawn, "spawn_detached", lambda *a, **k: False)
-    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
-    _midx(common / "objects" / "pack", 1)
-    assert sh.maybe_refresh(repo, common) is False
-    assert not (common / "coordinator" / "store-hygiene.claim").exists()
+def test_release_claim_lets_the_next_claim_win(tmp_path):
+    repo, common = _repo(tmp_path, packs=3)
+    assert sh._claim(common) is True
+    sh._release_claim(common)
+    assert sh._claim(common) is True
 
 
 def _git_fixture(tmp_path, n, real_git=False):
@@ -363,16 +315,3 @@ def test_ran_tier_keeps_the_claim(tmp_path, monkeypatch):
     monkeypatch.setattr(sh, "_box_busy", lambda: False)
     assert sh._run_daily(repo) == 0
     assert claim.exists()
-
-
-def test_spawn_exception_never_raises(tmp_path, monkeypatch):
-    from coordinator_core.ops.ceremony import detached_spawn
-
-    def boom(*a, **k):
-        raise RuntimeError("no")
-
-    monkeypatch.setattr(detached_spawn, "spawn_detached", boom)
-    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
-    _midx(common / "objects" / "pack", 1)
-    assert sh.maybe_refresh(repo, common) is False
-    assert "CHILD FAILED" in (repo / "state" / "housekeeping-failures.log").read_text()

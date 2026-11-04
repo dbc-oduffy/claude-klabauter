@@ -94,3 +94,17 @@ def test_rows_over_small_fixture(tmp_path: Path, monkeypatch) -> None:
     whole = by_axis[lb.WHOLE_OP]
     assert whole.spine_parses >= holds.spine_parses
     assert whole.attribution["sizing_parses"] >= siblings and whole.attribution["plan_parses"] >= siblings
+
+
+def test_script_mode_mints_no_token_into_the_outer_settings_home(tmp_path: Path, monkeypatch, capsys) -> None:
+    """The fixture's sibling tokens land in the run's own settings home under the workdir;
+    before, 56 script runs left 28000 tokens in the real machine-local engine-records store."""
+    _bind_env(monkeypatch)
+    outer = tmp_path / "outer-home"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(outer))
+    work = tmp_path / "work"
+    work.mkdir()
+    lb.main(["--siblings", "2", "--tracked", "20", "--chain", "3", "--json", "--dir", str(work)])
+    capsys.readouterr()
+    assert not list(outer.rglob("*.json"))
+    assert lb.os.environ["COORDINATOR_SETTINGS_HOME"] == str(outer)

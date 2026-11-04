@@ -228,14 +228,31 @@ def _unlink_both(repo_root: Path, run_id: str, **kind: bool) -> None:
     _drop_legacy(repo_root, run_id, **kind)
 
 
-def _bounded_glob(directory: Path, deadline_ms: float) -> list[Path]:
-    """`directory`'s `*.json`, [] when the listing outlives `deadline_ms` or fails."""
+def _bounded_glob(directory: Path, deadline_ms: float, *, reap: bool = False) -> list[Path]:
+    """`directory`'s `*.json` modified inside one `TTL_SECONDS`, [] when the listing outlives
+    `deadline_ms` or fails. An older legacy file holds an expired token: reading it (one bounded
+    thread per file) cost every landing and hook ~2s CPU over ~300 dead records. `reap` deletes
+    those expired files in the same pass, so the legacy dir drains instead of being statted forever;
+    only the unclaimed dir reaps (a claimed record's expiry is `_claim_expirable`'s call)."""
     box: list[list[Path]] = []
     done = threading.Event()
 
     def work() -> None:
         try:
-            box.append(sorted(directory.glob("*.json")))
+            cutoff = time.time() - TTL_SECONDS
+            kept: list[Path] = []
+            with os.scandir(directory) as it:
+                for entry in it:
+                    if not entry.name.endswith(".json"):
+                        continue
+                    if entry.stat().st_mtime >= cutoff:
+                        kept.append(Path(entry.path))
+                    elif reap:
+                        try:
+                            os.unlink(entry.path)
+                        except OSError:
+                            pass
+            box.append(sorted(kept))
         except OSError:
             box.append([])
         finally:
@@ -715,7 +732,7 @@ def _listed(repo_root: Path, *, claimed: bool) -> list[dict]:
     seen = {p.stem for p in new_paths}
     common = legacy_record_dir(repo_root)
     if common is not None:
-        for path in _bounded_glob((common / _DIR).joinpath(*sub), LEGACY_READ_DEADLINE_MS):
+        for path in _bounded_glob((common / _DIR).joinpath(*sub), LEGACY_READ_DEADLINE_MS, reap=not claimed):
             if path.stem not in seen:
                 legacy = _read_legacy(repo_root, path.stem, claimed=claimed)
                 if legacy is not None:

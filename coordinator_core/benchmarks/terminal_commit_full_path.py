@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.win_portability import no_console_creationflags
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
 PLAN_ID = "pln-x-123456"
@@ -674,15 +674,18 @@ def _teardown_fixture(repo: Path) -> None:
 
 def main(argv: list[str]) -> int:
     """Run the driver; a fixture this call builds itself (not `--build-only`, not `--prebuilt`) is removed in a finally."""
+    import contextlib
+
     owned: list[Path] = []
-    try:
-        return _main(argv, owned)
-    finally:
-        for repo in owned:
-            _teardown_fixture(repo)
+    with contextlib.ExitStack() as scope:
+        try:
+            return _main(argv, owned, scope)
+        finally:
+            for repo in owned:
+                _teardown_fixture(repo)
 
 
-def _main(argv: list[str], owned: list[Path]) -> int:
+def _main(argv: list[str], owned: list[Path], scope) -> int:
     declare_benchmark_origin()
     argv = list(argv)
     kind = "plan"
@@ -721,6 +724,8 @@ def _main(argv: list[str], owned: list[Path]) -> int:
             file=sys.stderr,
         )
         return 2
+    if prebuilt is None:
+        scope.enter_context(fixture_settings_home(Path(args[0])))
     if build_only:
         return _build_only(Path(args[0]), kind)
     token: Optional[str] = None
@@ -730,6 +735,7 @@ def _main(argv: list[str], owned: list[Path]) -> int:
 
         manifest = json.loads((Path(prebuilt) / PREBUILT_MANIFEST).read_text(encoding="utf-8"))
         repo, script, token = Path(manifest["repo"]), manifest["script"], manifest["run_token"]
+        scope.enter_context(fixture_settings_home(repo.parent))
         kind = manifest.get("kind", "ask")
         real_shape = kind != "reclose"
         if manifest.get("launch"):

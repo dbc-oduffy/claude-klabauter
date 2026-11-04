@@ -148,6 +148,6 @@ def test_agy_two_brain_ids_picks_newest(tmp_path):
     import os
     os.utime(brain / old, (1, 1))
     os.utime(brain / new, (2000, 2000))
-    text = "p100\nfcwd\nn/w\nf5\nn%s/%s\nf6\nn%s/%s\n" % (brain, old, brain, new)
+    text = "p100\nfcwd\nn/w\nf5\nn%s/%s\nf6\nn%s/%s\n" % (brain.as_posix(), old, brain.as_posix(), new)
     out = live.find_live(pid=100, run=Runner(text), home=tmp_path)
     assert out["sessions"][0]["conversation"] == new

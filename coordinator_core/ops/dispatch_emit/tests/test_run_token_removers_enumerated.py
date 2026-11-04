@@ -135,7 +135,9 @@ def test_run_token_own_unlinks_are_the_protocol_functions_only():
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                         and node.func.attr == "unlink"):
                     scopes.add(fn.name)
-    assert scopes == {"mint", "redeem", "sweep_expired_escrows", "_unlink_both", "_drop_legacy"}
+    # `_bounded_glob` (its nested `work`) reaps TTL-expired legacy unclaimed files in its listing pass.
+    assert scopes == {"mint", "redeem", "sweep_expired_escrows", "_unlink_both", "_drop_legacy",
+                      "_bounded_glob", "work"}
 
 
 def test_walk_resolves_aliased_and_from_imports(tmp_path):

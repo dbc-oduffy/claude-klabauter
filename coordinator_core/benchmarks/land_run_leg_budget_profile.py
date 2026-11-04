@@ -67,7 +67,7 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
-from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
 from coordinator_core.benchmarks.land_run_slow_disk_profile import (  # noqa: E402
@@ -843,10 +843,11 @@ def main(argv: list) -> int:
     else:
         workdir = Path(tempfile.mkdtemp(prefix="lrlb-", dir=args.dir))
         try:
-            if args.live_siblings:
-                rows = run_live(workdir, args.live_siblings, siblings, args.tracked, args.chain, args.attribute)
-            else:
-                rows = run(workdir, siblings, args.tracked, args.chain, args.attribute)
+            with fixture_settings_home(workdir):
+                if args.live_siblings:
+                    rows = run_live(workdir, args.live_siblings, siblings, args.tracked, args.chain, args.attribute)
+                else:
+                    rows = run(workdir, siblings, args.tracked, args.chain, args.attribute)
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
     print(json.dumps([asdict(r) for r in rows], indent=1) if args.json else render(rows))

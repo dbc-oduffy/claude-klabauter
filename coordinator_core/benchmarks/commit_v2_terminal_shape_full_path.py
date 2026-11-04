@@ -21,7 +21,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.git.run import run_git
 
 SELF = "tsb-self"
@@ -119,12 +119,13 @@ def main(argv: list[str]) -> int:
     if len(args) != 1 or unknown:
         print("usage: commit_v2_terminal_shape_full_path <dir> [--setup-only]", file=sys.stderr)
         return 2
-    repo, params = build_fixture(Path(args[0]))
-    from coordinator_core.ops.ceremony import commit_v2  # noqa: F401  (loaded in both modes)
+    with fixture_settings_home(Path(args[0])):
+        repo, params = build_fixture(Path(args[0]))
+        from coordinator_core.ops.ceremony import commit_v2  # noqa: F401  (loaded in both modes)
 
-    if "--setup-only" in argv:
-        return 0
-    out = commit_v2._handler(params, repo_root=repo / ".git")
+        if "--setup-only" in argv:
+            return 0
+        out = commit_v2._handler(params, repo_root=repo / ".git")
     if out.get("committed") is not True:
         print(f"terminal-shape commit did not land: {out!r}", file=sys.stderr)
         return 1

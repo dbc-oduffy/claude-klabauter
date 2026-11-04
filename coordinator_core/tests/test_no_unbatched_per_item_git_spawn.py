@@ -771,11 +771,6 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # it re-asks git rather than guess; the batch that just failed cannot answer for one path.
         # Pinned by `test_check_destructive_rm_status_batch.py`.
         ('coordinator_core/bash_guards/_dc_rm.py', 'check_destructive_rm', '_run_git', 0),
-        # 2026-10-07 -- # class: structural-floor. `source_edit_gate._run_groups` runs one test
-        # runner per (runner, root) group and already hands that run every file of its group. N is
-        # the count of distinct test roots one edit touches; pytest and jest, or two roots with
-        # their own config and cwd, cannot share a process, and failure is reported per group.
-        ('coordinator_core/source_edit_gate/gate.py', '_run_groups', 'run_selected', 0),
         # 2026-10-07 -- # class: structural-floor. `command_succeeds_native` walks the `||` sides
         # of ONE manifest probe command, each a different program, returning on the first
         # success. There is no common argv to batch, and running every side in one go does more
@@ -806,6 +801,11 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # the other batched node". No batch primitive can substitute: this is `pytest`, not `git`,
         # and there is no cross-node "run each in its own process but report together" form.
         ("coordinator/bin/stable-suite-run.py", "_triage_isolation", "run", 0),
+        # 2026-11-04 -- # class: structural-floor. `with-suite-mutex::_dump_process_tree` runs
+        # `py-spy dump --pid <pid>` over the child tree before the ceiling kill: py-spy takes one
+        # pid per call, so the spawn is per-pid by nature, and the loop is bounded by
+        # `_DUMP_TOTAL_SECS` (budget check at the loop head).
+        ("coordinator/bin/with-suite-mutex", "_dump_process_tree", "run", 0),
         # 2026-10-08 -- # class: structural-floor. `census-recheck.py::recheck_plan` re-runs each
         # `census[]` row's own independently authored shell `command`: no shared argv across
         # rows to fold.

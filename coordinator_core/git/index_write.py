@@ -218,6 +218,9 @@ def _build_entry(name: bytes, mode: int, sha_hex: str, st: os.stat_result) -> by
     return out + b"\x00" * padding
 
 
+_SINGLE_READ_MAX = 1 << 24  # one read call below this; larger files stream in 1 MiB chunks
+
+
 def _worktree_matches_blob(file: Path, mode: int, sha_hex: str, st: os.stat_result) -> bool:
     """False only when `file` is a regular file whose git blob hash differs from `sha_hex`.
 
@@ -233,9 +236,14 @@ def _worktree_matches_blob(file: Path, mode: int, sha_hex: str, st: os.stat_resu
     seen = 0
     try:
         with open(file, "rb") as fh:
-            while chunk := fh.read(1 << 20):
-                seen += len(chunk)
-                h.update(chunk)
+            if st.st_size <= _SINGLE_READ_MAX:
+                data = fh.read(st.st_size + 1)
+                seen = len(data)
+                h.update(data)
+            else:
+                while chunk := fh.read(1 << 20):
+                    seen += len(chunk)
+                    h.update(chunk)
     except OSError:
         return True
     return seen == st.st_size and h.hexdigest() == sha_hex.lower()

@@ -28,7 +28,7 @@ import sys
 import uuid
 from pathlib import Path
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.git.run import run_git
 
 RUN_ID = "ask-bench"
@@ -216,11 +216,16 @@ def main(argv: list[str]) -> int:
         )
         return 2
     declare_benchmark_origin()
+    with fixture_settings_home(Path(args[0])):
+        return _scoped_main(argv, Path(args[0]))
+
+
+def _scoped_main(argv: list[str], parent: Path) -> int:
     incident = "--incident-shape" in argv
     refire = "--refire-withheld" in argv
     if refire:
-        return _main_refire(Path(args[0]), "--setup-only" in argv)
-    repo = (build_incident_fixture if incident else build_fixture)(Path(args[0]))
+        return _main_refire(parent, "--setup-only" in argv)
+    repo = (build_incident_fixture if incident else build_fixture)(parent)
     from coordinator_core.ops.dispatch_emit import land_run
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 

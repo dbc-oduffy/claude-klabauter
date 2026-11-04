@@ -138,10 +138,10 @@ def record_widen(run_dir: Union[str, Path], row_id: str, path: str) -> None:
         handle.write(json.dumps({"row": row_id, "path": path}, sort_keys=True) + "\n")
 
 
-def record_widens(run_dir: Union[str, Path], items: object) -> int:
-    """Record each well-formed ``{row, path}`` of ``items`` (the run script's widen list) through
-    ``record_widen``; a malformed item or an unsafe path is skipped. Returns the count recorded."""
-    count = 0
+def well_formed_widens(items: object) -> "list[dict]":
+    """The ``{row, path}`` items of ``items`` (the run script's widen list) with a non-empty row id
+    and a safe repo-relative path outside the denied prefixes; every other item is dropped."""
+    out = []
     for item in items if isinstance(items, list) else ():
         row = item.get("row") if isinstance(item, dict) else None
         path = item.get("path") if isinstance(item, dict) else None
@@ -153,9 +153,17 @@ def record_widens(run_dir: Union[str, Path], items: object) -> int:
             and not any(seg in ("", ".", "..") for seg in path.split("/"))
             and not _denied(path, _DEFAULT_DENY_PREFIXES)
         ):
-            record_widen(run_dir, row, path)
-            count += 1
-    return count
+            out.append({"row": row, "path": path})
+    return out
+
+
+def record_widens(run_dir: Union[str, Path], items: object) -> int:
+    """Record each ``well_formed_widens`` item through ``record_widen``; a malformed item or an
+    unsafe path is skipped. Returns the count recorded."""
+    kept = well_formed_widens(items)
+    for item in kept:
+        record_widen(run_dir, item["row"], item["path"])
+    return len(kept)
 
 
 def _records(run_dir: Path) -> "list[dict]":

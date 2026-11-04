@@ -475,23 +475,89 @@ def _run_ended(
     return _EVIDENCE if earlier and (_task_ended(earlier, task_id) or _task_gone(earlier, task_id)) else None
 
 
+#: Per-process memo of `_earlier_lines`, keyed (path, needle): a repeat call reads only the bytes
+#: appended since the last scan. Bounded by key count (oldest evicted) and by matched bytes per key;
+#: the product (16 x 4MiB = 64MiB) is the per-process ceiling in the long-lived engine.
+_EARLIER_MEMO_MAX_KEYS = 16
+_EARLIER_MEMO_MAX_BYTES = 4 * 1024 * 1024
+_EARLIER_PROBE_BYTES = 64
+
+
+class _EarlierMemo:
+    """What one scan of [.., stop) learned. `lines` holds the matching lines that end before `done`
+    (the offset after the last newline at or before `stop`) as (start offset, line); `trailing` is
+    the matching partial line in [done, stop), re-read once the file grows past `stop`. `probe` is
+    the bytes just before `done`: a replaced file whose size still permits reuse fails it."""
+
+    __slots__ = ("done", "stop", "probe", "lines", "trailing")
+
+    def __init__(self, done, stop, probe, lines, trailing) -> None:
+        self.done = done
+        self.stop = stop
+        self.probe = probe
+        self.lines = lines
+        self.trailing = trailing
+
+
+_EARLIER_MEMO: dict[tuple[str, str], _EarlierMemo] = {}
+
+
+def _memo_still_valid(handle, memo: _EarlierMemo, start: int, stop: int) -> bool:
+    """False when the file shrank, the window slid past the memo's scanned bytes, or the bytes
+    before `memo.done` changed (truncation, replacement). Replacement is detected by a short probe
+    only: a rewrite that keeps those bytes and grows reuses the memo."""
+    if stop < memo.stop or memo.done < start:
+        return False
+    if not memo.probe:
+        return memo.done == 0
+    handle.seek(memo.done - len(memo.probe))
+    return handle.read(len(memo.probe)) == memo.probe
+
+
+def _clip_to_window(entries, start: int, key: bytes) -> list[bytes]:
+    """The lines of (offset, line) `entries` as a fresh scan from `start` would see them: a line
+    straddling `start` is cut there and kept only if the cut still holds `key`."""
+    kept: list[bytes] = []
+    for offset, line in entries:
+        if offset < start:
+            line = line[start - offset:]
+            if key not in line:
+                continue
+        kept.append(line)
+    return kept
+
+
 def _earlier_lines(path: str, needle: str) -> str:
     """The lines holding `needle` in the `_TRANSCRIPT_HEAD_BYTES` before the tail window: a run
     that ended in a session that kept going has its launch and terminal notification there.
     Streams the window in `_SCAN_CHUNK_BYTES` reads and keeps only matching lines plus the open
     partial line, so memory is bounded by the chunk and the longest line, never the window (a
     window with no newline at all degrades to holding it, re-copied per chunk); a
-    line straddling the tail boundary is split across both windows and matches neither."""
+    line straddling the tail boundary is split across both windows and matches neither.
+
+    Memoised per (path, needle) in `_EARLIER_MEMO`: a repeat call scans [memo.done, stop) only, and
+    the memo is dropped when the file shrinks or its scanned prefix changes."""
     key = needle.encode("utf-8")
-    lines: list[bytes] = []
+    memo_key = (path, needle)
     try:
         with open(path, "rb") as handle:
             handle.seek(0, os.SEEK_END)
             stop = max(0, handle.tell() - _TRANSCRIPT_TAIL_BYTES)
             start = max(0, stop - _TRANSCRIPT_HEAD_BYTES)
-            handle.seek(start)
-            remaining = stop - start
+            memo = _EARLIER_MEMO.get(memo_key)
+            if memo is not None and not _memo_still_valid(handle, memo, start, stop):
+                memo = None
+            if memo is not None and memo.stop == stop:
+                entries = list(memo.lines)
+                if memo.trailing is not None:
+                    entries.append(memo.trailing)
+                return b"\n".join(_clip_to_window(entries, start, key)).decode("utf-8", errors="replace")
+            found: list[tuple[int, bytes]] = list(memo.lines) if memo is not None else []
+            position = memo.done if memo is not None else start
+            handle.seek(position)
+            remaining = stop - position
             carry = b""
+            carry_offset = position
             while remaining > 0:
                 chunk = handle.read(min(_SCAN_CHUNK_BYTES, remaining))
                 if not chunk:
@@ -499,15 +565,30 @@ def _earlier_lines(path: str, needle: str) -> str:
                 remaining -= len(chunk)
                 data = carry + chunk
                 cut = data.rfind(b"\n") + 1
+                base = carry_offset
                 carry = data[cut:]
-                if cut and data.find(key, 0, cut) != -1:
+                carry_offset = base + cut
+                at = data.find(key, 0, cut) if cut else -1
+                while at != -1:
+                    line_start = data.rfind(b"\n", 0, at) + 1
+                    line_end = data.find(b"\n", at)
                     # rstrip(b"\r"): a CRLF transcript's lines match the LF-split tail's.
-                    lines.extend(ln.rstrip(b"\r") for ln in data[:cut].split(b"\n") if key in ln)
-            if key in carry:
-                lines.append(carry.rstrip(b"\r"))
+                    found.append((base + line_start, data[line_start:line_end].rstrip(b"\r")))
+                    at = data.find(key, line_end + 1, cut)
+            trailing = (carry_offset, carry.rstrip(b"\r")) if key in carry else None
+            probe_from = max(0, carry_offset - min(_EARLIER_PROBE_BYTES, _SCAN_CHUNK_BYTES))
+            handle.seek(probe_from)
+            probe = handle.read(carry_offset - probe_from)
     except OSError:
         return ""
-    return b"\n".join(lines).decode("utf-8", errors="replace")
+    stored = [(o, ln) for o, ln in found if o + len(ln) > start]
+    _EARLIER_MEMO.pop(memo_key, None)
+    if remaining <= 0 and sum(len(ln) for _, ln in stored) <= _EARLIER_MEMO_MAX_BYTES:
+        while len(_EARLIER_MEMO) >= _EARLIER_MEMO_MAX_KEYS:
+            _EARLIER_MEMO.pop(next(iter(_EARLIER_MEMO)), None)
+        _EARLIER_MEMO[memo_key] = _EarlierMemo(carry_offset, stop, probe, stored, trailing)
+    entries = stored + ([trailing] if trailing is not None else [])
+    return b"\n".join(_clip_to_window(entries, start, key)).decode("utf-8", errors="replace")
 
 
 def _task_gone(transcript_tail: str, task_id: str) -> bool:

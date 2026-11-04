@@ -183,6 +183,14 @@
         "value": 0.2
       }
     },
+    "warp_live.live_run_for_session_repeat": {
+      "target_ms": 50,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "Repeat per-hook liveness check on a 64MiB transcript with a live run, measured by coordinator_core/benchmarks/warp_live_earlier_lines_budget.py (measured repeat 0.0ms, cold 62.5ms; target_ms is the cold-scan ceiling); target x (1 + tolerance) stays under the 200ms one-process bar."
+    },
     "cartography.count_references": {
       "target_ms": 106,
       "tolerance": {

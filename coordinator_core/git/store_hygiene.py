@@ -3,13 +3,12 @@ that decide when the engine owes the store maintenance.
 
 `status` answers three questions from a few syscalls: how many packs exist, how many of
 them the multi-pack-index covers, and roughly how many loose objects pile up. Callers
-in the detached daily child compare it to the `STALE_*` slacks; they never run git here.
-The commit route (`maybe_refresh`) calls neither `status` nor any directory scan.
+in the daily child (`--daily`, run by hand; no op launches it) compare it to the `STALE_*`
+slacks; they never run git here.
 
 Invariants:
   - `status` spawns nothing and imports nothing from the ops surface (cold-start budget);
-    only `maybe_refresh` imports ops modules, lazily, and spawns only through
-    `detached_spawn.spawn_detached`.
+    the daily child imports ops modules lazily.
   - `midx_pack_count` is None for no MIDX, a torn header, or an unreadable file; a
     caller treats None as "uncovered", never as an error.
   - `loose_estimate` is `entries in ONE sampled fan-out dir * 256`: coarse (multiples of
@@ -31,7 +30,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 STALE_PACK_SLACK = 32
 #: Estimated loose objects past which the daily tier owes a loose-packing leg.
 STALE_LOOSE_SLACK = 512
-#: Minimum seconds between claims of the daily tier by commit-route triggers.
+#: Minimum seconds between claims of the daily tier.
 CLAIM_INTERVAL_S = 3600
 #: Packs under this size are engine per-batch packs (1.7KB up to hundreds of KB); git's own
 #: packs are larger and left to `incremental-repack`.
@@ -167,13 +166,6 @@ def _release_claim(common_dir: Path) -> None:
         pass
 
 
-def _fire_daily(repo_root: Path) -> bool:
-    from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
-
-    engine = Path(__file__).resolve().parents[2]
-    return spawn_detached(str(engine), __file__, ["--repo", str(repo_root), "--daily"])
-
-
 def _box_busy() -> bool:
     """True when the 1-minute CPU load is at or past BUSY_CPU_LOAD. An unreadable load is
     not busy. Child-only: the Windows read may sleep a sampling gap."""
@@ -184,27 +176,6 @@ def _box_busy() -> bool:
     except Exception:  # noqa: BLE001 -- an unreadable load must not block maintenance
         return False
     return load is not None and load >= BUSY_CPU_LOAD
-
-
-def maybe_refresh(repo_root, common_dir) -> bool:
-    """Commit-route trigger: when no claim is live, fire the detached daily child, which
-    decides whether anything is owed. The only store access here is the claim file's
-    stat/create; it reads no pack directory, fan-out or liveness stamp.
-    True only when this call fired it. Never raises."""
-    try:
-        repo_root, common_dir = Path(repo_root), Path(common_dir)
-        if not _claim(common_dir):
-            return False
-        fired = False
-        try:
-            fired = bool(_fire_daily(repo_root))
-        finally:
-            if not fired:
-                _release_claim(common_dir)
-        return fired
-    except Exception as exc:  # noqa: BLE001 -- must never fail a landed commit
-        _record_failure(Path(repo_root), exc)
-        return False
 
 
 def _small_packs(pack_dir: Path) -> list[tuple[Path, Path]]:

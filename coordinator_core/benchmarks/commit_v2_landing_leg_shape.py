@@ -29,7 +29,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter
 from coordinator_core.git.run import run_git
 
@@ -273,8 +273,9 @@ def main(argv: list[str]) -> int:
         print("usage: commit_v2_landing_leg_shape <dir>", file=sys.stderr)
         return 2
     bind_session_env()
-    repo = build_fixture(Path(argv[0]))
-    report = run_leg(repo)
+    with fixture_settings_home(Path(argv[0])):
+        repo = build_fixture(Path(argv[0]))
+        report = run_leg(repo)
     print(json.dumps({
         "calls": [{**asdict(c), "paths": len(c.paths)} for c in report.calls],
         "process_time_ms": report.process_time_ms,

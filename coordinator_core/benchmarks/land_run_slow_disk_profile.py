@@ -58,7 +58,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from coordinator_core import locked_write  # noqa: E402
-from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import fresh_git_clone  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
@@ -746,14 +746,15 @@ def main(argv: list) -> int:
     args = ap.parse_args(argv)
     workdir = Path(tempfile.mkdtemp(prefix="lrsd-", dir=args.dir))
     try:
-        if args.op_latency_wedged:
-            rows = [run_op_latency_wedged(workdir, args.attribute)]
-        elif args.conditions == "idle-wait":
-            rows = run_idle_wait(workdir, args.tracked, args.chain, args.attribute)
-        else:
-            rows = run_axes(
-                workdir, args.delay_s, args.op_latency_ms / 1000.0, args.tracked, args.chain, args.attribute
-            )
+        with fixture_settings_home(workdir):
+            if args.op_latency_wedged:
+                rows = [run_op_latency_wedged(workdir, args.attribute)]
+            elif args.conditions == "idle-wait":
+                rows = run_idle_wait(workdir, args.tracked, args.chain, args.attribute)
+            else:
+                rows = run_axes(
+                    workdir, args.delay_s, args.op_latency_ms / 1000.0, args.tracked, args.chain, args.attribute
+                )
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
     if args.json:

@@ -29,7 +29,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks import terminal_commit_full_path as base
 from coordinator_core.git.run import run_git
 
@@ -360,7 +360,12 @@ def main(argv: list[str]) -> int:
     if len(args) != 1 or unknown or ("--setup-only" in argv and "--phases" in argv):
         print("usage: terminal_commit_real_session_shape <dir> [--setup-only | --phases]", file=sys.stderr)
         return 2
-    repo, params = build_fixture(Path(args[0]))
+    with fixture_settings_home(Path(args[0])):
+        return _run(argv, Path(args[0]))
+
+
+def _run(argv: list[str], parent: Path) -> int:
+    repo, params = build_fixture(parent)
     from coordinator_core.ops.dispatch_emit import terminal_commit  # noqa: F401  (loaded in both modes)
 
     stub_close_job(repo)

@@ -1486,9 +1486,13 @@ def stage(
     if session_id:
         # Confined reviewers' Edits are admitted only for review-targets.txt
         # paths; the plan route registers them at compose time, the ask route
-        # only learns them here.
+        # only learns them here. The staged plan is admitted too: reviewers are
+        # solicited to edit it, yet `_reviewable` drops plan paths.
+        admitted = list(manifest.review_declared_paths)
+        if plan_rel and plan_posix not in admitted:
+            admitted.append(plan_posix)
         try:
-            targets_add(root, session_id, list(manifest.review_declared_paths))
+            targets_add(root, session_id, admitted)
         except LedgerError:
             pass
     return manifest

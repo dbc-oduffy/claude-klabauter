@@ -82,11 +82,10 @@ from coordinator_core.git import index_write
 from coordinator_core.git.git_dir import resolve_git_dir, resolve_git_common_dir
 from coordinator_core.git.machine_local_paths import machine_local_refusal
 from coordinator_core.git.path_canon import first_non_canonical_path_refusal
-from coordinator_core.git import checkin_attrs
+from coordinator_core.git import call_io_scope, checkin_attrs
 from coordinator_core.git.content_hash import (
     eol_folded_sha256,
     _autocrlf_checkin_normalize,
-    _clean_filter_may_apply,
     _repo_autocrlf_true,
     _text_attribute_pinned,
 )
@@ -417,9 +416,10 @@ def _text_pin_checkin(root: Path, rel: str, data: bytes) -> Optional[bytes]:
     if _auto_looks_binary(data):
         return data
     try:
-        entry = read_index(root).get(rel)
+        entry = call_io_scope.memo("pin-index", str(root), lambda: read_index(root)).get(rel)
         if entry is not None:
-            obj = read_object(resolve_git_common_dir(root), entry.sha)
+            common = call_io_scope.memo("pin-common-dir", str(root), lambda: resolve_git_common_dir(root))
+            obj = read_object(common, entry.sha)
             if obj is None:
                 return None
             if b"\r" in obj[1]:
@@ -453,7 +453,7 @@ def _checkin_bytes(
     pins `*.cmd`, `*.ps1`, `*.sh`, `*.diff`, `*.patch` and `**/_goldens/**`,
     so these are reachable on ordinary commits here, not hypothetical.
     """
-    lfs = _clean_filter_may_apply(root, rel)
+    lfs = checkin_attrs.clean_filter_may_apply(root, rel)
     if lfs is not None:
         raise FilterUnsupported(
             f"{rel}: {lfs} -- this path's blob is produced by a clean filter "
@@ -1600,8 +1600,9 @@ def commit_paths(
     prefer_staged_set = {p.replace("\\", "/") for p in prefer_staged}
     delete_set = set(delete_list)
     untrack_set = set(untrack_list)
-    # One index parse for the whole pass: `_text_pin_checkin` reads the index per CR-bearing path.
-    with index_read_cache_scope():
+    # One index parse and one read per attribute/config file for the whole pass: the check-in
+    # resolvers run per path and would otherwise re-open the same files for each.
+    with index_read_cache_scope(), call_io_scope.call_io_scope():
       for p in path_list:
         if p in delete_set or p in untrack_set:
             # DECLARED DELETION WINS over the content read, and it has to win
@@ -2023,13 +2024,6 @@ def commit_paths(
         # An OSError here (peer-held file on Windows) propagates after the commit landed.
         merge_state.clear_merge_state(gitdir)
 
-    try:
-        from coordinator_core.git import store_hygiene
-
-        store_hygiene.maybe_refresh(repo, resolve_git_common_dir(repo))
-    except Exception:  # noqa: BLE001 -- a landed commit never fails on store hygiene
-        pass
-
     # The index is published only after the ref moved (an index matching a commit that never
     # landed is a lie), so a publish failure here is a landed commit with a stale index: reported
     # as `IndexStaleAfterCommit` -- callers must not retry -- never rolled back.
@@ -2353,7 +2347,7 @@ def refresh_stat_in_process(repo: Union[str, Path], paths: Sequence[str]) -> Tup
             and st.st_mtime_ns % 1_000_000_000 == entry.mtime_nsec
         ):
             continue
-        if not target.is_file() or _clean_filter_may_apply(root, p) is not None:
+        if not target.is_file() or checkin_attrs.clean_filter_may_apply(root, p) is not None:
             continue
         try:
             data = target.read_bytes()
