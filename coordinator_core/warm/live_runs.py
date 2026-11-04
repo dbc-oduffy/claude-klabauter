@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -72,6 +73,24 @@ def _stage_records(warp_dir: Path) -> list[Path]:
     except FileNotFoundError:
         return []
     return [Path(e.path) / "run-stage.json" for e in entries]
+
+
+_WARP_DIR_RE = re.compile(r"^warp-(?P<stem>.+)-(?P<ts>\d{8}T\d{6})-[0-9a-f]{6}$")
+
+
+def _superseded(rec: Path, data: dict, warp_starts: Mapping[str, list[tuple[str, str]]]) -> bool:
+    """True when a later warp run of this run's sizing exists: an ask's minted marker once its warp run
+    started, or a run a refire replaced. That later run's own record decides whether the work is live.
+    Names come from the scandir already taken; only this run's run.json is read."""
+    try:
+        sizing = json.loads((rec.parent / "run.json").read_text(encoding="utf-8")).get("sizing_rel")
+    except (OSError, ValueError, AttributeError):
+        return False
+    started = _parse_ts(data.get("started_at"))
+    if not isinstance(sizing, str) or not sizing or started is None:
+        return False
+    mine = started.strftime("%Y%m%dT%H%M%S")
+    return any(ts > mine and name != rec.parent.name for ts, name in warp_starts.get(Path(sizing).stem, ()))
 
 
 def _owner_live(session_id: object, memo: Optional[dict] = None) -> bool:
@@ -239,12 +258,14 @@ def find_live_runs(
     now: Optional[datetime] = None,
     window: timedelta = FRESHNESS_WINDOW,
     require_token: bool = True,
+    skip_superseded: bool = False,
 ) -> list[LiveRun]:
     """Return runs `run_is_live` accepts: not halted/complete, owner session live, own stage activity inside the window, run token held.
 
-    `require_token=False` is the `run_stage_live` bar: a staged run between ops holds no token and
-    still counts. `repos` maps registry key to repo root (default: the registry). Unreadable repos
-    or records are skipped. Result is sorted by repo then run_id.
+    `require_token=False` is the `run_stage_live` bar: stage, owner and freshness only.
+    `skip_superseded` drops a run whose sizing has a later warp run (`_superseded`). `repos` maps
+    registry key to repo root (default: the registry). Unreadable repos or records are skipped.
+    Result is sorted by repo then run_id.
     """
     if repos is None:
         repos = _registered_repos()
@@ -262,6 +283,12 @@ def find_live_runs(
         except OSError:
             continue
         name = key[len("repos."):] if key.startswith("repos.") else key
+        warp_starts: dict = {}
+        if skip_superseded:
+            for rec in records:
+                m = _WARP_DIR_RE.match(rec.parent.name)
+                if m:
+                    warp_starts.setdefault(m["stem"], []).append((m["ts"], rec.parent.name))
         for rec in records:
             data = _read_stage(rec)
             if data is None:
@@ -270,7 +297,7 @@ def find_live_runs(
                 data, cutoff, owner_memo, repo_root=Path(root), run_id=rec.parent.name,
                 require_token=require_token,
             )
-            if stage is None:
+            if stage is None or (skip_superseded and _superseded(rec, data, warp_starts)):
                 continue
             found.append(LiveRun(name, rec.parent.name, stage, str(data.get("last_activity_at") or "")))
     found.sort(key=lambda r: (r.repo, r.run_id))
@@ -297,7 +324,12 @@ def hold_for_mid_stage_runs(
     sleep: Callable[[float], None] = time.sleep,
     monotonic: Callable[[], float] = time.monotonic,
 ) -> tuple[list[LiveRun], float]:
-    """Wait up to `bound_s` for every registered repo's mid-stage runs (own included, token or not) to end.
+    """Wait up to `bound_s` for every registered repo's mid-stage runs (own included) to end.
+
+    A run holds the handover only with a held run token and no later warp run of its sizing: every
+    engine run mints one at emit and keeps it until its terminal commit, so a tokenless non-terminal
+    stage is a halted, refired or hand-landed predecessor (2026-11-04: staged/"resumed" phantoms
+    refused two publishes for their whole 30-minute freshness window).
 
     Returns (runs still mid-stage, seconds held): the runs empty means the handover may stop the
     server; non-empty means the bound lapsed and the caller refuses with `format_refusal`. Reads
@@ -307,7 +339,7 @@ def hold_for_mid_stage_runs(
     poll = HOLD_POLL_S if poll_s is None else poll_s
     start = monotonic()
     while True:
-        runs = find_live_runs(require_token=False)
+        runs = find_live_runs(require_token=True, skip_superseded=True)
         held = monotonic() - start
         if not runs or held >= bound:
             return runs, held

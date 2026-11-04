@@ -527,7 +527,22 @@ def _caller_budget_s() -> float:
 _ANSWER_SHARE = 0.85
 _SCAN_GRACE_S = 0.8
 _EMIT_FLOOR_S = 0.25
-_CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted", "gate", "gates", "answered"}
+_CALL: "contextvars.ContextVar[Optional[dict]]" = contextvars.ContextVar("submit_call", default=None)  # {"t0", "wall0", "roots", "minted", "gate", "gates", "answered", "session"}
+
+
+def _owned(call: Optional[dict], root: Path, ids: Sequence[str], session: Optional[str] = None) -> list:
+    """The `ids` this call may name as its own: those it reported minting, plus those whose run-token record
+    names its session (`session`, else the call's). Trap: every session on the box mints under the same `state/warp`, so a run that
+    appeared in the window is a peer's until its record says otherwise; naming one starts it here."""
+    reported = set(call["minted"]) if call else set()
+    session = session or (call.get("session") if call else None)
+    rest =[i for i in ids if i not in reported]
+    owners: dict = {}
+    if rest and session:
+        from coordinator_core.ops.dispatch_emit.run_token import live_records
+
+        owners = {r["run_id"]: r.get("session_id") for r in live_records(root)}
+    return sorted({i for i in ids if i in reported or (session and owners.get(i) == session)})
 
 
 def _emit_join_s() -> float:
@@ -563,17 +578,19 @@ def _minted_since_start(call: dict) -> Optional[list]:
 
     def scan() -> None:
         for root in list(call["roots"]):
+            fresh: list = []
             try:
                 with os.scandir(root / RECORD_DIR_ROOT) as it:
                     for e in it:
                         stage = os.path.join(e.path, RUN_STAGE_FILE)
                         try:
                             if e.is_dir() and os.stat(stage).st_mtime >= call["wall0"] - 1.0 and e.name not in found:
-                                found.append(e.name)
+                                fresh.append(e.name)
                         except OSError:
                             continue
             except OSError:
                 continue
+            found.extend(i for i in _owned(call, root, fresh) if i not in found)
 
     thread = threading.Thread(target=scan, daemon=True)
     thread.start()
@@ -637,7 +654,11 @@ def _token_run_ids_since(call: dict, deadline: float) -> list:
         for root in list(call["roots"]):
             for record in live_records(root):
                 try:
-                    if float(record.get("minted_at") or 0) >= call["wall0"] - 1.0 and record["run_id"] not in ids:
+                    if (
+                        float(record.get("minted_at") or 0) >= call["wall0"] - 1.0
+                        and record["run_id"] not in ids
+                        and (record["run_id"] in call["minted"] or (call.get("session") and record.get("session_id") == call["session"]))
+                    ):
                         ids.append(record["run_id"])
                 except (TypeError, ValueError):
                     continue
@@ -829,6 +850,24 @@ def _emit_gate(call: Optional[dict]) -> Any:
     return gate
 
 
+def _session_tokens_since(root: Path, session: Optional[str], since: float) -> list:
+    """Run ids whose token record `session` minted at or after `since`; [] with no session or on a stalled read."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit.run_token import live_records
+
+    if not session:
+        return []
+
+    def read() -> list:
+        return sorted(
+            r["run_id"] for r in live_records(root)
+            if r.get("session_id") == session and float(r.get("minted_at") or 0) >= since - 1.0
+        )
+
+    return _quick(read, time.monotonic() + _SCAN_GRACE_S) or []
+
+
 def _emit_within_budget(
     emit: EmitFn, params: dict, root: Path, budget_s: Optional[float] = None, scan: bool = True
 ) -> dict:
@@ -840,10 +879,12 @@ def _emit_within_budget(
     the write gate alone reports."""
     from coordinator_core.ops.dispatch_emit import run_token
 
+    import time
+
     call = _CALL.get()
     gate = _emit_gate(call)
-    # Trap: a concurrent submission's run minted in the window is named as ours; over-naming is the safe side of "do not re-submit".
     before = _run_dirs(root) if scan else set()
+    wall0 = time.time()
     box: dict = {}
 
     def work() -> None:
@@ -860,7 +901,7 @@ def _emit_within_budget(
     thread.start()
     thread.join(_emit_join_s() if budget_s is None else budget_s)
     if thread.is_alive():
-        minted = sorted(_run_dirs(root) - before) if scan else []
+        minted = _owned(call, root, sorted(_run_dirs(root) - before), params.get("session_id") or None) if scan else []
         if minted:
             names = ", ".join(minted)
             raise _EmitOverran(
@@ -874,7 +915,17 @@ def _emit_within_budget(
         if cancelled_in == "writing":
             raise _EmitOverran(_STALLED_RECORD_WRITE, stalled=True)
         if cancelled_in == "committed":  # the record published between the scan above and the cancel
-            late = sorted(_run_dirs(root) - before) if scan else []
+            session = params.get("session_id") or None
+            late = _owned(call, root, sorted(_run_dirs(root) - before), session) if scan else []
+            if scan and not late:  # the emit writes its token before its run dir: the token alone names the run
+                late = _session_tokens_since(root, session or (call or {}).get("session"), wall0)
+            if late:
+                raise _EmitOverran(
+                    f"The submission outran the hook budget after minting run {', '.join(late)}. Do not re-submit: "
+                    f"the run exists; reconcile it by id (a re-submit duplicates it).",
+                    minted=True,
+                    run_ids=late,
+                )
             raise _EmitOverran(
                 "The submission outran the hook budget as its run was minted. Do not re-submit: "
                 "the run exists; reconcile it by listing runs (a re-submit duplicates it).",
@@ -1659,6 +1710,7 @@ def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session
     spent = ""
     for child in children:
         params = {**child.emit_params, LAUNCHER_CHILD_EMIT_PARAM: True}
+        params.setdefault("session_id", session_id or "")  # an overrun names a child's run by this session only
         if params.pop(_DEFER_EMIT_KEY, False):
             emitted.append(_deferred_child_reply(root, child, params, "Not emitted: the sizing read stalled in the hook."))
             continue
@@ -2437,7 +2489,11 @@ def evaluate(
             from coordinator_core.ops.dispatch_emit.run_token import WriteGate
             from coordinator_core.ops.dispatch_emit.sizing_fire import sizing_memo
 
-            call = {"t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": []}
+            session = payload.get("session_id")
+            call = {
+                "t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": [],
+                "session": session if isinstance(session, str) and session else None,
+            }
             box: dict = {}
 
             def body() -> None:

@@ -58,6 +58,8 @@ OUTCOME_RESULT = "result"
 OUTCOME_ERROR = "error"
 OUTCOME_ABANDONED = "abandoned"
 OUTCOME_WORKER_LOST = "worker-lost"
+#: The accept process terminated the worker at its result deadline; the op may have half-applied.
+OUTCOME_KILLED = "killed"
 OUTCOME_NOT_DISPATCHED = "not-dispatched"
 
 _FINISHED_OUTCOMES = (OUTCOME_RESULT, OUTCOME_ERROR)
@@ -69,7 +71,7 @@ _FINISHED_OUTCOMES = (OUTCOME_RESULT, OUTCOME_ERROR)
 #: join is read as executing; past it the supersede rule in `stamp`, not this
 #: ceiling, carries a late result.
 OVERDUE_CEILING_FACTOR = 10
-_UNKNOWABLE_OUTCOMES = (OUTCOME_ABANDONED, OUTCOME_WORKER_LOST)
+_UNKNOWABLE_OUTCOMES = (OUTCOME_ABANDONED, OUTCOME_WORKER_LOST, OUTCOME_KILLED)
 
 
 #: Per-process call counter; `next()` on an `itertools.count` is atomic under the GIL.

@@ -519,6 +519,10 @@ def _live_claim_scan(
     if not wanted:
         return claims
     own_sizing, predecessors = _own_lineage(root, exclude_run)
+    # A peer's bare prefix (`writes_under`, as wide as `coordinator_core/`) never holds a path the
+    # asking run names exactly: it would strand that run's own written files at checkpoint and empty
+    # its review prep, for the peer token's whole TTL. An exact peer declaration still holds.
+    own_exact = set(_manifest_declared(exclude_run, root)[0]) if exclude_run else set()
     for record in run_token.held_records(root):
         sid = record.get("session_id")
         run_id = record["run_id"]
@@ -537,7 +541,9 @@ def _live_claim_scan(
         declared_set = set(declared)
         withheld = _withheld_paths(root, run_id)
         for path in wanted - withheld:
-            if path in declared_set or any(path.startswith(pre + "/") or path == pre for pre in prefixes):
+            if path in declared_set or (
+                path not in own_exact and any(path.startswith(pre + "/") or path == pre for pre in prefixes)
+            ):
                 claims.setdefault(path, []).append((record["minted_at"], run_id, sid))
     for entries in claims.values():
         entries.sort()

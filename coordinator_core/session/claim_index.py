@@ -176,6 +176,8 @@ from coordinator_core.session.path_dialect import canonicalize_relative_path
 #: of 5 events, and the 541ms was a capped call timing this very cap). The
 #: cap exists for an unbounded corpus, not for that number.
 REBUILD_PROCESS_TIME_CAP_SECS = 0.5
+# Wall bound of one walk: process_time never advances while a read blocks, so it alone cannot stop a stalled walk.
+REBUILD_WALL_CAP_SECS = 0.4
 
 UNANSWERABLE = "__UNANSWERABLE__"
 
@@ -470,11 +472,16 @@ def _agent_owner_sid(agent_dir_path: str) -> tuple:
     return touch_record.agent_owner_sid(agent_dir_path)
 
 
-def _enumerate_claim_sinks(base: str, live_only_out: "Optional[Set[str]]" = None) -> tuple:
+def _enumerate_claim_sinks(
+    base: str, live_only_out: "Optional[Set[str]]" = None, wall_deadline: "Optional[float]" = None
+) -> tuple:
     """``(pairs, complete)`` of every claimant sink under ``base``. ``live_only_out``, when given,
     collects the sinks listed as a live file with no rotated generation."""
     pairs: List[tuple] = []
     complete = True
+
+    def _expired() -> bool:
+        return wall_deadline is not None and time.monotonic() > wall_deadline
 
     def _scandir_sorted(path):
         nonlocal complete
@@ -487,6 +494,8 @@ def _enumerate_claim_sinks(base: str, live_only_out: "Optional[Set[str]]" = None
             return []
 
     for entry in _scandir_sorted(base):
+        if _expired():
+            return pairs, False
         if entry.name == _AGENTS_SUBDIR:
             continue
         try:
@@ -515,6 +524,8 @@ def _enumerate_claim_sinks(base: str, live_only_out: "Optional[Set[str]]" = None
 
     agents_base = os.path.join(base, _AGENTS_SUBDIR)
     for agent_entry in _scandir_sorted(agents_base):
+        if _expired():
+            return pairs, False
         try:
             is_dir = agent_entry.is_dir()
         except OSError:
@@ -632,16 +643,19 @@ def _walk(base: str, on_sink=None) -> _IndexState:
     """``rebuild``'s walk over a resolved sessions dir. ``on_sink(sink_path, claimant_sid,
     stream_claims)`` sees every sink read cleanly, for the index build."""
     process_deadline = time.process_time() + REBUILD_PROCESS_TIME_CAP_SECS
+    wall_deadline = time.monotonic() + REBUILD_WALL_CAP_SECS
     live_only: Set[str] = set()
-    touched_pairs, complete = _enumerate_claim_sinks(base, live_only)
-    abort_cause: Optional[str] = None if complete else ABORT_CAUSE_IO_ERROR
+    touched_pairs, complete = _enumerate_claim_sinks(base, live_only, wall_deadline)
+    abort_cause: Optional[str] = None
+    if not complete:
+        abort_cause = ABORT_CAUSE_CAP_EXCEEDED if time.monotonic() > wall_deadline else ABORT_CAUSE_IO_ERROR
     folded: List[tuple] = []
 
     for sink in live_only:
         touch_record.hint_live_only(sink)
     try:
         for touched_path, claimant_sid, agent_id in touched_pairs:
-            if time.process_time() > process_deadline:
+            if time.process_time() > process_deadline or time.monotonic() > wall_deadline:
                 complete = False
                 if abort_cause is None:
                     abort_cause = ABORT_CAUSE_CAP_EXCEEDED

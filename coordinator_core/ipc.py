@@ -481,6 +481,9 @@ def _log():
     global _logger
     if _logger is None:
         import logging
+        from coordinator_core import source_free_traceback
+
+        source_free_traceback.install()
         _logger = logging.getLogger(__name__)
     return _logger
 

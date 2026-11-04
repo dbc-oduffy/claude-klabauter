@@ -132,6 +132,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.strip_worktree_isolation":         "none",
     "hooks.block_worktree_tool":              "none",
     "hooks.block_group_em_agent_cap_grant":   "none",
+    "hooks.rewrite_sendmessage_peer_name":    "none",
     "hooks.sessionstart_dispatch":            "none",
     "hooks.sessionstart_async_dispatch":      "none",
     "hooks.assert_em_role":                   "none",

@@ -83,7 +83,7 @@ def _emit_blocking_then_real(release: threading.Event, done: threading.Event, se
     def emit(params: dict, root: Path) -> dict:
         try:
             if mint_first:
-                run_token.mint(root, RUN_ID, SCRIPT, session_id="s1")
+                run_token.mint(root, RUN_ID, SCRIPT, session_id=params.get("session_id") or None)  # as the real emit does
             release.wait(30)
             return mod._default_emit(params, root)
         except BaseException as exc:

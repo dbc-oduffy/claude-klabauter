@@ -381,9 +381,9 @@ def _load_advisory_state(tmpdir: str, session_id: str) -> dict:
     state file.
     """
     try:
-        with open(_dual_read_path(_advisory_state_path(tmpdir, session_id)), "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
+        from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_json_object
+
+        return bounded_json_object(_dual_read_path(_advisory_state_path(tmpdir, session_id))) or {}
     except Exception:
         return {}
 
@@ -1291,9 +1291,9 @@ def _remove_workflow_run_record(path: str) -> None:
 
 def _read_workflow_run_record(path: str) -> "dict | None":
     try:
-        with open(path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else None
+        from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_json_object
+
+        return bounded_json_object(path)
     except Exception:
         return None
 

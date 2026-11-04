@@ -272,11 +272,46 @@ def _digest(token: str) -> str:
 def _read(path: Optional[Path]) -> Optional[dict]:
     if path is None:
         return None
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_json_object
+
+    return bounded_json_object(path)
+
+
+_RECORD_CACHE: dict = {}
+_RECORD_CACHE_MAX = 4096
+
+
+def _cached_records(directory: Path) -> list[tuple[str, dict]]:
+    """`directory`'s `*.json` records, sorted by name. One listing; a file is opened only when its
+    (mtime, size) from the listing differs from the cached read, so an unchanged token dir opens nothing.
+    A write replaces the file (new mtime/size) and so invalidates its own entry."""
+    import os
+
+    records: list[tuple[str, dict]] = []
     try:
-        record = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return record if isinstance(record, dict) else None
+        with os.scandir(directory) as it:
+            entries = sorted((e for e in it if e.name.endswith(".json")), key=lambda e: e.name)
+            for entry in entries:
+                try:
+                    st = entry.stat()
+                except OSError:
+                    continue
+                sig = (st.st_mtime_ns, st.st_size)
+                hit = _RECORD_CACHE.get(entry.path)
+                if hit is not None and hit[0] == sig:
+                    record = hit[1]
+                else:
+                    record = _read(Path(entry.path))
+                    if record is None:
+                        _RECORD_CACHE.pop(entry.path, None)
+                        continue
+                    if len(_RECORD_CACHE) >= _RECORD_CACHE_MAX:
+                        _RECORD_CACHE.clear()
+                    _RECORD_CACHE[entry.path] = (sig, record)
+                records.append((entry.name[:-5], dict(record)))
+    except OSError:
+        return []
+    return records
 
 
 def _fresh(record: dict) -> bool:
@@ -724,12 +759,10 @@ def _listed(repo_root: Path, *, claimed: bool) -> list[dict]:
     if home is None:
         return []
     sub = (_CLAIMED,) if claimed else ()
-    try:
-        new_paths = sorted((home / _DIR).joinpath(*sub).glob("*.json"))
-    except OSError:
-        new_paths = []
-    records = [r for r in (_read(p) for p in new_paths) if r is not None]
-    seen = {p.stem for p in new_paths}
+    new_dir = (home / _DIR).joinpath(*sub)
+    listed = _cached_records(new_dir)
+    records = [r for _stem, r in listed]
+    seen = {stem for stem, _r in listed}
     common = legacy_record_dir(repo_root)
     if common is not None:
         for path in _bounded_glob((common / _DIR).joinpath(*sub), LEGACY_READ_DEADLINE_MS, reap=not claimed):

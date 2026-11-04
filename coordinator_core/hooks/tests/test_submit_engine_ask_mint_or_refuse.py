@@ -25,10 +25,14 @@ def _payload(root: Path) -> dict:
     return real._payload(root, {"ask": "build the thing", "source": "relayed"})
 
 
-def _mint(root: Path, script: bool, run_id: str = RUN_ID) -> None:
+def _mint(root: Path, script: bool, run_id: str = RUN_ID, session_id: str = "sess-real-emit") -> None:
+    """A run dir plus its run-token record naming `session_id`, as the real emit leaves it."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
     d = root / RECORD_DIR_ROOT / run_id
     d.mkdir(parents=True)
     (d / RUN_STAGE_FILE).write_text('{"stage": "minted"}', encoding="utf-8")
+    run_token.mint(root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs", session_id=session_id)
     if script:
         (root / RUN_DIR_ROOT).mkdir(parents=True, exist_ok=True)
         (root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs").write_text("export const meta = {}\n", encoding="utf-8")
@@ -153,6 +157,37 @@ def test_marker_published_as_the_budget_runs_out_still_rides_an_allow_with_the_c
     assert chosen[0] in env["hookSpecificOutput"]["additionalContext"]
     script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
     assert chosen[0] in script.read_text(encoding="utf-8")
+
+
+PEER_RUN = "ask-20261102T200001-c84894"
+
+
+def test_a_peer_sessions_run_minted_during_the_overrun_is_never_named_or_started(repo, monkeypatch):
+    """2026-11-04 09:30Z: a {sizing} submit that overran was answered "Submitted as run" with two runs a
+    peer session minted in the same window, and its launcher tried to start them."""
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
+    release = threading.Event()
+
+    def emit(params, r):
+        _mint(r, script=True, run_id=PEER_RUN, session_id="sess-peer")
+        release.wait(30)
+        return {}
+
+    try:
+        env = mod.evaluate(_payload(repo), emit=emit)
+    finally:
+        release.set()
+    assert PEER_RUN not in json.dumps(env), env
+    if _decision(env) == "allow":
+        assert PEER_RUN not in Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+
+
+def test_answer_deadline_names_only_this_sessions_runs(repo):
+    _mint(repo, script=True)
+    _mint(repo, script=True, run_id=PEER_RUN, session_id="sess-peer")
+    call = {"t0": time.monotonic(), "wall0": time.time() - 5, "roots": [repo], "minted": [], "session": "sess-real-emit"}
+    assert mod._minted_since_start(call) == [RUN_ID]
+    assert mod._token_run_ids_since(call, time.monotonic() + 1.0) == [RUN_ID]
 
 
 @pytest.mark.parametrize("script", [True, False])

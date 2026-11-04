@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests import test_submit_engine_ask_real_emit as real
+from coordinator_core.ops.dispatch_emit import run_token
 
 pytestmark = [pytest.mark.cadence]
 
@@ -84,7 +85,9 @@ def _overrun(repo, monkeypatch, mint: bool):
     release = threading.Event()
 
     def emit(params, root):
-        if mint:
+        if mint:  # token first, naming the submitting session, then the run dir: the real emit's order
+            run_token.mint(root, "ask-20261029T200000-e3414a", "scratch/warp/ask-20261029T200000-e3414a.workflow.mjs",
+                           session_id=params.get("session_id") or None)
             d = root / RECORD_DIR_ROOT / "ask-20261029T200000-e3414a"
             d.mkdir(parents=True)
             (d / RUN_STAGE_FILE).write_text('{"stage": "minted"}', encoding="utf-8")
@@ -247,7 +250,7 @@ def test_fan_overrun_children_are_deferred_into_the_launcher_not_refused(tmp_pat
         assert reply["path"].startswith("scratch/warp/defer-") and "dispatch.emit" in body and child.run_id in body
 
 
-def test_fan_overrun_after_a_run_was_minted_still_names_the_error_for_that_child(tmp_path, monkeypatch):
+def test_fan_overrun_after_a_run_was_minted_still_names_the_error_for_that_child(repo, monkeypatch):
     import threading
 
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
@@ -255,6 +258,8 @@ def test_fan_overrun_after_a_run_was_minted_still_names_the_error_for_that_child
     release = threading.Event()
 
     def emit(params, root):
+        run_token.mint(root, "ask-20261029T200000-e3414a", "scratch/warp/ask-20261029T200000-e3414a.workflow.mjs",
+                       session_id=params.get("session_id") or None)
         d = root / RECORD_DIR_ROOT / "ask-20261029T200000-e3414a"
         d.mkdir(parents=True)
         (d / RUN_STAGE_FILE).write_text("{}", encoding="utf-8")
@@ -264,7 +269,7 @@ def test_fan_overrun_after_a_run_was_minted_still_names_the_error_for_that_child
     monkeypatch.setattr(mod, "_default_emit", emit)
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "0.25")
     try:
-        launcher = mod._default_launch(tmp_path, "ask-parent", _fan_children(), None)
+        launcher = mod._default_launch(repo, "ask-parent", _fan_children(), "sess-fan")
     finally:
         release.set()
     emitted = launcher.read_text(encoding="utf-8").split("const EMITTED = ", 1)[1].split(";\n", 1)[0]

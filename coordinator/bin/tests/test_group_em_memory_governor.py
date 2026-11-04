@@ -1592,6 +1592,42 @@ def test_process_leg_spawns_nothing(_default_proc_thresholds, monkeypatch):
     _proc_run([_spawner_tree(7, gov.PROC_CEILING)])
 
 
+def _tiny_tree(root: P, n: int) -> list:
+    """`root` plus `n` 3MB python children, each with a conhost: a high count, a tiny footprint."""
+    out = [root]
+    for i in range(n):
+        pid = 40000 + i * 2
+        out.append(P(pid, root.pid, 5, 3, "python3 -c x", "python3.exe"))
+        out.append(P(pid + 1, pid, 5, 0.5, "conhost.exe 0x4", "conhost.exe"))
+    return out
+
+
+def test_tiny_hook_tree_at_high_total_is_not_paused(_default_proc_thresholds):
+    root = P(95348, 1, 2, 3, "python3 -c # COORDINATOR HOOK SEAM bootstrap", "python3.exe")
+    lines, calls = _proc_run([_tiny_tree(root, gov.PROC_CEILING // 2 + 13)])
+    assert lines == [] and calls == []
+
+
+@pytest.mark.parametrize("cmd,image", [
+    ("bash.exe -c source /c/Users/x/.claude/shell-snapshots/snapshot-bash-1.sh", "bash.exe"),
+    ("python3 -c # COORDINATOR HOOK SEAM", "python3.exe"),
+    ("python3 /x/_hook_boot.py", "python3.exe"),
+])
+def test_tool_shell_and_hook_seam_roots_are_never_paused_even_when_heavy(_default_proc_thresholds, cmd, image):
+    root = P(7, 1, 2, 50, cmd, image)
+    table = [root] + [P(20000 + i, 7, 5, 40, "python.exe -m x", "python.exe") for i in range(gov.PROC_CEILING)]
+    lines, calls = _proc_run([table])
+    assert lines == [] and calls == []
+
+
+def test_small_tree_under_rss_floor_is_not_paused_but_heavy_one_is(_default_proc_thresholds):
+    small = P(7, 1, 2, 3, "python.exe -m runner", "python.exe")
+    assert gov.choose_process_victim(_tiny_tree(small, 20), {7: 41}, None, set(), 999) is None
+    heavy = P(7, 1, 2, 400, "python.exe -m runner", "python.exe")
+    pick = gov.choose_process_victim(_tiny_tree(heavy, 20), {7: 41}, None, set(), 999)
+    assert pick is not None and pick[0].pid == 7
+
+
 def test_no_live_group_em_skips_the_critical_trim_with_one_line(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(gov, "fire_cache_trim", lambda bin_dir: calls.append(1) or "tail")

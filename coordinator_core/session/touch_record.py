@@ -1510,6 +1510,10 @@ def clear_live_only_hints(sink_paths: Iterable[str]) -> None:
     _LIVE_ONLY_HINT.difference_update(sink_paths)
 
 
+_AGENT_OWNER_MAX_CHARS = 512
+_MAX_SINK_BYTES = 64 * 1024 * 1024
+
+
 def agent_owner_sid(agent_dir_path: str) -> tuple[str, bool]:
     """First line of ``<agent_dir_path>/em-session-id.txt`` and whether the read was conclusive:
     ``("", True)`` for an absent back-pointer, ``("", False)`` for an unreadable one."""
@@ -1518,7 +1522,7 @@ def agent_owner_sid(agent_dir_path: str) -> tuple[str, bool]:
         return cached, True
     try:
         with open(os.path.join(agent_dir_path, "em-session-id.txt"), "r", encoding="utf-8") as fh:
-            sid = fh.readline().strip()
+            sid = fh.readline(_AGENT_OWNER_MAX_CHARS).strip()
     except FileNotFoundError:
         return "", True
     except OSError:
@@ -1568,6 +1572,8 @@ def read_stream_claims_and_held_kind(
     family = [live] if cache_key in _LIVE_ONLY_HINT else discover_family(sink_path)
     for member in family:
         try:
+            if os.stat(member).st_size > _MAX_SINK_BYTES:
+                raise OSError(f"sink exceeds {_MAX_SINK_BYTES} bytes")
             raw = member.read_bytes()
             # Append-only: a size equal to the bytes read means nothing landed in between.
             if member == live:

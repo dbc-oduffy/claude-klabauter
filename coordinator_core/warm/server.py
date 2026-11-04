@@ -418,7 +418,15 @@ WORKER_POOL_SIZE = 30
 # box with >=30 cores exactly where it was, and leaves WORKER_POOL_SIZE /
 # PENDING_LISTENER_POOL_SIZE / ACCEPTOR_POOL_SIZE -- the cheap I/O-bound bounds
 # that genuinely answer "how many queued callers" -- untouched.
-DISPATCH_PROCESS_POOL_SIZE = min(WORKER_POOL_SIZE, max(1, os.cpu_count() or 1))
+#
+# IO-SAFE CAP. Every worker reads the same drive, so concurrency past a few
+# saturates the disk the whole box shares: 2026-11-04 11:24Z, 20 workers (one
+# at 916 MB of IO) drove the E: queue to 242, and a respawned engine had 18
+# workers within 5 s. C1's plateau (~4 threads) says throughput gains stop at
+# 4 anyway, so the pool is capped at `_DISPATCH_POOL_IO_CAP`, not at the core
+# count alone. `_LIGHT_RESERVE_WORKERS` rides on top and stays small.
+_DISPATCH_POOL_IO_CAP = 4
+DISPATCH_PROCESS_POOL_SIZE = min(_DISPATCH_POOL_IO_CAP, WORKER_POOL_SIZE, max(1, os.cpu_count() or 1))
 
 # ACCEPTOR POOL SIZE -- the POSIX accept layer's own bound
 # (`_ServerContext._start_acceptor_pool`). Reuses
@@ -1311,9 +1319,18 @@ def _write_stall_record(
         os.replace(tmp, final)
         for old in sorted(stall_dir.glob("*.txt"), reverse=True)[STALL_DUMP_KEEP:]:
             old.unlink(missing_ok=True)
-        return final
     except Exception:  # noqa: BLE001 -- diagnostics never stop an op
         return None
+    try:
+        from coordinator_core.warm import hang_restart
+
+        # A pool worker (`_WORKER_STALL_DIR` set) names its parent: the server is what restarts.
+        hang_restart.maybe_restart(
+            stall_dir, server_pid=os.getppid() if _WORKER_STALL_DIR is not None else os.getpid()
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return final
 
 
 def _arm_stall_dump(
@@ -3400,6 +3417,35 @@ class _ServerContext:
         self.__dict__.setdefault("_retired_procs", []).extend(procs)
         self._write_recycle_line(holders, len(keys))
 
+    def _terminate_overdue_worker(self, pool: Any, claim: Optional[Path], dispatch_key: Optional[str]) -> bool:
+        """Terminate the worker holding an op past its result deadline. Its pid is the one
+        its claim file records; `pool._processes` maps pid to process. Stamps `killed`
+        first, then swaps `pool` out under `_dispatch_pool_lock` (the executor breaks
+        when a child dies; the next `_ensure_dispatch_pool` rebuilds). Neighbours on the
+        same pool read BrokenProcessPool -> `worker-lost`. False when no worker is found
+        (nothing is killed and the caller falls back to the abandoned path)."""
+        try:
+            pid = int(claim.read_text(encoding="ascii").strip()) if claim is not None else None
+        except (OSError, ValueError):
+            pid = None
+        proc = (getattr(pool, "_processes", None) or {}).get(pid) if pid is not None else None
+        if proc is None:
+            return False
+        if dispatch_key is not None:
+            _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_KILLED)
+        with self._dispatch_pool_lock:
+            if self._dispatch_pool is pool:
+                self._dispatch_pool = None
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            pool.shutdown(wait=False)
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
     def _retired_workers_alive(self) -> int:
         """Recycled-pool workers still alive. A worker blocked in a kernel call survives
         `terminate()`; recycling again on top of them grows the process count without bound."""
@@ -3564,10 +3610,11 @@ class _ServerContext:
                 # the same fail-closed `_op_may_mutate` the BrokenProcessPool
                 # branch below uses, so this does not duplicate that predicate.
                 #
-                # NEGATIVE SPEC: NEVER KILL THE WORKER. It may be
-                # mid-mutation, and killing it converts a slow op into a
-                # half-applied one. This bounds how long THIS connection
-                # thread is held, not how long the op runs.
+                # The worker is TERMINATED (`_terminate_overdue_worker`) once the
+                # diagnosis below is read: an abandoned worker keeps scanning the
+                # shared drive and piles up (2026-11-04 11:24Z). The op may have
+                # half-applied, which is why the reply stays indeterminate and the
+                # stamp reads `killed`: reconcile against real state.
                 envelope = _timeout_error_envelope(
                     msg.get("method"), _POOL_RESULT_DEADLINE_SECS, msg.get("id")
                 )
@@ -3590,8 +3637,9 @@ class _ServerContext:
                     )
                 else:
                     dump_note = "No stall dump written: no diagnosis block."
-                if dispatch_key is not None:
-                    _ack_store.mark_withdrawn(dispatch_key)
+                if not self._terminate_overdue_worker(pool, claim, dispatch_key):
+                    if dispatch_key is not None:
+                        _ack_store.mark_withdrawn(dispatch_key)
                 error = envelope.get("error")
                 if isinstance(error, dict):
                     if isinstance(data, dict) and isinstance(data.get("diagnosis"), dict):
@@ -3607,8 +3655,11 @@ class _ServerContext:
             # receives for its whole idle life. Drop the corpse so the next
             # request rebuilds a fresh pool.
             with self._dispatch_pool_lock:
-                broken = self._dispatch_pool
-                self._dispatch_pool = None
+                # Identity-checked: a straggler of a pool already replaced (an
+                # overdue-worker kill) must not drop the successor.
+                broken = pool
+                if self._dispatch_pool is pool:
+                    self._dispatch_pool = None
             diagnosis = _dead_worker_diagnosis(broken, getattr(self, "_worker_stderr_dir", None))
             if broken is not None:
                 try:

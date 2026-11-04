@@ -2107,6 +2107,33 @@ def _peer_held_left(peer_held: dict) -> dict:
     return {"peer_held_left": [{"path": p, "sessions": sorted(s)} for p, s in sorted(peer_held.items())]}
 
 
+PEER_CLAIM_LOOKUP_DEADLINE_S = 0.3
+
+
+def _bounded_claim_lookup(claim_index, paths: list, cwd: str) -> dict:
+    """`claim_index.lookup` on a daemon thread held to `PEER_CLAIM_LOOKUP_DEADLINE_S` of wall time;
+    a stalled read answers every path UNANSWERABLE (no hold) while the thread finishes on its own."""
+    import threading
+
+    box: list = []
+    done = threading.Event()
+
+    def work() -> None:
+        try:
+            box.append(claim_index.lookup(paths, cwd=cwd))
+        except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread
+            box.append(exc)
+        finally:
+            done.set()
+
+    threading.Thread(target=work, daemon=True).start()
+    if not done.wait(PEER_CLAIM_LOOKUP_DEADLINE_S):
+        return {path: [claim_index.UNANSWERABLE] for path in paths}
+    if isinstance(box[0], BaseException):
+        raise box[0]
+    return box[0]
+
+
 def _peer_held(
     root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object,
     *, plan_rel: Optional[str] = None, run_base: Optional[str] = None, minted_before: Optional[tuple] = None,
@@ -2132,12 +2159,12 @@ def _peer_held(
                 own_sid = session_core.resolve_session_id(str(root))
             except Exception:  # noqa: BLE001 -- an unresolved caller holds nothing of its own
                 own_sid = None
-        found = claim_index.lookup(list(paths), cwd=str(root))
+        found = _bounded_claim_lookup(claim_index, list(paths), str(root))
         for path in paths:
             claimants = found.get(path, [])
             if claim_index.UNANSWERABLE in claimants:
                 continue
-            kinds = (found.recorded_kind or {}).get(path, {})
+            kinds = (getattr(found, "recorded_kind", None) or {}).get(path, {})
             for sid in claimants:
                 if sid == own_sid or sid in self_sessions or not touch_record.kind_blocks_a_peer_commit(kinds.get(sid)):
                     continue

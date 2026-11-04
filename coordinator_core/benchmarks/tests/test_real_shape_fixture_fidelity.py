@@ -16,6 +16,9 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 
 
+_SETTINGS_HOME_DIR = "settings-home"
+
+
 @pytest.fixture(scope="module")
 def real_shape_repo(tmp_path_factory):
     parent = tmp_path_factory.mktemp("real_shape_fidelity")
@@ -23,6 +26,9 @@ def real_shape_repo(tmp_path_factory):
     saved_tempdir = tempfile.tempdir
     saved_files = driver.REAL_TREE_FILES
     driver.REAL_TREE_FILES = 100
+    # The run token lives under the settings home, and the per-test home quarantine resets it for
+    # every test: pin the home the token is minted under so the token test can read the same one.
+    os.environ["COORDINATOR_SETTINGS_HOME"] = str(parent / _SETTINGS_HOME_DIR)
     try:
         repo, _script = driver.build_ask_fixture(parent)
         driver.build_real_shape(repo)
@@ -47,9 +53,10 @@ def test_sizing_corpus_collector_reads_every_real_shape_record(real_shape_repo):
     )
 
 
-def test_real_shape_fixture_mints_a_live_token_for_the_run(real_shape_repo):
+def test_real_shape_fixture_mints_a_live_token_for_the_run(real_shape_repo, monkeypatch):
     from coordinator_core.ops.dispatch_emit import run_token
 
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(real_shape_repo.parent / _SETTINGS_HOME_DIR))
     assert run_token.is_live(real_shape_repo, driver.ASK_RUN), (
         "the fixture run holds no live token: a field call carries run_id and run_token"
     )

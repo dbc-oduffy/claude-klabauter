@@ -687,11 +687,9 @@ def _read_remaining(halted: dict) -> dict[str, dict[str, Any]]:
 
 
 def _read_json_object(path: Path) -> dict | None:
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return data if isinstance(data, dict) else None
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_json_object
+
+    return bounded_json_object(path)
 
 
 _FULL_SHA_RE = re.compile(r"[0-9a-f]{40}")

@@ -153,8 +153,8 @@ def _ctx(tmp_path):
 
 
 @pytest.mark.spawns_process
-@pytest.mark.deliberate_wall_clock(reason="a blocked worker must read terminal past the pool deadline")
-def test_blocked_worker_reads_abandoned_then_finishes_when_released(tmp_path, monkeypatch):
+@pytest.mark.deliberate_wall_clock(reason="a blocked worker must be killed past the pool deadline")
+def test_blocked_worker_past_its_deadline_is_killed_and_reads_killed(tmp_path, monkeypatch):
     ctx, inner = _ctx(tmp_path)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", _DEADLINE)
     monkeypatch.setattr(server, "_timeout_for", lambda method: 0.0)
@@ -174,15 +174,12 @@ def test_blocked_worker_reads_abandoned_then_finishes_when_released(tmp_path, mo
         assert _wait_for(lambda: (tmp_path / "blocked.started").exists())
         assert server._ack_store.status(key)["state"] == dispatch_ack.STATE_EXECUTING
 
-        assert _wait_for(lambda: server._ack_store.status(key).get("overdue") is True, 30.0)
         assert _wait_for(lambda: server._ack_store.status(key)["state"] != dispatch_ack.STATE_EXECUTING, 30.0)
         status = server._ack_store.status(key)
         assert status["state"] == dispatch_ack.STATE_UNKNOWABLE
-        assert status["reason"] == dispatch_ack.OUTCOME_ABANDONED
-
-        release.write_text("1")
+        assert status["reason"] == dispatch_ack.OUTCOME_KILLED
         thread.join(timeout=_WAIT)
-        assert _wait_for(lambda: server._ack_store.status(key)["state"] == dispatch_ack.STATE_FINISHED)
+        assert server._ack_store.status(key)["reason"] == dispatch_ack.OUTCOME_KILLED
     finally:
         release.write_text("1")
         inner.shutdown(wait=True)

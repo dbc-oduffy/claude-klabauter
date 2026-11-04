@@ -147,9 +147,10 @@ def test_token_free_find_lists_a_staged_run_between_ops(tmp_path):
 
 
 def _fresh_staged_run(root, run_id):
-    """A real run-stage.json stamped now, no token, owner live."""
+    """A real run-stage.json stamped now, owner live, holding its run token as a run between ops does."""
     d = root / "state" / "warp" / run_id
     d.mkdir(parents=True)
+    _token(root, run_id)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     (d / "run-stage.json").write_text(
         json.dumps({"stage": "staged", "last_activity_at": stamp, "session_id": "sess1"}), encoding="utf-8"
@@ -439,7 +440,7 @@ def test_owner_does_not_hold_a_terminal_or_ownerless_run(tmp_path, monkeypatch):
 
 # --- Phantom-live shapes: runs that ended or never ran but whose run-stage.json still reads live. ---
 # Each fixture is one run dir under state/warp, otherwise live (fresh stamp, live owner, token held),
-# so only the run's ended state decides. The handover bar is find_live_runs(require_token=False).
+# so only the run's ended state decides. The handover bar is hold_for_mid_stage_runs's own.
 
 
 def _stranded(root, run_id, stage, halt=None, *, minutes_ago=1, token_age_s=0.0, token_fields=None):
@@ -462,7 +463,36 @@ def _stranded(root, run_id, stage, halt=None, *, minutes_ago=1, token_age_s=0.0,
 
 
 def _handover_live(repo):
-    return [r.run_id for r in live_runs.find_live_runs({"repos.r1": str(repo)}, now=NOW, require_token=False)]
+    return [
+        r.run_id
+        for r in live_runs.find_live_runs({"repos.r1": str(repo)}, now=NOW, require_token=True, skip_superseded=True)
+    ]
+
+
+def test_a_tokenless_staged_run_does_not_hold_the_handover(tmp_path):
+    """2026-11-04: a staged/"resumed" predecessor with no token refused two publishes for 30 minutes."""
+    repo = tmp_path / "r1"
+    _run(repo, "phantom", "staged", 2, token=None)
+    assert _handover_live(repo) == []
+
+
+def _sized(root, run_id, stage, started, sizing="state/sizings/2026-11-04-abc123-1-fix.yaml"):
+    _run(root, run_id, stage, 1)
+    d = root / "state" / "warp" / run_id
+    data = json.loads((d / "run-stage.json").read_text(encoding="utf-8"))
+    data["started_at"] = started
+    (d / "run-stage.json").write_text(json.dumps(data), encoding="utf-8")
+    (d / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
+
+
+def test_a_run_whose_sizing_has_a_later_warp_run_does_not_hold_the_handover(tmp_path):
+    """An ask's minted marker once its warp run started, and a run a refire replaced, step aside for
+    the later run, which alone decides."""
+    repo = tmp_path / "r1"
+    _sized(repo, "ask-20261104T094954-82f900", "minted", "2026-11-04T09:49:55Z")
+    _sized(repo, "warp-2026-11-04-abc123-1-fix-20261104T081330-f8e6cd", "staged", "2026-11-04T08:13:30Z")
+    _sized(repo, "warp-2026-11-04-abc123-1-fix-20261104T095046-fcd0f3", "staged", "2026-11-04T09:50:45Z")
+    assert _handover_live(repo) == ["warp-2026-11-04-abc123-1-fix-20261104T095046-fcd0f3"]
 
 
 def test_control_executing_run_with_live_owner_is_live_for_the_handover(tmp_path):

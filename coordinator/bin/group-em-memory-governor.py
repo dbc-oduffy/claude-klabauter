@@ -103,6 +103,8 @@ PROTECTED_HARD = re.compile(
     r"|lang(?:uage)?[-_]?server|pyright|(?:^|[^a-z])mcp(?:[^a-z]|$)"
     r"|deploy-from-snapshot|deploy:"
     r"|scratch/deploy-|group-em-memory-governor|(?:^|[/\\])conhost(?:\.exe)?(?:\s|$)"
+    # Claude tool shells and hook seams: a frozen one hangs the calling session's tool or hook call.
+    r"|shell-snapshots|COORDINATOR HOOK SEAM|_hook_boot\.py"
     # Store and database owners: freezing one mid-write stalls or half-applies every client's write.
     r"|(?:^|[/\\])owner\.ts\b|pglite|(?:^|[/\\\s])postgres(?:\.exe)?\b|\bmysqld\b|\bmongod\b"
     r"|\bredis-server\b|\bsqlite3?(?:\.exe)?\b"
@@ -1072,10 +1074,13 @@ def python_conhost_trees(procs: list[Proc]) -> tuple[int, dict[int, int]]:
 
 def choose_process_victim(procs: list[Proc], roots: dict[int, int], prev_roots: Optional[dict[int, int]],
                           paused: set[int], self_pid: int, ntree: frozenset = frozenset(),
-                          guarded: frozenset = frozenset()) -> Optional[tuple[Proc, int, int]]:
+                          guarded: frozenset = frozenset(),
+                          floor_mb: float = MIN_RSS_MB) -> Optional[tuple[Proc, int, int]]:
     """(root, python+conhost count, growth since the previous sample) of the tree that grew most,
     ties to the larger count then the younger; None when every root is protected, guarded, paused
-    or holds this process. Growth is 0 on the first sample (no baseline)."""
+    or holds this process. Growth is 0 on the first sample (no baseline). A tree whose summed RSS is
+    under `floor_mb` is skipped: freezing it frees nothing, and process count alone never pauses.
+    Only RSS is available per process, so there is no separate commit floor."""
     by_pid = {p.pid: p for p in procs}
     prot = protected_pids(procs, ntree, guarded)
     best: Optional[tuple[tuple, Proc, int, int]] = None
@@ -1083,7 +1088,10 @@ def choose_process_victim(procs: list[Proc], roots: dict[int, int], prev_roots: 
         root = by_pid.get(pid)
         if root is None or pid in paused or pid in prot or pid in guarded or pid == self_pid:
             continue
-        if self_pid in descendants(pid, procs):
+        members = descendants(pid, procs)
+        if self_pid in members:
+            continue
+        if sum(by_pid[m].rss_mb for m in members) < floor_mb:
             continue
         growth = 0 if prev_roots is None else count - prev_roots.get(pid, 0)
         if prev_roots is not None and growth <= 0:

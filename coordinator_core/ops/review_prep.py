@@ -1020,11 +1020,9 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
 
 
 def _read_json_object(path: Path) -> Optional[dict]:
-    try:
-        got = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    return got if isinstance(got, dict) else None
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_json_object
+
+    return bounded_json_object(path)
 
 
 def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, own_session: str = "") -> List[str]:

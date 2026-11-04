@@ -41,14 +41,22 @@ _inflight: set[str] = set()
 _inflight_lock = threading.Lock()
 
 
+OVERSIZE = _Sentinel("OVERSIZE")
+DEFAULT_MAX_BYTES = 32 * 1024 * 1024
+
+
 def _read_file(path: Path) -> bytes:
     return path.read_bytes()
 
 
-def bounded_read(path: Union[str, Path], deadline_ms: float) -> Union[bytes, _Sentinel]:
-    """Bytes of `path`, `MISSING` when absent or unreadable, `STALLED` when the read outlives
-    `deadline_ms`. The read runs on a daemon thread left to finish after a stall; at most one read
-    per path is in flight, so a second call while one is outstanding returns `STALLED` at once."""
+def bounded_read(
+    path: Union[str, Path], deadline_ms: float, max_bytes: int = DEFAULT_MAX_BYTES
+) -> Union[bytes, _Sentinel]:
+    """Bytes of `path`, `MISSING` when absent or unreadable, `OVERSIZE` when the file exceeds
+    `max_bytes`, `STALLED` when the read outlives `deadline_ms`. The size check runs before the
+    read, on the worker thread. The read runs on a daemon thread left to finish after a stall; at
+    most one read per path is in flight, so a second call while one is outstanding returns
+    `STALLED` at once."""
     key = str(path)
     with _inflight_lock:
         if key in _inflight:
@@ -59,7 +67,11 @@ def bounded_read(path: Union[str, Path], deadline_ms: float) -> Union[bytes, _Se
 
     def work() -> None:
         try:
-            box.append(_read_file(Path(key)))
+            if Path(key).stat().st_size > max_bytes:
+                box.append(OVERSIZE)
+            else:
+                data = _read_file(Path(key))
+                box.append(OVERSIZE if len(data) > max_bytes else data)
         except OSError:
             box.append(MISSING)
         except BaseException:
@@ -320,3 +332,21 @@ def in_backoff(record: dict, now: float) -> bool:
     caller serves the stored refusal and spawns no recompose."""
     until = record.get("retry_not_before")
     return isinstance(until, (int, float)) and not isinstance(until, bool) and now < until
+
+
+JSON_READ_DEADLINE_MS = 250.0
+JSON_READ_MAX_BYTES = 4 * 1024 * 1024
+
+
+def bounded_json_object(
+    path: Union[str, Path], deadline_ms: float = JSON_READ_DEADLINE_MS, max_bytes: int = JSON_READ_MAX_BYTES
+) -> Optional[dict]:
+    """The JSON object in `path`; None when absent, unreadable, oversize, stalled, malformed or not an object."""
+    raw = bounded_read(path, deadline_ms, max_bytes)
+    if not isinstance(raw, bytes):
+        return None
+    try:
+        got = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    return got if isinstance(got, dict) else None

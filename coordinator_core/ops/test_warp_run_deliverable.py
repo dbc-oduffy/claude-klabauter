@@ -232,6 +232,19 @@ def test_commit_request_prefix_claims_child(repo, live):
     assert _claims(repo, ["pkg/tests/t.py", "pkg/testsx/t.py"]) == {"pkg/tests/t.py": [PEER]}
 
 
+def test_peer_prefix_never_holds_a_path_the_asking_run_names_exactly(repo, live):
+    run_dir = repo / "scratch/warp/p1"
+    run_dir.mkdir(parents=True)
+    marker = render_marker(
+        CommitRequest(chunks=(ChunkCommit(id="C", title="t", paths=("pkg/x.py",), prefixes=("pkg/",)),), version=1)
+    )
+    (run_dir / "commit-request.txt").write_text((marker or "") + "\n", encoding="utf-8")
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    _manifest(repo, "own", writes=["pkg/a.py", "pkg/x.py"])
+    got = _claims(repo, ["pkg/a.py", "pkg/x.py", "pkg/b.py"], exclude_run="own")
+    assert got == {"pkg/x.py": [PEER], "pkg/b.py": [PEER]}
+
+
 def test_minted_run_with_unproven_runner_is_not_a_live_peer(repo, live, monkeypatch):
     from coordinator_core import warp_live
 

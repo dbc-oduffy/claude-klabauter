@@ -1642,6 +1642,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/hooks/block_group_em_agent_cap_grant.py",
         ("_handler",),
     ),
+    "hooks.rewrite_sendmessage_peer_name": (
+        "coordinator_core/hooks/rewrite_sendmessage_peer_name.py",
+        ("_handler",),
+    ),
     "hooks.check_claude_md_size": (
         "coordinator_core/hooks/check_claude_md_size.py",
         ("_handler",),
