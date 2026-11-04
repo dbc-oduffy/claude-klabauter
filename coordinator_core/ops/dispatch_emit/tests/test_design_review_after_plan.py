@@ -8,6 +8,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
+from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGED_INLINE_SLOT
 from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 
@@ -49,6 +50,14 @@ def _planned(repo, tshirt="S", **over):  # noqa: F811
     _put(repo, tshirt=tshirt, route="spec-dispatch", name="canvas-fixture", **over)
     (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
     (repo / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
+
+
+def _run_script(repo, run_id):  # noqa: F811
+    """The run script emit leaves before stage; the staged twin refuses a manifest without it."""
+    script = repo / RUN_DIR_ROOT / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(f"export const meta = {{ name: 'x' }}\n{STAGED_INLINE_SLOT}\n", encoding="utf-8", newline="\n")
+    return run_id
 
 
 def _files(repo):  # noqa: F811
@@ -94,7 +103,7 @@ def test_stage_refuses_an_unapproved_xs_canvas_sizing_and_writes_nothing(repo): 
 
 def test_stage_stages_an_approved_canvas_plan(repo):  # noqa: F811
     _planned(repo, design_route=_route("canvas", APPROVAL))
-    manifest = stage(repo, run_id="canvas3", plan_rel=PLAN_REL)
+    manifest = stage(repo, run_id=_run_script(repo, "canvas3"), plan_rel=PLAN_REL)
     assert [r.id for r in manifest.rows] == ["C1"]
 
 
@@ -105,7 +114,7 @@ def test_reviewer_and_none_gate_and_stage_without_a_design_refusal(repo, route):
     assert verdict.halt is None and verdict.arm is not None
     assert verdict.to_json()["design_route"]["route"] == route
     _gate_sizing_at_emit(repo, REL, ["pkg/a.py"])
-    assert stage(repo, run_id=f"{route}1", plan_rel=PLAN_REL).rows
+    assert stage(repo, run_id=_run_script(repo, f"{route}1"), plan_rel=PLAN_REL).rows
 
 
 def test_an_absent_block_emits_no_key_and_stages(repo):  # noqa: F811
@@ -115,4 +124,4 @@ def test_an_absent_block_emits_no_key_and_stages(repo):  # noqa: F811
     assert verdict.halt is None and verdict.arm is not None
     assert "design_route" not in verdict.to_json()
     _gate_sizing_at_emit(repo, REL, ["pkg/a.py"])
-    assert stage(repo, run_id="absent1", plan_rel=PLAN_REL).rows
+    assert stage(repo, run_id=_run_script(repo, "absent1"), plan_rel=PLAN_REL).rows

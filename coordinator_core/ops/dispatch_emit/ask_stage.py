@@ -18,6 +18,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Callable, Mapping, Optional, Sequence
 
+from coordinator_core.bash_guards import leg_attribution
+from coordinator_core.bash_guards.leg_attribution import leg
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.ipc import register_op
@@ -126,6 +128,7 @@ from coordinator_core.ops.dispatch_emit.wave_map import (
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops._brief_premise import check_brief_claims, render_contradicted
 from coordinator_core.ops.sizing_intake_contract import read_em_brief
+from coordinator_core.telemetry import op_row_fields
 
 # Writes per-run staging files (manifest, commit-request) under a run dir, not a stamped artifact.
 GENERATES = []
@@ -883,15 +886,39 @@ def _excluded_by_ask(sizing: Mapping, writes: Sequence[str]) -> dict[str, str]:
 LIVE_RUN_WRITE_OVERLAP = "live-run-write-overlap"
 STAGE_RECEIPT_MISSING = "stage-receipt-missing"
 STAGE_CLAIM_STALLED = "stage-claim-stalled"
+LIVE_OVERLAP_DEADLINE_S = 0.5
 
 
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `live-run-write-overlap` naming each other live run whose staged
     footprint intersects `writes`, and release this run's token so the refusal ends the run.
-    Trap: not atomic; two stages interleaving before either writes its manifest both pass."""
+    Trap: not atomic; two stages interleaving before either writes its manifest both pass.
+    A footprint read outliving LIVE_OVERLAP_DEADLINE_S degrades: the check is skipped with a logged
+    advisory and the stage proceeds (the read-only pre-check never aborts a stage)."""
+    import logging
+    import threading
+
     from coordinator_core.ops.dispatch_emit import live_run_writes, run_token
 
-    hits = live_run_writes.overlaps(writes, live_run_writes.live_footprints(root, exclude_run_id=run_id))
+    box: list = []
+
+    def read() -> None:
+        try:
+            box.append(live_run_writes.live_footprints(root, exclude_run_id=run_id))
+        except BaseException as exc:  # noqa: BLE001 - surfaced below
+            box.append(exc)
+
+    worker = threading.Thread(target=read, daemon=True)
+    worker.start()
+    worker.join(LIVE_OVERLAP_DEADLINE_S)
+    if not box:
+        logging.getLogger(__name__).warning(
+            "live-run-write-overlap check skipped: footprint read exceeded %ss", LIVE_OVERLAP_DEADLINE_S
+        )
+        return
+    if isinstance(box[0], BaseException):
+        raise box[0]
+    hits = live_run_writes.overlaps(writes, box[0])
     if not hits:
         return
     named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
@@ -1108,7 +1135,8 @@ def stage(
             named = ", ".join(f"{k} (line {v})" for k, v in sorted(unfilled.items()))
             raise AskStageError(f"PLAN-SCAFFOLD-UNFILLED: {plan_posix} still carries {named}")
     try:
-        parse = shared if shared is not None else _parse_plan(root, plan_path, plan_text)
+        with leg("parse"):
+            parse = shared if shared is not None else _parse_plan(root, plan_path, plan_text)
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
     except SpineReadError as exc:
@@ -1148,7 +1176,8 @@ def stage(
     except (RouteAdmissionError, RouteTableError) as exc:
         raise AskStageError(f"route: {exc}") from exc
     # Split, not refuse: runtime_cap is CPU-dependent and a refusal would halt hands-off runs.
-    waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
+    with leg("waves"):
+        waves = cap_waves(build_waves(rows), sibling_split.runtime_cap())
     from coordinator_core.ops.dispatch_emit.memo_rows import memo_close_only
 
     blocking_drops = _criterion_blocking_drops(root, exclusions)
@@ -1201,11 +1230,11 @@ def stage(
             criterion_blocking_drops=blocking_drops,
         )
 
-    context = derive_plan_context(
-        plan_text, fallback_title=plan_path.stem, repo_root=root.as_posix()
-    )
-
-    clauses = _discharge_clauses_for(plan_text, root, list(raw_by_id.values()))
+    with leg("context"):
+        context = derive_plan_context(
+            plan_text, fallback_title=plan_path.stem, repo_root=root.as_posix()
+        )
+        clauses = _discharge_clauses_for(plan_text, root, list(raw_by_id.values()))
 
     ask_file = record / ASK_TEXT_FILE
     ask_text = ask_file.read_text(encoding="utf-8") if ask_file.is_file() else None
@@ -1238,8 +1267,9 @@ def stage(
     em_block = em_brief_block(run_sizing, root)
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block
-    test_targets, no_test_target = _test_scope(waves, root)
-    wave_test_targets = _wave_test_scopes(waves, root)
+    with leg("test_scope"):
+        test_targets, no_test_target = _test_scope(waves, root)
+        wave_test_targets = _wave_test_scopes(waves, root)
 
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
     premise_ids = _premise_row_ids(raw_by_id)
@@ -1248,78 +1278,79 @@ def stage(
     declared: list[str] = []
     brief_sizes: dict[str, int] = {}
     kept_ids: set[str] = set()
-    for wave_no, wave in enumerate(waves):
-        for row in wave:
-            agent_type = _row_agent_type(row)
-            if row.agent_model and agent_type in _AGENT_MODELS:
-                row = row._replace(agent_model=None)  # a pinned type takes its pin; the override is dropped
-            _model_opt(agent_type, row.agent_model)  # raises on bad model grammar of an unpinned override
-            model = resolve_agent_model(agent_type, row.agent_model)
-            brief = run_dir / "briefs" / f"{row.id}.md"
-            report_rel = _dispatch_report_path(plan_posix, row.id)
-            kept_from = (
-                resume_snap.kept_run
-                if agent_type != REVIEWER_AGENT_TYPE and _kept_row_holds(root, resume_snap, row.id, report_rel)
-                else ""
-            )
-            if kept_from:
-                kept_ids.add(row.id)
-            prior = None if kept_from else _set_aside_prior_report(root, report_rel)
-            if kept_from:
-                text = _kept_brief(kept_from)
-            elif agent_type == REVIEWER_AGENT_TYPE:
-                text = _reviewer_brief(root, run_dir, row.id, raw_by_id.get(row.id) or {})
-            else:
-                text = _row_prompt(row, plan_posix, context)
-                if intent:
-                    text = intent + "\n" + text
-                if row.id in clauses:
-                    text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
-                scratch_clause = scratch_delete.brief_clause(run_id, row.id, row.writes)
-                if scratch_clause:
-                    text = text.rstrip() + "\n\n" + scratch_clause + "\n"
-                delete_clause = _declared_delete_brief_clause(run_id, row.id, row.writes)
-                if delete_clause:
-                    text = text.rstrip() + "\n\n" + delete_clause + "\n"
-                if prior:
-                    text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
-                if row.id in premise_ids:
-                    text = text.rstrip() + "\n\n" + PREMISE_RECORD_BRIEF_LINE + "\n"
-                for dep in after.get(row.id, ()):
-                    if dep in kept_ids:
-                        line = _persisted_return_line(root, resume_snap.kept_run, dep)
-                        if line:
-                            text = text.rstrip() + "\n\n" + line
-            _write(brief, text)
-            brief_sizes[row.id] = len(text.encode("utf-8"))
-            paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
-            declared.extend(paths)
-            manifest_rows.append(
-                ManifestRow(
-                    id=row.id,
-                    agent_type=agent_type,
-                    model=model,
-                    effort=row.effort,
-                    brief_path=_rel(root, brief),
-                    writes=tuple(paths),
-                    wave=wave_no,
-                    deps=after.get(row.id, ()),
-                    route=routes[row.id].to_json() if row.id in routes else None,
-                    route_source=_route_source(row.id, routes, raw_by_id),
-                    register_rows=tuple(str(r) for r in (raw_by_id.get(row.id) or {}).get("register_rows") or ()),
-                    kept_from=kept_from,
-                    adopts_stranded=_adopts_stranded(raw_by_id.get(row.id)),
+    with leg("briefs"):
+        for wave_no, wave in enumerate(waves):
+            for row in wave:
+                agent_type = _row_agent_type(row)
+                if row.agent_model and agent_type in _AGENT_MODELS:
+                    row = row._replace(agent_model=None)  # a pinned type takes its pin; the override is dropped
+                _model_opt(agent_type, row.agent_model)  # raises on bad model grammar of an unpinned override
+                model = resolve_agent_model(agent_type, row.agent_model)
+                brief = run_dir / "briefs" / f"{row.id}.md"
+                report_rel = _dispatch_report_path(plan_posix, row.id)
+                kept_from = (
+                    resume_snap.kept_run
+                    if agent_type != REVIEWER_AGENT_TYPE and _kept_row_holds(root, resume_snap, row.id, report_rel)
+                    else ""
                 )
-            )
-            chunks.append(
-                ChunkCommit(
-                    id=row.id,
-                    title=row.title,
-                    paths=tuple(paths),
-                    prefixes=tuple(row.writes_under),
-                    report=_dispatch_report_path(plan_posix, row.id),
+                if kept_from:
+                    kept_ids.add(row.id)
+                prior = None if kept_from else _set_aside_prior_report(root, report_rel)
+                if kept_from:
+                    text = _kept_brief(kept_from)
+                elif agent_type == REVIEWER_AGENT_TYPE:
+                    text = _reviewer_brief(root, run_dir, row.id, raw_by_id.get(row.id) or {})
+                else:
+                    text = _row_prompt(row, plan_posix, context)
+                    if intent:
+                        text = intent + "\n" + text
+                    if row.id in clauses:
+                        text = text.rstrip() + "\n\n" + clauses[row.id] + "\n"
+                    scratch_clause = scratch_delete.brief_clause(run_id, row.id, row.writes)
+                    if scratch_clause:
+                        text = text.rstrip() + "\n\n" + scratch_clause + "\n"
+                    delete_clause = _declared_delete_brief_clause(run_id, row.id, row.writes)
+                    if delete_clause:
+                        text = text.rstrip() + "\n\n" + delete_clause + "\n"
+                    if prior:
+                        text = text.rstrip() + "\n\n" + _prior_report_line(prior) + "\n"
+                    if row.id in premise_ids:
+                        text = text.rstrip() + "\n\n" + PREMISE_RECORD_BRIEF_LINE + "\n"
+                    for dep in after.get(row.id, ()):
+                        if dep in kept_ids:
+                            line = _persisted_return_line(root, resume_snap.kept_run, dep)
+                            if line:
+                                text = text.rstrip() + "\n\n" + line
+                _write(brief, text)
+                brief_sizes[row.id] = len(text.encode("utf-8"))
+                paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
+                declared.extend(paths)
+                manifest_rows.append(
+                    ManifestRow(
+                        id=row.id,
+                        agent_type=agent_type,
+                        model=model,
+                        effort=row.effort,
+                        brief_path=_rel(root, brief),
+                        writes=tuple(paths),
+                        wave=wave_no,
+                        deps=after.get(row.id, ()),
+                        route=routes[row.id].to_json() if row.id in routes else None,
+                        route_source=_route_source(row.id, routes, raw_by_id),
+                        register_rows=tuple(str(r) for r in (raw_by_id.get(row.id) or {}).get("register_rows") or ()),
+                        kept_from=kept_from,
+                        adopts_stranded=_adopts_stranded(raw_by_id.get(row.id)),
+                    )
                 )
-            )
+                chunks.append(
+                    ChunkCommit(
+                        id=row.id,
+                        title=row.title,
+                        paths=tuple(paths),
+                        prefixes=tuple(row.writes_under),
+                        report=_dispatch_report_path(plan_posix, row.id),
+                    )
+                )
 
     manifest_rows, row_groups = _group_rows(manifest_rows, brief_sizes, raw_by_id)
     owed, draft_rows = _memo_draft_steps(root, run_dir, owed, raw_by_id, intent, manifest_rows, classify_receiver)
@@ -1361,9 +1392,10 @@ def stage(
         )
 
     docs = doc_writes(run_id, run_sizing)
-    _refuse_live_write_overlap(
-        root, run_id, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]
-    )
+    with leg("overlap"):
+        _refuse_live_write_overlap(
+            root, run_id, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]
+        )
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
     chunks.append(ChunkCommit(id=DOCS_CHUNK_ID, title="run docs", paths=docs))
     kept_review = _kept_review_paths(root, run_id, record, resume_snap, declared)
@@ -1401,6 +1433,8 @@ def stage(
     ]
     ledger_item_ids, withheld_ids = requirements_ledger.ledger_ids(register_rows)
     review_declared = _reviewable(_dedupe_preserve_order(review_paths))
+    with leg("baseline"):
+        write_baseline = _stage_write_baseline(root, manifest_rows, record, run_sizing_rel)
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
@@ -1421,7 +1455,7 @@ def stage(
         withheld_ids=withheld_ids,
         retired_resume_rows=retired_resume,
         dropped_writes=tuple({"path": p, "sentence": s} for p, s in excluded.items()),
-        write_baseline=_stage_write_baseline(root, manifest_rows, record, run_sizing_rel),
+        write_baseline=write_baseline,
         slot_withheld=tuple(slot_withheld_rows(raw_by_id)),
         memo_close=memo_close if not manifest_rows else (),
         held_ids=held_ids,
@@ -1429,14 +1463,17 @@ def stage(
     )
     if dropped_rows:
         _record_staging_drops(record, run_id, dropped_rows)
-    payload = manifest_payload(root, manifest)
-    reply_sidecar.write_reply(root, record / "manifest.json", payload)
+    with leg("manifest"):
+        payload = manifest_payload(root, manifest)
+        reply_sidecar.write_reply(root, record / "manifest.json", payload)
     from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot
 
-    stage_dirt_snapshot.write_snapshot(root, record)
+    with leg("dirt_snapshot"):
+        stage_dirt_snapshot.write_snapshot(root, record)
     from coordinator_core.ops.dispatch_emit import live_run_writes
 
-    live_run_writes.index_stage(root, run_id, payload, time.time())
+    with leg("live_index"):
+        live_run_writes.index_stage(root, run_id, payload, time.time())
     from coordinator_core.ops.dispatch_emit import halted_withheld_index
 
     try:
@@ -2140,7 +2177,25 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     `reply_sidecar.read_reply`. A refused request replies `{"error": str}`. A run whose record dir
     carries a `stop_after=plan` marker replies `{"parked": "plan", "plan_path": str|None}` and stages
     nothing, until its `halted.json` records the park; the next call then consumes the marker and stages.
+
+    Runs under leg attribution: the process_time row carries `legs` and `handler_thread_ms`.
     """
+    token = leg_attribution.begin()
+    t0 = time.thread_time()
+    try:
+        return _run_ask_stage(params, repo_root)
+    finally:
+        try:
+            fields = {"handler_thread_ms": round((time.thread_time() - t0) * 1000.0, 1)}
+            legs = leg_attribution.summary(top=3, floor_ms=50.0)
+            if legs:
+                fields["legs"] = legs
+            op_row_fields.attach(**fields)
+        finally:
+            leg_attribution.end(token)
+
+
+def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
     if repo_root is None:
         return {"error": "dispatch.ask_stage requires repo_root"}
     refusal = validate_params("dispatch.ask_stage", params, _PARAMS)
@@ -2150,37 +2205,41 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     run_id = params["run_id"]
     root = main_worktree_root(Path(repo_root))
     if _consume_park_marker(root, run_id):
+        stamp_run_stage(root, run_id, "halted")
         return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None}
     digest = ask_stage_receipt.params_digest(params)
-    spine_sha = _spine_sha(root, params.get("plan_path") or None)
     plan_parse: Optional[_PlanParse] = None
+    with leg("preflight"):
+        spine_sha = _spine_sha(root, params.get("plan_path") or None)
     try:
         prior_dir = record_dir(root, run_id)
     except ValueError:
         prior_dir = None
     if prior_dir is not None:
-        recorded = ask_stage_receipt.landed(prior_dir, digest, spine_sha)
-        if recorded is not None:
-            return {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
-        running = ask_stage_receipt.in_flight(prior_dir, digest)
-        if running is not None:
-            return {ask_stage_receipt.STAGE_IN_FLIGHT_KEY: running}
-        if ask_stage_receipt.partial(prior_dir):
-            return {
-                "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
-                "stage receipt. Reconcile the run; nothing was written."
-            }
-        parsed: list = []
-        escaping = _escaping_write_refusal(
-            root, params.get("plan_path") or None, params.get("only_rows"), parse_out=parsed
-        )
-        if parsed:
-            plan_parse = parsed[0]
-        if escaping is not None:
-            return {"error": escaping}
+        with leg("preflight"):
+            recorded = ask_stage_receipt.landed(prior_dir, digest, spine_sha)
+            if recorded is not None:
+                return {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
+            running = ask_stage_receipt.in_flight(prior_dir, digest)
+            if running is not None:
+                return {ask_stage_receipt.STAGE_IN_FLIGHT_KEY: running}
+            if ask_stage_receipt.partial(prior_dir):
+                return {
+                    "error": f"{STAGE_RECEIPT_MISSING}: manifest.json landed for run {run_id} with no matching "
+                    "stage receipt. Reconcile the run; nothing was written."
+                }
+            parsed: list = []
+            escaping = _escaping_write_refusal(
+                root, params.get("plan_path") or None, params.get("only_rows"), parse_out=parsed
+            )
+            if parsed:
+                plan_parse = parsed[0]
+            if escaping is not None:
+                return {"error": escaping}
         prior_dir.mkdir(parents=True, exist_ok=True)
         try:
-            claimed = ask_stage_receipt.claim(prior_dir, digest)
+            with leg("claim"):
+                claimed = ask_stage_receipt.claim(prior_dir, digest)
         except ask_stage_receipt.ClaimCreateStalled as exc:
             return {"error": f"{STAGE_CLAIM_STALLED}: {exc}. Nothing was staged; re-fire the ask."}
         if not claimed:
@@ -2203,9 +2262,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             plan_parse=plan_parse,
         )
         if params.get("plan_path"):
-            stamp = stamp_plan_executing(root, params["plan_path"])
-        handle = reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json")
-        ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
+            with leg("stamp"):
+                stamp = stamp_plan_executing(root, params["plan_path"])
+        with leg("receipt"):
+            handle = reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json")
+            ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}
         if getattr(exc, "owed_em_ids", None):
@@ -2220,7 +2281,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return reply
     finally:
         if prior_dir is not None:
-            ask_stage_receipt.release(prior_dir)
+            with leg("release"):
+                ask_stage_receipt.release(prior_dir)
     reply = {"manifest_handle": handle}
     if stamp is not None and stamp["outcome"] != "unchanged":
         reply[PLAN_EXECUTING_STAMP_KEY] = stamp

@@ -104,3 +104,25 @@ def test_stalled_index_read(tmp_path, monkeypatch):
     assert time.perf_counter() - t0 < 1
     gate.set()
     time.sleep(0.1)
+
+
+def test_stalled_index_write_degrades_instead_of_hanging(tmp_path, monkeypatch):
+    """A write outliving the deadline returns False at the deadline; a second write while it is
+    outstanding returns False at once; after the stall clears, writes land again."""
+    root = _root(tmp_path)
+    assert idx.add(root, "r0", 1.0) is True
+    gate = threading.Event()
+    real = hrr.atomic_write_bytes
+    monkeypatch.setattr(hrr, "atomic_write_bytes", lambda p, d: (gate.wait(5), real(p, d))[1])
+    monkeypatch.setattr(idx, "WRITE_DEADLINE_MS", 50.0)
+    t0 = time.perf_counter()
+    assert idx.add(root, "r1", 1.0) is False
+    assert time.perf_counter() - t0 < 1
+    t1 = time.perf_counter()
+    assert idx.add(root, "r2", 1.0) is False
+    assert time.perf_counter() - t1 < 0.04
+    gate.set()
+    time.sleep(0.3)
+    monkeypatch.setattr(hrr, "atomic_write_bytes", real)
+    assert idx.add(root, "r3", 1.0) is True
+    assert "r3" in idx.read(root, 2000)

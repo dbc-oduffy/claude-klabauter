@@ -254,7 +254,9 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help=(
             "Repo root (absolute path). If omitted, resolved via "
             "coordinator_core.lifecycle.find_repo_root from cwd. "
-            "Required — implicit os.getcwd() fallback is prohibited."
+            "Optional; implicit os.getcwd() fallback is prohibited. "
+            "Refused (non-zero exit) on scope-none ops such as agent_pipe.send "
+            "(DR-279)."
         ),
     )
     p.add_argument(

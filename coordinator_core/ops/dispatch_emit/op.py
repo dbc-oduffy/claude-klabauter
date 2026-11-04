@@ -1094,6 +1094,7 @@ _PARAM_FIELDS = (
     Field("session_root", "str"),
     Field("route_preference", "str"),
     Field("em_rationale", "str"),
+    Field("em_size", "str"),
     Field("ask_context", "str_list"),
     Field("all_of_pm_ask", "bool"),
     Field("launcher_child", "bool"),
@@ -2404,6 +2405,13 @@ def _dispatch_emit_body(
             if bad:
                 raise ValueError(bad)
             route_pref = _route_pref.parse(params.get("route_preference"), params.get("em_rationale"))
+        em_size: Optional[str] = None
+        if params.get("em_size") is not None:
+            from coordinator_core.ops.dispatch_emit.ask_contract import VALID_SIZES
+
+            em_size = str(params["em_size"]).strip().upper()
+            if em_size not in VALID_SIZES:
+                raise ValueError(f"dispatch.emit em_size takes one of {VALID_SIZES}, got {params['em_size']!r}")
         sizing_rel: Optional[str] = None
         relayed_slice_text: Optional[str] = None
         if sizing_path:
@@ -2539,6 +2547,7 @@ def _dispatch_emit_body(
             "pm_advisory": pm_advisory, "pm_turn_recorded": pm_turn_recorded,
             "relayed_slice_text": relayed_slice_text,
             "route_preference": route_pref,
+            "em_size": em_size,
             "required_reviewers": list(params.get("required_reviewers") or ()),
             "chatty": bool(params.get("chatty")),
         }
@@ -2917,72 +2926,89 @@ def _dispatch_emit_body(
         ask_script_path = _script_path_under(guarded_path, ask_ctx["root"])
         from coordinator_core.ops.dispatch_emit import run_token as _run_token
 
+        # A token outliving a failed emit hands the resubmit a run id whose state/warp dir was never
+        # written; roll back token and any dir this emit created unless the run already had a dir
+        # (a resume or rebind keeps its token).
+        dir_absent_at_entry = not record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]).is_dir()
+        rollback_token = False
         try:
-            ask_run_token = _run_token.mint(
-                Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path or "",
-                session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"], carry_prior=True,
+            try:
+                ask_run_token = _run_token.mint(
+                    Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path or "",
+                    session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"], carry_prior=True,
+                )
+            except (OSError, ValueError):
+                # No git dir to hold the record, or no repo-relative script to bind it to: the run
+                # hands its commit back to the EM.
+                ask_run_token = None
+            ask_ctx["run_token"] = ask_run_token
+            rollback_token = ask_run_token is not None and dir_absent_at_entry
+            ask_ctx["token_escrowed"] = bool(
+                ask_run_token
+                and params.get("launcher_child") is True
+                and _run_token.escrow(Path(ask_ctx["root"]), ask_ctx["run_id"], ask_run_token)
             )
-        except (OSError, ValueError):
-            # No git dir to hold the record, or no repo-relative script to bind it to: the run
-            # hands its commit back to the EM.
-            ask_run_token = None
-        ask_ctx["run_token"] = ask_run_token
-        ask_ctx["token_escrowed"] = bool(
-            ask_run_token
-            and params.get("launcher_child") is True
-            and _run_token.escrow(Path(ask_ctx["root"]), ask_ctx["run_id"], ask_run_token)
-        )
-        staged_prompts: dict[str, str] = {}
-        ask_ctx["carried_notes"] = _live_carried_notes(
-            Path(ask_ctx["root"]), ask_ctx["run_id"], ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from")
-        )
-        script = compose_ask_script(
-            staged_out=staged_prompts,
-            review_roster_fragment=review_roster_fragment,
-            review_stage_schemas=review_stage_schemas,
-            repo_root=Path(ask_ctx["root"]).as_posix(),
-            prompt=ask_ctx["prompt"],
-            sizing_rel=ask_ctx["sizing_rel"],
-            run_id=ask_ctx["run_id"],
-            session_id=emitting_session_id,
-            carried_notes=ask_ctx["carried_notes"],
-            script_path=ask_script_path,
-            plan_blitz_args=ask_ctx.get("plan_blitz_args"),
-            writes=ask_ctx.get("writes", ()),
-            cross_repo_approved=bool(params.get("cross_repo_approved")),
-            agent_type_host=agent_type_host,
-            baton=ask_ctx.get("baton"),
-            accept_pending=bool(ask_ctx.get("accept_pending")),
-            preamble=preamble,
-            em_brief=ask_ctx.get("em_brief"),
-            stop_after=ask_ctx.get("stop_after"),
-            in_run_commit=ask_run_token is not None,
-            ask_source=ask_ctx["ask_source"],
-            route_preference=ask_ctx["route_preference"],
-            required_reviewers=ask_ctx["required_reviewers"],
-            launcher_child=params.get("launcher_child") is True,
-            run_base_sha=ask_ctx.get("inherited_base") or (
-                _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
-                if ask_ctx.get("reserved_parent") or ask_ctx.get("rebound")
-                else None
-            ),
-        )
-        ask_body = ask_ctx["prompt"] or ask_ctx["relayed_slice_text"]
-        if ask_body:
-            # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.
-            ask_name = RELAYED_ASK_FILE if ask_ctx["ask_source"] == ASK_SOURCE_RELAYED else ASK_TEXT_FILE
-            ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
-            ask_file.parent.mkdir(parents=True, exist_ok=True)
-            ask_file.write_text(ask_body, encoding="utf-8", newline="\n")
-        for staged_name, staged_text in staged_prompts.items():
-            staged_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / PROMPTS_DIR / f"{staged_name}.md"
-            staged_file.parent.mkdir(parents=True, exist_ok=True)
-            staged_file.write_text(staged_text, encoding="utf-8", newline="\n")
-        if not ask_ctx["route_preference"].is_empty():
-            pref_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / _route_pref.ROUTE_PREFERENCE_FILE
-            pref_file.parent.mkdir(parents=True, exist_ok=True)
-            pref_file.write_text(_route_pref.to_json(ask_ctx["route_preference"]), encoding="utf-8", newline="\n")
-        bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
+            staged_prompts: dict[str, str] = {}
+            ask_ctx["carried_notes"] = _live_carried_notes(
+                Path(ask_ctx["root"]), ask_ctx["run_id"], ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from")
+            )
+            script = compose_ask_script(
+                staged_out=staged_prompts,
+                review_roster_fragment=review_roster_fragment,
+                review_stage_schemas=review_stage_schemas,
+                repo_root=Path(ask_ctx["root"]).as_posix(),
+                prompt=ask_ctx["prompt"],
+                sizing_rel=ask_ctx["sizing_rel"],
+                run_id=ask_ctx["run_id"],
+                session_id=emitting_session_id,
+                carried_notes=ask_ctx["carried_notes"],
+                script_path=ask_script_path,
+                plan_blitz_args=ask_ctx.get("plan_blitz_args"),
+                writes=ask_ctx.get("writes", ()),
+                cross_repo_approved=bool(params.get("cross_repo_approved")),
+                agent_type_host=agent_type_host,
+                baton=ask_ctx.get("baton"),
+                accept_pending=bool(ask_ctx.get("accept_pending")),
+                preamble=preamble,
+                em_brief=ask_ctx.get("em_brief"),
+                em_size=ask_ctx.get("em_size"),
+                stop_after=ask_ctx.get("stop_after"),
+                in_run_commit=ask_run_token is not None,
+                ask_source=ask_ctx["ask_source"],
+                route_preference=ask_ctx["route_preference"],
+                required_reviewers=ask_ctx["required_reviewers"],
+                launcher_child=params.get("launcher_child") is True,
+                run_base_sha=ask_ctx.get("inherited_base") or (
+                    _recorded_run_base(Path(ask_ctx["root"]), ask_ctx["run_id"])
+                    if ask_ctx.get("reserved_parent") or ask_ctx.get("rebound")
+                    else None
+                ),
+            )
+            ask_body = ask_ctx["prompt"] or ask_ctx["relayed_slice_text"]
+            if ask_body:
+                # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.
+                ask_name = RELAYED_ASK_FILE if ask_ctx["ask_source"] == ASK_SOURCE_RELAYED else ASK_TEXT_FILE
+                ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
+                ask_file.parent.mkdir(parents=True, exist_ok=True)
+                ask_file.write_text(ask_body, encoding="utf-8", newline="\n")
+            for staged_name, staged_text in staged_prompts.items():
+                staged_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / PROMPTS_DIR / f"{staged_name}.md"
+                staged_file.parent.mkdir(parents=True, exist_ok=True)
+                staged_file.write_text(staged_text, encoding="utf-8", newline="\n")
+            if not ask_ctx["route_preference"].is_empty():
+                pref_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / _route_pref.ROUTE_PREFERENCE_FILE
+                pref_file.parent.mkdir(parents=True, exist_ok=True)
+                pref_file.write_text(_route_pref.to_json(ask_ctx["route_preference"]), encoding="utf-8", newline="\n")
+            bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
+            record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]).mkdir(parents=True, exist_ok=True)
+        except BaseException:
+            if rollback_token:
+                _run_token.discard(Path(ask_ctx["root"]), ask_ctx["run_id"])
+            if dir_absent_at_entry:
+                import shutil
+
+                shutil.rmtree(record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]), ignore_errors=True)
+            raise
         ask_ctx["revisions_inherited"] = [
             {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip(), "kind": "revision"}
             for i in (bound.items if bound is not None else ())

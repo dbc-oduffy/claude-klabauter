@@ -189,6 +189,7 @@ def test_fire_task_still_running_before_fire_is_waited_on_then_fails_without_fir
     fake = FakeSchtasks(_log(tmp_path), states=("Running",), last="0x41301")
     result = _fire(tmp_path, fake, wait_seconds=6.0)
     assert not result.ok and "0x41301" in result.detail
+    assert result.running  # pre-fire Running: the caller re-measures, never "NOT effective"
     assert "/run" not in fake.calls
     assert result.waited >= 6.0
 
@@ -204,17 +205,42 @@ def test_fire_refused_as_already_running_is_failure_not_none(tmp_path):
     fake = FakeSchtasks(_log(tmp_path), run_rc=1, run_err="ERROR: The task is currently running (0x800710E0)")
     result = _fire(tmp_path, fake)
     assert result is not None and not result.ok and "0x800710E0" in result.detail
+    assert result.running  # pre-fire Running: the caller re-measures, never "NOT effective"
 
 
 def test_fire_run_failure_for_another_reason_returns_none(tmp_path):
     assert _fire(tmp_path, FakeSchtasks(_log(tmp_path), run_rc=1, run_err="ERROR: Access is denied.")) is None
 
 
-def test_fire_bounded_wait_expiry_is_failure_naming_the_task_state(tmp_path):
+def test_fire_bounded_wait_expiry_without_extension_names_the_task_state(tmp_path):
     fake = FakeSchtasks(_log(tmp_path), states=("Ready", "Running"), last="0x41301")
-    result = _fire(tmp_path, fake, wait_seconds=4.0)
-    assert not result.ok
+    result = _fire(tmp_path, fake, wait_seconds=4.0, extend_while_running=0.0)
+    assert not result.ok and result.running
     assert "after 4s" in result.detail and "Running" in result.detail and "0x41301" in result.detail
+
+
+def test_fire_keeps_waiting_past_the_bound_while_the_task_is_running(tmp_path):
+    fake = FakeSchtasks(_log(tmp_path), states=("Ready", "Running"), last="0x41301")
+    fake.on_sleep[9] = _record("2026-11-03T20:20:09.0000000Z")
+    result = _fire(tmp_path, fake, wait_seconds=4.0, extend_while_running=20.0)
+    assert result.ok and result.detail == NEW_NUMBERS
+    assert result.waited > 4.0
+
+
+def test_fire_still_running_after_the_extension_is_flagged_running_not_judged(tmp_path):
+    fake = FakeSchtasks(_log(tmp_path), states=("Ready", "Running"), last="0x41301")
+    result = _fire(tmp_path, fake, wait_seconds=4.0, extend_while_running=6.0)
+    assert not result.ok and result.running
+    assert "after 10s" in result.detail
+
+
+def test_governor_wait_never_extends_past_its_bound(tmp_path):
+    import file_cache_trim as fct
+
+    fake = FakeSchtasks(_log(tmp_path), states=("Ready", "Running"))
+    line = fire_box_cache_trim(fake, fake.log, fake.sleep, live_fn=lambda: True)
+    assert line.startswith("NOT TRIMMED:")
+    assert fake.sleeps <= fct.GOVERNOR_WAIT_SECONDS / fct.POLL_SECONDS
 
 
 def test_fire_task_leaving_running_without_a_record_fails_early(tmp_path):
@@ -246,7 +272,7 @@ def test_fire_task_absent_returns_none_without_running(tmp_path):
 
 
 def test_governor_line_is_this_runs_result_or_not_trimmed(tmp_path):
-    fresh = FakeSchtasks(_log(tmp_path), on_run=_record("2026-11-03T20:30:00.0000000Z"))
+    fresh = FakeSchtasks(_log(tmp_path), on_run=_record("2999-01-01T00:00:00.0000000Z"))
     line = fire_box_cache_trim(fresh, fresh.log, fresh.sleep, live_fn=lambda: True)
     assert NEW_NUMBERS in line and "this run's result" in line
     stale = FakeSchtasks(_log(tmp_path), states=("Ready",))
@@ -345,6 +371,24 @@ def test_apply_result_not_from_this_run_is_failure_with_no_after_read(capsys):
     assert code == ExitCode.TRIM_FAILED
     assert "no result record from this run" in err and "28.00 GiB" in err
     assert host.events.count("read") == 2  # before + the one sample inside fire; never an after-read
+
+
+RUNNING_FIRE = TrimFire(False, "no result record from this run after 150s wait (task Running)", 150.0, running=True)
+
+
+def test_apply_task_still_running_with_cache_dropped_exits_0_not_a_false_negative(capsys):
+    host = ScriptHost([snap(18.4, 17.3), snap(18.4, 17.3), snap(5.3, 30.7)])
+    code, out, err = _apply(host, RUNNING_FIRE, capsys)
+    assert code == ExitCode.OK
+    assert "NOT effective" not in err and "still Running" in out and "5.30 GiB" in out
+
+
+def test_apply_task_still_running_with_no_drop_is_unverified_not_not_effective(capsys):
+    host = ScriptHost([snap(18.4, 17.3), snap(18.4, 17.3), snap(18.2, 17.5)])
+    code, out, err = _apply(host, RUNNING_FIRE, capsys)
+    assert code == ExitCode.TRIM_FAILED
+    assert "UNVERIFIED" in err and "NOT effective" not in err
+    assert "18.40 GiB -> 18.20 GiB" in err
 
 
 def test_apply_tiny_cache_has_nothing_to_trim(capsys):

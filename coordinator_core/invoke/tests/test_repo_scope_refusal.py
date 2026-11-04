@@ -122,6 +122,27 @@ def test_repo_flag_not_refused_on_worktree_scoped_op():
     assert parsed.get("jsonrpc") == "2.0"
 
 
+def test_help_describes_repo_as_optional_and_refused_on_none_scoped_op():
+    result = subprocess.run(
+        [sys.executable, "-m", "coordinator_core.invoke", "--help"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        cwd=_PROJECT_ROOT,
+        env=_make_env(),
+        creationflags=_NO_CONSOLE,
+    )
+    assert result.returncode == 0, result.stderr
+    flat = " ".join(result.stdout.split())
+    assert "Required" not in flat
+    assert "Optional" in flat
+    assert "agent_pipe.send" in flat
+
+    refused = _invoke("agent_pipe.send", "{}", "--repo", _PROJECT_ROOT)
+    assert refused.returncode != 0
+    assert "--repo" in refused.stderr
+
+
 def test_no_repo_flag_still_works_on_none_scoped_op():
     result = _invoke("ping", "{}")
 

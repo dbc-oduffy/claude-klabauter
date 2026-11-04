@@ -290,6 +290,13 @@ def test_harness_notices_are_refused_without_consuming_an_index(tmp_path, monkey
     assert PT.append_turn("next", session_id="sid-notice")["turn"] == len(lines)
 
 
+def test_peer_message_wrapper_is_refused_but_typed_text_is_recorded(tmp_path, monkeypatch):
+    _session(tmp_path, monkeypatch, "sid-peer")
+    wrapped = '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="peer">hi</cross-session-message>'
+    assert PT.append_turn(wrapped, session_id="sid-peer")["ok"] is False
+    assert PT.append_turn("typed, mentioning <cross-session-message", session_id="sid-peer")["turn"] == 0
+
+
 def test_prompt_containing_a_notice_prefix_mid_text_is_recorded(tmp_path, monkeypatch):
     _session(tmp_path, monkeypatch, "sid-mid")
     text = "see <task-notification> and [Cross-session idle notice] here"

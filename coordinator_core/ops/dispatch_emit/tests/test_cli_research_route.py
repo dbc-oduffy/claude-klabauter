@@ -67,7 +67,7 @@ def _run(capsys, argv):
 def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
     rel = _write_sizing(
         repo, "--research-class", "corpus", "--research-appetite", "medium",
-        "--research-source", "web", "--research-source", "notebooklm", "--research-target", "notebooklm=A",
+        "--research-source", "web", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube", "--research-target", "notebooklm=A",
     )
     capsys.readouterr()
     code, reply = _run(capsys, ["--from-sizing", rel])
@@ -96,7 +96,7 @@ def test_from_sizing_emits_a_chain_with_halts_and_brief(repo, capsys):
 
 
 def test_from_sizing_honours_a_given_list(repo, capsys):
-    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
     ctx, _, _ = op_module._research_route_setup(
         {"lists": {"notebooks": ["A", "B"]}}, repo, rel, None
     )
@@ -106,7 +106,7 @@ def test_from_sizing_honours_a_given_list(repo, capsys):
 
 
 def test_a_notebooklm_sizing_with_no_notebooks_names_both_routes(repo, capsys):
-    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
     capsys.readouterr()
     assert cli_module.main(["--from-sizing", rel]) == cli_module.EXIT_DATA_ERROR
     err = capsys.readouterr().err
@@ -242,7 +242,7 @@ def test_a_flag_reaches_the_pipeline_that_declares_it_and_an_unclaimed_one_is_re
 
 def test_every_segments_refusals_arrive_together(repo):
     rel = _write_sizing(
-        repo, "--research-class", "corpus", "--research-source", "web", "--research-source", "notebooklm",
+        repo, "--research-class", "corpus", "--research-source", "web", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube",
     )
     with pytest.raises(op_module.PipelineEmitRefused) as exc:
         op_module._research_route_setup({"flags": {"nope": "1"}}, repo, rel, None)
@@ -283,7 +283,7 @@ def test_an_unkeyable_list_value_refuses_the_emit(repo, monkeypatch):
     monkeypatch.setitem(
         research_emit.LIST_KEY_SHAPES, "notebooklm", {"notebooks": (re.compile(r"^[A-Z]$"), "letters")}
     )
-    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm")
+    rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
     with pytest.raises(op_module.PipelineEmitRefused) as exc:
         op_module._research_route_setup({"lists": {"notebooks": ["web-docs"]}}, repo, rel, None)
     assert exc.value.reasons == ["pipeline 'notebooklm': --list notebooks=web-docs: values must be letters"]

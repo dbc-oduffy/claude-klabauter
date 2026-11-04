@@ -20,6 +20,7 @@ _BATON_CLI_VERBS = (
     "handoff.supersede_predecessor",
     "handoff-carry-gate",
     "baton-stamp-carried-ids",
+    "baton-stamp-task-list",
 )
 _MIGRATED_VERBS = ("handoff.stamp_phase", "handoff.author_fork")
 _MIGRATED_VERBS__SUBJECT_CLASS = "op-name"

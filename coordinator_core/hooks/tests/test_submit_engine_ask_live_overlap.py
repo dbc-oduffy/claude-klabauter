@@ -350,3 +350,19 @@ def test_a_run_with_no_token_record_and_no_marker_stays_live(tmp_path, monkeypat
     _live(tmp_path, {"run-a": {"pkg/mod.py"}})
     monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([]))
     assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+
+
+def test_stalled_liveness_read_denies_nothing(tmp_path, monkeypatch):
+    """An index hit whose ended-read stalls is unknown, not live: the ask is allowed."""
+    (tmp_path / ".git").mkdir()
+    _live(tmp_path, {"run-a": {"pkg/mod.py"}})
+    real = mod._bounded_call
+
+    def stall_ended(key, fn, deadline_ms=None):
+        return halt_resume_record.STALLED if key[0] == "ended" else real(key, fn, deadline_ms)
+
+    monkeypatch.setattr(mod, "_bounded_call", stall_ended)
+    seen: list = []
+    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "source": "pm", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(tmp_path, seen))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert len(seen) == 1

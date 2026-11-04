@@ -120,6 +120,12 @@ __all__ = [
     "holder_successor_spawn",
     "PUBLISH_HOLDER_TOKEN_ENV",
     "hold_publish_marker",
+    "HANDOVER_PENDING_FILENAME",
+    "HANDOVER_PENDING_TTL_SECS",
+    "handover_pending_path",
+    "handover_pending_remaining_secs",
+    "handover_pending_held",
+    "hold_handover_pending",
     "DRAIN_WAIT_SECS",
     "wait_for_publish_release",
     "wait_for_publish_swap",
@@ -162,6 +168,10 @@ BREADCRUMB_FILENAME = "warm.json"
 PUBLISH_MARKER_FILENAME = "publish.marker"
 #: A crashed publisher's marker stops blocking after this.
 PUBLISH_MARKER_MAX_AGE_SECS = 3600
+HANDOVER_PENDING_FILENAME = "handover.pending"
+#: Longest a handover-pending hold gates mints; covers the ~14 min staging phase
+#: with margin, and bounds the wedge a crashed publisher can leave.
+HANDOVER_PENDING_TTL_SECS = 1800.0
 #: A live holder refreshes its marker's mtime this often (daemon thread).
 PUBLISH_HEARTBEAT_SECS = 2.0
 #: A heartbeating marker untouched this long is wedged (~7 missed beats).
@@ -1230,6 +1240,84 @@ def hold_publish_marker(engine_root: Path, *, holder: str) -> Iterator[Path]:
             if current is not None and current.get("pid") == os.getpid():
                 path.unlink()
         except OSError:
+            pass
+
+
+def handover_pending_path(engine_root: Optional[Path] = None) -> Path:
+    """`svc_dir(engine_root) / HANDOVER_PENDING_FILENAME`."""
+    return svc_dir(engine_root) / HANDOVER_PENDING_FILENAME
+
+
+def handover_pending_remaining_secs(
+    engine_root: Optional[Path] = None, *, now: Optional[float] = None,
+) -> float:
+    """Seconds left on a handover-pending hold for `engine_root`; 0.0 when none is held.
+
+    TRAP: reader on the mint path -- one read, no subprocess, no unlink of a
+    stale file, never raises; unreadable, malformed or expired reads 0.0.
+    """
+    current = time.time() if now is None else now
+    try:
+        record = json.loads(handover_pending_path(engine_root).read_text(encoding="utf-8"))
+        expires_at = record["expires_at"]
+        if isinstance(expires_at, bool) or not isinstance(expires_at, (int, float)):
+            return 0.0
+        return max(0.0, min(float(expires_at) - current, HANDOVER_PENDING_TTL_SECS))
+    except Exception:  # noqa: BLE001 -- a hint reader never raises
+        return 0.0
+
+
+def handover_pending_held(engine_root: Optional[Path] = None, *, now: Optional[float] = None) -> bool:
+    """Whether a publish handover is pending for `engine_root`: new mints hold until it clears."""
+    return handover_pending_remaining_secs(engine_root, now=now) > 0.0
+
+
+@contextmanager
+def hold_handover_pending(engine_root: Optional[Path] = None) -> Iterator[Path]:
+    """Mark a publish handover pending for `engine_root` while the body runs.
+
+    Writes `{pid, token, started_at, expires_at}` atomically; yields the path; on
+    exit unlinks it only if it still carries this hold's token. `expires_at` is
+    `HANDOVER_PENDING_TTL_SECS` ahead, so a crashed publisher cannot wedge mints.
+    A hold this process already owns is yielded untouched (the outer hold releases).
+    """
+    path = handover_pending_path(engine_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        existing = None
+    if (
+        isinstance(existing, dict)
+        and existing.get("pid") == os.getpid()
+        and handover_pending_held(engine_root)
+    ):
+        yield path
+        return
+    token = secrets.token_hex(8)
+    now = time.time()
+    record = {
+        "pid": os.getpid(),
+        "token": token,
+        "started_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "expires_at": now + HANDOVER_PENDING_TTL_SECS,
+    }
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(record), encoding="utf-8", newline="\n")
+    if not locked_write.replace_with_retry(str(tmp), str(path)):
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise OSError(f"could not write handover-pending breadcrumb {path}")
+    try:
+        yield path
+    finally:
+        try:
+            current = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(current, dict) and current.get("token") == token:
+                path.unlink()
+        except (OSError, ValueError):
             pass
 
 

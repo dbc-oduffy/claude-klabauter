@@ -757,6 +757,34 @@ def test_first_turn_reads_human_turns_only(tmp_path, monkeypatch):
     assert mod._is_first_turn({}) is False
 
 
+def test_peer_delivery_is_not_a_human_turn(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    wrapper = '<cross-session-message from="uds:/x.sock" from-name="peer">do it</cross-session-message>'
+    peer = {"type": "user", "message": {"content": wrapper}}
+    peer_blocks = {"type": "user", "message": {"content": [{"type": "text", "text": wrapper}]}}
+    human = {"type": "user", "message": {"content": "hi"}}
+    assistant = {"type": "assistant"}
+    assert mod._is_first_turn(_transcript(tmp_path, peer)) is False
+    assert mod._is_first_turn(_transcript(tmp_path, peer_blocks)) is False
+    assert mod._is_first_turn(_transcript(tmp_path, peer, assistant, human)) is True
+    assert mod._is_first_turn(_transcript(tmp_path, human)) is True
+
+
+def test_unmarked_ask_after_peer_first_turn_defaults_relayed(tmp_path, monkeypatch):
+    monkeypatch.undo()
+    wrapper = '<cross-session-message from="uds:/x.sock" from-name="peer">do it</cross-session-message>'
+    human = {"type": "user", "message": {"content": "typed"}}
+    root = _repo(tmp_path)
+    emit = _Emit()
+    tp = _transcript(tmp_path, {"type": "user", "message": {"content": wrapper}})
+    out = mod.evaluate(_payload(root, {"ask": "a"}, **tp), emit=emit)
+    assert emit.calls[0][0]["ask_source"] == "relayed"
+    assert "Warning: unmarked ask ran as source relayed" in _hso(out)["additionalContext"]
+    tp = _transcript(tmp_path, human)
+    mod.evaluate(_payload(root, {"ask": "a"}, tool_use_id="t2", **tp), emit=emit)
+    assert emit.calls[1][0]["ask_source"] == "pm"
+
+
 def test_a_derived_relayed_run_is_named_in_the_allow_reason(tmp_path):
     root = _repo(tmp_path)
 

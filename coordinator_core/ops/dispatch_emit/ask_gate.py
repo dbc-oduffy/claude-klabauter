@@ -161,6 +161,7 @@ def _research_build_split_verdict(
     from coordinator_core.ops.dispatch_emit import ask_fanout
     from coordinator_core.ops.dispatch_emit.research_build_split import (
         notebooklm_targets_or_halt,
+        split_plan_rel,
         split_research_build,
     )
     from coordinator_core.session import claimed_write
@@ -171,14 +172,14 @@ def _research_build_split_verdict(
     research_doc, build_doc = split_research_build(sizing, sizing_rel, writes)
     if targets:
         research_doc["research"]["targets"] = targets
-    stem = Path(sizing_rel).stem
-    for doc in (research_doc, build_doc):
-        # The fan-out requires a plan edge. A sizing with none gets a pointer to no file: a plan edge that
-        # names no plan reads as "no plan" downstream.
-        if not (isinstance(doc.get("plan"), str) and doc["plan"].strip()):
-            doc["plan"] = f"docs/plans/{stem}.md"
     base = f"{sizing_rel[: -len('.yaml')] if sizing_rel.endswith('.yaml') else sizing_rel}-{uuid.uuid4().hex[:6]}"
     rels = (f"{base}-research.yaml", f"{base}-build.yaml")
+    for rel, doc in zip(rels, (research_doc, build_doc)):
+        # The fan-out requires a plan edge. A sizing with none gets the month-dir path
+        # coordinator-doc-new will mint for that slice's own stem: a flat path makes plan-blitz refuse
+        # "sizing already cites plan".
+        if not (isinstance(doc.get("plan"), str) and doc["plan"].strip()):
+            doc["plan"] = split_plan_rel(rel)
     for rel, doc in zip(rels, (research_doc, build_doc)):
         claimed_write.create_exclusive(
             Path(repo_root) / rel, yaml.safe_dump(doc, sort_keys=False, allow_unicode=True)
@@ -219,6 +220,82 @@ def _research_build_split_verdict(
         fire=reply["fire"],
         split=split,
     )
+
+
+def _run_landed_sha(root: Path, run_id: str) -> Optional[str]:
+    """The sha `run_id` landed at per its halt marker or sibling status, else None."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+
+    if not safe_id(run_id):
+        return None
+    try:
+        marker = halted_run.read_strict_run(ask_contract.record_dir(root, run_id))
+    except (ValueError, halted_run.UnreadableHaltRecord):
+        marker = None
+    if marker is not None and marker.get("status") == halted_run.STATUS_LANDED:
+        sha = marker.get("sha")
+        return sha if isinstance(sha, str) and sha else None
+    try:
+        status = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if isinstance(status, dict) and status.get("status") == contract.STATUS_LANDED:
+        sha = status.get("sha")
+        return sha if isinstance(sha, str) and sha else None
+    return None
+
+
+def _credit_split_predecessors(root: Path, sizing_rel: str) -> list[str]:
+    """Credit the research slice run a split minted when a refire already landed its sizing's work.
+
+    Gated sizing `sizing_rel` is a split build slice held `after` a research slice run that never ran: when
+    another run bound to that research slice sizing landed, the minted run is recorded landed under it
+    (`dispatch.record_halted_run_landed` `landed_under`) and its sibling status closes through
+    `run_close.sibling_release`, the one release path. Returns the credited run ids; a missing record,
+    a still-running predecessor or a refused credit credits nothing."""
+    if not Path(sizing_rel).stem.endswith("-build"):
+        return []
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+    from coordinator_core.ops.dispatch_emit import halted_run_landed, run_close
+    from coordinator_core.session import claimed_write
+
+    norm = Path(sizing_rel).as_posix()
+    warp = root / Path(contract.parent_record_rel("x")).parents[1]
+    credited: list[str] = []
+    for rec in sorted(warp.glob("*/parent.json")):
+        data = run_close._read_json(rec)
+        try:
+            parent = contract.ParentRecord.from_json(data) if data else None
+        except (ValueError, KeyError, TypeError):
+            continue
+        by_id = {r.run_id: r for r in parent.runs} if parent else {}
+        for run in by_id.values():
+            if run.slice_sizing != norm:
+                continue
+            for pred_id in run.after:
+                pred = by_id.get(pred_id)
+                if pred is None or _run_landed_sha(root, pred_id):
+                    continue
+                other = _newest_run_binding(root, pred.slice_sizing, pred_id)
+                sha = _run_landed_sha(root, other) if other else None
+                if not sha:
+                    continue
+                reply = halted_run_landed._handler(
+                    {"run_id": pred_id, "sha": sha, "landed_under": other}, root
+                )
+                if reply.get("ok"):
+                    own = root / contract.status_rel(pred_id)
+                    if not own.exists():
+                        claimed_write.replace_text(
+                            own,
+                            json.dumps({"status": contract.STATUS_RUNNING, "parent_id": parent.parent_id}, sort_keys=True)
+                            + "\n",
+                        )
+                    run_close.sibling_release(root, pred_id, sha)
+                    credited.append(pred_id)
+    return credited
 
 
 class _NoInRunRemedy(Exception):
@@ -1222,6 +1299,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
         if refused is not None:
             return _refuse(refused).to_json()
+    _credit_split_predecessors(root, sizing_rel)
     recorded = _write_record(root, sizing_rel, record) if record is not None else None
     landed: list = []
     kept: list = []

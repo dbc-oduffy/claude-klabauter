@@ -1484,6 +1484,87 @@ def _dispatch_baton_stamp_carried_ids(args: list[str], repo_root: Path) -> dict[
     return {"cli": "baton-stamp-carried-ids", "args": args, "stamped": _state["stamped"]}
 
 
+_OPEN_TASKS_SECTION_RE = re.compile(r"^## Open tasks[ \t]*\n.*?(?=^## |\Z)", re.DOTALL | re.MULTILINE)
+
+
+def _dispatch_baton_stamp_task_list(args: list[str], repo_root: Path) -> dict[str, Any]:
+    """d1t: write the session's open harness tasks as a `## Open tasks` body section.
+
+    Body-only edit (frontmatter content untouched; a CRLF file is rewritten LF throughout,
+    because split_frontmatter normalises line endings). No open tasks, an unreadable store or
+    a session with no task dir stamps nothing and still succeeds. A section whose
+    `yaml tasks` block already reads back equal is not rewritten.
+    """
+    from coordinator_core import task_carry
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+
+    file_rel: Optional[str] = None
+    session_id: Optional[str] = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--file":
+            file_rel = args[i + 1] if i + 1 < len(args) else None
+            i += 2
+            continue
+        if args[i] == "--session-id":
+            session_id = args[i + 1] if i + 1 < len(args) else None
+            i += 2
+            continue
+        i += 1
+    if not file_rel:
+        raise RuntimeError("baton-stamp-task-list: --file is required")
+
+    try:
+        tasks = task_carry.read_open_tasks(session_id or "")
+    except Exception:  # noqa: BLE001 -- an unreadable store must never refuse a handoff
+        tasks = []
+    result: dict[str, Any] = {
+        "cli": "baton-stamp-task-list",
+        "args": args,
+        "stamped": False,
+        "count": len(tasks),
+    }
+    if not tasks:
+        return result
+
+    target = Path(file_rel)
+    target_abs = target if target.is_absolute() else repo_root / target
+    section = task_carry.render_tasks_section(tasks)
+    state: dict[str, bool] = {"stamped": False}
+
+    def mutate(old_text: str) -> str:
+        state["stamped"] = False
+        split = split_frontmatter(old_text)
+        if split is None:
+            raise MutateAbort(f"baton-stamp-task-list: no parseable YAML frontmatter in {target_abs}")
+        body = split.body_with_leading_newline
+        if not old_text.endswith(body):
+            old_text = old_text.replace("\r\n", "\n")
+        head = old_text[: len(old_text) - len(body)]
+        existing = _OPEN_TASKS_SECTION_RE.search(body)
+        if existing is not None:
+            if task_carry.parse_tasks_block(existing.group(0)) == tasks:
+                return old_text
+            new_body = body[: existing.start()] + section + "\n" + body[existing.end():].lstrip("\n")
+            new_body = new_body.rstrip("\n") + "\n"
+        else:
+            new_body = body.rstrip("\n") + "\n\n" + section
+        state["stamped"] = True
+        return head + new_body
+
+    try:
+        locked_rmw(target_abs, mutate, repo_root=repo_root)
+    except FileNotFoundError:
+        raise RuntimeError(f"baton-stamp-task-list: file not found: {target_abs}")
+    except LockTimeout as exc:
+        raise RuntimeError(f"baton-stamp-task-list: timed out waiting for file lock on {target_abs}: {exc}")
+    except MutateAbort as exc:
+        raise RuntimeError(str(exc)) from exc
+    result["stamped"] = state["stamped"]
+    return result
+
+
 #: C5 discriminator decision (docs/plans/2026-08-19-directives-name-an-op-not-
 #: a-cli.md § C5 / § The discriminator for the mixed end state) -- checked
 #: live against `coordinator_core.authz.registration_quad._live_registry()`
@@ -1529,6 +1610,7 @@ _CLI_DISPATCH: dict[str, Callable[[list[str], Path], dict[str, Any]]] = {
     "handoff.supersede_predecessor": _dispatch_handoff_supersede_predecessor,
     "handoff-carry-gate": _dispatch_handoff_carry_gate,
     "baton-stamp-carried-ids": _dispatch_baton_stamp_carried_ids,
+    "baton-stamp-task-list": _dispatch_baton_stamp_task_list,
 }
 
 #: The op-named subset of `_CLI_DISPATCH` per the C5 discriminator decision

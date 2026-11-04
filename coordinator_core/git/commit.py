@@ -100,7 +100,7 @@ from coordinator_core.git.git_objects import (
     object_batch,
     write_object,
 )
-from coordinator_core.git.git_state import IndexParseError, head_blobs, head_sha, head_tree_sha, read_commit, read_index, read_tree_spine
+from coordinator_core.git.git_state import IndexParseError, head_blobs, head_sha, head_tree_sha, index_read_cache_scope, read_commit, read_index, read_tree_spine
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git import rollback_check
 from coordinator_core.git import checkpoint_guard
@@ -1600,7 +1600,9 @@ def commit_paths(
     prefer_staged_set = {p.replace("\\", "/") for p in prefer_staged}
     delete_set = set(delete_list)
     untrack_set = set(untrack_list)
-    for p in path_list:
+    # One index parse for the whole pass: `_text_pin_checkin` reads the index per CR-bearing path.
+    with index_read_cache_scope():
+      for p in path_list:
         if p in delete_set or p in untrack_set:
             # DECLARED DELETION WINS over the content read, and it has to win
             # HERE rather than at the `assembled` write below: a path named in

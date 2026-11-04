@@ -580,7 +580,7 @@ def test_stage_models_triage_haiku_lands_once_and_in_reemit_argv(tmp_path):
     haiku = _emit(tmp_path / "b", stage_models={"triage": "haiku"})
     sonnet = _emit(tmp_path / "c", stage_models={"triage": "sonnet"})
     pinned = plain.script.count("model: 'haiku'")
-    assert pinned == 7
+    assert pinned == 9
     assert haiku.script.count("model: 'haiku'") == pinned
     assert sonnet.script.count("model: 'haiku'") == pinned - 1
     assert re.search(r"label: 'triage'[^\n]*?model: 'haiku'", plain.script)

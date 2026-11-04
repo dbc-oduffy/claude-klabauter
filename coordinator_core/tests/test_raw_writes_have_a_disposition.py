@@ -316,6 +316,10 @@ _INSTALL_PREFIX = "coordinator_core/install/"
 _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/agent_pipe/__main__.py': ('outside-repo', 'relay worker result.json (tmp + os.replace), argv.json and agent log under <settings-home>/agent-pipe/runs/<run_id>, never the repo: _relay'),
     'coordinator_core/agent_pipe/mailbox.py': ('outside-repo', 'O_APPEND mailbox lines, lock file and drain os.replace under <settings-home>/agent-pipe/mailboxes, never the repo: append, drain'),
+    'coordinator_core/agent_pipe/bridge.py': ('outside-repo', 'bridge inbox and log O_APPEND lines, routes.json (tmp + os.replace) and inbox claim rename under <settings-home>/agent-pipe, never the repo: _append_line, _store_routes, _claim_inbox'),
+    'coordinator_core/agent_pipe/roster.py': ('outside-repo', 'roster.json via tmp + os.replace under <settings-home>/agent-pipe, never the repo: _store'),
+    'coordinator_core/group_em/gem_home_path_guard.py': ('git-internal', 'pre-commit hook written into <group-em home>/.git/hooks (the home is outside every checkout), never state/: install'),
+    'coordinator_core/hooks/block_ungranted_opus_subagent.py': ('outside-repo', 'override log lines appended via atomic_append under <settings-home>/state/agent-model-overrides.jsonl, never the repo; the open(..., "rb") is a read-only pointer-file read: _record_override'),
     'coordinator_core/ops/agent_pipe.py': ('outside-repo', 'run dir and request.json under <settings-home>/agent-pipe/runs/<run_id>, never the repo: agent_pipe.start/send'),
     'coordinator_core/codex_runner/__main__.py': ('outside-repo', 'worker result.json (tmp + os.replace) under <settings-home>/codex-runs/<run_id>, never the repo: _write_result'),
     'coordinator_core/codex_runner/agy.py': ('outside-repo', 'agy conversation events and stderr logs under <settings-home>/codex-runs/<run_id>, never the repo: AgyConversation.open'),

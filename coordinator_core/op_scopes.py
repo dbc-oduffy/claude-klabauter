@@ -578,6 +578,10 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # agent_pipe.start / .send -- run dirs and mailboxes live under the machine-global settings home.
     "agent_pipe.start":                       "none",
     "agent_pipe.send":                        "none",
+    "agent_pipe.list_live":                   "none",
+    "agent_pipe.bridge_send":                 "none",
+    "agent_pipe.roster_bind":                 "none",
+    "agent_pipe.route_set":                   "none",
     "groupem.enter":                          "none",
     # groupem.stamp / groupem.resolve_addressee / groupem.idle_report / groupem.standing --
     # same resolution story as groupem.enter immediately above: each

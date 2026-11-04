@@ -9,6 +9,9 @@ marker, discards the run token and lands the record through ``abandoned_runs`` (
 The reap holds a run younger than its quiet window, so a fresh abandon replies ``landed_sha: null`` and
 ``note`` names the reap's skip reason; the halt marker still blocks any start.
 
+``abandon`` on an id with no run dir (announced, never written) only discards its token and replies
+ok; with no token either it refuses ``run-not-found``, and ``start`` on it always refuses.
+
 A run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt
 marker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file
 reads only; no git spawn on the refusal path or on ``start``.
@@ -98,6 +101,19 @@ def _abandon(repo_root: Path, run_id: str, dry_run: bool) -> dict:
     return reply(run_id, ACTION_ABANDON, landed_sha=sha, note=note)
 
 
+def _clear_dirless_mint(repo_root: Path, run_id: str, dry_run: bool) -> Optional[dict]:
+    """Abandon of an id whose token record exists but whose run dir never landed: discard the token
+    (and its escrow); no marker, no reap, nothing to commit. None when no token record exists."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if run_token._read_rec(repo_root, run_id) is None and run_token.escrowed(repo_root, run_id) is None:
+        return None
+    if dry_run:
+        return reply(run_id, ACTION_ABANDON, note="dry-run: token not discarded")
+    run_token.discard(repo_root, run_id)
+    return reply(run_id, ACTION_ABANDON, note=f"no {RECORD_DIR_ROOT}/{run_id}: stray mint token discarded")
+
+
 @register_op(OP_NAME)
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.minted_run": start or abandon one minted-only run."""
@@ -115,6 +131,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     root = main_worktree_root(Path(repo_root))
     run_dir = root / RECORD_DIR_ROOT / run_id
     if not run_dir.is_dir():
+        if action == ACTION_ABANDON:
+            cleared = _clear_dirless_mint(root, run_id, bool(p.get("dry_run")))
+            if cleared is not None:
+                return cleared
         return reply(run_id, action, refusal=f"{REFUSAL_NOT_FOUND}: no {RECORD_DIR_ROOT}/{run_id}")
     if not is_minted_only(run_dir):
         return reply(run_id, action, refusal=f"{REFUSAL_PAST_MINTED}: {run_id} is past stage minted or halt-marked")

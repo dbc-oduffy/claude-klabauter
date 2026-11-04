@@ -148,6 +148,20 @@ def test_start_keeps_the_earlier_sizings(run):
     assert rl.read_run(d)[rl.EARLIER_SIZINGS_FIELD] == [REL]
 
 
+def test_start_holds_with_retry_after_and_leaves_no_run_dir_while_handover_pends(repo, tmp_path, monkeypatch):
+    from coordinator_core.warm import breadcrumb
+
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
+    with breadcrumb.hold_handover_pending():
+        with pytest.raises(rl.HandoverPending) as held:
+            rl.start(repo, RUN)
+    assert held.value.reply["status"] == "handover_pending"
+    assert held.value.reply["retry_after"] >= 1
+    assert not (repo / RECORD_DIR_ROOT / RUN).exists()
+    d = rl.start(repo, RUN)
+    assert (d / "run-stage.json").is_file()
+
+
 def test_run_token_bind_sizing_follows_the_newest_sizing(run, monkeypatch):
     repo, _d = run
     session = "s-1"

@@ -29,6 +29,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RECORD_DIR_ROOT,
     RUN_OUTCOME_FILE,
     LedgerHalt,
+    halted_naming_existing_plan,
     halted_record_message,
     ledger_halt_path,
     write_ledger_halt,
@@ -459,7 +460,7 @@ def land(worktree_root: Path, repo_root: Path, params: dict) -> dict:
     """Land a halted run's record (``params.halted_by``) and the product it finished; see the module."""
     from coordinator_core.ops.dispatch_emit import run_token
 
-    halted = params[HALTED_RECORD_PARAM]
+    halted = halted_naming_existing_plan(worktree_root, params[HALTED_RECORD_PARAM])
     run_id = params.get("run_id")
     if not isinstance(run_id, str) or not safe_id(run_id):
         return _error(f"params.run_id {run_id!r} is not a single safe path segment", refused="run-id-unsafe")

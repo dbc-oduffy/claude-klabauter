@@ -198,3 +198,77 @@ def test_schema_refuses_an_unknown_source():
                                                   "classes": {}, "message": ""}, "anchor_verdicts": [bad]}
     with pytest.raises(jsonschema.ValidationError, match="magic"):
         _validate(reply)
+
+
+def _carry_uncheckable(root: Path, plan: Path) -> None:
+    from coordinator_core.ops._research_grounding import line_hashes
+    from coordinator_core.session.machinery_paths import plan_sidecars_dir
+
+    lines = plan.read_text(encoding="utf-8").splitlines()
+    live = line_hashes("\n".join(lines))[next(i for i, ln in enumerate(lines) if "check:" in ln)]
+    path = Path(plan_sidecars_dir(str(root))) / f"{plan.stem}.premise-carry.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({
+            "schema": "premise-carry/1", "plan": REL, "brief_version": "v", "basis": [],
+            "rows": [{"verdict": "UNCHECKABLE", "citation": "the fixture marker",
+                      "anchor": ANCHOR_ID, "line_hash": live}],
+        }),
+        encoding="utf-8",
+    )
+
+
+def _home_check_plan(root: Path) -> Path:
+    common = _plan(root)
+    plan = root / REL
+    plan.write_text(
+        plan.read_text(encoding="utf-8").replace(
+            f"grep -c marker {REL}", "grep -c crossSessionInbound ~/.claude/settings.json"
+        ),
+        encoding="utf-8",
+    )
+    return common
+
+
+@pytest.mark.parametrize("lane", ["passed-row", "carry-row"])
+@pytest.mark.parametrize("engine", ["mismatch", "real"])
+def test_uncheckable_row_is_carried_never_relabelled_contradicted(tmp_path, monkeypatch, lane, engine):
+    common = _home_check_plan(tmp_path)
+    if engine == "mismatch":
+        monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("MISMATCH", observed="0"))
+    else:
+        monkeypatch.setenv("HOME", str(tmp_path / "home"))
+        monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    params: dict = {"plan": REL}
+    if lane == "passed-row":
+        row = {"verdict": "UNCHECKABLE", "citation": "the fixture marker", "anchor": ANCHOR_ID}
+        params["premise"] = {"rows": [row]}
+    else:
+        _carry_uncheckable(tmp_path, tmp_path / REL)
+    reply = op._handler(params, common)
+    assert not any("anchor-premise-CONTRADICTED" in b for b in reply["blocking"])
+    assert _entry(reply)["verdict"] == "UNCHECKABLE"
+    assert any(r["kind"] == "uncheckable-to-falsifier-row" for r in reply.get("mechanical_repairs", []))
+    _validate(reply)
+
+
+_AP1_CITATION = "AP1 -- crossSessionInbound is a top-level key of ~/.claude/settings.json"
+
+
+def test_uncheckable_row_citing_the_anchor_id_first_without_an_anchor_key_is_carried(tmp_path, monkeypatch):
+    common = _home_check_plan(tmp_path)
+    monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("MISMATCH", observed="0"))
+    row = {"verdict": "UNCHECKABLE", "citation": _AP1_CITATION.replace("AP1", ANCHOR_ID, 1)}
+    reply = op._handler({"plan": REL, "premise": {"rows": [row]}}, common)
+    assert not any("anchor-premise-CONTRADICTED" in b for b in reply["blocking"])
+    assert _entry(reply)["verdict"] == "UNCHECKABLE" and _entry(reply)["source"] == "row"
+    assert any(r["kind"] == "uncheckable-to-falsifier-row" for r in reply["mechanical_repairs"])
+    _validate(reply)
+
+
+def test_uncheckable_row_mentioning_the_anchor_id_in_passing_does_not_clear_a_broke_check(tmp_path, monkeypatch):
+    common = _home_check_plan(tmp_path)
+    monkeypatch.setattr(_anchor_check, "evaluate", _evaluate("MISMATCH", observed="0"))
+    row = {"verdict": "UNCHECKABLE", "citation": f"a different claim that cites {ANCHOR_ID} in passing"}
+    reply = op._handler({"plan": REL, "premise": {"rows": [row]}}, common)
+    assert any(b.startswith(f"anchor-premise-CONTRADICTED: {ANCHOR_ID}") for b in reply["blocking"])

@@ -61,7 +61,7 @@ def _brief(repo: Path, ctx: dict, segment: str) -> str:
 
 def test_seed_kinds_route_to_their_own_pipelines(repo):
     rel = _seeded_sizing(
-        repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)], "--research-target", "notebooklm=A"
+        repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)], "--research-notebooklm-need", "youtube", "--research-target", "notebooklm=A"
     )
     ctx = _setup(repo, rel)
     assert ctx["shape"]["pipelines"] == ["nlm-preflight", "repo", "notebooklm", "web"]
@@ -96,7 +96,7 @@ def test_repo_target_plus_repo_seed_get_two_keyed_segments_and_a_compare(repo, t
 
 
 def test_a_notebooklm_segment_without_notebooks_or_video_seeds_still_refuses(repo):
-    rel = _seeded_sizing(repo, [("doc", URL_C)], "--research-source", "notebooklm")
+    rel = _seeded_sizing(repo, [("doc", URL_C)], "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
     with pytest.raises(PipelineEmitRefused) as exc:
         _setup(repo, rel)
     assert any(
@@ -120,7 +120,7 @@ def test_the_emit_spawns_no_subprocess(repo, monkeypatch):
 
     monkeypatch.setattr(subprocess, "Popen", _fail)
     rel = _seeded_sizing(
-        repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)], "--research-target", "notebooklm=A"
+        repo, [("repo", URL_A), ("video", URL_B), ("doc", URL_C)], "--research-notebooklm-need", "youtube", "--research-target", "notebooklm=A"
     )
     assert _setup(repo, rel)["segments"]
 

@@ -147,7 +147,9 @@ def _resolve(file_arg: str, repo_root: Path) -> Path:
     if not file_arg or "\\" in file_arg or ":" in file_arg or any(c in _GLOB for c in file_arg):
         raise _NotEvaluable("file operand must be a plain repo-relative path")
     pure = PurePosixPath(file_arg)
-    if pure.is_absolute() or Path(file_arg).is_absolute() or ".." in pure.parts:
+    # `~` is home, not a repo dir: joined under the root it reads as a missing file, i.e. a false
+    # MISMATCH -> CONTRADICTED block. Out-of-repo paths are NOT_EVALUABLE, like absolute ones.
+    if pure.parts[0].startswith("~") or pure.is_absolute() or Path(file_arg).is_absolute() or ".." in pure.parts:
         raise _NotEvaluable("file operand must be repo-relative with no '..'")
     root = repo_root.resolve()
     target = (root / pure).resolve()

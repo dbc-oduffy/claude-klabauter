@@ -382,3 +382,9 @@ def test_delivery_note_locate_resolves_flat_and_sharded(tmp_path):
     (tmp_path / f"docs/delivery/{rid}.md").write_text("x", encoding="utf-8")
     assert c.delivery_note_locate(tmp_path, rid) == f"docs/delivery/{rid}.md"
     assert c.delivery_note_locate(tmp_path, "run-1") == "docs/delivery/run-1.md"
+
+
+def test_halted_naming_existing_plan_drops_missing_plan_from_trailer(tmp_path):
+    missing = {"halted": "commit", c.HALT_PLAN_FIELD: "docs/plans/gone.md"}
+    assert c.HALT_PLAN_TRAILER not in c.halted_record_message("r", c.halted_naming_existing_plan(tmp_path, missing))
+    assert f"{c.HALT_PLAN_TRAILER}: docs/plans/gone.md" in c.halted_record_message("r", missing)

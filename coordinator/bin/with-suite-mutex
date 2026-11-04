@@ -492,6 +492,10 @@ def _kill_process_tree(process: "subprocess.Popen[bytes]") -> int:
 
 #: Per-process ceiling on one pre-kill stack dump; a wedged process must not stall the kill.
 _DUMP_TIMEOUT_SECS = 20
+#: Ceiling on the whole pre-kill dump however wide the tree.
+_DUMP_TOTAL_SECS = 25
+#: Least a dump may be given: py-spy needs seconds, so a wide tree dumps fewer pids rather than all of them badly.
+_DUMP_MIN_PER_PID_SECS = 5
 
 
 def _dump_process_tree(process: "subprocess.Popen[bytes]") -> None:
@@ -512,11 +516,21 @@ def _dump_process_tree(process: "subprocess.Popen[bytes]") -> None:
         pids = [parent.pid] + [c.pid for c in parent.children(recursive=True)]
     except psutil.Error:
         return
-    for pid in pids:
+    deadline = time.monotonic() + _DUMP_TOTAL_SECS
+    per_pid = min(_DUMP_TIMEOUT_SECS, max(_DUMP_MIN_PER_PID_SECS, _DUMP_TOTAL_SECS / len(pids)))
+    for index, pid in enumerate(pids):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or index >= max(1, int(_DUMP_TOTAL_SECS / per_pid + 1e-6)):
+            print(
+                f"with-suite-mutex: dump budget spent; {len(pids) - index} process(es) undumped.",
+                file=sys.stderr, flush=True,
+            )
+            return
         try:
             out = subprocess.run(
                 [py_spy, "dump", "--pid", str(pid)], capture_output=True, text=True,
-                timeout=_DUMP_TIMEOUT_SECS, **no_console_creationflags(),
+                timeout=min(per_pid, remaining),
+                **no_console_creationflags(),
             )
             body = (out.stdout or "") + (out.stderr or "")
         except (OSError, subprocess.TimeoutExpired) as exc:

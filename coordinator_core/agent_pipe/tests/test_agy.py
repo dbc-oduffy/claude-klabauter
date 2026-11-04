@@ -26,6 +26,19 @@ def test_parse_line_ignores_garbage():
     assert a.parse_line('{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"x"}}') is None
 
 
+def test_parse_line_records_quota_cause_from_error_event():
+    a = AgyAdapter()
+    assert a.parse_line('{"event":"error","error":{"message":"RESOURCE_EXHAUSTED: quota exceeded"}}') is None
+    assert a.cause == "quota_exhausted"
+
+
+def test_ordinary_stream_leaves_no_cause():
+    a = AgyAdapter()
+    for line in _lines():
+        a.parse_line(line)
+    assert a.cause is None
+
+
 def test_argv_shapes_and_no_bypass(monkeypatch):
     monkeypatch.setattr("coordinator_core.agent_pipe.agy.shutil.which", lambda name: "/bin/agy")
     a = AgyAdapter()

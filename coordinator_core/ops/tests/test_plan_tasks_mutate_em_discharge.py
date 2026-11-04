@@ -147,6 +147,14 @@ def test_discharge_writes_key_and_leaves_plan_bytes(tmp_path):
     assert EM_DISCHARGE_KEY == "em_discharged"
 
 
+def test_plan_moved_after_minting_discharges_at_its_written_path_only(tmp_path):
+    repo, plan = _plan(tmp_path)
+    minted = plan.parent / "2026-11" / plan.name
+    refused = _call(repo, minted)
+    assert refused["exit_code"] != 0 and "plan not found" in str(refused)
+    assert _call(repo, plan)["applied"] is True
+
+
 def test_second_discharge_is_noop_not_overwrite(tmp_path):
     repo, plan = _plan(tmp_path)
     _call(repo, plan)

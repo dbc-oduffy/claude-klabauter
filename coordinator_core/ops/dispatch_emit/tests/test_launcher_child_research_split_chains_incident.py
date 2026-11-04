@@ -55,7 +55,7 @@ def _drive(script: str, workflow_results: list, chain_emit: dict, workflow_throw
 
 
 def _good_chain(tmp_path: Path, run_id: str = "ask-res") -> dict:
-    return {"path": f"{tmp_path.as_posix()}/scratch/warp/{run_id}/c.mjs", "run_id": run_id, "fire_args": {}}
+    return {"path": f"{tmp_path.as_posix()}/scratch/warp/{run_id}.workflow.mjs", "run_id": run_id, "fire_args": {}}
 
 
 @pytest.mark.spawns_process
@@ -63,7 +63,7 @@ def test_launcher_emits_and_starts_the_research_sibling_in_the_same_run(tmp_path
     done = {"route": "research", "done": True}
     out = _drive(_script(tmp_path), [_CHILD_SPLIT, done], _good_chain(tmp_path))
     assert out["r"] == {"run_id": "ask-r1", "status": "ok", "result": {**done, "chained_from": "ask-r1"}}
-    assert [c["scriptPath"] for c in out["calls"]][1] == f"{tmp_path.as_posix()}/scratch/warp/ask-res/c.mjs"
+    assert [c["scriptPath"] for c in out["calls"]][1] == f"{tmp_path.as_posix()}/scratch/warp/ask-res.workflow.mjs"
     chain_prompt = out["emits"][0]["prompt"]
     assert f'"from_sizing":"{_SIBLING}"' in chain_prompt
     assert "sizing_path" not in chain_prompt and '"ask":true' not in chain_prompt

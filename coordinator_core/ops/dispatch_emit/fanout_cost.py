@@ -13,7 +13,8 @@ Constants:
 - `GROUP_MIN_UNITS` 3: under three units there is nothing to batch.
 - `LARGE_UNIT_BYTES` 16000 (about 4k tokens of prompt): a unit past this does enough work on its
   own to amortise its startup and stays solo.
-- `GROUP_CONTEXT_CAP_BYTES` 24000 (about 6k tokens): a pair of mid-size units past this stays split
+- `GROUP_CONTEXT_CAP_BYTES` 30000 (about 7.5k tokens; a row brief's fixed prompt is ~12k bytes, so a
+  pair must clear 2x that): a pair of mid-size units past this stays split
   so one agent's prompt context stays well under its own startup load.
 - `STARTUP_TOKENS_PER_AGENT` 31000: median of the first assistant usage record (input +
   cache_creation + cache_read) over 23 local workflow-subagent transcripts measured 2026-10-19
@@ -36,7 +37,7 @@ UNITS_PER_AGENT = 2
 RUNTIME_GROUP_MAX_ITEMS = 8
 GROUP_MIN_UNITS = 3
 LARGE_UNIT_BYTES = 16_000
-GROUP_CONTEXT_CAP_BYTES = 24_000
+GROUP_CONTEXT_CAP_BYTES = 30_000
 STARTUP_TOKENS_PER_AGENT = 31_000
 
 BASES = ("exact", "lower-bound", "expected")

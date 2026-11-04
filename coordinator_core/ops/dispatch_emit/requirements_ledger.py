@@ -126,6 +126,21 @@ class LedgerRefused(ValueError):
     """The run or the revision cannot be admitted; the message names the cause."""
 
 
+HANDOVER_PENDING_STATUS = "handover_pending"
+#: Longest a held mint is told to wait before retrying.
+HANDOVER_RETRY_CAP_SECS = 30
+
+
+class HandoverPending(Exception):
+    """A publish handover is pending: the mint is held, not refused. `reply` is
+    `{status: handover_pending, retry_after: <secs>}`; nothing was written."""
+
+    def __init__(self, remaining_secs: float) -> None:
+        self.retry_after = max(1, min(HANDOVER_RETRY_CAP_SECS, int(remaining_secs) + 1))
+        self.reply = {"status": HANDOVER_PENDING_STATUS, "retry_after": self.retry_after}
+        super().__init__(f"{HANDOVER_PENDING_STATUS}: retry after {self.retry_after}s")
+
+
 @dataclass(frozen=True)
 class Item:
     id: str
@@ -656,6 +671,9 @@ def pm_words(sizing: Optional[Mapping]) -> list[str]:
 def _sizing_path(root: Path, sizing_rel: str) -> Path:
     from coordinator_core.session.record_homes import home_dir
 
+    # A Windows caller's repo-relative path arrives with `\`; on POSIX that is a filename byte, not a
+    # separator, so the same sizing would read as missing on the Mac box.
+    sizing_rel = sizing_rel.replace("\\", "/")
     found = contained_path(Path(root) / sizing_rel, [Path(home_dir(str(root), "sizings"))])
     if found is not None and found.is_file():
         return found
@@ -1080,7 +1098,14 @@ def start(
     repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False, resumed_from: Optional[str] = None,
 ) -> Path:
     """Make the run ledger-bearing (emit time). Returns the run dir. `resumed_from` names the halted
-    run this one resumes; omitted, a rebound run keeps the link its run.json already carries."""
+    run this one resumes; omitted, a rebound run keeps the link its run.json already carries.
+
+    Raises `HandoverPending` before writing anything while a publish handover is pending."""
+    from coordinator_core.warm import breadcrumb
+
+    remaining = breadcrumb.handover_pending_remaining_secs()
+    if remaining > 0.0:
+        raise HandoverPending(remaining)
     dir_ = run_dir(repo_root, run_id)
     prior = read_run(dir_) or {}
     data = {

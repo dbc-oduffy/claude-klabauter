@@ -466,7 +466,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.session_whoami_live", 'registers "session.whoami_live"'),
     ("coordinator_core.ops.session_peer_roster", 'registers "session.peer_roster"'),
     ("coordinator_core.ops.codex_runner", 'registers "codex_runner.start", "codex_runner.result"'),
-    ("coordinator_core.ops.agent_pipe", 'registers "agent_pipe.start", "agent_pipe.send"'),
+    ("coordinator_core.ops.agent_pipe", 'registers "agent_pipe.start", "agent_pipe.send", "agent_pipe.list_live"'),
     ("coordinator_core.ops.group_em_enter", 'registers "groupem.enter"'),
     ("coordinator_core.ops.group_em_stamp", 'registers "groupem.stamp"'),
     ("coordinator_core.ops.group_em_resolve_addressee", 'registers "groupem.resolve_addressee"'),

@@ -88,6 +88,7 @@ _HARNESS_NOTICE_PREFIXES = (
     "[Cross-session delivery notice]",
     "<task-notification>",
     "[SYSTEM NOTIFICATION - NOT USER INPUT]",
+    "<cross-session-message",
 )
 
 #: Same bound as the baton store's own lock: this runs on every prompt.

@@ -139,8 +139,19 @@ def _request(
     )
 
 
+def _is_peer_delivery(content: Any) -> bool:
+    """True when a user record's text opens with the `<cross-session-message` peer wrapper."""
+    if isinstance(content, list):
+        content = next(
+            (b.get("text") for b in content if isinstance(b, dict) and b.get("type") == "text"), None
+        )
+    return isinstance(content, str) and content.lstrip().startswith("<cross-session-message")
+
+
 def _is_first_turn(payload: Mapping[str, Any]) -> bool:
     """True when the session transcript holds exactly one human turn; unreadable reads False.
+
+    A peer-delivered `<cross-session-message` record is not a human turn.
 
     Reads the transcript file in-process and stops at the second human turn.
     """
@@ -163,6 +174,8 @@ def _is_first_turn(payload: Mapping[str, Any]) -> bool:
                 if isinstance(content, list) and any(
                     isinstance(b, dict) and b.get("type") == "tool_result" for b in content
                 ):
+                    continue
+                if _is_peer_delivery(content):
                     continue
                 turns += 1
                 if turns > 1:
@@ -1881,7 +1894,7 @@ def _live_write_overlap_deny(
         deliverable = sizing_doc.get("deliverable_id") if sizing_rel else None
 
         def ended(rid: str) -> bool:
-            return (
+            return bool(
                 _halt_marker_ended(root, rid) or _stage_halted(root, rid) or _status_of(root, rid) in ("halted", "landed")
                 or _ended_on_evidence(root, rid)
                 or (isinstance(deliverable, str) and _sibling_record_run_stopped(root, rid, deliverable))
@@ -1889,13 +1902,18 @@ def _live_write_overlap_deny(
 
         live: dict = {}
         for rid, paths in hits.items():
-            if _bounded_call(("ended", str(root), rid), lambda rid=rid: ended(rid)) is True:
+            verdict = _bounded_call(("ended", str(root), rid), lambda rid=rid: ended(rid))
+            if verdict is True:
                 if _bounded_call(("dead", str(root), rid), lambda rid=rid: _run_row_dead(root, rid)) is True:
                     from coordinator_core.ops.dispatch_emit import live_run_writes
 
                     live_run_writes.index_remove(root, rid)
-            else:
+            elif verdict is False:
                 live[rid] = paths
+            else:
+                # Trap: a STALLED liveness read is unknown, not live. Denying on it refused a refire
+                # behind a run halted 90 min earlier; an unproven clash denies nothing.
+                _record_skipped_overlap_check(root)
         hits = live
     if not hits:
         return None

@@ -10,6 +10,8 @@ import json
 import shutil
 from typing import Optional
 
+from coordinator_core.agent_pipe.contract import classify_exit
+
 _OUTPUT_FLAGS = ["--output-format", "stream-json"]
 
 
@@ -18,7 +20,13 @@ def _agy() -> str:
 
 
 class AgyAdapter:
-    """Adapter for the Antigravity CLI; argv never carries a permission-bypass flag or a settings path."""
+    """Adapter for the Antigravity CLI; argv never carries a permission-bypass flag or a settings path.
+
+    `parse_line` records the first failure `cause` (see contract.classify_exit); stateful per run.
+    """
+
+    def __init__(self) -> None:
+        self.cause: Optional[str] = None
 
     def spawn_argv(self, prompt: str, conversation: Optional[str] = None) -> list[str]:
         """argv for a fresh headless run; a given `conversation` resumes it instead."""
@@ -36,7 +44,10 @@ class AgyAdapter:
             event = json.loads(line)
         except (ValueError, TypeError):
             return None
-        if not isinstance(event, dict) or event.get("event") != "step_update":
+        if not isinstance(event, dict):
+            return None
+        if event.get("event") != "step_update":
+            self.cause = self.cause or classify_exit(line)
             return None
         step = event.get("step_update")
         if not isinstance(step, dict) or step.get("step_type") != "agent_response":

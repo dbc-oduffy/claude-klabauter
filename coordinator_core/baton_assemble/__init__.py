@@ -4230,6 +4230,21 @@ def _build_directives(
             "already_satisfied": False,
         }
 
+    # d1t -- carry the session's open harness tasks into the baton body. No
+    # resolvable session id means no directive; the handoff is never refused.
+    d1t_directive: Optional[dict[str, Any]] = None
+    if kind == "handoff":
+        _task_sid = session_id or _resolve_current_session_id()
+        if _task_sid:
+            d1t_directive = {
+                "id": "d1t",
+                "cli": "baton-stamp-task-list",
+                "args": ["--file", d1_out, "--session-id", _task_sid],
+                "depends_on": ["d1"],
+                # Read-back-equal block short-circuits with no write.
+                "already_satisfied": False,
+            }
+
     directives: list[dict[str, Any]] = []
     if d7_directive is not None:
         directives.append(d7_directive)
@@ -4238,11 +4253,15 @@ def _build_directives(
         directives.append(d1b_directive)
     if d1c_directive is not None:
         directives.append(d1c_directive)
+    if d1t_directive is not None:
+        directives.append(d1t_directive)
     _d2_depends_on = ["d1"]
     if d1b_directive is not None:
         _d2_depends_on.append("d1b")
     if d1c_directive is not None:
         _d2_depends_on.append("d1c")
+    if d1t_directive is not None:
+        _d2_depends_on.append("d1t")
     directives.append(
         {
             "id": "d2",

@@ -10,9 +10,22 @@ Negative-spec: pure; reads and writes no file, spawns no process, mutates neithe
 from __future__ import annotations
 
 import copy
+import re
 from typing import Mapping, Optional, Sequence
 
 _NOTEBOOKLM = "notebooklm"
+_DATE_PREFIX = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
+
+
+def split_plan_rel(sizing_rel: str) -> str:
+    """Return the plan path `coordinator-doc-new --type plan` mints for a sizing's stem:
+    `docs/plans/<YYYY-MM>/<stem>.md`. A stem with no `YYYY-MM-DD-` prefix has no month dir and
+    maps to the flat `docs/plans/<stem>.md`."""
+    stem = sizing_rel.replace("\\", "/").rsplit("/", 1)[-1]
+    if stem.endswith(".yaml"):
+        stem = stem[: -len(".yaml")]
+    m = _DATE_PREFIX.match(stem)
+    return f"docs/plans/{m.group(1)}/{stem}.md" if m else f"docs/plans/{stem}.md"
 
 
 def split_research_build(
@@ -30,6 +43,7 @@ def split_research_build(
     research_doc.pop("writes", None)
     build_doc = copy.deepcopy(dict(sizing))
     build_doc.pop("research", None)
+    build_doc["route"] = "plan"
     build_doc["writes"] = [str(w).strip() for w in writes if str(w).strip()]
     return research_doc, build_doc
 

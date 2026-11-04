@@ -85,6 +85,38 @@ def test_unknown_run_is_a_named_refusal(tmp_path):
     assert out["ok"] is False and out["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
 
 
+def test_abandon_clears_a_token_with_no_run_dir(tmp_path):
+    (tmp_path / ".git").mkdir()
+    token = run_token.mint(tmp_path, RUN, f"scratch/warp/{RUN}.workflow.mjs")
+    assert run_token.escrow(tmp_path, RUN, token)
+    assert run_token.is_live(tmp_path, RUN)
+    out = _call(tmp_path, "abandon")
+    assert out["ok"] is True and out["refusal"] is None
+    assert not run_token.is_live(tmp_path, RUN)
+    assert run_token._read_rec(tmp_path, RUN, escrow=True) is None
+    assert not (tmp_path / "state" / "warp" / RUN).exists()
+    assert _call(tmp_path, "abandon")["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
+
+
+def test_start_on_a_token_with_no_run_dir_still_refuses(tmp_path):
+    (tmp_path / ".git").mkdir()
+    run_token.mint(tmp_path, RUN, f"scratch/warp/{RUN}.workflow.mjs")
+    assert _call(tmp_path, "start")["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
+    assert run_token.is_live(tmp_path, RUN)
+
+
+def test_abandon_dry_run_keeps_a_dirless_token(tmp_path):
+    (tmp_path / ".git").mkdir()
+    run_token.mint(tmp_path, RUN, f"scratch/warp/{RUN}.workflow.mjs")
+    assert _call(tmp_path, "abandon", dry_run=True)["ok"] is True
+    assert run_token.is_live(tmp_path, RUN)
+
+
+def test_abandon_with_neither_token_nor_dir_refuses(tmp_path):
+    (tmp_path / ".git").mkdir()
+    assert _call(tmp_path, "abandon")["refusal"].startswith(minted_run.REFUSAL_NOT_FOUND)
+
+
 def test_start_given_the_common_dir_key_finds_the_run_from_another_cwd(tmp_path, monkeypatch):
     """The engine hands a common_dir-scoped op `<repo>/.git`, not the worktree root; cwd is elsewhere."""
     from coordinator_core.ipc import resolve_op_repo_key

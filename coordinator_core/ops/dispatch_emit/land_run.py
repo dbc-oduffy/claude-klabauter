@@ -2649,7 +2649,7 @@ VERIFY_REACH_DIRTY = "verify-reach-dirty"
 
 def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str]) -> dict:
     """Dirty tracked paths the landing set's tests can read, outside the landing set: the record's
-    ``reach_dirt`` unioned with a land-time check. Peer holds are not subtracted."""
+    ``reach_dirt`` unioned with a land-time check. Attribution is the caller's (`_split_reach_dirt`)."""
     from coordinator_core.ops.dispatch_emit.test_reach import foreign_dirt, reach_paths, seeds_for_landing
 
     landing = {*product, *deleted}
@@ -2657,6 +2657,19 @@ def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted
     dirt = {p: b for p, b in recorded.items() if isinstance(p, str) and p not in landing}
     dirt.update(foreign_dirt(root, reach_paths(root, seeds_for_landing(root, landing)), landing))
     return dirt
+
+
+def _split_reach_dirt(
+    root: Path, reach_dirt: dict, art_run_id: Optional[str], plan_rel: Optional[str], own_sid: Optional[str],
+    rid: object, script_path: object, **peer_kw,
+) -> tuple[dict, dict]:
+    """``(refusing, foreign)``: the reach dirt no run claims, and ``{path: holder}`` for dirt another unlanded
+    run holds (live claim or declared writes) or withholds as halted. Only the unattributed remainder refuses."""
+    paths = sorted(reach_dirt)
+    foreign = {p: str(h) for p, h in foreign_halted_withheld(root, art_run_id, plan_rel, paths).items()}
+    held = _peer_held(root, [p for p in paths if p not in foreign], own_sid, rid, script_path, plan_rel=plan_rel, **peer_kw)
+    foreign.update({p: ", ".join(sorted(s)) for p, s in held.items() if s})
+    return {p: b for p, b in reach_dirt.items() if p not in foreign}, foreign
 
 
 def _measured_record(root: Path, run_id: Optional[str]) -> Optional[dict]:
@@ -4044,6 +4057,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             )
         settled_blobs = {**settled_blobs, **own_blobs}
 
+    reach_dirt_foreign: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
         non_product = {*art_present, *receipt_paths, bookkeeping_path}
         differing = (
@@ -4074,6 +4088,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 [p for p in commit_deleted if p not in set(art_deleted)],
             )
         )
+        if reach_dirt:
+            reach_dirt, reach_dirt_foreign = _split_reach_dirt(
+                root, reach_dirt, art_run_id, request.plan_path, session_id, rid, script_path,
+                run_base=run_base if isinstance(run_base, str) else None,
+                minted_before=own_seniority, self_sessions=_firing_sessions(root, rid, session_id),
+            )
         if reach_dirt:
             _remove(root, receipt_paths)
             _reap_measured_export(root, measured_run)
@@ -4261,6 +4281,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["targeted_tests_note"] = "; ".join(deleted_notes)
     reply.update(_fence_reply(fence))
     reply.update(_peer_held_left(peer_held))
+    if reach_dirt_foreign:
+        reply["reach_dirt_foreign"] = reach_dirt_foreign
     expanded = sorted(
         p for p in paths
         if p in measured_carries and p not in inherited and (p in footprint_breach or p not in owner)

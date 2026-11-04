@@ -69,9 +69,9 @@ def test_vendored_structured_matches_the_oracle_graph(monkeypatch, tmp_path):
 
 def test_phase_labels_schema_literal_and_chunk_cap(monkeypatch, tmp_path):
     script = _structured(monkeypatch, tmp_path)
-    assert "phases: ['Scope', 'Scout', 'Verify', 'Rebuttal', 'Synthesize', 'Coverage']" in script
+    assert "phases: ['Scope', 'Scout', 'Brief', 'Verify', 'Rebuttal', 'Synthesize', 'Coverage']" in script
     assert [m for m in re.findall(r"phase\('([^']+)'\)", script)] == [
-        "Scope", "Scope", "Scout", "Verify", "Rebuttal", "Synthesize", "Coverage"
+        "Scope", "Scope", "Scout", "Brief", "Verify", "Rebuttal", "Synthesize", "Coverage"
     ]
     assert script.count('"required": ["topic", "challenged"]') == 2
     assert "inChunks" not in script and script.count("fanOut(items,") == 2
@@ -97,7 +97,8 @@ def _copy_with(tmp_path: Path, old: str, new: str) -> Path:
     return content
 
 
-_CAP = "    web_caller: true\n    depends_on: [scout]\n"
+# Anchors the verify stage (the fan-out one); tracks DoE's tree, so it moves when verify's deps do.
+_CAP = "    web_caller: true\n    depends_on: [brief-author]\n"
 
 
 def _with_cap(tmp_path: Path, value: str) -> Path:

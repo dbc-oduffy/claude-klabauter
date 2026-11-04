@@ -112,6 +112,12 @@ def test_absolute_operand(root):
     assert _state(root, f"grep -c foo {root / 'a.txt'}", "3") == "NOT_EVALUABLE"
 
 
+@pytest.mark.parametrize("operand", ["~/.claude/settings.json", "~other/x.txt", "~"])
+def test_home_operand_is_not_evaluable_never_a_missing_file(root, operand):
+    # A `~/` operand once joined under the repo root, read as a missing file and became MISMATCH.
+    assert _state(root, f"grep -c accept {operand}", "1") == "NOT_EVALUABLE"
+
+
 def test_symlink_escape(root, tmp_path_factory):
     outside = tmp_path_factory.mktemp("outside") / "o.txt"
     outside.write_text("foo\n")

@@ -986,6 +986,7 @@ def chain_ancestor_count(abs_artifact_path: Path, repo_root: Path, classificatio
         handoff_dir=str(repo_root / "state" / "handoffs"),
         repo_root=str(repo_root),
         include_history_tier=False,
+        follow_id_aliases=False,
     )
     ordered = walk["orderedPaths"]
     return max(len(ordered) - 1, 0)
@@ -4757,6 +4758,15 @@ def brief(artifact_path: str, decisions: Optional[dict[str, Any]] = None, claim_
         except OSError:
             baton_text = ""
         decision_object["preflight"]["premise_drift"] = _gate_brief.compute_premise_drift(root, abs_path, baton_text)
+        from coordinator_core import task_carry as _task_carry
+
+        harness_task_directives = _task_carry.recreate_directives(_task_carry.parse_tasks_block(baton_text))
+        decision_object["harness_task_directives"] = harness_task_directives
+        if harness_task_directives:
+            n_tasks = sum(1 for d in harness_task_directives if d.get("tool") == "TaskCreate")
+            decision_object["next_move"] += f" Recreate {n_tasks} carried tasks via harness_task_directives."
+    else:
+        decision_object["harness_task_directives"] = []
     if classification == "memo":
         decision_object["preflight"]["reply_obligation"] = reply_obligation
 

@@ -435,3 +435,108 @@ def test_owner_does_not_hold_a_terminal_or_ownerless_run(tmp_path, monkeypatch):
     monkeypatch.setattr(live_runs, "_owner_live", lambda sid, memo=None: False)
     _session_run(repo, "dead", "staged", 1)
     assert not live_runs.run_owner_holds(repo, "dead")
+
+
+# --- Phantom-live shapes: runs that ended or never ran but whose run-stage.json still reads live. ---
+# Each fixture is one run dir under state/warp, otherwise live (fresh stamp, live owner, token held),
+# so only the run's ended state decides. The handover bar is find_live_runs(require_token=False).
+
+
+def _stranded(root, run_id, stage, halt=None, *, minutes_ago=1, token_age_s=0.0, token_fields=None):
+    """A run whose run-stage.json is left at `stage`; `halt` writes the run's real halted.json through
+    halted_run.write_halt_marker (which stamps stage=halted) and the stage is then restored, the
+    leftover the phantom shapes share."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    d = root / "state" / "warp" / run_id
+    d.mkdir(parents=True)
+    base = root / ".git" / "coordinator-warp-run-tokens"
+    base.mkdir(parents=True, exist_ok=True)
+    token = {"run_id": run_id, "minted_at": time.time() - token_age_s, **(token_fields or {})}
+    (base / f"{run_id}.json").write_text(json.dumps(token), encoding="utf-8")
+    stage_data = {"stage": stage, "last_activity_at": _ts(minutes_ago), "session_id": "sess1"}
+    if halt is not None:
+        halted_run.write_halt_marker(d, halted=halt, sizing_rel="state/sizings/2026-11/x.yaml")
+    (d / "run-stage.json").write_text(json.dumps(stage_data), encoding="utf-8")
+    return d
+
+
+def _handover_live(repo):
+    return [r.run_id for r in live_runs.find_live_runs({"repos.r1": str(repo)}, now=NOW, require_token=False)]
+
+
+def test_control_executing_run_with_live_owner_is_live_for_the_handover(tmp_path):
+    repo = tmp_path / "r1"
+    _stranded(repo, "control", "executing")
+    assert _handover_live(repo) == ["control"]
+    assert live_runs.run_is_live(repo, "control", now=NOW)
+
+
+def test_control_freshly_minted_run_inside_the_runner_grace_is_live(tmp_path):
+    repo = tmp_path / "r1"
+    _stranded(repo, "fresh", "minted", token_age_s=5.0)
+    assert _handover_live(repo) == ["fresh"]
+
+
+def test_control_resumed_marker_does_not_end_a_run(tmp_path):
+    repo = tmp_path / "r1"
+    d = _stranded(repo, "resumed", "executing")
+    (d / "halted.json").write_text(json.dumps({"status": "resumed", "halted": "refused"}), encoding="utf-8")
+    assert _handover_live(repo) == ["resumed"]
+
+
+def test_dead_owner_staged_run_is_not_live(tmp_path):
+    repo = tmp_path / "r1"
+    _stranded(repo, "dead", "staged")
+    data = json.loads((repo / "state" / "warp" / "dead" / "run-stage.json").read_text(encoding="utf-8"))
+    data["session_id"] = "gone"
+    (repo / "state" / "warp" / "dead" / "run-stage.json").write_text(json.dumps(data), encoding="utf-8")
+    assert _handover_live(repo) == []
+    assert not live_runs.run_is_live(repo, "dead", now=NOW)
+
+
+@pytest.mark.designed_red
+@pytest.mark.parametrize(
+    "halted, stage",
+    [
+        ("parked", "minted"),
+        ("refused", "minted"),
+        ("stage_pending", "staged"),
+    ],
+    ids=["parked-left-minted", "refusal-halted-left-minted", "stage-pending-exit-left-staged"],
+)
+def test_a_run_with_a_halt_marker_is_not_live_whatever_its_stage_reads(tmp_path, halted, stage):
+    """A halted run is over: the halt marker decides, not the stage a halt path forgot to stamp."""
+    repo = tmp_path / "r1"
+    _stranded(repo, "halted-run", stage, halted)
+    assert _handover_live(repo) == []
+    assert not live_runs.run_is_live(repo, "halted-run", now=NOW)
+    assert not live_runs.run_stage_live(repo, "halted-run", now=NOW)
+
+
+@pytest.mark.designed_red
+def test_a_closed_run_left_at_staged_is_not_live(tmp_path):
+    repo = tmp_path / "r1"
+    d = _stranded(repo, "closed", "staged")
+    (d / "halted.json").write_text(json.dumps({"status": "closed", "halted": "stage_pending"}), encoding="utf-8")
+    assert _handover_live(repo) == []
+
+
+@pytest.mark.designed_red
+def test_a_never_started_minted_run_past_the_grace_is_not_live(tmp_path):
+    """The Workflow returned at once ('hook did not rewrite it'): token minted long ago, no submission, no launch, stage minted."""
+    repo = tmp_path / "r1"
+    _stranded(repo, "never-ran", "minted", token_age_s=3600.0)
+    assert _handover_live(repo) == []
+    assert not live_runs.run_is_live(repo, "never-ran", now=NOW)
+
+
+@pytest.mark.designed_red
+def test_phantoms_beside_a_live_run_leave_only_the_live_run(tmp_path):
+    repo = tmp_path / "r1"
+    _stranded(repo, "a-live", "executing")
+    _stranded(repo, "b-parked", "minted", "parked")
+    _stranded(repo, "c-refused", "minted", "refused")
+    _stranded(repo, "d-pending", "staged", "stage_pending")
+    _stranded(repo, "e-never", "minted", token_age_s=3600.0)
+    assert _handover_live(repo) == ["a-live"]

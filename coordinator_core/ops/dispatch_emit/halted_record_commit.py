@@ -41,6 +41,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
     RECORD_DIR_ROOT,
+    halted_naming_existing_plan,
     halted_record_message,
 )
 from coordinator_core.ops.dispatch_emit.land_run_halt import (
@@ -102,7 +103,7 @@ def commit_halted_record(worktree_root: Path, repo_root: Path, params: dict) -> 
     from coordinator_core.ops.dispatch_emit import run_token
     from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import _error
 
-    halted = params[HALTED_RECORD_PARAM]
+    halted = halted_naming_existing_plan(worktree_root, params[HALTED_RECORD_PARAM])
     run_id = params.get("run_id")
     if not isinstance(run_id, str) or not safe_id(run_id):
         return _error(f"params.run_id {run_id!r} is not a single safe path segment", refused="run-id-unsafe")

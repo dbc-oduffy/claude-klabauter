@@ -1356,7 +1356,9 @@ def _repo_root_from_handoff_dir(handoff_dir: str) -> str:
     return os.path.normpath(os.path.join(handoff_dir, '..', '..'))
 
 
-def handoff_edges(node_meta: dict, edge_kinds: Set[str]) -> List[str]:
+def handoff_edges(
+    node_meta: dict, edge_kinds: Set[str], *, include_aliases: bool = True
+) -> List[str]:
     """Return raw edge-target strings for the named edge kinds.
 
     Given parsed frontmatter metadata for a node and a set of edge-kind names,
@@ -1385,7 +1387,9 @@ def handoff_edges(node_meta: dict, edge_kinds: Set[str]) -> List[str]:
         kind_meta = EDGE_KIND_META.get(kind)
         if kind_meta is None:
             continue
-        field_names = [kind_meta['field']] + list(EDGE_KIND_FIELD_ALIASES.get(kind, ()))
+        field_names = [kind_meta['field']]
+        if include_aliases:
+            field_names += list(EDGE_KIND_FIELD_ALIASES.get(kind, ()))
         for field_name in field_names:
             val = node_meta.get(field_name)
             if val is None:
@@ -1436,7 +1440,12 @@ def walk_forward(
     repo_root: Optional[str] = None,
     *,
     include_history_tier: bool = True,
+    follow_id_aliases: bool = True,
 ) -> Dict[str, Any]:
+    """`follow_id_aliases=False` follows path-form edges only: an id-suffixed
+    alias (`predecessor_id`) needs the corpus-wide handoff_id index, so it is
+    skipped when the path-form edge of the same kind exists, and a link that
+    carries ONLY an alias reads `missing-link`. Cost is O(chain)."""
     if edge_kinds is None:
         edge_kinds = {'predecessor'}
     if node_gate is None:
@@ -1455,7 +1464,9 @@ def walk_forward(
     # call always qualifies (predecessor_id is aliased), but a caller
     # restricted to e.g. {'forked_from'} alone skips the scan entirely.
     id_index: Optional[Union['_LazyHandoffIdIndex', Dict[str, str]]] = None
-    if repo_root and any(EDGE_KIND_FIELD_ALIASES.get(k) for k in edge_kinds):
+    if follow_id_aliases and repo_root and any(
+        EDGE_KIND_FIELD_ALIASES.get(k) for k in edge_kinds
+    ):
         id_index = _LazyHandoffIdIndex(repo_root)
 
     nodes: Dict[str, dict] = {}
@@ -1497,7 +1508,15 @@ def walk_forward(
 
         dfs_stack.append({'path': abs_path, 'phase': 'exit'})
 
-        raw_edges = handoff_edges(meta, edge_kinds)
+        raw_edges = handoff_edges(meta, edge_kinds, include_aliases=follow_id_aliases)
+        if not follow_id_aliases:
+            for kind in edge_kinds:
+                if (
+                    EDGE_KIND_FIELD_ALIASES.get(kind)
+                    and not handoff_edges(meta, {kind}, include_aliases=False)
+                    and handoff_edges(meta, {kind})
+                ):
+                    terminated_early = 'missing-link'
 
         edges_to_push: List[str] = []
         for raw_ref in raw_edges:

@@ -89,3 +89,68 @@ def test_fanout_refusal_leaves_no_derived_sizings(repo, monkeypatch):
     v = gate(repo, REL, writes=["docs/a.md"])
     assert v.arm is None and "split" not in v.halt
     assert [p.name for p in (repo / "state" / "sizings").iterdir()] == ["2026-10-29-split-gate.yaml"]
+
+
+def test_each_slice_cites_its_own_month_dir_plan_path(repo):
+    _put(repo, RESEARCH)
+    split = gate(repo, REL, writes=["docs/a.md"]).halt["split"]
+    for key in ("research", "build"):
+        rel = split[key]["sizing"]
+        doc = yaml.safe_load((repo / rel).read_text(encoding="utf-8"))
+        stem = rel.rsplit("/", 1)[-1][: -len(".yaml")]
+        assert doc["plan"] == f"docs/plans/2026-10/{stem}.md"
+    build = yaml.safe_load((repo / split["build"]["sizing"]).read_text(encoding="utf-8"))
+    assert build["route"] == "plan"
+
+
+def test_a_parent_plan_edge_is_kept_on_both_slices(repo):
+    _put(repo, RESEARCH)
+    doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
+    doc["plan"] = "docs/plans/2026-10/2026-10-29-parent.md"
+    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    split = gate(repo, REL, writes=["docs/a.md"]).halt["split"]
+    for key in ("research", "build"):
+        got = yaml.safe_load((repo / split[key]["sizing"]).read_text(encoding="utf-8"))
+        assert got["plan"] == "docs/plans/2026-10/2026-10-29-parent.md"
+
+
+SHA = "c" * 40
+
+
+def _status(repo, run_id):
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+
+    p = repo / contract.status_rel(run_id)
+    return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def _refire(repo, split, status):
+    stem = split["research"]["sizing"].rsplit("/", 1)[-1][: -len(".yaml")]
+    rid = f"warp-{stem}-20261104T010000-bbbbbb"
+    d = repo / "state" / "warp" / rid
+    d.mkdir(parents=True)
+    (d / "halted.json").write_text(json.dumps({"status": status, "sha": SHA}), encoding="utf-8")
+    return rid
+
+
+def test_gating_the_build_slice_credits_the_research_slice_a_landed_refire_ran(repo):
+    from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+
+    _put(repo, RESEARCH)
+    split = gate(repo, REL, writes=["docs/a.md"]).halt["split"]
+    _refire(repo, split, "landed")
+    assert (_status(repo, split["research"]["run_id"]) or {}).get("status") != "landed"
+    _handler({"sizing_path": split["build"]["sizing"]}, repo)
+    got = _status(repo, split["research"]["run_id"])
+    assert got["status"] == "landed" and got["sha"] == SHA and got["parent_id"] == split["parent_id"]
+
+
+def test_a_refire_that_did_not_land_credits_nothing(repo):
+    from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+
+    _put(repo, RESEARCH)
+    split = gate(repo, REL, writes=["docs/a.md"]).halt["split"]
+    before = _status(repo, split["research"]["run_id"])
+    _refire(repo, split, "halted")
+    _handler({"sizing_path": split["build"]["sizing"]}, repo)
+    assert _status(repo, split["research"]["run_id"]) == before

@@ -29,6 +29,37 @@ def _all_three(root):
     )
 
 
+def test_handover_pending_held_inside_the_hold_and_released_after(root):
+    assert not breadcrumb.handover_pending_held(root)
+    with breadcrumb.hold_handover_pending(root) as path:
+        assert path.exists()
+        assert breadcrumb.handover_pending_held(root)
+        with breadcrumb.hold_handover_pending(root):
+            assert breadcrumb.handover_pending_held(root)
+        assert breadcrumb.handover_pending_held(root)
+    assert not breadcrumb.handover_pending_held(root)
+    assert not path.exists()
+
+
+def test_handover_pending_expires_so_a_crashed_publish_cannot_wedge_mints(root):
+    with breadcrumb.hold_handover_pending(root):
+        future = time.time() + breadcrumb.HANDOVER_PENDING_TTL_SECS + 1
+        assert not breadcrumb.handover_pending_held(root, now=future)
+
+
+def test_handover_pending_unreadable_reads_not_held(root):
+    path = breadcrumb.handover_pending_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+    assert not breadcrumb.handover_pending_held(root)
+
+
+def test_handover_pending_exit_leaves_a_hold_another_publisher_rewrote(root):
+    with breadcrumb.hold_handover_pending(root) as path:
+        path.write_text(json.dumps({"pid": 1, "token": "other", "expires_at": time.time() + 60}), encoding="utf-8")
+    assert path.exists()
+
+
 def test_marker_blocks_all_three_and_release_allows(root):
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         assert path.exists()

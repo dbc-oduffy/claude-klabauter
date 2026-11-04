@@ -240,13 +240,13 @@ def test_gate_key_the_composed_script_sends_is_the_key_the_handler_accepts(repo)
 
 
 def test_stage_keys_the_composed_script_sends_are_the_keys_the_handler_reads(repo):
-    import inspect
-
     from coordinator_core.ops.dispatch_emit import ask_stage
 
+    # The handler reads its params through the typed `_PARAMS` schema, so a sent key it does not
+    # declare is a key it never reads.
     sent = set(_composed_params("dispatch.ask_stage"))
-    src = inspect.getsource(ask_stage._handler)
-    assert all(f'"{k}"' in src for k in sent), sent
+    declared = {f.name for f in ask_stage._PARAMS}
+    assert sent <= declared, sent - declared
 
 
 def test_gate_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo):
@@ -365,7 +365,7 @@ def test_concrete_m_writes_the_minted_spine_and_returns_its_path(repo, monkeypat
     _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
     v = gate(repo, REL)
     assert v.halt is None and v.arm == "m_plus"
-    assert v.spine_plan == "docs/plans/2026-10-01-gate.md"
+    assert v.spine_plan == "docs/plans/2026-10/2026-10-01-gate.md"
     text = (repo / v.spine_plan).read_text(encoding="utf-8")
     assert "pytest pkg/tests/test_a.py" in text and "pkg/a.py" in text
     assert v.to_json()["spine_plan"] == v.spine_plan
@@ -385,7 +385,7 @@ def test_m_without_acceptance_rows_has_no_spine_plan(repo, monkeypatch):
 
 def test_existing_spine_is_returned_unchanged_never_overwritten(repo, monkeypatch):
     _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
-    path = repo / "docs" / "plans" / "2026-10-01-gate.md"
+    path = repo / "docs" / "plans" / "2026-10" / "2026-10-01-gate.md"
     path.parent.mkdir(parents=True)
     path.write_text("edited by the reviewer\n", encoding="utf-8")
     v = gate(repo, REL)
@@ -440,7 +440,7 @@ def test_resume_plan_beats_a_concrete_sizing(repo, monkeypatch):
     )
     v = gate(repo, REL)
     assert v.resume_plan == "docs/plans/other.md" and v.spine_plan is None
-    assert not (repo / "docs" / "plans" / "2026-10-01-gate.md").exists()
+    assert not (repo / "docs" / "plans" / "2026-10" / "2026-10-01-gate.md").exists()
 
 
 @pytest.mark.parametrize("tshirt,route", [("XS", "dispatch"), ("S", "spec-dispatch")])

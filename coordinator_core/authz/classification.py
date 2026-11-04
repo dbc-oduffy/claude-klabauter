@@ -932,21 +932,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #            docs/decisions/DR-208-invoke-op-authz-model.md § 5
     #            docs/plans/2026-07-13-claude-klabauter-auto-reconcile-open-handoffs.md § C8
     "handoff.transition": OpClass.MUTATING,
-    # handoff.human_gate_clear — MUTATING: clears the human gate_evidence legs of one
-    # state/handoffs/*.md file on a validated PM citation, stamps gate_cleared_by, commits it.
-    # DR-208 five-question affirmation (citing ops/handoff_human_gate_clear.py):
-    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      locked_rmw rewrites the handoff; commit_paths writes one commit for that file.
-    #   2. Writes into rag's relational store?                                 No.
-    #   3. Opens any file for write (including sentinel creation)?             YES.
-    #      The handoff file and the lock sidecar.
-    #   4. Mutates shared mutable state outside its own module?                YES.
-    #      state/handoffs/*.md is shared across EM sessions; the git ref moves.
-    #   5. Persistent state changes observable across process boundaries?     YES.
-    #      The stamped file and the new commit.
-    # Authority: docs/decisions/DR-266 (gate-recheck stays the evidence re-resolver);
-    #            docs/plans/2026-10-30-human-gate-clear-verb.md § C2
-    "handoff.human_gate_clear": OpClass.MUTATING,
     # handoff.stamp — MUTATING: in-place frontmatter mutation of a single
     # state/handoffs/*.md file (inserts shipped_in: <SHA> field).
     # DR-208 five-question affirmation (citing ops/handoff_stamp.py):
@@ -2884,6 +2869,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # <settings-home>/agent-pipe/mailboxes/<session>.jsonl.
     "agent_pipe.start": OpClass.MUTATING,
     "agent_pipe.send": OpClass.MUTATING,
+    # agent_pipe.list_live — COMPUTE_ONLY: one ps + one lsof, reads the agy/codex homes, writes nothing.
+    "agent_pipe.list_live": OpClass.COMPUTE_ONLY,
+    # agent_pipe.bridge_send / roster_bind / route_set — MUTATING: each writes bridge.jsonl, roster.json
+    # or routes.json under <settings-home>/agent-pipe/; none spawns.
+    "agent_pipe.bridge_send": OpClass.MUTATING,
+    "agent_pipe.roster_bind": OpClass.MUTATING,
+    "agent_pipe.route_set": OpClass.MUTATING,
     # groupem.enter — MUTATING, unlike every other op on this surface: it
     # composes session.peer_roster's own read (via read_pass) with two
     # writing legs -- nomination.claim() writes/refreshes
@@ -2929,10 +2921,6 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.box_hold -- MUTATING: writes or removes
     # <settings-home>/state/group-em/box/hold.json.
     "groupem.box_hold": OpClass.MUTATING,
-    # session.landing_hold -- MUTATING: writes or removes
-    # <worktree>/.coordinator-local/landing-hold/<session_id>.json; clear replays the deferred
-    # landings as commits.
-    "session.landing_hold": OpClass.MUTATING,
     # groupem.admission_post -- MUTATING: appends a line to
     # <settings-home>/state/group-em/box/admission.jsonl.
     "groupem.admission_post": OpClass.MUTATING,

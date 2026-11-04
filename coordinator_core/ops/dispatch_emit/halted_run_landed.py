@@ -8,7 +8,10 @@ halt commit, else the op refuses naming the row; recorded on the landed marker a
 ``in_run`` (bool, optional: close the calling run itself as already delivered; admits a ``running``
 sibling status or a solo run with no halt marker, and refuses unless every manifest
 ``review_declared_paths`` entry has no delta between the manifest ``head_sha`` and HEAD and the
-worktree; a marker-less run writes nothing and replies the not-applicable close).
+worktree; a marker-less run writes nothing and replies the not-applicable close),
+``landed_under`` (string, optional run id: admits a run with no sibling status or halt record whose
+work landed under that other run; the named run's marker must read ``landed`` at a sha matching
+``sha``/``shas``, else the "never ran" refusal stands; writes nothing and replies the not-applicable close).
 Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read
@@ -932,14 +935,42 @@ def _in_run_unclean(root: Path, run_id: str) -> Optional[str]:
     return None
 
 
+def _landed_sha(root: Path, other: str, shas: list) -> Optional[str]:
+    """The sha *other* landed at when its halt marker or sibling status reads landed at a sha matching *shas*, else None."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+    from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
+
+    if not safe_id(other):
+        return None
+    landed = None
+    try:
+        marker = halted_run.read_strict_run(ask_contract.record_dir(root, other))
+        if marker is not None and marker.get("status") == halted_run.STATUS_LANDED:
+            landed = marker.get("sha")
+    except (ValueError, halted_run.UnreadableHaltRecord):
+        pass
+    if landed is None:
+        try:
+            prior = json.loads((root / contract.status_rel(other)).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if isinstance(prior, dict) and prior.get("status") == contract.STATUS_LANDED:
+            landed = prior.get("sha")
+    if isinstance(landed, str) and any(landed.startswith(s) for s in shas):
+        return landed
+    return None
+
+
 def _record_solo(
     root: Path, run_id: str, shas: list, session_id: Optional[str] = None, in_run: bool = False,
-    met_by: Optional[dict] = None,
+    met_by: Optional[dict] = None, landed_under: Optional[str] = None,
 ) -> dict:
     """Solo run (no sibling status): record landed on its halt marker; the caller commits ``recorded``.
 
     ``in_run`` admits a marker-less run: it verifies the sha and the clean write set, writes nothing and
-    replies ``_close_landed``'s not-applicable close.
+    replies ``_close_landed``'s not-applicable close. ``landed_under`` admits a marker-less run whose
+    work the named run already landed: no git read, the named run's landed sha is the credit.
     """
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 
@@ -957,6 +988,13 @@ def _record_solo(
         if problem:
             return _refuse(problem)
         return {"ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, **_close_landed(root, run_id, sha, session_id)}
+    if marker is None and landed_under:
+        landed = _landed_sha(root, landed_under, shas)
+        if landed:
+            return {
+                "ok": True, "run_id": run_id, "sha": landed, "written": False, "landed_under": landed_under,
+                **_close_landed(root, run_id, landed, session_id),
+            }
     if marker is None:
         return _refuse(f"{run_id} has no sibling status or halt record; it never ran")
     status = marker.get("status")
@@ -1012,6 +1050,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if in_run is not None and not isinstance(in_run, bool):
         return _refuse(f"{OP_NAME} requires in_run to be a boolean")
 
+    landed_under = params.get("landed_under")
+    if landed_under is not None and (not isinstance(landed_under, str) or not landed_under):
+        return _refuse(f"{OP_NAME} requires landed_under to be a run id string")
+
     sid = params.get("session_id")
     session_id = sid if isinstance(sid, str) and _UUID.fullmatch(sid) else None
 
@@ -1019,7 +1061,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     try:
         prior = json.loads((root / contract.status_rel(run_id)).read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return _record_solo(root, run_id, shas, session_id, bool(in_run), met_by)
+        return _record_solo(root, run_id, shas, session_id, bool(in_run), met_by, landed_under)
     except (OSError, ValueError):
         return _refuse(f"{run_id} sibling status is unreadable")
     status = prior.get("status") if isinstance(prior, dict) else None

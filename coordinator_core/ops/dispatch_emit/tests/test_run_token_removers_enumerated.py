@@ -29,6 +29,12 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "reaped idle run with no live holder (abandoned)"),
     ("ops/dispatch_emit/op.py", "_abandon_run"): (
         1, "recomposed refire shell nothing is driving (abandoned)"),
+    ("ops/dispatch_emit/op.py", "_dispatch_emit_body"): (
+        1, "this call's own fresh mint, rolled back because its run dir failed to land (never launched)"),
+    ("ops/dispatch_emit/minted_run.py", "_abandon"): (
+        1, "operator abandon of a minted-only run; the halt marker lands first so the run is unstartable"),
+    ("ops/dispatch_emit/minted_run.py", "_clear_dirless_mint"): (
+        1, "abandon of a mint whose run dir never landed (never launched)"),
     ("ops/dispatch_emit/ask_stage.py", "_refuse_live_write_overlap"): (
         1, "write-overlap refusal ending this run"),
     ("ops/dispatch_emit/terminal_commit.py", "_settle_token"): (
@@ -119,7 +125,8 @@ def test_every_run_token_remover_is_allowlisted_with_its_condition():
 def test_run_token_own_unlinks_are_the_protocol_functions_only():
     """`run_token.py` is outside the caller walk; its own `.unlink` calls, the spent-receipt
     removal in `mint` and the escrow TTL reaper `sweep_expired_escrows` included (escrow
-    removal is protocol too), must stay in the protocol functions."""
+    removal is protocol too), must stay in the protocol functions. `consume` / `discard` unlink
+    through the `_unlink_both` / `_drop_legacy` helpers, so those helpers are protocol too."""
     tree = ast.parse((_PKG / "ops/dispatch_emit/run_token.py").read_text(encoding="utf-8"))
     scopes: set[str] = set()
     for fn in ast.walk(tree):
@@ -128,7 +135,7 @@ def test_run_token_own_unlinks_are_the_protocol_functions_only():
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
                         and node.func.attr == "unlink"):
                     scopes.add(fn.name)
-    assert scopes == {"mint", "redeem", "consume", "discard", "sweep_expired_escrows"}
+    assert scopes == {"mint", "redeem", "sweep_expired_escrows", "_unlink_both", "_drop_legacy"}
 
 
 def test_walk_resolves_aliased_and_from_imports(tmp_path):

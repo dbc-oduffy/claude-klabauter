@@ -171,6 +171,25 @@ def test_notebooklm_targets_derive_or_halt(repo, with_questions):
         assert [p.name for p in (repo / "state" / "sizings").iterdir()] == [Path(REL).name]
 
 
+def test_build_doc_is_route_plan_and_research_doc_keeps_its_route():
+    from coordinator_core.ops.dispatch_emit.research_build_split import split_research_build
+
+    research_doc, build_doc = split_research_build(_doc(RESEARCH), REL, WRITES)
+    assert build_doc["route"] == "plan" and "research" not in build_doc
+    assert research_doc["route"] == "spec-dispatch" and "research" in research_doc
+
+
+def test_split_plan_rel_is_the_month_dir_path():
+    from coordinator_core.ops.dispatch_emit.research_build_split import split_plan_rel
+
+    assert (
+        split_plan_rel("state/sizings/2026-11/2026-11-04-x-ab12cd-build.yaml")
+        == "docs/plans/2026-11/2026-11-04-x-ab12cd-build.md"
+    )
+    assert split_plan_rel("state/sizings/2026-10-29-split-stress.yaml") == "docs/plans/2026-10/2026-10-29-split-stress.md"
+    assert split_plan_rel("state/sizings/undated.yaml") == "docs/plans/undated.md"
+
+
 def test_no_writes_research_sizing_does_not_split(repo):
     _put(repo, RESEARCH)
     v = gate(repo, REL, writes=[])

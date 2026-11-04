@@ -1040,3 +1040,46 @@ def test_dump_without_py_spy_reports_and_does_not_raise(tmp_path, capsys):
     with mock.patch.object(wrapper.shutil, "which", return_value=None):
         wrapper._dump_process_tree(mock.Mock(pid=os.getpid()))
     assert "py-spy not on PATH" in capsys.readouterr().err
+
+
+#: Most wall-clock seconds the pre-kill dump may add before the kill, however many processes the tree holds.
+_DUMP_TOTAL_BUDGET_SECS = 30
+
+
+@pytest.mark.designed_red
+def test_pre_kill_dump_is_bounded_in_total_for_a_wide_process_tree(tmp_path):
+    """The ceiling kill must land within a fixed time of the ceiling: the dump's worst case is a
+    per-process timeout summed over every process in the tree, so a wide xdist tree holds the mutex
+    for minutes past --max-runtime (example-game-repo pytest pid 34556 held it past 300s)."""
+    wrapper = _load_wrapper_module()
+    parent = mock.Mock(pid=1)
+    parent.children.return_value = [mock.Mock(pid=100 + i) for i in range(24)]
+    timeouts = []
+
+    def fake_run(argv, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return mock.Mock(stdout="", stderr="")
+
+    with mock.patch.object(wrapper, "psutil", _PsutilWithProcess(wrapper.psutil, parent)), \
+         mock.patch.object(wrapper.shutil, "which", return_value="py-spy"), \
+         mock.patch.object(wrapper.subprocess, "run", fake_run):
+        wrapper._dump_process_tree(mock.Mock(pid=1))
+    assert timeouts, "the dump ran no py-spy"
+    assert sum(t for t in timeouts if t) <= _DUMP_TOTAL_BUDGET_SECS
+
+
+def test_pre_kill_dump_of_a_small_tree_still_dumps_every_process(tmp_path):
+    wrapper = _load_wrapper_module()
+    parent = mock.Mock(pid=1)
+    parent.children.return_value = [mock.Mock(pid=2), mock.Mock(pid=3)]
+    dumped = []
+
+    def fake_run(argv, **kwargs):
+        dumped.append(argv[-1])
+        return mock.Mock(stdout="", stderr="")
+
+    with mock.patch.object(wrapper, "psutil", _PsutilWithProcess(wrapper.psutil, parent)), \
+         mock.patch.object(wrapper.shutil, "which", return_value="py-spy"), \
+         mock.patch.object(wrapper.subprocess, "run", fake_run):
+        wrapper._dump_process_tree(mock.Mock(pid=1))
+    assert dumped == ["1", "2", "3"]

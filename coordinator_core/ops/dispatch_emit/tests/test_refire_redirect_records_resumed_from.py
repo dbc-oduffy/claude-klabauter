@@ -81,5 +81,17 @@ def test_abandon_leaves_a_run_without_resumed_from_alone(repo, monkeypatch):
 
     _halt(repo)
     assert _fire(repo)["run_id"] == OLDER
+    # The rebind mints a token naming the firing session; another session's abandon of it is refused.
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "99999999-8888-7777-6666-555555555555")
     assert _abandon(repo, OLDER)["abandoned"] is False
     assert hr._read(record_dir(repo, OLDER))["status"] != hr.STATUS_CLOSED
+
+
+def test_the_firing_session_abandons_its_own_stalled_rebound_run(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run as hr
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    _halt(repo)
+    assert _fire(repo)["run_id"] == OLDER
+    assert _abandon(repo, OLDER)["abandoned"] is True
+    assert hr._read(record_dir(repo, OLDER))["status"] == hr.STATUS_CLOSED

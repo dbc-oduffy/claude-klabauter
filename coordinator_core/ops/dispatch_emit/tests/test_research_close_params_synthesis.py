@@ -53,7 +53,7 @@ def test_web_and_repo_emit_names_both_synthesis_files(monkeypatch, tmp_path, cap
 def test_scouts_only_emit_carries_no_key(monkeypatch, tmp_path, capsys, content_root):
     params = _emit(
         monkeypatch, tmp_path, capsys, content_root,
-        "--research-class", "corpus", "--research-source", "notebooklm", "--research-target", "notebooklm=A",
+        "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube", "--research-target", "notebooklm=A",
     )
     assert "require_segment_outputs" not in params
 

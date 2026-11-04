@@ -458,6 +458,29 @@ HALT_REASON_FIELDS = ("reason", "detail", "refused", "error")
 HALT_REASON_MAX_CHARS = 300
 
 
+#: Stands in for a halt's plan path that is not on disk, inside its `next_action` text.
+HALT_MISSING_PLAN_PLACEHOLDER = "<the plan>"
+
+
+def halted_naming_existing_plan(repo_root: Path, halted: dict) -> dict:
+    """`halted`, or a copy whose `plan` is None and whose `next_action` text carries
+    `HALT_MISSING_PLAN_PLACEHOLDER` when the named plan is not a file under `repo_root` (the
+    author moved it after the run minted the path). One stat; no search for a replacement. Pure."""
+    plan = halted.get(HALT_PLAN_FIELD) if isinstance(halted, dict) else None
+    if not isinstance(plan, str) or not plan:
+        return halted
+    root = Path(repo_root)
+    target = contained_path(root / plan, [root])
+    if target is not None and target.is_file():
+        return halted
+    out = {**halted, HALT_PLAN_FIELD: None}
+    next_action = halted.get("next_action")
+    if next_action is not None:
+        needle = json.dumps(plan)[1:-1]
+        out["next_action"] = json.loads(json.dumps(next_action).replace(needle, HALT_MISSING_PLAN_PLACEHOLDER))
+    return out
+
+
 def halted_record_message(run_id: str, halted: dict) -> str:
     """Commit message for a halted run's record-only commit: subject, blank line, `Halted-By:`
     and, when the halt carries a reason, one `Halt-Reason:` line (first non-empty of

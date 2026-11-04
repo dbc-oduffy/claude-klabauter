@@ -19,7 +19,8 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
-from coordinator_core.ops.dispatch_emit.fanout_cost import STARTUP_TOKENS_PER_AGENT, read_fanout
+from coordinator_core.ops.dispatch_emit.fanout_cost import BASES, STARTUP_TOKENS_PER_AGENT, read_fanout
+from coordinator_core.ops.dispatch_emit.nested_run_contract import STAGED_INLINE_SLOT
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
@@ -33,7 +34,7 @@ def _assert_cost_fields(fanout: dict, *, units: int) -> None:
     assert fanout is not None
     assert _META_KEYS <= set(fanout)
     assert isinstance(fanout["expectedAgents"], int) and not isinstance(fanout["expectedAgents"], bool)
-    assert fanout["basis"] in ("exact", "lower-bound")
+    assert fanout["basis"] in BASES
     assert fanout["units"] == units
     assert fanout["startupTokensPerAgent"] == STARTUP_TOKENS_PER_AGENT > 0
     assert fanout["startupTokensTotal"] == fanout["expectedAgents"] * fanout["startupTokensPerAgent"]
@@ -156,7 +157,7 @@ def test_grind_six_entries_batch_and_meta_and_queue_reply_carry_the_cost(repo):
 
     meta = read_fanout(script)
     _assert_cost_fields(meta, units=6)
-    assert meta["basis"] == "lower-bound"
+    assert meta["basis"] == "expected"
     assert len(meta["groups"]) < 6
     assert sum(len(g) for g in meta["groups"]) == 6
     assert meta["expectedAgents"] > len(meta["groups"])
@@ -183,6 +184,9 @@ def _ask_manifest(repo: Path):
         "---\ndeliverable_id: dlv-fan-abc123\n---\n# Fan plan\n\n## Tasks\n\n```yaml plan-tasks\n" + rows + "```\n",
         encoding="utf-8", newline="\n",
     )
+    script = repo / "scratch" / "warp" / "r1.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(f"export const meta = {{ name: 'x' }}\n{STAGED_INLINE_SLOT}\n", encoding="utf-8", newline="\n")
     return stage(repo, run_id="r1", plan_rel=_PLAN_REL)
 
 

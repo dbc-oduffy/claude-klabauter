@@ -49,6 +49,33 @@ def test_overlap_refused_naming_run_and_paths_and_token_released(repo):
     assert not (repo / "scratch" / "warp" / "mine" / "commit-request.txt").exists()
 
 
+def test_stalled_footprint_read_degrades_and_stages(repo, monkeypatch, caplog):
+    import threading
+
+    from coordinator_core.ops.dispatch_emit import ask_stage, live_run_writes
+
+    _live_peer(repo, "peer", ["pkg/b.py"])
+    gate = threading.Event()
+    monkeypatch.setattr(live_run_writes, "live_footprints", lambda *a, **k: gate.wait(10))
+    monkeypatch.setattr(ask_stage, "LIVE_OVERLAP_DEADLINE_S", 0.05)
+    try:
+        with caplog.at_level("WARNING"):
+            assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
+    finally:
+        gate.set()
+    assert "check skipped" in caplog.text
+
+
+def test_fast_footprint_read_still_refuses_under_deadline(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    _live_peer(repo, "peer", ["pkg/b.py"])
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    monkeypatch.setattr(ask_stage, "LIVE_OVERLAP_DEADLINE_S", 5.0)
+    with pytest.raises(AskStageError, match="live-run-write-overlap"):
+        stage(repo, run_id="mine", plan_rel=PLAN_REL)
+
+
 def test_disjoint_peer_stages(repo):
     _live_peer(repo, "peer", ["other/z.py"])
     assert sorted(r.id for r in stage(repo, run_id="mine", plan_rel=PLAN_REL).rows) == ["C1", "C2", "C3"]

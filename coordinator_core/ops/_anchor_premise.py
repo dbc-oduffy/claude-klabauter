@@ -193,10 +193,14 @@ def _valid(verdict: Any) -> bool:
 
 
 def _mentions(row: Any, anchor_id: str) -> bool:
-    """True when a RESOLVES row carries ``anchor_id`` as a whole token in its citation or evidence."""
-    if not isinstance(row, dict) or row.get("verdict") != "RESOLVES":
+    """True when a RESOLVES row carries ``anchor_id`` as a whole token in its citation or evidence,
+    or an UNCHECKABLE row's citation opens with it (an incidental mention never downgrades a check)."""
+    if not isinstance(row, dict) or row.get("verdict") not in ("RESOLVES", "UNCHECKABLE"):
         return False
     pattern = re.compile(r"(?<![A-Za-z0-9_.-])" + re.escape(anchor_id) + r"(?![A-Za-z0-9_-])")
+    if row["verdict"] == "UNCHECKABLE":
+        cited = row.get("citation")
+        return isinstance(cited, str) and bool(re.match(r"\s*" + pattern.pattern, cited))
     return any(
         isinstance(row.get(key), str) and pattern.search(row[key]) for key in ("citation", "evidence")
     )

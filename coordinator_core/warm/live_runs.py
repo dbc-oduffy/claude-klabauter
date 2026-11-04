@@ -132,12 +132,53 @@ def _live_stage(
         return None
     if require_token and not _token_held(repo_root, run_id):
         return None
-    if stage == "minted":
-        from coordinator_core import warp_live
-
-        if warp_live.runner_unproven(repo_root, run_id):
-            return None
+    if _record_terminal(repo_root, run_id, stage):
+        return None
     return stage
+
+
+def _never_started(repo_root: Path, run_id: str) -> bool:
+    """True when a minted run's token is past the runner grace and nothing shows a runner: no
+    submitted call or transcript, no launch record. Unlike `warp_live.runner_unproven`, a token
+    missing its session or script (a Workflow that returned at once) still reads unproven.
+    Records only; any read failure answers False."""
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    try:
+        if warp_live.runner_unproven(repo_root, run_id):
+            return True
+        record = next((r for r in run_token.held_records(repo_root) if r.get("run_id") == run_id), None)
+        if record is None:
+            return False
+        if time.time() - float(record["minted_at"]) <= warp_live.MINTED_RUNNER_GRACE_SECONDS:
+            return False
+        submission = warp_live._read_json(warp_live._submission_path(repo_root, run_id)) or {}
+        if submission.get("tool_use_id") or submission.get("transcript_path"):
+            return False
+        session_id = submission.get("session_id") or record.get("session_id")
+        script = submission.get("script_path") or record.get("script_path")
+        if isinstance(session_id, str) and session_id and isinstance(script, str) and script:
+            return not warp_live._own_launch_ids(
+                session_id, script, warp_live._launch_dirs(None), None, float(record["minted_at"])
+            )
+        return True
+    except Exception:
+        return False
+
+
+def _record_terminal(repo_root: Path, run_id: str, stage: str) -> bool:
+    """True when the run dir shows the run ended or never started, whatever `run-stage.json` reads.
+
+    An ended `halted.json` (halted, landed, superseded, closed; not resumed) ends it, whichever
+    stage a halt path left behind; a minted run with no runner after the grace never started.
+    Pure file reads.
+    """
+    from coordinator_core import warp_live
+
+    if warp_live._holds_ended_marker(repo_root, run_id):
+        return True
+    return stage == "minted" and _never_started(repo_root, run_id)
 
 
 def run_is_live(

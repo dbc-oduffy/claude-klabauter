@@ -44,6 +44,7 @@ _GIB = 1024**3
 # the task; it never creates, stops or schedules one.
 TRIM_TASK = "BoxCacheTrim"
 TASK_WAIT_SECONDS = 30.0
+RUNNING_EXTENSION_SECONDS = 120.0
 GOVERNOR_WAIT_SECONDS = 10.0
 POLL_SECONDS = 1.0
 STATE_POLL_SECONDS = 2.0
@@ -72,6 +73,7 @@ class TrimFire:
     ok: bool
     detail: str
     waited: float
+    running: bool = False
 
     def line(self) -> str:
         if self.ok:
@@ -140,13 +142,17 @@ def fire_trim_task(
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     sample: Optional[Callable[[], None]] = None,
     wait_seconds: float = TASK_WAIT_SECONDS,
+    extend_while_running: float = RUNNING_EXTENSION_SECONDS,
 ) -> Optional[TrimFire]:
     """Fire BoxCacheTrim and report only a result written after the fire. None when the task is
     absent or would not start (caller falls back); else a TrimFire, never the old log tail: a task
     still Running (0x41301), a refused fire (0x800710E0), a task that left Running without a
     record, and a bounded wait that expires are all `ok=False`. `sample` is called once per poll
     while waiting. An automatic caller passes `live_fn`: None, with nothing spawned, unless it
-    reports a live group-em (a raising probe reads as not live); no `live_fn` is a manual trim."""
+    reports a live group-em (a raising probe reads as not live); no `live_fn` is a manual trim.
+    Trap: past `wait_seconds` a task still Running keeps being waited on for up to
+    `extend_while_running` more; if it is still Running then, the result has `running=True` so the
+    caller re-measures instead of judging the trim."""
     if live_fn is not None:
         try:
             if not live_fn():
@@ -163,7 +169,7 @@ def fire_trim_task(
         waited += STATE_POLL_SECONDS
         state = _task_state(run) or state
     if state.running:
-        return TrimFire(False, f"{TRIM_TASK} still Running (0x41301) after {waited:.0f}s; not fired", waited)
+        return TrimFire(False, f"{TRIM_TASK} still Running (0x41301) after {waited:.0f}s; not fired", waited, running=True)
 
     fired_at = now()
     try:
@@ -174,7 +180,7 @@ def fire_trim_task(
     if fired.returncode != 0:
         said = f"{getattr(fired, 'stdout', '')} {getattr(fired, 'stderr', '')}".lower()
         if "running" in said or "800710e0" in said:
-            return TrimFire(False, f"{TRIM_TASK} refused the fire: already running (0x800710E0)", waited)
+            return TrimFire(False, f"{TRIM_TASK} refused the fire: already running (0x800710E0)", waited, running=True)
         return None
 
     elapsed = 0.0
@@ -195,7 +201,9 @@ def fire_trim_task(
                 f"(Last Result {state.last_result or 'unknown'})",
                 waited + elapsed,
             )
-        if elapsed >= wait_seconds:
+        if elapsed >= wait_seconds and not (
+            state is not None and state.running and elapsed < wait_seconds + extend_while_running
+        ):
             break
         sleep(POLL_SECONDS)
         elapsed += POLL_SECONDS
@@ -213,6 +221,7 @@ def fire_trim_task(
         False,
         f"no result record from this run after {elapsed:.0f}s wait (task {shown})",
         waited + elapsed,
+        running=bool(state and state.running),
     )
 
 
@@ -226,7 +235,8 @@ def fire_box_cache_trim(
     not start, or `live_fn` reports no live group-em; else this run's result line, or a line
     starting `NOT TRIMMED:` naming why no result from this run arrived. Trap: the governor's loop
     blocks on this call, so its waits are bounded at GOVERNOR_WAIT_SECONDS, not the manual 30s."""
-    fired = fire_trim_task(run, log_path, sleep, live_fn, wait_seconds=GOVERNOR_WAIT_SECONDS)
+    fired = fire_trim_task(run, log_path, sleep, live_fn, wait_seconds=GOVERNOR_WAIT_SECONDS,
+                           extend_while_running=0.0)
     return None if fired is None else fired.line()
 
 
@@ -332,6 +342,37 @@ def _fmt_move(label: str, before: int, after: int) -> str:
     return f"{label} {_gib(before)} -> {_gib(after)}"
 
 
+def _judge_running(
+    host: FileCacheHost,
+    before: MemorySnapshot,
+    seen: list[int],
+    sample: Callable[[], None],
+    fired: TrimFire,
+    need: int,
+) -> int:
+    """The task was still Running when the bounded wait ended: judge by re-measured memory, never
+    by the missing record. A drop is success; no drop yet is UNVERIFIED, not 'NOT effective'."""
+    sample()
+    try:
+        after = host.read_memory()
+    except CounterError as exc:
+        _err(f"{TRIM_TASK} still Running after {fired.waited:.0f}s and the memory counters could "
+             f"not be re-read: {exc}")
+        return ExitCode.COUNTERS_UNAVAILABLE
+    trough = min([*seen, after.cache_bytes])
+    numbers = (f"{_fmt_move('cache', before.cache_bytes, after.cache_bytes)}, "
+               f"{_fmt_move('available', before.available_bytes, after.available_bytes)}")
+    if before.cache_bytes - trough >= need:
+        print(f"{TRIM_TASK} still Running after {fired.waited:.0f}s but the cache dropped "
+              f"(low {_gib(trough)}): {numbers}")
+        print(_block("before", before))
+        print(_block("after", after))
+        return ExitCode.OK
+    _err(f"trim UNVERIFIED: {TRIM_TASK} still Running after {fired.waited:.0f}s, cache not dropped "
+         f"yet: {numbers} (low seen {_gib(trough)}); re-measure with box-memory-snapshot")
+    return ExitCode.TRIM_FAILED
+
+
 def _apply_via_task(
     host: FileCacheHost,
     fire: Callable[[Callable[[], None]], Optional[TrimFire]],
@@ -360,6 +401,9 @@ def _apply_via_task(
     fired = fire(sample)
     if fired is None:
         return None
+    need = max(MIN_DROP_BYTES, int(before.cache_bytes * DROP_FRACTION))
+    if not fired.ok and fired.running:
+        return _judge_running(host, before, seen, sample, fired, need)
     if not fired.ok:
         _err(f"trim NOT effective: {fired.detail}; before cache {_gib(before.cache_bytes)}, "
              f"available {_gib(before.available_bytes)}, no after-read (waited {fired.waited:.1f}s)")
@@ -383,7 +427,6 @@ def _apply_via_task(
 
     numbers = (f"{_fmt_move('cache', before.cache_bytes, after.cache_bytes)}, "
                f"{_fmt_move('available', before.available_bytes, after.available_bytes)}")
-    need = max(MIN_DROP_BYTES, int(before.cache_bytes * DROP_FRACTION))
     refilled = after.cache_bytes - trough
     if before.cache_bytes < NOOP_FLOOR_BYTES:
         print(f"nothing to trim: cache already under {_gib(NOOP_FLOOR_BYTES)} ({numbers})")

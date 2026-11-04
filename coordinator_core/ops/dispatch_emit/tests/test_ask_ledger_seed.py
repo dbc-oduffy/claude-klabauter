@@ -132,6 +132,7 @@ def test_a_relayed_runs_sizing_takes_pm_verbatims_only_from_the_pm_turn_log(tmp_
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-rl")
     pm_turns.append_turn("the PM said this", session_id="sid-rl")
     path = Path(record_homes.record_path(str(tmp_path), "sizings", "2026-10-13-relay.yaml"))
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_DRAFT, encoding="utf-8")
     code = sizing_assemble.main([
         "--tshirt", "M", "--intent", "RELAYED-MARK do it", "--premise-provenance", "read",
