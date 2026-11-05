@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.research_close import _handler
+from coordinator_core.session import claim_index, touch_record
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -264,16 +265,78 @@ def test_a_recorded_key_name_is_not_a_secret(repo, scratch):
     assert _close(repo, scratch, "corpus", outputs=["final.md"])["exit_code"] == 0
 
 
-def test_an_untracked_research_file_written_during_the_run_refuses_the_close_with_no_write(repo, scratch):
+@pytest.fixture(autouse=True)
+def claims(tmp_path: Path, monkeypatch) -> Path:
+    """Point the ownership projection at a tmp claim ledger, never the box's sessions."""
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    real = claim_index.commit_set
+    monkeypatch.setattr(
+        claim_index, "commit_set",
+        lambda sid, sessions_dir=None, cwd=None: real(sid, sessions_dir=str(sessions), cwd=cwd),
+    )
+    return sessions
+
+
+def _hold(sessions: Path, sid: str, path: str) -> None:
+    touch_record.append_event(
+        str(sessions / sid / "touch-record.jsonl"), session_id=sid, agent_id=None,
+        verb=touch_record.VERB_TOUCH, path=path, timestamp=1786183200.0, kind="w",
+    )
+
+
+def test_an_own_untracked_research_file_written_during_the_run_refuses_the_close_with_no_write(
+    repo, scratch, claims
+):
     stray = repo / "docs" / "research" / "2026-10-09-elsewhere.md"
     stray.parent.mkdir(parents=True)
     stray.write_text("duplicate\n", encoding="utf-8")
+    _hold(claims, "me", "docs/research/2026-10-09-elsewhere.md")
     head = _git(repo, "rev-parse", "HEAD")
-    out = _close(repo, scratch, "corpus", outputs=["final.md"])
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], session_id="me")
     assert out["exit_code"] == 1 and out["committed"] is False and out["deliverable"] is False, out
     assert out["strays"] == ["docs/research/2026-10-09-elsewhere.md"]
     assert _git(repo, "rev-parse", "HEAD") == head
     assert sorted(p.name for p in (repo / "docs" / "research").iterdir()) == ["2026-10-09-elsewhere.md"]
+
+
+def test_a_peer_untracked_research_file_is_noted_once_not_refused_and_left_intact(
+    repo, scratch, claims
+):
+    peer = repo / "docs" / "research" / "peer-live.md"
+    peer.parent.mkdir(parents=True)
+    peer.write_bytes(b"peer output\n")
+    _hold(claims, "peer", "docs/research/peer-live.md")
+    unclaimed = repo / "docs" / "research" / "nobody.md"
+    unclaimed.write_bytes(b"orphan\n")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], session_id="me")
+    assert out["exit_code"] == 0 and out["committed"] is True and out["deliverable"] is True, out
+    assert out["peer_files"] == ["docs/research/nobody.md", "docs/research/peer-live.md"]
+    assert peer.read_bytes() == b"peer output\n" and unclaimed.read_bytes() == b"orphan\n"
+    assert out["paths"] == [f"{_run()}/outputs/final.md"]
+    committed = _git(repo, "show", "--name-only", "--format=", "HEAD").splitlines()
+    assert sorted(committed) == sorted([*out["paths"], _TRAIL])
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all").count("peer-live.md") == 1
+
+
+def test_a_peer_stray_does_not_retrigger_on_a_second_close(repo, scratch, claims):
+    peer = repo / "docs" / "research" / "peer-live.md"
+    peer.parent.mkdir(parents=True)
+    peer.write_text("peer\n", encoding="utf-8")
+    _hold(claims, "peer", "docs/research/peer-live.md")
+    first = _close(repo, scratch, "corpus", outputs=["final.md"], session_id="me")
+    again = _close(repo, scratch, "corpus", outputs=["final.md"], session_id="me")
+    assert first["exit_code"] == again["exit_code"] == 0 and again["sha"] == first["sha"]
+
+
+def test_a_contested_stray_is_not_own_and_is_noted(repo, scratch, claims):
+    shared = repo / "docs" / "research" / "shared.md"
+    shared.parent.mkdir(parents=True)
+    shared.write_text("both\n", encoding="utf-8")
+    _hold(claims, "me", "docs/research/shared.md")
+    _hold(claims, "peer", "docs/research/shared.md")
+    out = _close(repo, scratch, "corpus", outputs=["final.md"], session_id="me")
+    assert out["exit_code"] == 0 and out["peer_files"] == ["docs/research/shared.md"], out
 
 
 def test_a_file_inside_the_run_dir_is_not_a_stray(repo, scratch):
@@ -284,19 +347,20 @@ def test_a_file_inside_the_run_dir_is_not_a_stray(repo, scratch):
     assert out["exit_code"] == 0 and "strays" not in out, out
 
 
-def test_strays_then_the_printed_remedy_then_reclose_records_every_output(repo, scratch):
+def test_strays_then_the_printed_remedy_then_reclose_records_every_output(repo, scratch, claims):
     research = repo / "docs" / "research"
     research.mkdir(parents=True)
     names = ["head-nlm.md", "head-nlm-advisory.md"]
     for n in names:
         (research / n).write_text(f"{n} body\n", encoding="utf-8")
-    first = _close(repo, scratch, "corpus", outputs=["final.md"])
+        _hold(claims, "me", f"docs/research/{n}")
+    first = _close(repo, scratch, "corpus", outputs=["final.md"], session_id="me")
     assert first["exit_code"] == 1 and sorted(first["strays"]) == sorted(f"docs/research/{n}" for n in names)
     assert "move each into the run's scratch dir and re-close" in first["error"]
 
     for n in names:
         shutil.move(str(research / n), str(scratch / n))
-    again = _close(repo, scratch, "corpus", outputs=["final.md", *names])
+    again = _close(repo, scratch, "corpus", outputs=["final.md", *names], session_id="me")
     assert again["exit_code"] == 0 and again["committed"] is True, again
     assert "strays" not in again
     dest = f"{_run()}/outputs"

@@ -2323,8 +2323,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "e8e4744b635ec79fbb89be63b94e9a489a7fc603",
-    "coordinator_core/_engine_stamp": "1c3d2070a030f4fb2d9de2ff497129bd7257b78d",
+    "coordinator_core/_engine_published_at": "1ba29efe211bceb1149c306bede47833bee59d8d",
+    "coordinator_core/_engine_stamp": "7c7a7ac59fbe7a78cc0f9c7ef9209c5d8cafdda4",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -7910,7 +7910,7 @@
     "coordinator_core/ops/requirement_register.py": "75a4ceb53e0ba25142cef5a3c747cb34cfaae618",
     "coordinator_core/ops/requirement_register_stall.py": "4829079604b702bffee0ca718b80dbd6a59d6478",
     "coordinator_core/ops/research_archive_workdir.py": "a9539faaa66a6c088bb1aae0d0cea83ec6e87925",
-    "coordinator_core/ops/research_close.py": "13371d7729d888b70458950f22767315ea988829",
+    "coordinator_core/ops/research_close.py": "ccee92687d9007fca0db1c2deb4ec51a7af150e1",
     "coordinator_core/ops/research_dir_restructure.py": "d3a122cba0d0740eb3d3ea7edebff46c87b7726a",
     "coordinator_core/ops/research_reground.py": "eaaa0ca0688060f335383e6ba7437c54d0e0b498",
     "coordinator_core/ops/research_shape.py": "bb31713b22effae20425f0d6c9dc47508e95863f",
@@ -8736,7 +8736,7 @@
     "coordinator_core/ops/tests/test_requirement_register_fifa_replay.py": "f0df452d50af619181d19fbd7da216d1d45d6a54",
     "coordinator_core/ops/tests/test_requirement_register_pins.py": "4795515bce73c6362146cbeb2c4367641e3cb240",
     "coordinator_core/ops/tests/test_requirement_register_unclaimed_ids.py": "db1a75e967714ee7f9f6f24684bea4de24fa8964",
-    "coordinator_core/ops/tests/test_research_close.py": "ab801aa0f7d2b0861c1d10c2f59476d851f39ad6",
+    "coordinator_core/ops/tests/test_research_close.py": "027cccad3ff02ba56ad28bbdd2e4ee560935d065",
     "coordinator_core/ops/tests/test_research_close_group_runs.py": "8fb8316f67a3a7959d62caf779e57900039bd51b",
     "coordinator_core/ops/tests/test_research_close_releases_build_sibling.py": "8b070360814717b2b44a80bc83152b4197b94e4e",
     "coordinator_core/ops/tests/test_research_close_require_outputs.py": "81a2dbbc7ecd4d000c24c5063af578c1a39ccfd8",
@@ -11132,5 +11132,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "41193368c500c556d661b0243546017e6d806a39"
+  "source_head": "f2b9576fe08950c737bc98dc96db10f397ccb3e2"
 }

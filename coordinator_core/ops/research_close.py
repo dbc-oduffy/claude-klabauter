@@ -61,9 +61,10 @@ never excused.
 Before any copy, every output is scanned for secret-shaped values (a run can read a
 third-party tree that commits credentials); a hit refuses the close naming file, line and
 pattern, never the value. Before any copy, untracked files under ``docs/research/`` written
-since the run began and outside the run dir refuse the close (``deliverable: false``, ``strays``
-listed, nothing written): a member that wrote its output elsewhere left it uncommitted and
-unarchived; move each into scratch and re-close.
+since the run began and outside the run dir are partitioned by ``claim_index.commit_set`` (the
+caller's ``session_id`` param, else the ambient session): those this session solely claims refuse the
+close (``deliverable: false``, ``strays`` listed, nothing written; move each into scratch and
+re-close); every other one is listed as ``peer_files`` on the success reply and never touched.
 
 Idempotency: a re-run whose destination dir already holds byte-equal copies of every
 output and the identical trail record returns the sha of the commit that landed them (found
@@ -122,7 +123,9 @@ from coordinator_core.ops import _research_trail
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops._research_sizing import ResearchSizingRefused, drop_research_block
 from coordinator_core.ops.fleet._common import main_worktree_root
+from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.repo_relative_text import relativize_text
+from coordinator_core.session import claim_index
 
 _RESEARCH_DIR = Path("docs") / "research"
 _WALK_LIMIT = 200
@@ -397,6 +400,18 @@ def _landed_sha(worktree: Path, subject: str) -> Optional[str]:
     return None
 
 
+def _own_strays(worktree: Path, strays: list[str], session_id: Optional[str]) -> list[str]:
+    """The `strays` this session holds the sole write claim on (DR-258 ``commit_set``).
+
+    Without a session id nothing is attributable, so nothing is own: the close never refuses
+    on a file it cannot show is the caller's.
+    """
+    if not strays or not session_id:
+        return []
+    mine = set(claim_index.commit_set(session_id, cwd=str(worktree)).paths)
+    return [s for s in strays if s in mine]
+
+
 def _close_committed(
     worktree: Path,
     scratch: Path,
@@ -468,16 +483,19 @@ def _close_archived(
     dest_dir = archive_root / run_rel
     if contained_path(dest_dir, [archive_root]) is None:
         return _err(f"destination escapes {str(archive_root)!r}: {str(dest_dir)!r}")
+    peer_files: list[str] = []
     if not local:
         strays = _strays(worktree, dest_dir, since)
-        if strays:
+        own = _own_strays(worktree, strays, meta.get("session_id"))
+        if own:
             return _err(
-                f"run is not deliverable: {len(strays)} untracked docs/research file(s) written "
-                f"during this run sit outside {run_dir_rel}; move each into the run's scratch dir "
-                "and re-close, or delete it",
+                f"run is not deliverable: {len(own)} untracked docs/research file(s) this session "
+                f"wrote during this run sit outside {run_dir_rel}; move each into the run's "
+                "scratch dir and re-close",
                 deliverable=False,
-                strays=strays,
+                strays=own,
             )
+        peer_files = strays
 
     pairs = [(src, dest_dir / layout.child_for(src.relative_to(scratch).as_posix())) for src in sources]
     if len({dst for _, dst in pairs}) != len(pairs):
@@ -607,6 +625,8 @@ def _close_archived(
         "workdir": f"{run_dir_rel}/workdir",
         "deliverable": True,
     }
+    if peer_files:
+        shared["peer_files"] = peer_files
     if local:
         return {
             **shared,
@@ -853,6 +873,7 @@ def _close_sync(worktree: Path, params: dict) -> dict:
     meta = {
         "tier": tier, "value_class": value_class, "sizing": sizing, "sizing_rel": sizing_rel,
         "group_runs": group_runs, "topic": topic,
+        "session_id": str(params.get("session_id") or "") or resolve_current_session_id(worktree),
     }
     local_root_raw = params.get("local_root")
     result = _close_committed(
@@ -874,7 +895,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     ``open`` (count of ``## Open questions`` grounding lines, passed not graded) when non-zero;
     local-only adds ``local_only``, ``destination``, ``claims_out``. Returns (exit_code 1):
     ``{committed: false, error}``; a ``require_claims``, ``require_outputs`` or ``require_grounding``
-    refusal adds ``deliverable: false``, as does a ``strays`` refusal (which also lists ``strays``); a grounding-verdict refusal also adds ``grounding`` (the
+    refusal adds ``deliverable: false``, as does a ``strays`` refusal (own strays only, listed in ``strays``); a success with
+    other sessions' untracked files adds ``peer_files``; a grounding-verdict refusal also adds ``grounding`` (the
     five verdict counts); when a ``digest-*.md`` is newer than ``grounding.md`` that refusal also
     adds ``next_action: {op: "research.reground", params: {run_id, scratch_dir}}`` (absolute
     ``scratch_dir``).
