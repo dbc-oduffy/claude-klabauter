@@ -268,6 +268,57 @@ def test_nonzero_launcher_exit_other_than_test_failure_records_error_with_reason
     assert record["status"] == "error" and "126" in record["reason"]
 
 
+def _exit4(stderr: str):
+    def run(argv, cwd, *, log, append=False, **_kw):
+        with open(log, "a" if append else "w", encoding="utf-8") as fh:
+            fh.write(stderr)
+        return 4
+    return run
+
+
+def _retest_reason(repo, tmp_path, run) -> str:
+    rc = retest_targeted.main(
+        ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
+        run=run,
+    )
+    assert rc == 2
+    record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
+    assert record["status"] == "error"
+    return record["reason"]
+
+
+def test_exit4_unrecognized_timeout_is_a_provisioning_defect_naming_the_pip_line(repo, tmp_path):
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "x"\n[project.optional-dependencies]\ntest = ["pytest>=9.1", "pytest-timeout>=2.3"]\n',
+        encoding="utf-8")
+    reason = _retest_reason(repo, tmp_path, _exit4(
+        "ERROR: usage: pytest [options]\npytest: error: unrecognized arguments: --timeout=300\n"))
+    assert "provisioning defect" in reason
+    assert 'pip install "pytest-timeout>=2.3"' in reason
+    assert "no test results" not in reason
+
+
+def test_exit4_unrecognized_timeout_without_pyproject_names_bare_plugin(repo, tmp_path):
+    reason = _retest_reason(repo, tmp_path, _exit4("pytest: error: unrecognized arguments: --timeout=300\n"))
+    assert 'pip install "pytest-timeout"' in reason
+
+
+def test_exit4_unrecognized_numprocesses_names_xdist_alongside_timeout(repo, tmp_path):
+    reason = _retest_reason(repo, tmp_path, _exit4(
+        "pytest: error: unrecognized arguments: --timeout=300 -n 4 --dist=loadfile\n"))
+    assert 'pip install "pytest-timeout" "pytest-xdist"' in reason
+
+
+def test_exit4_other_unrecognized_option_stays_a_crashed_launcher(repo, tmp_path):
+    reason = _retest_reason(repo, tmp_path, _exit4("pytest: error: unrecognized arguments: --bogus\n"))
+    assert "provisioning defect" not in reason and "no test results" in reason
+
+
+def test_exit4_without_unrecognized_output_stays_a_crashed_launcher(repo, tmp_path):
+    reason = _retest_reason(repo, tmp_path, _exit4("ERROR: file or directory not found\n"))
+    assert "provisioning defect" not in reason and "exited 4" in reason
+
+
 def test_undeclared_launcher_file_records_error(repo, tmp_path):
     _declare(repo, targeted_test_launcher="scripts/missing.py")
     rc = retest_targeted.main(

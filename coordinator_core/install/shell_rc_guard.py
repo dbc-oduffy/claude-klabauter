@@ -133,7 +133,7 @@ from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 from coordinator_core.ipc import register_op
-from coordinator_core.engine_root import coordinator_engine_root_with_class
+from coordinator_core.engine_root import _load_shim, coordinator_engine_root_with_class
 from coordinator_core.install.write_surface import (
     ShapedClause,
     WriteSurfaceDeclaration,
@@ -463,6 +463,8 @@ def write_shell_rc_guard_block(
             )
         try:
             claude_klabauter_clone, _resolution_class = coordinator_engine_root_with_class()
+            if not claude_klabauter_clone:
+                raise RuntimeError(_load_shim().unresolved_engine_message())
         except RuntimeError as exc:
             print(f"[shell-rc-guard] skip: could not resolve claude-klabauter clone root: {exc}", file=sys.stderr)
             # Discovery (the claude-klabauter clone root) came up empty — resolved

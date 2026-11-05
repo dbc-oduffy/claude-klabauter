@@ -5,10 +5,13 @@ Usage:
 
 Far boxes are the comma-separated ssh aliases in the machine-local key `unimatrix.far_boxes`.
 For each alias with no live supervisor pair, this starts one `unimatrix-roster.py` bridge
-supervisor and one `unimatrix-mirror-all.py` inbox supervisor, detached, with only the
-Unimatrix-Zero relay key (`-o IdentitiesOnly=yes` is applied by the supervisors' ssh calls).
+supervisor and one `unimatrix-mirror-all.py` inbox supervisor, detached, with only
+that alias's relay key (`-o IdentitiesOnly=yes` is applied by the supervisors' ssh calls).
+The key per alias is the machine-local `unimatrix.keys.<alias>`, else the IdentityFile `ssh -G` gives
+the alias (an existing non-default file), else the shared key (settings home, else the group-em home).
 
-Silent exit 0 when no alias is listed. With aliases listed but no relay key (settings home, else\nthe group-em home), it appends one line to the log and links nothing.
+Silent exit 0 when no alias is listed. An alias with no existing key appends one line to the log and
+is skipped; other aliases still link.
 An unreachable far box appends one line to `<settings home>/unimatrix/autolink.log`.
 Nothing is ever printed and the exit status is always 0: a session start must not fail on it.
 """
@@ -27,6 +30,8 @@ ALIAS_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._@-]{0,63}")
 PROBE_CONNECT_SECONDS = 5
 PROBE_TIMEOUT_SECONDS = 15
 LOCK_STALE_SECONDS = 60
+KEYS_PREFIX = "unimatrix.keys."
+SSH_DEFAULT_IDENTITIES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk", "id_xmss"}
 SUPERVISORS = (("bridge", "unimatrix-roster.py"), ("inbox", "unimatrix-mirror-all.py"))
 
 
@@ -165,9 +170,48 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe):
             pass
 
 
-def run(roster=None, boxes=None, spawn=detached, probe_fn=probe):
+def machine_local_key(roster, alias, run=subprocess.run):
+    """The machine-local `unimatrix.keys.<alias>` path, or None when unset or unreadable."""
+    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    if not reader.is_file():
+        return None
+    try:
+        r = run([sys.executable, str(reader), "get", f"{KEYS_PREFIX}{alias}"],
+                capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    val = r.stdout.strip() if not r.returncode else ""
+    return os.path.expanduser(val) if val else None
+
+
+def ssh_identity_file(roster, alias, run=subprocess.run):
+    """First existing, non-default IdentityFile `ssh -G` gives the alias, else None."""
+    try:
+        r = run(["ssh", "-G", "--", alias], capture_output=True, text=True, timeout=PROBE_CONNECT_SECONDS,
+                creationflags=roster.no_window())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if r.returncode:
+        return None
+    for line in r.stdout.splitlines():
+        name, _, val = line.partition(" ")
+        if name.lower() != "identityfile":
+            continue
+        path = Path(os.path.expanduser(val.strip()))
+        if path.name not in SSH_DEFAULT_IDENTITIES and path.is_file():
+            return str(path)
+    return None
+
+
+def resolve_key(roster, alias, local_fn=None, ssh_fn=None):
+    """The relay key for one alias: machine-local, else ssh-config IdentityFile, else the shared default."""
+    local_fn, ssh_fn = local_fn or machine_local_key, ssh_fn or ssh_identity_file
+    return local_fn(roster, alias) or ssh_fn(roster, alias) or roster.default_key()
+
+
+def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None):
+    key_fn = key_fn or resolve_key
     roster = roster or _roster()
-    key = roster.default_key()
     boxes = read_far_boxes(roster) if boxes is None else boxes
     if not boxes:
         return
@@ -178,13 +222,13 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe):
         with open(sdir / "autolink.log", "a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {msg}\n")
 
-    if not Path(key).is_file():
-        # Far boxes are configured, so a missing key is a misconfiguration worth one line, not silence.
-        say(f"no Unimatrix-Zero key (looked for {key} and the group-em home); no far box linked")
-        return
-
     for alias in boxes:
         try:
+            key = key_fn(roster, alias)
+            if not Path(key).is_file():
+                # A configured alias with no key is a misconfiguration worth one line, not silence.
+                say(f"far box {alias}: no Unimatrix-Zero key (looked for {key}); not linked")
+                continue
             link_peer(roster, alias, key, say, spawn=spawn, probe_fn=probe_fn)
         except Exception as ex:  # one peer's failure must not stop the next or fail the session
             say(f"far box {alias} link failed: {type(ex).__name__}: {str(ex)[:120]}")

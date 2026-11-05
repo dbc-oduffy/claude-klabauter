@@ -328,3 +328,32 @@ def test_sweep_expired_twins_also_sweeps_aged_escrows(tmp_path):
     assert escrow_file.exists()
     twin.sweep_expired_twins(tmp_path, now=time.time() + run_token.TTL_SECONDS + 60)
     assert not escrow_file.exists()
+
+
+def _receipt(path):
+    """The `.emitted.json` receipt beside a script."""
+    return path.with_name(path.name + ".emitted.json")
+
+
+def test_twin_leaves_receipt_and_remove_twins_removes_it(tmp_path):
+    _script(tmp_path)
+    _call(tmp_path)
+    assert _receipt(_twin_path(tmp_path)).is_file()
+    assert twin.remove_twins(tmp_path, "run1") == 1
+    assert not _twin_path(tmp_path).exists()
+    assert not _receipt(_twin_path(tmp_path)).exists()
+
+
+def test_identical_rerun_restores_missing_receipt(tmp_path):
+    _script(tmp_path)
+    _call(tmp_path)
+    _receipt(_twin_path(tmp_path)).unlink()
+    _call(tmp_path)
+    assert _receipt(_twin_path(tmp_path)).is_file()
+
+
+def test_sweep_expired_twins_removes_receipt(tmp_path):
+    _script(tmp_path)
+    _call(tmp_path)
+    assert twin.sweep_expired_twins(tmp_path, now=os.path.getmtime(_twin_path(tmp_path)) + 10**9) == 1
+    assert not _receipt(_twin_path(tmp_path)).exists()

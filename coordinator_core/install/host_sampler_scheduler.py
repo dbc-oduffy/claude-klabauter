@@ -63,6 +63,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.install.install_root_scope import redirected_install_reason
 from coordinator_core.install.substrate import _refuse_machine_mutation
 from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.win_portability import no_console_creationflags
@@ -227,6 +228,19 @@ def _systemd_units(python_exe: str, repo_root: Path) -> "dict[str, str]":
     }
 
 
+def _redirected_skip() -> bool:
+    """True (after printing one advisory) when this install root is redirected
+    away from the operator default home; the machine-global job is not ours to write."""
+    reason = redirected_install_reason()
+    if reason is None:
+        return False
+    print(
+        f"[ADVISORY] host-sampler job not registered: {reason} "
+        "(machine-global job belongs to the default install)"
+    )
+    return True
+
+
 def _register_file_based(repo_root: Path, python_exe: Optional[str]) -> bool:
     """macOS LaunchAgent / Linux systemd user timer, written as plain files so
     no ``launchctl``/``systemctl``/``crontab`` process is spawned. Both are
@@ -239,6 +253,8 @@ def _register_file_based(repo_root: Path, python_exe: Optional[str]) -> bool:
     blocked = _refuse_machine_mutation(TASK_NAME, what="register the host-sampler job", check_temp_path=False)
     if blocked:
         print(f"[ADVISORY] {blocked}")
+        return False
+    if _redirected_skip():
         return False
     python_exe = python_exe or sys.executable
     try:
@@ -285,6 +301,8 @@ def register_host_sampler_task(
     blocked = _refuse_machine_mutation(TASK_NAME, what="register the host-sampler scheduled task", check_temp_path=False)
     if blocked:
         print(f"[ADVISORY] {blocked}")
+        return False
+    if _redirected_skip():
         return False
 
     if python_exe is None:

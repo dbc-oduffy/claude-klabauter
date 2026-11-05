@@ -127,7 +127,8 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
 
 def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     """Read the run's overlay verdict for the `measured` record. One file read, no spawn: "green" or "red"
-    when a verdict keyed to exactly this landing set and base sha exists; otherwise "missing" (no file) or
+    (or "inconclusive", which land_run lands with an advisory) when a verdict keyed to exactly this landing
+    set and base sha exists; otherwise "missing" (no file) or
     "mismatch" (keyed to a different landing set or base sha; `detail` says which side moved)."""
     try:
         data = json.loads(verdict_path(root, run_id).read_text(encoding="utf-8"))
@@ -142,6 +143,8 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
         moved = "base sha" if data.get("base_sha") != measured.get("base_sha") else "landing set blobs"
         return OverlayVerdict("mismatch", f"the overlay verdict was keyed to a different {moved}", seeds)
     verdict = data.get("verdict")
+    if verdict == "inconclusive":
+        return OverlayVerdict("inconclusive", str(data.get("detail", "")), seeds)
     if verdict not in ("green", "red"):
         return OverlayVerdict("missing", f"overlay verdict was {verdict!r}: {data.get('detail', '')}", seeds)
     return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)

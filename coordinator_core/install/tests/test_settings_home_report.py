@@ -41,6 +41,14 @@ def claude_klabauter_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+@pytest.fixture(autouse=True)
+def _no_registered_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Default to no registered engine so the wrapper source is machine-independent."""
+    monkeypatch.setattr(
+        "coordinator_core.engine_root.published_engine_mirror_path", lambda *a, **k: None
+    )
+
+
 def test_fully_populated_fixed_members_report_present(tmp_path: Path, claude_klabauter_root: Path) -> None:
     sh = _populate_full_settings_home(tmp_path)
 
@@ -129,6 +137,7 @@ def test_publish_excluded_name_is_never_missing(
     fake_engine_root = tmp_path / "fake-engine-root"
     fake_bin = fake_engine_root / "coordinator" / "bin"
     fake_bin.mkdir(parents=True)
+    _give_engine_a_shim(fake_engine_root, sh, "_resolve_klabauter.py")
     for name in expected:
         if name == excluded_name:
             continue
@@ -322,6 +331,94 @@ def test_byte_copied_member_diverging_from_this_roots_source_is_unverified(
         "body not this root's" in line and _BYTE_COPIED_NAME in line
         for line in format_report_lines(report)
     )
+    assert any(
+        "install-claude-author-wrapper" in line for line in format_report_lines(report)
+    ), "a stale byte-copied body must name the one command that rewrites it"
+
+
+@_byte_copied_is_a_forwarder_slot
+def test_byte_copied_member_matching_published_wrapper_source_counts_present(
+    tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`install-claude-author-wrapper` copies the published build's wrapper
+    when one is registered; those bytes are a legitimate final body."""
+    published = tmp_path / "published"
+    pub_src = published.joinpath(*BYTE_COPIED_BIN_SOURCES[_BYTE_COPIED_NAME])
+    pub_src.parent.mkdir(parents=True)
+    pub_src.write_bytes(b"#!/bin/sh\n# published build wrapper\n")
+    monkeypatch.setattr(
+        "coordinator_core.engine_root.published_engine_mirror_path", lambda *a, **k: str(published)
+    )
+    sh = _populate_full_settings_home(tmp_path)
+    _land_forwarders(sh, claude_klabauter_root)
+    _land_byte_copied_member(sh, claude_klabauter_root, body=pub_src.read_bytes())
+
+    report = check_settings_home(sh, claude_klabauter_root)
+
+    assert report.forwarder_byte_copied == [_BYTE_COPIED_NAME]
+    assert _BYTE_COPIED_NAME not in report.forwarder_unverified
+
+
+@_byte_copied_is_a_forwarder_slot
+def test_registered_engine_wrapper_is_the_judge_not_the_claude_klabauter_tree(
+    tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With an engine registered, claude-klabauter's own wrapper bytes are a foreign body."""
+    published = tmp_path / "published"
+    pub_src = published.joinpath(*BYTE_COPIED_BIN_SOURCES[_BYTE_COPIED_NAME])
+    pub_src.parent.mkdir(parents=True)
+    pub_src.write_bytes(b"#!/bin/sh\n# registered engine wrapper\n")
+    monkeypatch.setattr(
+        "coordinator_core.engine_root.published_engine_mirror_path", lambda *a, **k: str(published)
+    )
+    sh = _populate_full_settings_home(tmp_path)
+    _land_forwarders(sh, claude_klabauter_root)
+
+    _land_byte_copied_member(sh, claude_klabauter_root)  # claude-klabauter tree's bytes
+    report = check_settings_home(sh, claude_klabauter_root)
+    assert _BYTE_COPIED_NAME in report.forwarder_unverified
+    assert not report.complete
+
+    _land_byte_copied_member(sh, claude_klabauter_root, body=pub_src.read_bytes())
+    report = check_settings_home(sh, claude_klabauter_root)
+    assert report.forwarder_byte_copied == [_BYTE_COPIED_NAME]
+    assert _BYTE_COPIED_NAME not in report.forwarder_unverified
+
+
+@_byte_copied_is_a_forwarder_slot
+def test_forwarder_pass_does_not_overwrite_a_present_byte_copied_body(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.install import substrate
+
+    ml_bin, ch_bin, bin_dst = tmp_path / "ml_bin", tmp_path / "ch_bin", tmp_path / "bin_dst"
+    bin_dst.mkdir()
+    manifest = substrate._load_bin_templates_manifest(substrate._resolve_bin_templates_manifest_root())
+    for entry in manifest.install_bin_resolvers_entries():
+        (ml_bin / entry.name).parent.mkdir(parents=True, exist_ok=True)
+        (ml_bin / entry.name).write_text(f"ml::{entry.name}\n")
+    for f, _exec_bit in substrate._CH_FAMILY_FILES:
+        (ch_bin / f).parent.mkdir(parents=True, exist_ok=True)
+        (ch_bin / f).write_text(f"ch::{f}\n")
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    monkeypatch.setattr(substrate, "_door_engine_root", lambda: None)
+    monkeypatch.setattr(substrate, "_engine_root_or_raise", lambda: (str(_REPO_ROOT), "test"))
+
+    def run() -> None:
+        substrate._install_bin_resolvers(
+            ml_bin, ch_bin, bin_dst, check_only=False, python3_cmd_resolved_bin=sys.executable
+        )
+
+    body = b"#!/bin/sh\n# single writer's body\n"
+    (bin_dst / _BYTE_COPIED_NAME).write_bytes(body)
+    run()
+    assert (bin_dst / _BYTE_COPIED_NAME).read_bytes() == body
+
+    (bin_dst / _BYTE_COPIED_NAME).unlink()
+    run()
+    assert (bin_dst / _BYTE_COPIED_NAME).is_file(), "an absent name is still seeded"
+    run()
+    assert _AGENT_FORWARDER_MARKER in (bin_dst / _BYTE_COPIED_NAME).read_text()
 
 
 @_byte_copied_is_a_forwarder_slot
@@ -341,15 +438,53 @@ def test_byte_copy_arm_is_scoped_to_the_declared_member(
     assert not report.complete
 
 
-def test_missing_resolver_shim_is_detected(tmp_path: Path, claude_klabauter_root: Path) -> None:
+def _give_engine_a_shim(engine_root: Path, sh: Path, name: str) -> None:
+    """Lay one resolver shim in the engine tree by shape and its installed copy in `sh/bin`."""
+    family = engine_root / "coordinator" / "lib" / f"resolve-{name[len('_resolve_'):-3]}"
+    family.mkdir(parents=True)
+    (family / name).write_text("x")
+    (sh / "bin" / name).write_text("x")
+
+
+def _pin_engine_root(monkeypatch: pytest.MonkeyPatch, engine_root: Path) -> None:
+    from coordinator_core.install.engine_root_for_install import InstallEngineRoot
+
+    monkeypatch.setattr(
+        "coordinator_core.install.settings_home_report.resolve_engine_root_for_install",
+        lambda: InstallEngineRoot(kind="published", root=engine_root, remediation=None),
+    )
+
+
+def test_missing_resolver_shim_is_detected_under_the_engine_name(
+    tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sh = _populate_full_settings_home(tmp_path)
     _land_forwarders(sh, claude_klabauter_root)
-    (sh / "bin" / "_resolve_claude_klabauter.py").unlink()
+    engine = tmp_path / "engine"
+    _give_engine_a_shim(engine, sh, "_resolve_klabauter.py")
+    _pin_engine_root(monkeypatch, engine)
+    (sh / "bin" / "_resolve_klabauter.py").unlink()
 
     report = check_settings_home(sh, claude_klabauter_root)
 
     assert not report.complete
-    assert any("_resolve_claude_klabauter.py" in m.label for m in report.fixed_missing)
+    assert any("_resolve_klabauter.py" in m.label for m in report.fixed_missing)
+    assert not any("_resolve_claude_klabauter.py" in m.label for m in report.fixed_missing)
+
+
+def test_engine_without_a_shim_fails_with_the_not_found_reason(
+    tmp_path: Path, claude_klabauter_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sh = _populate_full_settings_home(tmp_path)
+    _land_forwarders(sh, claude_klabauter_root)
+    engine = tmp_path / "engine"
+    (engine / "coordinator" / "lib").mkdir(parents=True)
+    _pin_engine_root(monkeypatch, engine)
+
+    report = check_settings_home(sh, claude_klabauter_root)
+
+    assert not report.complete
+    assert any("resolver shim cannot be verified" in m.label for m in report.fixed_missing)
 
 
 def _load_doctor_probe_module():

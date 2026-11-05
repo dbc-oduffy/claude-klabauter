@@ -13,6 +13,8 @@ from coordinator_core.install import host_sampler_scheduler as hss
 @pytest.fixture(autouse=True)
 def _kill_switch_off(monkeypatch):
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    for var in ("COORDINATOR_SETTINGS_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR"):
+        monkeypatch.delenv(var, raising=False)
 
 
 def _completed(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
@@ -191,3 +193,34 @@ class TestFileBasedRegistration:
         monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
         with mock.patch.object(hss, "_IS_WINDOWS", False):
             assert hss.unregister_host_sampler_task() is False
+
+
+class TestRedirectedInstallSkipsRegistration:
+    @pytest.mark.parametrize("platform", ["darwin", "linux"])
+    def test_file_based_leaves_existing_job_untouched(self, fake_home, tmp_path, monkeypatch, capsys, platform):
+        if platform == "darwin":
+            existing = fake_home / "Library/LaunchAgents/com.coordinator.hostsampler.plist"
+        else:
+            existing = fake_home / ".config/systemd/user/coordinator-host-sampler.timer"
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(b"real-box-job")
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "sandbox" / ".claude"))
+        with mock.patch.object(hss, "_IS_WINDOWS", False), mock.patch.object(hss.sys, "platform", platform):
+            assert hss.register_host_sampler_task(tmp_path, python_exe="/x/py") is False
+        assert existing.read_bytes() == b"real-box-job"
+        assert "[ADVISORY] host-sampler job not registered: CLAUDE_CONFIG_DIR=" in capsys.readouterr().out
+
+    def test_win32_does_not_call_schtasks(self, fake_home, tmp_path, monkeypatch, capsys):
+        monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sandbox" / "settings"))
+        with mock.patch.object(hss, "_IS_WINDOWS", True), \
+                mock.patch.object(hss.sys, "platform", "win32"), \
+                mock.patch.object(hss, "_run_schtasks") as schtasks:
+            assert hss.register_host_sampler_task(tmp_path, python_exe="py.exe") is False
+        schtasks.assert_not_called()
+        assert "[ADVISORY] host-sampler job not registered: COORDINATOR_SETTINGS_HOME=" in capsys.readouterr().out
+
+    def test_override_equal_to_default_still_registers(self, fake_home, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(fake_home / ".claude"))
+        with mock.patch.object(hss, "_IS_WINDOWS", False), mock.patch.object(hss.sys, "platform", "darwin"):
+            assert hss.register_host_sampler_task(tmp_path, python_exe="/x/py") is True
+        assert (fake_home / "Library/LaunchAgents/com.coordinator.hostsampler.plist").exists()

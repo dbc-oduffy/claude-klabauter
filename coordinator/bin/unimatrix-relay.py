@@ -1,8 +1,9 @@
 """Forced command for the unimatrix key on the receiving box: the ONLY thing that key
 can run. It moves Claude Code cross-session messages between boxes and nothing else.
 
-authorized_keys line (restrict = no pty, no forwarding of any kind; key body elided):
-  restrict,command="python3 ~/.coordinator-claude-settings/unimatrix/unimatrix-relay.py" ssh-ed25519 <key-body> unimatrix
+authorized_keys line (restrict = no pty, no forwarding of any kind; key body elided). The exact
+line for a box, with absolute interpreter and relay paths, is printed by `unimatrix-install.py --install`:
+  restrict,command="/opt/homebrew/bin/python3 /Users/me/.coordinator-claude-settings/unimatrix/unimatrix-relay.py" ssh-ed25519 <key-body> unimatrix
 
 Modes, read from SSH_ORIGINAL_COMMAND:
   roster            print one JSON line per live local session: its registry entry
@@ -123,8 +124,8 @@ def entries():
 
 def roster():
     for pid, d, key in entries():
-        if d.get("unimatrixMirror"):
-            continue  # never re-export a far session we are only mirroring
+        if d.get("unimatrixMirror") or d.get("macSocketPath"):
+            continue  # never re-export a far session we are only mirroring, whichever OS made the entry
         with open(os.path.join(os.path.expanduser(SESS), key), encoding="utf-8") as fh:
             body = fh.read()
         print(json.dumps({"entry": d, "key_name": key, "key": body}))

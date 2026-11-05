@@ -159,6 +159,22 @@ def write_stop_after_marker(dir_: Path, stop_after: str, sender: object = None) 
     return marker
 
 
+def stop_after_plan_live(dir_: Path) -> bool:
+    """True when `dir_` holds a `stop_after=plan` marker that its pass has not already outlived.
+
+    A marker written after the pass staged (`run-stage.json` `staged_at` earlier than the marker's
+    `at`) is stale: the pass moved past planning, so a refire never inherits it. A marker with no `at`,
+    or a pass with no `staged_at` (never staged, or staged before the stamp existed), is live.
+    The compare is strict at second granularity: a marker written in the same second as staging stays
+    live, and a marker deliberately re-armed after the pass staged is ignored."""
+    marker = _read_json_object(Path(dir_) / STOP_AFTER_FILE) or {}
+    if marker.get(STOP_AFTER_KEY) != STOP_AFTER_PLAN:
+        return False
+    at = marker.get("at")
+    staged_at = (_read_json_object(Path(dir_) / RUN_STAGE_FILE) or {}).get("staged_at")
+    return not (isinstance(at, str) and isinstance(staged_at, str) and at > staged_at)
+
+
 def lineage_stop_after(root: Path, run_id: str) -> Optional[str]:
     """`STOP_AFTER_PLAN` when `run_id`'s record dir or any ancestor's (`LINEAGE_KEYS` in run.json,
     nearest first, depth-bounded, cycle-safe) holds a marker with stop_after=plan; else None. An
@@ -175,7 +191,7 @@ def lineage_stop_after(root: Path, run_id: str) -> Optional[str]:
                 dir_ = record_dir(root, rid)
             except ValueError:
                 continue
-            if (_read_json_object(dir_ / STOP_AFTER_FILE) or {}).get(STOP_AFTER_KEY) == STOP_AFTER_PLAN:
+            if stop_after_plan_live(dir_):
                 return STOP_AFTER_PLAN
             run = _read_json_object(dir_ / "run.json") or {}
             nxt.extend(v for k in LINEAGE_KEYS if isinstance(v := run.get(k), str))
@@ -1135,6 +1151,8 @@ def write_run_stage_at(
         data["started_at"] = stamp
     data["stage"] = stage
     data["last_activity_at"] = stamp
+    if stage == "staged" and "staged_at" not in data:
+        data["staged_at"] = stamp
     if steps_planned is not None:
         data["steps_planned"] = int(steps_planned)
     if warp_run:

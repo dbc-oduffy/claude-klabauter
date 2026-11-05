@@ -281,6 +281,47 @@ def _collection_failed_since(log: Path, offset: int) -> bool:
         return False
 
 
+_UNRECOGNIZED_ARGS = re.compile(r"unrecognized arguments:([^\n]*)", re.IGNORECASE)
+_OPTION_PLUGINS = {"--timeout": "pytest-timeout", "--timeout-method": "pytest-timeout", "-n": "pytest-xdist",
+                   "--numprocesses": "pytest-xdist", "--dist": "pytest-xdist"}
+
+
+def _declared_spec(root: Path, plugin: str) -> str:
+    """The ``plugin`` requirement as ``pyproject.toml`` declares it in a ``[project.optional-dependencies]``
+    extra (e.g. ``pytest-timeout>=2.3``), else the bare name."""
+    try:
+        import tomllib
+
+        extras = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]["optional-dependencies"]
+        for specs in extras.values():
+            for spec in specs:
+                if re.split(r"[<>=!~\[; ]", spec, maxsplit=1)[0].lower() == plugin:
+                    return spec
+    except (OSError, KeyError, TypeError, ValueError):
+        pass
+    return plugin
+
+
+def _missing_plugin_defect(log: Path, offset: int, root: Path) -> Optional[str]:
+    """A provisioning-defect message when the session's output past ``offset`` shows pytest rejecting an
+    option owned by a plugin that is not installed (exit 4, ``unrecognized arguments``); None otherwise."""
+    try:
+        with open(log, "rb") as handle:
+            handle.seek(offset)
+            text = handle.read().decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    match = _UNRECOGNIZED_ARGS.search(text)
+    if not match:
+        return None
+    plugins = sorted({_OPTION_PLUGINS[t.split("=")[0]] for t in match.group(1).split() if t.split("=")[0] in _OPTION_PLUGINS})
+    if not plugins:
+        return None
+    specs = " ".join(f'"{_declared_spec(root, p)}"' for p in plugins)
+    return (f"provisioning defect, not failed tests: pytest plugin(s) {', '.join(plugins)} not installed "
+            f"(pytest rejected{match.group(1).rstrip()}); install with: {sys.executable} -m pip install {specs}")
+
+
 def _scope_of(root: Path, test: str) -> str:
     """Nearest ancestor directory of the test file, inside ``root``, holding a ``conftest.py`` (repo-relative
     POSIX; ``""`` when none). One pytest session per scope keeps a bare ``from conftest import`` on its own."""
@@ -704,6 +745,8 @@ def _run_pass(run, root: Path, tests: list[str], log_path: Path, deadline: float
             break
         elif rc == 1:
             failed_cmds.append(cmd)
+        elif rc == 4 and (defect := _missing_plugin_defect(log_path, offset, root)):
+            broken_msgs.append(f"{defect}: {cmd}")
         elif rc not in (0, NO_TESTS_COLLECTED):
             broken_msgs.append(f"launcher exited {rc} with no test results (denied, missing or crashed launcher): {cmd}")
     status, reason = "pass", ""

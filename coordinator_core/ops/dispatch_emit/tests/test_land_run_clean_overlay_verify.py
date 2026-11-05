@@ -145,6 +145,17 @@ def test_land_run_refuses_a_red_verdict(halted, monkeypatch):  # noqa: F811
     assert _git(halted, "log", "-1", "--format=%s").strip() == "fixture"
 
 
+def test_land_run_lands_on_an_inconclusive_verdict_with_an_advisory(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+
+    _, result = _dirty_land(halted, "inconclusive")
+
+    assert result["committed"] is True, result
+    assert result["clean_overlay_verify"]["verdict"] == "inconclusive"
+    assert "inconclusive" in result["clean_overlay_verify"]["advisory"]
+    assert FIXTURE in result["reach_dirt_foreign"]
+
+
 def test_land_run_refuses_a_missing_verdict(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
 

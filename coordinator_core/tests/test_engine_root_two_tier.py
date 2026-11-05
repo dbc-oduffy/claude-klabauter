@@ -105,15 +105,9 @@ def _short_circuit_fixture(tmp_path, monkeypatch):
 
 def test_cross_entrypoint_agreement_short_circuit_branch(_short_circuit_fixture):
     shim = _load_shim_for_test()
-    expected_root, expected_class = shim.resolve_claude_klabauter_root_with_class()
-    actual_root, actual_class = claude_klabauter_root.coordinator_engine_root_with_class()
-
-    assert expected_class == shim.RESOLUTION_LIVE_WORKING_TREE
-    assert actual_class == expected_class
-    assert _normalize_root(actual_root) == _normalize_root(expected_root)
-    assert _normalize_root(actual_root) == _normalize_root(
-        str(_short_circuit_fixture.live_dir)
-    )
+    # A registered-but-unpublished claude-klabauter tree is never an engine.
+    assert shim.resolve_claude_klabauter_root_with_class() == (None, "unresolved")
+    assert claude_klabauter_root.coordinator_engine_root_with_class() == (None, "unresolved")
 
 
 @pytest.fixture
@@ -227,10 +221,7 @@ def test_dual_boot_absent_klabauter_registry_resolved(tmp_path, monkeypatch):
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
-    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
-
-    assert root == str(live_dir)
-    assert cls == "live-working-tree"
+    assert claude_klabauter_root.coordinator_engine_root_with_class() == (None, "unresolved")
 
 
 def test_dual_boot_absent_klabauter_honors_machine_local_registry_dir_override(
@@ -264,10 +255,11 @@ def test_dual_boot_absent_klabauter_honors_machine_local_registry_dir_override(
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
-    root, cls = claude_klabauter_root.coordinator_engine_root_with_class()
-
-    assert root == str(override_live_dir)
-    assert cls == "live-working-tree"
+    shim = claude_klabauter_root._load_shim()
+    assert claude_klabauter_root.coordinator_engine_root_with_class() == (None, "unresolved")
+    # The override dir is the one named in the remediation.
+    assert str(override_ml_dir) in shim.unresolved_engine_message()
+    assert str(override_live_dir) not in shim.unresolved_engine_message()
 
 
 def _make_bin_dir_with_sentinel(root, extra_targets=()):
@@ -303,16 +295,16 @@ def test_exec_cli_live_working_tree_class_unchanged_no_fallback(tmp_path, monkey
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
 
     shim = _load_shim_for_test()
-    root, cls = shim.resolve_claude_klabauter_root_with_class()
-    assert cls == shim.RESOLUTION_LIVE_WORKING_TREE
+    assert shim.resolve_claude_klabauter_root_with_class() == (None, "unresolved")
 
     with pytest.raises(SystemExit) as excinfo:
-        shim.exec_cli("nowhere-cli", [])
+        shim.exec_cli("archive-stamp-cli", [])
 
-    assert excinfo.value.code == 127
+    # A live tree carrying the target is still never run: no engine, no exec.
+    assert excinfo.value.code == 1
     captured = capsys.readouterr()
-    assert "under both" not in captured.err
-    assert "coordinator helper" in captured.err
+    assert "claude-klabauter" in captured.err
+    assert str(live_root) not in captured.err
 
 
 @pytest.fixture

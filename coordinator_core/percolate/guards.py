@@ -678,6 +678,52 @@ def check_extensionless_shebang_absent(target_root: str | Path, params: dict) ->
     return GuardResult(kind='extensionless-shebang-absent', ok=True)
 
 
+def _has_duplicate_str_members(node: ast.Set | ast.Tuple) -> bool:
+    """True when two CONSECUTIVE members are the same non-empty string: a collapsed rename
+    leaves the two spellings side by side, while a long literal repeating a name far apart is
+    legitimate source."""
+    prev: str | None = None
+    for elt in node.elts:
+        if isinstance(elt, ast.Constant) and isinstance(elt.value, str) and elt.value:
+            if elt.value == prev:
+                return True
+            prev = elt.value
+        else:
+            prev = None
+    return False
+
+
+def _collapsed_literal_lines(tree: ast.AST) -> list[int]:
+    """Line numbers of set literals, and of tuples that act as a membership set, whose string
+    members repeat back to back -- the published-bytes signature of a rename that mapped two spellings of a
+    dual-name compatibility set onto one.
+
+    Tuples are flagged only as the sole argument of `frozenset`/`set` or as the right side of
+    `in`/`not in`: argv rows, parametrize rows and `(x, x)` pairs are legitimate duplicates.
+    """
+    lines: list[int] = []
+    for node in ast.walk(tree):
+        candidates: list[ast.expr] = []
+        if isinstance(node, ast.Set):
+            candidates.append(node)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in ('frozenset', 'set')
+            and len(node.args) == 1
+        ):
+            candidates.append(node.args[0])
+        elif isinstance(node, ast.Compare):
+            candidates.extend(
+                comp for op, comp in zip(node.ops, node.comparators)
+                if isinstance(op, (ast.In, ast.NotIn))
+            )
+        for cand in candidates:
+            if isinstance(cand, (ast.Set, ast.Tuple)) and _has_duplicate_str_members(cand):
+                lines.append(cand.lineno)
+    return sorted(set(lines))
+
+
 def check_python_syntax_valid(
     target_root: str | Path,
     params: dict,
@@ -696,6 +742,10 @@ def check_python_syntax_valid(
     declarations (store-load-time validation cannot see this class of defect -- a
     hand-authored rule is well-formed as a declaration; the damage depends entirely on
     what identifier shape it lands on in the tree).
+
+    The same parse also fails a file holding a set/frozenset/`in`-tuple literal with repeated
+    string members (`_collapsed_literal_lines`): a rename that maps both spellings of a
+    dual-name compatibility set onto one parses fine and only shows as a duplicate.
   - `registration-liveness`: defence-in-depth over
     `coordinator_core.percolate.prune_dead_registrations` (§ chunk C1 of
     docs/plans/2026-08-10-the-payload-derives-its-own-op-registrations.md): C1's transform
@@ -760,9 +810,14 @@ def check_python_syntax_valid(
             failures.append((rel, f'{rel}: unreadable ({exc})'))
             continue
         try:
-            compile(source, str(path), 'exec', dont_inherit=True)
+            tree = compile(source, str(path), 'exec', ast.PyCF_ONLY_AST, dont_inherit=True)
+            compile(tree, str(path), 'exec', dont_inherit=True)
         except SyntaxError as exc:
             failures.append((rel, f'{rel}: {exc.__class__.__name__}: {exc}'))
+            continue
+        collapsed = _collapsed_literal_lines(tree)
+        if collapsed:
+            failures.append((rel, f'{rel}: duplicate string members in set/tuple literal at line(s) {collapsed}'))
         else:
             clean_memo.record_clean(data)
 

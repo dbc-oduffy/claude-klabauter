@@ -109,6 +109,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.engine_root import (
+    _load_shim,
     _registry_mtime_pair,
     coordinator_engine_root_with_class,
     engine_source_root,
@@ -118,6 +119,15 @@ from coordinator_core.install.setup_template_manifest import (
     _MANIFEST_ATTRS,
     _load_setup_template_manifest,
 )
+
+
+def _engine_root_or_raise() -> "tuple[str, str]":
+    """`coordinator_engine_root_with_class()` with an `(None, 'unresolved')` answer raised as
+    `RuntimeError` carrying the fetch-claude-klabauter message."""
+    root, resolution_class = coordinator_engine_root_with_class()
+    if not root:
+        raise RuntimeError(_load_shim().unresolved_engine_message().rstrip("\n"))
+    return root, resolution_class
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census). Every write
 # (dst.write_text, _write_bin_manifest, the policy-gate report) targets
@@ -501,7 +511,7 @@ def _resolve_bin_templates_manifest_root() -> Path:
     colocated = Path(__file__).resolve().parents[2]
     if (colocated / "coordinator" / "lib" / "bin-templates-manifest.py").is_file():
         return colocated
-    _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
+    _claude_klabauter_root_str, _resolution_class = _engine_root_or_raise()
     return Path(_claude_klabauter_root_str)
 
 
@@ -2219,8 +2229,8 @@ _AGENT_HELPER_RESERVED_NAMES = frozenset(
 # symlink, and `coordinator_core.ops.install_claude_author_wrapper` (run by
 # DoE's install chain, Step 3.5b, via the `install-claude-author-wrapper`
 # forwarder, AFTER the forwarder loop here) `shutil.copyfile`s the wrapper source onto that path -- through the
-# symlink, onto the settings-home file. The generated forwarder this module
-# writes is therefore never the FINAL body on POSIX; the source bytes are. The
+# symlink, onto the settings-home file. Step 3.5b owns the POSIX body: the
+# forwarder loop only seeds a name in this map when absent, never overwrites. The
 # wrapper carries its own shebang precisely because of this delivery shape
 # (`coordinator/bin/claude-author.py`'s file header; guard
 # `install/tests/test_installed_posix_targets_have_shebang.py`).
@@ -3191,7 +3201,7 @@ def run(setup_only: bool = False, check_only: bool = False) -> int:
     # in the claude-klabauter checkout, resolved via the canonical resolver, never by
     # __file__-walking or a hardcoded sibling name.
     try:
-        _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
+        _claude_klabauter_root_str, _resolution_class = _engine_root_or_raise()
         claude_klabauter_root = Path(_claude_klabauter_root_str)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
@@ -3504,6 +3514,25 @@ _CH_FAMILY_FILES = (
 _RM_FAMILY_FILES = ("_resolve_claude_klabauter.py",)
 
 
+def rm_family_names(engine_root: "Path") -> "tuple[str, ...]":
+    """The installed resolver-shim filename(s) for ``engine_root``, found by
+    shape via ``_live_source_tree_resolver`` so a renamed (published) tree
+    yields its renamed shim. Empty when no resolver is found: never falls
+    back to ``_RM_FAMILY_FILES`` or ``_AGENT_RESOLVER_MODULE``, which spell
+    the pre-rename name.
+    """
+    resolver = _live_source_tree_resolver(Path(engine_root))
+    return (resolver.name,) if resolver is not None else ()
+
+
+def rm_family_not_found_message(engine_root: "Path") -> str:
+    """The single FAIL line for an engine root with no resolver shim by shape."""
+    return (
+        f"no single coordinator/lib/resolve-*/_resolve_*.py under engine root "
+        f"{Path(engine_root)}; resolver shim cannot be verified"
+    )
+
+
 def _static_bin_family_names(claude_klabauter_root: "Optional[Path]" = None) -> "frozenset[str]":
     """Complete set of filenames `_install_bin_resolvers` installs into
     `bin_dst` this run from a STATIC source —
@@ -3539,7 +3568,7 @@ def _static_bin_family_names(claude_klabauter_root: "Optional[Path]" = None) -> 
     names: "set[str]" = set()
     names.update(e.name for e in manifest.install_bin_resolvers_entries())
     names.update(f for f, _ in _CH_FAMILY_FILES)
-    names.update(_RM_FAMILY_FILES)
+    names.update(rm_family_names(root))
     return frozenset(names)
 
 
@@ -3932,6 +3961,11 @@ def _write_agent_helper_forwarders(
                 door_source = None
         for f, target in sorted({**published_only, **agent_helper_target_map}.items()):
             try:
+                if f in BYTE_COPIED_BIN_SOURCES and (bin_dst / f).exists():
+                    # Step 3.5b owns a byte-copied body; this loop only seeds
+                    # the name when absent and never overwrites a present one.
+                    agent_helper_resolved.append(WriteSurfaceEntry(kind="file-path", path=str(bin_dst / f)))
+                    continue
                 if _is_publisher_only_name(f, target, publisher_only_names):
                     if not check_only:
                         _retire_door_images(bin_dst, {f})
@@ -4345,7 +4379,7 @@ def _install_bin_resolvers(
     # derivation that already needed this same value. Purely a reordering:
     # same resolution, same failure mode, just paid once, earlier.
     try:
-        _claude_klabauter_root_resolved_str, _resolution_class = coordinator_engine_root_with_class()
+        _claude_klabauter_root_resolved_str, _resolution_class = _engine_root_or_raise()
         claude_klabauter_root_resolved = Path(_claude_klabauter_root_resolved_str)
     except RuntimeError as exc:
         raise SubstrateFatalError(f"install-substrate: {exc}") from exc
@@ -5690,19 +5724,16 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
                 for name, _exec_bit in _CH_FAMILY_FILES
             ),
         ),
-        # Clause 11 — the resolve-claude-klabauter family: a STATIC 1-entry tuple
-        # (`_RM_FAMILY_FILES`), sourced from
-        # `coordinator/lib/resolve-claude-klabauter/` — a distinct source tree/family
-        # from clause 10, kept separate per the plan's per-family-not-
-        # collapsed guidance.
-        StaticClause(
-            entries=tuple(
-                WriteSurfaceEntry(
-                    kind="file-path",
-                    path=f"<settings-home>/bin/{name}",
-                    reason="rm_family closure, installed once per bin dir",
-                )
-                for name in _RM_FAMILY_FILES
+        # Clause 11 — the resolver-shim family: SHAPED, because the shim's
+        # filename is derived from the engine tree by shape
+        # (`rm_family_names`) and a renamed (published) tree spells it
+        # differently from `_RM_FAMILY_FILES`.
+        ShapedClause(
+            discovered_by="rm_family_names (resolver shim found by shape under the engine root)",
+            entry_template=WriteSurfaceEntry(
+                kind="file-path",
+                path="<settings-home>/bin/<resolver-shim-name>",
+                reason="rm_family closure, installed once per bin dir",
             ),
         ),
         # Clause 12 — `_write_bin_manifest`: the installer's own provenance

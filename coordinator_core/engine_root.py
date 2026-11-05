@@ -221,44 +221,15 @@ _SHIM_PATH = Path(__file__).resolve().parent.parent / "coordinator" / "lib" / "r
 #: if the shim's constant value ever changes, this one must change with it.
 _RESOLUTION_LIVE_WORKING_TREE_LITERAL = "live-working-tree"
 
-_RESOLUTION_UNVERIFIED_ENV_LITERAL = "unverified-env"
-
 _RESOLUTION_RESOLVED_ENGINE_LITERAL = "resolved-engine"
 
-#: Review: code-reviewer — sanctioned path-load consumer surface. This
-#: wrapper's Cheap-short-circuit step (see `coordinator_engine_root_with_class`
-#: step 2 below) reaches into the shim's underscore-prefixed helpers
-#: (`_ml_dir`, `_registry_value`, `_resolve_claude_klabauter_root`) rather than going
-#: exclusively through the shim's public `resolve_claude_klabauter_root_with_class()`.
-#: This is a DECLARED exception, not general license: `coordinator_core`
-#: (this module only) is a named path-load consumer of those three helpers
-#: plus `resolve_claude_klabauter_root_with_class` and the `RESOLUTION_*` constants —
-#: see the matching declaration in the shim's own module docstring
-#: (`coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py`). Changing
-#: `resolve_claude_klabauter_root_with_class()`'s step-1 precondition (the
-#: published-engine-registered-and-usable check) obliges updating this
-#: wrapper's short-circuit in the SAME change — the underscore prefix still
-#: means "not for general callers" for everyone else.
-#:
-#: The mechanical backstop for that obligation is
-#: `coordinator_core/tests/test_engine_root_two_tier.py`'s cross-entrypoint
-#: agreement test: it drives a fixture with `repos.claude_klabauter` ABSENT,
-#: so this wrapper takes the short-circuit while the shim runs its own full
-#: ladder, and both are asserted to still agree. A future step-order change
-#: that breaks that agreement fails there, not only in prose.
-#:
-#: C5 (docs/plans/2026-08-19-an-engine-root-is-a-stamped-build.md) changed
-#: the step-1 precondition again: `_resolve_published_engine` now ALSO
-#: requires a valid engine build stamp ("an engine root is a stamped build.
-#: No stamp, no engine.") before treating `repos.claude_klabauter` as
-#: usable. This short-circuit's own precondition — `repos.claude_klabauter`
-#: is REGISTERED AT ALL (a bare `_registry_value` read, never
-#: `_resolve_published_engine`) — is unaffected: it decides only whether the
-#: gate's published-engine branches can fire, not whether they succeed, so
-#: a registered-but-unstamped root still takes the full-gate path at step 3
-#: below and correctly fails to resolve there rather than short-circuiting
-#: past the stamp check. Recorded here per the obligation above rather than
-#: left implicit.
+#: Sanctioned path-load consumer surface: `coordinator_core` (this module only)
+#: reaches the shim's underscore-prefixed `_ml_dir`, `_registry_value`,
+#: `_resolve_published_engine` and `_is_stamped_engine_root`, plus
+#: `resolve_claude_klabauter_root_with_class` and the `RESOLUTION_*` constants (matching
+#: declaration in the shim's module docstring). Changing the shim's rung-0 or
+#: published-engine predicate obliges updating this wrapper's rung-0 check in the
+#: same change; `test_engine_root_two_tier.py`'s agreement tests are the backstop.
 
 _shim_module: Optional[types.ModuleType] = None
 
@@ -302,16 +273,14 @@ def _reset_skew_advisory() -> None:
 
 
 #: Module-scope memo for the (expensive) two-tier gate answer, keyed on
-#: `(registry mtime pair, session root)`. An explicit memo with a reset
+#: the registry mtime pair. An explicit memo with a reset
 #: seam, not an `os.environ` export, so the cache dies with the test/process
 #: boundary rather than leaking into subprocess children or across pytest
 #: cases.
 #:
-#: PER-KEY DICT, not a single-entry `(key, value)` pair (C10, staff-eng
-#: review finding 8): a warm server serves dispatches from DIFFERENT
-#: session roots interleaved in one process, and a bare last-write-wins
-#: slot is the same missing-key COLLISION class C7 fixes for the two
-_GATE_MEMO: "dict[Tuple[float, float, Optional[str]], Tuple[str, str]]" = {}
+#: Per-key dict: the key is registry state only (the answer no longer depends
+#: on the session root), so interleaved dispatches share one entry safely.
+_GATE_MEMO: "dict[Tuple[float, float], Tuple[Optional[str], str]]" = {}
 
 
 def _reset_gate_memo() -> None:
@@ -396,115 +365,44 @@ def is_published_engine_mirror(root: str) -> bool:
     return same_path(root, mirror)
 
 
-def classify_env_resolved_root(root: str) -> str:
-    """Resolve the class Rung 1 deliberately does not compute.
+def coordinator_engine_root_with_class() -> Tuple[Optional[str], str]:
+    """Resolve the engine root AND the DR-132 resolution class alongside it.
 
-    `coordinator_engine_root_with_class()`'s Rung 1 returns
-    `_RESOLUTION_UNVERIFIED_ENV_LITERAL` because an environment hit proves a
-    path and nothing else. This pays the cost that rung refuses to: it asks
-    whether that path IS the published engine mirror, via
-    `published_engine_mirror_path()` — the same "registered and on-disk
-    usable" check the full gate uses, so this does not re-derive the
-    `repos.claude_klabauter` read (see this module's docstring,
-    "single-implementation property").
-
-    Call this ONLY where the distinction changes behaviour — in practice the
-    state-WRITE path in `state_root.py`. It costs a shim load; putting it
-    back on the resolution hot path is the exact regression Rung 1 exists to
-    avoid.
-
-    NEGATIVE SPEC — this is a mirror check, not a working-tree proof. A path
-    that is not the published mirror classifies as a live working tree, which
-    is the answer Rung 1 asserted unconditionally before; the change is that
-    the mirror case is now excluded rather than assumed away. No registered
-    mirror means no mirror to confuse this root with, so a single-tree box
-    keeps the live-tree answer by construction rather than by luck. Fail-open
-    on an unreadable registry, inheriting `published_engine_mirror_path()`'s
-    contract: the guard's job is to catch the mirror, not to make every
-    registry hiccup unwritable.
+    Wraps the shim's `resolve_claude_klabauter_root_with_class()` and never reimplements
+    its ladder. No rung returns a claude-klabauter tree (PM ruling 2026-11-05):
+      1. `COORDINATOR_ENGINE_ROOT` answers only when it is an existing dir
+         carrying an engine stamp (the shim's `_is_stamped_engine_root`, the same
+         predicate as `warm.engine_root.is_engine_root`); a claude-klabauter tree
+         carries no stamp, so the stamp is the never-claude-klabauter test. Class
+         `_RESOLUTION_RESOLVED_ENGINE_LITERAL`, matching the shim.
+      2. Otherwise the shim's published engine, memoized module-scope on the
+         registry mtime pair (see `_reset_gate_memo()`).
+    With no stamped published engine the shim returns `(None, 'unresolved')`
+    and this function passes it through, never raising; callers print
+    `shim.unresolved_engine_message()` (how to fetch claude-klabauter).
     """
-    if is_published_engine_mirror(root):
-        return _RESOLUTION_RESOLVED_ENGINE_LITERAL
-    return _RESOLUTION_LIVE_WORKING_TREE_LITERAL
+    shim = _load_shim()
 
-
-def coordinator_engine_root_with_class() -> Tuple[str, str]:
-    """Resolve the claude-klabauter root AND the DR-132 resolution class alongside it.
-
-    Wraps C3's `resolve_claude_klabauter_root_with_class()` shim — does NOT
-    reimplement the published-engine-vs-live-working-tree gate. Returns
-    `(root, resolution_class)` where the class is one of the shim's
-    `RESOLUTION_RESOLVED_ENGINE` / `RESOLUTION_LIVE_WORKING_TREE` /
-    `RESOLUTION_UNRESOLVED` string constants.
-
-    HOT-PATH SHAPE (do not "simplify" away — see plan § C4 wrapper half):
-      1. Rung 1 (`CLAUDE_KLABAUTER_ROOT` env var) — `coordinator_engine_root()`'s
-         existing free rung, re-checked here so this function never runs
-         the gate ahead of it. Resolves the SAME path
-         `coordinator_engine_root()` already returns today, and classifies
-         it `_RESOLUTION_UNVERIFIED_ENV_LITERAL` — an env hit proves a path
-         and nothing about which tree it is. Callers that need the
-         distinction call `classify_env_resolved_root()`; see that constant's
-         comment for why the check is not run here.
-      2. Cheap short-circuit: if `repos.claude_klabauter` (the published
-         engine mirror key) is not registered at all, the gate's step 1/3
-         (published-engine branches) can never fire — skip straight to the
-         shim's own live-tree resolution (`_resolve_claude_klabauter_root`) rather
-         than paying for the full `_is_claude_klabauter_source_tree` session-root
-         walk the gate would otherwise do first (2026-08-18, C4: this
-         replaced the retired per-repo `_is_engine_working_repo` gate with
-         a structural session-root-vs-live-root comparison; the short-circuit
-         here is unaffected either way — it still skips the walk entirely).
-         Note this still pays one `_load_shim()`/`exec_module` cost (the
-         unconditional `_load_shim()` call at the top of this function,
-         before this branch) — it is the gate walk, not the shim load,
-         that is skipped here.
-      3. Otherwise, run the full gate (`resolve_claude_klabauter_root_with_class()`),
-         memoized module-scope on `(registry mtime pair, session root)` so
-         a long-lived process re-invoking this on every call does not
-         re-walk the registry/session-root chain each time. See
-         `_reset_gate_memo()` for the test-seam contract.
-
-    Raises whatever the shim raises on a hard miss
-    (`ClaudeKlabauterResolutionError`) — this function does not translate that into
-    `coordinator_engine_root()`'s `RuntimeError`/`_REMEDIATION` shape; the
-    two error types are distinct because they come from distinct call
-    chains (see `coordinator_engine_root()`'s own remediation vs. the
-    shim's registry-plus-published-engine remediation text).
-    """
-    # Through the C10 accessor, not the raw name — same reason as
-    # `coordinator_engine_root`'s Rung 1 above: the publish transform rewrites
-    # a literal "CLAUDE_KLABAUTER_ROOT" and the mirror's copy of this rung then cannot
-    # see what a live-tree caller exported. This is the site `cc_invoke`'s
-    # `_delegate_to_gate` reaches when it loads a MIRROR candidate's gate, so
-    # a raw read here is what sent that path falling through to the
-    # machine-local registry — the dependency Rung 1 exists to remove.
     existing = coordinator_engine_root_env(
         "engine_root.coordinator_engine_root_with_class"
     ) or ""
-    if existing:
-        return existing, _RESOLUTION_UNVERIFIED_ENV_LITERAL
+    if (
+        existing
+        and os.path.isdir(existing)
+        and shim._is_stamped_engine_root(Path(existing))
+    ):
+        return existing, _RESOLUTION_RESOLVED_ENGINE_LITERAL
 
-    shim = _load_shim()
-    ml_dir = shim._ml_dir()
-
-    published_key = shim._registry_value(ml_dir, "repos.claude_klabauter")
-    if not published_key:
-        root = shim._resolve_claude_klabauter_root(ml_dir)
-        return root, shim.RESOLUTION_LIVE_WORKING_TREE
-
-    session_root = shim._session_repo_root()
-    memo_key = (
-        *_registry_mtime_pair(ml_dir),
-        str(session_root) if session_root is not None else None,
-    )
-
+    memo_key = _registry_mtime_pair(shim._ml_dir())
     cached = _GATE_MEMO.get(memo_key)
     if cached is not None:
         return cached
 
     result = shim.resolve_claude_klabauter_root_with_class()
-    _GATE_MEMO[memo_key] = result
+    # An unresolved answer is not memoized: provisioning a stamp into an already
+    # registered engine path leaves the registry mtime pair unchanged.
+    if result[0]:
+        _GATE_MEMO[memo_key] = result
     return result
 
 

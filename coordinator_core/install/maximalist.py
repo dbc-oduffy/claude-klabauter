@@ -1499,13 +1499,34 @@ def _install_claude_author_wrapper(
         return
 
     link_target = os.path.join(settings_bin, "claude-author")
+    # The forwarder loop writes a trampoline at link_target and nothing else in
+    # this pass lands the wrapper bytes there, so a body that is not this
+    # root's source (trampoline, or another engine root's build) is converged
+    # below -- the same bytes `install-claude-author-wrapper` copies through the link.
+    body_current = os.path.isfile(link_target) and filecmp.cmp(wrapper_src, link_target, shallow=False)
 
     if check_only:
         if os.path.islink(wrapper_dst) and os.readlink(wrapper_dst) == link_target:
             print(f"claude_author_wrapper: ready (symlink {wrapper_dst} -> {link_target})")
         else:
             print(f"claude_author_wrapper: would symlink {wrapper_dst} -> {link_target}")
+        if not body_current:
+            print(f"claude_author_wrapper: would copy wrapper source onto {link_target}")
         return
+
+    if not body_current:
+        os.makedirs(settings_bin, exist_ok=True)
+        body_tmp = f"{link_target}.tmp-{os.getpid()}"
+        try:
+            shutil.copy2(wrapper_src, body_tmp)
+            os.chmod(body_tmp, os.stat(body_tmp).st_mode | 0o111)
+            os.replace(body_tmp, link_target)
+        except OSError as exc:
+            with contextlib.suppress(OSError):
+                os.unlink(body_tmp)
+            print(f"FATAL: failed to install claude-author wrapper body to {link_target}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        print(f"claude_author_wrapper: body installed ({link_target})")
 
     os.makedirs(local_bin, exist_ok=True)
     already_correct = os.path.islink(wrapper_dst) and os.readlink(wrapper_dst) == link_target

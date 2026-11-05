@@ -185,10 +185,13 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             rest.append(a)
     argv = rest
 
-    from coordinator_core.engine_root import coordinator_engine_root_with_class
+    from coordinator_core.engine_root import _load_shim, coordinator_engine_root_with_class
 
     try:
         claude_klabauter_root_str, _cls = coordinator_engine_root_with_class()
+        if not claude_klabauter_root_str:
+            print(_load_shim().unresolved_engine_message(), end="", file=sys.stderr)
+            return 1
         script, contract = _declared_installer(Path(claude_klabauter_root_str))
     except InstallEntryError as exc:
         print(str(exc), file=sys.stderr)

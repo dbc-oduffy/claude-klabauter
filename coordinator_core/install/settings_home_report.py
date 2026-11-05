@@ -78,7 +78,8 @@ from coordinator_core.install.engine_root_for_install import resolve_engine_root
 from coordinator_core.install.substrate import (
     _AGENT_FORWARDER_MARKER,
     _read_native_forwarder_manifest_state,
-    _RM_FAMILY_FILES,
+    rm_family_names,
+    rm_family_not_found_message,
     BYTE_COPIED_BIN_SOURCES,
     _derive_agent_helper_target_map,
 )
@@ -171,13 +172,6 @@ _FIXED_MEMBERS: tuple[tuple[str, str, str, str, bool], ...] = (
         True,
     ),
     (
-        f"bin/{_RM_FAMILY_FILES[0]} (resolution shim every forwarder imports)",
-        f"bin/{_RM_FAMILY_FILES[0]}",
-        "file",
-        "claude-klabauter coordinator_core/install/substrate.py :: _install_bin_resolvers, rm_family",
-        True,
-    ),
-    (
         ".percolate-identity (machine-local rung 2 of publish.resolve_percolate_identity_path; "
         "a per-repo setup/.percolate-identity wins)",
         ".percolate-identity",
@@ -256,6 +250,45 @@ class SettingsHomeReport:
         )
 
 
+_RM_SHIM_SOURCE = "claude-klabauter coordinator_core/install/substrate.py :: _install_bin_resolvers, rm_family"
+
+
+def resolver_shim_members(
+    settings_home_path: Path, engine_root: "Path | None"
+) -> list["SettingsHomeMember"]:
+    """One required member per resolver shim the ENGINE tree installs, named by
+    `rm_family_names(engine_root)`. A tree with no shim by shape yields one
+    absent member carrying the reason, never a guessed name. An unresolved root
+    yields none: the question is unanswerable, and the install check reports the
+    missing engine root itself. `engine_root` is the registered engine, never the
+    claude-klabauter tree."""
+    if engine_root is None:
+        return []
+    names = rm_family_names(engine_root)
+    if not names:
+        return [
+            SettingsHomeMember(
+                label=rm_family_not_found_message(engine_root),
+                path=settings_home_path / "bin",
+                kind="file",
+                present=False,
+                source=_RM_SHIM_SOURCE,
+                required=True,
+            )
+        ]
+    return [
+        SettingsHomeMember(
+            label=f"bin/{n} (resolution shim every forwarder imports)",
+            path=settings_home_path / "bin" / n,
+            kind="file",
+            present=(settings_home_path / "bin" / n).is_file(),
+            source=_RM_SHIM_SOURCE,
+            required=True,
+        )
+        for n in names
+    ]
+
+
 def expected_forwarders(claude_klabauter_root: Path) -> dict[str, str]:
     """The live-derived installed-name -> on-disk-target map, straight from
     the same function `_install_bin_resolvers` uses. Not a hand-list --
@@ -303,20 +336,16 @@ def _byte_copied_body_matches_source(
 ) -> bool:
     """True iff `installed_name` is a BYTE-COPIED bin member
     (`substrate.BYTE_COPIED_BIN_SOURCES`) and the installed file's bytes are
-    exactly THIS claude-klabauter root's source file's bytes.
+    exactly the source's bytes (`claude-author`: the registered engine's
+    wrapper, `_shared.claude_author_wrapper_source`).
 
     Why a second verification arm and not a suppression: `forwarder_body_is_ours`
     verifies the shape of a GENERATED trampoline -- the marker line plus the
     `exec_cli("<target>")` call. A byte copy carries neither and can never carry
-    them: the delivery mechanism is `shutil.copyfile` of the source file, so the
-    installed body IS the source. `claude-author` is that shape on POSIX -- the
-    forwarder loop writes a trampoline at `<settings-home>/bin/claude-author`, then
-    `install-claude-author-wrapper.py` copies the wrapper source onto
-    `~/.local/bin/claude-author`, which `maximalist`'s Step 3.5b has made a symlink
-    ONTO that same settings-home file, so the source bytes are the final body on
-    every completed install. The marker check therefore reported one permanent
-    `body not this root's` on every run -- a FAIL whose remediation ("re-run
-    scripts/setup.py") reproduced it exactly.
+    them: the delivery mechanism is a byte copy of the source file, so the
+    installed body IS the source. `claude-author` is that shape on POSIX --
+    `maximalist`'s Step 3.5b owns its body (the forwarder loop never overwrites
+    a present one) and lands the wrapper source at `<settings-home>/bin/claude-author`.
 
     Same discipline as `_is_door_owned_forwarder_slot`: a NAMED member in a
     KNOWN-different delivery shape gets its own positive verification, never a
@@ -331,9 +360,16 @@ def _byte_copied_body_matches_source(
     rel = BYTE_COPIED_BIN_SOURCES.get(installed_name)
     if rel is None:
         return False
-    src = claude_klabauter_root.joinpath(*rel)
     try:
-        return src.read_bytes() == path.read_bytes()
+        if installed_name == "claude-author":
+            # Judged against the registered engine's wrapper, never the claude-klabauter
+            # tree when an engine is registered.
+            from coordinator_core.install._shared import claude_author_wrapper_source
+
+            source = claude_author_wrapper_source(claude_klabauter_root)
+        else:
+            source = claude_klabauter_root.joinpath(*rel)
+        return source.read_bytes() == path.read_bytes()
     except OSError:
         return False
 
@@ -513,6 +549,9 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
             )
         )
 
+    resolved_engine_root = resolve_engine_root_for_install()
+    report.members.extend(resolver_shim_members(settings_home_path, resolved_engine_root.root))
+
     try:
         expected = expected_forwarders(claude_klabauter_root)
     except OSError as exc:
@@ -532,7 +571,6 @@ def check_settings_home(settings_home_path: Path, claude_klabauter_root: Path) -
     # excluding everything: `resolve_engine_root_for_install` returning no
     # root means the question is unanswerable here, not that nothing
     # qualifies.
-    resolved_engine_root = resolve_engine_root_for_install()
     if resolved_engine_root.root is not None:
         excluded = sorted(
             name
@@ -660,7 +698,7 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
             ("missing", report.forwarder_missing),
             ("body not this root's", report.forwarder_unverified),
             ("door-owned", report.forwarder_door_owned),
-            ("byte-copied (bytes match this root's source)", report.forwarder_byte_copied),
+            ("byte-copied (bytes match the engine's wrapper source)", report.forwarder_byte_copied),
             (
                 "native-forwarder manifest unmeasured (unreadable/malformed, "
                 "NOT 'none installed')",
@@ -672,6 +710,14 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
             preview = ", ".join(names[:10])
             more = "" if len(names) <= 10 else f" (+{len(names) - 10} more)"
             lines.append(f"    {label}: {preview}{more}")
+
+        stale_byte_copies = [n for n in report.forwarder_unverified if n in BYTE_COPIED_BIN_SOURCES]
+        if stale_byte_copies:
+            lines.append(
+                f"    remediation ({', '.join(stale_byte_copies)}): run "
+                "`install-claude-author-wrapper` -- rewrites the body to the registered engine's "
+                "wrapper source"
+            )
 
         if report.forwarder_excluded:
             names = report.forwarder_excluded

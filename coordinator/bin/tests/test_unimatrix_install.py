@@ -2,6 +2,8 @@
 import importlib.util
 import io
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -22,6 +24,11 @@ def _engine(monkeypatch, tmp_path):
     root.mkdir()
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(root), "published-target"))
     return root
+
+
+@pytest.fixture(autouse=True)
+def _no_real_scheduler(monkeypatch):
+    monkeypatch.setattr(ui, "run_schtasks", lambda *a: None)
 
 
 def _run(argv, text, dest=None, hooks=None):
@@ -57,7 +64,28 @@ def test_range_constant_and_scripts():
         "unimatrix-codex-hook-sessionstart.py",
         "unimatrix-host-guard.py",
         "unimatrix-doctrine-seed.py",
+        "unimatrix-autolink.py",
+        "unimatrix-mirror-all.py",
+        "unimatrix-reshape.py",
     )
+
+
+def test_vendored_scripts_cover_real_autolink_closure():
+    closure = ui.script_closure(ui._BIN_DIR)
+    assert ui.AUTOLINK_SCRIPT in closure
+    assert {"unimatrix-roster.py", "unimatrix-mirror-all.py", "unimatrix-reshape.py"} <= closure
+    assert closure <= set(ui.VENDORED_SCRIPTS) | set(ui.OPTIONAL_SCRIPTS)
+
+
+def test_install_seeds_closure_script_outside_vendored_list(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    src = tmp_path / "src"
+    (src / "unimatrix-autolink.py").write_text("# runs unimatrix-newpiece.py\n", encoding="utf-8")
+    assert _run(["--install"], "2.1.316", tmp_path / "d")[0] != 0
+    (src / "unimatrix-newpiece.py").write_text("# new\n", encoding="utf-8")
+    assert _run(["--install"], "2.1.316", tmp_path / "d")[0] == 0
+    assert (tmp_path / "d" / "unimatrix-newpiece.py").is_file()
 
 
 def test_parse_version():
@@ -117,6 +145,43 @@ def test_install_copies_scripts_and_prints_rc_notice(monkeypatch, tmp_path, plat
     assert rc == 0
     assert "/rc" in out and out.index("/rc") < out.index("installed")
     assert sorted(p.name for p in dest.iterdir()) == sorted(ui.VENDORED_SCRIPTS)
+
+
+def test_install_prints_authorized_keys_line_with_absolute_paths(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
+    assert rc == 0
+    line = [l for l in out.splitlines() if "restrict,command=" in l][0]
+    assert f"{ui.forced_command_interpreter()} {dest / 'unimatrix-relay.py'}\" ssh-ed25519" in line
+    assert Path(ui.forced_command_interpreter()).is_absolute()
+
+
+def test_authorized_keys_line_windows_form(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    line = ui.authorized_keys_line(r"\Users\me\unimatrix", interpreter=r"\Python312\python.exe")
+    assert line.startswith(r'restrict,command="\Python312\python.exe \Users\me\unimatrix')
+    assert line.endswith(r'unimatrix-relay.py" ssh-ed25519 <key-body> unimatrix')
+
+
+def test_authorized_keys_line_escapes_quotes_for_paths_with_spaces():
+    line = ui.authorized_keys_line("/home/a b/unimatrix", interpreter="/usr/bin/python3")
+    assert line.startswith('restrict,command="/usr/bin/python3 \\"')
+    assert 'unimatrix-relay.py\\"" ssh-ed25519' in line
+
+
+def test_macos_prefers_homebrew_python_over_stub(monkeypatch, tmp_path):
+    brew = tmp_path / "brew-python3"
+    brew.write_text("#!/bin/sh\n")
+    brew.chmod(0o755)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(tmp_path / "absent"), str(brew)))
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert ui.forced_command_interpreter() == str(brew)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(tmp_path / "absent"),))
+    assert ui.forced_command_interpreter() == sys.executable
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(brew),))
+    monkeypatch.setattr(sys, "platform", "linux")
+    assert ui.forced_command_interpreter() == sys.executable
 
 
 def test_install_refuses_outside_range_without_copying(monkeypatch, tmp_path):
@@ -825,3 +890,324 @@ def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
     assert rc == 0 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out
     cmd = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert "--engine-root" not in cmd
+
+
+class _Proc:
+    def __init__(self, rc=0, out=""):
+        self.returncode, self.stdout, self.stderr = rc, out, ""
+
+
+def _scheduler(task_exists=True):
+    calls = []
+
+    def run(*args):
+        calls.append(args)
+        return _Proc(0 if args[0] != "/Query" or task_exists else 1)
+
+    return run, calls
+
+
+def test_macos_login_agent_is_run_at_load_once_with_no_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    dest, agents = tmp_path / "unimatrix", tmp_path / "LaunchAgents"
+    assert ui.register_login_agent(dest, agents)[0] == "created"
+    [plist] = list(agents.iterdir())
+    import plistlib
+    spec = plistlib.loads(plist.read_bytes())
+    assert plist.name == f"{ui.LOGIN_AGENT_LABEL}.plist" and spec["Label"] == ui.LOGIN_AGENT_LABEL
+    assert spec["RunAtLoad"] is True
+    assert not {"KeepAlive", "StartInterval", "StartCalendarInterval", "WatchPaths"} & set(spec)
+    assert spec["ProgramArguments"] == [sys.executable, str(dest / ui.AUTOLINK_SCRIPT)]
+    assert spec["ProgramArguments"][1].startswith(str(tmp_path))
+
+
+def test_login_agent_reinstall_leaves_one_registration_and_heals_a_stale_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    agents = tmp_path / "LaunchAgents"
+    ui.register_login_agent(tmp_path / "a", agents)
+    assert ui.register_login_agent(tmp_path / "a", agents)[0] == "present"
+    assert ui.register_login_agent(tmp_path / "b", agents)[0] == "updated"
+    [plist] = list(agents.iterdir())
+    assert str(tmp_path / "b") in plist.read_text(encoding="utf-8", errors="replace")
+
+
+def test_login_agent_uninstall_removes_it_and_tolerates_absence(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    agents = tmp_path / "LaunchAgents"
+    assert ui.unregister_login_agent(agents) == "absent"
+    ui.register_login_agent(tmp_path / "a", agents)
+    assert ui.unregister_login_agent(agents) == "removed"
+    assert list(agents.iterdir()) == [] and ui.unregister_login_agent(agents) == "absent"
+
+
+def test_linux_login_agent_is_a_oneshot_user_unit_enabled_by_symlink(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "linux")
+    units = tmp_path / "systemd" / "user"
+    assert ui.register_login_agent(tmp_path / "u", units)[0] == "created"
+    unit = (units / ui.LOGIN_UNIT).read_text(encoding="utf-8")
+    assert "Type=oneshot" in unit and str(tmp_path / "u" / ui.AUTOLINK_SCRIPT) in unit
+    assert "Restart" not in unit and "Timer" not in unit
+    link = units / "default.target.wants" / ui.LOGIN_UNIT
+    assert link.is_symlink() and link.resolve() == (units / ui.LOGIN_UNIT).resolve()
+    assert ui.register_login_agent(tmp_path / "u", units)[0] == "present"
+    assert ui.unregister_login_agent(units) == "removed"
+    assert not (units / ui.LOGIN_UNIT).exists() and not link.is_symlink()
+
+
+def test_windows_login_agent_is_one_onlogon_task_overwritten_in_place(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    run, calls = _scheduler()
+    assert ui.register_login_agent(tmp_path / "u", schtasks=run)[0] == "registered"
+    assert ui.register_login_agent(tmp_path / "u", schtasks=run)[0] == "registered"
+    argv = calls[0]
+    assert argv[:2] == ("/Create", "/TN") and argv[2] == ui.LOGIN_TASK_NAME and argv[-1] == "/F"
+    assert argv[argv.index("/SC") + 1] == "ONLOGON"
+    assert not {"/MO", "/RI", "/DU", "MINUTE"} & set(argv)
+    tr = argv[argv.index("/TR") + 1]
+    assert ui.AUTOLINK_SCRIPT in tr and sys.executable in tr
+    assert calls[0] == calls[1]
+
+
+def test_windows_login_agent_uninstall_deletes_task_and_tolerates_absence(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "win32")
+    run, calls = _scheduler(task_exists=True)
+    assert ui.unregister_login_agent(schtasks=run) == "removed"
+    assert calls[-1] == ("/Delete", "/TN", ui.LOGIN_TASK_NAME, "/F")
+    run, calls = _scheduler(task_exists=False)
+    assert ui.unregister_login_agent(schtasks=run) == "absent"
+    assert all(c[0] == "/Query" for c in calls)
+
+
+def test_windows_schtasks_failure_is_a_skip_not_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    state, _ = ui.register_login_agent(tmp_path, schtasks=lambda *a: _Proc(1))
+    assert state == "skipped"
+    assert ui.register_login_agent(tmp_path, schtasks=lambda *a: None)[0] == "skipped"
+
+
+def test_main_install_registers_one_login_agent_and_uninstall_removes_it(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    hooks = tmp_path / "g" / "hooks.json"
+    rc, out = _run(["--install"], "2.1.316", tmp_path / "d", hooks)
+    assert rc == 0 and "login agent created" in out
+    assert _run(["--install"], "2.1.316", tmp_path / "d", hooks)[1].count("login agent present") == 1
+    [plist] = list((tmp_path / "g" / "login-agent").iterdir())
+    assert plist.name == f"{ui.LOGIN_AGENT_LABEL}.plist"
+    buf = io.StringIO()
+    assert ui.main(["--uninstall"], out=buf, hooks_path=hooks) == 0
+    assert "login agent removed" in buf.getvalue() and not plist.exists()
+
+
+def test_main_default_install_writes_the_agent_under_home_and_never_the_real_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    home, rc, out = _default_install(monkeypatch, tmp_path)
+    assert rc == 0 and (home / "Library" / "LaunchAgents" / f"{ui.LOGIN_AGENT_LABEL}.plist").is_file()
+
+
+def test_main_windows_install_uses_the_injected_scheduler(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    run, calls = _scheduler()
+    buf = io.StringIO()
+    rc = ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf,
+                 hooks_path=tmp_path / "g" / "hooks.json", schtasks=run)
+    assert rc == 0 and "login agent registered" in buf.getvalue() and calls[0][0] == "/Create"
+
+
+class _PairBox:
+    """Fake subprocess.run for --pair: ssh -G, _machine_local get and set, ssh-keygen."""
+
+    def __init__(self, store=None):
+        self.store, self.calls = dict(store or {}), []
+
+    def __call__(self, argv, **kw):
+        self.calls.append(list(argv))
+        done = lambda rc=0, out="": type("R", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+        if argv[0] == "ssh":
+            return done(0, "")
+        if argv[0] == "ssh-keygen":
+            path = Path(argv[argv.index("-f") + 1])
+            path.write_text("PRIVATE", encoding="utf-8")
+            Path(str(path) + ".pub").write_text("ssh-ed25519 AAAAPAIRBODY unimatrix\n", encoding="utf-8")
+            return done()
+        if argv[2] == "get":
+            return done(0, self.store[argv[3]]) if argv[3] in self.store else done(1)
+        self.store[argv[3]] = argv[4]
+        return done()
+
+
+def _pair_home(monkeypatch, tmp_path, reader=True):
+    home = tmp_path / "sh"
+    (home / "bin").mkdir(parents=True)
+    if reader:
+        (home / "bin" / "_machine_local.py").write_text("# stub\n", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    return home
+
+
+def test_pair_mints_records_and_second_run_reads_same_key(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox()
+    priv, body = ui.pair_key("far-1", run=box)
+    assert priv == home / ".secrets" / "ssh" / "unimatrix-far-1" and body == "AAAAPAIRBODY"
+    assert box.store == {"unimatrix.keys.far-1": str(priv)}
+    keygens = [c for c in box.calls if c[0] == "ssh-keygen"]
+    assert len(keygens) == 1 and "-N" in keygens[0] and keygens[0][keygens[0].index("-N") + 1] == ""
+    priv2, body2 = ui.pair_key("far-1", run=box)
+    assert (priv2, body2) == (priv, body) and len([c for c in box.calls if c[0] == "ssh-keygen"]) == 1
+
+
+def test_pair_adopts_unrecorded_existing_key_without_overwriting(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    key = home / ".secrets" / "ssh" / "unimatrix-x"
+    key.parent.mkdir(parents=True)
+    key.write_text("MINE", encoding="utf-8")
+    Path(str(key) + ".pub").write_text("ssh-ed25519 EXISTINGBODY c\n", encoding="utf-8")
+    box = _PairBox()
+    priv, body = ui.pair_key("x", run=box)
+    assert body == "EXISTINGBODY" and key.read_text(encoding="utf-8") == "MINE"
+    assert not [c for c in box.calls if c[0] == "ssh-keygen"] and box.store["unimatrix.keys.x"] == str(key)
+
+
+def test_pair_sanitizes_alias_and_refuses_empty(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    priv, _ = ui.pair_key("a b/c", run=_PairBox())
+    assert priv.name == "unimatrix-a-b-c" and priv.parent == home / ".secrets" / "ssh"
+    with pytest.raises(RuntimeError):
+        ui.pair_key("///", run=_PairBox())
+
+
+def test_pair_without_machine_local_reader_fails_before_minting(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path, reader=False)
+    box = _PairBox()
+    with pytest.raises(RuntimeError):
+        ui.pair_key("x", run=box)
+    assert not [c for c in box.calls if c[0] == "ssh-keygen"]
+
+
+def test_pair_main_prints_line_and_block_and_exits_zero(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    buf = io.StringIO()
+    rc = ui.main(["--pair", "x"], out=buf, pair_run=_PairBox())
+    text = buf.getvalue()
+    assert rc == 0 and "Host x\n" in text and "IdentityFile " in text and "unimatrix-x" in text
+    assert any(l.startswith('restrict,command="') and l.endswith("ssh-ed25519 AAAAPAIRBODY unimatrix")
+               and 'unimatrix-relay.py"' in l for l in text.splitlines())
+
+
+def test_pair_main_refuses_with_nonzero_when_key_cannot_be_recorded(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path, reader=False)
+    buf = io.StringIO()
+    assert ui.main(["--pair", "x"], out=buf, pair_run=_PairBox()) == 6 and "REFUSE" in buf.getvalue()
+
+
+def test_authorized_keys_line_key_body_with_posix_and_windows_interpreters():
+    posix = ui.authorized_keys_line("/home/me/unimatrix", "/usr/bin/python3", "KB")
+    win = ui.authorized_keys_line(r"\Users\me\unimatrix", r"\Python312\python.exe", "KB")
+    assert posix.endswith(" ssh-ed25519 KB unimatrix") and win.endswith(" ssh-ed25519 KB unimatrix")
+    assert "/usr/bin/python3 " in posix and "python.exe " in win
+    assert "<key-body>" in ui.authorized_keys_line("/d", "/p")
+
+
+class _FarBox(_PairBox):
+    """_PairBox whose ssh runs the stdin program locally under a fake HOME, as the far box would."""
+
+    def __init__(self, home, reply=None, **kw):
+        super().__init__(**kw)
+        self.home, self.reply, self.sent = home, reply, []
+
+    def __call__(self, argv, **kw):
+        if argv[0] != "ssh" or "-G" in argv:
+            return super().__call__(argv, **kw)
+        self.calls.append(list(argv))
+        done = lambda rc, out: type("R", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+        if self.reply is not None:
+            return done(0, self.reply)
+        if argv[argv.index("--") + 2] == "python3" and getattr(self, "no_python3", False):
+            return done(127, "")
+        self.sent.append(kw["input"])
+        env = {**os.environ, "HOME": str(self.home), "USERPROFILE": str(self.home),
+               "COORDINATOR_SETTINGS_HOME": str(self.home / "fsh")}
+        r = subprocess.run([sys.executable, "-"], input=kw["input"], capture_output=True, text=True, env=env,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        return done(r.returncode, r.stdout)
+
+
+def test_pair_installs_line_once_over_authorized_link(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    far = tmp_path / "far"
+    far.mkdir()
+    box = _FarBox(far)
+    status, line = ui.install_over_link("x", "AAAAPAIRBODY", run=box)
+    assert status == "added"
+    keys = far / ".ssh" / "authorized_keys"
+    assert keys.read_text(encoding="utf-8") == line + "\n" and f"{sys.executable} " in line
+    assert str(far / "fsh" / "unimatrix") in line
+    if sys.platform != "win32":
+        assert keys.stat().st_mode & 0o777 == 0o600 and keys.parent.stat().st_mode & 0o777 == 0o700
+    assert ui.install_over_link("x", "AAAAPAIRBODY", run=box)[0] == "present"
+    assert keys.read_text(encoding="utf-8") == line + "\n"
+
+
+def test_pair_install_appends_after_unterminated_existing_line(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    keys = tmp_path / "far" / ".ssh" / "authorized_keys"
+    keys.parent.mkdir(parents=True)
+    keys.write_text("ssh-ed25519 OTHER me", encoding="utf-8")
+    assert ui.install_over_link("x", "NEWBODY", run=_FarBox(tmp_path / "far"))[0] == "added"
+    assert keys.read_text(encoding="utf-8").splitlines()[0] == "ssh-ed25519 OTHER me"
+    assert len(keys.read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_pair_install_tries_python_when_python3_is_absent(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    box = _FarBox(tmp_path / "far")
+    box.no_python3 = True
+    assert ui.install_over_link("x", "B", run=box)[0] == "added"
+    assert [c[c.index("--") + 2] for c in box.calls if c[0] == "ssh"][:2] == ["python3", "python"]
+    assert all("BatchMode=yes" in c for c in box.calls if c[0] == "ssh")
+
+
+def test_pair_dead_link_sends_nothing_and_prints_paste_instruction(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    for reply in ("", "relay says hello\n", "linux\t/usr/bin/python3\n"):
+        box = _FarBox(tmp_path / "far", reply=reply)
+        assert ui.install_over_link("x", "B", run=box) == ("no-link", None)
+        assert not (tmp_path / "far" / ".ssh").exists()
+    box = _FarBox(tmp_path / "far", reply="")
+    buf = io.StringIO()
+    assert ui.main(["--pair", "x"], out=buf, pair_run=box) == 0
+    assert "no authorized link to x: paste the line above on the far box" in buf.getvalue()
+
+
+def test_pair_main_reports_added_then_present(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    box = _FarBox(tmp_path / "far")
+    first, second = io.StringIO(), io.StringIO()
+    assert ui.main(["--pair", "x"], out=first, pair_run=box) == 0
+    assert ui.main(["--pair", "x"], out=second, pair_run=box) == 0
+    assert "added on x" in first.getvalue() and "already present on x" in second.getvalue()
+    assert len((tmp_path / "far" / ".ssh" / "authorized_keys").read_text(encoding="utf-8").splitlines()) == 1
+
+
+def test_pair_windows_admin_far_box_is_not_written(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    box = _PairBox()
+    seen = []
+
+    def run(argv, **kw):
+        if argv[0] != "ssh" or "-G" in argv:
+            return box(argv, **kw)
+        done = lambda out: type("R", (), {"returncode": 0, "stdout": out, "stderr": ""})()
+        if "input" in kw and "IsUserAnAdmin" in kw["input"]:
+            seen.append(kw["input"])
+            return done("admin\n")
+        return done("win32\tC:\\Python312\\python.exe\tC:\\Users\\me\\.coordinator-claude-settings\n")
+
+    status, line = ui.install_over_link("x", "B", run=run)
+    assert status == "admin" and seen and "C:\\Python312\\python.exe" in line
+    buf = io.StringIO()
+    assert ui.main(["--pair", "x"], out=buf, pair_run=run) == 0 and "administrators_authorized_keys" in buf.getvalue()

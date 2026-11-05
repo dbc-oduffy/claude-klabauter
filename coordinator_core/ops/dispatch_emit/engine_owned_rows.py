@@ -40,9 +40,12 @@ def resolve_engine_root() -> tuple[str, str]:
     """`(root, resolution_class)` of the engine from `engine_root.coordinator_engine_root_with_class`;
     `("", "unresolved")` when the engine cannot be resolved on this machine."""
     try:
-        return engine_root.coordinator_engine_root_with_class()
+        root, resolution_class = engine_root.coordinator_engine_root_with_class()
     except RuntimeError:
         return "", UNRESOLVED_CLASS
+    if not root:
+        return "", UNRESOLVED_CLASS
+    return root, resolution_class
 
 
 def engine_owner_rows(

@@ -3,8 +3,8 @@
 For each landed path whose HEAD blob differs from its base blob, every HEAD line the worktree
 bytes remove is attributed by position to the first-parent commit that introduced it; a line
 introduced by a commit that is not the run's own is a finding. Zero spawns: objects are read
-through ``git_objects``. A run's own commits are those whose message carries ``Checkpoint-Base:``
-(or ``Checkpoint-Review-Base:``) equal to the run base; when the plan is known, those carrying
+through ``git_objects``. The landing commits the worktree bytes verbatim, so a landing that only inserts
+lines over the run base still drops a sibling's since-base line and is a finding. A run's own commits are those whose message carries ``Checkpoint-Base:`` (or ``Checkpoint-Review-Base:``) equal to the run base; when the plan is known, those carrying
 ``Checkpoint-Plan:`` equal to it and either no stamped base, one on the walked chain, one among the run
 base's first-parent ancestors, or one the run's own record names (``landing_integrity.closing_bases``).
 ``Session-Id`` cannot discriminate (concurrent runs share it), nor can plan text alone (a prior run of the

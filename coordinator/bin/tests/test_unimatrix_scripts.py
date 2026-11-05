@@ -172,6 +172,22 @@ def test_relay_refuses_a_name_a_live_local_session_holds(monkeypatch):
         relay.check_name_free("local-1")
 
 
+def test_relay_roster_prints_only_non_mirror_sessions(monkeypatch, tmp_path, capsys):
+    relay = load("relay")
+    (tmp_path / "1.k.key").write_text("body", encoding="utf-8")
+    live = [
+        (1, {"name": "local"}, "1.k.key"),
+        (2, {"name": "roster-mirror", "macSocketPath": "/far/m.sock"}, "1.k.key"),
+        (3, {"name": "relay-mirror", "unimatrixMirror": True}, "1.k.key"),
+        (4, {"name": "both", "unimatrixMirror": True, "macSocketPath": "/far/b.sock"}, "1.k.key"),
+    ]
+    monkeypatch.setattr(relay, "entries", lambda: iter(live))
+    monkeypatch.setattr(relay, "SESS", str(tmp_path))
+    relay.roster()
+    lines = [json.loads(l) for l in capsys.readouterr().out.splitlines()]
+    assert [l["entry"]["name"] for l in lines] == ["local"]
+
+
 def test_relay_stores_the_far_socket_and_drops_unlisted_remote_fields():
     relay = load("relay")
     raw = {"messagingSocketPath": r"\\.\pipe\far", "pid": 1, "procStart": "x", "cwd": "/w", "name": "evil"}

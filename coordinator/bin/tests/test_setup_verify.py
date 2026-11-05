@@ -34,6 +34,21 @@ def _load_module():
 
 
 _mod = _load_module()
+_real_doe_tree_from_evidence = _mod._doe_tree_from_evidence
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_doe_tree(monkeypatch) -> None:
+    """Launcher-delivery evidence is box state; default it off so tests are hermetic."""
+    monkeypatch.setattr(_mod, "_doe_tree_from_evidence", lambda: None)
+
+
+def test_doe_tree_wrapper_delegates_to_shared_predicate(tmp_path: Path, monkeypatch) -> None:
+    """The wrapper reaches the real installer predicate, not just its None fallback."""
+    monkeypatch.syspath_prepend(str(_BIN_DIR.parent / "lib" / "install"))
+    import coordinator_install
+    monkeypatch.setattr(coordinator_install, "doe_tree_from_evidence", lambda: tmp_path)
+    assert _real_doe_tree_from_evidence() == tmp_path
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +267,21 @@ def test_check_hooks_args_shape_still_detects_missing_file(tmp_path: Path, capsy
     assert "gone.py" in err
 
 
-def test_settings_membership_degrades_to_warn_when_live_resolved(tmp_path: Path, capsys) -> None:
-    """Probe 1 must not fail an install Probe 0 passes as live-resolved."""
+def test_settings_membership_passes_on_launcher_delivery(tmp_path: Path, capsys, monkeypatch) -> None:
+    """DoE-tree evidence (launcher delivery) counts as enabled without --plugin-dir."""
+    settings = tmp_path / "settings.json"
+    settings.write_text(json.dumps({"enabledPlugins": {"other@thing": True}}))
+    monkeypatch.setattr(_mod, "_doe_tree_from_evidence", lambda: tmp_path)
+    ns = _mod.build_parser().parse_args(["check-settings-membership", "--settings", str(settings)])
+    rc = ns.func(ns)
+    cap = capsys.readouterr()
+    assert rc == 0
+    assert cap.out.startswith("PASS")
+    assert "WARN" not in cap.err
+
+
+def test_settings_membership_passes_when_live_resolved(tmp_path: Path, capsys) -> None:
+    """Probe 1 passes an install Probe 0 passes as live-resolved."""
     settings = tmp_path / "settings.json"
     settings.write_text(json.dumps({"enabledPlugins": {"other@thing": True}}))
     source = _make_live_resolved_source(
@@ -264,10 +292,11 @@ def test_settings_membership_degrades_to_warn_when_live_resolved(tmp_path: Path,
          "--plugin-dir", str(source)]
     )
     rc = ns.func(ns)
-    err = capsys.readouterr().err
+    cap = capsys.readouterr()
     assert rc == 0
-    assert "[WARN]" in err
-    assert "live-resolved" in err
+    assert cap.out.startswith("PASS")
+    assert "live-resolved" in cap.out
+    assert "WARN" not in cap.err
 
 
 def test_settings_membership_still_fails_without_live_resolved_evidence(
@@ -613,10 +642,13 @@ def test_plugin_registered_state2_pass_live_resolved_via_plugin_dir(tmp_path: Pa
         "--plugin-dir", str(source_dir),
     ])
     rc = ns.func(ns)
-    out = capsys.readouterr().out
+    cap = capsys.readouterr()
+    out = cap.out
     assert rc == 0
     assert "PASS" in out
     assert "live-resolved" in out
+    assert "FAIL" not in cap.err
+    assert "FAIL" not in out
 
 
 def test_plugin_registered_state2_pass_via_hooks_only(tmp_path: Path, capsys) -> None:

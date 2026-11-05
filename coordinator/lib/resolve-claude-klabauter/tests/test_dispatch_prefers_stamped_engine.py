@@ -99,7 +99,7 @@ def test_stamped_published_root_is_usable(tmp_path, _registry):
     assert shim._resolve_published_engine(_registry.ml_dir) == published_root.as_posix()
 
 
-def test_dispatch_denies_unstamped_engine_falls_through_to_live_tree(tmp_path, _registry, monkeypatch):
+def test_dispatch_denies_unstamped_engine_and_never_falls_to_live_tree(tmp_path, _registry, monkeypatch):
     published_root = tmp_path / "published"
     (published_root / "coordinator_core").mkdir(parents=True)
 
@@ -125,10 +125,8 @@ def test_dispatch_denies_unstamped_engine_falls_through_to_live_tree(tmp_path, _
     shim = _load_shim()
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(shim, "_self_located_root", lambda: None)
-    root, resolution_class = shim.resolve_claude_klabauter_root_with_class()
-
-    assert resolution_class == shim.RESOLUTION_LIVE_WORKING_TREE
-    assert root == live_root.as_posix()
+    assert shim.resolve_claude_klabauter_root_with_class() == (None, shim.RESOLUTION_UNRESOLVED)
+    assert shim._resolve_claude_klabauter_root(_registry.ml_dir) == live_root.as_posix()
 
 
 def test_dispatch_denies_unstamped_engine_raises_when_no_live_tree(tmp_path, _registry, monkeypatch):
@@ -143,8 +141,7 @@ def test_dispatch_denies_unstamped_engine_raises_when_no_live_tree(tmp_path, _re
     shim = _load_shim()
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(shim, "_self_located_root", lambda: None)
-    with pytest.raises(shim.ClaudeKlabauterResolutionError):
-        shim.resolve_claude_klabauter_root_with_class()
+    assert shim.resolve_claude_klabauter_root_with_class() == (None, shim.RESOLUTION_UNRESOLVED)
 
 
 def test_dispatch_uses_stamped_engine_as_last_resort(tmp_path, _registry, monkeypatch):

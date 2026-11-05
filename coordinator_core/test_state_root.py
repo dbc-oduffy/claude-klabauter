@@ -377,46 +377,23 @@ def test_main_subject_missing_arg_rc1(stub_peers, capsys):
     assert "--subject requires an argument" in capsys.readouterr().err
 
 
-def test_unverified_env_class_resolves_to_mirror_and_is_refused(monkeypatch):
+def test_resolved_engine_class_from_env_rung_is_refused_for_state_writes(monkeypatch):
     monkeypatch.setattr(
         sr, "coordinator_engine_root_with_class",
-        lambda: ("/repos/publish-mirror", sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
+        lambda: ("/repos/publish-mirror", sr._RESOLUTION_RESOLVED_ENGINE_LITERAL),
     )
-    monkeypatch.setattr(
-        sr, "classify_env_resolved_root",
-        lambda root: sr._RESOLUTION_RESOLVED_ENGINE_LITERAL,
-    )
+    monkeypatch.setattr(sr, "_live_engine_source_root", lambda _refused: None)
     with pytest.raises(sr.StateRootError) as exc:
         sr._claude_klabauter_state()
     assert "PUBLISHED engine mirror" in str(exc.value)
 
 
-def test_unverified_env_class_resolving_live_still_writes(monkeypatch):
+def test_live_working_tree_class_still_writes(monkeypatch):
     monkeypatch.setattr(
         sr, "coordinator_engine_root_with_class",
-        lambda: (_CLAUDE_KLABAUTER, sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
-    )
-    monkeypatch.setattr(
-        sr, "classify_env_resolved_root",
-        lambda root: "live-working-tree",
+        lambda: (_CLAUDE_KLABAUTER, "live-working-tree"),
     )
     assert sr._claude_klabauter_state() == _state(_CLAUDE_KLABAUTER)
-
-
-def test_unverified_env_class_is_never_passed_through_unclassified(monkeypatch):
-    seen = []
-    monkeypatch.setattr(
-        sr, "coordinator_engine_root_with_class",
-        lambda: ("/repos/whatever", sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
-    )
-
-    def _spy(root):
-        seen.append(root)
-        return "live-working-tree"
-
-    monkeypatch.setattr(sr, "classify_env_resolved_root", _spy)
-    sr._claude_klabauter_state()
-    assert seen == ["/repos/whatever"]
 
 
 def test_print_map_refuses_mirror_reached_through_the_env_rung(
@@ -424,11 +401,7 @@ def test_print_map_refuses_mirror_reached_through_the_env_rung(
 ):
     monkeypatch.setattr(
         sr, "coordinator_engine_root_with_class",
-        lambda: ("/repos/publish-mirror", sr._RESOLUTION_UNVERIFIED_ENV_LITERAL),
-    )
-    monkeypatch.setattr(
-        sr, "classify_env_resolved_root",
-        lambda root: sr._RESOLUTION_RESOLVED_ENGINE_LITERAL,
+        lambda: ("/repos/publish-mirror", sr._RESOLUTION_RESOLVED_ENGINE_LITERAL),
     )
     rc = sr.main(["--print-map"])
     assert rc == 0

@@ -45,8 +45,8 @@ from coordinator_core.win_portability import no_console_creationflags
 def claude_author_wrapper_source(own_root: Path) -> Path:
     """The claude-author wrapper source both the Step 3.5b installer and doctor P-23 use.
 
-    The published engine's ``coordinator/bin/claude-author.py`` when a stamped
-    published root is registered and carries that file; otherwise ``own_root``'s.
+    The registered published engine's ``coordinator/bin/claude-author.py`` when
+    that root carries the file; ``own_root``'s only when no engine is registered.
     Spawns nothing.
     """
     from coordinator_core.engine_root import published_engine_mirror_path

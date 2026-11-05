@@ -297,6 +297,11 @@ def main(argv: List[str]) -> int:
         return 1
 
     claude_klabauter_root, _resolution_class = coordinator_engine_root_with_class()
+    if not claude_klabauter_root:
+        from coordinator_core.engine_root import _load_shim
+
+        print(_load_shim().unresolved_engine_message(), end="", file=sys.stderr)
+        return 1
     claude_klabauter_root_path = Path(claude_klabauter_root)
 
     try:

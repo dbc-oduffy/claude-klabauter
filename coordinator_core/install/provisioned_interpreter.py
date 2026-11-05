@@ -19,6 +19,7 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 )
 
 _READER_REL = Path("project_rag_scripts") / "lib" / "read_claude_pin.py"
+_INSTALLER_REL = Path("project_rag_scripts") / "install_example_retrieval_repo_plugin.py"
 _READ_TIMEOUT_SECS = 5
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[2]
 
@@ -28,6 +29,8 @@ class ProvisionedInterpreter:
     path: str | None
     reason: str = ""
     example_retrieval_repo_root: str | None = None
+    never_installed: bool = False  # reader exit 3: registered, no host pin written
+    install_command: str = ""  # set with never_installed: the one command that writes the pin
 
 
 def resolve_provisioned_interpreter(example_retrieval_repo_root: str | None = None) -> ProvisionedInterpreter:
@@ -36,9 +39,9 @@ def resolve_provisioned_interpreter(example_retrieval_repo_root: str | None = No
     root = example_retrieval_repo_root
     if not root:
         try:
-            from coordinator_core.install._shared import ml_get
+            from coordinator_core.machine_resolver import registry_get
 
-            root = ml_get("repos.project_rag")
+            root = registry_get("repos.project_rag") or ""
         except Exception as exc:  # noqa: BLE001
             return ProvisionedInterpreter(None, f"machine-local read failed: {exc}")
     if not root:
@@ -61,7 +64,10 @@ def resolve_provisioned_interpreter(example_retrieval_repo_root: str | None = No
         return ProvisionedInterpreter(None, f"pin reader failed: {exc}", root)
     pin = (proc.stdout or "").strip().splitlines()
     if proc.returncode != 0 or len(pin) != 1 or not os.path.exists(pin[-1]):
-        return ProvisionedInterpreter(
-            None, f"no usable pin (exit {proc.returncode}): {(proc.stderr or '').strip()[:200]}", root
-        )
+        reason = f"no usable pin (exit {proc.returncode}): {(proc.stderr or '').strip()[:200]}"
+        if proc.returncode != 3:
+            return ProvisionedInterpreter(None, reason, root)
+        command = f"{sys.executable} {_INSTALLER_REL.as_posix()} (in {root})"
+        reason += f" -- example-retrieval-repo is registered but never host-installed here; run {command}"
+        return ProvisionedInterpreter(None, reason, root, never_installed=True, install_command=command)
     return ProvisionedInterpreter(pin[-1], "", root)

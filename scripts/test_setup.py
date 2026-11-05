@@ -64,15 +64,6 @@ def _no_pin_relaunch(setup_mod, monkeypatch):
     monkeypatch.setattr(setup_mod, "_relaunch_under_provisioned_pin", lambda argv: None)
 
 
-_REAL_FLOOR_DECIDE: dict = {}
-
-
-@pytest.fixture(autouse=True)
-def _no_floor_decide(setup_mod, monkeypatch):
-    # The install path spawns the plugin's engine-floor-decide.py, which records a verdict
-    # into the box's real state; only the tests that name it run the real function.
-    _REAL_FLOOR_DECIDE.setdefault("fn", setup_mod.run_engine_floor_decide)
-    monkeypatch.setattr(setup_mod, "run_engine_floor_decide", lambda *a, **k: None)
 @pytest.fixture(autouse=True)
 def _no_machine_doe_evidence(setup_mod, monkeypatch):
     # DoE-presence evidence reads the real registry; a unit test must not depend on this box's.
@@ -1273,90 +1264,89 @@ def test_entry_guard_precedes_coordinator_core_imports_and_any_write():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_claude_klabauter_root_flag_wins(setup_mod, monkeypatch):
+def _stub_engine_ladder(setup_mod, monkeypatch, *, stamped, ladder):
+    """Pin the shim's stamp predicate and the engine ladder answer (test double)."""
+    er = setup_mod._engine_root_module()
+    shim = er._load_shim()
+    monkeypatch.setattr(shim, "_is_stamped_engine_root", lambda p: Path(p) in stamped)
+    monkeypatch.setattr(er, "coordinator_engine_root_with_class", lambda: ladder)
+
+
+def test_resolve_claude_klabauter_root_flag_naming_a_stamped_engine_wins(
+    setup_mod, monkeypatch, tmp_path
+):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    _stub_engine_ladder(setup_mod, monkeypatch, stamped={tmp_path}, ladder=(None, "unresolved"))
     args = setup_mod.Args()
-    args.claude_klabauter_root = "/flag/path"
+    args.claude_klabauter_root = str(tmp_path)
     root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
-    assert root == Path("/flag/path")
+    assert root == tmp_path
     assert source == "--claude-klabauter-live-root flag"
 
 
-def test_resolve_claude_klabauter_root_env_fallback(setup_mod, monkeypatch):
-    """The RETIRED name still answers here, and says so in its source label.
-
-    C23 kept this rung deliberately: an installer runs against un-migrated
-    boxes, which are exactly the population still exporting the old spelling.
-    The label carries `(RETIRED)` so an operator reading setup's own output
-    learns which name answered.
-    """
-    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
-    monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/env/path")
-    args = setup_mod.Args()
-    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
-    assert root == Path("/env/path")
-    assert source == "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"
-
-
-def test_resolve_claude_klabauter_root_env_fallback_emits_c14_retirement_advisory(
+def test_resolve_claude_klabauter_root_flag_naming_an_unstamped_tree_is_refused(
     setup_mod, monkeypatch, capsys
 ):
-    """C5 (2026-09-01): C23 required the value RESOLVE, never that it stay
-    SILENT. This rung must keep resolving for un-migrated boxes AND emit
-    engine_root.py's C14-style retirement line naming
-    COORDINATOR_ENGINE_ROOT, reusing its once-per-site emission guard so a
-    long-running installer does not spam it on repeated calls."""
-    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+    """A claude-klabauter tree carries no engine stamp; the flag never names one."""
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    _stub_engine_ladder(setup_mod, monkeypatch, stamped=set(), ladder=("/engine", "x"))
+    args = setup_mod.Args()
+    args.claude_klabauter_root = "/flag/claude-klabauter-tree"
+    with pytest.raises(SystemExit) as exc:
+        setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    assert exc.value.code == 1
+    assert "claude-klabauter is never an engine" in capsys.readouterr().err
+
+
+def test_resolve_claude_klabauter_root_retired_env_never_answers(setup_mod, monkeypatch, capsys):
+    """CLAUDE_KLABAUTER_ROOT emits the retirement advisory once and never becomes the root."""
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/env/path")
     monkeypatch.setattr(
         setup_mod.sys.modules["coordinator_core.engine_root"],
         "_ENGINE_ROOT_FALLBACK_EMITTED",
         set(),
     )
+    _stub_engine_ladder(
+        setup_mod, monkeypatch, stamped=set(), ladder=("/published/engine", "registry")
+    )
     args = setup_mod.Args()
+
+    root, _source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    assert "CLAUDE_KLABAUTER_ROOT is set but is NO LONGER HONOURED" in capsys.readouterr().err
+    assert root == Path("/published/engine")
+    assert root != Path("/env/path")
 
     setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
-    first_stderr = capsys.readouterr().err
-    assert "CLAUDE_KLABAUTER_ROOT is set but is NO LONGER HONOURED" in first_stderr
-    assert "COORDINATOR_ENGINE_ROOT" in first_stderr
-
-    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
-    second_stderr = capsys.readouterr().err
-    assert second_stderr == ""
-    assert root == Path("/env/path")
-    assert source == "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"
+    assert capsys.readouterr().err == ""
 
 
-def test_resolve_claude_klabauter_root_prefers_the_current_name(setup_mod, monkeypatch):
-    """C23 REGRESSION PIN. This rung previously read the retired name and
-    nothing else, so a box exporting only COORDINATOR_ENGINE_ROOT got no
-    env rung at all and fell silently through to git-root auto-discovery --
-    the installer then provisioned against whichever tree it happened to sit
-    in, ignoring the operator's explicit pin."""
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/current/path")
+def test_resolve_claude_klabauter_root_delegates_to_the_engine_ladder(setup_mod, monkeypatch):
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
-    args = setup_mod.Args()
-    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    _stub_engine_ladder(
+        setup_mod, monkeypatch, stamped=set(), ladder=("/current/path", "env-literal")
+    )
+    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), setup_mod.Args())
     assert root == Path("/current/path")
-    assert source == "COORDINATOR_ENGINE_ROOT env var"
+    assert source == "engine ladder (env-literal)"
 
 
-def test_resolve_claude_klabauter_root_current_name_outranks_retired(setup_mod, monkeypatch):
-    """Both set: the current name wins, mirroring the accessor's precedence."""
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", "/current/path")
+def test_resolve_claude_klabauter_root_ignores_retired_name_when_current_set(setup_mod, monkeypatch):
     monkeypatch.setenv("CLAUDE_KLABAUTER_ROOT", "/stale/path")
-    args = setup_mod.Args()
-    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
+    _stub_engine_ladder(setup_mod, monkeypatch, stamped=set(), ladder=("/current/path", "r"))
+    root, _source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), setup_mod.Args())
     assert root == Path("/current/path")
 
 
-def test_resolve_claude_klabauter_root_repo_root_default(setup_mod, monkeypatch):
-    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+def test_resolve_claude_klabauter_root_repo_root_is_never_the_default(
+    setup_mod, monkeypatch, capsys
+):
+    """No flag, no engine: the repo root (a claude-klabauter tree) is not a fallback."""
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
-    args = setup_mod.Args()
-    root, source = setup_mod.resolve_claude_klabauter_root(Path("/repo"), args)
-    assert root == Path("/repo")
-    assert source == "git-root auto-discovery"
+    _stub_engine_ladder(setup_mod, monkeypatch, stamped=set(), ladder=(None, "unresolved"))
+    with pytest.raises(SystemExit) as exc:
+        setup_mod.resolve_claude_klabauter_root(Path("/repo"), setup_mod.Args())
+    assert exc.value.code == 1
+    assert "/repo" not in capsys.readouterr().out
 
 
 def test_resolve_coordinator_claude_root_flag_wins(setup_mod, monkeypatch):
@@ -4140,7 +4130,7 @@ def test_symbols_hint_silent_when_symbols_extra_absent(
 
 
 # ---------------------------------------------------------------------------
-# --check target label + remediation (C02); install-path engine floor decide (C08)
+# --check target label + remediation (C02)
 # ---------------------------------------------------------------------------
 
 
@@ -4186,7 +4176,6 @@ def test_run_check_prints_target_and_published_remediation_on_failure(
         setup_check, "run_checks", lambda *a, **k: [setup_check.CheckItem("x", False, "broken")]
     )
     monkeypatch.setattr(setup_mod, "check_installed_exec_bit_parity", lambda *a, **k: setup_check.CheckItem("y", True, "ok"))
-    monkeypatch.setattr(setup_mod, "run_engine_floor_decide", lambda *a, **k: pytest.fail("--check must not run the decider"))
     root = Path(__file__).resolve().parent.parent
     assert setup_mod.run_check(root) == 1
     out = capsys.readouterr().out
@@ -4207,62 +4196,6 @@ def test_statusline_absence_passes_but_a_stale_or_unresolvable_command_still_fai
     assert not broken.ok
     other = setup_check.CheckItem("guards", False, "no statusLine.command in x")
     assert not setup_mod.statusline_absence_is_not_a_fail([other])[0].ok
-
-
-def _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, *, present: bool):
-    from types import SimpleNamespace
-
-    plugin = tmp_path / "plugin"
-    if present:
-        (plugin / "bin").mkdir(parents=True)
-        (plugin / "bin" / "engine-floor-decide.py").write_text("", encoding="utf-8")
-    monkeypatch.setattr(
-        setup_mod, "_resolve_coordinator_claude_root",
-        lambda repo_root, args: (tmp_path, SimpleNamespace(is_publish_mirror_rejected=False, display="stub")),
-    )
-    monkeypatch.setattr(setup_mod, "_resolve_plugin_root_for_machine_local", lambda coord: plugin)
-
-
-def _fake_decider_run(monkeypatch, setup_mod, stdout: str):
-    from types import SimpleNamespace
-
-    calls = []
-
-    def fake_run(cmd, **kw):
-        calls.append(cmd)
-        return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
-
-    monkeypatch.setattr(setup_mod.subprocess, "run", fake_run)
-    return calls
-
-
-def test_floor_decide_runs_decider_once_and_prints_clean_verdict(setup_mod, monkeypatch, tmp_path, capsys):
-    _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, present=True)
-    calls = _fake_decider_run(monkeypatch, setup_mod, "clean: engine /e stamp a floor b\n")
-    verdict = _REAL_FLOOR_DECIDE["fn"](tmp_path, "py", setup_mod.Args())
-    out = capsys.readouterr().out
-    assert verdict == "clean" and len(calls) == 1
-    assert calls[0][0] == "py" and calls[0][1].endswith("engine-floor-decide.py")
-    assert "clean: engine /e" in out and "[ADVISORY]" not in out
-
-
-def test_floor_decide_undecided_prints_bounded_command(setup_mod, monkeypatch, tmp_path, capsys):
-    _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, present=True)
-    _fake_decider_run(monkeypatch, setup_mod, "undecided: engine /e stamp a floor b\n")
-    assert _REAL_FLOOR_DECIDE["fn"](tmp_path, "py", setup_mod.Args()) == "undecided"
-    out = capsys.readouterr().out
-    assert "[ADVISORY] engine floor undecided" in out and "engine-floor-decide.py" in out
-
-
-def test_floor_decide_absent_decider_prints_bounded_command_and_spawns_nothing(
-    setup_mod, monkeypatch, tmp_path, capsys
-):
-    _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, present=False)
-    calls = _fake_decider_run(monkeypatch, setup_mod, "")
-    assert _REAL_FLOOR_DECIDE["fn"](tmp_path, "py", setup_mod.Args()) is None
-    out = capsys.readouterr().out
-    assert calls == []
-    assert "py <plugin>/coordinator/bin/engine-floor-decide.py" in out
 
 
 def test_main_register_only_exits_nonzero_when_forwarders_missing(setup_mod, monkeypatch, tmp_path):
@@ -4442,3 +4375,53 @@ def test_refresh_group_em_home_states_arming_is_post_install(setup_mod, monkeypa
     assert "home refreshed from template: HOME" in out
     assert "post-install" in out
     assert "/group-em" in out
+
+
+def _write_test_extra_pyproject(root, specs):
+    body = ", ".join(f'"{s}"' for s in specs)
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0"\ndependencies = []\n'
+        f"[project.optional-dependencies]\ntest = [{body}]\n",
+        encoding="utf-8",
+    )
+
+
+def test_handle_test_tooling_default_names_pip_line_for_missing_only(setup_mod, monkeypatch, tmp_path, capsys):
+    _write_test_extra_pyproject(tmp_path, ["pytest>=8.0", "pytest-timeout>=2.3"])
+    monkeypatch.setattr(
+        setup_mod, "_probe_dist_versions", lambda py, dists: {"pytest": "9.0.1", "pytest-timeout": None}
+    )
+    installs = []
+    monkeypatch.setattr(setup_mod, "_install_test_deps", lambda *a, **k: installs.append(a))
+
+    setup_mod.handle_test_tooling(tmp_path, "/engine/python", setup_mod.Args())
+
+    out = capsys.readouterr().out
+    assert "/engine/python -m pip install \"pytest-timeout>=2.3\"" in out
+    assert "pytest>=8.0" not in out.split("-m pip install")[-1]
+    assert installs == []
+
+
+def test_handle_test_tooling_with_flag_installs_declared_specs(setup_mod, monkeypatch, tmp_path, capsys):
+    _write_test_extra_pyproject(tmp_path, ["pytest>=8.0", "pytest-timeout>=2.3"])
+    monkeypatch.setattr(
+        setup_mod,
+        "_probe_dist_versions",
+        lambda py, dists: {"pytest": "9.0.1", "pytest-timeout": "2.3.1"},
+    )
+    installs = []
+    monkeypatch.setattr(setup_mod, "_install_test_deps", lambda py, specs: installs.append((py, specs)))
+    args = setup_mod.Args()
+    args.with_test_deps = True
+
+    setup_mod.handle_test_tooling(tmp_path, "/engine/python", args)
+
+    assert installs == [("/engine/python", ["pytest>=8.0", "pytest-timeout>=2.3"])]
+    assert "pip install" not in capsys.readouterr().out
+
+
+def test_handle_test_tooling_satisfied_prints_no_pip_line(setup_mod, monkeypatch, tmp_path, capsys):
+    _write_test_extra_pyproject(tmp_path, ["pytest-timeout>=2.3"])
+    monkeypatch.setattr(setup_mod, "_probe_dist_versions", lambda py, dists: {"pytest-timeout": "2.3.1"})
+    setup_mod.handle_test_tooling(tmp_path, "/engine/python", setup_mod.Args())
+    assert "pip install" not in capsys.readouterr().out

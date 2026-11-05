@@ -38,6 +38,22 @@ def manifest_run_id(sidecar_rel: str) -> str | None:
 _TWIN_NAME = re.compile(r"\.staged-[0-9a-f]{64}\.workflow\.mjs")
 
 
+def _unlink_receipt(twin: Path) -> None:
+    """Remove the twin's ``.emitted.json`` receipt beside it; a missing or locked receipt is ignored."""
+    try:
+        twin.with_name(twin.name + ".emitted.json").unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _leave_receipt(twin: Path) -> None:
+    """Leave the twin's fire receipt (best-effort, so the Workflow hook sees an engine-emitted script)."""
+    if not twin.with_name(twin.name + ".emitted.json").exists():
+        from coordinator_core.ops.workflow_fire.receipt import write_fire_receipt
+
+        write_fire_receipt(twin)
+
+
 def remove_twins(root: Path, run_id: object) -> int:
     """Unlink every ``scratch/warp/<run_id>.staged-<sha>.workflow.mjs``; return how many were removed.
 
@@ -57,6 +73,7 @@ def remove_twins(root: Path, run_id: object) -> int:
         if name.startswith(prefix) and _TWIN_NAME.fullmatch(name[len(prefix):]):
             try:
                 (directory / name).unlink()
+                _unlink_receipt(directory / name)
                 removed += 1
             except OSError:
                 pass
@@ -90,6 +107,7 @@ def sweep_expired_twins(root: Path, now: float | None = None) -> int:
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()
+                _unlink_receipt(path)
                 removed += 1
         except OSError:
             pass
@@ -177,6 +195,7 @@ def ensure_twin(
         raise refuse(f"staged twin write failed: {twin_rel!r} is outside {_RUN_DIR_ROOT}/")
     try:
         if target.read_bytes() == body:
+            _leave_receipt(target)
             return Path(twin_rel).as_posix()
     except OSError:
         pass
@@ -191,4 +210,5 @@ def ensure_twin(
         raise refuse(f"staged twin write failed: {twin_rel!r}: {exc}") from exc
     finally:
         tmp.unlink(missing_ok=True)
+    _leave_receipt(target)
     return Path(twin_rel).as_posix()

@@ -41,6 +41,8 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
     monkeypatch.delenv("UNIMATRIX_TUNNEL_REMOTE", raising=False)
     al = load("unimatrix-autolink")
+    real_ssh = al.ssh_identity_file
+    monkeypatch.setattr(al, "ssh_identity_file", lambda roster, alias, run=None: None)
     roster = al._roster()
     live = set()
     monkeypatch.setattr(roster, "pid_alive", lambda pid: pid in live)
@@ -50,6 +52,7 @@ def env(tmp_path, monkeypatch):
         pass
 
     e = E()
+    e.real_ssh_identity_file = real_ssh
     e.home, e.al, e.roster, e.live = home, al, roster, live
     e.sdir = home / "unimatrix"
     e.key = Path(roster.default_key())
@@ -243,6 +246,84 @@ def test_tunnel_alias_is_forwarded_to_supervisors(env, monkeypatch):
     env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok)
     for c in sp.cmds:
         assert c[c.index("--tunnel-remote") + 1] == "machine-a-wg"
+
+
+def write_key(path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("k")
+    return str(path)
+
+
+def key_of(cmd):
+    return cmd[cmd.index("--key") + 1]
+
+
+def test_each_alias_gets_its_own_key_in_probe_and_both_supervisors(env, tmp_path):
+    ka, kb = write_key(tmp_path / "ka"), write_key(tmp_path / "kb")
+    keys = {"alpha": ka, "beta": kb}
+    probed = []
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["alpha", "beta"], spawn=sp,
+               probe_fn=lambda r, a, k: probed.append((a, k)),
+               key_fn=lambda r, a: keys[a])
+    assert probed == [("alpha", ka), ("beta", kb)]
+    got = {(c[c.index("--remote") + 1], key_of(c)) for c in sp.cmds}
+    assert got == {("alpha", ka), ("beta", kb)} and len(sp.cmds) == 4
+
+
+def test_resolution_order_machine_local_then_ssh_config_then_default(env, tmp_path):
+    local, ssh = write_key(tmp_path / "local"), write_key(tmp_path / "ssh")
+    add_key(env)
+    r = env.roster
+    assert env.al.resolve_key(r, "a", lambda r, a: local, lambda r, a: ssh) == local
+    assert env.al.resolve_key(r, "a", lambda r, a: None, lambda r, a: ssh) == ssh
+    assert env.al.resolve_key(r, "a", lambda r, a: None, lambda r, a: None) == str(env.key)
+
+
+def test_machine_local_key_reads_the_per_alias_registry_key(env, tmp_path):
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "~/k-machine-a\n", "")
+
+    (env.home / "bin" / "_machine_local.py").write_text("")
+    assert env.al.machine_local_key(env.roster, "machine-a", run=fake_run) == os.path.expanduser("~/k-machine-a")
+    assert seen[0][-2:] == ["get", "unimatrix.keys.machine-a"]
+    unset = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, "", "")
+    assert env.al.machine_local_key(env.roster, "machine-a", run=unset) is None
+
+
+def test_ssh_identity_file_takes_existing_file_and_ignores_builtin_defaults(env, tmp_path):
+    real = write_key(tmp_path / "unimatrix-zero-a-to-b")
+    default = write_key(tmp_path / "id_ed25519")
+    missing = str(tmp_path / "gone")
+
+    def out(*files):
+        text = "".join(f"identityfile {f}\n" for f in files)
+        return lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, text, "")
+
+    ssh = env.real_ssh_identity_file
+    assert ssh(env.roster, "a", run=out(default, missing, real)) == real
+    assert ssh(env.roster, "a", run=out(default, missing)) is None
+    assert ssh(env.roster, "a", run=lambda cmd, **kw: subprocess.CompletedProcess(cmd, 255, "", "")) is None
+
+
+def test_alias_with_missing_key_logs_one_line_and_next_alias_still_links(env, tmp_path):
+    kb = write_key(tmp_path / "kb")
+    keys = {"alpha": str(tmp_path / "absent"), "beta": kb}
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["alpha", "beta"], spawn=sp, probe_fn=ok, key_fn=lambda r, a: keys[a])
+    assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"beta"}
+    lines = (env.sdir / "autolink.log").read_text().splitlines()
+    assert len(lines) == 1 and "alpha" in lines[0] and "no Unimatrix-Zero key" in lines[0]
+
+
+def test_default_resolution_path_matches_todays_shared_key(env):
+    add_key(env)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a", "other"], spawn=sp, probe_fn=ok)
+    assert {key_of(c) for c in sp.cmds} == {str(env.key)} and len(sp.cmds) == 4
 
 
 def test_cli_entrypoint_unconfigured_is_silent_exit_zero(tmp_path):

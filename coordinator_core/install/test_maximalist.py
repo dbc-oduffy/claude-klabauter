@@ -741,6 +741,39 @@ def test_claude_author_wrapper_symlink_replaces_wrong_target_link(stub_env, monk
     assert Path(os.readlink(result)) == target
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX-only C2 symlink contract; see test above.")
+def test_claude_author_wrapper_converges_foreign_root_body(stub_env, monkeypatch):
+    """A foreign-root body at <settings_bin>/claude-author plus a regular-file
+    ~/.local/bin/claude-author is converged to this root's source bytes, and
+    the settings-home byte-copy verifier then accepts it; a second pass is a
+    no-op on the body."""
+    from coordinator_core.install._shared import claude_author_wrapper_source
+    from coordinator_core.install.settings_home_report import _byte_copied_body_matches_source
+
+    settings_bin = stub_env["settings_bin"]
+    settings_bin.mkdir(parents=True, exist_ok=True)
+    target = settings_bin / "claude-author"
+    target.write_text("#!/bin/sh\n# another engine root's trampoline\n")
+    target.chmod(0o755)
+    dst = stub_env["claude_home"] / ".local" / "bin" / "claude-author"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_text("#!/bin/sh\necho foreign-root-regular-file\n")
+    dst.chmod(0o755)
+
+    claude_klabauter_root = stub_env["claude_klabauter_root"]
+    src = claude_author_wrapper_source(claude_klabauter_root)
+
+    result = _run_install_claude_author_wrapper(stub_env, monkeypatch)
+    assert result.is_symlink() and Path(os.readlink(result)) == target
+    assert target.read_bytes() == src.read_bytes()
+    assert target.stat().st_mode & stat.S_IXUSR
+    assert _byte_copied_body_matches_source("claude-author", target, claude_klabauter_root)
+
+    inode = target.stat().st_ino
+    _run_install_claude_author_wrapper(stub_env, monkeypatch)
+    assert target.stat().st_ino == inode
+
+
 def test_claude_author_wrapper_missing_source_is_fatal(stub_env):
     (stub_env["claude_klabauter_root"] / "coordinator" / "bin" / "claude-author.py").unlink()
     rc = maximalist.run(
@@ -1504,9 +1537,11 @@ def test_seed_claude_klabauter_argv_composed_with_key_and_derived_path(stub_env,
 
     def _recording_run(cmd, env=None):
         captured.append(list(cmd))
-        return real_run(cmd, env=env)
+        return 0 if cmd and cmd[0] == "fake-ml-cli" else real_run(cmd, env=env)
 
     monkeypatch.setattr(maximalist, "_run", _recording_run)
+    monkeypatch.setattr(_machine_resolver_module, "registry_get", lambda key: None)
+    monkeypatch.setattr(_machine_resolver_module, "retire_paired_content_root_key", lambda key: False)
 
     rc = maximalist.run(
         check_only=False,

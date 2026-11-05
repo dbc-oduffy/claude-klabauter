@@ -2698,6 +2698,8 @@ def _with_peer_drift(root: Path, reply: dict) -> dict:
 
 
 LANDING_TREE_DIFFERS = "landing-tree-differs-from-measured"
+VERIFY_OVERLAY_RED = "verify-overlay-red"
+VERIFY_OVERLAY_UNVERIFIED = "verify-overlay-unverified"
 
 
 def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str]) -> dict:
@@ -4133,6 +4135,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             )
         settled_blobs = {**settled_blobs, **own_blobs}
 
+    # An "inconclusive" overlay (no seeds, timeout, collection error) lands with an advisory; only red,
+    # missing and mismatch refuse.
     reach_dirt_foreign: dict = {}
     reach_dirt_overlay: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
@@ -4183,15 +4187,18 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 else clean_overlay_verify.OverlayVerdict("missing", "the landing has no measured run id")
             )
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            if overlay.verdict != "green":
+            if overlay.verdict == "inconclusive":
+                reach_dirt_overlay["advisory"] = f"clean-overlay verdict inconclusive: {overlay.detail}"
+            elif overlay.verdict != "green":
                 _remove(root, receipt_paths)
                 _reap_measured_export(root, measured_run)
                 return _error(
                     f"landing refused: peer dirt is in the verified tests' reach and the clean-overlay verdict "
                     f"is {overlay.verdict}: {overlay.detail}. Run "
                     f"{clean_overlay_verify.remedy_call(measured_run)} in the verify stage, then re-land",
-                    refused="verify-overlay-red" if overlay.red else "verify-overlay-unverified",
+                    refused=VERIFY_OVERLAY_RED if overlay.red else VERIFY_OVERLAY_UNVERIFIED,
                     reach_dirt_foreign=reach_dirt_foreign,
+                    paths=sorted(reach_dirt_foreign),
                 )
 
     try:

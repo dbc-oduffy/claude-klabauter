@@ -128,7 +128,7 @@ def test_working_repos_membership_alone_does_not_exempt_a_different_session(
     assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
-def test_no_working_repos_entry_needed_when_session_is_the_live_root(
+def test_session_being_the_live_root_still_gets_published_engine(
     tmp_path: Path, monkeypatch
 ):
     ml_dir = tmp_path / "machine-local"
@@ -151,11 +151,11 @@ def test_no_working_repos_entry_needed_when_session_is_the_live_root(
     monkeypatch.setattr(resolve_claude_klabauter, "_self_located_root", lambda: None)
 
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
-    assert root == str(live_root)
-    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+    assert root == str(published_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
-def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: Path, monkeypatch):
+def test_absent_engine_target_still_diverts_regardless_of_identity(tmp_path: Path, monkeypatch):
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -182,8 +182,8 @@ def test_absent_engine_target_does_not_divert_regardless_of_identity(tmp_path: P
     assert resolve_claude_klabauter._is_claude_klabauter_source_tree(ml_dir) is False
 
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
-    assert root == str(live_root)
-    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+    assert root == str(published_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
 def test_setup_chain_walker_locator_rung_still_resolves(tmp_path: Path, monkeypatch):

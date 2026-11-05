@@ -85,7 +85,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.machine_resolver import registry_set
-from coordinator_core.engine_root import coordinator_engine_root_with_class
+from coordinator_core.engine_root import _load_shim, coordinator_engine_root_with_class
 from coordinator_core.ops.discover_working_repos import main as _discover_working_repos_main
 from coordinator_core.win_portability import is_executable, no_console_creationflags
 
@@ -448,11 +448,20 @@ def _derive_repo_key(repo_base: str) -> str:
     return collapsed.strip("_")
 
 
+def _engine_root_or_raise() -> "tuple[str, str]":
+    """`coordinator_engine_root_with_class()` with an `(None, 'unresolved')` answer raised as
+    `RuntimeError` carrying the fetch-claude-klabauter message."""
+    root, resolution_class = coordinator_engine_root_with_class()
+    if not root:
+        raise RuntimeError(_load_shim().unresolved_engine_message().rstrip("\n"))
+    return root, resolution_class
+
+
 def _seed_machine_local_registry(confirm: bool, non_interactive: bool) -> None:
     print("[post-toolchain] Seeding machine-local registry...")
 
     try:
-        claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
+        claude_klabauter_root_str, _resolution_class = _engine_root_or_raise()
         claude_klabauter_root = Path(claude_klabauter_root_str)
     except RuntimeError as exc:
         print(f"[post-toolchain] WARNING: cannot resolve CLAUDE_KLABAUTER_ROOT to locate machine-local: {exc}", file=sys.stderr)
@@ -738,7 +747,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     # silently skipping the preflight and stumbling into those steps would
     # produce a much more confusing failure downstream.
     try:
-        claude_klabauter_root_for_preflight_str, _resolution_class = coordinator_engine_root_with_class()
+        claude_klabauter_root_for_preflight_str, _resolution_class = _engine_root_or_raise()
         claude_klabauter_root_for_preflight = Path(claude_klabauter_root_for_preflight_str)
     except RuntimeError as exc:
         print(f"[post-toolchain] ERROR: cannot resolve the engine root for setup preflight: {exc}", file=sys.stderr)
@@ -775,7 +784,7 @@ def _run_post_toolchain_steps(plugin_root: Path, args: _Args) -> int:
     # and calls the same function once claude-klabauter's own installer runs.
     # This call site exists for the re-run/already-registered case.
     try:
-        claude_klabauter_root_for_engine_str, _resolution_class = coordinator_engine_root_with_class()
+        claude_klabauter_root_for_engine_str, _resolution_class = _engine_root_or_raise()
         provision_stamped_engine(Path(claude_klabauter_root_for_engine_str))
     except RuntimeError:
         print(

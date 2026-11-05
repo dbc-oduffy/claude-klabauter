@@ -1649,11 +1649,11 @@ def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args)
     installed = _probe_dist_versions(engine_py, [dist for dist, _ in floors])
 
     unmet: list[str] = []
-    for dist, floor in floors:
+    for spec, (dist, floor) in zip(specs, floors):
         have = installed.get(dist)
         if have is None:
             print(f"ADVISORY [test-deps] {dist} — not installed under {engine_py}")
-            unmet.append(dist)
+            unmet.append(spec)
             continue
         have_tuple = _version_tuple(have)
         if floor is None or have_tuple is None:
@@ -1662,7 +1662,7 @@ def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args)
         floor_str = ".".join(str(part) for part in floor)
         if have_tuple < floor:
             print(f"ADVISORY [test-deps] {dist} {have} is BELOW the declared floor >={floor_str}")
-            unmet.append(dist)
+            unmet.append(spec)
         else:
             print(f"PASS [test-deps] {dist} {have} (>= {floor_str})")
 
@@ -1682,7 +1682,7 @@ def handle_test_tooling(claude_klabauter_root: Path, engine_py: str, args: Args)
     print("  the declared floor is what produced 4800 collection errors on 2026-07-28.")
     print("  To provision it:")
     print(f"    {setup_invocation()} --with-test-deps")
-    print(f"  Or directly:  {engine_py} -m pip install {quote_specs(specs)}")
+    print(f"  Or just the missing ones:  {engine_py} -m pip install {quote_specs(unmet)}")
 
 
 def print_symbols_extra_hint(claude_klabauter_root: Path) -> None:
@@ -2327,28 +2327,39 @@ def resolve_claude_klabauter_root(repo_root: Path, args: Args) -> tuple[Path, st
     Finding 7 (P2): --claude-klabauter-live-root previously redirected registration/
     verification but was silently ignored by dependency provisioning, which
     always derived from the script's own on-disk location."""
-    if args.claude_klabauter_root:
-        return Path(args.claude_klabauter_root), "--claude-klabauter-live-root flag"
-    # C23: this consulted the RETIRED name only, so it went dark when C14
-    # stopped anything exporting it — an operator with only
-    # COORDINATOR_ENGINE_ROOT set silently got git-root auto-discovery
-    # instead of their explicit pin, and the installer then provisioned
-    # against whichever tree it happened to be sitting in. The retired name
-    # stays as a second rung because this is an INSTALLER: it runs against
-    # boxes that have not been migrated yet, which is precisely the
-    # population that still exports the old spelling.
-    if os.environ.get("COORDINATOR_ENGINE_ROOT"):
-        return Path(os.environ["COORDINATOR_ENGINE_ROOT"]), "COORDINATOR_ENGINE_ROOT env var"
     if os.environ.get("CLAUDE_KLABAUTER_ROOT"):
-        # C23 required the value RESOLVE (this installer runs against
-        # un-migrated boxes that still export the old spelling) -- it never
-        # required SILENCE. Reuse engine_root.py's C14 retirement wording and
-        # once-per-site emission guard so the fleet has one message for one
-        # retirement: an un-migrated operator gets a working install AND the
-        # one signal that tells them to migrate (C5, 2026-09-01).
+        # Advisory only: the retired name answers nothing.
         _emit_claude_klabauter_root_retired("scripts.setup", os.environ["CLAUDE_KLABAUTER_ROOT"])
-        return Path(os.environ["CLAUDE_KLABAUTER_ROOT"]), "CLAUDE_KLABAUTER_ROOT env var (RETIRED)"
-    return repo_root, "git-root auto-discovery"
+    if args.claude_klabauter_root:
+        flagged = Path(args.claude_klabauter_root)
+        # A claude-klabauter tree carries no engine stamp; the flag never names one.
+        if not _engine_root_module()._load_shim()._is_stamped_engine_root(flagged):
+            print(
+                f"ERROR: --claude-klabauter-live-root {flagged} is not a stamped engine; "
+                "claude-klabauter is never an engine.\n"
+                + _engine_root_module()._load_shim().unresolved_engine_message(),
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        return flagged, "--claude-klabauter-live-root flag"
+    # `coordinator_engine_root_with_class` ignores an unstamped
+    # COORDINATOR_ENGINE_ROOT and falls to repos.claude_klabauter.
+    engine, resolution = _engine_root_module().coordinator_engine_root_with_class()
+    if engine is None:
+        print(
+            _engine_root_module()._load_shim().unresolved_engine_message(),
+            file=sys.stderr,
+            end="",
+        )
+        raise SystemExit(1)
+    return Path(engine), f"engine ladder ({resolution})"
+
+
+def _engine_root_module():
+    """`coordinator_core.engine_root`, looked up at call time."""
+    import coordinator_core.engine_root as engine_root_mod
+
+    return engine_root_mod
 
 
 def _git_current_branch(tree: Path) -> str | None:
@@ -3012,7 +3023,24 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     _note_change("warm-engine", f"machine-local set engine.warm.enabled = {value}")
 
     if want_warm:
-        start_warm_engine(repo_root)
+        from coordinator_core.install.install_root_scope import (
+            redirected_install_reason,
+            unregistered_clone_reason,
+        )
+
+        redirect = redirected_install_reason()
+        if redirect is not None:
+            print(
+                f"[ADVISORY] warm engine not started: {redirect}; "
+                "a redirected install never starts a resident server"
+            )
+        elif (unregistered := unregistered_clone_reason(repo_root)) is not None:
+            print(
+                f"[ADVISORY] warm engine not started: {unregistered}; "
+                "only the registered clone starts a resident server"
+            )
+        else:
+            start_warm_engine(repo_root)
 
 
 def _verification_child_program() -> str:
@@ -3330,6 +3358,12 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
     if provisioned.path:
         interpreter_labels.setdefault(provisioned.path, []).append(
             "example-retrieval-repo provisioned pin (guard interpreter)"
+        )
+    elif provisioned.never_installed:
+        print(
+            "  [dialect-guard] example-retrieval-repo is registered with no host-installed pin "
+            "(plugin delivery); probing the engine and bare python3 interpreters only. "
+            f"To install it: {provisioned.install_command}"
         )
     else:
         print(
@@ -4521,6 +4555,19 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
     from coordinator_core.install.host_sampler_scheduler import (
         register_host_sampler_task,
     )
+    from coordinator_core.install.install_root_scope import (
+        redirected_install_reason,
+        unregistered_clone_reason,
+    )
+
+    if redirected_install_reason() is None:
+        unregistered = unregistered_clone_reason(repo_root)
+        if unregistered is not None:
+            print(
+                f"[ADVISORY] host-sampler job not registered: {unregistered} "
+                "(machine-global job belongs to the registered clone)"
+            )
+            return
 
     if register_host_sampler_task(repo_root):
         _note_change("host-sampler", "host-resource sampler scheduled job registered or refreshed")
@@ -4783,45 +4830,6 @@ def check_failure_remediation(identity: str | None, claude_klabauter_root: Path,
         "no published engine root registered (repos.claude_klabauter unset); install from the published "
         "claude-klabauter clone's scripts/setup.py; authoring-checkout failures clear at publication"
     )
-
-
-def run_engine_floor_decide(repo_root: Path, engine_py: str, args: Args) -> str | None:
-    """Install path only: run the plugin's `engine-floor-decide.py` once and print its verdict.
-
-    Returns the verdict word (clean|behind|undecided|indeterminate) or None when the decider is absent.
-    An absent decider or an undecided verdict prints the one bounded command to run by hand.
-    """
-    coord_path, source = _resolve_coordinator_claude_root(repo_root, args)
-    plugin_root = None if source.is_publish_mirror_rejected else _resolve_plugin_root_for_machine_local(coord_path)
-    decider = None
-    if plugin_root is not None:
-        for candidate in (plugin_root / "bin", plugin_root / "coordinator" / "bin"):
-            if (candidate / "engine-floor-decide.py").is_file():
-                decider = candidate / "engine-floor-decide.py"
-                break
-    print()
-    print("--- Verification: engine floor ---")
-    if decider is None:
-        print(
-            "[ADVISORY] engine floor undecided: coordinator plugin's engine-floor-decide.py not found "
-            f"(coordinator-claude root: {source.display}). Once the plugin is installed, run: "
-            f"{engine_py} <plugin>/coordinator/bin/engine-floor-decide.py"
-        )
-        return None
-    command = f"{engine_py} {decider}"
-    try:
-        proc = subprocess.run(
-            [engine_py, str(decider)], capture_output=True, text=True, timeout=45, **_NO_CONSOLE
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        print(f"[ADVISORY] engine floor undecided: decider did not run ({exc}). Run: {command}")
-        return "undecided"
-    line = (proc.stdout.strip().splitlines() or [""])[-1]
-    verdict = line.split(":", 1)[0].strip() or "undecided"
-    print(f"  {line or 'engine-floor-decide printed nothing'}")
-    if verdict not in ("clean", "behind"):
-        print(f"[ADVISORY] engine floor {verdict}: run to retry: {command}")
-    return verdict
 
 
 def _register_only_forwarder_item(claude_klabauter_root: Path):
@@ -5192,6 +5200,8 @@ def main(argv: list[str]) -> int:
     claude_klabauter_root_resolved = register_claude_klabauter_root(claude_klabauter_root_resolved, claude_klabauter_root_source, repo_root, args)
     if not args.register_only:
         write_environment_import(repo_root, "local")
+    if not args.register_only:
+        install_repo_discovery(repo_root, claude_klabauter_root_resolved, args)
     offer_warm_opt_in(repo_root, args)
     if not args.register_only:
         register_fleet_with_example_retrieval_repo(repo_root)
@@ -5200,8 +5210,6 @@ def main(argv: list[str]) -> int:
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
     dialect_disarmed = check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)
-    if not args.register_only:
-        run_engine_floor_decide(repo_root, engine_py, args)
 
     if not args.register_only:
         # ORDER IS LOAD-BEARING AND SILENTLY SO -- forwarders FIRST, door SECOND.
@@ -5231,7 +5239,6 @@ def main(argv: list[str]) -> int:
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
-        install_repo_discovery(repo_root, claude_klabauter_root_resolved, args)
         install_general_work_ensure(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)

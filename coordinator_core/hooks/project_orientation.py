@@ -64,7 +64,8 @@ the existing one instead of re-deriving it:
 source's version answers "which sibling claude-klabauter checkout will THIS session's
 hooks execute", including a publish-mirror roster (`resolve_publish_mirror_
 roster`), a provenance suffix (env-override / published-fallback /
-published-legacy-gate / live-no-target / live-env-dup), and a
+published-legacy-gate; the live-tree provenances are dropped because a
+Claude-klabauter tree is never the engine), and a
 `CLAUDE_PLUGIN_ROOT`-divergence line (`_w_live_plugin_root_line`) — all of
 it DoE-side machinery for a script running OUTSIDE the engine, reasoning
 about which sibling checkout answers it. Hosted here, INSIDE the engine's
@@ -79,7 +80,9 @@ tree) plus the branch suffix (`coordinator_core.git.git_state.head_branch`,
 zero-spawn). NOT ported: `resolve_publish_mirror_roster`,
 `resolve_own_publish_target_keys`, the provenance suffix, and
 `_w_live_plugin_root_line`/`_paths_differ` (no other caller — dropped with
-this banner's roster leg).
+this banner's roster leg). No provenance is kept: a claude-klabauter tree is
+never the engine, so a live-working-tree class or an unresolvable engine reads
+"Engine: none - fetch claude-klabauter" (no extra resolver call).
 
 `foreign_path_filter.session_repo_is_plane` (this row's other write) is
 consumed by nothing on the ported surface once the mirror-roster leg above
@@ -716,9 +719,17 @@ def _resolve_engine_root_with_class() -> tuple:
         return None, None
 
 
+_NO_ENGINE_BANNER = (
+    "── Engine: none - fetch claude-klabauter "
+    "(github.com/dbc-oduffy/claude-klabauter) ──\n"
+)
+
+
 def _engine_resolution_banner(out: List[str]) -> None:
+    """Names the published engine, or says to fetch it; a claude-klabauter tree is never reported as the engine."""
     root, klass = _resolve_engine_root_with_class()
-    if not root or not klass:
+    if not root or klass != RESOLUTION_RESOLVED_ENGINE:
+        out.append(_NO_ENGINE_BANNER)
         return
 
     branch_suffix = ""
@@ -733,10 +744,7 @@ def _engine_resolution_banner(out: List[str]) -> None:
     except Exception:
         branch_suffix = ""
 
-    if klass == RESOLUTION_RESOLVED_ENGINE:
-        out.append(f"── Engine: published mirror{branch_suffix}: {root} ──\n")
-    elif klass == RESOLUTION_LIVE_WORKING_TREE:
-        out.append(f"── Engine: live tree{branch_suffix} ──\n")
+    out.append(f"── Engine: published mirror{branch_suffix}: {root} ──\n")
 
 
 def _extract_cache_field(cache_text: str, key: str) -> str:

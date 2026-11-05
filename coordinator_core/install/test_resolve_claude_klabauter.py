@@ -502,10 +502,9 @@ def _make_published_engine_fixture(root: Path, stamped: bool = True) -> None:
         )
 
 
-def test_live_tree_wins_when_session_is_the_source_tree(tmp_path: Path, monkeypatch):
-    """2026-08-18 (C4): the discriminant is now structural — the session's
-    OWN root must equal ``_resolve_claude_klabauter_root``'s resolved value, not
-    membership in a registered ``engine.working_repos.*`` set (retired)."""
+def test_published_wins_even_when_session_is_the_source_tree(tmp_path: Path, monkeypatch):
+    """A session whose OWN root is the live claude-klabauter tree still gets the
+    published engine: claude-klabauter is never the engine."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -523,8 +522,8 @@ def test_live_tree_wins_when_session_is_the_source_tree(tmp_path: Path, monkeypa
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(live_root))
 
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
-    assert root == str(live_root)
-    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+    assert root == str(published_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
 def test_published_wins_when_session_is_not_the_source_tree(tmp_path: Path, monkeypatch):
@@ -564,9 +563,8 @@ def test_published_wins_when_session_is_not_the_source_tree(tmp_path: Path, monk
     assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
-def test_structural_gate_none_does_not_divert(tmp_path: Path, monkeypatch):
-    """`engine.target` IS written here -- isolates the structural gate's
-    OWN undeterminable case from the separate absent-target case below."""
+def test_published_wins_when_structural_gate_is_undeterminable(tmp_path: Path, monkeypatch):
+    """No determinable session root: the published engine still answers."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -586,25 +584,21 @@ def test_structural_gate_none_does_not_divert(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
     # No determinable session root (no CLAUDE_PROJECT_DIR, and cwd has no
     # `.git` in its ancestry) -> the structural gate is undeterminable
-    # (None), which MUST NOT divert away from an otherwise-resolvable live
-    # tree, regardless of engine.target being readable.
+    # (None).
     no_git_cwd = tmp_path / "no-git-cwd"
     no_git_cwd.mkdir()
     monkeypatch.chdir(no_git_cwd)
 
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
-    assert root == str(live_root)
-    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+    assert root == str(published_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
-def test_absent_engine_target_does_not_divert_even_when_session_confirmed_different(
+def test_absent_engine_target_still_resolves_published_engine(
     tmp_path: Path, monkeypatch
 ):
-    """AC20 (ruling correction, 2026-08-18): a box with `repos.claude_klabauter`
-    registered but `engine.target` never written -- every machine installed
-    before C8 -- MUST NOT divert, even when the structural gate is a
-    CONFIRMED `False` (a session that is definitely not the live tree).
-    Absence means "not yet rolled out", never a silent opt-in."""
+    """`engine.target` never written: the stamped published engine still
+    answers; presence of the key no longer gates dispatch."""
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -628,11 +622,11 @@ def test_absent_engine_target_does_not_divert_even_when_session_confirmed_differ
     assert resolve_claude_klabauter._is_claude_klabauter_source_tree(ml_dir) is False
 
     root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
-    assert root == str(live_root)
-    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
+    assert root == str(published_root)
+    assert cls == resolve_claude_klabauter.RESOLUTION_RESOLVED_ENGINE
 
 
-def test_no_klabauter_byte_identical_to_today(tmp_path: Path, monkeypatch):
+def test_no_klabauter_never_resolves_live_tree_but_locator_still_does(tmp_path: Path, monkeypatch):
     ml_dir = tmp_path / "machine-local"
     ml_dir.mkdir()
     live_root = tmp_path / "live-claude-klabauter"
@@ -641,10 +635,10 @@ def test_no_klabauter_byte_identical_to_today(tmp_path: Path, monkeypatch):
 
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
-    root, cls = resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
-    assert root == str(live_root)
-    assert cls == resolve_claude_klabauter.RESOLUTION_LIVE_WORKING_TREE
-    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir() == root + "/coordinator/bin"
+    assert resolve_claude_klabauter.resolve_claude_klabauter_root_with_class() == (None, resolve_claude_klabauter.RESOLUTION_UNRESOLVED)
+    assert "no published claude-klabauter engine" in resolve_claude_klabauter.unresolved_engine_message()
+    assert resolve_claude_klabauter._resolve_claude_klabauter_root(ml_dir) == str(live_root)
+    assert resolve_claude_klabauter.resolve_claude_klabauter_bin_dir() == str(live_root) + "/coordinator/bin"
 
 
 def test_both_unresolvable_raises(tmp_path: Path, monkeypatch):
@@ -652,8 +646,7 @@ def test_both_unresolvable_raises(tmp_path: Path, monkeypatch):
     ml_dir.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
-    with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="cannot resolve claude-klabauter"):
-        resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert resolve_claude_klabauter.resolve_claude_klabauter_root_with_class() == (None, resolve_claude_klabauter.RESOLUTION_UNRESOLVED)
 
 
 def test_klabauter_only_resolves_published_engine(tmp_path: Path, monkeypatch):
@@ -695,8 +688,7 @@ def test_unstamped_published_root_is_denied(tmp_path: Path, monkeypatch):
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(ml_dir))
 
     assert resolve_claude_klabauter._resolve_published_engine(ml_dir) is None
-    with pytest.raises(resolve_claude_klabauter.ClaudeKlabauterResolutionError, match="cannot resolve claude-klabauter"):
-        resolve_claude_klabauter.resolve_claude_klabauter_root_with_class()
+    assert resolve_claude_klabauter.resolve_claude_klabauter_root_with_class() == (None, resolve_claude_klabauter.RESOLUTION_UNRESOLVED)
 
 
 @pytest.mark.skipif(

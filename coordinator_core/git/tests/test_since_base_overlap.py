@@ -65,12 +65,38 @@ def _setup(tmp_path: Path):
     return repo, base, base_lines
 
 
-def test_incident_shape_stale_landing_with_own_edit_is_refused(tmp_path: Path) -> None:
+def test_stale_base_add_only_landing_that_drops_a_sibling_line_is_refused(tmp_path: Path) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    foreign = repo.commit({PATH: _join(foreign_lines)}, "foreign terminal commit")
+    repo.land(_join(list(base_lines) + ["own_edit = 2\n"]))
+
+    findings, notes = since_base_overlap.check(tmp_path, [PATH], base, run_id=None)
+
+    assert notes == []
+    assert [(f.path, f.reason) for f in findings] == [(PATH, SINCE_BASE_OVERLAP)]
+    assert foreign[:10] in findings[0].detail
+
+
+def test_add_only_landing_over_the_sibling_version_keeps_the_sibling_line_and_is_clean(tmp_path: Path) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign terminal commit")
+    landed = _join(foreign_lines) + "own_edit = 2\n"
+    repo.land(landed)
+
+    assert since_base_overlap.check(tmp_path, [PATH], base, run_id=None) == ([], [])
+
+
+def test_stale_landing_that_also_edits_a_base_line_is_refused(tmp_path: Path) -> None:
     repo, base, base_lines = _setup(tmp_path)
     foreign_lines = list(base_lines)
     foreign_lines.insert(40, "foreign_change = 1\n")
     foreign = repo.commit({PATH: _join(foreign_lines)}, "foreign terminal commit")
     stale = list(base_lines) + ["own_edit = 2\n"]
+    stale[1] = "    changed_by_run,\n"
     repo.land(_join(stale))
 
     findings = since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None)
@@ -103,6 +129,20 @@ def test_crlf_worktree_that_keeps_foreign_lines_is_clean(tmp_path: Path) -> None
 
 
 def test_crlf_worktree_that_drops_foreign_lines_is_refused(tmp_path: Path) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "foreign_change = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    stale = list(base_lines)
+    stale[1] = "    changed_by_run,\n"
+    repo.land((_join(stale) + "own = 1\n").replace("\n", "\r\n"))
+
+    findings = since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None)
+
+    assert [(f.path, f.reason) for f in findings] == [(PATH, SINCE_BASE_OVERLAP)]
+
+
+def test_crlf_stale_add_only_landing_that_drops_a_sibling_line_is_refused(tmp_path: Path) -> None:
     repo, base, base_lines = _setup(tmp_path)
     foreign_lines = list(base_lines)
     foreign_lines.insert(40, "foreign_change = 1\n")

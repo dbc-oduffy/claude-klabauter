@@ -120,3 +120,22 @@ def test_missing_target_does_not_touch_broken_live_tree(
     err = capsys.readouterr().err
     assert "unresolvable live working tree" not in err
     assert fixture.published_root.as_posix() in err
+
+
+def test_unresolved_engine_exits_nonzero_with_fetch_message(
+    tmp_path, _registry, monkeypatch, capsys
+):
+    live_root = tmp_path / "live"
+    _make_bin_dir(live_root)
+    (_registry.ml_dir / "registry.local.toml").write_text(
+        f"[repos]\nclaude_klabauter = '{live_root.as_posix()}'\n", encoding="utf-8"
+    )
+    monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
+
+    shim = _load_shim()
+    monkeypatch.setattr(shim, "_self_located_root", lambda: None)
+    with pytest.raises(SystemExit) as excinfo:
+        shim.exec_cli("archive-stamp-cli.py", argv=[])
+
+    assert excinfo.value.code == 1
+    assert "https://github.com/dbc-oduffy/claude-klabauter" in capsys.readouterr().err

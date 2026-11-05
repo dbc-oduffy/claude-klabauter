@@ -220,9 +220,11 @@ def _self_heal_forwarders_inner() -> None:
         _write_agent_forwarder,
         _union_native_forwarder_manifest,
     )
-    from coordinator_core.engine_root import coordinator_engine_root_with_class
+    from coordinator_core.engine_root import _load_shim, coordinator_engine_root_with_class
 
     _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
+    if not _claude_klabauter_root_str:
+        raise RuntimeError(_load_shim().unresolved_engine_message())
     claude_klabauter_root = Path(_claude_klabauter_root_str)
     agent_bin = claude_klabauter_root / "coordinator" / "bin"
     bin_dst = settings_home() / "bin"

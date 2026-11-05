@@ -447,6 +447,13 @@ def _resolve_claude_klabauter_root() -> tuple[Path | None, str]:
 
 _CLAUDE_KLABAUTER_ROOT_PROBE = "claude-klabauter.root.resolve"
 
+#: Stdlib twin of `_resolve_claude_klabauter.unresolved_engine_message()`; this file cannot import it.
+_FETCH_KLABAUTER_REMEDIATION = (
+    "Fetch the published engine: git clone https://github.com/dbc-oduffy/claude-klabauter "
+    "and run its setup, or machine-local set repos.claude_klabauter <path>, "
+    "or set COORDINATOR_ENGINE_ROOT=<stamped engine path>."
+)
+
 
 def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
     """Probe claude-klabauter.root.resolve — REQUIRED.
@@ -497,6 +504,17 @@ def _run_probe_claude_klabauter_root() -> tuple[_ProbeResult, Path | None]:
                     "Verify the path is the claude-klabauter repo root (must contain coordinator_core/). "
                     "Update: machine-local set repos.claude_klabauter /correct/path"
                 ),
+            ), None
+
+        if not _engine_root_is_stamped(root):
+            return _ProbeResult(
+                probe=_CLAUDE_KLABAUTER_ROOT_PROBE,
+                status=_BROKEN,
+                detail=(
+                    f"Engine root {str(root)!r} (via {source}) carries no engine stamp: "
+                    "claude-klabauter is never an engine."
+                ),
+                remediation=_FETCH_KLABAUTER_REMEDIATION,
             ), None
 
         return _ProbeResult(

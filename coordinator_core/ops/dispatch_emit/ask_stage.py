@@ -48,6 +48,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     lineage_stop_after,
     record_dir,
     stamp_run_stage,
+    stop_after_plan_live,
     rulable_ids,
 )
 from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError, RouteTableError, route_rows
@@ -585,15 +586,16 @@ def _only_rows(
     return kept, [e for e in exclusions if e.get("id") in keep], retired, dropped
 
 
-def _refuse_reminted_em_rows(plan_path: Path, raw_by_id: Mapping[str, Mapping], keep: frozenset) -> None:
-    """Refuse a ledger re-plan's em-performed row whose register rows an em-discharged
-    em-performed row already serves. A row with no register_rows, or itself discharged, is never refused."""
+def _drop_reminted_em_rows(plan_path: Path, raw_by_id: Mapping[str, Mapping], keep: frozenset) -> tuple[str, ...]:
+    """Ids of a ledger re-plan's em-performed rows whose register rows an em-discharged
+    em-performed row already serves; the caller omits them. A row with no register_rows, itself
+    discharged, or chained to a discharged row is never returned."""
     from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
     from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 
     discharged = read_em_discharges(plan_path)
     if not discharged:
-        return
+        return ()
     served: set[str] = set()
     for row_id in discharged:
         raw = raw_by_id.get(str(row_id))
@@ -607,12 +609,7 @@ def _refuse_reminted_em_rows(plan_path: Path, raw_by_id: Mapping[str, Mapping], 
         regs = {str(x) for x in raw.get("register_rows") or ()}
         if regs and regs <= served and not _reaches(raw_by_id, row_id, discharged):
             dupes.append(row_id)
-    if dupes:
-        raise AskStageError(
-            f"ledger re-plan re-mints em-performed row(s) {dupes}: their register rows are served by an "
-            "em-discharged row; give the row a depends_on chain to the discharged row (it then consumes it), "
-            "or drop it from only_rows"
-        )
+    return tuple(dupes)
 
 
 def _reaches(raw_by_id: Mapping[str, Mapping], start: str, targets) -> bool:
@@ -1155,7 +1152,10 @@ def stage(
     if only_rows is not None:
         rows, ran_premises = _settle_ran_premises(rows, raw_by_id, root, plan_posix, run_id)
     if ledger_resume and only_rows is not None:
-        _refuse_reminted_em_rows(plan_path, raw_by_id, frozenset(only_rows))
+        reminted = _drop_reminted_em_rows(plan_path, raw_by_id, frozenset(only_rows))
+        if reminted:
+            rows = [r for r in rows if r.id not in reminted]
+            retired_resume = (*retired_resume, *reminted)
     check_unschedulable_rows(rows, raw_by_id)
     _split = split_frontmatter(plan_text)
     _drift = plan_pin_drift(_split.fm_text, root) if _split is not None else []
@@ -2032,18 +2032,15 @@ def _consume_park_marker(root: Path, run_id: str) -> bool:
     `stop_after == "plan"` marker the run has not yet parked on. The run's own marker is unlinked only
     once `halted.json` records the park, so a parked reply lost in relay parks again rather than staging
     past the revise. An ancestor's marker is never unlinked here: a successor with no park recorded
-    parks, and one whose `halted.json` records the park has discharged it. An absent, unreadable or
+    parks, and one whose `halted.json` records the park has discharged it. A marker written after its
+    pass staged (`stop_after_plan_live`) is stale and never counts. An absent, unreadable or
     malformed marker and a lineage without one is False."""
     try:
         dir_ = record_dir(root, run_id)
     except ValueError:
         return False
     marker = dir_ / STOP_AFTER_FILE
-    try:
-        data = json.loads(marker.read_text(encoding="utf-8"))
-    except (ValueError, OSError):
-        data = None
-    own = isinstance(data, dict) and data.get("stop_after") == STOP_AFTER_PLAN
+    own = stop_after_plan_live(dir_)
     if not own and lineage_stop_after(root, run_id) != STOP_AFTER_PLAN:
         return False
     try:

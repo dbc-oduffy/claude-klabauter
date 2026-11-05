@@ -1529,6 +1529,8 @@ def uninstall_remove_substrate(
         # empty derived set just means this sub-leg is a no-op.
         try:
             _claude_klabauter_root_str, _resolution_class = coordinator_engine_root_with_class()
+            if not _claude_klabauter_root_str:
+                raise RuntimeError("unresolved engine root")
             agent_bin = Path(_claude_klabauter_root_str) / "coordinator" / "bin"
             derived_names = _derive_agent_helper_names(agent_bin)
         except RuntimeError:

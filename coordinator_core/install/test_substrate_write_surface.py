@@ -140,17 +140,16 @@ def test_ch_family_and_rm_family_static_clauses_recomputed_from_source_constants
     honest rather than silently staling the declaration."""
     ch_clause, rm_clause = target.WRITE_SURFACE.clauses[9], target.WRITE_SURFACE.clauses[10]
     assert isinstance(ch_clause, StaticClause)
-    assert isinstance(rm_clause, StaticClause)
+    assert isinstance(rm_clause, ShapedClause)
 
     ch_expected = {f"<settings-home>/bin/{name}" for name, _exec_bit in target._CH_FAMILY_FILES}
     assert {e.path for e in ch_clause.entries} == ch_expected
     for entry in ch_clause.entries:
         assert entry.kind == "file-path"
 
-    rm_expected = {f"<settings-home>/bin/{name}" for name in target._RM_FAMILY_FILES}
-    assert {e.path for e in rm_clause.entries} == rm_expected
-    for entry in rm_clause.entries:
-        assert entry.kind == "file-path"
+    assert rm_clause.entry_template.kind == "file-path"
+    assert rm_clause.entry_template.path == "<settings-home>/bin/<resolver-shim-name>"
+    assert "_resolve_claude_klabauter.py" not in rm_clause.entry_template.path
 
 
 def test_bin_manifest_provenance_ledger_clause_uses_filename_constant():

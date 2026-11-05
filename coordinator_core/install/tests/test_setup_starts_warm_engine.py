@@ -141,3 +141,59 @@ def test_a_failing_spawn_never_fails_the_install(monkeypatch, capsys, setup_modu
     out = capsys.readouterr()
     assert "[ADVISORY]" in out.err
     assert "PASS [warm engine]" not in out.out
+
+
+def _drive_offer_warm_opt_in(monkeypatch, setup, tmp_path):
+    from coordinator_core.install import _shared
+
+    monkeypatch.setattr(setup, "_resolve_coordinator_claude_root", lambda r, a: (tmp_path, None))
+    monkeypatch.setattr(setup, "_resolve_plugin_root_for_machine_local", lambda c: None)
+    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda p: ["machine-local"])
+    monkeypatch.setattr(setup.subprocess, "run", lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    started: list = []
+    monkeypatch.setattr(setup, "start_warm_engine", lambda repo_root: started.append(repo_root))
+    setup.offer_warm_opt_in(tmp_path, SimpleNamespace(agent_mode=True))
+    return started
+
+
+@pytest.fixture
+def _home_and_clean_env(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home))
+    for var in ("COORDINATOR_SETTINGS_HOME", "CLAUDE_HOME", "CLAUDE_CONFIG_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    return home
+
+
+def test_redirected_install_never_starts_a_warm_engine(
+    monkeypatch, capsys, setup_module_under_test, tmp_path, _home_and_clean_env
+):
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "sandbox" / "claude-home"))
+
+    started = _drive_offer_warm_opt_in(monkeypatch, setup_module_under_test, tmp_path)
+
+    out = capsys.readouterr().out
+    assert started == []
+    assert "PASS [registration] engine.warm.enabled = true" in out
+    assert "[ADVISORY] warm engine not started: CLAUDE_HOME=" in out
+
+
+def test_default_install_still_starts_the_warm_engine(
+    monkeypatch, capsys, setup_module_under_test, tmp_path, _home_and_clean_env
+):
+    from types import SimpleNamespace
+
+    from coordinator_core.install import engine_root_for_install
+
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(_home_and_clean_env / ".claude"))
+    monkeypatch.setattr(
+        engine_root_for_install,
+        "resolve_engine_root_for_install",
+        lambda: SimpleNamespace(kind="published", root=tmp_path, remediation=None),
+    )
+
+    started = _drive_offer_warm_opt_in(monkeypatch, setup_module_under_test, tmp_path)
+
+    assert started == [tmp_path]
+    assert "warm engine not started" not in capsys.readouterr().out

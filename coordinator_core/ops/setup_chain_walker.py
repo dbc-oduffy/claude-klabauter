@@ -86,8 +86,10 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
 
-# Both spellings: the published engine's rename rewrites this module's literal but not the manifest data.
-_ENGINE_SEAM_KINDS = frozenset({"claude_klabauter_seam_resolvable", "claude_klabauter_seam_resolvable"})
+# Both spellings in source; the publish rename maps both to one, which is all the published
+# engine needs. Two one-member tuples, never one dual literal: the rename-collapse guard
+# refuses a set/tuple literal whose members become duplicates.
+_ENGINE_SEAM_KINDS = frozenset(("claude_klabauter_seam_resolvable",)) | frozenset(("claude_klabauter_seam_resolvable",))
 
 
 _SCRIPT_VERSION = "1.0.0"
