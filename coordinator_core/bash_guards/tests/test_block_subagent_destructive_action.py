@@ -4914,3 +4914,52 @@ def test_commit_agent_destructive_dash_c_verbs_still_deny(commit_target_repo, ta
     repo, cwd = commit_target_repo
     cmd = f'git -C "{repo.as_posix()}" {tail}'
     assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") == "deny"
+
+
+def _rm_verdict(command):
+    result = _enveloped(guard.check)(_payload(command, agent_type="coordinator:executor"))
+    return "deny" if result is not None else "allow"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        'rg "rm -rf" coordinator_core',
+        "rg 'rm -f' coordinator_core",
+        "git grep -n 'rm -f' -- docs",
+        'grep -rn "rm --recursive" docs',
+        'echo "do not rm -rf here"',
+        'git grep -n "rm -rf" -- docs && echo done',
+    ],
+)
+def test_rm_text_inside_a_quoted_operand_allows(command):
+    assert _rm_verdict(command) == "allow"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rf build/out",
+        "ls && rm -rf build/out",
+        "ls; rm -rf build/out",
+        "ls | rm -rf build/out",
+        'bash -c "rm -rf build/out"',
+        "sh -c 'rm -rf build/out'",
+        "echo $(rm -rf build/out)",
+        'echo "$(rm -rf build/out)"',
+        'echo "`rm -rf build/out`"',
+        "ls | xargs rm -rf",
+        "env rm -rf build/out",
+        '"rm" -rf build/out',
+        'rg "rm -rf" docs; rm -rf build/out',
+        'rg "x" docs && rm -rf build/out',
+    ],
+)
+def test_rm_in_command_position_still_denies(command):
+    assert _rm_verdict(command) == "deny"
+
+
+def test_op_relay_rm_f_defer_params_tail_is_classified_by_target():
+    relay = "coordinator-invoke dispatch.run --params-file {p} && rm -f {p}"
+    assert _rm_verdict(relay.format(p="build/out/defer-params.json")) == "deny"
+    assert _rm_verdict(relay.format(p=".pytest_cache/defer-params.json")) == "allow"

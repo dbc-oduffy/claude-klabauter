@@ -529,6 +529,39 @@ _RM_DENY_RE = re.compile(
     re.MULTILINE,
 )
 
+_SUBSTITUTION_OPEN_RE = re.compile(r"\$\(|`")
+
+
+def _rm_deny_in_command_position(text: str) -> bool:
+    """True when `_RM_DENY_RE` matches an `rm` that can execute: one outside any quoted span,
+    or inside a double-quoted span after an unclosed `$(`/backtick. An `rm` inside a quoted
+    operand (`rg "rm -rf" path`) is text; a wrapper's quoted payload is unwrapped elsewhere."""
+    for m in _RM_DENY_RE.finditer(text):
+        idx = text.index("rm", m.start())
+        quote = ""
+        span_start = 0
+        i = 0
+        while i < idx:
+            ch = text[i]
+            if ch == "\\" and quote != "'":
+                i += 2
+                continue
+            if quote:
+                if ch == quote:
+                    quote = ""
+            elif ch in "'\"":
+                quote = ch
+                span_start = i + 1
+            i += 1
+        if not quote:
+            return True
+        if quote == '"':
+            prefix = text[span_start:idx]
+            if _SUBSTITUTION_OPEN_RE.search(prefix):
+                return True
+    return False
+
+
 # v2 SURFACE PROBES (module comment "DESTRUCTIVE-ACTION GUARD v2"): same
 # cheap, boundary-anchored raw-text style as the v1 probes above -- each is
 # a Layer-1 gate only, the actual deny/allow classification is Layer-2
@@ -5154,7 +5187,7 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             deny_kind = tok_surfaces.deny_kind
 
         if not deny and is_rm_surface:
-            if _RM_DENY_RE.search(cmd_norm) and not _rm_only_regenerable(cmd_norm):
+            if _rm_deny_in_command_position(cmd_norm) and not _rm_only_regenerable(cmd_norm):
                 deny = True
                 deny_kind = "rm -r/-f (recursive or force)"
 

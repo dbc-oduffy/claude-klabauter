@@ -953,7 +953,9 @@ def _own_drift_actuals(
     """``{path: actual}`` for each content-sha256 entry of a commit_v2 ``blob_drift`` list whose
     current bytes are the run's own last recorded write (``drift_attribution.classify``: the run
     session's and the fix-pass agents' touch ledgers, not bounded by the run record's start, so a
-    refire keeps the run's earlier own write). Those are the bytes the run left; a foreign or
+    refire keeps the run's earlier own write). The ledgers read are the session's, every review
+    writer's and every agent the session dispatched (the reverify, verify and evidence legs write
+    under types the review-writer set omits). Those are the bytes the run left; a foreign or
     unrecorded rewrite is absent and keeps refusing. Hash-only, no spawn."""
     from coordinator_core.ops.dispatch_emit import drift_attribution
     from coordinator_core.ops.dispatch_emit.terminal_commit_review import REVIEW_RECORD_AGENT
@@ -968,7 +970,10 @@ def _own_drift_actuals(
     owned = drift_attribution.classify(
         worktree_root, run_dir if run_dir is not None else worktree_root, list(actual), declared,
         session_id=session_id,
-        agent_ids=sorted({a for a in (review_writes or {}).values() if a and a != REVIEW_RECORD_AGENT}),
+        agent_ids=sorted(
+            {a for a in (review_writes or {}).values() if a and a != REVIEW_RECORD_AGENT}
+            | set(drift_attribution.session_agent_ids(worktree_root, session_id))
+        ),
         run_started_at=0.0,
     )[drift_attribution.RUN_OWNED]
     return {p: actual[p] for p in owned}

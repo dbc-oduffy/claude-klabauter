@@ -73,7 +73,12 @@ def render_notice(kind: str, holder: dict[str, Optional[str]]) -> str:
             f"Group EM standing. {reach} Route parked-wave reports, blockers, cross-session "
             "obligations, box-capacity and queueing questions, and a second opinion before asking "
             "the PM there; settled asks stay on the memo channel. This replaces any earlier "
-            "Group EM address you were given."
+            "Group EM address you were given. Booting that session in the group-em home "
+            "conferred the standing; no typed command is required. Every "
+            "repo's SessionStart Group EM line names this box-wide holder. A message headed "
+            "[PM via G-EM ...] carries the PM's verbatim words and a record pointer, so read "
+            "the record. A message headed [G-EM ...] is the G-EM's own words and is judged on "
+            "the merits."
         )
     return (
         f"Group EM notice, informational, no reply is wanted: {who} has stood down and the box "

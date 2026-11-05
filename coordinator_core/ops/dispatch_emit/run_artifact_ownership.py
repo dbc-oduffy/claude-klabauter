@@ -36,6 +36,8 @@ class OwnArtifacts:
     corrupt_parents: tuple[str, ...] = ()
     # `<plan stem>.evidence.yaml` beside each plan the run names; the criterion-evidence stage writes it.
     plan_evidence: frozenset[str] = frozenset()
+    # The plan doc the run's sizing was minted from: its `plan:` edge names a `.md` whose stem is the sizing's stem.
+    plan_docs: frozenset[str] = frozenset()
 
     def _is_note(self, rel: str) -> bool:
         """The run's note at its located path, or at the other of its flat and `<YYYY-MM>` shard homes."""
@@ -49,10 +51,12 @@ class OwnArtifacts:
         )
 
     def covers(self, rel: str) -> bool:
-        """True for the run's sizings, plan evidence, delivery note, or anything under its record dir."""
+        """True for the run's sizings, plan evidence, minted plan doc, delivery note, or anything under its record dir."""
         if not rel:
             return False
-        if rel in self.sizings or rel in self.plan_evidence or (self.delivery_note and self._is_note(rel)):
+        if rel in self.sizings or rel in self.plan_evidence or rel in self.plan_docs:
+            return True
+        if self.delivery_note and self._is_note(rel):
             return True
         return bool(self.record_prefix) and rel.startswith(self.record_prefix)
 
@@ -112,6 +116,26 @@ def _plan_evidence(root: Path, run_id: str, sizings: set[str]) -> frozenset[str]
     return frozenset(out)
 
 
+def _plan_docs(root: Path, sizings: set[str]) -> frozenset[str]:
+    """Each sizing's `plan:` edge when it is a `.md` sharing the sizing's stem: the engine-minted plan doc.
+
+    A plan the sizing merely points at keeps its own stem and stays foreign.
+    """
+    out: set[str] = set()
+    for rel in sizings:
+        try:
+            match = _PLAN_EDGE.search((root / rel).read_text(encoding="utf-8"))
+        except OSError:
+            continue
+        if not match:
+            continue
+        pp = PurePosixPath(match.group(1).strip().replace("\\", "/"))
+        if pp.is_absolute() or ".." in pp.parts or pp.suffix != ".md" or pp.stem != PurePosixPath(rel).stem:
+            continue
+        out.add(str(pp))
+    return frozenset(out)
+
+
 def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
     """The sizing(s), plan evidence, record prefix and delivery note *run_id* owns; empty for an unsafe id."""
     if not isinstance(run_id, str) or not safe_id(run_id):
@@ -122,6 +146,7 @@ def own_artifact_paths(root: Path, run_id: str) -> OwnArtifacts:
     return OwnArtifacts(
         sizings=frozenset(sizings),
         plan_evidence=_plan_evidence(root, run_id, sizings),
+        plan_docs=_plan_docs(root, sizings),
         corrupt_parents=corrupt,
         record_prefix=f"{_warp_home()}/{run_id}/",
         delivery_note=delivery_note_locate(root, run_id),

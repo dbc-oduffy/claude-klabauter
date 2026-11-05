@@ -435,6 +435,61 @@ def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(set
     assert "venv" not in stderr
 
 
+def test_provision_deps_guarded_but_satisfied_candidate_passes_no_refusal(setup_mod, monkeypatch, tmp_path, capsys):
+    """A PEP-668 guarded consumer whose imports already resolve needs no
+    provisioning: PASS no-op, no exit 96, no pip call."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: True)
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
+    calls = []
+    monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
+    _stub_editable_finder_conversion(setup_mod, monkeypatch)
+
+    engine_py, _ = setup_mod.provision_deps(pyproject_dir, sys.executable)
+
+    assert engine_py == sys.executable
+    assert calls == []
+    captured = capsys.readouterr()
+    assert "PASS [deps]" in captured.out
+    assert "refusing" not in captured.err
+
+
+def test_provision_deps_guarded_unsatisfied_remediation_names_path_order_not_rerun(
+    setup_mod, monkeypatch, tmp_path, capsys
+):
+    """A guarded candidate that needs provisioning still refuses (96); the
+    remediation names PATH ordering, never a re-run under the supported
+    interpreter, and never the override flag."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+    monkeypatch.setattr(setup_mod, "_find_supported_interpreter", lambda: "/opt/pyenv/bin/python3.12")
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
+    calls = []
+    monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.provision_deps(pyproject_dir, sys.executable)
+
+    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
+    assert calls == []
+    stderr = capsys.readouterr().err
+    assert "ahead of the guarded interpreter on PATH" in stderr
+    assert "/opt/pyenv/bin" in stderr
+    assert "/opt/pyenv/bin/python3.12 scripts/setup.py" not in stderr
+    assert "re-run this installer under" not in stderr
+    assert "--break-system-packages" not in stderr
+
+
 # ---------------------------------------------------------------------------
 # DR-411 container opt-in — --i-assert-no-other-consumer
 # (docs/decisions/DR-411-the-pep-668-refusal-does-not-reach-an-ephemeral-container.md)

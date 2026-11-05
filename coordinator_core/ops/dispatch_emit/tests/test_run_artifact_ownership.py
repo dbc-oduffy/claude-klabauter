@@ -91,6 +91,29 @@ def test_covers_three_classes_and_refuses_product(tmp_path):
     assert not got.covers(f"state/warp/{B}/run.json")
 
 
+def _sizing_with_plan(root, stem, plan):
+    path = root / f"state/sizings/{stem}.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'plan: "{plan}"\n', encoding="utf-8")
+    (root / f"state/warp/{A}").mkdir(parents=True, exist_ok=True)
+    (root / f"state/warp/{A}/run.json").write_text(
+        json.dumps({"sizing_rel": f"state/sizings/{stem}.yaml"}), encoding="utf-8"
+    )
+
+
+def test_minted_plan_doc_is_own(tmp_path):
+    plan = "docs/plans/2026-11/2026-11-05-18d8d5-1-x.md"
+    _sizing_with_plan(tmp_path, "2026-11-05-18d8d5-1-x", plan)
+    got = own.own_artifact_paths(tmp_path, A)
+    assert got.covers(plan)
+    assert not got.covers("docs/plans/2026-11/2026-11-05-18d8d5-2-y.md")
+
+
+def test_pointed_at_plan_with_other_stem_stays_foreign(tmp_path):
+    _sizing_with_plan(tmp_path, "2026-11-05-18d8d5-1-x", "docs/plans/2026-10-01-older.md")
+    assert not own.own_artifact_paths(tmp_path, A).covers("docs/plans/2026-10-01-older.md")
+
+
 def test_delivery_note_follows_flat_or_shard(tmp_path):
     assert own.own_artifact_paths(tmp_path, A).delivery_note == f"docs/delivery/2026-10/{A}.md"
     (tmp_path / "docs/delivery").mkdir(parents=True)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -85,3 +86,100 @@ def _stub_source_preflight(request, monkeypatch):
         return
 
     monkeypatch.setattr(source_preflight, "check_source_published", lambda _source_dir, *_a, **_k: None)
+
+
+_SCRIPT = Path(__file__).resolve().parents[1] / "plan-spine-check.py"
+_SIZING = "state/sizings/s.yaml"
+
+_SIZING_YAML = """\
+schema: sizing-object
+name: s
+requirement_register:
+  sources:
+  - doc: state/sizings/s.yaml
+    ref: ask
+  rows:
+  - id: R1
+    source_text: Do the thing.
+    anchor: relayed
+    surface: internal
+    status: open
+    claimed_by: []
+  rollup:
+    open: 1
+    partial: 0
+"""
+
+_ROW = """\
+- id: C1
+  title: do the thing
+  change_kind: script-edit
+  surface: a.py
+  writes: [a.py]
+  reads_at_head: []
+  consumes: []
+  model: {model}
+  effort: medium
+  agent_type: {agent_type}
+  register_rows: {register_rows}
+  traces_to_brief: "do the thing"
+  acceptance: "a.py does the thing"
+  queue_scope: project
+  disposition: open
+{body}"""
+
+_CLEAN_BODY = "  body: |\n    Edit a.py so that it parses the register and prints each row id.\n"
+
+
+def _plan(
+    root: Path,
+    *,
+    body: str = _CLEAN_BODY,
+    register_rows: str = "[R1]",
+    agent_type: str = "coordinator:executor",
+    model: str = "sonnet",
+    anchors: str = "anchor_premises: []\n",
+    claims: bool = True,
+) -> Path:
+    (root / ".git").mkdir(exist_ok=True)
+    (root / "state" / "sizings").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "sizings" / "s.yaml").write_text(_SIZING_YAML, encoding="utf-8")
+    (root / "docs" / "plans").mkdir(parents=True, exist_ok=True)
+    claim_block = f'register_claims:\n  sizing: "{_SIZING}"\n  rows: ["R1"]\n' if claims else ""
+    row = _ROW.format(agent_type=agent_type, model=model, register_rows=register_rows, body=body)
+    text = (
+        "---\ntitle: t\nstatus: executing\n"
+        f'sizing_object: "{_SIZING}"\n{claim_block}{anchors}---\n\n# t\n\n## Tasks\n\n'
+        f"```yaml plan-tasks\n{row}```\n"
+    )
+    plan = root / "docs" / "plans" / "p.md"
+    plan.write_text(text, encoding="utf-8")
+    return plan
+
+
+def _run(plan: Path, *extra: str):
+    return subprocess.run(
+        [sys.executable, str(_SCRIPT), *extra, str(plan)],
+        capture_output=True,
+        text=True,
+        cwd=plan.parents[2],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+
+
+@pytest.fixture
+def spine_script() -> Path:
+    """Path to plan-spine-check.py."""
+    return _SCRIPT
+
+
+@pytest.fixture
+def make_plan():
+    """Build a one-row plan under a root; keyword args vary the row (agent_type, model, body, ...)."""
+    return _plan
+
+
+@pytest.fixture
+def run_spine_check():
+    """Run plan-spine-check.py on a plan path with optional extra CLI args; returns CompletedProcess."""
+    return _run

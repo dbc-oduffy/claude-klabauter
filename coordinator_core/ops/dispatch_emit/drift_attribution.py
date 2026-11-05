@@ -98,6 +98,32 @@ def _ledger_hashes(
     return out
 
 
+def session_agent_ids(root: Path, session_id: Optional[str]) -> List[str]:
+    """Every agent the session dispatched, whatever its subagent type, that the session owns (the
+    run's reverify, verify and evidence legs write under executor and falsifier types the
+    review-writer denylist skips). Empty on an unreadable ledger; reads one file and each owner pointer."""
+    if not session_id:
+        return []
+    from coordinator_core.session import core, touch_record
+
+    hub = core.sessions_dir(str(root))
+    if not hub:
+        return []
+    try:
+        text = (Path(hub) / session_id / "dispatched-agents.txt").read_text(encoding="utf-8")
+    except OSError:
+        return []
+    out: List[str] = []
+    for row in text.splitlines():
+        agent_id = row.split("\t", 1)[0].strip()
+        if not agent_id or agent_id in out:
+            continue
+        owner, conclusive = touch_record.agent_owner_sid(str(Path(hub) / ".agents" / agent_id))
+        if conclusive and owner == session_id:
+            out.append(agent_id)
+    return out
+
+
 def classify(
     root: Path,
     run_dir: Path,

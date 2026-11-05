@@ -1364,7 +1364,14 @@ def provision_deps(
             )
             _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
 
-    guarded = [c for c in candidates if _is_externally_managed(c.path)]
+    def _satisfied(interpreter: str) -> bool:
+        if installs_engine:
+            return _engine_installed(interpreter, import_names, claude_klabauter_root)
+        return deps_importable(interpreter, import_names)
+
+    # A guarded candidate that already satisfies its imports needs no pip
+    # install, so it is not a refusal: it falls through to the PASS no-op below.
+    guarded = [c for c in candidates if _is_externally_managed(c.path) and not _satisfied(c.path)]
     if guarded and container_optin_honoured:
         print()
         print(
@@ -1410,10 +1417,21 @@ def provision_deps(
             file=sys.stderr,
         )
         supported = _find_supported_interpreter()
+        # The guarded interpreter is the consumer's, not the installer's: a re-run
+        # under another interpreter hits the same refusal. The clearing action is
+        # PATH order for the consumer(s) named above.
         if supported:
             print(
-                f"  Supported interpreter found on PATH: {supported} — re-run this installer "
-                f"under it ({supported} scripts/setup.py ...).",
+                f"  Supported interpreter found: {supported} — put its directory "
+                f"({Path(supported).parent}) ahead of the guarded interpreter on PATH "
+                "for the consumer(s) named above, then re-run this installer.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "  No supported interpreter found on PATH — install one, then put its "
+                "directory ahead of the guarded interpreter on PATH for the consumer(s) "
+                "named above and re-run this installer.",
                 file=sys.stderr,
             )
         if removed_any:
@@ -1423,11 +1441,6 @@ def provision_deps(
                 file=sys.stderr,
             )
         _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
-
-    def _satisfied(interpreter: str) -> bool:
-        if installs_engine:
-            return _engine_installed(interpreter, import_names, claude_klabauter_root)
-        return deps_importable(interpreter, import_names)
 
     engine_py: str | None = None
     for index, candidate in enumerate(candidates):

@@ -420,15 +420,26 @@ def doctrine_root():
 
 
 def resolve_engine_root():
-    """Return (engine_root or None, provenance) via the shared hook-side resolver; never raises."""
+    """Return (engine_root or None, provenance); never raises.
+
+    Uses the hook-side resolver when this install carries it, else the in-tree settings-home ladder
+    (cc_invoke.resolve_engine_root). A miss returns None with the resolver's first failure line.
+    """
+    hook_side = PLUGIN_ROOT / "hooks" / "scripts" / "_engine_root.py"
     try:
-        path = PLUGIN_ROOT / "hooks" / "scripts" / "_engine_root.py"
-        spec = importlib.util.spec_from_file_location("_engine_root_for_install", path)
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        root, _cls, prov = mod.resolve_claude_klabauter_root_with_provenance()
+        if hook_side.is_file():
+            spec = importlib.util.spec_from_file_location("_engine_root_for_install", hook_side)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            root, _cls, prov = mod.resolve_claude_klabauter_root_with_provenance()
+        else:
+            spec = importlib.util.spec_from_file_location("_cc_invoke_for_install", _BIN_DIR / "lib" / "cc_invoke.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            root, prov = mod.resolve_engine_root(str(Path(__file__).resolve())), "settings-home ladder"
     except Exception as exc:
-        return None, f"resolver failed: {exc}"
+        lines = str(exc).strip().splitlines()
+        return None, f"resolver failed: {lines[0] if lines else type(exc).__name__}"
     return (str(root), prov) if root and Path(root).is_dir() else (None, prov if root is None else "root missing")
 
 
@@ -682,8 +693,8 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             print("hook wiring/trust UNVERIFIED: Codex handler trust was not confirmed", file=out)
         print("governance enforcement UNVERIFIED until the C6 live matrix", file=out)
     else:
-        print("governance DEGRADED: engine root unresolved; guards answer the neutral fallback "
-              "(ask on agy, {} on Codex), never allow", file=out)
+        print(f"governance DEGRADED: engine root unresolved ({provenance}); guards answer the neutral "
+              "fallback (ask on agy, {} on Codex), never allow", file=out)
     print("governance scope: shell-command PreToolUse only (Codex Bash, agy run_command)", file=out)
     return rc
 

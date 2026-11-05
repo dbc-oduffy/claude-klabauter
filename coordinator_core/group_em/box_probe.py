@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -47,8 +48,21 @@ def _ram_mb() -> Optional[int]:
         return None
 
 
+def _has_ue() -> bool:
+    """True when an Unreal root env var names an existing dir, or an editor binary is on PATH."""
+    for var in ("UE_ROOT", "UNREAL_ENGINE_ROOT"):
+        root = os.environ.get(var)
+        if root and os.path.isdir(root):
+            return True
+    return any(shutil.which(name) is not None for name in ("UnrealEditor", "UnrealEditor-Cmd"))
+
+
 def probe() -> dict:
-    """This machine's capability record: os, arch, cpu_count, ram_mb, python, gpu (always None)."""
+    """This machine's capability record.
+
+    Fields: os, arch, cpu_count, ram_mb, python, gpu (always None), has_p4 and has_ue (flat
+    booleans so ``placement.satisfies`` can require ``{"has_ue": True}``).
+    """
     return {
         "os": platform.system(),
         "arch": platform.machine(),
@@ -56,6 +70,8 @@ def probe() -> dict:
         "ram_mb": _ram_mb(),
         "python": platform.python_version(),
         "gpu": None,
+        "has_p4": shutil.which("p4") is not None,
+        "has_ue": _has_ue(),
     }
 
 

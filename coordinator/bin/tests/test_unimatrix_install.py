@@ -13,6 +13,7 @@ ui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(ui)
 
 PLATFORMS = ["win32", "darwin", "linux"]
+_REAL_RESOLVE = ui.resolve_engine_root
 
 
 @pytest.fixture(autouse=True)
@@ -795,3 +796,32 @@ def test_main_success_says_wiring_verified_and_enforcement_unverified(monkeypatc
     out = buf.getvalue()
     assert rc == 0 and "hook wiring/trust verified" in out
     assert "governance verified" not in out and "enforcement UNVERIFIED until the C6" in out
+
+
+def test_default_install_resolves_engine_root_through_settings_home_door(monkeypatch, tmp_path):
+    root = tmp_path / "door-root"
+    root.mkdir()
+    monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "no-plugin")
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root))
+    home, rc, out = _default_install(monkeypatch, tmp_path)
+    assert rc == 0 and f"governance engine root: {root} (settings-home ladder)" in out
+    assert "governance DEGRADED" not in out
+    codex = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    agy = _hooks_file(home / ".gemini" / "config" / "hooks.json")[ui.AGY_HOOK_KEY]["PreToolUse"][0]["hooks"][0]["command"]
+    assert f"--engine-root {root}" in codex and f"--engine-root {root}" in agy
+
+
+def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
+    bin_dir = tmp_path / "fakebin"
+    (bin_dir / "lib").mkdir(parents=True)
+    (bin_dir / "lib" / "cc_invoke.py").write_text(
+        "def resolve_engine_root(script_file):\n    raise RuntimeError('no engine root\\nfix it')\n",
+        encoding="utf-8")
+    monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "no-plugin")
+    monkeypatch.setattr(ui, "_BIN_DIR", bin_dir)
+    home, rc, out = _default_install(monkeypatch, tmp_path)
+    assert rc == 0 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out
+    cmd = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
+    assert "--engine-root" not in cmd

@@ -212,3 +212,30 @@ def test_keyword_families(word):
 @pytest.mark.parametrize("line", ["a delayed plan", "alternately", "preserve this row"])
 def test_non_keywords(line):
     assert not audit.KEYWORDS.search(line)
+
+
+@pytest.mark.parametrize("body", [
+    "> PM: defer this to later",
+    "Nothing is deferred here.",
+    "We do not defer anything to a follow-up.",
+    "## Anti-scope\n\n- defer the rest\n\n## Out of scope\n\nfollow-up work",
+])
+def test_noise_yields_no_hit(body):
+    assert audit.find_hits("---\nstatus: implemented\n---\n\n# T\n\n" + body + "\n") == []
+
+
+@pytest.mark.parametrize("body", [
+    "Not now, but this is deferred to later.",
+    "## Notes\n\nWe will do it as a follow-up.",
+    "Not in this plan — deferred to a later plan.",
+])
+def test_true_deferral_still_hits(body):
+    assert len(audit.find_hits("---\nstatus: implemented\n---\n\n# T\n\n" + body + "\n")) == 1
+
+
+def test_population_reads_a_sharded_plan_and_still_reads_a_flat_one(tmp_path):
+    _write(tmp_path, "2026-11-01-flat.md", PLAN)
+    _write(tmp_path, "2026-11/2026-11-02-sharded.md", PLAN)
+    _write(tmp_path, "notashard/2026-11-03-deep.md", PLAN)
+    got = [p.name for p in audit.population(tmp_path, [], "2026-07-09")]
+    assert got == ["2026-11-01-flat.md", "2026-11-02-sharded.md"]
