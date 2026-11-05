@@ -54,6 +54,16 @@ WRITE_SURFACE = WriteSurfaceDeclaration(
 )
 
 
+_UNTRACK_CLAUSE_INDEX = 1
+"""Index of `WRITE_SURFACE`'s SHAPED clause (the tracked runtime files untracked from the index)."""
+
+
+def _record_resolution(clause_index: int, entries) -> None:
+    from coordinator_core.install import resolution_journal
+
+    resolution_journal.record_resolution("runtime-ignore-apply", clause_index, entries)
+
+
 @dataclass(frozen=True)
 class ApplyResult:
     appended: tuple[str, ...]
@@ -113,5 +123,11 @@ def apply_runtime_ignore(repo_root: Path, template: Path | None = None) -> Apply
         )
         if done.returncode != 0:
             raise RuntimeError(f"git rm --cached failed ({done.returncode}): {done.stderr.strip()}")
+    _record_resolution(
+        _UNTRACK_CLAUSE_INDEX,
+        tuple(
+            WriteSurfaceEntry(kind="file-path", path=str(root / p), effect="delete") for p in findings.tracked
+        ),
+    )
     skipped = "template not found" if template is None else None
     return ApplyResult(findings.missing, findings.tracked, skipped)

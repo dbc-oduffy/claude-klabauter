@@ -178,12 +178,11 @@ EXIT_DIALECT_GUARD_DISARMED = 98
 # dependency checks are.
 EXIT_REPO_IDENTITY_UNRESOLVED = 95
 
-# Exit-code 96: a DESIGNED REFUSAL, not a failure. The installer must provision
-# the predictable set of interpreters declared consumers actually resolve to --
-# including the bare `python3` coordinator-content-repo's `hooks.json` registers hooks under --
-# and one of them is externally-managed (PEP 668), so provisioning it would
-# require an override this installer will never pass. Refusing IS the correct
-# outcome; the remediation names a supported interpreter.
+# Exit-code 96: a DESIGNED REFUSAL, not a failure. Reached when an interpreter
+# turns out PEP-668 externally-managed at pip time (the marker probe said
+# unguarded), or the container opt-in is refused off Linux/root; provisioning
+# would require an override this installer will never pass. A guarded
+# interpreter found by the probe is served by engine-site instead (DR-478).
 #
 # WHY A RESERVED CODE RATHER THAN STDERR PROSE: coordinator-content-repo's settings-home
 # post-condition (the declare half of the 4b declare/prove split, memo
@@ -913,24 +912,6 @@ def _record_homebrew_removal(
         print(f"  [ADVISORY] could not write Homebrew-removal record to {log_path}: {exc}", file=sys.stderr)
 
 
-def _find_supported_interpreter() -> str | None:
-    """First `python3.1x` on PATH that is 3.11+ and NOT PEP 668
-    externally-managed, else None. Refusal-path only; at most one probe
-    process per distinct realpath."""
-    seen: set[str] = set()
-    for minor in range(20, 10, -1):
-        found = shutil.which(f"python3.{minor}")
-        if not found:
-            continue
-        real = os.path.realpath(found)
-        if real in seen:
-            continue
-        seen.add(real)
-        if not _is_externally_managed(found):
-            return found
-    return None
-
-
 def _offer_homebrew_removal(
     candidate: InterpreterCandidate,
     settings_home_path: Path,
@@ -1290,16 +1271,15 @@ def provision_deps(
     installs itself. A dev-tree run that finds the engine already pointed at
     itself exits `EXIT_ENGINE_AT_DEV_TREE` rather than passing over it.
 
-    A guarded (PEP-668) candidate is a DESIGNED REFUSAL: exits
-    `EXIT_INTERPRETER_UNSUPPORTED` (96) naming the interpreter and the
-    consumer that resolves to it. This is unconditional ("when an
-    interpreter raises a guard, swap the interpreter", never narrow the
-    blast radius with an override flag). On macOS with Homebrew's guarded
-    `python3`, an interactive operator (not `agent_mode`) is offered
-    `brew uninstall` of it —
-    `_offer_homebrew_removal` — but the refusal for THIS run stands either
-    way; a fresh supported interpreter still needs to be installed and the
-    installer re-run.
+    A guarded (PEP-668) candidate that is not already satisfied is not
+    refused: `engine_interpreter.ensure(sys.executable, dep_specs)` installs the declared
+    deps with one `pip --target <settings-home>/engine-site` (DR-478) and the
+    installer's own interpreter is returned as `engine_python` — no second
+    interpreter; hooks and shims keep the system one. Guarded candidates skip
+    the per-candidate pip loop and the editable-finder step, since nothing is
+    installed into them. Exit 96 remains for the container opt-in refused off
+    Linux/root and for pip discovering PEP 668 mid-install on a candidate the
+    marker probe called unguarded.
 
     A genuine machine-level install failure that is NOT PEP-668 (permission-
     denied, network, disk) exits 1 naming the machine-level remediation.
@@ -1391,66 +1371,36 @@ def provision_deps(
     elif guarded:
         print()
         for c in guarded:
-            print(f"  GUARDED (PEP 668 externally-managed): {c.label} ({c.path})", file=sys.stderr)
-            print("    consumers:", file=sys.stderr)
-            for consumer in c.consumers:
-                print(f"      - {consumer}", file=sys.stderr)
-
-        removed_any = False
-        for c in guarded:
-            if _offer_homebrew_removal(c, settings_home_path, interactive=not agent_mode):
-                removed_any = True
-
-        print(file=sys.stderr)
+            print(f"  GUARDED (PEP 668 externally-managed): {c.label} ({c.path})")
         print(
-            "FAIL [deps] refusing to provision a PEP-668 externally-managed interpreter — "
-            "no override flag is ever passed.",
-            file=sys.stderr,
+            "Provisioning the declared deps into engine-site (pip --target, DR-478) — "
+            "no override flag, no second interpreter."
         )
-        print(
-            # DO NOT NAME uv HERE. Current uv ships an EXTERNALLY-MANAGED marker inside
-            # its own managed CPython builds, so an operator following this advice
-            # literally installs a uv Python and hits this identical refusal
-            # (klabauter#1, macOS 15.5; marker confirmed at
-            # ~/.local/share/uv/python/cpython-3.13.*/lib/python3.13/EXTERNALLY-MANAGED).
-            # pyenv is named first deliberately: unlike the python.org .pkg it needs no
-            # admin rights, which is the reporter's point and the better default.
-            "  Remediation: install a supported (non-externally-managed) interpreter for the "
-            "consumer(s) named above — pyenv (builds from source, no admin rights) or a "
-            "python.org release — then re-run this installer. NOT a uv-managed Python: "
-            "current uv ships its CPython builds with an EXTERNALLY-MANAGED marker, so it "
-            "lands back here. On stock Linux, distro python3 is externally-managed by "
-            "policy; this is the expected default there too, not an edge case.",
-            file=sys.stderr,
-        )
-        supported = _find_supported_interpreter()
-        # The guarded interpreter is the consumer's, not the installer's: a re-run
-        # under another interpreter hits the same refusal. The clearing action is
-        # PATH order for the consumer(s) named above.
-        if supported:
+        from coordinator_core.install import engine_interpreter
+
+        try:
+            engine_interpreter.ensure(sys.executable, dep_specs)
+        except RuntimeError as exc:
+            print(f"FAIL [deps] engine-site provisioning failed: {exc}", file=sys.stderr)
             print(
-                f"  Supported interpreter found: {supported} — put its directory "
-                f"({Path(supported).parent}) ahead of the guarded interpreter on PATH "
-                "for the consumer(s) named above, then re-run this installer.",
+                "  Remediation: fix the machine-level install (permissions, network, disk), "
+                "then re-run: python3 scripts/setup.py",
                 file=sys.stderr,
             )
-        else:
-            print(
-                "  No supported interpreter found on PATH — install one, then put its "
-                "directory ahead of the guarded interpreter on PATH for the consumer(s) "
-                "named above and re-run this installer.",
-                file=sys.stderr,
-            )
-        if removed_any:
-            print(
-                "  A guarded Homebrew Python was removed above at your consent — install its "
-                "replacement, then re-run.",
-                file=sys.stderr,
-            )
-        _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
+            _exit_flushed(1)
+        print(f"PASS [deps] engine-site provisioned for {len(guarded)} guarded interpreter(s).")
+
+    # Guarded candidates are served by engine-site: nothing is installed into them. Trap: ensure()
+    # stamps the installer's own major.minor, so a guarded candidate of another minor is skipped
+    # here yet ignores the site at runtime; the dialect-guard step (exit 98) is what catches it.
+    engine_site_paths = {c.path for c in guarded} if not container_optin_honoured else set()
 
     engine_py: str | None = None
     for index, candidate in enumerate(candidates):
+        if candidate.path in engine_site_paths:
+            if index == 0:
+                engine_py = candidate.path
+            continue
         if _satisfied(candidate.path):
             what = "and coordinator_core " if installs_engine else ""
             print(
@@ -4769,6 +4719,20 @@ def check_installed_exec_bit_parity(repo_root: Path, settings_home_path: Path):
     return CheckItem(name, True, f"installed bin/ matches {templates_bin} (exempt: {', '.join(sorted(EXEC_BIT_MAY_DROP))})")
 
 
+def statusline_absence_is_not_a_fail(items: list) -> list:
+    """A settings.json with no `statusLine.command` is a box coordinator-claude's install step 5 has
+    not wired (or the operator declined): not a claude-klabauter install defect. A wired-but-stale or
+    unresolvable command stays a FAIL."""
+    from coordinator_core.install.setup_check import CheckItem
+
+    return [
+        CheckItem(i.name, True, "not wired (coordinator-claude install step 5 owns the status line)")
+        if i.name == "statusline" and not i.ok and i.detail.startswith("no statusLine.command in ")
+        else i
+        for i in items
+    ]
+
+
 def run_check(claude_klabauter_root: Path) -> int:
     """`--check`: verify the install and print one PASS/FAIL line per item; exit 1 on any FAIL."""
     if str(claude_klabauter_root) not in sys.path:
@@ -4784,7 +4748,9 @@ def run_check(claude_klabauter_root: Path) -> int:
         keys = ["repos.claude_klabauter"]
     print("=== setup.py --check ===")
     print(check_target_label(identity, claude_klabauter_root))
-    items = setup_check.run_checks(claude_klabauter_root, settings_home(), claude_config_dir(), keys, registry_get)
+    items = statusline_absence_is_not_a_fail(
+        setup_check.run_checks(claude_klabauter_root, settings_home(), claude_config_dir(), keys, registry_get)
+    )
     items.append(check_installed_exec_bit_parity(Path(__file__).resolve().parent.parent, settings_home()))
     for item in items:
         print(item.line())

@@ -332,7 +332,10 @@ _FAKE_REAL_INSTALL_PATH = (
 
 
 def test_refuse_machine_mutation_blocks_temp_rooted_path(monkeypatch, tmp_path):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
+    # tmp_path is the temp root here: a sibling test can reset tempfile's cache so a session
+    # TMPDIR that does not contain tmp_path is re-read.
+    monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path))
 
     reason = _refuse_machine_mutation(str(tmp_path / "settings-home" / "bin"), what="test mutation")
 
@@ -341,7 +344,7 @@ def test_refuse_machine_mutation_blocks_temp_rooted_path(monkeypatch, tmp_path):
 
 
 def test_refuse_machine_mutation_allows_non_temp_non_disabled_path(monkeypatch):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
 
     reason = _refuse_machine_mutation(_FAKE_REAL_INSTALL_PATH, what="test mutation")
 
@@ -367,7 +370,10 @@ def _fake_win_user_path_entries_for_windows_health_steps(already_present=False):
 
 
 def test_windows_health_steps_refuses_temp_rooted_bin_dst(monkeypatch, tmp_path, capsys):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
+    # tmp_path is the temp root here: a sibling test can reset tempfile's cache so a session
+    # TMPDIR that does not contain tmp_path is re-read.
+    monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path))
     bin_dst = tmp_path / "t6a_home" / ".coordinator-claude-settings" / "bin"
 
     calls: list = []
@@ -407,7 +413,7 @@ def test_windows_health_steps_mutates_for_a_genuine_non_temp_path(monkeypatch, c
     # Positive control: with the belt-and-braces opt-out cleared and a path
     # that is NOT temp-rooted, the mutation must actually proceed -- proving
     # the guard blocks only the sandbox case, not every install.
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
 
     calls: list = []
@@ -433,7 +439,7 @@ def test_windows_health_steps_mutates_for_a_genuine_non_temp_path(monkeypatch, c
 
 
 def test_windows_health_steps_cygpath_unavailable_states_consequence_and_fix(monkeypatch, capsys):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
 
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: "")
@@ -452,7 +458,7 @@ def test_windows_health_steps_cygpath_unavailable_states_consequence_and_fix(mon
 
 
 def test_windows_health_steps_unreadable_user_path_states_consequence_and_fix(monkeypatch, capsys):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
 
     monkeypatch.setattr(substrate, "_cygpath_w", lambda p: p)
@@ -731,7 +737,7 @@ def test_windows_health_steps_appx_stub_disabled_never_prompts_or_deletes(monkey
 
 
 def test_windows_health_steps_appx_stub_enabled_prompt_still_deletes(monkeypatch, capsys):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     bin_dst = Path(_FAKE_REAL_INSTALL_PATH)
 
     calls: list = []
@@ -787,7 +793,7 @@ def test_prune_orphaned_static_bin_names_disabled_does_not_unlink(monkeypatch, t
 
 
 def test_prune_orphaned_static_bin_names_enabled_unlinks(monkeypatch, tmp_path):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -825,7 +831,7 @@ def test_percolation_and_path_steps_disabled_skips_rc_block_writes(monkeypatch, 
 
 
 def test_percolation_and_path_steps_enabled_writes_rc_block(monkeypatch, tmp_path):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
     install_base = tmp_path / "home"
     install_base.mkdir()
@@ -857,7 +863,7 @@ def test_c10a_steps_leave_legacy_whoami_dir_alone(monkeypatch, tmp_path, mutatio
     if mutation_disabled:
         monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     else:
-        monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+        monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
         monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
     install_base = tmp_path / "home"
     settings_home_path = tmp_path / "settings-home"
@@ -884,7 +890,7 @@ def test_c10a_steps_leave_legacy_whoami_dir_alone(monkeypatch, tmp_path, mutatio
 def test_c10a_steps_never_touches_a_legacy_venv(monkeypatch, tmp_path, capsys):
     """Step C10a-3 is deleted: `_c10a_steps` takes no venv flag and leaves a
     legacy `.coordinator-venv` untouched."""
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     install_base = tmp_path / "home"
     settings_home_path = tmp_path / "settings-home"
     plugin_root = tmp_path / "plugin-root"
@@ -909,7 +915,7 @@ def test_c10a_steps_never_touches_a_legacy_venv(monkeypatch, tmp_path, capsys):
 
 
 def test_stale_sitepackages_pointer_is_pruned_when_manifest_recorded_it(monkeypatch, tmp_path):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     monkeypatch.setattr(substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root"))
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -951,7 +957,7 @@ def test_fnm_step_disabled_does_not_spawn_brew_or_curl(monkeypatch, capsys):
 
 
 def test_fnm_step_enabled_installs_via_brew(monkeypatch):
-    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION")
     monkeypatch.setenv("COORDINATOR_INSTALL_FNM", "1")
     monkeypatch.setattr(
         substrate.shutil, "which",
@@ -1001,6 +1007,67 @@ def test_resolve_hook_python_bin_ignores_the_venv_pin(monkeypatch):
 
     monkeypatch.setattr(pyresolve, "resolve_python_bin", _fail_if_called)
 
+    assert resolve_hook_python_bin() == "/usr/bin/python3"
+
+
+def test_engine_site_prepended_only_when_stamp_matches_interpreter(monkeypatch, tmp_path):
+    import sys
+
+    from coordinator_core import ipc
+    from coordinator_core.install import engine_interpreter
+
+    site = tmp_path / ipc._ENGINE_SITE_DIR_NAME
+    site.mkdir()
+    monkeypatch.setattr("coordinator_core._settings_home.settings_home", lambda: tmp_path)
+    monkeypatch.setattr(engine_interpreter, "engine_site_dir", lambda home=None: site)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+
+    monkeypatch.setattr(engine_interpreter, "stamp", lambda home=None: (0, 0))
+    ipc._prepend_engine_site()
+    assert str(site) not in sys.path
+
+    monkeypatch.setattr(engine_interpreter, "stamp", lambda home=None: None)
+    ipc._prepend_engine_site()
+    assert str(site) not in sys.path
+
+    monkeypatch.setattr(
+        engine_interpreter, "stamp", lambda home=None: tuple(sys.version_info[:2])
+    )
+    ipc._prepend_engine_site()
+    assert sys.path[0] == str(site)
+    ipc._prepend_engine_site()
+    assert sys.path.count(str(site)) == 1
+
+
+def test_engine_site_absent_dir_skips_provider_import(monkeypatch, tmp_path):
+    import sys
+
+    from coordinator_core import ipc
+
+    monkeypatch.setattr("coordinator_core._settings_home.settings_home", lambda: tmp_path)
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "coordinator_core.install.engine_interpreter")
+    ipc._prepend_engine_site()
+    assert "coordinator_core.install.engine_interpreter" not in sys.modules
+    assert str(tmp_path / ipc._ENGINE_SITE_DIR_NAME) not in sys.path
+
+
+def test_engine_site_gate_name_matches_provider():
+    from coordinator_core import ipc
+    from coordinator_core.install import engine_interpreter
+
+    assert engine_interpreter.engine_site_dir().name == ipc._ENGINE_SITE_DIR_NAME
+
+
+def test_resolve_hook_python_bin_ignores_the_engine_site(monkeypatch, tmp_path):
+    import coordinator_core.pyresolve as pyresolve
+    from coordinator_core.install import engine_interpreter
+
+    monkeypatch.setattr(pyresolve, "_is_windows", lambda: False)
+    monkeypatch.setattr(pyresolve, "_resolve_non_windows", lambda: ("/usr/bin/python3", []))
+    monkeypatch.setattr(
+        engine_interpreter, "stamp", lambda home=None: tuple(__import__("sys").version_info[:2])
+    )
     assert resolve_hook_python_bin() == "/usr/bin/python3"
 
 

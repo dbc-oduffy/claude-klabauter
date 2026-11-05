@@ -397,6 +397,16 @@ def probe_armed(
     probe_src = (
         "import sys\n"
         f"sys.path.insert(0, {str(claude_klabauter_root)!r})\n"
+        # Mirrors ipc._prepend_engine_site (stamp must match this interpreter's major.minor);
+        # self-contained so the probe needs no other module of the engine-site change.
+        "try:\n"
+        "    from coordinator_core._settings_home import settings_home\n"
+        "    _site = settings_home() / 'engine-site'\n"
+        "    _maj, _min = (_site / '.engine-site-stamp').read_text(encoding='utf-8').splitlines()[0].strip().split('.')\n"
+        "    if (int(_maj), int(_min)) == tuple(sys.version_info[:2]) and str(_site) not in sys.path:\n"
+        "        sys.path.insert(0, str(_site))\n"
+        "except Exception:\n"
+        "    pass\n"
         "from coordinator_core.bash_guards._dialect import _powershell_tokens\n"
         "from coordinator_core.bash_guards._verdict import collecting\n"
         "with collecting() as declarations:\n"

@@ -453,6 +453,33 @@ def _cap_blas_threads() -> None:
 
 _cap_blas_threads()
 
+
+_ENGINE_SITE_DIR_NAME = "engine-site"
+
+
+def _prepend_engine_site() -> None:
+    # Engine-site (DR-478) rides ahead of every third-party import below; zero spawn. A stamp
+    # naming another interpreter's major.minor is ignored (its compiled wheels would not load).
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        # Gate before the import: engine_interpreter drags subprocess into every hook's budget.
+        # The literal is pinned to engine_site_dir by test_engine_site_gate_name_matches_provider.
+        if not (settings_home() / _ENGINE_SITE_DIR_NAME).is_dir():
+            return
+        from coordinator_core.install import engine_interpreter
+
+        if engine_interpreter.stamp() != tuple(_sys.version_info[:2]):
+            return
+        site = str(engine_interpreter.engine_site_dir())
+        if site not in _sys.path:
+            _sys.path.insert(0, site)
+    except Exception:
+        return
+
+
+_prepend_engine_site()
+
 # pathlib, typing, types and threading stay off the import path: this module's cold-start module
 # count is ceilinged in benchmarks/import-budget-manifest.json. Path is imported function-locally;
 # `ipc.Path` still resolves through `__getattr__` for callers that read it.

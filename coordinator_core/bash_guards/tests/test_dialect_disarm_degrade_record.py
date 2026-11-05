@@ -135,3 +135,60 @@ def test_probe_armed_survives_non_utf8_probe_output(tmp_path):
     armed, reason = probe_armed(sys.executable, tmp_path)
     assert armed is False
     assert "bad" in reason
+
+
+def _site_less_interpreter(tmp_path):
+    """A POSIX wrapper running the current interpreter with `-S`, so the parser
+    packages are importable only from an engine-site on the probe child's path."""
+    import importlib.util
+    import os
+    import stat
+    import sys
+
+    if os.name == "nt":
+        pytest.skip("POSIX wrapper interpreter")
+    for name in ("tree_sitter", "tree_sitter_pwsh"):
+        if importlib.util.find_spec(name) is None:
+            pytest.skip(f"{name} not installed in this interpreter")
+    wrapper = tmp_path / "py-nosite"
+    wrapper.write_text(f'#!/bin/sh\nexec "{sys.executable}" -S "$@"\n', encoding="utf-8")
+    wrapper.chmod(wrapper.stat().st_mode | stat.S_IXUSR)
+    return str(wrapper)
+
+
+def _stamped_engine_site_with_parser(home):
+    import importlib.util
+    import shutil
+    import sys
+
+    site = home / "engine-site"
+    site.mkdir(parents=True)
+    for name in ("tree_sitter", "tree_sitter_pwsh"):
+        spec = importlib.util.find_spec(name)
+        shutil.copytree(spec.submodule_search_locations[0], site / name)
+    (site / ".engine-site-stamp").write_text(
+        f"{sys.version_info[0]}.{sys.version_info[1]}\n", encoding="utf-8"
+    )
+
+
+def test_probe_armed_sees_a_parser_present_only_in_engine_site(tmp_path, monkeypatch):
+    from coordinator_core.bash_guards._dialect import probe_armed
+
+    interpreter = _site_less_interpreter(tmp_path)
+    home = tmp_path / "settings-home"
+    _stamped_engine_site_with_parser(home)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    repo_root = __import__("pathlib").Path(__file__).resolve().parents[3]
+    armed, detail = probe_armed(interpreter, repo_root)
+    assert armed is True, detail
+
+
+def test_probe_armed_without_engine_site_still_reports_missing_package(tmp_path, monkeypatch):
+    from coordinator_core.bash_guards._dialect import probe_armed
+
+    interpreter = _site_less_interpreter(tmp_path)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "empty-home"))
+    repo_root = __import__("pathlib").Path(__file__).resolve().parents[3]
+    armed, detail = probe_armed(interpreter, repo_root)
+    assert armed is False
+    assert "missing-package" in detail

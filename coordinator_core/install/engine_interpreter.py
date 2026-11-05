@@ -1,82 +1,114 @@
-"""coordinator_core.install.engine_interpreter -- the engine-owned interpreter.
+"""coordinator_core.install.engine_interpreter -- the engine-site provider (DR-478).
 
-Purpose: when the installer's base interpreter is PEP-668 externally managed
-(fresh Homebrew python3), the engine runs from a stdlib ``venv`` under the
-settings home that the installer builds once and stamps. Not a fallback beside
-a machine interpreter: see docs/decisions/DR-engine-interpreter-on-a-guarded-base.md.
+Purpose: on a PEP-668 externally-managed base interpreter the installer puts the
+declared third-party deps in ``<settings-home>/engine-site`` with one
+``pip install --target``; the engine bootstrap puts that directory on
+``sys.path`` while its stamp matches the running interpreter's major.minor.
+No second interpreter exists; hooks and shims keep the system one.
 
 Public surface:
 
-    def engine_interpreter_dir(home: Optional[Path] = None) -> Path: ...
-    def interpreter_path(venv_dir: Path) -> Path: ...
-    def ensure(base_python: str, home: Optional[Path] = None) -> str: ...
-    def stamped(home: Optional[Path] = None) -> Optional[str]: ...
+    def engine_site_dir(home: Optional[Path] = None) -> Path: ...
+    def stamp(home: Optional[Path] = None) -> Optional[tuple[int, int]]: ...
+    def ensure(base_python: str, dep_specs: Sequence[str], home: Optional[Path] = None) -> Path: ...
 
 ``home`` is the settings-home root; ``None`` resolves ``settings_home()``.
 """
 from __future__ import annotations
 
+import hashlib
 import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.win_portability import no_console_creationflags
 
-_DIR_NAME = "engine-interpreter"
-_CREATE_TIMEOUT_S = 120
+_DIR_NAME = "engine-site"
+_STAMP_NAME = ".engine-site-stamp"
+_PIP_TIMEOUT_S = 600
+_PROBE_TIMEOUT_S = 30
 
 
-def _is_windows() -> bool:
-    return os.name == "nt"
-
-
-def engine_interpreter_dir(home: Optional[Path] = None) -> Path:
-    """The engine interpreter's venv directory under the settings home."""
+def engine_site_dir(home: Optional[Path] = None) -> Path:
+    """The engine-site directory under the settings home."""
     return (Path(home) if home is not None else settings_home()) / _DIR_NAME
 
 
-def interpreter_path(venv_dir: Path) -> Path:
-    """The interpreter inside ``venv_dir``: ``Scripts/python.exe`` on Windows, ``bin/python`` elsewhere."""
-    if _is_windows():
-        return Path(venv_dir) / "Scripts" / "python.exe"
-    return Path(venv_dir) / "bin" / "python"
+def _read_stamp(home: Optional[Path]) -> Optional[tuple[tuple[int, int], str]]:
+    try:
+        lines = (engine_site_dir(home) / _STAMP_NAME).read_text(encoding="utf-8").splitlines()
+        major, minor = lines[0].strip().split(".")
+        return (int(major), int(minor)), (lines[1].strip() if len(lines) > 1 else "")
+    except (OSError, ValueError, IndexError):
+        return None
 
 
-def stamped(home: Optional[Path] = None) -> Optional[str]:
-    """The engine interpreter path when it exists as an executable file, else None. Zero spawn."""
-    py = interpreter_path(engine_interpreter_dir(home))
-    if py.is_file() and os.access(py, os.X_OK):
-        return str(py)
-    return None
+def stamp(home: Optional[Path] = None) -> Optional[tuple[int, int]]:
+    """The major.minor engine-site was provisioned for, or None when unstamped. Zero spawn."""
+    read = _read_stamp(home)
+    return read[0] if read else None
 
 
-def ensure(base_python: str, home: Optional[Path] = None) -> str:
-    """Return the engine interpreter path, creating it with ``base_python -m venv`` if absent.
+def _specs_digest(dep_specs: Sequence[str]) -> str:
+    return hashlib.sha256("\n".join(sorted(dep_specs)).encode("utf-8")).hexdigest()[:16]
 
-    Idempotent: an existing working interpreter is reused with no spawn.
-    Raises RuntimeError when creation fails or leaves no interpreter.
-    """
-    existing = stamped(home)
-    if existing is not None:
-        return existing
-    venv_dir = engine_interpreter_dir(home)
-    venv_dir.parent.mkdir(parents=True, exist_ok=True)
+
+def _minor_of(base_python: str) -> tuple[int, int]:
+    """major.minor of ``base_python``; zero spawn when it is the running interpreter."""
+    try:
+        if os.path.realpath(base_python) == os.path.realpath(sys.executable):
+            return (sys.version_info[0], sys.version_info[1])
+    except OSError:
+        pass
     try:
         proc = subprocess.run(
-            [base_python, "-m", "venv", str(venv_dir)],
+            [base_python, "-c", "import sys;print('%d.%d' % sys.version_info[:2])"],
             capture_output=True,
             text=True,
-            timeout=_CREATE_TIMEOUT_S,
+            timeout=_PROBE_TIMEOUT_S,
+            **no_console_creationflags(),
+        )
+        major, minor = proc.stdout.strip().split(".")
+        return int(major), int(minor)
+    except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+        raise RuntimeError(f"cannot read the version of {base_python}: {exc}") from exc
+
+
+def ensure(base_python: str, dep_specs: Sequence[str], home: Optional[Path] = None) -> Path:
+    """Return the engine-site directory, provisioning it when the stamp does not match.
+
+    Idempotent: a stamp matching ``base_python``'s major.minor and ``dep_specs``
+    spawns nothing. A drifted or missing stamp rebuilds the directory with one
+    ``base_python -m pip install --target``; the stamp is written last. Never
+    passes ``--break-system-packages``. Raises RuntimeError on failure.
+    """
+    want = _minor_of(base_python)
+    digest = _specs_digest(dep_specs)
+    if _read_stamp(home) == (want, digest):
+        return engine_site_dir(home)
+    site = engine_site_dir(home)
+    shutil.rmtree(site, ignore_errors=True)
+    site.mkdir(parents=True, exist_ok=True)
+    try:
+        proc = subprocess.run(
+            [base_python, "-m", "pip", "install", "--target", str(site), *dep_specs],
+            capture_output=True,
+            text=True,
+            timeout=_PIP_TIMEOUT_S,
             **no_console_creationflags(),
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        raise RuntimeError(f"engine interpreter creation failed: {exc}") from exc
-    created = stamped(home)
-    if proc.returncode != 0 or created is None:
+        shutil.rmtree(site, ignore_errors=True)
+        raise RuntimeError(f"engine-site install failed: {exc}") from exc
+    if proc.returncode != 0:
+        shutil.rmtree(site, ignore_errors=True)
         raise RuntimeError(
-            f"engine interpreter creation failed (rc={proc.returncode}): "
+            f"engine-site install failed (rc={proc.returncode}): "
             f"{(proc.stderr or proc.stdout or '').strip()[-400:]}"
         )
-    return created
+    (site / _STAMP_NAME).write_text(f"{want[0]}.{want[1]}\n{digest}\n", encoding="utf-8")
+    return site

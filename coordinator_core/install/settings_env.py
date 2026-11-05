@@ -73,6 +73,7 @@ def apply_settings_env(plugin_root: Path, settings_path: Path) -> dict:
     checker = Path(plugin_root).joinpath(*SETTINGS_ENV_CHECKER_REL)
     if not checker.is_file():
         raise FileNotFoundError(f"settings-env checker not found at {checker}")
+    Path(settings_path).parent.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [sys.executable, str(checker), "--settings", str(settings_path), "--apply", "--json"],
         capture_output=True,

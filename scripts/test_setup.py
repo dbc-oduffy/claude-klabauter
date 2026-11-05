@@ -414,29 +414,68 @@ def test_installed_engine_root_reads_only_an_editable_file_url(
     assert setup_mod._installed_engine_root("py") == (target.resolve() if found else None)
 
 
-def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(setup_mod, monkeypatch, tmp_path, capsys):
-    """A PEP-668 externally-managed candidate is a DESIGNED REFUSAL --
-    EXIT_INTERPRETER_UNSUPPORTED (96), unconditional: no pip install is ever
-    attempted (swap the interpreter, never pass an override flag)."""
+def _stub_engine_site_ensure(monkeypatch, *, fail=None):
+    """Replace `engine_interpreter.ensure` with a recorder; returns its call list."""
+    from coordinator_core.install import engine_interpreter
+
+    ensure_calls = []
+
+    def _ensure(base_python, *args, **kwargs):
+        ensure_calls.append(base_python)
+        assert args and list(args[0])
+        if fail is not None:
+            raise fail
+
+    monkeypatch.setattr(engine_interpreter, "ensure", _ensure)
+    return ensure_calls
+
+
+def test_provision_deps_guarded_unsatisfied_provisions_engine_site_returns_own_interpreter(
+    setup_mod, monkeypatch, tmp_path, capsys
+):
+    """A guarded, unsatisfied candidate is provisioned through engine-site
+    (DR-478): ensure runs once on the installer's interpreter, exit is clean,
+    no pip install lands in the guarded interpreter, and the installer's own
+    interpreter comes back as engine_python."""
     pyproject_dir = tmp_path / "root"
     pyproject_dir.mkdir()
     _fixture_pyproject(pyproject_dir)
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
-    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+    ensure_calls = _stub_engine_site_ensure(monkeypatch)
+    pip_calls = []
+    monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: pip_calls.append(argv))
+    finder_calls = _stub_editable_finder_conversion(setup_mod, monkeypatch)
 
-    calls = []
-    monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
+    engine_py, _ = setup_mod.provision_deps(pyproject_dir, sys.executable)
+
+    assert engine_py == sys.executable
+    assert ensure_calls == [sys.executable]
+    assert pip_calls == []
+    assert finder_calls == []
+    captured = capsys.readouterr()
+    assert "--break-system-packages" not in captured.out + captured.err
+    assert "refusing" not in captured.err
+
+
+def test_provision_deps_guarded_engine_site_failure_exits_1(setup_mod, monkeypatch, tmp_path, capsys):
+    """A failed engine-site install is a genuine failure (1), never the 96 refusal."""
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+    _stub_engine_site_ensure(monkeypatch, fail=RuntimeError("network down"))
 
     with pytest.raises(SystemExit) as exc_info:
         setup_mod.provision_deps(pyproject_dir, sys.executable)
 
-    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
-    assert calls == []
-    stderr = capsys.readouterr().err
-    assert "PEP-668" in stderr or "PEP 668" in stderr
-    assert "venv" not in stderr
+    assert exc_info.value.code == 1
+    assert "engine-site provisioning failed" in capsys.readouterr().err
 
 
 def test_provision_deps_guarded_but_satisfied_candidate_passes_no_refusal(setup_mod, monkeypatch, tmp_path, capsys):
@@ -463,37 +502,6 @@ def test_provision_deps_guarded_but_satisfied_candidate_passes_no_refusal(setup_
     assert "refusing" not in captured.err
 
 
-def test_provision_deps_guarded_unsatisfied_remediation_names_path_order_not_rerun(
-    setup_mod, monkeypatch, tmp_path, capsys
-):
-    """A guarded candidate that needs provisioning still refuses (96); the
-    remediation names PATH ordering, never a re-run under the supported
-    interpreter, and never the override flag."""
-    pyproject_dir = tmp_path / "root"
-    pyproject_dir.mkdir()
-    _fixture_pyproject(pyproject_dir)
-    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
-    _stub_candidates(setup_mod, monkeypatch, sys.executable)
-    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
-    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
-    monkeypatch.setattr(setup_mod, "_find_supported_interpreter", lambda: "/opt/pyenv/bin/python3.12")
-    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
-    calls = []
-    monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
-
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable)
-
-    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
-    assert calls == []
-    stderr = capsys.readouterr().err
-    assert "ahead of the guarded interpreter on PATH" in stderr
-    assert "/opt/pyenv/bin" in stderr
-    assert "/opt/pyenv/bin/python3.12 scripts/setup.py" not in stderr
-    assert "re-run this installer under" not in stderr
-    assert "--break-system-packages" not in stderr
-
-
 # ---------------------------------------------------------------------------
 # DR-411 container opt-in — --i-assert-no-other-consumer
 # (docs/decisions/DR-411-the-pep-668-refusal-does-not-reach-an-ephemeral-container.md)
@@ -505,32 +513,29 @@ def test_parse_args_container_optin_flag(setup_mod):
     assert args.container_optin is True
 
 
-def test_provision_deps_guarded_without_optin_flag_unchanged_no_override_token(
+def test_provision_deps_guarded_without_optin_flag_never_passes_override_token(
     setup_mod, monkeypatch, tmp_path, capsys
 ):
-    """The floor: the workstation path (no --i-assert-no-other-consumer passed)
-    is behaviourally unchanged by this carve-out existing at all -- same
-    exit 96, same no-pip-call, and (new) no override token anywhere near the
-    argv the installer would have built."""
+    """Without --i-assert-no-other-consumer a guarded candidate goes through
+    engine-site: no pip argv into it, and no override token anywhere."""
     pyproject_dir = tmp_path / "root"
     pyproject_dir.mkdir()
     _fixture_pyproject(pyproject_dir)
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
-    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
-
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+    ensure_calls = _stub_engine_site_ensure(monkeypatch)
     calls = []
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
 
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable)
+    setup_mod.provision_deps(pyproject_dir, sys.executable)
 
-    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
+    assert ensure_calls == [sys.executable]
     assert calls == []
-    stderr = capsys.readouterr().err
-    assert "--break-system-packages" not in stderr
-    assert "--i-assert-no-other-consumer" not in stderr
+    captured = capsys.readouterr()
+    assert "--break-system-packages" not in captured.out + captured.err
+    assert "--i-assert-no-other-consumer" not in captured.out + captured.err
 
 
 def test_provision_deps_container_optin_honoured_appends_break_system_packages_only(
@@ -866,57 +871,6 @@ def test_offer_homebrew_removal_non_interactive_silent_no_input(setup_mod, monke
     assert setup_mod._offer_homebrew_removal(candidate, tmp_path, interactive=False) is False
     out = capsys.readouterr()
     assert "Uninstall" not in out.out + out.err
-
-
-def test_provision_deps_guarded_agent_mode_names_supported_interpreter(
-    setup_mod, monkeypatch, tmp_path, capsys
-):
-    pyproject_dir = tmp_path / "root"
-    pyproject_dir.mkdir()
-    _fixture_pyproject(pyproject_dir)
-    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
-    _stub_candidates(setup_mod, monkeypatch, sys.executable)
-    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
-    monkeypatch.setattr(setup_mod, "_find_supported_interpreter", lambda: "/opt/pyenv/bin/python3.12")
-    seen = {}
-
-    def _offer(candidate, settings_home_path, interactive=True):
-        seen["interactive"] = interactive
-        return False
-
-    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", _offer)
-
-    with pytest.raises(SystemExit) as exc_info:
-        setup_mod.provision_deps(pyproject_dir, sys.executable, agent_mode=True)
-
-    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
-    assert seen["interactive"] is False
-    assert "/opt/pyenv/bin/python3.12" in capsys.readouterr().err
-
-
-def test_find_supported_interpreter_skips_managed_and_dedupes_realpath(setup_mod, monkeypatch, tmp_path):
-    real = tmp_path / "python3.12"
-    real.write_text("")
-    link = tmp_path / "python3.13"
-    link.symlink_to(real)
-    other = tmp_path / "python3.11"
-    other.write_text("")
-    paths = {"python3.13": str(link), "python3.12": str(real), "python3.11": str(other)}
-    monkeypatch.setattr(setup_mod.shutil, "which", lambda name: paths.get(name))
-    probed = []
-
-    def _managed(interpreter):
-        probed.append(interpreter)
-        return interpreter != str(other)
-
-    monkeypatch.setattr(setup_mod, "_is_externally_managed", _managed)
-    assert setup_mod._find_supported_interpreter() == str(other)
-    assert probed == [str(link), str(other)]
-
-
-def test_find_supported_interpreter_none_when_all_managed(setup_mod, monkeypatch):
-    monkeypatch.setattr(setup_mod.shutil, "which", lambda name: None)
-    assert setup_mod._find_supported_interpreter() is None
 
 
 def test_offer_homebrew_removal_declines_on_closed_stdin_runtime_error(setup_mod, monkeypatch, tmp_path):
@@ -4239,6 +4193,20 @@ def test_run_check_prints_target_and_published_remediation_on_failure(
     assert f"target: {label} {root}" in out
     failed = [line for line in out.splitlines() if line.startswith("check: FAILED")]
     assert failed and "re-run scripts/setup.py" not in failed[0]
+
+
+def test_statusline_absence_passes_but_a_stale_or_unresolvable_command_still_fails(setup_mod, tmp_path):
+    from coordinator_core.install import setup_check
+
+    _write = lambda payload: (tmp_path / "settings.json").write_text(json.dumps(payload), encoding="utf-8")
+    _write({})
+    absent = setup_mod.statusline_absence_is_not_a_fail([setup_check.check_statusline(tmp_path)])[0]
+    assert absent.ok and absent.name == "statusline"
+    _write({"statusLine": {"type": "command", "command": str(tmp_path / "missing")}})
+    broken = setup_mod.statusline_absence_is_not_a_fail([setup_check.check_statusline(tmp_path)])[0]
+    assert not broken.ok
+    other = setup_check.CheckItem("guards", False, "no statusLine.command in x")
+    assert not setup_mod.statusline_absence_is_not_a_fail([other])[0].ok
 
 
 def _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, *, present: bool):
