@@ -138,6 +138,51 @@ def dependents_unstarted_refire_next_action(reason: str, *, run_id: str, sizing_
 
 #: Record-dir file holding a run's revised stop-after phase.
 STOP_AFTER_FILE = "stop-after.json"
+#: The run.json keys linking a run to the run it descends from.
+LINEAGE_KEYS = ("resumes_ask", "resumed_from", "reserved_parent", "chain_parent")
+_LINEAGE_MAX_DEPTH = 16
+
+
+def write_stop_after_marker(dir_: Path, stop_after: str, sender: object = None) -> dict:
+    """Atomically write `STOP_AFTER_FILE` into `dir_`; the one writer of the marker. Returns the marker."""
+    from datetime import datetime, timezone
+
+    who = " ".join(sender.split()) if isinstance(sender, str) else ""
+    marker = {
+        "stop_after": stop_after,
+        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "from": who or None,
+    }
+    atomic_write_bytes(
+        Path(dir_) / STOP_AFTER_FILE, (json.dumps(marker, sort_keys=True) + "\n").encode("utf-8"), preserve_mode=False
+    )
+    return marker
+
+
+def lineage_stop_after(root: Path, run_id: str) -> Optional[str]:
+    """`STOP_AFTER_PLAN` when `run_id`'s record dir or any ancestor's (`LINEAGE_KEYS` in run.json,
+    nearest first, depth-bounded, cycle-safe) holds a marker with stop_after=plan; else None. An
+    unsafe or unknown run id contributes nothing."""
+    seen: set[str] = set()
+    frontier = [run_id]
+    for _ in range(_LINEAGE_MAX_DEPTH):
+        nxt: list[str] = []
+        for rid in frontier:
+            if not isinstance(rid, str) or not rid or rid in seen:
+                continue
+            seen.add(rid)
+            try:
+                dir_ = record_dir(root, rid)
+            except ValueError:
+                continue
+            if (_read_json_object(dir_ / STOP_AFTER_FILE) or {}).get(STOP_AFTER_KEY) == STOP_AFTER_PLAN:
+                return STOP_AFTER_PLAN
+            run = _read_json_object(dir_ / "run.json") or {}
+            nxt.extend(v for k in LINEAGE_KEYS if isinstance(v := run.get(k), str))
+        if not nxt:
+            return None
+        frontier = nxt
+    return None
 #: `workflow.late_rows`: the live ledger ids the run's staged manifest holds no work for.
 OP_LATE_ROWS = "workflow.late_rows"
 LATE_ROWS_FIELD = "late_rows"
@@ -1063,12 +1108,15 @@ RUN_STAGES = ("minted", "staged", "halted", "landed")
 
 def write_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, now: str | None = None,
-    warp_run: str | None = None,
+    warp_run: str | None = None, session_id: str | None = None,
 ) -> Path:
     """Atomically write `stage` into `<record_path>/run-stage.json` and return the path. One read of
     the prior file, one write. `session_id`/`started_at` come from the prior file; the first stamp of
     any stage sets them (`session_id` null when unresolvable), so a run that never passed the ledger
-    start still projects as a `WorkflowRun`. `steps_planned` is kept from the prior file unless given.
+    start still projects as a `WorkflowRun`. The first stamp records `session_id` when given, else the
+    request's carried caller session, else (cold only) the process environment's. A warm-served request
+    with no carried session records null, never the engine spawner's. `steps_planned` is kept from the
+    prior file unless given.
     Raises ValueError on a stage outside RUN_STAGES."""
     from datetime import datetime, timezone
 
@@ -1079,9 +1127,11 @@ def write_run_stage_at(
     stamp = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     data: dict[str, Any] = dict(prior) if prior else {}
     if "started_at" not in data:
-        from coordinator_core.session.core import resolve_session_id
+        from coordinator_core.session.core import carried_session_id, in_warm_served_request, resolve_session_id
 
-        data["session_id"] = resolve_session_id() or None
+        data["session_id"] = session_id or carried_session_id() or (
+            None if in_warm_served_request() else resolve_session_id() or None
+        )
         data["started_at"] = stamp
     data["stage"] = stage
     data["last_activity_at"] = stamp
@@ -1091,6 +1141,42 @@ def write_run_stage_at(
         data["warp_run"] = warp_run
     atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return path
+
+
+HEARTBEAT_MIN_S = 60.0
+_HEARTBEAT_TERMINAL = frozenset({"halted", "complete", "landed"})
+
+
+def touch_run_activity(record_path: Path, *, now: "datetime | None" = None) -> bool:
+    """Advance `<record_path>/run-stage.json`'s `last_activity_at` only, at most once per `HEARTBEAT_MIN_S`.
+
+    True when it wrote. False for an absent, malformed, stage-less or terminal file, or a stamp younger
+    than the throttle (nothing written). `stage` and every other key are untouched. One read, at most
+    one atomic write; never raises on an unwritable file."""
+    from datetime import datetime, timezone
+
+    path = Path(record_path) / RUN_STAGE_FILE
+    data = _read_json_object(path)
+    if not data:
+        return False
+    stage = data.get("stage")
+    if not isinstance(stage, str) or not stage or stage in _HEARTBEAT_TERMINAL:
+        return False
+    moment = now or datetime.now(timezone.utc)
+    try:
+        last = datetime.fromisoformat(str(data.get("last_activity_at")).strip().replace("Z", "+00:00"))
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        if (moment - last).total_seconds() < HEARTBEAT_MIN_S:
+            return False
+    except ValueError:
+        pass
+    data["last_activity_at"] = moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except OSError:
+        return False
+    return True
 
 
 def adopt_run_stage_at(record_path: Path, session_id: str, *, now: str | None = None) -> Path:
@@ -1128,20 +1214,27 @@ def read_run_stage(repo_root: Path, run_id: str) -> dict[str, Any] | None:
         return None
 
 
-def stamp_run_stage(repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None) -> None:
+def stamp_run_stage(
+    repo_root: Path, run_id: str, stage: str, *, steps_planned: int | None = None, session_id: str | None = None,
+) -> None:
     """Best-effort `write_run_stage`: a ValueError or OSError never reaches the op it rides on."""
     try:
-        stamp_run_stage_at(record_dir(repo_root, run_id), stage, steps_planned=steps_planned)
+        stamp_run_stage_at(
+            record_dir(repo_root, run_id), stage, steps_planned=steps_planned, session_id=session_id,
+        )
     except ValueError:
         pass
 
 
 def stamp_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, warp_run: str | None = None,
+    session_id: str | None = None,
 ) -> None:
     """Best-effort `write_run_stage_at`: a ValueError or OSError never reaches the op it rides on."""
     try:
-        write_run_stage_at(record_path, stage, steps_planned=steps_planned, warp_run=warp_run)
+        write_run_stage_at(
+            record_path, stage, steps_planned=steps_planned, warp_run=warp_run, session_id=session_id,
+        )
     except (ValueError, OSError):
         pass
 

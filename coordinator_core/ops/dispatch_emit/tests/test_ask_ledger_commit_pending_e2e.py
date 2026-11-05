@@ -47,6 +47,14 @@ let _memoCloseOnly = false;
 const _viaRoadmap = false, _RUN_TOKEN = '%(token)s', _sizingRel = 'state/sizings/x.yaml', _planRel = null, REPO_ROOT = '/r';
 const _gate = { arm: 'xs' }, _runId = 'run-1', _resumeLedger = null, _preHaltCredit = false;
 let _splitExit = null;
+let _lateIds = [], _verifyLateIds = [], _lateLeg = null;
+const _lateRead = async () => [];
+let _reverifyJoined = false; const _joinReverify = async () => null; const _reviewReused = false;
+const _reviewBlockedHalt = () => {};
+let _alreadyDelivered = null, _allLandedResume = false, _consumedReturns = {}, _footprintReviewed = false, _foreignReds = [];
+const _verdictText = () => '';
+const _judgeRules = %(judge_rules)s;
+let _haltedByHold = false, _integrationNotRun = [], _ledgerExec = false, _xsTail = false;
 let _writes = [];
 const _verdictReports = [];
 let %(owner_rows)s = [];
@@ -95,6 +103,7 @@ def _run(
         "agent_defs": ask_compose._AGENT_DEFS_HELPER_JS,
         "helper": ask_compose._usage_limit_helper_js(),
         "cap": ask_compose.CAP_HELPER_JS,
+        "judge_rules": ask_compose._emit._JUDGE_VERDICT_RULES_JS,
     }
     body = _segment(in_run_commit, judged).replace(
         "  return { arm:",
@@ -266,13 +275,18 @@ def test_the_composed_halt_matches_the_ledger_judge_whatever_the_checker_verdict
     results = _run(cases)
     mismatches = []
     for n, name in enumerate(names):
-        failed = [f["id"] for f in judge(ledger, {"items": [_PARITY_ITEMS[name]]})["failures"]]
+        failed = [f["id"] for f in judge(ledger, {"items": [_gate_normalised(_PARITY_ITEMS[name])]})["failures"]]
         for verdict, out in zip(("pass", "fail"), results[2 * n : 2 * n + 2]):
             halted = out["halted_by"]
             blocked = [i["id"] for i in halted["items"]] if halted else []
             if blocked != failed:
                 mismatches.append((name, verdict, blocked, failed))
     assert not mismatches, mismatches
+
+
+def _gate_normalised(item: dict) -> dict:
+    """The item as the composed close gate hands it on: a not_met row's `essential: false` is reset to true."""
+    return {**item, "essential": True} if item.get("status") == "not_met" and item.get("essential") is False else item
 
 
 _WITHHELD_ITEMS = {
@@ -294,7 +308,9 @@ def test_the_composed_halt_matches_the_ledger_judge_on_a_withheld_row(all_of):
     )
     mismatches = []
     for name, out in zip(names, results):
-        failed = [f["id"] for f in judge(ledger, {"items": [_WITHHELD_ITEMS[name]]}, gated={"C9"})["failures"]]
+        failed = [
+            f["id"] for f in judge(ledger, {"items": [_gate_normalised(_WITHHELD_ITEMS[name])]}, gated={"C9"})["failures"]
+        ]
         halted = out["halted_by"]
         blocked = [i["id"] for i in halted["items"]] if halted else []
         if blocked != failed:

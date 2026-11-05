@@ -570,3 +570,270 @@ def test_phantoms_beside_a_live_run_leave_only_the_live_run(tmp_path):
     _stranded(repo, "d-pending", "staged", "stage_pending")
     _stranded(repo, "e-never", "minted", token_age_s=3600.0)
     assert _handover_live(repo) == ["a-live"]
+
+
+def test_a_commit_halted_run_left_at_staged_never_holds_the_handover(tmp_path, monkeypatch):
+    """ask-20261105T132059-61266a: commit refused, halt record written, stage still `staged`, fresh stamp,
+    live owner and held token. The hold returns clear at once instead of waiting out the bound."""
+    repo = tmp_path / "r1"
+    _stranded(repo, "ask-halted", "staged", "commit")
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.r1": str(repo)})
+    sleeps = []
+    runs, _ = live_runs.hold_for_mid_stage_runs(bound_s=120.0, poll_s=2.0, sleep=sleeps.append)
+    assert runs == [] and sleeps == []
+
+
+def test_control_a_staged_run_without_a_halt_record_still_holds_the_handover(tmp_path):
+    repo = tmp_path / "r1"
+    _stranded(repo, "ask-live", "staged")
+    assert _handover_live(repo) == ["ask-live"]
+
+
+def _held_marker(monkeypatch, held=True):
+    from coordinator_core.warm import breadcrumb
+
+    monkeypatch.setattr(breadcrumb, "handover_pending_held", lambda engine_root=None, **_: held)
+
+
+def test_drain_refuses_without_the_handover_pending_hold(tmp_path, monkeypatch):
+    _held_marker(monkeypatch, held=False)
+    with pytest.raises(RuntimeError):
+        live_runs.drain_for_handover(tmp_path)
+
+
+def test_drain_returns_at_once_for_a_staged_run_with_no_leg_in_flight(tmp_path, monkeypatch):
+    foreign = tmp_path / "foreign"
+    _fresh_staged_run(foreign, "run-foreign")
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.foreign": str(foreign)})
+    _held_marker(monkeypatch)
+
+    def no_sleep(_s):
+        raise AssertionError("slept with no leg in flight")
+
+    runs, held = live_runs.drain_for_handover(tmp_path, in_flight=lambda r: False, sleep=no_sleep)
+    assert runs == [] and held < 0.5
+
+
+def test_drain_waits_for_a_leg_in_flight_then_clears(tmp_path, monkeypatch):
+    foreign = tmp_path / "foreign"
+    _fresh_staged_run(foreign, "run-foreign")
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.foreign": str(foreign)})
+    _held_marker(monkeypatch)
+    clock = [0.0]
+    sleeps: list[float] = []
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        clock[0] += s
+
+    runs, held = live_runs.drain_for_handover(
+        tmp_path, in_flight=lambda r: clock[0] < 4.0, bound_s=60.0, poll_s=2.0,
+        sleep=fake_sleep, monotonic=lambda: clock[0],
+    )
+    assert runs == [] and sleeps == [2.0, 2.0] and held == 4.0
+
+
+def test_drain_reports_a_leg_still_in_flight_when_the_bound_lapses(tmp_path, monkeypatch):
+    foreign = tmp_path / "foreign"
+    _fresh_staged_run(foreign, "run-foreign")
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.foreign": str(foreign)})
+    _held_marker(monkeypatch)
+    clock = [0.0]
+
+    def fake_sleep(s):
+        clock[0] += s
+
+    runs, held = live_runs.drain_for_handover(
+        tmp_path, in_flight=lambda r: True, bound_s=5.0, poll_s=2.0,
+        sleep=fake_sleep, monotonic=lambda: clock[0],
+    )
+    assert [r.run_id for r in runs] == ["run-foreign"] and held >= 5.0
+
+
+def _bind_supervisor(tmp_path, dispatch):
+    import threading
+    from http.server import ThreadingHTTPServer
+
+    from coordinator_core.warm import cookie, skew, supervisor
+
+    skew.write_engine_stamp(tmp_path, "sha-test")
+    secret = cookie.ensure(tmp_path)
+    ctx = supervisor._ServerContext(
+        httpd=None, engine_root=tmp_path, version_state=skew.ServerVersionState(tmp_path), dispatch=dispatch,
+    )
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), supervisor._make_handler(ctx))
+    ctx.httpd = httpd
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd, httpd.server_address[1], secret
+
+
+def _post_op(port, secret):
+    import urllib.request
+
+    from coordinator_core.warm import cookie, supervisor
+
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}{supervisor.HOOK_PATH}",
+        data=json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash"}).encode(),
+        headers={"Content-Type": "application/json", cookie.COOKIE_HEADER: secret},
+        method="POST",
+    )
+    urllib.request.urlopen(req, timeout=10).read()
+
+
+def _wait_until(predicate, secs=5.0):
+    deadline = time.monotonic() + secs
+    while time.monotonic() < deadline:
+        if predicate():
+            return True
+        time.sleep(0.01)
+    return False
+
+
+def test_supervisor_in_flight_count_reads_nonzero_for_an_op_held_open(tmp_path, monkeypatch):
+    import threading
+
+    from coordinator_core.warm import supervisor
+
+    started, release = threading.Event(), threading.Event()
+
+    def blocking_dispatch(msg, *, caller=None, isolated=False):
+        started.set()
+        release.wait(10)
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+
+    httpd, port, secret = _bind_supervisor(tmp_path, blocking_dispatch)
+    monkeypatch.setattr(supervisor, "read_discovery", lambda root=None: {"port": port})
+    monkeypatch.setattr(supervisor, "discovery_is_live", lambda record: True)
+    worker = threading.Thread(target=_post_op, args=(port, secret), daemon=True)
+    try:
+        assert supervisor.in_flight_count(tmp_path) == 0
+        worker.start()
+        assert started.wait(5)
+        assert supervisor.in_flight_count(tmp_path) == 1
+        assert live_runs.engine_legs_in_flight(tmp_path) is True
+        release.set()
+        worker.join(5)
+        assert _wait_until(lambda: supervisor.in_flight_count(tmp_path) == 0)
+    finally:
+        release.set()
+        httpd.shutdown()
+
+
+def test_supervisor_parks_a_new_op_while_the_handover_marker_is_held(tmp_path, monkeypatch):
+    import threading
+
+    from coordinator_core.warm import breadcrumb, supervisor
+
+    started = threading.Event()
+
+    def dispatch(msg, *, caller=None, isolated=False):
+        started.set()
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
+
+    monkeypatch.setattr(supervisor, "HANDOVER_PARK_POLL_SECS", 0.01)
+    httpd, port, secret = _bind_supervisor(tmp_path, dispatch)
+    monkeypatch.setattr(supervisor, "read_discovery", lambda root=None: {"port": port})
+    monkeypatch.setattr(supervisor, "discovery_is_live", lambda record: True)
+    worker = threading.Thread(target=_post_op, args=(port, secret), daemon=True)
+    try:
+        with breadcrumb.hold_handover_pending(tmp_path):
+            worker.start()
+            time.sleep(0.3)
+            assert not started.is_set()
+            assert supervisor.in_flight_count(tmp_path) == 0
+        assert started.wait(5)
+        worker.join(5)
+    finally:
+        httpd.shutdown()
+
+
+def test_supervisor_in_flight_count_is_zero_without_a_live_listener_and_unknown_when_unaskable(tmp_path, monkeypatch):
+    from coordinator_core.warm import supervisor
+
+    monkeypatch.setattr(supervisor, "read_discovery", lambda root=None: None)
+    assert supervisor.in_flight_count(tmp_path) == 0
+    monkeypatch.setattr(supervisor, "read_discovery", lambda root=None: {"port": 1})
+    monkeypatch.setattr(supervisor, "discovery_is_live", lambda record: True)
+    monkeypatch.setattr(supervisor.cookie, "read", lambda root=None: None)
+    assert supervisor.in_flight_count(tmp_path) is None
+
+
+def test_front_door_in_flight_status_counts_relays_and_refuses_a_bad_credential(tmp_path, monkeypatch):
+    import threading
+    import urllib.error
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+
+    from coordinator_core.warm import front_door
+
+    monkeypatch.setattr(front_door._FrontDoorContext, "_boot_credential", staticmethod(lambda: "k"))
+    monkeypatch.setattr(front_door.door_credential, "read_secret", lambda: "k")
+
+    class _NoDials:
+        def record(self, **_kw):
+            pass
+
+    class _Unbound:
+        pass
+
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), _Unbound)
+    ctx = front_door._FrontDoorContext(httpd=httpd, engine_root=tmp_path)
+    ctx.dials = _NoDials()
+    httpd.RequestHandlerClass = front_door._make_handler(ctx)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    port = httpd.server_address[1]
+    monkeypatch.setattr(front_door, "read_discovery", lambda root=None: {"port": port})
+    monkeypatch.setattr(front_door, "discovery_is_live", lambda record: True)
+    try:
+        assert front_door.in_flight_count(tmp_path) == 0
+        ctx.in_flight.enter()
+        assert front_door.in_flight_count(tmp_path) == 1
+        bad = urllib.request.Request(
+            f"http://127.0.0.1:{port}{front_door.IN_FLIGHT_PATH}",
+            headers={front_door.door_credential.CREDENTIAL_HEADER: "wrong"},
+        )
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(bad, timeout=5)
+        assert err.value.code == 403
+        ctx.in_flight.exit()
+        assert front_door.in_flight_count(tmp_path) == 0
+    finally:
+        httpd.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("supervisor_count", "door_count", "expected"),
+    [(0, 0, False), (1, 0, True), (0, 2, True), (None, 0, True), (0, None, True)],
+)
+def test_engine_legs_in_flight_combines_both_probes(tmp_path, monkeypatch, supervisor_count, door_count, expected):
+    from coordinator_core.warm import front_door, supervisor
+
+    monkeypatch.setattr(supervisor, "in_flight_count", lambda root=None, **k: supervisor_count)
+    monkeypatch.setattr(front_door, "in_flight_count", lambda root=None, **k: door_count)
+    assert live_runs.engine_legs_in_flight(tmp_path) is expected
+
+
+def test_drain_default_probe_gates_on_engine_legs(tmp_path, monkeypatch):
+    foreign = tmp_path / "foreign"
+    _fresh_staged_run(foreign, "run-foreign")
+    monkeypatch.setattr(live_runs, "_registered_repos", lambda: {"repos.foreign": str(foreign)})
+    _held_marker(monkeypatch)
+    monkeypatch.setattr(live_runs, "engine_legs_in_flight", lambda root: False)
+    assert live_runs.drain_for_handover(tmp_path, sleep=lambda s: None)[0] == []
+    monkeypatch.setattr(live_runs, "engine_legs_in_flight", lambda root: True)
+    runs, _ = live_runs.drain_for_handover(tmp_path, bound_s=0.0, sleep=lambda s: None)
+    assert [r.run_id for r in runs] == ["run-foreign"]
+
+
+def test_supervisor_park_gives_up_at_its_bound_when_the_marker_never_clears(tmp_path, monkeypatch):
+    from coordinator_core.warm import breadcrumb, supervisor
+
+    monkeypatch.setattr(supervisor, "HANDOVER_PARK_POLL_SECS", 0.01)
+    monkeypatch.setattr(supervisor, "HANDOVER_PARK_BOUND_SECS", 0.2)
+    ctx = type("Ctx", (), {"engine_root": tmp_path})()
+    with breadcrumb.hold_handover_pending(tmp_path):
+        started = time.monotonic()
+        supervisor._park_while_handover_pending(ctx)
+        elapsed = time.monotonic() - started
+    assert 0.2 <= elapsed < 2.0

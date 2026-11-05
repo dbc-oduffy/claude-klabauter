@@ -535,6 +535,7 @@ def _landing_integrity_gate(
             pass
     paths = [p for p in all_paths if p not in skip]
     findings = li.unparseable_py(worktree_root, paths)
+    findings += li.lost_definition_findings(worktree_root, paths, deleted_paths, landed_text=landed_text)
     findings += li.withheld_closure_findings(
         worktree_root, paths, deleted_paths, withheld, landed_text=landed_text,
     )
@@ -715,7 +716,7 @@ def _measured_rev_drift_refusal(
     if not met:
         return None
     try:
-        drifted = measured_rev.measured_rev_drift(run_dir, worktree_root)
+        drifted = measured_rev.foreign_drift(run_dir, worktree_root)
     except (OSError, ValueError) as exc:
         reason, detail = "measured-rev-record-unreadable", f"measured-rev record unreadable ({exc})"
     else:

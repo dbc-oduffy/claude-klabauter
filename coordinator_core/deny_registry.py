@@ -26,7 +26,10 @@ MALFORMED_REQUEST = "malformed-request"
 #: shared tree (a blanket commit sweeping their edits). Not an op refusal class.
 DISRUPTIVE = "disruptive"
 
-IRREVERSIBLE_CLASSES = frozenset({BOX_DEGRADING, IRREVERSIBLE_EXTERNAL, MALFORMED_REQUEST})
+#: ``head-integrity``: a landing that would put a caller of a name HEAD lacks on the branch.
+HEAD_INTEGRITY = "head-integrity"
+
+IRREVERSIBLE_CLASSES = frozenset({BOX_DEGRADING, IRREVERSIBLE_EXTERNAL, MALFORMED_REQUEST, HEAD_INTEGRITY})
 GUARD_CLASSES = frozenset({BOX_DEGRADING, IRREVERSIBLE_EXTERNAL, DISRUPTIVE})
 
 #: Guards that may deny, each with its class. Keys are kebab-case guard names. A guard
@@ -95,6 +98,8 @@ ADVISORY_BY_RULING: Dict[str, str] = {
     "guard-repo-setup-claude-home-refusal": "repo-setup config overwrite under ~/.claude; recoverable from the repo",
     "guard-terminal-review": "Stop-hook review gate; no side effect",
     "guard-turn-intent": "Stop-hook turn record; no side effect",
+    "block-published-engine-mirror-write": "a write into the published mirror; recoverable by re-publish",
+    "rewrite-repo-root-search": "search-scope rewrite nudge; no side effect",
     "hand-dispatch-planner": "a hand dispatch of a workflow-owned planner; the run can be redone",
     "nudge-em-code-dispatch": "routing nudge for an EM's inline code write",
     "nudge-foreground-agent-dispatch": "foreground to background rewrite",
@@ -259,6 +264,10 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
     _OPS + "daily_summary_gap:GapRefusal": _pending("822520"),
 }
 
+#: Landing refusal reasons (``landing_integrity`` finding kinds) allowed to withhold or refuse a
+#: landing, each with its class.
+LANDING_REFUSAL_CLASS: Dict[str, str] = {"lost-definition": HEAD_INTEGRITY}
+
 _RAISE_REFUSAL = re.compile(r"^\s*raise\s+(?:\w+\.)*(\w*Refus\w*)", re.M)
 _PENDING_OWNER = re.compile(r"^(C\d+|[A-Za-z0-9][A-Za-z0-9_-]{3,})$")
 
@@ -290,6 +299,7 @@ def registry_problems(
     guard_classes: Dict[str, str] | None = None,
     op_classes: Dict[str, OpClass] | None = None,
     refusal_sites: Iterable[str] = (),
+    landing_classes: Dict[str, str] | None = None,
 ) -> List[Tuple[str, str]]:
     """``(site, reason)`` for every registry entry or op refusal that breaks the rule.
 
@@ -298,7 +308,11 @@ def registry_problems(
     """
     guards = GUARD_DENY_CLASS if guard_classes is None else guard_classes
     ops = OP_REFUSAL_CLASS if op_classes is None else op_classes
+    landing = LANDING_REFUSAL_CLASS if landing_classes is None else landing_classes
     problems: List[Tuple[str, str]] = []
+    for reason, cls in landing.items():
+        if cls not in IRREVERSIBLE_CLASSES:
+            problems.append((reason, f"landing refusal class {cls!r} is not in IRREVERSIBLE_CLASSES"))
     for name, cls in guards.items():
         if cls not in GUARD_CLASSES:
             problems.append((name, f"guard class {cls!r} is not an irreversible guard class"))

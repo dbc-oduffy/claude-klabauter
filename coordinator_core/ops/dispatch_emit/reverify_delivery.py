@@ -98,29 +98,30 @@ def _sidecar(call: str, plan_path: str, label: str) -> str:
     return with_sidecar_clause(call, "reverify", Path(plan_path.replace("\\", "/")).stem or "run", label)
 
 
-_Scope = Tuple[Optional[List[str]], str, List[str]]
+_Scope = Tuple[Optional[List[str]], str, List[str], str]
 
 
 def _select_scope(repo_root: Optional[Path], base: Optional[str], head_sha: str) -> _Scope:
-    """`(tests, error, unmapped)`: the engine-computed test set for `base..head_sha`, or
-    `(None, reason, [])` when the base is unknown or the selection raises. `unmapped` names the
+    """`(tests, error, unmapped, notice)`: the engine-computed test set for `base..head_sha`, or
+    `(None, reason, [], "")` when the base is unknown or the selection raises. `notice` is the
+    selector's narrowing statement, empty when nothing was dropped. `unmapped` names the
     changed files no selected test covers: when no test is selected, every non-`.py` file (a
     non-`.py` file beside selected tests is ordinary and never forbids a pass), and, when
     selection is not `fully_mapped`, every changed `.py` that is not itself a selected test."""
     # The literal "run_base_sha" is the unresolved-placeholder value of the caller's `base`.
     if repo_root is None or not base or base == "run_base_sha":
-        return None, "run_base_sha or repo root unknown", []
+        return None, "run_base_sha or repo root unknown", [], ""
     from coordinator_core.ops.reverify_scope import select_tests
 
     try:
         picked = select_tests(Path(repo_root), base, head_sha)
     except ValueError as exc:
-        return None, str(exc), []
+        return None, str(exc), [], ""
     tests = list(picked["tests"])
     unmapped = [p for p in picked["changed"] if not p.endswith(".py")] if not tests else []
     if not picked["fully_mapped"]:
         unmapped += [p for p in picked["changed"] if p.endswith(".py") and p not in tests]
-    return tests, "", unmapped
+    return tests, "", unmapped, picked.get("notice", "")
 
 
 #: Paths per `python -m pytest` invocation: keeps each command line well under OS limits.
@@ -179,9 +180,12 @@ def _batched_paths(tests: List[str]) -> str:
     ).rstrip(";")
 
 
-def _scope_clause(tests: Optional[List[str]], error: str, base: str, unmapped: Optional[List[str]] = None) -> str:
+def _scope_clause(
+    tests: Optional[List[str]], error: str, base: str, unmapped: Optional[List[str]] = None, notice: str = ""
+) -> str:
     """The set-naming sentence: explicit files, run nothing (empty), or an error leg (no set).
-    Any `unmapped` file forbids a `pass`: no test is evidence for it."""
+    Any `unmapped` file forbids a `pass`: no test is evidence for it. A non-empty `notice` is
+    stated in `summary`."""
     if tests is None:
         return (
             f"No test set could be computed ({error}). Run nothing, no directory, tier or suite; "
@@ -205,6 +209,7 @@ def _scope_clause(tests: Optional[List[str]], error: str, base: str, unmapped: O
         + _TIER_MARKER_CLAUSE
         + (_ADMIT_GATE if len(tests) > 1 else "")
         + unmapped_clause
+        + (f"Scope notice: {notice} Quote it in `summary`. " if notice else "")
         + f"Re-run each red at the run base {base} in an export of it and list in `baseline.pre_existing` "
         "only ids measured red there; a red not re-run or whose export failed is `unverified`, never "
         "`pre_existing`; a base check that failed in the export itself (`git archive` exit 128, no `.git`) is `unverified`. "
@@ -218,14 +223,14 @@ def _tests_prompt(
     repo_root: Optional[Path] = None,
     *,
     write_record: bool = False,
-    scope: _Scope = (None, "no selection", []),
+    scope: _Scope = (None, "no selection", [], ""),
 ) -> str:
     """The scoped-test brief. `repo_root` is the repo whose pinned interpreter the clause names;
     `scope` is `_select_scope`'s result. `write_record` adds the test-runner's sidecar clause,
     which an agent without Write cannot honour."""
     return (
         f"Run the plan's scoped tests at HEAD {head_sha}: {plan_path}, run_base_sha {base}. "
-        f"{_scope_clause(scope[0], scope[1], base, scope[2])}"
+        f"{_scope_clause(scope[0], scope[1], base, scope[2], scope[3])}"
         f"{interpreter_clause(repo_root)} "
         "Run them through the engine entry `emit-dispatch-workflow --retest-targeted "
         "--from-task-output <file> --isolated-export`, then `emit-dispatch-workflow --retest-targeted "
@@ -550,7 +555,7 @@ def compose_reverify_script(
     tests_ident: dict[str, str] = {}
     # A degraded host runs the judge as general-purpose, which has Write: keep the two legs there.
     verify_merge = rerun_tests and judge_call is not None and not host_degraded
-    scope = _select_scope(repo_root, run_base_sha, head_sha) if rerun_tests else (None, "no selection", [])
+    scope = _select_scope(repo_root, run_base_sha, head_sha) if rerun_tests else (None, "no selection", [], "")
     judge_lines = ""
     criterion_field = ""
     if verify_merge:

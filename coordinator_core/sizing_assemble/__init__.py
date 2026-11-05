@@ -265,7 +265,7 @@ from coordinator_core.bounded_slug import bounded_slug
 from coordinator_core.session.output_tree_layout import locate, write_rel
 
 from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped  # noqa: F401 -- ENGINE_SIZE_RULE re-exported
-from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
+from coordinator_core.roadmap.post_stamp_clause import doc_approval_refusal, suite_tier_refusal
 
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     Flag,
@@ -1133,6 +1133,9 @@ def route(
             "--mechanically-uniform-reason needs --mechanically-uniform"
         )
     scout_evidence = list(scout_evidence or [])
+    doc_refusal = doc_approval_refusal(exit_criterion)
+    if doc_refusal is not None:
+        raise SizingAssembleError(doc_refusal)
     tier_refusal = suite_tier_refusal(exit_criterion)
     if tier_refusal is not None:
         if not _suite_tier_rewrite_is_safe(exit_criterion):
@@ -2557,7 +2560,9 @@ def amend_exit_criterion(root: Path, sizing: str, statement: str, ruling: str) -
     ruling_file = contained_path(root / ruling, [root])
     if ruling_file is None or not ruling_file.is_file():
         raise SizingAssembleError(f"--ruling {ruling!r} is not a file under {root.as_posix()}")
-    refusal = post_stamp_refusal(statement) or suite_tier_refusal(statement)
+    refusal = (
+        post_stamp_refusal(statement) or suite_tier_refusal(statement) or doc_approval_refusal(statement)
+    )
     if refusal is not None:
         raise SizingAssembleError(refusal)
 

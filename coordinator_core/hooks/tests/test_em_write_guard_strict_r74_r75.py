@@ -90,8 +90,13 @@ def _is_deny(result) -> bool:
     return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 
+def _is_advisory(result) -> bool:
+    hso = (result or {}).get("hookSpecificOutput") or {}
+    return hso.get("permissionDecision") == "allow" and str(hso.get("additionalContext", "")).startswith("Advisory: ")
+
+
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 def _emit_turn_budget_advisory(root: Path, tmp_path: Path, monkeypatch) -> str:
@@ -115,11 +120,11 @@ def _emit_turn_budget_advisory(root: Path, tmp_path: Path, monkeypatch) -> str:
 @SHAPES
 def test_a_unmeasurable_write_charges_budget_so_every_later_edit_denies(env, cmd):
     root = env
-    record = _shell(root, cmd)
-    assert record is not None and record.verdict_kind == "deny"
-    assert "Budget unmeasurable" in record.summary
+    assert _shell(root, cmd) is None
+    assert xb.is_advised(xb.read_lane(root, SID))
     for rel in ("a.py", "b.py", "c.py"):
-        assert _is_deny(_edit(root, rel)), rel
+        edit = _edit(root, rel)
+        assert not _is_deny(edit) and _is_advisory(edit), rel
 
 
 @pytest.mark.parametrize(
@@ -133,9 +138,9 @@ def test_a_unmeasurable_write_charges_budget_so_every_later_edit_denies(env, cmd
     ids=["node-stdin", "bash-s", "python-c", "node-e"],
 )
 def test_a_other_interpreter_write_forms_are_refused_as_unmeasurable(env, cmd):
-    record = _shell(env, cmd)
-    assert record is not None and record.verdict_kind == "deny"
-    assert "Budget unmeasurable" in record.summary
+    assert _shell(env, cmd) is None
+    lane = xb.read_lane(env, SID)
+    assert xb.is_advised(lane)
 
 
 def test_a_control_edit_without_a_prior_unmeasurable_write_is_admitted(env):
@@ -149,10 +154,8 @@ def test_b_advisory_closes_product_writes_naming_engine_ask_until_it_fires(env, 
     assert xb.is_advised(xb.read_lane(root, SID))
 
     edit = _edit(root, "a.py")
-    assert _is_deny(edit) and "engine-ask" in _reason(edit)
-    shell = _shell(root, cmd)
-    assert shell is not None and shell.verdict_kind == "deny"
-    assert "engine-ask" in shell.summary
+    assert not _is_deny(edit) and _is_advisory(edit) and "engine-ask" in _reason(edit)
+    assert _shell(root, cmd) is None
 
     monkeypatch.setattr(flag_em_poll_in_flight, "session_workflow_run_ids", lambda sid: ["run-1"])
     assert leaf.advised_deny_envelope(str(root), SID) is None
@@ -163,19 +166,18 @@ def test_b_latch_holds_without_an_xs_lane(env, tmp_path, monkeypatch, cmd):
     root = env
     xb.lane_path(root, SID).unlink()
     _emit_turn_budget_advisory(root, tmp_path, monkeypatch)
-    shell = _shell(root, cmd)
-    assert shell is not None and shell.verdict_kind == "deny"
-    assert "engine-ask" in shell.summary
+    assert _shell(root, cmd) is None
+    assert xb.is_advised(xb.read_lane(root, SID))
 
 
 def test_c_denied_edits_and_latch_envelope_carry_the_resolved_level(env):
     root = env
-    assert _shell(root, R75).verdict_kind == "deny"
+    assert _shell(root, R75) is None
     edit = _edit(root, "a.py")
-    assert _is_deny(edit) and edit["guardLevel"] == "strict"
+    assert _is_advisory(edit) and edit["guardLevel"] == "log"
     xb.latch_advised(root, SID)
     latched = leaf.advised_deny_envelope(str(root), SID)
-    assert latched is None or latched["guardLevel"] == "strict"
+    assert latched is None or latched["guardLevel"] == "log"
 
 
 def test_c_fire_record_carries_the_resolved_level(tmp_path):
@@ -183,4 +185,4 @@ def test_c_fire_record_carries_the_resolved_level(tmp_path):
     assert block_discharge.record_fire(str(root), SID, "nudge-em-code-dispatch", "r74")
     records, _ = block_discharge._read_one(block_discharge._ledger_path(str(root), SID))
     fires = [r for r in records if r.get("kind") == "fire"]
-    assert fires and all(r["level"] == "strict" for r in fires)
+    assert fires and all(r["level"] == "log" for r in fires)

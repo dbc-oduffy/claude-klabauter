@@ -771,6 +771,30 @@ def _ledger_met_ids(ledger_verdict: object) -> list:
     ]
 
 
+def met_row_files(root: Path, verdict: object) -> tuple:
+    """Sorted repo-relative posix files that a ``met`` item names in its ``root_read`` or ``met_by``
+    and that exist under ``root`` (directories and paths outside it are skipped). Pure: no spawn."""
+    from coordinator_core.ops.dispatch_emit.post_commit_paths import _contained
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import normalize_verdict, path_tokens
+
+    items = normalize_verdict(verdict).get("items") if isinstance(verdict, dict) else None
+    if not isinstance(items, list):
+        return ()
+    base = Path(root).resolve()
+    found: set = set()
+    for item in items:
+        if not isinstance(item, dict) or item.get("status") != "met":
+            continue
+        for key in ("root_read", "met_by"):
+            value = item.get(key)
+            for text in [value] if isinstance(value, str) else (value if isinstance(value, list) else []):
+                for token in path_tokens(text) if isinstance(text, str) else ():
+                    rel = _contained(base, token)
+                    if rel is not None and (base / rel).is_file():
+                        found.add(rel)
+    return tuple(sorted(found))
+
+
 def _withheld_product_files(
     worktree_root: Path, snapshot: Optional[_Snapshot], declared: set, committed: set,
 ) -> list:

@@ -88,29 +88,33 @@ def _is_deny(result) -> bool:
     return bool(result) and result["hookSpecificOutput"].get("permissionDecision") == "deny"
 
 
+def _is_advisory(result) -> bool:
+    hso = (result or {}).get("hookSpecificOutput") or {}
+    return hso.get("permissionDecision") == "allow" and str(hso.get("additionalContext", "")).startswith("Advisory: ")
+
+
 def _reason(result) -> str:
-    return result["hookSpecificOutput"]["permissionDecisionReason"]
+    return result["hookSpecificOutput"]["additionalContext"]
 
 
 @pytest.mark.parametrize("cmd", [R74, R75], ids=["r74", "r75"])
 def test_strict_unmeasurable_write_makes_later_edits_over_budget(env, cmd):
     root, _ = env
-    record = _shell(root, cmd)
-    assert record is not None and record.verdict_kind == "deny"
-    assert "Budget unmeasurable" in record.summary
+    assert _shell(root, cmd) is None
+    assert xb.is_advised(xb.read_lane(root, SID))
     for rel, old in (("a.py", "l1\n"), ("b.py", "l2\n"), ("c.py", "l3\n")):
         result = _edit(root, rel, old, "v = 1\n")
-        assert _is_deny(result), rel
+        assert not _is_deny(result), rel
+        assert _is_advisory(result), rel
         assert "engine-ask" in _reason(result)
 
 
 def test_strict_unmeasurable_advisory_latches_in_budget_writes_until_engine_ask_fires(env, monkeypatch):
     root, _ = env
-    assert _shell(root, R75).verdict_kind == "deny"
+    assert _shell(root, R75) is None
     assert xb.is_advised(xb.read_lane(root, SID))
-    shell = _shell(root, "cat > pkg/mod.py <<'EOF'\nx = 1\nEOF")
-    assert shell is not None and shell.verdict_kind == "deny"
-    assert "engine-ask" in shell.summary
+    latched = _edit(root, "a.py", "l1\n", "v = 1\n")
+    assert _is_advisory(latched) and "engine-ask" in _reason(latched)
     monkeypatch.setattr(flag_em_poll_in_flight, "session_workflow_run_ids", lambda sid: ["run-1"])
     assert _shell(root, "cat > pkg/mod.py <<'EOF'\nx = 1\nEOF") is None
 
@@ -119,15 +123,14 @@ def test_strict_latched_lane_denies_a_measured_in_budget_write_naming_engine_ask
     root, _ = env
     xb.latch_advised(root, SID)
     result = _edit(root, "a.py", "l1\n", "v = 1\n")
-    assert _is_deny(result)
+    assert not _is_deny(result) and _is_advisory(result)
     assert "closed until engine-ask fires" in _reason(result) and "engine-ask" in _reason(result)
 
 
 def test_warn_level_unmeasurable_write_stays_an_advisory_and_latches_nothing(env, monkeypatch):
     root, _ = env
     _set_level(monkeypatch, "warn")
-    record = _shell(root, R75)
-    assert record is not None and record.verdict_kind != "deny"
+    assert _shell(root, R75) is None
     lane = xb.read_lane(root, SID)
     assert not xb.is_advised(lane) and not lane.get("unmeasured")
     assert not _is_deny(_edit(root, "a.py", "l1\n", "v = 1\n"))

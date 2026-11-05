@@ -20,7 +20,7 @@ def _stamp(tmp_path: Path) -> None:
 def _patch_try_warm_dispatch(monkeypatch, fn):
     from coordinator_core.warm import client
 
-    monkeypatch.setattr(client, "try_warm_dispatch", fn)
+    monkeypatch.setattr(client, "try_warm_dispatch", lambda msg, **kwargs: fn(msg))
 
 
 def test_trigger_listener_boot_calls_ensure_listener_from_a_stamped_root(tmp_path, monkeypatch):

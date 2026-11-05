@@ -33,15 +33,28 @@ def test_start_returns_fire_args_and_escrowed_token(tmp_path):
     assert run_token.escrow(tmp_path, RUN, token)
     out = _call(tmp_path, "start")
     assert out["ok"] is True and out["refusal"] is None
-    assert out["fire_args"] == {"repoRoot": tmp_path.as_posix(), "runToken": token}
-    assert out["script_path"] == f"scratch/warp/{RUN}.workflow.mjs"
+    run_rel = f"scratch/warp/{RUN}.workflow.mjs"
+    assert out["fire_args"] is None
+    assert out["run_script"] == run_rel
+    assert out["script_path"] != run_rel and out["script_path"].startswith("scratch/warp/")
+    text = (tmp_path / out["script_path"]).read_text(encoding="utf-8")
+    assert "Starts a minted run through the stage loop" in text and run_rel in text and token in text
 
 
 def test_start_without_escrow_still_returns_repo_root(tmp_path):
     _repo(tmp_path)
     out = _call(tmp_path, "start")
     assert out["ok"] is True
+    assert out["run_script"] == f"scratch/warp/{RUN}.workflow.mjs"
+    text = (tmp_path / out["script_path"]).read_text(encoding="utf-8")
+    assert tmp_path.as_posix() in text and "runToken" not in text.split("repoRoot", 1)[1].split("}", 1)[0]
+
+
+def test_start_args_is_the_raw_run_script_reply(tmp_path):
+    _repo(tmp_path)
+    out = minted_run.start_args(tmp_path, RUN)
     assert out["fire_args"] == {"repoRoot": tmp_path.as_posix()}
+    assert out["script_path"] == f"scratch/warp/{RUN}.workflow.mjs"
 
 
 def test_start_with_no_stage_file_is_allowed(tmp_path):
@@ -56,7 +69,7 @@ def test_start_refuses_when_the_script_is_missing(tmp_path):
     assert out["refusal"].startswith(minted_run.REFUSAL_NO_SCRIPT)
 
 
-def test_start_writes_nothing(tmp_path):
+def test_start_writes_nothing_into_the_run_dir(tmp_path):
     rdir = _repo(tmp_path)
     before = sorted(p.name for p in rdir.iterdir())
     _call(tmp_path, "start")
@@ -128,8 +141,8 @@ def test_start_given_the_common_dir_key_finds_the_run_from_another_cwd(tmp_path,
     key = resolve_op_repo_key(minted_run.OP_NAME, tmp_path)
     out = minted_run._handler({"run_id": RUN, "action": "start"}, key)
     assert out["ok"] is True, out
-    assert out["fire_args"] == {"repoRoot": tmp_path.as_posix()}
-    assert out["script_path"] == f"scratch/warp/{RUN}.workflow.mjs"
+    assert out["run_script"] == f"scratch/warp/{RUN}.workflow.mjs"
+    assert out["script_path"] != out["run_script"] and (tmp_path / out["script_path"]).is_file()
 
 
 def test_unknown_run_is_still_refused_given_the_common_dir_key(tmp_path):

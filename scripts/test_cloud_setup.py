@@ -374,11 +374,13 @@ def test_host_precondition_refusal_still_writes_the_session_verdict_surface(
     report_path = tmp_path / "cloud-setup-report.json"
     monkeypatch.setattr(cloud_mod, "INSTALL_REPORT_PATH", report_path)
 
+    settings_home = tmp_path / "settings-home"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
+
     rc = cloud_mod.main()
 
     assert rc == 0
-    claude_home = Path(cloud_mod.os.environ["CLAUDE_HOME"]) / ".claude"
-    verdict_path = claude_home / "rules" / cloud_mod.SESSION_VERDICT_RULE
+    verdict_path = settings_home / cloud_mod.SESSION_VERDICT_RULE
     assert verdict_path.exists(), "the refusal is the case that most needs the session surface"
     body = verdict_path.read_text()
     assert "host precondition" in body

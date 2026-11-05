@@ -47,7 +47,8 @@ def _stop_payload(tmp_path: Path, text: str) -> dict:
 def test_turn_intent_blocks_announced_but_unexecuted_final_turn(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_COCKPIT", "1")
     result = gti._handler({"payload": _stop_payload(tmp_path, ANNOUNCE_TEXT)})
-    assert result.get("decision") == "block", result
+    assert result.get("decision") != "block", result
+    assert str(result.get("systemMessage", "")).startswith("Advisory: "), result
 
 
 def test_manufactured_blocker_advises_on_claimed_blocked_final_turn(tmp_path):

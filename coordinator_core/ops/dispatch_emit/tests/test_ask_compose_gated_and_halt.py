@@ -132,7 +132,9 @@ def _eval_reason(pulled_json: str) -> str:
 @pytest.mark.cadence
 def test_no_ready_halt_appends_pulled_reasons_after_the_literal(monkeypatch):
     script = _script(monkeypatch)
-    assert "reason: ('plan-blitz reported no ready plan' + (((_blitz?.regate ?? _blitz)?.pulled ?? [])" in script
+    from coordinator_core.ops.dispatch_emit.ask_roadmap import no_ready_reason_js
+
+    assert f"reason: {no_ready_reason_js('(_blitz?.regate ?? _blitz)?.pulled')}" in script
     got = _eval_reason('[{"reason":"1 blocking, 0 advisory: a"},{"x":1},{"reason":"b"}]')
     assert got == "plan-blitz reported no ready plan: 1 blocking, 0 advisory: a; b"
 

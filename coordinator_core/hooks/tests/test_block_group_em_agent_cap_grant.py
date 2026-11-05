@@ -37,10 +37,13 @@ def group_em(monkeypatch):
         "Heads up\nGO with up to 6 waves, no builds",
     ],
 )
-def test_agent_cap_in_grant_denies(group_em, message):
+def test_agent_cap_in_grant_advises(group_em, message):
     out = m._handler(_p(message))
-    assert _denies(out)
-    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert not _denies(out)
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    reason = hso["additionalContext"]
+    assert reason.startswith("Advisory: ")
     assert "maxWorkers=2" in reason and "one tsc" in reason
 
 

@@ -58,18 +58,36 @@ def _iso_ago(seconds: float) -> str:
     return stamp.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
+_DEAD_PID = 2_000_000_011
+_FAKE_STATE: dict = {}
+_FAKE_CREATE: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def fake_pid_probe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Liveness and create time come from fakes: `_DEAD_PID` reads dead, every
+    other pid reads as the real probe says, and no create time is known unless
+    a test sets one (the test process itself post-dates the back-dated locks)."""
+    from coordinator_core.ask_spool import record
+
+    real_state = record.pid_state
+    _FAKE_STATE.clear()
+    _FAKE_CREATE.clear()
+    _FAKE_STATE[_DEAD_PID] = False
+    monkeypatch.setattr(record, "pid_state", lambda pid: _FAKE_STATE[pid] if pid in _FAKE_STATE else real_state(pid))
+    monkeypatch.setattr(record, "pid_create_time", lambda pid: _FAKE_CREATE.get(pid))
+
+
 def _dead_pid() -> int:
-    import subprocess
-    import sys
+    return _DEAD_PID
 
-    from coordinator_core.win_portability import no_console_creationflags
 
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "pass"],
-        **no_console_creationflags(),
-    )
-    proc.wait()
-    return proc.pid
+def _heartbeat_meta(pid: int, heartbeat_ago: float, started_ago: float = 60.0) -> Path:
+    path = _write_meta(pid=pid, owner="hb-session", started_at=_iso_ago(started_ago))
+    meta = json.loads((path / "meta.json").read_text(encoding="utf-8"))
+    meta["heartbeat_at"] = _iso_ago(heartbeat_ago)
+    (path / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    return path
 
 
 def test_lock_path_is_under_settings_home() -> None:
@@ -166,38 +184,163 @@ def test_stale_by_dead_pid_is_reclaimed() -> None:
     assert suite_mutex.holder()["owner"] == "session-b"
 
 
-def test_live_pid_past_the_live_holder_ceiling_is_reclaimed() -> None:
-    """A wedged-but-alive runner still cannot hold the fleet hostage forever.
+def test_live_holder_without_heartbeat_is_never_reclaimed_on_age() -> None:
+    assert not hasattr(suite_mutex, "LIVE_HOLDER_TTL_SECS")
+    _write_meta(pid=os.getpid(), owner="raw-acquirer", started_at=_iso_ago(7 * 60 * 60))
 
-    Supersedes `test_stale_by_ttl_is_reclaimed_even_with_a_live_pid`, which
-    pinned `STALE_TTL_SECS` as the ceiling for a LIVE holder too. That contract
-    was wrong in practice, not merely tight: on 2026-08-18 a full-tier gate run
-    passed 45 minutes while still executing, its lock was reclaimed mid-suite,
-    and a second pytest started against the same tree — the exact concurrency
-    `with-suite-mutex` exists to prevent. The anti-hostage intent the old test
-    protected is preserved here at `LIVE_HOLDER_TTL_SECS`; only the ceiling for
-    a demonstrably-live holder moved.
-    """
-    _write_meta(
-        pid=os.getpid(),
-        owner="wedged-session",
-        started_at=_iso_ago(suite_mutex.LIVE_HOLDER_TTL_SECS + 60),
-    )
+    current = suite_mutex.holder()
+    assert current is not None and current["owner"] == "raw-acquirer"
+
+
+def test_live_pid_past_stale_ttl_with_fresh_heartbeat_is_kept() -> None:
+    _heartbeat_meta(os.getpid(), heartbeat_ago=5, started_ago=suite_mutex.STALE_TTL_SECS + 60)
+
+    current = suite_mutex.holder()
+    assert current is not None, "a live holder past STALE_TTL was reclaimed mid-run"
+    assert current["owner"] == "hb-session"
+
+
+def test_live_pid_with_stale_heartbeat_is_reclaimed() -> None:
+    """An orphaned child (its wrapper dead) still reads alive but stops heartbeating."""
+    _heartbeat_meta(os.getpid(), heartbeat_ago=suite_mutex.HEARTBEAT_STALE_SECS + 60)
+
+    assert suite_mutex.holder() is None
+    assert not suite_mutex.lock_path().exists()
+    assert suite_mutex.acquire("session-b", "pytest") is True
+
+
+def test_pid_created_after_the_lock_was_taken_is_reclaimed() -> None:
+    import time
+
+    pid = 4_242_424
+    _FAKE_STATE[pid] = True
+    _FAKE_CREATE[pid] = time.time() - 10
+    _write_meta(pid=pid, owner="recycled", started_at=_iso_ago(600))
 
     assert suite_mutex.holder() is None
     assert suite_mutex.acquire("session-b", "pytest") is True
 
 
-def test_live_pid_past_stale_ttl_but_within_live_ceiling_is_kept() -> None:
-    _write_meta(
-        pid=os.getpid(),
-        owner="slow-but-honest-suite",
-        started_at=_iso_ago(suite_mutex.STALE_TTL_SECS + 60),
-    )
+def test_pid_created_before_the_lock_was_taken_is_kept() -> None:
+    import time
+
+    pid = 4_242_425
+    _FAKE_STATE[pid] = True
+    _FAKE_CREATE[pid] = time.time() - 1200
+    _write_meta(pid=pid, owner="original", started_at=_iso_ago(600))
 
     current = suite_mutex.holder()
-    assert current is not None, "a live holder past STALE_TTL was reclaimed mid-run"
-    assert current["owner"] == "slow-but-honest-suite"
+    assert current is not None and current["owner"] == "original"
+
+
+def test_unreadable_create_time_does_not_reclaim_a_live_pid() -> None:
+    pid = 4_242_426
+    _FAKE_STATE[pid] = True
+    _write_meta(pid=pid, owner="unknown-age", started_at=_iso_ago(600))
+
+    assert suite_mutex.holder()["owner"] == "unknown-age"
+
+
+def test_indeterminate_pid_with_stale_heartbeat_is_reclaimed() -> None:
+    pid = 4_242_427
+    _FAKE_STATE[pid] = None
+    _heartbeat_meta(pid, heartbeat_ago=suite_mutex.HEARTBEAT_STALE_SECS + 60)
+
+    assert suite_mutex.holder() is None
+
+
+def _fake_kernel32(monkeypatch: pytest.MonkeyPatch, exit_code: int, created_filetime: int):
+    import ctypes
+
+    from coordinator_core.ask_spool import record
+
+    class _Kernel32:
+        def OpenProcess(self, access, inherit, pid):
+            return 77
+
+        def GetExitCodeProcess(self, handle, ref):
+            ref._obj.value = exit_code
+            return 1
+
+        def GetProcessTimes(self, handle, created, exited, kernel, user):
+            created._obj.value = created_filetime
+            return 1
+
+        def CloseHandle(self, handle):
+            return 1
+
+    monkeypatch.setattr(ctypes, "windll", type("W", (), {"kernel32": _Kernel32()})(), raising=False)
+    monkeypatch.setattr(record, "pid_state", record.win_pid_state)
+    monkeypatch.setattr(record, "pid_create_time", record.win_pid_create_time)
+
+
+def test_windows_exit_code_not_still_active_is_reclaimed_by_default_holder(monkeypatch) -> None:
+    _fake_kernel32(monkeypatch, exit_code=1, created_filetime=0)
+    _write_meta(pid=41712, owner="exited-holder", started_at=_iso_ago(60))
+
+    assert suite_mutex.holder() is None
+    assert not suite_mutex.lock_path().exists()
+
+
+def test_windows_still_active_with_old_create_time_is_kept(monkeypatch) -> None:
+    from coordinator_core.ask_spool import record
+
+    long_ago = (1_700_000_000 * 10_000_000) + record._FILETIME_UNIX_EPOCH
+    _fake_kernel32(monkeypatch, exit_code=259, created_filetime=long_ago)
+    _write_meta(pid=41712, owner="running-holder", started_at=_iso_ago(60))
+
+    assert suite_mutex.holder()["owner"] == "running-holder"
+
+
+def test_windows_still_active_with_create_time_after_started_at_is_reclaimed(monkeypatch) -> None:
+    import time
+
+    from coordinator_core.ask_spool import record
+
+    just_now = int((time.time() - 5) * 10_000_000) + record._FILETIME_UNIX_EPOCH
+    _fake_kernel32(monkeypatch, exit_code=259, created_filetime=just_now)
+    _write_meta(pid=41712, owner="recycled-holder", started_at=_iso_ago(600))
+
+    assert suite_mutex.holder() is None
+
+
+def test_touch_heartbeat_stamps_only_the_owners_lock() -> None:
+    assert suite_mutex.acquire("session-a", "pytest") is True
+    assert "heartbeat_at" not in suite_mutex.holder()
+
+    assert suite_mutex.touch_heartbeat("session-b") is False
+    assert suite_mutex.touch_heartbeat("session-a") is True
+
+    current = suite_mutex.holder()
+    assert current["heartbeat_at"].endswith("Z")
+    assert current["owner"] == "session-a" and current["cmd"] == "pytest"
+
+
+def test_touch_heartbeat_on_a_freed_lock_does_not_recreate_it() -> None:
+    assert suite_mutex.touch_heartbeat("session-a") is False
+    assert not suite_mutex.lock_path().exists()
+
+
+def test_held_refreshes_the_heartbeat_until_release(monkeypatch) -> None:
+    import threading
+
+    monkeypatch.setattr(suite_mutex, "HEARTBEAT_INTERVAL_SECS", 0.01)
+    beats = threading.Semaphore(0)
+    real_touch = suite_mutex.touch_heartbeat
+
+    def counting_touch(owner, *, path=None):
+        result = real_touch(owner, path=path)
+        beats.release()
+        return result
+
+    monkeypatch.setattr(suite_mutex, "touch_heartbeat", counting_touch)
+    with suite_mutex.held("session-a", "pytest") as acquired:
+        assert acquired is True
+        for _ in range(3):
+            assert beats.acquire(timeout=5)
+        assert "heartbeat_at" in suite_mutex.holder()
+    assert suite_mutex.holder() is None
+    assert not suite_mutex.lock_path().exists()
 
 
 def test_dead_pid_past_stale_ttl_still_expires_at_the_short_ceiling() -> None:

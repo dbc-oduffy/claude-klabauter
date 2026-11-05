@@ -5,6 +5,7 @@ the real `dispatch.emit` on a tmp repo: the run record holds both and the size-s
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -61,16 +62,26 @@ def _run_id(env: dict) -> str:
     return Path(_hso(env)["updatedInput"]["scriptPath"]).name.removesuffix(".workflow.mjs")
 
 
+def _deferred_emit(env: dict, root: Path) -> dict:
+    """The hook defers the emit into a launcher script; run its `dispatch.emit` leg with the script's params."""
+    script = Path(_hso(env)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    params_file = Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", script, re.M).group(1)))
+    reply = mod._default_emit(json.loads(params_file.read_text(encoding="utf-8")), root)
+    assert reply.get("run_id") and reply.get("path"), reply
+    return reply
+
+
 def test_a_preference_and_rationale_persist_in_the_run_record_and_reach_the_scout_prompt(repo):
     env = _submit(repo, {"ask": "make the exporter streaming", "source": "pm", "route_preference": "roadmap",
                          "em_rationale": RATIONALE})
 
     assert _hso(env)["permissionDecision"] == "allow", env
-    record = record_dir(repo, _run_id(env)) / ROUTE_PREFERENCE_FILE
+    reply = _deferred_emit(env, repo)
+    record = record_dir(repo, reply["run_id"]) / ROUTE_PREFERENCE_FILE
     assert json.loads(record.read_text(encoding="utf-8")) == {
         "route_preference": "roadmap", "em_rationale": RATIONALE,
     }
-    script = Path(_hso(env)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    script = Path(reply["path"]).read_text(encoding="utf-8")
     assert "## EM route preference" in script
     assert "roadmap" in script and RATIONALE in script
 
@@ -79,8 +90,9 @@ def test_a_submission_without_a_preference_writes_no_record_and_no_block(repo):
     env = _submit(repo, {"ask": "make the exporter streaming", "source": "pm"})
 
     assert _hso(env)["permissionDecision"] == "allow", env
-    assert not (record_dir(repo, _run_id(env)) / ROUTE_PREFERENCE_FILE).exists()
-    assert "## EM route preference" not in Path(_hso(env)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    reply = _deferred_emit(env, repo)
+    assert not (record_dir(repo, reply["run_id"]) / ROUTE_PREFERENCE_FILE).exists()
+    assert "## EM route preference" not in Path(reply["path"]).read_text(encoding="utf-8")
 
 
 def test_an_invalid_preference_is_denied_naming_the_key_and_writes_nothing(repo):
@@ -96,7 +108,8 @@ def test_an_over_length_rationale_is_truncated_not_refused(repo):
                          "em_rationale": "y" * 2001})
 
     assert _hso(env)["permissionDecision"] == "allow", env
-    record = json.loads((record_dir(repo, _run_id(env)) / ROUTE_PREFERENCE_FILE).read_text(encoding="utf-8"))
+    reply = _deferred_emit(env, repo)
+    record = json.loads((record_dir(repo, reply["run_id"]) / ROUTE_PREFERENCE_FILE).read_text(encoding="utf-8"))
     assert record["route_preference"] == "plan"
     assert len(record["em_rationale"]) <= EM_RATIONALE_MAX_CHARS
     assert record["em_rationale"].endswith("[truncated]")

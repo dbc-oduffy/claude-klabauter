@@ -11,7 +11,7 @@ from coordinator_core.write_guards import engine
 
 
 SENTINEL_BASENAME = ".coordinator-override-worktree-guard"
-GUARD_NAME = "block_worktree_sentinel_write"
+GUARD_NAME = "destructive_rm"
 ADVISORY_TARGET = "tasks/lessons.md"
 ADVISORY_GUARD_NAME = "nudge_tasks_state_folder_split"
 
@@ -30,6 +30,21 @@ def _isolated_tempdir(tmp_path, monkeypatch):
     yield
 
 
+@pytest.fixture
+def floor_guard(monkeypatch):
+    """A hard-deny under a deny_registry name: the unlock seam only matters for a deny that
+    survives the policy point, and no shipped write guard is both hard-deny and registered."""
+    deny = {
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "floor deny for testing",
+        }
+    }
+    guard = engine._Guard(GUARD_NAME, "hard-deny", ["Write"], 5, lambda p: dict(deny))
+    monkeypatch.setattr(engine, "_discover_guards", lambda: ([guard], []))
+
+
 def _payload(session_id, tool_name="Write", file_path=None):
     p = {
         "tool_name": tool_name,
@@ -46,6 +61,7 @@ def _is_deny(out):
     return out.get("hookSpecificOutput", {}).get("permissionDecision") == "deny"
 
 
+@pytest.mark.usefixtures("floor_guard")
 class TestAbsentSentinelDenies:
 
     def test_no_sentinel_denies(self):
@@ -53,6 +69,7 @@ class TestAbsentSentinelDenies:
         assert _is_deny(out)
 
 
+@pytest.mark.usefixtures("floor_guard")
 class TestPresentSentinelGrantsOnce:
     def test_sentinel_allows(self):
         gus.sentinel_path("sess-1", GUARD_NAME).write_text("", encoding="utf-8")
@@ -73,6 +90,7 @@ class TestPresentSentinelGrantsOnce:
         assert not p.exists()
 
 
+@pytest.mark.usefixtures("floor_guard")
 class TestPerGuardIsolation:
     def test_sentinel_for_a_different_guard_does_not_clear_this_one(self):
         gus.sentinel_path("sess-1", "block_priority_ledger_edit").write_text("", encoding="utf-8")
@@ -80,6 +98,7 @@ class TestPerGuardIsolation:
         assert _is_deny(out)
 
 
+@pytest.mark.usefixtures("floor_guard")
 class TestPerSessionIsolation:
     def test_peer_session_sentinel_does_not_clear_ours(self):
         gus.sentinel_path("peer-session", GUARD_NAME).write_text("", encoding="utf-8")
@@ -87,6 +106,7 @@ class TestPerSessionIsolation:
         assert _is_deny(out)
 
 
+@pytest.mark.usefixtures("floor_guard")
 class TestUnresolvableSessionIdFailsClosed:
     def test_missing_session_id_denies_even_with_a_sentinel_on_disk(self):
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")

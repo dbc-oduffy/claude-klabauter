@@ -1,0 +1,172 @@
+"""Falsifier: the landing set's scoped tests run in a shared clone of the candidate commit (verify stage), so
+peer dirt in the worktree neither fails nor greens them; land_run only reads the keyed verdict, landing on green
+and refusing on red, missing or mismatched, and never runs a test itself."""
+
+from __future__ import annotations
+
+import json
+import subprocess
+import time
+
+import pytest
+
+from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
+from coordinator_core.ops.dispatch_emit import measured_rev as mr
+from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import RUN2, halted  # noqa: F401
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git, _write, repo  # noqa: F401
+from coordinator_core.ops.dispatch_emit.tests.test_land_run_foreign_dirt_in_reach_e2e import (
+    FIXTURE,
+    LANDING,
+    _VERDICT,
+    _track_fixture,
+)
+from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
+from coordinator_core.ops.dispatch_emit.tests.test_reverify_measures_landing_tree_e2e import _stage
+
+pytestmark = pytest.mark.spawns_process
+
+READER = "t/test_reader.py"
+_READER_SRC = (
+    "import pathlib\n\n\ndef test_reads_data():\n"
+    "    assert pathlib.Path(__file__).with_name('data.txt').read_text().strip() == 'ok'\n"
+)
+
+
+def _repo(tmp_path, *, data: str = "ok\n"):
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    _write(root, READER, _READER_SRC)
+    _write(root, "t/data.txt", data)
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "init")
+    return root, _git(root, "rev-parse", "HEAD").strip()
+
+
+def test_peer_dirt_in_the_worktree_does_not_fail_the_overlay(tmp_path):
+    root, head = _repo(tmp_path)
+    _write(root, "t/data.txt", "peer dirt\n")
+
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "green", out
+    assert not cov.overlay_root(root, "run1").exists()
+
+
+def test_a_red_in_the_candidate_is_red_even_when_the_worktree_is_clean(tmp_path):
+    root, head = _repo(tmp_path, data="broken\n")
+
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.red, out
+    assert not cov.overlay_root(root, "run1").exists()
+
+
+def test_no_seeds_and_an_unreachable_candidate_are_inconclusive_never_red(tmp_path):
+    root, head = _repo(tmp_path)
+
+    assert cov.verify(root, "run1", head, []).verdict == "inconclusive"
+    assert cov.verify(root, "run1", "0" * 40, [READER]).verdict == "inconclusive"
+    assert not cov.overlay_root(root, "run1").exists()
+
+
+def _no_spawn(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("land_run must not run the overlay verify")
+
+    monkeypatch.setattr(cov, "verify", boom)
+    monkeypatch.setattr(cov, "_run", boom)
+
+
+def _verdict(root, measured, verdict, **over):
+    cov.write_verdict(root, RUN2, {**measured, **over}, cov.OverlayVerdict(verdict, "boom", ("t/x.py",)))
+
+
+def _dirty_land(halted, verdict, *, mutate=None):
+    _track_fixture(halted)
+    resume, token = _stage(halted)
+    measured = mr.measured_rev(RUN2, LANDING, repo_root=halted)
+    if verdict:
+        _verdict(halted, measured, verdict, **(mutate or {}))
+    _write(halted, FIXTURE, '{"a": 9, "dirty": true}\n')
+    return measured, _terminal_with(halted, token, resume, _VERDICT)
+
+
+def test_land_run_lands_on_a_green_verdict_despite_foreign_dirt(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+
+    _, result = _dirty_land(halted, "green")
+
+    assert result["committed"] is True, result
+    assert FIXTURE in result["reach_dirt_foreign"]
+    assert result["clean_overlay_verify"]["verdict"] == "green"
+    assert FIXTURE in _git(halted, "status", "--porcelain", "--", FIXTURE)
+
+
+def test_land_run_refuses_a_red_verdict(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+
+    _, result = _dirty_land(halted, "red")
+
+    assert result["committed"] is False
+    assert result["refused"] == "verify-overlay-red", result
+    assert _git(halted, "log", "-1", "--format=%s").strip() == "fixture"
+
+
+def test_land_run_refuses_a_missing_verdict(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+
+    _, result = _dirty_land(halted, None)
+
+    assert result["committed"] is False
+    assert result["refused"] == "verify-overlay-unverified", result
+    assert "clean_overlay_verify --run-id" in result["error"]
+
+
+@pytest.mark.parametrize("field", ["blobs", "base_sha"])
+def test_land_run_refuses_a_verdict_keyed_to_another_landing_set_or_head(halted, monkeypatch, field):  # noqa: F811
+    _no_spawn(monkeypatch)
+    _track_fixture(halted)
+    measured = mr.measured_rev(RUN2, LANDING, repo_root=halted)
+    other = {"blobs": {"x": "0" * 40}} if field == "blobs" else {"base_sha": "1" * 40}
+    assert cov.check_verdict(halted, RUN2, measured).verdict == "missing"
+    _verdict(halted, measured, "green", **other)
+
+    out = cov.check_verdict(halted, RUN2, measured)
+
+    assert out.verdict == "mismatch", out
+
+
+def test_no_foreign_dirt_needs_no_verdict_and_runs_no_overlay(halted, monkeypatch):  # noqa: F811
+    _no_spawn(monkeypatch)
+    _track_fixture(halted)
+    resume, token = _stage(halted)
+    mr.measured_rev(RUN2, LANDING, repo_root=halted)
+
+    result = _terminal_with(halted, token, resume, _VERDICT)
+
+    assert result["committed"] is True, result
+
+
+def test_cli_writes_a_verdict_land_run_reads(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    run = "warp-2026-11-01-cli-abc123"
+    record = cov.measured_rev_record_path(root, run)
+    record.parent.mkdir(parents=True, exist_ok=True)
+    measured = {"sha": head, "base_sha": head, "paths": [READER], "blobs": {READER: "b"}}
+    record.write_text(json.dumps(measured), encoding="utf-8")
+    _write(root, "t/data.txt", "peer dirt\n")
+
+    assert cov.main(["--run-id", run, "--repo-root", str(root)]) == 0
+
+    assert cov.check_verdict(root, run, measured).verdict == "green"
+    assert not cov.overlay_root(root, run).exists()
+
+
+def test_reading_the_verdict_stays_inside_the_brightline(tmp_path):
+    measured = {"sha": "a" * 40, "base_sha": "b" * 40, "blobs": {"p": "c" * 40}}
+    cov.write_verdict(tmp_path, RUN2, measured, cov.OverlayVerdict("green", "", ("t.py",)))
+    start = time.process_time()
+    for _ in range(20):
+        assert cov.check_verdict(tmp_path, RUN2, measured).verdict == "green"
+    assert (time.process_time() - start) / 20 < 0.05

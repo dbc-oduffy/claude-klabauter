@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-LANDING_REFUSAL_KINDS = frozenset({"destructive-git", "secret-in-diff"})
+LANDING_REFUSAL_KINDS = frozenset({"destructive-git", "secret-in-diff", "lost-definition"})
 
 PROVENANCE_KINDS = frozenset({
     "peer-hunks-co-declared",

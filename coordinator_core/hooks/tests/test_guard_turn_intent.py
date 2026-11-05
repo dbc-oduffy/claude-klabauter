@@ -137,7 +137,11 @@ def _run(payload: dict):
 
 
 def _blocked(result: dict) -> bool:
-    return result.get("decision") == "block" and ti.BLOCK_REASON in str(result.get("reason", ""))
+    """The turn-intent enforcement fired. `guard-turn-intent` is unregistered, so its Stop block is
+    clamped to a Stop advisory at every level: never `decision: block`."""
+    assert result.get("decision") != "block"
+    message = str(result.get("systemMessage", ""))
+    return message.startswith("Advisory: ") and "<turn-intent>" in message
 
 
 def _record(directory: Path) -> dict:
@@ -158,7 +162,7 @@ def test_missing_tail_blocks_twice_then_heuristic(tmp_path, monkeypatch):
     first = _run(payload)
     second = _run({**payload, "stop_hook_active": True})
     assert _blocked(first) and _blocked(second)
-    assert first["decision"] == "block"
+    assert "decision" not in first
     assert not (d / ti.RECORD_NAME).exists()
     third = _run({**payload, "stop_hook_active": True})
     assert not _blocked(third)
@@ -320,7 +324,7 @@ def test_block_takes_precedence_over_go_ask_advisory(tmp_path, monkeypatch):
     _heartbeat(root)
     result = _run({**payload, "last_assistant_message": GO_ASK})
     assert _blocked(result)
-    assert not _advisory(result)
+    assert "asking for a go" not in _advisory(result)
 
 
 # --- announced-unexecuted-work block at each guard level ------------------
@@ -346,7 +350,8 @@ def _announce_at_level(tmp_path, monkeypatch, level: str) -> dict:
 
 def test_announced_work_blocks_at_strict_level(tmp_path, monkeypatch):
     result = _announce_at_level(tmp_path, monkeypatch, "strict")
-    assert result.get("decision") == "block" and _stop_valid(result)
+    assert result.get("decision") != "block" and _stop_valid(result)
+    assert result["systemMessage"].startswith("Advisory: ")
 
 
 def test_announced_work_at_warn_level_is_stop_valid(tmp_path, monkeypatch):

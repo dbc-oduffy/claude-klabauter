@@ -166,7 +166,7 @@ figures via `benchmarks/process_time.batched_process_time_ms` k=8, real
 figures read off this repo's `op-latency.jsonl` `kind: "process_time"` rows).
 Stated here because an unstated cost is the one nobody defends when it grows.
 
-  - SPAWN BUDGET: **1 baseline, 3 worst case**, and CONSTANT in the number
+  - SPAWN BUDGET: **1 baseline, 4 worst case**, and CONSTANT in the number
     of paths and the number of commit groups either way. Verified by
     tallying `subprocess.Popen` across a full `commit_session_offer` at
     4 paths/4 groups, 12/3 and 40/8. The live census agrees and is the
@@ -205,6 +205,11 @@ Stated here because an unstated cost is the one nobody defends when it grows.
     (nested `.gitignore`, `info/exclude`, `core.excludesFile`, negation) and
     batched over every such path at once. `dry_run` answers the same
     question from the `git status` it already paid for and spawns nothing.
+  - SPAWN 4, CONDITIONAL -- `_plan_adoption`'s one batched `git ls-files`
+    tracked-set read. It fires only when `unclaimed` holds a path two or
+    more directories deep (sole-EM adoption); one spawn for every such
+    path at once, never per path. Pinned by the sole-EM adoption spawn
+    tests.
   - TIME BUDGET: **the read-only path holds 500ms; the full commit path
     reaches 656ms.** The real `per_op_handler` rows in this repo's
     `op-latency.jsonl` separate on WHICH PATH RAN, not on spawn count:
@@ -328,6 +333,12 @@ from coordinator_core.session import claim_index
 from coordinator_core.session.claims import my_agent_touched
 from coordinator_core.session import scope as scope_module
 from coordinator_core.session.liveness import _ABANDONMENT_WINDOW_SEC, live_session_ids
+from coordinator_core.ops.session.residue_adoption import (
+    adoption_groups,
+    candidate_ancestor_dirs,
+    classify_unclaimed,
+    is_sole_live_em,
+)
 
 class ExcludedPath(TypedDict):
     path: str
@@ -690,6 +701,20 @@ class CommitOfferReport(TypedDict):
     # `read_only` (additive, NotRequired): copied from
     # `SafeCommitOffer.read_only`; never committed. Absent when empty.
     read_only: NotRequired[List[str]]
+    # Sole-EM adoption (additive, NotRequired; absent on early-return
+    # envelopes). `sole_em`: the live set was exactly this session.
+    # `adoption_groups`: ready-made `{paths, message}` groups for unclaimed
+    # dirt in tracked path classes that this call did NOT commit (the caller
+    # was not the sole live session); pass them back verbatim as `groups`.
+    # On a `dry_run` by the sole live session the same key lists the groups a
+    # real call WILL commit.
+    # `gitignore_candidates`: path classes with no tracked sibling, never
+    # committed. `sole_em_residue`: unclaimed paths still dirty after a sole
+    # EM's call -- necessarily its own; empty when not sole.
+    sole_em: NotRequired[bool]
+    adoption_groups: NotRequired[List[CommitGroup]]
+    gitignore_candidates: NotRequired[List[str]]
+    sole_em_residue: NotRequired[List[str]]
     # write ledger against, and what it found. REPORT-ONLY, never a gate:
     # nothing here feeds back into `safe_set`/`resolved_groups`, so it cannot
     # widen the commit boundary, exactly like `residue`/`excluded` above.
@@ -1582,6 +1607,130 @@ def _mtime_orphans(
     )
 
 
+class _Adoption(TypedDict):
+    sole_em: bool
+    adoptable: "OrderedDict[str, List[str]]"
+    adoptable_paths: List[str]
+    gitignore_candidates: List[str]
+    left_paths: List[str]
+
+
+def _plan_adoption(
+    session_id: str, worktree_root: Optional[str], unclaimed: Sequence[str]
+) -> Optional[_Adoption]:
+    """Classify `unclaimed` by tracked path class and decide sole-EM status.
+
+    ONE batched `git ls-files -z` over the distinct two-segment class
+    directories (none when `unclaimed` is empty or every path is shallower),
+    and ONE liveness read. `sole_em` needs a proven live set equal to exactly
+    this session: an empty or errored read is never sole. Returns `None`
+    (report nothing) when git cannot answer -- an unknown tracked set must not
+    present every class as an ignore candidate. Never raises.
+
+    Spawn budget: SPAWN 4 of the module-docstring BUDGET, whenever
+    `unclaimed` holds a path two or more directories deep (pinned by the
+    sole-EM adoption spawn tests).
+
+    Cost trap: the listing spans every tracked file under each class
+    directory, so its output grows with the corpus. Measured on this repo:
+    `state/warp` (the largest class, 1.87MB of output) lists in 35ms wall;
+    five classes together cost ~63ms child CPU, an order under the 500ms
+    bar. If a class ever breaches it, use one existence probe per class
+    instead of the full listing.
+    """
+    if not worktree_root or not unclaimed:
+        return None
+    class_dirs = sorted(
+        {ancestors[-1] for ancestors in map(candidate_ancestor_dirs, unclaimed) if ancestors}
+    )
+    tracked: List[str] = []
+    if class_dirs:
+        result = run_git(
+            [
+                "-C", worktree_root, "--no-optional-locks", "--literal-pathspecs",
+                "-c", "core.quotepath=false", "ls-files", "-z", "--", *class_dirs,
+            ],
+            binary=True,
+        )
+        if result.timed_out or result.returncode != 0:
+            return None
+        tracked = [
+            seg.decode("utf-8", "surrogateescape")
+            for seg in result.stdout_bytes.split(b"\0")
+            if seg
+        ]
+    classification = classify_unclaimed(unclaimed, tracked)
+    try:
+        live = live_session_ids(worktree_root)
+    except Exception:  # noqa: BLE001 - a readout must never raise
+        live = None
+    adoptable_paths = [p for ps in classification["adoptable"].values() for p in ps]
+    taken = set(adoptable_paths)
+    return {
+        "sole_em": is_sole_live_em(session_id, live),
+        "adoptable": classification["adoptable"],
+        "adoptable_paths": adoptable_paths,
+        "gitignore_candidates": classification["gitignore_candidates"],
+        "left_paths": [p for p in unclaimed if p not in taken],
+    }
+
+
+def _adoption_report_fields(adoption: Optional[_Adoption], session_id: str) -> dict:
+    """The dry-run report fields: what a commit would adopt (sole) or hand back."""
+    if not adoption:
+        return {"sole_em": False, "adoption_groups": [], "gitignore_candidates": [], "sole_em_residue": []}
+    return {
+        "sole_em": adoption["sole_em"],
+        "adoption_groups": adoption_groups(adoption["adoptable"], session_id),
+        "gitignore_candidates": adoption["gitignore_candidates"],
+        "sole_em_residue": list(adoption["left_paths"]) if adoption["sole_em"] else [],
+    }
+
+
+def _adoption_lines(
+    fields: "Mapping[str, Any]", dry_run: bool = False
+) -> List[str]:
+    """Operator lines for adoption_groups, gitignore_candidates, sole_em_residue."""
+    lines: List[str] = []
+    groups = fields.get("adoption_groups") or []
+    if groups:
+        n = sum(len(g["paths"]) for g in groups)
+        if dry_run and fields.get("sole_em"):
+            lines.append(
+                "Sole live session: %d unclaimed path(s) in %d tracked path "
+                "class(es) will be adopted and committed on a real call."
+                % (n, len(groups))
+            )
+        else:
+            lines.append(
+                "Ready-made groups: %d unclaimed path(s) in %d tracked path "
+                "class(es), NOT committed (this session is not the only live "
+                "one). Pass the report's `adoption_groups` verbatim as `groups` "
+                "to commit them." % (n, len(groups))
+            )
+    candidates = fields.get("gitignore_candidates") or []
+    if candidates:
+        sample = candidates[:_RESIDUE_CLASS_SAMPLE_COUNT]
+        remaining = len(candidates) - len(sample)
+        tail = " (+%d more)" % remaining if remaining > 0 else ""
+        lines.append(
+            "Gitignore candidates: %d path class(es) with no tracked sibling "
+            "— %s%s. Never committed; ignore them or commit by explicit "
+            "pathspec." % (len(candidates), ", ".join(sample), tail)
+        )
+    residue = fields.get("sole_em_residue") or []
+    if residue:
+        sample = residue[:_RESIDUE_CLASS_SAMPLE_COUNT]
+        remaining = len(residue) - len(sample)
+        tail = " (+%d more)" % remaining if remaining > 0 else ""
+        lines.append(
+            "Sole-EM residue: %d path(s) left dirty by the only live session "
+            "— e.g. %s%s. They are this session's own; the list is on "
+            "`sole_em_residue`." % (len(residue), ", ".join(sample), tail)
+        )
+    return lines
+
+
 def _reconcile_offer(
     session_id: str,
     offer: SafeCommitOffer,
@@ -2057,9 +2206,56 @@ async def commit_session_offer_async(
     group_results = [
         await _commit_group(worktree_root, g, session_id) for g in resolved_groups
     ]
-    failed_groups = [g for g in group_results if g.get("commit_failed")]
     residue, reconciliation = _compute_residue(
         session_id, group_results, worktree_root
+    )
+
+    adoption = _plan_adoption(session_id, worktree_root, reconciliation["unclaimed"])
+    adoption_extra: List[CommitGroup] = []
+    adoption_handback: List[CommitGroup] = []
+    if adoption:
+        adopt_set = set(adoption["adoptable_paths"])
+        # A caller group naming an unclaimed adoptable path (the pass-back of
+        # a prior call's `adoption_groups`) commits it under the caller's own
+        # message; the path is proven unclaimed-and-dirty by THIS call.
+        for dg in dropped_groups:
+            passed = [p for p in dg["dropped"] if p in adopt_set]
+            if passed:
+                adoption_extra.append({"paths": passed, "message": dg["message"]})
+        taken = {p for g in adoption_extra for p in g["paths"]}
+        remaining = OrderedDict(
+            (k, [p for p in ps if p not in taken]) for k, ps in adoption["adoptable"].items()
+        )
+        remaining_groups = adoption_groups(remaining, session_id)
+        if adoption["sole_em"]:
+            adoption_extra.extend(remaining_groups)
+        else:
+            adoption_handback = remaining_groups
+    if adoption_extra:
+        extra_results = [
+            await _commit_group(worktree_root, g, session_id) for g in adoption_extra
+        ]
+        group_results = group_results + extra_results
+        done = {p for g in extra_results if g.get("committed") for p in g["paths"]}
+        if done:
+            for dg in dropped_groups:
+                gone = [p for p in dg["dropped"] if p in done]
+                dg["dropped"] = [p for p in dg["dropped"] if p not in done]
+                dg["matched"] += len(gone)
+            dropped_groups = [dg for dg in dropped_groups if dg["dropped"]]
+            residue = OrderedDict(
+                (k, left)
+                for k, left in (
+                    (k, [p for p in ps if p not in done]) for k, ps in residue.items()
+                )
+                if left
+            )
+            reconciliation["unclaimed"] = [
+                p for p in reconciliation["unclaimed"] if p not in done
+            ]
+    failed_groups = [g for g in group_results if g.get("commit_failed")]
+    sole_em_residue: List[str] = (
+        list(reconciliation["unclaimed"]) if adoption and adoption["sole_em"] else []
     )
 
     committed_paths: List[str] = []
@@ -2136,6 +2332,12 @@ async def commit_session_offer_async(
     }
     if offer.get("read_only"):
         final_report["read_only"] = list(offer["read_only"])
+    final_report["sole_em"] = bool(adoption and adoption["sole_em"])
+    final_report["adoption_groups"] = adoption_handback
+    final_report["gitignore_candidates"] = (
+        list(adoption["gitignore_candidates"]) if adoption else []
+    )
+    final_report["sole_em_residue"] = sole_em_residue
     return final_report
 
 
@@ -2527,6 +2729,7 @@ def _render_report(report: CommitOfferReport, worktree_root: Optional[str] = Non
             "your own lands here, and so do paths that are nobody's."
             % (len(unclaimed), ", ".join(sample), tail)
         )
+    lines.extend(_adoption_lines(report))
     mtime_orphans = report.get("mtime_orphans") or []
     if mtime_orphans:
         lines.append(_mtime_orphans_line(mtime_orphans))
@@ -2704,6 +2907,17 @@ def _handler(params: dict, repo_root=None) -> dict:
     the ceremonies that call this op echo that text rather than re-derive it,
     and moving the rendering out would re-author it once per ceremony.
 
+    Sole-EM adoption (reports carry `sole_em`, `adoption_groups`,
+    `gitignore_candidates`, `sole_em_residue`): unclaimed dirt whose nearest
+    two-plus-segment ancestor directory holds a tracked file is adoptable.
+    When the live set is exactly the caller, a real call commits it as extra
+    per-class groups; otherwise nothing is committed and `adoption_groups`
+    returns ready-made `{paths, message}` entries to pass back as `groups`.
+    Unclaimed paths in a class with no tracked file are never committed and
+    come back as `gitignore_candidates`. `sole_em_residue` lists what the sole
+    EM's call still left dirty (empty when not sole). An empty or errored
+    liveness read never counts as sole.
+
     On a dry run, returns `{"dry_run": True, "reconciliation": ..., **offer}`
     — never a commit. `rendered` names THREE counts, not two: safe, excluded,
     and dirty-but-claimed-by-nobody. That third one is what keeps `safe_paths:
@@ -2752,10 +2966,17 @@ def _handler(params: dict, repo_root=None) -> dict:
             reconciliation["unclaimed"],
             core.git_root(cwd) or cwd or ".",
         )
+        adoption_fields = _adoption_report_fields(
+            _plan_adoption(
+                session_id, core.git_root(cwd) or cwd or ".", reconciliation["unclaimed"]
+            ),
+            session_id,
+        )
         return {
             "dry_run": True,
-            "rendered": _render_dry_run(offer, reconciliation),
+            "rendered": _render_dry_run(offer, reconciliation, adoption_fields),
             "reconciliation": reconciliation,
+            **adoption_fields,
             **offer,
         }
 
@@ -2792,7 +3013,11 @@ def _handler(params: dict, repo_root=None) -> dict:
     return {**report, "rendered": _render_report(report, worktree_root)}
 
 
-def _render_dry_run(offer: SafeCommitOffer, reconciliation: Reconciliation) -> str:
+def _render_dry_run(
+    offer: SafeCommitOffer,
+    reconciliation: Reconciliation,
+    adoption_fields: Optional[Mapping[str, Any]] = None,
+) -> str:
     """The `dry_run` operator line. Names THREE buckets, not two: what this
     session may commit, what is withheld as contested, and what is dirty under
     nobody's claim.
@@ -2833,6 +3058,8 @@ def _render_dry_run(offer: SafeCommitOffer, reconciliation: Reconciliation) -> s
             "pathspec; the full list is on `reconciliation.unclaimed`."
             % (", ".join(sample), tail)
         )
+    for adoption_line in _adoption_lines(adoption_fields or {}, dry_run=True):
+        line += "\n" + adoption_line
     mtime_orphans = offer.get("mtime_orphans") or []
     if mtime_orphans:
         line += "\n" + _mtime_orphans_line(mtime_orphans)

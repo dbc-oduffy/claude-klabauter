@@ -29,6 +29,12 @@ import pytest
 
 from coordinator_core.testing.registry_sandbox import fail_on_live_registry_write_fixture
 
+# Arrival tests load `coordinator/bin/*.py` CLIs by path; those CLIs' `import lib` bootstrap
+# needs `coordinator/bin` itself importable, as `coordinator/bin/tests/conftest.py` arranges.
+_BIN_DIR = Path(__file__).resolve().parents[1] / "bin"
+if str(_BIN_DIR) not in sys.path:
+    sys.path.insert(0, str(_BIN_DIR))
+
 
 # Autouse across this whole tree, and deliberately DETECTION rather than
 # redirection. The obvious prevention — arming ``MACHINE_LOCAL_REGISTRY_DIR``

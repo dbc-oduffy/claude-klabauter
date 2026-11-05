@@ -1,10 +1,11 @@
 """
 coordinator_core.ops.group_em_box_federation -- JSON-RPC "groupem.box_register", "groupem.box_place",
-"groupem.box_send", "groupem.box_roster".
+"groupem.box_send", "groupem.box_roster", "groupem.suite_grant_receive", "groupem.box_key_pin".
 
 Purpose: the engine surface of multi-box group-em. Register a box (settings-home root + capability)
-in this box's registry, place a whole run on a registered box, append one line to a box's inbox, and
-read the federated roster of remote boxes.
+in this box's registry, place a whole run on a registered box, append one line to a box's inbox, read
+the federated roster of remote boxes, accept a signed suite grant relayed from another box, and pin a
+peer box's signing key.
 
 Registered in `coordinator_core/ops/__init__.py`'s registration list, `_registry_map.py`'s
 `OP_MODULE_MAP`, `op_scopes.py` (scope "none") and `authz/classification.py` (register, place and
@@ -122,6 +123,57 @@ def _groupem_box_send(params: dict, repo_root: Optional[Path] = None) -> dict:
                 box_id = box_registry.ensure_identity(home)
                 box_registry.register(home, box_probe.stored_capability(home) or {}, box_id=box_id)
         return box_send.send(box_id, to, text)
+    except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@register_op("groupem.suite_grant_receive")
+def _groupem_suite_grant_receive(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "groupem.suite_grant_receive" handler: the far end of a relayed suite grant.
+
+    Params:
+        envelope (dict) -- the signed grant the issuing box built; verified here against the key
+            pinned for its ``issuer_box_id``.
+
+    Returns:
+        {"ok": True, "reason": "received"} | {"ok": False, "reason"} -- a refusal writes nothing.
+    """
+    p = params if isinstance(params, dict) else {}
+    envelope = p.get("envelope")
+    if not isinstance(envelope, dict):
+        return {"error": "envelope (object) is required"}
+    try:
+        from coordinator_core.group_em import suite_grant
+
+        return suite_grant.receive_relayed_grant(envelope)
+    except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+@register_op("groupem.box_key_pin")
+def _groupem_box_key_pin(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "groupem.box_key_pin" handler: pin a peer box's signing key on this box.
+
+    Trust anchor of every relayed grant: any caller of this op can pin a key it also holds and so
+    mint a verifying envelope. No code gates the caller; the MUTATING classification is the only
+    fence, so run it as an operator act only.
+
+    Params:
+        box_id (str) -- the peer box whose grants this box will accept.
+        key_b64 (str) -- that box's key, base64 (its ``state/group-em/box-key`` text).
+
+    Returns:
+        {"pinned": True, "box_id"} or {"error": str}.
+    """
+    p = params if isinstance(params, dict) else {}
+    box_id, key_b64 = _str(p, "box_id"), _str(p, "key_b64")
+    if box_id is None or key_b64 is None:
+        return {"error": "box_id and key_b64 (non-empty str) are required"}
+    try:
+        from coordinator_core.group_em import box_key
+
+        box_key.pin_peer_key(box_id, key_b64)
+        return {"pinned": True, "box_id": box_id}
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         return {"error": f"{type(exc).__name__}: {exc}"}
 

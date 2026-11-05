@@ -1,5 +1,5 @@
-"""The write engine resolves each hard-deny at the policy point: warn by default,
-deny only by flag, floor guards always deny, and a demoted deny never stops the scan."""
+"""The write engine resolves each hard-deny at the policy point: a deny_registry guard always
+denies, every other guard is an advisory at every level, and a demoted deny never stops the scan."""
 
 from __future__ import annotations
 
@@ -56,37 +56,41 @@ def test_no_flags_demotes_non_floor_deny_to_advisory(consumer):
     assert "Advisory" in out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_global_strict_denies(consumer, monkeypatch):
+def test_global_strict_does_not_lift_a_non_floor_guard(consumer, monkeypatch):
     consumer(_guard("guard_doctrine_surface_edits", 10, "Doctrine edit."))
     monkeypatch.setenv(_LEVEL, "strict")
     machine_profile.reset_cache()
-    assert _decision(engine.evaluate(dict(_PAYLOAD))) == "deny"
+    assert _decision(engine.evaluate(dict(_PAYLOAD))) == "allow"
 
 
-def test_per_guard_strict_hardens_only_that_guard(consumer, monkeypatch):
+def test_per_guard_strict_does_not_lift_a_non_floor_guard(consumer, monkeypatch):
     a = _guard("guard-a", 10, "A tripped.")
-    b = _guard("guard-b", 20, "B tripped.")
     monkeypatch.setenv(_LEVEL, "warn")
     monkeypatch.setenv(_LEVEL + "_GUARD-A", "strict")
-    consumer(a, b)
-    assert _decision(engine.evaluate(dict(_PAYLOAD))) == "deny"
-    consumer(b)
+    consumer(a)
     assert _decision(engine.evaluate(dict(_PAYLOAD))) == "allow"
 
 
 def test_floor_guard_denies_with_no_flags(consumer):
-    consumer(_guard("block_consumed_handoff_edit", 10, "Consumed handoff."))
+    consumer(_guard("destructive_rm", 10, "Destructive rm."))
+    assert _decision(engine.evaluate(dict(_PAYLOAD))) == "deny"
+
+
+def test_floor_guard_denies_at_the_off_level(consumer, monkeypatch):
+    consumer(_guard("destructive_rm", 10, "Destructive rm."))
+    monkeypatch.setenv(_LEVEL, "off")
+    machine_profile.reset_cache()
     assert _decision(engine.evaluate(dict(_PAYLOAD))) == "deny"
 
 
 def test_demoted_deny_does_not_hide_a_later_floor_deny(consumer):
     consumer(
         _guard("guard_doctrine_surface_edits", 10, "Doctrine edit."),
-        _guard("block_consumed_handoff_edit", 20, "Consumed handoff."),
+        _guard("destructive_rm", 20, "Destructive rm."),
     )
     out = engine.evaluate(dict(_PAYLOAD))
     assert _decision(out) == "deny"
-    assert "Consumed handoff" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "Destructive rm" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
 def test_held_advisory_returned_or_prepended_in_aggregate(consumer):

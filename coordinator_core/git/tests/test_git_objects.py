@@ -390,3 +390,44 @@ def test_alternates_cycle_terminates_and_misses(tmp_path: Path) -> None:
     )
     assert _read_object(consumer_git, "0" * 40) is None
     assert git_objects._alternate_common_dirs(consumer_git) == [donor_git]
+
+
+def test_write_object_stalled_peer_in_same_fanout_dir_does_not_fail_this_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+    import threading
+
+    from coordinator_core.git import git_objects
+
+    gitdir = tmp_path / "g"
+    (gitdir / "objects").mkdir(parents=True)
+    monkeypatch.setattr(git_objects, "_WRITE_OBJECT_DEADLINE_SECS", 0.2)
+
+    def _sha(payload: bytes) -> str:
+        return hashlib.sha1(b"blob %d\x00" % len(payload) + payload).hexdigest()
+
+    slow = b"slow-0"
+    fast = next(
+        p for p in (b"fast-%d" % i for i in range(5000)) if _sha(p)[:2] == _sha(slow)[:2]
+    )
+    assert _sha(fast) != _sha(slow)
+
+    release = threading.Event()
+    real = git_objects._replace_with_retry
+
+    def _blocking(src, dst, **kw):
+        if Path(dst).name == _sha(slow)[2:]:
+            release.wait(5)
+        return real(src, dst, **kw)
+
+    monkeypatch.setattr(git_objects, "_replace_with_retry", _blocking)
+    try:
+        with pytest.raises(TimeoutError):
+            write_object(gitdir, b"blob", slow)
+        assert write_object(gitdir, b"blob", fast) == _sha(fast)
+        assert git_objects._obj_path(gitdir, _sha(fast)).exists()
+        with pytest.raises(TimeoutError):
+            write_object(gitdir, b"blob", slow)
+    finally:
+        release.set()

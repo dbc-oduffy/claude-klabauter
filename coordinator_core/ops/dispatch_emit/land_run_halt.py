@@ -45,8 +45,6 @@ from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _U
 
 #: ``withheld`` reason for a finished chunk's product when the halt lands the record only.
 HALT_RECORD_ONLY = "halt-record-only"
-#: ``withheld`` reason for a chunk with at least one declared write withheld for another reason.
-CHUNK_PARTIAL = "chunk-write-set-partial"
 #: ``withheld`` reason for a declared path whose peer claim could not be read.
 PEER_INDETERMINATE = "peer-claim-indeterminate"
 #: ``withheld`` reason for a path a live peer session holds.
@@ -302,42 +300,6 @@ def held_rows_for(repo_root: Path, run_id: str, plan_rel: Optional[str]) -> Opti
     return [{"id": i, "reason": r} for i, r in snap.held]
 
 
-def stamp_halt_lands_chunks(
-    worktree_root: Path, repo_root: Path, halted: dict, marker_plan: Optional[str],
-    landed_chunks: Sequence[str], sha: Optional[str], session_id: Optional[str],
-) -> Optional[dict]:
-    """Code a ledger-check halt's ``Lands-Chunks`` rows at the halt sha in one plan-only commit.
-
-    Returns the ``lands_chunks_stamp`` reply (``rows_coded``/``coded_sha`` or ``coded_stamp_error``),
-    or None when there is nothing to stamp. Never raises and never undoes the halt commit; the run
-    token is not touched.
-    """
-    if marker_kind(halted) != "ledger-check" or not landed_chunks or not isinstance(sha, str) or not sha:
-        return None
-    plan = halted.get(HALT_PLAN_FIELD)
-    plan = plan if isinstance(plan, str) and plan else marker_plan
-    if not plan:
-        return None
-    try:
-        from coordinator_core.ops.dispatch_emit.plan_row_coding import source_rows_by_plan
-        from coordinator_core.ops.dispatch_emit.terminal_commit import _stamp_coded_commit
-        from coordinator_core.warm.entry_seam import reentrant_dispatch
-
-        by_plan = source_rows_by_plan(worktree_root, plan, list(landed_chunks))
-        if not by_plan:
-            return None
-
-        def commit_v2(params: dict, root: Path):
-            return reentrant_dispatch("ceremony.commit_v2", params, repo_root=root)
-
-        reply = _stamp_coded_commit(
-            commit_v2, worktree_root, repo_root, {}, sha, session_id, checkpoint_rows={sha: by_plan},
-        )
-    except Exception as exc:  # noqa: BLE001 -- the halt commit stands
-        return {"coded_stamp_error": repr(exc)}
-    return {k: v for k, v in reply.items() if not k.startswith("_")}
-
-
 def _settle_ledger_pointer(
     repo_root: Path, run_id: str, halted: dict, sizing_rel: Optional[str], outcome_rel: Optional[str] = None
 ) -> None:
@@ -400,6 +362,30 @@ def _stamp_run_baton(
     except (LockTimeout, OSError, ValueError) as exc:
         return rel, {"path": rel, "error": str(exc)}
     return rel, None
+
+
+def _docs_to_artifact_lane(
+    artifacts: run_artifacts.RunArtifacts, declared: list, sizing_rel: Optional[str], baton_rel: Optional[str]
+) -> tuple:
+    """``(artifacts, declared)`` with each declared run-doc path (sizing, baton, or any path in a
+    ``HALT_LANDABLE_CLASSES`` class) moved from the declared lane into ``artifacts``, so what stays
+    declared is product only."""
+    docs = [
+        p for p in declared
+        if p == sizing_rel or p == baton_rel or artifacts.class_of(p) in run_artifacts.HALT_LANDABLE_CLASSES
+    ]
+    if not docs:
+        return artifacts, declared
+    by_class = {c: list(ps) for c, ps in artifacts.by_class.items()}
+    for p in docs:
+        if artifacts.class_of(p) is None:
+            by_class.setdefault("sizing" if p == sizing_rel else "baton", []).append(p)
+    moved = run_artifacts.RunArtifacts(
+        run_id=artifacts.run_id,
+        by_class={c: tuple(sorted(set(ps))) for c, ps in by_class.items()},
+        record_dirs=artifacts.record_dirs, root=artifacts.root, notes=artifacts.notes,
+    )
+    return moved, [p for p in declared if p not in docs]
 
 
 def _live_run_ids(repo_root: Path) -> list:
@@ -653,6 +639,7 @@ def _land(
     elif baton_rel is not None and baton_rel not in artifacts.by_class.get("baton", ()) and baton_rel not in declared:
         declared.append(baton_rel)
     baton_reply = {"run_baton": baton_error} if baton_error is not None else {}
+    artifacts, declared = _docs_to_artifact_lane(artifacts, declared, sizing_rel, baton_rel)
 
     tracked_record = _tracked_names_in(root, record_dir_rel)
     probe = sorted({*declared, *artifacts.paths(), *tracked_record})
@@ -723,60 +710,28 @@ def _land(
         for p in product + removed:
             if p not in held and (everywhere or f"claim state indeterminate for {p!r}" in indeterminate):
                 withheld[p] = PEER_INDETERMINATE
-    pending = product + removed
     product = [p for p in product if p not in withheld]
     removed = [p for p in removed if p not in withheld]
     art_paths = [p for p in art_paths if p not in withheld]
     art_deleted = [p for p in art_deleted if p not in withheld]
 
     land_deadline.check("land_run_halt._land.integrity")
-    integrity: list = []
-    claim_provenance: list = []
-    targeted: Optional[dict] = None
-    tfind: list = []
-    tcheck = ""
-    if kind == "ledger-check":
-        tfind, tcheck = landing_integrity.landing_test_gate(root, params, run_id)
-        targeted = {
-            "check": tcheck,
-            "findings": [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in tfind],
-            **({"note": tfind.deleted_note} if tfind.deleted_note else {}),
-        }
-    if kind != "ledger-check" or tcheck in ("no-verdict", landing_integrity.NOT_RUN_CHECK):
-        # Trap: with no verdict, or a verdict where no test executed (not-run), the scoped-test leg
-        # never ran, so landing would ship untested product; a resumed run re-runs the withheld
-        # chunks and its terminal commit carries the verdict.
-        withheld.update({p: HALT_RECORD_ONLY for p in product + removed if p in owner})
-    else:
-        from coordinator_core.ops.dispatch_emit import halt_closure
-
-        partial_chunks = halt_closure.partial_chunks(owner, pending, [p for p in product + removed if p not in withheld])
-        withheld.update({p: CHUNK_PARTIAL for p in product + removed if owner.get(p) in partial_chunks})
-        plan = halted.get("plan") if isinstance(halted.get("plan"), str) else None
-        if not plan:
-            request, _ = _run_request(root, params.get("script_path"))
-            plan = getattr(request, "plan_path", None)
-        live = [p for p in product if p not in withheld]
-        integrity = landing_integrity.unparseable_py(root, live)
-        integrity += landing_integrity.withheld_closure_findings(
-            root, live, [p for p in removed if p not in withheld], withheld=sorted(withheld))
-        if run_base is not None and live:
-            integrity += landing_integrity.since_base_findings(root, live, run_base, run_id=run_id, plan=plan)
-        integrity, claim_provenance = landing_integrity.split_claim_provenance(integrity)
-        bad = {owner[f.path]: f.reason for f in reversed(integrity) if f.path in owner}
-        withheld.update({p: bad[owner[p]] for p in product + removed if p not in withheld and owner.get(p) in bad})
-        _withhold_importers_of_withheld(root, product, removed, owner, withheld)
-        claim_provenance = [f for f in claim_provenance if f.path not in withheld]
-    product = [p for p in product if p not in withheld]
-    removed = [p for p in removed if p not in withheld]
-    unlanded_chunks = {owner[p] for p in withheld if p in owner}
-    landed_chunks = sorted({owner[p] for p in product + removed if p in owner} - unlanded_chunks)
-    paths = paths + product + art_paths
-    deleted = deleted + removed + art_deleted
+    # A halt commit carries no product: a resumed run lands it, and its bytes may be a peer's.
+    withheld.update({p: HALT_RECORD_ONLY for p in product + removed if p not in withheld})
+    paths = paths + art_paths
+    deleted = deleted + art_deleted
+    # Final allowlist, applied to the commit's whole path list: own record-dir files or a run-doc class.
+    stray = {
+        p: HALT_RECORD_ONLY for p in (*paths, *deleted)
+        if not p.startswith(record_dir_rel + "/") and artifacts.class_of(p) not in run_artifacts.HALT_LANDABLE_CLASSES
+    }
+    withheld.update(stray)
+    paths = [p for p in paths if p not in stray]
+    deleted = [p for p in deleted if p not in stray]
     landed_classes: dict = {}
     for p in art_paths + art_deleted:
         cls = artifacts.class_of(p)
-        if cls:
+        if cls and p not in stray:
             landed_classes[cls] = landed_classes.get(cls, 0) + 1
 
     if process_withheld:
@@ -792,13 +747,6 @@ def _land(
         own_differ, own_gone = _differs(root, written_entries, run_written)
         own_changed = own_differ | own_gone
     _withhold_run_dirt(withheld, run_written, own_changed, set(paths) | set(deleted))
-    if _withhold_importers_of_withheld(root, product, removed, owner, withheld):
-        product = [p for p in product if p not in withheld]
-        removed = [p for p in removed if p not in withheld]
-        paths = [p for p in paths if p not in withheld]
-        deleted = [p for p in deleted if p not in withheld]
-        unlanded_chunks = {owner[p] for p in withheld if p in owner}
-        landed_chunks = sorted({owner[p] for p in product + removed if p in owner} - unlanded_chunks)
     from coordinator_core.ops.dispatch_emit.halted_record_commit import plan_tree_eviction
 
     eviction = plan_tree_eviction(
@@ -810,7 +758,7 @@ def _land(
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,
             **({"withheld": withheld} if withheld else {}), **peer_held_by,
-            **({"targeted_tests": targeted} if targeted is not None else {}), **baton_reply, **base,
+            **baton_reply, **base,
         }
 
     land_deadline.check("land_run_halt._land.commit")
@@ -819,8 +767,6 @@ def _land(
 
     for line in run_halted_trailer_lines(landing_integrity.closing_bases(root, run_id, params)):
         message += "\n" + line
-    if landed_chunks:
-        message += "\nLands-Chunks: " + ", ".join(landed_chunks)
     if landed_classes:
         message += "\nLands-Artifacts: " + ", ".join(f"{c}={n}" for c, n in sorted(landed_classes.items()))
     if deleted:
@@ -873,19 +819,6 @@ def _land(
     if left_over:
         out["run_artifact_residue"] = left_over
     out["run_artifacts"] = {"landed": sorted(paths + deleted), "withheld": withheld}
-    if landed_chunks:
-        out["landed_chunks"] = landed_chunks
     if withheld:
         out["withheld"] = withheld
-    stamp = stamp_halt_lands_chunks(root, repo_root, halted, plan_rel, landed_chunks, outcome.sha, session_id)
-    if stamp is not None:
-        out["lands_chunks_stamp"] = stamp
-    if targeted is not None:
-        out["targeted_tests"] = targeted
-    if integrity:
-        out["integrity"] = [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in integrity]
-    if tfind:
-        out["advisory"] = landing_integrity.provenance_entries(tfind)
-    if claim_provenance:
-        out["provenance"] = landing_integrity.provenance_entries(claim_provenance)
     return {**out, "paths": paths + deleted, **base}

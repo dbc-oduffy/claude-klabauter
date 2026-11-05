@@ -44,8 +44,17 @@ def _envelope(target, **extra):
     }
 
 
-@pytest.mark.parametrize("parts", _SURFACES)
-@pytest.mark.parametrize("audience", [{}, {"agent_id": "engine-run-1", "agent_type": "executor"}])
+_SUBAGENT = {"agent_id": "engine-run-1", "agent_type": "executor"}
+
+
+@pytest.mark.parametrize(
+    "parts,audience",
+    [
+        (_SURFACES[0], {}),
+        (_SURFACES[0], _SUBAGENT),
+        (_SURFACES[1], {}),
+    ],
+)
 def test_doctrine_edit_lands_with_an_advisory_and_no_sentinel(doe, parts, audience):
     target = doe.joinpath(*parts)
     result = guard.check(_envelope(target, **audience))
@@ -54,6 +63,14 @@ def test_doctrine_edit_lands_with_an_advisory_and_no_sentinel(doe, parts, audien
     assert "permissionDecision" not in out
     assert "advisory" in out["additionalContext"]
     assert "byte budget" in out["additionalContext"]
+
+
+def test_dispatched_agent_claude_md_edit_is_the_registered_subagent_deny(doe):
+    """PM ruling, deny_registry.SUBAGENT_DENY_CLASS: the one deny, a dispatched agent's CLAUDE.md edit."""
+    result = guard.check(_envelope(doe.joinpath(*_SURFACES[1]), **_SUBAGENT))
+    out = result["hookSpecificOutput"]
+    assert out["permissionDecision"] == "deny"
+    assert "dispatched agent may not edit CLAUDE.md" in out["permissionDecisionReason"]
 
 
 def test_unprotected_path_in_a_protected_directory_passes_silently(doe):

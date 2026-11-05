@@ -9,7 +9,7 @@ import pytest
 from coordinator_core.guard_routes import keys
 from coordinator_core.write_guards import engine
 
-_GUARD = "fake-route-guard"
+_GUARD = "destructive-rm"  # a deny_registry guard: an unregistered name is demoted to an advisory
 _ENVELOPE = {
     "hookSpecificOutput": {
         "permissionDecision": "deny",

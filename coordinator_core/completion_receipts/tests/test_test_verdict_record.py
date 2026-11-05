@@ -113,16 +113,24 @@ def _effective(p):
     return fm, verdict.effective_test_verdict(fm)
 
 
-def _failres(method, caused=()):
-    return _res(
-        status="fail", tests_failed=2, baseline_method=method,
-        baseline={"pre_existing": ["a::t1", "a::t2"], "caused": list(caused), "unverified": []},
-    )
+def _failres(method, caused=(), log=None):
+    baseline = {"pre_existing": ["a::t1", "a::t2"], "caused": list(caused), "unverified": []}
+    if log is not None:
+        baseline["evidence"] = ["a::t1", "a::t2"]
+        baseline["base_log"] = str(log)
+    return _res(status="fail", tests_failed=2, baseline_method=method, baseline=baseline)
+
+
+def _base_log(tmp_path):
+    """A base-export pytest log re-finding both pre-existing ids red, as the clearing gate requires."""
+    log = tmp_path / "base.log"
+    log.write_text("FAILED a::t1 - boom\nFAILED a::t2 - boom\n", encoding="utf-8")
+    return log
 
 
 def test_baseline_export_all_pre_existing_is_pass(tmp_path):
     p = _write(tmp_path)
-    record_test_verdict(tmp_path, _failres("export"))
+    record_test_verdict(tmp_path, _failres("export", log=_base_log(tmp_path)))
     fm, eff = _effective(p)
     assert fm["test_verdict"] == "fail" and fm["baseline_method"] == "export"
     assert fm["baseline"]["pre_existing"] == ["a::t1", "a::t2"]
@@ -132,6 +140,12 @@ def test_baseline_export_all_pre_existing_is_pass(tmp_path):
 def test_baseline_with_caused_stays_fail(tmp_path):
     p = _write(tmp_path)
     record_test_verdict(tmp_path, _failres("export", caused=["a::t3"]))
+    assert _effective(p)[1] == "fail"
+
+
+def test_baseline_export_without_evidence_stays_fail(tmp_path):
+    p = _write(tmp_path)
+    record_test_verdict(tmp_path, _failres("export"))
     assert _effective(p)[1] == "fail"
 
 

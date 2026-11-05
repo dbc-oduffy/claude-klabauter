@@ -3223,6 +3223,35 @@ def _refuse_while_draining(conn: Any, *, server_sha: Optional[str]) -> None:
             pass
 
 
+def _spawn_background(fn: Callable[..., Any], *args: Any) -> None:
+    threading.Thread(target=fn, args=args, name="ask-spool-drain", daemon=True).start()
+
+
+def _run_ask_spool_drain(repo_root: Any) -> None:
+    try:
+        from coordinator_core.ask_spool import drain
+
+        drain.run(str(repo_root))
+    except Exception as exc:  # noqa: BLE001 -- a drain failure leaves entries pending for the next boot
+        print("ask_spool drain failed: %s: %s" % (type(exc).__name__, exc), file=sys.stderr)
+
+
+class _DrainTrigger:
+    """Starts one background ask-spool drain per served repo, after its first request."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._seen: "set[str]" = set()
+
+    def maybe_drain(self, repo_root: Any) -> None:
+        key = str(repo_root)
+        with self._lock:
+            if key in self._seen:
+                return
+            self._seen.add(key)
+        _spawn_background(_run_ask_spool_drain, repo_root)
+
+
 class _ServerContext:
 
     def __init__(
@@ -3275,6 +3304,7 @@ class _ServerContext:
         self._idle_watchdog_stop = threading.Event()
         self._served_repos_lock = threading.Lock()
         self._served_repos: "dict[Path, None]" = {}
+        self._drain_trigger = _DrainTrigger()
         self._dispatch_pool: Optional["concurrent.futures.ProcessPoolExecutor"] = None
         self._dispatch_pool_lock = threading.Lock()
         self._worker_threads: "list[threading.Thread]" = []
@@ -3311,6 +3341,7 @@ class _ServerContext:
     def record_served_repo(self, repo_root: Any) -> None:
         with self._served_repos_lock:
             self._served_repos[Path(repo_root)] = None
+        self._drain_trigger.maybe_drain(Path(repo_root))
 
     def served_repos(self) -> list:
         with self._served_repos_lock:

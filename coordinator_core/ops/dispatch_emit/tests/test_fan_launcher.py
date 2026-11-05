@@ -762,3 +762,36 @@ def test_the_start_loop_refuses_a_second_deferred_emit_and_an_out_of_tree_one(tm
     bad = {fl.DEFERRED_EMIT_KEY: {"path": "/elsewhere/x.workflow.mjs", "run_id": "ask-r1", "fire_args": {}}}
     out, started = _run_start_loop_under_node(tmp_path, [bad], "ask-p2")
     assert out["status"] == "emit_refused" and len(started) == 1
+
+
+def _mark_parked(root: Path, run_id: str) -> None:
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN, record_dir, write_stop_after_marker
+
+    d = record_dir(root, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    write_stop_after_marker(d, STOP_AFTER_PLAN)
+
+
+def test_child_emit_params_carry_the_parents_stop_after_and_nothing_otherwise(tmp_path):
+    base = {"ask": True, "sizing_path": "s.yaml"}
+    assert fl.child_emit_params(tmp_path, "ask-parent", base) == base
+    _mark_parked(tmp_path, "ask-parent")
+    assert fl.child_emit_params(tmp_path, "ask-parent", base) == {**base, "stop_after": "plan"}
+    assert "stop_after" not in base
+
+
+def test_write_launcher_refuses_children_emitted_without_the_parents_stop_after(tmp_path):
+    _mark_parked(tmp_path, "ask-parent")
+    with pytest.raises(ValueError, match="stop_after"):
+        _write(tmp_path)
+    children = [
+        fl.LaunchChild(run_id=c.run_id, sizing_rel=c.sizing_rel, emit_params=fl.child_emit_params(tmp_path, "ask-parent", c.emit_params))
+        for c in _children("ask-r1", "ask-r2")
+    ]
+    path = fl.write_launcher(tmp_path, "ask-parent", children, "sess-1", _replies("ask-r1", "ask-r2"))
+    assert path.exists()
+
+
+def test_write_launcher_without_a_parked_lineage_is_unchanged(tmp_path):
+    path, script = _write(tmp_path)
+    assert path.exists() and "stop_after" not in script

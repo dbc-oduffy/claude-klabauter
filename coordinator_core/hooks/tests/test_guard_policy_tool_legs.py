@@ -41,31 +41,31 @@ def _flag(mp, key, value):
     machine_profile.reset_cache()
 
 
-def test_no_flags_warns_not_denies(isolated, tmp_path):
+def test_no_flags_registered_guard_denies_and_unregistered_guard_advises(isolated, tmp_path):
     out = block_worktree_tool._handler(dict(_ENTER))
-    assert not _denies(out)
-    assert out["hookSpecificOutput"]["additionalContext"]
+    assert _denies(out)
+    assert out["hookSpecificOutput"]["permissionDecisionReason"]
     out = guard_python_syntax_on_write._handler(_bad_write(tmp_path))
     assert not _denies(out)
     assert out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_global_strict_denies(isolated, tmp_path):
+def test_global_strict_denies_only_the_registered_guard(isolated, tmp_path):
     _flag(isolated, _GLOBAL, "strict")
     assert _denies(block_worktree_tool._handler(dict(_ENTER)))
-    assert _denies(guard_python_syntax_on_write._handler(_bad_write(tmp_path)))
+    assert not _denies(guard_python_syntax_on_write._handler(_bad_write(tmp_path)))
 
 
-def test_per_guard_strict_hardens_one_leg_only(isolated, tmp_path):
+def test_per_guard_strict_does_not_lift_an_unregistered_guard(isolated, tmp_path):
     _flag(isolated, _GLOBAL, "warn")
     _flag(isolated, _SYNTAX_KEY, "strict")
-    assert _denies(guard_python_syntax_on_write._handler(_bad_write(tmp_path)))
-    assert not _denies(block_worktree_tool._handler(dict(_ENTER)))
+    assert not _denies(guard_python_syntax_on_write._handler(_bad_write(tmp_path)))
+    assert _denies(block_worktree_tool._handler(dict(_ENTER)))
 
 
-def test_per_guard_off_allows_silently(isolated):
+def test_per_guard_off_does_not_silence_a_registered_deny(isolated):
     _flag(isolated, _WORKTREE_KEY, "off")
-    assert not _denies(block_worktree_tool._handler(dict(_ENTER)))
+    assert _denies(block_worktree_tool._handler(dict(_ENTER)))
 
 
 @pytest.mark.parametrize(

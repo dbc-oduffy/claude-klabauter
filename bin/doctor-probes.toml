@@ -251,7 +251,8 @@ symptom_keywords = ["runaway file", "disk bloat", "large untracked file", "workt
 
 triage = true
 body = "bin/claude-klabauter-doctor-probe.py:_run_probe_worktree_bloat"
-required = true
+# Not an install-took check: it walks the worktree, so it stays off the --required-only install path.
+required = false
 
 
 severity_if_fail = "degraded"

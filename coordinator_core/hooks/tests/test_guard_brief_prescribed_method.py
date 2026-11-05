@@ -63,11 +63,12 @@ def test_warn_returns_advisory_naming_span(tmp_path):
     assert "State the outcome" in hso["additionalContext"]
 
 
-def test_strict_denies(tmp_path):
+def test_strict_advises_naming_the_span(tmp_path):
     _table(tmp_path, "strict")
     hso = _hso(g.evaluate(_agent(_BRIEF), repo_root=tmp_path))
-    assert hso["permissionDecision"] == "deny"
-    assert "ue_build_job.py" in hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
+    assert "ue_build_job.py" in hso["additionalContext"]
 
 
 def test_strict_deny_passes_through_guard_level(tmp_path, monkeypatch):

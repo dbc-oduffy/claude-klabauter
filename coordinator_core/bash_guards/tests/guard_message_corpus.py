@@ -1544,6 +1544,22 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "guard-uncapped-pytest-plugin",
+        "guard-uncapped-pytest-plugin-fire",
+        "pytest -p adhoc_plugin tests/",
+        True,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
+        "guard-uncapped-pytest-plugin",
+        "guard-uncapped-pytest-plugin-control",
+        "pytest -p xdist tests/",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-home-root-bash-write",
         "block-home-root-bash-write-fire",
         "echo x > ~/stray.txt",
@@ -4119,6 +4135,65 @@ def _fire_guard_turn_intent_control() -> Optional[Dict[str, Any]]:
     return _fire_guard_turn_intent("Tests pass. Ready when you are.", False)
 
 
+def _fire_idle_compact_advisory(prompt: str, run_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    from coordinator_core.hooks import idle_compact_advisory as hook
+
+    session_id = str(uuid.uuid4())
+    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-hooks-ica-", dir=_neutral_scratch_parent()) as scratch:
+        log = Path(scratch) / "injections.jsonl"
+        if run_id is not None:
+            import datetime
+
+            log.write_text(
+                _json.dumps(
+                    {
+                        "session_id": session_id,
+                        "action": "injected",
+                        "run_id": run_id,
+                        "ts": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        with unittest.mock.patch(
+            "coordinator_core.idle_compact.contract.injection_log_path", lambda: log
+        ):
+            return _to_envelope_or_none(hook._handler({"prompt": prompt, "session_id": session_id}))
+
+
+def _fire_idle_compact_advisory_injected() -> Optional[Dict[str, Any]]:
+    return _fire_idle_compact_advisory("/compact", "run-corpus-1")
+
+
+def _fire_idle_compact_advisory_control() -> Optional[Dict[str, Any]]:
+    return _fire_idle_compact_advisory("/compact", None)
+
+
+def _fire_rewrite_sendmessage_peer_name(to: str) -> Optional[Dict[str, Any]]:
+    from types import SimpleNamespace
+
+    from coordinator_core.hooks import rewrite_sendmessage_peer_name as hook
+
+    peers = [SimpleNamespace(name="claude-klabauter-c8", address="claude-klabauter-c8@corpus")]
+    with unittest.mock.patch(
+        "coordinator_core.session.harness_registry.snapshot", lambda: []
+    ), unittest.mock.patch(
+        "coordinator_core.session.reachability.resolve_candidates", lambda _snap: peers
+    ):
+        return _to_envelope_or_none(
+            hook._handler({"tool_name": "SendMessage", "tool_input": {"to": to, "message": "hi"}})
+        )
+
+
+def _fire_rewrite_sendmessage_peer_name_near_miss() -> Optional[Dict[str, Any]]:
+    return _fire_rewrite_sendmessage_peer_name("claude-klabauter-c8")
+
+
+def _fire_rewrite_sendmessage_peer_name_control() -> Optional[Dict[str, Any]]:
+    return _fire_rewrite_sendmessage_peer_name("claude-klabauter-c8")
+
+
 # --- AC10 coverage-gap closers, 2026-08-31. Three hooks modules landed
 # between 2026-08-18 and 2026-08-31 with neither a corpus row nor a named
 # exemption, which `test_ac10_coverage_gap_is_empty_or_named_exemption`
@@ -4691,14 +4766,14 @@ def _fire_submit_engine_ask_with(
 def _fire_submit_bug_blitz_with(
     args: Any = None, branch: str = "main", in_repo: bool = True, subagent: bool = False, name: str = "coordinator:bug-blitz"
 ) -> Optional[Dict[str, Any]]:
-    with tempfile.TemporaryDirectory(prefix="guard-message-corpus-sbb-", dir=_neutral_scratch_parent()) as scratch:
+    with tempfile.TemporaryDirectory(prefix="sbb-", dir=_neutral_scratch_parent()) as scratch:
         root = Path(scratch) / "repo"
         (root / ".git" / "objects").mkdir(parents=True)
         (root / ".git" / "refs").mkdir()
         (root / ".git" / "HEAD").write_text(f"ref: refs/heads/{branch}\n", encoding="utf-8")
-        cwd = str(root) if in_repo else str(Path(scratch) / "outside")
+        cwd = str(root) if in_repo else str(Path(scratch) / "o")
         if not in_repo:
-            (Path(scratch) / "outside").mkdir()
+            (Path(scratch) / "o").mkdir()
         payload = {
             "tool_name": "Workflow",
             "tool_input": {"name": name, "args": args if args is not None else {"targets": "red-set"}},
@@ -6645,6 +6720,14 @@ HOOK_ROWS: List[HookRow] = [
     ),
     HookRow("guard_turn_intent", "fire-go-ask", True, _fire_guard_turn_intent_go_ask),
     HookRow("guard_turn_intent", "control-no-group-em", False, _fire_guard_turn_intent_control),
+    HookRow("idle_compact_advisory", "fire-injected", True, _fire_idle_compact_advisory_injected),
+    HookRow("idle_compact_advisory", "control-not-injected", False, _fire_idle_compact_advisory_control),
+    HookRow(
+        "rewrite_sendmessage_peer_name", "fire-near-miss", True, _fire_rewrite_sendmessage_peer_name_near_miss
+    ),
+    HookRow(
+        "rewrite_sendmessage_peer_name", "control-exact-name", False, _fire_rewrite_sendmessage_peer_name_control
+    ),
     HookRow(
         "plan_persistence_check",
         "fire-persisted-advisory",

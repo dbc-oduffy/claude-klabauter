@@ -2190,6 +2190,12 @@ def _em_turn_budget_sync(params: dict) -> str:
 _TOUCH_RECORDING_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 
 
+def _ask_spool_notice_sync(session_id: str, repo_root) -> str:
+    from coordinator_core.ask_spool import notice
+
+    return notice.advisory_text(None if repo_root is None else str(repo_root), session_id)
+
+
 def _touched_path(params: dict) -> str:
     """The written path: a flat ``file_path`` (stub-mapped route), else the raw
     hook event's ``tool_input`` (HTTP route, which forwards the event verbatim)."""
@@ -2445,10 +2451,17 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     turn_text = _text_or_breadcrumb("em_turn_budget", results[10])
 
+    # One stat when no notice is pending, so it runs inline rather than on a thread.
+    try:
+        spool_text = _ask_spool_notice_sync(session_id, repo_root)
+    except Exception as exc:  # noqa: BLE001 -- advisory legs fail open
+        spool_text = _text_or_breadcrumb("ask_spool_notice", exc)
+
     texts = [
         text
         for text in (
             cp_text, rt_text, ad_text, uh_text, hw_text, ge_text, stall_text, turn_text,
+            spool_text,
         )
         if text
     ]

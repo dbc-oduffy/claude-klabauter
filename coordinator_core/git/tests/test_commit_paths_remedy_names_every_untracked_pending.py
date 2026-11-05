@@ -52,6 +52,10 @@ def test_remedy_names_untracked_classified_sibling_and_skips_tracked(repo):
     (repo / "coordinator" / "bin" / "existing_cli.py").write_text(
         "x = 2\n", encoding="utf-8", newline="\n"
     )
+    # 56fa06679f: a clean or pathspec-carried setup/publish-targets.portable is
+    # regenerated and lands; the refusal (and its remedy) survives only when a
+    # peer's uncommitted edit makes the portable file dirty and outside the pathspec.
+    _write(repo / "setup" / "publish-targets.portable", _PORTABLE + "# peer edit\n")
     paths = [
         "coordinator/bin/existing_cli.py",
         "coordinator/bin/classified-tool.py",

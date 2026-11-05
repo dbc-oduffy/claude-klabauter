@@ -511,18 +511,16 @@ class TestEnforceTierUGate:
         assert result.refusal_message is None
         assert called["n"] == 0
 
-    def test_this_repos_own_diff_scoped_fast_test_cmd_classifies_tier_f_and_refuses(
+    def test_this_repos_own_diff_scoped_fast_test_cmd_classifies_tier_t_and_proceeds(
         self, tmp_path
     ):
-        """AC3b: THIS repo's own configured fast_test_cmd is BARE and
-        classifies Tier U (R6-discharged) -- but the DIFF-SCOPED form
-        /validate and /workday-complete step-1 actually execute (the bare
-        command with a changed-test-path appended, via
-        coordinator_core.diff_scoped_tests.append_test_paths) classifies
-        Tier F, and is newly gated by this dispatch. Measured live against
-        the real repo root, not a synthetic fixture -- the two forms are
-        different objects and must not be conflated (see plan's Anti-scope:
-        'Name the object precisely')."""
+        """THIS repo's own configured fast_test_cmd is BARE and classifies
+        Tier U -- but the DIFF-SCOPED form /validate and /workday-complete
+        step-1 actually execute (the bare command with a changed-test-path
+        appended, via coordinator_core.diff_scoped_tests.append_test_paths)
+        is a configured cmd plus appended test files: Tier T, never Tier F,
+        and ungated. Measured live against the real repo root; the two forms
+        are different objects and must not be conflated."""
         import os as _os
 
         from coordinator_core.diff_scoped_tests import append_test_paths
@@ -542,13 +540,14 @@ class TestEnforceTierUGate:
             bare_cmd, ["coordinator_core/session/tests/test_tier_u_gate.py"]
         )
         diff_scoped_matches = guard.classify_command(diff_scoped_cmd, cwd=repo_root)
-        assert diff_scoped_matches and all(m.tier == "F" for m in diff_scoped_matches)
+        assert not any(m.tier == "F" for m in diff_scoped_matches)
+        assert not diff_scoped_matches
 
         result = tier_u_gate.enforce_tier_u_gate(
             diff_scoped_cmd, repo_root=repo_root, session_id="s1-c1-ac3b-probe-session"
         )
-        assert result.proceed is False
-        assert "Tier F" in result.refusal_message
+        assert result.proceed is True
+        assert result.refusal_message is None
 
     def test_r6_declaration_does_not_discharge_a_tier_f_command(self, tmp_path):
         """AC4/C1's own guard against the escape-hatch-by-omission the PM

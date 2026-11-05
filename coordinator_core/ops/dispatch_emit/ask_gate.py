@@ -31,6 +31,7 @@ from coordinator_core.ops.dispatch_emit.ask_exclusions import excluded_paths
 RESUME_EXCLUDE_FIELD = "exclude"
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ALL_LANDED_HALT_KIND,
+    HALT_MISALIGNED,
     HALT_REFUSAL,
     HALT_RESEARCH,
     HALT_ROOM,
@@ -66,10 +67,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     record_dir,
     write_run_baton,
     rulable_ids,
+    size_misaligned,
 )
 from coordinator_core.ops.sizing_acceptance import (
     ENGINE_SIZE_RULE,
-    apm_picks_xl_exit,
     lacks_human_acceptance,
     sizing_acceptance_skipped,
 )
@@ -117,6 +118,7 @@ set_fleet_mode_provider(resolve_fleet_interaction_mode)
 
 _ACCEPT_TOUCHPOINTS = frozenset({"accept_sizing", "accept_exit_criterion"})
 _ACCEPTED_NULL_PREFIX = "`exit_criterion.accepted`"
+_ENGINE_LARGE_SIZES = ("XL", "XXL")
 _PARAMS = (
     Field("sizing_path", "nonempty_str", required=True),
     Field("writes", "str_list"),
@@ -128,6 +130,7 @@ _PARAMS = (
     Field("session_id", "str"),
     Field("route_override_reason", "str"),
     Field("require_live_token", "bool"),
+    Field("em_size", "nonempty_str"),
 )
 _RECORD_KINDS = ("exit_criterion", "xl_exit", design_route.RECORD_KIND)
 _XL_PICKS = ("roadmap", "accept_multi_session", "split")
@@ -396,6 +399,7 @@ def gate(
     phase_sink: Optional[list] = None,
     held_sink: Optional[list] = None,
     reasons_sink: Optional[list] = None,
+    em_size: Optional[str] = None,
 ) -> GateVerdict:
     """Arm for the sizing at `sizing_rel`, or the single halt that stops it, naming every cause.
 
@@ -434,7 +438,7 @@ def gate(
         return replace(_refuse(f"{error}: repair {shown or registry}"), design_route=route_payload)
     verdict = _arm_verdict(
         root, sizing_rel, writes=writes, baton=baton, landed_sink=landed_sink, run_id=run_id, kept_sink=kept_sink,
-        phase_sink=phase_sink, held_sink=held_sink, reasons_sink=reasons_sink,
+        phase_sink=phase_sink, held_sink=held_sink, reasons_sink=reasons_sink, em_size=em_size,
     )
     if route_payload is not None and verdict.design_route is None:
         verdict = replace(verdict, design_route=route_payload)
@@ -542,6 +546,43 @@ def _newest_run_binding(repo_root: Path, sizing_rel: str, skip: Optional[str]) -
     return best[1] if best else None
 
 
+#: Wall bound on the orphan lookup; past it the gate answers no orphan.
+ORPHAN_LOOKUP_WALL_S = 0.4
+
+
+def _bounded_orphan_lookup(
+    repo_root: Path, sizing_rel: str, run_id: Optional[str], session_id: str
+) -> Optional[tuple[str, dict]]:
+    """`(newest run id, orphan verdict)` when an orphan binds the sizing; None when none does or the
+    lookup outlives `ORPHAN_LOOKUP_WALL_S` (the worker is a daemon thread left to finish)."""
+    import threading
+
+    from coordinator_core.ops.dispatch_emit import orphan_adopt as oa
+
+    box: list = []
+    done = threading.Event()
+
+    def work() -> None:
+        try:
+            newest = _newest_run_binding(repo_root, sizing_rel, run_id)
+            if newest is not None:
+                verdict = oa.orphan_verdict(repo_root, newest, session_id)
+                if verdict["orphaned"]:
+                    box.append((newest, verdict))
+        except BaseException:
+            pass
+        finally:
+            done.set()
+
+    try:
+        threading.Thread(target=work, daemon=True).start()
+    except BaseException:
+        return None
+    if not done.wait(ORPHAN_LOOKUP_WALL_S):
+        return None
+    return box[0] if box else None
+
+
 def _orphan_pending_halt(repo_root: Path, sizing_rel: str, run_id: Optional[str]) -> Optional[GateVerdict]:
     """None when no orphan binds the sizing, or when the gate adopted it in-run (the fire then resumes from
     the run's disk evidence); the `orphan_pending` halt naming the adopt call only when both adopt tries fail."""
@@ -549,12 +590,10 @@ def _orphan_pending_halt(repo_root: Path, sizing_rel: str, run_id: Optional[str]
     from coordinator_core.ops.dispatch_emit import orphan_adopt as oa
     from coordinator_core.session.core import resolve_session_id
 
-    newest = _newest_run_binding(repo_root, sizing_rel, run_id)
-    if newest is None:
+    found = _bounded_orphan_lookup(repo_root, sizing_rel, run_id, resolve_session_id() or "")
+    if found is None:
         return None
-    verdict = oa.orphan_verdict(repo_root, newest, resolve_session_id() or "")
-    if not verdict["orphaned"]:
-        return None
+    newest, verdict = found
     reason = (
         f"run {newest} was orphaned by dead session {verdict['recorded_session']} at stage {verdict['stage']}: "
         "adopt it to resume from its first unreceipted stage instead of re-running the sizing"
@@ -587,8 +626,11 @@ def _arm_verdict(
     repo_root: Path, sizing_rel: str, *, writes: Sequence[str] = (), baton: Optional[str] = None,
     landed_sink: Optional[list] = None, run_id: Optional[str] = None, kept_sink: Optional[list] = None,
     phase_sink: Optional[list] = None, held_sink: Optional[list] = None, reasons_sink: Optional[list] = None,
+    em_size: Optional[str] = None,
 ) -> GateVerdict:
-    """The arm-or-halt verdict, before the design-registry leg."""
+    """The arm-or-halt verdict, before the design-registry leg.
+
+    `em_size` is the EM's stated size: M or below against an engine XL/XXL is the one sizing-time halt."""
     from coordinator_core import sizing_assemble as sa
 
     repo_root = Path(repo_root)
@@ -598,7 +640,11 @@ def _arm_verdict(
     except SizingFireRefused as exc:
         return _refuse("; ".join(exc.fields))
 
-    pending_orphan = _orphan_pending_halt(repo_root, sizing_rel, run_id)
+    engine_tshirt = sizing["estimate"]["tshirt"]
+    if size_misaligned(em_size, engine_tshirt):
+        return _halt(HALT_MISALIGNED, f"EM stated {em_size} but the engine sized {engine_tshirt}: misaligned")
+
+    pending_orphan =_orphan_pending_halt(repo_root, sizing_rel, run_id)
     if pending_orphan is not None:
         return pending_orphan
 
@@ -641,8 +687,8 @@ def _arm_verdict(
         )
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
         extra = {}
-        if route == "pm-decision" and apm_picks_xl_exit(sizing.get("interaction_mode")):
-            # The script's xl-exit stage records the APM's pick and re-gates; pm mode halts here.
+        if route == "pm-decision":
+            # The script's xl-exit stage records the APM's pick and re-gates, in every interaction mode.
             extra["apm_xl_exit"] = True
         return _halt(
             HALT_ROOM,
@@ -663,7 +709,7 @@ def _arm_verdict(
     mode = sizing.get("interaction_mode")
     tshirt = sizing["estimate"]["tshirt"]
     needs_acceptance = False
-    if mode in sa.TOUCHPOINTS_BY_MODE:
+    if mode in sa.TOUCHPOINTS_BY_MODE and tshirt not in _ENGINE_LARGE_SIZES:
         needs_acceptance = any(
             t["id"] in _ACCEPT_TOUCHPOINTS
             for t in sa.touchpoints(mode, tshirt, sizing.get("route"))
@@ -1248,6 +1294,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     refusal = validate_params("dispatch.ask_gate", params, _PARAMS)
     if refusal is not None:
         return refusal
+    if params.get("run_id"):
+        from coordinator_core.ops.dispatch_emit.requirements_ledger import HandoverPending
+        from coordinator_core.warm import breadcrumb as _breadcrumb
+
+        pending_secs = _breadcrumb.handover_pending_remaining_secs()
+        if pending_secs > 0.0:
+            return HandoverPending(pending_secs).reply
     record = params.get("record")
     if record is not None:
         refusal = _record_refusal(record)
@@ -1289,8 +1342,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             _mark_token_spent(root, params["run_id"])
             return _refuse(
                 f"run token for {params['run_id']} is spent or gone (a run that halted or ended no longer "
-                "holds one), so this refire could land nothing. This run is retired; the call starts a "
-                f"new run id with a new token: {fire_command(sizing_rel)}",
+                "holds one), so this refire could land nothing. This run is retired; the call mints a "
+                f"fresh run id and token carrying its revise notes: {fire_command(sizing_rel)}",
             ).to_json()
     if params.get("run_id"):
         refused = _bind_run(
@@ -1309,7 +1362,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     verdict = gate(
         root, sizing_rel, writes=writes, baton=params.get("baton"),
         mint_design_rows=bool(params.get("run_id")), landed_sink=landed, run_id=params.get("run_id"),
-        kept_sink=kept, phase_sink=phases, held_sink=held, reasons_sink=reasons,
+        kept_sink=kept, phase_sink=phases, held_sink=held, reasons_sink=reasons, em_size=params.get("em_size"),
     )
     if landed and verdict.halt is None and verdict.resume_plan and verdict.resume_rows:
         _stamp_landed_rows(root, verdict.resume_plan, landed)
@@ -1651,6 +1704,13 @@ def _mark_token_spent(root: Path, run_id: str) -> None:
         (target / TOKEN_SPENT_FILE).write_text("{}\n", encoding="utf-8")
     except OSError:
         pass
+
+
+def token_spent(root: Path, run_id: str) -> bool:
+    """True when the gate refused `run_id` for a spent run token: its record dir holds `TOKEN_SPENT_FILE`."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, safe_id
+
+    return bool(safe_id(run_id)) and (Path(root) / RECORD_DIR_ROOT / run_id / TOKEN_SPENT_FILE).is_file()
 
 
 def retire_token_spent_halt(root: Path, sizing_rel: str) -> Optional[str]:

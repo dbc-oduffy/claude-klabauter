@@ -1,12 +1,13 @@
-"""codex_runner.resolve -- locate the fnm-installed codex entry as [node_exe, codex_js].
+"""codex_runner.resolve -- locate the codex entry: fnm [node_exe, codex_js], else PATH [codex].
 
-Pure filesystem reads: never spawns fnm or a shell, so the spawn chain has no
-cmd.exe / .cmd shim on Windows.
+Pure filesystem reads: never spawns fnm or a shell. The fnm route has no cmd.exe / .cmd shim on
+Windows; the PATH fallback returns whatever which resolves (codex.cmd on Windows) as a bare argv.
 """
 from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -41,7 +42,22 @@ def fnm_root(platform: Optional[str] = None, env: Optional[dict] = None) -> Path
 
 
 def resolve_codex(platform: Optional[str] = None, env: Optional[dict] = None) -> list[str]:
-    """Return [node_exe, codex_js] for the fnm `default` alias; raise CodexUnavailable if absent."""
+    """Return [node_exe, codex_js] for the fnm `default` alias, else [which("codex")] from PATH.
+
+    Raises CodexUnavailable only when both miss. The PATH hit is spawned directly, never via a shell;
+    on Windows it is the codex.cmd that which resolves.
+    """
+    try:
+        return _resolve_fnm(platform, env)
+    except CodexUnavailable as fnm_miss:
+        path = (os.environ if env is None else env).get("PATH", "")
+        found = shutil.which("codex", path=path)
+        if found:
+            return [found]
+        raise CodexUnavailable(f"{fnm_miss}; codex not on PATH either") from fnm_miss
+
+
+def _resolve_fnm(platform: Optional[str], env: Optional[dict]) -> list[str]:
     platform = platform or sys.platform
     windows = platform.startswith("win")
     root = fnm_root(platform, env)

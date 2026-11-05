@@ -28,12 +28,13 @@ def _payload(path, tool="Write", key="file_path", **extra):
 
 
 def _reason(out):
+    """The guard is advisory-by-ruling (recoverable clutter): allow plus one advisory line."""
     body = out["hookSpecificOutput"]
-    assert body["permissionDecision"] == "deny"
-    return body["permissionDecisionReason"]
+    assert body["permissionDecision"] == "allow"
+    return body["additionalContext"]
 
 
-def test_write_to_new_top_level_is_denied_naming_scratch(world):
+def test_write_to_new_top_level_is_advised_naming_scratch(world):
     root, _ = world
     reason = _reason(guard.check(_payload(root / "fresh" / "f.txt")))
     assert "<repo>/scratch/" in reason

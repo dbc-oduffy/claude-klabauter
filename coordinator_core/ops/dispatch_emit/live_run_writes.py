@@ -125,7 +125,7 @@ def prune_index(root: Path, *, deep: bool = False, now: Optional[float] = None) 
             over = isinstance(minted, (int, float)) and now - minted > warp_live.UNLAUNCHED_GRACE_SECONDS
         if not over and deep and launched:
             record = records.get(run_id)
-            over = record is None or not warp_live._record_live(root, record, None, None, dirs)
+            over = record is None or not warp_live._record_live(root, record, None, None, dirs, records_only=True)
         if over:
             dropped.append(run_id)
     for run_id in dropped:
@@ -144,7 +144,9 @@ def live_footprints(root: Path, *, exclude_run_id: Optional[str]) -> dict[str, O
             run_id = record["run_id"]
             if run_id == exclude_run_id or run_id in out:
                 continue
-            if not warp_live.run_is_over(root, run_id) and warp_live._record_live(root, record, None, None, dirs):
+            if not warp_live.run_is_over(root, run_id) and warp_live._record_live(
+                root, record, None, None, dirs, records_only=True,
+            ):
                 out[run_id] = _footprint(root, run_id)
     return out
 

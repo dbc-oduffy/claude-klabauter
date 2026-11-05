@@ -119,6 +119,117 @@ from coordinator_core.invoke.warm_miss import (  # noqa: F401 -- re-exported for
 )
 
 
+_COLD_BY_DESIGN_MARKER = "carries no engine build stamp"
+
+
+def _remote_failover(msg: dict, *, popen=None) -> Optional[dict]:
+    """Start a background remote retry of `msg` after the local engine failed; never blocks on ssh.
+
+    Returns None to keep the local path (not remote-safe, `--allow-unstamped-dispatch`, hook
+    context, a local-path param, no ssh box, or a launch failure on a compute-only op). Otherwise
+    the envelope carries `remote_handle` (read with `remote_engine.background.read_handle`): for a
+    phase-2 op it holds an `error` and the caller must return it without running the op locally,
+    because the far run may mutate; for a compute-only op it holds no `result`/`error` and the
+    local response stands with the handle attached. Never raises.
+    """
+    try:
+        from coordinator_core.ipc import is_unstamped_dispatch_allowed
+
+        if is_unstamped_dispatch_allowed():
+            return None
+        from coordinator_core.remote_engine import background, fallback, policy
+
+        op = msg.get("method")
+        if not isinstance(op, str) or not policy.remote_safe(op):
+            return None
+        params = msg.get("params")
+        params = params if isinstance(params, dict) else {}
+        if fallback.in_hook_context() or policy.carries_local_path(params):
+            return None
+        phase2 = policy.is_phase2_mutating(op)
+        if phase2:
+            from coordinator_core.group_em import box_registry
+
+            if fallback.pick_box(box_registry.read_boxes(), box_registry.local_box_id()) is None:
+                return None
+        key = background.launch(op, params, popen=popen)
+        envelope = {"jsonrpc": "2.0", "id": msg.get("id")}
+        if key is None:
+            if not phase2:
+                return None
+            envelope["error"] = {
+                "code": -32603,
+                "message": f"remote launch failed; {op} not run",
+            }
+            return envelope
+        envelope["remote_handle"] = key
+        if phase2:
+            envelope["error"] = {
+                "code": -32603,
+                "message": (
+                    f"{op} is running on a remote box in the background; it is not run locally. "
+                    "Read the outcome from the handle; on an indeterminate outcome reconcile with "
+                    "warm.request_status on the far box."
+                ),
+                "data": {"remote_handle": key, "pending": True},
+            }
+        print(
+            f"[remote-engine] {op} retried remotely in the background; handle {key}.",
+            file=sys.stderr,
+        )
+        return envelope
+    except Exception:  # noqa: BLE001 - the local loud-pass path stays authoritative
+        return None
+
+
+def _attach_remote_handle(response: object, handle: Optional[str]) -> None:
+    """Label a local response with the background retry's handle (also inside a dict result)."""
+    if not handle or not isinstance(response, dict):
+        return
+    response["remote_handle"] = handle
+    result = response.get("result")
+    if isinstance(result, dict):
+        result["remote_handle"] = handle
+
+
+def _op_is_compute_only(msg: dict) -> bool:
+    """A timed-out local op may still finish, so only a compute-only op is safe to rerun remotely."""
+    try:
+        from coordinator_core.authz.classification import OpClass, classify
+
+        return classify(msg.get("method")) is OpClass.COMPUTE_ONLY
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _local_engine_unhealthy() -> bool:
+    """True when the health probe failed for a permanent reason other than cold-by-design."""
+    try:
+        from coordinator_core.warm.client import last_cold_reason
+
+        reason = last_cold_reason()
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(reason) and _COLD_BY_DESIGN_MARKER not in reason
+
+
+def _is_cold_reach_timeout(response: object) -> bool:
+    """True when `response` is the plain op-timed-out envelope of a compute-only cold dispatch."""
+    if not isinstance(response, dict):
+        return False
+    error = response.get("error")
+    if not isinstance(error, dict):
+        return False
+    from coordinator_core.ipc import INTERNAL_ERROR
+
+    message = error.get("message")
+    return (
+        error.get("code") == INTERNAL_ERROR
+        and isinstance(message, str)
+        and message.startswith("op timed out after")
+    )
+
+
 def _resolved_sid() -> Optional[str]:
     """Session id for a telemetry row, or None.
 
@@ -1041,6 +1152,8 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     this chunk's settings.py change), so this call is cheap even when
     #     re-derived rather than cached across this single-shot CLI process.
     response = None
+    warm_missed = False
+    remote_handle: Optional[str] = None
     if allow_warm:
         from coordinator_core.warm.settings import is_warm_enabled
 
@@ -1066,6 +1179,17 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             # caller asked for exactly this.
             if response is None:
                 response = settle_warm_miss(msg)
+                if response is None:
+                    warm_missed = True
+                    # Remote only when the health probe failed for good; a transient miss
+                    # keeps the local cold run, which is the existing degraded mode.
+                    if _local_engine_unhealthy():
+                        failover = _remote_failover(msg)
+                        if failover is not None:
+                            if "error" in failover:
+                                response = failover
+                            else:
+                                remote_handle = failover.get("remote_handle")
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout
@@ -1205,6 +1329,11 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             _record_dispatch_process_time(msg, _pt_t_start, _pt_process_start)
             loop.close()
             asyncio.set_event_loop(None)
+        if warm_missed and _is_cold_reach_timeout(response) and _op_is_compute_only(msg):
+            late = _remote_failover(msg)
+            if late is not None and "error" not in late:
+                remote_handle = late.get("remote_handle")
+        _attach_remote_handle(response, remote_handle)
         _captured = _handler_stdout.getvalue()
         if _captured:
             # Best-effort: the envelope below is the thing that must survive.

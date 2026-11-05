@@ -42,6 +42,8 @@ ARTIFACT_CLASSES = (
     "ask-dir",
 )
 DOC_PATHS_PARAM = "doc_paths"
+#: Classes a halt commit may carry beside the own record dir: run docs, never product or another run's record.
+HALT_LANDABLE_CLASSES = frozenset({"record-dir", "plan", "sizing", "delivery-note", "handoff", "baton"})
 
 def _home_rel(kind: str) -> str:
     return Path(home_dir("", kind)).as_posix()
@@ -575,7 +577,7 @@ def split_run_state(paths: Iterable[str]) -> tuple[list[str], list[str]]:
     return keep, state
 
 
-EVIDENCE_ROOT = "state/run-evidence"
+EVIDENCE_ROOT = _home_rel("run-evidence")
 OUTCOME_FILE = "outcome.json"
 
 

@@ -118,6 +118,23 @@ def test_deep_prune_drops_a_resumed_row_without_the_transcript_walk(repo, monkey
     assert live_run_writes.prune_index(repo, deep=True) == ["r1"]
 
 
+def test_footprints_and_deep_prune_read_records_only(repo, monkeypatch):
+    run_token.mint(repo, "r1", SCRIPT, session_id="s")
+    _submit(repo, "r1")
+    live_run_writes.index_stage(repo, "r1", {"rows": [{"writes": ["a.py"]}]})
+    seen: list = []
+    real = warp_live._record_live
+
+    def spy(*a, **k):
+        seen.append(k.get("records_only"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(warp_live, "_record_live", spy)
+    assert set(live_run_writes.live_footprints(repo, exclude_run_id=None)) == {"r1"}
+    live_run_writes.prune_index(repo, deep=True)
+    assert seen and all(v is True for v in seen)
+
+
 def test_resumed_run_holds_no_footprint_but_stays_live_to_session_readers(repo):
     run_token.mint(repo, "r1", SCRIPT, session_id="s")
     _submit(repo, "r1")
@@ -245,3 +262,15 @@ def test_overlaps_exact_dir_prefix_and_none():
     assert got == {"r1": ["a/b/x.py"], "r4": ["a"]}
     assert live_run_writes.overlaps(["a/b"], fp) == {"r1": ["a/b/x.py"], "r4": ["a"]}
     assert live_run_writes.overlaps([], fp) == {}
+
+
+def test_deferred_emit_run_past_the_grace_loses_its_footprint_records_only(repo, monkeypatch):
+    """Accepted: records-only liveness cannot see a deferred-emit run's transcript-found launch,
+    so once the unlaunched grace passes its footprint is dropped. Within the grace it is held."""
+    run_token.mint(repo, "d1", SCRIPT, session_id="s")
+    _stage(repo, "d1", rows=[["a.py"]])
+    assert live_run_writes.live_footprints(repo, exclude_run_id=None) == {"d1": frozenset({"a.py"})}
+    real = time.time
+    late = real() + warp_live.UNLAUNCHED_GRACE_SECONDS + 60
+    monkeypatch.setattr(warp_live.time, "time", lambda: late)
+    assert live_run_writes.live_footprints(repo, exclude_run_id=None) == {}

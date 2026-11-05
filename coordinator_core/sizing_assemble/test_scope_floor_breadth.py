@@ -11,7 +11,7 @@ _REASON = "same capture re-run over every page"
 def test_uniform_large_scope_stays_below_l():
     decision = sa.route(
         estimate=_M,
-        scope_files=11676,
+        scope_files=900,  # under the composed-script byte cap (~992 files), far over the L floor
         scope_lines=50000,
         mechanically_uniform=True,
         mechanically_uniform_reason=_REASON,

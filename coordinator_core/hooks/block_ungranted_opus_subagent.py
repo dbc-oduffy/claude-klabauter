@@ -368,9 +368,8 @@ def _explicit_request_advisory(
     )
     routes = ", ".join(personas[:3]) if personas else "coordinator:staff-eng"
     return (
-        f"MODEL SWITCHED: subagent_type={subagent_type!r} requested model "
-        f"{passed_model!r}; runs as {_INHERITED_REWRITE_MODEL}. Opus-pinned: {routes}. "
-        f"Or set {_OVERRIDE_KEY} to the reason Opus is needed."
+        f"MODEL SWITCHED: {subagent_type!r} asked {passed_model!r}; runs as "
+        f"{_INHERITED_REWRITE_MODEL}. Opus-pinned: {routes}. Or set {_OVERRIDE_KEY} to the reason."
     )
 
 

@@ -29,6 +29,12 @@ def _verdict(gated):
 @pytest.mark.parametrize("spine", SHAPES.values(), ids=SHAPES.keys())
 def test_executor_heavy_is_repaired_in_wave_and_regates_clean(tmp_path, monkeypatch, spine, roles):
     shapes.agents(tmp_path, monkeypatch, roles)
+    # Hermetic: an unpinned repaired type (coordinator:builder) resolves its model from the
+    # installed plugin definition, which only some boxes carry.
+    monkeypatch.setattr(
+        "coordinator_core.hooks.block_unenumerated_agent_type.plugin_agent_model",
+        lambda agent_type, **kw: ("sonnet", None),
+    )
     gated = shapes.gate(tmp_path, spine)
     assert gated["classes"]["EXECUTOR_HEAVY"]["status"] != "PASS"
 

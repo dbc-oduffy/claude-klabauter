@@ -54,6 +54,19 @@ def test_register_peer_by_explicit_id_writes_nothing_under_root(tmp_path):
     assert "transport" not in box_registry.register(tmp_path / "s", {}, directory=d)
 
 
+def test_register_validates_remote_shell_and_pinned_ssh(tmp_path):
+    import pytest
+
+    t = {"kind": "ssh", "host": "h", "invoke": "C:/x/coordinator-invoke.cmd", "remote_shell": "cmd",  # abs-path-ok: Windows fixture
+         "ssh": "C:/Windows/System32/OpenSSH/ssh.exe"}  # abs-path-ok: Windows fixture
+    rec = box_registry.register(tmp_path / "far", {}, directory=tmp_path / "d", box_id="box-w", transport=t)
+    assert rec["transport"] == t
+    for bad in ({"remote_shell": "fish"}, {"ssh": "/evil/bash.exe"}, {"ssh": 3}):
+        with pytest.raises(ValueError):
+            box_registry.register(tmp_path / "far", {}, directory=tmp_path / "d", box_id="box-w",
+                                  transport={**t, **bad})
+
+
 def test_register_rejects_unsafe_explicit_id(tmp_path):
     import pytest
 

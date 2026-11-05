@@ -144,8 +144,8 @@ def test_a_warned_scout_dispatch_of_an_unrostered_shape_is_still_stopped(
 ) -> None:
     _scout_at_warn(monkeypatch, {"general-purpose"})
     out = mod.check(_agent_payload("coordinator:sizing-scout"))
-    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "not on the enumerated roster" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "not on the enumerated roster" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_a_warned_scout_dispatch_of_an_opus_ungranted_shape_is_still_stopped(
@@ -425,8 +425,9 @@ def test_named_and_unnamed_invented_type_both_denied(monkeypatch: pytest.MonkeyP
 
     assert unnamed is not None
     assert named is not None
-    assert unnamed["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert named["hookSpecificOutput"]["permissionDecision"] == "deny"
+    for env in (unnamed, named):
+        assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert env["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
 def test_enumerated_coordinator_type_silent(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -445,7 +446,7 @@ def test_unreadable_roster_denies_with_ac10_reason(monkeypatch: pytest.MonkeyPat
     _patch_roster(monkeypatch, None, reason)
     envelope = mod.check(_agent_payload("coordinator:executor"))
     assert envelope is not None
-    reason_text = envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    reason_text = envelope["hookSpecificOutput"]["additionalContext"]
     assert "MISSING ENTIRELY" in reason_text
     assert mod._OVERRIDE_MARKER_PREFIX in reason_text
 
@@ -484,7 +485,8 @@ def test_override_marker_with_empty_reason_does_not_suppress(monkeypatch: pytest
     payload = _agent_payload("hookprobe-invented", prompt=prompt)
     envelope = mod.check(payload)
     assert envelope is not None
-    assert envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert envelope["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert envelope["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
 def test_named_and_unnamed_fork_type_both_allowed(monkeypatch: pytest.MonkeyPatch) -> None:

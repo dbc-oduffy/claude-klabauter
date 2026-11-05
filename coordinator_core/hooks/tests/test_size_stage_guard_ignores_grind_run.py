@@ -43,7 +43,8 @@ def test_ask_token_still_names_the_run(tmp_path, monkeypatch, kind):
     assert warp_live.size_stage_run(root, base.SESSION, str(run_dir)) == base.RUN_ID
     denied = base._edit(root, session_transcript, base.AGENT_A)
     assert denied is not None
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert denied["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert denied["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
 
 
 def test_mint_records_kind_and_refuses_unknown(tmp_path):

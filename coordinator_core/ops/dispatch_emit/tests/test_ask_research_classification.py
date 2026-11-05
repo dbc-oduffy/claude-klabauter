@@ -10,6 +10,7 @@ import yaml
 
 import coordinator_core.sizing_assemble as sa
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
+from coordinator_core.ops.dispatch_emit.agent_body_dedupe import resolve_schema_refs
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler
 from coordinator_core.ops.dispatch_emit.prompt_fragments import resolve_fragment_refs
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
@@ -41,8 +42,8 @@ def _stub_wrap(text):
 
 @pytest.fixture(scope="module")
 def script() -> str:
-    # Module scope runs outside conftest's function-scoped hoist switch, so resolve any hoisted refs here.
-    return resolve_fragment_refs(compose_ask_script(
+    # Module scope runs outside conftest's function-scoped hoist switch, so resolve any hoisted refs and `_SCn` schema thunks here.
+    return resolve_fragment_refs(resolve_schema_refs(compose_ask_script(
         repo_root="REPO",
         prompt="Survey how the sizing gate routes asks and write up the findings",
         sizing_rel=None,
@@ -51,7 +52,7 @@ def script() -> str:
         wrap_stage=_stub_wrap,
         plan_blitz_text="stub",
         **REVIEW_KW,
-    ))
+    )))
 
 
 def _line(script: str, needle: str) -> str:

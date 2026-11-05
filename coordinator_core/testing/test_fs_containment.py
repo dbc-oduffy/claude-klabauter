@@ -303,7 +303,7 @@ def test_counted_numbered_dir_never_scans_the_root(tmp_path, monkeypatch):
     real_scandir = os.scandir
 
     def _no_scan(path=".", *a, **k):
-        if Path(path) == tmp_path:
+        if isinstance(path, (str, os.PathLike)) and Path(path) == tmp_path:
             raise AssertionError("root was scanned")
         return real_scandir(path, *a, **k)
 

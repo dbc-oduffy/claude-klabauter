@@ -82,13 +82,44 @@ def _run_landing_paths(root: Path, run_id: str) -> list[str]:
     return out
 
 
+def _withheld_paths(root: Path, run_id: str) -> frozenset[str]:
+    """Paths the EM withheld through `workflow.revise withhold_paths`, read from the run's record dirs."""
+    from coordinator_core.ops.dispatch_emit import run_withhold
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, record_dir
+
+    homes = dict.fromkeys((record_dir(root, run_id), root / RUN_DIR_ROOT / run_id))
+    return frozenset(p.replace("\\", "/") for p in run_withhold.read(homes))
+
+
+def _drop_unmeasurable(root: Path, run_id: str, rels: Sequence[str], spine: Dict[str, Any]) -> list[str]:
+    """`rels` minus withheld paths and minus untracked paths git ignores (a per-machine build product
+    is never part of a landing set). A path in HEAD or the index is tracked and stays, whatever
+    .gitignore says; an ignore verdict the matcher cannot reproduce keeps the path."""
+    withheld = _withheld_paths(root, run_id)
+    kept = [r for r in rels if r not in withheld]
+    untracked = [r for r in kept if r.rpartition("/")[2] not in spine.get(r.rpartition("/")[0], {})]
+    if not untracked:
+        return kept
+    from coordinator_core.git.git_state import read_index_paths
+    from coordinator_core.git.ignore_match import IgnoreMatcher
+
+    try:
+        indexed = read_index_paths(root)
+    except ValueError:
+        return kept
+    matcher = IgnoreMatcher(root)
+    ignored = {r for r in untracked if r not in indexed and matcher.ignored(r, False) is True}
+    return [r for r in kept if r not in ignored]
+
+
 def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None = None) -> Dict[str, Any]:
     """Params `run_id`, `paths`; returns a dict keyed by `MEASURED_REV_KEYS`
     (`sha`, `base_sha`, `paths`, `removed`, `blobs`, `tree`) plus `reach_dirt`: tracked
     paths the landing set's tests can read, outside the set, that differ from HEAD. Moves no ref, writes no index,
     spawns nothing. The record is replaced per run_id and measures `paths` unioned with the run's own
     recorded write set (`_run_landing_paths`), so a re-run re-measures the current landing set; a
-    path outside both stays unmeasured. Raises `MeasuredRevRefused` for no HEAD, an unmeasurable test reach, a
+    path outside both stays unmeasured. A withheld path and an untracked gitignored path are dropped from
+    that union and never read. Raises `MeasuredRevRefused` for no HEAD, an unmeasurable test reach, a
     path outside the repo, a directory, glob or submodule path in `paths`, or an unsupported checkin filter.
     `repo_root` defaults to the current directory."""
     root = Path(repo_root) if repo_root is not None else Path.cwd()
@@ -103,6 +134,7 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     spine = read_tree_spine(root, rels)
     if spine is None:
         raise MeasuredRevRefused("HEAD's tree spine could not be read")
+    rels = _drop_unmeasurable(root, run_id, rels, spine)
 
     gitdir = resolve_git_dir(root)
     assembled: Dict[str, object] = {}
@@ -214,3 +246,27 @@ def measured_rev_drift(run_dir: Path, repo_root: Path) -> list[str]:
     drifted = [p for p, sha in blobs.items() if commit.checkin_blob_sha(root, p) != sha]
     drifted.extend(p for p in data.get("removed") or [] if (root / p).exists())
     return drifted
+
+
+def foreign_drift(
+    run_dir: Path, repo_root: Path, *, session_id: str | None = None, own_hashes: Any = None,
+) -> list[str]:
+    """`measured_rev_drift` minus what the run itself explains: a path whose bytes are the run's own
+    last recorded write (`drift_attribution.classify`; `own_hashes` adds `{path: [sha256]}` the caller
+    read from the review agents' ledgers) is re-measured at those bytes, and a path outside the stage
+    manifest's declared writes and the in-run widened paths that the run did not write is an
+    outside edit, withheld rather than refused. What is left is foreign. With no declared writes on
+    record nothing is outside them. Hash-only; same raises as `measured_rev_drift`."""
+    drifted = measured_rev_drift(run_dir, repo_root)
+    if not drifted:
+        return []
+    from coordinator_core.ops.dispatch_emit import drift_attribution, land_run
+    from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
+
+    run_dir = Path(run_dir)
+    declared = [*land_run._manifest_declared(run_dir / "manifest.json")[0], *widened_paths(run_dir)]
+    split = drift_attribution.classify(
+        Path(repo_root), run_dir, drifted, declared, session_id=session_id, own_hashes=own_hashes,
+    )
+    foreign = split[drift_attribution.FOREIGN]
+    return foreign if declared else [*foreign, *split[drift_attribution.OUTSIDE_DECLARED]]

@@ -88,7 +88,7 @@ def test_op_returns_post_advisory_shape_for_a_firing_payload(tmp_path, monkeypat
     # The routed path (plan_capture_persist.persist_captured_plan) is
     # preferred and succeeds here, scaffolding a schema-compliant artifact
     # rather than a raw dump — see module docstring's "Two write paths".
-    written = list((repo / "docs" / "plans").glob("*.md"))
+    written = list((repo / "docs" / "plans").rglob("*.md"))
     assert len(written) == 1
     assert "My Plan" in written[0].read_text(encoding="utf-8")
 
@@ -164,7 +164,7 @@ def test_op_reads_claude_project_dir_from_payload_env_not_os_environ(tmp_path, m
     }
     result = _handler({"payload": payload})
     assert result != {}
-    written = list((repo / "docs" / "plans").glob("*.md"))
+    written = list((repo / "docs" / "plans").rglob("*.md"))
     assert len(written) == 1
 
     # And the inverse: an ambient os.environ CLAUDE_PROJECT_DIR must not be
@@ -182,7 +182,7 @@ def test_op_reads_claude_project_dir_from_payload_env_not_os_environ(tmp_path, m
     # No cwd and no payload env override -> unresolvable repo root -> no-op,
     # NOT routed to the ambient os.environ repo.
     assert result2 == {}
-    assert list((other_repo / "docs" / "plans").glob("*.md")) == []
+    assert list((other_repo / "docs" / "plans").rglob("*.md")) == []
 
 
 def test_op_readme_row_shape_matches_between_routed_and_fallback_paths(tmp_path, monkeypatch) -> None:

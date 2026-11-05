@@ -93,6 +93,90 @@ def test_the_two_outcomes_do_not_collide_with_the_rejection_exit_codes():
     assert codes.isdisjoint({0, 1, 2, 3})
 
 
+class _Indeterminate(RuntimeError):
+    pass
+
+
+def _send_harness(mod, monkeypatch, tmp_path, route):
+    import argparse
+    import sys
+    import types
+
+    fake = types.SimpleNamespace(
+        route_mutation=route, WarmDispatchIndeterminate=_Indeterminate
+    )
+    monkeypatch.setitem(sys.modules, "cc_invoke", fake)
+    monkeypatch.setattr(mod, "_current_repo_root", lambda: str(tmp_path))
+    monkeypatch.setattr(mod, "_warn_if_unregistered_sender", lambda: None)
+    monkeypatch.setattr(mod, "_fanout_topics", lambda root, topic: [])
+    outbox = tmp_path / "outbox" / "t.md"
+    monkeypatch.setattr(mod, "_outbox_write_path", lambda root, topic: str(outbox))
+    return argparse.Namespace(topic="t"), outbox.parent / "sent" / "t.md"
+
+
+def test_send_indeterminate_after_receipt_reports_delivered_without_resend(
+    tmp_path, monkeypatch, capsys
+):
+    mod = _load_cli_module()
+    calls = []
+
+    def route(op, payload, root, legacy):
+        calls.append(op)
+        sent.parent.mkdir(parents=True)
+        sent.write_text("---\n", encoding="utf-8")
+        raise _Indeterminate("worker_died")
+
+    args, sent = _send_harness(mod, monkeypatch, tmp_path, route)
+    rc = mod._cmd_send(args)
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert len(calls) == 1
+    assert "REFUSED" not in out
+    assert str(sent) in out
+
+
+def test_send_indeterminate_before_receipt_resumes_once_and_renders_receipt(
+    tmp_path, monkeypatch, capsys
+):
+    mod = _load_cli_module()
+    calls = []
+
+    def route(op, payload, root, legacy):
+        calls.append(op)
+        if len(calls) == 1:
+            raise _Indeterminate("worker_died")
+        return {
+            "exit_code": 0,
+            "acted": [{"id": "/r/cross-repo/inbox/t.md", "sent_receipt": "sent/t.md"}],
+        }
+
+    args, _sent = _send_harness(mod, monkeypatch, tmp_path, route)
+    rc = mod._cmd_send(args)
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert len(calls) == 2
+    assert "Receiver-side:" in out
+    assert "REFUSED" not in out
+
+
+def test_send_indeterminate_twice_still_refuses(tmp_path, monkeypatch, capsys):
+    mod = _load_cli_module()
+    calls = []
+
+    def route(op, payload, root, legacy):
+        calls.append(op)
+        raise _Indeterminate("worker_died")
+
+    args, _sent = _send_harness(mod, monkeypatch, tmp_path, route)
+    rc = mod._cmd_send(args)
+
+    assert rc == 1
+    assert len(calls) == 2
+    assert "REFUSED: t:" in capsys.readouterr().out
+
+
 def test_every_outcome_returns_a_note_that_names_the_path(tmp_path):
     mod = _load_cli_module()
     target = tmp_path / "state" / "memo-outbox" / "some-topic.md"

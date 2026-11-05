@@ -274,7 +274,7 @@ class TestHardDenyShortCircuitsAggregate:
 
     def _guards(self, advisory_calls):
         return [
-            _fake_hard_deny("h-deny", 5),
+            _fake_hard_deny("destructive-rm", 5),  # a deny_registry guard: its deny holds
             _fake_advisory("g-should-not-run", 10, calls=advisory_calls),
         ]
 

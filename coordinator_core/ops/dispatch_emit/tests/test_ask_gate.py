@@ -214,6 +214,8 @@ def _composed_objects(op: str) -> list:
         direct = f"{op} \\'' + JSON.stringify("
         expr = "".join(ln[ln.index(direct) + len(direct) - len("JSON.stringify(") :]
                        for ln in script.splitlines() if direct in ln)
+        shared = "const _stagePlanParams = () => "
+        expr += "".join(ln[ln.index(shared) + len(shared) :] for ln in script.splitlines() if shared in ln)
     else:
         line = next(ln for ln in script.splitlines() if op in ln and "JSON.stringify(" in ln)
         expr = line[line.index("JSON.stringify(") :]

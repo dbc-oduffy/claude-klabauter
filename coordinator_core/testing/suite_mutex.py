@@ -47,14 +47,15 @@ therefore means the suite run genuinely ended — normally or by crash — so
 reclaiming is correct rather than a wrongful takeover. Callers that acquire
 from a process which will NOT outlive the run MUST pass ``pid=`` explicitly.
 
-Staleness has two independent signals; either one alone marks the lock stale:
+Staleness has independent signals; any one alone marks the lock stale:
   1. Dead PID (see above).
-  2. Hard TTL — age-expired is stale, so a wedged runner cannot hold the fleet
-     hostage forever. The ceiling depends on what liveness says: a holder shown
-     alive gets ``LIVE_HOLDER_TTL_SECS``; a holder that is dead, or whose
-     liveness is indeterminate, gets the much shorter ``STALE_TTL_SECS``. A
-     single age-based ceiling applied regardless of PID used to reclaim honest
-     long runs mid-suite — see ``LIVE_HOLDER_TTL_SECS``.
+  2. Reused PID — the recorded process was created after the lock's
+     ``started_at``, so it is not the process that took the lock.
+  3. Stale heartbeat — ``held()`` refreshes ``heartbeat_at`` while the block
+     runs; a lock whose heartbeat stopped (its owner died, even if an orphaned
+     child still holds the pid) is stale after ``HEARTBEAT_STALE_SECS``.
+  4. Age past ``STALE_TTL_SECS``, applied only to a holder that is not shown
+     alive. A holder shown alive is never reclaimed on age alone.
 
 Negative-spec — what this lock is NOT:
     - NOT a per-repo lock. It is deliberately machine-global; two different
@@ -97,6 +98,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -116,26 +118,19 @@ _LOG = logging.getLogger(__name__)
 # process) self-heals within one working session rather than wedging the fleet.
 STALE_TTL_SECS: float = 45 * 60.0
 
-# Hard ceiling for a holder whose PID is DEMONSTRABLY alive. `STALE_TTL_SECS`
-# above is premised on "a full suite in this repo runs ~10 minutes"; that
-# premise no longer holds — the marker-scoped fast tier alone was measured at
-# 22m22s on 2026-08-18, and a full-tier gate run on the same box passed 45
-# minutes while still executing. Applying the 45-minute TTL to a live holder
-# therefore did exactly what its own comment promises never happens: an honest
-# run was reclaimed out from under itself, mid-suite, and a second pytest
-# started against the same tree. That is the precise condition
-# `with-suite-mutex` exists to prevent, and it failed silently — a log line,
-# then two concurrent runs producing mutually untrustworthy output.
-#
-# Splitting the ceiling keeps both intents intact. A holder that cannot be
-# shown alive (dead, or liveness indeterminate) still expires at
-# `STALE_TTL_SECS`, so a crash never wedges the fleet. A holder that IS alive
-# gets this far longer ceiling, so a legitimately slow suite finishes — while
-# a genuinely wedged-but-alive runner still cannot hold the fleet hostage
-# forever. Derive the real budget rather than trusting either number in prose:
-# `docs/reference/test-tiers.md` § Known-red set makes the same point about
-# suite figures generally, and they drift on every edit to the tier.
-LIVE_HOLDER_TTL_SECS: float = 6 * 60 * 60.0
+# A holder that cannot be shown alive expires at `STALE_TTL_SECS`; one that is
+# alive is never reclaimed on age (the fast tier alone has run past 22 minutes,
+# a full-tier gate past 45). `held()` stamps `heartbeat_at` into the lock every
+# `HEARTBEAT_INTERVAL_SECS` from the acquirer's own process; a lock carrying one
+# that is older than `HEARTBEAT_STALE_SECS` has lost its owner, even when the
+# recorded pid (an orphaned child of a dead wrapper) still reads alive. A lock
+# with no `heartbeat_at` (a raw `acquire()` caller) opts out of that signal.
+HEARTBEAT_INTERVAL_SECS: float = 30.0
+HEARTBEAT_STALE_SECS: float = 5 * 60.0
+
+# A reused pid is detected when its creation instant is later than `started_at`
+# by more than this (`started_at` is truncated to whole seconds).
+_CREATE_TIME_SLACK_SECS: float = 5.0
 
 # Grace window for a lock dir whose meta.json is absent, truncated, or
 # unparseable. mkdir and the metadata write are two operations, so a reader can
@@ -244,30 +239,43 @@ def _dir_mtime(path: Path) -> Optional[float]:
 def _pid_alive(pid: int) -> Optional[bool]:
     """Return True/False for PID liveness, or None when it cannot be determined.
 
-    Delegates to ``coordinator_core.session.core.pid_alive``, which is the
-    engine's single cross-platform primitive (``os.kill(pid, 0)`` on POSIX,
-    ``psutil.pid_exists`` on Windows where no ``kill(pid, 0)`` equivalent
-    exists). None — the indeterminate verdict, raised there as
-    ``MissingPsutilError`` on a Windows host with psutil absent — is
-    deliberately distinct from False: an indeterminate read must leave the
-    holder presumed alive (fail-closed-to-keep), leaving the TTL as the only
-    staleness signal, rather than reporting every Windows holder dead and
-    letting two suites run at once.
+    Delegates to ``coordinator_core.ask_spool.record.pid_state``, the engine's
+    one spawn-free probe (``GetExitCodeProcess == STILL_ACTIVE`` on Windows,
+    ``os.kill(pid, 0)`` on POSIX). None — doubt — is deliberately distinct from
+    False: an indeterminate read leaves the holder presumed alive, with
+    ``STALE_TTL_SECS`` and the heartbeat as the staleness signals.
     """
     if pid <= 0:
         return None
-    from coordinator_core.session.core import pid_alive as _engine_pid_alive
+    from coordinator_core.ask_spool.record import pid_state
 
     try:
-        return bool(_engine_pid_alive(pid))
+        return pid_state(pid)
     except Exception as exc:
-        _LOG.warning(
-            "suite_mutex: PID liveness indeterminate for pid %s — presuming alive "
-            "(TTL remains the only staleness signal): %s",
-            pid,
-            exc,
-        )
+        _LOG.warning("suite_mutex: PID liveness indeterminate for pid %s: %s", pid, exc)
         return None
+
+
+def _pid_create_time(pid: int) -> Optional[float]:
+    """Creation instant of ``pid`` (epoch seconds), or None when unreadable."""
+    from coordinator_core.ask_spool.record import pid_create_time
+
+    try:
+        return pid_create_time(pid)
+    except Exception:
+        return None
+
+
+def _pid_reused(pid: int, started_at: str) -> bool:
+    """True when ``pid`` names a process created after the lock was stamped.
+
+    The recorded pid is always a process that existed before the stamp (the
+    acquirer, or the child the wrapper spawned first), so a later creation
+    instant means the pid was recycled for an unrelated process.
+    """
+    started = _parse_iso(started_at)
+    created = _pid_create_time(pid)
+    return started is not None and created is not None and created > started + _CREATE_TIME_SLACK_SECS
 
 
 def _read_meta(path: Path) -> Optional[dict]:
@@ -297,25 +305,48 @@ def _read_meta(path: Path) -> Optional[dict]:
     owner = parsed.get("owner")
     cmd = parsed.get("cmd")
     started_at = parsed.get("started_at")
-    return {
+    meta = {
         "pid": pid_int,
         "owner": owner if isinstance(owner, str) and owner else _UNKNOWN_OWNER,
         "started_at": started_at if isinstance(started_at, str) and started_at else "",
         "cmd": cmd if isinstance(cmd, str) else "",
     }
+    heartbeat_at = parsed.get("heartbeat_at")
+    if isinstance(heartbeat_at, str) and heartbeat_at:
+        meta["heartbeat_at"] = heartbeat_at
+    return meta
+
+
+def _replace_meta(path: Path, payload: dict) -> None:
+    tmp_path = path / f".{_META_FILENAME}.{uuid.uuid4().hex}.tmp"
+    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
+    os.replace(str(tmp_path), str(path / _META_FILENAME))
 
 
 def _write_meta(path: Path, *, pid: int, owner: str, cmd: str) -> None:
     """Atomically stamp holder metadata inside an already-acquired lock dir."""
-    payload = {
-        "pid": pid,
-        "owner": owner,
-        "started_at": _now_iso(),
-        "cmd": cmd,
-    }
-    tmp_path = path / f".{_META_FILENAME}.{uuid.uuid4().hex}.tmp"
-    tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
-    os.replace(str(tmp_path), str(path / _META_FILENAME))
+    _replace_meta(path, {"pid": pid, "owner": owner, "started_at": _now_iso(), "cmd": cmd})
+
+
+def touch_heartbeat(owner: str, *, path: Optional[Path] = None) -> bool:
+    """Stamp ``heartbeat_at`` on the lock ``owner`` holds. True iff it was stamped.
+
+    Never raises and never recreates a freed lock dir: a lock that was released,
+    reclaimed or re-taken by another owner is left alone. Trap: the read-then-replace
+    is not atomic, so a beat stalled past ``HEARTBEAT_STALE_SECS`` could overwrite a
+    successor's meta; the owner check narrows that window but cannot close it.
+    """
+    try:
+        path = lock_path() if path is None else path
+        meta = _read_meta(path)
+        if meta is None or meta["owner"] != owner:
+            return False
+        meta["heartbeat_at"] = _now_iso()
+        _replace_meta(path, meta)
+        return True
+    except Exception as exc:
+        _LOG.warning("suite_mutex: heartbeat for %s failed: %s", owner, exc)
+        return False
 
 
 def _age_secs(path: Path, meta: Optional[dict]) -> Optional[float]:
@@ -394,15 +425,22 @@ def holder(*, path: Optional[Path] = None) -> Optional[dict]:
         meta = _read_meta(path)
         age = _age_secs(path, meta)
 
-        # Liveness is resolved BEFORE the age ceiling, because it selects which
-        # ceiling applies. Order matters: checking age first reclaims a live
-        # holder mid-run, which is the defect `LIVE_HOLDER_TTL_SECS` documents.
+        # A holder proven alive is never reclaimed on age: only a pid that was
+        # recycled or a heartbeat that stopped marks it stale.
         holder_alive = _pid_alive(meta["pid"]) if meta is not None else None
-        effective_ttl = LIVE_HOLDER_TTL_SECS if holder_alive is True else STALE_TTL_SECS
 
-        if age is not None and age > effective_ttl:
-            _reclaim(path, f"age {age:.0f}s exceeds TTL {effective_ttl:.0f}s", meta)
+        if age is not None and age > STALE_TTL_SECS and holder_alive is not True:
+            _reclaim(path, f"age {age:.0f}s exceeds TTL {STALE_TTL_SECS:.0f}s", meta)
             return None
+
+        if meta is not None and holder_alive is not False:
+            if holder_alive is True and _pid_reused(meta["pid"], meta["started_at"]):
+                _reclaim(path, f"pid {meta['pid']} was created after the lock was taken (reused)", meta)
+                return None
+            heartbeat = _parse_iso(meta.get("heartbeat_at"))
+            if heartbeat is not None and time.time() - heartbeat > HEARTBEAT_STALE_SECS:
+                _reclaim(path, f"heartbeat older than {HEARTBEAT_STALE_SECS:.0f}s", meta)
+                return None
 
         if meta is None:
             if age is not None and age > _META_GRACE_SECS:
@@ -574,8 +612,22 @@ def held(owner: str, cmd: str, timeout: float = 0.0, *, pid: Optional[int] = Non
     nothing, so a failed acquire can never tear down the real holder's lock.
     """
     acquired = acquire(owner, cmd, timeout, pid=pid, path=path)
+    stop = threading.Event()
+    beat: Optional[threading.Thread] = None
+    if acquired:
+        touch_heartbeat(owner, path=path)
+
+        def _beat() -> None:
+            while not stop.wait(HEARTBEAT_INTERVAL_SECS):
+                touch_heartbeat(owner, path=path)
+
+        beat = threading.Thread(target=_beat, name="suite-mutex-heartbeat", daemon=True)
+        beat.start()
     try:
         yield acquired
     finally:
+        if beat is not None:
+            stop.set()
+            beat.join(timeout=5)
         if acquired:
             release(owner, path=path)

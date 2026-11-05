@@ -178,6 +178,46 @@ def test_fingerprint_for_run_is_stable_when_head_advances(tmp_path):
     assert hrr.matches(record, consumer)
 
 
+def _lineage_run(root, run_id, halted="criterion", **links):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN, record_dir, write_stop_after_marker
+
+    rd = record_dir(root, run_id)
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "run.json").write_text(json.dumps(links))
+    (rd / "halted.json").write_text(json.dumps({"status": "halted", "halted": halted, "run_base_sha": "a" * 40}))
+    return rd, lambda: write_stop_after_marker(rd, STOP_AFTER_PLAN)
+
+
+def test_inherited_stop_after_follows_the_ancestor_chain_and_ends_at_a_discharged_park(tmp_path):
+    parent, mark = _lineage_run(tmp_path, "ask-parent")
+    mark()
+    child, _ = _lineage_run(tmp_path, "warp-child", chain_parent="ask-parent")
+    assert hrr.inherited_stop_after(tmp_path, child) == "plan"
+    parked, _ = _lineage_run(tmp_path, "warp-parked", halted="parked", chain_parent="ask-parent")
+    assert hrr.inherited_stop_after(tmp_path, parked) is None
+    free, _ = _lineage_run(tmp_path, "warp-free")
+    assert hrr.inherited_stop_after(tmp_path, free) is None
+
+
+def test_a_record_built_before_the_lineage_gained_a_park_is_not_served_after_it(tmp_path):
+    (tmp_path / "plan.md").write_bytes(b"plan v1")
+    (tmp_path / "sizing.yaml").write_bytes(b"sizing v1")
+    parent, mark = _lineage_run(tmp_path, "ask-parent")
+    child, _ = _lineage_run(tmp_path, "warp-child", chain_parent="ask-parent")
+    before = hrr.fingerprint_for_run(tmp_path, child, "sizing.yaml", "plan.md")
+    record = hrr.build_record(
+        composed_script_rel=None, hoisted_fragments={}, gate_verdict={}, landed_state_sha=None,
+        fingerprint=before, resume_plan_rel="plan.md", stop_after=before["stop_after"],
+    )
+    assert record["stop_after"] is None
+    assert hrr.matches(record, hrr.fingerprint_for_run(tmp_path, child, "sizing.yaml", "plan.md"))
+    mark()
+    after = hrr.fingerprint_for_run(tmp_path, child, "sizing.yaml", "plan.md")
+    assert after["stop_after"] == "plan" and not hrr.matches(record, after)
+
+
 def test_hint_round_trips_per_sizing_and_refuses_an_unsafe_id(tmp_path):
     from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 

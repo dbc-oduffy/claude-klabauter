@@ -1,4 +1,4 @@
-"""run_token: mint, the atomic admit, redeem, consume, sizing path normalising, and which sizings an in-flight run owns."""
+"""run_token: mint, the atomic admit, redeem, redeem_claim, holds_claim, consume, sizing path normalising, and which sizings an in-flight run owns."""
 
 from __future__ import annotations
 
@@ -621,3 +621,59 @@ def test_command_params_parse_inline_and_heredoc():
     assert run_token.token_params_from_command(heredoc)["run_id"] == "b"
     land = "coordinator-invoke dispatch.land_run --params-file - <<'JSON'\n{\"run_id\": \"c\", \"run_token\": \"t\"}\nJSON"
     assert run_token.token_params_from_command(land)["run_id"] == "c"
+
+
+def test_redeem_claim_returns_the_identity_to_exactly_one_caller(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    assert run_token.redeem_claim(repo, "ask-1", "f" * 32, "a.mjs") is None
+    identity = run_token.redeem_claim(repo, "ask-1", token, "a.mjs")
+    assert set(identity) == {"claimed_at", "pid", "thread"}
+    assert identity["pid"] == os.getpid() and identity["thread"] == threading.get_ident()
+    assert run_token.redeem_claim(repo, "ask-1", token, "a.mjs") is None
+    assert run_token.holds_claim(repo, "ask-1", token, "a.mjs", identity)
+
+
+def test_redeem_claim_adopts_a_dead_holder_and_holds_claim_follows_the_adopter(tmp_path, monkeypatch):
+    import json
+
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    first = run_token.redeem_claim(repo, "ask-1", token, "a.mjs")
+    path = _claimed_path(repo)
+    record = json.loads(path.read_text(encoding="utf-8"))
+    other = {**first, "pid": first["pid"] + 1}
+    path.write_text(json.dumps({**record, **other}), encoding="utf-8")
+    assert run_token.holds_claim(repo, "ask-1", token, "a.mjs", other)
+    monkeypatch.setattr(run_token, "_holder_alive", lambda pid: False)
+    mine = run_token.redeem_claim(repo, "ask-1", token, "a.mjs")
+    assert mine is not None and mine["pid"] == os.getpid()
+    assert run_token.holds_claim(repo, "ask-1", token, "a.mjs", mine)
+    assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", other)
+
+
+def test_redeem_claim_adopts_an_over_budget_live_holder_only_when_a_budget_is_given(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    first = run_token.redeem_claim(repo, "ask-1", token, "a.mjs")
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + 100)
+    assert run_token.redeem_claim(repo, "ask-1", token, "a.mjs") is None
+    assert run_token.redeem_claim(repo, "ask-1", token, "a.mjs", budget_secs=500) is None
+    adopted = run_token.redeem_claim(repo, "ask-1", token, "a.mjs", budget_secs=50)
+    assert adopted is not None and adopted["claimed_at"] != first["claimed_at"]
+    assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", first)
+    assert run_token.holds_claim(repo, "ask-1", token, "a.mjs", adopted)
+
+
+def test_holds_claim_is_false_without_a_claim_or_for_other_credentials(tmp_path):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    ghost = {"claimed_at": 1.0, "pid": 1, "thread": 1}
+    assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", ghost)
+    identity = run_token.redeem_claim(repo, "ask-1", token, "a.mjs")
+    assert not run_token.holds_claim(repo, "ask-1", "f" * 32, "a.mjs", identity)
+    assert not run_token.holds_claim(repo, "ask-1", token, "b.mjs", identity)
+    assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", None)
+    run_token.consume(repo, "ask-1")
+    assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", identity)

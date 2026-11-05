@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """warm-read-load-probe.py -- what does a fixed op mix cost the warm server's pool workers in read bytes and CPU.
 
 Resolves the live warm server (process scan for `coordinator_core/warm/server.py`, confirmed against

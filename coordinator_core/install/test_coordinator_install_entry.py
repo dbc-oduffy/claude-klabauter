@@ -194,6 +194,114 @@ def test_check_only_refuses_to_guess_when_no_flag_declared(tmp_path, monkeypatch
     assert "Refusing to guess" in err
 
 
+def _host_fixture(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    script = repo_root / "scripts" / "setup.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    _write_manifest(
+        repo_root,
+        _base_manifest(standalone_setup_script={_PLATFORM_KEY: "scripts/setup.py"}),
+    )
+    _stub_claude_klabauter_root(monkeypatch, repo_root)
+    captured = {}
+
+    def _fake_call(cmd, **kwargs):
+        captured["cmd"] = cmd
+        return 0
+
+    monkeypatch.setattr(cie.subprocess, "call", _fake_call)
+    return captured
+
+
+@pytest.mark.parametrize("argv", [["--host", "codex,agy"], ["--host=codex,agy"]])
+def test_host_is_forwarded_to_the_installer_without_double_dash(tmp_path, monkeypatch, argv):
+    captured = _host_fixture(tmp_path, monkeypatch)
+
+    assert main(argv) == 0
+
+    cmd = captured["cmd"]
+    i = cmd.index("--host")
+    assert cmd[i + 1] == "codex,agy"
+    assert cmd.count("--host") == 1
+
+
+def test_host_runs_as_a_second_call_after_the_full_install(tmp_path, monkeypatch):
+    _host_fixture(tmp_path, monkeypatch)
+    cmds = []
+
+    def _call(cmd, **kwargs):
+        cmds.append(cmd)
+        return 0
+
+    monkeypatch.setattr(cie.subprocess, "call", _call)
+
+    assert main(["--host", "codex,agy"]) == 0
+
+    assert len(cmds) == 2
+    assert "--host" not in cmds[0]
+    assert cmds[1][cmds[1].index("--host") + 1] == "codex,agy"
+
+
+def test_host_step_is_skipped_when_the_full_install_fails(tmp_path, monkeypatch):
+    _host_fixture(tmp_path, monkeypatch)
+    cmds = []
+    monkeypatch.setattr(cie.subprocess, "call", lambda cmd, **kw: cmds.append(cmd) or 90)
+
+    assert main(["--host", "codex"]) == 90
+    assert len(cmds) == 1 and "--host" not in cmds[0]
+
+
+def test_omitting_host_forwards_no_host_flag(tmp_path, monkeypatch):
+    captured = _host_fixture(tmp_path, monkeypatch)
+
+    assert main([]) == 0
+
+    assert "--host" not in captured["cmd"]
+
+
+def test_host_composes_with_check_only_and_double_dash(tmp_path, monkeypatch):
+    repo_root = tmp_path / "repo"
+    script = repo_root / "scripts" / "setup.py"
+    script.parent.mkdir(parents=True)
+    script.write_text("", encoding="utf-8")
+    _write_manifest(
+        repo_root,
+        _base_manifest(
+            standalone_setup_script={
+                _PLATFORM_KEY: "scripts/setup.py",
+                "entry_point_contract": {"check_only_flag": "--check"},
+            }
+        ),
+    )
+    _stub_claude_klabauter_root(monkeypatch, repo_root)
+    captured = {}
+    monkeypatch.setattr(
+        cie.subprocess, "call", lambda cmd, **kw: captured.setdefault("cmd", cmd) and 0
+    )
+
+    main(["--check-only", "--host", "agy", "--", "--verbose"])
+
+    cmd = captured["cmd"]
+    assert "--check" in cmd
+    assert cmd[cmd.index("--host") + 1] == "agy"
+    assert cmd[-1] == "--verbose"
+
+
+def test_host_without_value_is_refused_before_dispatch(tmp_path, monkeypatch, capsys):
+    _host_fixture(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        cie.subprocess, "call", lambda cmd, **kw: pytest.fail("must not dispatch")
+    )
+
+    assert main(["--host"]) == 2
+    assert "--host requires a value" in capsys.readouterr().err
+
+
+def test_usage_lists_host():
+    assert "--host" in cie._USAGE
+
+
 @pytest.mark.parametrize("exit_code", [0, 1, 90, cie.EXIT_INTERPRETER_UNSUPPORTED])
 def test_dispatched_exit_code_forwarded_verbatim(tmp_path, monkeypatch, exit_code):
     repo_root = tmp_path / "repo"

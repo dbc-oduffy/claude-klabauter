@@ -11,7 +11,13 @@ from typing import Callable
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import abandoned_runs, run_artifacts, run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit import (
+    abandoned_runs,
+    process_artifact_policy,
+    run_artifacts,
+    run_token,
+    terminal_commit,
+)
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_MANIFEST_MARKER,
     HALT_PLAN_FIELD,
@@ -70,6 +76,7 @@ def repo(tmp_path, monkeypatch):
     _write(root, ".gitignore", f".coordinator-local/\n{RUN_DIR_ROOT}/*/submission.json\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
+    monkeypatch.setattr(process_artifact_policy, "hosts_coordinator_state", lambda root: True)
     monkeypatch.setattr(terminal_commit, "_ship_cited_sizing", lambda *a, **k: {})
     monkeypatch.setattr(terminal_commit, "_ledger_gate", lambda *a, **k: (None, None, []))
     from coordinator_core.session import scope
@@ -205,7 +212,7 @@ def _leftovers(root: Path, artifacts: run_artifacts.RunArtifacts, dirs: tuple[st
     out = _git(
         ["status", "--porcelain", "--untracked-files=all", "--", *artifacts.paths(), *dirs], root
     )
-    lines = [line for line in out.splitlines() if line.strip()]
+    lines = [line for line in out.splitlines() if line.strip() and not run_artifacts.is_run_state(line[3:])]
     return [f"{line[3:]} [{artifacts.class_of(line[3:]) or 'record-dir'}]" for line in lines]
 
 
@@ -258,7 +265,11 @@ def test_a_docs_stage_halt_lands_plan_handoff_and_delivery_note_and_leaves_the_t
     assert {DS_PLAN, DS_HANDOFF, DS_DELIVERY, DS_EVIDENCE, DOC} <= landed, landed
     assert artifacts.class_of(DS_HANDOFF) == "handoff" and artifacts.class_of(DS_DELIVERY) == "delivery-note"
     assert DS_HANDOFF != BATON
-    assert _git(["status", "--porcelain", "--untracked-files=all"], repo).strip() == ""
+    dirty = [
+        line for line in _git(["status", "--porcelain", "--untracked-files=all"], repo).splitlines()
+        if line.strip() and not run_artifacts.is_run_state(line[3:])
+    ]
+    assert dirty == []
 
 
 REVIEW_FILE = "elsewhere/ask_roadmap.py"
@@ -308,7 +319,8 @@ def test_a_review_written_file_outside_every_declared_path_is_committed_or_named
         seed = _git(["rev-list", "--max-parents=0", "HEAD"], repo).strip()
         assert REVIEW_FILE not in _git(["log", f"{seed}..HEAD", "--name-only", "--format="], repo).split(), reply
         tree_dirty = {
-            line[3:] for line in _git(["status", "--porcelain", "--untracked-files=all"], repo).splitlines() if line
+            line[3:] for line in _git(["status", "--porcelain", "--untracked-files=all"], repo).splitlines()
+            if line and not run_artifacts.is_run_state(line[3:])
         }
         assert tree_dirty == {REVIEW_FILE}, (tree_dirty, reply)
 

@@ -85,6 +85,8 @@ def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(t
 
 def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusal(tmp_path, monkeypatch, capsys):
     # An S sizing without positive S evidence resizes to XS at assemble; the precedent flag keeps it on the S arm.
+    # The Workflow runtime provides a `log` global that the refusal path calls; the shared e2e harness defines none.
+    monkeypatch.setattr(e2e, "_HARNESS", e2e._HARNESS.replace("const phase =", "const log = () => {};\nconst phase =", 1))
     scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "S", "ceo", ["--precedent", "shipped-before"])
     assert verdict["arm"] == "s"
     stub = e2e._stub(scout, decision, verdict)
@@ -99,3 +101,29 @@ def test_an_emit_time_park_is_set_before_the_halt_record_commit_that_lands_it():
     script = _emit_time_script(in_run_commit=True)
     assert script.index("parked after plan: stop_after=plan") < script.index("await _commitHaltRecord()")
     assert "halt_commit: _haltCommit" in script
+
+
+@pytest.mark.parametrize("research", [False, True])
+def test_every_chain_literal_carries_chain_parent_and_stop_after_only_when_the_run_has_one(research):
+    from coordinator_core.ops.dispatch_emit.ask_compose import _chain_emit_params_js
+
+    bare = _chain_emit_params_js("SZ", research=research)
+    parked = _chain_emit_params_js("SZ", research=research, stop_after=STOP_AFTER_PLAN)
+    assert "chain_parent: _runId" in bare and "stop_after" not in bare
+    assert "chain_parent: _runId" in parked and f"stop_after: '{STOP_AFTER_PLAN}'" in parked
+
+
+@pytest.mark.parametrize("stop_after", [None, STOP_AFTER_PLAN])
+def test_the_composed_chain_legs_thread_the_runs_stop_after_into_their_emit_params(stop_after):
+    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+
+    legs = {
+        "m_plus": ac._m_plus_chain_js(repo_root="R", head="H", anchor="A", run_id="r1", stop_after=stop_after),
+        "split": ac._research_split_chain_js(head="H", anchor="A", run_id="r1", stop_after=stop_after),
+        "pure": ac._pure_research_chain_js(head="H", anchor="A", run_id="r1", stop_after=stop_after),
+        "split_child": ac._research_split_chain_js(head="H", anchor="A", run_id="r1", launcher_child=True, stop_after=stop_after),
+        "pure_child": ac._pure_research_chain_js(head="H", anchor="A", run_id="r1", launcher_child=True, stop_after=stop_after),
+    }
+    for name, js in legs.items():
+        assert "chain_parent: _runId" in js, name
+        assert (f"stop_after: '{STOP_AFTER_PLAN}'" in js) is bool(stop_after), name

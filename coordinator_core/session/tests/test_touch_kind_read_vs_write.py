@@ -284,6 +284,12 @@ _KINDLESS_BY_DESIGN = frozenset({
     # Rewrites historical lines into the current record. Stamping them would
     # be the backfill this axis's negative spec forbids.
     "ops/session/legacy_touch_corpus_migrate.py",
+    # Benchmark harnesses seed a throwaway clone with a synthetic touch so the
+    # measured leg has a claim to land; the record never reaches a real session.
+    "benchmarks/hunk_split_large_file_budget.py",
+    "benchmarks/land_gate_reach_profile.py",
+    "benchmarks/land_run_leg_budget_profile.py",
+    "benchmarks/land_run_slow_disk_profile.py",
 })
 
 _TOUCH_WRITERS = {"append_event", "append_touch_claims", "touch"}

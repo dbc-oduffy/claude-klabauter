@@ -230,7 +230,9 @@ class TestReachableThroughEngine:
         payload = _payload(_grant_path(repo_root), cwd=str(repo_root))
         result = engine.evaluate(payload)
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        # advisory-by-ruling (deny_registry.ADVISORY_BY_RULING): allow plus one advisory line
+        assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+        assert "additionalContext" in result["hookSpecificOutput"]
 
     def test_reachable_through_engine_for_sentinel(self, tmp_path):
         sid = _unique_sid()
@@ -239,7 +241,8 @@ class TestReachableThroughEngine:
             payload = _payload(str(path), cwd=str(tmp_path))
             result = engine.evaluate(payload)
             assert result is not None
-            assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+            assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
+            assert "additionalContext" in result["hookSpecificOutput"]
         finally:
             try:
                 path.unlink()

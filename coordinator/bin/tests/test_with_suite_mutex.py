@@ -1083,3 +1083,101 @@ def test_pre_kill_dump_of_a_small_tree_still_dumps_every_process(tmp_path):
          mock.patch.object(wrapper.subprocess, "run", fake_run):
         wrapper._dump_process_tree(mock.Mock(pid=1))
     assert dumped == ["1", "2", "3"]
+
+
+def test_wrapper_refreshes_the_lock_heartbeat_while_the_child_runs(tmp_path, monkeypatch):
+    """Heartbeat is written by the wrapper's process: every beat is a call on the
+    lock the wrapper holds, and the lock carries `heartbeat_at` mid-run."""
+    home = tmp_path / "home"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.chdir(tmp_path)
+    module = _load_wrapper_module()
+    monkeypatch.setattr(module.suite_mutex, "HEARTBEAT_INTERVAL_SECS", 0.05)
+    beats, seen_meta = [], []
+    real_touch = module.suite_mutex.touch_heartbeat
+
+    def spy(owner, *, path=None):
+        beats.append(owner)
+        ok = real_touch(owner, path=path)
+        meta = _lock_dir(home) / "meta.json"
+        if meta.exists():
+            seen_meta.append(json.loads(meta.read_text()))
+        return ok
+
+    monkeypatch.setattr(module.suite_mutex, "touch_heartbeat", spy)
+    assert module.main(["--", sys.executable, "-c", "import time; time.sleep(1)"]) == 0
+    assert len(beats) >= 3
+    assert any("heartbeat_at" in m for m in seen_meta)
+    assert not _lock_dir(home).exists()
+
+
+class _FakeKernel32:
+    def __init__(self, fail_on=None):
+        self.calls, self.fail_on, self.flags = [], fail_on, None
+
+    def _ret(self, name, ok=1):
+        self.calls.append(name)
+        return 0 if name == self.fail_on else ok
+
+    def CreateJobObjectW(self, attrs, name):
+        return self._ret("CreateJobObjectW", 99)
+
+    def SetInformationJobObject(self, job, info_class, ref, size):
+        self.flags = ref._obj.BasicLimitInformation.LimitFlags
+        self.info_class = info_class
+        return self._ret("SetInformationJobObject")
+
+    def AssignProcessToJobObject(self, job, handle):
+        self.assigned = (job, handle)
+        return self._ret("AssignProcessToJobObject")
+
+    def CloseHandle(self, handle):
+        self.calls.append("CloseHandle")
+        return 1
+
+
+def test_child_is_bound_to_a_kill_on_close_job_object():
+    module = _load_wrapper_module()
+    kernel32 = _FakeKernel32()
+    child = mock.Mock(_handle=1234)
+    before = len(module._JOB_HANDLES)
+    assert module._bind_child_to_wrapper_lifetime(child, kernel32=kernel32) is True
+    assert kernel32.flags == module._JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE == 0x2000
+    assert kernel32.info_class == 9
+    assert kernel32.assigned == (99, 1234)
+    assert len(module._JOB_HANDLES) == before + 1
+    module._JOB_HANDLES.pop()
+
+
+@pytest.mark.parametrize("failing", ["CreateJobObjectW", "SetInformationJobObject", "AssignProcessToJobObject"])
+def test_a_failed_job_object_step_leaves_the_run_unbound_not_failed(failing):
+    module = _load_wrapper_module()
+    kernel32 = _FakeKernel32(fail_on=failing)
+    before = len(module._JOB_HANDLES)
+    assert module._bind_child_to_wrapper_lifetime(mock.Mock(_handle=1), kernel32=kernel32) is False
+    assert len(module._JOB_HANDLES) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX spawn kwargs")
+def test_posix_child_gets_its_own_process_group():
+    module = _load_wrapper_module()
+    kwargs = module._own_tree_popen_kwargs()
+    assert kwargs["process_group"] == 0
+    assert ("preexec_fn" in kwargs) == sys.platform.startswith("linux")
+    assert module._bind_child_to_wrapper_lifetime(mock.Mock()) is False
+
+
+def test_interrupt_path_kills_the_whole_child_tree(monkeypatch):
+    module = _load_wrapper_module()
+    killed = []
+    monkeypatch.setattr(module, "_kill_process_tree", lambda p: killed.append(p) or 1)
+    process = mock.Mock(pid=5)
+    process.poll.return_value = 0
+    ps_process = mock.Mock()
+    # The cleanup is closed over main(); an interrupt raised at the lock drives it.
+    with mock.patch.object(module.subprocess, "Popen", return_value=process), \
+         mock.patch.object(module, "psutil", _PsutilWithProcess(module.psutil, ps_process)), \
+         mock.patch.object(module.suite_mutex, "held", side_effect=KeyboardInterrupt()):
+        with pytest.raises(KeyboardInterrupt):
+            module.main(["--", sys.executable, "-c", "pass"])
+    assert killed == [process]

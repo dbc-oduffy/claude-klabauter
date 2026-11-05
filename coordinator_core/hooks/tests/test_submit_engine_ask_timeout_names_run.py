@@ -25,6 +25,7 @@ def _slow_emit(root_seen: list, mint: bool, release: threading.Event):
             d = root / RECORD_DIR_ROOT / RUN_ID
             d.mkdir(parents=True)
             (d / RUN_STAGE_FILE).write_text('{"stage": "minted"}', encoding="utf-8")
+            mod._note_minted(RUN_ID)
         root_seen.append(root)
         release.wait(30)
         return {"path": str(root / "never.js"), "run_id": RUN_ID}
@@ -33,9 +34,13 @@ def _slow_emit(root_seen: list, mint: bool, release: threading.Event):
 
 
 def _deny_reason(env: dict) -> str:
+    """The answer text of an overran submit: an allow that carries the text as context (a refusal of
+    recoverable work is clamped to an advisory) or, for a registered refusal, a deny reason."""
     hso = env["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny", env
-    return hso["permissionDecisionReason"]
+    if hso["permissionDecision"] == "deny":
+        return hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow", env
+    return hso["additionalContext"]
 
 
 def test_overrun_after_mint_names_the_run(repo, monkeypatch):
@@ -194,7 +199,8 @@ def test_stall_before_any_mint_answers_inside_the_budget_and_says_nothing_was_ta
         assert time.monotonic() - started < 2.5
     finally:
         release.set()
-    assert "before any run was minted" in _deny_reason(env)
+    text = _deny_reason(env)
+    assert "reach-budget-no-run" in text and "the ask is spooled" in text and "Do not re-submit" in text
 
 
 def test_fanout_blocked_inside_a_write_leaves_no_sizing_at_the_deny(repo, monkeypatch):

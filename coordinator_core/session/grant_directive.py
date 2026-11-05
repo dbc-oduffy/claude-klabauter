@@ -101,7 +101,16 @@ _GROUP_EM_REMEDY = {
     "GRANTEE_NOT_LIVE": "grantee session is not live; name a live session",
     "TTL_OUT_OF_RANGE": "--ttl-minutes must be 1..720",
     "NOTE_EMPTY": "the note is the ruling, verbatim; pass it non-empty",
+    "BOX_UNKNOWN": "no registered box has that id; register the peer box first",
+    "RELAY_FAILED": "the grantee box did not accept the grant",
 }
+
+
+def _refusal(reason: str) -> str:
+    """``REASON: remedy``; a ``REASON:detail`` (the far box's own reason) keeps its detail."""
+    key, _, detail = reason.partition(":")
+    remedy = _GROUP_EM_REMEDY.get(key, "refused")
+    return f"{key}: {remedy}" + (f" ({detail})" if detail else "")
 
 
 def _with_remaining(stamp) -> str:
@@ -125,17 +134,20 @@ def _run_group_em_verb(verb: str, rest: list[str]) -> Tuple[int, str]:
     if verb == "group-em-grant":
         parsed = parse_group_em_grant_args(rest)
         if not isinstance(parsed, tuple):
-            return EXIT_USAGE, "group-em-grant <grantee> <note> [--ttl-minutes N] [--repo <root>]"
+            return EXIT_USAGE, (
+                "group-em-grant <grantee | box_id:session> <note> [--ttl-minutes N] [--repo <root>]"
+            )
         grantee, note, ttl, repo = parsed
         kwargs = {"repo": repo}
         if ttl is not None:
             kwargs["ttl_minutes"] = ttl
         result = suite_grant.issue_suite_grant(grantee, note, **kwargs)
         if not result.ok:
-            return EXIT_FALSE, f"{result.reason}: {_GROUP_EM_REMEDY.get(result.reason, 'refused')}"
+            return EXIT_FALSE, _refusal(result.reason)
         rec = result.record or {}
+        relay = f"relayed to box {rec['grantee_box_id']} " if rec.get("grantee_box_id") else ""
         return EXIT_OK, (
-            f"group-em-grant: grantee {rec.get('grantee_session_id')} "
+            f"group-em-grant: {relay}grantee {rec.get('grantee_session_id')} "
             f"expires {_with_remaining(rec.get('expires_at'))} issuer {rec.get('issuer_session_id')}"
         )
 
@@ -144,7 +156,7 @@ def _run_group_em_verb(verb: str, rest: list[str]) -> Tuple[int, str]:
         return EXIT_USAGE, "group-em-revoke <grantee>"
     result = suite_grant.revoke_suite_grant(parsed)
     if not result.ok:
-        return EXIT_FALSE, f"{result.reason}: {_GROUP_EM_REMEDY.get(result.reason, 'refused')}"
+        return EXIT_FALSE, _refusal(result.reason)
     return EXIT_OK, ""
 
 

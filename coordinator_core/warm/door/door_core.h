@@ -283,6 +283,22 @@ int door_basename_is_install_class(const char *basename);
 
 int door_hook_event_name(const char *json, size_t len, buf_t *out);
 
+/* Top-level string member `want` of a JSON object, appended to `out` with a trailing NUL
+ * counted in `out->len`. Returns 0 when absent or not a string. */
+int door_json_top_string(const char *json, size_t len, const char *want, buf_t *out);
+
+/* Repo root for the ask spool: nearest `.git` ancestor of the payload's `cwd`, else the `cwd`.
+ * Appends a NUL-terminated path to `out`; 0 when the payload has no cwd. */
+int door_hook_spool_root(const char *payload, size_t len, buf_t *out);
+
+/* Writes `payload` as `<root>/.coordinator-local/ask-spool/<out_id>.json` (0600, O_EXCL),
+ * layout pinned by docs/reference/ask-spool.md. `out_id` is set on every call that gets past
+ * argument checks. Returns 1 created, 2 already spooled, 0 failed (no partial entry is left).
+ * POSIX only: the Windows build returns 0 until door.c wires its own writer. This is the one
+ * function in the shared core that touches the filesystem. */
+int door_spool_hook_payload(const char *root, const char *payload, size_t len,
+                            const char *op, const char *reason, char out_id[17]);
+
 
 /* Hook-mode repo-root recursive-search pre-check: answers without the engine.
  *
@@ -309,6 +325,10 @@ int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *
  * no permissionDecision. Unlike the pass-loudly envelope it does not claim the
  * guard never ran -- the op may have completed. */
 int build_hook_post_delivery_envelope(buf_t *out, const char *op, long deadline_ms, const char *event_name);
+
+/* Hook-mode answer after the ask was written to the spool: names `spool_id`,
+ * no permissionDecision. */
+int build_hook_spooled_envelope(buf_t *out, const char *spool_id, const char *event_name);
 
 
 int build_hook_deny_envelope(buf_t *out, const char *reason);

@@ -19,6 +19,7 @@ shapes its author thought of.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -1480,6 +1481,105 @@ def test_a_real_suite_tier_mention_still_refuses(statement):
     from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
 
     assert suite_tier_refusal(statement)
+
+
+_DOC_GATE_ACCEPTANCE = (
+    "the PM's approval of docs/reference/host-install-codex-agy.md recorded verbatim in the "
+    "reference doc's frontmatter"
+)
+
+
+def _doc_gate_plan(tmp_path, *, statement, acceptance):
+    (tmp_path / "coordinator_core").mkdir(parents=True, exist_ok=True)
+    fm = _CLEAN_FM.replace("the four fields land and validate", statement)
+    spine = _CLEAN_SPINE + f"  acceptance: {json.dumps(acceptance)}\n"
+    return _write_plan(tmp_path, frontmatter=fm, spine=spine)
+
+
+def test_a_spine_row_acceptance_requiring_pm_approval_of_a_doc_is_refused(tmp_path):
+    report = _gate(
+        tmp_path,
+        _doc_gate_plan(tmp_path, statement="the four fields land and validate", acceptance=_DOC_GATE_ACCEPTANCE),
+    )
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["PRIME_EXIT"]["kind"] == "prime-exit-doc-approval"
+    assert "row C1 acceptance" in report["classes"]["PRIME_EXIT"]["detail"]
+
+
+def test_a_prime_exit_requiring_an_approved_doc_is_refused(tmp_path):
+    report = _gate(
+        tmp_path,
+        _doc_gate_plan(
+            tmp_path,
+            statement="the PM's approval of the host install reference doc is recorded",
+            acceptance="tests pass",
+        ),
+    )
+    assert report["classes"]["PRIME_EXIT"]["kind"] == "prime-exit-doc-approval"
+
+
+@pytest.mark.parametrize(
+    "acceptance",
+    [
+        "the PM's approval of the merge to main is recorded",
+        "the PM approves the scope of the plan before dispatch",
+        "tests covering touched files pass; no PM approval of the doc is needed",
+    ],
+)
+def test_direction_scope_and_irreversible_approvals_still_pass_the_gate(tmp_path, acceptance):
+    report = _gate(
+        tmp_path,
+        _doc_gate_plan(tmp_path, statement="the four fields land and validate", acceptance=acceptance),
+    )
+    assert report["classes"]["PRIME_EXIT"]["status"] == "PASS"
+
+
+@pytest.mark.parametrize(
+    "criterion, refused",
+    [
+        (_DOC_GATE_ACCEPTANCE, True),
+        ("the PM approves the merge to main", False),
+        ("the PM approves the scope of the plan", False),
+    ],
+)
+def test_sizing_assemble_refuses_pm_approval_of_a_doc(monkeypatch, capsys, criterion, refused):
+    import coordinator_core.sizing_assemble as sa
+    from coordinator_core.session import fleet_mode, mode_resolution
+
+    monkeypatch.setattr(fleet_mode, "read_fleet_mode", lambda: {})
+    monkeypatch.setattr(mode_resolution, "read_fleet_mode", lambda: {})
+    rc = sa.main(["--tshirt", "M", "--exit-criterion", criterion])
+    if refused:
+        assert rc == sa.EXIT_USAGE
+        assert "PM approval of a non-direction artifact" in capsys.readouterr().err
+    else:
+        assert rc == sa.EXIT_OK
+
+
+def test_amend_exit_criterion_refuses_pm_approval_of_a_doc(tmp_path):
+    import coordinator_core.sizing_assemble as sa
+
+    (tmp_path / "ruling.md").write_text("ruling", encoding="utf-8")
+    with pytest.raises(sa.SizingAssembleError, match="non-direction artifact"):
+        sa.amend_exit_criterion(tmp_path, "state/sizings/x.yaml", _DOC_GATE_ACCEPTANCE, "ruling.md")
+
+
+@pytest.mark.parametrize(
+    "statement, refused",
+    [(_DOC_GATE_ACCEPTANCE, True), ("the PM approves the merge to main", False)],
+)
+def test_accept_exit_criterion_refuses_pm_approval_of_a_doc_only(tmp_path, statement, refused):
+    from coordinator_core.ops.tests import test_sizing_accept_exit_criterion as t
+
+    repo = tmp_path / "repo"
+    t._init_repo(repo)
+    t._seed_sizing(repo, exit_criterion=f"exit_criterion:\n  statement: {json.dumps(statement)}\n  accepted: null\n")
+    result = t._run(t._base(), repo)
+    if refused:
+        assert result["exit_code"] == 1
+        assert "non-direction artifact" in result["error"]
+    else:
+        assert "non-direction artifact" not in str(result.get("error", ""))
 
 
 # ---------------------------------------------------------------------------

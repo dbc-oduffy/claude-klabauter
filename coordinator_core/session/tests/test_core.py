@@ -458,27 +458,91 @@ def test_pid_alive_posix_unaffected_by_missing_psutil(monkeypatch):
     assert core.pid_alive(2**31 - 1) is False
 
 
-@pytest.mark.skipif(
-    __import__("importlib").util.find_spec("psutil") is None,
-    reason="psutil (the Windows liveness mechanism) not installed",
-)
-def test_pid_alive_windows_uses_psutil_pid_exists(monkeypatch):
-    # Flip the platform seam only (see TestWindowsCreateTimePath in
-    # test_liveness.py for why _IS_WINDOWS and not os.name).
+def _fake_kernel32(monkeypatch, *, handle, last_error=0, exit_code=259):
+    import types
+
+    from coordinator_core.ask_spool import record
+
+    class _Code:
+        def __init__(self):
+            self.value = 0
+
+    k32 = types.SimpleNamespace(
+        OpenProcess=lambda *a: handle,
+        GetExitCodeProcess=lambda h, ref: setattr(ref, "value", exit_code) or True,
+        CloseHandle=lambda h: True,
+    )
+    fake = types.SimpleNamespace(
+        windll=types.SimpleNamespace(kernel32=k32),
+        GetLastError=lambda: last_error,
+        c_ulong=_Code,
+        byref=lambda x: x,
+    )
+    monkeypatch.setitem(__import__("sys").modules, "ctypes", fake)
     monkeypatch.setattr(core, "_IS_WINDOWS", True)
-    assert core.pid_alive(os.getpid()) is True
-    assert core.pid_alive(2**31 - 1) is False
+    return record
 
 
-def test_pid_alive_windows_missing_psutil_raises_loud(monkeypatch):
-    """The defect this test guards against: on native Windows with psutil
-    absent, pid_alive used to silently return False for every PID (every
-    session reads DEAD -> wrongful claim takeover). It must now raise a
-    clear, actionable error instead."""
-    monkeypatch.setattr(core, "_IS_WINDOWS", True)
+def test_pid_alive_windows_needs_still_active_proof(monkeypatch):
+    _fake_kernel32(monkeypatch, handle=0, last_error=87)  # no such pid
+    assert core.pid_alive(41712) is False
+    _fake_kernel32(monkeypatch, handle=7, exit_code=1)  # exited, handle still openable
+    assert core.pid_alive(41712) is False
+    _fake_kernel32(monkeypatch, handle=7, exit_code=259)  # STILL_ACTIVE
+    assert core.pid_alive(41712) is True
+
+
+def test_pid_alive_windows_doubt_reads_alive_and_never_consults_psutil(monkeypatch):
+    _fake_kernel32(monkeypatch, handle=0, last_error=5)  # access denied
     monkeypatch.setattr(core, "psutil", None)
-    with pytest.raises(core.MissingPsutilError, match="psutil is a required dependency"):
-        core.pid_alive(os.getpid())
+    assert core.pid_alive(41712) is True
+
+
+def test_pid_alive_posix_eperm_reads_dead(monkeypatch):
+    monkeypatch.setattr(core, "_IS_WINDOWS", False)
+
+    def denied(pid, sig):
+        raise PermissionError(pid)
+
+    monkeypatch.setattr(core.os, "kill", denied)
+    assert core.pid_alive(4242) is False
+
+
+def test_pid_create_time_windows_converts_filetime(monkeypatch):
+    import types
+
+    from coordinator_core.ask_spool import record
+
+    unix_ts = 1_700_000_000
+    ft = record._FILETIME_UNIX_EPOCH + unix_ts * 10_000_000
+
+    class _U64:
+        def __init__(self):
+            self.value = 0
+
+    def times(h, created, exited, kern, user):
+        created.value = ft
+        return True
+
+    k32 = types.SimpleNamespace(
+        OpenProcess=lambda *a: 7, GetProcessTimes=times, CloseHandle=lambda h: True
+    )
+    fake = types.SimpleNamespace(
+        windll=types.SimpleNamespace(kernel32=k32), c_ulonglong=_U64, byref=lambda x: x
+    )
+    monkeypatch.setitem(__import__("sys").modules, "ctypes", fake)
+    monkeypatch.setattr(record.sys, "platform", "win32")
+    assert record.pid_create_time(41712) == float(unix_ts)
+    k32.OpenProcess = lambda *a: 0
+    assert record.pid_create_time(41712) is None
+
+
+def test_pid_create_time_posix_reads_self():
+    from coordinator_core.ask_spool import record
+
+    pytest.importorskip("psutil")
+    t = record.pid_create_time(os.getpid())
+    assert t is not None and t <= time.time()
 
 
 def test_win_create_time_epoch_missing_psutil_raises_loud(monkeypatch):

@@ -418,8 +418,12 @@ def write_object(
     # Bounded: a kernel-blocked stat/mkdir/write (defrag pass, 2026-11-02) refuses with
     # TimeoutError. Safe to abandon -- the object is content-addressed, so a late finish is
     # idempotent; the caller sees a refusal, never a half-written ref.
+    # Key is the object path, not its fan-out dir: run_bounded stalls a whole key after one
+    # overrun and makes a second caller wait on the first, so a dir key let one slow object
+    # (a Windows AV/indexer scan of a fresh tmp file) fail every other object sharing its
+    # 1-in-256 `objects/xx` dir -- a memo send's blob/tree/commit -- with the 2.0s TimeoutError.
     placed = run_bounded(
-        f"write-object:{path.parent}", _place, deadline=_WRITE_OBJECT_DEADLINE_SECS, default=None
+        f"write-object:{path}", _place, deadline=_WRITE_OBJECT_DEADLINE_SECS, default=None
     )
     if placed is None:
         raise TimeoutError(

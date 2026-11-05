@@ -367,7 +367,7 @@ def _why_protected(is_local_config: bool) -> str:
     return "is always-loaded doctrine"
 
 
-_REVIEW_CHECKS_DOCTRINE = "Review checks: byte budget holds; no unprompted rewrite."
+_REVIEW_CHECKS_DOCTRINE = "Review check: byte budget; no unprompted rewrite."
 _REVIEW_CHECKS_CONFIG = (
     "Review check: a narrowed gate command is not paired with the declaration "
     "that authorizes it."
@@ -377,15 +377,14 @@ _REVIEW_CHECKS_CONFIG = (
 def _surface_advisory(target: str, is_local_config: bool) -> str:
     checks = _REVIEW_CHECKS_CONFIG if is_local_config else _REVIEW_CHECKS_DOCTRINE
     return (
-        f"[doctrine-surface guard] advisory: {target} "
+        f"{target} "
         f"{_why_protected(is_local_config)}. {checks}"
     )
 
 
 _STRONGEST_CLAUDE_MD_WARNING = (
-    "[doctrine-surface guard] STOP. CLAUDE.md edit: enforce the rule in code "
-    "or a tripwire, not doctrine prose. Alternative: a guard, a test, or a "
-    "wiki page. Edit CLAUDE.md only when nothing structural fits."
+    "[doctrine-surface guard] STOP: enforce the rule in code or a tripwire, "
+    "not doctrine prose. Instead: a guard or test."
 )
 _CHANGELOG_SHAPE_WARNING = (
     "[doctrine-surface guard] STOP. This addition is changelog-shaped (a "

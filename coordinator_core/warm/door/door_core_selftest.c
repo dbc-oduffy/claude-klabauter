@@ -24,11 +24,15 @@
  * failing check named on stdout.
  */
 
+#define _DEFAULT_SOURCE
+#define _DARWIN_C_SOURCE
 #include "door_core.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 static int failures = 0;
 static int checks = 0;
@@ -375,6 +379,45 @@ int main(int argc, char **argv) {
         check_int("precheck/untouched_out_on_no_match", (long)out.len, 0);
         free(out.data);
     }
+
+#ifndef _WIN32
+    {
+        char tmpl[] = "/tmp/door-spool-selftest-XXXXXX";
+        char *root = mkdtemp(tmpl);
+        check_int("spool/tempdir_made", root != NULL, 1);
+        if (root) {
+            const char *payload =
+                "{\"session_id\":\"s1\",\"tool_use_id\":\"t1\",\"cwd\":\"/x\",\"tool_input\":{}}";
+            char id[17], id2[17], path[256];
+            check_int("spool/created",
+                      door_spool_hook_payload(root, payload, strlen(payload),
+                                              "hooks.submit_engine_ask", "why", id), 1);
+            check_str("spool/id_is_sha1_session_plus_tool_use", id, "c24e932639367300");
+            snprintf(path, sizeof path, "%s/.coordinator-local/ask-spool/%s.json", root, id);
+            struct stat st;
+            check_int("spool/entry_exists", stat(path, &st) == 0, 1);
+            check_int("spool/mode_is_0600", (long)(st.st_mode & 0777), 0600);
+            snprintf(path, sizeof path, "%s/.coordinator-local/ask-spool", root);
+            check_int("spool/dir_stat", stat(path, &st) == 0, 1);
+            check_int("spool/dir_is_0700", (long)(st.st_mode & 0777), 0700);
+            check_int("spool/second_write_is_idempotent",
+                      door_spool_hook_payload(root, payload, strlen(payload),
+                                              "hooks.submit_engine_ask", "why", id2), 2);
+            check_str("spool/same_id_on_retry", id2, id);
+            const char *bare = "{\"session_id\":\"s1\",\"cwd\":\"/x\"}";
+            char id3[17];
+            check_int("spool/no_tool_use_id_still_spools",
+                      door_spool_hook_payload(root, bare, strlen(bare),
+                                              "hooks.submit_engine_ask", "why", id3), 1);
+            char want[17];
+            sha1_hex16((const unsigned char *)"s1{\"session_id\":\"s1\",\"cwd\":\"/x\"}", 2 + strlen(bare), want);
+            check_str("spool/no_tool_use_id_hashes_payload", id3, want);
+            char cmd[320];
+            snprintf(cmd, sizeof cmd, "rm -rf %s", root);
+            if (system(cmd) != 0) printf("note: could not remove %s\n", root);
+        }
+    }
+#endif
 
     printf("%s: %d checks, %d failures\n",
            failures == 0 ? "PASS" : "FAIL", checks, failures);

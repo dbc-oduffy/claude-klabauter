@@ -74,13 +74,17 @@ def test_agent_leg_default_allows_through_fanin():
 
 def test_agent_leg_global_strict_denies_through_fanin(monkeypatch):
     _set(monkeypatch, _GLOBAL, "strict")
-    assert _hso(pad._handler(_agent_payload()))["permissionDecision"] == "deny"
+    hso = _hso(pad._handler(_agent_payload()))
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
 
 
-def test_per_guard_strict_hardens_one_leg_only(monkeypatch):
+def test_per_guard_strict_on_unregistered_agent_leg_stays_advisory_and_leaves_workflow_leg(monkeypatch):
     _set(monkeypatch, _GLOBAL, "warn")
     _set(monkeypatch, _per_guard(UNENUMERATED), "strict")
-    assert _hso(pad._handler(_agent_payload()))["permissionDecision"] == "deny"
+    hso = _hso(pad._handler(_agent_payload()))
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
     assert _hso(bwua._handler(_unmodeled_payload())).get("permissionDecision") != "deny"
 
 

@@ -38,7 +38,7 @@ _TARGETS_FILE = _REPO_ROOT / "setup" / "publish-targets.portable"
 
 _ROW_NAME = "claude-klabauter-coordinator-bin"
 
-_SIBLING_CALL_RE = re.compile(r'_sibling\(\s*["\']([^"\']+)["\']\s*\)')
+_SIBLING_CALL_RE = re.compile(r'(?<![A-Za-z0-9])_sibling\(\s*["\']([^"\']+)["\']\s*\)')
 
 # Known ground truth as of this guard's authoring (2026-08-18) — asserted
 # separately from the general sweep below so a change to either the call

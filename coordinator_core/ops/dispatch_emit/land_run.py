@@ -54,6 +54,7 @@ from pathlib import Path, PurePosixPath
 from typing import Collection, Mapping, Optional, Sequence
 
 from coordinator_core.git.machine_local_paths import machine_local_paths
+from coordinator_core import ipc as _ipc
 from coordinator_core.ipc import register_op
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import land_run_contract as contract
@@ -282,9 +283,30 @@ def _settle_token(token_state: dict, *, landed: bool, receipt: Optional[dict] = 
 
     root, run_id, token, script_path = claim
     if landed:
-        run_token.consume(root, run_id, landed=receipt)
+        run_token.consume(root, run_id, landed=receipt)  # the commit landed: spent whoever holds the claim now
+    elif _claim_adopted(token_state.pop("identity", None), claim):
+        return  # an adopter holds the claim; releasing would revive a token it is using
     else:
         run_token.release(root, run_id, token, script_path)
+
+
+def _claim_adopted(identity: Optional[dict], claim: tuple) -> bool:
+    """True when this call's claim (`identity`, from `run_token.redeem_claim`) no longer stands on disk."""
+    if identity is None:
+        return False
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root, run_id, token, script_path = claim
+    return not run_token.holds_claim(root, run_id, token, script_path, identity)
+
+
+class _ClaimAdopted(Exception):
+    """The run token claim was adopted by a later call; this call commits nothing."""
+
+
+def _claim_budget_secs() -> float:
+    """The land_run op budget a claim's `deadline` is measured against."""
+    return float(_ipc._timeout_for(contract.OP_NAME))
 
 
 # ---- params -----------------------------------------------------------------------------------
@@ -810,17 +832,22 @@ _OVERLAP_REMEDY = (
 )
 
 
-def _redeem_or_answer(root: Path, run_id: object, token: str, script_path: object) -> Optional[dict]:
-    """None when this call holds the claim; else the reply that ends it: ``already_landed`` from the
-    spent receipt, ``run-token-in-flight`` for a claim a live, in-budget first call still holds (a dead
-    or over-budget holder's claim is adopted by ``redeem``), else ``run-token``."""
+def _redeem_or_answer(
+    root: Path, run_id: object, token: str, script_path: object, token_state: Optional[dict] = None
+) -> Optional[dict]:
+    """None when this call holds the claim (its identity lands in ``token_state["identity"]``); else the
+    reply that ends it: ``already_landed`` from the spent receipt, ``run-token-in-flight`` for a claim a
+    live, in-budget first call still holds (a dead or over-budget holder's claim is adopted by
+    ``redeem_claim``), else ``run-token``."""
     from coordinator_core.ops.dispatch_emit import run_token
 
-    if run_token.redeem(root, run_id, token, script_path):
-        return None
-    if _readmitted_reviewed(root, run_id, token, script_path) and run_token.redeem(
-        root, run_id, token, script_path
-    ):
+    budget = _claim_budget_secs()
+    won = run_token.redeem_claim(root, run_id, token, script_path, budget_secs=budget)
+    if won is None and _readmitted_reviewed(root, run_id, token, script_path):
+        won = run_token.redeem_claim(root, run_id, token, script_path, budget_secs=budget)
+    if won is not None:
+        if token_state is not None:
+            token_state["identity"] = won
         return None
     landed = already_landed_reply(root, run_id, token, script_path)
     if landed is not None:
@@ -1619,7 +1646,7 @@ def _ledger_gate(
     from coordinator_core.ops.dispatch_emit import measured_rev
 
     try:
-        drifted = measured_rev.measured_rev_drift(run_dir, root)
+        drifted = measured_rev.foreign_drift(run_dir, root)
         drift_reason = f"measured-rev-drift: {', '.join(drifted)}"
     except (OSError, ValueError):
         drifted, drift_reason = ["<record>"], "measured-rev-record-unreadable"
@@ -2671,7 +2698,6 @@ def _with_peer_drift(root: Path, reply: dict) -> dict:
 
 
 LANDING_TREE_DIFFERS = "landing-tree-differs-from-measured"
-VERIFY_REACH_DIRTY = "verify-reach-dirty"
 
 
 def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str]) -> dict:
@@ -2921,11 +2947,13 @@ def _mismatch_detail(
 
 def _measured_mismatch(
     root: Path, record: dict, product: Sequence[str], deleted: Sequence[str], settled: dict, own=None,
-    baseline: Optional[Mapping] = None,
+    baseline: Optional[Mapping] = None, owned_now=None,
 ) -> list:
     """Paths where the product changes a commit would introduce (``product`` path -> blob, ``deleted``
     removals) differ from the record's ``blobs``/``removed``. A record path the commit omits counts
-    unless HEAD already holds the recorded blob. Paths *own* (an ``OwnArtifacts``) covers never count."""
+    unless HEAD already holds the recorded blob. Paths *own* (an ``OwnArtifacts``) covers never count.
+    ``owned_now`` (paths -> the subset whose bytes are the run's own last write) drops a landing path
+    the run's review/fix leg rewrote after the record; a foreign rewrite stays."""
     from coordinator_core.git.commit import checkin_blob_sha
 
     blobs = record.get("blobs") if isinstance(record.get("blobs"), dict) else {}
@@ -2941,12 +2969,30 @@ def _measured_mismatch(
     differing |= {p for p in removed if p not in gone and p in head}
     if own is not None:
         differing = {p for p in differing if not own.covers(p)}
+    if owned_now is not None and differing & landing:
+        differing -= set(owned_now(sorted(differing & landing)))
     if baseline:
         differing = {
             p for p in differing
             if not (p in landing and _own_hunks_agree(root, p, blobs.get(p), baseline, settled))
         }
     return sorted(differing)
+
+
+def _own_bytes_now(root: Path, run_dir, session_id, run_id, inline_review):
+    """A ``paths -> run-owned subset`` callable: those paths whose bytes are the run session's or a
+    review agent's last recorded write (``drift_attribution.classify``), not bounded by the run
+    record's start. Hash-only; the ledgers are read when called."""
+    from coordinator_core.ops.dispatch_emit import drift_attribution
+
+    def owned(paths):
+        hashes = {p: [sha] for p, (sha, _at) in _review_write_events(root, session_id, run_id, inline_review).items()}
+        return drift_attribution.classify(
+            root, run_dir if run_dir is not None else root, paths, [], session_id=session_id,
+            own_hashes=hashes, run_started_at=0.0,
+        )[drift_attribution.RUN_OWNED]
+
+    return owned
 
 
 def _reap_measured_export(root: Path, run_id: Optional[str]) -> None:
@@ -3024,7 +3070,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         session_id = None
 
     if params.get("run_token") is not None:
-        answered = _redeem_or_answer(root, params.get("run_id"), params["run_token"], script_path)
+        answered = _redeem_or_answer(root, params.get("run_id"), params["run_token"], script_path, token_state)
         if answered is not None:
             if answered.get(ALREADY_LANDED_KEY):
                 if not incomplete:
@@ -3584,6 +3630,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if unmeasured:
         own_covers = _run_owned(root, art_run_id).covers
         unmeasured = [p for p in unmeasured if not own_covers(p)]
+        if unmeasured:
+            own_now = set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(unmeasured))
+            unmeasured = [p for p in unmeasured if p not in own_now]
         run_baseline = manifest.write_baseline if manifest is not None else {}
         unmeasured = [p for p in unmeasured if not _peer_dirt_only(root, p, run_baseline)]
     if unmeasured:
@@ -4085,6 +4134,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         settled_blobs = {**settled_blobs, **own_blobs}
 
     reach_dirt_foreign: dict = {}
+    reach_dirt_overlay: dict = {}
     if measured is not None and merge_plan is None and not (anchor_only or request.review_only):
         non_product = {*art_present, *receipt_paths, bookkeeping_path}
         differing = (
@@ -4093,6 +4143,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 [p for p in commit_deleted if p not in set(art_deleted)], settled_blobs,
                 own=_run_owned(root, art_run_id),
                 baseline=manifest.write_baseline if manifest is not None else None,
+                owned_now=_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review),
             )
         )
         if differing:
@@ -4122,13 +4173,26 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 minted_before=own_seniority, self_sessions=_firing_sessions(root, rid, session_id),
             )
         if reach_dirt:
-            _remove(root, receipt_paths)
-            _reap_measured_export(root, measured_run)
-            return _error(
-                f"landing refused: the verified tests can read {', '.join(sorted(reach_dirt))}, dirty against "
-                f"HEAD outside the landing set. Revert or land them, then re-measure with {_measured_rev_call(measured_run)} and re-verify",
-                refused=VERIFY_REACH_DIRTY, paths=sorted(reach_dirt),
+            reach_dirt_foreign.update({p: "unattributed" for p in reach_dirt})
+        if reach_dirt_foreign:
+            from coordinator_core.ops.dispatch_emit import clean_overlay_verify
+
+            overlay = (
+                clean_overlay_verify.check_verdict(root, measured_run, measured)
+                if measured_run and safe_id(measured_run)
+                else clean_overlay_verify.OverlayVerdict("missing", "the landing has no measured run id")
             )
+            reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
+            if overlay.verdict != "green":
+                _remove(root, receipt_paths)
+                _reap_measured_export(root, measured_run)
+                return _error(
+                    f"landing refused: peer dirt is in the verified tests' reach and the clean-overlay verdict "
+                    f"is {overlay.verdict}: {overlay.detail}. Run "
+                    f"{clean_overlay_verify.remedy_call(measured_run)} in the verify stage, then re-land",
+                    refused="verify-overlay-red" if overlay.red else "verify-overlay-unverified",
+                    reach_dirt_foreign=reach_dirt_foreign,
+                )
 
     try:
         land_deadline.check("land_run.commit")
@@ -4137,6 +4201,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         raise
 
     def _attempt():
+        # Trap: checked once before the commit; an adopter arriving after it is not stopped here.
+        if token_state.get("claim") and _claim_adopted(token_state.get("identity"), token_state["claim"]):
+            raise _ClaimAdopted()
         try:
             return commit_paths(
                 root, commit_set, message, deleted_paths=commit_deleted,
@@ -4169,6 +4236,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                     return _error(f"{outcome} {_OVERLAP_REMEDY}", refused=overlap)
                 raise outcome
             break
+        except _ClaimAdopted:
+            return _error(
+                "the run token claim was adopted by a later call past this call's op budget; "
+                "this call committed nothing",
+                refused="run-token-adopted",
+            )
         except BlobDriftRefused as exc:
             drift = [
                 {"path": d.path, "basis": d.basis, "expected": d.expected, "actual": d.actual} for d in exc.drift
@@ -4310,6 +4383,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     reply.update(_peer_held_left(peer_held))
     if reach_dirt_foreign:
         reply["reach_dirt_foreign"] = reach_dirt_foreign
+        if reach_dirt_overlay:
+            reply["clean_overlay_verify"] = reach_dirt_overlay
     expanded = sorted(
         p for p in paths
         if p in measured_carries and p not in inherited and (p in footprint_breach or p not in owner)
@@ -4697,9 +4772,9 @@ def _carry_withheld_symbol_targets(
     """``(carry, dropped)``. ``carry``: each uncommitted ``.py`` a landed file reads a name from (the
     withheld-symbol pair), so the commit never leaves HEAD calling a name only the worktree defines.
     A target another run withholds, a peer holds, or the landing already carries or removes stays out
-    and its provenance entry remains the record. ``dropped`` maps a landing test whose target stays
-    out (withheld, held or barred) to ``TEST_WITHOUT_SOURCE: <target>``; the caller removes it from the
-    landing. A non-test importer keeps its provenance entry and lands."""
+    and its provenance entry remains the record. ``dropped`` maps a landing importer whose target stays
+    out (withheld, held or barred) to ``TEST_WITHOUT_SOURCE: <target>`` for a test and
+    ``LOST_DEFINITION: <target>`` otherwise; the caller removes it from the landing."""
     from coordinator_core.authoring_leaks import import_closure
     from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_integrity as li
 
@@ -4725,9 +4800,9 @@ def _carry_withheld_symbol_targets(
     carry = [t for t in free if not held.get(t)]
     stays_out = out_of_landing - set(carry)
     dropped = {
-        imp: f"{TEST_WITHOUT_SOURCE}: {tgt}"
+        imp: f"{TEST_WITHOUT_SOURCE if _is_test_path(imp) else li.LOST_DEFINITION}: {tgt}"
         for imp, tgt in sorted(pairs.items())
-        if tgt in stays_out and _is_test_path(imp)
+        if tgt in stays_out
     }
     return carry, dropped
 

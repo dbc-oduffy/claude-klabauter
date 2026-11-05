@@ -25,6 +25,11 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#ifndef _WIN32
+#include <errno.h>
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 
 typedef struct {
@@ -654,6 +659,11 @@ int door_basename_is_install_class(const char *basename) {
 }
 
 int door_hook_event_name(const char *json, size_t len, buf_t *out) {
+    return door_json_top_string(json, len, "hook_event_name", out);
+}
+
+int door_json_top_string(const char *json, size_t len, const char *want, buf_t *out) {
+    size_t want_len = strlen(want);
     cursor_t c = { json, json + len };
     skip_ws(&c);
     if (c.p >= c.end || *c.p != '{') return 0;
@@ -665,7 +675,7 @@ int door_hook_event_name(const char *json, size_t len, buf_t *out) {
         buf_t key;
         if (!buf_init(&key, 32)) return 0;
         if (!parse_json_string(&c, &key)) { free(key.data); return 0; }
-        int match = key.len == 15 && memcmp(key.data, "hook_event_name", 15) == 0;
+        int match = key.len == want_len && memcmp(key.data, want, want_len) == 0;
         free(key.data);
         skip_ws(&c);
         if (c.p >= c.end || *c.p != ':') return 0;
@@ -703,6 +713,132 @@ int build_hook_post_delivery_envelope(buf_t *out, const char *op, long deadline_
              "the engine did not answer %s within the %ld ms hook read deadline; the op may "
              "have completed. Check for an existing run record before re-submitting.",
              (op && *op) ? op : "this op", deadline_ms);
+    int ok = 1;
+    ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: ");
+    ok &= buf_append_json_escaped(out, text, strlen(text));
+    ok &= buf_append_cstr(out, "\",\"suppressOutput\":false");
+    if (event_name && *event_name && strcmp(event_name, "SessionEnd") != 0) {
+        ok &= buf_append_cstr(out, ",\"hookSpecificOutput\":{\"hookEventName\":\"");
+        ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
+        ok &= buf_append_cstr(out, "\",\"additionalContext\":\"coordinator: ");
+        ok &= buf_append_json_escaped(out, text, strlen(text));
+        ok &= buf_append_cstr(out, "\"}");
+    }
+    ok &= buf_append_cstr(out, "}\n");
+    return ok;
+}
+
+/* Repo root for a spool write: the nearest ancestor of the payload's `cwd`
+ * holding `.git`, else `cwd` itself. Returns 0 when the payload carries no cwd. */
+int door_hook_spool_root(const char *payload, size_t len, buf_t *out) {
+    buf_t cwd;
+    if (!buf_init(&cwd, 256)) return 0;
+    if (!door_json_top_string(payload, len, "cwd", &cwd) || cwd.len < 2) {
+        free(cwd.data);
+        return 0;
+    }
+    size_t end = cwd.len - 1;
+    char probe[4096 + 8];
+    int ok = 0;
+    if (end < 4096) {
+        size_t n = end;
+        for (;;) {
+            struct stat st;
+            memcpy(probe, cwd.data, n);
+            memcpy(probe + n, "/.git", 6);
+            if (stat(probe, &st) == 0) { ok = buf_append(out, cwd.data, n) && buf_append(out, "", 1); break; }
+            while (n > 0 && cwd.data[n - 1] != '/' && cwd.data[n - 1] != '\\') n--;
+            while (n > 1 && (cwd.data[n - 1] == '/' || cwd.data[n - 1] == '\\')) n--;
+            if (n <= 1) break;
+        }
+        if (!ok) ok = buf_append(out, cwd.data, end) && buf_append(out, "", 1);
+    }
+    free(cwd.data);
+    return ok;
+}
+
+#ifdef _WIN32
+int door_spool_hook_payload(const char *root, const char *payload, size_t len,
+                            const char *op, const char *reason, char out_id[17]) {
+    (void)root; (void)payload; (void)len; (void)op; (void)reason; (void)out_id;
+    return 0;
+}
+#else
+static int spool_mkdir(const char *path, mode_t mode) {
+    return mkdir(path, mode) == 0 || errno == EEXIST;
+}
+
+int door_spool_hook_payload(const char *root, const char *payload, size_t len,
+                            const char *op, const char *reason, char out_id[17]) {
+    out_id[0] = '\0';
+    if (!root || !*root || !payload) return 0;
+    buf_t session, tool, idin, body;
+    int result = 0;
+    int b_session = buf_init(&session, 64), b_tool = buf_init(&tool, 64);
+    int b_idin = buf_init(&idin, 256), b_body = buf_init(&body, len + 512);
+    if (!(b_session && b_tool && b_idin && b_body)) goto done;
+    if (!door_json_top_string(payload, len, "session_id", &session)) session.len = 0;
+    if (!door_json_top_string(payload, len, "tool_use_id", &tool)) tool.len = 0;
+    size_t sess_n = session.len ? session.len - 1 : 0;
+    size_t tool_n = tool.len ? tool.len - 1 : 0;
+    if (!buf_append(&idin, session.data, sess_n)) goto done;
+    if (tool_n) {
+        if (!buf_append(&idin, tool.data, tool_n)) goto done;
+    } else if (!buf_append(&idin, payload, len)) {
+        goto done;
+    }
+    sha1_hex16((const unsigned char *)idin.data, idin.len, out_id);
+
+    char header_tail[48];
+    snprintf(header_tail, sizeof header_tail, ",\"spooled_at\":%lld,\"session_id\":\"", (long long)time(NULL));
+    int ok = buf_append_cstr(&body, "{\"spool_id\":\"") && buf_append_cstr(&body, out_id) &&
+        buf_append_cstr(&body, "\",\"op\":\"") && buf_append_json_escaped(&body, op, strlen(op)) &&
+        buf_append_cstr(&body, "\",\"reason\":\"") && buf_append_json_escaped(&body, reason, strlen(reason)) &&
+        buf_append_cstr(&body, "\"") && buf_append_cstr(&body, header_tail) &&
+        buf_append_json_escaped(&body, session.data, sess_n) &&
+        buf_append_cstr(&body, "\",\"repo_root\":\"") && buf_append_json_escaped(&body, root, strlen(root)) &&
+        buf_append_cstr(&body, "\"}\n") && buf_append(&body, payload, len);
+    if (!ok) goto done;
+
+    char dir[4096 + 64], path[4096 + 96];
+    size_t rn = strlen(root);
+    if (rn > 4096) goto done;
+    snprintf(dir, sizeof dir, "%s/.coordinator-local", root);
+    if (!spool_mkdir(dir, 0755)) goto done;
+    snprintf(dir, sizeof dir, "%s/.coordinator-local/ask-spool", root);
+    if (!spool_mkdir(dir, 0700)) goto done;
+    snprintf(path, sizeof path, "%s/%s.json", dir, out_id);
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+    if (fd < 0) {
+        result = (errno == EEXIST) ? 2 : 0;
+        goto done;
+    }
+    size_t off = 0;
+    while (off < body.len) {
+        ssize_t w = write(fd, body.data + off, body.len - off);
+        if (w < 0 && errno == EINTR) continue;
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    int closed = close(fd) == 0;
+    if (off == body.len && closed) {
+        result = 1;
+    } else {
+        unlink(path);
+    }
+done:
+    if (b_session) free(session.data);
+    if (b_tool) free(tool.data);
+    if (b_idin) free(idin.data);
+    if (b_body) free(body.data);
+    return result;
+}
+#endif
+
+int build_hook_spooled_envelope(buf_t *out, const char *spool_id, const char *event_name) {
+    char text[160];
+    snprintf(text, sizeof text,
+             "Engine unavailable; ask spooled as %s; it mints when the engine recovers.", spool_id);
     int ok = 1;
     ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: ");
     ok &= buf_append_json_escaped(out, text, strlen(text));

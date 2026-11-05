@@ -125,14 +125,8 @@ def check(payload: Dict[str, Any]) -> Optional[Any]:
 def _record(plugin: str) -> Any:
     from coordinator_core.guard_messages.alternative_record import AdaptableOffer, AlternativeRecord
 
-    summary = (
-        f"BLOCKED: `pytest -p {plugin}` loads an ad-hoc plugin with no process cap: a plugin "
-        "that spawns pytest recurses until the box dies."
-    )
-    tail = (
-        " Run it under the capped launcher: `python -m coordinator_core.testing.scoped_pytest "
-        "--allow <target> -- <same pytest args>`."
-    )
+    summary = f"BLOCKED: `pytest -p {plugin}` loads an ad-hoc plugin with no process cap."
+    tail = " Use `python -m coordinator_core.testing.scoped_pytest --allow <target> -- <pytest args>`."
     return AlternativeRecord(
         verdict_kind="deny",
         guard_name=GUARD_NAME,
@@ -140,7 +134,7 @@ def _record(plugin: str) -> Any:
         em_text=summary + tail,
         members=(
             AdaptableOffer(
-                template="python -m coordinator_core.testing.scoped_pytest --allow <target> -- <same pytest args>",
+                template="python -m coordinator_core.testing.scoped_pytest --allow <target> -- <pytest args>",
                 what_to_adapt="the allowed target and the pytest args",
             ),
         ),

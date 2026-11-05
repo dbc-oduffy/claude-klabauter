@@ -109,7 +109,9 @@ def test_composed_wave_groups_slices_by_the_fragment_max(fragment, rows):
 def test_kira_composed_at_l_and_above(fragment, tshirt):
     if _has_integration_stage(fragment):
         pytest.skip("Kira is an integration-stage agent, not a review-wave one")
-    assert _KIRA in _compose_wave(fragment, executor_rows=4, tshirt=tshirt)
+    rostered = any(a.get("agentType") == _KIRA for a in _wave_agents(fragment))
+    # A roster that names no Kira (the no-integration-pass sequence) composes none at any size.
+    assert (_KIRA in _compose_wave(fragment, executor_rows=4, tshirt=tshirt)) is rostered
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M", None])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 from pathlib import Path
 
@@ -106,7 +107,9 @@ def test_overrun_with_no_run_minted_is_taken_as_a_deferred_emit(repo, monkeypatc
     assert hso["permissionDecision"] == "allow", env
     script = Path(hso["updatedInput"]["scriptPath"])
     text = script.read_text(encoding="utf-8")
-    assert script.parent == repo / "scratch" / "warp" and "dispatch.emit" in text and "build the thing" in text
+    params_file = Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", text, re.M).group(1)))
+    assert script.parent == repo / "scratch" / "warp" and "dispatch.emit" in text
+    assert "build the thing" in params_file.read_text(encoding="utf-8")
     assert script.stem.split(".")[0] in hso["additionalContext"] and "Do not re-submit" in hso["additionalContext"]
     assert "nothing was taken" not in str(env)
 
@@ -247,7 +250,9 @@ def test_fan_overrun_children_are_deferred_into_the_launcher_not_refused(tmp_pat
     for child, reply in zip(_fan_children(), emitted):
         assert "error" not in reply and reply["run_id"] == child.run_id, reply
         body = (tmp_path / reply["path"]).read_text(encoding="utf-8")
-        assert reply["path"].startswith("scratch/warp/defer-") and "dispatch.emit" in body and child.run_id in body
+        params_file = Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", body, re.M).group(1)))
+        assert reply["path"].startswith("scratch/warp/defer-") and "dispatch.emit" in body
+        assert child.run_id in params_file.read_text(encoding="utf-8")
 
 
 def test_fan_overrun_after_a_run_was_minted_still_names_the_error_for_that_child(repo, monkeypatch):
@@ -338,8 +343,8 @@ def test_deferred_script_carries_target_root_for_the_repo_unkeyed_cli(tmp_path):
     import re
 
     script = mod._write_deferred_script(tmp_path, {"ask": "build the thing", "session_id": ""})
-    literal = re.search(r"^const PARAMS = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
-    assert json.loads(json.loads(literal))["target_root"] == tmp_path.as_posix()
+    params_file = Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)))
+    assert json.loads(params_file.read_text(encoding="utf-8"))["target_root"] == tmp_path.as_posix()
 
 
 _NODE_HARNESS = """
@@ -382,8 +387,8 @@ def test_default_deferred_script_emits_the_ask_as_a_launcher_child(tmp_path):
     import re
 
     script = mod._write_deferred_script(tmp_path, {"ask": "build the thing", "session_id": ""})
-    literal = re.search(r"^const PARAMS = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
-    assert json.loads(json.loads(literal))["launcher_child"] is True
+    params_file = Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)))
+    assert json.loads(params_file.read_text(encoding="utf-8"))["launcher_child"] is True
 
 
 @pytest.mark.spawns_process

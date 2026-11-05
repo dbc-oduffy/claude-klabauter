@@ -58,6 +58,9 @@ def test_run_doctor_spawns_nothing_and_stays_under_the_process_time_budget(
         real_init(self, *args, **kwargs)
 
     monkeypatch.setattr(subprocess.Popen, "__init__", counting_init)
+    # The darwin-only `mdfind` probe is a deliberate single spawn, covered by
+    # test_doctor_spotlight_advice; every other layer must still spawn nothing.
+    monkeypatch.setattr(doctor, "spotlight_advice", lambda *a, **k: None)
 
     start = time.process_time()
     report, _ = doctor.run_doctor()

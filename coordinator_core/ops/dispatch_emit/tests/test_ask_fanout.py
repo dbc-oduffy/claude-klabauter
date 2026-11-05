@@ -171,7 +171,10 @@ def test_mixed_sources_stamp_only_the_relayed_slice(repo):
         {"ask": VERBATIM, "writes": ["c"]},
     ]})
     assert out["exit_code"] == 0, out
-    paths = sorted((repo / "state" / "sizings").glob("*.yaml"))
+    from datetime import date
+    paths = sorted((repo / "state" / "sizings").glob("*/*.yaml"))
+    assert not list((repo / "state" / "sizings").glob("*.yaml"))
+    assert {p.parent.name for p in paths} == {date.today().strftime("%Y-%m")}
     docs = [yaml.safe_load(p.read_text(encoding="utf-8")) for p in paths]
     assert len(docs) == 3
     assert docs[0]["em_analysis"][c.SLICE_SOURCE_KEY] == "relayed"
@@ -343,7 +346,7 @@ def test_route_preference_stamps_only_the_carrying_slice(repo):
         {"ask": "fix c", "writes": ["c"]},
     ]})
     assert out["exit_code"] == 0, out
-    docs = [yaml.safe_load(p.read_text(encoding="utf-8")) for p in sorted((repo / "state" / "sizings").glob("*.yaml"))]
+    docs = [yaml.safe_load(p.read_text(encoding="utf-8")) for p in sorted((repo / "state" / "sizings").glob("*/*.yaml"))]
     assert len(docs) == 3
     assert docs[0]["em_analysis"]["route_preference"] == "roadmap"
     assert docs[0]["em_analysis"]["em_rationale"] == "spans two workstreams"

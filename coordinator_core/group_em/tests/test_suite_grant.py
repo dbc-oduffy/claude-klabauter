@@ -223,3 +223,162 @@ def test_check_never_raises(env):
 
 def test_human_grant_enum_is_unchanged():
     assert session_grant._VALID_GRANTED_BY == frozenset({"pm", "ceremony"})
+
+
+# --- cross-box relay: box A (holder) issues for a session living on box B --------------------
+
+
+@pytest.fixture
+def boxes(tmp_path, monkeypatch):
+    import base64
+
+    from coordinator_core.group_em import box_key, box_registry
+
+    home_a, home_b = tmp_path / "home-a", tmp_path / "home-b"
+    dir_a, dir_b = home_a / "state" / "group-em", home_b / "state" / "group-em"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    id_a, id_b = box_registry.ensure_identity(home_a), box_registry.ensure_identity(home_b)
+    box_registry.register(home_b, {"os": "linux"}, directory=dir_a)
+    box_key.pin_peer_key(id_a, base64.b64encode(box_key.ensure_key(home_a)).decode(), home_b)
+    live = {HOLDER, PEER}
+    monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
+    monkeypatch.setattr(
+        nomination, "is_live", lambda rec: nomination.LivenessResult(rec.get("session_id") in live, "live")
+    )
+    monkeypatch.setattr(suite_grant, "session_live", lambda sid, cwd=None: sid in live)
+    monkeypatch.setattr(
+        session_registry, "read_rows", lambda directory=None: [_row(PEER, "peer-name", str(repo))]
+    )
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", HOLDER)
+    monkeypatch.setattr(suite_grant.time, "time", lambda: NOW + 1)
+    dir_a.mkdir(parents=True, exist_ok=True)
+    nomination.claim(str(repo), HOLDER, directory=dir_a, prompt_id="p-1")
+    return {"a": dir_a, "b": dir_b, "ida": id_a, "idb": id_b, "repo": str(repo), "live": live,
+            "home_a": home_a, "home_b": home_b, "mp": monkeypatch}
+
+
+def _relay(boxes, grantee=None, **kw):
+    grantee = grantee or f"{boxes['idb']}:{PEER}"
+    return suite_grant.issue_suite_grant(grantee, "ruled", directory=boxes["a"], now=NOW, **kw)
+
+
+def _check_b(boxes, now=NOW + 60, root=None):
+    return suite_grant.check_group_em_suite_grant(
+        boxes["repo"], session_id=PEER, repo_root=root or boxes["repo"], directory=boxes["b"], now=now
+    )
+
+
+def test_relay_issue_delivers_and_grantee_box_reads_granted_with_no_local_holder(boxes):
+    result = _relay(boxes)
+    assert result.ok and result.record["grantee_box_id"] == boxes["idb"] and "sig" in result.record
+    assert (boxes["b"] / "suite-grants" / "relayed" / f"{PEER}.json").is_file()
+    assert list((boxes["a"] / "suite-grants").rglob("*.json")) == []
+    granted, record = _check_b(boxes)
+    assert granted and record["issuer_session_id"] == HOLDER and record["scope_root"] == boxes["repo"]
+
+
+def test_relay_passes_through_node_transport_deliver_grant(boxes):
+    from coordinator_core.group_em import node_transport
+
+    seen = []
+
+    class T:
+        def deliver_grant(self, box, envelope):
+            seen.append((box["box_id"], envelope))
+            return {"ok": True, "reply": {}}
+
+    boxes["mp"].setattr(node_transport, "select", lambda box, directory=None, runner=None: T())
+    assert _relay(boxes).ok
+    assert seen[0][0] == boxes["idb"] and seen[0][1]["issuer_box_id"] == boxes["ida"]
+
+
+def test_relay_far_refusal_is_surfaced_and_writes_nothing(boxes):
+    boxes["live"].discard(PEER)
+    result = _relay(boxes)
+    assert not result.ok and result.reason == f"{suite_grant.RELAY_FAILED}:{suite_grant.GRANTEE_NOT_LIVE}"
+    assert not (boxes["b"] / "suite-grants").exists()
+
+
+def test_relay_unknown_box_and_non_holder_are_refused(boxes):
+    assert _relay(boxes, grantee=f"box-nope:{PEER}").reason == suite_grant.BOX_UNKNOWN
+    boxes["mp"].setenv("COORDINATOR_SESSION_ID", PEER)
+    assert _relay(boxes).reason == suite_grant.NOT_GROUP_EM
+
+
+def _envelope(boxes, **over):
+    from coordinator_core.group_em import box_key
+
+    rec = {
+        "schema_version": 1, "kind": suite_grant.KIND, "issuer_session_id": HOLDER,
+        "issuer_name": "h", "issuer_box_id": boxes["ida"], "grantee_session_id": PEER,
+        "grantee_box_id": boxes["idb"], "grantee_name": "",
+        "issued_at": suite_grant._iso(NOW), "expires_at": suite_grant._iso(NOW + 3600), "note": "n",
+    }
+    rec.update(over)
+    return box_key.sign(rec, boxes["home_a"])
+
+
+def _receive(boxes, envelope, now=NOW + 1):
+    return suite_grant.receive_relayed_grant(envelope, directory=boxes["b"], now=now)
+
+
+def test_receive_accepts_a_valid_envelope_and_scope_comes_from_the_local_registry(boxes):
+    assert _receive(boxes, _envelope(boxes))["ok"] is True
+    assert _check_b(boxes)[0]
+    assert not _check_b(boxes, root=str(boxes["home_b"]))[0]
+
+
+def test_receive_refuses_unsigned_forged_tampered_and_unpinned(boxes):
+    good = _envelope(boxes)
+    unsigned = {k: v for k, v in good.items() if k != "sig"}
+    tampered = {**good, "expires_at": suite_grant._iso(NOW + 7200)}
+    assert _receive(boxes, unsigned)["reason"] == "bad_signature"
+    assert _receive(boxes, tampered)["reason"] == "bad_signature"
+    forged = {**good, "sig": "0" * 64}
+    assert _receive(boxes, forged)["reason"] == "bad_signature"
+    assert _receive(boxes, {**good, "issuer_box_id": "box-other"})["reason"] == "bad_signature"
+    assert _receive(boxes, "nope")["reason"] == "bad_envelope"
+    assert not (boxes["b"] / "suite-grants").exists()
+
+
+def test_receive_refuses_expired_ceiling_wrong_box_and_not_live(boxes):
+    assert _receive(boxes, _envelope(boxes), now=NOW + 7200)["reason"] == "expired"
+    over = _envelope(boxes, expires_at=suite_grant._iso(NOW + 721 * 60))
+    assert _receive(boxes, over)["reason"] == "bad_ttl"
+    assert _receive(boxes, _envelope(boxes, grantee_box_id="box-else"))["reason"] == "wrong_grantee_box"
+    boxes["live"].discard(PEER)
+    assert _receive(boxes, _envelope(boxes))["reason"] == suite_grant.GRANTEE_NOT_LIVE
+    assert not (boxes["b"] / "suite-grants").exists()
+
+
+def test_planted_relayed_file_reads_ungranted(boxes):
+    import json as _json
+
+    target = boxes["b"] / "suite-grants" / "relayed" / f"{PEER}.json"
+    target.parent.mkdir(parents=True)
+    forged = {**_envelope(boxes), "sig": "f" * 64}
+    target.write_text(_json.dumps({"envelope": forged, "scope_root": boxes["repo"]}), encoding="utf-8")
+    assert _check_b(boxes) == (False, None)
+    unsigned = {k: v for k, v in _envelope(boxes).items() if k != "sig"}
+    target.write_text(_json.dumps({"envelope": unsigned, "scope_root": boxes["repo"]}), encoding="utf-8")
+    assert _check_b(boxes) == (False, None)
+
+
+def test_relayed_grant_expiry_liveness_and_envelope_scope_are_enforced(boxes):
+    assert _receive(boxes, _envelope(boxes, scope_root=str(boxes["repo"]) + "/sub"))["ok"]
+    assert not _check_b(boxes)[0]
+    assert _receive(boxes, _envelope(boxes))["ok"]
+    assert _check_b(boxes)[0]
+    assert not _check_b(boxes, now=NOW + 7200)[0]
+    boxes["live"].discard(PEER)
+    assert not _check_b(boxes)[0]
+
+
+def test_bare_sid_still_takes_the_same_box_path(boxes):
+    boxes["mp"].setattr(
+        session_registry, "read_rows", lambda directory=None: [_row(PEER, "peer-name", boxes["repo"])]
+    )
+    result = suite_grant.issue_suite_grant(PEER, "ruled", directory=boxes["a"], now=NOW)
+    assert result.ok and "grantee_box_id" not in result.record
+    assert (boxes["a"] / "suite-grants" / HOLDER / f"{PEER}.json").is_file()

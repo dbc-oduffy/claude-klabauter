@@ -2873,10 +2873,31 @@ def _ungranted_record_failing_gate(
         return "undetermined (the diagnostic itself failed; the deny stands)"
 
 
-_GROUP_EM_GRANT_LINE = (
-    "\nOr the live Group EM runs: "
-    "tier-u-grant-cli group-em-grant <session> \"<ruling>\""
-)
+def _group_em_grant_line() -> str:
+    """Remedy line naming the group-em-grant route this box can actually use.
+
+    The bare same-box form only when a live Group EM holds this box; otherwise the
+    ``<box_id>:<session>`` form a Group EM on another box runs. Any read error reads cross-box.
+    """
+    box_id = "local"
+    live = False
+    try:
+        from coordinator_core.group_em import box_registry, nomination
+
+        box_id = box_registry.local_box_id()
+        holder = nomination.box_holder()
+        live = bool(holder and holder.get("live"))
+    except Exception:
+        live = False
+    if live:  # same-box route
+        return (
+            "\nOr the live Group EM runs: "
+            "tier-u-grant-cli group-em-grant <session> \"<ruling>\""
+        )
+    return (
+        "\nOr a Group EM runs, on its own box: "
+        "tier-u-grant-cli group-em-grant %s:<session> \"<ruling>\"" % box_id
+    )
 
 
 def _deny_reason_grant(
@@ -3036,7 +3057,7 @@ def _deny_reason_grant(
                 "Grant detail: %s"
                 % (detected, cmd_safe, _GRANT_DETAIL_POINTER)
             )
-            + _GROUP_EM_GRANT_LINE
+            + _group_em_grant_line()
             + ("\n\n%s" % _override_note if _override_note else "")
         )
     return (
@@ -3050,7 +3071,7 @@ def _deny_reason_grant(
             "resource control): %s"
             % (detected, cmd_safe, _GRANT_DETAIL_POINTER)
         )
-        + _GROUP_EM_GRANT_LINE
+        + _group_em_grant_line()
         + ("\n\n%s" % _override_note if _override_note else "")
     )
 

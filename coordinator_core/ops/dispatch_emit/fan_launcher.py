@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit import emission_receipt
-from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
+from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY, STOP_AFTER_KEY, lineage_stop_after
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     CHAIN_HANDOFF_KEY,
     LAUNCHER_CHILD_EMIT_PARAM,
@@ -63,6 +63,12 @@ class LaunchChild:
     run_id: str  # the fan-out's reserved run id
     sizing_rel: str  # the slice sizing, POSIX, repo-relative
     emit_params: Mapping[str, Any]  # dispatch.emit params the caller sends to emit this child (ask, sizing_path, reserved_run_id, ...)
+
+
+def child_emit_params(root: Path, parent_id: str, params: Mapping[str, Any]) -> dict:
+    """``params`` for a child of ``parent_id``'s fan-out, with ``stop_after`` added when the parent's lineage carries one."""
+    stop = lineage_stop_after(Path(root), parent_id)
+    return {**params, STOP_AFTER_KEY: stop} if stop and not params.get(STOP_AFTER_KEY) else dict(params)
 
 
 LaunchFn = Callable[[Path, str, Sequence[LaunchChild], Optional[str], Sequence[Mapping[str, Any]]], Path]
@@ -410,6 +416,13 @@ def write_launcher(
         raise ValueError(f"write_launcher: duplicate run_id {duplicates}")
     if len(emitted) != len(children):
         raise ValueError(f"write_launcher: {len(emitted)} emitted replies for {len(children)} children")
+    stop = lineage_stop_after(Path(root), parent_id)
+    unparked = [c.run_id for c in children if stop and c.emit_params.get(STOP_AFTER_KEY) != stop]
+    if unparked:
+        raise ValueError(
+            f"write_launcher: parent {parent_id!r} carries {STOP_AFTER_KEY}={stop}; children {unparked} were emitted "
+            f"without it (build their emit_params with child_emit_params)"
+        )
     script = _render(Path(root), parent_id, children, emitted)
     target = Path(root) / launcher_rel(parent_id)
     target.parent.mkdir(parents=True, exist_ok=True)

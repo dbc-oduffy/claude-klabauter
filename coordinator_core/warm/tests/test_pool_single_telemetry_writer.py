@@ -132,7 +132,7 @@ def test_pool_is_built_with_the_forward_queue_as_third_initarg(monkeypatch, tmp_
         initargs = pool.kwargs["initargs"]
         assert len(initargs) == 3
         q = initargs[2]
-        assert pool.kwargs["max_workers"] == server.DISPATCH_PROCESS_POOL_SIZE
+        assert pool.kwargs["max_workers"] == server.DISPATCH_PROCESS_POOL_SIZE + server._LIGHT_RESERVE_WORKERS
         assert getattr(q, "_maxsize") == server._FORWARD_QUEUE_MAX
     finally:
         ctx._telemetry_drain_stop.set()

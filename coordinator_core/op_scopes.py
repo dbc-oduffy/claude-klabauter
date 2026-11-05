@@ -52,6 +52,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "canvas.harvest":                        "show_top",
     "design.registry.lookup":                "show_top",
     "ping":                                  "none",
+    "remote_engine.handle":                  "none",
     "invoke.from_argv":                      "none",
     "hooks.suggest_sonnet_research":         "none",
     "hooks.subagent_arrival_check":          "none",
@@ -602,6 +603,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.box_place":                      "none",
     "groupem.box_send":                       "none",
     "groupem.box_roster":                     "none",
+    "groupem.suite_grant_receive":            "none",
+    "groupem.box_key_pin":                    "none",
     "workstream_complete.stand_down_watchers": "none",
     # session.work_state — read-only held/unclaimed corpus read over
     # state/handoffs/, which is main-worktree-rooted repo state -- exactly

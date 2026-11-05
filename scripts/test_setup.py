@@ -23,6 +23,7 @@ import importlib.util
 import json
 import os
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -61,6 +62,17 @@ def _no_pin_relaunch(setup_mod, monkeypatch):
     # main() re-execs under the example-retrieval-repo pin when it differs from sys.executable; that
     # child bypasses every in-process monkeypatch, so tests drive main() in this process.
     monkeypatch.setattr(setup_mod, "_relaunch_under_provisioned_pin", lambda argv: None)
+
+
+_REAL_FLOOR_DECIDE: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _no_floor_decide(setup_mod, monkeypatch):
+    # The install path spawns the plugin's engine-floor-decide.py, which records a verdict
+    # into the box's real state; only the tests that name it run the real function.
+    _REAL_FLOOR_DECIDE.setdefault("fn", setup_mod.run_engine_floor_decide)
+    monkeypatch.setattr(setup_mod, "run_engine_floor_decide", lambda *a, **k: None)
 
 
 # ---------------------------------------------------------------------------
@@ -408,7 +420,7 @@ def test_provision_deps_guarded_interpreter_exits_96_no_fallback_no_override(set
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
-    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path: False)
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
 
     calls = []
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
@@ -447,7 +459,7 @@ def test_provision_deps_guarded_without_optin_flag_unchanged_no_override_token(
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
-    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path: False)
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
 
     calls = []
     monkeypatch.setattr(setup_mod, "_run_pip", lambda argv: calls.append(argv))
@@ -478,7 +490,7 @@ def test_provision_deps_container_optin_honoured_appends_break_system_packages_o
     _stub_settings_home(setup_mod, monkeypatch, tmp_path)
     _stub_candidates(setup_mod, monkeypatch, sys.executable)
     monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
-    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path: False)
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", lambda candidate, settings_home_path, interactive=True: False)
     monkeypatch.setattr(setup_mod.sys, "platform", "linux")
     monkeypatch.setattr(setup_mod.os, "geteuid", lambda: 0, raising=False)
     _stub_editable_finder_conversion(setup_mod, monkeypatch)
@@ -781,6 +793,73 @@ def test_offer_homebrew_removal_returns_false_for_non_homebrew_interpreter(setup
     assert setup_mod._offer_homebrew_removal(candidate, tmp_path) is False
 
 
+def test_offer_homebrew_removal_non_interactive_silent_no_input(setup_mod, monkeypatch, tmp_path, capsys):
+    monkeypatch.setattr(setup_mod, "_is_homebrew_python", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_homebrew_python_formula", lambda interpreter: "python@3.14")
+
+    def _no_input(prompt):
+        raise AssertionError("input() must not be called")
+
+    monkeypatch.setattr("builtins.input", _no_input)
+    candidate = setup_mod.InterpreterCandidate(
+        label="bare python3 on PATH", path="/opt/homebrew/bin/python3", consumers=("hooks.json",)
+    )
+    assert setup_mod._offer_homebrew_removal(candidate, tmp_path, interactive=False) is False
+    out = capsys.readouterr()
+    assert "Uninstall" not in out.out + out.err
+
+
+def test_provision_deps_guarded_agent_mode_names_supported_interpreter(
+    setup_mod, monkeypatch, tmp_path, capsys
+):
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_find_supported_interpreter", lambda: "/opt/pyenv/bin/python3.12")
+    seen = {}
+
+    def _offer(candidate, settings_home_path, interactive=True):
+        seen["interactive"] = interactive
+        return False
+
+    monkeypatch.setattr(setup_mod, "_offer_homebrew_removal", _offer)
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.provision_deps(pyproject_dir, sys.executable, agent_mode=True)
+
+    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
+    assert seen["interactive"] is False
+    assert "/opt/pyenv/bin/python3.12" in capsys.readouterr().err
+
+
+def test_find_supported_interpreter_skips_managed_and_dedupes_realpath(setup_mod, monkeypatch, tmp_path):
+    real = tmp_path / "python3.12"
+    real.write_text("")
+    link = tmp_path / "python3.13"
+    link.symlink_to(real)
+    other = tmp_path / "python3.11"
+    other.write_text("")
+    paths = {"python3.13": str(link), "python3.12": str(real), "python3.11": str(other)}
+    monkeypatch.setattr(setup_mod.shutil, "which", lambda name: paths.get(name))
+    probed = []
+
+    def _managed(interpreter):
+        probed.append(interpreter)
+        return interpreter != str(other)
+
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", _managed)
+    assert setup_mod._find_supported_interpreter() == str(other)
+    assert probed == [str(link), str(other)]
+
+
+def test_find_supported_interpreter_none_when_all_managed(setup_mod, monkeypatch):
+    monkeypatch.setattr(setup_mod.shutil, "which", lambda name: None)
+    assert setup_mod._find_supported_interpreter() is None
+
+
 def test_offer_homebrew_removal_declines_on_closed_stdin_runtime_error(setup_mod, monkeypatch, tmp_path):
     """The twin of
     test_offer_homebrew_removal_declines_on_eof for the OTHER exception
@@ -951,6 +1030,9 @@ def test_main_register_only_does_not_provision_dependencies(setup_mod, monkeypat
     )
     monkeypatch.setattr(setup_mod, "check_dialect_guard_armed", lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
+    monkeypatch.setattr(
+        setup_mod, "_register_only_forwarder_item", lambda root: types.SimpleNamespace(ok=True, line=lambda: "ok")
+    )
 
     assert setup_mod.main(["--register-only", "--i-am-agent"]) == 0
     assert "provision_deps" not in calls
@@ -3990,3 +4072,132 @@ def test_symbols_hint_silent_when_symbols_extra_absent(
     )
     setup_mod.print_symbols_extra_hint(tmp_path)
     assert capsys.readouterr().out == ""
+
+
+# ---------------------------------------------------------------------------
+# --check target label + remediation (C02); install-path engine floor decide (C08)
+# ---------------------------------------------------------------------------
+
+
+def test_check_target_label_names_each_identity(setup_mod, tmp_path):
+    assert setup_mod.check_target_label(setup_mod.IDENTITY_AUTHORING, tmp_path) == (
+        f"target: authoring checkout {tmp_path}"
+    )
+    assert setup_mod.check_target_label(setup_mod.IDENTITY_MIRROR, tmp_path) == (
+        f"target: published engine root {tmp_path}"
+    )
+
+
+def test_check_remediation_on_authoring_names_published_root_setup(setup_mod, tmp_path):
+    msg = setup_mod.check_failure_remediation(
+        setup_mod.IDENTITY_AUTHORING, tmp_path, lambda key: "/pub/claude-klabauter"
+    )
+    assert str(Path("/pub/claude-klabauter") / "scripts" / "setup.py") in msg
+    assert "clear at publication" in msg
+    assert "re-run scripts/setup.py" not in msg
+
+
+def test_check_remediation_on_authoring_without_registered_published_root(setup_mod, tmp_path):
+    msg = setup_mod.check_failure_remediation(setup_mod.IDENTITY_AUTHORING, tmp_path, lambda key: None)
+    assert "repos.claude_klabauter unset" in msg
+    assert "re-run scripts/setup.py" not in msg
+
+
+def test_check_remediation_on_published_root_names_that_roots_setup(setup_mod, tmp_path):
+    msg = setup_mod.check_failure_remediation(setup_mod.IDENTITY_MIRROR, tmp_path, lambda key: "/other")
+    assert str(tmp_path / "scripts" / "setup.py") in msg
+    assert "/other" not in msg
+
+
+@pytest.mark.parametrize("identity,label", [("authoring", "authoring checkout"), ("mirror", "published engine root")])
+def test_run_check_prints_target_and_published_remediation_on_failure(
+    setup_mod, monkeypatch, capsys, identity, label
+):
+    from coordinator_core.install import setup_check
+
+    ident = setup_mod.IDENTITY_AUTHORING if identity == "authoring" else setup_mod.IDENTITY_MIRROR
+    monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda root: ident)
+    monkeypatch.setattr(
+        setup_check, "run_checks", lambda *a, **k: [setup_check.CheckItem("x", False, "broken")]
+    )
+    monkeypatch.setattr(setup_mod, "check_installed_exec_bit_parity", lambda *a, **k: setup_check.CheckItem("y", True, "ok"))
+    monkeypatch.setattr(setup_mod, "run_engine_floor_decide", lambda *a, **k: pytest.fail("--check must not run the decider"))
+    root = Path(__file__).resolve().parent.parent
+    assert setup_mod.run_check(root) == 1
+    out = capsys.readouterr().out
+    assert f"target: {label} {root}" in out
+    failed = [line for line in out.splitlines() if line.startswith("check: FAILED")]
+    assert failed and "re-run scripts/setup.py" not in failed[0]
+
+
+def _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, *, present: bool):
+    from types import SimpleNamespace
+
+    plugin = tmp_path / "plugin"
+    if present:
+        (plugin / "bin").mkdir(parents=True)
+        (plugin / "bin" / "engine-floor-decide.py").write_text("", encoding="utf-8")
+    monkeypatch.setattr(
+        setup_mod, "_resolve_coordinator_claude_root",
+        lambda repo_root, args: (tmp_path, SimpleNamespace(is_publish_mirror_rejected=False, display="stub")),
+    )
+    monkeypatch.setattr(setup_mod, "_resolve_plugin_root_for_machine_local", lambda coord: plugin)
+
+
+def _fake_decider_run(monkeypatch, setup_mod, stdout: str):
+    from types import SimpleNamespace
+
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        return SimpleNamespace(stdout=stdout, stderr="", returncode=0)
+
+    monkeypatch.setattr(setup_mod.subprocess, "run", fake_run)
+    return calls
+
+
+def test_floor_decide_runs_decider_once_and_prints_clean_verdict(setup_mod, monkeypatch, tmp_path, capsys):
+    _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, present=True)
+    calls = _fake_decider_run(monkeypatch, setup_mod, "clean: engine /e stamp a floor b\n")
+    verdict = _REAL_FLOOR_DECIDE["fn"](tmp_path, "py", setup_mod.Args())
+    out = capsys.readouterr().out
+    assert verdict == "clean" and len(calls) == 1
+    assert calls[0][0] == "py" and calls[0][1].endswith("engine-floor-decide.py")
+    assert "clean: engine /e" in out and "[ADVISORY]" not in out
+
+
+def test_floor_decide_undecided_prints_bounded_command(setup_mod, monkeypatch, tmp_path, capsys):
+    _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, present=True)
+    _fake_decider_run(monkeypatch, setup_mod, "undecided: engine /e stamp a floor b\n")
+    assert _REAL_FLOOR_DECIDE["fn"](tmp_path, "py", setup_mod.Args()) == "undecided"
+    out = capsys.readouterr().out
+    assert "[ADVISORY] engine floor undecided" in out and "engine-floor-decide.py" in out
+
+
+def test_floor_decide_absent_decider_prints_bounded_command_and_spawns_nothing(
+    setup_mod, monkeypatch, tmp_path, capsys
+):
+    _stub_plugin_with_decider(setup_mod, monkeypatch, tmp_path, present=False)
+    calls = _fake_decider_run(monkeypatch, setup_mod, "")
+    assert _REAL_FLOOR_DECIDE["fn"](tmp_path, "py", setup_mod.Args()) is None
+    out = capsys.readouterr().out
+    assert calls == []
+    assert "py <plugin>/coordinator/bin/engine-floor-decide.py" in out
+
+
+def test_main_register_only_exits_nonzero_when_forwarders_missing(setup_mod, monkeypatch, tmp_path):
+    """Registration alone cannot vouch for the box: a missing forwarder member fails the run."""
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(setup_mod, "provision_deps", lambda *a, **k: pytest.fail("provisioned"))
+    monkeypatch.setattr(setup_mod, "resolve_python", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(setup_mod, "derive_deps", lambda _p: (["dep==1"], ["dep"]))
+    monkeypatch.setattr(setup_mod, "register_claude_klabauter_root", lambda root, *a, **k: root)
+    monkeypatch.setattr(setup_mod, "offer_warm_opt_in", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "verify_coordinator_core_importable", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "check_dialect_guard_armed", lambda *a, **k: None)
+    monkeypatch.setattr(setup_mod, "run_health_probe", lambda *a, **k: False)
+    monkeypatch.setattr(
+        setup_mod, "_register_only_forwarder_item", lambda root: types.SimpleNamespace(ok=False, line=lambda: "FAIL")
+    )
+    assert setup_mod.main(["--register-only", "--i-am-agent"]) == 1

@@ -2,8 +2,8 @@
 restored: declared class and RUNTIME behaviour must agree, probed through the real entrypoint
 `engine.evaluate` (not `module.check`), so an incumbent guard swallowing the slot is caught.
 
-At guard level strict (the author default, pinned suite-wide) each guard denies with its own
-text; at warn (the consumer default) the policy point turns the same deny into an advisory.
+Each guard is an advisory-by-ruling entry (not in the deny registry), so at every guard level
+the policy point turns its would-be deny into a one-line advisory carrying its own text.
 
 Spec backlink: pln-apply-the-guard-class-census-u-4cae4a, AC5.
 """
@@ -24,11 +24,16 @@ from coordinator_core.claude_md_budget import DEV_REPO_SENTINEL, HARD_LIMIT_BYTE
 
 
 def _assert_deny(out, *, must_contain: str = ""):
-    assert out is not None, "engine.evaluate returned ALLOW, expected deny"
+    """No guard here is in the deny registry, so the policy point turns its
+    would-be deny into a one-line advisory (allow plus additionalContext)."""
+    from coordinator_core import machine_profile
+
+    assert out is not None, "engine.evaluate returned ALLOW, expected an advisory"
     hso = out["hookSpecificOutput"]
-    assert hso.get("permissionDecision") == "deny", out
-    assert must_contain in hso["permissionDecisionReason"], (
-        "deny came back without this guard's own text -- an incumbent guard "
+    assert hso.get("permissionDecision") == "allow", out
+    assert hso["additionalContext"].startswith(machine_profile.ADVISORY_PREFIX), out
+    assert must_contain in hso["additionalContext"], (
+        "advisory came back without this guard's own text -- an incumbent guard "
         "may have swallowed the slot: %r" % out
     )
 

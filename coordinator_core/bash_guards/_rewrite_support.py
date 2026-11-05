@@ -153,7 +153,7 @@ def _ready(text: str) -> Any:
 
 
 _EXAMPLE_RETRIEVAL_REPO_HINT = (
-    "example-retrieval-repo serves this repo: use project_semantic_search, project_symbol, "
+    "example-retrieval-repo: use project_semantic_search, project_symbol, "
     "project_referencers (via ToolSearch) for content lookups; grep is fine for literal text."
 )
 

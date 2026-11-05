@@ -6,10 +6,11 @@ carrying ``transport: {kind: ssh, host, invoke}`` is reached through ``box_trans
 be any address ssh resolves, a WireGuard address included). Any other kind selects a transport
 whose calls reply ``ok=False``.
 
-Both calls on every transport return ``{"ok": True, ...}`` or ``{"ok": False, "reason": ...}`` and
-never raise:
+Every call on every transport returns ``{"ok": True, ...}`` or ``{"ok": False, "reason": ...}`` and
+never raises:
     list_sessions(box, run=None) -> {ok, box_id, sessions}
     send(box, to_session, text, from_session=None) -> {ok, reply}
+    deliver_grant(box, envelope) -> {ok, reply}   # far box's suite_grant.receive_relayed_grant
 
 Negative-spec:
     - ``from_session`` is accepted for the receiver-namespace rewrite but neither underlying
@@ -75,6 +76,18 @@ class FsTransport:
         except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
             return _fail(f"fs_send_failed:{type(exc).__name__}:{exc}")
 
+    def deliver_grant(self, box: dict, envelope: dict) -> dict:
+        try:
+            from coordinator_core.group_em import suite_grant
+
+            root = box.get("root")
+            if not isinstance(root, str) or not root:
+                return _fail("no_root")
+            res = suite_grant.receive_relayed_grant(envelope, home=Path(root))
+            return {"ok": True, "reply": res} if res.get("ok") else _fail(str(res.get("reason")))
+        except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
+            return _fail(f"fs_deliver_failed:{type(exc).__name__}:{exc}")
+
 
 class SshTransport:
     """ssh box: delegates to ``box_transport``; ``runner`` is injectable so tests spawn nothing."""
@@ -104,6 +117,15 @@ class SshTransport:
         except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
             return _fail(f"ssh_send_failed:{type(exc).__name__}:{exc}")
 
+    def deliver_grant(self, box: dict, envelope: dict) -> dict:
+        try:
+            from coordinator_core.group_em import box_transport
+
+            res = box_transport.deliver_grant(box, envelope, runner=self.runner)
+            return res if res.get("ok") else _fail(str(res.get("reason", "ssh_failed")))
+        except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
+            return _fail(f"ssh_deliver_failed:{type(exc).__name__}:{exc}")
+
 
 class UnknownTransport:
     """A box whose ``transport.kind`` is unrecognised: every call replies ``ok=False``."""
@@ -119,6 +141,9 @@ class UnknownTransport:
     def send(
         self, box: dict, to_session: str, text: str, from_session: Optional[str] = None
     ) -> dict:
+        return _fail(f"unknown_transport:{self.detail}")
+
+    def deliver_grant(self, box: dict, envelope: dict) -> dict:
         return _fail(f"unknown_transport:{self.detail}")
 
 

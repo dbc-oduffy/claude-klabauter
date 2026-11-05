@@ -317,6 +317,70 @@ def format_refusal(runs: list[LiveRun], held_s: float = 0.0) -> str:
     )
 
 
+def _poll_runs(
+    in_flight: Optional[Callable[[LiveRun], bool]],
+    bound_s: Optional[float],
+    poll_s: Optional[float],
+    sleep: Callable[[float], None],
+    monotonic: Callable[[], float],
+) -> tuple[list[LiveRun], float]:
+    """Poll token-holding live runs until none remain (after the `in_flight` filter, when given) or the bound lapses."""
+    bound = HOLD_BOUND_S if bound_s is None else bound_s
+    poll = HOLD_POLL_S if poll_s is None else poll_s
+    start = monotonic()
+    while True:
+        runs = find_live_runs(require_token=True, skip_superseded=True)
+        if in_flight is not None:
+            runs = [r for r in runs if in_flight(r)]
+        held = monotonic() - start
+        if not runs or held >= bound:
+            return runs, held
+        sleep(min(poll, max(bound - held, 0.0)))
+
+
+def drain_for_handover(
+    engine_root: Path,
+    *,
+    in_flight: Optional[Callable[[LiveRun], bool]] = None,
+    bound_s: Optional[float] = None,
+    poll_s: Optional[float] = None,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> tuple[list[LiveRun], float]:
+    """Wait up to `bound_s` for the legs in flight under token-holding runs to finish; return (still in flight, seconds held).
+
+    The caller holds `breadcrumb.hold_handover_pending(engine_root)` across drain, stop and swap, so
+    the supervisor parks new ops (`supervisor._park_while_handover_pending`); this asserts the hold
+    and never opens or releases it (RuntimeError when absent). A staged run between legs holds the
+    token but has no leg in flight and does not block: `in_flight(run)` answers whether a leg is
+    running now. `None` uses `engine_legs_in_flight(engine_root)`, which the server cannot attribute
+    to one run, so any leg in flight holds every token-holding run. Empty result: the handover may
+    stop the server; non-empty: the bound lapsed and the caller refuses with `format_refusal`.
+    Reads only (loopback status asks); spawns nothing.
+    """
+    from coordinator_core.warm import breadcrumb
+
+    if not breadcrumb.handover_pending_held(engine_root):
+        raise RuntimeError("drain_for_handover requires the caller to hold breadcrumb.hold_handover_pending")
+    if in_flight is None:
+        in_flight = lambda _run: engine_legs_in_flight(engine_root)  # noqa: E731
+    return _poll_runs(in_flight, bound_s, poll_s, sleep, monotonic)
+
+
+def engine_legs_in_flight(engine_root: Path) -> bool:
+    """True when the engine root's op-dispatching supervisor or front door has a request in flight.
+
+    An unreachable-but-live server (count unknown) reads True: a stop must never race a leg it
+    could not see. No recorded live server reads False.
+    """
+    from coordinator_core.warm import front_door, supervisor
+
+    for count in (supervisor.in_flight_count(engine_root), front_door.in_flight_count(engine_root)):
+        if count is None or count > 0:
+            return True
+    return False
+
+
 def hold_for_mid_stage_runs(
     *,
     bound_s: Optional[float] = None,
@@ -333,14 +397,6 @@ def hold_for_mid_stage_runs(
 
     Returns (runs still mid-stage, seconds held): the runs empty means the handover may stop the
     server; non-empty means the bound lapsed and the caller refuses with `format_refusal`. Reads
-    only; spawns nothing.
+    only; spawns nothing. Waits on every token-holding run, leg in flight or not; the publish and percolate handovers use `drain_for_handover`.
     """
-    bound = HOLD_BOUND_S if bound_s is None else bound_s
-    poll = HOLD_POLL_S if poll_s is None else poll_s
-    start = monotonic()
-    while True:
-        runs = find_live_runs(require_token=True, skip_superseded=True)
-        held = monotonic() - start
-        if not runs or held >= bound:
-            return runs, held
-        sleep(min(poll, max(bound - held, 0.0)))
+    return _poll_runs(None, bound_s, poll_s, sleep, monotonic)

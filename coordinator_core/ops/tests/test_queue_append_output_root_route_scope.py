@@ -23,6 +23,7 @@ Bug: state/bug-backlog/2026-08-19-published-caller-imports-a-mirror-only-name-fr
 from __future__ import annotations
 
 import os
+import tempfile
 
 import pytest
 
@@ -78,7 +79,14 @@ def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
 # Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
 
 
+def _pin_temp_root(monkeypatch, root):
+    """Make `root` the process temp root, so a path under it is a temp path wherever pytest put `tmp_path`."""
+    monkeypatch.setattr(tempfile, "tempdir", str(root))
+    monkeypatch.setenv("TMPDIR", str(root))
+
+
 def test_swept_temp_root_refuses_even_in_process(monkeypatch, tmp_path):
+    _pin_temp_root(monkeypatch, tmp_path)
     swept = tmp_path / "already-gone"
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(swept))
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
@@ -135,7 +143,8 @@ def test_unresolvable_session_id_leaves_ownership_unverified(monkeypatch, tmp_pa
     )
 
 
-def test_is_swept_tmp_root_predicate(tmp_path):
+def test_is_swept_tmp_root_predicate(monkeypatch, tmp_path):
+    _pin_temp_root(monkeypatch, tmp_path)
     live = tmp_path / "still-here"
     live.mkdir()
     swept = tmp_path / "already-gone"

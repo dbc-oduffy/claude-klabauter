@@ -2,9 +2,10 @@
 
 Params: ``{run_id: str, action: "start" | "abandon", dry_run?: bool}``.
 Reply: ``{ok, run_id, action, fire_args | null, landed_sha | null, refusal | null}``; a refusal
-carries ``ok: false`` and a one-line ``refusal`` naming the cause. ``start`` returns the
-``fire_args`` of the Workflow start plus ``script_path`` (the run's script under ``scratch/warp``;
-``runToken`` rides ``fire_args`` only while the run's token is escrowed); ``abandon`` writes the halt
+carries ``ok: false`` and a one-line ``refusal`` naming the cause. ``start`` returns ``script_path``, a
+stage-loop start script under ``scratch/warp``: fire that path with no args (it carries
+``repoRoot``/``runToken`` and follows ``stage_pending`` into the staged twin); ``fire_args`` is null and
+``run_script`` names the run's own script, which is never fired directly. ``abandon`` writes the halt
 marker, discards the run token and lands the record through ``abandoned_runs`` (``run_ids=[run_id]``).
 The reap holds a run younger than its quiet window, so a fresh abandon replies ``landed_sha: null`` and
 ``note`` names the reap's skip reason; the halt marker still blocks any start.
@@ -14,7 +15,8 @@ ok; with no token either it refuses ``run-not-found``, and ``start`` on it alway
 
 A run is startable or abandonable only while it is minted-only (``halted_run._is_shell``: no halt
 marker, progress record absent or at ``minted``); a run past ``minted`` is refused. In-process file
-reads only; no git spawn on the refusal path or on ``start``.
+reads only on the refusal path; ``start`` also writes one ``scratch/warp/defer-*.workflow.mjs`` file
+(``dry_run`` does not apply to it); no git spawn.
 """
 
 from __future__ import annotations
@@ -68,8 +70,8 @@ def is_minted_only(run_dir: Path) -> bool:
     return run_dir.is_dir() and _is_shell(run_dir)
 
 
-def _start(repo_root: Path, run_id: str) -> dict:
-    """``fire_args`` for the run's script. Reads only: the script file's existence and the token escrow."""
+def start_args(repo_root: Path, run_id: str) -> dict:
+    """``fire_args`` and ``script_path`` of the run's own script. Reads only: the script file's existence and the token escrow."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     script_rel = f"{RUN_DIR_ROOT}/{run_id}{RUN_SCRIPT_SUFFIX}"
@@ -80,6 +82,21 @@ def _start(repo_root: Path, run_id: str) -> dict:
     if token:
         fire_args["runToken"] = token
     return reply(run_id, ACTION_START, fire_args=fire_args, script_path=script_rel)
+
+
+def _start(repo_root: Path, run_id: str) -> dict:
+    """The stage-loop start script for the run: ``script_path`` is that script, ``run_script`` the run's own.
+    Trap: firing ``run_script`` directly ends at ``stage_pending`` with nothing starting the staged twin."""
+    from coordinator_core.hooks.submit_engine_ask import write_direct_start_script
+
+    args = start_args(repo_root, run_id)
+    if not args["ok"]:
+        return args
+    script = write_direct_start_script(repo_root, run_id, args["script_path"], args["fire_args"])
+    start_rel = Path(script).resolve().relative_to(Path(repo_root).resolve()).as_posix()
+    out = reply(run_id, ACTION_START, script_path=start_rel)
+    out["run_script"] = args["script_path"]
+    return out
 
 
 def _abandon(repo_root: Path, run_id: str, dry_run: bool) -> dict:

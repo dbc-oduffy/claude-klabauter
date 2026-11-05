@@ -349,8 +349,12 @@ class TestForegroundDispatchStrip:
 
     def test_present_false_reroutes_to_background(self, tmp_path):
         _init_git_dir(tmp_path)
+        sid = "11111111-2222-3333-4444-555555555555"
+        foreground_dispatch_strip.compute_foreground_reroute(
+            True, sid, {"prompt": "x"}, str(tmp_path)
+        )
         result = foreground_dispatch_strip.compute_foreground_reroute(
-            False, "sid-1234", {"prompt": "x"}, str(tmp_path)
+            None, sid, {"prompt": "x"}, str(tmp_path)
         )
         assert result is not None
         verdict, value, _ = result
@@ -359,8 +363,12 @@ class TestForegroundDispatchStrip:
 
     def test_present_false_without_prompt_denies(self, tmp_path):
         _init_git_dir(tmp_path)
+        sid = "11111111-2222-3333-4444-555555555555"
+        foreground_dispatch_strip.compute_foreground_reroute(
+            True, sid, {"prompt": "x"}, str(tmp_path)
+        )
         result = foreground_dispatch_strip.compute_foreground_reroute(
-            False, "sid-1234", {}, str(tmp_path)
+            None, sid, {}, str(tmp_path)
         )
         assert result is not None
         verdict, value, _ = result

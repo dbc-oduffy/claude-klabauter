@@ -91,6 +91,7 @@ from coordinator_core.git.content_hash import (
 )
 from coordinator_core.git.git_index import parse_index_identity
 from coordinator_core.git.git_objects import (
+    _obj_path,
     _ref_exists_loose_or_packed,
     cas_ref,
     packed_contains,
@@ -348,6 +349,22 @@ def _worktree_blob(
     return write_object(
         gitdir, b"blob", _checkin_bytes(root, rel, data, autocrlf), created=created
     )
+
+
+def _absent_blob_guesses(gitdir: Path, repo: Union[str, Path], data: bytes) -> set:
+    """Blob shas a checkin of `data` plausibly yields (raw, CRLF folded to LF)
+    that the object store does not yet hold. Zero spawns.
+
+    A guess proves nothing about what the filter produces; it is only a
+    novelty witness: a fallback blob equal to a guess absent before the
+    fallback ran cannot have been held by any ancestor."""
+    common = resolve_git_common_dir(repo)
+    absent = set()
+    for payload in {data, data.replace(b"\r\n", b"\n")}:
+        sha = hashlib.sha1(b"blob %d\x00" % len(payload) + payload).hexdigest()
+        if not _obj_path(common, sha).exists() and not packed_contains(common, sha):
+            absent.add(sha)
+    return absent
 
 
 def checkin_sizes(
@@ -1596,6 +1613,9 @@ def commit_paths(
     staged_preferred = []
     staged_passed_over: list = []
     refused: list = []
+    # path -> blob shas the object store lacked BEFORE `blob_fallback` wrote
+    # anything: the fallback's result landing in this set proves it novel.
+    absent_before_fallback: Dict[str, set] = {}
 
     prefer_staged_set = {p.replace("\\", "/") for p in prefer_staged}
     delete_set = set(delete_list)
@@ -1669,6 +1689,7 @@ def commit_paths(
                 # fallback costs one process for the whole set rather than one
                 # per path (and zero if nothing is refused).
                 refused.append(p)
+                absent_before_fallback[p] = _absent_blob_guesses(gitdir, repo, data)
                 continue
             mode = declared_modes.get(p) or (entry.mode if entry is not None else _mode_for(root / p))
             if entry is not None and blob != entry.sha:
@@ -1700,6 +1721,8 @@ def commit_paths(
                     f"{p}: the blob fallback returned no sha for a path this "
                     "module refused. Nothing was written."
                 )
+            if blob in absent_before_fallback.get(p, ()):
+                created_blobs.add(blob)
             entry = staged.get(p)
             mode = declared_modes.get(p) or (entry.mode if entry is not None else _mode_for(root / p))
             if entry is not None and blob != entry.sha:

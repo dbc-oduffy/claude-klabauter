@@ -99,7 +99,9 @@ def test_python_syntax_guard_denies_unparseable_write(tmp_path):
         "tool_input": {"file_path": str(target), "content": "def broken(:\n    pass\n"},
     }
     result = guard_python_syntax_on_write._handler(params)
-    assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
 
 
 def test_python_syntax_guard_allows_valid_write(tmp_path):
@@ -201,7 +203,8 @@ def test_repo_setup_claude_home_refusal_denies_through_the_wrapped_envelope(tmp_
         }
     )
     hso = result["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
 
 
 def test_plan_test_surface_tier_allows_wrong_tool():

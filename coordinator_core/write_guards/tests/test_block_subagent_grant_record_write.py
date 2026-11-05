@@ -297,11 +297,15 @@ class TestTraversalResolutionScopeEqualsEnforcement:
 
 
 class TestReachableThroughEngine:
-    def test_engine_check_denies_subagent_grant_record_write(self, tmp_path):
+    def test_engine_check_advises_on_subagent_grant_record_write(self, tmp_path):
+        """advisory-by-ruling (deny_registry.ADVISORY_BY_RULING): the engine answers allow plus
+        one advisory line, never a deny."""
         repo_root = _make_plain_clone(tmp_path)
         payload = _payload(
             _grant_path(repo_root), tool_name="Write", cwd=str(repo_root)
         )
         result = engine.evaluate(payload)
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert "additionalContext" in hso

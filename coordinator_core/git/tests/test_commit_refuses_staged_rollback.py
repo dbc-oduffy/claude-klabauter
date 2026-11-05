@@ -350,3 +350,43 @@ def test_true_revert_to_an_older_blob_still_refuses(tmp_path):
     _commit(repo, "live/s.yaml", "status: closed\nnote: later\n", "edit")
     with pytest.raises(StagedRollbackRefused):
         _commit(repo, "live/s.yaml", "status: open\n", "revert", detect_rollback=True)
+
+
+def _pinned_repo(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / ".gitattributes").write_text("*.cmd text eol=crlf\n", encoding="utf-8", newline="\n")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-q", "-m", "pin")
+    return repo
+
+
+def _pinned_commit(repo, content, msg, **kwargs):
+    (repo / "run.cmd").write_bytes(content)
+    return gcommit.commit_paths(
+        repo, ["run.cmd"], msg,
+        blob_fallback=lambda paths: gcommit.hash_worktree_blobs_via_spawn(paths, cwd=repo),
+        **kwargs,
+    )
+
+
+def test_crlf_pinned_novel_blob_skips_the_walk_but_a_restore_still_refuses(tmp_path, monkeypatch):
+    """A fallback-resolved blob proven novel skips the walk; one an ancestor
+    held is not novel and is refused."""
+    repo = _pinned_repo(tmp_path)
+    _pinned_commit(repo, b"echo v0\r\n", "v0")
+    _pinned_commit(repo, b"echo v1\r\n", "v1")
+    _pinned_commit(repo, b"echo v2\r\n", "v2")
+    walked = []
+    real = gcommit.rollback_check.find_exact_blob_rollbacks
+    monkeypatch.setattr(
+        gcommit.rollback_check,
+        "find_exact_blob_rollbacks",
+        lambda *a, **k: walked.append(dict(a[2])) or real(*a, **k),
+    )
+    assert _pinned_commit(repo, b"echo brand new\r\n", "fresh", detect_rollback=True).sha
+    assert walked == []
+    landed = gcommit.head_sha(repo)
+    with pytest.raises(StagedRollbackRefused):
+        _pinned_commit(repo, b"echo v0\r\n", "restore v0", detect_rollback=True)
+    assert [list(w) for w in walked] == [["run.cmd"]]
+    assert gcommit.head_sha(repo) == landed

@@ -2936,6 +2936,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "groupem.box_place": OpClass.MUTATING,
     "groupem.box_send": OpClass.MUTATING,
     "groupem.box_roster": OpClass.COMPUTE_ONLY,
+    # groupem.suite_grant_receive / box_key_pin -- MUTATING: write a relayed grant record or a
+    # pinned peer key under <settings-home>/state/group-em/.
+    "groupem.suite_grant_receive": OpClass.MUTATING,
+    "groupem.box_key_pin": OpClass.MUTATING,
     # workstream_complete.stand_down_watchers -- MUTATING: kills this session's
     # attributed watcher trees and removes the Group EM holder record.
     "workstream_complete.stand_down_watchers": OpClass.MUTATING,

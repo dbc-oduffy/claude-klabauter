@@ -386,6 +386,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_ledger import (  # noqa:
     _write_note_verdicts,
     _awaiting_operator,
     _ledger_gate,
+    met_row_files,
     _ledger_writeback,
     _STATUS_FIELD,
     _DELIVERED_REPORT_RE,
@@ -945,6 +946,34 @@ def _undeclared_dirty(
     return out
 
 
+def _own_drift_actuals(
+    worktree_root: Path, run_dir: Optional[Path], drift: Sequence, declared: Sequence[str],
+    session_id: Optional[str], review_writes: Optional[dict],
+) -> dict:
+    """``{path: actual}`` for each content-sha256 entry of a commit_v2 ``blob_drift`` list whose
+    current bytes are the run's own last recorded write (``drift_attribution.classify``: the run
+    session's and the fix-pass agents' touch ledgers, not bounded by the run record's start, so a
+    refire keeps the run's earlier own write). Those are the bytes the run left; a foreign or
+    unrecorded rewrite is absent and keeps refusing. Hash-only, no spawn."""
+    from coordinator_core.ops.dispatch_emit import drift_attribution
+    from coordinator_core.ops.dispatch_emit.terminal_commit_review import REVIEW_RECORD_AGENT
+
+    actual = {
+        d["path"]: d["actual"] for d in drift
+        if isinstance(d, dict) and d.get("basis") == "content-sha256"
+        and isinstance(d.get("path"), str) and isinstance(d.get("actual"), str) and d["actual"]
+    }
+    if not actual:
+        return {}
+    owned = drift_attribution.classify(
+        worktree_root, run_dir if run_dir is not None else worktree_root, list(actual), declared,
+        session_id=session_id,
+        agent_ids=sorted({a for a in (review_writes or {}).values() if a and a != REVIEW_RECORD_AGENT}),
+        run_started_at=0.0,
+    )[drift_attribution.RUN_OWNED]
+    return {p: actual[p] for p in owned}
+
+
 def _run_owned_dirt(
     worktree_root: Path, request: CommitRequest, snapshot: Optional[_Snapshot],
     session_id: Optional[str], all_paths: list, deleted_paths: list, touched: frozenset,
@@ -971,17 +1000,15 @@ def _run_owned_dirt(
     )
     present = [p for p in in_scope if (worktree_root / p).is_file()]
     gone = [p for p in in_scope if not (worktree_root / p).exists()]
-    if not present and not gone:
-        return [], []
     from coordinator_core.session import scope as session_scope
 
     root_str = str(worktree_root)
     owned = touched
     declared = {p for c in request.chunks for p in c.paths}
     candidates = [p for p in present if p in owned] + [p for p in gone if p in owned or p in declared]
-    if not candidates:
-        return [], []
-    contested = session_scope.contested_by_live_peers(candidates, session_id, cwd=root_str)
+    contested = (
+        session_scope.contested_by_live_peers(candidates, session_id, cwd=root_str) if candidates else {}
+    )
     contested = {} if contested is None else contested
     if left_out is not None:
         left_out.update({p: list(contested[p]) for p in candidates if p in contested})
@@ -993,7 +1020,54 @@ def _run_owned_dirt(
 
         split = partition_declared_deletions(worktree_root, gone_ok)
         deletions = [] if split is None else sorted(split[0])
+    moved = _moved_old_sides(
+        worktree_root, [p for p in (*files, *all_paths) if p in snapshot.changed],
+        taken | set(deletions),
+    )
+    if moved:
+        moved_contested = session_scope.contested_by_live_peers(moved, session_id, cwd=root_str) or {}
+        if left_out is not None:
+            left_out.update({p: list(moved_contested[p]) for p in moved if p in moved_contested})
+        deletions = sorted({*deletions, *(p for p in moved if p not in moved_contested)})
     return files, deletions
+
+
+def _moved_old_sides(worktree_root: Path, adds: Sequence[str], skip: set) -> list:
+    """HEAD-tracked paths gone from disk whose blob is the content of a run-owned add: the old
+    side of a move (staged ``git mv`` or delete plus add), which lands with the add. The search is
+    the HEAD listing of each add's own directory and its ancestors, so a move into or out of a
+    subtree pairs; a move between sibling subtrees does not. Exact content only, one old side
+    per add. In-process tree reads and file hashing: no spawn."""
+    if not adds:
+        return []
+    from coordinator_core.git.commit import checkin_blob_sha
+    from coordinator_core.git.git_state import read_tree_spine
+
+    probes: dict = {}
+    for add in adds:
+        head = add.rpartition("/")[0]
+        while True:
+            probes[f"{head}/_" if head else "_"] = None
+            if not head:
+                break
+            head = head.rpartition("/")[0]
+    spine = read_tree_spine(worktree_root, list(probes))
+    if spine is None:
+        return []
+    olds: dict = {}
+    for directory, entries in spine.items():
+        for name, (mode, sha) in entries.items():
+            rel = f"{directory}/{name}" if directory else name
+            if mode & 0o170000 == 0o100000 and rel not in skip and not (worktree_root / rel).exists():
+                olds.setdefault(sha, []).append(rel)
+    if not olds:
+        return []
+    paired: list = []
+    for add in sorted(adds):
+        sha = checkin_blob_sha(worktree_root, add)
+        if sha is not None and olds.get(sha):
+            paired.append(olds[sha].pop(0))
+    return paired
 
 
 def _empty_diff_landing(worktree_root: Path, request: CommitRequest) -> Optional[dict]:
@@ -2302,10 +2376,12 @@ def _terminal_commit_inner(
 
     recorded_pc = _recorded_post_checkpoint(worktree_root, ask_run_dir, review_run_id, inline_review)
     commit_obliged: tuple = ()
+    met_cited: tuple = ()
     if isinstance(params.get("ledger_verdict"), dict):
         from coordinator_core.ops.dispatch_emit.post_commit_paths import commit_act_paths
 
         commit_obliged = commit_act_paths(worktree_root, params["ledger_verdict"])
+        met_cited = met_row_files(worktree_root, params["ledger_verdict"])
     obliged_dirs = [p for p in commit_obliged if (worktree_root / p).is_dir()]
     obliged_files = [p for p in commit_obliged if p not in obliged_dirs]
 
@@ -2314,6 +2390,7 @@ def _terminal_commit_inner(
         [p for c in request.chunks for p in c.paths]
         + sorted(recorded_pc)
         + obliged_files
+        + list(met_cited)
         + [p for p in (request.plan_path, plan_seam, bookkeeping_record_path) if p]
         + companions
         + ([ask_note_rel] if ask_note_rel else [])
@@ -2689,6 +2766,15 @@ def _terminal_commit_inner(
             )
         obliged_changed = sorted(p for p in answered if (worktree_root / p).is_file())
         all_paths.extend(p for p in obliged_changed if p not in all_paths)
+    met_changed: list = []
+    if met_cited:
+        met_answer = _changed(snapshot, worktree_root, list(met_cited))
+        if met_answer is None:
+            return _error(
+                f"cannot read the worktree state of met-row file(s) {list(met_cited)}",
+                refused=POST_COMMIT_PATH_UNLANDED,
+            )
+        met_changed = sorted(p for p in met_answer if (worktree_root / p).is_file())
     deleted_paths = sorted(set(deleted_paths) | set(owned_deletions))
     scope["run_owned"] = list(run_owned)
     # A session's own `.git/` scratch (review-targets.txt) reaches the touched set but never a
@@ -3192,7 +3278,7 @@ def _terminal_commit_inner(
         *(artifacts.paths() if artifacts is not None else ()),
         *(art_landable.present if art_landable is not None else ()),
         *(art_landable.deleted if art_landable is not None else ()),
-        *receipt_paths, *companions, *seam_own, *review_land, *run_owned,
+        *receipt_paths, *companions, *seam_own, *review_land, *run_owned, *owned_deletions,
         *(p for p in (note_rel, ask_note_rel, bookkeeping_record_path, cited_sizing,
                       allowlist_path, request.plan_path) if p),
     }
@@ -3255,6 +3341,27 @@ def _terminal_commit_inner(
         all_paths = merge_plan["paths"]
         deleted_paths = merge_plan["deleted"]
         merge_artifacts = merge_plan["artifacts"]
+
+    # Gitignored and machine-local paths never ride the commit pathspec; commit_v2 refuses the
+    # whole commit on one. The snapshot answers for covered paths, one batched check-ignore the rest.
+    probe_paths = [p for p in all_paths if p not in {*receipt_paths, allowlist_path}]
+    local_drop = set(machine_local_paths(probe_paths))
+    ignored_drop = _ignored_among_left(worktree_root, [p for p in probe_paths if p not in local_drop], snapshot)
+    dropped_local = local_drop | set(ignored_drop or ())
+    if dropped_local:
+        all_paths = [p for p in all_paths if p not in dropped_local]
+        if art_landable is not None:
+            art_landable = dataclasses.replace(
+                art_landable,
+                ignored_excluded=tuple(sorted({*art_landable.ignored_excluded, *dropped_local})),
+            )
+        if not all_paths and not deleted_paths and not (
+            anchor_only or request.review_only or params.get("allow_empty") is True or marker_anchor
+        ):
+            _remove(worktree_root, receipt_paths)
+            if close_ctx is not None:
+                close_ctx.clear()
+            return _with_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
 
     # The product commit never carries the session's claimed leftovers: commit_v2 would widen the
     # pathspec past the declared set. They land in the follow-on commit after this one.
@@ -3363,7 +3470,10 @@ def _terminal_commit_inner(
             reread_artifacts = owned.drop_expectations(expected, keep={note_committed})
         if expected:
             commit_params["expected_content_sha256"] = expected
-    if snapshot is not None:
+    if ignored_drop is not None and set(all_paths) <= {*probe_paths, *receipt_paths, allowlist_path}:
+        # The pre-commit probe answered for every path: none left is ignored.
+        commit_params["ignored_untracked"] = []
+    elif snapshot is not None:
         # Receipts and the regenerated allowlist are new tracked-by-design files the
         # snapshot predates; every other path must be covered or commit_v2 asks git itself.
         fresh = {*receipt_paths, allowlist_path}
@@ -3473,6 +3583,16 @@ def _terminal_commit_inner(
             f"land (withheld, peer-held or ignored): {unlanded[:10]}. Land them or revise the row",
             refused=POST_COMMIT_PATH_UNLANDED,
             unlanded=unlanded,
+        )
+    met_unlanded = [p for p in met_changed if p not in landed_now]
+    if met_unlanded:
+        _unstamp_landed()
+        _remove(worktree_root, receipt_paths)
+        return _error(
+            f"a met ledger row names {len(met_unlanded)} changed file(s) in root_read/met_by that did not "
+            f"land (withheld, peer-held or ignored): {met_unlanded[:10]}. Land them or revise the row",
+            refused=POST_COMMIT_PATH_UNLANDED,
+            unlanded=met_unlanded,
         )
 
     from coordinator_core.ops.dispatch_emit import landing_secrets as _secrets
@@ -3623,6 +3743,30 @@ def _terminal_commit_inner(
         raise
     if not isinstance(reply, dict):
         reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
+
+    if (
+        reply.get("refused") == "blob-drift" and not overlap and session_id is not None
+        and isinstance(reply.get("blob_drift"), list) and commit_params.get("expected_content_sha256")
+    ):
+        own_now = _own_drift_actuals(
+            worktree_root, ask_run_dir, reply["blob_drift"], declared_writes, session_id, review_writes,
+        )
+        if own_now:
+            commit_params["expected_content_sha256"] = {**commit_params["expected_content_sha256"], **own_now}
+            try:
+                reply, overlap = ref_cas_retry.retry_ref_moved(
+                    worktree_root, _overlap_paths, _attempt, _cas_lost
+                )
+            except OpUnavailableError:
+                _unstamp_landed()
+                _remove(worktree_root, receipt_paths)
+                return _error("ceremony.commit_v2 is not registered")
+            except BaseException:
+                _unstamp_landed()
+                _remove(worktree_root, receipt_paths)
+                raise
+            if not isinstance(reply, dict):
+                reply = {"committed": False, "sha": None, "error": f"unexpected commit_v2 reply: {reply!r}"}
 
     tolerated: list = []
     real_drift: Optional[list] = None

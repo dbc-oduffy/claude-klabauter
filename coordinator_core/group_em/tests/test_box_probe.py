@@ -62,6 +62,23 @@ def test_write_capability_keeps_existing_id_and_refreshes(tmp_path):
     assert "minted_at" in fresh
 
 
+def test_stored_capability_reads_without_minting(tmp_path):
+    assert box_probe.stored_capability(tmp_path) is None
+    assert not (tmp_path / "state").exists()
+    box_registry.ensure_identity(tmp_path)
+    assert box_probe.stored_capability(tmp_path) is None
+    rec = box_probe.write_capability(tmp_path)
+    assert box_probe.stored_capability(tmp_path) == rec["capability"]
+
+
+@pytest.mark.parametrize("body", ["[1, 2]", "not json", '{"capability": "x"}'])
+def test_stored_capability_refuses_malformed(tmp_path, body):
+    path = tmp_path / "state" / "group-em" / "box.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(body, encoding="utf-8")
+    assert box_probe.stored_capability(tmp_path) is None
+
+
 def test_write_capability_survives_non_dict_box_json(tmp_path):
     path = tmp_path / "state" / "group-em" / "box.json"
     path.parent.mkdir(parents=True)

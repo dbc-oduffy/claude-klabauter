@@ -41,5 +41,7 @@ def test_new_improvement_queue_with_justification_creation_guard_wins(tmp_path):
 
     assert result is not None
     hso = result["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "coordinator-queue-append" in hso["permissionDecisionReason"]
+    # Neither guard is in the deny registry: the policy point demotes each deny to an
+    # advisory, and the first (119) is the one the engine returns.
+    assert hso["permissionDecision"] == "allow"
+    assert "coordinator-queue-append" in hso["additionalContext"]

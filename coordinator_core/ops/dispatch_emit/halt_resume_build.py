@@ -88,6 +88,7 @@ def build(root, run_id: str) -> Optional[dict]:
         pass  # the hint only serves a refire whose halted-run lookup stalls
     run_base = halted_run.halted_run_base(rd)
     session_id = _run_session_id(root, run_id)
+    stop_after = hrr.inherited_stop_after(root, rd)
 
     verdict: dict = {}
     script_rel: Optional[str] = None
@@ -122,6 +123,7 @@ def build(root, run_id: str) -> Optional[dict]:
             in_run_commit=True,
             ask_source=ASK_SOURCE_PM,
             run_base_sha=run_base,
+            stop_after=stop_after,
         )
         target = rd / COMPOSED_SCRIPT_FILE
         atomic_write_bytes(target, script.encode("utf-8"))
@@ -147,6 +149,7 @@ def build(root, run_id: str) -> Optional[dict]:
         landed_state_sha=landed,
         fingerprint=fingerprint,
         retry_not_before=retry_not_before,
+        stop_after=stop_after,
     )
     hrr.write(rd, record)
     return record

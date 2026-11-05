@@ -141,6 +141,8 @@ __all__ = [
     "is_own_door_health_payload",
     "probe_existing_holder",
     "STOP_PATH",
+    "IN_FLIGHT_PATH",
+    "in_flight_count",
     "STOP_ASK_TIMEOUT_SECS",
     "ask_front_door_to_stop",
     "elect_front_door",
@@ -402,6 +404,52 @@ def ask_front_door_to_stop(
     except Exception:  # noqa: BLE001 -- an ask must never raise, see docstring
         return False
     return is_own_door_health_payload(payload) and payload.get("stopping") is True
+
+
+#: Loopback, credentialed GET answering `{"in_flight": <relays being forwarded now>}` before
+#: any in-flight entry, so asking never counts as in flight.
+IN_FLIGHT_PATH = "/warm/in-flight"
+
+
+def in_flight_count(
+    engine_root: Optional[Path] = None,
+    *,
+    timeout: float = STOP_ASK_TIMEOUT_SECS,
+    opener: Any = None,
+) -> Optional[int]:
+    """Relays in flight at `engine_root`'s front door.
+
+    0 when no live door is recorded. None when a live door cannot be asked or answers
+    malformed: the caller must treat that as in flight. Never raises. The door forwards ops
+    and holds none of its own, so the op-dispatching count is `supervisor.in_flight_count`.
+    """
+    import urllib.error
+    import urllib.request
+
+    try:
+        record = read_discovery(engine_root)
+        if not isinstance(record, dict) or not discovery_is_live(record):
+            return 0
+        port = record.get("port")
+        secret = door_credential.read_secret()
+        if not isinstance(port, int) or not secret:
+            return None
+        req = urllib.request.Request(
+            f"http://{bind_host()}:{port}{IN_FLIGHT_PATH}",
+            headers={door_credential.CREDENTIAL_HEADER: secret},
+            method="GET",
+        )
+        open_url = opener if opener is not None else urllib.request.urlopen
+        with open_url(req, timeout=timeout) as resp:
+            count = json.loads(resp.read().decode("utf-8")).get("in_flight")
+        return count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
+    except urllib.error.HTTPError as exc:
+        # Trap: a 404 is a live server that predates IN_FLIGHT_PATH. Reading it as in flight
+        # refuses every handover until a publish replaces it, which that refusal blocks; its stop
+        # path drains in-flight work before signalling, so no count is the pre-endpoint guarantee.
+        return 0 if exc.code == 404 else None
+    except Exception:  # noqa: BLE001 -- a probe never raises; unknown reads as in flight
+        return None
 
 
 def _apply_exclusivity(sock: socket.socket) -> None:
@@ -1348,6 +1396,16 @@ def _make_handler(ctx: "_FrontDoorContext"):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+                return
+            if self.path.rstrip("/") == IN_FLIGHT_PATH:
+                if self.client_address[0] not in _LOOPBACK_PEERS:
+                    self._answer({"reason": "not_local"}, status=403)
+                    return
+                presented = door_credential.credential_from_headers(self.headers)
+                if not door_credential.verify(presented, ctx.door_key):
+                    self._answer({"reason": "credential_invalid"}, status=403)
+                    return
+                self._answer({"in_flight": ctx.in_flight()})
                 return
             self.send_response(404)
             self.end_headers()

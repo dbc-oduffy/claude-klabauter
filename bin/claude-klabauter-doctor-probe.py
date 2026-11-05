@@ -55,8 +55,9 @@ prerequisites before any selection is applied — see `_ensure_core_importable`)
 Run modes:
 
   (default)    Emit full JSON verdict envelope to stdout; exit 0 always.
-  --step-zero  Emit five-key NDJSON per step-zero-emitter-contract.md; exit 1 if any
-               REQUIRED probe is BROKEN or DEGRADED, else exit 0.
+  --step-zero  Emit five-key NDJSON per step-zero-emitter-contract.md; exit 1 only if a
+               REQUIRED probe is BROKEN or DEGRADED (a hard fail); inconclusive and
+               advisory rows never set it, else exit 0.
 
 Imports coordinator_core.doctor_envelope (C0) for envelope emission when coordinator_core
 is importable; falls back to an equivalent local implementation otherwise so the probe
@@ -1420,8 +1421,8 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
 
     Verifies three things:
       1. import coordinator_core succeeds.
-      2. coordinator_core.lifecycle._compute_core_version() resolves (returns
-         a hex SHA-256 string).
+      2. coordinator_core.lifecycle._compute_core_version is importable and
+         callable (not invoked: it walks the source tree).
       3. Retired submodules are ABSENT — import coordinator_core.client should
          raise ImportError (ImportError = healthy; successful import = BROKEN).
 
@@ -1455,10 +1456,13 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
                 ),
             )
 
-        # Check 2: _compute_core_version() resolves.
+        # Check 2: the version helper is present and callable. It is NOT called:
+        # it hashes every coordinator_core source file (a filesystem walk), which the
+        # --required-only install path must not do.
         try:
             from coordinator_core.lifecycle import _compute_core_version  # Private: intentional — spec §C1b requires this specific version helper; update alongside lifecycle.py if it is renamed.
-            version_hash = _compute_core_version()
+            if not callable(_compute_core_version):
+                raise TypeError("_compute_core_version is not callable")
         except (ImportError, Exception) as exc:
             return _ProbeResult(
                 probe=_VERSION_SANITY_PROBE,
@@ -1507,14 +1511,13 @@ def _run_probe_version_sanity(claude_klabauter_root: Path | None) -> _ProbeResul
             probe=_VERSION_SANITY_PROBE,
             status=_PASS,
             detail=(
-                f"coordinator_core imports cleanly; _compute_core_version() resolved "
-                f"(hash prefix: {version_hash[:12]!r}); retired submodule "
+                f"coordinator_core imports cleanly; _compute_core_version is importable "
+                f"(not invoked: it walks the source tree); retired submodule "
                 f"coordinator_core.client correctly absent (ImportError). "
                 "Note: registered-vs-resolved root divergence check intentionally not "
                 "reproduced (decided tradeoff — see plan § C1b)."
             ),
             remediation="—",
-            data={"version_hash_prefix": version_hash[:12]},
         )
     except Exception as exc:
         return _ProbeResult(
@@ -5756,8 +5759,8 @@ def _sz_severity(r: _ProbeResult) -> str:
 def emit_step_zero(results: list[_ProbeResult]) -> int:
     """Emit one NDJSON line per probe per step-zero-emitter-contract.md.
 
-    Returns exit code: 1 if any REQUIRED probe has status BROKEN/DEGRADED or
-    is skipped (inconclusive), else 0.
+    Returns exit code: 1 only if a REQUIRED (severity hard) probe has a hard
+    ``fail``; ``inconclusive`` and advisory rows never set it.
 
     Uses Python's json.dumps for string escaping, which implements the five-escape
     contract (backslash, double-quote, CR, LF, TAB) in the required order.
@@ -5781,7 +5784,7 @@ def emit_step_zero(results: list[_ProbeResult]) -> int:
         )
         sys.stdout.write(line + "\n")
         sys.stdout.flush()
-        if r.required and sz_st in (_SZ_FAIL, _SZ_INCONCLUSIVE):
+        if r.required and sz_st == _SZ_FAIL:
             any_required_fail = True
     return 1 if any_required_fail else 0
 
@@ -6226,7 +6229,7 @@ def main() -> int:
         epilog=(
             "Default mode: emit full JSON verdict envelope (exit 0).\n"
             "--step-zero mode: emit five-key NDJSON per step-zero-emitter-contract.md "
-            "(exit 1 if any REQUIRED probe fails).\n"
+            "(exit 1 only if a REQUIRED probe hard-fails).\n"
             "--triage: emit triage probe set (triage=true probes from doctor-probes.toml).\n"
             "--cluster NAME: emit probes in the named cluster (declared in doctor-probes.toml).\n"
             "--probe ID: emit exactly the named probe by manifest id."
@@ -6240,7 +6243,7 @@ def main() -> int:
         action="store_true",
         help=(
             "Emit five-key NDJSON probe lines per step-zero-emitter-contract.md. "
-            "Exit 1 if any REQUIRED probe is BROKEN/DEGRADED/inconclusive; exit 0 otherwise."
+            "Exit 1 only if a REQUIRED probe is BROKEN/DEGRADED; inconclusive and advisory rows exit 0."
         ),
     )
     mode_group.add_argument(

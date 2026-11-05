@@ -657,6 +657,14 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_box_federation.py",
         ("_groupem_box_roster",),
     ),
+    "groupem.suite_grant_receive": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_suite_grant_receive",),
+    ),
+    "groupem.box_key_pin": (
+        "coordinator_core/ops/group_em_box_federation.py",
+        ("_groupem_box_key_pin",),
+    ),
     "workstream_complete.stand_down_watchers": (
         "coordinator_core/ops/watcher_stand_down.py",
         ("_stand_down_watchers",),
@@ -2089,19 +2097,6 @@ _RESUME_LAUNCH_SEAM = _Legitimation(
     "(`calls == []`); detached Popen measured 2026-10-29 at 0ms parent CPU, 2-5ms wall.",
 )
 
-_ROLLBACK_GIT_REACH = _Legitimation(
-    # `git/rollback_check.py::_git` is the one subprocess.run behind the opt-in `detect_rollback`
-    # leg (rev-parse + one `git log --first-parent --raw`). Measured 2026-10-29: 2 spawns, 156-188ms
-    # process time (3 paths, 1000-commit window); NOT executed by these ops' counted fixtures
-    # (spied 2026-10-29 across the roadmap.blitz_stage / roadmap.blitz_land / memo.send spawn-count
-    # files: 10 tests, zero `_git` calls). Each op's exact-equality global-counter test would fail
-    # loudly the day the leg runs, because the counter sees every subprocess.run.
-    counter=_GLOBAL_SUBPROCESS_RUN,
-    counted_by="coordinator_core/git/tests/test_rollback_check.py",
-    executed="Reach-only: measured NOT executed under this op's counter (2026-10-29 spy, zero hits); "
-    "the site's own cost is 2 spawns / 156-188ms process where it does run.",
-)
-
 _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
     **{
         (op, "coordinator_core/ops/ceremony/detached_spawn.py", "spawn_detached", "<dynamic>", 0):
@@ -2119,10 +2114,6 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
             "workflow.revise",
             "dispatch.measured_rev",
         )
-    },
-    **{
-        (op, "coordinator_core/git/rollback_check.py", "_git", "git", 0): _ROLLBACK_GIT_REACH
-        for op in ("roadmap.blitz_land", "roadmap.blitz_stage", "memo.send")
     },
     (
         "bin.workday_complete_backfill_scan.scan",
@@ -7487,7 +7478,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # `detect_rollback=True`): 2 spawns (rev-parse + one `git log --first-parent --raw`), 156-188ms
     # process over 3 paths and a 1000-commit window (measured 2026-10-29), under the 500ms bar.
     # 2 -> 3, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "session.safe_commit_offer": 3,
+    "session.safe_commit_offer": 2,
     # 20 -> 21, 2026-10-12 (3843db8c19): P-24 runs `machine-local check` once per sentinel
     # run, not per key -- one constant spawn under the probe's own timeout.
     "plugin_health.sentinel": 21,
@@ -7611,7 +7602,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 2 -> 3, 2026-10-29: `rollback_check._git`, reach-only (`detect_rollback` stays False); where
     # executed 2 spawns, 156-188ms process (measured 2026-10-29).
     # 1 -> 2, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "research.close": 2,
+    "research.close": 1,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
     "changelog.compute_day_fields": 1,
@@ -7702,9 +7693,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).
     # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
     # 2 -> 3, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "review.freeze_diff": 3,
+    "review.freeze_diff": 2,
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
-    "review.partition_slices": 3,
+    "review.partition_slices": 2,
     "review.reachability": 1,
     "review.snapshot_diff_and_head": 1,
     "scratchpad.sweep": 1,
@@ -7733,7 +7724,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # `detect_rollback` False); where executed it is 2 spawns, 156-188ms process (measured 2026-10-29).
     # 1 -> 2, 2026-11-04: `detached_spawn.spawn_detached` via `commit_paths -> store_hygiene.maybe_refresh
     # -> _fire_daily` (see the store-hygiene note above this dict); "store +1" below means this site.
-    "deliverable.cascade_terminal": 2,
+    "deliverable.cascade_terminal": 1,
     # Six reachable sites: five git/plumbing sites (archive_stamp._run_git, git_native._invoke and
     # _hash_object_stdin_bytes, git/run.py::run_git, commit_signing) plus the one detached launch of
     # the close job (spawn_detached from _launch_close_job), which keeps the commit from waiting
@@ -7786,7 +7777,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only (commit_paths leaves `detect_rollback`
     # False); where executed 2 spawns, 156-188ms process (measured 2026-10-29).
     # 2 -> 3, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "hooks.sessionend_auto_commit": 3,
+    "hooks.sessionend_auto_commit": 2,
     "hooks.sessionstart_ensure_http_forwarder": 1,
     "hooks.subagent_zero_tool_use_detect": 1,
     # 10 -> 7, 2026-10-12: sweep_boot reaches build_cache; the same three sites left its reach.
@@ -7808,15 +7799,15 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "plan.narrow_criterion": 4,
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
     # 3 -> 4, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "review_mint.bookkeep_wave": 4,
+    "review_mint.bookkeep_wave": 3,
     # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site; 5 -> 4 by 7d1da49c7a.
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
     # 3 -> 4, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "review_mint.record_superseding_review": 4,
+    "review_mint.record_superseding_review": 3,
     "review_stamp.check": 1,
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
     # 3 -> 4, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "review_stamp.mint": 4,
+    "review_stamp.mint": 3,
     # --- 2026-10-02 merge reconciliation (claude/admiring-franklin x work/machine-a). The git
     # routing sweep (7481613e80, 7835b34367) moved per-module `subprocess` git calls onto the
     # shared `git/run.py::run_git` site, so the same physical call is now one site key for every
@@ -7854,7 +7845,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Two reach-only sites through `commit_paths` (`rollback_check._git`, `detect_rollback` stays False);
     # the op executes 0 spawns (land_credited_profile, C1: `commit_paths` 0 spawns at both scales).
     # 1 -> 2, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
-    "dispatch.land_credited": 2,
+    "dispatch.land_credited": 1,
     # Reach-only static counts, measured 2026-11-03 via `_measure_static_spawn_counts`; ceilings, not execution evidence.
     "agent_pipe.send": 1,
     "agent_pipe.start": 1,

@@ -110,7 +110,10 @@ def scan_dir_for_findings(root: Path, scan_dirs: Tuple[str, ...] = _SCAN_DIRS) -
 #: Audience.SUBAGENT))` — it stops at the `(`, so the stringified rendered subagent text is
 #: all that is visible. Treated as agent-facing: a withhold-shaped read fails loudly if its
 #: knob is neither registered nor waived, where a not-withhold reading would hide it.
-_AGENT_FACING_EXACT = frozenset({"err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "str"})
+_AGENT_FACING_EXACT = frozenset({
+    "err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "str",
+    'error["message"]',  # the IPC error envelope text a caller (agent) reads
+})
 _AGENT_FACING_SUFFIXES = ("_note", "_msg", "_err", "_ctx")
 
 #: Environment/dict/generated-text haystacks: assertions about the PROCESS ENVIRONMENT,
@@ -235,6 +238,10 @@ _WAIVERS: Dict[Tuple[str, str], str] = {
         "withhold on a path the registry does not cover (registry covers percolate.destination-lock-refusal only)",
     ("coordinator_core/ops/dispatch_emit/tests/test_ask_stage_declared_delete_clause.py", "COORDINATOR_DISPATCH_ROW"):
         "declared-delete marker shown to executor rows when the channel is live; absence asserts row scoping, not a withhold",
+    ("coordinator_core/bash_guards/tests/test_block_subagent_destructive_action.py", "COORDINATOR_DISPATCH_ROW"):
+        "declared-delete marker advertised only when the channel is live; the markerless deny text omitting it asserts row scoping, not a withhold",
+    ("coordinator_core/tests/test_ipc_error_message.py", "COORDINATOR_DISPATCH_TIMEOUT_SECS"):
+        "operator timeout tunable, not an override knob: the envelope not naming it is message hygiene, not a withhold",
 }
 
 

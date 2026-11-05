@@ -48,13 +48,13 @@ def _boot_and_tear_down(raise_inside: bool) -> list:
                 time.sleep(0.5)
             if raise_inside:
                 raise RuntimeError("test body failed")
-    except RuntimeError as exc:
-        if "test body failed" not in str(exc):
-            raise
     except ic.WarmEngineBootTimeout:
         pytest.skip("isolated warm server did not boot")
     except ic.CloneTeardownLeak as exc:
         pytest.fail(f"teardown left a surviving process: {exc}")
+    except RuntimeError as exc:
+        if "test body failed" not in str(exc):
+            raise
     assert tmp_parent is not None
     return _rooted(tmp_parent)
 

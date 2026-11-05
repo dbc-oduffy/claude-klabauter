@@ -64,8 +64,9 @@ def _payload(cwd: str, prompt: str, subagent_type=EXECUTOR, tool_name="Agent") -
 
 def _reason(result: dict) -> str:
     hso = result["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    return hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
+    return hso["additionalContext"]
 
 
 def test_no_table_admits(repo):

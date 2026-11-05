@@ -165,7 +165,11 @@ class TestADegradeCompensatesNothing:
         # d4 (render-project-tracker) was retired 2026-08-14 -- see
         # `_build_directives`'s own note in coordinator_core/baton_assemble/
         # __init__.py. The retirement landed without updating this list.
-        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
+        # d1t (task-list carry) exists only when a session id resolves, so it
+        # is environment-conditional and not part of the pinned order.
+        assert [d for d in report["landed"] if d != "d1t"] == [
+            "d7", "d1", "d2", "d5", "d6",
+        ]
 
     def test_the_decline_triggers_no_compensation_pass_at_all(
         self, tmp_path, monkeypatch

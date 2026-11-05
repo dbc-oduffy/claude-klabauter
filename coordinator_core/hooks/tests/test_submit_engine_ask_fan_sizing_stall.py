@@ -20,18 +20,21 @@ from coordinator_core.ops.dispatch_emit.fan_launcher import launcher_rel
 
 
 def _stall_first_child(monkeypatch) -> list:
-    """`_load_sizing_doc` raises `_SizingStalled` for the first slice sizing it is asked for, per fan-out."""
-    real = mod._load_sizing_doc
+    """`_load_sizing_docs` reads the first slice sizing it is asked for as `STALLED`, per fan-out."""
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
+
+    real = mod._load_sizing_docs
     stalled: list = []
 
-    def load(root, sizing_rel):
-        if not stalled:
-            stalled.append(sizing_rel)
-        if sizing_rel == stalled[0]:
-            raise mod._SizingStalled(sizing_rel)
-        return real(root, sizing_rel)
+    def load(root, sizing_rels):
+        docs = real(root, sizing_rels)
+        if not stalled and sizing_rels:
+            stalled.append(sizing_rels[0])
+        if stalled and stalled[0] in docs:
+            docs[stalled[0]] = STALLED
+        return docs
 
-    monkeypatch.setattr(mod, "_load_sizing_doc", load)
+    monkeypatch.setattr(mod, "_load_sizing_docs", load)
     return stalled
 
 
@@ -52,10 +55,10 @@ def test_a_stalled_child_sizing_read_defers_its_emit_and_still_writes_the_launch
     assert Path(script).is_file()
     text = Path(script).read_text(encoding="utf-8")
     runs = _runs(repo, _parents(repo)[0])
-    assert stalled and len(emitted) == len(runs) - 1
+    assert stalled and emitted == []
     deferred = [e for e in json.loads(text.split("const EMITTED = ")[1].split(";\n")[0]) if e.get("deferred")]
-    assert len(deferred) == 1 and deferred[0]["run_id"] in runs and deferred[0]["run_id"] not in emitted
-    assert (repo / deferred[0]["path"]).is_file()
+    assert sorted(e["run_id"] for e in deferred) == sorted(runs)
+    assert all((repo / e["path"]).is_file() for e in deferred)
 
 
 def test_a_deferred_child_params_never_carry_the_defer_marker(repo, monkeypatch):

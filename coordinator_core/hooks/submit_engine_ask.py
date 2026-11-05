@@ -625,6 +625,9 @@ def _answer_overran(call: dict) -> dict:
         return _refuse(f"The submission outran the hook budget as its run was minted. Do not re-submit. {_minted_remedy([])}")
     if gate_state == "writing":
         return _refuse(_STALLED_RECORD_WRITE)
+    spooled = _spool_envelope(call.get("payload"), roots[0] if roots else None, "reach-budget-no-run")
+    if spooled is not None:
+        return spooled
     return _refuse("The submission outran the hook budget before any run was minted; nothing was taken. Re-submit once.")
 
 
@@ -754,10 +757,10 @@ def _direct_start(root: Path, run_id: str, deadline: float) -> Optional[dict]:
 
         if not minted_run.is_minted_only(root / RECORD_DIR_ROOT / run_id):
             return None
-        reply = minted_run._start(root, run_id)
+        reply = minted_run.start_args(root, run_id)
         if not (isinstance(reply, dict) and reply.get("ok") and reply.get("script_path")):
             return None
-        return _write_direct_start_script(root, run_id, reply["script_path"], reply.get("fire_args") or None)
+        return write_direct_start_script(root, run_id, reply["script_path"], reply.get("fire_args") or None)
 
     script = _quick(start, deadline)
     if script is None:
@@ -888,8 +891,12 @@ def _emit_within_budget(
     box: dict = {}
 
     def work() -> None:
+        from coordinator_core.session.core import session_identity_override
+
         try:
-            box["result"] = emit(params, root)
+            sid = params.get("session_id")
+            with session_identity_override(sid if isinstance(sid, str) else None):
+                box["result"] = emit(params, root)
         except BaseException as exc:  # re-raised on the caller's thread
             box["error"] = exc
 
@@ -938,31 +945,34 @@ def _emit_within_budget(
     return box["result"]
 
 
-_DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: 'Emits and starts one submission whose emit outran the hook budget' }
-const REPO_ROOT = __REPO_ROOT__;
-const PARAMS = __PARAMS__;
-const PARAMS_FILE = __PARAMS_FILE__;
-const INVOKE = __INVOKE__;
+# The emit-relay constants and helper shared by the deferred and direct-start scripts, which both relay a chain emit.
+_EMIT_RELAY_JS = r"""const INVOKE = __INVOKE__;
 const EMIT_OP = __EMIT_OP__;
 const EMIT_SCHEMA = {
   type: 'object',
   required: ['path', 'run_id', 'fire_args'],
   properties: { path: { type: 'string' }, run_id: { type: 'string' }, fire_args: { type: 'object' }, error: { type: 'string' } },
 };
-// Trap: a relay re-typing a long params JSON mangles its keys, so an oversize payload rides a file the command names.
-const EMIT_ARGS = PARAMS_FILE !== '' ? '--params-file "' + PARAMS_FILE + '"' : "'" + PARAMS.replace(/'/g, "'\\''") + "'";
+// Trap: the relay can answer a quoted-empty path (`""` or `''`), which is not the empty string.
+function _blankPath(p) {
+  return typeof p !== 'string' || p.replace(/["'\s]/g, '') === '';
+}
+"""
+
+
+_DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: 'Emits and starts one submission whose emit outran the hook budget' }
+const REPO_ROOT = __REPO_ROOT__;
+const PARAMS_FILE = __PARAMS_FILE__;
+""" + _EMIT_RELAY_JS + r"""// Trap: ask text carries quotes and `$(`; the command names a params file and never inlines the payload. The relay deletes the file once the emit has read it.
 const reply = await agent(
   __AUTHORITY__
-  + ' Run `' + INVOKE + ' ' + EMIT_OP + ' ' + EMIT_ARGS + '` once, with the command word exactly as written, and '
+  + ' Run `' + INVOKE + ' ' + EMIT_OP + ' --params-file "' + PARAMS_FILE + '"` once, with the command word exactly as written. '
+  + 'Whether it succeeds or fails, then delete the params file with `rm -f "' + PARAMS_FILE + '"`. Then '
   + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
   + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
   + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
   { label: 'deferred-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
 );
-// Trap: the relay can answer a quoted-empty path (`""` or `''`), which is not the empty string.
-function _blankPath(p) {
-  return typeof p !== 'string' || p.replace(/["'\s]/g, '') === '';
-}
 if (!reply || _blankPath(reply.path)) {
   return { status: 'emit_refused', error: (reply && reply.error) || 'the deferred emit returned no script path' };
 }
@@ -1008,18 +1018,21 @@ async function _startLoop(firstPath) {
 }
 """
 
-_DEFERRED_START_JS = _STAGE_LOOP_JS + r"""// Trap: a relaying agent mis-copies run_id (the ask's own id); the script path's basename is the run id, so never read the relayed one.
+# The chain hop both start scripts share; it needs ASK_RUN_ID, ASK_SCRIPT_PATH and `first` (the ask run's `_startLoop` outcome).
+_CHAIN_FOLLOW_JS = r"""// Trap: a relaying agent mis-copies run_id (the ask's own id); the script path's basename is the run id, so never read the relayed one.
 function _pathRunId(p) {
   const b = p.replace(/\\/g, '/').split('/').pop();
   return (b.endsWith(RUN_SCRIPT_SUFFIX) && b.indexOf('.staged-') === -1) ? b.slice(0, b.length - RUN_SCRIPT_SUFFIX.length) : '';
 }
-const first = await _startLoop(scriptPath);
-if (!first.ok) return { status: 'failed', run_id: reply.run_id, error: first.error };
+if (!first.ok) return { status: 'failed', run_id: ASK_RUN_ID, error: first.error };
 const handoff = (first.result !== null && typeof first.result === 'object') ? first.result.__CHAIN_KEY__ : null;
 if (handoff === null || typeof handoff !== 'object') return first.result;
 // Trap: one hop only. A gate agent that already ran dispatch.emit leaves its reply keys in the hand-off; those are never emit params.
 const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...chainParams } = handoff;
-const _fail = (why) => ({ status: 'failed', run_id: reply.run_id, error: 'the chained run did not complete (' + why + '); the ask run ' + reply.run_id + ' stays resumable' });
+const _fail = (why) => ({ status: 'failed', run_id: ASK_RUN_ID, error: 'the chained run did not complete (' + why + '); the ask run ' + ASK_RUN_ID + ' stays resumable' });
+// Trap: the payload rides a quoted heredoc on stdin; JSON.stringify escapes every newline, so the body is one line and cannot equal the tag.
+const _chainTag = 'CHAIN_PARAMS_JSON';
+const _chainJson = JSON.stringify({ ...chainParams, __LAUNCHER_PARAM__: true });
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
 if (!_blankPath(_rp)) {
@@ -1027,7 +1040,9 @@ if (!_blankPath(_rp)) {
 } else {
   chain = await agent(
     __AUTHORITY__
-    + ' Run `' + INVOKE + ' ' + EMIT_OP + " '" + JSON.stringify({ ...chainParams, __LAUNCHER_PARAM__: true }).replace(/'/g, "'\\''") + "'` once, with the command word exactly as written, and "
+    + ' Run this command once, with the command word exactly as written, and copy the heredoc body byte for byte:\n'
+    + INVOKE + ' ' + EMIT_OP + ' --params-file - <<\'' + _chainTag + '\'\n' + _chainJson + '\n' + _chainTag + '\n\n'
+    + 'Then '
     + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
     + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
     + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
@@ -1036,22 +1051,22 @@ if (!_blankPath(_rp)) {
 }
 if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
 const _chainRun = _pathRunId(chain.path);
-if (_chainRun === '' || _chainRun === reply.run_id || _chainRun === _pathRunId(scriptPath)) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id');
+if (_chainRun === '' || _chainRun === ASK_RUN_ID || _chainRun === _pathRunId(ASK_SCRIPT_PATH)) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id');
 const chained = await _startLoop(_normPath(chain.path));
 if (!chained.ok) return _fail(chained.error);
 const r = chained.result;
 if (r !== null && typeof r === 'object' && r.__CHAIN_KEY__) return _fail('the chained run returned a second hand-off');
-return (r !== null && typeof r === 'object') ? { ...r, chained_from: reply.run_id } : { chained: r, chained_from: reply.run_id };
+return (r !== null && typeof r === 'object') ? { ...r, chained_from: ASK_RUN_ID } : { chained: r, chained_from: ASK_RUN_ID };
 """
+_DEFERRED_START_JS = _STAGE_LOOP_JS + r"""const ASK_RUN_ID = reply.run_id;
+const ASK_SCRIPT_PATH = scriptPath;
+const first = await _startLoop(ASK_SCRIPT_PATH);
+""" + _CHAIN_FOLLOW_JS
 
 
 #: Longest inline `ask_brief` a deferred script re-types through its relay agent; a longer one rides a repo file.
 #: Trap: the relay agent re-types inline params and can mangle a key (seen: `ask_brief_placeholder`); the bar stays low to shrink that surface.
 DEFERRED_BRIEF_INLINE_MAX = 200
-
-#: Longest serialized params a deferred script re-types inline after the brief spill; a longer payload rides `--params-file`.
-DEFERRED_PARAMS_INLINE_MAX = 4000
-
 
 def _spill_long_brief(root: Path, params: dict) -> dict:
     """`params` with an inline `ask_brief` past `DEFERRED_BRIEF_INLINE_MAX` moved to `scratch/warp/` as `ask_brief_file`,
@@ -1084,6 +1099,84 @@ def _stage_loop_values(start_args: Optional[dict] = None) -> dict:
     }
 
 
+def _chain_follow_values() -> dict:
+    """The `_CHAIN_FOLLOW_JS` and `_EMIT_RELAY_JS` placeholders shared by both start scripts."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.fan_launcher import _EMIT_OP, _INVOKE, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
+
+    return {
+        "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
+        "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
+        "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
+        "__INVOKE__": json.dumps(_INVOKE),
+        "__EMIT_OP__": json.dumps(_EMIT_OP),
+    }
+
+
+_SPOOLED_JS = r"""export const meta = { name: 'engine-ask-spooled', description: 'Marks an ask held in the local ask spool' }
+return { status: 'spooled', spool_id: __SPOOL_ID__ };
+"""
+
+_UNAVAILABLE_CODE = -32004
+
+
+def _unavailable(exc: BaseException) -> Optional[str]:
+    """The spool reason when `exc` is a held mint (HandoverPending) or a -32004 dispatch timeout, else None."""
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import HandoverPending
+
+    if isinstance(exc, HandoverPending):
+        return "handover-pending"
+    code = getattr(exc, "code", None)
+    if code is None and exc.args and isinstance(exc.args[0], dict):
+        code = exc.args[0].get("code")
+    return "dispatch-timeout" if code == _UNAVAILABLE_CODE else None
+
+
+def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional[dict]:
+    """Allow envelope for an ask written to the ask spool ("spooled as <id>"), or None when it cannot be
+    spooled (no payload or root, or an unwritable disk), so the caller keeps its own answer. No engine call."""
+    import json
+
+    from coordinator_core.ask_spool import record
+
+    if not isinstance(payload, Mapping):
+        return None
+    if root is None:
+        root = _repo_root(None, dict(payload))
+        if root is None:
+            return None
+    session = payload.get("session_id")
+    tool_use_id = payload.get("tool_use_id")
+    try:
+        raw = json.dumps(payload, default=str, ensure_ascii=False).encode("utf-8")
+        spool_id, _created = record.spool_ask(
+            str(root),
+            raw,
+            session_id=session if isinstance(session, str) else "",
+            tool_use_id=tool_use_id if isinstance(tool_use_id, str) and tool_use_id else None,
+            reason=reason,
+        )
+    except (OSError, ValueError):
+        return None
+    script = root / "scratch" / "warp" / f"spooled-{spool_id}.workflow.mjs"
+    try:
+        script.parent.mkdir(parents=True, exist_ok=True)
+        script.write_text(_SPOOLED_JS.replace("__SPOOL_ID__", json.dumps(spool_id)), encoding="utf-8")
+    except OSError:
+        return _refuse(
+            f"The engine is unavailable ({reason}); the ask is spooled as {spool_id} and mints once the "
+            "engine is healthy. Do not re-submit."
+        )
+    return _allow_rewrite(
+        {"scriptPath": str(script)},
+        f"The engine is unavailable ({reason}); the ask is spooled as {spool_id}. It mints exactly one run "
+        "once the engine is healthy and this session is notified. Do not re-submit. End the turn.",
+        f"Engine submission: spooled as {spool_id}.",
+    )
+
+
 def _write_deferred_script(root: Path, params: dict) -> Path:
     """A script under `scratch/warp/` that re-runs `dispatch.emit(params)` through an op-relay agent and starts what it emits."""
     import json
@@ -1091,7 +1184,6 @@ def _write_deferred_script(root: Path, params: dict) -> Path:
     from coordinator_core.ops.dispatch_emit.fan_launcher import (
         _EMIT_OP, _INVOKE, DEFERRED_EMIT_KEY, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM,
     )
-    from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
 
     # A launcher starts this script as its child, and a child cannot call workflow(): it hands the emit back instead.
     # Trap: the relay runs `dispatch.emit` over the CLI, which is repo-unkeyed; the in-hook emit got the root
@@ -1105,22 +1197,17 @@ def _write_deferred_script(root: Path, params: dict) -> Path:
         params = {**params, LAUNCHER_CHILD_EMIT_PARAM: True}
         start_values = {
             **_stage_loop_values(),
-            "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
-            "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
-            "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
+            **_chain_follow_values(),
         }
         start = re.sub("|".join(start_values), lambda m: start_values[m.group(0)], _DEFERRED_START_JS)
     params_json = json.dumps(params, default=str, ensure_ascii=True)
-    params_file = ""
-    if len(params_json) > DEFERRED_PARAMS_INLINE_MAX:
-        spill = root / "scratch" / "warp" / f"defer-params-{uuid.uuid4().hex[:12]}.json"
-        spill.parent.mkdir(parents=True, exist_ok=True)
-        spill.write_text(params_json, encoding="utf-8", newline="\n")
-        params_file, params_json = spill.as_posix(), "{}"
+    spill = root / "scratch" / "warp" / f"defer-params-{uuid.uuid4().hex[:12]}.json"
+    spill.parent.mkdir(parents=True, exist_ok=True)
+    spill.write_text(params_json, encoding="utf-8", newline="\n")
+    params_file = spill.as_posix()
     values = {
         "__START__": start,
         "__REPO_ROOT__": json.dumps(Path(root).as_posix()),
-        "__PARAMS__": json.dumps(params_json),
         "__PARAMS_FILE__": json.dumps(params_file),
         "__INVOKE__": json.dumps(_INVOKE),
         "__EMIT_OP__": json.dumps(_EMIT_OP),
@@ -1173,9 +1260,10 @@ _DIRECT_START_JS = r"""export const meta = { name: 'engine-ask-direct-start', de
 const REPO_ROOT = __REPO_ROOT__;
 const RUN_ID = __RUN_ID__;
 const RUN_PATH = __RUN_PATH__;
-""" + _STAGE_LOOP_JS + r"""const started = await _startLoop(_normPath(RUN_PATH));
-return started.ok ? started.result : { status: 'failed', run_id: RUN_ID, error: started.error };
-"""
+""" + _EMIT_RELAY_JS + _STAGE_LOOP_JS + r"""const ASK_RUN_ID = RUN_ID;
+const ASK_SCRIPT_PATH = _normPath(RUN_PATH);
+const first = await _startLoop(ASK_SCRIPT_PATH);
+""" + _CHAIN_FOLLOW_JS
 
 
 def _write_minted_start_script(root: Path, run_ids: Sequence[str]) -> Path:
@@ -1198,7 +1286,7 @@ def _write_minted_start_script(root: Path, run_ids: Sequence[str]) -> Path:
     return script
 
 
-def _write_direct_start_script(root: Path, run_id: str, script_path: str, fire_args: Optional[dict]) -> Path:
+def write_direct_start_script(root: Path, run_id: str, script_path: str, fire_args: Optional[dict]) -> Path:
     """A script under `scratch/warp/` that starts one minted run's script with `fire_args` through the stage loop."""
     import json
 
@@ -1207,6 +1295,7 @@ def _write_direct_start_script(root: Path, run_id: str, script_path: str, fire_a
         "__RUN_ID__": json.dumps(run_id),
         "__RUN_PATH__": json.dumps(str(script_path).replace("\\", "/")),
         **_stage_loop_values(fire_args),
+        **_chain_follow_values(),
     }
     script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
     script.parent.mkdir(parents=True, exist_ok=True)
@@ -1700,31 +1789,15 @@ def _fan_tail(root: Path, reply: Mapping[str, Any], started: Sequence[str], laun
 def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session_id: Optional[str]) -> Path:
     from coordinator_core.ops.dispatch_emit.fan_launcher import LAUNCHER_CHILD_EMIT_PARAM, write_launcher
 
-    import time
-
-    # One deadline spans every child; an overran emit still runs on its daemon thread, so no further child is emitted here.
-    # A child the budget did not reach (or whose emit overran with no run minted) is handed to the launcher as a deferred-emit
-    # script: the launcher starts it like an emitted run, and it emits and starts the child in the background.
-    deadline = time.monotonic() + _caller_budget_s() * _EMIT_BUDGET_SHARE
+    # Every child is a deferred-emit script: the launcher child runs `dispatch.emit` and starts the run, so the hook
+    # pays no per-child emit. A refusal inside that emit is named by the launcher as the child's `emit_refused`.
     emitted: list = []
-    spent = ""
     for child in children:
         params = {**child.emit_params, LAUNCHER_CHILD_EMIT_PARAM: True}
-        params.setdefault("session_id", session_id or "")  # an overrun names a child's run by this session only
-        if params.pop(_DEFER_EMIT_KEY, False):
-            emitted.append(_deferred_child_reply(root, child, params, "Not emitted: the sizing read stalled in the hook."))
-            continue
-        if spent:
-            emitted.append(_deferred_child_reply(root, child, params, f"Not emitted: the hook budget was spent. {spent}"))
-            continue
-        try:
-            reply = _emit_within_budget(_default_emit, params, root, max(deadline - time.monotonic(), 0.0))
-        except _EmitOverran as over:
-            spent = over.message
-            reply = {"error": over.message} if over.minted or over.stalled else _deferred_child_reply(root, child, params, over.message)
-        except Exception as exc:  # a refused child is named in the launcher; siblings still start
-            reply = {"error": str(exc)}
-        emitted.append(reply)
+        params.setdefault("session_id", session_id or "")
+        params.pop(_DEFER_EMIT_KEY, False)
+        note = "Not emitted in the hook: the launcher child emits and starts it."
+        emitted.append(_deferred_child_reply(root, child, params, note))
     return write_launcher(root, parent_id, children, session_id, emitted)
 
 
@@ -1908,6 +1981,40 @@ def _sibling_record_run_stopped(root: Path, run_id: str, deliverable_id: str) ->
     )
 
 
+_SUCCESSOR_DEPTH = 4
+
+
+def _orphan_verdict(root: Path, run_id: str) -> dict:
+    """`orphan_adopt.orphan_verdict` as seen by no session; `{}` when it cannot be read."""
+    from coordinator_core.ops.dispatch_emit.orphan_adopt import orphan_verdict
+
+    try:
+        verdict = orphan_verdict(root, run_id, "")
+    except (OSError, ValueError):
+        return {}
+    return verdict if isinstance(verdict, dict) else {}
+
+
+def _superseded_successor_ended(root: Path, run_id: str, ended: Any, depth: int = _SUCCESSOR_DEPTH) -> bool:
+    """True when `run_id` is superseded (orphan_adopt's verdict) and its successor holds no claim:
+    the successor's own ended-state decides, followed through a chain of at most `_SUCCESSOR_DEPTH`."""
+    verdict = _orphan_verdict(root, run_id)
+    successor = verdict.get("superseded_by") if verdict.get("reason") == "superseded" else None
+    if not isinstance(successor, str) or depth <= 0:
+        return False
+    return bool(ended(successor) or _superseded_successor_ended(root, successor, ended, depth - 1))
+
+
+def _stale_blocker_remedy(root: Path, run_id: str) -> str:
+    """The adopt call when `run_id`'s owner session is gone and no later run supersedes it, else empty."""
+    from coordinator_core.ops.dispatch_emit.orphan_adopt import adopt_call
+
+    verdict = _orphan_verdict(root, run_id)
+    if verdict.get("orphaned") is True and verdict.get("recorded_session"):
+        return f" Its owner session is gone; `{adopt_call(run_id, root)}` takes it over or closes it."
+    return ""
+
+
 def _live_write_overlap_deny(
     root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any], sizing_rel: Optional[str] = None
 ) -> Optional[str]:
@@ -1945,12 +2052,15 @@ def _live_write_overlap_deny(
         # A fan-out child records its end in sibling-status.json, never halted.json.
         deliverable = sizing_doc.get("deliverable_id") if sizing_rel else None
 
-        def ended(rid: str) -> bool:
+        def self_ended(rid: str) -> bool:
             return bool(
                 _halt_marker_ended(root, rid) or _stage_halted(root, rid) or _status_of(root, rid) in ("halted", "landed")
                 or _ended_on_evidence(root, rid)
                 or (isinstance(deliverable, str) and _sibling_record_run_stopped(root, rid, deliverable))
             )
+
+        def ended(rid: str) -> bool:
+            return self_ended(rid) or _superseded_successor_ended(root, rid, self_ended)
 
         live: dict = {}
         for rid, paths in hits.items():
@@ -1971,7 +2081,9 @@ def _live_write_overlap_deny(
         return None
     run_id, paths = next(iter(sorted(hits.items())))
     shown = ", ".join(paths[:5]) + (f" (+{len(paths) - 5} more)" if len(paths) > 5 else "")
-    return f"Run {run_id} is live and writes {shown}, which this ask also writes. Resubmit when {run_id} lands."
+    remedy = _bounded_call(("remedy", str(root), run_id), lambda: _stale_blocker_remedy(root, run_id))
+    remedy = remedy if isinstance(remedy, str) else ""
+    return f"Run {run_id} is live and writes {shown}, which this ask also writes. Resubmit when {run_id} lands.{remedy}"
 
 
 _RESEARCH_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+?)(?:\.md)?$")
@@ -2083,6 +2195,39 @@ def _child_params(
     return params
 
 
+def _fan_prefire_refusal(root: Path, payload: Mapping[str, Any], ready: Sequence[Any], approved: bool) -> Optional[str]:
+    """The refusal text of the checks a multi-ask submission runs once, over every ready child, before the launcher
+    is written; None when all hold.
+
+    B1 live-run clash: no ready child's sizing is already worked by a live run. B2 cross-repo writes: every ask's
+    declared `writes` stay inside the repo or reach an approved sibling. The child's own `dispatch.emit` runs the
+    rest in the launcher child."""
+    from types import SimpleNamespace
+
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import CrossRepoWriteError, check_cross_repo_writes
+
+    session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+    transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
+    with warp_live.listing_scope():
+        for r in ready:
+            live = warp_live.live_run_for_sizing(root, r.slice_sizing, session_id=session_id, transcript_path=transcript)
+            if live and live != r.run_id:
+                return f"Run {live} is already working {r.slice_sizing}; its completion is your one wake. End the turn."
+    args = payload["tool_input"].get("args")
+    asks = args.get("asks") if isinstance(args, dict) else None
+    rows = []
+    for i, item in enumerate(asks if isinstance(asks, list) else ()):
+        writes = item.get("writes") if isinstance(item, dict) else None
+        if isinstance(writes, list):
+            rows.append(SimpleNamespace(id=f"asks[{i}]", writes=[w.strip() for w in writes if isinstance(w, str) and w.strip()], writes_under=()))
+    try:
+        check_cross_repo_writes(rows, root, approved=approved)
+    except CrossRepoWriteError as exc:
+        return str(exc)
+    return None
+
+
 def _launch_all(
     root: Path,
     payload: Mapping[str, Any],
@@ -2114,6 +2259,9 @@ def _launch_all(
             params = _child_params(sizing_root or root, tool_input, session_id, r, call_stop, approved, doc)
         children.append(LaunchChild(run_id=r.run_id, sizing_rel=r.slice_sizing, emit_params=params))
     parent_id = str(fan_reply["parent_id"])
+    refusal = _fan_prefire_refusal(root, payload, ready, approved)
+    if refusal:
+        return _refuse(refusal)
     try:
         script = (launch or _default_launch)(root, parent_id, children, session_id)
     except Exception as exc:  # the launcher's refusal text is the whole message
@@ -2289,6 +2437,32 @@ def _resume_fire_args(root: Path, run_id: str, sizing_rel: str, session_id: Opti
     return {"fire_args": {"repoRoot": root.as_posix(), "runToken": token}}
 
 
+def _ensure_launcher_run_token(root: Path, run_id: str, sizing_rel: str, session_id: Optional[str]) -> None:
+    """Leave the resumed run holding a live escrowed token the launcher's staged twin inlines.
+
+    The child emit escrows one; a launcher whose child emit was deferred, or a `launch` that
+    escrowed nothing, would start a run whose commit presents a spent or absent token. An
+    escrowed live token is left alone; otherwise one is minted for the commit leg's script path
+    (`carry_prior` keeps a token a running script holds) and escrowed. A mint that cannot bind
+    leaves the run handing its commit back, as before. The check runs inside the gated write leg,
+    which the remaining hook window bounds: a stalled box detaches the mint and still starts the run."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+    def ensure() -> None:
+        if run_token.escrowed(root, run_id) is not None:
+            return
+        token = run_token.mint(
+            root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
+            session_id=session_id, sizing_rel=sizing_rel, carry_prior=True,
+        )
+        run_token.escrow(root, run_id, token)
+
+    state, err = _write_leg("run_token.mint", ensure, gated=True)
+    if state == "raised" and not isinstance(err, (OSError, ValueError)):
+        raise err
+
+
 def _resume_route(
     root: Path,
     sizing_rel: str,
@@ -2384,6 +2558,7 @@ def _resume_route(
         script = (launch or _default_launch)(root, parent_id, [child], session_id)
     except Exception as exc:  # the launcher's refusal text is the whole message
         return _refuse(f"The engine wrote no launcher: {exc}"), None
+    _ensure_launcher_run_token(root, halted_id, sizing_rel, session_id)
     from coordinator_core import warp_live
 
     call_id = payload.get("tool_use_id")
@@ -2492,7 +2667,7 @@ def evaluate(
             session = payload.get("session_id")
             call = {
                 "t0": time.monotonic(), "wall0": time.time(), "roots": [], "minted": [], "gate": WriteGate(), "gates": [],
-                "session": session if isinstance(session, str) and session else None,
+                "session": session if isinstance(session, str) and session else None, "payload": payload,
             }
             box: dict = {}
 
@@ -2864,8 +3039,18 @@ def _evaluate(
                 return _minted_start_envelope(root, over.run_ids, time.monotonic() + _ENVELOPE_GRACE_S)
             return _refuse(over.message) if over.stalled else _deferred_envelope(root, params, over)
         except Exception as exc:  # the engine's refusal text is the whole message
+            why = _unavailable(exc)
+            live = _CALL.get()
+            nothing_minted = live is None or _minted_since_start(live) == []
+            spooled = _spool_envelope(payload, root, why) if why and nothing_minted else None
+            if spooled is not None:
+                return spooled
             return _refuse(_name_root_tried(f"The engine refused the submission: {_cause(exc)}", root, sizing_rel))
 
+    if isinstance(result, dict) and result.get("status") == "handover_pending" and not result.get("run_id"):
+        spooled = _spool_envelope(payload, root, "handover-pending")
+        if spooled is not None:
+            return spooled
     if isinstance(result, dict):
         _note_minted(result.get("run_id"))
     script = result.get("path") if isinstance(result, dict) else None

@@ -366,3 +366,94 @@ def test_stalled_liveness_read_denies_nothing(tmp_path, monkeypatch):
     env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "source": "pm", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(tmp_path, seen))
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert len(seen) == 1
+
+
+OLD_RUN = "ask-20261104T110538-8f5875"
+NEW_RUN = "warp-2026-11-04-neutral-anchor-6ec8fe-20261104T150000-6ec8fe"
+SIZING = "state/sizings/2026-11/2026-11-04-neutral-anchor-6ec8fe.yaml"
+
+
+def _stage_run(root: Path, run_id: str, stage: str, session: str = "dead-session") -> None:
+    import json
+
+    rd = root / "state" / "warp" / run_id
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "run-stage.json").write_text(json.dumps({"stage": stage, "session_id": session}), encoding="utf-8")
+    (rd / "run.json").write_text(json.dumps({"sizing_rel": SIZING}), encoding="utf-8")
+
+
+def test_a_superseded_run_with_a_halted_successor_does_not_block_a_submission(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _stage_run(tmp_path, OLD_RUN, "staged")
+    _stage_run(tmp_path, NEW_RUN, "halted")
+    _live(tmp_path, {OLD_RUN: {"pkg/mod.py"}})
+    seen: list = []
+    env = mod.evaluate(_payload(tmp_path, {"ask": "fix it", "source": "pm", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(tmp_path, seen))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert len(seen) == 1
+
+
+def test_a_superseded_run_with_a_live_successor_still_blocks(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _stage_run(tmp_path, OLD_RUN, "staged")
+    _stage_run(tmp_path, NEW_RUN, "running")
+    _live(tmp_path, {OLD_RUN: {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and OLD_RUN in why
+
+
+def test_a_stale_orphaned_blocker_names_the_adopt_op(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _stage_run(tmp_path, OLD_RUN, "staged")
+    _live(tmp_path, {OLD_RUN: {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and OLD_RUN in why and "dispatch.adopt_orphaned_run" in why
+
+
+def test_a_blocker_with_no_recorded_owner_names_no_remedy(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _live(tmp_path, {"run-a": {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and "adopt_orphaned_run" not in why
+
+
+def test_the_supersession_and_orphan_preconditions_hold_for_the_staged_runs(tmp_path):
+    from coordinator_core.ops.dispatch_emit.orphan_adopt import orphan_verdict
+
+    _stage_run(tmp_path, OLD_RUN, "staged")
+    _stage_run(tmp_path, NEW_RUN, "halted")
+    verdict = orphan_verdict(tmp_path, OLD_RUN, "")
+    assert verdict["reason"] == "superseded" and verdict["superseded_by"] == NEW_RUN
+    lone = tmp_path / "lone"
+    _stage_run(lone, OLD_RUN, "staged")
+    verdict = orphan_verdict(lone, OLD_RUN, "")
+    assert verdict["orphaned"] is True and verdict["recorded_session"] == "dead-session"
+
+
+def test_emit_runs_under_the_callers_session_identity(tmp_path):
+    from coordinator_core.session.core import resolve_session_id
+
+    caller = "e9b562a0-1111-4222-8333-444455556666"
+    seen: list = []
+
+    def emit(params: dict, root: Path) -> dict:
+        seen.append(resolve_session_id())
+        return {}
+
+    mod._emit_within_budget(emit, {"session_id": caller}, tmp_path, 5.0)
+    assert seen == [caller]
+
+
+def test_emit_without_a_uuid_session_id_binds_no_override(tmp_path):
+    from coordinator_core.session.core import resolve_session_id
+
+    outside = resolve_session_id()
+    seen: list = []
+
+    def emit(params: dict, root: Path) -> dict:
+        seen.append(resolve_session_id())
+        return {}
+
+    mod._emit_within_budget(emit, {"session_id": "s1"}, tmp_path, 5.0)
+    mod._emit_within_budget(emit, {}, tmp_path, 5.0)
+    assert seen == [outside, outside]

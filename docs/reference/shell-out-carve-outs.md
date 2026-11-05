@@ -301,6 +301,41 @@ Anti-loophole teeth:
 Sites:
 - `coordinator/bin/statusline.py` `_run_inner()` (`subprocess.run(command, shell=True, ...)`, ordinal 1; operator's statusLine command)
 
+## (i) the Unimatrix box transport's single ssh site
+
+The one ssh spawn in this repo: `box_transport._run`, the transport behind `node_transport.select`
+(Unimatrix box access, from `3e4c24d918`). The remote-engine fallback rides it and adds no other
+remote mechanism. PM ruling 2026-11-04T14:58:48Z (run `ask-20261104T145244-87bdaa`), verbatim:
+
+> we can add ssh stuff if it is contained, I guess, but I don't want unlimited ssh going on.  we already have a system for remote box access with example-retrieval-repo, with unimatrix, so I don't know why we need more stuff
+
+The spawn is `shell=False` with an argv list, so it is not shell-shaped and has no machine-readable
+register entry; this class records the ruling and its limits. The limits are enforced in code at
+`box_transport._run` / `_remote_invoke`, with one test per limit in
+`coordinator_core/group_em/tests/test_box_transport.py`, never by this prose:
+
+- Hosts: only a box present in `box_registry`, matched on host, `invoke`, `remote_shell` and `ssh`
+  (`_registered`); any other host is refused with a reason.
+- Command: only that box's registered far settings-home `coordinator-invoke` with an op from the
+  allowlist (`ALLOWED_OPS` or a `policy.remote_safe` op), quoted for the row's `remote_shell` (`posix` or
+  `cmd`; `_remote_command`).
+- Spawn shape: argv-form with `-o BatchMode=yes -o ConnectTimeout=<n>` and the row's pinned `ssh`
+  binary (an `ssh` or `ssh.exe` path); never a shell (`_shape_ok` refuses any other argv).
+- Concurrency: at most one in-flight call per box, fleet-wide on this machine: an `O_EXCL` lock file
+  under `box_registry.lock_dir()` (a dead holder or an expired lock is reclaimed).
+- Rate: `RATE_MAX_CALLS` per `RATE_WINDOW_S` per box through a shared rate-window file in the same
+  directory; over it the call is refused with a reason, and a refused ssh still spends its token.
+- Windows: verified on Machine-a by group-em-70.
+
+Anti-loophole teeth:
+
+- No second ssh site: any other `ssh` spawn is a violation until the PM names it.
+- The remote-engine failover queues to the `ask_spool` and its drain, which reach a far box only
+  through `node_transport.select` to `box_transport`; it spawns nothing of its own.
+
+Sites:
+- `coordinator_core/group_em/box_transport.py` `_run()` (argv0 `ssh`, `PLAIN_SPAWN`; the only ssh site)
+
 ## Machine-readable register
 
 The block below is the parseable form of the `Sites:` bullets above, read by

@@ -515,3 +515,78 @@ class TestDerivedKeyMatchesClaimArtifact:
         evidence = liveness.claim_holder_relinquished(str(cdir))
         assert evidence is not None
         assert evidence.kind == "derived"
+
+
+class TestEndedOwnerClaimsAreNonBlocking:
+    """Reader-side relinquishment (DR-460): a claim whose owner ``session_live``
+    reports dead -- including basis ``harness-registry-superseded`` -- never
+    blocks, and liveness is resolved once per distinct owner."""
+
+    _LIVE = "33333333-3333-3333-3333-333333333333"
+    _DEAD = "44444444-4444-4444-4444-444444444444"
+    _SUPERSEDED = "55555555-5555-5555-5555-555555555555"
+    _ME = "66666666-6666-6666-6666-666666666666"
+
+    def _lookup_result(self, paths, owners):
+        from coordinator_core.session import claim_index
+
+        res = claim_index._LookupResult({p: list(owners) for p in paths})
+        res.recorded_kind = {p: {o: "write" for o in owners} for p in paths}
+        return res
+
+    def _decide(self, calls):
+        def fake(sid, cwd=None):
+            calls.append(sid)
+            if sid == self._LIVE:
+                return (True, "pid-alive", None)
+            if sid == self._SUPERSEDED:
+                return (False, "harness-registry-superseded", None)
+            return (False, "stable-pid-dead", None)
+
+        return fake
+
+    def test_commit_scope_contest_ignores_dead_and_superseded(self, tmp_path, monkeypatch):
+        from coordinator_core.ops import warp_run_deliverable
+        from coordinator_core.session import claim_index, scope
+
+        repo = _init_repo(tmp_path)
+        Path(core.sessions_dir(str(repo))).mkdir(parents=True, exist_ok=True)
+        paths = [f"f{i}.txt" for i in range(5)]
+        owners = [self._LIVE, self._DEAD, self._SUPERSEDED]
+        monkeypatch.setattr(
+            claim_index, "lookup", lambda ps, **kw: self._lookup_result(ps, owners)
+        )
+        monkeypatch.setattr(
+            warp_run_deliverable, "live_run_write_claims", lambda *a, **k: {}
+        )
+        monkeypatch.setattr(scope, "_paths_with_uncommitted_state", lambda p, c: None)
+        calls: list = []
+        monkeypatch.setattr(liveness, "_decide_session_live", self._decide(calls))
+
+        out = scope.contested_by_live_peers(paths, self._ME, str(repo))
+
+        assert out == {p: [self._LIVE] for p in paths}
+        assert sorted(calls) == sorted(owners)
+
+    def test_commit_v2_peer_warning_skips_dead_and_superseded(self, tmp_path, monkeypatch):
+        from coordinator_core.ops.ceremony import commit_v2
+        from coordinator_core.session import claim_index
+
+        repo = _init_repo(tmp_path)
+        paths = [f"g{i}.txt" for i in range(4)]
+        owners = [self._LIVE, self._DEAD, self._SUPERSEDED]
+        monkeypatch.setattr(
+            claim_index, "lookup", lambda ps, **kw: self._lookup_result(ps, owners)
+        )
+        calls: list = []
+        monkeypatch.setattr(liveness, "_decide_session_live", self._decide(calls))
+        monkeypatch.setattr(liveness, "session_abandoned", lambda *a, **k: False)
+        holds: list = []
+
+        warnings = commit_v2._peer_claim_warnings(
+            repo, paths, peer_holds=holds, own_sid=self._ME
+        )
+
+        assert {sid for _p, sid in holds} == {self._LIVE}
+        assert all(self._DEAD not in w and self._SUPERSEDED not in w for w in warnings)
+        assert sorted(calls) == sorted(owners)

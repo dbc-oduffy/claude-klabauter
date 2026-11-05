@@ -122,5 +122,5 @@ def test_governor_loop_fires_retention_on_first_tick(monkeypatch):
     args = argparse.Namespace(interval=0, max_pauses=3, resume_after=6, psi_full=10.0,
                               avail_pct=5.0, runaway_mb=0, runaway_every=6)
     gov.run(args, emit=lambda _l: None, sample=lambda: False, procs_fn=lambda: [],
-            sleep=lambda _s: None, max_ticks=3, retention_fn=lambda: fired.append(1))
+            sleep=lambda _s: None, max_ticks=3, group_em_live_fn=lambda: True, retention_fn=lambda: fired.append(1))
     assert fired == [1]

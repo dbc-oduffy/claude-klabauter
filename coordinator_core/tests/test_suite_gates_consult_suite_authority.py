@@ -141,6 +141,26 @@ def _run(cmd, repo, *, env=None, agent_id=None):
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+_WRAPPED = "with-suite-mutex -- %s"
+_GRANT_ROUTE = "tier-u-grant-cli group-em-grant"
+_WRAPPER_DENY_HEAD = "Route this through the suite mutex"
+_CLOUD_WRAPPER_PHRASE = "A suite command must actually HOLD"
+
+
+def _envelope(cmd, repo, *, env=None):
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": cmd},
+        "session_id": "sess1",
+        "cwd": str(repo),
+    }
+    if env is not None:
+        payload["env"] = env
+    result = envelope_of(guard.check(payload), "em")
+    assert result is not None, "suite command must not pass silently"
+    return result["hookSpecificOutput"]  # permissionDecision + reason/additionalContext
+
+
 def _authority_passed(reason: str) -> bool:
     # Past the authority leg the only remaining denial is the mutex-wrapper one.
     return "with-suite-mutex" in reason
@@ -154,10 +174,24 @@ def test_cloud_em_authorized_without_grant(repo, monkeypatch, cmd):
 
 
 @pytest.mark.parametrize("cmd", [_FAST, _FULL], ids=["fast", "full"])
-def test_box_em_denied_without_grant(repo, monkeypatch, cmd):
+def test_ungranted_box_em_wrapped_suite_allowed_with_grant_route_advisory(repo, monkeypatch, cmd):
     _rung(monkeypatch, "attended")
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-    assert not _authority_passed(_run(cmd, repo, env={}))
+    out = _envelope(_WRAPPED % cmd, repo, env={})
+    assert out["permissionDecision"] == "allow"
+    assert _GRANT_ROUTE in out["additionalContext"]
+    assert "without an authorization grant" in out["additionalContext"]
+
+
+@pytest.mark.parametrize("cmd", [_FAST, _FULL], ids=["fast", "full"])
+def test_ungranted_box_em_bare_suite_denied_on_wrapper_leg_with_grant_route(repo, monkeypatch, cmd):
+    _rung(monkeypatch, "attended")
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    out = _envelope(cmd, repo, env={})
+    assert out["permissionDecision"] == "deny"
+    reason = out["permissionDecisionReason"]
+    assert _WRAPPER_DENY_HEAD in reason
+    assert _GRANT_ROUTE in reason
 
 
 @pytest.mark.parametrize("cmd", [_FAST, _FULL], ids=["fast", "full"])
@@ -195,10 +229,27 @@ def test_subagent_denied_despite_group_em_grant(repo, monkeypatch, group_em_gran
     assert not _authority_passed(_run(cmd, repo, env={}, agent_id=_AGENT))
 
 
-def test_forged_marker_on_attended_machine_denied(repo, monkeypatch):
+def test_forged_marker_on_attended_machine_is_not_cloud_and_gets_grant_advisory(repo, monkeypatch):
     _rung(monkeypatch, "attended")
     monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
-    assert not _authority_passed(_run(_FULL, repo, env=_CLOUD_ENV))
+    bare = _envelope(_FULL, repo, env=_CLOUD_ENV)
+    assert bare["permissionDecision"] == "deny"
+    reason = bare["permissionDecisionReason"]
+    assert _WRAPPER_DENY_HEAD in reason
+    assert _CLOUD_WRAPPER_PHRASE not in reason
+    assert _GRANT_ROUTE in reason
+    wrapped = _envelope(_WRAPPED % _FULL, repo, env=_CLOUD_ENV)
+    assert wrapped["permissionDecision"] == "allow"
+    assert _GRANT_ROUTE in wrapped["additionalContext"]
+
+
+def test_cloud_marker_on_cloud_rung_gets_cloud_wrapper_deny_without_grant_route(repo, monkeypatch):
+    _rung(monkeypatch, "cloud")
+    monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
+    out = _envelope(_FULL, repo, env=_CLOUD_ENV)
+    assert out["permissionDecision"] == "deny"
+    assert _CLOUD_WRAPPER_PHRASE in out["permissionDecisionReason"]
+    assert _GRANT_ROUTE not in out["permissionDecisionReason"]
 
 
 @pytest.mark.parametrize(

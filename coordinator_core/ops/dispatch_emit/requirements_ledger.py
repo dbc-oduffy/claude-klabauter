@@ -1131,9 +1131,11 @@ def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
 
 def start(
     repo_root: Path, run_id: str, *, all_of_pm_ask: bool = False, resumed_from: Optional[str] = None,
+    session_id: Optional[str] = None,
 ) -> Path:
     """Make the run ledger-bearing (emit time). Returns the run dir. `resumed_from` names the halted
     run this one resumes; omitted, a rebound run keeps the link its run.json already carries.
+    `session_id` is the submitting caller, recorded on the minted stage (`write_run_stage_at`).
 
     Raises `HandoverPending` before writing anything while a publish handover is pending."""
     from coordinator_core.warm import breadcrumb
@@ -1158,7 +1160,7 @@ def start(
         data[RESUMED_FROM_FIELD] = prior[RESUMED_FROM_FIELD]
     _write_run(dir_, data)
     _write_view(repo_root, dir_, run_id)
-    stamp_run_stage(repo_root, run_id, "minted")
+    stamp_run_stage(repo_root, run_id, "minted", session_id=session_id)
     return dir_
 
 
@@ -1642,12 +1644,9 @@ def revise(
         declare_write(dir_ / RUN_FILE)
     added: Optional[str] = None
     if stop_after:
-        from coordinator_core.atomic_replace import atomic_write_bytes
+        from coordinator_core.ops.dispatch_emit.ask_contract import write_stop_after_marker
 
-        marker = {"stop_after": stop_after, "at": _now(), "from": _clean_sender(sender) or None}
-        atomic_write_bytes(
-            dir_ / STOP_AFTER_FILE, (json.dumps(marker, sort_keys=True) + "\n").encode("utf-8"), preserve_mode=False
-        )
+        write_stop_after_marker(dir_, stop_after, sender)
         declare_write(dir_ / STOP_AFTER_FILE)
     note_uncovered = _note_uncovered_paths(root, dir_, run, note) if has_note else []
     if note_uncovered and _widen_footprint(root, run, run_id, note_uncovered, note, outcome):

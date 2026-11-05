@@ -71,7 +71,7 @@ def test_suite_root_directory_deny_names_the_command_and_the_node_id_remedy():
     result = bdsi._handler({"tool_name": "Agent", "tool_input": {"prompt": "Run: pytest coordinator/tests"}, "cwd": _ROOT})
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "pytest coordinator/tests" in reason and "node ids" in reason
+    assert "directory 'coordinator/tests'" in reason and "node ids" in reason
 
 
 def test_engine_emitted_workflow_script_is_allowed_only_with_receipt(tmp_path):

@@ -2505,7 +2505,7 @@ def _release_path_claims_bulk(
     _report_warm_uncarried_resolve("_release_path_claims_bulk")
     if not my_sid:
         return True
-    scope.release_own_path_claims(
+    scope.release_own_path_claims_bulk(
         my_sid,
         None if paths is None else list(paths),
         cwd=baton_repo_root or cwd,

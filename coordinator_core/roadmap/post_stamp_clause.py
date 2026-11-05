@@ -115,6 +115,45 @@ def suite_tier_refusal(statement: object) -> Optional[str]:
     )
 
 
+_APPROVAL = re.compile(r"\b(?:approv\w*|sign[\s-]?offs?|ratif\w*|blessing|authori[sz]ation)\b", re.IGNORECASE)
+_APPROVER = re.compile(r"\b(?:pm|product\s+owner|stakeholders?|human|operator|user)(?:'s|s')?\b", re.IGNORECASE)
+_DOC_ARTIFACT = re.compile(
+    r"\b(?:docs?|documentation|memos?|readme|wiki|runbook|guide|pages?|changelog|release\s+notes|install\s+plans?"
+    r"|reference\s+(?:docs?|pages?))\b|[\w./-]+\.md\b|\bdocs/",
+    re.IGNORECASE,
+)
+# An irreversible action named in the clause is the thing approved, not the doc.
+_IRREVERSIBLE = re.compile(r"\b(?:push|publish|merge|release|submit|deploy|force-push|delet\w+)\b", re.IGNORECASE)
+_ADJECTIVAL_APPROVED = re.compile(r"\bapproved\s+(?:[\w-]+\s+){0,3}?(?:docs?|memos?|pages?|reference|install\s+plans?)\b", re.IGNORECASE)
+
+#: The one wording a doc-approval refusal offers in place of the gate.
+DOC_APPROVAL_REMEDIATION = "the doc exists and a test or check proves its content"
+
+
+def doc_approval_refusal(statement: object) -> Optional[str]:
+    """Refusal message when a clause requires approval of a doc/reference page/memo, else None.
+
+    Approval of direction, scope, priority or an irreversible action passes. A negated
+    mention ("no PM approval of the doc") passes. Shared by sizing-assemble,
+    `sizing.accept_exit_criterion` and the plan prep gate.
+    """
+    text = " ".join(str(statement or "").split())
+    for clause in re.split(r"(?<=[.;])\s+|\s*;\s*", text):
+        artifact = _DOC_ARTIFACT.search(clause)
+        if artifact is None or _IRREVERSIBLE.search(clause):
+            continue
+        for a in _APPROVAL.finditer(clause):
+            if _negated(clause[: a.start()]):
+                continue
+            if _APPROVER.search(clause) or _ADJECTIVAL_APPROVED.search(clause):
+                return (
+                    f"{EXIT_CRITERION_REFUSAL_HEAD}PM approval of a non-direction artifact "
+                    f"({artifact.group(0)!r}); engineering calls need no PM approval. "
+                    f"{REMEDIATION_MARKER}{DOC_APPROVAL_REMEDIATION}."
+                )
+    return None
+
+
 _EXIT_HEADING = re.compile(r"^#{1,6}\s+exit criteria\b", re.IGNORECASE)
 _ITEM = re.compile(r"^\s{0,3}\d+[.)]\s+")
 
@@ -152,3 +191,8 @@ def post_stamp_body_refusal(plan_text: str) -> Optional[str]:
 def suite_tier_body_refusal(plan_text: str) -> Optional[str]:
     """Refusal for the first body exit-criteria item naming a suite tier, else None."""
     return _body_refusal(plan_text, suite_tier_refusal)
+
+
+def doc_approval_body_refusal(plan_text: str) -> Optional[str]:
+    """Refusal for the first body exit-criteria item requiring approval of a doc, else None."""
+    return _body_refusal(plan_text, doc_approval_refusal)

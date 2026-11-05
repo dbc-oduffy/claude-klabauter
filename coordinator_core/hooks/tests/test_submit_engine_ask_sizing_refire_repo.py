@@ -151,5 +151,5 @@ def test_absolute_sizing_outside_any_repo_is_denied_naming_it(tmp_path, repos):
 
 def test_deferred_sizing_emit_script_carries_the_resolved_root(tmp_path):
     script = mod._write_deferred_script(tmp_path, {"ask": True, "sizing_path": REL, "session_id": ""})
-    literal = re.search(r"^const PARAMS = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
-    assert json.loads(json.loads(literal))["target_root"] == tmp_path.as_posix()
+    params_file = Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)))
+    assert json.loads(params_file.read_text(encoding="utf-8"))["target_root"] == tmp_path.as_posix()

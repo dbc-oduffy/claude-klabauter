@@ -75,6 +75,30 @@ def ensure_identity(home: Optional[Path] = None) -> str:
     return box_id
 
 
+REMOTE_SHELLS = ("posix", "cmd")
+SSH_BINARY_NAMES = frozenset({"ssh", "ssh.exe"})
+
+
+def lock_dir(home: Optional[Path] = None) -> Path:
+    """Directory holding the per-box cross-process lock and rate-window files."""
+    return _group_em_dir(home) / "box-locks"
+
+
+def transport_problem(transport: dict) -> Optional[str]:
+    """Why an ssh ``transport`` row's optional ``remote_shell`` / ``ssh`` fields are unusable; else None."""
+    if transport.get("kind") != "ssh":
+        return None
+    shell = transport.get("remote_shell", "posix")
+    if shell not in REMOTE_SHELLS:
+        return f"remote_shell must be one of {REMOTE_SHELLS}"
+    ssh = transport.get("ssh")
+    if ssh is not None and (
+        not isinstance(ssh, str) or ssh.replace("\\", "/").rsplit("/", 1)[-1] not in SSH_BINARY_NAMES
+    ):
+        return "ssh must be a path to an ssh or ssh.exe binary"
+    return None
+
+
 def register(
     root,
     capability: dict,
@@ -87,8 +111,9 @@ def register(
     Any node registers its peers; no node is privileged. Without ``box_id`` the id is
     ``ensure_identity(root)`` (a locally readable root), so the box's own records and its registry
     row agree. A peer whose root is not locally reachable passes its ``box_id`` (and ``transport``,
-    e.g. ``{kind: ssh, host, invoke}``): nothing is minted or written under ``root``. Raises
-    ValueError for an unsafe ``box_id``. Re-registering overwrites the row (capability refresh).
+    e.g. ``{kind: ssh, host, invoke}`` plus optional ``remote_shell`` ("posix" default, or "cmd" for
+    a Windows far box) and ``ssh`` (pinned absolute path of the ssh binary)): nothing is minted or
+    written under ``root``. Raises ValueError for an unsafe ``box_id`` or transport. Re-registering overwrites the row (capability refresh).
     """
     root_path = Path(root)
     if box_id is None:
@@ -104,6 +129,9 @@ def register(
         "registered_at": time.time(),
     }
     if transport is not None:
+        problem = transport_problem(transport)
+        if problem:
+            raise ValueError(f"invalid transport: {problem}")
         record["transport"] = dict(transport)
     _write(_boxes_dir(directory) / (box_id + ".json"), record)
     return record

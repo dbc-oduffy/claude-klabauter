@@ -103,3 +103,21 @@ def test_holder_record_issuer_is_resolved_sid_not_argv(tmp_path, monkeypatch):
     assert code == gd.EXIT_OK
     assert not list((tmp_path / "suite-grants").glob("*/*.json"))
     assert gd.run_grant_directive(["group-em-revoke", "grantee-sid"])[0] == gd.EXIT_OK
+
+
+def test_relay_outcome_lines(monkeypatch):
+    rec = {"grantee_session_id": "sid-g", "grantee_box_id": "box-b", "expires_at": "2026-10-21T10:00:00Z",
+           "issuer_session_id": "sid-i"}
+    monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: _result(True, "issued", rec))
+    code, msg = gd.run_grant_directive(["group-em-grant", "box-b:sid-g", "ruled"])
+    assert code == gd.EXIT_OK and "relayed to box box-b" in msg and "sid-g" in msg
+
+    monkeypatch.setattr(
+        suite_grant, "issue_suite_grant", lambda *a, **k: _result(False, "RELAY_FAILED:bad_signature")
+    )
+    code, msg = gd.run_grant_directive(["group-em-grant", "box-b:sid-g", "ruled"])
+    assert code == gd.EXIT_FALSE and msg.startswith("RELAY_FAILED:") and "bad_signature" in msg
+
+    monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: _result(False, "BOX_UNKNOWN"))
+    code, msg = gd.run_grant_directive(["group-em-grant", "box-x:sid-g", "ruled"])
+    assert code == gd.EXIT_FALSE and "register" in msg

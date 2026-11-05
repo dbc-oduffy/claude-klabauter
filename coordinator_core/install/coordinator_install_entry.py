@@ -77,7 +77,7 @@ from typing import Optional
 EXIT_INTERPRETER_UNSUPPORTED = 96
 
 _USAGE = """\
-usage: coordinator-install [--check-only] [-- <args>]
+usage: coordinator-install [--check-only] [--host <hosts>] [-- <args>]
 
 Installs coordinator by dispatching this repo's declared installer, read from
 its agent-install manifest rather than a hardcoded path.
@@ -88,6 +88,9 @@ it is absent the underlying installer exits 90 naming it, which is the correct
 answer, not a defect in this entry.
 
   --check-only  probe install state without mutating the box
+  --host <list> comma-separated foreign hosts (e.g. codex,agy); run as a second
+                installer call (host fragment and MCP entry only) after the full
+                install returns 0; validated by the installer, forwarded as given
   -- <args>     forwarded verbatim to the underlying installer
 
 Exit codes: 0 success. 96 designed refusal (an interpreter this installer will
@@ -166,6 +169,22 @@ def main(argv: "Optional[list[str]]" = None) -> int:
     check_only = "--check-only" in argv
     argv = [a for a in argv if a != "--check-only"]
 
+    host_args: "list[str]" = []
+    rest: "list[str]" = []
+    it = iter(argv)
+    for a in it:
+        if a == "--host":
+            value = next(it, None)
+            if value is None or value.startswith("--"):
+                print("coordinator-install: --host requires a value, e.g. --host codex,agy", file=sys.stderr)
+                return 2
+            host_args = ["--host", value]
+        elif a.startswith("--host="):
+            host_args = ["--host", a[len("--host="):]]
+        else:
+            rest.append(a)
+    argv = rest
+
     from coordinator_core.engine_root import coordinator_engine_root_with_class
 
     try:
@@ -194,11 +213,22 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         flag = contract.get("non_interactive_flag")
         if isinstance(flag, str) and flag:
             cmd.append(flag)
+    if check_only:
+        cmd.extend(host_args)
     cmd.extend(passthrough)
 
     from coordinator_core.win_portability import no_console_passthrough_kwargs
 
-    return subprocess.call(cmd, **no_console_passthrough_kwargs())
+    rc = subprocess.call(cmd, **no_console_passthrough_kwargs())
+    if rc != 0 or check_only or not host_args:
+        return rc
+    # setup.py --host is host-only: the full install runs first, the host step is its own call.
+    host_cmd = [sys.executable, str(script)]
+    flag = contract.get("non_interactive_flag")
+    if isinstance(flag, str) and flag:
+        host_cmd.append(flag)
+    host_cmd.extend(host_args)
+    return subprocess.call(host_cmd, **no_console_passthrough_kwargs())
 
 
 if __name__ == "__main__":

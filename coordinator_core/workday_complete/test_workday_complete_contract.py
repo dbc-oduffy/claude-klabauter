@@ -567,7 +567,7 @@ def test_main_threads_for_date_and_only_flags_into_brief(monkeypatch, capsys) ->
     argv-plumbing test, independent of `real_home`/disk state."""
     captured: dict[str, object] = {}
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False, scope_summary=None):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False, scope_summary=None, no_push=False):
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode
         captured["scope_summary"] = scope_summary
@@ -586,7 +586,7 @@ def test_main_no_flags_calls_brief_with_defaults(monkeypatch, capsys) -> None:
     byte-identical to today's zero-arg call."""
     captured: dict[str, object] = {}
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False, scope_summary=None):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False, scope_summary=None, no_push=False):
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode
         captured["scope_summary"] = scope_summary
@@ -664,7 +664,7 @@ def test_main_threads_scope_summary_eq_form_into_brief(monkeypatch, capsys) -> N
     a leading-dash value that would misparse in the split two-token form."""
     captured: dict[str, object] = {}
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False, scope_summary=None):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False, scope_summary=None, no_push=False):
         captured["scope_summary"] = scope_summary
         return 0, {"ok": True}
 

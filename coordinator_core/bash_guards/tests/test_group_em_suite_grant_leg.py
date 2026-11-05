@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
-from coordinator_core.group_em import suite_grant
+from coordinator_core.group_em import box_registry, nomination, suite_grant
 from coordinator_core.session import grant
 from coordinator_core.guard_messages.testing import envelope_of
 
@@ -49,11 +49,34 @@ def test_live_group_em_grant_clears_the_authority_leg(repo, monkeypatch):
 
 def test_expired_group_em_grant_is_denied_with_both_remedy_lines(repo, monkeypatch):
     monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (False, {"k": 1}))
+    monkeypatch.setattr(nomination, "box_holder", lambda *a, **k: {"live": True})
     reason = _reason(_enveloped(guard.check)(_payload(_FULL, repo)))
     assert "with-suite-mutex -- python -m pytest" in reason
     assert "without an authorization grant" in reason
     assert 'tier-u-grant-cli group-em-grant <session> "<ruling>"' in reason
     assert "tier-u-grant-cli grant pm" not in reason
+
+
+def test_no_live_local_holder_names_the_cross_box_form(repo, monkeypatch):
+    monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (False, {"k": 1}))
+    monkeypatch.setattr(box_registry, "local_box_id", lambda home=None: "box-abc123")
+    for holder in (None, {"live": False}):
+        monkeypatch.setattr(nomination, "box_holder", lambda *a, _h=holder, **k: _h)
+        reason = _reason(_enveloped(guard.check)(_payload(_FULL, repo)))
+        assert 'group-em-grant box-abc123:<session> "<ruling>"' in reason
+        assert 'group-em-grant <session>' not in reason
+        assert "ask the PM" not in reason
+
+
+def test_holder_read_error_fails_closed_to_the_cross_box_form(repo, monkeypatch):
+    def boom(*a, **k):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(nomination, "box_holder", boom)
+    monkeypatch.setattr(box_registry, "local_box_id", lambda home=None: "box-abc123")
+    line = guard._group_em_grant_line()
+    assert "box-abc123:<session>" in line
+    assert "group-em-grant <session>" not in line
 
 
 def test_pm_grant_record_is_returned_when_both_legs_miss(repo, monkeypatch):

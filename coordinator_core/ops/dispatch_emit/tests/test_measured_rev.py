@@ -286,3 +286,64 @@ def test_handler_measures_the_worktree_when_ipc_passes_the_git_dir(repo):
     out = mr._handler({"run_id": "run-gitdir", "paths": ["edit.txt"]}, repo / ".git")
     assert "error" not in out, out
     assert out["base_sha"] == _git(repo, "rev-parse", "HEAD").strip()
+
+
+def _cr_pinned_repo(repo):
+    (repo / ".gitignore").write_text("build/\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "ignore build")
+
+
+def test_cr_bearing_path_is_refused_unless_ignored_or_withheld_control(repo):
+    _cr_pinned_repo(repo)
+    (repo / "edit.txt").write_bytes(b"new\n")
+    (repo / "loose.bin").write_bytes(b"a\r\nb\x00\r\n")
+    with pytest.raises(mr.MeasuredRevRefused, match="CR bytes"):
+        mr.measured_rev("run-cr0", ["edit.txt", "loose.bin"], repo_root=repo)
+
+
+def test_ignored_untracked_cr_binary_in_the_paths_is_never_measured(repo):
+    _cr_pinned_repo(repo)
+    (repo / "edit.txt").write_bytes(b"new\n")
+    (repo / "build").mkdir()
+    (repo / "build" / "door.bin").write_bytes(b"\x7fELF\r\n\x00\r\n")
+    out = mr.measured_rev("run-cr1", ["edit.txt", "build/door.bin"], repo_root=repo)
+    assert out["paths"] == ["edit.txt"]
+    assert "build/door.bin" not in out["blobs"] and "build/door.bin" not in out["removed"]
+    assert "build/door.bin" not in _tree(repo, out["sha"])
+
+
+def test_ignored_untracked_binary_in_the_run_write_set_is_never_measured(repo, monkeypatch):
+    _cr_pinned_repo(repo)
+    (repo / "edit.txt").write_bytes(b"new\n")
+    (repo / "build").mkdir()
+    (repo / "build" / "door.bin").write_bytes(b"\x7fELF\r\n\x00\r\n")
+    monkeypatch.setattr(mr, "_run_landing_paths", lambda root, run_id: ["build/door.bin", "edit.txt"])
+    out = mr.measured_rev("run-cr2", [], repo_root=repo)
+    assert out["paths"] == ["edit.txt"]
+
+
+def test_tracked_path_stays_measured_even_if_gitignore_matches_it(repo):
+    _cr_pinned_repo(repo)
+    (repo / "build").mkdir()
+    (repo / "build" / "t.txt").write_bytes(b"one\n")
+    _git(repo, "add", "-f", "build/t.txt")
+    _git(repo, "commit", "-q", "-m", "tracked-ignored")
+    (repo / "build" / "t.txt").write_bytes(b"two\n")
+    out = mr.measured_rev("run-cr3", ["build/t.txt"], repo_root=repo)
+    assert out["paths"] == ["build/t.txt"]
+
+
+def test_withheld_path_is_removed_from_every_input(repo):
+    from coordinator_core.ops.dispatch_emit import run_withhold
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    _cr_pinned_repo(repo)
+    (repo / "edit.txt").write_bytes(b"new\n")
+    (repo / "loose.bin").write_bytes(b"a\r\nb\x00\r\n")
+    home = record_dir(repo, "run-cr4")
+    home.mkdir(parents=True, exist_ok=True)
+    run_withhold.record(home, [{"path": "loose.bin", "reason": "per-machine product"}], "2026-11-04T00:00:00Z")
+    out = mr.measured_rev("run-cr4", ["edit.txt", "loose.bin"], repo_root=repo)
+    assert out["paths"] == ["edit.txt"]
+    assert "loose.bin" not in out["removed"]

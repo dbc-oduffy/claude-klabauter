@@ -130,7 +130,7 @@ def test_unreadable_and_missing_directory_skipped(tmp_path, monkeypatch):
     real = os.scandir
 
     def fake(path):
-        if Path(path) == bad:
+        if isinstance(path, (str, os.PathLike)) and Path(path) == bad:
             raise PermissionError("denied")
         return real(path)
 

@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.machine_profile as mp
+from coordinator_core.hooks import _em_post_fire
 from coordinator_core.hooks import _em_write_budget as leaf
 from coordinator_core.hooks import flag_em_poll_in_flight as fl
 from coordinator_core.hooks import nudge_em_code_dispatch as mod
@@ -158,6 +159,7 @@ def test_post_fire_record_decides_on_liveness(root, monkeypatch):
     _fire(monkeypatch, ["run-1"])
     assert mod._post_fire_deny(SID, (), str(root)) is not None
     _declare(root, marker="landed")
+    _em_post_fire._VERDICTS.clear()
     assert mod._post_fire_deny(SID, (), str(root)) is None
     _fire(monkeypatch, [])
     assert mod._post_fire_deny(SID, (), str(root)) is None

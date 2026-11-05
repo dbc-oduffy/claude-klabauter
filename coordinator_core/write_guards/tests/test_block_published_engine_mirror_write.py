@@ -83,11 +83,18 @@ def test_registry_error_is_silent(monkeypatch):
     assert guard.check(_payload(f"{MIRROR}/{REL}")) is None
 
 
-def test_engine_dispatch_surfaces_advisory_for_mirror_write(roots, tmp_path):
+def test_engine_dispatch_surfaces_advisory_for_mirror_write(monkeypatch, tmp_path):
+    """Roots live under tmp_path: a fake top-level folder would trip the drive-root guard's
+    demoted advisory, which the engine returns ahead of an advisory-class guard."""
     from coordinator_core.write_guards import engine
 
-    out = engine.evaluate(_payload(f"{MIRROR}/{REL}"), cwd=str(tmp_path))
+    mirror = (tmp_path / "claude-klabauter").as_posix()
+    source = (tmp_path / "claude-klabauter").as_posix()
+    monkeypatch.setattr(engine_root, "published_engine_mirror_path", lambda: mirror)
+    monkeypatch.setattr(engine_root, "engine_source_root", lambda: source)
+
+    out = engine.evaluate(_payload(f"{mirror}/{REL}"), cwd=str(tmp_path))
     assert out is not None
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
-    assert f"{SOURCE}/{REL}" in hso["additionalContext"]
+    assert f"{source}/{REL}" in hso["additionalContext"]

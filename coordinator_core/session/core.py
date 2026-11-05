@@ -608,17 +608,10 @@ def pid_alive(pid) -> bool:
     Parity note: the bash original is ``kill -0 "$pid" 2>/dev/null``,
     which reports DEAD (nonzero exit) on EPERM (process exists but is
     owned by another uid) as well as ESRCH — ``kill -0`` treats
-    "can't signal it" the same as "can't find it". ``psutil.pid_exists``
-    has no such notion (it reports True for any visible-but-unowned PID),
-    so on POSIX we shell out to the same ``os.kill(pid, 0)`` primitive
-    bash uses to preserve that EPERM-is-dead parity exactly.
-    psutil.pid_exists() and the prior
-    PermissionError->True branch both diverged from bash's kill-0-as-dead
-    EPERM handling.
+    "can't signal it" the same as "can't find it"; POSIX keeps that parity.
 
-    Raises :class:`MissingPsutilError` on Windows when psutil is absent —
-    there is no POSIX-equivalent fallback there, and returning False would
-    silently report every PID dead (see that class's docstring).
+    Probing is delegated to ``ask_spool.record.win_pid_state`` /
+    ``posix_pid_state``; on Windows doubt (access denied) reads as alive.
     """
     try:
         pid_int = int(pid)
@@ -626,30 +619,13 @@ def pid_alive(pid) -> bool:
         return False  # non-numeric/absent pid -> not alive
     if pid_int <= 0:
         return False
+    from coordinator_core.ask_spool import record as _probe
+
     if _IS_WINDOWS:
-        # No kill(pid, 0) equivalent on native Windows; psutil is
-        # authoritative there (bash's kill -0 doesn't run natively either).
-        _ps = _psutil()
-        if _ps is None:
-            raise MissingPsutilError(
-                "psutil is a required dependency and is not installed in this "
-                "interpreter, but Windows PID-liveness (pid_alive) has no "
-                "fallback without it — reporting every PID dead here would "
-                "risk wrongful claim takeover. Install it "
-                "(`pip install psutil` / `pip install -e .` from the "
-                "coordinator_core project root) or re-run claude-klabauter's setup "
-                "(scripts/setup.py) to provision the engine venv."
-            )
-        return _ps.pid_exists(pid_int)
-    try:
-        os.kill(pid_int, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return False  # bash `kill -0` also reports dead (nonzero) on EPERM
-    except OSError:
-        return False  # any other kill(2) failure -> treat as dead (same parity)
-    return True
+        state = _probe.win_pid_state(pid_int)
+        return True if state is None else state  # doubt: alive, no wrongful takeover
+    # bash `kill -0` reports dead on EPERM and any other kill(2) failure.
+    return _probe.posix_pid_state(pid_int) is True
 
 
 class _WinLivenessAmbiguous(Exception):

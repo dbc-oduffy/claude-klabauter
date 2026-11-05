@@ -61,7 +61,8 @@ Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
                             [--with-test-deps]
-                            [--register-only] [--check] [--help]
+                            [--register-only] [--check] [--host codex,agy]
+                            [--warm on|off] [--repair forwarders] [--help]
 
 Negative-spec:
   coordinator_core is NOT stdlib-only — pyproject.toml's [project].dependencies
@@ -117,7 +118,7 @@ Negative-spec:
   Does NOT shell out to bash/PowerShell anywhere in this file — the whole
   installer is naked Python (subprocess is used only to invoke OTHER Python
   interpreters/venvs, the `machine-local` / `pip` executables, and — only
-  after explicit interactive consent — `brew` to remove a guarded Homebrew
+  after explicit interactive (non-agent) consent — `brew` to remove a guarded Homebrew
   Python, see `_offer_homebrew_removal`).
 """
 
@@ -316,9 +317,21 @@ Options:
   --coordinator-root <path>          Explicit coordinator-claude root override (default: COORDINATOR_CLAUDE_ROOT env -> sibling-dir)
   --with-test-deps                   Also install the declared test extra (pytest + plugins). Off by
                                       default: the installer provisions the engine, not the dev loop
-  --register-only                    Skip Step Zero + dep check; run registration + verification only
-  --check                            Verify the install, one PASS/FAIL line per item (forwarders, door,
+  --register-only                    Skip Step Zero + dep check; run registration + verification only.
+                                      Skips dependency provisioning and the bin-forwarder members it
+                                      does not already see; it reports what it skipped and never claims
+                                      a full install. A missing forwarder member: use --repair forwarders
+  --repair forwarders                Restore missing bin-forwarder members only; touches no other
+                                      default and prints what it changed
+  --warm on|off                      Answer the warm-engine opt-in without prompting (never blocks on
+                                      a non-TTY stdin; unset = the non-interactive default)
+  --check                           Verify the install, one PASS/FAIL line per item (forwarders, door,
                                       guards, repos.* pointers, statusline); exits 1 on any FAIL
+  --host <csv>                       Host-only install for Codex / agy (codex, agy): writes only the
+                                      example-retrieval-repo MCP entry; no root registration, warm
+                                      opt-in or seeding. Advisory: one [host:<id>] report each, never
+                                      changes the exit status; with --check it writes nothing. An
+                                      unknown id exits 1
   --preflight                        Read-only OSS Step Zero probe: python, git, uv, gh, node, pwsh,
                                       clone_auth (coordinator_core.install.prereq_probe). Prints one
                                       pass/warn/fail line per probe; mutates nothing. Exit 0 if no
@@ -382,6 +395,34 @@ def setup_invocation() -> str:
     return "python3 scripts/setup.py"
 
 
+#: Foreign-host ids `--host` accepts; mirrors coordinator_core.install.host_targets.HOSTS.
+FOREIGN_HOSTS = ("codex", "agy")
+
+
+WARM_CHOICES = ("on", "off")
+REPAIR_CHOICES = ("forwarders",)
+
+#: (component, detail) rows a run appends via `_note_change`; printed by `_print_change_summary`.
+_CHANGES: list[tuple[str, str]] = []
+
+
+def _note_change(component: str, detail: str) -> None:
+    """Record one thing this run altered, for the end-of-run change summary."""
+    _CHANGES.append((component, detail))
+
+
+def _print_change_summary() -> None:
+    """Print every noted change, or a single 'no changes' line; never prints nothing."""
+    print()
+    print("--- Changes this run ---")
+    if not _CHANGES:
+        print("[changes] none: this run altered nothing")
+        return
+    print(f"[changes] this run altered {len(_CHANGES)} item(s):")
+    for component, detail in _CHANGES:
+        print(f"  - {component}: {detail}")
+
+
 class ArgError(Exception):
     """A malformed CLI invocation — caller prints .args[0] to stderr and exits 1."""
 
@@ -399,6 +440,9 @@ class Args:
         self.check = False
         self.preflight = False
         self.help = False
+        self.hosts: list[str] = []
+        self.warm: str = ""  # "" | "on" | "off"
+        self.repair: str = ""  # "" | "forwarders"
         self.claude_klabauter_root: str = ""
         self.coordinator_root: str = ""
 
@@ -434,6 +478,31 @@ def parse_args(argv: list[str]) -> Args:
             args.preflight = True
         elif tok == "--help":
             args.help = True
+        elif tok == "--host":
+            i += 1
+            if i >= n or argv[i].startswith("--"):
+                got = argv[i] if i < n else ""
+                raise ArgError(f"ERROR: --host requires a csv of host ids (got: '{got}')")
+            for raw in argv[i].split(","):
+                host_id = raw.strip()
+                if host_id not in FOREIGN_HOSTS:
+                    raise ArgError(
+                        f"ERROR: unknown host: {host_id!r} (expected one of: {', '.join(FOREIGN_HOSTS)})"
+                    )
+                if host_id not in args.hosts:
+                    args.hosts.append(host_id)
+        elif tok == "--warm":
+            i += 1
+            got = argv[i] if i < n else ""
+            if got not in WARM_CHOICES:
+                raise ArgError(f"ERROR: --warm requires one of: {', '.join(WARM_CHOICES)} (got: '{got}')")
+            args.warm = got
+        elif tok == "--repair":
+            i += 1
+            got = argv[i] if i < n else ""
+            if got not in REPAIR_CHOICES:
+                raise ArgError(f"ERROR: --repair requires one of: {', '.join(REPAIR_CHOICES)} (got: '{got}')")
+            args.repair = got
         elif tok == "--claude-klabauter-live-root":
             i += 1
             if i >= n or argv[i].startswith("--"):
@@ -837,15 +906,34 @@ def _record_homebrew_removal(
         print(f"  [ADVISORY] could not write Homebrew-removal record to {log_path}: {exc}", file=sys.stderr)
 
 
+def _find_supported_interpreter() -> str | None:
+    """First `python3.1x` on PATH that is 3.11+ and NOT PEP 668
+    externally-managed, else None. Refusal-path only; at most one probe
+    process per distinct realpath."""
+    seen: set[str] = set()
+    for minor in range(20, 10, -1):
+        found = shutil.which(f"python3.{minor}")
+        if not found:
+            continue
+        real = os.path.realpath(found)
+        if real in seen:
+            continue
+        seen.add(real)
+        if not _is_externally_managed(found):
+            return found
+    return None
+
+
 def _offer_homebrew_removal(
-    candidate: InterpreterCandidate, settings_home_path: Path
+    candidate: InterpreterCandidate,
+    settings_home_path: Path,
+    interactive: bool = True,
 ) -> bool:
     """Offer, interactively, to `brew uninstall` a guarded Homebrew Python
-    that a declared consumer resolves to. PM-authorized 2026-08-17,
-    INCLUDING on `--i-am-agent` — the offer still fires there; it does not
-    require a human at an interactive terminal, only an explicit affirmative
-    answer to proceed, which `--i-am-agent`'s typically-closed stdin already
-    defaults to declining via the EOFError branch below.
+    that a declared consumer resolves to. PM-authorized 2026-08-17 (DR-317).
+    R1 of the 2026-11-05 host-install repair ask narrows it: with
+    `interactive=False` (`--i-am-agent` or a non-TTY stdin) nothing is
+    printed or asked and the function returns False.
 
     Defaults to NO: silence, EOF, or any non-affirmative response declines
     — an explicit affirmative token (`y`/`yes`) is required to proceed.
@@ -860,6 +948,8 @@ def _offer_homebrew_removal(
 
     Returns True iff the operator explicitly affirmed AND the removal
     itself succeeded."""
+    if not interactive:
+        return False
     if not _is_homebrew_python(candidate.path):
         return False
     formula = _homebrew_python_formula(candidate.path)
@@ -1155,6 +1245,7 @@ def provision_deps(
     *,
     container_optin: bool = False,
     installs_engine: bool = True,
+    agent_mode: bool = False,
 ) -> tuple[str, list[str]]:
     """Machine-first dependency provisioning (PM ruling 2026-08-17,
     superseding DR-307's healthy-venv prior-consent branch and retiring
@@ -1197,8 +1288,8 @@ def provision_deps(
     consumer that resolves to it. This is unconditional ("when an
     interpreter raises a guard, swap the interpreter", never narrow the
     blast radius with an override flag). On macOS with Homebrew's guarded
-    `python3`, the operator is offered (interactively, PM-authorized,
-    including on `--i-am-agent`) to `brew uninstall` it —
+    `python3`, an interactive operator (not `agent_mode`) is offered
+    `brew uninstall` of it —
     `_offer_homebrew_removal` — but the refusal for THIS run stands either
     way; a fresh supported interpreter still needs to be installed and the
     installer re-run.
@@ -1293,7 +1384,7 @@ def provision_deps(
 
         removed_any = False
         for c in guarded:
-            if _offer_homebrew_removal(c, settings_home_path):
+            if _offer_homebrew_removal(c, settings_home_path, interactive=not agent_mode):
                 removed_any = True
 
         print(file=sys.stderr)
@@ -1318,6 +1409,13 @@ def provision_deps(
             "policy; this is the expected default there too, not an edge case.",
             file=sys.stderr,
         )
+        supported = _find_supported_interpreter()
+        if supported:
+            print(
+                f"  Supported interpreter found on PATH: {supported} — re-run this installer "
+                f"under it ({supported} scripts/setup.py ...).",
+                file=sys.stderr,
+            )
         if removed_any:
             print(
                 "  A guarded Homebrew Python was removed above at your consent — install its "
@@ -2720,6 +2818,7 @@ def register_claude_klabauter_root(
             print(f"  Remediation: run manually: machine-local set {key} {value}", file=sys.stderr)
             _exit_flushed(1)
         print(f"PASS [registration] {key} = {value}")
+        _note_change("registry", f"machine-local set {key} = {value}")
     for advisory in pending_advisories:
         advisory()
 
@@ -2786,6 +2885,43 @@ def seed_gem_cross_repo_commit_default(*, get=None, put=None) -> None:
     print(f"[OK] {GEM_CROSS_REPO_COMMIT_KEY} = on (default; set off to block Group EM cross-repo commits)")
 
 
+def register_fleet_with_example_retrieval_repo(repo_root: Path) -> None:
+    """Hand every fleet repo to example-retrieval-repo through one detached worker; silent when example-retrieval-repo is absent.
+
+    Writes the registration plan under the settings-home `rag-fleet-registration/` dir and prints one
+    status line. A spawn failure is an ADVISORY on stderr, never an install failure."""
+    if os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION", "").strip() not in ("", "0"):
+        print("SKIP [example-retrieval-repo] fleet registration: COORDINATOR_DISABLE_MACHINE_MUTATION set")
+        return
+    try:
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.install import rag_fleet_registration as reg
+        from coordinator_core.ops.ceremony import detached_spawn
+
+        rag = reg.detect_example_retrieval_repo()
+        if rag is None:
+            return
+        plan = reg.registration_plan(rag)
+        work_dir = settings_home() / "rag-fleet-registration"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        plan["status_path"] = str(work_dir / "status.json")
+        plan["log_path"] = str(work_dir / "worker.log")
+        plan_path = work_dir / "plan.json"
+        plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+        script = Path(__file__).resolve().parent / "rag_fleet_register.py"
+        started = detached_spawn.spawn_detached(str(repo_root), str(script), [str(plan_path)])
+    except (ImportError, OSError, RuntimeError) as exc:
+        print(f"[ADVISORY] example-retrieval-repo fleet registration skipped ({exc}).", file=sys.stderr)
+        return
+    if not started:
+        print(
+            f"[ADVISORY] example-retrieval-repo fleet registration worker did not start; run: {sys.executable} {script} {plan_path}",
+            file=sys.stderr,
+        )
+        return
+    print(f"example-retrieval-repo: fleet registration running in the background; status: {plan['status_path']}")
+
+
 def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     """Install-time warm-engine opt-in, written to `engine.warm.enabled` in
     the machine-local TOML registry — the same registry `register_claude_klabauter_root`
@@ -2822,7 +2958,9 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
     plugin_root = _resolve_plugin_root_for_machine_local(coord_path)
     plugin_root_str = str(plugin_root) if plugin_root else None
 
-    if args.agent_mode:
+    if args.warm:
+        want_warm = args.warm == "on"
+    elif args.agent_mode:
         want_warm = True
     else:
         print()
@@ -2868,6 +3006,7 @@ def offer_warm_opt_in(repo_root: Path, args: Args) -> None:
         print(f"  Remediation: run manually: machine-local set engine.warm.enabled {value}", file=sys.stderr)
         return
     print(f"PASS [registration] engine.warm.enabled = {value}")
+    _note_change("warm-engine", f"machine-local set engine.warm.enabled = {value}")
 
     if want_warm:
         start_warm_engine(repo_root)
@@ -3471,6 +3610,7 @@ def refresh_group_em_home(repo_root: Path, args: Args) -> None:
         if added and scripts_dir in sys.path:
             sys.path.remove(scripts_dir)
     print(f"OK   [group-em] home refreshed from template: {home}")
+    _note_change("group-em", f"home refreshed from template: {home}")
 
 
 def migrate_group_em_inbox(repo_root: Path, args: Args) -> None:
@@ -3565,9 +3705,10 @@ _RETENTION_DAYS = 2
 
 
 def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, args: Args) -> None:
-    """Set `cleanupPeriodDays: 2` in `settings.json` when absent, and lower any larger value.
+    """Set `cleanupPeriodDays: 2` in `settings.json` only when the key is absent.
 
-    ADVISORY, non-fatal. An existing value at or below 2 is never raised; malformed
+    ADVISORY, non-fatal. An existing value is never changed (lowering deletes
+    transcripts irreversibly at next Claude start); malformed
     JSON is left untouched. Atomic write (temp + os.replace). Refused under
     `COORDINATOR_DISABLE_MACHINE_MUTATION`."""
     print()
@@ -3593,9 +3734,7 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
                 return
         current = data.get("cleanupPeriodDays")
         had_key = "cleanupPeriodDays" in data
-        if had_key and not (
-            isinstance(current, (int, float)) and not isinstance(current, bool) and current > _RETENTION_DAYS
-        ):
+        if had_key:
             print(f"SKIP [retention] cleanupPeriodDays already set ({current!r}) in {settings_path}")
             return
         data["cleanupPeriodDays"] = _RETENTION_DAYS
@@ -3606,6 +3745,7 @@ def apply_transcript_retention_default(claude_klabauter_root_resolved: Path, arg
             os.replace(tmp, settings_path)
         finally:
             tmp.unlink(missing_ok=True)
+        _note_change("transcript-retention", f"cleanupPeriodDays {current!r} -> {_RETENTION_DAYS} in {settings_path}")
         print(f"PASS [retention] cleanupPeriodDays={_RETENTION_DAYS} set in {settings_path} (was {current!r})")
     except Exception as exc:  # noqa: BLE001 - advisory step, never fatal
         print(f"WARN [retention] skipped ({type(exc).__name__}: {exc})", file=sys.stderr)
@@ -3981,6 +4121,7 @@ def install_bin_forwarders(repo_root: Path, engine_py: str, claude_klabauter_roo
         print(f"  Re-run manually: {engine_py} -m coordinator_core.install.substrate --setup-only "
               f"(CLAUDE_PLUGIN_ROOT={plugin_root})", file=sys.stderr)
         return True
+    _note_change("forwarders", "bin-forwarder install ran (missing or stale members restored)")
     return False
 
 
@@ -4368,8 +4509,8 @@ def install_host_sampler_task(repo_root: Path, claude_klabauter_root_resolved: P
         register_host_sampler_task,
     )
 
-    register_host_sampler_task(repo_root)
-
+    if register_host_sampler_task(repo_root):
+        _note_change("host-sampler", "host-resource sampler scheduled job registered or refreshed")
 
 def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwarders_failed: bool = False) -> None:
     """Install-chain step: report whether `<settings-home>` is actually
@@ -4579,13 +4720,101 @@ def run_check(claude_klabauter_root: Path) -> int:
     else:
         keys = ["repos.claude_klabauter"]
     print("=== setup.py --check ===")
+    print(check_target_label(identity, claude_klabauter_root))
     items = setup_check.run_checks(claude_klabauter_root, settings_home(), claude_config_dir(), keys, registry_get)
     items.append(check_installed_exec_bit_parity(Path(__file__).resolve().parent.parent, settings_home()))
     for item in items:
         print(item.line())
     code = setup_check.exit_code(items)
-    print("check: all items verified" if code == 0 else "check: FAILED -- re-run scripts/setup.py")
+    if code == 0:
+        print("check: all items verified")
+    else:
+        print(f"check: FAILED -- {check_failure_remediation(identity, claude_klabauter_root, registry_get)}")
     return code
+
+
+def check_target_label(identity: str | None, claude_klabauter_root: Path) -> str:
+    """The `--check` line naming which install this run verified."""
+    if identity == IDENTITY_AUTHORING:
+        return f"target: authoring checkout {claude_klabauter_root}"
+    return f"target: published engine root {claude_klabauter_root}"
+
+
+def check_failure_remediation(identity: str | None, claude_klabauter_root: Path, registry_get) -> str:
+    """`--check` FAILED remediation: always names a published install's own setup.py, never a bare rerun."""
+    if identity != IDENTITY_AUTHORING:
+        return f"re-run {claude_klabauter_root / 'scripts' / 'setup.py'} (this published engine root's own installer)"
+    published = registry_get("repos.claude_klabauter")
+    if published:
+        return (
+            f"verify the published engine root with `{Path(published) / 'scripts' / 'setup.py'} --check`; "
+            "authoring-checkout failures clear at publication"
+        )
+    return (
+        "no published engine root registered (repos.claude_klabauter unset); install from the published "
+        "claude-klabauter clone's scripts/setup.py; authoring-checkout failures clear at publication"
+    )
+
+
+def run_engine_floor_decide(repo_root: Path, engine_py: str, args: Args) -> str | None:
+    """Install path only: run the plugin's `engine-floor-decide.py` once and print its verdict.
+
+    Returns the verdict word (clean|behind|undecided|indeterminate) or None when the decider is absent.
+    An absent decider or an undecided verdict prints the one bounded command to run by hand.
+    """
+    coord_path, source = _resolve_coordinator_claude_root(repo_root, args)
+    plugin_root = None if source.is_publish_mirror_rejected else _resolve_plugin_root_for_machine_local(coord_path)
+    decider = None
+    if plugin_root is not None:
+        for candidate in (plugin_root / "bin", plugin_root / "coordinator" / "bin"):
+            if (candidate / "engine-floor-decide.py").is_file():
+                decider = candidate / "engine-floor-decide.py"
+                break
+    print()
+    print("--- Verification: engine floor ---")
+    if decider is None:
+        print(
+            "[ADVISORY] engine floor undecided: coordinator plugin's engine-floor-decide.py not found "
+            f"(coordinator-claude root: {source.display}). Once the plugin is installed, run: "
+            f"{engine_py} <plugin>/coordinator/bin/engine-floor-decide.py"
+        )
+        return None
+    command = f"{engine_py} {decider}"
+    try:
+        proc = subprocess.run(
+            [engine_py, str(decider)], capture_output=True, text=True, timeout=45, **_NO_CONSOLE
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"[ADVISORY] engine floor undecided: decider did not run ({exc}). Run: {command}")
+        return "undecided"
+    line = (proc.stdout.strip().splitlines() or [""])[-1]
+    verdict = line.split(":", 1)[0].strip() or "undecided"
+    print(f"  {line or 'engine-floor-decide printed nothing'}")
+    if verdict not in ("clean", "behind"):
+        print(f"[ADVISORY] engine floor {verdict}: run to retry: {command}")
+    return verdict
+
+
+def _register_only_forwarder_item(claude_klabauter_root: Path):
+    """`--register-only` completeness verdict: the `--check` forwarders item, evaluated now."""
+    if str(claude_klabauter_root) not in sys.path:
+        sys.path.insert(0, str(claude_klabauter_root))
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.install import setup_check
+
+    return setup_check.check_forwarders(settings_home(), claude_klabauter_root)
+
+
+def run_repair_forwarders(repo_root: Path, claude_klabauter_root: Path, args: Args) -> int:
+    """`--repair forwarders`: reinstall the bin-forwarder members, re-verify, and touch nothing else."""
+    _reset_resolution_journal()
+    failed = install_bin_forwarders(repo_root, resolve_python(), claude_klabauter_root, args)
+    if not any(component == "forwarders" for component, _ in _CHANGES):
+        _note_change("forwarders", "repair attempted; writer failed, state unverified" if failed else "repair ran; no member change recorded")
+    item = _register_only_forwarder_item(claude_klabauter_root)
+    print(item.line())
+    _print_change_summary()
+    return 1 if (failed or not item.ok) else 0
 
 
 def run_preflight() -> int:
@@ -4720,6 +4949,44 @@ def _print_spotlight_advice(repo_root: Path, claude_klabauter_root_resolved: Pat
         print(f"[ADVISORY] {advice}")
 
 
+def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, check: bool = False) -> None:
+    """Opt-in step (`--host`): install example-retrieval-repo MCP wiring onto Codex / agy.
+
+    Prints one `[host:<id>]` report line per host plus indented detail. ADVISORY: a host whose
+    binary is absent is reported under unreachable, any failure prints WARN, and nothing here
+    changes the exit status. check=True writes nothing.
+    """
+    if not args.hosts:
+        return
+    print()
+    print("--- Install: foreign hosts ---")
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core.install import host_install_agy, host_install_codex
+        from coordinator_core.install.host_targets import plan
+    except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
+        print(f"WARN [host] installer modules unavailable: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return
+    writers = {"codex": host_install_codex.apply, "agy": host_install_agy.apply}
+    for host in args.hosts:
+        try:
+            hp = plan(host)
+            result = writers[host](check=check)
+            print(
+                f"[host:{host}] binary={hp.binary or 'absent'} mcp={result.mcp} "
+                f"config={result.config_path}"
+            )
+            for note in result.notes:
+                print(f"  note: {note}")
+            for item in hp.unreachable:
+                print(f"  unreachable: {item}")
+            if hp.binary is None:
+                print(f"  unreachable: {host} binary not found on PATH")
+        except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
+            print(f"[host:{host}] WARN could not report: {type(exc).__name__}: {exc}", file=sys.stderr)
+
+
 def main(argv: list[str]) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -4753,7 +5020,17 @@ def main(argv: list[str]) -> int:
     repo_root = script_path.parent.parent
     claude_klabauter_root_resolved, claude_klabauter_root_source = resolve_claude_klabauter_root(repo_root, args)
     if args.check:
-        return run_check(claude_klabauter_root_resolved)
+        check_rc = run_check(claude_klabauter_root_resolved)
+        install_foreign_hosts(claude_klabauter_root_resolved, args, check=True)
+        return check_rc
+
+    if args.repair == "forwarders":
+        return run_repair_forwarders(repo_root, claude_klabauter_root_resolved, args)
+
+    if args.hosts:
+        install_foreign_hosts(claude_klabauter_root_resolved, args)
+        _print_change_summary()
+        return 0
 
     migrate_legacy_content_root()
 
@@ -4803,6 +5080,7 @@ def main(argv: list[str]) -> int:
             py,
             container_optin=args.container_optin,
             installs_engine=resolve_repo_identity(claude_klabauter_root_resolved) == IDENTITY_MIRROR,
+            agent_mode=args.agent_mode,
         )
 
     if not args.register_only:
@@ -4820,11 +5098,15 @@ def main(argv: list[str]) -> int:
     if not args.register_only:
         write_environment_import(repo_root, "local")
     offer_warm_opt_in(repo_root, args)
+    if not args.register_only:
+        register_fleet_with_example_retrieval_repo(repo_root)
     seed_heavy_admission_defaults()
     seed_gem_cross_repo_commit_default()
     verify_coordinator_core_importable(claude_klabauter_root_resolved, engine_py, import_names)
     dialect_disarmed = check_dialect_guard_armed(claude_klabauter_root_resolved, engine_py)
     probe_hard_failure = run_health_probe(claude_klabauter_root_resolved, engine_py, args.agent_mode)
+    if not args.register_only:
+        run_engine_floor_decide(repo_root, engine_py, args)
 
     if not args.register_only:
         # ORDER IS LOAD-BEARING AND SILENTLY SO -- forwarders FIRST, door SECOND.
@@ -4847,6 +5129,7 @@ def main(argv: list[str]) -> int:
         apply_runtime_gitignore(repo_root, args)
         migrate_group_em_inbox(repo_root, args)
         if not apply_settings_manifest_env(repo_root, claude_klabauter_root_resolved, args):
+            _print_change_summary()
             return 1
         apply_transcript_retention_default(claude_klabauter_root_resolved, args)
         install_percolate_identity(repo_root, claude_klabauter_root_resolved)
@@ -4863,6 +5146,17 @@ def main(argv: list[str]) -> int:
         _print_spotlight_advice(repo_root, claude_klabauter_root_resolved)
 
     print()
+    _print_change_summary()
+    if args.register_only:
+        fwd = _register_only_forwarder_item(claude_klabauter_root_resolved)
+        if not fwd.ok:
+            print(fwd.line(), file=sys.stderr)
+            print(
+                "=== claude-klabauter setup: registration only -- NOT a full install ===\n"
+                "  skipped: dependency provisioning, bin forwarders, warm door, settings, identity, receipt.\n"
+                "  restore the forwarder members without a full install: python3 scripts/setup.py --repair forwarders"
+            )
+            return 1
     if probe_hard_failure:
         print("=== claude-klabauter setup: complete, but a HARD-severity health probe failed ===")
     else:

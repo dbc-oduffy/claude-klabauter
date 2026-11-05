@@ -385,10 +385,10 @@ def _stage_minted(root: Path, run_id: str) -> bool:
 def runner_unproven(
     repo_root: Path, run_id: str, *, now: Optional[float] = None, tmpdir: Optional[str] = None
 ) -> bool:
-    """True only when `run_id` has a live token record, its stage is minted or absent, no launch is
-    recoverable (launch records, the submitting call's launch result, a terminal result naming the
-    run), and it was minted more than `MINTED_RUNNER_GRACE_SECONDS` before `now`. Every read
-    failure answers False. Never spends the token. No spawn."""
+    """True only when `run_id` has a live token record, its stage is minted or absent, no launch
+    record joins it, its submission names neither a call nor a transcript, and it was minted more
+    than `MINTED_RUNNER_GRACE_SECONDS` before `now`. Reads records only, never a transcript; every
+    read failure answers False. Never spends the token. No spawn."""
     try:
         root = Path(repo_root)
         record = next((r for r in _token_records(root) if r.get("run_id") == run_id), None)
@@ -405,17 +405,8 @@ def runner_unproven(
         tool_use_id = submission.get("tool_use_id")
         if _own_launch_ids(session_id, script, _launch_dirs(tmpdir), tool_use_id, minted_at):
             return False
-        transcript = submission.get("transcript_path")
-        has_transcript = isinstance(transcript, str) and bool(transcript)
-        tail = _tail(transcript) if has_transcript else ""
-        has_call = isinstance(tool_use_id, str) and bool(tool_use_id)
-        if (has_transcript or has_call) and not tail:
-            return False
-        if has_call:
-            seen = tail if tool_use_id in tail else _earlier_lines(transcript, tool_use_id) + "\n" + tail
-            if _call_refused(seen, tool_use_id) or _launch_task_id(seen, tool_use_id):
-                return False
-        return not _result_names_run(session_id, transcript if has_transcript else None, tail, run_id)
+        # A submitted call or transcript is a runner this record-only check cannot disprove.
+        return not (tool_use_id or submission.get("transcript_path"))
     except Exception:
         return False
 
@@ -430,6 +421,8 @@ def _run_ended(
     snapshot: Optional[LaunchSnapshot] = None,
     run_id: Optional[str] = None,
     repo_root: Optional[Path] = None,
+    *,
+    records_only: bool = False,
 ) -> Optional[str]:
     """Why the run is over, else None while it is live: `_EVIDENCE` once the harness reported the
     run's task terminal (halted returns included) or the submitting call was refused; `_TIMER`
@@ -438,7 +431,11 @@ def _run_ended(
     instead; it needs `repo_root` and `run_id` to read the stage.
 
     A run started inside a deferred-emit script has no launch record under its own script and no
-    submission: its terminal notification is found by the `run_id` its result names."""
+    submission: its terminal notification is found by the `run_id` its result names.
+
+    With `records_only`, no transcript is read: live unless the owner exited (`_EVIDENCE`) or a
+    no-launch grace passed (`_TIMER`); a run with launch ids reads live. Trap: a deferred-emit run has no
+    launch ids of its own, so it reads over after the grace here; the transcript path alone finds it."""
     if not (isinstance(session_id, str) and session_id) or not isinstance(script_path, str):
         # An ownerless token is the unlaunched state with no owner to read: it ages out on the
         # same bound and is never spent.
@@ -446,6 +443,13 @@ def _run_ended(
     if _owner_exited(session_id, minted_at):
         return _EVIDENCE
     task_ids = _own_launch_ids(session_id, script_path, dirs, tool_use_id, minted_at, snapshot)
+    if records_only:
+        if task_ids:
+            return None
+        grace = UNLAUNCHED_GRACE_SECONDS
+        if run_id and repo_root is not None and _stage_minted(Path(repo_root), run_id):
+            grace = MINTED_RUNNER_GRACE_SECONDS
+        return _TIMER if time.time() - minted_at > grace else None
     has_transcript = isinstance(transcript_path, str) and bool(transcript_path)
     if not has_transcript:
         tail = ""
@@ -733,10 +737,13 @@ def _record_live(
     *,
     ended_on_evidence: bool = False,
     snapshot: Optional[LaunchSnapshot] = None,
+    records_only: bool = False,
 ) -> bool:
     """True while the run is live; with `ended_on_evidence`, True only when the run ended on the
-    harness's evidence (the one site that consumes the token)."""
+    harness's evidence (the one site that consumes the token). `records_only` reads no transcript
+    and never spends the token or writes a halt marker; it has no meaning with `ended_on_evidence`."""
     run_id = record["run_id"]
+    records_only = records_only and not ended_on_evidence
     if not ended_on_evidence and _holds_ended_marker(root, run_id):
         return False
     submission = _read_json(_submission_path(root, run_id)) or {}
@@ -755,11 +762,14 @@ def _record_live(
         snapshot,
         run_id,
         root,
+        records_only=records_only,
     )
-    if ended == _EVIDENCE:
+    if ended == _EVIDENCE and not records_only:
         _run_token.consume(root, run_id)
     if ended_on_evidence:
         return ended == _EVIDENCE
+    if records_only:
+        return ended is None
     if ended is None and _halted_on_usage_limit(
         root, run_id, record, submission, run_session, transcript, script, dirs
     ):

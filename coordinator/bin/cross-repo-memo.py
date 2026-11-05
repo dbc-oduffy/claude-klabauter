@@ -3485,9 +3485,34 @@ def _cmd_send(args: argparse.Namespace) -> int:
         )
 
     try:
-        result = cc_invoke.route_mutation(
-            "memo.send", {"dry_run": False, "topic": topic}, sender_root, legacy_send
-        )
+        _sent_copy = _sent_outbox_archive_path(_outbox_write_path(sender_root, topic))
+    except Exception:  # engine binding unavailable: the op itself will refuse loudly
+        _sent_copy = ""
+    _sent_existed_before = bool(_sent_copy) and os.path.exists(_sent_copy)
+
+    try:
+        try:
+            result = cc_invoke.route_mutation(
+                "memo.send", {"dry_run": False, "topic": topic}, sender_root, legacy_send
+            )
+        except getattr(cc_invoke, "WarmDispatchIndeterminate", ()) as indeterminate:
+            print(f"cross-repo-memo send: {indeterminate}", file=sys.stderr)
+            if _sent_copy and os.path.exists(_sent_copy) and not _sent_existed_before:
+                print(
+                    "cross-repo-memo send: RECONCILED — the send completed despite "
+                    "the error above; the sender receipt is on disk. Do NOT re-send."
+                )
+                print(f"Sender-side receipt: {_sent_copy}")
+                return 0
+            print(
+                "cross-repo-memo send: no sender receipt yet — resuming once; "
+                "memo.send reconciles a delivery already landed in the receiver "
+                "(receipt only, no second delivery).",
+                file=sys.stderr,
+            )
+            result = cc_invoke.route_mutation(
+                "memo.send", {"dry_run": False, "topic": topic}, sender_root, legacy_send
+            )
     except RuntimeError as exc:
         print(f"cross-repo-memo send: {exc}", file=sys.stderr)
         _print_route_mutation_failure_reasons(exc)

@@ -45,6 +45,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     OwedRow,
     StageManifest,
     delivery_note_rel,
+    lineage_stop_after,
     record_dir,
     stamp_run_stage,
     rulable_ids,
@@ -2027,17 +2028,23 @@ def manifest_payload(root: Path, manifest: StageManifest) -> dict:
 
 
 def _consume_park_marker(root: Path, run_id: str) -> bool:
-    """True when the run's record dir holds a `stop_after == "plan"` marker the run has not yet parked
-    on. The marker is unlinked only once `halted.json` records the park, so a parked reply lost in
-    relay parks again rather than staging past the revise. An absent, unreadable or malformed marker
-    is False."""
+    """True when the run, or an ancestor in its lineage (`lineage_stop_after`), holds a
+    `stop_after == "plan"` marker the run has not yet parked on. The run's own marker is unlinked only
+    once `halted.json` records the park, so a parked reply lost in relay parks again rather than staging
+    past the revise. An ancestor's marker is never unlinked here: a successor with no park recorded
+    parks, and one whose `halted.json` records the park has discharged it. An absent, unreadable or
+    malformed marker and a lineage without one is False."""
     try:
         dir_ = record_dir(root, run_id)
-        marker = dir_ / STOP_AFTER_FILE
+    except ValueError:
+        return False
+    marker = dir_ / STOP_AFTER_FILE
+    try:
         data = json.loads(marker.read_text(encoding="utf-8"))
     except (ValueError, OSError):
-        return False
-    if not isinstance(data, dict) or data.get("stop_after") != STOP_AFTER_PLAN:
+        data = None
+    own = isinstance(data, dict) and data.get("stop_after") == STOP_AFTER_PLAN
+    if not own and lineage_stop_after(root, run_id) != STOP_AFTER_PLAN:
         return False
     try:
         halted = json.loads((dir_ / "halted.json").read_text(encoding="utf-8"))
@@ -2045,10 +2052,11 @@ def _consume_park_marker(root: Path, run_id: str) -> bool:
         halted = None
     if not (isinstance(halted, dict) and halted.get("halted") == HALT_PARKED):
         return True
-    try:
-        marker.unlink()
-    except OSError:
-        pass
+    if own:
+        try:
+            marker.unlink()
+        except OSError:
+            pass
     return False
 
 

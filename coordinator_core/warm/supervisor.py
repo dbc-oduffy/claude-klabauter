@@ -120,6 +120,8 @@ __all__ = [
     "DISCOVERY_FILENAME",
     "HEALTH_PATH",
     "HOOK_PATH",
+    "IN_FLIGHT_PATH",
+    "in_flight_count",
     "HEALTH_CHECK_TIMEOUT_SECS",
     "SPAWN_DEBOUNCE_SECS",
     "ENTRY_SCRIPT",
@@ -148,6 +150,13 @@ __all__ = [
 DISCOVERY_FILENAME = "warm-http.json"
 
 HEALTH_PATH = "/health"
+
+#: Cookie-gated GET answering `{"in_flight": <ops executing now>}`; the publish handover's drain probe.
+IN_FLIGHT_PATH = "/warm/in-flight"
+
+#: Longest a new op parks while a publish handover is pending before it runs anyway.
+HANDOVER_PARK_BOUND_SECS = 120.0
+HANDOVER_PARK_POLL_SECS = 0.05
 
 HOOK_PATH = hook_http.HOOK_PATH
 
@@ -496,6 +505,55 @@ def check_health(
             return 200 <= int(status) < 300
     except Exception:  # noqa: BLE001 -- a health check must never raise, see docstring
         return False
+
+
+def in_flight_count(
+    engine_root: Optional[Path] = None,
+    *,
+    timeout: float = HEALTH_CHECK_TIMEOUT_SECS,
+    opener: Any = None,
+) -> Optional[int]:
+    """Ops executing in this root's live supervisor right now.
+
+    0 when no live listener is recorded (nothing to stop under). None when a live listener
+    cannot be asked or answers malformed: the caller must treat that as in flight. Reads only;
+    the ask is not itself counted as in flight. Never raises.
+    """
+    import urllib.error
+    import urllib.request
+
+    root = engine_root if engine_root is not None else _default_engine_clone()
+    try:
+        record = read_discovery(root)
+        if not isinstance(record, dict) or not discovery_is_live(record):
+            return 0
+        url = listener_url(record)
+        secret = cookie.read(root)
+        if not url or not secret:
+            return None
+        req = urllib.request.Request(
+            url.rstrip("/") + IN_FLIGHT_PATH, headers={cookie.COOKIE_HEADER: secret}, method="GET"
+        )
+        open_url = opener if opener is not None else urllib.request.urlopen
+        with open_url(req, timeout=timeout) as resp:
+            count = json.loads(resp.read().decode("utf-8")).get("in_flight")
+        return count if isinstance(count, int) and not isinstance(count, bool) and count >= 0 else None
+    except urllib.error.HTTPError as exc:
+        # Trap: a 404 is a live server that predates IN_FLIGHT_PATH. Reading it as in flight
+        # refuses every handover until a publish replaces it, which that refusal blocks; its stop
+        # path drains in-flight work before signalling, so no count is the pre-endpoint guarantee.
+        return 0 if exc.code == 404 else None
+    except Exception:  # noqa: BLE001 -- a probe never raises; unknown reads as in flight
+        return None
+
+
+def _park_while_handover_pending(ctx: "_ServerContext") -> None:
+    """Hold a new op, before it counts as in flight, while this root's publish handover is pending."""
+    if ctx.engine_root is None:
+        return
+    deadline = time.monotonic() + HANDOVER_PARK_BOUND_SECS
+    while breadcrumb.handover_pending_held(ctx.engine_root) and time.monotonic() < deadline:
+        time.sleep(HANDOVER_PARK_POLL_SECS)
 
 
 def supervisor_pipe_name(
@@ -1126,6 +1184,9 @@ def _make_handler(ctx: "_ServerContext"):
                 self.end_headers()
                 self.wfile.write(body)
                 return
+            if self.path.rstrip("/") == IN_FLIGHT_PATH:
+                self._respond_json({"in_flight": ctx.in_flight()})
+                return
             self.send_response(404)
             self.end_headers()
 
@@ -1144,6 +1205,7 @@ def _make_handler(ctx: "_ServerContext"):
                 self.end_headers()
                 return
 
+            _park_while_handover_pending(ctx)
             ctx.in_flight.enter()
             released = False
 

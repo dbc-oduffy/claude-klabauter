@@ -53,6 +53,15 @@ def test_seeds_only_the_newest_turn(repo):
     )
 
 
+def test_default_mint_lands_in_the_month_shard(repo):
+    from datetime import date
+    _turns("an ask")
+    out = _mint(repo)
+    month = date.today().strftime("%Y-%m")
+    assert out["sizing_path"].startswith(f"state/sizings/{month}/")
+    assert not list((repo / "state" / "sizings").glob("*.yaml"))
+
+
 def test_output_is_schema_valid(repo):
     _turns("ship it now please")
     out = _mint(repo, em_brief="keep it small")
@@ -129,7 +138,7 @@ def test_relayed_source_ignores_a_recorded_turn_and_leaves_the_mark(repo):
 def test_refuses_an_existing_path(repo, monkeypatch):
     _turns("an ask")
     from datetime import date
-    target = repo / "state" / "sizings" / f"{date.today().isoformat()}-do-the-thing.yaml"
+    target = repo / "state" / "sizings" / date.today().strftime("%Y-%m") / f"{date.today().isoformat()}-do-the-thing.yaml"
     target.parent.mkdir(parents=True)
     target.write_text("schema: sizing-object\n", encoding="utf-8")
     out = _mint(repo)
@@ -142,7 +151,7 @@ def test_second_mint_of_the_same_turn_refuses(repo):
     assert _mint(repo)["exit_code"] == 0
     again = _mint(repo, name="other name")
     assert again["exit_code"] == 1 and "turn 0 is already sized" in again["error"]
-    assert not list((repo / "state" / "sizings").glob("*other-name*"))
+    assert not list((repo / "state" / "sizings").glob("**/*other-name*"))
 
 
 def test_a_newer_turn_mints_after_the_mark(repo):

@@ -348,6 +348,8 @@ OP_MODULE_MAP: Dict[str, str] = {
     "groupem.box_place":                      "coordinator_core.ops.group_em_box_federation",
     "groupem.box_send":                       "coordinator_core.ops.group_em_box_federation",
     "groupem.box_roster":                     "coordinator_core.ops.group_em_box_federation",
+    "groupem.suite_grant_receive":            "coordinator_core.ops.group_em_box_federation",
+    "groupem.box_key_pin":                    "coordinator_core.ops.group_em_box_federation",
     "workstream_complete.stand_down_watchers": "coordinator_core.ops.watcher_stand_down",
     "session.work_state":                     "coordinator_core.ops.session_work_state",
     "session.artifact_owner":                 "coordinator_core.ops.session_artifact_owner",

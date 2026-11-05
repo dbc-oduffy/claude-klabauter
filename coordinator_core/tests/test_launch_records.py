@@ -30,7 +30,7 @@ def test_session_record_paths_absent_and_present(tmp_path):
     assert lr.session_record_paths(t, "s1") == []
     assert lr.session_record_paths(t, "../bad") == []
     p = lr.record_path(t, "s1", "t1")
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         f.write("{}")
     assert lr.session_record_paths(t, "s1") == [p]
     assert lr.session_record_paths(t, "s2") == []
@@ -64,7 +64,7 @@ def _forbid_listing(monkeypatch, forbidden):
 def test_session_record_paths_never_lists_parent(tmp_path, monkeypatch):
     t = str(tmp_path)
     lr.record_path(t, "s1", "t1")
-    open(lr.record_path(t, "s1", "t1"), "w").close()
+    open(lr.record_path(t, "s1", "t1"), "w", encoding="utf-8").close()
     forbidden = {
         os.path.normcase(os.path.abspath(t)),
         os.path.normcase(os.path.abspath(os.path.join(t, "workflow-runs"))),
@@ -83,7 +83,7 @@ def test_migrate_moves_named_flat_without_listing(tmp_path, monkeypatch):
     src1 = lr.flat_record_path(ta, "s1", "t1")
     src2 = lr.flat_record_path(tb, "s1", "t2")
     for s, c in ((src1, "one"), (src2, "two")):
-        with open(s, "w") as f:
+        with open(s, "w", encoding="utf-8") as f:
             f.write(c)
     unrelated = a / "workflow-run-s1-notnamed.json"
     unrelated.write_text("x")
@@ -94,8 +94,8 @@ def test_migrate_moves_named_flat_without_listing(tmp_path, monkeypatch):
         _forbid_listing(scoped, forbidden)
         n = lr.migrate_flat_records([ta, tb], "s1", ["t1", "t2", "t3", "t1", "../bad"])
     assert n == 2
-    assert open(os.path.join(ta, "workflow-runs", "s1", "t1.json")).read() == "one"
-    assert open(os.path.join(ta, "workflow-runs", "s1", "t2.json")).read() == "two"
+    assert open(os.path.join(ta, "workflow-runs", "s1", "t1.json"), encoding="utf-8").read() == "one"
+    assert open(os.path.join(ta, "workflow-runs", "s1", "t2.json"), encoding="utf-8").read() == "two"
     assert not os.path.exists(src1) and not os.path.exists(src2)
     assert unrelated.exists()
     assert not os.path.exists(lr.session_dir(ta, "s1") + "/t3.json")
@@ -106,11 +106,11 @@ def test_migrate_never_overwrites_and_creates_no_dir_without_source(tmp_path):
     assert lr.migrate_flat_records([t], "s1", ["t1"]) == 0
     assert not os.path.exists(lr.session_dir(t, "s1"))
     dest = lr.record_path(t, "s1", "t1")
-    with open(dest, "w") as f:
+    with open(dest, "w", encoding="utf-8") as f:
         f.write("new")
     src = lr.flat_record_path(t, "s1", "t1")
-    with open(src, "w") as f:
+    with open(src, "w", encoding="utf-8") as f:
         f.write("old")
     assert lr.migrate_flat_records([t], "s1", ["t1"]) == 0
-    assert open(dest).read() == "new"
+    assert open(dest, encoding="utf-8").read() == "new"
     assert lr.migrate_flat_records([t], "bad/s", ["t1"]) == 0

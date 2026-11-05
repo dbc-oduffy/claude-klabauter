@@ -23,6 +23,14 @@ def _hso(env: dict) -> dict:
     return env["hookSpecificOutput"]
 
 
+def _advises(env: dict) -> str:
+    """`hand-dispatch-planner` is unregistered, so its refusal is a PreToolUse advisory at every level."""
+    hso = _hso(env)
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: ")
+    return hso["additionalContext"]
+
+
 @pytest.fixture
 def strict(monkeypatch):
     monkeypatch.setattr(machine_profile, "guard_level", lambda _name: "strict")
@@ -31,8 +39,7 @@ def strict(monkeypatch):
 @pytest.mark.parametrize("stype", sorted(mod.PLANNER_TYPES))
 def test_top_level_planner_is_denied_naming_sizing_before_plan(strict, stype):
     out = mod.hand_dispatch_deny(_payload(stype), stype)
-    assert _hso(out)["permissionDecision"] == "deny"
-    reason = _hso(out)["permissionDecisionReason"]
+    reason = _advises(out)
     assert reason.index("Skill(coordinator:sizing)") < reason.index("Skill(coordinator:plan)")
     assert "mise-prep" not in reason
 
@@ -46,13 +53,13 @@ def test_mise_prep_brief_passes_for_plan_author(strict, stype):
 def test_mise_prep_token_does_not_carve_out_roadmap_planner(strict):
     stype = "coordinator:roadmap-planner"
     out = mod.hand_dispatch_deny(_payload(stype, "mise-prep-gate"), stype)
-    assert _hso(out)["permissionDecision"] == "deny"
+    _advises(out)
 
 
 @pytest.mark.parametrize("prompt", ["pre-mise-prep-gate", "mise-prep-gates", "mise-prep gate"])
 def test_token_must_be_whole(strict, prompt):
     stype = "coordinator:plan-author"
-    assert _hso(mod.hand_dispatch_deny(_payload(stype, prompt), stype))["permissionDecision"] == "deny"
+    _advises(mod.hand_dispatch_deny(_payload(stype, prompt), stype))
 
 
 def test_nested_dispatch_passes(strict):
@@ -115,10 +122,10 @@ def _repo(tmp_path, claimed):
 def test_plan_author_naming_a_sizing_whose_plan_omits_rows_is_denied(strict, tmp_path, stype):
     root = _repo(tmp_path, ["R1"])
     payload = _payload(stype, f"Amend the plan to claim R2. Sizing: {SIZING}", cwd=str(root))
-    assert _hso(mod.hand_dispatch_deny(payload, stype))["permissionDecision"] == "deny"
+    _advises(mod.hand_dispatch_deny(payload, stype))
 
 
 def test_bare_plan_author_stays_denied_with_a_repo_present(strict, tmp_path):
     stype = "coordinator:plan-author"
     payload = _payload(stype, "write the plan", cwd=str(_repo(tmp_path, ["R1"])))
-    assert _hso(mod.hand_dispatch_deny(payload, stype))["permissionDecision"] == "deny"
+    _advises(mod.hand_dispatch_deny(payload, stype))

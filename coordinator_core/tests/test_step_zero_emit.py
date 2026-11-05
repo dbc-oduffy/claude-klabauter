@@ -97,3 +97,54 @@ def test_emit_writes_trailing_newline_only(tmp_path):
     out = buf.getvalue()
     assert out.endswith("\n")
     assert out.count("\n") == 1
+
+
+# --- emit_step_zero exit rule follows the severity labels -------------------
+
+import importlib.util
+import sys
+from pathlib import Path
+
+_BIN_PROBE = Path(__file__).parent.parent.parent / "bin" / "claude-klabauter-doctor-probe.py"
+
+
+def _load_probe():
+    spec = importlib.util.spec_from_file_location("claude_klabauter_doctor_probe_step_zero_exit", _BIN_PROBE)
+    mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = mod
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _exit_for(mod, capsys, *rows):
+    code = mod.emit_step_zero(list(rows))
+    capsys.readouterr()
+    return code
+
+
+def test_step_zero_exit_zero_when_only_advisory_rows_fail(capsys):
+    mod = _load_probe()
+    adv = mod._ProbeResult("a", mod._BROKEN, "d", "r", required=False)
+    ok = mod._ProbeResult("b", mod._PASS, "d", "r", required=True)
+    assert _exit_for(mod, capsys, adv, ok) == 0
+
+
+def test_step_zero_exit_zero_on_hard_inconclusive_row(capsys):
+    mod = _load_probe()
+    skipped = mod._ProbeResult("c", mod._PASS, "d", "r", required=True, skipped=True)
+    assert _exit_for(mod, capsys, skipped) == 0
+
+
+def test_step_zero_exit_one_on_hard_fail(capsys):
+    mod = _load_probe()
+    for status in (mod._BROKEN, mod._DEGRADED):
+        hard = mod._ProbeResult("d", status, "d", "r", required=True)
+        assert _exit_for(mod, capsys, hard) == 1
+
+
+def test_worktree_bloat_is_not_a_required_probe():
+    import tomllib
+
+    manifest = tomllib.loads((_BIN_PROBE.parent / "doctor-probes.toml").read_text(encoding="utf-8"))
+    row = next(p for p in manifest["probe"] if p["id"] == "claude-klabauter.worktree.bloat")
+    assert row["required"] is False

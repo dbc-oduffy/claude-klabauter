@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
+import tempfile
 import uuid
+from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.resource_lifecycle.errors import LeaseHeld
 from coordinator_core.resource_lifecycle.lease import Lease
 
@@ -27,8 +31,14 @@ def _name() -> str:
 
 
 @pytest.fixture
-def lease_dir(tmp_path):
-    return tmp_path / "l"
+def lease_dir():
+    # pytest's tmp_path pushes the socket path past the 100-byte sun_path budget on macOS.
+    base = "/tmp" if os.name == "posix" and len(tempfile.gettempdir()) > 40 else None
+    root = tempfile.mkdtemp(prefix="ls", dir=base)
+    try:
+        yield Path(root) / "l"
+    finally:
+        rmtree_or_raise(Path(root), label="lease-test")
 
 
 def _spawn_holder(name, directory):

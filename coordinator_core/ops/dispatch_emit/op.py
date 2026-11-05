@@ -263,9 +263,13 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     RELAYED_ASK_FILE,
     RUN_DIR_ROOT,
+    HALT_PARKED,
+    STOP_AFTER_FILE,
     STOP_AFTER_KEY,
     STOP_AFTER_PLAN,
+    lineage_stop_after,
     record_dir,
+    write_stop_after_marker,
 )
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
@@ -847,9 +851,13 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     if ask_ctx.get("sizing_rel") and not ask_ctx.get("reserved_parent"):
         _seed_run_base(root, ask_ctx["run_id"], ask_ctx.get("inherited_base"))
         _record_run_base(root, ask_ctx["run_id"])
-    ledger.start(
+    run_dir_ = ledger.start(
         root, ask_ctx["run_id"], all_of_pm_ask=all_of_pm_ask, resumed_from=ask_ctx.get("resumes_ask") or ask_ctx.get("resumed_from"),
     )
+    if ask_ctx.get("chain_parent"):
+        ledger._write_run(run_dir_, {**(ledger.read_run(run_dir_) or {}), "chain_parent": ask_ctx["chain_parent"]})
+    if ask_ctx.get("stop_after") and not (run_dir_ / STOP_AFTER_FILE).is_file():
+        write_stop_after_marker(run_dir_, ask_ctx["stop_after"], "dispatch.emit")
     if ask_ctx.get("sizing_rel"):
         prompt = ask_ctx.get("prompt")
         relayed = ask_ctx.get("ask_source") == ASK_SOURCE_RELAYED
@@ -858,6 +866,54 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
             ask_text=None if relayed else prompt, relayed_text=prompt if relayed else None,
         )
     return None
+
+
+def _chain_parent_param(root: Path, params: dict) -> Optional[str]:
+    """The `chain_parent` run id, validated as an existing record dir; None when not given."""
+    value = params.get("chain_parent")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"dispatch.emit chain_parent takes a run id, got {value!r}")
+    try:
+        exists = record_dir(root, value).is_dir()
+    except ValueError as exc:
+        raise ValueError(f"dispatch.emit chain_parent {value!r} is not a safe run id") from exc
+    if not exists:
+        raise ValueError(f"dispatch.emit chain_parent {value!r} has no record dir")
+    return value
+
+
+def _inherited_stop_after(root: Path, run_id: str, chain_parent: Optional[str], *resumed: Optional[str]) -> Optional[str]:
+    """`STOP_AFTER_PLAN` when the run's own or its chain parent's lineage holds the park, or a resumed
+    predecessor's lineage does and that predecessor has not already parked (resuming a parked run stages)."""
+    from coordinator_core.ops.dispatch_emit import halted_run as _halted_run
+
+    for rid in (run_id, chain_parent):
+        if rid and lineage_stop_after(root, rid) == STOP_AFTER_PLAN:
+            return STOP_AFTER_PLAN
+    for rid in resumed:
+        if not rid:
+            continue
+        try:
+            marker = _halted_run._read(record_dir(root, rid))
+        except ValueError:
+            continue
+        if marker and marker.get("halted") == HALT_PARKED:
+            continue
+        if lineage_stop_after(root, rid) == STOP_AFTER_PLAN:
+            return STOP_AFTER_PLAN
+    return None
+
+
+def _refuse_non_ask_chain_parent(params: dict) -> None:
+    """A non-ask route cannot park; a `chain_parent` whose lineage holds stop_after=plan refuses there."""
+    root = params.get("repo_root") or params.get("target_root")
+    if root and isinstance(params["chain_parent"], str) and lineage_stop_after(Path(root), params["chain_parent"]):
+        raise ValueError(
+            f"dispatch.emit {STOP_AFTER_KEY}={STOP_AFTER_PLAN} is held by chain_parent "
+            f"{params['chain_parent']!r} but this route cannot park; refusing to compose an execute leg"
+        )
 
 
 def _preminted_ask_run_id(value: Any) -> str:
@@ -1120,7 +1176,7 @@ _UNTYPED_PARAM_KEYS = frozenset({
     "scout_mode", "scout_questions", "lanes", "lane_count", "hot_files", "resume_missing",
     "cloud_spawn", "cross_repo_approved", "reserved_run_id", "chatty", "max_rows", "skip_landed",
     "landed_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
-    "_caller_cwd", "preminted_run_id",
+    "_caller_cwd", "preminted_run_id", "chain_parent",
 })
 
 
@@ -2383,6 +2439,9 @@ def _dispatch_emit_body(
             params = {**params, "output_path": str(pipeline_root / RUN_DIR_ROOT / f"{run_id}.workflow.mjs")}
         repo_root = repo_root or pipeline_root
 
+    if not ((ask or sizing_path) and research_ctx is None) and params.get("chain_parent") is not None:
+        _refuse_non_ask_chain_parent(params)
+
     if (ask or sizing_path) and research_ctx is None:
         if plan_path or inventory_path or queue or profile_name:
             raise SizingPathConflictError(
@@ -2539,13 +2598,24 @@ def _dispatch_emit_body(
             if intake_doc is not None and isinstance(intake_doc.get("em_analysis"), dict)
             else None
         )
-        effective_stop = params.get(STOP_AFTER_KEY) or sizing_stop
+        chain_parent = _chain_parent_param(ask_root, params)
+        effective_stop = (
+            params.get(STOP_AFTER_KEY)
+            or sizing_stop
+            or _inherited_stop_after(ask_root, run_id, chain_parent, resumes_ask, resumed_from, reserved_parent)
+        )
         if effective_stop not in (None, STOP_AFTER_PLAN):
             raise ValueError(
                 f"dispatch.emit {STOP_AFTER_KEY} takes only {STOP_AFTER_PLAN!r}, got {effective_stop!r}"
             )
+        if effective_stop and (record_dir(ask_root, run_id) / "manifest.json").is_file():
+            raise ValueError(
+                f"dispatch.emit {STOP_AFTER_KEY}={effective_stop} cannot be honoured: run {run_id} is already "
+                "staged (manifest.json); it never composes an execute leg"
+            )
         ask_ctx = {
             "stop_after": effective_stop,
+            "chain_parent": chain_parent,
             "root": ask_root, "prompt": prompt, "sizing_rel": sizing_rel, "run_id": run_id,
             "reserved_parent": reserved_parent, "rebound": rebound, "output_redirect": output_redirect,
             "inherited_base": inherited_base, "resumes_ask": resumes_ask,

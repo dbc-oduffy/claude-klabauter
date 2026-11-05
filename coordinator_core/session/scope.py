@@ -3009,6 +3009,9 @@ the former ``_release_from_touched_file``, for BOTH release planes.
         # deleted legacy writer had, kept deliberately.
     claimed = project_self_scope(claimed_lines)
     to_release: List[str] = []
+    prefetch = getattr(normalize, "prefetch", None)
+    if prefetch is not None:
+        prefetch([p for p in claimed if p and not p.endswith("/")])
     for raw_path in sorted(claimed):
         if not raw_path or raw_path.endswith("/"):
             continue  # never release a directory entry
@@ -3022,18 +3025,21 @@ the former ``_release_from_touched_file``, for BOTH release planes.
     if not to_release:
         return  # AC10 — no empty write, don't churn the sink's mtime
 
-    for raw_path in to_release:
-        try:
-            touch_record.append_event(
-                sink_path,
-                session_id=sid,
-                agent_id=agent_id,
-                verb=touch_record.VERB_RELEASE,
-                path=raw_path,
-                timestamp=when.timestamp(),
-            )
-        except touch_record.LineTooLong:
-            continue  # fail-safe RETAIN for this one path only
+    stamp = when.timestamp()
+    touch_record.append_events(
+        sink_path,
+        (
+            {
+                "session_id": sid,
+                "agent_id": agent_id,
+                "verb": touch_record.VERB_RELEASE,
+                "path": raw_path,
+                "timestamp": stamp,
+                "allow_absolute": _is_absolute(_strip_extended_length_prefix(raw_path)),
+            }
+            for raw_path in to_release
+        ),
+    )  # a too-long line is dropped alone (RETAIN for that path only)
 
 
 def release_own_path_claims(
@@ -3052,6 +3058,80 @@ def release_own_path_claims_in_process(
     """:func:`release_own_path_claims` with zero spawns: a recorded entry stored absolute is
     resolved by the pure-Python relpath arm or left unmatched, so its claim is retained."""
     _release_own_path_claims(sid, paths, cwd, lambda raw_path: _normalize_recorded_in_process(raw_path, cwd))
+
+
+_RESIDUE_ARGV_CHARS = 24000
+
+
+class _BulkNormalizer:
+    """Normaliser for a whole release pass: every entry resolves in process; an absolute entry the
+    fast arm declines (the residue) is resolved by batched ``git ls-files`` calls in :meth:`prefetch`,
+    never one spawn per path. ``prefetch`` must run over the pass's entries before they are looked up."""
+
+    def __init__(self, cwd: Optional[str]) -> None:
+        self._cwd = cwd
+        self._resolved: Dict[str, Optional[str]] = {}
+
+    def prefetch(self, raw_paths: Iterable[str]) -> None:
+        residue: List[Tuple[str, str, str]] = []
+        for raw in raw_paths:
+            if raw in self._resolved:
+                continue
+            norm = _normalize_recorded_in_process(raw, self._cwd)
+            self._resolved[raw] = norm
+            if norm is not None or not self._cwd:
+                continue
+            fpath = _strip_extended_length_prefix(raw)
+            candidate, _exc = _relpath_candidate(fpath, self._cwd)
+            try:
+                is_dir = os.path.isdir(fpath)
+            except OSError:
+                is_dir = False
+            if candidate and not is_dir:
+                residue.append((raw, fpath, candidate))
+        if residue:
+            self._resolve_residue(residue)
+
+    def _resolve_residue(self, residue: "List[Tuple[str, str, str]]") -> None:
+        tracked: Set[str] = set()
+        chunk: List[str] = []
+        size = 0
+        for _raw, fpath, _cand in residue + [("", "", "")]:
+            if chunk and (not fpath or size + len(fpath) > _RESIDUE_ARGV_CHARS):
+                result = _git_run(
+                    ["-c", "core.quotepath=false", "ls-files", "--full-name", "-z", "--", *chunk],
+                    self._cwd,
+                )
+                if result is not None and result.returncode == 0:
+                    tracked.update(n for n in result.stdout.split("\0") if n)
+                chunk, size = [], 0
+            if fpath:
+                chunk.append(fpath)
+                size += len(fpath) + 1
+        # An entry git records under a different spelling than the relpath candidate (symlinked
+        # directory, case) is matched to its tracked name by realpath; untracked entries keep the
+        # candidate, as the per-path arm's relpath fallback does.
+        unmatched = tracked - {cand for _r, _f, cand in residue}
+        by_real = {
+            os.path.realpath(os.path.join(self._cwd or "", n)): n for n in unmatched
+        }
+        for raw, fpath, cand in residue:
+            name = cand if cand in tracked else by_real.get(os.path.realpath(fpath), cand)
+            self._resolved[raw] = canonicalize_relative_path(name)
+
+    def __call__(self, raw_path: str) -> Optional[str]:
+        if raw_path not in self._resolved:
+            self.prefetch([raw_path])
+        return self._resolved[raw_path]
+
+
+def release_own_path_claims_bulk(
+    sid: str, paths: "Optional[List[str]]", cwd: Optional[str] = None
+) -> None:
+    """:func:`release_own_path_claims` for many paths: zero spawns when every recorded entry
+    resolves in process, one batched ``git ls-files`` for the absolute-path residue, and one
+    append per sink."""
+    _release_own_path_claims(sid, paths, cwd, _BulkNormalizer(cwd))
 
 
 def _normalize_recorded_in_process(raw_path: str, cwd: Optional[str]) -> Optional[str]:
@@ -3344,9 +3424,41 @@ def _release_own_path_claims(
             em_sid,
             release_set,
             when,
-            _normalize_agent_touched_entry,
+            _AgentEntryNormalizer(_normalize_agent_touched_entry, main_normalize),
             agent_id=agent_dir.name,
         )
+
+
+class _AgentEntryNormalizer:
+    """Agent-sink normaliser for the release path: a relative entry takes the agent dialect; an
+    absolute entry (which the agent dialect drops) takes the pass's main normaliser, so one
+    resolver and one batched ``prefetch`` serve both planes. An entry outside the worktree
+    resolves to ``None`` and stays held. Applies to release only -- the agent dialect's other
+    callers are unchanged."""
+
+    __slots__ = ("_agent", "_main")
+
+    def __init__(
+        self,
+        agent: "Callable[[str], Optional[str]]",
+        main: "Callable[[str], Optional[str]]",
+    ) -> None:
+        self._agent = agent
+        self._main = main
+
+    @staticmethod
+    def _absolute(raw_path: str) -> bool:
+        return _is_absolute(_strip_extended_length_prefix(raw_path))
+
+    def prefetch(self, raw_paths: Iterable[str]) -> None:
+        main_prefetch = getattr(self._main, "prefetch", None)
+        if main_prefetch is not None:
+            main_prefetch([p for p in raw_paths if self._absolute(p)])
+
+    def __call__(self, raw_path: str) -> Optional[str]:
+        if self._absolute(raw_path):
+            return self._main(raw_path)
+        return self._agent(raw_path)
 
 
 class _AgentDirEntry:
@@ -3554,7 +3666,7 @@ def release_all_committed_claims(sid: str, cwd: Optional[str] = None) -> None:
     boundary (never touches a peer's claim) as every other route through
     that function.
     """
-    release_own_path_claims(sid, None, cwd=cwd)
+    release_own_path_claims_bulk(sid, None, cwd=cwd)
 
 
 #: Prefix that forces a git pathspec to be matched byte-literally, so a

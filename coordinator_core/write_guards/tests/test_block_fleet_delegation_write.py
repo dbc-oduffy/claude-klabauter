@@ -184,9 +184,15 @@ class TestTraversalAndCaseFoldBypasses:
 
 
 class TestReachableThroughEngine:
-    def test_engine_evaluate_denies_fleet_delegation_write(self, monkeypatch, tmp_path):
+    def test_engine_evaluate_advises_on_fleet_delegation_write(self, monkeypatch, tmp_path):
+        """The guard is advisory-by-ruling (deny_registry.ADVISORY_BY_RULING), so the engine's
+        policy point answers allow plus one advisory line, never a deny."""
+        from coordinator_core import machine_profile
+
         target = _target_path(monkeypatch, tmp_path)
         payload = _payload(target, tool_name="Write", cwd=str(tmp_path))
         result = engine.evaluate(payload)
         assert result is not None
-        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        hso = result["hookSpecificOutput"]
+        assert hso["permissionDecision"] == "allow"
+        assert hso["additionalContext"].startswith(machine_profile.ADVISORY_PREFIX)

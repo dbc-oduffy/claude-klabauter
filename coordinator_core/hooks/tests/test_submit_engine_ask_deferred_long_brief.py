@@ -50,11 +50,13 @@ def _const(text: str, name: str):
     return json.loads(literal)
 
 
+def _emit_params(text: str) -> dict:
+    """The params the relay's emit command reads: the file its `--params-file` names."""
+    return json.loads(Path(_const(text, "PARAMS_FILE")).read_text(encoding="utf-8"))
+
+
 def _emit_keys(text: str, root: Path) -> set:
-    """The keys the relay's emit command carries: the inline PARAMS, or the params file the command names."""
-    params_file = _const(text, "PARAMS_FILE")
-    raw = Path(params_file).read_text(encoding="utf-8") if params_file else _const(text, "PARAMS")
-    return set(json.loads(raw))
+    return set(_emit_params(text))
 
 
 def _accepted() -> set:
@@ -70,7 +72,7 @@ def test_long_brief_defer_emits_accepted_keys_only(tmp_path, monkeypatch):
     assert keys <= _accepted(), keys - _accepted()
     assert "ask_brief_file" in keys and "ask_brief" not in keys
     assert "context line." not in text
-    params = json.loads(_const(text, "PARAMS")) if not _const(text, "PARAMS_FILE") else {}
+    params = _emit_params(text)
     spilled = ask_brief.load_em_brief(root, brief=None, brief_file=params["ask_brief_file"])
     assert "context line." in spilled.text
 
@@ -87,24 +89,13 @@ def test_mid_length_brief_spills_and_emits_accepted_keys_only(tmp_path, monkeypa
     assert brief not in text
 
 
-def test_oversize_params_ride_a_params_file_the_command_names(tmp_path, monkeypatch):
+def test_params_ride_a_params_file_the_command_names(tmp_path, monkeypatch):
     root = _repo(tmp_path)
-    monkeypatch.setattr(mod, "DEFERRED_PARAMS_INLINE_MAX", 100)
     ask = "build the thing"
     text = _defer(root, {"ask": ask, "source": "relayed", "em_context": "x"}, monkeypatch)
 
     params_file = _const(text, "PARAMS_FILE")
     assert params_file and Path(params_file).is_file()
-    assert json.loads(Path(params_file).read_text(encoding="utf-8"))["ask"] == ask
-    assert _const(text, "PARAMS") == "{}"
-    assert "--params-file" in text and "build the thing." not in text
+    assert _emit_params(text)["ask"] == ask
+    assert "--params-file" in text and "const PARAMS =" not in text
     assert _emit_keys(text, root) <= _accepted()
-
-
-def test_short_params_stay_inline(tmp_path, monkeypatch):
-    root = _repo(tmp_path)
-    text = _defer(root, {"ask": "build it", "source": "relayed", "em_context": "short"}, monkeypatch)
-
-    assert _const(text, "PARAMS_FILE") == ""
-    assert "short" in _const(text, "PARAMS")
-    assert not list((root / "scratch" / "warp").glob("defer-params-*"))

@@ -16,6 +16,11 @@ process time; 50 held runs, 25 minted + 25 halted, 100MiB transcripts):
     live_run_write_claims            opens=50  process_ms=32922
     _refuse_live_write_overlap       opens=50  process_ms=34688
     _halted_only_release+_peer_held  opens=50  process_ms=36234
+
+END (records-only liveness; macOS, same fixture; transcript opens and process time per surface call):
+    live_run_write_claims            opens=0   process_ms=100.8
+    _refuse_live_write_overlap       opens=0   process_ms=36.7
+    _halted_only_release+_peer_held  opens=0   process_ms=100.8
 """
 
 from __future__ import annotations
@@ -232,17 +237,25 @@ def measure_all(base: Path) -> tuple:
 def run_benchmark(base: Optional[Path] = None) -> dict:
     """Measure the three surfaces under `base` (a fresh temp dir when None, removed after)."""
     owned = base is None
-    base = Path(tempfile.mkdtemp(prefix="liveness-budget-")) if owned else Path(base)
+    if owned:
+        from coordinator_core.temp_layout import managed_tempdir
+
+        base = Path(tempfile.mkdtemp(prefix="liveness-budget-", dir=str(managed_tempdir())))
+    else:
+        base = Path(base)
     try:
         return measure_all(base)[1]
     finally:
         if owned:
-            import shutil
+            from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
-            shutil.rmtree(base, ignore_errors=True)
+            rmtree_or_raise(base, label="liveness-budget")
 
 
 def main() -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     rows = run_benchmark()
     failed = False
     for surface in SURFACES:

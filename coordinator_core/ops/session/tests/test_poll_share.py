@@ -11,11 +11,25 @@ FIXTURE = Path(__file__).parent / "fixtures" / "poll_share_synthetic.jsonl"
 
 
 @pytest.fixture(scope="module")
-def result():
-    return poll_share.compute(str(FIXTURE), "S1")
+def polling_transcript(tmp_path_factory):
+    # The committed fixture spells its polls as ListAgents, which POLL_TOOLS no longer counts.
+    text = FIXTURE.read_text(encoding="utf-8").replace('"name":"ListAgents"', '"name":"TaskList"')
+    assert '"name":"TaskList"' in text, "fixture spelling changed; the ListAgents rewrite no longer applies"
+    path = tmp_path_factory.mktemp("poll_share") / "poll_share_synthetic.jsonl"
+    path.write_text(text, encoding="utf-8")
+    return path
 
 
-def test_window_with_three_listagents_turns(result):
+@pytest.fixture(scope="module")
+def result(polling_transcript):
+    return poll_share.compute(str(polling_transcript), "S1")
+
+
+def test_listagents_is_not_a_poll():
+    assert not poll_share._is_poll_call({"name": "ListAgents", "input": {}})
+
+
+def test_window_with_three_poll_turns(result):
     w = result["windows"][0]
     assert (w["em_turns"], w["poll_turns"], w["keepalive_ticks"], w["closed"]) == (4, 3, 0, True)
     assert w["poll_share"] == 0.75
@@ -31,12 +45,12 @@ def test_window_with_zero_polls(result):
     assert (w["em_turns"], w["poll_turns"], w["poll_share"]) == (1, 0, 0.0)
 
 
-def test_totals_and_shape(result):
+def test_totals_and_shape(result, polling_transcript):
     assert (result["em_turns"], result["poll_turns"], result["keepalive_ticks"]) == (8, 4, 1)
     assert result["poll_share"] == 0.5
     assert result["classifier_version"] == poll_share.CLASSIFIER_VERSION
     assert result["session_id"] == "S1"
-    assert str(FIXTURE) not in repr(result)
+    assert str(polling_transcript) not in repr(result)
 
 
 def test_poll_tools_is_imported_not_retyped():

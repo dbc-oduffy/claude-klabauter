@@ -139,6 +139,52 @@ def test_build_omits_an_absent_or_non_canonical_session_id(repo, monkeypatch, ba
     assert receipt["session_id"] == ""
 
 
+def _spy_compose(monkeypatch):
+    seen = []
+    real = ask_compose.compose_ask_script
+    monkeypatch.setattr(ask_compose, "compose_ask_script", lambda **kw: (seen.append(kw.get("stop_after")), real(**kw))[1])
+    return seen
+
+
+def test_build_composes_with_the_lineage_stop_after_and_records_it(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN, write_stop_after_marker
+
+    parent = record_dir(repo, "ask-parent")
+    parent.mkdir(parents=True)
+    write_stop_after_marker(parent, STOP_AFTER_PLAN)
+    rd = record_dir(repo, RUN)
+    rd.mkdir(parents=True)
+    (rd / "run.json").write_text(json.dumps({"chain_parent": "ask-parent"}))
+    seen = _spy_compose(monkeypatch)
+    _halt(repo, monkeypatch)
+    record = hrb.build(repo, RUN)
+    assert seen == [STOP_AFTER_PLAN]
+    assert record["stop_after"] == STOP_AFTER_PLAN and record["fingerprint"]["stop_after"] == STOP_AFTER_PLAN
+    script = (repo / record["composed_script_rel"]).read_text(encoding="utf-8")
+    assert "parked after plan: stop_after=plan" in script
+
+
+def test_build_without_a_parked_lineage_composes_with_no_stop_after(repo, monkeypatch):
+    seen = _spy_compose(monkeypatch)
+    _halt(repo, monkeypatch)
+    record = hrb.build(repo, RUN)
+    assert seen == [None] and record["stop_after"] is None
+    assert "parked after plan: stop_after=plan" not in (repo / record["composed_script_rel"]).read_text(encoding="utf-8")
+
+
+def test_a_deliberate_resume_of_a_parked_run_stages(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, STOP_AFTER_PLAN, write_stop_after_marker
+
+    rd = record_dir(repo, RUN)
+    rd.mkdir(parents=True)
+    write_stop_after_marker(rd, STOP_AFTER_PLAN)
+    seen = _spy_compose(monkeypatch)
+    monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda root, run_id: None)
+    halted_run.write_halt_marker(rd, halted=HALT_PARKED, sizing_rel=REL, run_base_sha=BASE)
+    record = hrb.build(repo, RUN)
+    assert seen == [None] and record["stop_after"] is None
+
+
 def test_main_rejects_a_wrong_argument_count():
     assert hrb.main(["only-one"]) == 2
 

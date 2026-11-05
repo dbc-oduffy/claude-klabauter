@@ -143,6 +143,8 @@ import yaml
 from coordinator_core.bounded_io import run_bounded
 from coordinator_core.roadmap import census
 from coordinator_core.roadmap.post_stamp_clause import (
+    doc_approval_body_refusal,
+    doc_approval_refusal,
     post_stamp_body_refusal,
     post_stamp_refusal,
     suite_tier_body_refusal,
@@ -390,6 +392,11 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
         True,
         "edit prime_exit_criterion statement: name the behaviour and the tests "
         "covering the touched files, not a suite tier — {detail}",
+    ),
+    "prime-exit-doc-approval": (
+        True,
+        "edit the prime_exit_criterion statement or the named row's `acceptance:`: drop the PM "
+        "approval of a doc and name the check that proves its content — {detail}",
     ),
     "test-runner-out-of-role-row": (
         True,
@@ -2244,6 +2251,13 @@ def _prime_exit(
     suite_tier = suite_tier_refusal(statement) or (suite_tier_body_refusal(text) if text else None)
     if suite_tier is not None:
         return _defect("prime-exit-suite-tier", suite_tier)
+    doc_approval = (
+        doc_approval_refusal(statement)
+        or (doc_approval_body_refusal(text) if text else None)
+        or (_row_doc_approval_refusal(text) if text else None)
+    )
+    if doc_approval is not None:
+        return _defect("prime-exit-doc-approval", doc_approval)
     derived_from = criterion.get("derived_from")
     if not str(derived_from or "").strip():
         return _defect(
@@ -2823,6 +2837,17 @@ def _row_acceptance_counts(row: Dict[str, Any]) -> bool:
         return False
     disposition = str(row.get("disposition") or "").strip()
     return disposition == "coded" or disposition not in _UNSCHEDULABLE_DISPOSITIONS
+
+
+def _row_doc_approval_refusal(text: str) -> Optional[str]:
+    """Refusal for the first live spine row whose `acceptance:` requires approval of a doc."""
+    for row in raw_spine_rows(text):
+        if not isinstance(row, dict) or not _row_acceptance_counts(row):
+            continue
+        refusal = doc_approval_refusal(row.get("acceptance"))
+        if refusal is not None:
+            return f"row {row.get('id')} acceptance: {refusal}"
+    return None
 
 
 def _done_clause(

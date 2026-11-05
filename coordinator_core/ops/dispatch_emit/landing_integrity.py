@@ -89,6 +89,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
 PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
 IMPORT_CLOSURE_UNTRACKED = "import-closure-untracked"
+LOST_DEFINITION = "lost-definition"
 
 CLAIM_PROVENANCE_REASONS = (
     "import-closure-untracked", "peer-hunks-co-declared", "out-of-ask-hunks", "shipped-claim-unbacked",
@@ -674,6 +675,33 @@ def import_closure_findings(
     except Exception as exc:
         return [Finding("", IMPORT_CLOSURE_UNTRACKED, f"import-closure detector failed: {type(exc).__name__}: {exc}")]
     return [Finding(f.path, IMPORT_CLOSURE_UNTRACKED, f"{f.line}: {f.detail}") for f in found]
+
+
+def lost_definition_pairs(
+    worktree_root: Path, findings: Sequence, paths: Sequence[str], carried: Sequence[str] = (),
+) -> dict[str, str]:
+    """``{importer: target}`` over ``IMPORT_CLOSURE_UNTRACKED`` ``findings`` whose target ``.py``
+    (tracked, modified in the worktree) is neither in ``paths`` nor ``carried``: the landing's caller
+    reads a name only that uncommitted file defines. Reuses the detector's findings; no new scan."""
+    from coordinator_core.authoring_leaks import import_closure
+
+    pairs = import_closure.withheld_symbol_pairs(
+        worktree_root, [(f.path, f.detail) for f in findings if f.reason == IMPORT_CLOSURE_UNTRACKED],
+    )
+    lands = {*paths, *carried}
+    return {imp: tgt for imp, tgt in pairs.items() if tgt not in lands}
+
+
+def lost_definition_findings(
+    worktree_root: Path, paths: Sequence[str], deleted: Sequence[str], carried: Sequence[str] = (),
+    landed_text: Optional[Callable[[str], Optional[str]]] = None,
+) -> list[Finding]:
+    """Findings(LOST_DEFINITION) for landing ``.py`` paths that read a module attribute defined only
+    by an uncommitted file the landing leaves out: HEAD would hold a caller of a name it lacks.
+    AST over the landed ``.py`` only (``import_closure_findings``); zero extra spawns."""
+    found = import_closure_findings(worktree_root, paths, deleted, landed_text)
+    pairs = lost_definition_pairs(worktree_root, found, paths, carried)
+    return [Finding(f.path, LOST_DEFINITION, f.detail) for f in found if f.path in pairs]
 
 
 def withheld_closure_findings(

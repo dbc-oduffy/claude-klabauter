@@ -144,6 +144,14 @@ def test_a_class_outside_the_closed_list_is_red():
     ]
 
 
+def test_lost_definition_landing_refusal_is_head_integrity_and_a_stray_class_is_red():
+    assert dr.LANDING_REFUSAL_CLASS == {"lost-definition": dr.HEAD_INTEGRITY}
+    assert dr.HEAD_INTEGRITY in dr.IRREVERSIBLE_CLASSES
+    assert dr.registry_problems(landing_classes={"lost-definition": dr.HEAD_INTEGRITY}) == []
+    assert [p[0] for p in dr.registry_problems(landing_classes={"x-reason": "convenience"})] == ["x-reason"]
+    assert [p[0] for p in dr.registry_problems(landing_classes={"x-reason": dr.DISRUPTIVE})] == ["x-reason"]
+
+
 def test_disruptive_is_a_guard_class_and_not_an_op_class():
     assert dr.DISRUPTIVE in dr.GUARD_CLASSES
     assert dr.DISRUPTIVE not in dr.IRREVERSIBLE_CLASSES

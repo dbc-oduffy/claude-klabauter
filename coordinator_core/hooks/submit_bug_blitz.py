@@ -46,7 +46,7 @@ QUEUE_DIR = BACKLOG_DIR
 SCRATCH_ROOT = "state/scratch/bug-blitz"
 DECISIONS_FILE = "decisions.json"
 _ALLOWED_ARGS = frozenset({"targets", "appetite", "limit", "budget_tokens"})
-_ARGS_SHAPE = 'args: {targets: "<red-set dir | failing-tests file | backlog>"}, optional appetite, limit, budget_tokens (defaults to DEFAULT_BUDGET_TOKENS)'
+_ARGS_SHAPE = 'args: {targets: "<path>"}, optional appetite, limit, budget_tokens'
 
 EmitFn = Callable[[dict, Path], dict]
 ResolveFn = Callable[[str, Path], TargetSpec]

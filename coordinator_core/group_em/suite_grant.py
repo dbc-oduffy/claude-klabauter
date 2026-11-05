@@ -7,6 +7,13 @@ ISSUER's key, beside the nomination records, never in a grantee's ``.git/coordin
 dir (grant.py's "a writer writes only its own session" invariant holds). Claude-Klabauter-owned; DoE's
 ``tier-u-grant.schema.json`` and ``grant.py``'s ``_VALID_GRANTED_BY`` are untouched.
 
+A grant relayed from another box lands at ``suite-grants/relayed/<grantee_sid>.json`` only through
+``receive_relayed_grant`` (HMAC tag verified under the issuer box's key pinned here) and is
+re-verified on every read; the relayed leg is independent of the local holder.
+A relayed grant cannot be revoked (``group-em-revoke`` touches issuer records only); it lapses at
+``expires_at``. ``receive_relayed_grant`` checks grantee liveness against this box's session registry
+even when ``home`` names another box's root.
+
 NEGATIVE SPEC:
 
   - The issuer is the CALLING session (``core.resolve_session_id``), never an argument. Issue
@@ -36,7 +43,14 @@ from typing import NamedTuple, Optional
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.atomic_replace import atomic_write_bytes
-from coordinator_core.group_em import nomination, session_registry
+from coordinator_core.group_em import (
+    box_key,
+    box_registry,
+    node_transport,
+    nomination,
+    remote_identity,
+    session_registry,
+)
 from coordinator_core.session import core
 from coordinator_core.session.liveness import session_live
 
@@ -44,14 +58,20 @@ SCHEMA_VERSION = 1
 KIND = "group-em-suite-grant"
 TTL_DEFAULT_MINUTES = 120
 TTL_CEILING_MINUTES = 720
+RELAYED_DIR = "relayed"
+CLOCK_SKEW_S = 300
+AUDIT_FILE = "suite-grant-relay-audit.jsonl"
 
 NOT_GROUP_EM = "NOT_GROUP_EM"
 GROUP_EM_NOT_LIVE = "GROUP_EM_NOT_LIVE"
 ISSUER_UNRESOLVED = "ISSUER_UNRESOLVED"
+RELAY_ISSUER_ENV = "COORDINATOR_GROUP_EM_RELAY_ISSUER_SID"
 GRANTEE_UNRESOLVED = "GRANTEE_UNRESOLVED"
 GRANTEE_NOT_LIVE = "GRANTEE_NOT_LIVE"
 TTL_OUT_OF_RANGE = "TTL_OUT_OF_RANGE"
 NOTE_EMPTY = "NOTE_EMPTY"
+BOX_UNKNOWN = "BOX_UNKNOWN"
+RELAY_FAILED = "RELAY_FAILED"
 
 #: Generator-provenance declaration (coordinator_core/ops/generator_census). Records live under
 #: `settings_home() / "state" / "group-em" / "suite-grants"`, the operator home, never a path
@@ -78,6 +98,11 @@ def _safe_sid(sid: object) -> bool:
 
 def _grant_path(issuer_sid: str, grantee_sid: str, directory: Optional[Path]) -> Path:
     return _grants_dir(directory) / issuer_sid / f"{grantee_sid}.json"
+
+
+def _relayed_path(grantee_sid: str, directory: Optional[Path], home: Optional[Path]) -> Path:
+    base = directory if directory is not None else (box_registry._group_em_dir(home) if home else None)
+    return _grants_dir(base) / RELAYED_DIR / f"{grantee_sid}.json"
 
 
 def _iso(epoch: float) -> str:
@@ -115,6 +140,201 @@ def _resolve_grantee(grantee: str) -> tuple[Optional[str], Optional[session_regi
     return None, None
 
 
+def _home_of(directory: Optional[Path]) -> Optional[Path]:
+    """The settings home owning the ``state/group-em`` dir ``directory`` (None: this box's home)."""
+    return Path(directory).parent.parent if directory is not None else None
+
+
+def _relay_grant(
+    sid: str,
+    holder: dict,
+    box_id: str,
+    grantee_sid: str,
+    note: str,
+    ttl_minutes: int,
+    repo: Optional[str],
+    directory: Optional[Path],
+    home: Optional[Path],
+    now: Optional[float],
+) -> IssueResult:
+    """Sign the grant under this box's key and deliver it to ``box_id``; the far box decides."""
+    if not _safe_sid(grantee_sid):
+        return IssueResult(False, GRANTEE_UNRESOLVED, None)
+    box = next((b for b in box_registry.read_boxes(directory) if b.get("box_id") == box_id), None)
+    if box is None:
+        return IssueResult(False, BOX_UNKNOWN, None)
+    issued = time.time() if now is None else now
+    record = {
+        "schema_version": SCHEMA_VERSION,
+        "kind": KIND,
+        "issuer_session_id": sid,
+        "issuer_name": nomination._holder_name(holder),
+        "issuer_box_id": box_registry.local_box_id(home),
+        "grantee_session_id": grantee_sid,
+        "grantee_box_id": box_id,
+        "grantee_name": "",
+        "issued_at": _iso(issued),
+        "expires_at": _iso(issued + ttl_minutes * 60),
+        "note": note.strip(),
+    }
+    if repo:
+        record["scope_root"] = repo
+    envelope = box_key.sign(record, home)
+    reply = node_transport.select(box, directory).deliver_grant(box, envelope)
+    if not isinstance(reply, dict) or reply.get("ok") is not True:
+        far = reply.get("reason") if isinstance(reply, dict) else None
+        return IssueResult(False, f"{RELAY_FAILED}:{far or 'no_reply'}", None)
+    return IssueResult(True, "issued", envelope)
+
+
+AUDIT_FIELD_MAX = 128
+
+
+def _audit_clip(value: object) -> object:
+    """An envelope field as an audit value: refused arrivals carry attacker-chosen content, so strings are bounded
+    and non-scalars are dropped."""
+    if isinstance(value, str):
+        return value[:AUDIT_FIELD_MAX]
+    return value if value is None or isinstance(value, (bool, int, float)) else None
+
+
+def _audit_relayed(
+    envelope: object,
+    reply: dict,
+    directory: Optional[Path],
+    home: Optional[Path],
+    now: Optional[float],
+) -> None:
+    """Append one JSON line per arrival (accepted or refused) to ``<group-em dir>/suite-grant-relay-audit.jsonl``
+    on this box; best-effort, never raises."""
+    try:
+        env = envelope if isinstance(envelope, dict) else {}
+        if home is None and directory is not None:
+            home = _home_of(directory)
+        base = directory if directory is not None else (box_registry._group_em_dir(home) if home else None)
+        accepted = reply.get("ok") is True
+        line = {
+            "at": _iso(time.time() if now is None else now),
+            "outcome": "accepted" if accepted else "refused",
+            "reason": _audit_clip(reply.get("reason")),
+            "issuer_box_id": _audit_clip(env.get("issuer_box_id")),
+            "issuer_session_id": _audit_clip(env.get("issuer_session_id")),
+            "grantee_session_id": _audit_clip(env.get("grantee_session_id")),
+            "expires_at": _audit_clip(env.get("expires_at")),
+        }
+        if accepted:
+            line["basis"] = "box-key-hmac"
+        path = _grants_dir(base).parent / AUDIT_FILE
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(line, sort_keys=True) + "\n")
+    except Exception:  # noqa: BLE001 -- audit is best-effort
+        pass
+
+
+def receive_relayed_grant(
+    envelope: object,
+    *,
+    home: Optional[Path] = None,
+    directory: Optional[Path] = None,
+    now: Optional[float] = None,
+) -> dict:
+    """Arrival check for a grant another box issued; ``{"ok": True}`` after writing
+    ``relayed/<grantee_sid>.json``, else ``{"ok": False, "reason"}`` having written nothing.
+
+    The tag must verify under the issuer box's key pinned on this box. ``scope_root`` is the
+    envelope's when the issuer named one, else the grantee's cwd in this box's registry. Every
+    arrival, accepted or refused, appends one line to ``suite-grant-relay-audit.jsonl``. Never raises.
+    """
+    reply = _receive_relayed_grant(envelope, home=home, directory=directory, now=now)
+    _audit_relayed(envelope, reply, directory, home, now)
+    return reply
+
+
+def _receive_relayed_grant(
+    envelope: object,
+    *,
+    home: Optional[Path] = None,
+    directory: Optional[Path] = None,
+    now: Optional[float] = None,
+) -> dict:
+    try:
+        if not isinstance(envelope, dict):
+            return {"ok": False, "reason": "bad_envelope"}
+        if home is None and directory is not None:
+            home = _home_of(directory)
+        issuer_box = envelope.get("issuer_box_id")
+        if not box_registry._valid_id(issuer_box):
+            return {"ok": False, "reason": "bad_issuer_box"}
+        if not box_key.verify(envelope, issuer_box, home):
+            return {"ok": False, "reason": "bad_signature"}
+        grantee_sid = envelope.get("grantee_session_id")
+        if (
+            envelope.get("schema_version") != SCHEMA_VERSION
+            or envelope.get("kind") != KIND
+            or not _safe_sid(grantee_sid)
+            or not _safe_sid(envelope.get("issuer_session_id"))
+        ):
+            return {"ok": False, "reason": "bad_record"}
+        if envelope.get("grantee_box_id") != box_registry.local_box_id(home):
+            return {"ok": False, "reason": "wrong_grantee_box"}
+        issued, expires = _parse_iso(envelope.get("issued_at")), _parse_iso(envelope.get("expires_at"))
+        current = time.time() if now is None else now
+        if issued is None or expires is None or expires - issued > TTL_CEILING_MINUTES * 60:
+            return {"ok": False, "reason": "bad_ttl"}
+        if not issued <= current + CLOCK_SKEW_S or not current < expires:
+            return {"ok": False, "reason": "expired"}
+        if not session_live(grantee_sid):
+            return {"ok": False, "reason": GRANTEE_NOT_LIVE}
+        scope_root = envelope.get("scope_root")
+        if not (isinstance(scope_root, str) and scope_root):
+            rows = session_registry.read_rows()
+            scope_root = next((r.cwd for r in rows if r.session_id == grantee_sid), "")
+        if not scope_root:
+            return {"ok": False, "reason": GRANTEE_UNRESOLVED}
+        target = _relayed_path(grantee_sid, directory, home).parent
+        target.mkdir(parents=True, exist_ok=True)
+        body = {"envelope": envelope, "scope_root": scope_root}
+        atomic_write_bytes(
+            target / f"{grantee_sid}.json", (json.dumps(body, indent=2) + "\n").encode("utf-8")
+        )
+        return {"ok": True, "reason": "received"}
+    except Exception as exc:  # noqa: BLE001 -- the receive contract is never-raise
+        return {"ok": False, "reason": f"receive_failed:{type(exc).__name__}"}
+
+
+_HARNESS_WALK_DEPTH = 8
+
+
+def harness_issuer_sid(
+    start_pid: Optional[int] = None, config_dir: Optional[Path] = None
+) -> str:
+    """Session id of the nearest ``claude`` ancestor of ``start_pid`` (default: this process),
+    read from that harness's own ``<config>/sessions/<pid>.json``; ``""`` when no ancestor
+    resolves. It names the caller only; ``issue_suite_grant`` still demands it equal the
+    live verified box holder."""
+    try:
+        from coordinator_core.session import core as _core
+
+        ps = _core._psutil()
+        pid = os.getpid() if start_pid is None else start_pid
+        for _ in range(_HARNESS_WALK_DEPTH):
+            proc = ps.Process(pid)
+            if _core._is_harness_process(_core._harness_process_comm(proc)):
+                base = config_dir or Path(
+                    os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude"
+                )
+                data = json.loads((base / "sessions" / f"{proc.pid}.json").read_text("utf-8"))
+                sid = data.get("sessionId") if isinstance(data, dict) else None
+                return sid if _safe_sid(sid) else ""
+            pid = proc.ppid()
+            if not pid:
+                break
+    except Exception:  # noqa: BLE001 -- unresolved is an answer, never a raise
+        pass
+    return ""
+
+
 def issue_suite_grant(
     grantee: str,
     note: str,
@@ -123,11 +343,21 @@ def issue_suite_grant(
     repo: Optional[str] = None,
     directory: Optional[Path] = None,
     now: Optional[float] = None,
+    relay_issuer_sid: Optional[str] = None,
 ) -> IssueResult:
     """Write the calling live verified box holder's test-run grant to ``grantee`` (a session id,
     or a registry name resolving to exactly one session). Reissuing overwrites. The grantee may be
-    the holder itself. ``scope_root`` is ``repo`` or the grantee's registry ``cwd``."""
+    the holder itself. ``scope_root`` is ``repo`` or the grantee's registry ``cwd``.
+
+    ``relay_issuer_sid`` stands in for an unresolvable caller sid for a ``box_id:session`` grantee
+    only (an env-less relay hop); it must still equal the live verified box holder's sid. Absent,
+    it is read from ``RELAY_ISSUER_ENV``, so the CLI path reaches it without a new argument."""
     sid = core.resolve_session_id()
+    remote = isinstance(grantee, str) and ":" in grantee
+    if relay_issuer_sid is None:
+        relay_issuer_sid = os.environ.get(RELAY_ISSUER_ENV)
+    if not _safe_sid(sid) and remote and _safe_sid(relay_issuer_sid):
+        sid = relay_issuer_sid
     if not _safe_sid(sid):
         return IssueResult(False, ISSUER_UNRESOLVED, None)
     holder = nomination.box_holder(directory, now)
@@ -143,6 +373,12 @@ def issue_suite_grant(
         or not 1 <= ttl_minutes <= TTL_CEILING_MINUTES
     ):
         return IssueResult(False, TTL_OUT_OF_RANGE, None)
+    home = _home_of(directory)
+    grantee_box, remote_sid = remote_identity.parse_key(grantee, box_registry.local_box_id(home))
+    if grantee_box != box_registry.local_box_id(home):
+        return _relay_grant(
+            sid, holder, grantee_box, remote_sid, note, ttl_minutes, repo, directory, home, now
+        )
     grantee_sid, row = _resolve_grantee(grantee)
     if not _safe_sid(grantee_sid):
         return IssueResult(False, GRANTEE_UNRESOLVED, None)
@@ -190,6 +426,77 @@ def revoke_suite_grant(
     return IssueResult(True, "revoked", None)
 
 
+def _check_local(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[dict]]:
+    holder = nomination.box_holder(directory, now)
+    if holder is None or not holder.get("live"):
+        return False, None
+    holder_sid = str(holder.get("session_id") or "")
+    if not _safe_sid(holder_sid):
+        return False, None
+    try:
+        record = json.loads(_grant_path(holder_sid, sid, directory).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, None
+    if not isinstance(record, dict):
+        return False, None
+    current = time.time() if now is None else now
+    issued, expires = _parse_iso(record.get("issued_at")), _parse_iso(record.get("expires_at"))
+    scope_root = record.get("scope_root")
+    ok = (
+        record.get("schema_version") == SCHEMA_VERSION
+        and record.get("kind") == KIND
+        and record.get("issuer_session_id") == holder_sid
+        and record.get("grantee_session_id") == sid
+        and issued is not None
+        and expires is not None
+        and issued <= current < expires
+        and expires - issued <= TTL_CEILING_MINUTES * 60
+        and isinstance(scope_root, str)
+        and bool(scope_root)
+        and _at_or_under(repo_root or cwd or os.getcwd(), scope_root)
+        and session_live(sid, cwd)
+    )
+    return bool(ok), record
+
+
+def _check_relayed(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[dict]]:
+    """The relayed leg: one path, re-verified against the pinned issuer key; a record that fails
+    the tag is never returned, so a denial cannot quote forged content."""
+    home = _home_of(directory)
+    try:
+        body = json.loads(_relayed_path(sid, directory, home).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False, None
+    envelope = body.get("envelope") if isinstance(body, dict) else None
+    local_scope = body.get("scope_root") if isinstance(body, dict) else None
+    if not isinstance(envelope, dict) or not box_key.verify(
+        envelope, str(envelope.get("issuer_box_id")), home
+    ):
+        return False, None
+    record = {**envelope, "scope_root": local_scope}
+    current = time.time() if now is None else now
+    issued, expires = _parse_iso(envelope.get("issued_at")), _parse_iso(envelope.get("expires_at"))
+    root = repo_root or cwd or os.getcwd()
+    env_scope = envelope.get("scope_root")
+    ok = (
+        envelope.get("schema_version") == SCHEMA_VERSION
+        and envelope.get("kind") == KIND
+        and envelope.get("grantee_session_id") == sid
+        and envelope.get("grantee_box_id") == box_registry.local_box_id(home)
+        and issued is not None
+        and expires is not None
+        and issued <= current + CLOCK_SKEW_S
+        and current < expires
+        and expires - issued <= TTL_CEILING_MINUTES * 60
+        and isinstance(local_scope, str)
+        and bool(local_scope)
+        and _at_or_under(root, local_scope)
+        and (env_scope is None or (isinstance(env_scope, str) and _at_or_under(root, env_scope)))
+        and session_live(sid, cwd)
+    )
+    return bool(ok), record
+
+
 def check_group_em_suite_grant(
     cwd: Optional[str] = None,
     *,
@@ -198,42 +505,24 @@ def check_group_em_suite_grant(
     directory: Optional[Path] = None,
     now: Optional[float] = None,
 ) -> tuple[bool, Optional[dict]]:
-    """``(granted, record)``: does the current live verified box holder's grant name the calling
-    session for the consumer root? ``record`` is the parsed grant whenever one was read, granted
-    or not, so a denial can quote it. Reads one path; never raises."""
+    """``(granted, record)``: does the current live verified box holder's grant, or a verified grant
+    relayed from another box, name the calling session for the consumer root? ``record`` is the
+    parsed grant whenever one was read, granted or not, so a denial can quote it. The two legs are
+    independent: a box with no live holder still honours a relayed grant. Reads at most two paths;
+    never raises."""
     try:
         sid = session_id or core.resolve_session_id(cwd)
         if not _safe_sid(sid):
             return False, None
-        holder = nomination.box_holder(directory, now)
-        if holder is None or not holder.get("live"):
-            return False, None
-        holder_sid = str(holder.get("session_id") or "")
-        if not _safe_sid(holder_sid):
-            return False, None
         try:
-            record = json.loads(_grant_path(holder_sid, sid, directory).read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return False, None
-        if not isinstance(record, dict):
-            return False, None
-        current = time.time() if now is None else now
-        issued, expires = _parse_iso(record.get("issued_at")), _parse_iso(record.get("expires_at"))
-        scope_root = record.get("scope_root")
-        ok = (
-            record.get("schema_version") == SCHEMA_VERSION
-            and record.get("kind") == KIND
-            and record.get("issuer_session_id") == holder_sid
-            and record.get("grantee_session_id") == sid
-            and issued is not None
-            and expires is not None
-            and issued <= current < expires
-            and expires - issued <= TTL_CEILING_MINUTES * 60
-            and isinstance(scope_root, str)
-            and bool(scope_root)
-            and _at_or_under(repo_root or cwd or os.getcwd(), scope_root)
-            and session_live(sid, cwd)
-        )
-        return bool(ok), record
+            granted, record = _check_local(sid, cwd, repo_root, directory, now)
+        except Exception:
+            granted, record = False, None
+        if granted:
+            return True, record
+        relayed_ok, relayed = _check_relayed(sid, cwd, repo_root, directory, now)
+        if relayed_ok:
+            return True, relayed
+        return False, record if record is not None else relayed
     except Exception:
         return False, None

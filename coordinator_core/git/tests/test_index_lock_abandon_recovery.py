@@ -110,15 +110,20 @@ def test_live_holder_still_busy_and_index_untouched(repo):
 
 
 def test_live_foreign_pid_owner_is_busy(repo):
-    _lock(repo).write_bytes(b"partial")
-    index_write._owner_path(_lock(repo)).write_text(
-        json.dumps({"pid": os.getppid(), "token": "t"}), encoding="utf-8"
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], **no_console_creationflags()
     )
-    if os.getppid() in (0, os.getpid()):
-        pytest.skip("no distinct live pid available")
-    with pytest.raises(index_write.IndexWriteLockBusy):
-        index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
-    assert _lock(repo).exists()
+    try:
+        _lock(repo).write_bytes(b"partial")
+        index_write._owner_path(_lock(repo)).write_text(
+            json.dumps({"pid": holder.pid, "token": "t"}), encoding="utf-8"
+        )
+        with pytest.raises(index_write.IndexWriteLockBusy):
+            index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+        assert _lock(repo).exists()
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)
 
 
 def test_ownerless_lock_is_never_reaped_by_acquire(repo):

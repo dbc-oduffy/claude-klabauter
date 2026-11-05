@@ -1,5 +1,6 @@
 """Tests for codex_runner.resolve on the posix and Windows fnm layouts (tmp_path fixtures)."""
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -85,6 +86,59 @@ def test_missing_node_raises(tmp_path):
     _alias(tmp_path, inst)
     with pytest.raises(resolve.CodexUnavailable, match="node"):
         resolve.resolve_codex("linux", {"FNM_DIR": str(tmp_path)})
+
+
+def _path_codex(tmp_path, name):
+    if sys.platform == "win32":
+        name += ".cmd"
+    bindir = tmp_path / "pathbin"
+    bindir.mkdir()
+    exe = bindir / name
+    exe.write_text("", encoding="utf-8")
+    exe.chmod(0o755)
+    return bindir, exe
+
+
+def test_path_fallback_when_alias_absent(tmp_path):
+    bindir, exe = _path_codex(tmp_path, "codex")
+    env = {"FNM_DIR": str(tmp_path / "nofnm"), "PATH": str(bindir)}
+    assert resolve.resolve_codex("linux", env) == [str(exe)]
+
+
+def test_path_fallback_when_node_or_package_absent(tmp_path):
+    bindir, exe = _path_codex(tmp_path, "codex")
+    inst = _install(tmp_path, "v1.0.0", windows=False)
+    (inst / "bin" / "node").unlink()
+    _alias(tmp_path, inst)
+    env = {"FNM_DIR": str(tmp_path), "PATH": str(bindir)}
+    assert resolve.resolve_codex("linux", env) == [str(exe)]
+
+
+def test_fnm_wins_over_path(tmp_path):
+    bindir, _ = _path_codex(tmp_path, "codex")
+    inst = _install(tmp_path, "v1.0.0", windows=False)
+    _alias(tmp_path, inst)
+    argv = resolve.resolve_codex("linux", {"FNM_DIR": str(tmp_path), "PATH": str(bindir)})
+    assert len(argv) == 2 and argv[1].endswith("codex.js")
+
+
+def test_both_miss_raises_naming_both(tmp_path):
+    with pytest.raises(resolve.CodexUnavailable, match="alias.*PATH"):
+        resolve.resolve_codex("linux", {"FNM_DIR": str(tmp_path), "PATH": str(tmp_path)})
+
+
+def test_windows_path_fallback_names_cmd_and_never_shell(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_which(cmd, path=None):
+        seen["args"] = (cmd, path)
+        return "npmbin/codex.cmd"
+
+    monkeypatch.setattr(resolve.shutil, "which", fake_which)
+    argv = resolve.resolve_codex("win32", {"FNM_DIR": str(tmp_path / "nofnm"), "PATH": "P"})
+    assert argv == ["npmbin/codex.cmd"] and seen["args"] == ("codex", "P")
+    import inspect
+    assert "shell=True" not in inspect.getsource(resolve)
 
 
 class _Proc:

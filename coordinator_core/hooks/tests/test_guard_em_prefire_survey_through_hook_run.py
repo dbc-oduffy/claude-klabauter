@@ -110,6 +110,7 @@ def door_env(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_DOOR_STDIN_MODE", "hook")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     monkeypatch.delenv("COORDINATOR_HOOK_EM_PREFIRE_SURVEY_DISABLED", raising=False)
+    monkeypatch.setenv("COORDINATOR_HOOK_CONTEXT", "1")
     monkeypatch.setattr(machine_profile, "guard_level", lambda name: "strict")
     monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(ers.PHASE_UNFIRED))
 
@@ -136,7 +137,7 @@ def _decision(body: dict) -> str:
 
 def _nudged(body: dict) -> bool:
     hso = body.get("hookSpecificOutput") or {}
-    return "[em-prefire-survey]" in str(hso.get("additionalContext", "")) and "permissionDecision" not in hso
+    return "[engine-ask nag" in str(hso.get("additionalContext", "")) and "permissionDecision" not in hso
 
 
 def _reason(body: dict) -> str:
@@ -151,8 +152,8 @@ def test_ninth_call_advises_through_the_door_with_fire_step_and_is_allowed(door,
     rc, body = door.run(monkeypatch, capsys, name)
     assert rc == 0
     assert _nudged(body)
-    assert _reason(body).startswith("[em-prefire-survey]")
-    assert warp_fire.fire_step() in _reason(body)
+    assert _reason(body).startswith("[engine-ask nag")
+    assert warp_fire.fire_step().split("call ", 1)[1] in _reason(body)
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
@@ -197,7 +198,7 @@ def test_cell_session_ninth_call_advises_with_role_marker(cell_door, monkeypatch
     rc, body = cell_door.run(monkeypatch, capsys, name)
     assert rc == 0
     assert _nudged(body)
-    assert _reason(body).startswith("[em-prefire-survey]")
+    assert _reason(body).startswith("[engine-ask nag")
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])

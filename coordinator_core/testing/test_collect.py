@@ -52,6 +52,14 @@ _REAL_TEST_MODULES = {
     "test_suite_run_record.py",
     "test_suite_run_reuse.py",
     "test_git_write.py",  # real unit test of testing/git_write.py
+    "test_baseline_cache.py",  # real unit test of testing/baseline_cache.py
+    "test_nested_session_guard.py",  # real unit test of the nested pytest-session guard
+    "test_pytest_child_private_commit.py",  # real unit test of the pytest child's private commit
+    "test_pytest_depth_sentinel_entry_points.py",  # real unit test of the pytest depth sentinel's entry points
+    "test_pytest_spawners_capped.py",  # real unit test of the capped pytest spawners
+    "test_scoped_pytest.py",  # real unit test of the scoped pytest runner
+    "test_spawn_depth.py",  # real unit test of the spawn-depth guard
+    "test_watch_parent.py",  # real unit test of the parent watcher
 }
 
 

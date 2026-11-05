@@ -420,6 +420,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
+    "benchmarks/lost_definition_leg_profile.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
     "benchmarks/probe_since_base_overlap.py::_fast_import": {
         "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
@@ -510,6 +514,58 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     },
     "ops/push_outstanding.py::_record_tracking_ref": {
         "reason": "ineligible: advances a remote-tracking ref after a landed push; creates no commit and carries no claim",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/halted_run_landed.py::_commit_records": {
+        "reason": "ineligible: lands the halted run's record files only; the session holds no claim on them",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/land_credited.py::_commit": {
+        "reason": "ineligible: lands the run's credited paths under the run's own holds; the landing carries no caller-supplied claim id",
+        "confirmed": True,
+    },
+    "ops/dispatch_emit/minted_records.py::settle": {
+        "reason": "ineligible: lands the run's own minted-record manifest; the session holds no claim on those paths",
+        "confirmed": True,
+    },
+    "ops/fleet/terminal_sizing_drain.py::land_moves": {
+        "reason": "ineligible: lands sizing renames built from HEAD's own blobs; no claim-bearing session id",
+        "confirmed": True,
+    },
+    "symbol_knowledge/agent_batches.py::_commit_sidecar": {
+        "reason": "ineligible: commits the symbol-knowledge sidecar for a background job; carries no claim-bearing session id",
+        "confirmed": True,
+    },
+    "benchmarks/baseline_export_cache_profile.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/commit_paths_pin_loop_budget.py::_call_once": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/commit_paths_pin_loop_budget.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/hunk_split_large_file_budget.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/land_credited_profile.py::leg_h_commit": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/land_run_leg_budget_profile.py::add_live_sibling_runs": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/review_prep_dirty_worktree.py::seed": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/submit_engine_ask_process_budget.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
     "workstream_complete/directives_commit_tail.py::run_close_commit": {

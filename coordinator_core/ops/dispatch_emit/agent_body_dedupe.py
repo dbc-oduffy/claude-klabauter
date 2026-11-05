@@ -20,7 +20,7 @@ from coordinator_core.ops.dispatch_emit import prompt_fragments as _pf
 
 _SITE = re.compile(r"\bschema:\s*(?=\{)")
 _DEF = re.compile(r"^const (_SC\d+) = \(\) => \((?=\{)", re.M)
-_NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+_NUMBER = re.compile(r"(?<![\w$])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
 _IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 _PURE_CODE = re.compile(r"[\s{}\[\]:,+]*")
 _LITERAL_IDENTS = {"true", "false", "null"}
@@ -138,11 +138,11 @@ def dedupe_agent_payloads(script: str, *, anchor: str) -> str:
     return strip_code_indentation(_dedupe_schemas(script, anchor))
 
 
-_INDENT = re.compile(r"^[ \t]+", re.M)
+_INDENT = re.compile(r"^[ \t]*\n|^[ \t]+", re.M)
 
 
 def strip_code_indentation(script: str) -> str:
-    """Drop the leading spaces and tabs of every line that starts in code, never inside a template, string or comment."""
+    """Drop the leading spaces and tabs of every line that starts in code, and every blank code line; never inside a template, string or comment."""
     mask = _code_mask(script)
     return _INDENT.sub(lambda m: "" if mask[m.start()] else m.group(), script)
 

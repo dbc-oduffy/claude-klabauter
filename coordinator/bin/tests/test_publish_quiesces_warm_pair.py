@@ -74,6 +74,7 @@ class _Env:
         self.ps = pair_stop
         self.events: list = []
         self.live_runs: list = []
+        self.leg_in_flight = False
         self.stop_results: list = []
         self.pre_results: list = []
         self.moving = False
@@ -125,6 +126,12 @@ def _setup(tmp_path, monkeypatch, engine_root: bool, rows: tuple = ("row-a",)) -
         return list(env.live_runs)
 
     monkeypatch.setattr(live_runs, "find_live_runs", find)
+
+    def legs(root):
+        env.events.append(("engine_legs_in_flight", breadcrumb.handover_pending_held(root)))
+        return env.leg_in_flight
+
+    monkeypatch.setattr(live_runs, "engine_legs_in_flight", legs)
 
     def stop(root, **k):
         if not env.held():
@@ -356,12 +363,65 @@ def test_live_midstage_runs_refuse_the_handover_naming_each_run(tmp_path, monkey
         live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z"),
         live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z"),
     ]
+    env.leg_in_flight = True
     rc, text = _run(env)
     assert rc == 1, text
     assert "example-game-repo ask-be779d" in text and "claude-klabauter ask-aaaaaa" in text
     assert "--allow" not in text and "--cut-run" not in text
     assert env.names("land_diff") == []
     assert env.names("stop") == []
+    assert not env.bc.handover_pending_held(env.repo)
+
+
+def test_staged_idle_run_does_not_hold_the_handover(tmp_path, monkeypatch):
+    from coordinator_core.warm import live_runs
+
+    env = _setup(tmp_path, monkeypatch, True)
+    env.live_runs[:] = [live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
+    env.leg_in_flight = False
+    rc, err = _run(env)
+    assert rc == 0, err
+    assert env.names("stop") != []
+    assert not env.bc.handover_pending_held(env.repo)
+
+
+def test_handover_pending_is_held_across_the_drain_and_the_stop(tmp_path, monkeypatch):
+    from coordinator_core.warm import live_runs
+
+    env = _setup(tmp_path, monkeypatch, True)
+    env.live_runs[:] = [live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
+    real_stop = env.ps.stop_warm_pair
+    stop_pending: list = []
+
+    def stop(root, **k):
+        stop_pending.append(env.bc.handover_pending_held(root))
+        return real_stop(root, **k)
+
+    monkeypatch.setattr(env.ps, "stop_warm_pair", stop)
+    rc, err = _run(env)
+    assert rc == 0, err
+    assert stop_pending and all(stop_pending)
+    drains = env.names("engine_legs_in_flight")
+    assert drains and all(held for _, held in drains)
+
+
+def test_a_leg_that_starts_after_the_drain_refuses_before_the_marked_stop(tmp_path, monkeypatch):
+    env = _setup(tmp_path, monkeypatch, True)
+    seen: list = []
+
+    def legs(root):
+        seen.append(1)
+        return len(seen) > 1
+
+    monkeypatch.setattr(env.publish_mod, "_swap_over_mid_stage", lambda *a, **k: False)
+    from coordinator_core.warm import live_runs
+
+    monkeypatch.setattr(live_runs, "engine_legs_in_flight", legs)
+    env.live_runs[:] = [live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
+    rc, text = _run(env)
+    assert rc == 1, text
+    assert env.names("stop") == []
+    assert not env.bc.handover_pending_held(env.repo)
 
 
 def test_live_midstage_run_does_not_bypass_survivor_refusal(tmp_path, monkeypatch):

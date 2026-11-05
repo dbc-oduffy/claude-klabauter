@@ -534,3 +534,15 @@ def test_by_name_launch_record_takes_the_script_path_from_the_launch_result(tmp_
     assert warp_live.live_run_for_sizing(
         repo, rel, session_id="s1", transcript_path=str(ended), tmpdir=str(tdir)
     ) is None
+
+
+def test_handler_surfaces_a_pending_spool_notice_to_the_submitting_session_only(tmp_path):
+    from coordinator_core.ask_spool import notice
+
+    notice.append_notice(str(tmp_path), "sess-spool", "sp1", "ask-run-1")
+
+    other = asyncio.run(pad._handler({"session_id": "sess-other", "tool_name": "Read"}, repo_root=tmp_path))
+    assert "sp1" not in str(other)
+
+    mine = asyncio.run(pad._handler({"session_id": "sess-spool", "tool_name": "Read"}, repo_root=tmp_path))
+    assert "Your spooled ask sp1 minted run ask-run-1." in mine["hookSpecificOutput"]["additionalContext"]

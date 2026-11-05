@@ -191,7 +191,7 @@ class TestRealWarmHit:
         from coordinator_core.warm import client
 
         monkeypatch.delenv("COORDINATOR_OVERRIDE_NO_VERIFY", raising=False)
-        monkeypatch.setattr(client, "try_warm_dispatch", lambda msg: self._server_side_dispatch(msg))
+        monkeypatch.setattr(client, "try_warm_dispatch", lambda msg, **kwargs: self._server_side_dispatch(msg))
         monkeypatch.setattr(
             "coordinator_core.warm.entry_seam._trigger_listener_boot", lambda: None
         )
@@ -206,7 +206,7 @@ class TestRealWarmHit:
     def test_a_real_hit_with_a_no_objection_verdict(self, monkeypatch):
         from coordinator_core.warm import client
 
-        monkeypatch.setattr(client, "try_warm_dispatch", lambda msg: self._server_side_dispatch(msg))
+        monkeypatch.setattr(client, "try_warm_dispatch", lambda msg, **kwargs: self._server_side_dispatch(msg))
         monkeypatch.setattr(
             "coordinator_core.warm.entry_seam._trigger_listener_boot", lambda: None
         )

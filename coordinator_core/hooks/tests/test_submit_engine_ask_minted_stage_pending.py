@@ -52,7 +52,7 @@ def _starts(got: dict) -> list:
 
 
 def _direct_script(root: Path) -> Path:
-    return mod._write_direct_start_script(root, RUN_ID, RUN_REL, FIRE_ARGS)
+    return mod.write_direct_start_script(root, RUN_ID, RUN_REL, FIRE_ARGS)
 
 
 def test_direct_start_rewrite_never_points_at_the_raw_run_script(repo):
@@ -106,6 +106,24 @@ def test_direct_start_caps_the_stage_rounds(repo, tmp_path):
     got = _node(_direct_script(repo), tmp_path, [], [_pending(s) for s in shas])
     assert got["out"]["status"] == "failed" and "stage rounds" in got["out"]["error"]
     assert len(_starts(got)) == MAX_STAGE_ROUNDS + 1
+
+
+@pytest.mark.spawns_process
+def test_minted_run_start_script_answers_stage_pending_with_the_staged_twin(repo, tmp_path):
+    from coordinator_core.ops.dispatch_emit import minted_run
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _mint(repo, script=True)
+    assert run_token.escrow(repo, RUN_ID, run_token.mint(repo, RUN_ID, RUN_REL))
+    out = minted_run._handler({"run_id": RUN_ID, "action": "start"}, repo)
+    assert out["ok"] is True, out
+    assert out["run_script"] == RUN_REL and out["script_path"] != RUN_REL
+    got = _node(repo / out["script_path"], tmp_path, [], [_pending(), {"done": True}])
+    starts = _starts(got)
+    assert [s["scriptPath"] for s in starts] == [f"{repo.as_posix()}/{RUN_REL}", _twin(repo)]
+    assert all(s["args"]["repoRoot"] == repo.as_posix() and s["args"]["runToken"] for s in starts)
+    assert got["out"] == {"done": True}
 
 
 @pytest.mark.spawns_process

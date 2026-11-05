@@ -101,6 +101,30 @@ def test_a_run_changing_only_non_py_files_does_not_report_pass(tmp_path):
     assert "report status `pass` with tests_run 0" not in script
 
 
+def test_a_narrowed_selection_states_the_notice_in_the_script(tmp_path):
+    from coordinator_core.ops.reverify_scope import _SUITE_BOUND
+
+    repo, _base = _one_test_file_repo(tmp_path)
+    (repo / "pkg" / "hub.py").write_text("V = 1\n")
+    for i in range(_SUITE_BOUND + 10):
+        (repo / "pkg" / "tests" / f"test_owner_{i:03d}.py").write_text("from pkg import hub\n\ndef test_o():\n    pass\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "graph")
+    base = _git(repo, "rev-parse", "HEAD")
+    (repo / "pkg" / "hub.py").write_text("V = 2\n")
+    _git(repo, "commit", "-qam", "touch hub")
+    script = _compose(repo, base)
+
+    assert "Scope notice: reverify selection narrowed" in script
+    assert script.count("pkg/tests/test_owner_") == _SUITE_BOUND
+
+
+def test_an_unnarrowed_selection_carries_no_notice(tmp_path):
+    repo, base = _one_test_file_repo(tmp_path)
+
+    assert "Scope notice" not in _compose(repo, base)
+
+
 def _fail(baseline, method="export", **extra):
     return {"status": "fail", "baseline_method": method, "baseline": baseline, **extra}
 

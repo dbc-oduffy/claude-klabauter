@@ -59,6 +59,20 @@ def probe() -> dict:
     }
 
 
+def stored_capability(home: Optional[Path] = None) -> Optional[dict]:
+    """The ``capability`` dict already in ``<home>/state/group-em/box.json``; None when absent or unreadable.
+
+    Read-only: never mints an identity and never probes.
+    """
+    try:
+        with open(box_registry._identity_path(home), "r", encoding="utf-8") as fh:
+            record = json.loads(fh.read())
+    except (OSError, ValueError):
+        return None
+    cap = record.get("capability") if isinstance(record, dict) else None
+    return cap if isinstance(cap, dict) else None
+
+
 def write_capability(home: Optional[Path] = None) -> dict:
     """Merge ``probe()`` into ``<home>/state/group-em/box.json`` as ``capability``; returns the record.
 

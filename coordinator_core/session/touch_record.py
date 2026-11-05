@@ -641,8 +641,13 @@ def encode_line(
     content_hash: Optional[str] = None,
     name: Optional[str] = None,
     kind: Optional[str] = None,
+    allow_absolute: bool = False,
 ) -> bytes:
     """Encode one event as a self-describing, newline-terminated line.
+
+    ``allow_absolute`` skips the out-of-worktree rejection and exists only so a RELEASE can
+    mirror an already-recorded absolute ``T`` path byte for byte; a writer of a new claim never
+    sets it.
 
     Path normalization happens here, once, via
     ``path_dialect.canonicalize_relative_path`` -- the decoder trusts the
@@ -684,7 +689,7 @@ def encode_line(
         raise ValueError(f"invalid kind {kind!r}; must be one of {_VALID_KINDS} or None")
 
     normalized_path = canonicalize_relative_path(path)
-    if _is_out_of_worktree(normalized_path):
+    if _is_out_of_worktree(normalized_path) and not (allow_absolute and verb == VERB_RELEASE):
         raise OutOfWorktreePath(
             f"path {path!r} (normalized {normalized_path!r}) is out of "
             "worktree -- absolute or upward-escaping paths are rejected, "
@@ -1131,6 +1136,44 @@ def append_event(
     if not atomic_append.append_line(sink_path, encoded, wait_secs=APPEND_WAIT_SECS):
         _note_degrade("append_pending", str(sink_path))
     note_claim_in_index(sink_path, canonicalize_relative_path(path))
+
+
+def append_events(sink: "Path | str", events: "Iterable[dict]") -> int:
+    """Encode every event and append them to ``sink`` in ONE ``atomic_append`` call.
+
+    Each event is a dict of ``append_event``'s keyword arguments (``session_id``, ``agent_id``,
+    ``verb``, ``path`` required; ``timestamp``, ``content_hash``, ``name``, ``kind`` optional).
+    A line that raises ``LineTooLong`` is dropped alone and the rest still land (the per-line
+    RETAIN rule); any other encode error propagates before anything is written. The writer
+    name is resolved once per distinct session id. Returns the count of lines written; zero
+    writes nothing and does not touch the sink.
+    """
+    names: dict = {}
+    lines: list = []
+    paths: list = []
+    for event in events:
+        kwargs = dict(event)
+        name = kwargs.pop("name", _UNSET)
+        if name is _UNSET:
+            sid = kwargs["session_id"]
+            if sid not in names:
+                names[sid] = _resolve_writer_name(sid)
+            name = names[sid]
+        try:
+            lines.append(encode_line(name=name, **kwargs))
+        except LineTooLong:
+            continue
+        paths.append(canonicalize_relative_path(kwargs["path"]))
+    if not lines:
+        return 0
+    sink_path = Path(sink)
+    sink_path.parent.mkdir(parents=True, exist_ok=True)
+    _maybe_rotate(sink_path)
+    if not atomic_append.append_line(sink_path, b"".join(lines), wait_secs=APPEND_WAIT_SECS):
+        _note_degrade("append_pending", str(sink_path))
+    for key in paths:
+        note_claim_in_index(sink_path, key)
+    return len(lines)
 
 
 # ---------------------------------------------------------------------------

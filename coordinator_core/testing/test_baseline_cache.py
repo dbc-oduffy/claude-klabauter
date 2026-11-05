@@ -50,7 +50,7 @@ def test_entry_files_are_read_only(top):
         pytest.skip("root bypasses file permissions")
     entry, _ = _build(top, 1)
     with pytest.raises(PermissionError):
-        open(entry / "pkg" / "sub" / "mod.py", "w")
+        open(entry / "pkg" / "sub" / "mod.py", "w", encoding="utf-8")
     assert not os.stat(entry / "top.txt").st_mode & stat.S_IWUSR
 
 

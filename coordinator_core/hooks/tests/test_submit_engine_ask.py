@@ -995,7 +995,8 @@ def test_op_door_answers_the_wrapped_payload(tmp_path, monkeypatch):
     assert run_token._record_path(root, run_id).is_file()  # the premint marker
     script = Path(hso["updatedInput"]["scriptPath"])
     body = script.read_text(encoding="utf-8")
-    assert re.search(rf'preminted_run_id\\*"\s*:\s*\\*"{run_id}', body)  # the deferred emit adopts the minted id
+    params_file = Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", body, re.M).group(1)))
+    assert json.loads(params_file.read_text(encoding="utf-8"))["preminted_run_id"] == run_id  # the deferred emit adopts the minted id
 
 
 # --- warp_live: liveness ends with the harness's terminal notification --------------------
@@ -1744,32 +1745,7 @@ def test_an_open_context_memo_carries_no_advisory(tmp_path):
     assert "may already be done" not in hso["additionalContext"]
 
 
-def test_default_launch_pre_emits_each_child_and_names_a_refused_one(tmp_path, monkeypatch):
-    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
-
-    children = [
-        LaunchChild(run_id=f"ask-r{i}", sizing_rel=f"state/sizings/ask-r{i}.yaml",
-                    emit_params={"ask": True, "sizing_path": f"state/sizings/ask-r{i}.yaml"})
-        for i in (1, 2)
-    ]
-    seen: list = []
-
-    def fake_emit(params, repo_root):
-        seen.append(params["sizing_path"])
-        if params["sizing_path"].endswith("ask-r1.yaml"):
-            raise RuntimeError("declined: r1 refused")
-        return {"path": "scratch/warp/ask-r2.workflow.mjs", "run_id": "ask-r2", "fire_args": {"repoRoot": "/r"}}
-
-    monkeypatch.setattr(mod, "_default_emit", fake_emit)
-    script = mod._default_launch(tmp_path, "ask-parent", children, None)
-    assert len(seen) == 2
-    text = script.read_text(encoding="utf-8")
-    assert "declined: r1 refused" in text and "ask-r2.workflow.mjs" in text
-
-
-def test_default_launch_stops_emitting_once_one_deadline_is_spent(tmp_path, monkeypatch):
-    import threading
-
+def test_default_launch_defers_every_child_to_the_launcher_and_never_emits_in_the_hook(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
     children = [
@@ -1778,22 +1754,33 @@ def test_default_launch_stops_emitting_once_one_deadline_is_spent(tmp_path, monk
         for i in (1, 2, 3)
     ]
     seen: list = []
-    release = threading.Event()
-
-    def slow_emit(params, repo_root):
-        seen.append(params["sizing_path"])
-        release.wait(5)
-        return {"path": "x.mjs", "run_id": "x", "fire_args": {}}
-
-    monkeypatch.setattr(mod, "_default_emit", slow_emit)
-    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "0.25")
-    try:
-        script = mod._default_launch(tmp_path, "ask-parent", children, None)
-    finally:
-        release.set()
-    assert seen == ["state/sizings/ask-r1.yaml"]
+    monkeypatch.setattr(mod, "_default_emit", lambda params, repo_root: seen.append(params) or {})
+    script = mod._default_launch(tmp_path, "ask-parent", children, None)
+    assert seen == []
     text = script.read_text(encoding="utf-8")
-    assert "outran the hook budget" in text and text.count("Not emitted") == 2
+    assert text.count("Not emitted in the hook") == 3
+    assert len(list((tmp_path / "scratch" / "warp").glob("*.workflow.mjs"))) == 4  # three deferred emits plus the launcher
+
+
+def test_default_launch_names_a_child_whose_deferred_script_cannot_be_written(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
+
+    children = [
+        LaunchChild(run_id=f"ask-r{i}", sizing_rel=f"state/sizings/ask-r{i}.yaml",
+                    emit_params={"ask": True, "sizing_path": f"state/sizings/ask-r{i}.yaml"})
+        for i in (1, 2)
+    ]
+    real = mod._write_deferred_script
+
+    def write(root, params):
+        if params["sizing_path"].endswith("ask-r1.yaml"):
+            raise OSError("disk full")
+        return real(root, params)
+
+    monkeypatch.setattr(mod, "_write_deferred_script", write)
+    text = mod._default_launch(tmp_path, "ask-parent", children, None).read_text(encoding="utf-8")
+    assert text.count("Not emitted in the hook") == 2
+    assert len(list((tmp_path / "scratch" / "warp").glob("*.workflow.mjs"))) == 2  # one deferred emit plus the launcher
 
 
 def _deferred_params(root: Path, em_context: str, monkeypatch) -> dict:
@@ -1812,8 +1799,7 @@ def _deferred_params(root: Path, em_context: str, monkeypatch) -> dict:
             worker.join(10)
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
     (script,) = (root / "scratch" / "warp").glob("defer-*.workflow.mjs")
-    literal = re.search(r"^const PARAMS = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1)
-    return json.loads(json.loads(literal))
+    return json.loads(Path(json.loads(re.search(r"^const PARAMS_FILE = (.*);$", script.read_text(encoding="utf-8"), re.M).group(1))).read_text(encoding="utf-8"))
 
 
 def test_submit_engine_ask_deferred_long_brief_rides_a_repo_file(tmp_path, monkeypatch):

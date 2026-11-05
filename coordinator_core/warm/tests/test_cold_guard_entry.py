@@ -26,10 +26,21 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from coordinator_core.ops import warm_guard_evaluate
 from coordinator_core.warm import hook_http
 
 _NO_VERIFY_CMD = "git commit --no-verify -m x -- foo.py"
+
+
+@pytest.fixture(autouse=True)
+def _floor_guard_level(monkeypatch):
+    """Pin every guard to the floor so a deny still reaches the verdict this suite compares;
+    under DR-475 an off-registry guard like no-verify only nudges."""
+    from coordinator_core import machine_profile
+
+    monkeypatch.setattr(machine_profile, "resolved_level", lambda _name, subagent=False: "floor")
 
 
 def _event(cmd: str, *, env: dict | None = None, session_id: str = "s-cold-guard") -> dict:

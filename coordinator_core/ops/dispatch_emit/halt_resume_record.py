@@ -181,6 +181,18 @@ def fingerprint_of(root: Union[str, Path], plan_rel: Optional[str], sizing_rel: 
     }
 
 
+def inherited_stop_after(root: Union[str, Path], record_dir: Union[str, Path]) -> Optional[str]:
+    """`plan` when the halted run's lineage still owes a park; None once the run's own halt is the park
+    (a deliberate resume of a parked run stages) or no ancestor carries one. Spawns nothing."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, lineage_stop_after
+
+    marker = halted_run._read(Path(record_dir))
+    if marker and marker.get("halted") == HALT_PARKED:
+        return None
+    return lineage_stop_after(Path(root), Path(record_dir).name)
+
+
 def fingerprint_for_run(
     root: Union[str, Path],
     record_dir: Union[str, Path],
@@ -198,6 +210,7 @@ def fingerprint_for_run(
     fp = fingerprint_of(root, plan_rel, sizing_rel, halted_run_base(Path(record_dir)))
     fp["resume_plan_rel"] = plan_rel
     fp["revised_at"] = revised_halt(Path(record_dir))
+    fp["stop_after"] = inherited_stop_after(root, record_dir)
     if landed_state_sha is not MISSING:
         fp["landed_state_sha"] = landed_state_sha
     return fp
@@ -270,9 +283,12 @@ def build_record(
     fingerprint: dict,
     resume_plan_rel: Optional[str] = None,
     retry_not_before: Optional[float] = None,
+    stop_after: Optional[str] = None,
 ) -> dict:
-    """A record dict in the on-disk shape; `retry_not_before` is set only on a refused build."""
+    """A record dict in the on-disk shape; `retry_not_before` is set only on a refused build and
+    `stop_after` only when the composed script carries the inherited park."""
     return {
+        "stop_after": stop_after,
         "retry_not_before": retry_not_before,
         "schema": SCHEMA,
         "resume_plan_rel": resume_plan_rel,
@@ -317,7 +333,7 @@ def matches(record: dict, fingerprint: dict) -> bool:
     if stored.get("halt_head") is None or fingerprint.get("halt_head") is None:
         return False
     keys = ["plan_sha256", "sizing_sha256", "halt_head", "revised_at"]
-    keys += [k for k in ("resume_plan_rel", "landed_state_sha") if k in fingerprint]
+    keys += [k for k in ("resume_plan_rel", "landed_state_sha", "stop_after") if k in fingerprint]
     if not all(stored.get(k) == fingerprint.get(k) for k in keys):
         return False
     if "resume_plan_rel" in stored and stored["resume_plan_rel"] != record.get("resume_plan_rel"):

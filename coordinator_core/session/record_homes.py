@@ -123,6 +123,7 @@ HOMES = frozenset({
     "reviews",
     "roadmap",
     "rulings",
+    "run-evidence",
     "sizings",
     "spawn-deletions",
     "stand-downs",

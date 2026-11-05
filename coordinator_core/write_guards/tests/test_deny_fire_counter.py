@@ -48,7 +48,8 @@ def _payload(session_id="sess-c6-deny", cwd=None):
     return p
 
 
-def _fake_hard_deny(name="fake-hard-deny-guard"):
+def _fake_hard_deny(name="destructive-rm"):
+    # a deny_registry guard: an unregistered name is demoted to an advisory before the counter
     return engine._Guard(name, "hard-deny", ["Write"], 5, lambda payload: dict(_DENY_ENVELOPE))
 
 
@@ -73,7 +74,7 @@ class TestUnclearedHardDenyProducesOneRecord:
         assert len(lines) == 1
         record = json.loads(lines[0])
         assert set(record.keys()) == {"guard", "session", "at", "cleared"}
-        assert record["guard"] == "fake-hard-deny-guard"
+        assert record["guard"] == "destructive-rm"
         assert record["session"] == "sess-c6-deny"
         assert record["cleared"] is False
 
@@ -110,7 +111,7 @@ class TestClearedHardDenyProducesOneRecordAndChainContinues:
         assert len(lines) == 1
         record = json.loads(lines[0])
         assert record["cleared"] is True
-        assert record["guard"] == "fake-hard-deny-guard"
+        assert record["guard"] == "destructive-rm"
 
 
 class TestDenyCounterNeverReadBack:

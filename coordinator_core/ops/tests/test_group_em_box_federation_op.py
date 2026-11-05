@@ -16,7 +16,7 @@ from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_box_federation as op
 
-_OPS = ("box_register", "box_place", "box_send", "box_roster")
+_OPS = ("box_register", "box_place", "box_send", "box_roster", "suite_grant_receive", "box_key_pin")
 
 
 @pytest.mark.parametrize("name", _OPS)
@@ -105,3 +105,26 @@ def test_roster_never_raises(homes, monkeypatch):
 
     monkeypatch.setattr(watch, "remote_box_rows", boom, raising=False)
     assert "error" in op._groupem_box_roster({})
+
+
+def test_box_key_pin_writes_the_peer_key_and_refuses_bad_params(homes):
+    import base64
+
+    a, _ = homes
+    key_b64 = base64.b64encode(b"k" * 32).decode()
+    assert op._groupem_box_key_pin({"box_id": "box-peer", "key_b64": key_b64}) == {
+        "pinned": True,
+        "box_id": "box-peer",
+    }
+    assert (a / "state" / "group-em" / "peer-keys" / "box-peer.json").is_file()
+    assert "error" in op._groupem_box_key_pin({"box_id": "box-peer"})
+    assert "error" in op._groupem_box_key_pin({"box_id": "../x", "key_b64": key_b64})
+    assert "error" in op._groupem_box_key_pin({"box_id": "box-peer", "key_b64": "!!notb64"})
+    assert "error" in op._groupem_box_key_pin(None)
+
+
+def test_suite_grant_receive_refuses_a_non_object_and_an_unpinned_issuer(homes):
+    assert "error" in op._groupem_suite_grant_receive({})
+    assert "error" in op._groupem_suite_grant_receive({"envelope": "x"})
+    out = op._groupem_suite_grant_receive({"envelope": {"issuer_box_id": "box-unpinned", "sig": "ab"}})
+    assert out == {"ok": False, "reason": "bad_signature"}

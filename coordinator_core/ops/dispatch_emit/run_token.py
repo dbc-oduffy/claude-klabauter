@@ -571,10 +571,25 @@ def _well_formed(run_id: object, token: object, script_path: object) -> bool:
 def admits(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
     """Read-only: True while the run's live record is fresh and `token` and `script_path` match
     it. Claims nothing, so a guard that admits a command whose op then fails to parse strands
-    no record; two racing invocations can both pass here and `redeem` refuses the loser."""
+    no record; two racing invocations can both pass here and `redeem` refuses the loser.
+    An admit is real run activity: it also throttle-stamps the run's `last_activity_at`
+    (`ask_contract.touch_run_activity`); that heartbeat never fails the admit."""
     if not _well_formed(run_id, token, script_path):
         return False
-    return _matches(_read_rec(repo_root, run_id), run_id, token, script_path)
+    admitted = _matches(_read_rec(repo_root, run_id), run_id, token, script_path)
+    if admitted:
+        _heartbeat(repo_root, run_id)
+    return admitted
+
+
+def _heartbeat(repo_root: Path, run_id: str) -> None:
+    try:
+        from coordinator_core.ops.dispatch_emit.ask_contract import touch_run_activity
+        from coordinator_core.session import record_homes
+
+        touch_run_activity(Path(record_homes.home_dir(str(repo_root), "warp")) / run_id)
+    except Exception:  # noqa: BLE001 -- a heartbeat must never fail an admit
+        pass
 
 
 def halt_admits(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
@@ -619,32 +634,43 @@ def readmit_reviewed(repo_root: Path, run_id: object, token: object, script_path
     return True
 
 
-def redeem(repo_root: Path, run_id: object, token: object, script_path: object) -> bool:
+def redeem(
+    repo_root: Path, run_id: object, token: object, script_path: object, budget_secs: Optional[float] = None
+) -> bool:
     """The op's atomic claim: True for exactly one caller whose `token` and `script_path` match
     the live record. The claim is an exclusive create of the claimed record (a rename of one
     source can succeed for several racing callers on Windows). The claimed record stays until
-    `consume` (the commit landed) or `release` (it did not)."""
+    `consume` (the commit landed) or `release` (it did not). `budget_secs` also makes a claim
+    older than that adoptable while its holder lives."""
+    return redeem_claim(repo_root, run_id, token, script_path, budget_secs=budget_secs) is not None
+
+
+def redeem_claim(
+    repo_root: Path, run_id: object, token: object, script_path: object, budget_secs: Optional[float] = None
+) -> Optional[dict]:
+    """`redeem`, returning the winning claim's identity `{claimed_at, pid, thread}` (None when this
+    call did not win). Pass it to `holds_claim` to learn whether a later caller adopted the claim."""
     if not _well_formed(run_id, token, script_path):
-        return False
+        return None
     live = _record_path(repo_root, run_id)
     claimed = _record_path(repo_root, run_id, claimed=True)
     if live is None or claimed is None:
-        return False
+        return None
     record = _read_rec(repo_root, run_id)
     if not _matches(record, run_id, token, script_path):
         held = _read_rec(repo_root, run_id, claimed=True)
         if held is None:
-            return False
-        adopted, aside = _adopt_expired_claim(claimed, held, run_id, token, script_path)
+            return None
+        identity, aside = _adopt_expired_claim(claimed, held, run_id, token, script_path, budget_secs)
         if aside is not None:
             aside.unlink(missing_ok=True)
-        return adopted
+        return identity
     try:
         claimed.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
-        return False
-    _write_claim(fd, record)
+        return None
+    identity = _write_claim(fd, record)
     for _ in range(50):
         try:
             live.unlink(missing_ok=True)
@@ -653,15 +679,28 @@ def redeem(repo_root: Path, run_id: object, token: object, script_path: object) 
             time.sleep(0.005)
     _drop_legacy(repo_root, run_id)
     _drop_staged_twins(repo_root, run_id)
-    return True
+    return identity
 
 
-def _write_claim(fd: int, record: dict) -> None:
+def holds_claim(repo_root: Path, run_id: object, token: object, script_path: object, identity: object) -> bool:
+    """Read-only: True while the claimed record matches `token` and `script_path` and still carries
+    `identity` (from `redeem_claim`); an adopter's re-created claim carries its own. Never raises."""
+    if not isinstance(identity, dict) or not _well_formed(run_id, token, script_path):
+        return False
+    record = _read_rec(repo_root, run_id, claimed=True)
+    return _matches(record, run_id, token, script_path) and all(
+        record.get(k) == identity.get(k) for k in _IDENTITY_KEYS
+    )
+
+
+_IDENTITY_KEYS = ("claimed_at", "pid", "thread")
+
+
+def _write_claim(fd: int, record: dict) -> dict:
+    identity = {"claimed_at": time.time(), "pid": os.getpid(), "thread": threading.get_ident()}
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
-        json.dump(
-            {**record, "claimed_at": time.time(), "pid": os.getpid(), "thread": threading.get_ident()},
-            fh, sort_keys=True,
-        )
+        json.dump({**record, **identity}, fh, sort_keys=True)
+    return identity
 
 
 def _holder_alive(pid: object) -> bool:
@@ -676,10 +715,13 @@ def _holder_alive(pid: object) -> bool:
         return True
 
 
-def _claim_expirable(record: dict, path: Path) -> bool:
+def _claim_expirable(record: dict, path: Path, budget_secs: Optional[float] = None) -> bool:
     """True when the claim's holder is provably dead: its pid gone, or, in this process, its thread
-    exited. A warm op past its budget is abandoned, not stopped, so age alone never expires a claim
-    whose holder is recorded. A legacy claim without `pid` ages by `claimed_at` or the file mtime."""
+    exited; or, when `budget_secs` is given, the claim is older than it. Without a budget a live
+    holder keeps its claim at any age. A legacy claim without `pid` ages by `claimed_at` or the file mtime."""
+    stamped = record.get("claimed_at")
+    if budget_secs is not None and isinstance(stamped, (int, float)) and time.time() - stamped > budget_secs:
+        return True
     pid = record.get("pid")
     if isinstance(pid, int) and pid > 0:
         if pid == os.getpid():
@@ -696,24 +738,29 @@ def _claim_expirable(record: dict, path: Path) -> bool:
 
 
 def _adopt_expired_claim(
-    claimed: Path, record: dict, run_id: object, token: object, script_path: object
-) -> tuple[bool, Optional[Path]]:
+    claimed: Path,
+    record: dict,
+    run_id: object,
+    token: object,
+    script_path: object,
+    budget_secs: Optional[float] = None,
+) -> tuple[Optional[dict], Optional[Path]]:
     """Take over a matching, expirable claim: the rename out of `claimed` has exactly one winner,
-    who re-creates the claim under its own pid and time. Returns (adopted, the renamed-aside
-    file the caller unlinks)."""
-    if not _matches(record, run_id, token, script_path) or not _claim_expirable(record, claimed):
-        return False, None
+    who re-creates the claim under its own pid and time. Returns (the new claim identity or None,
+    the renamed-aside file the caller unlinks)."""
+    if not _matches(record, run_id, token, script_path) or not _claim_expirable(record, claimed, budget_secs):
+        return None, None
     aside = claimed.with_name(f"{claimed.name}.adopt.{os.getpid()}")
     try:
         os.replace(claimed, aside)
     except OSError:
-        return False, None
+        return None, None
     try:
         fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
-        return False, aside
-    _write_claim(fd, {k: v for k, v in record.items() if k not in ("claimed_at", "pid", "thread")})
-    return True, aside
+        return None, aside
+    identity = _write_claim(fd, {k: v for k, v in record.items() if k not in _IDENTITY_KEYS})
+    return identity, aside
 
 
 def _drop_staged_twins(repo_root: Path, run_id: object) -> None:

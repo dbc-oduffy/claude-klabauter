@@ -196,3 +196,52 @@ def test_refusal_lists_spellings_and_keeps_remediation_tail():
     assert msg.startswith(psc.EXIT_CRITERION_REFUSAL_HEAD)
     assert psc.REMEDIATION_MARKER in msg
     assert psc.SUITE_TIER_REMEDIATION == "tests covering touched files pass"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the PM's approval of docs/reference/host-install-codex-agy.md recorded verbatim in the reference doc's frontmatter",
+        "PM approves the install doc",
+        "An approved per-host install plan doc",
+        "An approved per-host install plan",
+        "PM sign-off on the reference page",
+        "the memo is ratified by the PM",
+        "tests pass. PM approval of the README is recorded",
+    ],
+)
+def test_doc_approval_refused(text):
+    from coordinator_core.roadmap import post_stamp_clause as psc
+
+    msg = psc.doc_approval_refusal(text)
+    assert msg and msg.startswith(psc.EXIT_CRITERION_REFUSAL_HEAD)
+    assert msg.endswith(f"{psc.REMEDIATION_MARKER}{psc.DOC_APPROVAL_REMEDIATION}.")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "PM approves the scope of the install work",
+        "PM approval of the direction is recorded",
+        "PM approval before merge to main of the docs change",
+        "PM approval to push the reference doc",
+        "no PM approval of the doc is required",
+        "never requires PM approval for a memo",
+        "the reference doc exists and a test proves its content",
+        "",
+        None,
+    ],
+)
+def test_doc_approval_allowed(text):
+    from coordinator_core.roadmap.post_stamp_clause import doc_approval_refusal
+
+    assert doc_approval_refusal(text) is None
+
+
+def test_doc_approval_body_refusal_names_item():
+    from coordinator_core.roadmap.post_stamp_clause import doc_approval_body_refusal
+
+    plan = "## Exit criteria\n\n1. tests pass\n2. PM approval of the install doc\n"
+    msg = doc_approval_body_refusal(plan)
+    assert msg and msg.startswith("body exit criterion 2: ")
+    assert doc_approval_body_refusal("## Exit criteria\n\n1. tests pass\n") is None

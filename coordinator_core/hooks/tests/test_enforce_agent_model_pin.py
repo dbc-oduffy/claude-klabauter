@@ -188,7 +188,10 @@ def test_enumerated_type_with_violating_model_denies_via_composed_pin_reason(mon
     }
     envelope = unenumerated_mod.check(payload)
     assert envelope is not None
-    reason = envelope["hookSpecificOutput"]["permissionDecisionReason"]
+    hso = envelope["hookSpecificOutput"]
+    assert hso.get("permissionDecision") != "deny"
+    assert hso["updatedInput"]["model"] == "sonnet"
+    reason = hso["additionalContext"]
     assert "sonnet" in reason and "opus" in reason
 
 

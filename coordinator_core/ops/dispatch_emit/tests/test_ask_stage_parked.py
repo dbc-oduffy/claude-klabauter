@@ -92,3 +92,41 @@ def test_marker_holds_until_the_park_is_recorded(tmp_path):
     resumed = _handler(_params(), repo_root=tmp_path)
     assert PARKED_REPLY_KEY not in resumed and "error" not in resumed and not marker.exists()
     assert (record_dir(tmp_path, _RUN) / "manifest.json").is_file()
+
+
+_ANCESTOR = "ancestorrun"
+
+
+def _ancestor_marker(root, parked: bool = False):
+    adir = record_dir(root, _ANCESTOR)
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / STOP_AFTER_FILE).write_text(json.dumps({"stop_after": "plan"}), encoding="utf-8")
+    if parked:
+        (adir / "halted.json").write_text(json.dumps({"halted": "parked"}), encoding="utf-8")
+    rdir = record_dir(root, _RUN)
+    rdir.mkdir(parents=True, exist_ok=True)
+    (rdir / "run.json").write_text(json.dumps({"chain_parent": _ANCESTOR}), encoding="utf-8")
+    return rdir
+
+
+def test_ancestor_marker_parks_a_markerless_successor(tmp_path, monkeypatch):
+    _seed(tmp_path)
+    rdir = _ancestor_marker(tmp_path)
+    monkeypatch.setattr(ask_stage, "stage", lambda *a, **k: (_ for _ in ()).throw(AssertionError("staged")))
+
+    reply = _handler(_params(), repo_root=tmp_path)
+
+    assert reply == {PARKED_REPLY_KEY: "plan", "plan_path": PLAN_REL}
+    assert not (rdir / "manifest.json").exists()
+    assert (record_dir(tmp_path, _ANCESTOR) / STOP_AFTER_FILE).exists()
+
+
+def test_unrelated_ancestor_marker_does_not_park(tmp_path):
+    _seed(tmp_path)
+    adir = record_dir(tmp_path, _ANCESTOR)
+    adir.mkdir(parents=True, exist_ok=True)
+    (adir / STOP_AFTER_FILE).write_text(json.dumps({"stop_after": "plan"}), encoding="utf-8")
+
+    reply = _handler(_params(), repo_root=tmp_path)
+
+    assert PARKED_REPLY_KEY not in reply

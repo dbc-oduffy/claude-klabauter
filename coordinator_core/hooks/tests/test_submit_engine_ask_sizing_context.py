@@ -7,7 +7,8 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.hooks import submit_engine_ask as mod
-from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit import ask_compose, ask_roadmap
+from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief, EmBriefRefused, load_em_brief
 
 
@@ -174,6 +175,11 @@ def test_roadmap_arm_refusal_names_the_workflow_args(monkeypatch):
     monkeypatch.setattr(ask_compose, "parse_execute_review", lambda *_, **__: None)
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: "")
     monkeypatch.setattr(ask_compose, "_xl_exit_open", lambda *_: False)
+
+    def unreachable(*_a, **_k):
+        raise AskPlanBlitzRefused("plugin root did not resolve; roadmap-blitz.mjs is unreachable")
+
+    monkeypatch.setattr(ask_roadmap, "load_roadmap_blitz_text", unreachable)
     with pytest.raises(ask_compose.AskComposeRefused) as exc:
         ask_compose.compose_ask_script(
             repo_root=".",
@@ -186,5 +192,5 @@ def test_roadmap_arm_refusal_names_the_workflow_args(monkeypatch):
             wrap_stage=lambda text, **kw: (f"async function {ask_compose._PLAN_BLITZ_FN}(", []),
             em_brief=EmBrief(text="", source="inline", context=("ctx.md",)),
         )
-    assert "args.context" in str(exc.value)
-    assert "args.brief" in str(exc.value)
+    assert "the roadmap stage cannot be embedded" in str(exc.value)
+    assert "roadmap-blitz.mjs is unreachable" in str(exc.value)

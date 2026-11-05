@@ -25,10 +25,12 @@ STAGE_BUDGETS: dict[str, dict[str, int]] = {
 
 
 def _strip_variants(text: str) -> list[str]:
-    from coordinator_core.ops.dispatch_emit import ask_compose, ask_plan_blitz
+    from coordinator_core.ops.dispatch_emit import agent_body_dedupe, ask_compose, ask_plan_blitz
 
     strip = getattr(ask_plan_blitz, "strip_comment_lines", None) or ask_compose._strip_comment_lines
-    return [text, strip(text)]
+    stripped = strip(text)
+    base = [text, stripped]
+    return base + [agent_body_dedupe.strip_code_indentation(v) for v in base]
 
 
 def stage_texts(plan_blitz_text: Optional[str] = None, roadmap_text: Optional[str] = None) -> dict[str, str]:

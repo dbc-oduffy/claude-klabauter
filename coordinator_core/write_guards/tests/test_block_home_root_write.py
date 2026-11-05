@@ -27,10 +27,11 @@ def _payload(path, tool="Write", key="file_path", cwd=None):
     return payload
 
 
-def test_write_of_new_home_file_is_denied(home):
+def test_write_of_new_home_file_is_advised(home):
+    """advisory-by-ruling (recoverable clutter at the home root): allow plus one advisory line."""
     out = guard.check(_payload(home / "fo.txt"))["hookSpecificOutput"]
-    assert out["permissionDecision"] == "deny"
-    assert out["permissionDecisionReason"] == DENY_REASON
+    assert out["permissionDecision"] == "allow"
+    assert out["additionalContext"] == machine_profile.ADVISORY_PREFIX + DENY_REASON
 
 
 def test_notebook_path_is_judged(home):
@@ -56,15 +57,12 @@ def test_malformed_payload_allows(home):
     assert guard.check({}) is None
 
 
-@pytest.mark.parametrize("level,decision", [("warn", "allow"), ("off", None)])
-def test_guard_level_downgrades_the_deny(home, monkeypatch, level, decision):
+@pytest.mark.parametrize("level", ["strict", "warn", "off"])
+def test_no_guard_level_lifts_the_advisory_to_a_deny(home, monkeypatch, level):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     machine_profile.reset_cache()
     out = guard.check(_payload(home / "fo.txt"))
-    if decision is None:
-        assert out is None
-    else:
-        assert out["hookSpecificOutput"]["permissionDecision"] == decision
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
 def test_home_under_a_git_repo_this_guard_wins_over_out_of_repo_bump(home, tmp_path):
@@ -73,4 +71,4 @@ def test_home_under_a_git_repo_this_guard_wins_over_out_of_repo_bump(home, tmp_p
     result = engine.evaluate(_payload(home / "fo.txt", cwd=other), cwd=str(other))
     assert result is not None
     body = result.get("hookSpecificOutput", result)
-    assert body["permissionDecisionReason"].startswith(DENY_REASON)
+    assert body["additionalContext"] == machine_profile.ADVISORY_PREFIX + DENY_REASON

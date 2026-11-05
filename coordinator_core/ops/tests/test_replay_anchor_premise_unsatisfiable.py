@@ -34,10 +34,19 @@ def _verdict(tmp_path, entries, checker_ran):
 @pytest.mark.parametrize("entries", [_UNEVALUABLE, _REFUSED], ids=["unevaluable", "screen-refused"])
 def test_unsatisfiable_premise_is_a_note_not_a_pull(tmp_path, entries, checker_ran):
     out = _verdict(tmp_path, entries, checker_ran)
-    assert out["verdict"] == "ready", out
-    assert out["mechanical_repairs"] == [] and out["blocking"] == []
-    for entry in entries:
-        assert entry["id"] in out["reason"], out
+    assert out["blocking"] == [], out
+    if checker_ran:
+        assert out["verdict"] == "ready", out
+        assert out["mechanical_repairs"] == []
+        for entry in entries:
+            assert entry["id"] in out["reason"], out
+    else:
+        # Each box runs only one of these two branches, chosen by whether the checker exists.
+        # Engine-only lane (no premise-checker): an unevaluable anchor is one mechanical
+        # rewrite repair naming its id, never a halt or a substantive pull.
+        assert out["verdict"] == "pulled" and out["pull_class"] == "mechanical", out
+        assert {r["target"] for r in out["mechanical_repairs"]} == {e["id"] for e in entries}, out
+        assert {r["kind"] for r in out["mechanical_repairs"]} == {"anchor-check-not-evaluable"}, out
 
 
 # The r41/r40 plan files are not on disk; each fixture reproduces that run's refused premise shape.
@@ -58,8 +67,12 @@ _NAMED_PLANS = {
 @pytest.mark.parametrize("plan", ["L-r41", "XL-r41", "XXL-r40"])
 def test_named_run_plan_not_refused_by_anchor_gate(tmp_path, plan, checker_ran):
     out = _verdict(tmp_path, _NAMED_PLANS[plan], checker_ran)
-    assert out["verdict"] == "ready", out
     assert not any("anchor-premise" in b for b in out["blocking"]), out
+    if checker_ran:
+        assert out["verdict"] == "ready", out
+    else:
+        assert out["verdict"] == "pulled" and out["pull_class"] == "mechanical", out
+        assert {r["target"] for r in out["mechanical_repairs"]} == {e["id"] for e in _NAMED_PLANS[plan]}, out
 
 
 @pytest.mark.parametrize("checker_ran", [True, False])

@@ -46,19 +46,45 @@ def _unload(name: str) -> None:
 
 class TestHardDenyShortCircuitStopsImporting:
     def test_guard_past_the_winning_hard_deny_is_never_imported(self, monkeypatch):
-        # block_illegal_filename (PRIORITY 20) fires before
-        # block_confined_agent_write (PRIORITY 48) in real PRIORITY order --
-        # pick two real, already-shipped guard modules so this exercises the
-        # actual AST metadata scan, not a fake _Guard.
-        _unload("block_illegal_filename")
-        _unload("block_confined_agent_write")
+        # Only a deny_registry guard's deny survives the policy point, and no shipped write
+        # guard is both hard-deny and registered, so the winner is a registered name served
+        # through the real engine seams (metadata, discovery, import) with fakes.
+        calls = []
+        deny = {"hookSpecificOutput": {"permissionDecision": "deny", "permissionDecisionReason": "no"}}
 
-        payload = _payload(file_path="/repo/bad:name.txt")
-        out = engine.evaluate(payload)
+        def _fake_metadata(name):
+            if name == "destructive_rm":
+                return ("hard-deny", ["Write"], 10)
+            if name == "g_past":
+                return ("hard-deny", ["Write"], 20)
+            return None
 
-        assert out is not None, "expected block_illegal_filename to fire"
-        assert _module_key("block_illegal_filename") in sys.modules
-        assert _module_key("block_confined_agent_write") not in sys.modules, (
+        def _fake_iter_modules(path):
+            class _Info:
+                def __init__(self, name):
+                    self.name = name
+
+            return [_Info("destructive_rm"), _Info("g_past")]
+
+        def _fake_import(dotted):
+            name = dotted.rsplit(".", 1)[-1]
+            calls.append(name)
+
+            class _Mod:
+                @staticmethod
+                def check(payload):
+                    return dict(deny)
+
+            return _Mod()
+
+        monkeypatch.setattr(engine, "_cheap_guard_metadata", _fake_metadata)
+        monkeypatch.setattr(engine.pkgutil, "iter_modules", _fake_iter_modules)
+        monkeypatch.setattr(engine.importlib, "import_module", _fake_import)
+
+        out = engine.evaluate(_payload())
+
+        assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert calls == ["destructive_rm"], (
             "a guard past the winning hard-deny (higher PRIORITY number) "
             "must never be imported for this call"
         )
@@ -101,6 +127,36 @@ class TestAdvisoryFirstWinsStopsImporting:
 
         assert out == {"hookSpecificOutput": {"additionalContext": "fired:g-high"}}
         assert calls == ["g-high"], "g-low must never be imported once g-high fires first"
+
+
+class TestRealDiscoveryImportsNoGuardBody:
+    def test_real_discovery_scan_leaves_every_guard_module_unimported(self):
+        guard_keys = [
+            k for k in list(sys.modules)
+            if k.startswith("coordinator_core.write_guards.")
+            and k.rsplit(".", 1)[-1] not in ("engine", "__main__")
+            and not k.rsplit(".", 1)[-1].startswith("_")
+            and ".tests" not in k
+        ]
+        for k in guard_keys:
+            sys.modules.pop(k, None)
+
+        guards, _failed = engine._discover_guards()
+
+        assert len(guards) > 10, "real discovery must surface the shipped guards"
+        imported = [
+            k for k in sys.modules
+            if k in {_module_key(g.name) for g in guards}
+        ]
+        assert imported == [], f"stage-one discovery imported guard bodies: {imported}"
+
+    def test_real_evaluate_imports_the_firing_guard_only_on_reach(self):
+        _unload("block_illegal_filename")
+
+        out = engine.evaluate(_payload(file_path="/repo/bad:name.txt"))
+
+        assert out is not None, "expected block_illegal_filename to fire"
+        assert _module_key("block_illegal_filename") in sys.modules
 
 
 class TestCheapMetadataReadsRealGuardWithoutImporting:

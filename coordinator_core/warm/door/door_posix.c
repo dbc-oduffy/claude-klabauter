@@ -943,15 +943,35 @@ static size_t g_hook_payload_len = 0;
 static char g_hook_op[128] = "";
 
 
+#define DOOR_SUBMIT_ASK_OP "hooks.submit_engine_ask"
+
+/* An engine-ask submission the engine could not take is kept on disk, no engine call.
+ * 1 = spooled (id in `id`), 0 = not an ask or the write failed. */
+static int spool_submit_ask(const char *reason, char id[17]) {
+    if (!g_hook_payload || strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) != 0) return 0;
+    buf_t root;
+    if (!buf_init(&root, 256)) return 0;
+    int got = door_hook_spool_root(g_hook_payload, g_hook_payload_len, &root);
+    int r = got ? door_spool_hook_payload(root.data, g_hook_payload, g_hook_payload_len,
+                                          DOOR_SUBMIT_ASK_OP, reason, id) : 0;
+    free(root.data);
+    if (r == 0) fprintf(stderr, "door: could not spool the ask\n");
+    return r != 0;
+}
+
 static int emit_hook_pass_loudly(const char *reason) {
     buf_t event, out;
     const char *event_name = NULL;
+    char spool_id[17] = "";
     int have_event = buf_init(&event, 32);
     if (have_event && g_hook_payload &&
         door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
         event_name = event.data;
     }
-    int built = buf_init(&out, 1024) && build_hook_pass_loudly_envelope(&out, reason, event_name);
+    int spooled = spool_submit_ask(reason, spool_id);
+    int built = buf_init(&out, 1024) &&
+        (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
+                 : build_hook_pass_loudly_envelope(&out, reason, event_name));
     if (have_event) free(event.data);
     if (!built) {
         fprintf(stderr, "door: guard did not run: %s\n", reason);
@@ -1019,8 +1039,11 @@ static int emit_hook_post_delivery(void) {
         door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
         event_name = event.data;
     }
+    char spool_id[17] = "";
+    int spooled = spool_submit_ask("coordinator-door: engine gave no answer in time", spool_id);
     int built = buf_init(&out, 1024) &&
-        build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS, event_name);
+        (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
+                 : build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS, event_name));
     if (have_event) free(event.data);
     if (!built) {
         fprintf(stderr, "door: engine gave no answer in time: %s\n", g_hook_op);

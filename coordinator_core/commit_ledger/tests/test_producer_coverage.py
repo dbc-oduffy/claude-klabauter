@@ -92,6 +92,25 @@ _EXEMPT_PRODUCERS = {
         "measure; same shape as `benchmarks/op_fixtures.py`, not a "
         "production commit path."
     ),
+    "benchmarks/land_gate_reach_profile.py": (
+        "benchmark fixture builder -- commits into a throwaway clone so the "
+        "land-gate reach profile has a history to measure; not a production "
+        "commit path."
+    ),
+    "benchmarks/land_run_leg_budget_profile.py": (
+        "benchmark fixture builder -- commits a synthetic record dir into a "
+        "disposable fixture repo for the `dispatch.land_run` leg profile; not "
+        "a production commit path."
+    ),
+    "benchmarks/terminal_sizing_drain_budget.py": (
+        "benchmark fixture builder -- seeds a throwaway corpus repo for the "
+        "terminal-sizing drain budget; not a production commit path."
+    ),
+    "group_em/gem_home_sync.py": (
+        "commit-pull-push of the G-EM home repo at handoff and quick-wrap; "
+        "no baton or handoff owns that commit, so there is no ledger entry to "
+        "record."
+    ),
     "git/commit.py": (
         "the `commit-tree -S` signing seam (`_sign_commit_tree`) inside "
         "`commit_paths`, the single commit path that replaced the killed "

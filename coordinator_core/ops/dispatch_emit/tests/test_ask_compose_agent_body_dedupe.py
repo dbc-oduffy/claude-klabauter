@@ -64,6 +64,15 @@ def test_schema_with_a_free_identifier_stays_inline(monkeypatch):
     assert dedupe.dedupe_agent_payloads(src, anchor=_ANCHOR) == src
 
 
+def test_schema_holding_a_fragment_ref_is_still_a_constant_literal(monkeypatch):
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
+    holds_ref = '{"type": "object", "required": ["a"], "properties": {"a": {"description": _PF237}}, "pad": "xxxxxxxxxxxxxxxx"}'
+    src = _src(holds_ref, holds_ref, holds_ref)
+    out = dedupe.dedupe_agent_payloads(src, anchor=_ANCHOR)
+    assert out.count("schema: _SC0()") == 3
+    assert dedupe.resolve_schema_refs(out) == src
+
+
 def test_schema_appearing_once_stays_inline(monkeypatch):
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     src = _src(_SCHEMA)
@@ -97,6 +106,11 @@ def test_production_ask_resolves_back_to_the_unhoisted_script(monkeypatch):
 def test_indentation_strip_keeps_template_string_and_comment_whitespace():
     src = "  const a = 1;\n    const t = `x\n      y`;\n  /* c\n     d */\n\tfoo();\n"
     assert dedupe.strip_code_indentation(src) == "const a = 1;\nconst t = `x\n      y`;\n/* c\n     d */\nfoo();\n"
+
+
+def test_blank_code_lines_are_dropped_but_template_and_comment_blank_lines_stay():
+    src = "const a = 1;\n\n  \nconst t = `x\n\n   y`;\n/* c\n\n d */\n\nfoo();\n"
+    assert dedupe.strip_code_indentation(src) == "const a = 1;\nconst t = `x\n\n   y`;\n/* c\n\n d */\nfoo();\n"
 
 
 def test_every_composed_schema_site_reads_as_a_call_after_its_const(monkeypatch):

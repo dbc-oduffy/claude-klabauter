@@ -21,6 +21,9 @@ def _module_files(module: str) -> List[str]:
     return [f"{base}.py", f"{base}/__init__.py"]
 
 
+#: Most owner tests (beyond the touched ones) a reverify adds: past it the run holds the suite mutex like a suite run.
+_SUITE_BOUND = 30
+
 _TEST_STEM_RE = re.compile(r"^test_(.+)\.py$")
 
 
@@ -116,7 +119,7 @@ def _importers(repo_root: Path, sources: Set[str]) -> Dict[str, Set[str]]:
     alt = "|".join(re.escape(leaf) for leaf in sorted(leaves))
     # An import line naming a leaf, or a continuation line of a parenthesised import list carrying one.
     pattern = (
-        rf"^[[:space:]]*(from|import)[[:space:]][^#]*\b({alt})\b"
+        rf"^[[:space:]]*(from|import)[[:space:]][^#]*(^|[^[:alnum:]_])({alt})([^[:alnum:]_]|$)"
         rf"|^[[:space:]]+([A-Za-z_][A-Za-z_0-9]*([[:space:]]+as[[:space:]]+[A-Za-z_0-9]+)?[[:space:]]*,[[:space:]]*)*"
         rf"({alt})([[:space:]]+as[[:space:]]+[A-Za-z_0-9]+)?[[:space:]]*,?[[:space:]]*(#.*)?$"
     )
@@ -133,12 +136,15 @@ def _importers(repo_root: Path, sources: Set[str]) -> Dict[str, Set[str]]:
 
 
 def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
-    """Tests covering the files changed in ``base..head``, and those of each changed module's importers.
+    """The touched test files plus the direct test owners of each touched source file.
 
-    Importer closure is one hop: a changed module's direct importers contribute their own mapped
-    tests (a test of an importer need not import the changed module).
+    A direct owner is the stem-mapped test of a changed module, or a test file importing it. A
+    non-test importer's own tests are never pulled in. Owners beyond
+    ``_SUITE_BOUND`` files (stem-mapped first; touched tests always kept) are dropped and
+    ``notice`` says so.
 
-    Returns ``{"tests": sorted posix paths, "changed": posix paths, "fully_mapped": bool}``.
+    Returns ``{"tests": sorted posix paths, "changed": posix paths, "fully_mapped": bool,
+    "notice": str}`` (``notice`` is empty unless the selection was narrowed).
     ``fully_mapped`` is False when a changed non-test ``.py`` has no mapped or importing test.
     Raises ``ValueError`` when ``base`` is unknown or the diff fails; never an empty set for that.
     """
@@ -157,24 +163,37 @@ def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
             tests.add(path)
         else:
             changed_src.add(path)
+    touched = set(tests)
     importers = _importers(repo_root, changed_src)
-    for importer in importers:
-        if _is_test_file(importer, testpaths):
-            tests.add(importer)
-        else:
-            tests.update(_mapped(index, importer))
+    importing_tests = {imp for imp in importers if _is_test_file(imp, testpaths)}
+    mapped: Set[str] = set()
     for path in sorted(changed_src):
         found = set(_mapped(index, path))
+        mapped.update(found)
         if not found:
             tests_dir = PurePosixPath(path).parent / "tests"
             found = {
                 imp for imp, hit in importers.items()
                 if path in hit and PurePosixPath(imp).parent == tests_dir and _is_test_file(imp, testpaths)
             }
+            mapped.update(found)
         if not found:
             fully_mapped = False
-        tests.update(found)
-    return {"tests": sorted(tests), "changed": changed, "fully_mapped": fully_mapped}
+    extras = sorted(mapped - touched) + sorted(importing_tests - touched - mapped)
+    kept = extras[:_SUITE_BOUND]
+    notice = ""
+    if len(extras) > len(kept):
+        notice = (
+            f"reverify selection narrowed: {len(touched) + len(extras)} test files would run, over the "
+            f"{_SUITE_BOUND}-owner-file bound; kept {len(touched)} touched and {len(kept)} owner tests, "
+            f"dropped {len(extras) - len(kept)} owner tests (importers or stem-mapped); quote this notice with any pass."
+        )
+    return {
+        "tests": sorted(touched | set(kept)),
+        "changed": changed,
+        "fully_mapped": fully_mapped,
+        "notice": notice,
+    }
 
 
 def split_pre_existing(failing: Iterable[str], failing_at_base: Iterable[str]) -> dict:

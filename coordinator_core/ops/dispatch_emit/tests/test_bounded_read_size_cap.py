@@ -31,3 +31,10 @@ def test_oversize_does_not_read_the_body(tmp_path, monkeypatch):
 
     monkeypatch.setattr(hrr, "_read_file", boom)
     assert hrr.bounded_read(f, 1000, max_bytes=5) is hrr.OVERSIZE
+
+
+def test_json_object_over_cap_is_none_not_an_error(tmp_path):
+    f = tmp_path / "f.json"
+    f.write_text('{"k": "' + "x" * 50 + '"}', encoding="utf-8")
+    assert hrr.bounded_json_object(f, 1000, max_bytes=10) is None
+    assert hrr.bounded_json_object(f, 1000) == {"k": "x" * 50}

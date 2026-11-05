@@ -67,13 +67,21 @@ def test_pass_run_writes_the_receipt_onto_the_inventory_record(tmp_path):
 def test_a_baseline_cleared_fail_is_stamped_as_pass(tmp_path):
     repo, inv, sidecar = _repo(tmp_path)
     record = _record()
+    base_log = tmp_path / "base.log"
+    base_log.write_text("FAILED a.py::t1 - boom\nFAILED b.py::t2 - boom\n", encoding="utf-8")
     record["tests"] = {
         "status": "fail",
         "run": 5,
         "failed": 2,
         "sidecar": "t.md",
         "baseline_method": "export",
-        "baseline": {"pre_existing": ["a", "b"], "caused": [], "unverified": []},
+        "baseline": {
+            "pre_existing": ["a.py::t1", "b.py::t2"],
+            "evidence": ["a.py::t1", "b.py::t2"],
+            "base_log": str(base_log),
+            "caused": [],
+            "unverified": [],
+        },
     }
     stamp = m.mint_receipt(inv, repo, resolved=(SHA, sidecar, record), terminal_tree_sha=TREE)
     assert stamp["build_test"]["verdict"] == "pass"

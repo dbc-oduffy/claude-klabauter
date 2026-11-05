@@ -4,7 +4,27 @@ import json
 import subprocess
 import time
 
-from coordinator_core.group_em import box_registry, box_send, node_transport, remote_roster
+import pytest
+
+from coordinator_core.group_em import box_registry, box_send, box_transport, node_transport, remote_roster
+
+INV = "/x/coordinator-invoke"
+_REGISTERED: list = []
+
+
+@pytest.fixture(autouse=True)
+def _registry_and_limits(monkeypatch):
+    _REGISTERED.clear()
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: list(_REGISTERED))
+    box_transport._reset_limits()
+    yield
+    box_transport._reset_limits()
+
+
+def _ssh_box(host):
+    box = {"box_id": "home", "transport": {"kind": "ssh", "host": host, "invoke": INV}}
+    _REGISTERED.append(dict(box))
+    return box
 
 
 def _cp(returncode=0, stdout="", stderr=""):
@@ -31,7 +51,7 @@ def test_unknown_kind_replies_ok_false_and_never_raises():
 
 
 def test_ssh_list_and_send_through_runner():
-    box = {"box_id": "home", "transport": {"kind": "ssh", "host": "192.0.2.2", "invoke": "/x/inv"}}
+    box = _ssh_box("192.0.2.2")
     calls = []
 
     def runner(argv, timeout):
@@ -52,7 +72,7 @@ def test_ssh_list_and_send_through_runner():
 
 
 def test_ssh_failure_is_ok_false_with_reason():
-    box = {"box_id": "home", "transport": {"kind": "ssh", "host": "h", "invoke": "/x/inv"}}
+    box = _ssh_box("h")
     t = node_transport.select(box, runner=lambda argv, timeout: _cp(returncode=255, stderr="no"))
     for res in (t.list_sessions(box), t.send(box, "s", "x", "me")):
         assert res["ok"] is False and res["reason"] == "ssh_exit_255"
@@ -95,3 +115,49 @@ def test_fs_send_lands_in_inbox_and_refuses_unknown_box(tmp_path):
         {"box_id": "box-nope"}, "em-1", "x", "me"
     )
     assert bad == {"ok": False, "reason": "unknown_box"}
+
+
+def test_unknown_transport_deliver_grant_replies_ok_false():
+    t = node_transport.select({"box_id": "b", "transport": {"kind": "pigeon"}})
+    res = t.deliver_grant({"box_id": "b"}, {"sig": "x"})
+    assert res["ok"] is False and "pigeon" in res["reason"]
+    assert node_transport.select(None).deliver_grant(None, {})["ok"] is False
+
+
+def test_ssh_deliver_grant_invokes_far_op_and_maps_the_reply():
+    box = _ssh_box("h")
+    calls = []
+
+    def runner(reply):
+        def run(argv, timeout):
+            calls.append(argv)
+            return _cp(stdout=json.dumps(reply))
+
+        return run
+
+    ok = node_transport.select(box, runner=runner({"ok": True, "reason": "received"}))
+    assert ok.deliver_grant(box, {"sig": "x"})["ok"] is True
+    assert "groupem.suite_grant_receive" in calls[0][-1] and '"envelope"' in calls[0][-1]
+    no = node_transport.select(box, runner=runner({"ok": False, "reason": "bad_signature"}))
+    assert no.deliver_grant(box, {}) == {"ok": False, "reason": "bad_signature"}
+    down = node_transport.select(box, runner=lambda argv, timeout: _cp(returncode=255))
+    assert down.deliver_grant(box, {})["ok"] is False
+
+
+def test_fs_deliver_grant_calls_receive_against_the_box_root(tmp_path, monkeypatch):
+    from coordinator_core.group_em import suite_grant
+
+    seen = {}
+
+    def fake(envelope, **kw):
+        seen.update(envelope=envelope, **kw)
+        return {"ok": False, "reason": "bad_signature"}
+
+    monkeypatch.setattr(suite_grant, "receive_relayed_grant", fake)
+    box = {"box_id": "b", "root": str(tmp_path)}
+    res = node_transport.select(box).deliver_grant(box, {"sig": "x"})
+    assert res == {"ok": False, "reason": "bad_signature"} and seen["home"] == tmp_path
+    assert node_transport.select({"box_id": "b"}).deliver_grant({"box_id": "b"}, {}) == {
+        "ok": False,
+        "reason": "no_root",
+    }

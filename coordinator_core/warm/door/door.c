@@ -128,6 +128,10 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <sddl.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <io.h>
+#include <sys/stat.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -820,15 +824,111 @@ static size_t g_hook_payload_len = 0;
 static char g_hook_op[128] = "";
 
 
+#define DOOR_SUBMIT_ASK_OP "hooks.submit_engine_ask"
+
+/* Windows twin of `door_core.c :: door_spool_hook_payload` (whose _WIN32 leg is a stub): same
+ * record bytes, id and path, layout pinned by docs/reference/ask-spool.md. Owner-only access is
+ * the per-user default ACL under the repo, not a mode bit. 1 created, 2 already spooled, 0 failed;
+ * no partial entry is left. Keep the record builder in step with the POSIX one by hand: no test
+ * builds this file on Windows. */
+static int spool_payload_w(const char *root, const char *reason, char out_id[17]) {
+    out_id[0] = '\0';
+    const char *payload = g_hook_payload;
+    size_t len = g_hook_payload_len;
+    buf_t session, tool, idin, body;
+    int result = 0;
+    int b_session = buf_init(&session, 64), b_tool = buf_init(&tool, 64);
+    int b_idin = buf_init(&idin, 256), b_body = buf_init(&body, len + 512);
+    wchar_t *wpath = NULL;
+    if (!(b_session && b_tool && b_idin && b_body)) goto done;
+    if (!door_json_top_string(payload, len, "session_id", &session)) session.len = 0;
+    if (!door_json_top_string(payload, len, "tool_use_id", &tool)) tool.len = 0;
+    size_t sess_n = session.len ? session.len - 1 : 0;
+    size_t tool_n = tool.len ? tool.len - 1 : 0;
+    if (!buf_append(&idin, session.data, sess_n)) goto done;
+    if (tool_n ? !buf_append(&idin, tool.data, tool_n) : !buf_append(&idin, payload, len)) goto done;
+    sha1_hex16((const unsigned char *)idin.data, idin.len, out_id);
+
+    char header_tail[48];
+    snprintf(header_tail, sizeof header_tail, ",\"spooled_at\":%lld,\"session_id\":\"", (long long)time(NULL));
+    int ok = buf_append_cstr(&body, "{\"spool_id\":\"") && buf_append_cstr(&body, out_id) &&
+        buf_append_cstr(&body, "\",\"op\":\"" DOOR_SUBMIT_ASK_OP "\",\"reason\":\"") &&
+        buf_append_json_escaped(&body, reason, strlen(reason)) &&
+        buf_append_cstr(&body, "\"") && buf_append_cstr(&body, header_tail) &&
+        buf_append_json_escaped(&body, session.data, sess_n) &&
+        buf_append_cstr(&body, "\",\"repo_root\":\"") && buf_append_json_escaped(&body, root, strlen(root)) &&
+        buf_append_cstr(&body, "\"}\n") && buf_append(&body, payload, len);
+    if (!ok) goto done;
+
+    char dir[4096 + 64], path[4096 + 96];
+    if (strlen(root) > 4096) goto done;
+    snprintf(dir, sizeof dir, "%s/.coordinator-local", root);
+    wchar_t *wdir = utf8_to_wide(dir);
+    if (!wdir) goto done;
+    int made = CreateDirectoryW(wdir, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+    free(wdir);
+    if (!made) goto done;
+    snprintf(dir, sizeof dir, "%s/.coordinator-local/ask-spool", root);
+    wdir = utf8_to_wide(dir);
+    if (!wdir) goto done;
+    made = CreateDirectoryW(wdir, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+    free(wdir);
+    if (!made) goto done;
+    snprintf(path, sizeof path, "%s/%s.json", dir, out_id);
+    wpath = utf8_to_wide(path);
+    if (!wpath) goto done;
+    int fd = _wopen(wpath, _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY, _S_IREAD | _S_IWRITE);
+    if (fd < 0) {
+        result = (errno == EEXIST) ? 2 : 0;
+        goto done;
+    }
+    size_t off = 0;
+    while (off < body.len) {
+        int w = _write(fd, body.data + off, (unsigned)(body.len - off));
+        if (w <= 0) break;
+        off += (size_t)w;
+    }
+    int closed = _close(fd) == 0;
+    if (off == body.len && closed) {
+        result = 1;
+    } else {
+        _wunlink(wpath);
+    }
+done:
+    free(wpath);
+    if (b_session) free(session.data);
+    if (b_tool) free(tool.data);
+    if (b_idin) free(idin.data);
+    if (b_body) free(body.data);
+    return result;
+}
+
+/* An engine-ask submission the engine could not take is kept on disk, no engine call.
+ * 1 = spooled (id in `id`), 0 = not an ask or the write failed. */
+static int spool_submit_ask(const char *reason, char id[17]) {
+    if (!g_hook_payload || strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) != 0) return 0;
+    buf_t root;
+    if (!buf_init(&root, 256)) return 0;
+    int got = door_hook_spool_root(g_hook_payload, g_hook_payload_len, &root);
+    int r = got ? spool_payload_w(root.data, reason, id) : 0;
+    free(root.data);
+    if (r == 0) fwprintf(stderr, L"door: could not spool the ask\n");
+    return r != 0;
+}
+
 static int emit_hook_pass_loudly(const char *reason) {
     buf_t event, out;
     const char *event_name = NULL;
+    char spool_id[17] = "";
     int have_event = buf_init(&event, 32);
     if (have_event && g_hook_payload &&
         door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
         event_name = event.data;
     }
-    int built = buf_init(&out, 1024) && build_hook_pass_loudly_envelope(&out, reason, event_name);
+    int spooled = spool_submit_ask(reason, spool_id);
+    int built = buf_init(&out, 1024) &&
+        (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
+                 : build_hook_pass_loudly_envelope(&out, reason, event_name));
     if (have_event) free(event.data);
     if (!built) {
         fwprintf(stderr, L"door: guard did not run: %hs\n", reason);
@@ -1462,8 +1562,11 @@ static int emit_hook_post_delivery(void) {
         door_hook_event_name(g_hook_payload, g_hook_payload_len, &event)) {
         event_name = event.data;
     }
+    char spool_id[17] = "";
+    int spooled = spool_submit_ask("coordinator-door: engine gave no answer in time", spool_id);
     int built = buf_init(&out, 1024) &&
-        build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS, event_name);
+        (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
+                 : build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS, event_name));
     if (have_event) free(event.data);
     if (!built) {
         fwprintf(stderr, L"door: engine gave no answer in time: %hs\n", g_hook_op);
