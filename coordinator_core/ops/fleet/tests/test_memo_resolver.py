@@ -710,6 +710,22 @@ class TestPublishMirrorReroute:
         inbox, repo, _all = resolve_receiver_inbox("claude-klabauter-em")
         assert inbox is None and repo is None
 
+    def test_owned_klabauter_mirror_and_its_owner_both_resolve_to_claude_klabauter(self, tmp_path, monkeypatch):
+        mirror = tmp_path / "claude-klabauter"
+        claude_klabauter = tmp_path / "claude-klabauter"
+        claude_home = _make_claude_home(
+            tmp_path, {"claude_klabauter": mirror, "claude_klabauter": claude_klabauter},
+        )
+        _add_mirrors(claude_home, {
+            "claude_klabauter": {"owner": "claude-klabauter-em", "path": str(mirror)},
+        })
+        monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
+
+        for receiver in ("claude-klabauter-em", "claude-klabauter-em"):
+            inbox, repo, _all = resolve_receiver_inbox(receiver)
+            assert inbox is not None, receiver
+            assert same_repo_path(repo, claude_klabauter), receiver
+
     def test_redirect_alias_routes_to_the_central_receiver(self, tmp_path, monkeypatch):
         doe = tmp_path / "coordinator-content-repo-repo"
         claude_home = _make_claude_home(tmp_path, {"content_root": doe})

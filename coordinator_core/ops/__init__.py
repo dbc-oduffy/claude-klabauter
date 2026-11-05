@@ -173,6 +173,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.terminal_commit", 'registers "dispatch.terminal_commit"'),
     ("coordinator_core.ops.dispatch_emit.land_run", 'registers "dispatch.land_run"'),
     ("coordinator_core.ops.dispatch_emit.minted_run", 'registers "dispatch.minted_run"'),
+    ("coordinator_core.ops.dispatch_emit.reemit", 'registers "dispatch.reemit"'),
     ("coordinator_core.ops.dispatch_emit.run_terminality", 'registers "dispatch.run_terminality"'),
     ("coordinator_core.ops.dispatch_emit.land_credited", 'registers "dispatch.land_credited"'),
     ("coordinator_core.ops.dispatch_emit.land_remainder", 'registers "dispatch.land_verified_remainder"'),

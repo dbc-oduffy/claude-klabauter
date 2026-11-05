@@ -13,12 +13,14 @@ step that implements nothing without a stated reason.
 
 Stdlib only; runs on macOS, Linux and Windows.
 
-Never imports coordinator_core: the installer runs before an engine is importable, so
-its git calls stay on its own bounded `subprocess.run`.
+Never imports coordinator_core while steps run: the installer runs before an engine is importable, so
+its git calls stay on its own bounded `subprocess.run`. Only `record_concluded`, after the last step,
+imports it from the located engine root to stamp the setup_concluded receipt.
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import platform
@@ -133,7 +135,7 @@ def _is_coordinator_status_line(command: str) -> bool:
 
 CONTEXT7_PLUGIN = "context7@claude-plugins-official"
 CONTEXT7_MARKETPLACE = "anthropics/claude-plugins-official"
-NOTEBOOKLM_NAMES = ("notebooklm-mcp", "Gemini Notebook MCP")
+NOTEBOOKLM_NAMES = ("notebooklm-mcp", "gemini-notebook-mcp", "Gemini Notebook MCP")
 
 _MODE_ADAPTATION = {
     "auto": ("extras_on", "Presume the recommended extras and list them at the end as added."),
@@ -146,9 +148,30 @@ _MODE_ADAPTATION = {
 _NUDGE_MODES = {"plan", "acceptEdits", "default"}
 
 
-def plugin_root() -> Path:
+def plugin_root_source() -> tuple[Path, str]:
+    """(root, where it came from). With `CLAUDE_PLUGIN_ROOT` unset the root is this script's own
+    `coordinator/` when it carries the install manifest, else the `coordinator/` of the DoE checkout
+    the machine registry names; a script copy hosted elsewhere (klabauter) never supplies the
+    manifest. Neither found: the script's `coordinator/`, flagged as manifest-less."""
     env = os.environ.get("CLAUDE_PLUGIN_ROOT")
-    return Path(env) if env else Path(__file__).resolve().parents[2]
+    if env:
+        return Path(env), "CLAUDE_PLUGIN_ROOT"
+    own = Path(__file__).resolve().parents[2]
+    if manifest_path(own).is_file():
+        return own, "script clone (CLAUDE_PLUGIN_ROOT unset)"
+    doctrine = doe_global_doctrine()
+    if doctrine and manifest_path(doctrine.parent.parent / "coordinator").is_file():
+        return (doctrine.parent.parent / "coordinator",
+                "DoE checkout named by the machine registry (CLAUDE_PLUGIN_ROOT unset)")
+    return own, "script clone (CLAUDE_PLUGIN_ROOT unset; no install manifest found there or in a registered DoE checkout)"
+
+
+def manifest_found() -> bool:
+    return manifest_path().is_file()
+
+
+def plugin_root() -> Path:
+    return plugin_root_source()[0]
 
 
 def settings_home() -> Path:
@@ -339,8 +362,8 @@ def build_decisions(permission_mode: str | None = None) -> list[Decision]:
         ),
         Decision(
             "notebooklm",
-            "Install NotebookLM (deep-research Pipeline D)?",
-            "Powers deep research; pipelines A-C work without it. Needs a Google account and a one-time browser login.",
+            "Use NotebookLM (deep-research Pipeline D)?",
+            "Powers deep research; pipelines A-C work without it. The installer only checks that it is registered; install it per its own README.",
             ("install", "skip"), extra_default, "recommended",
         ),
         Decision(
@@ -456,6 +479,8 @@ class Ctx:
     extras: list = field(default_factory=list)
     restart_needed: bool = False
     next_session: list = field(default_factory=list)
+    engine_deps_failed: str = ""  # detail of a failed engine_deps step; engine-backed steps refuse to spawn
+    engine_root: str = ""  # set by step_engine_root; the receipt writer imports the setup-state module from it
 
 
 def _read_json(path: Path) -> dict:
@@ -531,12 +556,36 @@ def step_system_prereqs(ctx: Ctx) -> StepResult:
 def step_engine_root(ctx: Ctx) -> StepResult:
     ok, root = _engine_root()
     if ok:
+        ctx.engine_root = root
         return StepResult(INHERITED, f"engine root {root}")
     return _fail("artifact", "engine root does not resolve",
                  "clone the engine as a sibling of this plugin clone and register it: machine-local set repos.claude_klabauter <path>")
 
 
+def _deps_blocked(ctx: Ctx) -> StepResult | None:
+    if not ctx.engine_deps_failed:
+        return None
+    return _fail("load", f"engine_deps failed: {ctx.engine_deps_failed}",
+                 "fix the engine_deps step, then re-run the install")
+
+
+def step_engine_deps(ctx: Ctx) -> StepResult:
+    script, why = _engine_setup_script()
+    if script is None:
+        ctx.engine_deps_failed = why
+        return _fail("load", why, "clone the engine as a sibling of this plugin clone and register it: machine-local set repos.claude_klabauter <path>")
+    rc, out = run(_py(str(script), "--deps-only", "--i-am-agent"), timeout=600)
+    detail = out.splitlines()[-1] if out else f"exited {rc}"
+    if rc == 0:
+        return StepResult(RAN, detail)
+    ctx.engine_deps_failed = detail
+    return _fail_run("load", rc, detail, "provision the engine deps: python <engine>/scripts/setup.py --deps-only")
+
+
 def step_substrate(ctx: Ctx) -> StepResult:
+    blocked = _deps_blocked(ctx)
+    if blocked:
+        return blocked
     ok, engine = _engine_root()
     if not ok:
         return _fail("artifact", "engine root does not resolve; substrate not deposited")
@@ -575,6 +624,9 @@ def step_claude_home_repo(ctx: Ctx) -> StepResult:
 
 
 def step_posture(ctx: Ctx) -> StepResult:
+    blocked = _deps_blocked(ctx)
+    if blocked:
+        return blocked
     fwd = forwarder("write-identity-file")
     if not fwd:
         return _fail("artifact", "write-identity-file forwarder absent (run the substrate step first)")
@@ -624,7 +676,117 @@ def unresolved_placeholders(text: str) -> list[str]:
     return sorted(set(re.findall(r"\{\{[^}]*\}\}", text)))
 
 
+#: The one DoE-presence predicate (stdlib only: steps run before any engine is importable).
+#: `scripts/setup.py` loads this module by path and calls the same functions.
+_DOE_EVIDENCE_REGISTRY_KEYS = (
+    "repos.content_root",
+    "repos.doe_claude",  # private-name-ok: compat-fallback
+    "engine.working_repos.content_root",
+    "plugin.mirrors.coordinator-claude.live_path",
+)
+_CONTENT_ROOT_POINTER_NAMES = (".coordinator-content-root", ".coordinator-content-root")  # private-name-ok: compat-fallback
+_DEV_CLONE_DISTINCTIVE_MARKERS = (
+    "canonical-structure.yaml",
+    "artifact-shape-contract",
+    "cockpit-contract",
+)
+
+
+def _registry_flat() -> dict:
+    """Merged `registry.toml` + `registry.local.toml` (later wins) as dotted keys; {} when unreadable."""
+    try:
+        import tomllib
+    except ImportError:
+        return {}
+    override = os.environ.get("MACHINE_LOCAL_REGISTRY_DIR")
+    reg_dir = Path(override) if override else settings_home() / "machine-local"
+
+    def flatten(data: dict, prefix: str = "") -> dict:
+        out: dict = {}
+        for k, v in data.items():
+            if isinstance(v, dict):
+                out.update(flatten(v, f"{prefix}{k}."))
+            else:
+                out[f"{prefix}{k}"] = v
+        return out
+
+    merged: dict = {}
+    for name in ("registry.toml", "registry.local.toml"):
+        try:
+            merged.update(flatten(tomllib.loads((reg_dir / name).read_text(encoding="utf-8"))))
+        except (OSError, ValueError):
+            continue
+    return merged
+
+
+def doe_evidence_values() -> list[str]:
+    """Raw values that may name the DoE tree: content-root pointer files, then `_DOE_EVIDENCE_REGISTRY_KEYS`."""
+    values: list[str] = []
+    for name in _CONTENT_ROOT_POINTER_NAMES:
+        for base in (settings_home() / "machine-local", Path(os.environ.get("CLAUDE_HOME") or Path.home()) / ".claude"):
+            try:
+                values.append((base / name).read_text(encoding="utf-8").strip())
+            except OSError:
+                continue
+    flat = _registry_flat()
+    values.extend(str(flat.get(key) or "") for key in _DOE_EVIDENCE_REGISTRY_KEYS)
+    return values
+
+
+def _is_registered_publish_mirror(path: Path) -> bool:
+    flat = _registry_flat()
+    target = os.path.normcase(os.path.realpath(path))
+    for key, raw in flat.items():
+        if key.startswith("publish.mirrors.") and key.endswith(".path") and raw:
+            mirror = os.path.normcase(os.path.realpath(str(raw))).rstrip(os.sep)
+            if target == mirror or target.startswith(mirror + os.sep):
+                return True
+    return False
+
+
+def has_doe_dev_clone_marker(path: Path) -> bool:
+    """True iff `path/coordinator/` carries a DoE-only dev-clone marker (the published repo has none)."""
+    coordinator_dir = path / "coordinator"
+    return coordinator_dir.is_dir() and any(
+        (coordinator_dir / marker).exists() for marker in _DEV_CLONE_DISTINCTIVE_MARKERS
+    )
+
+
+def is_doe_tree(path: Path, is_publish_mirror: Callable[[Path], bool] | None = None) -> bool:
+    """True iff `path` is a DoE source tree: an existing directory that is not a registered publish
+    mirror and carries the `.coordinator-dev-repo` sentinel or the dev-clone markers. Decided from
+    contents, never from the directory name."""
+    mirror = is_publish_mirror or _is_registered_publish_mirror
+    return (
+        path.is_dir()
+        and not mirror(path)
+        and ((path / ".coordinator-dev-repo").is_file() or has_doe_dev_clone_marker(path))
+    )
+
+
+def doe_tree_from_evidence(
+    values: list[str] | None = None, is_publish_mirror: Callable[[Path], bool] | None = None
+) -> Path | None:
+    """The DoE source tree this box's evidence names, else None: first of `values`
+    (default `doe_evidence_values()`) that passes `is_doe_tree`."""
+    for value in (doe_evidence_values() if values is None else values):
+        if value and is_doe_tree(Path(value), is_publish_mirror):
+            return Path(value)
+    return None
+
+
+def doe_global_doctrine() -> Path | None:
+    """`global-doctrine/CLAUDE.md` of the DoE tree `doe_tree_from_evidence` names, else None."""
+    tree = doe_tree_from_evidence()
+    if tree is None:
+        return None
+    doctrine = tree / "global-doctrine" / "CLAUDE.md"
+    return doctrine if doctrine.is_file() else None
+
+
 def step_claude_md_seed(ctx: Ctx) -> StepResult:
+    if doe_global_doctrine():
+        return StepResult(INHERITED, "derived from global doctrine")
     fwd = forwarder("render-template")
     if not fwd:
         return _fail("artifact", "render-template forwarder absent (run the substrate step first)")
@@ -695,23 +857,13 @@ def step_notebooklm(ctx: Ctx) -> StepResult:
         return StepResult(SKIPPED, "declined by answer")
     if notebooklm_registered():
         return StepResult(INHERITED, "NotebookLM MCP server already registered")
-    uv, nlm = shutil.which("uv"), shutil.which("nlm")
-    if not nlm:
-        if not uv:
-            return _fail("load", "uv not on PATH", "install uv, then re-run with notebooklm=install")
-        rc, out = run([uv, "tool", "install", "notebooklm-mcp-cli"], timeout=300)
-        if rc != 0:
-            return _fail_run("load", rc, out)
-        nlm = shutil.which("nlm")
-    if not nlm:
-        return _fail("load", "nlm not on PATH after install (open a new shell)")
-    rc, out = run([nlm, "setup", "add", "claude-code"], timeout=120)
-    if rc != 0:
-        return _fail_run("load", rc, out)
-    ctx.extras.append("notebooklm")
-    ctx.next_session.append("NotebookLM loads next session")
-    return StepResult(RAN, "CLI installed and MCP server registered",
-                      "run `nlm login` once in a terminal (browser flow) before first use")
+    detail = ("not registered; install it per its README (github.com/jacob-bd/gemini-notebook-mcp-cli); "
+              "MCP key is `gemini-notebook-mcp` (older: `notebooklm-mcp`)")
+    for key in ("notebooklm-mcp", "gemini-notebook-mcp"):
+        cmd = shutil.which(key)
+        if cmd:
+            return StepResult(SKIPPED, detail, f"register with `claude mcp add -s user {key} -- {cmd}`")
+    return StepResult(SKIPPED, detail)
 
 
 def step_status_lines(ctx: Ctx) -> StepResult:
@@ -845,12 +997,14 @@ class Step:
     implements: tuple = ()
     exempt: str = ""  # reason this step implements no manifest entry
     risky: bool = False  # mutates beyond the settings home; needs its own consent
+    optional: bool = False  # advisory or presentation-only: its FAILED never withholds the concluded receipt
 
 
 STEPS: tuple[Step, ...] = (
-    Step("orientation", step_orientation, exempt="operator choice: the tour is not an install surface"),
+    Step("orientation", step_orientation, exempt="operator choice: the tour is not an install surface", optional=True),
     Step("system_prereqs", step_system_prereqs, ("system_prerequisites:*",)),
     Step("engine_root", step_engine_root, ("direct_deps:claude-klabauter",)),
+    Step("engine_deps", step_engine_deps, exempt="provisions engine deps the substrate scripts import"),
     Step("substrate", step_substrate, exempt="deposits the settings-home forwarders every later step calls"),
     Step("settings_env", step_settings_env, ("required_local_surfaces:settings-env", "required_env_vars:*")),
     Step("claude_home_repo", step_claude_home_repo, exempt="prerequisite of the identity file", risky=True),
@@ -858,14 +1012,15 @@ STEPS: tuple[Step, ...] = (
     Step("claude_md_seed", step_claude_md_seed, exempt="operator file seeded from answers"),
     Step("machine_profile", step_machine_profile, exempt="operator choice: machine-local setting"),
     Step("guard_level", step_guard_level, exempt="operator choice: machine-local setting"),
-    Step("context7", step_context7, ("required_mcp_surfaces:context7",), risky=True),
-    Step("notebooklm", step_notebooklm, ("required_mcp_surfaces:notebooklm-mcp",), risky=True),
+    Step("context7", step_context7, ("required_mcp_surfaces:context7",), risky=True, optional=True),
+    Step("notebooklm", step_notebooklm,
+         ("required_mcp_surfaces:gemini-notebook-mcp|required_mcp_surfaces:notebooklm-mcp",), optional=True),
     Step("status_lines", step_status_lines,
          ("required_local_surfaces:statusline-registration",
           "required_local_surfaces:subagent-statusline-registration")),
     Step("hooks_marker", step_hooks_marker, ("required_local_surfaces:hook-delivery",)),
     Step("coordinator_currency", step_currency, exempt="per-repo record, not a machine install surface"),
-    Step("open_claude_home", step_open_claude_home, exempt="presentation only"),
+    Step("open_claude_home", step_open_claude_home, exempt="presentation only", optional=True),
 )
 
 STEP_DECISION = {"orientation": "orientation", "claude_md_seed": "posture", "claude_home_repo": "track_claude_home", "settings_env": "settings_env", "posture": "posture",
@@ -904,8 +1059,10 @@ def check_manifest_drift(manifest: dict | None = None, steps: tuple[Step, ...] =
                 if not matched:
                     problems.append(f"step {step.id} claims {ref} but the manifest has no such entries")
                 claimed |= matched
-            elif ref in entries:
-                claimed.add(ref)
+            elif any(alt in entries for alt in ref.split("|")):
+                # Trap: `a|b` names one surface under a renamed key (upstream renamed the NotebookLM
+                # MCP key); the claim holds whichever spelling this manifest carries.
+                claimed |= {alt for alt in ref.split("|") if alt in entries}
             else:
                 problems.append(f"step {step.id} claims {ref}, absent from the manifest")
     for entry in sorted(entries - claimed):
@@ -1067,8 +1224,11 @@ def detect_track() -> dict:
     present, have, market = _installed_coordinator()
     drift: list[str] = []
     stale: list[str] = []
+    doe_box = doe_global_doctrine() is not None
     if not present:
         track, reason, steps = "fresh", "no coordinator plugin installed", ["plugin_install", *configure]
+        if doe_box:
+            reason += "; DoE box: coordinator is delivered by the DoE checkout, so no plugin is registered by design"
     else:
         want = _published_version(market)
         drift, stale = _plugin_drift(market)
@@ -1092,7 +1252,7 @@ def detect_track() -> dict:
         if stale:
             reason += f"; stale plugin cache dirs: {', '.join(stale)}"
     return {"track": track, "track_reason": reason, "track_steps": steps,
-            "plugin_drift": drift, "stale_plugin_cache": stale}
+            "doe_box": doe_box, "plugin_drift": drift, "stale_plugin_cache": stale}
 
 
 def step_plugin_install(ctx: Ctx) -> StepResult:
@@ -1202,22 +1362,93 @@ def take_backup(plan_id: str) -> list[str]:
     return saved
 
 
+# Must match the sentence inside TOUR's movement 2 verbatim; a mismatch makes the swap a silent no-op.
+_OWNER_WRITE_SENTENCE = "Ask three things and write the answers into the CLAUDE.md Owner section: "
+_DOE_OWNER_SENTENCE = ("Ask three things and note the answers in em-context.md, not CLAUDE.md "
+                       "(on this box CLAUDE.md is derived from global doctrine and regenerated): ")
+
+
+def tour() -> list[dict]:
+    """TOUR, with movement 2 pointed away from the live CLAUDE.md on a DoE-derived box."""
+    if not doe_global_doctrine():
+        return list(TOUR)
+    return [{**m, "text": m["text"].replace(_OWNER_WRITE_SENTENCE, _DOE_OWNER_SENTENCE)} for m in TOUR]
+
+
+def answers_shape() -> dict:
+    """The `--answers` document shape as `resolve_answers` accepts it."""
+    risky = [s.id for s in STEPS if s.risky]
+    return {
+        "decision_ids": "one key per entry of `decisions`, valued as that decision's options allow",
+        "consent": {"type": "object of booleans keyed by risky step id; absent or false skips the step",
+                    "risky_step_ids": risky, "example": {sid: True for sid in risky}},
+        "plan_id": "optional; the `backup.plan_id` of this plan, so the backup and the run share one id",
+    }
+
+
 def build_plan(permission_mode: str | None) -> dict:
-    problems = check_manifest_drift()
+    problems = check_manifest_drift() if manifest_found() else []
+    root, source = plugin_root_source()
     return {
         "backup": backup_block(_fresh_plan_id()),
         "schema": SCHEMA,
         "orientation": ORIENTATION,
-        "environment": (env := {"platform": platform.system(), "plugin_root": str(plugin_root()),
-                                **detect_track()}),
+        "environment": (env := {"platform": platform.system(), "plugin_root": str(root),
+                                "plugin_root_source": source, **detect_track()}),
+        "answers_shape": answers_shape(),
         "track_step_runners": track_step_runners(env["track_steps"]),
         "mode_policy": mode_policy(permission_mode),
         "decisions": [decision_json(d) for d in build_decisions(permission_mode)],
-        "tour": list(TOUR),
+        "tour": tour(),
         "steps": [{"id": s.id, "decision": STEP_DECISION.get(s.id), "risky": s.risky,
                    "implements": list(s.implements) or [f"exempt: {s.exempt}"]} for s in STEPS],
-        "manifest_drift": {"ok": not problems, "problems": problems},
+        "manifest_drift": ({"ok": not problems, "problems": problems} if manifest_found() else
+                           {"ok": None, "problems": [], "note": f"no install manifest under {root}; drift not checked"}),
     }
+
+
+def _plugin_version() -> str | None:
+    version = _read_json(plugin_root() / ".claude-plugin" / "plugin.json").get("version")
+    return version if isinstance(version, str) else None
+
+
+def record_concluded(results: list[dict], optional_ids: set[str], ctx: Ctx) -> dict:
+    """Stamp the setup_concluded receipt unless a required step FAILED; returns `{written, detail}`.
+
+    A SKIPPED required step does not withhold it (maximalist's mandatory-skip gate has no analogue here).
+
+    The one place this installer imports coordinator_core: after every step has run, from the engine root.
+    """
+    blocking = [r["id"] for r in results if r["status"] == FAILED and r["id"] not in optional_ids]
+    if blocking:
+        return {"written": False, "detail": f"withheld: required step failed ({', '.join(blocking)})"}
+    root = ctx.engine_root
+    if not root:
+        ok, found = _engine_root()
+        root = found if ok else ""
+    if not root:
+        return {"written": False, "detail": "withheld: engine root does not resolve"}
+    inserted = root not in sys.path
+    if inserted:
+        sys.path.insert(0, root)
+    try:
+        import importlib
+        state = importlib.import_module("coordinator_core.ops.coordinator_setup_state")
+        rc, sha = run(["git", "-C", root, "rev-parse", "HEAD"], timeout=10)
+        receipt = state.SetupReceipt(
+            phases_ran=tuple(r["id"] for r in results if r["status"] in (RAN, INHERITED)),
+            phases_skipped=tuple((r["id"], r["detail"]) for r in results if r["status"] == SKIPPED),
+            coordinator_version=_plugin_version(),
+            engine_ref=sha if rc == 0 and sha else None,
+        )
+        with contextlib.redirect_stdout(sys.stderr):  # the writer prints a status line; stdout is the JSON block
+            rc = state.record_setup_concluded(receipt)
+    except Exception as exc:  # the receipt must never abort the install block
+        return {"written": False, "detail": f"write failed: {type(exc).__name__}: {exc}"}
+    finally:
+        if inserted and root in sys.path:
+            sys.path.remove(root)
+    return {"written": rc == 0, "detail": "setup_concluded recorded" if rc == 0 else f"write failed (exit {rc})"}
 
 
 def execute(answers: dict, only: set[str] | None = None, permission_mode: str | None = None) -> dict:
@@ -1253,12 +1484,15 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
             row.update(stage=res.stage, retryable=res.retryable)
         results.append(row)
     counts = {k: sum(1 for r in results if r["status"] == k) for k in (RAN, SKIPPED, INHERITED, FAILED)}
+    receipt = (record_concluded(results, {s.id for s in steps if s.optional}, ctx) if not only
+               else {"written": False, "detail": "withheld: --only run"})
     return {
         "schema": "coordinator-install-result/1",
         "backup": backup,
         "steps": results,
         "summary": counts,
-        "tour": list(TOUR) if answers.get("orientation") == "tour-now" else [],
+        "receipt": receipt,
+        "tour": tour() if answers.get("orientation") == "tour-now" else [],
         "added_extras": [f"{e}: added; say the word to remove" for e in ctx.extras],
         "restart_needed": ctx.restart_needed,
         "next_session": ctx.next_session,
@@ -1268,6 +1502,9 @@ def execute(answers: dict, only: set[str] | None = None, permission_mode: str | 
 
 def render_text(block: dict) -> str:
     lines = [f"{r['status']:<9} {r['id']:<22} {r['detail']}" for r in block["steps"]]
+    receipt = block.get("receipt")
+    if receipt:
+        lines.append(f"{'RECEIPT':<9} {'setup_concluded':<22} {receipt['detail']}")
     lines += [f"ADDED     {e}" for e in block["added_extras"]]
     lines += [f"NEXT      {f}" for f in block["follow_ups"]]
     for t in block.get("tour", []):
@@ -1381,9 +1618,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"DRIFT: {p}", file=sys.stderr)
         return 1 if problems else 0
 
-    drift = check_manifest_drift()
+    planning = args.plan or (args.i_am_agent and not args.answers)
+    drift = check_manifest_drift() if manifest_found() and not planning else []
     if drift:
-        print(json.dumps({"error": "manifest/step drift", "problems": drift}, indent=2), file=sys.stderr)
+        root, source = plugin_root_source()
+        print(json.dumps({"error": "manifest/step drift", "plugin_root": str(root),
+                          "plugin_root_source": source, "problems": drift}, indent=2), file=sys.stderr)
         return 3
 
     if args.plan or (args.i_am_agent and not args.answers):

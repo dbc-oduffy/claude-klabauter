@@ -224,6 +224,17 @@ def test_point1_direct_dep_accepts_flat_functional_probe_kind(tmp_path, capsys):
     assert rc == 0
 
 
+def test_point1_direct_dep_accepts_claude_klabauter_flat_probe_kind(tmp_path, capsys):
+    manifest = _compliant_manifest()
+    manifest["direct_deps"] = [
+        {"id": "claude-klabauter", "functional_probe_kind": "claude_klabauter_seam_resolvable"}
+    ]
+    path = _write_manifest(tmp_path, manifest)
+    rc = main(["--manifest-path", str(path)])
+    assert "has no functional_probe" not in capsys.readouterr().err
+    assert rc == 0
+
+
 def test_point1_direct_dep_rejects_empty_flat_functional_probe_kind(tmp_path, capsys):
     manifest = _compliant_manifest()
     manifest["direct_deps"] = [{"id": "no-probe", "functional_probe_kind": ""}]
@@ -232,6 +243,7 @@ def test_point1_direct_dep_rejects_empty_flat_functional_probe_kind(tmp_path, ca
     err = capsys.readouterr().err
     assert rc == 1
     assert "direct_deps[0] ('no-probe') has no functional_probe.kind" in err
+    assert "claude_klabauter_seam_resolvable" in err
 
 
 def test_point1_system_prereq_missing_probe_cmd(tmp_path, capsys):

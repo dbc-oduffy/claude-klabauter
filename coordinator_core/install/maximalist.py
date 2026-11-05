@@ -220,8 +220,8 @@ What this does:
     11. check-install-singularity.sh   (Step 7.5 -- canonical-locus integrity gate)
     12. capture-fan-out-threshold.sh   (Step 8 -- fan-out large-wave threshold)
     13. platform-localize.sh           (Step 9 -- settings.local.json / marketplaces)
-    14. record_setup_concluded         (end of a completed run -- receipt; not written under --check-only,
-                                        an advisory failure, or a mandatory skip)
+    14. record_setup_concluded         (end of a completed run -- receipt; not written under --check-only
+                                        or a mandatory skip; an advisory failure does not withhold it)
 
 What this deliberately skips (run /coordinator:install for these -- the
 guided/interactive superset):
@@ -2273,9 +2273,7 @@ def _run_body(
     receipt_rc = 0
     if not check_only:
         blocking = next((p for p, _r, m in orch.skip_records if m), None)
-        if orch.failed:
-            print("setup_concluded receipt not written: an advisory phase failed.")
-        elif blocking is not None:
+        if blocking is not None:
             print(f"setup_concluded receipt not written: mandatory phase skipped ({blocking}).")
         else:
             from coordinator_core.ops.coordinator_setup_state import (  # local import: avoid import cost on --help

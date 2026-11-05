@@ -160,7 +160,7 @@ def _refusal(script: str, child_id: str, reply: dict, sizing_rel: str = ""):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
-    m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
+    m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n\nfunction _emitRefusalReason\(.*?\n\}\n", script, re.S)
     assert m
     prog = (
         "const WARP_PREFIX='/r/scratch/warp/';"
@@ -169,7 +169,17 @@ def _refusal(script: str, child_id: str, reply: dict, sizing_rel: str = ""):
     )
     out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return json.loads(out.stdout)
+    return _strip_reemit(json.loads(out.stdout))
+
+
+_REEMIT = '; re-emit with dispatch.reemit {"params_file": <the refused emit params file>} and start the returned script'
+
+
+def _strip_reemit(why):
+    if why is None:
+        return None
+    assert why.endswith(_REEMIT)
+    return why[: -len(_REEMIT)]
 
 
 @pytest.mark.spawns_process
@@ -198,7 +208,7 @@ def _chain_refusal(script: str, child_id: str, reply: dict):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not available")
-    m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n", script, re.S)
+    m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n\nfunction _emitRefusalReason\(.*?\n\}\n", script, re.S)
     assert m
     prog = (
         "const WARP_PREFIX='/r/scratch/warp/';const RUN_SCRIPT_SUFFIX='.workflow.mjs';"
@@ -207,7 +217,7 @@ def _chain_refusal(script: str, child_id: str, reply: dict):
     )
     out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    return json.loads(out.stdout)
+    return _strip_reemit(json.loads(out.stdout))
 
 
 @pytest.mark.spawns_process
@@ -626,6 +636,7 @@ def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path)
     results, prompts = json.loads(out.stdout)
     assert results[0]["status"] == "emit_refused"
     assert _DECLINE in results[0]["error"]
+    assert 'dispatch.reemit {"params_file":' in results[0]["error"]
     assert prompts == []
 
 

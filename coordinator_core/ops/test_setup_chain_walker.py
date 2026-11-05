@@ -532,6 +532,19 @@ def test_dep_probe_claude_klabauter_seam_resolvable_bypasses_sibling_gate(tmp_pa
     assert scw.dep_probe("claude-klabauter", manifest_path, repo_root) == "present"
 
 
+def test_dep_probe_claude_klabauter_seam_resolvable_bypasses_sibling_gate(tmp_path, capsys):
+    dep = {
+        "id": "claude-klabauter",
+        "severity": "hard",
+        "sibling_dir_name": "does-not-exist-anywhere",
+        "functional_probe_kind": "claude_klabauter_seam_resolvable",
+    }
+    repo_root, manifest_path = _repo_with_manifest(tmp_path, dep)
+
+    assert scw.dep_probe("claude-klabauter", manifest_path, repo_root) == "present"
+    assert "unknown probe kind" not in capsys.readouterr().err
+
+
 def test_dep_probe_unknown_kind_warns_present_but_broken(tmp_path, capsys):
     (tmp_path / "sib4").mkdir()
     dep = {

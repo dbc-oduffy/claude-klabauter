@@ -591,6 +591,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/completion_receipts/approve.py",
         ("_approve_op",),
     ),
+    # Enrolled 2026-11-05: empty reachable spawn set (reads params, writes the deferred script).
+    "dispatch.reemit": (
+        "coordinator_core/ops/dispatch_emit/reemit.py",
+        ("_handler",),
+    ),
     # Enrolled 2026-10-28: empty reachable spawn set (env/path probes only).
     "install.content_root_resolve": (
         "coordinator_core/ops/content_root_resolve.py",

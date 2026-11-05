@@ -824,6 +824,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.reap_abandoned_runs":             "common_dir",
     # dispatch.minted_run — starts or abandons one minted-only run under the caller's own worktree's state/warp/.
     "dispatch.minted_run":                      "common_dir",
+    # dispatch.reemit — writes one deferred script under the caller's own worktree's scratch/warp/.
+    "dispatch.reemit":                          "common_dir",
     "dispatch.commit_halted_rows":              "common_dir",
     "dispatch.commit_merge":                    "common_dir",
     "dispatch.supersede_slice":                 "common_dir",

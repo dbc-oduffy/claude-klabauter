@@ -45,3 +45,19 @@ def test_missing_binary_yields_no_path(tmp_path):
 
 def test_missing_root_yields_no_path(tmp_path):
     assert resolve_provisioned_interpreter(str(tmp_path / "nope")).path is None
+
+
+def test_set_but_missing_root_advisory_names_the_set_value_not_unset(tmp_path):
+    gone = str(tmp_path / "nope")
+    got = resolve_provisioned_interpreter(gone)
+    assert got.path is None
+    assert "unset" not in got.reason and gone in got.reason
+
+
+def test_unset_key_advisory_says_unset(monkeypatch):
+    import coordinator_core.install._shared as shared
+
+    monkeypatch.setattr(shared, "ml_get", lambda key: None)
+    got = resolve_provisioned_interpreter()
+    assert got.path is None
+    assert "unset" in got.reason

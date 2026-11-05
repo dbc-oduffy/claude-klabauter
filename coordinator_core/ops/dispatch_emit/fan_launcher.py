@@ -152,6 +152,11 @@ function _isOwnRecompose(child, e) {
 }
 
 function _emitRefusal(child, e, chained) {
+  const why = _emitRefusalReason(child, e, chained);
+  return why === null ? null : why + '; re-emit with dispatch.reemit {"params_file": <the refused emit params file>} and start the returned script';
+}
+
+function _emitRefusalReason(child, e, chained) {
   if (!e || typeof e !== 'object') return 'emit reply is not an object';
   if (typeof e.error === 'string' && e.error !== '') return 'emit failed: ' + e.error;
   if (chained) {

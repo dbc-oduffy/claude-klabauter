@@ -73,6 +73,10 @@ def _no_floor_decide(setup_mod, monkeypatch):
     # into the box's real state; only the tests that name it run the real function.
     _REAL_FLOOR_DECIDE.setdefault("fn", setup_mod.run_engine_floor_decide)
     monkeypatch.setattr(setup_mod, "run_engine_floor_decide", lambda *a, **k: None)
+@pytest.fixture(autouse=True)
+def _no_machine_doe_evidence(setup_mod, monkeypatch):
+    # DoE-presence evidence reads the real registry; a unit test must not depend on this box's.
+    monkeypatch.setattr(setup_mod, "_doe_evidence_values", lambda: [])
 
 
 # ---------------------------------------------------------------------------
@@ -1094,6 +1098,58 @@ def test_main_register_only_does_not_provision_dependencies(setup_mod, monkeypat
     assert calls == ["register", "verify"]
 
 
+def _stub_deps_only(setup_mod, monkeypatch, tmp_path, engine_py):
+    calls = []
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(setup_mod, "resolve_python", lambda: sys.executable)
+    monkeypatch.setattr(setup_mod, "resolve_claude_klabauter_root", lambda repo_root, args: (tmp_path, "test"))
+    monkeypatch.setattr(setup_mod, "resolve_repo_identity", lambda root: setup_mod.IDENTITY_MIRROR)
+    monkeypatch.setattr(
+        setup_mod,
+        "provision_deps",
+        lambda *a, **k: (calls.append("provision_deps"), (engine_py, ["dep"]))[1],
+    )
+
+    def _boom(name):
+        def _f(*a, **k):  # pragma: no cover - must never run
+            calls.append(name)
+            raise AssertionError(f"{name} ran under --deps-only")
+
+        return _f
+
+    monkeypatch.setattr(setup_mod, "_relaunch_under_provisioned_pin", _boom("relaunch"))
+    monkeypatch.setattr(setup_mod, "register_claude_klabauter_root", _boom("register"))
+    monkeypatch.setattr(setup_mod, "verify_coordinator_core_importable", _boom("verify"))
+    return calls
+
+
+def test_parse_args_deps_only(setup_mod):
+    assert setup_mod.parse_args(["--deps-only", "--i-am-agent"]).deps_only is True
+    assert setup_mod.parse_args(["--i-am-agent"]).deps_only is False
+
+
+@pytest.mark.parametrize("other", ["--check", "--register-only"])
+def test_parse_args_deps_only_excludes_check_and_register_only(setup_mod, other):
+    with pytest.raises(setup_mod.ArgError):
+        setup_mod.parse_args(["--deps-only", other, "--i-am-agent"])
+
+
+def test_main_deps_only_provisions_and_exits_without_registration(setup_mod, monkeypatch, tmp_path, capsys):
+    calls = _stub_deps_only(setup_mod, monkeypatch, tmp_path, sys.executable)
+    assert setup_mod.main(["--deps-only", "--i-am-agent"]) == 0
+    assert calls == ["provision_deps"]
+    assert "FAIL" not in capsys.readouterr().err
+
+
+def test_main_deps_only_fails_when_deps_land_in_another_interpreter(setup_mod, monkeypatch, tmp_path, capsys):
+    other = str(tmp_path / "venv" / "bin" / "python")
+    calls = _stub_deps_only(setup_mod, monkeypatch, tmp_path, other)
+    assert setup_mod.main(["--deps-only", "--i-am-agent"]) == 1
+    assert calls == ["provision_deps"]
+    err = capsys.readouterr().err
+    assert "FAIL [deps]" in err and other in err
+
+
 def test_main_without_register_only_still_provisions(setup_mod, monkeypatch, tmp_path):
     """The skip is scoped to the flag — an ordinary run must still provision."""
     calls = []
@@ -1161,7 +1217,7 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
         "refresh_group_em_home", "migrate_group_em_inbox",
         "apply_transcript_retention_default", "install_global_doctrine_files",
         "install_precompiled_bytecode", "install_general_work_ensure",
-        "install_record_receipt", "install_write_hook_plane_verdict",
+        "install_repo_discovery", "install_record_receipt", "install_write_hook_plane_verdict",
     ):
         monkeypatch.setattr(setup_mod, name, lambda *a, **k: None)
     monkeypatch.setattr(setup_mod, "apply_settings_manifest_env", lambda *a, **k: True)
@@ -4256,3 +4312,165 @@ def test_main_register_only_exits_nonzero_when_forwarders_missing(setup_mod, mon
         setup_mod, "_register_only_forwarder_item", lambda root: types.SimpleNamespace(ok=False, line=lambda: "FAIL")
     )
     assert setup_mod.main(["--register-only", "--i-am-agent"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# F20/F21: DoE presence from evidence (sentinel / content-root pointer /
+# plugin.mirrors live_path), never from a directory name.
+# ---------------------------------------------------------------------------
+
+
+def _f20_box(setup_mod, monkeypatch, tmp_path, *, evidence=True):
+    """A DoE box: sentinel-bearing DoE tree plus a sibling OSS `coordinator-claude` clone."""
+    doe = tmp_path / "DoE-tree"
+    (doe / "coordinator").mkdir(parents=True)
+    (doe / ".coordinator-dev-repo").write_text("", encoding="utf-8")
+    (doe / ".claude-plugin").mkdir()
+    (doe / ".claude-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+    (doe / "commands").mkdir()
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    oss = _coordinator_claude_clone(tmp_path)
+    monkeypatch.delenv("COORDINATOR_CLAUDE_ROOT", raising=False)
+    monkeypatch.setattr(setup_mod, "_coordinator_root_from_content_root", lambda: None)
+    monkeypatch.setattr(setup_mod, "_doe_evidence_values", lambda: [str(doe)] if evidence else [])
+    return repo, doe, oss
+
+
+def test_f20_sibling_oss_clone_does_not_win_over_doe_evidence(setup_mod, monkeypatch, tmp_path):
+    repo, doe, oss = _f20_box(setup_mod, monkeypatch, tmp_path)
+    root, source = setup_mod._resolve_coordinator_claude_root(repo, setup_mod.Args())
+    assert root == doe and root != oss
+    assert source.rung is setup_mod.CoordSourceRung.REGISTRY_CONTENT_SOURCE
+    assert source.is_unresolved is False
+
+
+def test_f20_sibling_default_still_used_without_doe_evidence(setup_mod, monkeypatch, tmp_path):
+    repo, _doe, oss = _f20_box(setup_mod, monkeypatch, tmp_path, evidence=False)
+    root, source = setup_mod._resolve_coordinator_claude_root(repo, setup_mod.Args())
+    assert root == oss
+    assert source.rung is setup_mod.CoordSourceRung.SIBLING_DIR_DEFAULT
+
+
+def test_f20_evidence_naming_an_oss_clone_is_not_doe_presence(setup_mod, monkeypatch, tmp_path):
+    oss = _coordinator_claude_clone(tmp_path)
+    monkeypatch.setattr(setup_mod, "_doe_evidence_values", lambda: ["", str(oss), str(tmp_path / "gone")])
+    assert setup_mod._doe_tree_from_evidence() is None
+
+
+def _f20_registry_box(monkeypatch, tmp_path, registry_text, pointer=None):
+    home = tmp_path / "settings-home"
+    (home / "machine-local").mkdir(parents=True)
+    (home / "machine-local" / "registry.local.toml").write_text(registry_text, encoding="utf-8")
+    if pointer is not None:
+        (home / "machine-local" / ".coordinator-content-root").write_text(pointer + "\n", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "nohome"))
+    monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
+
+
+def test_f20_evidence_collects_pointer_and_registry_keys(setup_mod, monkeypatch, tmp_path):
+    monkeypatch.undo()  # drop the autouse stub so the real collector runs
+    _f20_registry_box(
+        monkeypatch,
+        tmp_path,
+        "[engine.working_repos]\ncontent_root = '/reg/content'\n"
+        "[plugin.mirrors.coordinator-claude]\nlive_path = '/reg/live'\n",
+        pointer="/ptr",
+    )
+    values = [v for v in setup_mod._doe_evidence_values() if v]
+    assert values == ["/ptr", "/reg/content", "/reg/live"]
+
+
+def test_f20_setup_and_installer_share_one_predicate(setup_mod, monkeypatch, tmp_path):
+    doe = tmp_path / "DoE-tree"
+    doe.mkdir()
+    (doe / ".coordinator-dev-repo").write_text("", encoding="utf-8")
+    monkeypatch.undo()
+    _f20_registry_box(monkeypatch, tmp_path, "", pointer=str(doe))
+    install = setup_mod._install_module()
+    assert setup_mod._doe_tree_from_evidence() == doe == install.doe_tree_from_evidence()
+    assert setup_mod._is_doe_tree(doe) is install.is_doe_tree(doe) is True
+
+
+def test_f20_authoring_tree_finds_doe_through_an_oss_coord_path(setup_mod, monkeypatch, tmp_path):
+    _no_engine_source(monkeypatch)
+    _repo, doe, oss = _f20_box(setup_mod, monkeypatch, tmp_path)
+    assert setup_mod._authoring_tree_on_box(oss) == f"DoE source tree at {doe}"
+    monkeypatch.setattr(setup_mod, "_doe_evidence_values", lambda: [])
+    assert setup_mod._authoring_tree_on_box(oss) is None
+
+
+def test_f20_no_flag_install_keeps_candidate_and_registers_the_doe_tree(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    import coordinator_core.machine_resolver as mr
+    from coordinator_core.install import _shared
+
+    _no_engine_source(monkeypatch)
+    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: None)
+    monkeypatch.setattr(mr, "registry_get", lambda key: None)
+    monkeypatch.setattr(setup_mod, "_discover_claude_klabauter_checkout", lambda repo_root: None)
+    repo_root, doe, oss = _f20_box(setup_mod, monkeypatch, tmp_path)
+    (repo_root / "AGENTS.md").write_text("# claude-klabauter — Agent Entry Point\n")
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+
+    setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", repo_root, _override_args(setup_mod))
+
+    out = capsys.readouterr().out
+    assert "engine channel: candidate" in out
+    assert "machine-local set engine.target candidate" in out
+    assert f"machine-local set repos.content_root {doe}" in out
+    assert str(oss) not in out
+
+
+def _source_resolution(setup_mod, rung):
+    return setup_mod.CoordSourceResolution(rung=setup_mod.CoordSourceRung[rung], display="test")
+
+
+@pytest.mark.parametrize("rung", ["FLAG", "ENV", "REGISTRY_CONTENT_SOURCE"])
+def test_f21_content_root_rewrites_a_stale_oss_content_root(setup_mod, monkeypatch, tmp_path, rung):
+    import coordinator_core.machine_resolver as mr
+
+    _repo, doe, oss = _f20_box(setup_mod, monkeypatch, tmp_path)
+    monkeypatch.setattr(mr, "registry_get", lambda key: str(oss))
+    pending = setup_mod._unset_content_root_registration(doe, _source_resolution(setup_mod, rung), doe)
+    assert pending == {"repos.content_root": str(doe)}
+
+
+def test_f21_stale_repair_leaves_deliberate_values_alone(setup_mod, monkeypatch, tmp_path):
+    import coordinator_core.machine_resolver as mr
+
+    _repo, doe, oss = _f20_box(setup_mod, monkeypatch, tmp_path)
+    other_doe = tmp_path / "other-doe"
+    other_doe.mkdir()
+    (other_doe / ".coordinator-dev-repo").write_text("", encoding="utf-8")
+    flag = _source_resolution(setup_mod, "FLAG")
+    # a deliberate DoE value is not clobbered by another DoE root
+    monkeypatch.setattr(mr, "registry_get", lambda key: str(other_doe))
+    assert setup_mod._unset_content_root_registration(doe, flag, doe) == {}
+    # a lower rung (sibling guess) never overwrites a set value
+    monkeypatch.setattr(mr, "registry_get", lambda key: str(oss))
+    sibling = _source_resolution(setup_mod, "SIBLING_DIR_DEFAULT")
+    assert setup_mod._unset_content_root_registration(doe, sibling, doe) == {}
+    # an explicit OSS root does not overwrite either
+    assert setup_mod._unset_content_root_registration(oss, flag, oss) == {}
+
+
+def test_refresh_group_em_home_states_arming_is_post_install(setup_mod, monkeypatch, tmp_path, capsys):
+    monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
+    hooks = tmp_path / "plugin" / "hooks" / "scripts"
+    hooks.mkdir(parents=True)
+    (hooks / "_gem_home.py").write_text(
+        "def ensure_home(refresh=False):\n    return 'HOME'\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(setup_mod, "_resolve_coordinator_claude_root", lambda *a, **k: (tmp_path, None))
+    monkeypatch.setattr(setup_mod, "_resolve_plugin_root_for_machine_local", lambda *a, **k: tmp_path / "plugin")
+
+    setup_mod.refresh_group_em_home(tmp_path, None)
+
+    out = capsys.readouterr().out
+    assert "home refreshed from template: HOME" in out
+    assert "post-install" in out
+    assert "/group-em" in out

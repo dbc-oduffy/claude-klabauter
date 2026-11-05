@@ -443,9 +443,9 @@ def test_advisory_failure_continues_chain_to_completion(stub_env, monkeypatch):
     assert rc == 1
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
     assert "scaffold-canonical-structure" in names
-    # Every later phase still ran; the advisory failure withholds the receipt.
+    # Every later phase still ran; the advisory failure does not withhold the receipt.
     assert "check-install-singularity" in names
-    assert "coordinator-setup-state" not in names
+    assert "coordinator-setup-state" in names
 
 
 def test_step7_scaffold_raw_oserror_is_advisory_not_fatal(stub_env, monkeypatch):
@@ -472,7 +472,7 @@ def test_step7_scaffold_raw_oserror_is_advisory_not_fatal(stub_env, monkeypatch)
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
     assert "check-install-singularity" in names
     assert "capture-fan-out-threshold" in names
-    assert "coordinator-setup-state" not in names
+    assert "coordinator-setup-state" in names
 
 
 def test_check_only_skips_mutating_not_singularity(stub_env):
@@ -537,7 +537,7 @@ def test_compileall_failure_is_advisory_not_fatal(stub_env, monkeypatch):
     assert rc == 1
     names = [line.split(" ", 1)[0] for line in _log_lines(stub_env["call_log"])]
     assert "scaffold-canonical-structure" in names
-    assert "coordinator-setup-state" not in names
+    assert "coordinator-setup-state" in names
 
 
 def test_compileall_skipped_under_check_only(stub_env, monkeypatch):
@@ -1165,11 +1165,13 @@ def test_check_only_run_writes_no_stamp(stub_env):
     assert stub_env["receipts"] == []
 
 
-def test_advisory_failure_writes_no_stamp(stub_env, monkeypatch, capsys):
+def test_advisory_failure_still_writes_stamp(stub_env, monkeypatch, capsys):
     monkeypatch.setenv("RC_SCAFFOLD_CANONICAL_STRUCTURE", "1")
-    assert _run_live(stub_env) == 1
-    assert stub_env["receipts"] == []
-    assert "receipt not written: an advisory phase failed" in capsys.readouterr().out
+    assert _run_live(stub_env) == 1  # WARN summary / exit 1 stay
+    assert len(stub_env["receipts"]) == 1
+    out = capsys.readouterr().out
+    assert "ADVISORY failures" in out
+    assert "receipt not written" not in out
 
 
 def test_gen_settings_hooks_clone_absent_skip_writes_no_stamp(stub_env, monkeypatch, capsys):

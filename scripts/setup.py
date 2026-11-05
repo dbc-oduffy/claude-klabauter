@@ -61,7 +61,7 @@ Usage:
   python3 scripts/setup.py [--i-am-agent] [--skip-dep-check --accept-missing-deps-risk]
                             [--claude-klabauter-live-root <path>] [--coordinator-root <path>]
                             [--with-test-deps]
-                            [--register-only] [--check] [--host codex,agy]
+                            [--register-only] [--deps-only] [--check] [--host codex,agy]
                             [--warm on|off] [--repair forwarders] [--help]
 
 Negative-spec:
@@ -325,7 +325,9 @@ Options:
                                       default and prints what it changed
   --warm on|off                      Answer the warm-engine opt-in without prompting (never blocks on
                                       a non-TTY stdin; unset = the non-interactive default)
-  --check                           Verify the install, one PASS/FAIL line per item (forwarders, door,
+  --deps-only                        Provision the engine's declared deps into this interpreter, then exit
+                                      (no registration, forwarders or verification)
+  --check                            Verify the install, one PASS/FAIL line per item (forwarders, door,
                                       guards, repos.* pointers, statusline); exits 1 on any FAIL
   --host <csv>                       Host-only install for Codex / agy (codex, agy): writes only the
                                       example-retrieval-repo MCP entry; no root registration, warm
@@ -437,6 +439,7 @@ class Args:
         self.container_optin = False
         self.with_test_deps = False
         self.register_only = False
+        self.deps_only = False
         self.check = False
         self.preflight = False
         self.help = False
@@ -472,6 +475,8 @@ def parse_args(argv: list[str]) -> Args:
             args.with_test_deps = True
         elif tok == "--register-only":
             args.register_only = True
+        elif tok == "--deps-only":
+            args.deps_only = True
         elif tok == "--check":
             args.check = True
         elif tok == "--preflight":
@@ -521,6 +526,8 @@ def parse_args(argv: list[str]) -> Args:
                 "  Run 'python3 scripts/setup.py --help' for usage."
             )
         i += 1
+    if args.deps_only and (args.check or args.register_only):
+        raise ArgError("ERROR: --deps-only cannot be combined with --check or --register-only.")
     if not args.agent_mode and not _stdin_can_answer():
         # A prompt written to a stdin nobody is reading is not a question, it is
         # a hang. The prompt sites already handle a CLOSED stdin (EOFError /
@@ -1812,11 +1819,8 @@ def _is_publish_mirror(path: Path) -> bool:
 # scaffold); the generic ones now require at least 2-of-3 co-occurring —
 # this only narrows acceptance (a real coordinator-claude dev clone still
 # has all six), never widens it.
-_DEV_CLONE_DISTINCTIVE_MARKERS = (
-    "canonical-structure.yaml",
-    "artifact-shape-contract",
-    "cockpit-contract",
-)
+# The distinctive markers (`_DEV_CLONE_DISTINCTIVE_MARKERS`) are defined once, in
+# coordinator_install.py, beside the DoE-presence predicate that shares them.
 _DEV_CLONE_GENERIC_MARKERS = (
     "commands",
     "hooks",
@@ -1825,14 +1829,32 @@ _DEV_CLONE_GENERIC_MARKERS = (
 _DEV_CLONE_GENERIC_MIN_COUNT = 2
 
 
-def _has_doe_dev_clone_marker(path: Path) -> bool:
-    """True iff `path` carries a DoE dev-clone marker under `coordinator/`.
-    The published coordinator-claude repo ships its plugin at the repo root,
-    so these markers under `coordinator/` exist only in the DoE source tree."""
-    coordinator_dir = path / "coordinator"
-    return coordinator_dir.is_dir() and any(
-        (coordinator_dir / marker).exists() for marker in _DEV_CLONE_DISTINCTIVE_MARKERS
-    )
+def _install_module():
+    """coordinator_install.py loaded by path (stdlib-only; it owns the DoE-presence predicate)."""
+    name = "_setup_coordinator_install"
+    if name in sys.modules:
+        return sys.modules[name]
+    script = Path(__file__).resolve().parents[1] / "coordinator" / "lib" / "install" / "coordinator_install.py"
+    spec = importlib.util.spec_from_file_location(name, script)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module  # its dataclasses resolve their module by name
+    spec.loader.exec_module(module)
+    return module
+
+
+def _is_doe_tree(path: Path) -> bool:
+    """The shared predicate (`coordinator_install.is_doe_tree`), with this script's publish-mirror test."""
+    return _install_module().is_doe_tree(path, _is_publish_mirror)
+
+
+def _doe_evidence_values() -> list[str]:
+    """The shared evidence (`coordinator_install.doe_evidence_values`)."""
+    return _install_module().doe_evidence_values()
+
+
+def _doe_tree_from_evidence() -> Path | None:
+    """The DoE source tree this box's evidence names, else None (shared predicate)."""
+    return _install_module().doe_tree_from_evidence(_doe_evidence_values(), _is_publish_mirror)
 
 
 def _authoring_tree_on_box(coord_path: Path) -> str | None:
@@ -1842,8 +1864,9 @@ def _authoring_tree_on_box(coord_path: Path) -> str | None:
     tree or the DoE source tree is present runs the `candidate` channel;
     without either, it runs `main`. Claude-Klabauter is found through
     `engine_source_root()`, whose registry key survives the publish rename
-    (a literal repo-named key in this file does not); DoE through the
-    resolved coordinator-claude root's dev-clone markers."""
+    (a literal repo-named key in this file does not); DoE through
+    `_is_doe_tree(coord_path)` or, when the resolved root is not itself DoE
+    (an OSS sibling), `_doe_tree_from_evidence`."""
     try:
         from coordinator_core.engine_root import engine_source_root
 
@@ -1852,8 +1875,11 @@ def _authoring_tree_on_box(coord_path: Path) -> str | None:
         source = None
     if source and Path(source).is_dir():
         return f"engine source tree at {source}"
-    if _has_doe_dev_clone_marker(coord_path):
+    if _is_doe_tree(coord_path):
         return f"DoE source tree at {coord_path}"
+    doe_tree = _doe_tree_from_evidence()
+    if doe_tree is not None:
+        return f"DoE source tree at {doe_tree}"
     return None
 
 
@@ -1870,7 +1896,7 @@ def _looks_like_coordinator_claude_source(path: Path) -> bool:
         (path / "commands").is_dir() or (path / "hooks").is_dir()
     )
     coordinator_dir = path / "coordinator"
-    has_distinctive_marker = _has_doe_dev_clone_marker(path)
+    has_distinctive_marker = _install_module().has_doe_dev_clone_marker(path)
     generic_marker_count = sum(
         (coordinator_dir / marker).exists()
         for marker in _DEV_CLONE_GENERIC_MARKERS
@@ -2083,7 +2109,12 @@ def _resolve_coordinator_claude_root(repo_root: Path, args: Args) -> tuple[Path,
         else:
             candidate = repo_root.parent / "coordinator-claude"
             rung, display = CoordSourceRung.SIBLING_DIR_DEFAULT, "sibling-dir default"
-            if not os.path.isdir(candidate):
+            doe_tree = None if _is_doe_tree(candidate) else _doe_tree_from_evidence()
+            if doe_tree is not None:
+                # A guess beside the checkout never outranks evidence of the DoE tree.
+                candidate, rung = doe_tree, CoordSourceRung.REGISTRY_CONTENT_SOURCE
+                display = "DoE source tree (sentinel / content-root / live_path evidence)"
+            elif not os.path.isdir(candidate):
                 is_unresolved = True
                 display = f"{display} [UNRESOLVED -- PATH DOES NOT EXIST]"
     is_publish_mirror_rejected = _is_publish_mirror(candidate)
@@ -2484,10 +2515,12 @@ def _unset_content_root_registration(
     is untouched; `{}` when nothing should be written.
 
     negative-spec:
-      - Never overwrites an existing value: an operator who pointed the key
-        somewhere deliberate outranks a resolution ladder that may have
-        bottomed out at a sibling-dir guess. An unreadable registry counts as
-        set — this never writes on a value it could not see.
+      - Never overwrites an existing value, except a stale one: an explicit
+        FLAG/ENV/evidenced root that is a DoE tree replaces a value that is not a DoE
+        tree. An operator who pointed the key somewhere deliberate outranks a
+        resolution ladder that may have bottomed out at a sibling-dir guess.
+        An unreadable registry counts as set — this never writes on a value it
+        could not see.
       - Never writes `engine.working_repos.*`: that namespace is DoE's own
         identity assertion, which claude-klabauter only reads.
       - Never writes a CONTENT_ROOT-rung candidate: that rung already resolved
@@ -2514,7 +2547,14 @@ def _unset_content_root_registration(
         )
         return {}
     if (existing or "").strip():
-        return {}
+        # Only a root evidenced or explicitly named as a DoE tree repairs a value that is not one.
+        stale = (
+            coord_source.rung
+            in (CoordSourceRung.FLAG, CoordSourceRung.ENV, CoordSourceRung.REGISTRY_CONTENT_SOURCE)
+            and _is_doe_tree(coord_path)
+            and not _is_doe_tree(Path(existing.strip()))
+        )
+        return {_CONTENT_ROOT_ANCHOR_KEY: str(coord_path)} if stale else {}
     return {_CONTENT_ROOT_ANCHOR_KEY: str(coord_path)}
 
 
@@ -3342,7 +3382,10 @@ def check_dialect_guard_armed(claude_klabauter_root_resolved: Path, engine_py: s
             "example-retrieval-repo provisioned pin (guard interpreter)"
         )
     else:
-        print(f"  [ADVISORY] example-retrieval-repo pin unresolved: {provisioned.reason}")
+        print(
+            f"  [ADVISORY] example-retrieval-repo pin unresolved: {provisioned.reason} -- "
+            "register repos.project_rag (machine-local set), or ignore if example-retrieval-repo is not used"
+        )
     bare_python3 = shutil.which("python3")
     if bare_python3:
         interpreter_labels.setdefault(bare_python3, []).append(
@@ -3591,6 +3634,12 @@ def apply_runtime_gitignore(repo_root: Path, args: Args) -> None:
         print("     [gitignore] the untrack is staged in the index; commit it with your next commit")
 
 
+GROUP_EM_ARMING_NOTE = (
+    "NOTE [group-em] the home is not armed by install; arming is a post-install step: "
+    "run /group-em in a coordinator session"
+)
+
+
 def refresh_group_em_home(repo_root: Path, args: Args) -> None:
     """Redeploy the shipped group-em CLAUDE.md template into the group-em home on every run.
 
@@ -3624,6 +3673,7 @@ def refresh_group_em_home(repo_root: Path, args: Args) -> None:
             sys.path.remove(scripts_dir)
     print(f"OK   [group-em] home refreshed from template: {home}")
     _note_change("group-em", f"home refreshed from template: {home}")
+    print(GROUP_EM_ARMING_NOTE)
 
 
 def migrate_group_em_inbox(repo_root: Path, args: Args) -> None:
@@ -4923,6 +4973,45 @@ def _reset_resolution_journal() -> None:
         print(f"[ADVISORY] resolution journal not reset: {exc}", file=sys.stderr)
 
 
+def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, write=None) -> None:
+    """Install-chain step: pin unset `repos.*` keys (and the general-work root) to clones found by origin remote.
+
+    Runs in agent and interactive mode alike; never fatal. A set key is never overwritten:
+    the unset check precedes each write because `registry_set` replaces in place.
+    """
+    print()
+    print("--- Install: repo discovery ---")
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core import machine_resolver
+        from coordinator_core.install import repo_discovery
+
+        write = write or machine_resolver.registry_set
+        merged = machine_resolver.merged_flat_registry()
+
+        def is_set(key: str) -> bool:
+            return bool(str(merged.get(key) or "").strip())
+
+        declared = repo_discovery.declared_repo_keys()
+        roots: list[Path] = [claude_klabauter_root_resolved.parent]
+        for key in declared:
+            if is_set(key):
+                roots.append(Path(str(merged[key])).parent)
+        scan_roots = list(dict.fromkeys(roots))
+        wanted = repo_discovery.wanted_for_keys(declared)
+        wanted.update(repo_discovery.wanted_for_keys(["repos.general_work"]))
+        wanted = {k: v for k, v in wanted.items() if not is_set(k)}
+        found, ambiguous = repo_discovery.find_clones(scan_roots, wanted)
+        for key, clone in found.items():
+            write(key, str(clone))
+            print(f"[OK] {key} -> {clone}")
+        for key in ambiguous:
+            print(f"[ADVISORY] {key}: several clones match by remote; set it by hand.", file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 -- discovery must never break the install
+        print(f"[ADVISORY] repo discovery skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
+
+
 def install_general_work_ensure(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, ensure=None) -> None:
     """Install-chain step: run DoE's `general-work-root ensure` once; never fatal.
 
@@ -4998,6 +5087,30 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
                 print(f"  unreachable: {host} binary not found on PATH")
         except Exception as exc:  # noqa: BLE001 - advisory step never fails the install
             print(f"[host:{host}] WARN could not report: {type(exc).__name__}: {exc}", file=sys.stderr)
+def run_deps_only(args: Args) -> int:
+    """`--deps-only`: provision the engine deps into the launching interpreter and exit.
+
+    Runs before the pin relaunch, which would provision the example-retrieval-repo pin rather than
+    the interpreter the caller's engine-backed scripts run under. Exit 1 when deps landed
+    in a different interpreter (a fallback venv those scripts will not use)."""
+    repo_root = Path(__file__).resolve().parent.parent
+    claude_klabauter_root, _ = resolve_claude_klabauter_root(repo_root, args)
+    py = resolve_python()
+    engine_py, _ = provision_deps(
+        claude_klabauter_root,
+        py,
+        container_optin=args.container_optin,
+        installs_engine=resolve_repo_identity(claude_klabauter_root) == IDENTITY_MIRROR,
+    )
+    if os.path.realpath(engine_py) != os.path.realpath(py):
+        print(
+            f"FAIL [deps] engine deps were provisioned into {engine_py}, not {py}; "
+            "engine-backed scripts run under the latter.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"[OK] engine deps provisioned ({py})")
+    return 0
 
 
 def main(argv: list[str]) -> int:
@@ -5024,6 +5137,9 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return EXIT_FLAG_PAIR_VIOLATION
+
+    if args.deps_only:
+        return run_deps_only(args)
 
     relaunch_rc = _relaunch_under_provisioned_pin(argv)
     if relaunch_rc is not None:
@@ -5149,6 +5265,7 @@ def main(argv: list[str]) -> int:
         install_global_doctrine_files(repo_root, claude_klabauter_root_resolved, args)
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
+        install_repo_discovery(repo_root, claude_klabauter_root_resolved, args)
         install_general_work_ensure(repo_root, claude_klabauter_root_resolved, args)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)

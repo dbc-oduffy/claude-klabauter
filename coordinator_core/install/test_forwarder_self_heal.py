@@ -137,6 +137,73 @@ class TestStaleForwarderIsRewritten:
         assert (bin_dst / "percolate-push").read_text(encoding="utf-8") == self._current()
 
 
+class TestForwarderShebangPin:
+    def _body(self):
+        from coordinator_core.install.substrate import _agent_forwarder_content
+
+        return _agent_forwarder_content("percolate-push", "percolate-push.py").split("\n", 1)[1]
+
+    def _stale(self, tmp_path, first_line):
+        from coordinator_core.install.forwarder_self_heal import _python_forwarder_is_stale
+
+        f = tmp_path / "percolate-push"
+        f.write_text(first_line + "\n" + self._body(), encoding="utf-8")
+        return _python_forwarder_is_stale(f, "percolate-push", "percolate-push.py")
+
+    def test_first_line_pins_the_resolved_interpreter(self):
+        from coordinator_core.install.substrate import _agent_forwarder_content
+
+        first = _agent_forwarder_content("x", "x.py").split("\n", 1)[0]
+        assert first == "#!" + str(Path(sys.executable).resolve())
+
+    def test_py39_renders_env_form(self, monkeypatch):
+        from coordinator_core.install import substrate
+
+        monkeypatch.setattr(substrate.sys, "version_info", (3, 9, 6, "final", 0))
+        assert substrate._agent_forwarder_content("x", "x.py").startswith("#!/usr/bin/env python3\n")
+
+    def test_spaced_interpreter_path_keeps_env_form(self, monkeypatch):
+        from coordinator_core.install import substrate
+
+        monkeypatch.setattr(substrate.sys, "executable", "/opt/with space/python3")
+        monkeypatch.setattr(substrate.Path, "resolve", lambda self, *a, **k: self)
+        assert substrate._forwarder_shebang() == "#!/usr/bin/env python3"
+
+    def test_env_header_forwarder_is_stale(self, tmp_path):
+        assert self._stale(tmp_path, "#!/usr/bin/env python3") is True
+
+    def test_env_header_not_stale_when_renderer_would_not_pin(self, tmp_path, monkeypatch):
+        from coordinator_core.install import substrate
+
+        monkeypatch.setattr(substrate.sys, "version_info", (3, 9, 6, "final", 0))
+        assert self._stale(tmp_path, "#!/usr/bin/env python3") is False
+
+    def test_other_existing_interpreter_is_current(self, tmp_path):
+        other = tmp_path / "other-python"
+        other.write_text("", encoding="utf-8")
+        assert self._stale(tmp_path, f"#!{other}") is False
+
+    def test_vanished_interpreter_is_stale(self, tmp_path):
+        assert self._stale(tmp_path, f"#!{tmp_path / 'gone' / 'python3'}") is True
+
+    def test_body_drift_is_stale_even_with_current_shebang(self, tmp_path):
+        from coordinator_core.install.forwarder_self_heal import _python_forwarder_is_stale
+
+        f = tmp_path / "percolate-push"
+        f.write_text(
+            "#!" + str(Path(sys.executable).resolve()) + "\n" + self._body().replace("exec_cli(", "old("),
+            encoding="utf-8",
+        )
+        assert _python_forwarder_is_stale(f, "percolate-push", "percolate-push.py") is True
+
+    def test_foreign_file_is_never_stale(self, tmp_path):
+        from coordinator_core.install.forwarder_self_heal import _python_forwarder_is_stale
+
+        f = tmp_path / "percolate-push"
+        f.write_text("#!/usr/bin/env python3\nprint('hi')\n", encoding="utf-8")
+        assert _python_forwarder_is_stale(f, "percolate-push", "percolate-push.py") is False
+
+
 class TestCleanStateWritesNothing:
     def test_clean_tree_is_a_true_noop(self, tmp_path, monkeypatch):
         claude_klabauter_root = tmp_path / "claude-klabauter"

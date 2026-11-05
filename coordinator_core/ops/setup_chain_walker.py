@@ -86,6 +86,9 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
 
+# Both spellings: the published engine's rename rewrites this module's literal but not the manifest data.
+_ENGINE_SEAM_KINDS = frozenset({"claude_klabauter_seam_resolvable", "claude_klabauter_seam_resolvable"})
+
 
 _SCRIPT_VERSION = "1.0.0"
 _SCRIPT_NAME = "coordinator-claude setup"
@@ -579,7 +582,7 @@ def dep_probe(
 
     probe_kind_early = dep.get("functional_probe_kind", "")
 
-    # "claude_klabauter_seam_resolvable": bypasses the sibling_dir_exists gate entirely.
+    # "claude_klabauter_seam_resolvable" / "claude_klabauter_seam_resolvable" (_ENGINE_SEAM_KINDS): bypasses the sibling_dir_exists gate entirely.
     # Registry-resolved deps (claude-klabauter, declared as coordinator-claude's
     # W0.5 Option B+C hard dep) are NOT sibling-directory-colocated by
     # contract -- the engine root resolves via env var / settings-home pointer
@@ -597,7 +600,7 @@ def dep_probe(
     # `return "present"` so a corrupted/partial coordinator_core checkout
     # (module dir present, coordinator_core.invoke submodule missing) still
     # surfaces as present-but-broken instead of a silent tautology.
-    if probe_kind_early == "claude_klabauter_seam_resolvable":
+    if probe_kind_early in _ENGINE_SEAM_KINDS:
         try:
             spec = importlib.util.find_spec("coordinator_core.invoke")
         except (ModuleNotFoundError, ValueError):

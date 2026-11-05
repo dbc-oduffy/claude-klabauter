@@ -504,3 +504,22 @@ def test_relocate_case_variant_dependent_reported(tmp_path):
     assert _run_ml(sandbox, ["array-append", "stores.facepack.dependents", str(dep)]).returncode == 0
     r = _run_ml(sandbox, ["relocate-store", "facepack", new])
     assert f"stale-dependent\tfacepack\t{dep}" in r.stdout.splitlines()
+
+
+def _keys_sandbox(tmp_path) -> str:
+    sandbox = str(tmp_path / "reg")
+    _write_file(os.path.join(sandbox, "registry.toml"), 'schema = 1\n[misc]\nunset_one = ""\n')
+    _write_file(os.path.join(sandbox, "registry.local.toml"), 'schema = 1\n[misc]\nset_one = "v"\n')
+    return sandbox
+
+
+def test_keys_default_lists_declared_unset_and_set(tmp_path):
+    r = _run_ml(_keys_sandbox(tmp_path), ["keys", "--prefix", "misc"])
+    assert r.returncode == 0, r.stderr
+    assert sorted(r.stdout.split()) == ["misc.set_one", "misc.unset_one"]
+
+
+def test_keys_set_only_omits_declared_unset_key(tmp_path):
+    r = _run_ml(_keys_sandbox(tmp_path), ["keys", "--set-only", "--prefix", "misc"])
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.split() == ["misc.set_one"]

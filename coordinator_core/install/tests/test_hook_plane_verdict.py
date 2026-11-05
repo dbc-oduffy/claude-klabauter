@@ -362,3 +362,40 @@ def test_read_verdict_status_returns_the_first_line_or_none(tmp_path):
     path.parent.mkdir(parents=True)
     path.write_text("HOOK PLANE: UNARMED (delivery: none)\n\n- why\n", encoding="utf-8")
     assert hpv.read_verdict_status(tmp_path) == "HOOK PLANE: UNARMED (delivery: none)"
+
+
+def _plugin_dir_box(tmp_path: Path, *, sentinel: bool, script: bool = True):
+    home = tmp_path / "home"
+    _json(home / "settings.json", {})
+    (home / hpv._POINTER_NAME).write_text(str(tmp_path), encoding="utf-8")
+    root = _plugin(
+        tmp_path,
+        _hooks("python3 ${CLAUDE_PLUGIN_ROOT}/hooks/run.py"),
+        files=["hooks/run.py"] if script else [],
+    )
+    if sentinel:
+        (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
+    return home, root
+
+
+def test_plugin_dir_box_without_enabled_plugins_is_armed(tmp_path):
+    home, root = _plugin_dir_box(tmp_path, sentinel=True)
+    plane = hpv.derive_hook_plane(claude_home=home, plugin_root=root, settings_home=None)
+    assert plane["hook_delivery"] == "plugin-dir"
+    assert plane["plugin_hooks"]["via"] == "plugin-dir"
+    assert hpv.hook_plane_status_line(plane).startswith("HOOK PLANE: ARMED (delivery: plugin-dir")
+
+
+def test_no_sentinel_and_not_enabled_stays_unarmed(tmp_path):
+    home, root = _plugin_dir_box(tmp_path, sentinel=False)
+    plane = hpv.derive_hook_plane(claude_home=home, plugin_root=root, settings_home=None)
+    assert plane["hook_delivery"] == "none"
+    assert "not enabled" in plane["plugin_hooks"]["reason"]
+    assert hpv.hook_plane_status_line(plane).startswith("HOOK PLANE: UNARMED")
+
+
+def test_plugin_dir_box_with_absent_hook_file_stays_unarmed(tmp_path):
+    home, root = _plugin_dir_box(tmp_path, sentinel=True, script=False)
+    plane = hpv.derive_hook_plane(claude_home=home, plugin_root=root, settings_home=None)
+    assert plane["plugin_hooks"]["armed"] is False
+    assert hpv.hook_plane_status_line(plane).startswith("HOOK PLANE: UNARMED")

@@ -1965,9 +1965,26 @@ def _agent_cmd_raw_cmdline_block(target: str) -> str:
     )
 
 
+_ENV_SHEBANG = "#!/usr/bin/env python3"
+
+
+def _forwarder_shebang() -> str:
+    """Shebang line a forwarder rendered by this interpreter carries: the
+    running interpreter's absolute path when it is 3.11+ and the path is
+    shebang-safe, else the env form. A shebang cannot carry whitespace, so a
+    spaced interpreter path keeps the env form. Self-heal also renders this
+    from foreign interpreters; its stale rule tolerates their pinned shebangs."""
+    if sys.version_info < (3, 11):
+        return _ENV_SHEBANG
+    exe = str(Path(sys.executable).resolve())
+    if not exe or any(ch.isspace() for ch in exe):
+        return _ENV_SHEBANG
+    return f"#!{exe}"
+
+
 def _agent_forwarder_content(name: str, target: str, resolver_module: str = _AGENT_RESOLVER_MODULE) -> str:
     """The exact bytes `_write_agent_forwarder` installs for `name`."""
-    return f"""#!/usr/bin/env python3
+    return f"""{_forwarder_shebang()}
 # coordinator-claude bin forwarder for {name} — resolves claude-klabauter's
 # `coordinator/bin/` directory via the co-located `{resolver_module}.py`
 # shim (the ratified resolve-claude-klabauter-bin contract, coordinator-content-repo

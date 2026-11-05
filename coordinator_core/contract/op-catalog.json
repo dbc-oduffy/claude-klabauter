@@ -1124,6 +1124,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "JSON-RPC \"dispatch.reemit\": write the deferred script for one ``dispatch.emit`` params set.\n\n``dispatch.reemit``: the one EM-facing hand re-emit route.\n\nParams: ``{params_file: str}`` (a path, absolute or under the repo root) or ``{params: dict}``: the\n``dispatch.emit`` params to re-run. Reply: ``{ok, script_path, refusal?}``; ``script_path`` is repo-relative.\nWrites one deferred script under ``scratch/warp/`` and returns; the EM starts it, and it emits the run, follows\nthe launcher chain hand-off and answers every ``stage_pending`` with the staged twin. No git, no subprocess,\nno in-process ``dispatch.emit``.",
+      "module": "coordinator_core.ops.dispatch_emit.reemit",
+      "name": "dispatch.reemit",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"dispatch.reemit\": write the deferred script for one ``dispatch.emit`` params set.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"dispatch.release_run_token\": delete one run's unclaimed token record.\n\n``dispatch.release_run_token``: the sanctioned peer release of one warp run token.\n\nParams: ``{\"run_id\": str}``.\nReply: ``{ok, run_id, released, token_removed, index_entry_removed, record: {session_id,\nsizing_rel, minted_at} | None}``; ``released`` is true when the unclaimed token record or the\nlive-run index entry existed and is now gone, and ``record`` is null only when no token record\nwas held. The token's sha256 is never echoed. Removes the unclaimed record only\n(``run_token.discard``), so a terminal commit holding the claim is unaffected. No spawn, no git call.",
       "module": "coordinator_core.ops.dispatch_emit.release_run_token",
       "name": "dispatch.release_run_token",

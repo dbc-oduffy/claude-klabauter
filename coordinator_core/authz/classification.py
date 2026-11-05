@@ -2455,6 +2455,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The marker and the landed commit.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.minted_run": OpClass.MUTATING,
+    # dispatch.reemit — MUTATING: writes one deferred workflow script (and, past the inline bars, a params or
+    # brief spill) under scratch/warp/ (ops/dispatch_emit/reemit.py).
+    # DR-208 five-question affirmation (citing dispatch.reemit handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      One scratch script, plus a params or brief spill file when the payload is long.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The script and spill files under scratch/warp/.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      No git, no queue, no run record.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The script file, which the EM then starts.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.reemit": OpClass.MUTATING,
     # dispatch.adopt_orphaned_run — MUTATING: rewrites a dead session's run-stage.json session_id to the
     # caller and writes the run's halted.json (ops/dispatch_emit/orphan_adopt.py).
     # DR-208 five-question affirmation (citing dispatch.adopt_orphaned_run handler):

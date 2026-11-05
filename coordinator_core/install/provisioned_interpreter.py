@@ -41,8 +41,10 @@ def resolve_provisioned_interpreter(example_retrieval_repo_root: str | None = No
             root = ml_get("repos.project_rag")
         except Exception as exc:  # noqa: BLE001
             return ProvisionedInterpreter(None, f"machine-local read failed: {exc}")
-    if not root or not Path(root).is_dir():
-        return ProvisionedInterpreter(None, "repos.project_rag unset or missing")
+    if not root:
+        return ProvisionedInterpreter(None, "repos.project_rag unset")
+    if not Path(root).is_dir():
+        return ProvisionedInterpreter(None, f"repos.project_rag is set to {root} but that directory is missing")
     reader = Path(root) / _READER_REL
     if not reader.is_file():
         return ProvisionedInterpreter(None, f"pin reader absent: {reader}", root)

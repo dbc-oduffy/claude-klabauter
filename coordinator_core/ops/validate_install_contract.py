@@ -212,7 +212,7 @@ def _check_point1(manifest: dict, failures: _Failures) -> None:
                     f"direct_deps[{i}] ('{dep_id}') has no functional_probe.kind / functional_probe_kind",
                     "add a functional probe (nested functional_probe.kind, or flat "
                     "functional_probe_kind — kind: sibling_dir_exists|file_exists|"
-                    "python_import|command_succeeds|claude_klabauter_seam_resolvable) — a "
+                    "python_import|command_succeeds|claude_klabauter_seam_resolvable|claude_klabauter_seam_resolvable) — a "
                     "presence check alone (sibling dir exists) is not a functional probe.",
                 )
 

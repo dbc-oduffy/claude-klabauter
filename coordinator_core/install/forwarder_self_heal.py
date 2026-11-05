@@ -89,6 +89,7 @@ drift incident, 2026-08-14).
 
 from __future__ import annotations
 
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -279,14 +280,31 @@ def _self_heal_forwarders_inner() -> None:
         return
 
 
-_FORWARDER_HEADER = b"#!/usr/bin/env python3\n# coordinator-claude bin forwarder for "
+_FORWARDER_SECOND_LINE = b"# coordinator-claude bin forwarder for "
+_ENV_SHEBANG = b"#!/usr/bin/env python3"
+
+
+def _shebang_is_stale(actual: bytes, expected: bytes) -> bool:
+    """A pinned shebang from another existing interpreter is current, so two
+    interpreters never rewrite each other's forwarders; the env form is stale
+    only when the renderer would pin, and a pinned path is stale once gone."""
+    if actual == expected:
+        return False
+    if actual == _ENV_SHEBANG:
+        return expected != _ENV_SHEBANG
+    if not actual.startswith(b"#!/"):
+        return True
+    try:
+        return not Path(os.fsdecode(actual[2:])).exists()
+    except (ValueError, OSError):
+        return True
 
 
 def _python_forwarder_is_stale(path: Path, name: str, target: str) -> bool:
-    """True iff `path` is a Python forwarder this installer wrote whose bytes
-    differ from what `_agent_forwarder_content` renders today. A file that does
-    not carry the forwarder header (a native door image, a foreign file) is
-    never stale. Reads at most one byte past the expected length."""
+    """True iff `path` is a Python forwarder this installer wrote whose body
+    (every byte after the shebang) differs from `_agent_forwarder_content`, or
+    whose shebang `_shebang_is_stale` rejects. A file without the forwarder's
+    second line (a native door image, a foreign file) is never stale."""
     from coordinator_core.install.substrate import _agent_forwarder_content
 
     expected = _agent_forwarder_content(name, target).encode("utf-8")
@@ -295,9 +313,11 @@ def _python_forwarder_is_stale(path: Path, name: str, target: str) -> bool:
             actual = fh.read(2 * len(expected) + 2).replace(b"\r\n", b"\n")
     except OSError:
         return False
-    if actual == expected:
+    a_first, _, a_rest = actual.partition(b"\n")
+    e_first, _, e_rest = expected.partition(b"\n")
+    if not a_rest.startswith(_FORWARDER_SECOND_LINE):
         return False
-    return actual.startswith(_FORWARDER_HEADER)
+    return a_rest != e_rest or _shebang_is_stale(a_first, e_first)
 
 
 def _installed_forwarder_present(bin_dst: Path, name: str) -> bool:

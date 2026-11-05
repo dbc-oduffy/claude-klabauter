@@ -198,20 +198,25 @@ def plugin_hook_delivery(settings: dict, *, claude_home: Path, plugin_root: Path
         return result
     result["key"] = key
     enabled = settings.get("enabledPlugins")
-    if not (isinstance(enabled, dict) and enabled.get(key) is True):
+    if isinstance(enabled, dict) and enabled.get(key) is True:
+        try:
+            records = json.loads(
+                Path(claude_home).joinpath(*PLUGIN_RECORD_REL).read_text(encoding="utf-8")
+            )["plugins"][key]
+            if not isinstance(records, list):
+                raise TypeError(f"expected a list of plugin records, got {type(records).__name__}")
+            install_path = next(
+                r["installPath"] for r in records if isinstance(r, dict) and r.get("installPath")
+            )
+        except Exception as e:  # noqa: BLE001 - an absent record is a recorded miss
+            result["reason"] = f"no installed-plugin record names an installPath for {key} ({type(e).__name__}: {e})"
+            return result
+    # Mirrors live_plugin_registration.DEV_REPO_SENTINEL; inlined because this module is stdlib-only.
+    elif (Path(plugin_root).parent / ".coordinator-dev-repo").exists():
+        install_path = str(plugin_root)
+        result["via"] = "plugin-dir"
+    else:
         result["reason"] = f"{key} is not enabled in settings.json"
-        return result
-    try:
-        records = json.loads(
-            Path(claude_home).joinpath(*PLUGIN_RECORD_REL).read_text(encoding="utf-8")
-        )["plugins"][key]
-        if not isinstance(records, list):
-            raise TypeError(f"expected a list of plugin records, got {type(records).__name__}")
-        install_path = next(
-            r["installPath"] for r in records if isinstance(r, dict) and r.get("installPath")
-        )
-    except Exception as e:  # noqa: BLE001 - an absent record is a recorded miss
-        result["reason"] = f"no installed-plugin record names an installPath for {key} ({type(e).__name__}: {e})"
         return result
     result["install_path"] = install_path
     manifest = Path(install_path).joinpath(*PLUGIN_HOOKS_REL)
@@ -300,7 +305,7 @@ def derive_hook_plane(
     elif settings_armed:
         delivery = "settings"
     elif plugin["armed"]:
-        delivery = "plugin"
+        delivery = "plugin-dir" if plugin.get("via") == "plugin-dir" else "plugin"
     else:
         delivery = "none"
 
