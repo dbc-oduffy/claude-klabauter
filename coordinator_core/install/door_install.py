@@ -357,6 +357,22 @@ def committed_prebuilt_source_drift(
     )
 
 
+def _recorded_sources_current(record: object) -> bool:
+    """True iff `record` (an installed door sidecar) lists every door source
+    this tree ships and each hashes, line-ending-blind, to the recorded value.
+    False on any missing, unreadable or divergent source."""
+    recorded = record.get("sources") if isinstance(record, dict) else None
+    if not isinstance(recorded, dict) or not recorded:
+        return False
+    try:
+        return all(
+            _source_matches_recorded(path, recorded.get(path.name))
+            for path in door_build.SOURCES
+        )
+    except OSError:
+        return False
+
+
 class MirrorDoorRebuildError(DoorInstallError):
     """The publish mirror's door could not be rebuilt from its own sources."""
 
@@ -607,6 +623,16 @@ def verify_installed_provenance(bin_dst: Path) -> ProvenanceVerdict:
             "ok",
             f"{dest_exe} matches its recorded image_sha256 and was built from "
             f"this tree's door sources",
+        )
+
+    # A compile-fresh install (committed prebuilt behind its sources) lands an
+    # image that is current but is not the prebuilt's bytes; its sidecar records
+    # the sources it was built from, which is the same question install asked.
+    if _recorded_sources_current(record):
+        return ProvenanceVerdict(
+            "ok",
+            f"{dest_exe} matches its recorded image_sha256 and was built from "
+            "this tree's door sources",
         )
 
     try:

@@ -280,11 +280,28 @@ def receive_grant():
     try:
         from coordinator_core.group_em import suite_grant
     except ImportError:
-        import lib  # noqa: F401 -- bootstraps coordinator/bin/lib onto sys.path
-        from cc_invoke import require_dispatch_engine_on_path
-        require_dispatch_engine_on_path()
-        from coordinator_core.group_em import suite_grant
+        return _receive_via_door
     return suite_grant.receive_relayed_grant
+
+
+def _receive_via_door(env):
+    """Arrival check through the settings-home door; never raises.
+
+    The forced command can run under a system python with no engine and no lib/ beside this copy.
+    """
+    try:
+        home = Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
+        exe = home / "bin" / ("coordinator-invoke.exe" if os.name == "nt" else "coordinator-invoke")
+        proc = subprocess.run([str(exe), "groupem.suite_grant_receive", json.dumps({"envelope": env})],
+                              capture_output=True, text=True, timeout=30)
+    except Exception as exc:
+        return {"ok": False, "reason": f"door_unavailable:{type(exc).__name__}"}
+    try:
+        data = json.loads(proc.stdout or "")
+    except Exception:
+        return {"ok": False, "reason": "door_bad_reply"}
+    result = data.get("result") if isinstance(data, dict) else None
+    return result if isinstance(result, dict) else {"ok": False, "reason": "door_bad_reply"}
 
 
 def grant(args, line, receive=None):

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -97,3 +98,37 @@ def test_grant_mode_accepted_from_foreign_cwd_and_refuses_unsigned(tmp_path):
 def test_malformed_grant_exits_with_usage(tmp_path):
     p = run_relay("grant only-one", tmp_path)
     assert p.returncode != 0 and "usage:" in p.stderr and "grant" in p.stderr
+
+
+def run_isolated_relay(tmp_path, door_body):
+    """Run a lone copy of the relay under `-I` with no engine, no lib/, and a stub door."""
+    shutil.copy(RELAY, tmp_path / "unimatrix-relay.py")
+    home = tmp_path / "home"
+    if door_body is not None:
+        door = home / "bin" / "coordinator-invoke"
+        door.parent.mkdir(parents=True)
+        door.write_text(door_body)
+        door.chmod(0o755)
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "COORDINATOR_ENGINE_ROOT")}
+    env.update(SSH_ORIGINAL_COMMAND=CMD, COORDINATOR_SETTINGS_HOME=str(home))
+    return subprocess.run([sys.executable, "-I", str(tmp_path / "unimatrix-relay.py")], cwd=tmp_path,
+                          env=env, input=json.dumps(envelope()) + "\n", capture_output=True,
+                          text=True, timeout=30)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="stub door is a posix shell script")
+@pytest.mark.parametrize("door,ok,reason", [
+    ("#!/bin/sh\necho '{\"result\": {\"ok\": true}}'\n", True, None),
+    ("#!/bin/sh\necho '{\"result\": {\"ok\": false, \"reason\": \"bad_signature\"}}'\nexit 1\n",
+     False, "bad_signature"),
+    (None, False, "door_unavailable:FileNotFoundError"),
+    ("#!/bin/sh\necho 'not json'\n", False, "door_bad_reply"),
+    ("#!/bin/sh\necho '{\"jsonrpc\": \"2.0\", \"error\": {}}'\n", False, "door_bad_reply"),
+])
+def test_relay_without_engine_replies_through_the_door(tmp_path, door, ok, reason):
+    p = run_isolated_relay(tmp_path, door)
+    assert "Traceback" not in p.stderr
+    reply = json.loads(p.stdout)
+    assert reply["ok"] is ok
+    if reason:
+        assert reply["reason"] == reason

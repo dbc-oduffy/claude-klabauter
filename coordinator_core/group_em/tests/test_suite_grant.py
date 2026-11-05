@@ -206,6 +206,64 @@ def test_revoke_touches_only_the_callers_key(env):
     assert _check(env)[0]
 
 
+MSYS_ROOT = "C:/Program Files/Git/Users/x/repo"  # abs-path-ok: MSYS fixture value
+
+
+@pytest.mark.parametrize(
+    "path",
+    [MSYS_ROOT, "c:\\msys64\\home\\x", "D:/cygwin64/home/x", "C:/Program Files (x86)/Git/usr/x"],  # abs-path-ok: MSYS fixture values
+)
+def test_msys_prefixed_roots_are_detected(path):
+    assert suite_grant._msys_mangled(path)
+
+
+@pytest.mark.parametrize("path", ["/Users/x/repo", "C:/Users/x/repo", "C:/Program Files/Other/x", ""])
+def test_ordinary_roots_are_not_msys_mangled(path):
+    assert not suite_grant._msys_mangled(path)
+
+
+def test_remote_issue_with_msys_mangled_repo_is_refused_and_delivers_nothing(env, monkeypatch):
+    delivered = []
+    monkeypatch.setattr(
+        suite_grant.node_transport, "select", lambda *a, **k: delivered.append(a) or None
+    )
+    result = _issue(env, "box-b:sess1", repo=MSYS_ROOT)
+    assert (result.ok, result.reason) == (False, suite_grant.SCOPE_ROOT_MSYS_MANGLED)
+    assert delivered == []
+
+
+def test_local_issue_with_a_msys_looking_repo_is_unaffected(env):
+    assert _issue(env, repo=MSYS_ROOT).ok
+
+
+def test_cli_message_for_msys_refusal_names_msys_no_pathconv():
+    from coordinator_core.session import grant_directive
+
+    assert "MSYS_NO_PATHCONV=1" in grant_directive._refusal(suite_grant.SCOPE_ROOT_MSYS_MANGLED)
+
+
+@pytest.mark.parametrize("flavour,path,expected", [
+    ("posix", "/Users/x/repo", True),
+    ("posix", "C:/Program Files/Git/Users/x", False),
+    ("posix", "repo/sub", False),
+    ("windows", "C:/Program Files/Git/Users/x", True),
+    ("windows", "repo\\sub", False),
+])
+def test_absolute_here_follows_the_os_flavour(monkeypatch, flavour, path, expected):
+    cls = suite_grant.PurePosixPath if flavour == "posix" else suite_grant.PureWindowsPath
+    monkeypatch.setattr(suite_grant, "_path_flavour", lambda: cls)
+    assert suite_grant._absolute_here(path) is expected
+
+
+@pytest.mark.parametrize("grantee", ["box-b:sess1", "box-b:"])
+def test_revoke_of_a_remote_grantee_is_refused_loudly(env, grantee):
+    result = suite_grant.revoke_suite_grant(grantee, directory=env["dir"])
+    assert (result.ok, result.reason) == (False, suite_grant.REVOKE_REMOTE_UNSUPPORTED)
+    from coordinator_core.session import grant_directive
+
+    assert "expires_at" in grant_directive._refusal(result.reason)
+
+
 def test_check_spawns_nothing(env, monkeypatch):
     _issue(env)
 

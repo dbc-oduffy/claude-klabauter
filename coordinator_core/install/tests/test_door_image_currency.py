@@ -290,3 +290,57 @@ def test_a_current_posix_door_is_not_rebuilt(tmp_path, monkeypatch):
     door_install.install_door(bin_dst, tmp_path / "engine")
 
     assert builds == []
+
+
+def _win32_compile_fresh_install(tmp_path, monkeypatch, *, built_sources):
+    """Runs `install_door` on the win32 drift path with the compiler stubbed;
+    `built_sources` is the source fingerprint the fresh build's sidecar records."""
+    from coordinator_core.warm.door import build as door_build
+
+    monkeypatch.setattr(door_install.sys, "platform", "win32")
+    monkeypatch.setattr(door_install, "is_engine_root", lambda _root: True)
+    monkeypatch.setattr(door_install, "_sweep_displaced_images", lambda _bin: None, raising=False)
+    prebuilt = tmp_path / "door.exe"
+    prebuilt.write_bytes(door_install.NATIVE_IMAGE_MAGIC[0] + b"committed prebuilt, behind door.c")
+    prebuilt_sidecar = tmp_path / "door.exe.provenance.json"
+    prebuilt_sidecar.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(door_install, "_PREBUILT_DOOR_EXE", prebuilt)
+    monkeypatch.setattr(door_install, "_WINDOWS_PREBUILT_PROVENANCE", prebuilt_sidecar)
+    monkeypatch.setattr(door_install, "_PREBUILT_PROVENANCE", prebuilt_sidecar)
+    monkeypatch.setattr(door_install, "committed_prebuilt_source_drift", lambda **_kw: ["door.c"])
+    monkeypatch.setattr(door_build, "_find_compiler", lambda _c: "cc")
+
+    fresh = door_install.NATIVE_IMAGE_MAGIC[0] + b"freshly compiled door image" * 4
+
+    def _fake_build(_engine_root, *, output):
+        Path(output).write_bytes(fresh)
+        Path(str(output) + ".provenance.json").write_text(
+            json.dumps(
+                {"image_sha256": hashlib.sha256(fresh).hexdigest(), "sources": built_sources}
+            ),
+            encoding="utf-8",
+        )
+
+    monkeypatch.setattr(door_build, "build", _fake_build)
+    bin_dst = tmp_path / "bin"
+    door_install.install_door(bin_dst, tmp_path / "engine")
+    return bin_dst
+
+
+def test_win32_compile_fresh_install_passes_its_own_check(tmp_path, monkeypatch):
+    from coordinator_core.warm.door import build as door_build
+
+    current = {p.name: door_build.source_sha256(p) for p in door_build.SOURCES}
+    bin_dst = _win32_compile_fresh_install(tmp_path, monkeypatch, built_sources=current)
+    verdict = door_install.verify_installed_provenance(bin_dst)
+    assert verdict.status == "ok", verdict
+
+
+def test_win32_image_behind_the_checkout_sources_is_still_stale(tmp_path, monkeypatch):
+    from coordinator_core.warm.door import build as door_build
+
+    behind = {p.name: door_build.source_sha256(p) for p in door_build.SOURCES}
+    behind["door.c"] = "0" * 64
+    bin_dst = _win32_compile_fresh_install(tmp_path, monkeypatch, built_sources=behind)
+    verdict = door_install.verify_installed_provenance(bin_dst)
+    assert verdict.status == "stale", verdict

@@ -36,9 +36,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import NamedTuple, Optional
 
 from coordinator_core._settings_home import settings_home
@@ -72,6 +73,14 @@ TTL_OUT_OF_RANGE = "TTL_OUT_OF_RANGE"
 NOTE_EMPTY = "NOTE_EMPTY"
 BOX_UNKNOWN = "BOX_UNKNOWN"
 RELAY_FAILED = "RELAY_FAILED"
+SCOPE_ROOT_MSYS_MANGLED = "SCOPE_ROOT_MSYS_MANGLED"
+REVOKE_REMOTE_UNSUPPORTED = "REVOKE_REMOTE_UNSUPPORTED"
+SCOPE_ROOT_NOT_ABSOLUTE = "scope_root_not_absolute"
+
+_MSYS_ROOT = re.compile(
+    r"^[A-Za-z]:[\\/](?:Program Files(?: \(x86\))?[\\/]Git|msys64|msys32|cygwin64|cygwin)[\\/]",
+    re.IGNORECASE,
+)
 
 #: Generator-provenance declaration (coordinator_core/ops/generator_census). Records live under
 #: `settings_home() / "state" / "group-em" / "suite-grants"`, the operator home, never a path
@@ -128,6 +137,21 @@ def _at_or_under(root: str, scope_root: str) -> bool:
     return len(r) >= len(s) and r[: len(s)] == s
 
 
+def _msys_mangled(path: str) -> bool:
+    """True when ``path`` carries a Git-for-Windows/MSYS2/Cygwin install-root prefix, the signature of
+    Git Bash re-rooting a POSIX argv path. Detect only; never repaired."""
+    return bool(_MSYS_ROOT.match(path))
+
+
+def _path_flavour():
+    return PureWindowsPath if os.name == "nt" else PurePosixPath
+
+
+def _absolute_here(path: str) -> bool:
+    """True when ``path`` is absolute in this OS's path flavour."""
+    return _path_flavour()(path).is_absolute()
+
+
 def _resolve_grantee(grantee: str) -> tuple[Optional[str], Optional[session_registry.RegistryRow]]:
     """A session id, or a registry name matching exactly one session; ``(None, None)`` otherwise."""
     rows = session_registry.read_rows()
@@ -160,6 +184,8 @@ def _relay_grant(
     """Sign the grant under this box's key and deliver it to ``box_id``; the far box decides."""
     if not _safe_sid(grantee_sid):
         return IssueResult(False, GRANTEE_UNRESOLVED, None)
+    if repo and _msys_mangled(repo):
+        return IssueResult(False, SCOPE_ROOT_MSYS_MANGLED, None)
     box = next((b for b in box_registry.read_boxes(directory) if b.get("box_id") == box_id), None)
     if box is None:
         return IssueResult(False, BOX_UNKNOWN, None)
@@ -292,6 +318,8 @@ def _receive_relayed_grant(
             scope_root = next((r.cwd for r in rows if r.session_id == grantee_sid), "")
         if not scope_root:
             return {"ok": False, "reason": GRANTEE_UNRESOLVED}
+        if not _absolute_here(scope_root):
+            return {"ok": False, "reason": SCOPE_ROOT_NOT_ABSOLUTE}
         target = _relayed_path(grantee_sid, directory, home).parent
         target.mkdir(parents=True, exist_ok=True)
         body = {"envelope": envelope, "scope_root": scope_root}
@@ -414,6 +442,8 @@ def revoke_suite_grant(
     sid = core.resolve_session_id()
     if not _safe_sid(sid):
         return IssueResult(False, ISSUER_UNRESOLVED, None)
+    if isinstance(grantee, str) and ":" in grantee:
+        return IssueResult(False, REVOKE_REMOTE_UNSUPPORTED, None)
     grantee_sid, _row = _resolve_grantee(grantee)
     if grantee_sid is None and _safe_sid(grantee):
         grantee_sid = grantee

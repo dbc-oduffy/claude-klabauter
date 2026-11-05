@@ -162,9 +162,18 @@ def _signed(boxes, **override):
     return box_key.sign({**base, **override}, boxes["home_a"])
 
 
-@pytest.mark.parametrize("case", ["expired", "bad_ttl", "wrong_grantee_box", "grantee_not_live"])
+_NOT_ABSOLUTE = suite_grant.SCOPE_ROOT_NOT_ABSOLUTE
+_MSYS = "C:/Program Files/Git/Users/x/repo"  # abs-path-ok: MSYS fixture value
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["expired", "bad_ttl", "wrong_grantee_box", "grantee_not_live", "relative_root", "msys_root_on_posix"],
+)
 def test_receive_refuses_each_guard_reason_and_writes_nothing(two_boxes, case):
     assert _pin_a_on_b(two_boxes)["pinned"] is True
+    if case in ("relative_root", "msys_root_on_posix"):
+        two_boxes["mp"].setattr(suite_grant, "_path_flavour", lambda: suite_grant.PurePosixPath)
     now = suite_grant.time.time()
     iso = suite_grant._iso
     if case == "expired":
@@ -174,12 +183,40 @@ def test_receive_refuses_each_guard_reason_and_writes_nothing(two_boxes, case):
         envelope = _signed(two_boxes, issued_at=iso(now), expires_at=iso(now + ceiling + 600))
     elif case == "wrong_grantee_box":
         envelope = _signed(two_boxes, grantee_box_id=two_boxes["ida"])
+    elif case == "relative_root":
+        envelope = _signed(two_boxes, scope_root="repo/sub")
+    elif case == "msys_root_on_posix":
+        envelope = _signed(two_boxes, scope_root=_MSYS)
     else:
         envelope = _signed(two_boxes, grantee_session_id="sid-not-live")
+    expected = {
+        "grantee_not_live": suite_grant.GRANTEE_NOT_LIVE,
+        "relative_root": _NOT_ABSOLUTE,
+        "msys_root_on_posix": _NOT_ABSOLUTE,
+    }.get(case, case)
     _as_box(two_boxes, "b", PEER)
     reply = op._groupem_suite_grant_receive({"envelope": envelope})
-    assert reply == {"ok": False, "reason": suite_grant.GRANTEE_NOT_LIVE if case == "grantee_not_live" else case}
+    assert reply == {"ok": False, "reason": expected}
     assert not _relayed_file(two_boxes).exists()
+    if expected == _NOT_ABSOLUTE:
+        assert _audit_lines(two_boxes)[-1]["outcome"] == "refused"
+
+
+def test_receive_refuses_a_relative_root_under_the_windows_flavour(two_boxes):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    two_boxes["mp"].setattr(suite_grant, "_path_flavour", lambda: suite_grant.PureWindowsPath)
+    envelope = _signed(two_boxes, scope_root="repo\\sub")
+    _as_box(two_boxes, "b", PEER)
+    assert op._groupem_suite_grant_receive({"envelope": envelope}) == {"ok": False, "reason": _NOT_ABSOLUTE}
+    assert not _relayed_file(two_boxes).exists()
+
+
+def test_receive_accepts_a_drive_root_under_the_windows_flavour(two_boxes):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    two_boxes["mp"].setattr(suite_grant, "_path_flavour", lambda: suite_grant.PureWindowsPath)
+    envelope = _signed(two_boxes, scope_root=_MSYS)
+    _as_box(two_boxes, "b", PEER)
+    assert op._groupem_suite_grant_receive({"envelope": envelope})["ok"] is True
 
 
 def test_relayed_grant_outside_its_scope_root_reads_ungranted(two_boxes, capsys):

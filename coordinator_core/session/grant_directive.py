@@ -103,6 +103,10 @@ _GROUP_EM_REMEDY = {
     "NOTE_EMPTY": "the note is the ruling, verbatim; pass it non-empty",
     "BOX_UNKNOWN": "no registered box has that id; register the peer box first",
     "RELAY_FAILED": "the grantee box did not accept the grant",
+    "SCOPE_ROOT_MSYS_MANGLED": "Git Bash rewrote --repo; re-run with MSYS_NO_PATHCONV=1",
+    "REVOKE_REMOTE_UNSUPPORTED": (
+        "a relayed grant cannot be withdrawn from here; it lapses at its expires_at on the far box"
+    ),
 }
 
 

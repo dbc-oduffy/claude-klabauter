@@ -963,11 +963,11 @@ function _blankPath(p) {
 _DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: 'Emits and starts one submission whose emit outran the hook budget' }
 const REPO_ROOT = __REPO_ROOT__;
 const PARAMS_FILE = __PARAMS_FILE__;
-""" + _EMIT_RELAY_JS + r"""// Trap: ask text carries quotes and `$(`; the command names a params file and never inlines the payload. The relay deletes the file once the emit has read it.
+""" + _EMIT_RELAY_JS + r"""// Trap: ask text carries quotes and `$(`; the command names a params file and never inlines the payload. Trap: a subagent relay is denied recursive or forced removal, so the prompt carries no removal and the file is left in scratch/warp.
 const reply = await agent(
   __AUTHORITY__
   + ' Run `' + INVOKE + ' ' + EMIT_OP + ' --params-file "' + PARAMS_FILE + '"` once, with the command word exactly as written. '
-  + 'Whether it succeeds or fails, then delete the params file with `rm -f "' + PARAMS_FILE + '"`. Then '
+  + 'Do not delete or modify any file. Then '
   + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
   + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
   + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
