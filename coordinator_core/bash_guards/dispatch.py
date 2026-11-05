@@ -199,9 +199,6 @@ from coordinator_core.session.guard_unlock_sentinel import (
 )
 from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards.leg_attribution import leg as _leg
-from coordinator_core.bash_guards._helpers import (
-    _resolve_override_keys_doc_display as _override_keys_doc_display,
-)
 from coordinator_core.guard_advisory_counter import (
     record_advisory_fire as _record_advisory_fire,
     record_deny_fire as _record_deny_fire,
@@ -381,8 +378,8 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "stale-write": (">", "tee"),
     "block-worktree-creation": ("worktree",),
     "p4-verb-fence": ("p4", "git", "attrib", "chmod", "encodedcommand"),
-    "block-approval-sentinel-creation": (".coordinator-doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
-    "block-worktree-sentinel-creation": (".coordinator-override-worktree-guard", "xargs", "sh", "python"),
+    "block-approval-sentinel-creation": ("doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
+    "block-worktree-sentinel-creation": ("override-worktree-guard", "xargs", "sh", "python"),
     "block-stash-destruction": ("stash",),
     "block-topic-branch": ("checkout", "switch", "branch", "push"),
     "block-perforce-submit": ("p4", "submit", "shelve"),
@@ -1588,8 +1585,9 @@ def evaluate_payload_json(
     only caller that sends them.
 
     THE SEAM IS DELIBERATELY THIS ONE AND ONLY THIS ONE. The budget exists
-    because the harness cancels a PreToolUse hook that overruns its window
-    (15 000 ms), and a cancelled hook delivers NO verdict at all -- the
+    because the door stops waiting on a hook that overruns its window
+    (8 000 ms; derivation at `_GIT_PROBE_BUDGET_SECONDS`), and a hook the door
+    abandoned delivers NO verdict at all -- the
     2026-08-15 bare-commit sweep landed with neither its deny nor its
     advisory printed, ``durationMs=16336``. This function is the entry point
     of the process that runs inside that window; a check invoked directly
@@ -2198,6 +2196,10 @@ def _evaluate_payload_json_budgeted(
                 except Exception:
                     pass
             if _is_hard_deny_envelope and not _suppressed:
+                from coordinator_core.bash_guards._helpers import (
+                    _resolve_override_keys_doc_display as _override_keys_doc_display,
+                )
+
                 out = _annotate_unlock(
                     out,
                     session_id,

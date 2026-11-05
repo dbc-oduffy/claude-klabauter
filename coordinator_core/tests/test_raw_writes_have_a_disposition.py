@@ -355,6 +355,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/run_accept_partial.py': ('claims-explicitly', 'accept_partial.jsonl appended under the run dir, declared through declare_write: record'),
     'coordinator_core/ops/dispatch_emit/run_credit.py': ('claims-explicitly', 'credit.jsonl appended under the run dir, declared through declare_write: record'),
     'coordinator_core/ops/dispatch_emit/pipeline_run.py': ('claims-explicitly', 'revisions.md appended under the run scratch dir, declared through declare_write: append_revision'),
+    'coordinator_core/warm/paused_runs.py': ('ignored-target', 'paused-run records and pause/handover markers (tmp + os.replace, unlink) under the gitignored .coordinator-local/paused-runs/: _atomic_write, clear_pause_request, clear_handover_complete'),
     'coordinator_core/ops/fleet/scratch_hygiene.py': ('ignored-target', 'sweep cursor tmp + os.replace under the gitignored scratch/ dir: _write_cursor'),
     'coordinator_core/usage/session_cost.py': ('outside-repo', 'per-session cost cache tmp + os.replace under <settings-home>/state/session-cost: _write_cache'),
     'coordinator_core/git/sshsig.py': ('outside-repo', 'request frames written to the ssh-agent socket, never a file: _agent_requests'),

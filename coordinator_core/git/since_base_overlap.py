@@ -13,7 +13,6 @@ same plan stamps it).
 
 from __future__ import annotations
 
-import difflib
 import json
 import re
 from pathlib import Path
@@ -140,8 +139,12 @@ def _lines(common_dir: Path, blob: object) -> Optional[List[bytes]]:
 
 
 def _opcodes(a: List[bytes], b: List[bytes]) -> List[Tuple[str, int, int, int, int]]:
-    """difflib opcodes after trimming the common prefix/suffix, so the quadratic matcher sees
-    only the changed middle."""
+    """Full opcodes (equal included) tiling both sides. The common prefix/suffix is trimmed, so the
+    quadratic matcher sees only the changed middle; a middle past ``MAX_MATCHED_MIDDLE`` is split at
+    patience anchors, and a segment past the bound or the per-call difflib budget is one coarse
+    ``replace`` (``run_hunk_claims.anchored_opcodes``)."""
+    from coordinator_core.ops.dispatch_emit.run_hunk_claims import MAX_DIFFLIB_LINES, anchored_opcodes
+
     n = min(len(a), len(b))
     lo, hi_bound = 0, n
     while lo < hi_bound:
@@ -161,8 +164,8 @@ def _opcodes(a: List[bytes], b: List[bytes]) -> List[Tuple[str, int, int, int, i
     ops: List[Tuple[str, int, int, int, int]] = []
     if lo:
         ops.append(("equal", 0, lo, 0, lo))
-    sm = difflib.SequenceMatcher(None, a[lo : len(a) - hi], b[lo : len(b) - hi], autojunk=False)
-    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+    mid_ops, _coarse = anchored_opcodes(a[lo : len(a) - hi], b[lo : len(b) - hi], line_budget=MAX_DIFFLIB_LINES)
+    for tag, i1, i2, j1, j2 in mid_ops:
         ops.append((tag, i1 + lo, i2 + lo, j1 + lo, j2 + lo))
     if hi:
         ops.append(("equal", len(a) - hi, len(a), len(b) - hi, len(b)))

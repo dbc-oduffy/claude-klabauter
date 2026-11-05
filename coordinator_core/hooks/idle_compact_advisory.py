@@ -81,8 +81,8 @@ def _is_compact_prompt(prompt: str) -> bool:
 
 @register_op("hooks.idle_compact_advisory")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     try:
-        params = payload_of(params)
         if not _is_compact_prompt(field(params, "prompt")):
             return no_advisory()
         run_id = fresh_injection_run_id(field(params, "session_id"))

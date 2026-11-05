@@ -40,7 +40,9 @@ def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeyp
     monkeypatch.setattr(
         "coordinator_core.session.fleet_mode.fleet_mode_path", lambda: home / "fleet-mode.json"
     )
+    (tmp_path / ".git").mkdir()
     Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
+    (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("DELIVERABLE_ID", raising=False)
@@ -48,11 +50,11 @@ def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeyp
         "schema": "sizing-object",
         "name": "gate fixture",
         "intent": "exercise the gate",
-        "estimate": {"tshirt": "XL", "provisional": True},
-        "route": "plan",
+        "estimate": {"tshirt": "M", "provisional": True},
+        "route": "pm-decision",
         "detents": [],
         "fork": None,
-        "xl_exit": None,
+        "xl_exit": "accept_multi_session",
         "status": "sized",
         "premise": {"provenance": "not-applicable", "evidence": "fixture"},
         "deliverable_id": "dlv-fixture-abc123",
@@ -61,5 +63,5 @@ def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeyp
     }
     (tmp_path / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
     verdict = gate(tmp_path, REL)
-    assert verdict.halt["kind"] == "touchpoint"
-    assert verdict.halt["reason"].startswith("hands-on mode")
+    assert verdict.halt is None
+    assert yaml.safe_load((tmp_path / REL).read_text(encoding="utf-8"))["interaction_mode"] == "hands-on"

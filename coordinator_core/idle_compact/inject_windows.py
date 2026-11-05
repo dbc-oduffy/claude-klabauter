@@ -2,7 +2,7 @@
 
 ``FreeConsole`` detaches the caller from its own console, so ``WindowsInjector.inject``
 never runs the sequence in-process: it launches ``python -m
-coordinator_core.idle_compact.inject_windows <pid>`` as a DETACHED_PROCESS child and
+coordinator_core.idle_compact.inject_windows <pid>`` as a no-window child and
 reads the outcome from the child's exit code. The Enter key goes in a separate
 write after a pause; in the same burst the TUI reads it as a paste and does not send.
 """
@@ -41,7 +41,9 @@ _EXIT_REASONS = {
     EXIT_USAGE: "bad arguments",
 }
 
-_DETACHED_PROCESS = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+_CHILD_CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000) | getattr(
+    subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200
+)
 _INVALID_HANDLE = ctypes.c_void_p(-1).value
 
 
@@ -139,7 +141,7 @@ class WindowsInjector:
         try:
             child = self._popen(
                 [sys.executable, "-m", "coordinator_core.idle_compact.inject_windows", str(int(pid))],
-                creationflags=_DETACHED_PROCESS | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),  # popup-intentional-last-resort
+                creationflags=_CHILD_CREATIONFLAGS,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,

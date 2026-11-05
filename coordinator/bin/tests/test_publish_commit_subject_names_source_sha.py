@@ -49,13 +49,21 @@ publish = _load("publish_source_sha_under_test", "publish.py")
 round_mod = _load("percolate_round_source_sha_under_test", "percolate-round.py")
 
 
+_PIN = "0123456789abcdef0123456789abcdef01234567"
+
+
 def test_publish_leg_stamps_a_twelve_hex_source_sha():
-    suffix = publish._source_sha_suffix()
+    suffix = publish._source_sha_suffix(source_head=_PIN)
     assert _STAMP.fullmatch(suffix), f"unstamped publish-leg suffix: {suffix!r}"
+    assert _STAMP.fullmatch(suffix).group(1) == _PIN[:12]
+
+
+def test_publish_leg_without_a_pin_does_not_resolve_a_fresh_head():
+    assert publish._source_sha_suffix() == ""
 
 
 def test_round_leg_stamps_the_same_shape():
-    assert round_mod._source_sha_suffix() == publish._source_sha_suffix()
+    assert round_mod._source_sha_suffix(_PIN) == publish._source_sha_suffix(source_head=_PIN)
 
 
 def test_round_commit_subject_carries_the_stamp():

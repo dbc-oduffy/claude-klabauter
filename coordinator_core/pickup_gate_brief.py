@@ -150,7 +150,7 @@ def jgate_guidance(clearer: dict[str, Any]) -> tuple[str, str]:
         cleared = "Cite the sibling's landed work (its commit, or its commitment record)."
         settle = "the sibling's landed work"
     else:
-        cleared = "Name the act that cleared it in gate_cleared_by; the PM's own act, not an inference."
+        cleared = "Run `coordinator-invoke handoff.human_gate_clear` with a pm_turn or commit_sha citation; it stamps gate_cleared_by. The PM's own act, not an inference."
         settle = "the PM's act, recorded in gate_cleared_by"
     return cleared, f"Settled by {settle}; none is on the record. Leave awaiting_gate; re-run pickup-assemble after."
 

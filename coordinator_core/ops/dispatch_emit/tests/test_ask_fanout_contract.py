@@ -59,6 +59,29 @@ def test_overlap_by_path_and_directory_prefix():
     assert c.after_edges([_slice("a", writes=("ab/x.py",)), _slice("b", writes=("a/x.py",))])[1] == ()
 
 
+@pytest.mark.parametrize(
+    "first,second,overlaps",
+    [
+        ("point_registry/**", "point_registry/consumers.py", True),
+        ("point_registry/consumers.py", "point_registry/**", True),
+        ("a/**", "a/b/*.py", True),
+        ("a/*.py", "a/b/*.py", False),
+        ("a/*.py", "a/x.py", True),
+        ("a/*.py", "a/x.txt", False),
+        ("point_registry/**", "other/consumers.py", False),
+        ("a/**/c.py", "a/b/d.py", True),
+        ("src/**/*.py", "src/foo", True),
+        ("src/foo", "src/**/*.py", True),
+        ("a/**/c.py", "x/b/c.py", False),
+        ("a/**/c.py", "a/b/c.py", True),
+        ("src/*.py", "lib/*.py", False),
+    ],
+)
+def test_declared_writes_overlap_as_globs(first, second, overlaps):
+    edges = c.after_edges([_slice("a", writes=(first,)), _slice("b", writes=(second,))])
+    assert edges[1] == ((0,) if overlaps else ())
+
+
 def test_empty_writes_hint_overlaps_nothing():
     assert c.after_edges([_slice("a", writes=()), _slice("b", writes=None)])[1] == ()
     assert c.after_edges([_slice("a", writes=()), _slice("b", writes=("x",))])[1] == ()

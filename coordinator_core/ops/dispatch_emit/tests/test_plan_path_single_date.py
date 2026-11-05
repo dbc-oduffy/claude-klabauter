@@ -7,12 +7,12 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 
 
 def test_doubled_stem_resolves_to_one_date_even_with_differing_dates():
-    assert s_plan_path("state/sizings/2026-10-29-2026-10-29-foo-0c5fcc.yaml") == "docs/plans/2026-10-29-foo-0c5fcc.md"
-    assert s_plan_path("state/sizings/2026-10-29-2026-10-20-foo.yaml") == "docs/plans/2026-10-29-foo.md"
+    assert s_plan_path("state/sizings/2026-10-29-2026-10-29-foo-0c5fcc.yaml") == "docs/plans/2026-10/2026-10-29-foo-0c5fcc.md"
+    assert s_plan_path("state/sizings/2026-10-29-2026-10-20-foo.yaml") == "docs/plans/2026-10/2026-10-29-foo.md"
 
 
 def test_single_date_stem_and_existing_doubled_edge_untouched():
-    assert s_plan_path("state/sizings/2026-10-29-foo.yaml") == "docs/plans/2026-10-29-foo.md"
+    assert s_plan_path("state/sizings/2026-10-29-foo.yaml") == "docs/plans/2026-10/2026-10-29-foo.md"
 
 
 def test_scout_slug_strips_leading_date():

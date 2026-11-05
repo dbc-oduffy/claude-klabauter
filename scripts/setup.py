@@ -1378,8 +1378,15 @@ def provision_deps(
         )
         from coordinator_core.install import engine_interpreter
 
+        prior_minor = engine_interpreter.stamp()
         try:
             engine_interpreter.ensure(sys.executable, dep_specs)
+            now_minor = tuple(sys.version_info[:2])
+            if prior_minor is not None and prior_minor != now_minor:
+                print(
+                    "engine-site re-provisioned: python "
+                    f"{prior_minor[0]}.{prior_minor[1]} -> {now_minor[0]}.{now_minor[1]}"
+                )
         except RuntimeError as exc:
             print(f"FAIL [deps] engine-site provisioning failed: {exc}", file=sys.stderr)
             print(
@@ -4399,8 +4406,9 @@ def install_global_doctrine_files(repo_root: Path, claude_klabauter_root_resolve
     """Best-effort install-chain step: copy the coordinator-claude sibling's
     `templates/global-doctrine/CLAUDE.md` and `templates/global-doctrine/
     rules/*.md` into `~/.claude/CLAUDE.md` and `~/.claude/rules/`, copying IN
-    only what is absent — never overwriting an existing file, never pruning
-    one this source tree no longer carries.
+    only what is absent — never overwriting an existing file. The sole
+    deletion is the retired rule names (`RETIRED_RULE_NAMES`), which
+    `install_global_doctrine` prunes from `~/.claude/rules/`.
 
     Same failure shape as `install_precompiled_bytecode`'s docstring: this
     leg has always run inside the `coordinator_core.install.maximalist`
@@ -4415,7 +4423,7 @@ def install_global_doctrine_files(repo_root: Path, claude_klabauter_root_resolve
     precedent for reusing a maximalist-chain leg from here.
     """
     print()
-    print("--- Install: ~/.claude/CLAUDE.md + rules/*.md (global doctrine, copy-if-absent) ---")
+    print("--- Install: ~/.claude/CLAUDE.md + rules/*.md (global doctrine, copy-if-absent; retired rules pruned) ---")
 
     if str(claude_klabauter_root_resolved) not in sys.path:
         sys.path.insert(0, str(claude_klabauter_root_resolved))
@@ -4621,7 +4629,16 @@ def install_verify_settings_home(claude_klabauter_root_resolved: Path, *, forwar
     if forwarders_failed:
         print("FAIL bin/ forwarders: the writer reported failures this run (see the forwarder step above); presence alone does not verify them")
 
-    if report.complete and not forwarders_failed:
+    from coordinator_core.group_em.box_registry import LOCAL_BOX_ID, local_box_id
+
+    box_missing = local_box_id(settings_home_path) == LOCAL_BOX_ID
+    if box_missing:
+        print(
+            "FAIL box identity: no valid state/group-em/box.json; "
+            "run python -m coordinator_core.ops.doctor --fix"
+        )
+
+    if report.complete and not forwarders_failed and not box_missing:
         print(f"PASS [settings-home] complete at {settings_home_path}")
     else:
         print(
@@ -5009,6 +5026,35 @@ def install_general_work_ensure(repo_root: Path, claude_klabauter_root_resolved:
         print(f"[ADVISORY] general-work root {outcome.status}: {outcome.detail}", file=sys.stderr)
 
 
+def install_box_capability(claude_klabauter_root_resolved: Path) -> None:
+    """Install-chain step: stamp this box's identity and capability into box.json; never fatal."""
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core.group_em.box_probe import write_capability
+
+        write_capability()
+    except Exception as exc:
+        print(f"[ADVISORY] box capability not recorded ({exc}); re-run scripts/setup.py.", file=sys.stderr)
+
+
+def install_box_identity(claude_klabauter_root_resolved: Path) -> None:
+    """Install-chain step: mint box.json's `box-<uuid8>` once; never rewrites, never fatal."""
+    try:
+        if str(claude_klabauter_root_resolved) not in sys.path:
+            sys.path.insert(0, str(claude_klabauter_root_resolved))
+        from coordinator_core.group_em.box_registry import ensure_identity
+
+        box_id = ensure_identity()
+    except Exception as exc:
+        print(
+            f"[ADVISORY] box identity not minted ({exc}); run python -m coordinator_core.ops.doctor --fix.",
+            file=sys.stderr,
+        )
+        return
+    print(f"[OK] box identity {box_id}")
+
+
 def _print_spotlight_advice(repo_root: Path, claude_klabauter_root_resolved: Path) -> None:
     """Advisory on darwin when Spotlight still indexes the repos root; never fatal."""
     try:
@@ -5240,6 +5286,8 @@ def main(argv: list[str]) -> int:
         install_precompiled_bytecode(claude_klabauter_root_resolved, args)
         install_machine_identity(repo_root, claude_klabauter_root_resolved, args)
         install_general_work_ensure(repo_root, claude_klabauter_root_resolved, args)
+        install_box_identity(claude_klabauter_root_resolved)
+        install_box_capability(claude_klabauter_root_resolved)
         install_host_sampler_task(repo_root, claude_klabauter_root_resolved)
         install_verify_settings_home(claude_klabauter_root_resolved, forwarders_failed=forwarders_failed)
         install_record_receipt(claude_klabauter_root_resolved)

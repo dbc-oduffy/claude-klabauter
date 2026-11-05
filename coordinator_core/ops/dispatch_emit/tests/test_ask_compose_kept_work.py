@@ -63,7 +63,7 @@ def test_resume_ready_precedes_the_resume_plan_blitz_and_no_plan_agent_is_reacha
     script = _script(monkeypatch)
     # e312728c2c (phase reuse): a reused plan + plan_review also counts as resume-ready.
     ready = script.index(
-        "if ((_gate.resume_ready || (_reusePhase('plan') && _reusePhase('plan_review'))) && _gate.resume_plan) { _planRel = _gate.resume_plan; }"
+        "if ((_gate.resume_ready || (_reusePhase('plan') && _reusePhase('plan_review'))) && _gate.resume_plan && _gate.resume_plan !== _staleResumePlan) { _planRel = _gate.resume_plan; }"
     )
     guard = script.index("if (!_planRel && !_halted) {", ready)
     ready_line = script[ready : script.index("\n", ready)]

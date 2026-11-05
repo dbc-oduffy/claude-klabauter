@@ -616,7 +616,7 @@ def readiness_verdict(
                 "answer this major default-path finding with a fix row in the plan's spine "
                 "(answered_by: {kind: fix-row, row: <id>}) or a G-EM scope ruling "
                 "(answered_by: {kind: gem-scope-ruling, ref: <repo-relative file>}); "
-                "a disclosure or PM waiver does not clear it",
+                "a disclosure does not clear it",
             ))
         if _clear(review.get("verdict")):
             continue

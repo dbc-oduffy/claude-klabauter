@@ -600,3 +600,28 @@ def test_hands_on_apm_ruling_at_xl_is_refused(tmp_path):
     result = _run(_apm(), repo)
     assert result["exit_code"] == 1 and "hands-on" in result["error"], result
     assert sizing.read_bytes() == before
+
+
+def test_a_producer_only_wire_clause_is_refused_naming_the_clause(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+    before = sizing.read_bytes()
+
+    result = _run(_base(statement="The census is wired into the planner and writes out.json."), repo)
+
+    assert result["exit_code"] == 1
+    assert "wired into the" in result["error"]
+    assert sizing.read_bytes() == before
+
+
+def test_a_wire_clause_with_a_consumer_command_is_accepted(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    sizing = _seed_sizing(repo, exit_criterion=_PROPOSED)
+
+    result = _run(_base(statement="The census is wired into the planner: `census-cli --check` shows it."), repo)
+
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    assert "census-cli" in _doc(sizing)["exit_criterion"]["statement"]
+    assert _doc(sizing)["exit_criterion"]["accepted"]["pm_quote"]

@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git, _write, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_met_over_footprint_breach_incident import (
     C3_PATH,
@@ -169,7 +170,7 @@ def test_the_same_test_fails_against_the_peer_dirt_in_the_worktree(halted):  # n
 
     ran = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--rootdir", str(halted), LANE_TEST],
-        cwd=str(halted), capture_output=True, text=True,
+        cwd=str(halted), capture_output=True, text=True, **no_console_creationflags(),
     )
 
     assert ran.returncode == 1, ran.stdout + ran.stderr

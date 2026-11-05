@@ -208,3 +208,25 @@ def test_build_writes_a_receipt_the_fire_guards_accept_and_a_bare_script_is_stil
     hand_payload = {**payload, "tool_input": {"scriptPath": str(hand)}}
     assert allow._decide(hand_payload) is None
     assert evaluate(hand_payload, env={}) != {}
+
+
+@pytest.mark.twin_needs_script
+def test_recompose_script_runs_the_real_build_and_ensure_twin_stages_from_it(repo, monkeypatch):
+    import hashlib
+
+    from coordinator_core.ops.dispatch_emit import launcher_staged_twin as twin
+
+    _halt(repo, monkeypatch)
+    text, why = hrb.recompose_script(repo, RUN)
+    assert why == "" and text and (record_dir(repo, RUN) / hrb.COMPOSED_SCRIPT_FILE).read_text(encoding="utf-8") == text
+    assert not (repo / "scratch" / "warp" / f"{RUN}.workflow.mjs").exists()
+    raw = b'{"rows":[]}'
+    handle = {"path": f"state/warp/{RUN}/manifest.json", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+    rel = twin.ensure_twin(repo, handle["path"], raw, handle, max_bytes=10_000_000, refuse=ValueError)
+    assert rel is None  # the composed top-level script has no inline slot: recomposed, read, and nothing refused
+    assert (record_dir(repo, RUN) / hrb.COMPOSED_SCRIPT_FILE).is_file()
+
+
+def test_recompose_script_names_a_run_with_no_halt_marker(repo):
+    text, why = hrb.recompose_script(repo, RUN)
+    assert text is None and why

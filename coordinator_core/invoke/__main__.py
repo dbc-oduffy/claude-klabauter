@@ -305,6 +305,10 @@ Sending a mid-run revision to a warp run:
   run owns); credit_chunks ([{chunk, evidence}]); build_only (bool);
   stop_after ("plan": park the run after planning); retract_note ({note_id, reason});
   retract_row ({row_id, reason}: withdraws one open, unclaimed revision row); claim (bool, records the ruling as work; needs verbatim).
+  accept_partial ([{chunk, reason}]: rules PARTIAL chunks good enough to release their dependents);
+  widened ([{row, path}]: adds a path to that plan row's writes); ledger_verdict ({landed_sha, items}:
+  closes a halted run as landed); halted (dict), inline_review (dict), objective_loop (dict):
+  run-close payloads carried from the ask outcome.
   Full contract: coordinator-invoke workflow.revise --describe
 """
 

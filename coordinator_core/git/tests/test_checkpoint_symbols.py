@@ -3,10 +3,11 @@
 import subprocess
 
 from coordinator_core.git.checkpoint_symbols import removed_symbol_refusal
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _git(root, *args):
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True)
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, **no_console_creationflags())
 
 
 def _repo(tmp_path, files):

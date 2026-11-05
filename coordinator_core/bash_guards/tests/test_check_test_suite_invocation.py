@@ -3373,3 +3373,30 @@ class TestReuseFreshDeferral:
         out = _enveloped(guard.check)(_payload(
             "with-suite-mutex --reuse-fresh -- pytest", grant_repo, agent_id=_AGENT_ID))
         assert out is not None
+
+
+class TestWaitFlagDeferral:
+    """The ``--wait`` form the mutex refusal recommends passes while the mutex
+    is held; bare, non-wait wrapped and decoyed shapes stay denied."""
+
+    @pytest.mark.parametrize("command", [
+        "with-suite-mutex --wait --wait-timeout 1800 -- pytest",
+        # The wrapper itself rejects `--wait -- <cmd>` without running <cmd>.
+        "with-suite-mutex --wait -- python -m pytest",
+        "with-suite-mutex --wait-timeout 60 --wait -- pytest",
+        "cd . && with-suite-mutex --wait --wait-timeout 5 -- pytest",
+    ])
+    def test_allows_while_mutex_held(self, grant_repo, held_mutex, command):
+        assert _enveloped(guard.check)(_payload(command, grant_repo)) is None
+
+    @pytest.mark.parametrize("command", [
+        "with-suite-mutex -- pytest",
+        "pytest",
+        "with-suite-mutex --wait-timeout 1800 -- pytest",
+        "with-suite-mutex -- pytest --wait",
+        "with-suite-mutex --wait-timeout --wait -- pytest",
+        "with-suite-mutex --wait -- true && python -m pytest",
+        "with-suite-mutex --wait -- pytest && with-suite-mutex -- pytest",
+    ])
+    def test_still_denied_without_the_wait_flag(self, grant_repo, held_mutex, command):
+        assert _enveloped(guard.check)(_payload(command, grant_repo)) is not None

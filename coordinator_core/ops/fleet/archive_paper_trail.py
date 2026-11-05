@@ -2,8 +2,8 @@
 coordinator_core.ops.fleet.archive_paper_trail — fleet.archive_paper_trail op.
 
 Purpose: archive a research-session paper-trail workdir
-(docs/research/{run_id}-workdir) into the caller's own archive tree
-(docs/research/archive/{YYYY-MM-DD}-{topic_slug}) under a preview/act
+(docs/research/{run_id}-workdir) into its run dir
+(docs/research/{topic}/{YYYY-MM-DD}-{topic_slug}/workdir) under a preview/act
 (dry_run:true / dry_run:false) contract.
 
 Unifies the two call sites the fence inventory found describing this same
@@ -45,7 +45,8 @@ archived:false, already_archived:true instead of attempting (and failing,
 or worse silently re-merging) a second move. The archive destination name
 embeds the archival date (YYYY-MM-DD, computed at call time, not sourced
 from run_id), so a same-topic rerun on a LATER calendar day is detected via
-a glob over docs/research/archive/*-{topic_slug} rather than assuming the
+a glob over docs/research/*/*-{topic_slug}/workdir (and the legacy
+docs/research/archive/*-{topic_slug}) rather than assuming the
 original dest name — this is what makes the no-op detection date-independent.
 The op-classification row's platform-hazard note additionally floats porting
 the mv itself to a raw os.rename + os.stat().st_dev cross-device fallback;
@@ -90,6 +91,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.ops import _research_layout as _layout
 from coordinator_core.ops.fleet._common import (
     Move,
     archive_and_commit,
@@ -118,16 +120,38 @@ def _validate_component(value: object, field_name: str) -> str:
     return value
 
 
-def _find_existing_archive(archive_dir: Path, topic_slug: str) -> Optional[Path]:
+def _find_existing_archive(
+    research_dir: Path, archive_dir: Path, topic_slug: str
+) -> Optional[Path]:
+    """An earlier archive of this topic_slug: a run-dir workdir, else a legacy archive dir.
+
+    A run-dir workdir (docs/research/<topic>/<date>-<topic_slug>/workdir) wins over a
+    legacy docs/research/archive/<date>-<topic_slug> entry, which stays readable.
+    """
+    if research_dir.is_dir():
+        run_matches = sorted(
+            p
+            for p in research_dir.glob(f"*/*-{topic_slug}/workdir")
+            if p.is_dir()
+            and _layout.classify(p.relative_to(research_dir).as_posix()) == _layout.RUN_CHILD
+        )
+        if run_matches:
+            return run_matches[-1]
     if not archive_dir.is_dir():
         return None
     matches = sorted(archive_dir.glob(f"*-{topic_slug}"))
     return matches[-1] if matches else None
 
 
-def _compute_dest(archive_dir: Path, topic_slug: str) -> Path:
-    """Compute today's archive destination: archive_dir/{YYYY-MM-DD}-{topic_slug}."""
-    return archive_dir / f"{date.today().isoformat()}-{topic_slug}"
+def _compute_dest(research_dir: Path, topic_slug: str, topic: Optional[str] = None) -> Path:
+    """Today's destination: research_dir/<topic>/{YYYY-MM-DD}-{topic_slug}/workdir.
+
+    Raises ValueError when the topic or run name breaks the layout contract.
+    """
+    run = _layout.run_dir(
+        _layout.topic_for(topic_slug, topic), date.today().isoformat(), topic_slug
+    )
+    return research_dir.joinpath(*run.parts, "workdir")
 
 
 @register_op("fleet.archive_paper_trail")
@@ -135,7 +159,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """fleet.archive_paper_trail — archive a research paper-trail workdir.
 
     Wire contract (manifest row archive-paper-trail-to-archive-dir):
-        params: {repo_root: str, run_id: str, topic_slug: str, dry_run: bool}
+        params: {repo_root: str, run_id: str, topic_slug: str, dry_run: bool,
+                 topic?: str (research topic dir; absent, derived from topic_slug)}
         ->      {archived: bool, dest: str, already_archived: bool}
 
     The response MAY additionally carry a `failed` key — a non-empty list of
@@ -186,11 +211,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     research_dir = worktree.joinpath(*_RESEARCH_SUBDIR)
     archive_dir = worktree.joinpath(*_ARCHIVE_SUBDIR)
+    topic = params.get("topic")
+    if topic is not None:
+        topic = _validate_component(topic, "topic")
     src = research_dir / f"{run_id}-workdir"
-    dest = _compute_dest(archive_dir, topic_slug)
+    dest = _compute_dest(research_dir, topic_slug, topic)
 
     if not src.exists():
-        existing = _find_existing_archive(archive_dir, topic_slug)
+        existing = _find_existing_archive(research_dir, archive_dir, topic_slug)
         resolved_dest = existing if existing is not None else dest
         return {
             "archived": False,
@@ -268,7 +296,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     ]
     subject = (
         f"fleet: archive paper-trail {run_id} -> "
-        f"{dest.name} [fleet.archive_paper_trail]"
+        f"{dest.parent.name}/workdir [fleet.archive_paper_trail]"
     )
     acted, failed = await archive_and_commit(worktree, moves, subject)
     failed = collisions + list(failed)

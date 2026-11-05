@@ -152,6 +152,19 @@ def test_door_poll_with_wait_secs_returns_as_soon_as_the_stamp_lands(_fresh_stor
     assert time.monotonic() - started < 10
 
 
+def test_door_poll_reads_the_key_from_a_params_file_relative_to_the_caller_cwd(_fresh_store, tmp_path):
+    key = _admit_and_stamp(_fresh_store, _LANDED)
+    (tmp_path / "p.json").write_text(json.dumps({"key": key}), encoding="utf-8")
+    frame = _frame(
+        "invoke.from_argv",
+        {"argv": ["warm.request_status", "--params-file", "p.json", "--bare"], "cwd": str(tmp_path)},
+    )
+
+    (reply,) = _serve(frame, _no_dispatch)
+
+    assert reply["result"] == _LANDED
+
+
 def test_door_poll_with_a_malformed_key_exits_one():
     frame = _frame("invoke.from_argv", {"argv": ["warm.request_status", "{}", "--bare"]})
     (reply,) = _serve(frame, _no_dispatch)

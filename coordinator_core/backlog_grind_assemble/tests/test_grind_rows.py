@@ -1526,10 +1526,6 @@ class TestRunRecordLandsTheRunsBookkeeping:
 
     def test_plain_bookkeeping_spawns_no_git_process(self, repo, capsys, monkeypatch):
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
-        from coordinator_core.git import store_hygiene
-
-        # The commit route's detached daily-tier launch is counted by test_store_hygiene.
-        monkeypatch.setattr(store_hygiene, "maybe_refresh", lambda *a, **k: False)
 
         self._sweep_and_append(repo)
         capsys.readouterr()
@@ -1788,10 +1784,6 @@ class TestRunRecordLandsTheRunsBookkeeping:
 
     def test_the_widened_land_set_spawns_no_git_process(self, repo, capsys, monkeypatch):
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
-        from coordinator_core.git import store_hygiene
-
-        # The commit route's detached daily-tier launch is counted by test_store_hygiene.
-        monkeypatch.setattr(store_hygiene, "maybe_refresh", lambda *a, **k: False)
 
         self._write(repo, "state/sizings/s.yaml", "size: s\n", claim=False)
         extra = self._widened_extra(repo, ["state/sizings/s.yaml"])

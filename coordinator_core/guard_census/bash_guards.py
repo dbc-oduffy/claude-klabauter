@@ -16,7 +16,7 @@ from coordinator_core import deny_registry
 from coordinator_core.guard_census import BLOCK, DELETED, GUIDE, Row, enumerate_bash_guards
 
 _REDIRECT = {
-    "block-push-pr-non-owned-remote": "push to an owned remote, or ask the PM to publish",
+    "block-push-pr-non-owned-remote": "push to an owned remote, or route the publish to the G-EM",
     "block-perforce-submit": "the p4 review flow; the PM submits",
     "p4-verb-fence": "the read-only p4 verbs",
     "destructive-git-orphan": "a non-destructive ref operation",
@@ -35,6 +35,7 @@ _REDIRECT = {
     "check-test-suite-invocation": "a scoped pytest run of named test files, or the EM's scheduled suite leg",
     "guard-subagent-heavy-ue-launch": "return the launch to the EM as a slot leg",
     "block-subagent-destructive-action": "the trash-then-prune op",
+    "guard-uncapped-pytest-plugin": "python -m coordinator_core.testing.scoped_pytest --allow <target> -- <pytest args>",
 }
 
 #: Deny-only bodies executed away. The sentinel and grant guards policed a door now owned by the

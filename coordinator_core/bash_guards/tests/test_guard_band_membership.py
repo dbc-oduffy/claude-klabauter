@@ -56,6 +56,7 @@ CONFINEMENT_DENY_NAMES = [
     "deploy-dirty-tree",
     "block-editor-kill-by-name",
     "block-whole-filesystem-scan",
+    "guard-uncapped-pytest-plugin",
     "block-approval-sentinel-creation",
     "block-worktree-sentinel-creation",
     "block-home-root-bash-write",
@@ -118,6 +119,7 @@ ADVISORY_REWRITE_NAMES = [
     # guard_reap_stale_git_lock.py's own module docstring and dispatch.py's
     # registration comment.
     "reap-stale-git-lock",
+    "rewrite-repo-root-search",
     "validate-commit",
     "inprocess-search",
     "block-illegal-filename",

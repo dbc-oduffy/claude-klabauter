@@ -10,7 +10,9 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import abandoned_runs, process_artifact_policy, run_token, terminal_commit
+from coordinator_core.ops.dispatch_emit import (
+    abandoned_runs, process_artifact_policy, run_artifacts, run_token, terminal_commit,
+)
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -113,7 +115,7 @@ def test_onboarded_control_still_commits_the_halted_record(repo):
 
     assert out.get("committed") is True, out
     landed = set(_git(["show", "--name-only", "--format=", out["sha"]], repo).split())
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in landed
+    assert run_artifacts.outcome_rel(RUN) in landed
 
 
 def test_abandoned_run_reaper_commits_nothing_and_reports_withheld(repo):

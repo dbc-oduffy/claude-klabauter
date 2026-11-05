@@ -72,7 +72,7 @@ from coordinator_core.warm.entry_seam import WarmGuardOutcome, try_warm_guard_di
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_DENY_CMD = "git commit --no-verify -m x -- foo.py"
+_DENY_CMD = "git push --force origin main"
 
 
 def _deny_event() -> dict:

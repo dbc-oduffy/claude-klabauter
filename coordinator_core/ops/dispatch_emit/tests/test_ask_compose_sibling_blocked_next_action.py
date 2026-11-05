@@ -45,4 +45,4 @@ def test_blocked_rows_branch_precedes_unchanged_close_job_record(monkeypatch):
     branch = _landed_branch(monkeypatch)
     assert branch.index("refire_after_sibling") < branch.index("_nextAction = { kind: 'close_job', op: null,")
     close_job = branch[branch.index("_nextAction = { kind: 'close_job', op: null,") :]
-    assert "params: { run_id: _runId, close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] } }" in close_job
+    assert "params: { run_id: _commit.close?.run_id ?? _runId, close: _commit.close ?? null, fire: _commit.close?.siblings?.released ?? [] } }" in close_job

@@ -152,6 +152,13 @@ def test_lost_definition_landing_refusal_is_head_integrity_and_a_stray_class_is_
     assert [p[0] for p in dr.registry_problems(landing_classes={"x-reason": dr.DISRUPTIVE})] == ["x-reason"]
 
 
+def test_every_landing_refusal_kind_is_classed_or_a_guard_owned_kind():
+    from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import LANDING_REFUSAL_KINDS
+
+    guard_owned = {"destructive-git", "secret-in-diff"}
+    assert LANDING_REFUSAL_KINDS - guard_owned == set(dr.LANDING_REFUSAL_CLASS)
+
+
 def test_disruptive_is_a_guard_class_and_not_an_op_class():
     assert dr.DISRUPTIVE in dr.GUARD_CLASSES
     assert dr.DISRUPTIVE not in dr.IRREVERSIBLE_CLASSES
@@ -268,8 +275,9 @@ def test_unscheduled_suite_run_with_variable_held_paths_denies_at_every_level(mo
     import subprocess
 
     from coordinator_core.bash_guards import check_test_suite_invocation as guard
+    from coordinator_core.win_portability import no_console_creationflags
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     assert dr.GUARD_DENY_CLASS["check-test-suite-invocation"] == dr.BOX_DEGRADING
     payload = {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": "s", "cwd": str(tmp_path)}
     env = guard.check(payload)

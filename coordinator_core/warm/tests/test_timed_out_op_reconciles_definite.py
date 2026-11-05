@@ -209,6 +209,29 @@ def test_door_form_other_op_expiry_still_returns_indeterminate(stuck_warm):
     assert response["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
 
 
+def test_replay_safe_entrypoint_expiry_goes_cold_once(stuck_warm, capsys):
+    response = client.try_warm_dispatch(_door_msg("brief", "--repo", "x", entrypoint="consolidate-assemble"))
+    assert response is None
+    assert len(stuck_warm.written) == 1
+    assert client._last_cold_bucket == client.COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
+    assert "consolidate-assemble brief" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "msg",
+    [
+        _door_msg("apply", entrypoint="consolidate-assemble"),
+        _door_msg("brief", entrypoint="other-cli"),
+        _door_msg("--repo", "x", "brief", entrypoint="consolidate-assemble"),
+        _door_msg(entrypoint="consolidate-assemble"),
+        _door_msg("brief"),
+    ],
+)
+def test_other_entrypoint_frames_expiry_still_returns_indeterminate(stuck_warm, msg):
+    response = client.try_warm_dispatch(msg)
+    assert response["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
+
+
 def test_value_flag_set_matches_the_invoke_parser():
     from coordinator_core.invoke.__main__ import _build_arg_parser
 

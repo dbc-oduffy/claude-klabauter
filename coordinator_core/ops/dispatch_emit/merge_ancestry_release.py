@@ -48,6 +48,9 @@ def release(worktree_root, holds: list) -> list:
 def _release(root: Path, holds: list) -> list:
     if not holds:
         return holds
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    land_deadline.check("merge_ancestry_release.release")
     from coordinator_core.git.git_dir import resolve_git_dir
 
     if not (resolve_git_dir(root) / "MERGE_HEAD").exists():

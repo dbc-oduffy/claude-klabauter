@@ -4,6 +4,8 @@ Params: ``run_id`` (string, required: the halted run), ``sha`` (string: one comm
 (list of strings: further commit shas, unioned with ``sha``; at least one of the two is required),
 ``met_by`` (object, optional: ``{blocking row id: sha}``; each sha an ancestor-or-equal of HEAD and equal to or after the
 halt commit, else the op refuses naming the row; recorded on the landed marker and echoed in the reply),
+a marker whose ``blocking`` rows lack a ``met_by`` credit refuses ``halt reason stands``, and a marker whose
+reason starts ``completion gate:`` refuses unless the run-outcome ``inline_review`` leaves ``completion_blockers`` empty,
 ``session_id`` (string, optional uuid: the calling session, used to find the run's review sidecar),
 ``in_run`` (bool, optional: close the calling run itself as already delivered; admits a ``running``
 sibling status or a solo run with no halt marker, and refuses unless every manifest
@@ -770,6 +772,42 @@ def _met_by_problem(root: Path, run_id: str, met_by: dict, reached: frozenset) -
     return None
 
 
+_COMPLETION_GATE_PREFIX = "completion gate:"
+
+
+def _standing_halt_problem(root: Path, run_id: str, credited: dict) -> Optional[str]:
+    """Refusal while the run's halt marker states a reason no evidence discharges, else None.
+
+    Blocking rows (``_withheld``) owe a ``met_by`` credit, from this call (*credited*) or already
+    stamped on the marker. A marker whose ``reason``/``halted`` starts ``completion gate:`` also owes a
+    review record whose ``completion_blockers`` (halt marker excluded) is empty. A marker-less run
+    (``in_run``, ``landed_under``, never halted) has nothing standing.
+    """
+    from coordinator_core.ops.dispatch_emit import ask_contract, completion_gate, halted_run
+
+    try:
+        marker = halted_run._read(ask_contract.record_dir(root, run_id))
+    except ValueError:
+        return None
+    if marker is None:
+        return None
+    stamped = marker.get(MET_BY_FIELD)
+    have = set(credited) | (set(stamped) if isinstance(stamped, dict) else set())
+    uncredited = [b for b in _withheld(marker) if b not in have]
+    if uncredited:
+        return f"halt reason stands: blocking rows {', '.join(uncredited)} carry no met_by credit"
+    if any(
+        isinstance(marker.get(k), str) and marker[k].lstrip().startswith(_COMPLETION_GATE_PREFIX)
+        for k in (halted_run.HALT_REASON_FIELD, "halted")
+    ):
+        outcome = ask_contract.read_run_outcome(root, run_id)
+        review = outcome.get("inline_review") if isinstance(outcome, dict) else None
+        blockers = completion_gate.completion_blockers(inline_review=review, halt_marker=None)
+        if blockers:
+            return f"halt reason stands: completion gate unmet ({'; '.join(blockers)})"
+    return None
+
+
 def _verify(
     root: Path, run_id: str, shas: list, met_by: Optional[dict] = None,
 ) -> tuple[Optional[str], Optional[str], dict]:
@@ -1013,6 +1051,7 @@ def _record_solo(
     elif status != halted_run.STATUS_HALTED:
         return _refuse(f"{run_id} is {status}; only a halted or resumed run is recorded landed")
     sha, problem, echo = _verify(root, run_id, shas, met_by)
+    problem = problem or _standing_halt_problem(root, run_id, echo.get(MET_BY_FIELD, {}))
     if problem:
         return _refuse(problem)
     if met_by:
@@ -1080,6 +1119,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _refuse(f"{run_id} is {status}, not halted; only a halted run is recorded landed")
 
     sha, problem, echo = _verify(root, run_id, shas, met_by)
+    problem = problem or _standing_halt_problem(root, run_id, echo.get(MET_BY_FIELD, {}))
     if problem:
         return _refuse(problem)
     if in_run:

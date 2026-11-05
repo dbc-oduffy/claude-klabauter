@@ -65,6 +65,12 @@ def _status(result: dict) -> str:
 
 
 def _red(baseline, method="export", failed=1):
+    if baseline is not None:
+        baseline = {
+            **baseline,
+            "evidence": [*baseline.get("pre_existing", []), *baseline.get("foreign", [])],
+            "base_log": "base.log",
+        }
     return {"status": "fail", "tests_run": 3, "tests_failed": failed, "sidecar_path": "s.md",
             "baseline": baseline, "baseline_method": method}
 

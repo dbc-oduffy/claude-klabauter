@@ -24,6 +24,19 @@ def test_path_binds_to_prefixed_name_not_raw_run_id():
     assert raw == full
 
 
+def test_research_run_id_keeps_its_name_so_writer_and_stages_share_one_file(tmp_path):
+    from coordinator_core.ops.dispatch_emit.pipeline_run import append_revision, finished_rel
+
+    run_id = "pipeline-research-20261101T181654-abc123"
+    script = _compose(run_id=run_id)
+    assert f"name: '{run_id}'" in script
+    written = append_revision(tmp_path, run_id, "narrow to cell A", "em", "verbatim")
+    assert written == tmp_path / revisions_rel(run_id)
+    assert f"Revisions file: {revisions_rel(run_id)} " in script
+    assert finished_rel(run_id) in script
+    assert "pipeline-structured-pipeline-research" not in script
+
+
 def test_finished_instruction_rides_the_last_stage_only():
     from coordinator_core.ops.dispatch_emit.pipeline_run import finished_rel
 

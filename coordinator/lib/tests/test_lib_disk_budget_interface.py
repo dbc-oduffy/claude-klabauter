@@ -253,20 +253,21 @@ def test_child_stops_at_the_cap(monkeypatch):
 
 # --- no OS scheduler -------------------------------------------------------------------------
 
-_SCHEDULER_WORDS = ("launchd", "schtasks", "systemd", "crontab")
+_SCHEDULER_WORDS = ("launch" + "d", "sch" + "tasks", "system" + "d", "cron" + "tab")
 _DISK_BUDGET_WORDS = ("disk-budget", "disk_budget")
 
 
-def test_no_os_scheduler_entry_for_the_sweep_outside_docs():
-    repo = _ROOT.parent
-    this = Path(__file__).resolve()
+_SELF_PAIR = ("coordinator/lib/tests/test_lib_disk_budget_interface.py", "coordinator/tests/test_disk_budget_interface.py")
+
+
+def _scheduler_offenders(repo, exempt):
     offenders = []
     for top in (repo / "coordinator", repo / "setup"):
         for dirpath, dirnames, filenames in os.walk(top):
             dirnames[:] = [d for d in dirnames if d not in {"docs", "__pycache__", ".git", "node_modules"}]
             for name in filenames:
                 path = Path(dirpath) / name
-                if path.resolve() == this:
+                if path.resolve() in exempt:
                     continue
                 try:
                     text = path.read_text(encoding="utf-8").lower()
@@ -274,4 +275,16 @@ def test_no_os_scheduler_entry_for_the_sweep_outside_docs():
                     continue
                 if any(w in text for w in _SCHEDULER_WORDS) and any(w in text for w in _DISK_BUDGET_WORDS):
                     offenders.append(str(path.relative_to(repo)))
-    assert offenders == []
+    return offenders
+
+
+def test_no_os_scheduler_entry_for_the_sweep_outside_docs():
+    repo = _ROOT.parent
+    assert _scheduler_offenders(repo, {(repo / rel).resolve() for rel in _SELF_PAIR}) == []
+
+
+def test_scheduler_scan_still_refuses_a_same_named_file_elsewhere(tmp_path):
+    (tmp_path / "coordinator" / "x").mkdir(parents=True)
+    (tmp_path / "setup").mkdir()
+    (tmp_path / "coordinator" / "x" / "test_disk_budget_interface.py").write_text("launch" + "d disk-budget")
+    assert _scheduler_offenders(tmp_path, set()) == ["coordinator/x/test_disk_budget_interface.py"]

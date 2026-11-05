@@ -106,7 +106,8 @@ def run_records(repo_root: Path) -> Iterator[RunRecord]:
     try:
         run_dirs = sorted(p for p in (root / RUN_DIR_ROOT).iterdir() if p.is_dir())
     except OSError:
-        return
+        run_dirs = []
+    seen = {p.name for p in run_dirs}
     for run_dir in run_dirs:
         submission = _read_json(run_dir / SUBMISSION_FILE)
         sizing_rel = submission.get("sizing_rel")
@@ -120,6 +121,31 @@ def run_records(repo_root: Path) -> Iterator[RunRecord]:
             sizing_rel=sizing_rel or record_sizing_rel(root, run_dir.name),
             writes=declared_writes(run_dir),
             reconciled=(run_dir / RECONCILED_FILE).is_file(),
+        )
+    yield from _tracked_outcome_records(root, seen)
+
+
+def _tracked_outcome_records(root: Path, seen: set) -> Iterator[RunRecord]:
+    """`RunRecord`s of runs another box ran, read from the tracked `outcome.json` (the run dir is
+    local-only); a `landed` outcome counts as reconciled, a halted one as still open."""
+    try:
+        names = sorted(p.name for p in (root / "state" / "run-evidence").iterdir() if p.is_dir())
+    except OSError:
+        return
+    for name in names:
+        if name in seen:
+            continue
+        outcome = _read_json(root / "state" / "run-evidence" / name / "outcome.json")
+        if not outcome:
+            continue
+        sizing_rel = outcome.get("sizing_rel")
+        yield RunRecord(
+            run_id=name,
+            session_id="",
+            submitted_at=0.0,
+            sizing_rel=_norm(sizing_rel) if isinstance(sizing_rel, str) else "",
+            writes=(),
+            reconciled=outcome.get("state") == "landed",
         )
 
 
@@ -420,8 +446,10 @@ def _live_peer_run(
     non-empty `session_id` other than `exclude_session` that is `touch_record.session_live`, not
     halted, not landed, not stale at stage `minted` (`_stale_at_minted`; such a run is halted here),
     not minted with an unproven runner (`warp_live.runner_unproven`; resumable, not held),
-    and (when given) strictly senior to `minted_before=(minted_at, run_id)`."""
-    from coordinator_core.session import touch_record
+    and (when given) strictly senior to `minted_before=(minted_at, run_id)`. Inside a `call_io_scope`
+    the record-reading tail is answered once per run and `cwd`: the landing's several claim scans
+    weigh each sibling run once."""
+    from coordinator_core.git import call_io_scope
 
     sid = record.get("session_id")
     run_id = record["run_id"]
@@ -429,7 +457,15 @@ def _live_peer_run(
         return False
     if minted_before is not None and (record["minted_at"], run_id) >= tuple(minted_before):
         return False
-    if not touch_record.session_live(sid, cwd) or _halted(root, run_id) or _landed(root, run_id):
+    return call_io_scope.memo(
+        "wrd.live_peer_run", repr((str(root), run_id, sid, cwd)), lambda: _live_peer_tail(root, run_id, sid, cwd),
+    )
+
+
+def _live_peer_tail(root: Path, run_id: str, sid: str, cwd: Optional[str]) -> bool:
+    from coordinator_core.session import touch_record
+
+    if _halted(root, run_id) or _landed(root, run_id) or not touch_record.session_live(sid, cwd):
         return False
     if _stale_at_minted(root, run_id):
         _halt_abandoned(root, run_id)

@@ -1816,3 +1816,46 @@ def test_submit_engine_ask_deferred_short_brief_stays_inline(tmp_path, monkeypat
     params = _deferred_params(_repo(tmp_path), "short context", monkeypatch)
     assert "short context" in params["ask_brief"]
     assert "ask_brief_file" not in params
+
+
+_REFIRE_CONTEXT = "partials on the wip branch; sibling 07ab10 owns the other files"
+
+
+def _minted_overrun_refire(root: Path, monkeypatch):
+    """A refire of a halted run with an em_context whose launcher emit overruns after minting."""
+    rd = _halted_run(root, token_spent=False)
+
+    def overran(emit, params, root_, budget_s=None, scan=True):
+        raise mod._EmitOverran("outran after minting", minted=True, run_ids=[_SPENT_RUN])
+
+    monkeypatch.setattr(mod, "_emit_within_budget", overran)
+    out = mod.evaluate(_payload(root, {"sizing": _SPENT_SIZING, "em_context": _REFIRE_CONTEXT}))
+    return out, rd
+
+
+def test_a_refire_hands_its_emit_to_the_launcher_and_persists_em_context(tmp_path, monkeypatch):
+    """The launcher child emits the resumed run (no emit in the hook); the em_context rides that
+    deferred emit and is already in the run's notes before any script runs."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    root = _repo(tmp_path)
+    out, rd = _minted_overrun_refire(root, monkeypatch)
+    assert _hso(out)["permissionDecision"] == "allow", out
+    launcher = Path(_hso(out)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    assert '"error"' not in launcher and "defer-" in launcher
+    (deferred,) = (root / "scratch" / "warp").glob("defer-*.workflow.mjs")
+    carried = deferred.read_text(encoding="utf-8") + "".join(
+        b.read_text(encoding="utf-8") for b in (root / "scratch" / "warp").glob("defer-*") if b.suffix in (".md", ".json")
+    )
+    assert _REFIRE_CONTEXT in carried
+    assert any(_REFIRE_CONTEXT in n for n in rl.read_notes(rd))
+
+
+def test_a_repeat_refire_does_not_duplicate_the_persisted_em_context(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+
+    root = _repo(tmp_path)
+    _, rd = _minted_overrun_refire(root, monkeypatch)
+    (stored,) = rl.read_notes(rd)
+    mod._persist_em_context(root, _SPENT_RUN, stored)
+    assert rl.read_notes(rd) == [stored] and _REFIRE_CONTEXT in stored

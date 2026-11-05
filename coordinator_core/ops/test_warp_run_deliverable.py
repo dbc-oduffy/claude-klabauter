@@ -257,6 +257,24 @@ def test_minted_run_with_unproven_runner_is_not_a_live_peer(repo, live, monkeypa
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
 
 
+def test_halted_run_never_reaches_liveness_or_transcript_checks(repo, monkeypatch):
+    from coordinator_core import warp_live
+    from coordinator_core.session import touch_record
+
+    def boom(*a, **k):
+        raise AssertionError("liveness probed for a halted run")
+
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid: True)
+    monkeypatch.setattr(touch_record, "session_live", boom)
+    monkeypatch.setattr(warp_live, "runner_unproven", boom)
+    assert _claims(repo, ["a.py"]) == {}
+    monkeypatch.setattr(wrd, "_halted", lambda root, rid: False)
+    monkeypatch.setattr(wrd, "_landed", lambda root, rid: True)
+    assert _claims(repo, ["a.py"]) == {}
+
+
 def test_a_real_minted_run_past_the_grace_with_no_launch_is_not_a_live_peer(repo, live, tmp_path, monkeypatch):
     from coordinator_core import warp_live
 
@@ -470,3 +488,19 @@ def test_owners_claimed_fresh_present_expired_absent(repo, live, monkeypatch):
     real = time.time
     monkeypatch.setattr(time, "time", lambda: real() + run_token.TTL_SECONDS + 5)
     assert _owners(repo, ["state/warp/p1/run.json"]) == {}
+
+
+def test_run_records_reads_other_box_run_from_tracked_outcome(tmp_path):
+    import json as _json
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    ev = tmp_path / "state" / "run-evidence"
+    for name, state in (("ask-landed-1", "landed"), ("ask-halted-1", "halted")):
+        (ev / name).mkdir(parents=True)
+        (ev / name / "outcome.json").write_text(
+            _json.dumps({"run_id": name, "state": state, "sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8"
+        )
+    recs = {r.run_id: r for r in wrd.run_records(tmp_path)}
+    assert recs["ask-landed-1"].reconciled is True
+    assert recs["ask-halted-1"].reconciled is False
+    assert recs["ask-halted-1"].sizing_rel == "state/sizings/s.yaml"

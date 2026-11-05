@@ -1890,7 +1890,8 @@ def test_reverify_runs_as_pinned_haiku_not_a_sonnet_override():
     assert "agentType: 'coordinator:test-runner', model: 'haiku'" in block
     assert "model: 'sonnet'" not in block
     degraded = dict(_reverify_phases(reverify=True, host_degraded=True))["Review re-verify"]
-    assert "model:" not in degraded
+    assert "agentType: 'general-purpose', model: 'haiku'" in degraded
+    assert "model: 'sonnet'" not in degraded
 
 
 def test_reverify_runs_when_the_review_applied_no_edit():

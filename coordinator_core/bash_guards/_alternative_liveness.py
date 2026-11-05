@@ -148,6 +148,8 @@ from coordinator_core.bash_guards import block_subagent_destructive_action
 from coordinator_core.bash_guards import block_worktree_creation
 from coordinator_core.bash_guards import block_stash_destruction
 from coordinator_core.bash_guards import block_topic_branch
+from coordinator_core.bash_guards import guard_uncapped_pytest_plugin
+from coordinator_core.bash_guards import rewrite_repo_root_search
 from coordinator_core.bash_guards import block_editor_kill_by_name
 from coordinator_core.bash_guards import guard_subagent_heavy_ue_launch
 from coordinator_core.bash_guards import guard_heavy_command_admission
@@ -734,6 +736,12 @@ def _trigger_block_push_pr_non_owned_remote() -> Optional[Dict[str, Any]]:
         block_push_pr_non_owned_remote._configured_prefixes = orig
 
 
+def _trigger_rewrite_repo_root_search() -> Optional[Dict[str, Any]]:
+    """A scratch repo root carries no example-retrieval-repo index, so the guard takes its `git grep` rewrite leg."""
+    with _scratch_git_repo() as repo:
+        return rewrite_repo_root_search.check(_payload('grep -rn "hello" .', agent_id=None, cwd=repo))
+
+
 LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "check_no_verify": lambda: _dc.check_no_verify('git commit --no-verify -m "x"', "altlive-probe"),
     "check_runaway_find": lambda: _dc.check_runaway_find("find / -name '*.py'", "altlive-probe"),
@@ -802,10 +810,10 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     "block_external_workspace_vcs_write": _trigger_block_external_workspace_vcs_write,
     "block_push_pr_non_owned_remote": _trigger_block_push_pr_non_owned_remote,
     "block_worktree_sentinel_creation": lambda: block_worktree_sentinel_creation.check(
-        _payload("touch .coordinator-override-worktree-guard", agent_id=None)
+        _payload("touch " + block_worktree_sentinel_creation._TARGET_BASENAME, agent_id=None)
     ),
     "block_approval_sentinel_creation": lambda: block_approval_sentinel_creation.check_ungated(
-        _payload("touch .coordinator-doctrine-edit-approved", agent_id=None)
+        _payload("touch " + block_approval_sentinel_creation._TARGET_BASENAME, agent_id=None)
     ),
     "block_dev_repo_sentinel_removal": lambda: block_dev_repo_sentinel_removal.check(
         _payload("rm .coordinator-dev-repo", agent_id=None)
@@ -888,6 +896,10 @@ LIVE_TRIGGERS: Dict[str, Callable[[], Optional[Dict[str, Any]]]] = {
     ),
     "block_noncanonical_branch_creation": _trigger_block_noncanonical_branch_creation,
     "guard_post_executor_verification": _trigger_guard_post_executor_verification,
+    "guard_uncapped_pytest_plugin": lambda: guard_uncapped_pytest_plugin.check(
+        _payload("pytest -p altlive_probe_plugin tests/", agent_id=None)
+    ),
+    "rewrite_repo_root_search": _trigger_rewrite_repo_root_search,
 }
 
 

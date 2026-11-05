@@ -252,6 +252,9 @@ def run_swap(
 
 
 def main(argv: Optional[list[str]] = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--copy-secs", type=float, default=DEFAULT_COPY_SECS)
     parser.add_argument("--boot-secs", type=float, default=DEFAULT_BOOT_SECS)

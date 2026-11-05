@@ -678,7 +678,7 @@ def _remove_stale_local_ref_lock(root: Path, stderr: str, *, now: Optional[float
     try:
         refs_dir = (git_common_dir(root) / "refs").resolve()
         lock = Path(named).resolve()
-        lock.relative_to(refs_dir)
+        lock.relative_to(refs_dir)  # fs-only
         st = lock.stat()
         if not lock.is_file():
             return False

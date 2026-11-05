@@ -33,6 +33,11 @@ def _script(monkeypatch) -> str:
     )
 
 
+def _verdict_text_def(script: str) -> str:
+    start = script.index("const _verdictText = () =>")
+    return script[start : script.index("\n", start)]
+
+
 def test_binding_is_declared_then_set_from_gated_rows_after_stage(monkeypatch):
     script = _script(monkeypatch)
     decl = script.index("let _crossRepoRows = [];")
@@ -50,7 +55,8 @@ def test_verify_leg_and_delivery_verifier_both_carry_the_clause(monkeypatch):
     script = _script(monkeypatch)
     verify_start = script.index("phase: Verify")
     verify = script[verify_start : script.index("label: 'verify'", verify_start)]
-    assert _CLAUSE in verify
+    assert "_verdictText()" in verify
+    assert _CLAUSE in _verdict_text_def(script)
     assert script.count(_CLAUSE) >= 2
     assert "_crossRepoRows" in script[script.index("Review wave") :]
 
@@ -69,7 +75,8 @@ def test_ledger_schema_and_prompt_ask_for_root_read(monkeypatch):
     assert "root_read" in item["properties"]
     assert "root_read" not in item["required"]
     verify_start = script.index("phase: Verify")
-    assert "root_read" in script[verify_start : script.index("label: 'verify'", verify_start)]
+    assert "_verdictText()" in script[verify_start : script.index("label: 'verify'", verify_start)]
+    assert "root_read" in _verdict_text_def(script)
 
 
 def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch):
@@ -87,7 +94,9 @@ def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch):
     assert "label: 'ledger-check'" not in script
     verify = script[: script.index("label: 'verify'")]
     verify = verify[verify.rindex("agent("):]
-    assert "Ledger check, folded" in verify and "root_read" in verify and "engine-plane" in verify
+    assert "_verdictText()" in verify
+    verdict = _verdict_text_def(script)
+    assert "requirements ledger" in verdict and "root_read" in verdict and "engine-plane" in verdict
     assert script.count(_CLAUSE) >= 2
 
 

@@ -25,6 +25,10 @@ Negative-spec:
   - `unreachable` is also returned for a hook body (in a repo holding a hook wiring surface), bin
     script, doc or op the range CREATED and nothing modelled names. A pre-existing hook or bin script
     stays `undecidable`: its wiring may live in another repo.
+  - `pipeline-output` (a Python file's added `Path("a/b.ext").write_text|write_bytes`, `open(..., "w"|"a")`
+    or `json.dump(..., open(...))` literal) is `unreachable` only when no other non-test file holds the
+    literal, the producer repeats it nowhere, and no other file even holds its basename; an f-string,
+    joined or variable path is `undecidable`.
   - Click paths are traced on the Next.js app router only; any other stack is `undecidable`.
   - A middleware/proxy rewrite or redirect is not modelled: with one present, a step the trace
     cannot resolve is `undecidable`, never `broken`.
@@ -75,8 +79,18 @@ _MANIFESTS = (
     "package.json", "pyproject.toml", "setup.py", "setup.cfg", "hooks.json", "plugin.json",
     "manifest.json", ".claude/settings.json", ".claude/settings.local.json",
 )
-_ALL_ENTRY_KINDS = ("exported-function", "cli", "hook", "api-route", "page", "doc", "op")
+_ALL_ENTRY_KINDS = ("exported-function", "cli", "hook", "api-route", "page", "doc", "op", "pipeline-output")
 _REGISTRATION_KINDS = ("cli", "hook", "op")
+# A pipeline output is a string-literal repo-relative path a Python script writes; a consumer is any
+# other non-test file holding that literal.
+_PO_LIT = r"""(['"])([^'"\\\n{}]+/[^'"\\\n{}/]*\.[A-Za-z0-9]{1,8})\1"""
+_PO_PATH_WRITE = re.compile(r"\bPath\(\s*" + _PO_LIT + r"\s*\)\s*\.\s*write_(?:text|bytes)\(")
+_PO_PATH_OPEN = re.compile(r"\bPath\(\s*" + _PO_LIT + r"\s*\)\s*\.\s*open\(\s*['\"][wa][bt+]*['\"]")
+_PO_OPEN = re.compile(r"\bopen\(\s*" + _PO_LIT + r"\s*,\s*(?:mode\s*=\s*)?['\"][wa][bt+]*['\"]")
+_PO_ANY_WRITE = re.compile(r"\.\s*write_(?:text|bytes)\(")
+_PO_ANY_OPEN = re.compile(r"\bopen\(\s*[^)]*?,\s*(?:mode\s*=\s*)?['\"][wa][bt+]*['\"]")
+_PO_DYNAMIC = "<dynamic path>"
+_PO_CONSUMER_EXT = _CODE_EXT + (".md", ".json", ".yaml", ".yml", ".toml", ".sh", ".ps1", ".txt", ".cfg")
 _WORD = re.compile(rb"[\w$]")
 
 _LINK_RE = re.compile(r"""<Link[^>]*?href=\{?['"`]([^'"`]+)['"`]\}?[^>]*>([^<]*)<""")
@@ -190,6 +204,62 @@ def _classify(rel: str, text: str) -> list[tuple[str, str]]:
     if re.search(r"(^|/)hooks/", rel):
         return [("hook", Path(rel).stem)]
     return [("exported-function", s) for s in syms]
+
+
+def _pipeline_outputs(rel: str, text: str) -> list[tuple[str, str]]:
+    """[("pipeline-output", literal path | `<dynamic path>`)] for a Python file's added lines.
+
+    A write whose path is not a plain repo-relative literal yields one `<dynamic path>` entry per file."""
+    if not rel.endswith(".py") or not ("write_" in text or "open(" in text):
+        return []
+    def valid(p: str) -> bool:
+        return not p.startswith(("/", "\\")) and ".." not in p.split("/") and not re.match(r"[A-Za-z]:|\w+://", p)
+
+    counted = [m.group(2) for rx in (_PO_PATH_WRITE, _PO_OPEN) for m in rx.finditer(text)]
+    good = [m.group(2) for rx in (_PO_PATH_WRITE, _PO_PATH_OPEN, _PO_OPEN) for m in rx.finditer(text)
+            if valid(m.group(2))]
+    dynamic = len(_PO_ANY_WRITE.findall(text)) + len(_PO_ANY_OPEN.findall(text)) - sum(1 for p in counted if valid(p))
+    out = [("pipeline-output", p) for p in dict.fromkeys(good)]
+    if dynamic > 0:
+        out.append(("pipeline-output", _PO_DYNAMIC))
+    return out
+
+
+def _output_verdicts(root: Path, found: list[tuple[str, str, str]], extra: list[str], index: list[str]) -> dict:
+    """{("pipeline-output", literal, producer): verdict}: another non-test file holding the literal is
+    `reachable`; a repeat in the producer or only the basename elsewhere is `undecidable`; else `unreachable`."""
+    outs = [(s, r) for k, s, r in found if k == "pipeline-output"]
+    verdicts = {("pipeline-output", _PO_DYNAMIC, r): "undecidable" for s, r in outs if s == _PO_DYNAMIC}
+    lits = {s for s, _ in outs if s != _PO_DYNAMIC}
+    if not lits:
+        return verdicts
+    wanted = {s: (s.encode(), s.rsplit("/", 1)[-1].encode()) for s in lits}
+    files = [p for p in index if p.endswith(_PO_CONSUMER_EXT) and not _TEST_RE.search(p)]
+    seen = set(files)
+    files += [e for e in dict.fromkeys(extra) if e not in seen and e.endswith(_PO_CONSUMER_EXT) and not _TEST_RE.search(e)]
+    full: dict[str, set[str]] = {s: set() for s in lits}
+    base: dict[str, set[str]] = {s: set() for s in lits}
+    for f in files:
+        try:
+            b = (root / f).read_bytes()
+        except OSError:
+            continue
+        for s, (lit_b, name_b) in wanted.items():
+            if lit_b in b:
+                full[s].add(f)
+            elif name_b in b:
+                base[s].add(f)
+    for s, rel in outs:
+        if s == _PO_DYNAMIC:
+            continue
+        if full[s] - {rel}:
+            v = "reachable"
+        elif base[s] - {rel} or _read(root, rel).count(s) > 1:
+            v = "undecidable"
+        else:
+            v = "unreachable"
+        verdicts[("pipeline-output", s, rel)] = v
+    return verdicts
 
 
 def _route_of(rel: str) -> tuple[str, bool]:
@@ -462,6 +532,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             continue
         text = "\n".join(lines)
         entries = _classify(rel, text) + doc_entries(rel) + registration_entries(rel, text)
+        if "pipeline-output" in kinds:
+            entries += _pipeline_outputs(rel, text)
         for kind, sym in dict.fromkeys(entries):
             if kind in kinds:
                 found.append((kind, sym, rel))
@@ -485,6 +557,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         resolved.update({("doc", "", r): v for r, v in doc_verdicts(root, doc_rels, added, _index()).items()})
     if reg_found:
         resolved.update(registration_verdicts(root, reg_found, added, _index(), new=frozenset(created)))
+    if any(k == "pipeline-output" for k, _, _ in found):
+        resolved.update(_output_verdicts(root, found, writes, _index()))
     ents = _verdicts(root, found, sym_hits, route_hits, barrels, lambda: _manifest_text(root), sym_counts, resolved)
 
     touches_next = any(

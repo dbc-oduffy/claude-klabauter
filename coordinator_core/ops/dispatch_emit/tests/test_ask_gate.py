@@ -64,11 +64,24 @@ def test_accepted_xl_shape_halts_as_room(repo):
     assert v.arm is None and v.halt["kind"] == "room" and v.halt["route"] == "shape"
 
 
-def test_xl_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo):
+def test_xl_null_acceptance_is_engine_owned_and_does_not_halt_as_touchpoint(repo):
+    (repo / ".git").mkdir()
     _put(repo, tshirt="XL", route="plan")
     v = gate(repo, REL)
+    assert v.halt is None and v.arm == "m_plus"
+
+
+def test_m_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo):
+    (repo / ".git").mkdir()
+    _put(repo, tshirt="M", route="pm-decision", xl_exit="accept_multi_session")
+    v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "touchpoint"
-    assert "sizing-accept-exit-criterion" in v.halt["touchpoint"]  # C2/C9: launcher line and REL in v.halt["touchpoint"]
+    assert "sizing-accept-exit-criterion" in v.halt["touchpoint"]
+def test_absent_statement_halts_as_touchpoint_naming_invoke_line(repo):
+    _put(repo, tshirt="S", route="spec-dispatch", exit_criterion={"statement": None, "accepted": None})
+    v = gate(repo, REL, writes=["a.py"])
+    assert v.arm is None and v.halt["kind"] == "touchpoint"
+    assert "sizing.accept_exit_criterion" in v.halt["touchpoint"] and REL in v.halt["touchpoint"]
 
 
 def test_refusals_halt_all_named_at_once(repo, monkeypatch):
@@ -118,13 +131,45 @@ def test_m_plus_baton_carries_the_sizing_deliverable_id(repo):
     assert v.to_json()["baton"]["deliverableId"] == "dlv-fixture-abc123"
 
 
+@pytest.mark.cadence
+@pytest.mark.spawns_process
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 @pytest.mark.parametrize("tshirt,route", [("XL", "plan"), ("XXL", "plan")])
-def test_xl_keeps_the_acceptance_touchpoint(repo, mode, tshirt, route):
+def test_xl_acceptance_is_engine_owned_in_every_mode(repo, mode, tshirt, route):
+    (repo / ".git").mkdir()
     _put(repo, tshirt=tshirt, route=route, mode=mode)
     v = gate(repo, REL)
-    assert v.halt["kind"] == "touchpoint"
+    assert v.halt is None and v.arm == "m_plus"
     assert v.acceptance is None
+
+
+@pytest.mark.parametrize("em_size", ["XS", "S", "M", "m"])
+@pytest.mark.parametrize("tshirt", ["XL", "XXL"])
+def test_em_small_vs_engine_large_halts_misaligned_naming_both(repo, em_size, tshirt):
+    _put(repo, tshirt=tshirt, route="plan")
+    v = gate(repo, REL, em_size=em_size)
+    assert v.arm is None and v.halt["kind"] == "misaligned"
+    assert em_size in v.halt["reason"] and tshirt in v.halt["reason"]
+
+
+@pytest.mark.parametrize("em_size,tshirt", [("L", "XL"), ("XL", "XXL"), ("M", "L"), ("S", "M"), ("M", "S")])
+def test_em_size_without_the_misaligned_pairing_does_not_halt_misaligned(repo, em_size, tshirt):
+    _put(repo, tshirt=tshirt, route="spec-dispatch", accepted=ACCEPTED)
+    v = gate(repo, REL, em_size=em_size, writes=["a.py"])
+    assert v.halt is None or v.halt["kind"] != "misaligned"
+
+
+@pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
+def test_pm_decision_without_em_size_takes_the_apm_xl_exit_in_every_mode(repo, mode):
+    _put(repo, tshirt="XL", route="pm-decision", mode=mode)
+    v = gate(repo, REL)
+    assert v.arm is None and v.halt["kind"] == "room" and v.halt["apm_xl_exit"] is True
+
+
+def test_em_size_param_is_accepted_by_the_op_seam():
+    from coordinator_core.ops.dispatch_emit.ask_gate import _PARAMS
+
+    assert any(f.name == "em_size" for f in _PARAMS)
 
 
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])

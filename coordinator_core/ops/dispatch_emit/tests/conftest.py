@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 
@@ -12,6 +14,10 @@ def pytest_configure(config):
         "markers",
         "xs_gate_live: opt out of this directory's stub of the XS diff-budget refusal "
         "(terminal_commit tests that pin the unmeasurable-diff refusal live)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "twin_needs_script: opt out of this directory's run-script stub (the staged-twin refusal of an absent script runs live)",
     )
 
 
@@ -93,6 +99,37 @@ def write_run_scripts(root, *run_ids: str) -> None:
     warp.mkdir(parents=True, exist_ok=True)
     for run_id in run_ids:
         (warp / f"{run_id}.workflow.mjs").write_text("export const meta = { name: 'x' }\nreturn 1;\n", encoding="utf-8")
+
+
+_LIVE_TWIN_REFUSAL_MODULES = frozenset({"test_reply_sidecar"})
+
+
+@pytest.fixture(autouse=True)
+def _stage_finds_its_run_script(request):
+    """Cluster B: staging a run manifest leaves a twin beside the run's script and refuses when the
+    script is absent. A fixture that stages `run_id` without emitting the script gets the same
+    `write_run_scripts` stub the explicit callers use, written only when the file is missing.
+    A test marked `twin_needs_script`, or in a module of `_LIVE_TWIN_REFUSAL_MODULES` (they pin the
+    refusal itself), keeps it live."""
+    if request.node.get_closest_marker("twin_needs_script") or request.module.__name__.rpartition(".")[2] in _LIVE_TWIN_REFUSAL_MODULES:
+        yield
+        return
+    from coordinator_core.ops.dispatch_emit import launcher_staged_twin as twin
+
+    real = twin.ensure_twin
+
+    def _with_script(root, sidecar_rel, *args, **kwargs):
+        run_id = twin.manifest_run_id(sidecar_rel)
+        if run_id is not None and not (Path(root) / "scratch" / "warp" / f"{run_id}.workflow.mjs").exists():
+            write_run_scripts(Path(root), run_id)
+        return real(root, sidecar_rel, *args, **kwargs)
+
+    # Not monkeypatch: a test that calls `monkeypatch.undo()` mid-test must not strip the stub.
+    twin.ensure_twin = _with_script
+    try:
+        yield
+    finally:
+        twin.ensure_twin = real
 
 
 def execute_section(script: str) -> str:

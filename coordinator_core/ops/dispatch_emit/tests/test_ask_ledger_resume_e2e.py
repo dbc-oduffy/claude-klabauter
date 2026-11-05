@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     read_ledger_halt,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
+from coordinator_core.ops.dispatch_emit.tests.test_requirements_ledger import WIRED_EVIDENCE
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import (  # noqa: F401
@@ -76,7 +77,8 @@ def _sizings(root) -> list:
 
 def _met_out_of_band(root) -> None:
     rl.apply_verdict(
-        root, SIZING, {"items": [{"id": "R1", "status": "met", "wired": True}]}, run_id="oob", sha="b" * 7
+        root, SIZING, {"items": [{"id": "R1", "status": "met", "wired": True, **WIRED_EVIDENCE}]},
+        run_id="oob", sha="b" * 7
     )
 
 
@@ -124,7 +126,7 @@ def test_row_met_out_of_band_resumes_the_same_sizing_and_the_new_run_commits(hal
     assert _sizings(halted) == before
 
     token = _second_run(halted)
-    out = _commit(halted, token, {"items": [{"id": "R1", "status": "met", "wired": True}]})
+    out = _commit(halted, token, {"items": [{"id": "R1", "status": "met", "wired": True, **WIRED_EVIDENCE}]})
     assert out["committed"] is True, out
     assert out["rows_coded"] == {PLAN: ["C1"]}, out.get("rows_coded")
     assert "disposition: coded" in (halted / PLAN).read_text(encoding="utf-8")

@@ -884,7 +884,7 @@ def build_flag_severity_classification_judgment_point() -> dict[str, Any]:
             ),
         },
         id="flag-severity-classification",
-        question="Is this flagged item break-class (fix-by-default) or direction-class (ask the PM)?",
+        question="Is this flagged item break-class (fix-by-default) or direction-class (ask the APM)?",
         dispositions=[
             build_disposition("break-class", resolves=[]),
             build_disposition("direction-class", resolves=[]),

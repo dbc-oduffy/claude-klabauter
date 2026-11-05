@@ -156,7 +156,9 @@ def test_marker_published_as_the_budget_runs_out_still_rides_an_allow_with_the_c
     assert _decision(env) == "allow", env
     assert chosen[0] in env["hookSpecificOutput"]["additionalContext"]
     script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
-    assert chosen[0] in script.read_text(encoding="utf-8")
+    assert script.is_file()
+    params = list((repo / "scratch" / "warp").glob("defer-params-*.json"))
+    assert len(params) == 1 and chosen[0] in params[0].read_text(encoding="utf-8")
 
 
 PEER_RUN = "ask-20261102T200001-c84894"

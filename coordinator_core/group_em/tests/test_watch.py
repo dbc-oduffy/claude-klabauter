@@ -37,6 +37,9 @@ def _quiet_host_memory(monkeypatch):
     monkeypatch.setattr(watch, "_memory_floor_mb", lambda: None)
     monkeypatch.setattr(watch, "_process_census", lambda: None)
     monkeypatch.setattr(watch, "_reap_orphans", lambda: [])
+    # Real host load5 would trip the over-core alarm into emitted-line assertions;
+    # load cases patch read_load5 themselves.
+    monkeypatch.setattr(watch.box_load, "read_load5", lambda: None)
 
 
 def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):

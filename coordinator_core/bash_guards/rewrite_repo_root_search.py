@@ -290,7 +290,7 @@ def _check(payload: Dict[str, Any], tool_input: Dict[str, Any], cmd: str) -> Any
     return AlternativeRecord(
         verdict_kind="advisory",
         summary=text,
-        members=(AdaptableOffer(template="example-retrieval-repo project_semantic_search, git grep or the Grep tool", what_to_adapt="the query"),),
+        members=(AdaptableOffer(template="git grep -n <pattern> -- <subdir> (tracked files; no Grep tool needed), or example-retrieval-repo project_semantic_search", what_to_adapt="the query"),),
         guard_name=LEG_ID,
         em_text=text,
     )

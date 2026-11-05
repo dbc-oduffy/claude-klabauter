@@ -115,17 +115,16 @@ def test_close_then_archive_workdir_land_one_run_dir_and_legacy_still_reads(repo
     assert not (research / "trail" / "r1.yaml").exists()
 
 
-def test_a_stray_outside_the_run_dir_refuses_the_close_with_nothing_written(repo, scratch):
+def test_a_stray_outside_the_run_dir_is_noted_not_refused_and_left_intact(repo, scratch):
     stray = repo / "docs" / "research" / "2026-11-03-stray-dump"
     stray.mkdir()
     (stray / "late.md").write_text("late\n")
-    head = _git(repo, "rev-parse", "HEAD")
     out = asyncio.run(close_handler(
         {"scratch_dir": str(scratch), "tier": "corpus", "run_id": "r1", "topic_slug": _SLUG,
          "outputs": ["synthesis.md"]},
         repo / ".git",
     ))
-    assert out["exit_code"] == 1 and out["committed"] is False and out["deliverable"] is False, out
-    assert out["strays"] == ["docs/research/2026-11-03-stray-dump/late.md"]
-    assert _git(repo, "rev-parse", "HEAD") == head
-    assert not (repo / "docs" / "research" / _TOPIC).exists()
+    assert out["exit_code"] == 0 and out["committed"] is True and out["deliverable"] is True, out
+    assert out["peer_files"] == ["docs/research/2026-11-03-stray-dump/late.md"]
+    assert (stray / "late.md").read_text() == "late\n"
+    assert "late.md" not in _git(repo, "show", "--name-only", "--format=", "HEAD")

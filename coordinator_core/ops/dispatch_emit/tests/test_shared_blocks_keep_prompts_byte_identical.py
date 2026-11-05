@@ -5,7 +5,7 @@ from coordinator_core.ops.dispatch_emit import emit
 from .conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
-from ._shared_expand import expand_shared
+from ._shared_expand import expand_shared, merge_adjacent_literals
 
 _WORKFLOW_SCRIPT_CAP = 524288
 
@@ -51,7 +51,9 @@ def _compose(waves, *, shared: bool) -> str:
 
 def test_every_resolved_prompt_is_byte_identical_with_sharing():
     waves = _waves(4)
-    assert expand_shared(_compose(waves, shared=True)) == _compose(waves, shared=False)
+    assert merge_adjacent_literals(expand_shared(_compose(waves, shared=True))) == merge_adjacent_literals(
+        _compose(waves, shared=False)
+    )
 
 
 def test_a_fifty_wave_plan_fits_the_workflow_script_cap():

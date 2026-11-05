@@ -62,5 +62,5 @@ def test_multi_ask_fanout_slower_than_the_budget_denies_naming_the_hook_budget(r
     finally:
         release.set()
     hso = env["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert "hook budget" in hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow"
+    assert "spooled as" in hso["additionalContext"]

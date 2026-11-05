@@ -20,7 +20,10 @@ def test_misrouted_halt_names_the_plan_path_stage_and_other_halts_keep_revise(mo
     misrouted, other = rest.split(" : ", 1)
     assert misrouted.startswith("{ kind: 'stage_by_plan_path'")
     assert "revise_and_refire" not in misrouted
-    assert other.startswith(ask_compose.REVISE_NEXT_ACTION_JS)
+    # A research halt with rows to fire records fire_research; every remaining halt keeps the revise one.
+    assert other.startswith("(_halted?.halted === 'research'")
+    assert other.index("kind: 'fire_research'") < other.index(ask_compose.REVISE_NEXT_ACTION_JS)
+    assert other.endswith(ask_compose.REVISE_NEXT_ACTION_JS + ");")
 
 
 def test_a_run_without_in_run_commit_still_records_none(monkeypatch):

@@ -417,6 +417,13 @@ FIXTURES: dict[str, GuardFixtures] = {
         "deny": [_home_with_claude(_SCAFFOLD, in_claude_home=True)],
         "allow": [_home_with_claude(_SCAFFOLD, in_claude_home=False), _home_with_claude("ls", in_claude_home=True)],
     },
+    _G + "guard_uncapped_pytest_plugin": {
+        "deny": [_plain("pytest -p evilplug tests/")],
+        "allow": [
+            _plain("pytest -p no:cacheprovider tests/"),
+            _plain("python -m coordinator_core.testing.scoped_pytest --allow t -- -p evilplug"),
+        ],
+    },
     _G + "guard_subagent_heavy_ue_launch": {
         "deny": [_plain("UnrealEditor-Cmd.exe proj.uproject -run=Foo", agent_id="agent-abc123")],
         "allow": [

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.machine_resolver import registry_get
 from coordinator_core.ops.ceremony.git_native import cat_file_batch
 from coordinator_core.rea_ledger.canonical import canonical_bytes, revision_digest
 
@@ -26,7 +27,6 @@ PINNED_SHA256 = {
     "vectors.json": "f5bb8475d439cf471526e1a88aabdff5fa092a499266a5f0ec2f3951e2aa5edf",
 }
 _VENDORED = Path(__file__).resolve().parents[1] / "vendored" / "unknown-revision" / "v1"
-_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def _vectors() -> dict:
@@ -62,10 +62,11 @@ def test_a_single_edited_byte_breaks_the_pin(name: str) -> None:
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_vendored_bytes_match_sibling_blobs_at_pinned_sha() -> None:
-    sibling = _REPO_ROOT.parent / "project-rag"
+    registered = registry_get("repos.project_rag")
+    sibling = Path(registered) if registered else None
     got = (
         cat_file_batch(sibling, PINNED_SHA, list(SOURCE_PATHS.values()))
-        if (sibling / ".git").exists()
+        if sibling is not None and (sibling / ".git").exists()
         else {}
     )
     blobs = {name: got.get(path) for name, path in SOURCE_PATHS.items()}

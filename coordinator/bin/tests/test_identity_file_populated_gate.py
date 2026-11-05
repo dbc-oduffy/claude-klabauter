@@ -80,11 +80,12 @@ def _stub_dest_refresh(monkeypatch) -> None:
 
     monkeypatch.setattr(
         _dest_refresh,
-        "refresh_dest_from_origin",
+        "fetch_dest_upstream",
         lambda repo_root, *, out, err, source_root=None, source_ref="HEAD": _dest_refresh.RefreshResult(
             Path(repo_root), ok=True, branch="main", upstream="origin/main"
         ),
     )
+    monkeypatch.setattr(_dest_refresh, "fast_forward_dest", lambda result, *, out, err: result)
 
 
 def _wire_main_preconditions_except_identity(monkeypatch, *, setup_dir: Path, rows: list) -> None:

@@ -41,7 +41,9 @@ def yaml_load(text):
     """``yaml.safe_load`` on libyaml when present: same resolvers, same ``yaml.YAMLError``."""
     import yaml
 
-    return yaml.load(text, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
+    from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
+
+    return yaml.load(text, Loader=SAFE_LOADER)
 
 
 def row_rank(row: dict) -> int:

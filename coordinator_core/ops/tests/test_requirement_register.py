@@ -12,6 +12,8 @@ import yaml
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops import requirement_register_stall as rrs
 
+EV = {"command": "python -m consumer --run", "observed": "consumer reached the output"}
+
 
 def _row(rid, status="open", **kw):
     row = {
@@ -91,9 +93,9 @@ def test_apply_verdicts_preserves_bytes_outside_block_and_recomputes():
             _row("d", claimed_by=[P2])]
     text = _sizing(rows, tail="exit_criterion:\n  statement: x  # inline\n\nplan: p.md\n")
     judged = [
-        {"id": "a", "status": "met", "wired": True, "observed_ref": "cli:x"},
+        {"id": "a", "status": "met", "wired": True, "observed_ref": "cli:x", **EV},
         {"id": "b", "status": "met", "wired": False},
-        {"id": "d", "status": "met", "wired": True, "observed_ref": "ignored"},
+        {"id": "d", "status": "met", "wired": True, "observed_ref": "ignored", **EV},
     ]
     new = rr.apply_verdicts(text, judged, P1, "abc123", NOW)
     head, tail = text.split("requirement_register:")[0], text.split("exit_criterion:")[1]
@@ -114,7 +116,7 @@ def test_apply_verdicts_appends_met_by_and_skips_ruled_rows():
             _row("b", "deferred", claimed_by=[P1], ruling=RULING)]
     new = rr.apply_verdicts(
         _sizing(rows),
-        [{"id": "a", "status": "met", "wired": True}, {"id": "b", "status": "met", "wired": True}],
+        [{"id": "a", "status": "met", "wired": True, **EV}, {"id": "b", "status": "met", "wired": True, **EV}],
         P1, "new", NOW)
     reg = {r["id"]: r for r in rr.read_register(new).rows}
     assert reg["a"]["met_by"] == [f"{P2}@old", f"{P1}@new"] and reg["a"]["status"] == "met"
@@ -122,7 +124,7 @@ def test_apply_verdicts_appends_met_by_and_skips_ruled_rows():
 
 
 def _verdict_for(entry_point):
-    row = {"id": "a", "claim": "this-plan", "status": "met", "wired": True}
+    row = {"id": "a", "claim": "this-plan", "status": "met", "wired": True, **EV}
     if entry_point is not None:
         row[rr.JUDGE_EVIDENCE_ENTRY_POINT] = entry_point
     return row
@@ -172,10 +174,10 @@ def test_blocking_unclaimed_skips_claimed_met_ruled_and_other_plans():
 def test_apply_verdicts_claim_ids_moves_row_claimed_only_by_plan():
     rows = [_row("a")]
     new = rr.apply_verdicts(
-        _sizing(rows), [{"id": "a", "status": "met", "wired": True}], P1, "sha", NOW, ["a"])
+        _sizing(rows), [{"id": "a", "status": "met", "wired": True, **EV}], P1, "sha", NOW, ["a"])
     row = rr.read_register(new).rows[0]
     assert row["status"] == "met" and row["met_by"] == [f"{P1}@sha"]
-    same = rr.apply_verdicts(_sizing(rows), [{"id": "a", "status": "met", "wired": True}], P1, "sha", NOW)
+    same = rr.apply_verdicts(_sizing(rows), [{"id": "a", "status": "met", "wired": True, **EV}], P1, "sha", NOW)
     assert rr.read_register(same).rows[0]["status"] == "open"
 
 
@@ -634,10 +636,11 @@ def test_constraint_row_recorded_honoured_unblocks_ship(tmp_path):
 
 def test_apply_verdicts_repeat_for_the_same_sha_is_byte_identical():
     rows = [_row("a", claimed_by=[P1])]
-    once = rr.apply_verdicts(_sizing(rows), [{"id": "a", "status": "met", "wired": True}], P1, "sha1", NOW)
-    again = rr.apply_verdicts(once, [{"id": "a", "status": "met", "wired": True}], P1, "sha1", NOW + timedelta(minutes=5))
+    verdict = [{"id": "a", "status": "met", "wired": True, **EV}]
+    once = rr.apply_verdicts(_sizing(rows), verdict, P1, "sha1", NOW)
+    again = rr.apply_verdicts(once, verdict, P1, "sha1", NOW + timedelta(minutes=5))
     assert again == once
-    newer = rr.apply_verdicts(once, [{"id": "a", "status": "met", "wired": True}], P1, "sha2", NOW + timedelta(minutes=5))
+    newer = rr.apply_verdicts(once, verdict, P1, "sha2", NOW + timedelta(minutes=5))
     assert newer != once
 
 

@@ -45,6 +45,21 @@ def _halted_run(root: Path, run_id: str, *, status: str = "halted", writes=(JOB,
         _write(root, f"scratch/warp/{run_id}/commit-request.txt", render_marker(request) + "\n")
 
 
+def _dirty_in_a_git_tree(root: Path, rel: str) -> None:
+    """Track ``rel`` then edit it: a withheld path clean in the tree is no hold, so the hold needs real dirt."""
+    import subprocess
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, check=True,
+                       capture_output=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    _write(root, rel, "x = 1\n")
+    git("init", "-q")
+    git("add", rel)
+    git("commit", "-q", "-m", "base")
+    _write(root, rel, "x = 2\n")
+
+
 @pytest.fixture
 def repo(tmp_path):
     root = tmp_path / "repo"
@@ -56,6 +71,7 @@ def test_the_runs_own_halted_record_is_not_a_hold_against_itself(repo):
     own = "run-r"
     assert terminal_commit._live_run_claims(repo, [JOB], own) == set()
     _halted_run(repo, _run_id(), withheld=(JOB,))
+    _dirty_in_a_git_tree(repo, JOB)
     held: dict = {}
     assert terminal_commit._live_run_claims(repo, [JOB, "src/a.py"], own, held) == {JOB}
     assert list(held) == [JOB]

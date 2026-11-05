@@ -66,3 +66,10 @@ def test_op_refusal_row_must_name_a_real_site_and_a_redirect(monkeypatch):
     problems = gc.reconcile()
     assert any("names no op refusal site" in p for p in problems)
     assert any("must be a block with a redirect" in p for p in problems)
+
+
+def test_every_registered_write_guard_names_a_redirect():
+    from coordinator_core.guard_census import write_guards as wg
+
+    missing = (set(wg._REGISTERED) & set(gc.enumerate_write_guards())) - set(wg._REDIRECT)
+    assert not missing, f"registered write guards without a redirect: {sorted(missing)}"

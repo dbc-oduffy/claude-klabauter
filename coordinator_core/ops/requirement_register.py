@@ -50,6 +50,9 @@ ROW_SURFACE = "surface"
 ROW_STATUS = "status"
 ROW_CLAIMED_BY = "claimed_by"
 ROW_WIRED = "wired"
+ROW_WIRED_EVIDENCE = "wired_evidence"
+EVIDENCE_COMMAND = "command"
+EVIDENCE_OUTPUT = "output"
 ROW_MET_BY = "met_by"
 ROW_LAST_PROGRESS_AT = "last_progress_at"
 ROW_RULING = "ruling"
@@ -82,6 +85,17 @@ JUDGE_EVIDENCE_ENTRY_POINT = "evidence_entry_point"
 EVIDENCE_PRODUCTION = "production"
 EVIDENCE_HAND_BUILT = "hand-built-fixture"
 EVIDENCE_KINDS = (EVIDENCE_PRODUCTION, EVIDENCE_HAND_BUILT)
+
+
+def wired_evidence(item: Mapping) -> dict[str, str] | None:
+    """The consumer command and its output a judge verdict item carries as `{command, observed}`
+    (both non-empty strings), as the `{command, output}` a register row records; None when either
+    is missing, which demotes a `wired: true` verdict to unwired."""
+    command, observed = item.get("command"), item.get("observed")
+    if not (isinstance(command, str) and command.strip() and isinstance(observed, str) and observed.strip()):
+        return None
+    return {EVIDENCE_COMMAND: command, EVIDENCE_OUTPUT: observed}
+
 
 STALL_DAYS = 7
 _LIST_CAP = 15
@@ -154,13 +168,17 @@ _str_loader_cache: list[Any] = []
 def _loader() -> Any:
     """A safe loader that leaves ISO timestamps as strings, so a round-trip keeps their text.
 
-    Based on `yaml.CSafeLoader` when libyaml is present, else `yaml.SafeLoader`; the timestamp
-    resolver table is Python-side on both bases.
+    Based on libyaml's `CSafeLoader` when `yaml.__with_libyaml__` holds, else `yaml.SafeLoader`
+    (read at first call, then cached); the timestamp resolver table is Python-side on both bases.
     """
     if not _str_loader_cache:
         import yaml
 
-        base = yaml.CSafeLoader if getattr(yaml, "__with_libyaml__", False) else yaml.SafeLoader
+        base = (
+            yaml.CSafeLoader
+            if getattr(yaml, "__with_libyaml__", False) and hasattr(yaml, "CSafeLoader")
+            else yaml.SafeLoader
+        )
 
         class _StrLoader(base):
             pass
@@ -665,7 +683,8 @@ def apply_verdicts(
         if verdict is None or row.get(ROW_STATUS) in (STATUS_DEFERRED, STATUS_WAIVED):
             continue
         met = verdict.get(ROW_STATUS) == STATUS_MET
-        wired = verdict.get(ROW_WIRED) is True
+        evidence = wired_evidence(verdict)
+        wired = verdict.get(ROW_WIRED) is True and evidence is not None
         if verdict.get(JUDGE_EVIDENCE_ENTRY_POINT) == EVIDENCE_HAND_BUILT:
             met = False
         ref = f"{_plan_key(plan_path)}@{sha}"
@@ -680,6 +699,10 @@ def apply_verdicts(
         if key and key not in claimants(row):
             row[ROW_CLAIMED_BY] = [*(row.get(ROW_CLAIMED_BY) or []), key]
         row[ROW_WIRED] = wired
+        if wired:
+            row[ROW_WIRED_EVIDENCE] = evidence
+        else:
+            row.pop(ROW_WIRED_EVIDENCE, None)
         if met and wired:
             row[ROW_MET_BY] = met_by + ([ref] if ref not in met_by else [])
         row[ROW_LAST_PROGRESS_AT] = stamp

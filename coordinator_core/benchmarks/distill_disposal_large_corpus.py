@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -144,7 +143,9 @@ def run(files: int = DEFAULT_FILES, candidates: int = DEFAULT_CANDIDATES,
         return rows
     finally:
         if not keep:
-            shutil.rmtree(top, ignore_errors=True)
+            from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+            rmtree_or_raise(Path(top), label="distill-disposal")
 
 
 def main(argv: Optional[list] = None) -> int:

@@ -52,7 +52,6 @@ def _emit_m_ask(repo, capsys, blitz_text, monkeypatch):
 
 _BLINDED_REVIEWER_TAIL = "' -- read it completely, then execute it as written.'"
 _CHECKPOINT_COMMITTER_MARK = "On commit-failed, put the verbatim refusal in `reason`."
-_SIZING_PROBE_MARK = "once and return present true when it exits 0, else false. Write nothing."
 _VERDICT_WRITER_TAIL = "holding exactly this text and nothing else: ' + JSON.stringify(_v) + '. Return the path you wrote."
 
 
@@ -62,11 +61,10 @@ def _agent_prompts(script: str) -> list[str]:
         end = script.index("label:", m.end()) if "label:" in script[m.end():] else m.end() + 200
         out.append(script[m.end():end])
     # The blinded falsifier-integrity reviewer and its verdict-write writer carry no EM brief by design;
-    # so does the mechanical checkpoint committer, whose whole task is the declared path list, and the
-    # mechanical sizing-probe, whose whole task is one `test -f`.
+    # so does the mechanical checkpoint committer, whose whole task is the declared path list.
     return [
         p for p in out
-        if not any(m in p for m in (_VERDICT_WRITER_TAIL, _BLINDED_REVIEWER_TAIL, _CHECKPOINT_COMMITTER_MARK, _SIZING_PROBE_MARK))
+        if not any(m in p for m in (_VERDICT_WRITER_TAIL, _BLINDED_REVIEWER_TAIL, _CHECKPOINT_COMMITTER_MARK))
     ]
 
 

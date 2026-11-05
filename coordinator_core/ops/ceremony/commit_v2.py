@@ -1450,6 +1450,29 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in held]
             for path, sha in own_blobs.items():
                 expectations["supplied_blobs"].setdefault(path, sha)
+            from coordinator_core.ops.dispatch_emit import halted_hunk_attribution
+
+            if run_id and halted_hunk_attribution._baseline(worktree_root, run_id) is not None:
+                # Trap: own_blobs only splits paths HEAD tracks; a new file stages whole, so the
+                # unproduced-hunk check the halt-record commit uses gates it. A run with no
+                # write_baseline cannot be judged: unchanged. A new file the baseline omits is withheld.
+                from coordinator_core.git.git_state import head_blobs
+                from coordinator_core.ops.dispatch_emit import hunk_provenance
+
+                in_head = head_blobs(worktree_root, [p.replace("\\", "/") for p in raw_paths])
+                new_paths = [
+                    p for p in raw_paths
+                    if p.replace("\\", "/") not in in_head and (worktree_root / p).is_file()
+                ]
+                foreign_new = {
+                    f.path for f in hunk_provenance.unproduced_hunks(
+                        worktree_root, run_id, new_paths,
+                        own_plan=checkpoint_hunks._message_plan(message) or None,
+                    )
+                } if new_paths else set()
+                if foreign_new:
+                    raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in foreign_new]
+                    checkpoint_withheld = sorted({*checkpoint_withheld, *foreign_new})
         if not (raw_paths or raw_deleted or raw_untracked):
             return _error(
                 "every checkpoint path holds hunks outside this run or the run is unresolved, nothing to commit.",

@@ -123,6 +123,29 @@ def test_overrun_after_a_run_was_minted_starts_it_and_names_it(repo, monkeypatch
     assert "Do not re-submit" in json.dumps(env)
 
 
+def test_premint_overrun_before_the_record_write_mints_the_chosen_id_and_defers(repo, monkeypatch):
+    """An unminted premint overrun is taken: the deferred emit adopts the chosen id (inline or via its params file)."""
+    import re
+    import threading
+
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
+    release = threading.Event()
+    monkeypatch.setattr(mod, "_premint_marker", lambda params, root, run_id=None: release.wait(30))
+    try:
+        env = mod.evaluate(real._payload(repo, {"ask": "build the thing", "source": "relayed"}))
+    finally:
+        release.set()
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", env
+    found = re.search(r"\bask-\d{8}T\d{6}-[0-9a-f]{6}\b", hso["additionalContext"])
+    assert found and "nothing was taken" not in str(env)
+    text = Path(hso["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    params_file = re.search(r'^const PARAMS_FILE = "(.*)";$', text, re.MULTILINE)
+    if params_file and params_file.group(1):
+        text += Path(params_file.group(1)).read_text(encoding="utf-8")
+    assert found.group(0) in text  # the deferred emit adopts the chosen id
+
+
 def _stall_record_write(monkeypatch):
     """Stall the run record's temp-file creation until released; `done` is set when the stalled write returns."""
     import tempfile

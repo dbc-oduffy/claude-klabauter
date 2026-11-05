@@ -106,9 +106,11 @@ def acquire_lock(path):
     return False
 
 
-def probe(roster, alias, key, run=subprocess.run):
-    """None when the far relay answers, else a short reason. Uses only the relay key."""
-    remote = roster.pick_remote(alias, roster.default_tunnel())
+def probe(roster, alias, key, run=subprocess.run, remote=None):
+    """None when the far relay answers, else a short reason. Uses only the relay key.
+
+    `remote` overrides the dialled name (a stable-name fallback for a stale `alias`)."""
+    remote = remote or roster.pick_remote(alias, roster.default_tunnel())
     cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
            "-o", f"ConnectTimeout={PROBE_CONNECT_SECONDS}", remote, "roster"]
     try:
@@ -136,8 +138,21 @@ def supervisor_cmd(script, log, alias, key, tunnel):
     return cmd + ["--tunnel-remote", tunnel] if tunnel else cmd
 
 
-def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe):
-    """Start whichever of the peer's two supervisors is not live. Never raises for a down peer."""
+def stable_fallback(roster, alias, key, why, probe_fn, stable_fn):
+    """(remote, why) after a failed probe of `alias`: the first stable name that answers, else the original why."""
+    alt = stable_fn(alias)
+    if alt and alt != alias:
+        why_alt = probe_fn(roster, alias, key, remote=alt)
+        if not why_alt:
+            return alt, None
+    return alias, why
+
+
+def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn=None):
+    """Start whichever of the peer's two supervisors is not live. Never raises for a down peer.
+
+    The stable-name fallback runs only after the alias itself failed to answer."""
+    stable_fn = stable_fn or roster.stable_remote
     sdir = state_dir(roster)
     rec_path = sdir / f"autolink-{slug(alias)}.json"
     lock = sdir / f"autolink-{slug(alias)}.lock"
@@ -149,14 +164,19 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe):
         if not missing:
             return
         why = probe_fn(roster, alias, key)
+        remote = alias
+        if why:
+            remote, why = stable_fallback(roster, alias, key, why, probe_fn, stable_fn)
         if why:
             say(f"far box {alias} unreachable: {why}")
             return
+        if remote != alias:
+            say(f"far box {alias} pinned address stale; linked via {remote}")
         tunnel = roster.default_tunnel()
         for role, script in SUPERVISORS:
             if role not in missing:
                 continue
-            p = spawn(supervisor_cmd(script, sdir / f"{role}-{slug(alias)}.log", alias, key, tunnel))
+            p = spawn(supervisor_cmd(script, sdir / f"{role}-{slug(alias)}.log", remote, key, tunnel))
             try:
                 stamp = roster.proc_start(p.pid)
             except (OSError, subprocess.SubprocessError):
@@ -209,7 +229,7 @@ def resolve_key(roster, alias, local_fn=None, ssh_fn=None):
     return local_fn(roster, alias) or ssh_fn(roster, alias) or roster.default_key()
 
 
-def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None):
+def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, stable_fn=None):
     key_fn = key_fn or resolve_key
     roster = roster or _roster()
     boxes = read_far_boxes(roster) if boxes is None else boxes
@@ -229,7 +249,7 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None):
                 # A configured alias with no key is a misconfiguration worth one line, not silence.
                 say(f"far box {alias}: no Unimatrix-Zero key (looked for {key}); not linked")
                 continue
-            link_peer(roster, alias, key, say, spawn=spawn, probe_fn=probe_fn)
+            link_peer(roster, alias, key, say, spawn=spawn, probe_fn=probe_fn, stable_fn=stable_fn)
         except Exception as ex:  # one peer's failure must not stop the next or fail the session
             say(f"far box {alias} link failed: {type(ex).__name__}: {str(ex)[:120]}")
 

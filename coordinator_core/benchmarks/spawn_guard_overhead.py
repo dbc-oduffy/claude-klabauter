@@ -310,6 +310,9 @@ def run(limit: int = DEFAULT_LIMIT) -> dict:
 
 
 def main(argv: Optional[list] = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT)

@@ -152,7 +152,7 @@ def _drive_offer_warm_opt_in(monkeypatch, setup, tmp_path):
     monkeypatch.setattr(setup.subprocess, "run", lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
     started: list = []
     monkeypatch.setattr(setup, "start_warm_engine", lambda repo_root: started.append(repo_root))
-    setup.offer_warm_opt_in(tmp_path, SimpleNamespace(agent_mode=True))
+    setup.offer_warm_opt_in(tmp_path, SimpleNamespace(agent_mode=True, warm=None))
     return started
 
 

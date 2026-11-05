@@ -63,6 +63,7 @@ from coordinator_core.frontmatter.schema_validate import (
     validate_frontmatter,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.roadmap.consumer_clause import consumer_clause_refusal
 from coordinator_core.roadmap.post_stamp_clause import (
     doc_approval_refusal,
     post_stamp_refusal,
@@ -265,6 +266,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             post_stamp_refusal(new_statement)
             or suite_tier_refusal(new_statement)
             or doc_approval_refusal(new_statement)
+            or consumer_clause_refusal(new_statement)
         )
         if refusal is not None:
             raise MutateAbort(f"refusing to accept on {p}: {refusal}")

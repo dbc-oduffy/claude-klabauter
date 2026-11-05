@@ -245,6 +245,7 @@ EXPECTED_UNVERIFIABLE_COUNTS: Dict[str, int] = {
     "check_destructive_git_revert_advisory": 1,
     "check_stale_write": 1,
     "guard_deploy_dirty_tree": 1,
+    "rewrite_repo_root_search": 1,
 }
 
 #: DEAD offers no guard has fixed yet. Shrink-only: each entry is a guard whose
@@ -401,7 +402,9 @@ RUNG_FLOORS: Dict[str, str] = {
     "guard_powershell_via_bash": "CCC",
     "guard_repo_setup_claude_home_refusal": "BCC",
     "guard_subagent_heavy_ue_launch": "CCC",
+    "guard_uncapped_pytest_plugin": "BDD",
     "p4_verb_fence": "DCC",
+    "rewrite_repo_root_search": "ADD",
 }
 
 #: (guard, caller class) pairs allowed to grade below their floor. Empty: no

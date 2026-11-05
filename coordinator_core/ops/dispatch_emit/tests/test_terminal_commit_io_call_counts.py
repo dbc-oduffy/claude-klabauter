@@ -19,11 +19,15 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 # name of file -> upper bound on opens in one call (measured post-cut, with headroom of zero
 # beyond the observed count so a re-introduced per-path read trips it)
 BOUNDS = {
-    # one open per distinct directory on the attribute chain (10 in the fixture), never per path
-    ".gitattributes": 10,
-    "attributes": 1,
+    # one open per distinct directory on the attribute chain (9 in the fixture), never per path
+    ".gitattributes": 9,
+    # info/attributes: one read per commit_v2 scope (3 commits in the fixture), by
+    # checkin_attrs._attribute_lines via content_hash._read_text_scoped
+    "attributes": 3,
     # +1: the in-process worktree snapshot reads config that the git status spawn used to read
-    "config": 5,
+    # +1: scoped_worktree_status._config_layers also reads the XDG ~/.config/git/config layer,
+    #     which shares the basename "config" (worktree_snapshot -> _config_gap)
+    "config": 6,
     # 4 head_sha + 4 _cas_target + 4 _head_symref_target + 4 reflog + 3 head_branch
     "HEAD": 19,
     "session-shape.json": 2,

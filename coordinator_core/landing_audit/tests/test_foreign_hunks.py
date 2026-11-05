@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from coordinator_core.landing_audit.foreign_hunks import audit, landings, run_manifest_writes
+from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = pytest.mark.spawns_process
 
@@ -14,7 +15,7 @@ RUN_B = "ask-20261029T020202-bbbbbb"
 
 def _git(repo, *a):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *a], cwd=repo, check=True,
-                   capture_output=True)
+                   capture_output=True, **no_console_creationflags())
 
 
 def _manifest(repo, run, writes, docs=()):
@@ -94,9 +95,9 @@ def test_audit_is_read_only(tmp_path):
     _put(repo, "a/one.py", "1\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", f"landing for {RUN_A}\n\nLands-Chunks: C1")
-    before = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
+    before = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, **no_console_creationflags()).stdout
     audit(repo, "2000-01-01")
-    after = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True).stdout
+    after = subprocess.run(["git", "status", "--porcelain"], cwd=repo, capture_output=True, text=True, **no_console_creationflags()).stdout
     assert before == after
 
 

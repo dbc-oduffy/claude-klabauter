@@ -2363,28 +2363,28 @@ def _make_doctrine_source(coord_root: Path, claude_md_text: str, rule_names: Dic
 def test_install_global_doctrine_creates_absent_claude_md_and_rules(tmp_path):
     coord_root = tmp_path / "coord"
     home = tmp_path / "home"
-    _make_doctrine_source(coord_root, "# Global doctrine\n", {"context7.md": "# context7\n"})
+    _make_doctrine_source(coord_root, "# Global doctrine\n", {"style.md": "# style\n"})
 
     claude_md_created, rules_created = maximalist.install_global_doctrine(
         str(coord_root), str(home), check_only=False,
     )
 
     assert claude_md_created is True
-    assert rules_created == ["context7.md"]
+    assert rules_created == ["style.md"]
     assert (home / ".claude" / "CLAUDE.md").read_text(encoding="utf-8") == "# Global doctrine\n"
-    assert (home / ".claude" / "rules" / "context7.md").read_text(encoding="utf-8") == "# context7\n"
+    assert (home / ".claude" / "rules" / "style.md").read_text(encoding="utf-8") == "# style\n"
 
 
 def test_install_global_doctrine_never_overwrites_existing_files(tmp_path):
     coord_root = tmp_path / "coord"
     home = tmp_path / "home"
-    _make_doctrine_source(coord_root, "# fresh source content\n", {"context7.md": "# fresh rule\n"})
+    _make_doctrine_source(coord_root, "# fresh source content\n", {"style.md": "# fresh rule\n"})
 
     dest_claude_dir = home / ".claude"
     dest_rules_dir = dest_claude_dir / "rules"
     dest_rules_dir.mkdir(parents=True, exist_ok=True)
     (dest_claude_dir / "CLAUDE.md").write_text("# operator's hand-edited copy\n", encoding="utf-8")
-    (dest_rules_dir / "context7.md").write_text("# operator's hand-edited rule\n", encoding="utf-8")
+    (dest_rules_dir / "style.md").write_text("# operator's hand-edited rule\n", encoding="utf-8")
 
     claude_md_created, rules_created = maximalist.install_global_doctrine(
         str(coord_root), str(home), check_only=False,
@@ -2393,7 +2393,93 @@ def test_install_global_doctrine_never_overwrites_existing_files(tmp_path):
     assert claude_md_created is False
     assert rules_created == []
     assert (dest_claude_dir / "CLAUDE.md").read_text(encoding="utf-8") == "# operator's hand-edited copy\n"
-    assert (dest_rules_dir / "context7.md").read_text(encoding="utf-8") == "# operator's hand-edited rule\n"
+    assert (dest_rules_dir / "style.md").read_text(encoding="utf-8") == "# operator's hand-edited rule\n"
+
+
+_RETIRED = ("context7.md", "fleet-friction-reporting.md", "workstation-install-verdict.md", "cloud-preboot-verdict.md")
+
+
+def test_install_global_doctrine_prunes_retired_rules_and_keeps_others(tmp_path):
+    coord_root = tmp_path / "coord"
+    home = tmp_path / "home"
+    _make_doctrine_source(coord_root, "# doctrine\n", {})
+    dest_rules_dir = home / ".claude" / "rules"
+    dest_rules_dir.mkdir(parents=True)
+    for name in (*_RETIRED, "keep.md"):
+        (dest_rules_dir / name).write_text("x\n", encoding="utf-8")
+
+    maximalist.install_global_doctrine(str(coord_root), str(home), check_only=False)
+
+    assert [p.name for p in dest_rules_dir.iterdir()] == ["keep.md"]
+
+
+def test_install_global_doctrine_does_not_recopy_a_retired_rule_from_source(tmp_path):
+    coord_root = tmp_path / "coord"
+    home = tmp_path / "home"
+    _make_doctrine_source(coord_root, "# doctrine\n", {"context7.md": "old\n", "style.md": "s\n"})
+
+    _, rules_created = maximalist.install_global_doctrine(str(coord_root), str(home), check_only=False)
+
+    assert rules_created == ["style.md"]
+    assert not (home / ".claude" / "rules" / "context7.md").exists()
+
+
+def test_install_global_doctrine_check_only_keeps_retired_rules(tmp_path):
+    coord_root = tmp_path / "coord"
+    home = tmp_path / "home"
+    _make_doctrine_source(coord_root, "# doctrine\n", {})
+    dest_rules_dir = home / ".claude" / "rules"
+    dest_rules_dir.mkdir(parents=True)
+    (dest_rules_dir / "context7.md").write_text("x\n", encoding="utf-8")
+
+    maximalist.install_global_doctrine(str(coord_root), str(home), check_only=True)
+
+    assert (dest_rules_dir / "context7.md").exists()
+
+
+def test_derive_live_copy_session_start_prunes_retired_live_rules(tmp_path, monkeypatch):
+    from coordinator_core.hooks import derive_global_doctrine_live_copy as derive
+
+    repo = tmp_path / "doctrine"
+    (repo / "global-doctrine" / "rules").mkdir(parents=True)
+    (repo / "global-doctrine" / "CLAUDE.md").write_text("# d\n", encoding="utf-8")
+    (repo / derive._DEV_SENTINEL_NAME).write_text("", encoding="utf-8")
+    home = tmp_path / "home"
+    live_rules = home / ".claude" / "rules"
+    live_rules.mkdir(parents=True)
+    for name in (*_RETIRED, "keep.md"):
+        (live_rules / name).write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(derive, "_resolve_doctrine_repo_root", lambda: repo)
+    monkeypatch.setattr(derive, "_live_rules_dir", lambda: live_rules)
+    monkeypatch.setattr(derive, "_live_path", lambda: home / ".claude" / "CLAUDE.md")
+
+    derive.evaluate({"hook_event_name": "SessionStart"})
+
+    assert [p.name for p in live_rules.iterdir()] == ["keep.md"]
+
+
+def test_setup_install_global_doctrine_files_prunes_retired_rules(tmp_path, monkeypatch):
+    import importlib.util
+
+    repo_root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("claude_klabauter_setup_under_test", repo_root / "scripts" / "setup.py")
+    setup_mod = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = setup_mod
+    spec.loader.exec_module(setup_mod)
+    coord = tmp_path / "coord"
+    _make_doctrine_source(coord, "# doctrine\n", {})
+    home = tmp_path / "home"
+    rules = home / ".claude" / "rules"
+    rules.mkdir(parents=True)
+    for name in _RETIRED:
+        (rules / name).write_text("x\n", encoding="utf-8")
+    monkeypatch.setattr(setup_mod, "_resolve_coordinator_claude_root", lambda r, a: (coord, type("R", (), {"is_unresolved": False, "display": "t"})()))
+    monkeypatch.setattr(setup_mod, "_looks_like_coordinator_claude_source", lambda p: True)
+    monkeypatch.setattr(_shared_module, "require_home", lambda *_a, **_k: str(home))
+
+    setup_mod.install_global_doctrine_files(repo_root, repo_root, None)
+
+    assert list(rules.iterdir()) == []
 
 
 def test_install_global_doctrine_never_prunes_a_rule_absent_from_source(tmp_path):
@@ -2416,16 +2502,16 @@ def test_install_global_doctrine_never_prunes_a_rule_absent_from_source(tmp_path
 def test_install_global_doctrine_check_only_writes_nothing(tmp_path):
     coord_root = tmp_path / "coord"
     home = tmp_path / "home"
-    _make_doctrine_source(coord_root, "# doctrine\n", {"context7.md": "# context7\n"})
+    _make_doctrine_source(coord_root, "# doctrine\n", {"style.md": "# style\n"})
 
     claude_md_created, rules_created = maximalist.install_global_doctrine(
         str(coord_root), str(home), check_only=True,
     )
 
     assert claude_md_created is True
-    assert rules_created == ["context7.md"]
+    assert rules_created == ["style.md"]
     assert not (home / ".claude" / "CLAUDE.md").exists()
-    assert not (home / ".claude" / "rules" / "context7.md").exists()
+    assert not (home / ".claude" / "rules" / "style.md").exists()
 
 
 def test_legacy_launcher_list_never_names_the_current_launcher(tmp_path, monkeypatch):
@@ -2577,3 +2663,20 @@ def test_check_only_retires_nothing(tmp_path, monkeypatch):
 
     assert rc.read_text() == before
     assert (shell / f"{_STEM}-shim.sh").exists()
+
+
+def test_prune_retired_rules_reports_failed_unlink(tmp_path, monkeypatch):
+    from coordinator_core.hooks import derive_global_doctrine_live_copy as derive
+
+    name = derive.RETIRED_RULE_NAMES[0]
+    (tmp_path / name).write_text("x")
+
+    def _boom(self, *a, **k):
+        raise PermissionError("locked")
+
+    monkeypatch.setattr(Path, "unlink", _boom)
+    failed: list = []
+    pruned = derive.prune_retired_rules(tmp_path, failed=failed)
+
+    assert pruned == []
+    assert failed == [name]

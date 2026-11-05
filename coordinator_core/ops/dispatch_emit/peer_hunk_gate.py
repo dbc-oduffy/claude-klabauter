@@ -50,8 +50,8 @@ def _plan_spine_writes(root: Path, plan_rel: str) -> set:
     import yaml
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.frontmatter.yaml_load import SAFE_LOADER as loader
 
-    loader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
     out: set = set()
     try:
         located = locate_fenced_block((root / plan_rel).read_text(encoding="utf-8"))
@@ -78,6 +78,7 @@ def _sibling_spines(root: Path, run_ids: Iterable[str]) -> dict:
     (root, run_id) and per plan path in the scope's state."""
     import yaml
 
+    from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import halted_hold_release
 
@@ -100,7 +101,7 @@ def _sibling_spines(root: Path, run_ids: Iterable[str]) -> dict:
                     try:
                         sizing = yaml.load(
                             (root / sizing_rel).read_text(encoding="utf-8"),
-                            Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader),
+                            Loader=SAFE_LOADER,
                         ) or {}
                     except FileNotFoundError:
                         sizing = {}

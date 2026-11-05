@@ -404,6 +404,24 @@ def test_allowlisted_skill_disarms_but_other_skills_do_not(env):
     assert g.evaluate(env.payload(tid="cur2")) is None
 
 
+def _command_user(name: str) -> str:
+    return user(f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>")
+
+
+@pytest.mark.parametrize("skill", ["consolidate-git", "merging-to-main"])
+@pytest.mark.parametrize("via", ["skill", "command"])
+def test_pm_ceremony_never_nags_across_repeated_calls(env, skill, via):
+    env.write(_command_user(skill) if via == "command" else user())
+    env.survey(8)
+    if via == "skill":
+        env.write(use("sk", "Skill", {"skill": skill}))
+    for i in range(4):
+        assert g.evaluate(env.payload(tid=f"cur{i}")) is None
+    env.write(user())
+    env.survey(8, start=100)
+    assert g.evaluate(env.payload(tid="after")) is not None
+
+
 def test_open_xs_lane_does_not_exempt(env):
     from coordinator_core.session import xs_lane_budget
 

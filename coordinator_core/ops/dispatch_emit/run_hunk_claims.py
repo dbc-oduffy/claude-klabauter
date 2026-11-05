@@ -176,6 +176,101 @@ def changed_opcodes(old: list[bytes], new: list[bytes]) -> list[tuple[str, int, 
     ]
 
 
+MAX_DIFFLIB_LINES = 2000
+
+Opcode = tuple[str, int, int, int, int]
+
+
+def _anchor_cuts(old: list[bytes], new: list[bytes]) -> list[tuple[int, int]]:
+    """`(old index, new index)` of the longest order-keeping chain of lines unique to both sides."""
+    old_at: dict = {}
+    new_at: dict = {}
+    for at, line in enumerate(old):
+        old_at[line] = -1 if line in old_at else at
+    for at, line in enumerate(new):
+        new_at[line] = -1 if line in new_at else at
+    pairs = sorted((i, new_at[line]) for line, i in old_at.items() if i >= 0 and new_at.get(line, -1) >= 0)
+    tails: list = []  # tails[k]: index in `pairs` ending the best order-keeping chain of length k + 1
+    prev: list = []
+    for k, (_i, j) in enumerate(pairs):
+        lo, hi = 0, len(tails)
+        while lo < hi:
+            mid = (lo + hi) // 2
+            if pairs[tails[mid]][1] < j:
+                lo = mid + 1
+            else:
+                hi = mid
+        prev.append(tails[lo - 1] if lo else -1)
+        if lo == len(tails):
+            tails.append(k)
+        else:
+            tails[lo] = k
+    chain: list = []
+    cur = tails[-1] if tails else -1
+    while cur >= 0:
+        chain.append(pairs[cur])
+        cur = prev[cur]
+    chain.reverse()
+    return chain
+
+
+def anchored_opcodes(
+    old: list[bytes], new: list[bytes], *, line_budget: Optional[int] = None
+) -> tuple[list[Opcode], bool]:
+    """`(opcodes, coarse)`: full `difflib`-shaped opcodes (equal included) tiling `old` and `new`.
+
+    A changed middle within `MAX_MATCHED_MIDDLE` is matched whole. A longer one is split at patience
+    anchors (lines unique to both sides, kept in order) and each segment is matched alone: linear in
+    the file. A segment still past the bound, or past `line_budget` (total lines handed to `difflib`
+    across the call; None is unlimited), is one coarse span (`replace`, or `insert`/`delete` when a
+    side is empty) and sets `coarse`. Trap: a coarse span is not a match; callers read it as unknown.
+    """
+    import difflib
+
+    head, tail, mid_old, mid_new = _trim(old, new)
+    ops: list[Opcode] = []
+
+    def emit(tag: str, i1: int, i2: int, j1: int, j2: int) -> None:
+        if i1 == i2 and j1 == j2:
+            return
+        if tag == "equal" and ops and ops[-1][0] == "equal":
+            ops[-1] = ("equal", ops[-1][1], i2, ops[-1][3], j2)
+        else:
+            ops.append((tag, i1, i2, j1, j2))
+
+    emit("equal", 0, head, 0, head)
+    coarse = False
+    if max(len(mid_old), len(mid_new)) <= MAX_MATCHED_MIDDLE:
+        cuts = [(-1, -1), (len(mid_old), len(mid_new))]
+    else:
+        cuts = [(-1, -1), *_anchor_cuts(mid_old, mid_new), (len(mid_old), len(mid_new))]
+    spent = 0
+    for (ia, ja), (ib, jb) in zip(cuts, cuts[1:]):
+        if ia >= 0:
+            emit("equal", head + ia, head + ia + 1, head + ja, head + ja + 1)
+        s_old, s_new = mid_old[ia + 1:ib], mid_new[ja + 1:jb]
+        o0, n0 = head + ia + 1, head + ja + 1
+        if not s_old and not s_new:
+            continue
+        size = len(s_old) + len(s_new)
+        over = max(len(s_old), len(s_new)) > MAX_MATCHED_MIDDLE
+        if not over and line_budget is not None and spent + size > line_budget:
+            over = True
+        if over:
+            coarse = True
+            tag = "insert" if not s_old else "delete" if not s_new else "replace"
+            emit(tag, o0, o0 + len(s_old), n0, n0 + len(s_new))
+            continue
+        if not s_old or not s_new:
+            emit("insert" if not s_old else "delete", o0, o0 + len(s_old), n0, n0 + len(s_new))
+            continue
+        spent += size
+        for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, s_old, s_new, autojunk=False).get_opcodes():
+            emit(tag, o0 + i1, o0 + i2, n0 + j1, n0 + j2)
+    emit("equal", len(old) - tail, len(old), len(new) - tail, len(new))
+    return ops, coarse
+
+
 def _delta_spans(baseline: list[bytes], tree: list[bytes]) -> list[tuple[int, int]]:
     """Doubled worktree-side slots where `tree` differs from `baseline`."""
     spans: list[tuple[int, int]] = []

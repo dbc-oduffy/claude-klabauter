@@ -1,8 +1,8 @@
 """Driver for the grind terminal commit, measured as a process tree.
 
 Each invocation builds a fresh repo under a caller-given directory: two finished rows with product
-files, one row's ledger-root evidence path (dropped) and one untracked row deletion (dropped), beside
-an undeclared dirty file. It then calls `dispatch.land_run`'s handler with `grind` params.
+files, one row's ledger-root evidence path (dropped) and one row deletion already true (not
+dropped), beside an undeclared dirty file. It then calls `dispatch.land_run`'s handler with `grind` params.
 `--setup-only` does everything except that call, so the cost of the call is `full - setup-only`.
 
     python -m coordinator_core.benchmarks.grind_terminal_commit_full_path <dir> [--setup-only]
@@ -82,7 +82,7 @@ def _run(parent: Path, argv: list[str]) -> int:
         },
         repo_root=repo / ".git",
     )
-    if out.get("committed") is not True or len(out.get("rows") or []) != 2 or len(out.get("dropped") or []) != 2:
+    if out.get("committed") is not True or len(out.get("rows") or []) != 2 or len(out.get("dropped") or []) != 1:
         print(f"grind terminal commit did not complete: {out!r}", file=sys.stderr)
         return 1
     return 0

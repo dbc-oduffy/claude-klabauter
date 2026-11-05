@@ -509,6 +509,83 @@ def gone(
     )
 
 
+def link_state_dir(home: Optional[str] = None) -> str:
+    """Directory of per-far-alias link-state records written by `coordinator/bin/unimatrix-roster.py`.
+
+    Each `<alias>.json` holds {"alias", "state": "up"|"down", "since", "reason"}.
+    """
+    if home is None:
+        from coordinator_core._settings_home import settings_home
+
+        home = str(settings_home())
+    return os.path.join(home, "unimatrix", "link-state")
+
+
+def read_link_states(home: Optional[str] = None) -> dict[str, dict[str, str]]:
+    """`{alias: {"state", "reason"}}` for every readable record; missing or corrupt ones are skipped."""
+    out: dict[str, dict[str, str]] = {}
+    try:
+        with os.scandir(link_state_dir(home)) as it:
+            entries = [e.path for e in it if e.name.endswith(".json") and e.is_file()]
+    except OSError:
+        return out
+    for path in entries:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("state") not in ("up", "down"):
+            continue
+        alias = rec.get("alias")
+        if not isinstance(alias, str) or not alias:
+            alias = os.path.basename(path)[: -len(".json")]
+        reason = rec.get("reason")
+        out[alias] = {"state": rec["state"], "reason": reason if isinstance(reason, str) else ""}
+    return out
+
+
+def link_transitions(
+    prev: Optional[Mapping[str, str]], cur: Mapping[str, str]
+) -> list[tuple[str, str]]:
+    """`(alias, new_state)` for each alias whose state differs from `prev`, sorted by alias.
+
+    `prev=None` is the first tick: an already-down link is reported once, an up one is not.
+    An alias absent from `prev` on a later tick is treated as `up`, so its first `down` fires.
+    """
+    out: list[tuple[str, str]] = []
+    for alias in sorted(cur):
+        before = "up" if prev is None or alias not in prev else prev[alias]
+        if cur[alias] != before:
+            out.append((alias, cur[alias]))
+    return out
+
+
+def link_tick(
+    prev: Optional[Mapping[str, str]],
+    emit: Callable[[str], None],
+    home: Optional[str] = None,
+) -> Optional[dict[str, str]]:
+    """Emit one LINK-DOWN/LINK-UP line per link-state change; return the new `{alias: state}` map.
+
+    Never raises. An unreadable state dir returns `prev` unchanged so the next tick diffs
+    against the last good read.
+    """
+    try:
+        records = read_link_states(home)
+        cur = {alias: rec["state"] for alias, rec in records.items()}
+        for alias, state in link_transitions(prev, cur):
+            reason = records[alias]["reason"]
+            emit(f"LINK-{state.upper()} {alias}" + (f": {reason}" if reason else ""))
+        if prev is not None:
+            # A record that vanished keeps its last state so its reappearance is not a transition.
+            for alias, state in prev.items():
+                cur.setdefault(alias, state)
+        return cur
+    except Exception:
+        return None if prev is None else dict(prev)
+
+
 def _obligation_summary(repo_root: str, session_id: str) -> str:
     records = obligations.for_peer(repo_root, session_id)
     if records is None:
@@ -1129,8 +1206,11 @@ def save_prev_parked(
     peers: Optional[dict[str, dict[str, Any]]] = None,
     load: Optional[dict[str, Any]] = None,
     memory: Optional[dict[str, Any]] = None,
+    links: Optional[dict[str, str]] = None,
 ) -> bool:
     payload: dict[str, Any] = {"parked": dict(parked)}
+    if links is not None:
+        payload["links"] = dict(links)
     if memory is not None:
         payload["memory"] = dict(memory)
     if peers is not None:
@@ -1412,8 +1492,15 @@ def tick_once(
     # pins that emission does not depend on persistence succeeding).
     load_state = _load_alarm_tick(repo_root, emit)
     memory_state = _memory_tick(repo_root, emit)
+    prior_links = _load_prev_record(repo_root).get("links")
+    link_state = link_tick(prior_links if isinstance(prior_links, dict) else None, emit)
     save_prev_parked(
-        repo_root, cur_parked, peers=peer_notes, load=load_state, memory=memory_state
+        repo_root,
+        cur_parked,
+        peers=peer_notes,
+        load=load_state,
+        memory=memory_state,
+        links=link_state,
     )
     watch_heartbeat.stamp(
         repo_root,
@@ -1610,6 +1697,7 @@ def main(
     prev_parked: dict[str, bool] = {}
     prev_names: dict[str, dict[str, Any]] = {}
     prev_inbox_open: Optional[int] = None
+    prev_links: Optional[dict[str, str]] = None
     iterations = 0
     while max_iterations is None or iterations < max_iterations:
         declinations: list = []
@@ -1627,6 +1715,7 @@ def main(
                 prev_inbox_open=prev_inbox_open,
                 box_wide=box_wide,
             )
+            prev_links = link_tick(prev_links, emit)
             stamped = watch_heartbeat.stamp(
                 repo_root,
                 holder_session_id=group_em_session_id or "",

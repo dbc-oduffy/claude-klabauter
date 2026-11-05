@@ -73,6 +73,8 @@ def _with_sizing(root):
     (rec / "run.json").write_text(f'{{"sizing_rel": "{SIZING}"}}\n', encoding="utf-8")
     (root / "state" / "sizings").mkdir(parents=True, exist_ok=True)
     (root / SIZING).write_text("a: 1\n", encoding="utf-8")
+    (root / PLAN).parent.mkdir(parents=True, exist_ok=True)
+    (root / PLAN).write_text("plan\n", encoding="utf-8")
 
 
 def test_commit_halt_with_outcome_lands_outcome_and_pointer(repo):

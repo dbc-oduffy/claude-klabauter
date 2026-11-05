@@ -29,7 +29,6 @@ from coordinator_core.ops.fleet._index_resync_pending import (
     list_pending,
     record_pending,
 )
-from coordinator_core.win_portability import no_console_creationflags
 
 _LOG = logging.getLogger(__name__)
 _LOG.addHandler(logging.NullHandler())
@@ -45,24 +44,18 @@ CONTESTED = "contested"
 _Entry = Tuple[int, str]
 
 
-async def _run_git_once(argv: List[str], *, cwd: Path, env: dict) -> Tuple[int, str, str]:
-    """One spawn, no retry, no sleep; returns ``(returncode, stdout, stderr)``."""
-    import asyncio
+def _run_git_once(argv: List[str], *, cwd: Path, env: dict) -> Tuple[int, str, str]:
+    """One spawn, no retry, no sleep; returns ``(returncode, stdout, stderr)``.
 
-    proc = await asyncio.create_subprocess_exec(
-        *argv,
-        cwd=str(cwd),
-        env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        **no_console_creationflags(),
-    )
-    out, err = await proc.communicate()
-    return (
-        proc.returncode if proc.returncode is not None else 1,
-        out.decode("utf-8", errors="replace"),
-        err.decode("utf-8", errors="replace").strip(),
-    )
+    A spawn past ``run_git``'s local-plumbing budget is killed and reported as rc 1, so a worker
+    abandoned by a cancelled async entry cannot outlive the interpreter.
+    """
+    from coordinator_core.git.run import run_git
+
+    res = run_git(argv[1:], cwd=str(cwd), env=env)
+    if res.timed_out:
+        return 1, "", "timed out"
+    return res.returncode, res.stdout, res.stderr.strip()
 
 
 def _parse_ls_files_s(stdout: str) -> Dict[str, List[Tuple[int, str, int]]]:
@@ -128,16 +121,23 @@ def _restore_tokens(rec: PendingResync, head: Dict[str, _Entry]) -> Tuple[str, .
 
 
 async def drain_pending_resyncs(worktree_root: Path, *, run_git=_run_git_once) -> dict:
+    """Async entry for ``drain_pending_resyncs_sync``; ``run_git`` is a sync callable."""
+    import asyncio
+
+    return await asyncio.to_thread(
+        drain_pending_resyncs_sync, worktree_root, run_git=run_git
+    )
+
+
+def drain_pending_resyncs_sync(worktree_root: Path, *, run_git=_run_git_once) -> dict:
     """Classify every pending record and restore the ``needed`` ones from HEAD.
 
     ``run_git(argv, *, cwd, env) -> (returncode, stdout, stderr)``. Returns
     ``{"restored": [ids], "discharged": [ids], "kept": {id: class}}``. No records
     means no spawn. Never raises on a git fault: affected records are kept.
     """
-    import asyncio
-
     result: dict = {"restored": [], "discharged": [], "kept": {}}
-    records = await asyncio.to_thread(list_pending, worktree_root)
+    records = list_pending(worktree_root)
     if not records:
         return result
 
@@ -149,7 +149,7 @@ async def drain_pending_resyncs(worktree_root: Path, *, run_git=_run_git_once) -
     )
 
     all_paths = sorted({p for r in records for p in (r.src, r.dst)})
-    head = await asyncio.to_thread(head_blobs, worktree_root, all_paths)
+    head = head_blobs(worktree_root, all_paths)
     env = _make_git_env()
 
     for chunk in _argv_group_chunks([(r, (r.src, r.dst)) for r in records]):
@@ -157,7 +157,7 @@ async def drain_pending_resyncs(worktree_root: Path, *, run_git=_run_git_once) -
         argv = ["git", "ls-files", "-s", "-z", "--"]
         for r in chunk_recs:
             argv.extend((r.src, r.dst))
-        rc, stdout, stderr = await run_git(argv, cwd=worktree_root, env=env)
+        rc, stdout, stderr = run_git(argv, cwd=worktree_root, env=env)
         if rc != 0:
             _LOG.error("index-resync drain: ls-files failed: %s", stderr)
             for r in chunk_recs:
@@ -171,12 +171,12 @@ async def drain_pending_resyncs(worktree_root: Path, *, run_git=_run_git_once) -
             if cls == NEEDED:
                 needed.append(r)
             elif cls in (HEALED, STALE):
-                await asyncio.to_thread(discharge, worktree_root, r)
+                discharge(worktree_root, r)
                 result["discharged"].append(r.candidate_id)
             else:
                 result["kept"][r.candidate_id] = cls
                 if cls != r.last_reported_class:
-                    await _report_kept(
+                    _report_kept(
                         worktree_root, r, cls, _persist_index_resync_failure
                     )
 
@@ -185,10 +185,10 @@ async def drain_pending_resyncs(worktree_root: Path, *, run_git=_run_git_once) -
         rargv = ["git", "restore", "--staged", "--"]
         for r in needed:
             rargv.extend(_restore_tokens(r, head))
-        rc, _out, stderr = await run_git(rargv, cwd=worktree_root, env=env)
+        rc, _out, stderr = run_git(rargv, cwd=worktree_root, env=env)
         if rc == 0:
             for r in needed:
-                await asyncio.to_thread(discharge, worktree_root, r)
+                discharge(worktree_root, r)
                 result["restored"].append(r.candidate_id)
         else:
             _LOG.error(
@@ -200,20 +200,16 @@ async def drain_pending_resyncs(worktree_root: Path, *, run_git=_run_git_once) -
     return result
 
 
-async def _report_kept(worktree_root: Path, rec: PendingResync, cls: str, persist) -> None:
+def _report_kept(worktree_root: Path, rec: PendingResync, cls: str, persist) -> None:
     """File the kept record once per class change, then remember the class on the record."""
-    import asyncio
-
     try:
-        await asyncio.to_thread(
-            persist,
+        persist(
             worktree_root=worktree_root,
             candidate_id=rec.candidate_id,
             reason=f"drain-{cls}: {rec.src} -> {rec.dst}",
             op_label=rec.op_label,
         )
-        await asyncio.to_thread(
-            record_pending,
+        record_pending(
             worktree_root,
             [dataclasses.replace(rec, last_reported_class=cls)],
         )

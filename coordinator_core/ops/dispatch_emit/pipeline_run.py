@@ -16,7 +16,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import RUN_DIR_ROOT, R
 from coordinator_core.session.declared_writes import declare_write
 
 __all__ = [
-    "REVISIONS_MARKER", "FINISHED_REL", "emitted_pipeline_run", "revisions_rel", "finished_rel",
+    "REVISIONS_MARKER", "FINISHED_REL", "emitted_pipeline_run", "run_name", "revisions_rel", "finished_rel",
     "pipeline_run_state", "reads_revisions", "append_revision",
 ]
 
@@ -35,6 +35,15 @@ def emitted_pipeline_run(root: Path, run_id: str) -> Optional[Path]:
     if receipt is None or not receipt.is_file():
         return None
     return base / f"{run_id}.workflow.mjs"
+
+
+def run_name(pipeline: str, run_id: str) -> str:
+    """The run's directory and script-stem name: ``run_id`` when already a ``pipeline-`` id, else prefixed by ``pipeline``.
+
+    Trap: a ``pipeline-``-prefixed id of another pipeline (``pipeline-research-...``) stays verbatim; re-prefixing it
+    names a directory ``workflow.revise`` never writes.
+    """
+    return run_id if run_id.startswith(RUN_ID_PREFIX) else f"{RUN_ID_PREFIX}{pipeline}-{run_id}"
 
 
 def revisions_rel(run_id: str) -> str:

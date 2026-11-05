@@ -10,6 +10,7 @@ import yaml
 
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
+from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.ask_roadmap import approver_for
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
@@ -114,6 +115,45 @@ def test_roadmap_gate_leg_is_haiku_on_the_mechanical_type(repo):
     gate_call = script[script.index("const _gate = await agent("):].split("\n", 1)[0]
     assert ask_compose._lit(ask_compose._MECHANICAL_AGENT_TYPE) in gate_call
     assert ask_compose._lit(ask_compose._MECHANICAL_MODEL) in gate_call
+
+
+_BRIEF = EmBrief(text="the EM's framing", source="inline", context=())
+
+
+def _briefed(repo, **over):
+    return _compose(repo, wrap_stage=lambda t, **kw: (_PB, ["Plan"]), **over)
+
+
+def test_a_roadmap_sizing_with_a_brief_composes_and_runs_both_stages_under_it(repo):
+    _put(repo)
+    script = _briefed(repo, em_brief=_BRIEF, in_run_commit=True)
+    assert "which this script does not embed" not in script
+    assert "chained run did not start" not in script[script.index("_gate.arm === 'roadmap'") : script.index("  if (!_viaRoadmap) {")]
+    marks = ["roadmapBlitz({", "planBlitz({", "_nextAction = { kind: 'terminal_commit'", "phase('commit')"]
+    pos = [script.index(m, script.index("_viaRoadmap = true;")) for m in marks]
+    assert pos == sorted(pos)
+    stage = script[script.index("async function roadmapBlitz(") :]
+    assert stage.split("\n", 2)[1] == "const agent = (p, o) => _askAgent(_EM_BRIEF + p, o);"
+    assert not any(f.severity is Severity.ERROR for f in run_checks(script))
+
+
+def test_a_roadmap_sizing_with_an_em_size_composes_in_the_body_that_carries_it(repo):
+    _put(repo)
+    script = _briefed(repo, em_size="M")
+    assert 'em_size: "M"' in script and "roadmapBlitz({" in script
+    assert "_EM_BRIEF" not in script
+
+
+def test_a_roadmap_sizing_with_neither_brief_nor_size_stays_the_standalone_script(repo):
+    _put(repo)
+    script = _compose(repo)
+    assert "em_size" not in script and "_EM_BRIEF" not in script and "_askAgent" not in script
+
+
+def test_a_briefed_roadmap_sizing_refuses_when_the_roadmap_stage_cannot_load(repo):
+    _put(repo)
+    with pytest.raises(ask_compose.AskComposeRefused, match="roadmap stage cannot be embedded"):
+        _briefed(repo, em_brief=_BRIEF, roadmap_blitz_text="no meta block here")
 
 
 @pytest.mark.parametrize(

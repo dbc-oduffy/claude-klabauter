@@ -12,10 +12,13 @@ def test_write_then_read_roundtrip(tmp_path):
     run = tmp_path / "state" / "warp" / "r1"
     path = sr.write_receipt(run, "sizing", "ok", "state/sizings/x.yaml")
     assert path == run / "receipts" / "sizing.json"
+    assert not (tmp_path / "state" / "run-evidence").exists()
     rec = sr.read_receipt(run, "sizing")
     assert rec.stage == "sizing" and rec.run_id == "r1" and rec.verdict == "ok"
     assert rec.artifact == "state/sizings/x.yaml" and rec.at
     assert not list((run / "receipts").glob("*.tmp"))
+    assert sr.has_receipts(run)
+    assert not sr.has_receipts(tmp_path / "state" / "warp" / "none")
 
 
 def test_unknown_stage_and_empty_verdict_refused(tmp_path):
@@ -63,6 +66,7 @@ def test_replay_kira_gate_admits_a_null_fire_time_size():
 def test_op_writes_under_state_warp_and_refuses_bad_input(tmp_path):
     out = sr._handler({"run_id": "r2", "stage": "kira", "verdict": "clean", "artifact": None}, repo_root=tmp_path)
     assert out == {"ok": True, "path": "state/warp/r2/receipts/kira.json"}
+    assert not (tmp_path / "state" / "run-evidence").exists()
     assert sr.read_receipt(tmp_path / "state" / "warp" / "r2", "kira").verdict == "clean"
     assert sr._handler({"run_id": "../x", "stage": "kira", "verdict": "v"}, repo_root=tmp_path)["ok"] is False
     assert sr._handler({"run_id": "r2", "stage": "nope", "verdict": "v"}, repo_root=tmp_path)["ok"] is False

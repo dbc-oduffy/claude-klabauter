@@ -11,7 +11,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     SCOPE_POST, SCOPE_PRE, SCOPE_SUBJECT, PipelineEmitRefused, PipelineInputs,
 )
-from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
+from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, subjectless_advisories, validate
 
 ARRAY_SCHEMA = {"type": "object", "properties": {"items": {"type": "array"}}}
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "pipeline_structured"
@@ -364,3 +364,42 @@ def test_agent_type_from_on_an_unfanned_stage_is_still_refused(tmp_path):
     stage["fan_out"] = "none"
     reasons = _load_refusal(tmp_path, [stage], doc=_roster_doc(None))
     assert any("agent_type_from needs a fan_out" in r for r in reasons)
+
+
+def _subjectless_stages():
+    return [
+        _stage("pre"),
+        _stage("scope", fan_out="per_subject", depends_on=["pre"]),
+        _stage("post", depends_on=["scope"]),
+    ]
+
+
+def test_subjectless_per_subject_stage_is_skipped_and_dependants_relinked(tmp_path):
+    manifest = load_manifest(_build(tmp_path, _subjectless_stages()), "p")
+    schedule = validate(manifest, _inputs(subjects=()))
+    assert schedule.skipped == {"scope"}
+    assert "scope" not in schedule.scope and schedule.scope["post"] == SCOPE_PRE
+    assert subjectless_advisories(manifest, _inputs(subjects=()), schedule) == (
+        "stage 'scope' runs per subject but no subjects were given; it is skipped",
+    )
+
+
+def test_validate_surfaces_subjectless_advisory_on_stderr(tmp_path, capsys):
+    manifest = load_manifest(_build(tmp_path, _subjectless_stages()), "p")
+    validate(manifest, _inputs(subjects=()))
+    assert "advisory: stage 'scope' runs per subject but no subjects were given; it is skipped" in capsys.readouterr().err
+    validate(manifest, _inputs())
+    assert capsys.readouterr().err == ""
+
+
+def test_per_subject_stage_with_subjects_still_runs_without_advisory(tmp_path):
+    manifest = load_manifest(_build(tmp_path, _subjectless_stages()), "p")
+    schedule = validate(manifest, _inputs())
+    assert schedule.skipped == frozenset() and schedule.scope["scope"] == SCOPE_SUBJECT
+    assert subjectless_advisories(manifest, _inputs(), schedule) == ()
+
+
+def test_subjectless_run_with_no_stage_left_is_still_refused(tmp_path):
+    stages = [_stage("s", fan_out="per_subject")]
+    reasons = _refusal(tmp_path, stages, _inputs(subjects=()))
+    assert any("'s'" in r and "no subjects were given" in r for r in reasons)

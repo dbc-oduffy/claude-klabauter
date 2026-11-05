@@ -55,6 +55,10 @@ def test_revise_prompt_runs_the_readiness_verdict_op_with_pull_values():
 def test_mechanical_legs_run_the_applier_before_any_hand_edit():
     script = _script("run-c")
     assert script.count("plan.apply_mechanical_repairs") >= 2
+    tail = script
+    while "`plan.apply_mechanical_repairs`" in tail:
+        _, tail = tail.split("`plan.apply_mechanical_repairs`", 1)
+        assert "`repairs`, then Edit in place only the entries it returns in" in tail[:200]
 
 
 def test_mechanical_or_none_ready_reply_is_accepted_without_a_reblitz():

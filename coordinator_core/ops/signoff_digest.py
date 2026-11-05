@@ -21,6 +21,7 @@ from typing import Any, Optional
 import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import signoff_provenance as sp
 from coordinator_core.session import record_homes
@@ -29,7 +30,7 @@ _PREFILTER = re.compile(r"pm_approved|approved|accepted|execution_authorized_by"
 _FILE_DATE = re.compile(r"^(\d{4}-\d{2}-\d{2})-")
 _BUCKETS = ("pm_verified", "delegated", "unrecorded")
 # The pure-Python loader is most of this op's cost; libyaml keeps it under the bar.
-_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_YAML_LOADER = SAFE_LOADER
 
 
 def _bucket(s: sp.Signoff) -> str:

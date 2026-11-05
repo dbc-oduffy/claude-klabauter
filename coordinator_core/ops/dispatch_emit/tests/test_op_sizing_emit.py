@@ -22,6 +22,7 @@ _ACCEPTED = {"pm_quote": "yes", "on": "2026-10-02", "mode": "pm"}
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
     Path(home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -130,10 +131,28 @@ def test_accepted_m_receipt_carries_batons_and_uncommitted_and_planblitz_args(re
 def test_gate_halt_raises_refusal_naming_kind(repo):
     from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
 
-    _put(repo, "XL", route="plan", interaction_mode="hands-on", exit_criterion={"statement": "done", "accepted": None})
+    _put(repo, "M", route="pm-decision", xl_exit="accept_multi_session", interaction_mode="hands-on", exit_criterion={"statement": "done", "accepted": None})
     with pytest.raises(SizingFireRefused) as exc:
         _gate_sizing_at_emit(repo, REL, [])
     assert "touchpoint" in str(exc.value) and "sizing-accept-exit-criterion" in str(exc.value)
+
+
+def test_gate_refusal_names_the_refusing_field(repo):
+    from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
+
+    _put(repo, "M", status="shipped")
+    with pytest.raises(SizingFireRefused) as exc:
+        _gate_sizing_at_emit(repo, REL, [])
+    assert "refusal" in str(exc.value) and "`status`" in str(exc.value)
+
+
+def test_engine_xl_hands_on_unaccepted_is_not_a_touchpoint_halt(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import plan_blitz_args
+    from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
+
+    monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
+    _put(repo, "XL", route="plan", interaction_mode="hands-on", exit_criterion={"statement": "done", "accepted": None})
+    assert "accept_pending" not in _gate_sizing_at_emit(repo, REL, [])
 
 
 @pytest.mark.cadence

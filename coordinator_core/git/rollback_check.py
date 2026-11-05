@@ -172,22 +172,13 @@ def _tree_lookup(
     common_dir: Path, tree_sha: str, names: "set"
 ) -> Optional[Dict[str, Tuple[int, str]]]:
     """Only the `names` entries of one tree, scanned from the raw bytes; None if unreadable."""
-    obj = read_object(common_dir, tree_sha)
-    if obj is None or obj[0] != "tree":
-        return None
-    raw = obj[1]
-    wanted = {n.encode("utf-8", "surrogateescape"): n for n in names}
     found: Dict[str, Tuple[int, str]] = {}
-    pos, end = 0, len(raw)
-    while pos < end and len(found) < len(wanted):
-        sp = raw.find(b" ", pos)
-        nul = raw.find(_NUL, sp)
-        if sp < 0 or nul < 0:
-            break
-        name = wanted.get(raw[sp + 1:nul])
-        if name is not None:
-            found[name] = (int(raw[pos:sp], 8), raw[nul + 1:nul + 21].hex())
-        pos = nul + 21
+    for name in names:
+        entry = _tree_entry(common_dir, tree_sha, name)
+        if entry is None:
+            return None
+        if entry is not ABSENT:
+            found[name] = entry  # type: ignore[assignment]
     return found
 
 

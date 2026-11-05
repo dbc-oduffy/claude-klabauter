@@ -25,6 +25,23 @@ STAGED_RESUME_KEY = "resume"
 STAGED_RESUME_FIELDS = ("arm", "sizing_rel", "plan_rel", "tshirt")
 
 
+# Key the slim inline manifest carries naming the on-disk spill (rel path) holding the per-row bulk data.
+STAGED_SPILL_KEY = "spill"
+
+# Row keys the launcher-child script schedules on; they stay inline. `writes_count` replaces the
+# `writes` array. Trap: `writes` / `writes_under` are NOT here, and a slim row's absent list must
+# never reach a script consumer as an empty declared set (it scopes a commit to nothing).
+SLIM_ROW_KEYS = (
+    "id", "brief_path", "agent_type", "model", "wave", "deps", "group", "kept_from", "route", "writes_count",
+)
+
+# Per-row list keys that move to the spill; in-script readers of these (commit leg, footprint, halt write-set) resolve the full list from it.
+SPILLED_ROW_KEYS = ("writes", "writes_under")
+
+# Head of the refusal when a staged twin exceeds the Workflow runner cap (distinct from the relay-corrupt head).
+STAGED_TWIN_OVER_CAP_HEAD = "staged twin over the Workflow runner cap"
+
+
 # Suffix of an emitted run script; the JS readers splice this constant rather than restate it.
 RUN_SCRIPT_SUFFIX = ".workflow.mjs"
 
@@ -50,3 +67,8 @@ def twin_run_id(script_rel: str) -> str | None:
 def staged_twin_rel(run_id: str, sha256: str) -> str:
     """Repo-relative path of the staged twin; callers validate run_id and sha256 (64 lowercase hex)."""
     return f"scratch/warp/{run_id}.staged-{sha256}.workflow.mjs"
+
+
+def staged_spill_rel(run_id: str, sha256: str) -> str:
+    """Repo-relative path of the per-row spill beside the twin; same validation duty as `staged_twin_rel`."""
+    return f"scratch/warp/{run_id}.staged-{sha256}.spill.json"

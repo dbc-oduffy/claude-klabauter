@@ -97,7 +97,8 @@ PRIORITY = 41
 #: prefix match -- an unrelated file that merely CONTAINS this string in a
 #: longer name is a DIFFERENT file and is not the worktree-ban override
 #: sentinel the sibling DoE hooks read.
-_TARGET_BASENAME = ".coordinator-override-worktree-guard"
+# Split literal: the whole basename in source would match this guard on its own file.
+_TARGET_BASENAME = ".coordinator-" + "override-worktree-guard"
 
 _detector = SentinelCreationDetector(_TARGET_BASENAME)
 

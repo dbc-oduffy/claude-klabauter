@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,7 @@ def _git(root: Path, *args: str) -> None:
 def _tmp_cache(tmp_path, monkeypatch):
     cache = tmp_path / "gettemp"
     cache.mkdir()
-    monkeypatch.setattr(foreign_edits.tempfile, "gettempdir", lambda: str(cache))
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(cache))
     return cache
 
 

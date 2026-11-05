@@ -13,7 +13,8 @@ finding in its own sidecar under a `## Findings Ledger` heading (a fenced
     (`applied` rows: `after` present in `file` now, `before` present at a
     recorded baseline and absent now; `em-rejected` rows: a non-empty
     `reason`; `suspended` rows: refused unless the sidecar frontmatter
-    carries `verdict: REJECTED` or `verdict: PIVOT`),
+    carries `verdict: REJECTED` or `verdict: PIVOT`; `handed-to-em` rows:
+    accepted under any verdict, counted apart),
     and stamp `findings_ledger:` frontmatter plus `verified: true` per row on
     success.
   - `reject --sidecar <p> --finding <id> --reason <text>`: EM-only (denied to
@@ -71,7 +72,9 @@ _STATUS_EM_REJECTED = "em-rejected"
 _STATUS_SUSPENDED = "suspended"
 #: Sidecar-frontmatter `verdict:` values under which `verify` accepts `suspended` rows.
 _SUSPENDING_VERDICTS = frozenset({"REJECTED", "PIVOT"})
-_VALID_STATUSES = (_STATUS_APPLIED, _STATUS_EM_REJECTED, _STATUS_SUSPENDED)
+#: A ruling-only reviewer's finding the EM takes custody of; needs no premise verdict.
+_STATUS_HANDED_TO_EM = "handed-to-em"
+_VALID_STATUSES = (_STATUS_APPLIED, _STATUS_EM_REJECTED, _STATUS_SUSPENDED, _STATUS_HANDED_TO_EM)
 _OUT_OF_ASK_STATUSES = ("open", "applied", "em_rejected", _STATUS_EM_REJECTED)
 
 #: Refusals kept from `append_integrator_dispositions` (§ Contract, M2): this
@@ -497,10 +500,10 @@ def normalize_run_diff(source: Any) -> RunDiff:
 def applied_row_in_run_diff(row: Dict[str, Any], run_diff: RunDiff) -> bool:
     """True when the run's diff carries an ``applied`` row's file and, where the row names an
     integer ``line`` and the diff holds hunk ranges for that file, a hunk covering it. A row
-    with no ``file`` cannot be checked and passes; the caller screens ``out_of_ask`` rows."""
+    with no ``file`` cites nothing and is unevidenced (False); the caller screens ``out_of_ask`` rows."""
     file_rel = row.get("file")
     if not file_rel:
-        return True
+        return False
     path = _run_diff_key(str(file_rel))
     if path not in run_diff:
         return False
@@ -512,12 +515,24 @@ def applied_row_in_run_diff(row: Dict[str, Any], run_diff: RunDiff) -> bool:
 
 
 def rows_not_in_run_diff(rows: List[Dict[str, Any]], run_diff: RunDiff) -> List[Dict[str, Any]]:
-    """The ``applied`` rows (peer-hunk ``out_of_ask`` markers excluded) the run's diff does not carry."""
+    """The ``applied`` rows (peer-hunk ``out_of_ask`` markers excluded) the run's diff does not
+    carry, including rows citing no ``file``."""
     return [
         r for r in rows
         if _row_status(r) == _STATUS_APPLIED
         and r.get("out_of_ask") is not True
         and not applied_row_in_run_diff(r, run_diff)
+    ]
+
+
+def diff_evidenced_rows(rows: List[Dict[str, Any]], run_diff: RunDiff) -> List[Dict[str, Any]]:
+    """The ``applied`` rows (``out_of_ask`` excluded) whose cited file/hunk the run's diff
+    carries: the one source of the diff-evidenced applied count."""
+    return [
+        r for r in rows
+        if _row_status(r) == _STATUS_APPLIED
+        and r.get("out_of_ask") is not True
+        and applied_row_in_run_diff(r, run_diff)
     ]
 
 
@@ -638,7 +653,7 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
     failures: List[str] = list(_reviewed_plan_parse_errors(rows, repo_root))
     failures.extend(_reviewed_plan_read_conflicts(rows, repo_root))
     seen_ids = set()
-    applied = em_rejected = suspended = 0
+    applied = em_rejected = suspended = handed_to_em = 0
     new_rows: List[Dict[str, Any]] = []
     for row in rows:
         finding_id = row.get("id")
@@ -699,6 +714,8 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
                 new_rows.append(row)
                 continue
             suspended += 1
+        elif status == _STATUS_HANDED_TO_EM:
+            handed_to_em += 1
 
         stamped_row = dict(row)
         stamped_row["verified"] = True
@@ -710,8 +727,8 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
     verified_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     new_text = _rewrite_ledger_rows(text, new_rows)
     stamp_value = (
-        "{rows: %d, applied: %d, em_rejected: %d, suspended: %d, verified_at: %s}"
-        % (len(new_rows), applied, em_rejected, suspended, verified_at)
+        "{rows: %d, applied: %d, em_rejected: %d, suspended: %d, handed_to_em: %d, verified_at: %s}"
+        % (len(new_rows), applied, em_rejected, suspended, handed_to_em, verified_at)
     )
     new_text = _stamp_frontmatter_key(new_text, "findings_ledger", stamp_value)
     replace_text(sidecar_path, new_text)
@@ -723,6 +740,7 @@ def verify(sidecar_path: Path, *, repo_root: Path) -> VerifyOutcome:
             "applied": applied,
             "em_rejected": em_rejected,
             "suspended": suspended,
+            "handed_to_em": handed_to_em,
             "verified_at": verified_at,
         },
     )

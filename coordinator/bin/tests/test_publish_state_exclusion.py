@@ -120,6 +120,12 @@ def test_all_klabauter_rows_present():
     # `claude-klabauter-lib`) gained allowlist entries; none is a top-level `state`
     # or a `state/` path. Of the eleven, nine declare an allowlist and two
     # (publish-repo-toplevel, guard-routes) deliberately do not. 10 -> 11.
+    # Re-audited 2026-11-04: `claude-klabauter-guard-routes` is withheld from
+    # `setup/publish-targets.portable` (1ca342e602, 00efcc0523: wave-1 and wave-2 releases).
+    # The other ten rows are unchanged and none admits `state`. 11 -> 10.
+    # Re-audited 2026-11-04: `claude-klabauter-coordinator-templates-unimatrix`
+    # (source and destination `coordinator/templates/unimatrix`, allowlist
+    # `peer-doctrine.md`) was added; it admits no `state`. 10 -> 11.
     assert len(rows) == 11, (
         f"expected 11 publish-mirror:claude_klabauter rows, found {len(rows)}: "
         f"{[r[0] for r in rows]} — re-audit this file's row-by-row rationale"
@@ -152,10 +158,10 @@ def test_no_klabauter_allowlist_admits_state():
             f"this would carry claude-klabauter's working substrate into the mirror"
         )
 
-    assert checked_allowlisted == 9, (
-        f"expected 9 of the 11 claude_klabauter rows to declare an allowlist "
-        f"(claude-klabauter-publish-repo-toplevel and claude-klabauter-guard-routes "
-        f"deliberately have none), found {checked_allowlisted} — row shape has drifted, re-audit"
+    assert checked_allowlisted == 10, (
+        f"expected 10 of the 11 claude_klabauter rows to declare an allowlist "
+        f"(claude-klabauter-publish-repo-toplevel "
+        f"deliberately has none), found {checked_allowlisted} — row shape has drifted, re-audit"
     )
 
 

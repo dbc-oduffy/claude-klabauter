@@ -162,6 +162,7 @@ from coordinator_core.git.run import run_git
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
+from coordinator_core.bash_guards import _git_tree_facts
 from coordinator_core.bash_guards._helpers import operator_override_note
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census).
@@ -192,6 +193,53 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: Optional[float
     """
     result = run_git(args, cwd=cwd, timeout=timeout)
     return result.returncode, result.stdout
+
+
+def _toplevel(cwd: Optional[str]) -> Optional[str]:
+    """Worktree root for `cwd`: in-process first, `rev-parse --show-toplevel` only when
+    `_git_tree_facts` returns None. ``None`` when `cwd` is not in a repo."""
+    top = _git_tree_facts.toplevel(cwd or os.getcwd())
+    if top is not None:
+        return top
+    rc, out = _run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
+    return out.strip() if rc == 0 else None
+
+
+def _show_prefix(cwd: Optional[str]) -> Optional[str]:
+    """`rev-parse --show-prefix` for `cwd` (trailing '/' when non-empty), in-process first."""
+    prefix = _git_tree_facts.show_prefix(cwd or os.getcwd())
+    if prefix is not None:
+        return prefix
+    rc, out = _run_git(["rev-parse", "--show-prefix"], cwd=cwd)
+    return out.strip() if rc == 0 else None
+
+
+def _staged_names(cwd: Optional[str]) -> Optional[List[str]]:
+    """Staged paths (`diff --cached --name-only`), in-process first. A staged set holding
+    both an add and a delete may be a rename `--name-only` would print once, so it is
+    probed. ``None`` when the probe fails."""
+    rows = _git_tree_facts.staged_name_status(cwd or os.getcwd())
+    if rows is not None:
+        letters = {row.split("\t", 1)[0] for row in rows}
+        if not {"A", "D"} <= letters:
+            return [row.split("\t", 1)[1] for row in rows]
+    rc, out = _run_git(["diff", "--cached", "--name-only"], cwd=cwd)
+    if rc != 0:
+        return None
+    return [line for line in out.splitlines() if line]
+
+
+def _pathspec_literal(path: str, prefix: str, cwd: str) -> Optional[str]:
+    """Top-relative form of a plain file pathspec `path` (relative to `cwd`), or None when
+    the pathspec could be a glob, directory, magic or out-of-tree form git would expand."""
+    if not path or os.path.isabs(path) or any(c in path for c in "*?[\\:") or path.endswith("/"):
+        return None
+    if os.path.isdir(os.path.join(cwd, path)):
+        return None
+    norm = os.path.normpath(path).replace(os.sep, "/")
+    if norm in (".", "..") or norm.startswith("../"):
+        return None
+    return prefix + norm
 
 
 def _resolve_plugin_content_root() -> Optional[str]:
@@ -233,22 +281,20 @@ def check_schema_version_bump() -> Optional[str]:
     if plugin_root is None:
         return None
 
-    rc, _ = _run_git(["rev-parse", "--show-toplevel"], cwd=plugin_root)
-    if rc != 0:
+    if _toplevel(plugin_root) is None:
         return None
-    rc, rel_prefix_out = _run_git(["rev-parse", "--show-prefix"], cwd=plugin_root)
-    if rc != 0:
+    rel_prefix = _show_prefix(plugin_root)
+    if rel_prefix is None:
         return None
-    rel_prefix = rel_prefix_out.strip()
     # --show-prefix already carries the trailing slash when non-empty; "" when
     # the plugin root IS the git root (both forms concatenate directly).
     rel_canonical = rel_prefix + _CANONICAL_FILE
     rel_version = rel_prefix + _VERSION_FILE
 
-    rc, changed_out = _run_git(["diff", "--cached", "--name-only"], cwd=plugin_root)
-    if rc != 0:
+    staged_names = _staged_names(plugin_root)
+    if staged_names is None:
         return None
-    changed_names = set(l for l in changed_out.splitlines() if l)
+    changed_names = set(staged_names)
 
     canonical_changed = rel_canonical in changed_names
     version_changed = rel_version in changed_names
@@ -331,26 +377,20 @@ def check_bin_sh_polyglot() -> Optional[str]:
     if not os.path.isdir(bin_dir):
         return None
 
-    rc, _ = _run_git(["rev-parse", "--show-toplevel"], cwd=plugin_root)
-    if rc != 0:
+    git_root = _toplevel(plugin_root)
+    if git_root is None:
         return None
-    rc, rel_prefix_out = _run_git(["rev-parse", "--show-prefix"], cwd=plugin_root)
-    if rc != 0:
+    rel_prefix = _show_prefix(plugin_root)
+    if rel_prefix is None:
         return None
-    rel_prefix = rel_prefix_out.strip()
     bin_rel_prefix = rel_prefix + "bin/"
 
-    rc, git_root_out = _run_git(["rev-parse", "--show-toplevel"], cwd=plugin_root)
-    if rc != 0:
-        return None
-    git_root = git_root_out.strip()
-
-    rc, staged_out = _run_git(["diff", "--cached", "--name-only"], cwd=plugin_root)
-    if rc != 0:
+    staged_names = _staged_names(plugin_root)
+    if staged_names is None:
         return None
 
     candidates: List[str] = []
-    for rel in staged_out.splitlines():
+    for rel in staged_names:
         if not rel.startswith(bin_rel_prefix):
             continue
         tail = rel[len(bin_rel_prefix):]
@@ -501,10 +541,9 @@ def check_registration_quad_completeness(
         )
 
         if staged is None:
-            rc, staged_out = _run_git(["diff", "--cached", "--name-only"], cwd=cwd)
-            if rc != 0:
+            staged = _staged_names(cwd)
+            if staged is None:
                 return None
-            staged = [l for l in staged_out.splitlines() if l]
         candidates = [f for f in staged if f.startswith("coordinator_core/") and f.endswith(".py")]
         if not candidates and not any(f in _SURFACE_PATHS for f in staged):
             return None
@@ -669,8 +708,7 @@ def _log_pathspec_divergence_override(cmd: str, cwd: Optional[str], session_id: 
     override-logging convention peer guards in this codebase follow, not a
     new one invented for this check."""
     try:
-        rc_root, root_out = _run_git(["rev-parse", "--show-toplevel"], cwd)
-        git_root = root_out.strip() if rc_root == 0 else (cwd or "")
+        git_root = _toplevel(cwd) or (cwd or "")
         if not git_root:
             return
         override_log = _override_log_path(git_root, session_id)
@@ -723,6 +761,9 @@ def _index_only_removed_paths(paths: List[str], cwd: Optional[str]) -> List[str]
     matching every other predicate in this module)."""
     if not paths:
         return []
+    served = _removed_from_facts(paths, cwd)
+    if served is not None:
+        return served
     rc, out = _run_git(["diff", "--cached", "--name-status", "--", *paths], cwd=cwd)
     if rc != 0:
         return []
@@ -739,6 +780,39 @@ def _index_only_removed_paths(paths: List[str], cwd: Optional[str]) -> List[str]
         if os.path.exists(abs_path):
             still_on_disk.append(rel)
     return sorted(still_on_disk)
+
+
+def _removed_from_facts(paths: List[str], cwd: Optional[str]) -> Optional[List[str]]:
+    """`_index_only_removed_paths` answered in-process for plain file pathspecs; ``None``
+    (probe) for any pathspec shape, or reader state, it cannot answer exactly. Returned
+    names are cwd-relative, as the probe's `--name-status` prints them."""
+    here = cwd or os.getcwd()
+    rows = _git_tree_facts.staged_name_status(here)
+    top = _git_tree_facts.toplevel(here)
+    prefix = _git_tree_facts.show_prefix(here)
+    if rows is None or top is None or prefix is None:
+        return None
+    letters = {row.partition("\t")[0] for row in rows}
+    if {"A", "D"} <= letters:
+        return None
+    from coordinator_core.bash_guards._declared_delete_license import case_insensitive
+
+    fold = str.casefold if case_insensitive(Path(top)) else (lambda s: s)
+    wanted = {}
+    for p in paths:
+        literal = _pathspec_literal(p, prefix, here)
+        if literal is None:
+            return None
+        wanted[fold(literal)] = p
+    removed: List[str] = []
+    for row in rows:
+        letter, _, rel = row.partition("\t")
+        if letter != "D" or fold(rel) not in wanted:
+            continue
+        shown = rel[len(prefix):] if prefix and rel.startswith(prefix) else rel
+        if os.path.exists(os.path.join(here, shown)):
+            removed.append(shown)
+    return sorted(removed)
 
 
 def check_staged_pathspec_divergence(

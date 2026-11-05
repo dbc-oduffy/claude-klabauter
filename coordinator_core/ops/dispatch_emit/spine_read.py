@@ -156,6 +156,7 @@ import yaml
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
+from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ops.dispatch_emit.em_only_act import em_only_capability, forbidden_sole_act, row_is_em_performed
 from coordinator_core.ops.plan_tasks_render import RowsResult
 
@@ -977,7 +978,7 @@ class EmitterRow(NamedTuple):
     disjoint_parallel: bool = False
 
 
-_YAML_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_YAML_LOADER = SAFE_LOADER
 # Above one repo's plan corpus (~300): a set check reads every plan, and a
 # full clear at the limit made each read of a larger set miss.
 _MEMO_LIMIT = 1024

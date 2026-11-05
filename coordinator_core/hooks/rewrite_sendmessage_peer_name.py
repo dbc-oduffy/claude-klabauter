@@ -78,8 +78,9 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 @register_op("hooks.rewrite_sendmessage_peer_name")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     try:
-        return check(payload_of(params)) or no_advisory()
+        return check(params) or no_advisory()
     except Exception:
         return no_advisory()
 

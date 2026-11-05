@@ -107,6 +107,10 @@ def parked_next_action_js(plan_expr: str) -> str:
     )
 
 
+#: The engine-ask `args` key a refire carries: the halted run it resumes, resolved before the sizing lookup.
+RESUME_RUN_ID_ARG = "resume_run_id"
+
+
 def refire_next_action_for(halted: str, *, run_id: str, sizing_rel: str, detail: str) -> dict:
     """The `next_action` envelope of a `halted` halt that the run itself remedies: one engine-ask refire, no hand step.
 
@@ -115,7 +119,10 @@ def refire_next_action_for(halted: str, *, run_id: str, sizing_rel: str, detail:
     """
     from coordinator_core.ops.dispatch_emit import halt_refire
 
-    call = f'Workflow({{name: "coordinator:engine-ask", args: {{"sizing": {json.dumps(sizing_rel)}}}}})'
+    call = (
+        f'Workflow({{name: "coordinator:engine-ask", args: {{"sizing": {json.dumps(sizing_rel)}, '
+        f'"{RESUME_RUN_ID_ARG}": {json.dumps(run_id)}}}}})'
+    )
     return halt_refire.refire_next_action(call=call, run_id=run_id, sizing=sizing_rel, halted=halted, detail=detail)
 
 
@@ -1062,8 +1069,50 @@ def write_run_outcome(repo_root: Path, run_id: str, outcome: dict[str, Any]) -> 
         raise ValueError("run outcome needs an inline_review dict")
     path = record_dir(repo_root, run_id) / RUN_OUTCOME_FILE
     kept = {k: outcome[k] for k in RUN_OUTCOME_KEYS if k in outcome}
+    if _criterion_status(kept["inline_review"]) not in _JUDGE_VERDICTS:
+        stored = _criterion_of(_read_json_object(path) or {})
+        if stored.get("authored_by") == ENGINE_JUDGE_AUTHOR and stored.get("status") in _JUDGE_VERDICTS:
+            kept["inline_review"] = {**kept["inline_review"], "criterion": stored}
     atomic_write_bytes(path, (json.dumps(kept, indent=2) + "\n").encode("utf-8"))
     return path
+
+
+#: `inline_review.criterion.authored_by` of an engine-recorded verdict; differs from
+#: `completion_gate.JUDGE_AGENT` so `completion_blockers` still blocks it.
+ENGINE_JUDGE_AUTHOR = "engine:judge-coverage"
+_JUDGE_VERDICTS = ("met", "not_met")
+
+
+def _criterion_of(outcome: Mapping) -> dict[str, Any]:
+    review = outcome.get("inline_review")
+    criterion = review.get("criterion") if isinstance(review, dict) else None
+    return criterion if isinstance(criterion, dict) else {}
+
+
+def _criterion_status(review: Any) -> Any:
+    return _criterion_of({"inline_review": review}).get("status")
+
+
+def record_terminal_judge_at(record_path: Path) -> bool:
+    """Record `inline_review.criterion.status` not_met in `<record_path>/run-outcome.json` when it is
+    not already met or not_met; True when written. One read, at most one write, no subprocess."""
+    path = Path(record_path) / RUN_OUTCOME_FILE
+    data = _read_json_object(path) or {}
+    old = _criterion_of(data)
+    if old.get("status") in _JUDGE_VERDICTS:
+        return False
+    kept = {k: data[k] for k in RUN_OUTCOME_KEYS if k in data}
+    review = dict(kept["inline_review"]) if isinstance(kept.get("inline_review"), dict) else {}
+    review["criterion"] = {
+        **old,
+        "status": "not_met",
+        "authored_by": ENGINE_JUDGE_AUTHOR,
+        "reason": "no exit-criterion judge verdict at conclusion",
+        "prior_status": old.get("status"),
+    }
+    kept["inline_review"] = review
+    atomic_write_bytes(path, (json.dumps(kept, indent=2) + "\n").encode("utf-8"))
+    return True
 
 
 def read_run_outcome(repo_root: Path, run_id: str) -> dict[str, Any] | None:
@@ -1255,6 +1304,11 @@ def stamp_run_stage_at(
         )
     except (ValueError, OSError):
         pass
+    if stage == "landed":
+        try:
+            record_terminal_judge_at(record_path)
+        except (ValueError, OSError):
+            pass
 
 
 def write_ledger_halt(path: Path, halt: LedgerHalt) -> None:

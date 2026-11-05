@@ -139,6 +139,7 @@ def test_sync_push_to_bare_remote_then_pull(tmp_path, monkeypatch, capsys):
     for k in ("AUTHOR", "COMMITTER"):
         monkeypatch.setenv(f"GIT_{k}_NAME", "t")
         monkeypatch.setenv(f"GIT_{k}_EMAIL", "t@t")
+    assert _git(home, "symbolic-ref", "HEAD", f"refs/heads/{gem_home.DEFAULT_REMOTE_BRANCH}").returncode == 0
     assert mod.main(["sync", "--push"]) == 0
     assert json.loads(capsys.readouterr().out)["sync"] == "ok"
     assert _git(bare, "log", "--all", "--oneline").stdout.strip()

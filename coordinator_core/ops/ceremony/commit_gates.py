@@ -63,6 +63,7 @@ import functools
 import os
 import re
 import sys
+from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Sequence, Set, Tuple, Union
@@ -818,14 +819,17 @@ def attribution_gate(
             staged_deletions, rename_sources = set(), set()
         vacated_paths = staged_deletions | rename_sources
 
-    rename_pool_lines: List[str] = []
+    # Built once: every head-absent suspect diffs against this one pool, and rebuilding it per
+    # path is quadratic in a mass rename (932 renames outran the 30s op budget).
+    rename_pool: Optional[Counter] = None
     if vacated_paths:
         vacated_spine = read_tree_spine(root, sorted(vacated_paths))
+        pool: Counter = Counter()
         for vp in sorted(vacated_paths):
             text = _head_text(vacated_spine, common_dir, vp)
             if text is not None:
-                rename_pool_lines.extend(text.splitlines())
-    rename_pool_text = "\n".join(rename_pool_lines) if rename_pool_lines else None
+                pool.update(text.splitlines())
+        rename_pool = pool or None
 
     # Index identities for every path in `remaining`: staged-scan widening and the staged-only check.
     try:
@@ -841,7 +845,7 @@ def attribution_gate(
         if head_text is not None:
             old_text = head_text
         elif vacated_paths:
-            old_text = rename_pool_text
+            old_text = rename_pool
         else:
             old_text = None
 

@@ -1,4 +1,4 @@
-"""A met ledger discharges an indeterminate criterion through the real plan-implemented transition.
+"""The plan stamp needs a judge-authored met criterion with captured falsifier output; a ledger never stamps.
 
 Un-stubbed: a real plan file, the real ``cs_stamp_plan_implemented`` and ``criterion_refusal``.
 """
@@ -25,10 +25,12 @@ prime_exit_criterion:
   text: a.py exists
 review_stamp:
   delivery: {{verdict: PASS, product_files: 1, claims_unbacked: 0}}
-  tests: {{status: not_run, run: 0, failed: 0, sidecar: null}}
+  tests: {{status: pass, run: 3, failed: 0, sidecar: null}}
   criterion:
     status: {status}
     observation: judged
+    authored_by: {author}
+    falsifier: {{verdict: {verdict}, output: "3 passed in 0.1s"}}
 ---
 
 # Plan
@@ -67,28 +69,56 @@ def repo(tmp_path):
     return root
 
 
-def _plan(repo: Path, status: str) -> Path:
+def _plan(repo: Path, status: str, author: str = "coordinator:exit-criterion-judge", verdict: str = "pass") -> Path:
     plan = repo / "docs" / "plan.md"
     plan.parent.mkdir(exist_ok=True)
-    plan.write_text(_PLAN.format(status=status, ref="b" * 40), encoding="utf-8")
+    plan.write_text(
+        _PLAN.format(status=status, ref="b" * 40, author=author, verdict=verdict), encoding="utf-8",
+    )
     return plan
 
 
-def test_stamp_plan_implemented_indeterminate_with_ledger_met_stamps(repo):
-    plan = _plan(repo, "indeterminate")
-    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", _SHA, ledger_met="ledger-met: R1")
+def _refused(repo: Path, plan: Path, needle: str, **kw) -> None:
+    before = plan.read_text(encoding="utf-8")
+    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", _SHA, **kw)
+    assert out["plan_status"] == "not-stamped", out
+    assert needle in out["plan_status_reason"], out
+    assert plan.read_text(encoding="utf-8") == before
+
+
+def test_judge_authored_met_stamps_with_the_judges_falsifier_output(repo):
+    plan = _plan(repo, "met")
+    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", _SHA)
     assert out["plan_status"] == "implemented", out
     text = plan.read_text(encoding="utf-8")
     assert "status: implemented" in text
-    assert f"criterion met at {_SHA} per requirements ledger" in text
+    assert "3 passed in 0.1s" in text
+    assert f"criterion met at {_SHA}" in text
 
 
-def test_stamp_plan_implemented_not_met_with_ledger_met_refuses(repo):
+def test_ledger_met_never_discharges_an_indeterminate_criterion(repo):
+    plan = _plan(repo, "indeterminate")
+    _refused(repo, plan, "criterion is not met", ledger_met="ledger-met: R1")
+
+
+def test_not_met_with_ledger_met_refuses(repo):
     plan = _plan(repo, "not_met")
-    before = plan.read_text(encoding="utf-8")
-    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", _SHA, ledger_met="ledger-met: R1")
-    assert out["plan_status"] != "implemented", out
-    assert plan.read_text(encoding="utf-8") == before
+    _refused(repo, plan, "criterion is not met", ledger_met="ledger-met: R1")
+
+
+def test_met_without_judge_authorship_is_refused(repo):
+    plan = _plan(repo, "met", author="coordinator:executor")
+    _refused(repo, plan, "verdict not judge-authored")
+
+
+def test_standing_halt_marker_refuses_a_judge_authored_met(repo):
+    plan = _plan(repo, "met")
+    _refused(repo, plan, "halt standing", halt_marker={"status": "halted", "halted": "gate"})
+
+
+def test_falsifier_verdict_other_than_pass_is_refused(repo):
+    plan = _plan(repo, "met", verdict="fail")
+    _refused(repo, plan, "falsifier verdict is not pass")
 
 
 def test_criterion_refusal_default_keeps_the_indeterminate_refusal():
@@ -101,13 +131,13 @@ def test_criterion_refusal_default_keeps_the_indeterminate_refusal():
     assert criterion_refusal(Path("p.md"), fm.replace("indeterminate", "not_met"), ledger_met="ledger-met: R1") is not None
 
 
-def test_stamp_plan_implemented_absent_criterion_with_ledger_met_stamps(repo):
+def test_absent_criterion_with_ledger_met_is_refused(repo):
     plan = repo / "docs" / "plan.md"
     plan.parent.mkdir(exist_ok=True)
-    text = _PLAN.format(status="met", ref="b" * 40)
+    text = _PLAN.format(status="met", ref="b" * 40, author="x", verdict="pass")
     plan.write_text(text.replace("review_stamp:", "review_stamp_unused:", 1), encoding="utf-8")
     out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", _SHA, ledger_met="ledger-met: R1")
-    assert out.get("plan_status_reason") != "review_stamp criterion is not met", out
+    assert out["plan_status"] == "not-stamped", out
 
 
 class _Ledger:

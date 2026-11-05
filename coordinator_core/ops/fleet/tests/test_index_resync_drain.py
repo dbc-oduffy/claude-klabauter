@@ -41,7 +41,7 @@ class FakeGit:
         self.restore_rc = restore_rc
         self.calls = []
 
-    async def __call__(self, argv, *, cwd, env):
+    def __call__(self, argv, *, cwd, env):
         self.calls.append(list(argv))
         paths = argv[argv.index("--") + 1:]
         if argv[1] == "ls-files":
@@ -77,6 +77,28 @@ def env(tmp_path, monkeypatch):
 
 def _run(root, git):
     return asyncio.run(drain.drain_pending_resyncs(root, run_git=git))
+
+
+def test_sync_entry_matches_async_entry_without_a_loop(env):
+    root, state = env
+    rec, idx = _needed_fixture(root, state)
+    git = FakeGit(idx, state["head"])
+    result = drain.drain_pending_resyncs_sync(root, run_git=git)
+    assert result == {"restored": ["cid1"], "discharged": [], "kept": {}}
+    assert [c[1] for c in git.calls] == ["ls-files", "restore"]
+    assert list_pending(root) == []
+
+
+def test_default_runner_times_out_as_a_failed_spawn(monkeypatch, tmp_path):
+    from coordinator_core.git import run as git_run
+
+    def boom(args, **kw):
+        assert kw.get("timeout") is None
+        return git_run.GitResult(-1, "", "", True)
+
+    monkeypatch.setattr(git_run, "run_git", boom)
+    rc, out, err = drain._run_git_once(["git", "status"], cwd=tmp_path, env={})
+    assert rc == 1 and out == "" and "timed out" in err
 
 
 def _needed_fixture(root, state, n=1):

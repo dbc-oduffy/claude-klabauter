@@ -119,6 +119,9 @@ def profile(repo: Path, sha: str, calls: int) -> tuple[list[dict], dict]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--calls", type=int, default=3)
     ap.add_argument("--repo", help="existing repo to profile instead of a fixture")
@@ -130,7 +133,9 @@ def main(argv: list[str] | None = None) -> int:
             repo = Path(args.repo).resolve()
             sha = _git(repo, "rev-parse", args.sha)
         else:
-            tmp = Path(tempfile.mkdtemp(prefix="bec-profile-"))
+            from coordinator_core.temp_layout import managed_tempdir
+
+            tmp = Path(tempfile.mkdtemp(prefix="bec-profile-", dir=str(managed_tempdir())))
             repo = tmp / "repo"
             sha = build_fixture(repo)
         rows, summary = profile(repo, sha, args.calls)

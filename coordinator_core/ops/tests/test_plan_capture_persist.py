@@ -76,7 +76,7 @@ def test_predict_doc_new_plan_path_uses_40_char_truncation(tmp_path):
     path = predict_doc_new_plan_path(tmp_path, title)
     slug_part = path.stem[len(local_day()) + 1:]
     assert len(slug_part) <= 40
-    assert path.parent == tmp_path / "docs" / "plans"
+    assert path.parent == tmp_path / "docs" / "plans" / local_day()[:7]
 
 
 def test_predict_hook_capture_path_matches_derive_hook_slug(tmp_path):
@@ -229,7 +229,7 @@ def test_persist_captured_plan_ok(tmp_path, monkeypatch):
     plan_content = f"# {title}\n\n## Context\n\nsome prose\n"
     result = persist_captured_plan(plan_content, repo_root=repo_root)
     assert result["status"] == "ok"
-    assert result["path"] == f"docs/plans/{scaffold_path.name}"
+    assert result["path"] == scaffold_path.relative_to(repo_root).as_posix()
     assert result["readme_row"] == readme_row(scaffold_path)
     assert scaffold_path.is_file()
     assert "some prose" in scaffold_path.read_text(encoding="utf-8")
@@ -251,7 +251,7 @@ def test_persist_captured_plan_idempotent_when_compliant_already_exists(tmp_path
 
     result = persist_captured_plan(f"# {title}\n\nbody\n", repo_root=repo_root)
     assert result["status"] == "idempotent"
-    assert result["path"] == f"docs/plans/{existing_path.name}"
+    assert result["path"] == existing_path.relative_to(repo_root).as_posix()
 
 
 def test_persist_captured_plan_collision_on_different_raw_dump(tmp_path, monkeypatch):
@@ -383,7 +383,7 @@ def test_main_plan_file_flag(tmp_path, monkeypatch, capsys):
     rc = main(["--repo-root", str(repo_root), "--plan-file", str(plan_file)])
     assert rc == 0
     payload = json.loads(capsys.readouterr().out.strip())
-    assert payload["path"] == f"docs/plans/{scaffold_path.name}"
+    assert payload["path"] == scaffold_path.relative_to(repo_root).as_posix()
 
 
 # ---------------------------------------------------------------------------

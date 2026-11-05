@@ -8,12 +8,14 @@ from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_contract import PARKED_REPLY_KEY, STOP_AFTER_FILE, record_dir
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL, read_stage_reply
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 
 _RUN = "parkrun"
 
 
 def _seed(root) -> None:
     (root / ".git").mkdir(exist_ok=True)
+    write_run_scripts(root, _RUN)
     (root / PLAN_REL).parent.mkdir(parents=True, exist_ok=True)
     (root / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
 
@@ -38,6 +40,26 @@ def test_marker_parks_without_staging(tmp_path, monkeypatch):
 
     assert reply == {PARKED_REPLY_KEY: "plan", "plan_path": PLAN_REL}
     assert not (record_dir(tmp_path, _RUN) / "manifest.json").exists()
+
+
+def test_park_stamps_the_run_stage_halted(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, write_run_stage
+
+    _seed(tmp_path)
+    write_run_stage(tmp_path, _RUN, "minted")
+    _marker(tmp_path, json.dumps({"stop_after": "plan"}))
+
+    assert _handler(_params(), repo_root=tmp_path)[PARKED_REPLY_KEY] == "plan"
+    assert read_run_stage(tmp_path, _RUN)["stage"] == "halted"
+
+
+def test_unparked_stage_call_never_stamps_halted(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, write_run_stage
+
+    _seed(tmp_path)
+    write_run_stage(tmp_path, _RUN, "minted")
+    _handler(_params(), repo_root=tmp_path)
+    assert read_run_stage(tmp_path, _RUN)["stage"] != "halted"
 
 
 def test_parked_reply_plan_path_none_when_absent(tmp_path):
@@ -118,6 +140,18 @@ def test_ancestor_marker_parks_a_markerless_successor(tmp_path, monkeypatch):
 
     assert reply == {PARKED_REPLY_KEY: "plan", "plan_path": PLAN_REL}
     assert not (rdir / "manifest.json").exists()
+    assert (record_dir(tmp_path, _ANCESTOR) / STOP_AFTER_FILE).exists()
+
+
+def test_successor_that_recorded_its_park_stages(tmp_path):
+    _seed(tmp_path)
+    rdir = _ancestor_marker(tmp_path)
+    (rdir / "halted.json").write_text(json.dumps({"halted": "parked"}), encoding="utf-8")
+
+    reply = _handler(_params(), repo_root=tmp_path)
+
+    assert PARKED_REPLY_KEY not in reply and "error" not in reply
+    assert (record_dir(tmp_path, _RUN) / "manifest.json").is_file()
     assert (record_dir(tmp_path, _ANCESTOR) / STOP_AFTER_FILE).exists()
 
 

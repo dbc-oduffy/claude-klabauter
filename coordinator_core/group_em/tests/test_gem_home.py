@@ -308,7 +308,9 @@ def test_ensure_home_migrates_legacy_first(migrate_env, tmp_path):
 def _git(cwd, *args):
     import subprocess
 
-    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
+    from coordinator_core.win_portability import no_console_creationflags
+
+    return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, **no_console_creationflags())
 
 
 def test_ignore_list_ignores_box_runtime_and_tracks_inbox(migrate_env):

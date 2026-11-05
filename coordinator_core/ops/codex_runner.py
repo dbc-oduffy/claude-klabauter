@@ -36,9 +36,10 @@ _RESULT = "result.json"
 _PARAMS = ("mode", "repo_root", "artifact", "plan", "chunk", "parent_session_id")
 
 
-def _detach_kwargs() -> Dict[str, Any]:
+def _no_console_detach_kwargs() -> Dict[str, Any]:
+    # Trap: DETACHED_PROCESS must not be ORed in; Win32 then ignores CREATE_NO_WINDOW.
     if os.name == "nt":
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         return {"creationflags": flags}
     return {"start_new_session": True}
 
@@ -86,7 +87,7 @@ def _codex_runner_start(params: dict, repo_root: Optional[Path] = None) -> dict:
                 stderr=log,
                 cwd=req.repo_root,
                 env=settings_home_child_env(os.environ),
-                **_detach_kwargs(),
+                **_no_console_detach_kwargs(),
             )
     except OSError as exc:
         # Without a result the run would read as `running` forever (no child.json to probe).

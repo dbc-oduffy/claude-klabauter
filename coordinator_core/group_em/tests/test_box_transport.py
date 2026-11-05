@@ -68,6 +68,25 @@ def test_send_issues_one_argv_ssh_call_for_box_send():
     assert json.loads(parts[2]) == {"local": True, "to_session": "s1", "text": "it's hi"}
 
 
+def test_send_with_sender_carries_from_fields_and_a_verifying_signature(tmp_path):
+    import shlex
+
+    from coordinator_core.group_em import box_key
+
+    calls = []
+    out = box_transport.send(
+        BOX, "s1", "hi", runner=_runner("{}", calls=calls), from_session="sA", from_box="near", home=tmp_path
+    )
+    assert out["ok"] is True
+    params = json.loads(shlex.split(calls[0][6])[2])
+    assert (params["from_box"], params["from_session"]) == ("near", "sA")
+    key = (tmp_path / "state" / "group-em" / "box-key").read_text(encoding="ascii")
+    box_key.pin_peer_key("near", key, tmp_path / "far")
+    claim = {k: params[k] for k in ("from_box", "from_session", "to_session", "text", "ts", "sig")}
+    assert box_key.verify(claim, "near", tmp_path / "far") is True
+    assert box_key.verify({**claim, "from_box": "other"}, "near", tmp_path / "far") is False
+
+
 def test_non_ssh_transport_is_refused_without_spawning():
     calls = []
     for box in ({"box_id": "b"}, {"box_id": "b", "transport": {"kind": "fs"}},
@@ -125,6 +144,58 @@ def test_invoke_remote_requires_timeout_and_never_raises():
 
     assert box_transport.invoke_remote(BOX, "session.peer_roster", {}, weird, timeout=1)["reason"].startswith("invoke_failed")
     assert box_transport.invoke_remote({"box_id": "b"}, "x", {}, _runner("{}"), timeout=1)["reason"] == "not_ssh_transport"
+
+
+def test_identity_file_pins_the_key_and_option_like_values_are_refused(monkeypatch):
+    calls = []
+    keyed = {"box_id": "box-mac", "transport": {**BOX["transport"], "identity_file": "/k/id_ed25519"}}
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(keyed)])
+    assert box_transport.send(keyed, "s", "t", runner=_runner("{}", calls=calls))["ok"] is True
+    assert calls[0][1:5] == ["-i", "/k/id_ed25519", "-o", "IdentitiesOnly=yes"]
+    assert calls[0][-2] == "box.example" and box_transport._shape_ok(calls[0])
+    hostile = {"box_id": "box-mac", "transport": {**BOX["transport"], "identity_file": "-oProxyCommand=x"}}
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(hostile)])
+    assert _refused(box_transport.send(hostile, "s", "t", runner=_runner("{}", calls=calls)), "transport_row_invalid")
+    assert len(calls) == 1
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(keyed)])
+    assert _refused(box_transport.send(BOX, "s", "t", runner=_runner("{}", calls=calls)), "box_not_registered")
+
+
+def test_unkeyed_box_does_not_restrict_identities():
+    calls = []
+    box_transport.send(BOX, "s", "t", runner=_runner("{}", calls=calls))
+    assert "IdentitiesOnly=yes" not in calls[0] and "-i" not in calls[0]
+
+
+def test_tunnel_host_is_tried_once_only_after_exit_255_on_host(monkeypatch):
+    box = {"box_id": "box-mac", "transport": {**BOX["transport"], "tunnel_host": "10.8.0.2"}}
+    monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: [dict(box)])
+    hosts = []
+
+    def lan_down(argv, timeout):
+        hosts.append(argv[-2])
+        if argv[-2] == "box.example":
+            return subprocess.CompletedProcess(argv, 255, "", "unreachable")
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"sent": True}), "")
+
+    assert box_transport.send(box, "s", "t", runner=lan_down)["ok"] is True
+    assert hosts == ["box.example", "10.8.0.2"]
+
+    hosts.clear()
+    ok = _runner(json.dumps({"sent": True}), calls=hosts)
+    assert box_transport.send(box, "s", "t", runner=ok)["ok"] is True
+    assert len(hosts) == 1
+
+    hosts.clear()
+    other = _runner("", returncode=1, stderr="remote op failed", calls=hosts)
+    assert box_transport.send(box, "s", "t", runner=other)["reason"] == "ssh_exit_1"
+    assert len(hosts) == 1
+
+    hosts.clear()
+    both = _runner("", returncode=255, stderr="denied", calls=hosts)
+    assert box_transport.send(box, "s", "t", runner=both)["reason"] == "ssh_exit_255"
+    assert len(hosts) == 2
+    assert _refused(box_transport.send(BOX, "s", "t", runner=ok), "box_not_registered")
 
 
 def test_failure_replies_never_raise():

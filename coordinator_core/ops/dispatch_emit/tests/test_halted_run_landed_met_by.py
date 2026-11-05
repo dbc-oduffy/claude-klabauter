@@ -70,8 +70,8 @@ def test_met_by_at_and_after_the_halt_is_recorded_and_echoed(halted):
 
 def test_abbreviated_met_by_sha_is_recorded_full(halted):
     root, marker, _, _, after1, after2 = halted
-    out = _call(root, sha=after2, met_by={"R1": after1[:10]})
-    assert out["ok"] and out["met_by"] == {"R1": after1}
+    out = _call(root, sha=after2, met_by={"R1": after1[:10], "R2": after1})
+    assert out["ok"] and out["met_by"] == {"R1": after1, "R2": after1}
 
 
 def test_met_by_before_the_halt_refuses_naming_the_row(halted):
@@ -146,8 +146,57 @@ def test_malformed_met_by_refuses(halted, met_by):
     assert not out["ok"] and "met_by" in out["error"]
 
 
-def test_no_met_by_leaves_the_marker_without_the_key(halted):
+def test_blocking_rows_without_met_by_refuse_and_leave_the_marker_halted(halted):
     root, marker, _, _, _, after2 = halted
     out = _call(root, sha=after2)
+    assert not out["ok"]
+    assert out["error"] == "halt reason stands: blocking rows R1, R2 carry no met_by credit"
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "halted"
+
+
+def test_one_credited_row_still_refuses_the_other(halted):
+    root, _, _, _, after1, after2 = halted
+    out = _call(root, sha=after2, met_by={"R1": after1})
+    assert not out["ok"] and "blocking rows R2 carry" in out["error"]
+
+
+def test_a_marker_without_blocking_rows_lands_with_no_met_by_key(tmp_path):
+    root, marker, after = _ledger_halt_repo(tmp_path)
+    out = _call(root, sha=after)
     assert out["ok"] and "met_by" not in out
     assert "met_by" not in json.loads(marker.read_text(encoding="utf-8"))
+
+
+def _met_review(**over) -> dict:
+    criterion = {
+        "status": "met", "authored_by": "coordinator:exit-criterion-judge", "observation": "ran it",
+        "falsifier": {"output": "3 passed"}, **over,
+    }
+    return {"criterion": criterion, "tests": {"status": "pass", "run": 3}}
+
+
+def _gate_repo(tmp_path, monkeypatch, review):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    root, marker, after = _ledger_halt_repo(tmp_path, reason="completion gate: criterion not met")
+    monkeypatch.setattr(
+        ask_contract, "read_run_outcome", lambda r, rid: {"inline_review": review} if review is not None else None,
+    )
+    return root, marker, after
+
+
+@pytest.mark.parametrize(
+    "review", [None, _met_review(authored_by="coordinator:executor"), _met_review(falsifier={}), _met_review(status="not_met")],
+)
+def test_a_completion_gate_halt_refuses_without_a_judge_authored_met(tmp_path, monkeypatch, review):
+    root, marker, after = _gate_repo(tmp_path, monkeypatch, review)
+    out = _call(root, sha=after)
+    assert not out["ok"] and out["error"].startswith("halt reason stands: completion gate unmet")
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "halted"
+
+
+def test_a_completion_gate_halt_lands_once_the_judge_authored_met_is_recorded(tmp_path, monkeypatch):
+    root, marker, after = _gate_repo(tmp_path, monkeypatch, _met_review())
+    out = _call(root, sha=after)
+    assert out["ok"], out
+    assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "landed"

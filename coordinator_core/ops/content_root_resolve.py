@@ -14,6 +14,7 @@ coordinator-invoke in place of the shim (the prompt-template edit is DoE-owned).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -81,7 +82,7 @@ async def _content_root_resolve(params: dict, repo_root: Optional[Path] = None) 
     an own-machine probe). Returns {"path": str|None, "rung": str}; `path` is None only when no rung
     resolved, never an error."""
     del params, repo_root
-    path, rung = resolve_plugin_content_root()
+    path, rung = await asyncio.to_thread(resolve_plugin_content_root)
     return {"path": path, "rung": rung}
 
 

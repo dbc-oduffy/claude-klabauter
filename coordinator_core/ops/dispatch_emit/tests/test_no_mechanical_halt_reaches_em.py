@@ -19,7 +19,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
 CORE = Path(__file__).resolve().parents[3]
 DISPATCH_EMIT = CORE / "ops" / "dispatch_emit"
 SCAN_ROOTS = (CORE / "ops", CORE / "bash_guards")
-_NOT_A_KIND_SUFFIXES = ("_FIELD", "_FIELDS", "_TRAILER", "_UNCLOSED_REASON", "_RULE")
+_NOT_A_KIND_SUFFIXES = ("_FIELD", "_FIELDS", "_TRAILER", "_UNCLOSED_REASON", "_RULE", "_PLACEHOLDER")
 REMEDY_CALL = "remedy_or_halt"
 
 # Pseudo-kinds have no constant: a marker is a substring of the message a site emits for that condition.
@@ -47,10 +47,11 @@ def _module_str_constants(path: Path):
 
 
 def _halt_constants() -> dict[str, str]:
-    """Module-level HALT_* kind constants of dispatch_emit, name -> value."""
+    """Module-level HALT_* kind constants of dispatch_emit, name -> value. self_correction's HALT_* are
+    stage labels and phases, not halt kinds."""
     found: dict[str, str] = {}
     for path in _py_files(DISPATCH_EMIT):
-        if "HALT_" not in path.read_text(encoding="utf-8"):
+        if path.name == "self_correction.py" or "HALT_" not in path.read_text(encoding="utf-8"):
             continue
         for name, value in _module_str_constants(path):
             if name.startswith("HALT_") and not name.endswith(_NOT_A_KIND_SUFFIXES):
@@ -147,9 +148,42 @@ def _mechanical_kinds() -> dict[str, list[str]]:
     return {k: sorted(v) for k, v in names.items()}
 
 
+#: Sites a kind's name appears in without the EM ever being the remedy's owner. The first group are halt
+#: records whose remedy IS the computed `next_action`/reason they carry (`HALT_REMEDY` names it); the second
+#: are the same word used as an unrelated value (a git verdict, a landing plan's `refusal` key).
+_REMEDY_CARRIED_IN_THE_RECORD = {
+    ("arm-no-replan-leg", "ops/dispatch_emit/ledger_remaining_paths.py", "remaining_leg_plan"),
+    ("live-briefed-revise-refused", "ops/dispatch_emit/requirements_ledger.py", "_handler"),
+    ("halted-run", "ops/dispatch_emit/land_run.py", "_land_inner"),
+    ("halted-run", "ops/dispatch_emit/terminal_commit.py", "_terminal_commit_inner"),
+    ("dependents_unstarted", "ops/dispatch_emit/ask_contract.py", "dependents_unstarted_refire_next_action"),
+    ("dependents_unstarted", "ops/dispatch_emit/emit.py", "_held_halt_record_js"),
+    ("parked", "ops/dispatch_emit/ask_compose.py", "blitz_stage_read"),
+    ("parked", "ops/dispatch_emit/ask_contract.py", "parked_refire_next_action"),
+}
+_SAME_WORD_UNRELATED_VALUE = {
+    ("refusal", "ops/dispatch_emit/land_run.py", "_land_inner"),
+    ("refusal", "ops/dispatch_emit/terminal_commit.py", "_terminal_commit_inner"),
+    ("indeterminate", "ops/fleet/_findings_reap.py", "_is_tracked"),
+    ("indeterminate", "ops/introspect/verify_shipped.py", "_compute_verdict"),
+    ("indeterminate", "ops/introspect/verify_shipped.py", "verify_shipped"),
+}
+_NOT_A_REMEDY_SITE = _REMEDY_CARRIED_IN_THE_RECORD | _SAME_WORD_UNRELATED_VALUE
+
+
+def _enclosing_function(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
+    cur = node
+    while cur in parents:
+        cur = parents[cur]
+        if isinstance(cur, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return cur.name
+    return "<module>"
+
+
 def _offending_sites() -> dict[str, list[str]]:
     mech = _mechanical_kinds()
     out: dict[str, list[str]] = {k: [] for k in mech}
+    seen: set[tuple[str, str, str]] = set()
     for root in SCAN_ROOTS:
         for path in _py_files(root):
             text = path.read_text(encoding="utf-8")
@@ -174,7 +208,12 @@ def _offending_sites() -> dict[str, list[str]]:
                         or is_msg
                     )
                     if hit and _is_emitting_site(node, parents, message=is_msg):
-                        out[kind].append(f"{rel}:{node.lineno}")
+                        site = (kind, rel, _enclosing_function(node, parents))
+                        if site in _NOT_A_REMEDY_SITE:
+                            seen.add(site)
+                        else:
+                            out[kind].append(f"{rel}:{node.lineno}")
+    out["stale-allowlist-entry"] = [f"{k}@{r}::{f}" for k, r, f in sorted(_NOT_A_REMEDY_SITE - seen)]
     return out
 
 

@@ -152,15 +152,40 @@ def ruling_ask_act(raw: Dict[str, Any]) -> bool:
     return False
 
 
+_CODE_SUFFIXES = (".py", ".ts", ".js", ".cs", ".cpp", ".h", ".ps1")
+
+
+def code_deliverable(raw: Dict[str, Any]) -> bool:
+    """True when a `writes` or `writes_under` entry names a code file (`_CODE_SUFFIXES`)."""
+    for key in ("writes", "writes_under"):
+        entries = raw.get(key)
+        if isinstance(entries, str):
+            entries = [entries]
+        if not isinstance(entries, (list, tuple)):
+            continue
+        for entry in entries:
+            if isinstance(entry, str) and entry.strip().lower().endswith(_CODE_SUFFIXES):
+                return True
+    return False
+
+
 def row_is_em_performed(raw: Dict[str, Any]) -> bool:
     """True for a declared `performer: em` or `em_run: true` row, an `agent_type` in
     `EM_OWNED_AGENT_TYPES`, a ruling-ask row, one whose only act is agent-forbidden, or one blocked on
-    a capability only the EM session has."""
-    return (
+    a capability only the EM session has.
+
+    INVARIANT: the declared-field legs (performer, em_run, agent_type) yield False for a
+    `code_deliverable` row: code routes to an executor. `forbidden_sole_act` and `em_only_capability`
+    still hold: a genuine EM-only capability stays EM.
+    """
+    declared = not code_deliverable(raw) and (
         raw.get("performer") == "em"
         or raw.get("em_run") is True
-        or ruling_ask_act(raw)
         or raw.get("agent_type") in EM_OWNED_AGENT_TYPES
+    )
+    return (
+        declared
+        or ruling_ask_act(raw)
         or forbidden_sole_act(raw) is not None
         or em_only_capability(raw) is not None
     )

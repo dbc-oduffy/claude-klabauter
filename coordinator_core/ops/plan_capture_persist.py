@@ -176,7 +176,7 @@ def predict_hook_capture_path(repo_root: Path, plan_content: str) -> Path:
 def predict_doc_new_plan_path(repo_root: Path, title: str) -> Path:
     """Port of ``coordinator-doc-new``'s own ``_slug_from_title`` (40-char
     word-boundary truncation, re-stripped after truncation) + its ``plan`` default output
-    path (``docs/plans/<date>-<slug>.md``) — the collision surface against
+    path (``docs/plans/<YYYY-MM>/<date>-<slug>.md``, or the flat twin when it exists) — the collision surface against
     an ALREADY-COMPLIANT plan this op (or a prior manual scaffold) already
     produced for the same title. Deliberately a SEPARATE algorithm from
     ``derive_hook_slug`` (40 chars, not 60) — each predicts its own
@@ -190,7 +190,13 @@ def predict_doc_new_plan_path(repo_root: Path, title: str) -> Path:
         boundary = truncated.rfind("-")
         slug = truncated[:boundary] if boundary > 0 else truncated
     slug = slug.strip("-")
-    return repo_root / "docs" / "plans" / f"{local_day()}-{slug}.md"
+    from coordinator_core.session.output_tree_layout import write_rel
+
+    name = f"{local_day()}-{slug}.md"
+    flat = repo_root / "docs" / "plans" / name
+    if flat.is_file():
+        return flat
+    return repo_root / write_rel("docs/plans", name)
 
 
 # ---------------------------------------------------------------------------

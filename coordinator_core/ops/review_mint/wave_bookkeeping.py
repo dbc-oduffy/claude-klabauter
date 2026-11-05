@@ -69,8 +69,8 @@ from coordinator_core.frontmatter.primitives import (
 from coordinator_core.ops.review_findings_ledger import (
     LedgerError,
     _parse_ledger_rows,
+    diff_evidenced_rows,
     normalize_run_diff,
-    rows_not_in_run_diff,
     verify as ledger_verify,
 )
 from coordinator_core.subagent_sandbox.provision_report import _sanitize_segment
@@ -346,34 +346,91 @@ def landing_run_diff(
     return {p: r for p, r in diff.items() if p not in held}
 
 
-def _not_in_diff(text: str, run_diff: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """The sidecar's ``applied`` ledger rows the run diff lacks; ``[]`` with no diff or no ledger."""
-    if run_diff is None:
-        return []
-    try:
-        rows = _parse_ledger_rows(text)
-    except LedgerError:
-        return []
-    return rows_not_in_run_diff(rows or [], run_diff)
+_SEVERITY_RANK = {token: i for i, token in enumerate((*_SEVERITY_ORDER, "unranked"))}
+_LABEL_TOKEN_RE = re.compile(r"[A-Za-z]*\d+")
+_FINDING_HEADING_RE = re.compile(r"(?m)^###\s+(.*)$")
+_UNMATCHABLE_LABEL_PREFIXES = ("unledgered", "(no id)")
+
+
+def _worse(a: Optional[str], b: Optional[str]) -> Optional[str]:
+    if a is None or b is None:
+        return a if b is None else b
+    return a if _SEVERITY_RANK.get(a, 99) <= _SEVERITY_RANK.get(b, 99) else b
+
+
+def _label_keys(label: str) -> set:
+    """Lowercase tokens a finding label matches by: each letters-plus-digits token, plus ``f<N>``
+    for ``Finding N``."""
+    keys = {t.lower() for t in _LABEL_TOKEN_RE.findall(label)}
+    keys.update(f"f{n}" for n in re.findall(r"(?i)\bfinding\s*#?(\d+)", label))
+    return keys
+
+
+def _severity_by_label(section: Optional[str]) -> Dict[str, str]:
+    """``{label key: worst stated severity}`` over a ``## Findings`` section: a ``###`` block's
+    ``- **Severity:**`` line under its heading's keys, a JSON finding's ``severity`` under its ``id``."""
+    from coordinator_core.ops.review_findings_ledger import _iter_json_findings_payloads
+
+    out: Dict[str, str] = {}
+
+    def _put(label: str, severity: Optional[str]) -> None:
+        if severity is None:
+            return
+        for key in _label_keys(label):
+            out[key] = _worse(out.get(key), severity) or severity
+
+    if not section:
+        return out
+    text = section.replace("\r\n", "\n")
+    heads = list(_FINDING_HEADING_RE.finditer(text))
+    for i, head in enumerate(heads):
+        end = heads[i + 1].start() if i + 1 < len(heads) else len(text)
+        _put(head.group(1), _max_severity(text[head.end():end]))
+    for findings in _iter_json_findings_payloads(text):
+        for f in findings:
+            if isinstance(f, dict) and f.get("id") not in (None, ""):
+                _put(str(f["id"]), _canonical_severity(f.get("severity")))
+    return out
+
+
+def _unapplied_max_severity(
+    entries: List[Dict[str, str]], section: Optional[str], slice_severity: Optional[str]
+) -> Optional[str]:
+    """Worst severity over the unapplied ``entries``: the stated severity of the finding an
+    entry names, else the slice's own ``max_severity`` (fail closed). ``None`` with no entries."""
+    if not entries:
+        return None
+    by_label = _severity_by_label(section)
+    worst: Optional[str] = None
+    for entry in entries:
+        label = entry["finding"]
+        matched = None
+        if not label.startswith(_UNMATCHABLE_LABEL_PREFIXES):
+            for key in _label_keys(label):
+                matched = _worse(matched, by_label.get(key))
+        worst = _worse(worst, matched if matched is not None else slice_severity)
+    return worst
 
 
 def review_firing_rows(
     sidecar_paths: List[Path], plan_id: str, run_diff: Optional[Dict[str, Any]] = None
 ) -> List[Dict[str, Any]]:
-    """One ``{leg, plan_id, findings_count, max_severity, applied}`` summary row per
-    sidecar; a summary of the sidecar receipt, never a verdict. ``applied`` excludes an
-    applied row the ``run_diff`` (``normalize_run_diff`` shape) does not carry. Unreadable
-    sidecar: leg from the stem, zero counts. Never raises."""
+    """One ``{leg, plan_id, findings_count, max_severity, applied, unapplied_max_severity}``
+    summary row per sidecar; a summary of the sidecar receipt, never a verdict. ``applied`` is
+    only the ledger rows the ``run_diff`` (``normalize_run_diff`` shape) evidences
+    (``diff_evidenced_rows``): no ledger or no ``run_diff`` is 0, and the sidecar's own
+    ``applied`` frontmatter is never read. ``unapplied_max_severity`` is the worst severity over
+    the findings ``_unapplied_findings`` reports (unmatched ones count as the slice's worst),
+    ``None`` when none is unapplied. Unreadable sidecar: leg from the stem, zero counts. Never raises."""
     from coordinator_core.ops.review_findings_ledger import (
         _declared_findings_count,
         _extract_findings_section,
         _parse_ledger_rows,
-        _row_status,
     )
 
     rows: List[Dict[str, Any]] = []
     for path in map(Path, sidecar_paths):
-        leg, findings_count, applied, severity = _stem(path), 0, 0, None
+        leg, findings_count, applied, severity, unapplied_severity = _stem(path), 0, 0, None, None
         text = _load_sidecar_text(path)
         if text is not None:
             fm = _load_sidecar_fm(path) or {}
@@ -386,23 +443,26 @@ def review_firing_rows(
                 ledger = None
             declared = _declared_findings_count(text)
             findings_count = declared if declared is not None else len(ledger or [])
-            fm_applied = fm.get("applied")
-            if ledger is not None:
-                applied = sum(1 for r in ledger if _row_status(r) == "applied") - len(_not_in_diff(text, run_diff))
-            elif isinstance(fm_applied, int) and not isinstance(fm_applied, bool):
-                applied = fm_applied
-            severity = _max_severity(_extract_findings_section(text))
+            if ledger and run_diff is not None:
+                applied = len(diff_evidenced_rows(ledger, run_diff))
+            section = _extract_findings_section(text)
+            severity = _max_severity(section)
+            unapplied_severity = _unapplied_max_severity(
+                _unapplied_findings(_stem(path), text, None, run_diff), section, severity
+            )
         rows.append({
             "leg": leg,
             "plan_id": plan_id,
             "findings_count": findings_count,
             "max_severity": severity,
             "applied": applied,
+            "unapplied_max_severity": unapplied_severity,
         })
     return rows
 
 
 NOT_IN_RUN_DIFF = "not in run diff"
+NO_POST_REVIEW_DIFF = "no post-review diff"
 
 
 def _not_in_diff_reason(row: Dict[str, Any], withheld: Optional[Dict[str, str]]) -> str:
@@ -421,8 +481,8 @@ def _unapplied_findings(
     withheld: Optional[Dict[str, str]] = None,
 ) -> List[Dict[str, str]]:
     """One ``{sidecar, finding, reason}`` entry per reviewer finding that is not an
-    applied ledger row: a non-applied row, an applied row the ``run_diff`` lacks
-    (reason ``not in run diff``, naming the path and its reason when ``withheld`` holds it),
+    applied ledger row: a non-applied row, an applied row no ``run_diff`` evidences
+    (reason ``no post-review diff`` with no diff, else ``not in run diff``, naming the path and its reason when ``withheld`` holds it),
     a declared finding with no row, or every declared finding when the ledger is unreadable.
     Never raises."""
     from coordinator_core.ops.review_findings_ledger import (
@@ -467,8 +527,12 @@ def _unapplied_findings(
     for row in rows:
         status = _row_status(row)
         if status == "applied":
-            if run_diff is not None and rows_not_in_run_diff([row], run_diff):
-                _entry(str(row.get("id") or "(no id)"), _not_in_diff_reason(row, withheld))
+            if row.get("out_of_ask") is True or (run_diff is not None and diff_evidenced_rows([row], run_diff)):
+                continue
+            _entry(
+                str(row.get("id") or "(no id)"),
+                NO_POST_REVIEW_DIFF if run_diff is None else _not_in_diff_reason(row, withheld),
+            )
             continue
         why = row.get("reason")
         reason = why.strip() if isinstance(why, str) and why.strip() else f"status {status}"
@@ -499,10 +563,11 @@ def bookkeep_wave(
 
     `run_diff` (a path iterable or ``path -> line ranges`` mapping) is the run's own diff or
     landing set; absent, it is read from `stage_returns` (`run_diff_from_stage_returns`). With a
-    diff, an ``applied`` ledger row whose file (and line, when both sides name one) the diff lacks
-    is counted open: an ``unapplied_findings`` entry (reason ``not in run diff``), one less in
-    `review_firings` ``applied`` and in `fixes_applied`. With none, the reviewer's count stands and
-    `applied_checked_against_run_diff` reads false. `withheld` (``path -> reason``) is the landing's
+    diff, an ``applied`` ledger row whose file (and line, when both sides name one) the diff lacks,
+    or that cites no file, is counted open: an ``unapplied_findings`` entry (reason ``not in run
+    diff``), one less in `review_firings` ``applied`` and in `fixes_applied`. With none, no applied
+    row is evidenced: each is an entry (reason ``no post-review diff``), `review_firings` ``applied``
+    is 0 and `applied_checked_against_run_diff` reads false. `withheld` (``path -> reason``) is the landing's
     uncommitted set: dropped from a diff read off `stage_returns`, and named in the reason of a
     finding whose file it holds (a caller-passed `run_diff` should already exclude it).
 
@@ -604,7 +669,9 @@ def bookkeep_wave(
         for entry in _unapplied_findings(_stem(p), texts[_stem(p)], ledger_failures.get(_stem(p)), diff, withheld)
     ]
     record["applied_checked_against_run_diff"] = diff is not None
-    demoted = sum(1 for e in record["unapplied_findings"] if e["reason"].startswith(NOT_IN_RUN_DIFF))
+    demoted = sum(
+        1 for e in record["unapplied_findings"] if e["reason"].startswith((NOT_IN_RUN_DIFF, NO_POST_REVIEW_DIFF))
+    )
     if demoted and isinstance(record.get("fixes_applied"), int):
         record["fixes_applied"] = max(0, record["fixes_applied"] - demoted)
 

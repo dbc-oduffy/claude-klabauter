@@ -112,8 +112,9 @@ def test_commit_prompt_carries_a_path_command_and_an_uncopied_params_block(monke
         f"coordinator-invoke {OP_NAME} --params-file "
         "C:/repo/scratch/warp/run-1/terminal-commit-params.json"  # abs-path-ok: fixture root
     )
-    # The product commit stage and the halt-record commit both run it.
-    assert script.count(command) == 2
+    # The product commit stage, its retry after the retest-invariant leg, and the halt-record commit run it.
+    assert script.count(command) == 3
+    assert script.count("label: 'retest-invariant'") == 1
     start = script.rindex("phase: commit", 0, script.index("commit stage (`coordinator:git-commit-agent`"))
     prompt = script[start : script.index("Return from its JSON reply", start)]
     assert "--params-file -" not in prompt and "<<'JSON'" not in prompt

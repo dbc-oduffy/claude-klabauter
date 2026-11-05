@@ -355,3 +355,49 @@ def test_help_names_which_mode_fits_which_case(capsys):
         _run(["--help"])
     out = " ".join(capsys.readouterr().out.split())
     assert "single heavy job" in out and "already sized with its reserve S" in out
+
+
+def _boom():
+    raise OSError("commit exhausted")
+
+
+def _img(*names):
+    return [SimpleNamespace(pid=i, private_bytes=0, image=n) for i, n in enumerate(names)]
+
+
+def test_every_memory_read_failing_still_prints_process_counts(capsys):
+    rc = _run(
+        ["--json"],
+        status_fn=_boom,
+        nonpaged_fn=_boom,
+        cache_host_fn=_boom,
+        proc_table_fn=_boom,
+        names_fn=lambda: ["python.exe", "Python.exe", "conhost.exe", "svchost.exe"],
+    )
+    data = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert data["process_counts"] == {"python": 2, "conhost": 1}
+    assert data["available_gib"] == "unavailable" and data["top_consumers"] == "unavailable"
+    assert "not evidence of a kernel leak" in data["note"]
+
+
+def test_default_text_output_names_counts_and_note_when_reads_fail(capsys):
+    _run([], status_fn=_boom, proc_table_fn=_boom, names_fn=lambda: ["python.exe", "conhost.exe"])
+    out = capsys.readouterr().out
+    assert "python=1  conhost=1" in out and "kernel leak" in out
+
+
+def test_counts_come_from_the_process_table_when_it_reads(capsys):
+    def no_psutil():
+        raise AssertionError("psutil fallback used while the table read")
+
+    table = _img("python.exe", "pythonw.exe", "conhost.exe", "conhost.exe", "cmd.exe")
+    _run(["--json"], proc_table_fn=lambda: table, names_fn=no_psutil)
+    data = json.loads(capsys.readouterr().out)
+    assert data["process_counts"] == {"python": 2, "conhost": 2}
+    assert "note" not in data
+
+
+def test_counts_unavailable_when_table_and_psutil_both_fail(capsys):
+    _run(["--json"], proc_table_fn=_boom, names_fn=_boom)
+    assert json.loads(capsys.readouterr().out)["process_counts"] == "unavailable"

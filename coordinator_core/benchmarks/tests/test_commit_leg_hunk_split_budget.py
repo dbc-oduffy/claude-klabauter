@@ -82,8 +82,6 @@ from coordinator_core.git.commit import commit_paths
 from coordinator_core.ops.dispatch_emit import hunk_stage
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
 
-from coordinator_core.git import store_hygiene
-store_hygiene.maybe_refresh = lambda *a, **k: False
 warm = clone / "hunk_split_bench_warmup.txt"
 warm.write_text("warm\n", encoding="utf-8", newline="\n")
 commit_paths(clone, ["hunk_split_bench_warmup.txt"], "bench warmup")

@@ -17,7 +17,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import shutil
 import sys
 import tempfile
 import time
@@ -124,7 +123,9 @@ def profile(pack_counts=DEFAULT_PACK_COUNTS, real_repo: str | None = None) -> di
             hit_shas = _build_fixture(common, n)
             rows.append({"pack_count": n, **_measure(common, hit_shas)})
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+            rmtree_or_raise(tmp, label="pack-lookup-scaling")
     out: dict = {"fixture_rows": rows}
     if real_repo:
         common = Path(real_repo).resolve() / ".git"

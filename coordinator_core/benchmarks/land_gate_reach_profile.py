@@ -360,7 +360,9 @@ def main(argv: list) -> int:
         with fixture_settings_home(workdir):
             rows = run(Path(args.source_repo), workdir, tuple(args.overlay))
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+        rmtree_or_raise(workdir, label="land-gate-reach")
     print(json.dumps([asdict(r) for r in rows], indent=1) if args.json else render(rows, args.bar_ms))
     return exit_code(rows, args.bar_ms)
 

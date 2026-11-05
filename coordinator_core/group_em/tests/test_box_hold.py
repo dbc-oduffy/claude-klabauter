@@ -84,6 +84,19 @@ def test_expired_hold_clearable_by_anyone(tmp_path):
     assert box_hold.clear_hold("s2", directory=tmp_path) is True
 
 
+def test_hold_stamps_box_id_and_parse_tolerates_its_absence(tmp_path):
+    d = tmp_path / "state" / "group-em"
+    d.mkdir(parents=True)
+    (d / "box.json").write_text('{"box_id": "box-abc12345"}', encoding="utf-8")
+    h = box_hold.set_hold("s1", "r", 60, directory=d, now=1000.0)
+    assert h.box_id == "box-abc12345"
+    assert box_hold.read_hold(now=1001.0, directory=d).box_id == "box-abc12345"
+    path = d / "box" / "hold.json"
+    legacy = {"set_by_session": "s1", "reason": "r", "set_at": 1000.0, "expires_at": 1060.0}
+    path.write_text(__import__("json").dumps(legacy), encoding="utf-8")
+    assert box_hold.read_hold(now=1001.0, directory=d).box_id == "local"
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_import_closure_is_leaf():

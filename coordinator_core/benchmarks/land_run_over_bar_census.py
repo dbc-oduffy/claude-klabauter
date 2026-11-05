@@ -226,6 +226,9 @@ def census(*, repo_root: Path, since: float, until: float) -> dict:
 
 
 def main(argv: Optional[list] = None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--since")
     parser.add_argument("--until")

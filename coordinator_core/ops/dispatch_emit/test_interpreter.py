@@ -6,10 +6,13 @@ repo's pinned interpreter, so committed config never carries a host path; the en
 
 Ladder, first hit wins: `targeted_test_python:` in the repo's coordinator.local.md, then an explicit
 interpreter leading `fast_test_cmd:` (absolute path or versioned name; bare python/python3 is not a
-pin), then none. A pin is one executable: arguments or spaces resolve as "not on PATH". In-process only: shutil.which and os.access, never a spawn.
+pin), then, for the claude-klabauter root only, the provisioned interpreter (one pin-reader spawn per process,
+lazy), then none. A pin is one executable: arguments or spaces resolve as "not on PATH". Pin
+resolution is in-process: shutil.which and os.access.
 """
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shlex
@@ -32,6 +35,7 @@ _ABS_INTERPRETER = re.compile(r"^python[\d.]*(\.exe)?$", re.IGNORECASE)
 LAUNCHER_KEY = "targeted_test_launcher"
 SOURCE_KEY = "targeted_test_python"
 SOURCE_FAST_CMD = "fast_test_cmd"
+SOURCE_PROVISIONED = "provisioned"
 SOURCE_NONE = "none"
 
 
@@ -87,8 +91,31 @@ def resolve_targeted_test_python(repo_root: Union[str, Path]) -> TargetedPython:
         pin = _leading_interpreter(read_local_md_key(root, SOURCE_FAST_CMD)) or ""
         source = SOURCE_FAST_CMD
     if not pin:
+        provisioned = _provisioned_for(root)
+        if provisioned:
+            return TargetedPython(provisioned, SOURCE_PROVISIONED, None)
         return TargetedPython(None, SOURCE_NONE, None)
     return TargetedPython(pin, source, _unresolved(pin))
+
+
+@functools.lru_cache(maxsize=1)
+def _provisioned_path() -> Optional[str]:
+    """The provisioned interpreter, resolved once per process (the pin reader spawns once)."""
+    from coordinator_core.install.provisioned_interpreter import resolve_provisioned_interpreter
+
+    return resolve_provisioned_interpreter().path
+
+
+def _provisioned_for(root: str) -> Optional[str]:
+    """The provisioned interpreter when ``root`` is the claude-klabauter root, else None; lazy so hook paths never reach it."""
+    from coordinator_core.install.provisioned_interpreter import _CLAUDE_KLABAUTER_ROOT
+
+    try:
+        if Path(root).resolve() != _CLAUDE_KLABAUTER_ROOT:
+            return None
+    except OSError:
+        return None
+    return _provisioned_path()
 
 
 def _launcher_clause(repo_root: Union[str, Path]) -> Optional[str]:

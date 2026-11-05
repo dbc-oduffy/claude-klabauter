@@ -25,11 +25,11 @@ def test_a_dated_slug_gets_one_date_prefix(monkeypatch):
     monkeypatch.setattr(_MOD, "_today", lambda: "2026-11-01")
     monkeypatch.setattr(_MOD, "_bootstrap_engine", lambda: None)
     out = _MOD._default_output_path("plan", "t", None, slug_override="2026-11-01-footballer-04-mapping")
-    assert Path(out).as_posix() == "docs/plans/2026-11-01-footballer-04-mapping.md"
+    assert Path(out).as_posix() == "docs/plans/2026-11/2026-11-01-footballer-04-mapping.md"
 
 
 def test_an_undated_slug_is_unchanged(monkeypatch):
     monkeypatch.setattr(_MOD, "_today", lambda: "2026-11-01")
     monkeypatch.setattr(_MOD, "_bootstrap_engine", lambda: None)
     out = _MOD._default_output_path("plan", "t", None, slug_override="footballer-03-reach")
-    assert Path(out).as_posix() == "docs/plans/2026-11-01-footballer-03-reach.md"
+    assert Path(out).as_posix() == "docs/plans/2026-11/2026-11-01-footballer-03-reach.md"

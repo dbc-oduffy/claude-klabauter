@@ -368,7 +368,32 @@ COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY = "mutation-deadline-cold-replay"
 #: blobs use `atomic_write_bytes`. Re-verify the op against this invariant before adding a name.
 _COLD_REPLAY_SAFE = frozenset({"review.prep"})
 
+#: Read-only CLI `(entrypoint basename, first positional argv)` pairs whose
+#: delivered-then-expired warm request may be re-run cold once. Mirrors
+#: `door_replay_safe_invocations` in `door/door_core.c`
+#: (`door/tests/test_replay_safe_table_parity.py` pins the equality).
+_REPLAY_SAFE_ENTRYPOINTS = frozenset({("consolidate-assemble", "brief")})
+
 _FROM_ARGV_VALUE_FLAGS = frozenset({"--repo", "--params-file", "--from-task-output"})
+
+
+def _frame_is_replay_safe(msg: dict) -> bool:
+    """True when a delivered frame may be re-run cold once after the warm wait expired.
+
+    Either a door-form frame running an op in `_COLD_REPLAY_SAFE`, or an
+    `entrypoint` frame naming a `_REPLAY_SAFE_ENTRYPOINTS` pair. Anything
+    unparsable answers False.
+    """
+    if _replay_op_name(msg) in _COLD_REPLAY_SAFE:
+        return True
+    params = msg.get("params")
+    if msg.get("method") != "invoke.from_argv" or not isinstance(params, dict):
+        return False
+    entrypoint = params.get("entrypoint")
+    argv = params.get("argv")
+    if not isinstance(entrypoint, str) or not isinstance(argv, list) or not argv:
+        return False
+    return isinstance(argv[0], str) and (entrypoint, argv[0]) in _REPLAY_SAFE_ENTRYPOINTS
 
 
 def _replay_op_name(msg: dict) -> Any:
@@ -398,6 +423,66 @@ def _replay_op_name(msg: dict) -> Any:
         elif not token.startswith("-"):
             return token
     return method
+
+
+_STAGE_LEG_OPS = frozenset({"dispatch.ask_stage", "dispatch.ask_gate"})
+
+
+def _frame_op_and_params(msg: dict) -> "tuple[Any, dict]":
+    """The op a frame runs and its params object; `{}` when the params are not a readable JSON object."""
+    op = _replay_op_name(msg)
+    params = msg.get("params")
+    if msg.get("method") != "invoke.from_argv":
+        return op, params if isinstance(params, dict) else {}
+    argv = params.get("argv") if isinstance(params, dict) else None
+    if not isinstance(argv, list):
+        return op, {}
+    seen_op = skip = False
+    for token in argv:
+        if not isinstance(token, str):
+            break
+        if skip:
+            skip = False
+        elif token in _FROM_ARGV_VALUE_FLAGS:
+            skip = True
+        elif token.startswith("-"):
+            continue
+        elif not seen_op:
+            seen_op = True
+        else:
+            try:
+                parsed = json.loads(token)
+            except ValueError:
+                break
+            return op, parsed if isinstance(parsed, dict) else {}
+    return op, {}
+
+
+#: A hook-shaped caller waits this long for a pending handover to clear, not the full
+#: `breadcrumb.STAGE_ADMISSION_BOUND_S`: a hook answers within 1s, and the server's instant backstop
+#: refuses a mint that proceeds past the bound.
+HOOK_STAGE_ADMISSION_BOUND_S = 0.25
+
+
+def _await_stage_admission(msg: dict, hook_path: bool = False) -> None:
+    """Queue a stage-leg start (`run_id` on ask_stage/ask_gate) or an ask mint (`dispatch.emit`) behind a
+    pending publish handover, bounded (`HOOK_STAGE_ADMISSION_BOUND_S` for `hook_path`); any other frame
+    returns at once. Never raises. Past the bound the call proceeds and the server's instant backstop
+    refuses it."""
+    try:
+        op, params = _frame_op_and_params(msg)
+        if op in _STAGE_LEG_OPS:
+            wanted = bool(params.get("run_id"))
+        else:
+            wanted = op == "dispatch.emit" and bool(params.get("ask") or params.get("sizing_path"))
+        if wanted:
+            from coordinator_core.warm import breadcrumb
+
+            breadcrumb.await_stage_admission(
+                _engine_clone_root(), bound_s=HOOK_STAGE_ADMISSION_BOUND_S if hook_path else None
+            )
+    except Exception:  # noqa: BLE001 -- the preamble never fails the op
+        pass
 
 
 #: The bucket classification of THIS call's own `return None` inside
@@ -1401,6 +1486,8 @@ def _try_warm_dispatch_inner(
         _last_cold_bucket = COLD_BUCKET_SPAWN_TRIGGERING_MISS
         return None
 
+    _await_stage_admission(msg, hook_path)
+
     # P2 (docs/plans/2026-08-19-the-fired-path-reaches-the-engine.md § C3):
     # `engine_token()` was called TWICE per dispatch -- once to build the
     # pipe name, once to stamp the request -- paying `skew.compute_client_token()`
@@ -1608,10 +1695,16 @@ def _try_warm_dispatch_inner(
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
                 line = pending.wait(max(0.0, mutation_deadline - liveness_secs))
                 if line is _TIMED_OUT:
-                    if _replay_op_name(msg) in _COLD_REPLAY_SAFE:
+                    if _frame_is_replay_safe(msg):
                         _last_cold_bucket = COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
+                        _params = msg.get("params")
+                        _label = (
+                            f"{_params['entrypoint']} {_params['argv'][0]}"
+                            if _replay_op_name(msg) not in _COLD_REPLAY_SAFE
+                            else _replay_op_name(msg)
+                        )
                         print(
-                            f"[warm-client] {_replay_op_name(msg)} got no warm response within "
+                            f"[warm-client] {_label} got no warm response within "
                             f"{mutation_deadline}s; re-running cold once (replay-safe op)",
                             file=sys.stderr,
                         )

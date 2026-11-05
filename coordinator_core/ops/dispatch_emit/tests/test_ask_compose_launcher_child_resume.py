@@ -89,8 +89,9 @@ def test_every_later_pre_stage_leg_is_gated_on_the_resume(monkeypatch, raw):
 
 def test_the_resume_seeds_the_manifest_through_the_existing_adopt_so_a_failed_verify_halts_by_name(monkeypatch):
     script = _script(monkeypatch, launcher_child=True, raw=True)
-    assert "await _adoptStageReply({ manifest_handle: _STAGED_INLINE.handle });" in script
-    seed = script.index("await _adoptStageReply({ manifest_handle: _STAGED_INLINE.handle });")
+    seed_call = "await _adoptStageReply({ manifest_handle: _STAGED_INLINE.full_handle ?? _STAGED_INLINE.handle });"
+    assert seed_call in script
+    seed = script.index(seed_call)
     assert seed < script.index(_GUARD_OPEN)
     assert "stage reply sidecar does not match its handle: " in script
     for field in ("_sizingRel = _STAGED_RESUME.sizing_rel", "_planRel = _STAGED_RESUME.plan_rel"):
@@ -102,3 +103,68 @@ def test_the_guard_keys_on_the_resume_block_never_on_the_arm(monkeypatch):
         script = _script(monkeypatch, launcher_child=True, raw=True, arm=arm)
         assert script.count(_GUARD_OPEN) == 1
         assert not re.search(r"_STAGED_RESUME\.arm\s*===\s*'(?:xs|s|m_plus)'\s*\)\s*\{\s*phase\('size'", script)
+
+
+def test_only_a_launcher_child_holds_the_slim_manifest_halt(monkeypatch):
+    assert "staged twin is slim" in _script(monkeypatch, launcher_child=True, raw=True)
+    assert "staged twin is slim" not in _script(monkeypatch, launcher_child=False, raw=True)
+
+
+def _adopt_with_node(inline: dict, h: dict) -> dict:
+    import json
+    import subprocess
+    import shutil
+
+    from coordinator_core.ops.dispatch_emit import reply_sidecar
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node unavailable")
+    prog = (
+        reply_sidecar.VERIFY_REPLY_JS
+        + f"const _STAGED_INLINE = {json.dumps(inline)};\n"
+        + ask_compose._ADOPT_STAGED_INLINE_JS
+        + f"console.log(JSON.stringify(_adoptStagedInline({json.dumps(h)})));\n"
+    )
+    out = subprocess.run([node, "-e", prog], capture_output=True, text=True, timeout=60, check=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return json.loads(out.stdout)
+
+
+def _slim_inline():
+    import hashlib
+    import json
+
+    text = json.dumps({"rows": [{"id": "C1", "writes": [], "writes_count": 400}]}, sort_keys=True, separators=(",", ":"))
+    full = {"path": "state/warp/r/manifest.json", "sha256": "f" * 64, "bytes": 99999}
+    own = {"path": full["path"], "sha256": hashlib.sha256(text.encode()).hexdigest(), "bytes": len(text)}
+    return {"handle": own, "full_handle": full, "spill": "scratch/warp/r.staged-" + "f" * 64 + ".spill.json", "text": text}, full
+
+
+def test_adopt_accepts_the_slim_text_against_the_full_handle_and_marks_the_spill():
+    inline, full = _slim_inline()
+    got = _adopt_with_node(inline, full)
+    assert got["manifest"]["spill"] == inline["spill"]
+    assert got["manifest"]["full_handle"] == full
+    assert got["manifest"]["rows"][0]["writes_count"] == 400
+
+
+def test_adopt_refuses_a_slim_text_whose_bytes_do_not_match_its_own_handle():
+    inline, full = _slim_inline()
+    inline["text"] = inline["text"].replace("C1", "C2")
+    assert "fail" in _adopt_with_node(inline, full)
+
+
+def test_adopt_returns_null_when_the_handle_is_not_the_full_handle():
+    inline, full = _slim_inline()
+    assert _adopt_with_node(inline, inline["handle"]) is None
+
+
+def test_adopt_of_a_whole_inline_carries_no_spill_mark():
+    import hashlib
+    import json
+
+    text = json.dumps({"rows": [{"id": "C1", "writes": ["a.py"]}]}, sort_keys=True, separators=(",", ":"))
+    h = {"path": "state/warp/r/manifest.json", "sha256": hashlib.sha256(text.encode()).hexdigest(), "bytes": len(text)}
+    got = _adopt_with_node({"handle": h, "text": text}, h)
+    assert "spill" not in got["manifest"]

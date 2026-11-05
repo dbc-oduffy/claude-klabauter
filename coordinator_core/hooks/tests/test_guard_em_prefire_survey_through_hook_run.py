@@ -95,6 +95,22 @@ class Door:
         return rc, (json.loads(out) if out.strip() else {})
 
 
+def _stamped_engine_twin(tmp_path) -> str:
+    """A stamped engine root whose coordinator_core entries symlink the working tree's: the gate
+    refuses a claude-klabauter tree as an engine, and the stamp must not be written into the checkout.
+    Returned as a symlink: the provenance check admits an already-bound tree only for a linked engine root."""
+    twin = tmp_path / "engine-real"
+    core = twin / "coordinator_core"
+    core.mkdir(parents=True)
+    for entry in os.scandir(os.path.join(REPO_ROOT, "coordinator_core")):
+        if entry.name not in ("__pycache__", "_engine_stamp"):
+            os.symlink(entry.path, core / entry.name)
+    (core / "_engine_stamp").write_bytes(b"stamped\n")
+    link = tmp_path / "engine"
+    os.symlink(twin, link)
+    return str(link)
+
+
 @pytest.fixture
 def door_env(tmp_path, monkeypatch):
     from coordinator_core.ipc import allow_unstamped_dispatch
@@ -106,7 +122,7 @@ def door_env(tmp_path, monkeypatch):
     for d in (bin_dir, os.path.join(bin_dir, "lib")):
         if d not in sys.path:
             sys.path.insert(0, d)
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", REPO_ROOT)
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", _stamped_engine_twin(tmp_path))
     monkeypatch.setenv("COORDINATOR_DOOR_STDIN_MODE", "hook")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     monkeypatch.delenv("COORDINATOR_HOOK_EM_PREFIRE_SURVEY_DISABLED", raising=False)
@@ -176,6 +192,42 @@ def test_fire_disarms(door, monkeypatch, capsys):
     door.flush()
     rc, body = door.run(monkeypatch, capsys, "Read")
     assert rc == 0 and _decision(body) != "deny"
+
+
+def _command_opening(name: str) -> str:
+    return _line(
+        {
+            "type": "user",
+            "message": {
+                "role": "user",
+                "content": f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>",
+            },
+        }
+    )
+
+
+@pytest.mark.parametrize("skill", ["consolidate-git", "merging-to-main"])
+@pytest.mark.parametrize("via", ["skill", "command"])
+@pytest.mark.parametrize("name", ["Read", "Bash"])
+def test_ceremony_window_never_nags_across_repeated_calls(door, monkeypatch, capsys, skill, via, name):
+    if via == "command":
+        door.lines[0] = _command_opening(skill)
+    else:
+        door.lines.append(_use("sk", "Skill", {"skill": skill}))
+    door.history(8, name)
+    for _ in range(3):
+        rc, body = door.run(monkeypatch, capsys, name)
+        if "guard did not run" in str(body):
+            pytest.skip("engine root unresolved: the door never reached the guard")
+        assert rc == 0 and not _nudged(body) and _decision(body) != "deny"
+
+
+def test_ordinary_ask_after_a_ceremony_window_still_nags(door, monkeypatch, capsys):
+    door.lines[0] = _command_opening("consolidate-git")
+    door.lines.append(_user())
+    door.history(8, "Read")
+    rc, body = door.run(monkeypatch, capsys, "Read")
+    assert rc == 0 and _nudged(body)
 
 
 def test_open_xs_lane_does_not_exempt(door, monkeypatch, capsys):

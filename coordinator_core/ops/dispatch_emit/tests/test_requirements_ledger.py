@@ -263,8 +263,15 @@ def test_revise_spawns_nothing_and_holds_the_bar(run, monkeypatch):
     assert (time.process_time() - started) / 20 < 0.5
 
 
+WIRED_EVIDENCE = {"command": "python -m consumer --run", "observed": "consumer reached the output"}
+
+
 def _verdict(*rows):
-    return {"items": [dict(zip(("id", "status"), r[:2]), **(r[2] if len(r) > 2 else {})) for r in rows]}
+    """Items for `rows`; a `wired: True` extra carries the consumer command and output a wired row owes."""
+    def item(r):
+        extra = r[2] if len(r) > 2 else {}
+        return dict(zip(("id", "status"), r[:2]), **(WIRED_EVIDENCE if extra.get("wired") is True else {}), **extra)
+    return {"items": [item(r) for r in rows]}
 
 
 def _ledger(run):

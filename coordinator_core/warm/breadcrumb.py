@@ -126,6 +126,9 @@ __all__ = [
     "handover_pending_remaining_secs",
     "handover_pending_held",
     "hold_handover_pending",
+    "STAGE_ADMISSION_BOUND_S",
+    "STAGE_ADMISSION_POLL_S",
+    "await_stage_admission",
     "DRAIN_WAIT_SECS",
     "wait_for_publish_release",
     "wait_for_publish_swap",
@@ -172,6 +175,10 @@ HANDOVER_PENDING_FILENAME = "handover.pending"
 #: Longest a handover-pending hold gates mints; covers the ~14 min staging phase
 #: with margin, and bounds the wedge a crashed publisher can leave.
 HANDOVER_PENDING_TTL_SECS = 1800.0
+#: Longest a stage-leg or mint start queues behind a pending handover. Equals
+#: `live_runs.HOLD_BOUND_S` (this module must not import it; a test pins the equality).
+STAGE_ADMISSION_BOUND_S = 120.0
+STAGE_ADMISSION_POLL_S = 2.0
 #: A live holder refreshes its marker's mtime this often (daemon thread).
 PUBLISH_HEARTBEAT_SECS = 2.0
 #: A heartbeating marker untouched this long is wedged (~7 missed beats).
@@ -1270,6 +1277,32 @@ def handover_pending_remaining_secs(
 def handover_pending_held(engine_root: Optional[Path] = None, *, now: Optional[float] = None) -> bool:
     """Whether a publish handover is pending for `engine_root`: new mints hold until it clears."""
     return handover_pending_remaining_secs(engine_root, now=now) > 0.0
+
+
+def await_stage_admission(
+    engine_root: Optional[Path] = None,
+    *,
+    bound_s: Optional[float] = None,
+    poll_s: Optional[float] = None,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> bool:
+    """Queue a stage-leg or mint start behind a pending handover: True once none is pending, False if
+    `bound_s` (default `STAGE_ADMISSION_BOUND_S`) lapses first.
+
+    TRAP: client-side only -- a server op that slept here would itself be the in-flight request the
+    handover waits on. One breadcrumb read per poll, no subprocess, never raises.
+    """
+    bound = STAGE_ADMISSION_BOUND_S if bound_s is None else bound_s
+    poll = STAGE_ADMISSION_POLL_S if poll_s is None else poll_s
+    start = monotonic()
+    while True:
+        if handover_pending_remaining_secs(engine_root) <= 0.0:
+            return True
+        waited = monotonic() - start
+        if waited >= bound:
+            return False
+        sleep(min(poll, max(bound - waited, 0.0)))
 
 
 @contextmanager

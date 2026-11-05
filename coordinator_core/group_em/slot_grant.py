@@ -27,7 +27,7 @@ from typing import Optional
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.atomic_replace import atomic_write_bytes
-from coordinator_core.group_em import nomination
+from coordinator_core.group_em import box_registry, nomination
 from coordinator_core.group_em.admission_post import valid_peak_mb
 from coordinator_core.group_em.suite_grant import (
     GRANTEE_NOT_LIVE,
@@ -38,6 +38,7 @@ from coordinator_core.group_em.suite_grant import (
     NOTE_EMPTY,
     TTL_OUT_OF_RANGE,
     IssueResult,
+    _box_ok,
     _iso,
     _parse_iso,
     _resolve_grantee,
@@ -115,6 +116,7 @@ def issue_slot_grant(
         "grantee_name": row.name if row is not None else "",
         "run": run,
         "declared_peak_mb": peak,
+        "box_id": box_registry.local_box_id(),
         "issued_at": _iso(issued),
         "expires_at": _iso(issued + ttl_minutes * 60),
         "note": note.strip(),
@@ -177,6 +179,7 @@ def check_slot_grant(
             and record.get("issuer_session_id") == holder_sid
             and record.get("grantee_session_id") == session_id
             and record.get("run") == run
+            and _box_ok(record)
             and valid_peak_mb(record.get("declared_peak_mb")) is not None
             and (peak_mb is None or record["declared_peak_mb"] >= peak_mb)
             and issued is not None

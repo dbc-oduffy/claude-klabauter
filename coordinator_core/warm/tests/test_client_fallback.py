@@ -1055,3 +1055,99 @@ def test_healthy_swap_still_drains(monkeypatch: pytest.MonkeyPatch) -> None:
             assert client._drain_publish_hold() is True
         finally:
             timer.join()
+
+
+def _argv_frame(op: str, params: dict) -> dict:
+    return {
+        "jsonrpc": "2.0", "id": 1, "method": "invoke.from_argv",
+        "params": {"argv": [op, json.dumps(params), "--repo", "/r"]},
+    }
+
+
+def _direct_frame(op: str, params: dict) -> dict:
+    return {"jsonrpc": "2.0", "id": 1, "method": op, "params": params}
+
+
+@pytest.fixture
+def admission_calls(monkeypatch: pytest.MonkeyPatch) -> list:
+    from coordinator_core.warm import breadcrumb
+
+    calls: list = []
+    monkeypatch.setattr(breadcrumb, "await_stage_admission", lambda root=None, **kw: calls.append(root) or True)
+    return calls
+
+
+@pytest.mark.parametrize("frame", [
+    _direct_frame("dispatch.ask_stage", {"run_id": "r1", "sizing_path": "s.yaml"}),
+    _argv_frame("dispatch.ask_stage", {"run_id": "r1", "sizing_path": "s.yaml"}),
+    _argv_frame("dispatch.ask_gate", {"run_id": "r1", "sizing_path": "s.yaml"}),
+    _argv_frame("dispatch.emit", {"ask": "do the thing"}),
+    _direct_frame("dispatch.emit", {"sizing_path": "s.yaml"}),
+])
+def test_stage_leg_and_mint_frames_queue_on_the_pending_handover(
+    monkeypatch: pytest.MonkeyPatch, admission_calls: list, frame: dict
+) -> None:
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe())
+    assert client.try_warm_dispatch(frame) is not None
+    assert admission_calls == [client._engine_clone_root()]
+
+
+@pytest.mark.parametrize("frame", [
+    _direct_frame("dispatch.ask_stage", {"sizing_path": "s.yaml"}),
+    _argv_frame("dispatch.ask_gate", {"sizing_path": "s.yaml"}),
+    _argv_frame("dispatch.emit", {"name": "x"}),
+    _argv_frame("dispatch.terminal_commit", {"run_id": "r1"}),
+    _argv_frame("dispatch.ask_stage", {"run_id": "r1"})
+    | {"params": {"argv": ["dispatch.ask_stage", "not-json"]}},
+    _MSG,
+])
+def test_other_frames_never_read_the_breadcrumb(
+    monkeypatch: pytest.MonkeyPatch, admission_calls: list, frame: dict
+) -> None:
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe())
+    client.try_warm_dispatch(frame)
+    assert admission_calls == []
+
+
+def test_a_stage_start_waits_out_the_pending_handover_then_reaches_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from coordinator_core.warm import breadcrumb
+
+    events: list = []
+    pending = [True]
+
+    def fake_wait(root=None, **kw):
+        events.append("wait")
+        pending[0] = False
+        return True
+
+    monkeypatch.setattr(breadcrumb, "await_stage_admission", fake_wait)
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: events.append("open") or _FakePipe())
+    client.try_warm_dispatch(_direct_frame("dispatch.ask_stage", {"run_id": "r1"}))
+    assert events == ["wait", "open"] and pending == [False]
+
+
+@pytest.mark.parametrize("hook_path, expected_bound", [(True, client.HOOK_STAGE_ADMISSION_BOUND_S), (False, None)])
+def test_only_a_hook_shaped_mint_bounds_its_handover_wait_below_a_second(
+    monkeypatch: pytest.MonkeyPatch, hook_path: bool, expected_bound: "float | None"
+) -> None:
+    from coordinator_core.warm import breadcrumb
+
+    bounds: list = []
+    monkeypatch.setattr(breadcrumb, "await_stage_admission", lambda root=None, **kw: bounds.append(kw.get("bound_s")) or True)
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe())
+    assert client.try_warm_dispatch(_argv_frame("dispatch.emit", {"ask": "x"}), hook_path=hook_path) is not None
+    assert bounds == [expected_bound]
+    assert client.HOOK_STAGE_ADMISSION_BOUND_S < 1.0 < breadcrumb.STAGE_ADMISSION_BOUND_S
+
+
+def test_a_failing_admission_wait_never_fails_the_op(monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.warm import breadcrumb
+
+    def boom(root=None, **kw):
+        raise RuntimeError("breadcrumb exploded")
+
+    monkeypatch.setattr(breadcrumb, "await_stage_admission", boom)
+    monkeypatch.setattr(client, "_open_pipe", lambda pipe: _FakePipe())
+    assert client.try_warm_dispatch(_direct_frame("dispatch.ask_stage", {"run_id": "r1"})) is not None

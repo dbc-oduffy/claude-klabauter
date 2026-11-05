@@ -16,10 +16,10 @@ import argparse
 import contextlib
 import glob
 import os
-import shutil
 import sys
 import tempfile
 import time
+from pathlib import Path
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
@@ -165,7 +165,9 @@ def main(argv=None) -> int:
         result = measure(args.unrelated, workdir, args.repeats)
     finally:
         if owned:
-            shutil.rmtree(workdir, ignore_errors=True)
+            from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+            rmtree_or_raise(Path(workdir), label="prefire-lookup")
     print(f"listdir_of_tmpdir={result['listdir_of_tmpdir']} process_ms={result['process_ms']:.2f}")
     return 0
 

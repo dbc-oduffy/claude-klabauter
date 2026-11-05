@@ -319,8 +319,23 @@ function _abandonId(runId, chainedFrom) {
   ABANDON_IDS.push(chainedFrom === null ? { abandon_run: runId } : { abandon_run: runId, chained_from: chainedFrom });
 }
 
+// Trap: a refused baked reply is a prior emit_refused result, never settled: the child is emitted again once here, so a re-run launcher recovers it. An accepted reply is never re-emitted.
+async function _reemit(child, refusal) {
+  try {
+    const again = await _emitLeg(child, { ...child.emit, __LAUNCHER_PARAM__: true }, 're-emit-' + child.run_id);
+    return { emitted: again, refusal: _emitRefusal(child, again, false) };
+  } catch (e) {
+    return { emitted: null, refusal: refusal };
+  }
+}
+
 async function _runChild(child, emitted) {
-  const refusal = _emitRefusal(child, emitted, false);
+  let refusal = _emitRefusal(child, emitted, false);
+  if (refusal !== null) {
+    const again = await _reemit(child, refusal);
+    emitted = again.emitted;
+    refusal = again.refusal;
+  }
   if (refusal !== null) {
     _abandonRedirect(child, emitted);
     return { run_id: child.run_id, status: 'emit_refused', error: refusal };
@@ -359,7 +374,7 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild], emitted
     lit = lambda value: json.dumps(value, ensure_ascii=True)  # noqa: E731
     prefix, middle, suffix = _twin_affixes()
     refire_head, refire_tail = fire_command(_RUN_SENTINEL).split(json.dumps(_RUN_SENTINEL))
-    literals = [{"run_id": c.run_id, "sizing_rel": c.sizing_rel} for c in children]
+    literals = [{"run_id": c.run_id, "sizing_rel": c.sizing_rel, "emit": dict(c.emit_params)} for c in children]
     values = {
         "__EMITTED__": lit([_launcher_literal_reply(r) for r in emitted]),
         "__REPO_ROOT__": lit(Path(root).as_posix()),

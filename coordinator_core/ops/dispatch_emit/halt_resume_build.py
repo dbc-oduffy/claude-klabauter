@@ -155,6 +155,32 @@ def build(root, run_id: str) -> Optional[dict]:
     return record
 
 
+def recompose_script(root, run_id: str) -> tuple[Optional[str], str]:
+    """The run script for a run that lost its scratch script, as ``(text, "")``; ``(None, reason)`` when
+    it cannot be had (no halted marker, a gate refusal, an unreadable result). A readable
+    ``COMPOSED_SCRIPT_FILE`` already under the run dir is returned as is; only without one does it run
+    `build` inline, which persists the resume record, the receipt and that file (overwriting them).
+    Call it only on a path that already lost its script."""
+    root = Path(root)
+    try:
+        kept = record_dir(root, run_id) / COMPOSED_SCRIPT_FILE
+        if kept.is_file():
+            return kept.read_text(encoding="utf-8"), ""
+    except (OSError, UnicodeDecodeError):
+        pass  # an unreadable kept script falls through to a fresh build
+    try:
+        record = build(root, run_id)
+        if record is None:
+            return None, "the run has no halted marker naming a sizing"
+        rel = record.get("composed_script_rel")
+        if not rel:
+            halt = (record.get("gate_verdict") or {}).get("halt") or {}
+            return None, str(halt.get("reason") or "the sizing gate refused the recompose")
+        return (root / rel).read_text(encoding="utf-8"), ""
+    except Exception as exc:  # noqa: BLE001 -- any recompose failure becomes the caller's named refusal; no test runs the real `build`
+        return None, f"{type(exc).__name__}: {exc}"
+
+
 def main(argv: list[str]) -> int:
     if len(argv) != 2:
         print("usage: halt_resume_build.py <root> <run_id>", file=sys.stderr)

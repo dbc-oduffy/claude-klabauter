@@ -836,7 +836,11 @@ def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[objec
     Every stage reads the rows, `workflow.revise` grows them, and the terminal commit judges against them.
     """
     from coordinator_core.ops.dispatch_emit import requirements_ledger as ledger
+    from coordinator_core.warm import breadcrumb as _breadcrumb
 
+    held_secs = _breadcrumb.handover_pending_remaining_secs()
+    if held_secs > 0.0:
+        raise ledger.HandoverPending(held_secs)
     root = Path(ask_ctx["root"])
     if ask_ctx.get("reserved_parent"):
         _bind_reserved_run(root, ask_ctx["run_id"], ask_ctx["reserved_parent"], ask_ctx.get("sizing_rel"))
@@ -2549,17 +2553,27 @@ def _dispatch_emit_body(
         inherited_base = None
         resumes_ask = None
         resumed_from = None
-        if params.get("reserved_run_id") is not None and not _is_halt_resume_hint(
+        from coordinator_core.ops.dispatch_emit.ask_gate import token_spent as _token_spent
+
+        retired_reserved = (
+            params["reserved_run_id"]
+            if params.get("reserved_run_id") is not None and isinstance(params["reserved_run_id"], str)
+            and sizing_rel and _token_spent(ask_root, params["reserved_run_id"])
+            else None
+        )
+        if retired_reserved is None and params.get("reserved_run_id") is not None and not _is_halt_resume_hint(
             ask_root, params["reserved_run_id"], sizing_doc, sizing_rel
         ):
             run_id, reserved_parent = _reserved_run(ask_root, params["reserved_run_id"], sizing_doc, sizing_rel)
-            from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+            from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume, notes_predecessor
 
             predecessor = halted_run_to_resume(ask_root, sizing_rel)
             resumed_from = predecessor if predecessor != run_id else None
+            if resumed_from is None:
+                resumed_from = notes_predecessor(ask_root, sizing_rel, exclude=run_id)
         elif sizing_rel:
             from coordinator_core.ops.dispatch_emit.halted_run import (
-                halted_ask_run_for, halted_run_base, halted_run_for,
+                halted_ask_run_for, halted_run_base, halted_run_for, notes_predecessor,
             )
 
             halted_id = halted_run_for(ask_root, sizing_rel)
@@ -2574,7 +2588,12 @@ def _dispatch_emit_body(
                         record_dir(ask_root, resumes_ask)
                     )
                 else:
-                    resumed_from = halted_ask_run_for(ask_root, sizing_rel, ignore_superseded=True)
+                    resumed_from = (
+                        halted_ask_run_for(ask_root, sizing_rel, ignore_superseded=True)
+                        or notes_predecessor(ask_root, sizing_rel, exclude=run_id)
+                    )
+            if retired_reserved is not None and resumed_from is None and not halted_id:
+                resumed_from = retired_reserved
             if halted_id:
                 from coordinator_core.ops.dispatch_emit.halted_run import rebind_blocker, recorded_emitter
 
@@ -3078,13 +3097,17 @@ def _dispatch_emit_body(
                 pref_file.write_text(_route_pref.to_json(ask_ctx["route_preference"]), encoding="utf-8", newline="\n")
             bound = _start_requirements(ask_ctx, all_of_pm_ask=bool(params.get("all_of_pm_ask")))
             record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]).mkdir(parents=True, exist_ok=True)
-        except BaseException:
+        except BaseException as exc:
             if rollback_token:
                 _run_token.discard(Path(ask_ctx["root"]), ask_ctx["run_id"])
             if dir_absent_at_entry:
                 import shutil
 
                 shutil.rmtree(record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]), ignore_errors=True)
+            from coordinator_core.ops.dispatch_emit.requirements_ledger import HandoverPending
+
+            if isinstance(exc, HandoverPending):
+                return exc.reply
             raise
         ask_ctx["revisions_inherited"] = [
             {"id": i.id, "first_line": i.text.split("\n", 1)[0].strip(), "kind": "revision"}

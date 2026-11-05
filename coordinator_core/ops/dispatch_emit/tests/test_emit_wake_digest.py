@@ -781,13 +781,15 @@ def _js_baseline_clears(t: dict, manifest_ids: tuple = ()) -> bool:
     import subprocess
 
     from coordinator_core.ops.dispatch_emit.wake_digest import _BASELINE_CLEARS_JS
+    from coordinator_core.win_portability import no_console_creationflags
 
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
     prelude = f"const _isBaselineRed = (id) => {json.dumps(list(manifest_ids))}.includes(id); "
     src = f"{prelude}console.log(JSON.stringify({_BASELINE_CLEARS_JS}({json.dumps(t)})));"
-    out = subprocess.run([node, "-e", src], capture_output=True, text=True, check=True, timeout=30)
+    out = subprocess.run([node, "-e", src], capture_output=True, text=True, check=True, timeout=30,
+                         **no_console_creationflags())
     return json.loads(out.stdout)
 
 

@@ -1,5 +1,5 @@
 """The size-stage guard reaches only raw-ask runs: a grind run's spawns (no sizing, same session)
-may write, an ask run's still may not, and a record minted without `kind` reads as an ask."""
+may write, an ask run's still draws the advisory, and a record minted without `kind` reads as an ask."""
 
 from __future__ import annotations
 
@@ -41,10 +41,12 @@ def test_ask_token_still_names_the_run(tmp_path, monkeypatch, kind):
     root, session_transcript, run_dir = _session(tmp_path, monkeypatch, kind=kind)
 
     assert warp_live.size_stage_run(root, base.SESSION, str(run_dir)) == base.RUN_ID
-    denied = base._edit(root, session_transcript, base.AGENT_A)
-    assert denied is not None
-    assert denied["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert denied["hookSpecificOutput"]["additionalContext"].startswith("Advisory: ")
+    advised = base._edit(root, session_transcript, base.AGENT_A)
+    assert advised is not None
+    out = advised["hookSpecificOutput"]
+    assert out["permissionDecision"] == "allow"
+    assert out["additionalContext"].startswith("Advisory: ")
+    assert "Size stage: change no file but the sizing" in out["additionalContext"]
 
 
 def test_mint_records_kind_and_refuses_unknown(tmp_path):

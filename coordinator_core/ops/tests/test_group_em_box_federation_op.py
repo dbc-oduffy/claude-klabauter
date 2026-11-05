@@ -90,6 +90,36 @@ def test_send_appends_to_target_inbox_and_refuses_unknown(homes):
     assert "error" in op._groupem_box_send({"box_id": box["box_id"], "to_session": "em1"})
 
 
+def test_local_send_stamps_sender_only_when_signed_by_the_pinned_box(homes):
+    from coordinator_core.group_em import box_key
+
+    a, b = homes
+    box_key.ensure_key(b)
+    box_key.pin_peer_key("near", (b / "state" / "group-em" / "box-key").read_text(encoding="ascii"))
+    import time
+
+    now = int(time.time())
+    claim = box_key.sign(
+        {"from_box": "near", "from_session": "sN", "to_session": "em1", "text": "hi", "ts": now}, b
+    )
+    good = {"local": True, "to_session": "em1", "text": "hi", **{k: claim[k] for k in ("from_box", "from_session", "ts", "sig")}}
+    assert op._groupem_box_send(good)["sent"] is True
+    forged = {**good, "from_box": "mallory"}
+    assert op._groupem_box_send(forged)["sent"] is True
+    swapped = {**good, "text": "other"}
+    assert op._groupem_box_send(swapped)["sent"] is True
+    stale_claim = box_key.sign(
+        {"from_box": "near", "from_session": "sN", "to_session": "em1", "text": "hi", "ts": now - 10_000}, b
+    )
+    stale = {**good, "ts": stale_claim["ts"], "sig": stale_claim["sig"]}
+    assert op._groupem_box_send(stale)["sent"] is True
+    lines = [json.loads(x) for x in box_send.inbox_path(a).read_text(encoding="utf-8").splitlines()]
+    assert (lines[0]["from_box"], lines[0]["from_session"]) == ("near", "sN")
+    own = box_registry.local_box_id()
+    for bad in lines[1:]:  # forged, swapped, stale
+        assert bad["from_box"] == own and "from_session" not in bad
+
+
 def test_roster_wraps_remote_box_rows(homes, monkeypatch):
     _, b = homes
     box = op._groupem_box_register({"root": str(b), "capability": {}})["box"]

@@ -17,6 +17,7 @@ from typing import Iterable, Optional
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.group_em import nomination, session_registry
+from coordinator_core.group_em.box_registry import local_box_id
 
 PHASES = ("START", "END", "REQUEST")
 MAX_PIDS = 64
@@ -120,6 +121,7 @@ def post(
         "dead_pids": dead,
         "note": note[:MAX_TEXT],
         "holder_session": holder.get("session_id"),
+        "box_id": local_box_id(Path(directory).parent.parent if directory is not None else None),
     }
     if phase in ("START", "REQUEST") and peak is not None:
         line["declared_peak_mb"] = peak

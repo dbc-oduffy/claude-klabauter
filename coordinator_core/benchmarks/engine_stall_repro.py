@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import sys
 import tempfile
 import threading
@@ -34,8 +33,10 @@ if str(_ENGINE_ROOT) not in sys.path:
 import pytest  # noqa: E402
 
 from coordinator_core import atomic_append  # noqa: E402
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise  # noqa: E402
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed  # noqa: E402
 from coordinator_core.telemetry import log_rotation  # noqa: E402
+from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 
 #: The per-scenario caller-hold bar (plan acceptance 1).
 BAR_MS = 300.0
@@ -212,11 +213,11 @@ def measure(guard_secs: float = GUARD_SECS, scenarios: "tuple[str, ...]" = SCENA
     """Run each scenario in its own tmp dir; one record per scenario, in order. Never raises on a hold."""
     out: list[dict] = []
     for name in scenarios:
-        tmp = Path(tempfile.mkdtemp(prefix="engine-stall-repro-"))
+        tmp = Path(tempfile.mkdtemp(prefix="engine-stall-repro-", dir=str(managed_tempdir())))
         try:
             out.append(_RUNNERS[name](tmp, guard_secs))
         finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+            rmtree_or_raise(tmp, label="engine-stall-repro")
     return out
 
 

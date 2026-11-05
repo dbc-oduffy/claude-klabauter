@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
@@ -450,14 +451,46 @@ def _norm(path: str) -> PurePosixPath:
     return PurePosixPath(path.replace("\\", "/").strip("/"))
 
 
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _segment_compatible(x: str, y: str) -> bool:
+    xg = bool(_GLOB_CHARS & set(x))
+    yg = bool(_GLOB_CHARS & set(y))
+    if xg and yg:
+        return True
+    if xg:
+        return fnmatchcase(y, x)
+    if yg:
+        return fnmatchcase(x, y)
+    return x == y
+
+
+def _paths_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
+    """True when two declared writes can name a common path; either may be a glob (``**`` spans
+    segments) and a path that is a directory prefix of the other overlaps it. Two globs overlap
+    unless a literal segment rules it out. A ``**`` may swallow the last segment of the other path, so a
+    glob overlaps a bare directory it could reach into (``src/**/*.py`` vs ``src/foo``)."""
+
+    def m(i: int, j: int) -> bool:
+        if i == len(a) or j == len(b):
+            return True
+        if a[i] == "**" and (m(i + 1, j) or m(i, j + 1)):
+            return True
+        if b[j] == "**" and (m(i, j + 1) or m(i + 1, j)):
+            return True
+        return a[i] != "**" and b[j] != "**" and _segment_compatible(a[i], b[j]) and m(i + 1, j + 1)
+
+    return m(0, 0)
+
+
 def _writes_overlap(a: Optional[Sequence[str]], b: Optional[Sequence[str]]) -> bool:
     if a is None or b is None:
         return True
     for x in a:
-        px = _norm(x)
+        px = _norm(x).parts
         for y in b:
-            py = _norm(y)
-            if px == py or px in py.parents or py in px.parents:
+            if _paths_overlap(px, _norm(y).parts):
                 return True
     return False
 
@@ -469,8 +502,8 @@ def _earlier_wave(earlier: AskSlice, later: AskSlice) -> bool:
 def after_edges(slices: Sequence[AskSlice]) -> dict[int, tuple[int, ...]]:
     """Map slice index to the earlier indices it must follow.
 
-    j follows earlier i when both declare writes and those overlap (exact path, or one a directory
-    prefix of the other), when both carry a ``wave`` and i's is lower, or when j declared ``after`` naming i. A slice with no ``writes``
+    j follows earlier i when both declare writes and those overlap (exact path, one a directory
+    prefix of the other, or a glob covering a path or intersecting another glob), when both carry a ``wave`` and i's is lower, or when j declared ``after`` naming i. A slice with no ``writes``
     hint overlaps nothing: undeclared slices run in parallel and the shared-tree claim mechanism
     arbitrates their overlap. An empty ``writes`` list likewise overlaps nothing.
     """

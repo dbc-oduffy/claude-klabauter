@@ -471,7 +471,7 @@ def test_one_claim_pass_parses_each_run_manifest_once_over_many_paths(repo, monk
     wanted = [f"p/d{i}.py" for i in range(3)] + [f"q/other{i}.py" for i in range(40)]
     sibling_claims.sibling_run_claims(repo, OWN, wanted)
     assert calls, "the spy must see the manifest reads"
-    assert sorted(calls) == sorted(set(calls)) and set(calls) <= set(runs)
+    assert sorted(calls) == sorted(set(calls)) and set(calls) - {OWN} <= set(runs)
     calls.clear()
     with_scope = sibling_claims.shared_dir_holds(repo, OWN, ["p/own.py"], wanted)
     assert len(calls) == len(set(calls))

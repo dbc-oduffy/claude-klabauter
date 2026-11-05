@@ -755,6 +755,7 @@ def _eval_emitted_review_wave(fragment, *, rows, phase_verdicts):
     prog = (
         f"const _reviewReused = false; const n = 2; const _manifest = {{ rows: {json.dumps(rows)} }}; "
         f"const _phaseVerdict = (k) => ({json.dumps(phase_verdicts)})[k] ?? null; "
+        f"{ask_compose._RESUME_SLICE_IDS_DECL_JS.strip()} "
         f"console.log(JSON.stringify({fragment}));"
     )
     out = subprocess.run(

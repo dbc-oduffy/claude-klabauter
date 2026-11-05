@@ -24,6 +24,7 @@ from typing import Iterable, List, Optional, Tuple
 import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
 from coordinator_core.ops.dispatch_emit.spine_read import (
     NON_DISPATCHABLE_DISPOSITIONS,
     UNDECLARED,
@@ -109,7 +110,7 @@ class LeanPlan:
         return self._plan_edges
 
 
-_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+_LOADER = SAFE_LOADER
 _STAMP_RE = re.compile(r"^mise_prepped_sha:[ \t]*(.*?)[ \t]*$", re.M)
 _FM_EDGE_RE = re.compile(r"^depends_on_plan:", re.M)
 _FENCE = "```yaml plan-tasks"

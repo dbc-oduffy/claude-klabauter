@@ -30,7 +30,11 @@ def test_isolation_fixtures_are_active_in_this_file():
     assert "CLAUDE_PLUGIN_ROOT" not in os.environ, "dispatch_emit autouse fixtures detached"
 
 
-def test_interleaved_collection_keeps_the_fixtures_on_the_later_file(pytester):
+def test_interleaved_collection_keeps_the_fixtures_on_the_later_file(pytester, monkeypatch):
+    # The nested session bumps the suite's depth counters; monkeypatch restores them on teardown.
+    for name in ("COORDINATOR_PYTEST_DEPTH", "COORDINATOR_PYTEST_DEPTH_COUNTED"):
+        if name in os.environ:
+            monkeypatch.setenv(name, os.environ[name])
     args = [
         str(_TESTS / "test_xs_one_row_leg_budget.py"),
         str(_OPS / "test_blocked.py"),

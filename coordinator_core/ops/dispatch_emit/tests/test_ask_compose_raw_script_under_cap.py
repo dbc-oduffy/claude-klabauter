@@ -111,8 +111,8 @@ def test_raw_ask_stage_set_does_not_depend_on_a_brief(_production_inputs):
 
     bare = _compose_shape(None)
     briefed = _compose_shape(EmBrief(text=_BRIEF_TEXT, source="inline", context=()))
-    assert "async function roadmapBlitz(" not in bare
-    assert "async function roadmapBlitz(" not in briefed
+    assert "async function roadmapBlitz(" in bare
+    assert "async function roadmapBlitz(" in briefed
     assert _bytes(briefed) - _bytes(bare) < _BRIEF_DELTA_BYTES
 
 

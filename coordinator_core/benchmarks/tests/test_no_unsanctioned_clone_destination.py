@@ -119,6 +119,18 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
         "reuses the guard-message corpus's `_neutral_scratch_parent()` -- the same "
         "deliberately repo-neutral parent"
     ),
+    ("coordinator_core/advisory_census.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/engine_stall_repro.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/submit_slow_disk_profile.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/warp_live_earlier_lines_budget.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
     ("coordinator_core/benchmarks/handoff_supersede_baseline.py", "mkdtemp"): (
         "scratch under `managed_tempdir(REPO_ROOT)`, the managed temp root; not an engine clone"
     ),
@@ -144,6 +156,43 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
     ),
     ("coordinator_core/benchmarks/ask_stage_size_l_profile.py", "mkdtemp"): (
         "profile scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/ask_stage_size_l_profile.py", "TemporaryDirectory"): (
+        "profile home under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/ask_spool_write_budget.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, plus a short POSIX `/tmp` socket base for the AF_UNIX "
+        "sun_path byte budget; neither is an engine clone"
+    ),
+    ("coordinator_core/benchmarks/baseline_export_cache_profile.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/liveness_record_scan_budget.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/commit_paths_pin_loop_budget.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/hunk_split_large_file_budget.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/land_swap_hook_window.py", "TemporaryDirectory"): (
+        "synthetic engine root under a caller-passed `work_dir`, else the default temp; "
+        "a fake-pair fixture, not an engine clone"
+    ),
+    ("coordinator_core/resource_lifecycle/tests/test_lease.py", "mkdtemp"): (
+        "POSIX `/tmp` base keeps the lease socket path under the AF_UNIX sun_path byte budget; "
+        "chosen for socket length, not repo placement"
+    ),
+    ("coordinator_core/benchmarks/submit_engine_ask_fan_profile.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/submit_engine_ask_fan_profile.py", "TemporaryDirectory"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/host_hooks/tests/test_shim_end_to_end.py", "mkdtemp"): (
+        "POSIX `/tmp` base keeps the warm-socket path under the AF_UNIX sun_path byte budget; "
+        "chosen for socket length, not repo placement"
     ),
     ("coordinator_core/warm/door/tests/test_warm_zero_door_runs_cold.py", "TemporaryDirectory"): (
         "built-door output dir under `managed_tempdir()`, the managed temp root; not an engine clone"

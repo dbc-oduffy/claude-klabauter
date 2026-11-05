@@ -38,7 +38,6 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     Manifest,
     PipelineEmitRefused,
     PipelineInputs,
-    RUN_ID_PREFIX,
     Schedule,
     Stage,
     WHEN_FLAG,
@@ -62,7 +61,7 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import (
 )
 from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
-from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER, finished_rel, revisions_rel
+from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER, finished_rel, revisions_rel, run_name
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 __all__ = ["compose_pipeline_script", "compose_chain_script", "compose_chain_parts", "ChainPart"]
@@ -850,8 +849,7 @@ def compose_chain_script(
         raise PipelineEmitRefused(sorted(set(errors)))
 
     manifest, inputs, _ = parts[0]
-    prefix = f"{RUN_ID_PREFIX}{manifest.pipeline}-"
-    name = run_id if run_id.startswith(prefix) else prefix + run_id
+    name = run_name(manifest.pipeline, run_id)
     active = [stage for _, _, (_, _, act) in parts for stage in act]
     phases = ", ".join(_js_string_literal(title) for title in dict.fromkeys(stage_phase(s) for s in active))
     description = manifest.description or f"Pipeline {manifest.pipeline} over {len(inputs.subjects)} subject(s), run sequentially"

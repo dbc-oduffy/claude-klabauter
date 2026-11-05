@@ -73,6 +73,8 @@ import time
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
+from coordinator_core.win_portability import no_console_creationflags
+
 _TERMINATE_TIMEOUT_SECS = 5.0
 _KILL_TIMEOUT_SECS = 3.0
 
@@ -434,7 +436,7 @@ def spawn_clone_server(
         close_fds=True,
     )
     if sys.platform != "win32":
-        return subprocess.Popen(args, **common), None
+        return subprocess.Popen(args, **common, **no_console_creationflags()), None
 
     import ctypes
     from ctypes import wintypes

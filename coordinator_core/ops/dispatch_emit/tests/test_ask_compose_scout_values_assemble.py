@@ -104,10 +104,19 @@ def test_a_first_reply_missing_a_required_field_gets_the_no_values_retry(tmp_pat
 
 def test_a_retry_that_also_proves_nothing_halts_with_a_named_refusal(tmp_path):
     out = _drive({**_FULL, "exit_code": 0, "stdout": "not run", "stderr": ""}, [_RETRY_NO_PROOF], tmp_path)
-    assert [c["label"] for c in out["calls"]] == ["size", "size-retry", "sizing-probe"]
+    assert [c["label"] for c in out["calls"]] == ["size", "size-retry"]
     assert out["halted"]["halted"] == "refusal"
     reason = out["halted"]["reason"]
     assert "sizing-assemble did not run" in reason or SCOUT_DID_NOT_ASSEMBLE_REASON in reason
+
+
+def test_a_retry_that_proves_nothing_but_reports_the_sizing_file_present_does_not_halt(tmp_path):
+    out = _drive(
+        {**_FULL, "exit_code": 0, "stdout": "not run", "stderr": ""},
+        [{**_RETRY_NO_PROOF, "sizing_present": True}], tmp_path,
+    )
+    assert [c["label"] for c in out["calls"]] == ["size", "size-retry"]
+    assert out["halted"] is None
 
 
 def test_a_non_zero_exit_with_values_fires_no_retry(tmp_path):

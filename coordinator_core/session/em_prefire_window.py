@@ -31,7 +31,9 @@ _REL_SIZINGS = record_homes.home_dir("", "sizings").replace(os.sep, "/")
 COUNTED_TOOLS = ("Read", "Grep", "Glob", "Bash")
 OPENING_TEXT_CAP = 8 * 1024
 
-# Pickup, handoff, review and close-out class skills of DoE coordinator/skills; exact names only.
+# Skill-directed git ceremonies: also disarm when the PM's slash command is only a command-name record.
+CEREMONY_SKILLS = ("consolidate-git", "merging-to-main")
+# Pickup, handoff, review and close-out class skills of DoE coordinator/skills, plus the ceremonies; exact names only.
 DISARM_SKILLS = (
     "pickup",
     "handoff",
@@ -41,6 +43,10 @@ DISARM_SKILLS = (
     "quick-wrap",
     "workstream-complete",
     "finishing-a-development-branch",
+) + CEREMONY_SKILLS
+_CEREMONY_OPEN_RE = re.compile(
+    r"\A\s*(?:<command-message>[^<]*</command-message>\s*)?<command-name>/?(?:coordinator:)?(?:%s)</command-name>"
+    % "|".join(re.escape(s) for s in CEREMONY_SKILLS)
 )
 
 EXEMPT_PATH_SEGMENTS = ("/state/warp/", "/.coordinator-local/", "/cross-repo/inbox/")
@@ -826,7 +832,7 @@ def advance(
                         pre=[],
                         all=[],
                         fired=False,
-                        disarmed=False,
+                        disarmed=_CEREMONY_OPEN_RE.match(opening) is not None,
                         revised=False,
                         test_used=False,
                         asm=[],

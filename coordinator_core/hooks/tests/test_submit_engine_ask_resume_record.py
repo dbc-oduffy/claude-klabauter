@@ -331,18 +331,20 @@ def test_a_stalled_sizing_read_keeps_the_marker_and_retires_nothing(tmp_path, se
     assert retired == [] and emitted == [] and spawned == []
 
 
-def test_a_stalled_halted_lookup_is_a_refusal_not_the_plain_emit(tmp_path, seams, monkeypatch):
+def test_a_stalled_halted_lookup_defers_instead_of_refusing_or_composing_inline(tmp_path, seams, monkeypatch):
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     monkeypatch.setattr("coordinator_core.ops.dispatch_emit.halted_run.halted_run_to_resume", _sleeping([], "halted"))
     monkeypatch.setattr(mod, "_READ_DEADLINE_MS", 50.0)
     env = mod.evaluate(_payload(root), emit=emit)
-    assert _hso(env)["permissionDecision"] == "deny"
-    assert "halted-run lookup stalled" in _hso(env)["permissionDecisionReason"]
+    hso = _hso(env)
+    assert hso["permissionDecision"] == "allow"
+    assert "deferred emit" in hso["permissionDecisionReason"]
+    assert Path(hso["updatedInput"]["scriptPath"]).is_file()
     assert emitted == [] and spawned == []
 
 
-def test_a_lookup_already_in_flight_is_a_refusal_not_the_plain_emit(tmp_path, seams, monkeypatch):
+def test_a_lookup_already_in_flight_defers_not_the_plain_emit(tmp_path, seams, monkeypatch):
     """A second hook call while the first's lookup is still stuck returns STALLED at once."""
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
@@ -352,7 +354,7 @@ def test_a_lookup_already_in_flight_is_a_refusal_not_the_plain_emit(tmp_path, se
     started = time.perf_counter()
     env = mod.evaluate(_payload(root), emit=emit)
     assert time.perf_counter() - started < 0.2
-    assert _hso(env)["permissionDecision"] == "deny"
+    assert _hso(env)["permissionDecision"] == "allow"
     assert emitted == []
 
 

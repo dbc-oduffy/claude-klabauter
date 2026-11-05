@@ -20,7 +20,6 @@ from coordinator_core.guard_messages.testing import envelope_of
 BS = chr(92)
 
 NOT_DENY = [
-    pytest.param("find /e /f/dev -maxdepth 4 -iname '*x*'", id="ac1-bounded-root-find"),
     pytest.param(
         """coordinator-invoke plan.readiness_verdict '{"premise":"<evidence dir>"}'""",
         id="ac3-angle-brackets-in-json",
@@ -94,7 +93,14 @@ def test_cd_git_show_pipeline_never_denies_and_rewrites_faithfully(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "cmd", ["find / -name x", "find /c -name x", "find / -maxdepth 999 -name x"]
+    "cmd",
+    [
+        "find / -name x",
+        "find /c -name x",
+        "find / -maxdepth 999 -name x",
+        # block-whole-filesystem-scan is a registered deny (box-degrading); it never exempted -maxdepth.
+        "find /e /f/dev -maxdepth 4 -iname '*x*'",
+    ],
 )
 def test_unbounded_root_find_still_denies(cmd, tmp_path):
     assert _denies(_run(cmd, tmp_path))

@@ -27,8 +27,11 @@ def test_no_gate_emits_the_machinery_byte_identically():
     assert _GATE not in _checkpoint_js()
 
 
-def test_emit_route_passes_no_gate():
-    assert "pre_commit_gate_js" not in inspect.getsource(emit.compose_script)
+def test_emit_route_passes_only_the_owed_gates_gate():
+    source = inspect.getsource(emit.compose_script)
+    assert "pre_commit_gate_js=_OWED_GATES_GATE_FN" in source
+    assert "_WAVE_TESTS_GATE_FN" not in source
+    assert emit._OWED_GATES_GATE_FN != _GATE
 
 
 def test_gate_sits_after_paths_and_before_the_commit_agent():

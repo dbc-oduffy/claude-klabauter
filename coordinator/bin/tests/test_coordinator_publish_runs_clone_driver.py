@@ -3,6 +3,7 @@ registered worktree's. Drives the real wrapper file at default arguments against
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -41,10 +42,16 @@ def _make_tree(root: Path, *, git: bool, wrapper: bool) -> Path:
     return root
 
 
-def _run(worktree: Path, cwd: Path) -> dict[str, str]:
+def _run(worktree: Path, cwd: Path, *, own_core_on_path: bool = False) -> dict[str, str]:
+    env = None
+    if own_core_on_path:
+        # The own-tree legs put no root on sys.path; an interpreter without an installed
+        # coordinator_core needs the worktree root handed to it.
+        env = {**os.environ, "PYTHONPATH": str(worktree)}
     proc = subprocess.run(
         [sys.executable, str(worktree / "coordinator" / "bin" / "coordinator-publish.py")],
         cwd=str(cwd),
+        env=env,
         capture_output=True,
         text=True,
         timeout=60,
@@ -101,7 +108,7 @@ def test_in_process_leg_with_worktree_paths_already_on_sys_path(tmp_path):
 
 def test_runs_own_driver_when_cwd_is_inside_its_own_tree(tmp_path):
     worktree = _make_tree(tmp_path / "worktree", git=True, wrapper=True)
-    out = _run(worktree, worktree)
+    out = _run(worktree, worktree, own_core_on_path=True)
     assert _same(out["DRIVER"], worktree / "coordinator" / "bin" / "publish.py")
 
 
@@ -109,7 +116,7 @@ def test_runs_own_driver_when_cwd_is_in_no_checkout(tmp_path):
     worktree = _make_tree(tmp_path / "worktree", git=True, wrapper=True)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
-    out = _run(worktree, elsewhere)
+    out = _run(worktree, elsewhere, own_core_on_path=True)
     assert _same(out["DRIVER"], worktree / "coordinator" / "bin" / "publish.py")
 
 
@@ -117,5 +124,5 @@ def test_enclosing_checkout_without_publish_driver_is_not_a_clone(tmp_path):
     worktree = _make_tree(tmp_path / "worktree", git=True, wrapper=True)
     other = tmp_path / "other"
     (other / ".git").mkdir(parents=True)
-    out = _run(worktree, other)
+    out = _run(worktree, other, own_core_on_path=True)
     assert _same(out["DRIVER"], worktree / "coordinator" / "bin" / "publish.py")

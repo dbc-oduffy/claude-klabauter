@@ -73,7 +73,7 @@ def repo(tmp_path, monkeypatch):
     _write(root, PLAN, f"---\nsizing_object: {SIZING}\n---\nbody\n")
     _write(root, DOC, "seed\n")
     _write(root, "run.mjs", "// script\n")
-    _write(root, ".gitignore", f".coordinator-local/\n{RUN_DIR_ROOT}/*/submission.json\n")
+    _write(root, ".gitignore", f".coordinator-local/\n{RECORD_DIR_ROOT}/\n{RUN_DIR_ROOT}/*/submission.json\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     monkeypatch.setattr(process_artifact_policy, "hosts_coordinator_state", lambda root: True)
@@ -170,7 +170,9 @@ def _land_abandoned(root: Path) -> dict:
 
 def _age_record(root: Path, run_id: str) -> None:
     stamp = time.time() - run_token.TTL_SECONDS - 3600
-    for f in (root / RECORD_DIR_ROOT / run_id).iterdir():
+    aged = list((root / RECORD_DIR_ROOT / run_id).iterdir())
+    aged += [root / rel for rel in run_artifacts.candidate_paths(root, run_id).paths()]
+    for f in aged:
         os.utime(f, (stamp, stamp))
 
 
@@ -230,7 +232,7 @@ def test_no_run_leaves_a_dirty_tree(repo, mode):
 
     assert reply.get("ok") is not False, reply
     assert "run_artifact_residue" not in reply, reply
-    assert not left, f"{mode} run left run-authored paths uncommitted: {left}"
+    assert not left, f"{mode} run left run-authored paths uncommitted: {left}; reply: {reply}"
     expected_classes = {"sizing", "baton", "plan", "evidence-sidecar", "slice-sizing"}
     assert expected_classes <= {artifacts.class_of(p) for p in artifacts.paths()}
     if mode != "abandoned":

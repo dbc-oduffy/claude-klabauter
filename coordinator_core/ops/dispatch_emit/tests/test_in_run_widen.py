@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit import in_run_widen as w
+from coordinator_core.win_portability import no_console_creationflags
 
 ROOT = "/repo"
 
@@ -115,7 +116,8 @@ def test_js_parity_with_python(tmp_path):
     cj = tmp_path / "cases.json"
     js.write_text(script, encoding="utf-8")
     cj.write_text(json.dumps([[t, list(h)] for t, h, _ in cases]), encoding="utf-8")
-    out = subprocess.run(["node", str(js), str(cj)], capture_output=True, text=True, check=True, timeout=30)
+    out = subprocess.run(["node", str(js), str(cj)], capture_output=True, text=True, check=True, timeout=30,
+                         **no_console_creationflags())
     results = json.loads(out.stdout)
     for (text, h, _), js_res in zip(cases, results):
         py = w.classify_block(text, ROOT, h)

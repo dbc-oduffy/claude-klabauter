@@ -615,8 +615,15 @@ def _land(
     withheld.update({p: "halt-record-only" for p in product + gone if p in owner})
     product = [p for p in product if p not in withheld]
     gone = [p for p in gone if p not in withheld]
-    if product:
-        # Trap: commit_v2 stages the shared tree's whole file, so a product path holding a hunk this
+    # Run artifacts already tracked at HEAD (plan, handoff, sidecars) are staged whole-file too, so
+    # they take the same check; the run's own sizing, baton, note and record files carry no foreign hunk.
+    # With no write_baseline a tracked artifact other than the halt `plan` is withheld (commit_v2's
+    # checkpoint path leaves such a run unchanged).
+    art_tracked = set(_tracked_at_head(worktree_root, [
+        p for p in art_paths if p not in (sizing_rel, baton_rel) and artifacts.class_of(p) != "record-dir"
+    ]))
+    if product or art_tracked:
+        # Trap: commit_v2 stages the shared tree's whole file, so a path holding a hunk this
         # run never produced (or no baseline to tell) is withheld, never landed with the peer's hunk.
         from coordinator_core.ops.dispatch_emit import hunk_provenance
 
@@ -626,11 +633,13 @@ def _land(
 
         baseline = halted_hunk_attribution._baseline(worktree_root, run_id) or {}
         unproduced = hunk_provenance.unproduced_hunks(
-            worktree_root, run_id, [p for p in product if p not in land_only or p in baseline],
+            worktree_root, run_id,
+            [p for p in product if p not in land_only or p in baseline] + sorted(art_tracked),
             own_plan=halt_plan if isinstance(halt_plan, str) else None,
         )
         withheld.update({f.path: hunk_provenance.FOREIGN_HUNK_UNPRODUCED for f in unproduced})
         product = [p for p in product if p not in withheld]
+        art_paths = [p for p in art_paths if p not in withheld]
     paths = paths + product + art_paths
     deleted = deleted + gone + art_deleted
     paths, state_paths = run_artifacts.split_run_state(paths)

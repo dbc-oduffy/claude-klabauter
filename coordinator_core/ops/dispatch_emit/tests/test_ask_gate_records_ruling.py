@@ -24,6 +24,11 @@ def repo(_bare_repo):
     return _bare_repo
 
 
+def _put_touchpoint(repo, **over):
+    """A sizing whose exit criterion still awaits the APM's acceptance: XL is accepted by the engine, so M carries it."""
+    _put(repo, tshirt="M", route="pm-decision", xl_exit="accept_multi_session", **over)
+
+
 def _doc(repo):
     return yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
 
@@ -33,14 +38,14 @@ def _call(repo, **extra):
 
 
 def test_exit_criterion_record_writes_what_the_writer_writes_then_gates(repo):
-    _put(repo, tshirt="XL", route="plan", mode="ceo")
+    _put_touchpoint(repo, mode="ceo")
     assert _call(repo)["halt"]["kind"] == "touchpoint"
     reply = _call(repo, record={**EXIT_REC, "statement": "the gate records"})
     assert reply["recorded"] == {"ok": True}
     assert reply["halt"] is None or reply["halt"]["kind"] != "touchpoint"
     got = _doc(repo)
 
-    _put(repo, tshirt="XL", route="plan", mode="ceo")
+    _put_touchpoint(repo, mode="ceo")
     assert accept(
         {"sizing": REL, "apm_ruling": RULING, "ruling_ref": "ask-run-1", "statement": "the gate records"}, repo
     )["exit_code"] == 0
@@ -73,7 +78,7 @@ def test_a_split_record_is_written_then_gates_to_the_split_halt(repo):
 
 
 def test_a_refused_write_reports_the_error_and_still_returns_the_original_halt(repo):
-    _put(repo, tshirt="XL", route="plan", mode="pm")
+    _put_touchpoint(repo, mode="pm")
     before = (repo / REL).read_text(encoding="utf-8")
     reply = _call(repo, record={**EXIT_REC, "apm_ruling": "merge to main and publish"})
     assert reply["recorded"]["ok"] is False and reply["recorded"]["error"]
@@ -86,7 +91,10 @@ def test_a_refused_write_reports_the_error_and_still_returns_the_original_halt(r
     [("exit_criterion", "plan"), ("xl_exit", "pm-decision")],
 )
 def test_an_irreversible_ruling_is_refused_for_each_kind_and_leaves_the_sizing_byte_identical(repo, kind, route):
-    _put(repo, tshirt="XL", route=route, mode="ceo", **({"accepted": ACCEPTED} if kind == "xl_exit" else {}))
+    if kind == "xl_exit":
+        _put(repo, tshirt="XL", route=route, mode="ceo", accepted=ACCEPTED)
+    else:
+        _put_touchpoint(repo, mode="ceo")
     before = (repo / REL).read_text(encoding="utf-8")
     original = _call(repo)["halt"]
     base = XL_REC if kind == "xl_exit" else EXIT_REC

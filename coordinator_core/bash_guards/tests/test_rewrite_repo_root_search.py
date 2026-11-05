@@ -1,8 +1,18 @@
 """rewrite-repo-root-search: repo-root recursive grep/rg -> git grep, find advised, never deny."""
 
+import json
+from pathlib import Path
+
 import pytest
 
-from coordinator_core.bash_guards.rewrite_repo_root_search import ADVISORY, LEG_ID, check as _check
+from coordinator_core.bash_guards.rewrite_repo_root_search import ADVISORY, LEG_ID, REWRITE_NOTE, check as _check
+
+
+@pytest.fixture(autouse=True)
+def _unserved(monkeypatch):
+    from coordinator_core.bash_guards import _rag_serving
+
+    monkeypatch.setattr(_rag_serving, "serves_repo", lambda cwd=None: False)
 
 
 @pytest.fixture
@@ -30,6 +40,50 @@ def _advised(cmd, cwd):
     assert out.updated_input is None
     assert ADVISORY in out.em_text
     return out
+
+
+def test_rewrite_and_advisory_recommend_example_retrieval_repo(repo):
+    assert "project_semantic_search" in _run("grep -rn foo .", repo).em_text
+    assert "project_semantic_search" in _run("find .", repo).em_text
+
+
+_SHAPES = json.loads(
+    (Path(__file__).parent / "fixtures" / "repo_root_search_shapes.json").read_text(encoding="utf-8")
+)
+
+
+def test_shape_fixture_pins_the_leg_note_and_advisory():
+    assert _SHAPES["pinned_text"]["rewrite_note"] == REWRITE_NOTE
+    assert _SHAPES["pinned_text"]["advisory"] == ADVISORY
+
+
+@pytest.mark.parametrize(
+    "row",
+    [r for r in _SHAPES["rows"] if "{ROOT}" not in r["cmd"] and r["expected"] in ("rewrite", "none")],
+    ids=lambda r: f"{r['expected']}:{r['cmd']}:{r['cwd_is_repo_root']}",
+)
+def test_shape_fixture_rows_match_the_leg(repo, tmp_path, row):
+    cwd = repo if row["cwd_is_repo_root"] else tmp_path
+    out = _run(row["cmd"], cwd)
+    if row["expected"] == "none":
+        assert out is None
+        return
+    assert out is not None and out.verdict_kind == "rewrite"
+    assert out.updated_input["command"] == row["rewritten_cmd"]
+    assert out.em_text == row["note_text"]
+
+
+@pytest.mark.parametrize("cmd", ["grep -rn foo src", "grep -rn foo src docs", "grep -rn foo src/ coordinator_core"])
+def test_subdir_scoped_recursive_grep_passes_silently(repo, cmd):
+    assert _run(cmd, repo) is None
+
+
+def test_unmapped_offer_leads_with_git_grep_not_the_grep_tool(repo):
+    out = _run("grep -rn --color foo .", repo)
+    assert out is not None and out.verdict_kind == "advisory"
+    template = out.members[0].template
+    assert template.startswith("git grep")
+    assert "use the Grep tool" not in template and "Grep tool instead" not in template
 
 
 def test_leg_id():

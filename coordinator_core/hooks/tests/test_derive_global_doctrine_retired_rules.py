@@ -62,6 +62,17 @@ def test_tracked_name_is_not_retired(env):
     assert not (live / "fleet-friction-reporting.md").exists()
 
 
+def test_installer_retired_names_pruned_from_live(env):
+    repo, live, published = env
+    for name in mod.RETIRED_RULE_NAMES:
+        (live / name).write_text("old", encoding="utf-8")
+
+    _session_start()
+
+    for name in mod.RETIRED_RULE_NAMES:
+        assert not (live / name).exists()
+
+
 def test_non_dev_repo_retires_nothing(env, tmp_path):
     repo, live, published = env
     (repo / ".coordinator-dev-repo").unlink()

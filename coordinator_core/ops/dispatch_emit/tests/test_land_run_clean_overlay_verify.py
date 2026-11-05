@@ -13,6 +13,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import RUN2, halted  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git, _write, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_foreign_dirt_in_reach_e2e import (
@@ -36,7 +37,7 @@ _READER_SRC = (
 def _repo(tmp_path, *, data: str = "ok\n"):
     root = tmp_path / "repo"
     root.mkdir()
-    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console_creationflags())
     _write(root, READER, _READER_SRC)
     _write(root, "t/data.txt", data)
     _git(root, "add", "-A")
@@ -92,6 +93,55 @@ def test_overlay_falls_back_to_sys_executable_when_no_pin_or_the_pin_is_unresolv
     root, head = _repo(tmp_path)
     assert _pytest_argv_head(monkeypatch, root, head, None) == sys.executable
     assert _pytest_argv_head(monkeypatch, root, head, tmp_path / "missing" / "python3.99") == sys.executable
+
+
+def _clone_dests(monkeypatch):
+    dests = []
+    real = cov.run_git
+
+    def spy(args, **kw):
+        if args[:1] == ["clone"]:
+            dests.append(args[-1])
+        return real(args, **kw)
+
+    monkeypatch.setattr(cov, "run_git", spy)
+    return dests
+
+
+def test_a_configured_bulk_location_receives_the_overlay_clone_and_is_reaped(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    bulk = tmp_path / "bulk"
+    (root / "coordinator.local.md").write_text(f'---\nbulk_scratch_dir: "{bulk}"\n---\n', encoding="utf-8")
+    dests = _clone_dests(monkeypatch)
+
+    out = cov.verify(root, "run1", head, [READER])
+
+    assert out.verdict == "green", out
+    assert dests == [str(bulk / "clean-overlay" / "run1")]
+    assert not (root / "scratch").exists()
+    assert not (bulk / "clean-overlay" / "run1").exists()
+
+
+def test_unconfigured_or_relative_bulk_falls_back_to_repo_scratch(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    expected = str(root / "scratch" / "clean-overlay" / "run1")
+    dests = _clone_dests(monkeypatch)
+
+    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
+    (root / "coordinator.local.md").write_text("---\nbulk_scratch_dir: rel/dir\n---\n", encoding="utf-8")
+    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
+
+    assert dests == [expected, expected]
+    assert not cov.overlay_root(root, "run1").exists()
+
+
+def test_a_bulk_overlay_is_reaped_when_the_candidate_is_unreachable(tmp_path):
+    root, head = _repo(tmp_path)
+    bulk = tmp_path / "bulk"
+    (root / "coordinator.local.md").write_text(f'---\nbulk_scratch_dir: "{bulk}"\n---\n', encoding="utf-8")
+
+    assert cov.verify(root, "run1", "0" * 40, [READER]).verdict == "inconclusive"
+    assert not cov.overlay_root(root, "run1").exists()
 
 
 def test_no_seeds_and_an_unreachable_candidate_are_inconclusive_never_red(tmp_path):

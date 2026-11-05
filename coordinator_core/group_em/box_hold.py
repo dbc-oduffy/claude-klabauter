@@ -16,6 +16,7 @@ from typing import Optional
 
 from coordinator_core._settings_home import settings_home
 from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.group_em.box_registry import LOCAL_BOX_ID, local_box_id
 
 MAX_HOLD_TTL_S = 1800
 
@@ -26,6 +27,12 @@ class Hold:
     reason: str
     set_at: float
     expires_at: float
+    box_id: str = "local"
+
+
+def _home_of(directory: Optional[Path]) -> Optional[Path]:
+    """The settings-home a ``state/group-em`` directory sits under; None means the ambient home."""
+    return Path(directory).parent.parent if directory is not None else None
 
 
 def _hold_path(directory: Optional[Path] = None) -> Path:
@@ -47,7 +54,10 @@ def _parse(raw: str) -> Optional[Hold]:
     for n in (set_at, expires):
         if isinstance(n, bool) or not isinstance(n, (int, float)):
             return None
-    return Hold(sess, reason, float(set_at), float(expires))
+    box_id = data.get("box_id") if isinstance(data, dict) else None
+    if not isinstance(box_id, str) or not box_id:
+        box_id = LOCAL_BOX_ID
+    return Hold(sess, reason, float(set_at), float(expires), box_id)
 
 
 BARRED = "heavy commands (builds, test runs, typecheck, reindex, UE launch)"
@@ -93,7 +103,7 @@ def set_hold(
     """Write the hold atomically; ttl_s is clamped to (0, MAX_HOLD_TTL_S]."""
     ttl = max(1.0, min(float(ttl_s), float(MAX_HOLD_TTL_S)))
     t = time.time() if now is None else now
-    hold = Hold(session_id, reason, t, t + ttl)
+    hold = Hold(session_id, reason, t, t + ttl, local_box_id(_home_of(directory)))
     atomic_write_bytes(
         _hold_path(directory), json.dumps(asdict(hold), indent=2).encode("utf-8")
     )

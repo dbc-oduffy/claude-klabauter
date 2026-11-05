@@ -19,14 +19,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
+from coordinator_core.git.run import run_git
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 from coordinator_core.ops.dispatch_emit.test_interpreter import resolve_targeted_test_python
+from coordinator_core.resolve_validation_cmd import read_local_md_key
 from coordinator_core.win_portability import no_console_creationflags
 
 VERDICT_FILE = "overlay-verdict.json"
 
 OVERLAY_DIR = ("scratch", "clean-overlay")
+BULK_DIR_KEY = "bulk_scratch_dir"
 SETUP_TIMEOUT_S = 60
 TEST_TIMEOUT_S = 120
 _PYTEST_FAILED = 1
@@ -48,6 +51,12 @@ class OverlayVerdict:
 
 
 def overlay_root(root: Path, run_id: str) -> Path:
+    """Where this run's overlay lives: `<bulk_scratch_dir>/clean-overlay/<run>` when the repo's
+    coordinator.local.md declares an absolute `bulk_scratch_dir:`, else `<root>/scratch/clean-overlay/<run>`.
+    One config read, no spawn."""
+    bulk = read_local_md_key(str(root), BULK_DIR_KEY).strip().strip("\"'")
+    if bulk and Path(bulk).is_absolute():
+        return Path(bulk).joinpath(*OVERLAY_DIR[1:], run_id)
     return root.joinpath(*OVERLAY_DIR, run_id)
 
 
@@ -76,10 +85,10 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
     try:
         shutil.rmtree(dest, ignore_errors=True)
         dest.parent.mkdir(parents=True, exist_ok=True)
-        clone = _run(["git", "clone", "--shared", "--no-checkout", "-q", str(root), str(dest)], root, SETUP_TIMEOUT_S)
+        clone = run_git(["clone", "--shared", "--no-checkout", "-q", str(root), str(dest)], cwd=str(root))
         if clone.returncode:
             return OverlayVerdict("inconclusive", f"overlay clone failed: {clone.stderr.strip()[-_OUTPUT_TAIL:]}", seeds)
-        out = _run(["git", "checkout", "--detach", "-q", candidate_sha], dest, SETUP_TIMEOUT_S)
+        out = run_git(["checkout", "--detach", "-q", candidate_sha], cwd=str(dest))
         if out.returncode:
             return OverlayVerdict("inconclusive", f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}", seeds)
         ran = _run([_gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", *seeds], dest, TEST_TIMEOUT_S)

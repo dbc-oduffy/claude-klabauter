@@ -46,14 +46,18 @@ def _bound(repo, brief=None):
     rl.bind(repo, RUN, REL, ask_text="the ask")
 
 
-def test_note_naming_lettered_parts_mints_one_relayed_row_each(repo):
+def test_note_naming_lettered_parts_mints_no_row_a_note_is_not_a_requirement(repo):
     _bound(repo)
     before = _texts(repo)
     rl.revise(repo, RUN, note="Scope: (a) the gating fix; (b) remnant completion.")
-    after = _texts(repo)
-    assert after[len(before):] == ["(a) the gating fix", "(b) remnant completion."]
-    rows = rr.read_register((repo / REL).read_text(encoding="utf-8")).rows
-    assert {r["anchor"] for r in rows[len(before):]} == {"relayed"}
+    assert _texts(repo) == before
+
+
+def test_verbatim_naming_lettered_parts_mints_one_row_for_the_verbatim(repo):
+    _bound(repo)
+    before = _texts(repo)
+    rl.revise(repo, RUN, verbatim="Scope: (a) the gating fix; (b) remnant completion.")
+    assert _texts(repo)[len(before):] == ["Scope: (a) the gating fix; (b) remnant completion."]
 
 
 def test_repeated_note_adds_no_duplicate(repo):

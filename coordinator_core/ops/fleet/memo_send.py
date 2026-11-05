@@ -1280,6 +1280,36 @@ def _citation_matches(body: str):
         yield match
 
 
+_COMPLETION_WORD_RE = re.compile(
+    r"\b(done|landed|wired|mapped|handled)\b", re.IGNORECASE
+)
+
+
+def _completion_claims(body: str) -> list:
+    """The distinct completion words (done / landed / wired / mapped / handled,
+    lowercased, first-seen order) the prose of `body` uses outside fenced
+    blocks. Empty when `body` holds a fenced block of two or more non-blank
+    lines (a command plus its output).
+
+    Negative-spec: advisory input only — never refuses, never holds.
+    """
+    spans = _fenced_spans(body)
+    for start, end in spans:
+        inner = body[start:end].splitlines()[1:]
+        if inner and _FENCE_LINE_RE.match(inner[-1]):
+            inner = inner[:-1]
+        if sum(1 for ln in inner if ln.strip()) >= 2:
+            return []
+    seen: list = []
+    for match in _COMPLETION_WORD_RE.finditer(body):
+        if any(s <= match.start() < e for s, e in spans):
+            continue
+        word = match.group(1).lower()
+        if word not in seen:
+            seen.append(word)
+    return seen
+
+
 def _repo_qualifier_names(all_repos: dict) -> frozenset:
     """The set of names that qualify a body path citation as repo-scoped:
     each registry key (lowercased, `_` -> `-`) plus the lowercased basename
@@ -2450,6 +2480,14 @@ def _memo_send(params: dict, repo_root=None) -> dict:
         acted_item["citations_ambiguous"] = citations_ambiguous
     if cc_delivered:
         acted_item["cc_delivered"] = cc_delivered
+    completion_claims = _completion_claims(body)
+    if completion_claims:
+        acted_item["completion_claims"] = completion_claims
+        acted_item["completion_advisory"] = (
+            f"memo.send: body says {', '.join(completion_claims)} with no "
+            f"command-and-output block — paste the command and its output in "
+            f"a fenced block."
+        )
     if anchor_warning is not None:
         acted_item["anchor_warning"] = anchor_warning
     if receiver_index_warning is not None:

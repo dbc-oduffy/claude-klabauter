@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import sys
 from pathlib import Path
 
@@ -28,7 +27,7 @@ if str(_REPO) not in sys.path:
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.engine_op_overhead import WarmEngine, isolated_warm_engine  # noqa: E402
-from coordinator_core.benchmarks.isolated_clone import mkdtemp_for_clone  # noqa: E402
+from coordinator_core.benchmarks.isolated_clone import mkdtemp_for_clone, rmtree_or_raise  # noqa: E402
 from coordinator_core.benchmarks.process_time import batched_process_time_ms  # noqa: E402
 from coordinator_core.rea_ledger.canonical import canonical_bytes, ledger_root, revision_digest  # noqa: E402
 
@@ -148,7 +147,7 @@ def _leg(engine: WarmEngine, warm: bool) -> dict:
         out["__chain_lines__"] = len(chain.read_bytes().splitlines()) if chain.exists() else 0
         return out
     finally:
-        shutil.rmtree(repo, ignore_errors=True)
+        rmtree_or_raise(Path(repo), label="rea_ledger_write")
 
 
 def main() -> int:

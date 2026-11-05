@@ -18,6 +18,7 @@ import pytest
 from coordinator_core.testing import spawn_depth
 from coordinator_core.testing import scoped_pytest as sp
 from coordinator_core.testing import watch_parent
+from coordinator_core.win_portability import no_console_creationflags
 
 _REPO = Path(__file__).resolve().parents[2]
 _GIB = 1 << 30
@@ -118,6 +119,7 @@ def test_child_pytest_output_reaches_redirected_files(tmp_path, body, rc):
              "--allow", "test_x.py", "--", "test_x.py", "-q"],
             cwd=tmp_path, stdout=fo, stderr=fe, timeout=120,
             env={**os.environ, "PYTHONPATH": str(_REPO)},
+            **no_console_creationflags(),
         )
     text = out.read_text(errors="replace") + err.read_text(errors="replace")
     assert "1 " in text and ("passed" in text or "failed" in text), text
@@ -214,7 +216,11 @@ def _parent_death_survivors(tmp_path, depth):
     wrapper.write_text(_WRAPPER)
     cmd = [sys.executable] + [str(wrapper)] * depth + [str(driver), "--allow", test_file.name, "--", "-q", test_file.name]
     env = dict(os.environ, PYTHONPATH=str(_REPO))
-    kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+    kw = {**no_console_creationflags()}
+    if os.name == "nt":
+        kw["creationflags"] = kw.get("creationflags", 0) | subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kw["start_new_session"] = True
     upper = subprocess.Popen(cmd, cwd=tmp_path, env=env, **kw)
     try:
         deadline = time.monotonic() + 30

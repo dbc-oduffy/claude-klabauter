@@ -5,22 +5,26 @@ default kind ``fs`` is the loopback path and is not handled here. ``invoke`` is 
 absolute path to its settings-home ``bin/coordinator-invoke`` (a non-interactive ssh session
 loads no PATH). Optional row fields: ``remote_shell`` ("posix" default; "cmd" for a Windows far
 box, whose OpenSSH runs the command through cmd.exe) and ``ssh`` (pinned path of the local ssh
-binary). Both calls run the far box's own engine op through
+binary), ``identity_file`` (a pinned key: the call adds ``-i <key> -o IdentitiesOnly=yes`` so
+agent keys cannot exhaust the far box's MaxAuthTries) and ``tunnel_host`` (tried once, only after
+ssh itself failed with exit 255 on ``host``). Both calls run the far box's own engine op through
 ``<ssh> -o BatchMode=yes -o ConnectTimeout=<n> <host> <invoke> <op> <json>``: no remote glob, no
 local filesystem reach. The ssh child is spawned argv-form (never a shell); the ``runner``
 parameter is injectable so tests spawn nothing. A remote round trip is outside the 500ms process
 bar; callers run these off the hot path.
 
 Containment (enforced in ``_remote_invoke`` and re-checked in ``_run``, refusal is a reason):
-    - the host must be the ssh host of a ``box_registry`` row for the same ``box_id``, with the
-      row's own ``invoke``, ``remote_shell`` and ``ssh``;
+    - the host must be the ssh host (or ``tunnel_host``) of a ``box_registry`` row for the same
+      ``box_id``, with the row's own ``invoke``, ``remote_shell``, ``ssh``, ``identity_file`` and
+      ``tunnel_host``; an option-like ``identity_file`` or ``tunnel_host`` is refused;
     - the only remote command is that row's registered ``coordinator-invoke`` with an allowlisted op
       (``ALLOWED_OPS`` or a ``policy.remote_safe`` op), quoted for the row's remote shell;
-    - argv-form with ``-o BatchMode=yes -o ConnectTimeout=<n>``;
+    - argv-form with ``-o BatchMode=yes -o ConnectTimeout=<n>`` (keyed: led by
+      ``-i <key> -o IdentitiesOnly=yes``);
     - at most one in-flight call per box and ``RATE_MAX_CALLS`` per ``RATE_WINDOW_S`` per box,
       fleet-wide on this machine: an O_EXCL lock file per box (a dead holder or an expired lock is
       reclaimed) and a shared rate-window file, both under ``box_registry.lock_dir()``; a refused
-      ssh still spends its rate token.
+      ssh still spends its rate token, and a tunnel retry is admitted (and spends) as its own call.
 
 Negative-spec:
     - Never raises: a failure is ``{"ok": False, "state": "unknown", "reason": ...}``; an
@@ -258,6 +262,8 @@ def _registered(box: dict, host: str, invoke: str) -> Optional[str]:
             and reg.get("invoke") == invoke
             and reg.get("remote_shell", "posix") == (box.get("transport") or {}).get("remote_shell", "posix")
             and reg.get("ssh") == (box.get("transport") or {}).get("ssh")
+            and reg.get("identity_file") == (box.get("transport") or {}).get("identity_file")
+            and reg.get("tunnel_host") == (box.get("transport") or {}).get("tunnel_host")
         ):
             return None
         return "box_not_registered"
@@ -273,15 +279,27 @@ def _op_allowed(op: str) -> bool:
 
 
 def _shape_ok(argv: list) -> bool:
+    """``<ssh> [-i <key> -o IdentitiesOnly=yes] -o BatchMode=yes -o ConnectTimeout=<n> <host> <remote>``."""
+    if not (len(argv) in (7, 11) and isinstance(argv[0], str)):
+        return False
+    rest = argv[1:]
+    if len(argv) == 11:
+        if not (rest[0] == "-i" and not str(rest[1]).startswith("-") and rest[2:4] == ["-o", "IdentitiesOnly=yes"]):
+            return False
+        rest = rest[4:]
     return (
-        len(argv) == 7
-        and isinstance(argv[0], str)
-        and re.split(r"[\\/]", argv[0])[-1] in box_registry.SSH_BINARY_NAMES
-        and argv[1:3] == ["-o", "BatchMode=yes"]
-        and argv[3] == "-o"
-        and re.fullmatch(r"ConnectTimeout=\d{1,3}", str(argv[4])) is not None
-        and not str(argv[5]).startswith("-")
+        re.split(r"[\\/]", argv[0])[-1] in box_registry.SSH_BINARY_NAMES
+        and rest[0:2] == ["-o", "BatchMode=yes"]
+        and rest[2] == "-o"
+        and re.fullmatch(r"ConnectTimeout=\d{1,3}", str(rest[3])) is not None
+        and not str(rest[4]).startswith("-")
     )
+
+
+def _safe_arg(value: object) -> Optional[str]:
+    if not isinstance(value, str) or not value or value.startswith("-"):
+        return None
+    return value
 
 
 def _remote_command(shell: str, invoke: str, op: str, params: dict) -> Optional[str]:
@@ -314,10 +332,7 @@ def ssh_host(box: dict) -> Optional[str]:
     t = box.get("transport") if isinstance(box, dict) else None
     if not isinstance(t, dict) or t.get("kind") != "ssh":
         return None
-    host = t.get("host")
-    if not isinstance(host, str) or not host or host.startswith("-"):
-        return None
-    return host
+    return _safe_arg(t.get("host"))
 
 
 def _remote_invoke(
@@ -346,9 +361,26 @@ def _remote_invoke(
     remote = _remote_command(shell, invoke, op, params)
     if remote is None:
         return _unknown("invoke_unquotable_for_shell")
+    identity = transport.get("identity_file")
+    tunnel = transport.get("tunnel_host")
+    if (identity is not None and _safe_arg(identity) is None) or (
+        tunnel is not None and _safe_arg(tunnel) is None
+    ):
+        return _unknown("transport_row_invalid")
     connect_s = max(1, math.ceil(min(timeout, CONNECT_TIMEOUT_S)))
-    argv = [ssh_bin, "-o", "BatchMode=yes", "-o", f"ConnectTimeout={connect_s}", host, remote]
-    box_id = box["box_id"]
+    head = [ssh_bin] + (["-i", identity, "-o", "IdentitiesOnly=yes"] if identity else [])
+    head += ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={connect_s}"]
+    hosts = [host] + ([tunnel] if tunnel and tunnel != host else [])
+    for attempt, target in enumerate(hosts):
+        res = _invoke_once(box["box_id"], head + [target, remote], runner, timeout)
+        # LAN first; the tunnel is tried once, only after ssh itself failed (exit 255) on host.
+        if res.get("reason") != "ssh_exit_255" or attempt == len(hosts) - 1:
+            return res
+    return res
+
+
+def _invoke_once(box_id: str, argv: list, runner: Optional[Runner], timeout: float) -> dict:
+    """One admitted ssh call (box lock plus one rate token) and its parsed reply."""
     nonce, refused = _admit(box_id, timeout)
     if refused:
         return _unknown(refused)
@@ -586,13 +618,34 @@ def send(
     text: str,
     runner: Optional[Runner] = None,
     timeout: float = DEFAULT_TIMEOUT_S,
+    from_session: Optional[str] = None,
+    from_box: Optional[str] = None,
+    home: Optional[Path] = None,
+    now: Optional[float] = None,
 ) -> dict:
     """Relay one line to ``to_session`` on the far box through its ``groupem.box_send`` op.
 
     One ssh call. The far op is sent ``local: true`` so it delivers into its own inbox; the near
-    box's name for it is never looked up in the far registry.
+    box's name for it is never looked up in the far registry. With ``from_session`` and
+    ``from_box`` the params also carry them plus ``sig``, this box's ``box_key`` signature over
+    ``{from_box, from_session, to_session, text, ts}``; the far op stamps the sender only when
+    ``sig`` verifies under the key it pinned for ``from_box`` and ``ts`` is within its freshness window.
     Returns the far op's reply (``{sent, ...}``) as ``{"ok": True, "reply": ...}``,
     or ``{"ok": False, "reason"}`` for a transport failure.
     """
     params: dict = {"local": True, "to_session": to_session, "text": text}
+    if from_session and from_box:
+        from coordinator_core.group_em import box_key
+
+        claim = {
+            "from_box": from_box,
+            "from_session": from_session,
+            "to_session": to_session,
+            "text": text,
+            "ts": int(time.time() if now is None else now),
+        }
+        params["ts"] = claim["ts"]
+        params["from_box"] = from_box
+        params["from_session"] = from_session
+        params["sig"] = box_key.sign(claim, home)["sig"]
     return _remote_invoke(box, "groupem.box_send", params, runner, timeout)

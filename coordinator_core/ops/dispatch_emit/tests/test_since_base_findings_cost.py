@@ -80,9 +80,15 @@ def test_check_reads_ancestors_only_for_a_stamped_base_miss(monkeypatch, tmp_pat
     monkeypatch.setattr(since_base_overlap, "resolve_git_common_dir", lambda r: tmp_path)
     calls = []
     monkeypatch.setattr(since_base_overlap, "_base_ancestors", lambda *a: calls.append(a) or [])
-    since_base_overlap.check(tmp_path, [], "b0", plan=plan, head="h2")
+    # The own-commit set is computed lazily, on the first path with a line the worktree dropped.
+    (tmp_path / "f.txt").write_bytes(b"a\n")
+    blobs = {"h2": "B2", "h1": "B1", "b0": "B0"}
+    monkeypatch.setattr(since_base_overlap, "_blob_at_commit", lambda _c, sha, _p: blobs[sha])
+    lines = {"B2": [b"a\n", b"x\n"], "B1": [b"a\n"], "B0": []}
+    monkeypatch.setattr(since_base_overlap, "_lines", lambda _c, blob: lines[blob])
+    since_base_overlap.check(tmp_path, ["f.txt"], "b0", plan=plan, head="h2")
     assert len(calls) == 1
     calls.clear()
     metas["h2"]["message"] = f"s\n\nCheckpoint-Plan: {plan}\n"
-    since_base_overlap.check(tmp_path, [], "b0", plan=plan, head="h2")
+    since_base_overlap.check(tmp_path, ["f.txt"], "b0", plan=plan, head="h2")
     assert not calls

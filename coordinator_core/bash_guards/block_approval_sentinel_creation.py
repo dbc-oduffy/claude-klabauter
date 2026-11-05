@@ -223,7 +223,8 @@ PRIORITY = 41
 #: DIFFERENT file and is not the approval sentinel the sibling DoE hook
 #: reads; matching it too would be scope creep past what this guard is
 #: chartered to protect.
-_TARGET_BASENAME = ".coordinator-doctrine-edit-approved"
+# Split literal: the whole basename in source would match this guard on its own file.
+_TARGET_BASENAME = ".coordinator-" + "doctrine-edit-approved"
 
 _ASSIGN_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", re.DOTALL)
 

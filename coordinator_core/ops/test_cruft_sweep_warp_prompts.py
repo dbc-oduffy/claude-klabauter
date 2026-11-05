@@ -41,5 +41,44 @@ def test_dry_run_counts_without_deleting(tmp_path):
     assert (old / "prompts" / "p.md").exists()
 
 
+def _rm_spawns(tmp_path, monkeypatch, n_due):
+    for i in range(n_due):
+        _run(tmp_path, f"old{i}", outcome_age_days=30)
+    real = cruft_sweep.subprocess.run
+    calls = []
+
+    def counting(argv, *a, **kw):
+        if argv and argv[0] == "rm":
+            calls.append(argv)
+        return real(argv, *a, **kw)
+
+    monkeypatch.setattr(cruft_sweep.subprocess, "run", counting)
+    _, n = cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True)
+    assert n == n_due
+    return len(calls)
+
+
+def test_rm_spawn_count_independent_of_due_runs(tmp_path, monkeypatch):
+    one = _rm_spawns(tmp_path / "a", monkeypatch, 1)
+    five = _rm_spawns(tmp_path / "b", monkeypatch, 5)
+    assert one == five
+
+
+def test_surviving_target_not_counted(tmp_path, monkeypatch):
+    keep = _run(tmp_path, "keep", outcome_age_days=30)
+    gone = _run(tmp_path, "gone", outcome_age_days=30)
+    real = cruft_sweep._delete_paths_batch
+
+    def batch(targets, **kw):
+        res = real([t for t in targets if t != keep / "prompts"], **kw)
+        res[str(keep / "prompts")] = False
+        return res
+
+    monkeypatch.setattr(cruft_sweep, "_delete_paths_batch", batch)
+    _, n = cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True)
+    assert n == 1
+    assert not (gone / "prompts").exists()
+
+
 def test_missing_warp_root_is_noop(tmp_path):
     assert cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True) == (0, 0)

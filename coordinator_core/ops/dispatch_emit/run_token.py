@@ -60,6 +60,9 @@ KINDS = ("ask", "grind")
 #: A legacy claim (no holder pid recorded) older than this is adopted by the next `redeem`
 #: (twice the dispatcher's 30s backstop: the original op's reply is long abandoned).
 CLAIM_MAX_AGE_SECONDS = 60.0
+#: A same-process claim whose holder thread exited is adoptable only after this age: racing
+#: redeemers that read the claim just after a fast winner exits must lose, not adopt it.
+THREAD_EXIT_GRACE_SECONDS = 2.0
 _DIR = "coordinator-warp-run-tokens"
 #: Where `redeem` creates the claim record; `consume` or `release` ends it.
 _CLAIMED = "claimed"
@@ -156,10 +159,29 @@ def _record_path(
 ) -> Optional[Path]:
     if not _RUN_ID_RE.match(run_id or ""):
         return None
-    home = engine_record_dir(repo_root)
+    home = _record_home(repo_root)
     if home is None:
         return None
     return _under(home / _DIR, run_id, claimed, spent, halted, escrow, retired)
+
+
+_HOME_MEMO: dict = {}
+
+
+def _record_home(repo_root: Path) -> Optional[Path]:
+    """`engine_record_dir` memoized per (root, settings home, resolver): it resolves the git common dir
+    (a realpath syscall) and a sibling scan asks for it once per run. Only a found home is kept."""
+    from coordinator_core import _settings_home
+
+    key = (str(repo_root), str(_settings_home.settings_home()), engine_record_dir)
+    home = _HOME_MEMO.get(key)
+    if home is None:
+        home = engine_record_dir(repo_root)
+        if home is not None:
+            if len(_HOME_MEMO) > 256:
+                _HOME_MEMO.clear()
+            _HOME_MEMO[key] = home
+    return home
 
 
 def _under(base: Path, run_id: str, claimed: bool, spent: bool, halted: bool, escrow: bool, retired: bool) -> Path:
@@ -635,21 +657,23 @@ def readmit_reviewed(repo_root: Path, run_id: object, token: object, script_path
 
 
 def redeem(
-    repo_root: Path, run_id: object, token: object, script_path: object, budget_secs: Optional[float] = None
+    repo_root: Path, run_id: object, token: object, script_path: object, *, budget_secs: Optional[float] = None
 ) -> bool:
     """The op's atomic claim: True for exactly one caller whose `token` and `script_path` match
     the live record. The claim is an exclusive create of the claimed record (a rename of one
     source can succeed for several racing callers on Windows). The claimed record stays until
-    `consume` (the commit landed) or `release` (it did not). `budget_secs` also makes a claim
-    older than that adoptable while its holder lives."""
+    `consume` (the commit landed) or `release` (it did not). `budget_secs` stamps the claim's
+    `deadline`; see `redeem_claim`."""
     return redeem_claim(repo_root, run_id, token, script_path, budget_secs=budget_secs) is not None
 
 
 def redeem_claim(
-    repo_root: Path, run_id: object, token: object, script_path: object, budget_secs: Optional[float] = None
+    repo_root: Path, run_id: object, token: object, script_path: object, *, budget_secs: Optional[float] = None
 ) -> Optional[dict]:
-    """`redeem`, returning the winning claim's identity `{claimed_at, pid, thread}` (None when this
-    call did not win). Pass it to `holds_claim` to learn whether a later caller adopted the claim."""
+    """`redeem`, returning the winning claim's identity `{claimed_at, pid, thread}` plus its `deadline`
+    when stamped (None when this call did not win); pass it to `holds_claim` to learn whether a later
+    caller adopted the claim. A positive `budget_secs` records `deadline` = claimed_at + budget_secs:
+    past it the claim is adoptable by a later call even while its holder lives."""
     if not _well_formed(run_id, token, script_path):
         return None
     live = _record_path(repo_root, run_id)
@@ -670,7 +694,7 @@ def redeem_claim(
         fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
         return None
-    identity = _write_claim(fd, record)
+    identity = _write_claim(fd, record, budget_secs)
     for _ in range(50):
         try:
             live.unlink(missing_ok=True)
@@ -684,7 +708,8 @@ def redeem_claim(
 
 def holds_claim(repo_root: Path, run_id: object, token: object, script_path: object, identity: object) -> bool:
     """Read-only: True while the claimed record matches `token` and `script_path` and still carries
-    `identity` (from `redeem_claim`); an adopter's re-created claim carries its own. Never raises."""
+    `identity` (from `redeem_claim`); an adopter's re-created claim carries its own, and `consume` or
+    `release` removes it. Never raises."""
     if not isinstance(identity, dict) or not _well_formed(run_id, token, script_path):
         return False
     record = _read_rec(repo_root, run_id, claimed=True)
@@ -696,8 +721,10 @@ def holds_claim(repo_root: Path, run_id: object, token: object, script_path: obj
 _IDENTITY_KEYS = ("claimed_at", "pid", "thread")
 
 
-def _write_claim(fd: int, record: dict) -> dict:
-    identity = {"claimed_at": time.time(), "pid": os.getpid(), "thread": threading.get_ident()}
+def _write_claim(fd: int, record: dict, budget_secs: Optional[float] = None) -> dict:
+    identity: dict = {"claimed_at": time.time(), "pid": os.getpid(), "thread": threading.get_ident()}
+    if isinstance(budget_secs, (int, float)) and budget_secs > 0:
+        identity["deadline"] = identity["claimed_at"] + budget_secs
     with os.fdopen(fd, "w", encoding="utf-8") as fh:
         json.dump({**record, **identity}, fh, sort_keys=True)
     return identity
@@ -715,18 +742,23 @@ def _holder_alive(pid: object) -> bool:
         return True
 
 
-def _claim_expirable(record: dict, path: Path, budget_secs: Optional[float] = None) -> bool:
+def _claim_expirable(record: dict, path: Path) -> bool:
     """True when the claim's holder is provably dead: its pid gone, or, in this process, its thread
-    exited; or, when `budget_secs` is given, the claim is older than it. Without a budget a live
-    holder keeps its claim at any age. A legacy claim without `pid` ages by `claimed_at` or the file mtime."""
-    stamped = record.get("claimed_at")
-    if budget_secs is not None and isinstance(stamped, (int, float)) and time.time() - stamped > budget_secs:
+    exited; or when the claim is past its recorded `deadline` (the op budget), since a warm op past
+    its budget is abandoned, not stopped, and its late settle is a no-op (`holds_claim`). Age alone
+    never expires a claim whose holder is recorded without a `deadline`. A legacy claim without `pid`
+    ages by `claimed_at` or the file mtime."""
+    deadline = record.get("deadline")
+    if isinstance(deadline, (int, float)) and time.time() > deadline:
         return True
     pid = record.get("pid")
     if isinstance(pid, int) and pid > 0:
         if pid == os.getpid():
             thread = record.get("thread")
-            return isinstance(thread, int) and thread not in {t.ident for t in threading.enumerate()}
+            if not isinstance(thread, int) or thread in {t.ident for t in threading.enumerate()}:
+                return False
+            made = record.get("claimed_at")
+            return not isinstance(made, (int, float)) or time.time() - made > THREAD_EXIT_GRACE_SECONDS
         return not _holder_alive(pid)
     stamp = record.get("claimed_at")
     if not isinstance(stamp, (int, float)):
@@ -746,9 +778,9 @@ def _adopt_expired_claim(
     budget_secs: Optional[float] = None,
 ) -> tuple[Optional[dict], Optional[Path]]:
     """Take over a matching, expirable claim: the rename out of `claimed` has exactly one winner,
-    who re-creates the claim under its own pid and time. Returns (the new claim identity or None,
-    the renamed-aside file the caller unlinks)."""
-    if not _matches(record, run_id, token, script_path) or not _claim_expirable(record, claimed, budget_secs):
+    who re-creates the claim under its own pid, time and `budget_secs` deadline. Returns (the new
+    claim identity or None, the renamed-aside file the caller unlinks)."""
+    if not _matches(record, run_id, token, script_path) or not _claim_expirable(record, claimed):
         return None, None
     aside = claimed.with_name(f"{claimed.name}.adopt.{os.getpid()}")
     try:
@@ -759,7 +791,8 @@ def _adopt_expired_claim(
         fd = os.open(claimed, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
         return None, aside
-    identity = _write_claim(fd, {k: v for k, v in record.items() if k not in _IDENTITY_KEYS})
+    unclaimed = {k: v for k, v in record.items() if k not in (*_IDENTITY_KEYS, "deadline")}
+    identity = _write_claim(fd, unclaimed, budget_secs)
     return identity, aside
 
 
@@ -802,7 +835,7 @@ def is_live(repo_root: Path, run_id: str) -> bool:
 def _listed(repo_root: Path, *, claimed: bool) -> list[dict]:
     """Records in the settings-home dir (`claimed/` or the live dir), then those only the legacy
     dir holds (bounded listing; sunset per `_read_legacy`). A run id in both reads from the new root."""
-    home = engine_record_dir(repo_root)
+    home = _record_home(repo_root)
     if home is None:
         return []
     sub = (_CLAIMED,) if claimed else ()

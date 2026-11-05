@@ -59,9 +59,11 @@ def _count_parses(monkeypatch) -> dict:
     calls = {"manifest": 0, "spine": 0}
     real_manifest, real_spine = warp_run_deliverable._manifest_declared, peer_hunk_gate._sibling_spines
 
-    def manifest(*a, **k):
-        calls["manifest"] += 1
-        return real_manifest(*a, **k)
+    def manifest(run_id, *a, **k):
+        # The landing run's own manifest is read once for its exact paths; a sibling's is the per-sibling parse.
+        if run_id != OWN:
+            calls["manifest"] += 1
+        return real_manifest(run_id, *a, **k)
 
     def spine(root, run_ids):
         calls["spine"] += len(list(run_ids))

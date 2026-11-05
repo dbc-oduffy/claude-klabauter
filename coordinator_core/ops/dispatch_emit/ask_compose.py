@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit import agent_sidecar as _sidecar
 from coordinator_core.ops.dispatch_emit import agent_body_dedupe as _agent_body_dedupe
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _prompt_fragments
 from coordinator_core.ops.dispatch_emit import run_notes as _run_notes
+from coordinator_core.ops.dispatch_emit import compose_size as _compose_size
 from coordinator_core.ops.dispatch_emit.ask_staged_prompts import Stager, stage as _stage_prompt, stage_literal_runs
 from coordinator_core.ops.dispatch_emit.fan_launcher import EMIT_RELAY_AUTHORITY, _twin_affixes
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
@@ -210,6 +211,8 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     TERMINAL_COMMIT_CLI_HELPER_JS,
     TERMINAL_COMMIT_CLI_PROPERTY_JS,
     INTEGRATION_NOT_RUN_VAR,
+    _tests_status_expr,
+    bad_incomplete_ids_js,
     next_action_parts,
 )
 from coordinator_core.ops.dispatch_emit.review_floor import HALT_REVIEW_FLOOR, MANIFEST_KEY as _REVIEW_CODE_KEY
@@ -276,6 +279,10 @@ _RESUME_REVIEW_SLICE_FILTER_JS = (
     ".flatMap((w) => String(w.slice_id ?? '').split('+').filter(Boolean)); "
     "return _ids.length ? _ids : null; })()"
 )
+# The wave reads the filter in six places; the script declares it once as a thunk and every read calls it.
+_RESUME_SLICE_IDS_FN = "_resumeSliceIds"
+_RESUME_SLICE_IDS_CALL_JS = _RESUME_SLICE_IDS_FN + "()"
+_RESUME_SLICE_IDS_DECL_JS = f"  const {_RESUME_SLICE_IDS_FN} = () => {_RESUME_REVIEW_SLICE_FILTER_JS};"
 _SCOUT_SCHEMA = SCOUT_SCHEMA  # tests/test_ask_compose.py reads this name
 _BLITZ_TRAIL = "blitz"
 _INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
@@ -308,6 +315,23 @@ class AskComposeRefused(ValueError):
     """The ask cannot be composed into a script; the message names the cause."""
 
 
+#: The one compose input that grows is the plan-blitz asset a relayed ask embeds; 300 KiB holds the 279 KB
+#: asset the headroom test pins, and a larger one is refused by name rather than failing at the runner cap.
+STAGE_ASSET_BYTE_CAP = 307200
+
+
+#: Plan-blitz and roadmap-blitz together embed up to this many bytes; past it the roadmap stage stays out and an
+#: in-run roadmap pick chains into the `{sizing}` script like an M+ pick, so an oversize plan-blitz asset
+#: cannot push the script over the runner cap.
+STAGES_EMBED_BYTE_BUDGET = 262144
+
+
+def _check_stage_asset(name: str, text: Optional[str]) -> None:
+    n = len(text.encode("utf-8")) if text is not None else 0
+    if n > STAGE_ASSET_BYTE_CAP:
+        raise AskComposeRefused(f"{name} is {n} bytes, over its {STAGE_ASSET_BYTE_CAP}-byte cap")
+
+
 #: Halt reason when the scout twice returned no integer exit_code, i.e. never ran sizing-assemble.
 SCOUT_DID_NOT_ASSEMBLE_REASON = (
     "scout did not run sizing-assemble (no exit_code returned after one re-dispatch); "
@@ -330,6 +354,14 @@ _SCOUT_ARRAY_FIELDS = [k for k in SCOUT_SCHEMA["required"] if SCOUT_SCHEMA["prop
 
 def _lit(text: str) -> str:
     return _js_string_literal(text)
+
+
+_DOCBLOCK = re.compile(r"^/\*\n(?: \*[^\n]*\n)+ \*/\n", re.M)
+
+
+def _strip_docblocks(js: str) -> str:
+    """``js`` without its multi-line `/* ... */` doc blocks that open on a line of their own at column 0."""
+    return _DOCBLOCK.sub("", js)
 
 
 def _cat(*parts: str) -> str:
@@ -810,6 +842,9 @@ _LEDGER_CHECK_SCHEMA = _obj(
                     "withheld_by": _STR,
                     "owed_by": {"type": "array", "items": _STR},
                     "root_read": {"type": ["string", "array"], "items": _STR},
+                    "originals_read": {"type": ["string", "array"], "items": _STR},
+                    "capture_harvested_at": _STR,
+                    "original_last_edited_at": _STR,
                     "wired": {"type": "boolean"},
                     "superseded_by": _STR,
                     "post_commit_acts": {"type": "array", "items": {"type": "string", "enum": list(POST_COMMIT_ACTS)}},
@@ -826,6 +861,8 @@ _LEDGER_CHECK_SCHEMA = _obj(
 )
 _LEDGER_ITEMS_RULES = (
     "Rows under the ledger's Out of scope heading are ruled out: give them no item. "
+    "A row citing an external design original (claude.ai artifact or board URL) is met only after you "
+    "read the original itself, named in originals_read; a capture on disk is not the original. "
     "Return one entry in items for EVERY ledger item, by "
     "its id (the sizing's requirement_register row id), and on every engine-plane item named above "
     "set root_read to each root you judged it at: status 'met' when the change makes the "
@@ -1097,16 +1134,30 @@ _ADOPT_STAGE_REPLY_LAUNCHER_JS = (
 _ADOPT_STAGED_INLINE_JS = """function _adoptStagedInline(h) {
   const s = _STAGED_INLINE;
   if (!s || typeof s !== 'object' || !s.handle || typeof s.handle !== 'object' || h === null || typeof h !== 'object') return null;
-  if (s.handle.path !== h.path || s.handle.sha256 !== h.sha256 || s.handle.bytes !== h.bytes) return null;
-  const bad = _verifyReplyText(s.text, h);
+  const full = (s.full_handle && typeof s.full_handle === 'object') ? s.full_handle : s.handle;
+  if (full.path !== h.path || full.sha256 !== h.sha256 || full.bytes !== h.bytes) return null;
+  const bad = _verifyReplyText(s.text, s.handle);
   if (bad !== null) return { fail: bad };
   try {
-    return { manifest: JSON.parse(s.text) };
+    const m = JSON.parse(s.text);
+    if (typeof s.spill === 'string' && s.spill !== '') { m.spill = s.spill; m.full_handle = full; }
+    return { manifest: m };
   } catch (e) {
     return { fail: 'reply text is not valid JSON' };
   }
 }
 """
+# A slim twin (`_adoptStagedInline` marks it with `spill`) holds each row's `writes` as `[]` beside `writes_count`; the
+# in-script consumers (commit leg `paths`/`declared`, `_fpOwns`, `writeSet`) read the array, so a slim row with an
+# owed count halts here rather than scoping its commit to nothing. Trap: the full list lives only in the spill.
+_SLIM_MANIFEST_HALT_JS = (
+    "  if (_stagedManifest && _manifest && typeof _manifest.spill === 'string' && !_halted) {\n"
+    "    const _slimRow = (_manifest.rows ?? []).find((r) => r && Number(r.writes_count) > (r.writes ?? []).length);\n"
+    "    if (_slimRow) _halted = { halted: " + repr(HALT_REFUSAL) + ", kind: " + repr(HALT_REFUSAL) + ", reason: "
+    "'staged twin is slim: row ' + _slimRow.id + ' declares ' + _slimRow.writes_count + ' writes held in ' + _manifest.spill + "
+    "' and the commit leg cannot read them in-script', sizing: _sizingRel, plan: _planRel, run_id: _runId };\n"
+    "  }"
+)
 # The inline's resume block says the launcher already sized, planned and staged: the twin skips every pre-stage leg.
 # Trap: the guard keys on the block alone, never on arm; the manifest's verify is `_adoptStageReply`'s, so a failed
 # verify halts with `_STAGE_SIDECAR_HALT` and the legs stay skipped.
@@ -1316,15 +1367,23 @@ _JOIN_REVERIFY_JS = (
 
 #: A slice reviewer (`slice-review-result`) is BLOCKED with `findings` > `applied`; whole-diff lenses and
 #: null (degraded / verify-only) wave entries never match.
-def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = True, after_join: bool = False) -> str:
+def _review_blocked_halt_js(
+    sizing_rel: Optional[str], *, read_reverify: bool = True, after_join: bool = False, call_only: bool = False,
+) -> str:
     """The BLOCKED-review halt; its next_action names the engine-ask refire, since journal replay
     hands back the cached BLOCKED wave. `read_reverify=False` is the pre-verify slice halt; `after_join`
     is the post-join pass that also upgrades a slice halt with the re-verify test blockers.
 
     Reds in `_foreignReds` (set by `_reviewRecover`) never reach it; `_selfCorrection` rides on every halt.
     Reds outside the manifest's declared footprint never halt: they land on `_reviewReverify.out_of_ask`.
+
+    The body is declared once as `_reviewBlockedHalt`; `call_only` emits just the guarded call, so it must follow
+    a declaring emission.
     """
     guard = "(!_halted || _halted.halted === " + json.dumps(HALT_REVIEW_BLOCKED) + ")" if after_join else "!_halted"
+    call = "  if (" + guard + ") _reviewBlockedHalt();"
+    if call_only:
+        return call
     reverify_expr = (
         "(typeof _reviewReverify !== 'undefined' && _reviewReverify && typeof _reviewReverify === 'object') "
         "? (() => { const _px = (p) => { let s = String(p).replace(/\\\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; }; "
@@ -1336,7 +1395,7 @@ def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = 
         else "null"
     )
     return (
-        "  if (" + guard + ") {\n"
+        "  const _reviewBlockedHalt = () => {\n"
         "    const _blockedSlices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter("
         "(w) => w && w.verdict === 'BLOCKED' && (w.findings ?? 0) > (w.applied ?? 0));\n"
         "    const _sc = (typeof _selfCorrection !== 'undefined') ? _selfCorrection : null;\n"
@@ -1370,7 +1429,7 @@ def _review_blocked_halt_js(sizing_rel: Optional[str], *, read_reverify: bool = 
         "slices: _slicesJs, " + SELF_CORRECTION_FIELD + ": _sc, "
         "next_action: _scNa('The refire re-runs the review wave over the blocked slices: ') + "
         + _refire_js(sizing_rel) + " };\n"
-        "  }"
+        "  };\n" + call
     )
 
 
@@ -1429,7 +1488,7 @@ _REVIEW_RECOVER_JS = r"""
       let r = null;
       try { r = await __FIXCALL__; }
       catch (e) {
-        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        if (_usageHalted(e)) return;
         log('halt-fix leg threw: ' + String((e && e.message) ?? e));
       }
       if (_halted) return;
@@ -1447,7 +1506,7 @@ _REVIEW_RECOVER_JS = r"""
       let rv = null;
       try { rv = await __REVERIFYCALL__; }
       catch (e) {
-        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        if (_usageHalted(e)) return;
         log('halt-reverify leg threw: ' + String((e && e.message) ?? e));
       }
       if (_halted) return;
@@ -1551,7 +1610,9 @@ def _criterion_latest_test_reconcile_js() -> str:
     return (
         f"  if ({fv} && {fv}.status === 'not_met' && !String({fv}.reason ?? '').startsWith('not wired up: ') "
         f"&& (Array.isArray({fv}.failing) ? {fv}.failing.length > 0 : (typeof {fv}.failing === 'string' && {fv}.failing)) "
-        f"&& typeof {tv} !== 'undefined' && {tv} && ['pass', 'pass-with-skips'].includes({tv}.status)) "
+        f"&& typeof {tv} !== 'undefined' && {tv} && ['pass', 'pass-with-skips'].includes({tv}.status) "
+        "&& !(typeof _pmVerbatimIds !== 'undefined' && typeof _ledger !== 'undefined' && _ledger "
+        "&& (_ledger.items ?? []).some((i) => i && _pmVerbatimIds.includes(i.id) && i.status !== 'met'))) "
         f"{{ {fv} = {{ ...{fv}, status: 'met', reconciled_from: 'not_met', "
         f"reason: 'later test result ' + {tv}.status + ' supersedes the falsifier failures' }}; }}"
     )
@@ -1677,6 +1738,11 @@ def _usage_limit_helper_js() -> str:
         f"    _halted = {{ halted: {_lit(HALT_USAGE_LIMIT)}, run_id: _runId, detail: msg.slice(0, 300), "
         "resume_from_run_id: 'this Workflow run id (wf_...)', "
         f"next_action: {_lit(_USAGE_LIMIT_RESUME_CALL)} }};\n"
+        "  }\n"
+        "  function _usageHalted(e) {\n"
+        "    if (!_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) return false;\n"
+        "    _haltOnUsageLimit(e);\n"
+        "    return true;\n"
         "  }"
     )
 
@@ -1971,7 +2037,7 @@ _LEDGER_RECOVER_JS = r"""
         let rv = null;
         try { rv = await __REVERIFYCALL__; }
         catch (e) {
-          if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+          if (_usageHalted(e)) return;
           log('ledger-reverify leg threw: ' + String((e && e.message) ?? e));
         }
         if (_halted) return;
@@ -2023,7 +2089,7 @@ _LEDGER_RECOVER_JS = r"""
       const recordText = JSON.stringify({ cap: _recoveryCap, chunks: rec });
       try { await __RECORDCALL__; }
       catch (e) {
-        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        if (_usageHalted(e)) return;
         log('recovery record leg threw: ' + String((e && e.message) ?? e));
       }
     };
@@ -2136,7 +2202,7 @@ _REMNANT_COMPLETE_JS = r"""
       let leg = null;
       try { leg = await __REMNANTCALL__; }
       catch (e) {
-        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        if (_usageHalted(e)) return;
         log('remnant-complete leg threw: ' + String((e && e.message) ?? e));
       }
       if (_halted) return;
@@ -2153,7 +2219,7 @@ _REMNANT_COMPLETE_JS = r"""
         let rv = null;
         try { rv = await __REVERIFYCALL__; }
         catch (e) {
-          if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+          if (_usageHalted(e)) return;
           log('remnant-reverify leg threw: ' + String((e && e.message) ?? e));
         }
         if (_halted) return;
@@ -2179,7 +2245,7 @@ _REMNANT_COMPLETE_JS = r"""
       const recordText = JSON.stringify(rec);
       try { await __RECORDCALL__; }
       catch (e) {
-        if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return; }
+        if (_usageHalted(e)) return;
         log('remnant record leg threw: ' + String((e && e.message) ?? e));
       }
     };
@@ -2578,6 +2644,24 @@ def _em_context_row_ids(repo_root: str, sizing_rel: Optional[str]) -> list[str]:
         if isinstance(r, dict) and isinstance(r.get("id"), str)
         and str(r.get("source_text") or "").lstrip().startswith(EM_CONTEXT_MARKER)
         and not _is_design(r.get("anchor"))
+    ]
+
+
+def _pm_verbatim_row_ids(repo_root: str, sizing_rel: Optional[str]) -> list[str]:
+    """Ids of the sizing's register rows whose anchor origin is `pm_verbatims`; the reconcile never flips one to met."""
+    from coordinator_core.ops.dispatch_emit.completion_gate import PM_VERBATIM_ORIGIN
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import _origin
+
+    if not sizing_rel:
+        return []
+    try:
+        register = load_sizing_effective(Path(repo_root), sizing_rel).get("requirement_register")
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return []
+    rows = register.get("rows") if isinstance(register, dict) else None
+    return [
+        r["id"] for r in rows or []
+        if isinstance(r, dict) and isinstance(r.get("id"), str) and _origin(r.get("anchor"))[0] == PM_VERBATIM_ORIGIN
     ]
 
 
@@ -3249,7 +3333,7 @@ def _s_prep_gate_loop_js(
         "\n\nEdit that plan IN PLACE with Edit to fix every finding -- never scaffold a new plan, never change its "
         "path -- then return its repo-relative path as plan_rel.",
         *stage_parts,
-        *_prep_gate_act(repo_root, "js:JSON.stringify({ plan: _planRel }).replace(/'/g, \"'\\\\''\")"),
+        *_prep_gate_act(repo_root, "js:JSON.stringify({ plan: _planRel }).replace(/\\x27/g, \"'\\\\''\")"),
     )
     repair_call = _agent(
         repair_prompt, label="plan-prep-repair", phase="plan", agent_type=repair_type, agent_model=repair_model,
@@ -3379,6 +3463,7 @@ def compose_ask_script(
     ledger_clause_text = _RELAYED_LEDGER_CLAUSE if relayed else _LEDGER_CLAUSE
     if stop_after not in (None, STOP_AFTER_PLAN):
         raise AskComposeRefused(f"stop_after takes {STOP_AFTER_PLAN!r} or nothing, got {stop_after!r}")
+    _check_stage_asset("plan-blitz.mjs", plan_blitz_text)
 
     if review_roster_fragment is None or review_stage_schemas is None:
         from coordinator_core.ops.dispatch_emit.op import _load_review_inputs
@@ -3419,12 +3504,12 @@ def compose_ask_script(
         blitz_fn, blitz_phases = (
             wrap_stage(blitz_text, agent_prefix_var=EM_BRIEF_VAR) if em_brief else wrap_stage(blitz_text)
         )
-        blitz_fn = _strip_comment_lines(blitz_fn)
+        blitz_fn = _strip_docblocks(_strip_comment_lines(blitz_fn))
         if f"async function {_PLAN_BLITZ_FN}(" not in blitz_fn:
             raise AskComposeRefused(f"wrapped plan-blitz stage does not define async function {_PLAN_BLITZ_FN}")
 
     xl_open = _xl_exit_open(repo_root, sizing_rel)
-    # A raw ask is sized in-run, so any size can reach the XL exit.
+    # A raw ask is sized in-run, so any size can reach the XL exit; a known arm is already sized, so only an open XL exit can.
     xl_possible = sized_in_run or xl_open
     rb_fn: str = ""
     rb_phases: list[str] = []
@@ -3437,7 +3522,13 @@ def compose_ask_script(
         try:
             rb_text = roadmap_blitz_text if roadmap_blitz_text is not None else ask_roadmap.load_roadmap_blitz_text()
             rb_fn, rb_phases = ask_roadmap.wrap_roadmap_stage(rb_text)
-            if em_brief:
+            if (
+                blitz_fn
+                and not roadmap_in_body
+                and len(blitz_fn.encode("utf-8")) + len(rb_fn.encode("utf-8")) > STAGES_EMBED_BYTE_BUDGET
+            ):
+                rb_fn, rb_phases = "", []
+            if em_brief and rb_fn:
                 if _TOP_AGENT_DECL.search(rb_fn):
                     raise AskPlanBlitzRefused("roadmap-blitz.mjs declares a top-level `agent`; the brief shadow would collide")
                 rb_head, _, rb_rest = rb_fn.partition("\n")
@@ -3536,7 +3627,7 @@ def compose_ask_script(
         reverify=True,
         reverify_deferred=True,
         delivery_notes_js="_deliveryNotes",
-        slice_filter_js=_RESUME_REVIEW_SLICE_FILTER_JS,
+        slice_filter_js=_RESUME_SLICE_IDS_CALL_JS,
     )
     review_titles = [title for title, _ in review_blocks]
     ledger_charter = _folded_ledger_charter(
@@ -3590,6 +3681,7 @@ def compose_ask_script(
             head=head, anchor=anchor, script_path=script_path, repo_root=repo_root, run_id=run_id,
         ))
     b.append("  let _ledger = null;")
+    b.append(f"  const _pmVerbatimIds = {json.dumps(_pm_verbatim_row_ids(repo_root, sizing_rel))};")
     b.append("  let _consumedReturns = {};")
     b.append("  let _recoveryWithheld = [];")
     b.append("  let _ledgerSc = null;")
@@ -3753,7 +3845,7 @@ def compose_ask_script(
             "_sizingRel = _STAGED_RESUME.sizing_rel;\n"
             f"    if (_STAGED_RESUME.arm !== {_lit(ARM_XS)} && typeof _STAGED_RESUME.plan_rel === 'string' "
             "&& _STAGED_RESUME.plan_rel) _planRel = _STAGED_RESUME.plan_rel;\n"
-            "    await _adoptStageReply({ manifest_handle: _STAGED_INLINE.handle });\n"
+            "    await _adoptStageReply({ manifest_handle: _STAGED_INLINE.full_handle ?? _STAGED_INLINE.handle });\n"
             "  }"
         )
     if sized_in_run:
@@ -4946,7 +5038,11 @@ def compose_ask_script(
             "sizing: _sizingRel, run_id: _runId }; }"
         )
     else:
-        b.append(_m_plus_chain_js(repo_root=repo_root, head=head, anchor=anchor, run_id=run_id, stop_after=stop_after))
+        roadmap_chained_here = bool(xl_possible or roadmap_in_body) and not stop_after
+        b.append(_m_plus_chain_js(
+            repo_root=repo_root, head=head, anchor=anchor, run_id=run_id, with_roadmap=roadmap_chained_here,
+            stop_after=stop_after,
+        ))
 
     if stop_after:
         b.append(
@@ -4979,7 +5075,7 @@ def compose_ask_script(
             chatty=bool((plan_blitz_args or {}).get("chatty")),
         )
 
-    if xl_possible or roadmap_in_body:
+    if (xl_possible or roadmap_in_body) and (blitz_fn or launcher_child):
         b.append(f"  if (!_halted && _gate.arm === {_lit(ARM_ROADMAP)}) {{")
         b.append("    _viaRoadmap = true;")
         if rb_fn and blitz_fn:
@@ -5028,6 +5124,8 @@ def compose_ask_script(
             f"  if (_stagePending && !_stagedManifest) {{ return {{ {STAGE_PENDING_KEY}: _stagePending }}; }}"
         )
     b.append("  if (_stagedManifest) { _manifest = _stagedManifest; }")
+    if launcher_child:
+        b.append(_SLIM_MANIFEST_HALT_JS)
     if judged and fold_falsifier:
         spec_js = "_scoutFalsifier ?? _planFalsifier" if sized_in_run else "_planFalsifier"
         b.append(f"  if (_gate.arm && _gate.arm !== {_lit(ARM_XS)} && !_xsTail) {{ _falsifierSpec = {spec_js}; }}")
@@ -5287,7 +5385,9 @@ def compose_ask_script(
     # renaming its call sites: the leg register, phase-title and brief checks find legs by the
     # literal `agent(` token, so a renamed call site is invisible to every one of them.
     b.append("  const _reviewOuterAgent = agent;")
+    b.append(_RESUME_SLICE_IDS_DECL_JS)
     b.append("  let _reverifyJoined = false;")
+    b.append(f"  const _joinReverify = () => {_JOIN_REVERIFY_JS};")
     b.append("  let _footprintReviewed = false;")
     b.append(
         "  const _reviewReused = _reusePhase('review') && !!_phaseVerdict('review');\n"
@@ -5322,7 +5422,7 @@ def compose_ask_script(
         f"{{ {INTEGRATION_NOT_RUN_VAR} = true; }}"
     )
     # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
-    b.append("  if (!_reverifyJoined) { _reviewReverify = await " + _JOIN_REVERIFY_JS + "; _reverifyJoined = true; }")
+    b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
     b.append(_WAVE_DIFF_RECONCILE_JS)
     b.append(
         _review_recover_js(
@@ -5438,7 +5538,7 @@ def compose_ask_script(
         f"    const _runVerify = async () => {{ try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
         # A self-correction leg may have replaced the joined result; never rejoin the stale promise.
-        "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : " + _JOIN_REVERIFY_JS + "]);",
+        "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : _joinReverify()]);",
         "    _reverifyJoined = true;",
         "    if (!_halted && !_reviewReused && _reviewReverify && ((Array.isArray(_reviewReverify.unapplied) && _reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }",
         f"    if (_testWanted && _verify && _verify.test) {{ {_emit._TEST_RESULT_VAR} = _verify.test; }}",
@@ -5502,8 +5602,8 @@ def compose_ask_script(
         "    }"
     ]
     b.extend(verify_lines)
-    b.append("  if (!_reverifyJoined) { _reviewReverify = await " + _JOIN_REVERIFY_JS + "; _reverifyJoined = true; }")
-    b.append(_review_blocked_halt_js(sizing_rel, after_join=True))
+    b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
+    b.append(_review_blocked_halt_js(sizing_rel, after_join=True, call_only=True))
     b.append(no_target)
     b.append("  if (!_halted && _manifest && !_manifest.error) {")
     b.append(
@@ -5538,7 +5638,8 @@ def compose_ask_script(
         "      const rest = i.remaining.filter((a) => !((_manifest.doc_writes ?? []).includes(a) "
         "&& (_docs?.doc_paths ?? []).includes(a)));\n"
         "      if (rest.length === i.remaining.length) continue;\n"
-        "      if (rest.length) i.remaining = rest; else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
+        "      if (rest.length) i.remaining = rest; else if (_pmVerbatimIds.includes(i.id)) continue; "
+        "else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }\n"
         "    }\n"
         "    };\n"
         "    _normaliseLedger();"
@@ -5549,6 +5650,7 @@ def compose_ask_script(
             "    const _reconcileJudged = () => {\n"
             f"    if ({v}?.status === 'not_met' && (_ledger?.items ?? []).length "
             "&& (_ledger.items).every((i) => i && i.status === 'met') "
+            "&& !_reconciled.some((id) => _pmVerbatimIds.includes(id)) "
             f"&& !String({v}.reason ?? '').startsWith('not wired up: ') "
             f"&& [undefined, 'pass', 'not_present'].includes({v}.falsifier?.verdict) "
             f"&& (!Array.isArray({v}.clauses) || {v}.clauses.every((c) => !c || c.status === 'met'))) "
@@ -5717,6 +5819,15 @@ def compose_ask_script(
         if in_run_commit
         else "{ kind: 'none', op: null, params: null }"
     )
+    tests_status = _tests_status_expr(_emit._TEST_RESULT_VAR, "_verifications", "not_run")
+    status_pair = f"({tests_status} === 'pass-with-skips' ? 'pass' : {tests_status})"
+    if status_pair in na_params:
+        na_params = na_params.replace(status_pair, "(_testsStatus === 'pass-with-skips' ? 'pass' : _testsStatus)")
+        b.append(f"  const _testsStatus = {tests_status};")
+    bad_ids = bad_incomplete_ids_js(False)
+    if sum(part.count(bad_ids) for part in (na_kind, na_op, na_params)) > 1:
+        na_kind, na_op, na_params = (p.replace(bad_ids, "_badIncompleteIds") for p in (na_kind, na_op, na_params))
+        b.append(f"  const _badIncompleteIds = {bad_ids};")
     b.append(
         f"  _nextAction = {'_roadmapFan ? _nextAction : ' if roadmap_fan else ''}_closeable "
         f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
@@ -5775,6 +5886,9 @@ def compose_ask_script(
         "...(i.post_commit_acts ? { post_commit_acts: i.post_commit_acts } : {}), "
         "...(i.met_by ? { met_by: i.met_by } : {}), "
         "...(i.root_read != null ? { root_read: i.root_read } : {}), "
+        "...(i.originals_read != null ? { originals_read: i.originals_read } : {}), "
+        "...(i.capture_harvested_at ? { capture_harvested_at: i.capture_harvested_at } : {}), "
+        "...(i.original_last_edited_at ? { original_last_edited_at: i.original_last_edited_at } : {}), "
         "...(i.remaining ? { remaining: i.remaining } : {}), "
         f"...(i.{GAPS_CLOSED_FIELD} ? {{ {GAPS_CLOSED_FIELD}: i.{GAPS_CLOSED_FIELD} }} : {{}}) }})) }}; }}"
     )
@@ -5887,6 +6001,23 @@ def _chain_emit_params_js(
 _CHAIN_EMIT_PARAMS_JS = _chain_emit_params_js("_sizingRel")
 
 
+_CHAIN_STAGE_FN = "_chain_stage_pending_loop"
+
+
+def _declare_chain_stage_fn(script: str) -> str:
+    """Declare the staged-twin resume loop once, after the manifest marker line, when a chain leg calls it."""
+    call = f"await {_CHAIN_STAGE_FN}("
+    if call not in script:
+        return script
+    decl = (
+        f"const {_CHAIN_STAGE_FN} = async (_chained, _chainPath) => {{\n  let _why = null;\n"
+        + _chain_stage_loop_js()
+        + "\n  return { chained: _chained, why: _why };\n};\n"
+    )
+    eol = script.index("\n", script.index(ASK_MANIFEST_MARKER)) + 1
+    return script[:eol] + decl + script[eol:]
+
+
 def _chain_stage_loop_js() -> str:
     """JS lines run after the chained child returns: while it answers `stage_pending`, start its staged twin from
     this top-level script (one nesting level); the child itself holds no workflow() reader."""
@@ -5918,6 +6049,140 @@ def _declare_stage_plan_params(script: str) -> str:
         return script
     eol = script.index("\n", script.index(ASK_MANIFEST_MARKER)) + 1
     return script[:eol] + _STAGE_PLAN_PARAMS_DECL + script[eol:]
+
+
+_CHAIN_VERDICT_FN = "_chain_verdict"
+_CHAIN_CHECK_OPEN = "    const _chainCheck = (_ce) => {"
+
+
+def _chain_check_body_lines() -> list[str]:
+    """The `_chainCheck` body: reads `_ce`, `REPO_ROOT`, `_runId`; sets `_why`, `_chainPath`, `_chainRunId`."""
+    return [
+        "      const _root = REPO_ROOT.split(String.fromCharCode(92)).join('/').replace(/\\/+$/, '');",
+        "      const _warp = _root + '/scratch/warp/';",
+        "      let _cp = typeof _ce?.path === 'string' ? _ce.path.trim().split(String.fromCharCode(92)).join('/') : '';",
+        "      const _msys = /^\\/([A-Za-z])\\/(.*)$/.exec(_cp);",
+        "      if (_msys && /^[A-Za-z]:\\//.test(_root)) { _cp = _msys[1] + ':/' + _msys[2]; }",
+        "      else if (_cp !== '' && _cp[0] !== '/' && !/^[A-Za-z]:\\//.test(_cp)) { _cp = _root + '/' + _cp.replace(/^(\\.\\/)+/, ''); }",
+        "      if (typeof _ce?.error === 'string' && _ce.error !== '') { _why = 'emit failed: ' + _ce.error; }",
+        "      else if (_cp.split('/').indexOf('..') !== -1 || _cp.slice(0, _warp.length).toLowerCase() !== _warp.toLowerCase()) "
+        "{ _why = 'emit path is not under ' + _warp; }",
+        f"      else {{ const _cb = _cp.split('/').pop(); const _crs = {_lit(RUN_SCRIPT_SUFFIX)};",
+        "        const _cid = (_cb.endsWith(_crs) && _cb.indexOf('.staged-') === -1) ? _cb.slice(0, _cb.length - _crs.length) : '';",
+        "        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_cid) || _cid === _runId) { _why = 'emit reply run_id is not a run id'; }",
+        "        else { _chainPath = _cp; _chainRunId = _cid; } }",
+    ]
+
+
+def _chain_check_lines() -> list[str]:
+    return [_CHAIN_CHECK_OPEN, *_chain_check_body_lines(), "    };"]
+
+
+def _share_chain_check(script: str) -> tuple[str, list[str]]:
+    """When two or more chain legs carry the chain-emit reply check, replace each with a call of one shared function.
+
+    Each leg's `_chainCheck(_ce);` becomes an assignment of the shared function's verdict to the leg's own
+    `_why`/`_chainPath`/`_chainRunId` bindings, which are block-scoped per leg. Returns the script and the
+    shared function's declarator for `_attach_chain_helpers`.
+    """
+    block = "\n".join(_chain_check_lines())
+    if script.count(block) < 2:
+        return script, []
+    inline = f"[_why, _chainPath, _chainRunId] = {_CHAIN_VERDICT_FN}(_ce, _runId);"
+    decl = (
+        f"{_CHAIN_VERDICT_FN} = (_ce, _runId) => {{\n"
+        "      let _why = null; let _chainPath = null; let _chainRunId = '';\n"
+        + "\n".join(_chain_check_body_lines())
+        + "\n      return [_why, _chainPath, _chainRunId];\n}"
+    )
+    return script.replace(block + "\n", "").replace("_chainCheck(_ce);", inline), [decl]
+
+
+_CHAIN_EMIT_LET = re.compile(
+    r"^ +let _ce = await (agent\(.*?\{ from_sizing: )([\w.]+)(, .*label: 'chain-emit'.*\));$", re.M
+)
+_CHAIN_EMIT_FN = "_chain_emit"
+
+
+def _share_chain_emit(script: str) -> tuple[str, list[str]]:
+    """Research chain legs whose `let _ce = await agent(...)` emit calls differ only in the `from_sizing` operand
+    share one function of that operand."""
+    counts: dict[tuple[str, str], int] = {}
+    for m in _CHAIN_EMIT_LET.finditer(script):
+        counts[(m.group(1), m.group(3))] = counts.get((m.group(1), m.group(3)), 0) + 1
+    decls: list[str] = []
+    for (head, tail), n in counts.items():
+        if n < 2:
+            continue
+        name = _CHAIN_EMIT_FN + (str(len(decls)) if decls else "")
+
+        def _call(m: "re.Match[str]", head: str = head, tail: str = tail, name: str = name) -> str:
+            if (m.group(1), m.group(3)) != (head, tail):
+                return m.group(0)
+            return f"let _ce = await {name}({m.group(2)});"
+
+        script = _CHAIN_EMIT_LET.sub(_call, script)
+        decls.append(f"{name} = (_sz) => {head}_sz{tail}")
+    return script, decls
+
+
+def _attach_chain_helpers(script: str, helpers: list[str]) -> str:
+    """Declare ``helpers`` (``name = expr`` declarators; the last ends in a column-0 `}`) in the one `const` statement
+    of the staged-twin resume loop, so a chain block carved out with that loop carries them."""
+    if not helpers:
+        return script
+    at = script.find(f"const {_CHAIN_STAGE_FN} = async")
+    if at >= 0:
+        end = script.index("\n};\n", at)
+        return script[:end] + "\n}" + "".join(f",\n{h}" for h in helpers) + ";\n" + script[end + 4 :]
+    eol = script.index("\n", script.index(ASK_MANIFEST_MARKER)) + 1
+    return script[:eol] + "".join(f"const {h};\n" for h in helpers) + script[eol:]
+
+
+def _chain_start_lines(abandon_agent_call: str) -> list[str]:
+    """Start the chained run, abandon its minted child when the first start threw, then resume its staged twin."""
+    return [
+        "      let _chained;",
+        "      try { _chained = await workflow({ scriptPath: _chainPath }); }",
+        "      catch (e) {",
+        "        _why = 'start threw: ' + String(e && e.message ? e.message : e);",
+        f"        if (_chainRunId !== '') {{ try {{ await {abandon_agent_call}; }} catch (_ae) {{}} }}",
+        "      }",
+        f"      if (_why === null) {{ const _sr = await {_CHAIN_STAGE_FN}(_chained, _chainPath); _chained = _sr.chained; _why = _sr.why; }}",
+    ]
+
+
+_CHAIN_START_FN = "_chain_start"
+_CHAIN_START_OPEN = "      let _chained;\n      try { _chained = await workflow("
+_CHAIN_START_CLOSE = "_chained = _sr.chained; _why = _sr.why; }"
+
+
+def _share_chain_start(script: str) -> tuple[str, list[str]]:
+    """Each distinct `_chain_start_lines` block carried by two or more chain legs becomes one function (returned as
+    a declarator for `_attach_chain_helpers`); each leg keeps a one-line call to it."""
+    blocks: dict[str, int] = {}
+    pos = 0
+    while (i := script.find(_CHAIN_START_OPEN, pos)) != -1:
+        j = script.find(_CHAIN_START_CLOSE, i)
+        if j < 0:
+            break
+        j += len(_CHAIN_START_CLOSE)
+        block = script[i:j]
+        blocks[block] = blocks.get(block, 0) + 1
+        pos = j
+    decls, n = [], 0
+    for block, count in blocks.items():
+        if count < 2:
+            continue
+        name = _CHAIN_START_FN + (str(n) if n else "")
+        n += 1
+        call = f"      let _chained; [_chained, _why] = await {name}(_chainPath, _chainRunId, _runId);"
+        script = script.replace(block, call)
+        decls.append(
+            f"{name} = async (_chainPath, _chainRunId, _runId) => {{\n  let _why = null;\n{block}\n"
+            "  return [_chained, _why];\n}"
+        )
+    return script, decls
 
 
 def _chain_emit_start_lines(
@@ -5981,34 +6246,14 @@ def _chain_emit_start_lines(
         "    phase('plan');",
         "    let _why = null; let _chainPath = null; let _chainRunId = '';",
         *emit_decl_lines,
-        "    const _chainCheck = (_ce) => {",
-        "      const _root = REPO_ROOT.split(String.fromCharCode(92)).join('/').replace(/\\/+$/, '');",
-        "      const _warp = _root + '/scratch/warp/';",
-        "      let _cp = typeof _ce?.path === 'string' ? _ce.path.trim().split(String.fromCharCode(92)).join('/') : '';",
-        "      const _msys = /^\\/([A-Za-z])\\/(.*)$/.exec(_cp);",
-        "      if (_msys && /^[A-Za-z]:\\//.test(_root)) { _cp = _msys[1] + ':/' + _msys[2]; }",
-        "      else if (_cp !== '' && _cp[0] !== '/' && !/^[A-Za-z]:\\//.test(_cp)) { _cp = _root + '/' + _cp.replace(/^(\\.\\/)+/, ''); }",
-        "      if (typeof _ce?.error === 'string' && _ce.error !== '') { _why = 'emit failed: ' + _ce.error; }",
-        "      else if (_cp.split('/').indexOf('..') !== -1 || _cp.slice(0, _warp.length).toLowerCase() !== _warp.toLowerCase()) "
-        "{ _why = 'emit path is not under ' + _warp; }",
-        f"      else {{ const _cb = _cp.split('/').pop(); const _crs = {_lit(RUN_SCRIPT_SUFFIX)};",
-        "        const _cid = (_cb.endsWith(_crs) && _cb.indexOf('.staged-') === -1) ? _cb.slice(0, _cb.length - _crs.length) : '';",
-        "        if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_cid) || _cid === _runId) { _why = 'emit reply run_id is not a run id'; }",
-        "        else { _chainPath = _cp; _chainRunId = _cid; } }",
-        "    };",
+        *_chain_check_lines(),
         "    try {",
         f"      let _ce = {emit_expr};",
         "      _chainCheck(_ce);",
         *retry_lines,
         "    } catch (e) { _why = 'emit threw: ' + String(e && e.message ? e.message : e); }",
         "    if (_chainPath) {",
-        "      let _chained;",
-        "      try { _chained = await workflow({ scriptPath: _chainPath }); }",
-        "      catch (e) {",
-        "        _why = 'start threw: ' + String(e && e.message ? e.message : e);",
-        f"        if (_chainRunId !== '') {{ try {{ await {abandon_agent_call}; }} catch (_ae) {{}} }}",
-        "      }",
-        _chain_stage_loop_js(),
+        *_chain_start_lines(abandon_agent_call),
         "      if (_why === null) { return (_chained !== null && typeof _chained === 'object') "
         f"? {{ ..._chained, chained_from: _runId{return_extra_js} }} : {{ chained: _chained, chained_from: _runId{fallback_extra_js} }}; }}",
         "    }",
@@ -6080,7 +6325,7 @@ def _pure_research_chain_js(
 
 
 def _m_plus_chain_js(
-    *, repo_root: str, head: str, anchor: str, run_id: str, arm: str = ARM_M_PLUS,
+    *, repo_root: str, head: str, anchor: str, run_id: str, arm: str = ARM_M_PLUS, with_roadmap: bool = False,
     stop_after: Optional[str] = None,
 ) -> str:
     """The in-run leg of a script that embeds no plan-blitz, for an M+ pick or (`arm`) a roadmap pick: emit
@@ -6088,15 +6333,26 @@ def _m_plus_chain_js(
     survives only for an emit or start failure.
 
     The child is a full engine-ask over `_sizingRel`, so plan-blitz lives in its own script, never in this one.
+    `with_roadmap` makes one leg serve both picks, setting `_viaRoadmap` for the roadmap pick, so the script
+    carries one chain copy instead of two.
     """
     arm_name = "the roadmap arm" if arm == ARM_ROADMAP else "M+"
+    named = (
+        f"{arm_name} and" if not with_roadmap
+        else "' + (_viaRoadmap ? 'the roadmap arm' : 'M+') + ' and"
+    )
     halt = (
-        f"_halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to {arm_name} and the chained run did not "
+        f"_halted = {{ halted: {_lit(HALT_REFUSAL)}, reason: 'the sizing resolved to {named} the chained run did not "
         "start (' + _why + '): resubmit Workflow({name: \"coordinator:engine-ask\", args: {sizing: \"' + _sizingRel + "
         "'\"}})', sizing: _sizingRel, run_id: _runId };"
     )
+    guard = (
+        f"_gate.arm === {_lit(arm)}" if not with_roadmap
+        else f"(_gate.arm === {_lit(ARM_M_PLUS)} || _gate.arm === {_lit(ARM_ROADMAP)})"
+    )
     lines = [
-        f"  if (!_halted && _gate.arm === {_lit(arm)}) {{",
+        f"  if (!_halted && {guard}) {{",
+        *([f"    if (_gate.arm === {_lit(ARM_ROADMAP)}) {{ _viaRoadmap = true; }}"] if with_roadmap else []),
         *_chain_emit_start_lines(
             sizing_js="_sizingRel", head=head, anchor=anchor, run_id=run_id, fallback_extra_js=", sizing: _sizingRel",
             stop_after=stop_after,
@@ -6229,6 +6485,41 @@ def _hoist_baseline_clears(script: str) -> str:
     return body[:eol] + f"const {_BASELINE_CLEARS_FN} = {_BASELINE_CLEARS_JS};\n" + body[eol:]
 
 
+_INVOKE_FN = "_PF9001"
+
+
+def _hoist_invoke(script: str) -> str:
+    """Declare the quoted `coordinator-invoke` command word once, ahead of the manifest marker line, and cut each
+    single-quoted literal that spells it into a `_PF9001` operand.
+
+    The const goes before every const the later hoist emits, so a `_PFC` composite may name it.
+    """
+    if not _prompt_fragments.HOIST_ENABLED or script.count(_INVOKE) < 2:
+        return script
+    out: list[str] = []
+    last = 0
+    for s, e in _prompt_fragments._scan_literals(script):
+        if script[s] != "'" or _INVOKE not in script[s:e]:
+            continue
+        parts = script[s + 1 : e - 1].split(_INVOKE)
+        pieces: list[str] = []
+        for k, part in enumerate(parts):
+            if k:
+                pieces.append(_INVOKE_FN)
+            if part:
+                pieces.append("'" + part + "'")
+        expr = " + ".join(pieces)
+        if script[e : e + 3].lstrip()[:1] in (".", "[", "(") or script[e : e + 3].lstrip()[:2] == "?.":
+            expr = "(" + expr + ")"
+        out.append(script[last:s])
+        out.append(expr)
+        last = e
+    out.append(script[last:])
+    body = "".join(out)
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_INVOKE_FN} = '{_INVOKE}';\n" + body[at:]
+
+
 def _finish_script(
     b: list[str], manifest_rel: str, description: str, phase_titles: list[str], chatty: bool = False
 ) -> str:
@@ -6241,14 +6532,37 @@ def _finish_script(
         + "\n"
     )
     script = _hoist_baseline_clears(script)
+    script = _declare_chain_stage_fn(script)
+    script, verdict_fn = _share_chain_check(script)
+    script, start_fns = _share_chain_start(script)
+    script, emit_fns = _share_chain_emit(script)
+    script = _attach_chain_helpers(script, emit_fns + verdict_fn + start_fns)
     script = _declare_stage_plan_params(script)
+    script = _hoist_invoke(script)
     script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
     script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)
-    if len(script.encode("utf-8")) > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
+    total = len(script.encode("utf-8"))
+    if total > _emit._WORKFLOW_SCRIPT_BYTE_CAP:
         raise AskComposeRefused(
-            f"composed ask script is over the Workflow runner's {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte cap"
+            _compose_size.cap_refusal(total, _emit._WORKFLOW_SCRIPT_BYTE_CAP, _body_components(meta, b))
         )
     return script
+
+
+def _body_components(meta: str, b: list[str]) -> list[tuple[str, int]]:
+    """Pre-hoist byte sizes of the meta block and each body line over 4KB (named by its first line); the rest pool as `other body lines`."""
+    parts: dict[str, str] = {"meta block": meta}
+    rest: list[str] = []
+    for line in b:
+        if len(line) > 4096:
+            name = next((ln.strip() for ln in line.splitlines() if ln.strip()), "")[:60]
+            while name in parts:
+                name += "'"
+            parts[name] = line
+        else:
+            rest.append(line)
+    parts["other body lines"] = "\n".join(rest)
+    return _compose_size.component_sizes(parts)
 
 
 #: Repo-relative sidecars of the review wave's senior-front-end returns, or 'none'; the ledger

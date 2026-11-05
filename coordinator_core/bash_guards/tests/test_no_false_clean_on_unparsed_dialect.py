@@ -55,6 +55,7 @@ import inspect
 import os
 import pkgutil
 import re
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
@@ -173,6 +174,9 @@ _PS_COMMAND_FOR: Dict[str, Callable[[Any], str]] = {
     ),
     "guard_no_optional_locks": lambda mod: "git status",
     "guard_reap_stale_git_lock": lambda mod: "git status",
+    "guard_uncapped_pytest_plugin": lambda mod: "pytest -p adhoc_plugin tests/",
+    # Lands at the repo root (cwd = os.getcwd(), a git checkout) so the guard reaches a verdict.
+    "rewrite_repo_root_search": lambda mod: "grep -rn foo .",
     # The four below entered this table on 2026-08-30, when the meta-test
     # `test_every_powershell_declared_guard_has_a_fixture` was found red:
     # each declares `MATCHERS = COMMAND_TOOL_NAMES` (PowerShell included) and
@@ -251,6 +255,8 @@ _ENTRY_OVERRIDE: Dict[str, str] = {}
 #: helpers (default `agent_id="deadbeef0123"`, confined
 #: `agent_type="coordinator:code-reviewer"`).
 _PAYLOAD_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    # A repo-root search only speaks when cwd holds `.git`; pin the checkout, not the runner's cwd.
+    "rewrite_repo_root_search": {"cwd": str(Path(__file__).resolve().parents[3])},
     "block_reviewer_bash_outside_allowlist": {
         "agent_id": "deadbeef0123",
         "agent_type": "coordinator:code-reviewer",

@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import (
     _RESUME_REVIEW_SLICE_FILTER_JS,
+    _RESUME_SLICE_IDS_FN,
     compose_ask_script,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _ratio_kw
@@ -61,7 +62,8 @@ def test_the_composed_wave_hands_the_filter_to_every_slice_reviewer_and_caps_the
     assert _RESUME_REVIEW_SLICE_FILTER_JS in script
     assert "review_slice_ids: " in script
     assert "Review only the listed slice ids of your group" in script
-    assert "? " + _RESUME_REVIEW_SLICE_FILTER_JS + ".length : Infinity" in script
+    assert f"const {_RESUME_SLICE_IDS_FN} = () => {_RESUME_REVIEW_SLICE_FILTER_JS};" in script
+    assert "_resumeSliceIds().length : Infinity" in script
 
 
 def test_resumed_run_with_one_blocked_slice_filters_to_that_slice():
@@ -96,7 +98,7 @@ const parallel = (thunks) => Promise.all(thunks.map((t) => t()));
 const _agentDefsClause = () => '';
 let _halted = null, _xsTail = false, _noReviewPaths = false, _waveNotRun = [], _reviewPrep = null, _reviewWave = null;
 let _deliveryVerdict = null, _deliveryNotRun = null, _reviewIntegration = null, _integrationNotRun = false, _reviewReverify = null;
-let _footprintReviewed = false;
+let _footprintReviewed = false, _alreadyDelivered = false, _metBySkipped = false;
 const _prepLeg = '', _codeReviewOwed = false;
 const _planRel = 'p.md', _sizingRel = 's.yaml', _SESSION_ID = 'sid', _deliveryNotes = null, _reviewPaths = ['a.py'];
 const _manifest = { rows: Array.from({ length: 9 }, (_, i) => ({ id: 'R' + i })) };

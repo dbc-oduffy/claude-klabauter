@@ -679,6 +679,13 @@ _NOT_HEAVY = {
     "coordinator/bin/lib/session_detach.py": "detach helper, spawns nothing itself",
     "coordinator/bin/refresh-plugin-live-install.py": "file-sync tooling",
     "coordinator/bin/structural-index-refresh.py": "admitted upstream by close_background post_close_admission",
+    "coordinator/bin/unimatrix-agy-hook-launch.py": "detached agy relay leg, network-bound, not a memory-heavy job",
+    "coordinator/bin/unimatrix-autolink.py": "detached ssh bridge supervisors, network-bound, not a memory-heavy job",
+    "coordinator/bin/unimatrix-codex-launch.py": "codex app-server daemon launch, not a memory-heavy job",
+    "coordinator/bin/unimatrix-host-guard.py": "wall-bounded shim child for a host hook",
+    "coordinator/bin/unimatrix-inbox.py": "ssh relay client, network-bound, not a memory-heavy job",
+    "coordinator/bin/unimatrix-install.py": "claude --version probe, light",
+    "coordinator/bin/unimatrix-roster.py": "ssh bridge supervisor, network-bound, not a memory-heavy job",
     "coordinator/bin/validate-fast-and-packageability.py": "wall-budgeted gate (gate_budget)",
     "coordinator/bin/workday-complete-step1-validate.py": "wall-budgeted gate (gate_budget)",
 }
@@ -756,10 +763,11 @@ def test_xdist_runner_hold_never_spawns_and_a_serial_run_is_not_gated(monkeypatc
 
     monkeypatch.setattr(rn.subprocess, "Popen", fake_popen)
     _hold(monkeypatch)
-    assert rn._run_with_group_cleanup(["py", "-m", "pytest", "-n", "2"], cwd=str(tmp_path), timeout_s=1) is None
+    # An explicit target: a bare selection is the rootdir, which contains this calling test.
+    assert rn._run_with_group_cleanup(["py", "-m", "pytest", "-n", "2", "other_target_test.py"], cwd=str(tmp_path), timeout_s=1) is None
     assert spawned == []
     with pytest.raises(OSError):
-        rn._run_with_group_cleanup(["py", "-m", "pytest"], cwd=str(tmp_path), timeout_s=1)
+        rn._run_with_group_cleanup(["py", "-m", "pytest", "other_target_test.py"], cwd=str(tmp_path), timeout_s=1)
     assert len(spawned) == 1
 
 
@@ -770,7 +778,7 @@ def test_retest_launch_hold_never_spawns(monkeypatch, tmp_path):
     monkeypatch.setattr(rt.subprocess, "Popen", lambda argv, **kw: spawned.append(argv))
     _hold(monkeypatch)
     with pytest.raises(OSError, match="admission: HOLD"):
-        rt._run_argv(["py", "-m", "pytest", "-n", "4"], tmp_path)
+        rt._run_argv(["py", "-m", "pytest", "-n", "4", "other_target_test.py"], tmp_path)
     assert spawned == []
 
 

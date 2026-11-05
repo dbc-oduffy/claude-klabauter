@@ -164,3 +164,22 @@ def test_start_and_end_unchanged_without_peak(tmp_path, monkeypatch):
     assert admission_post.post("END", "s1", directory=tmp_path, declared_peak_mb=5)["posted"]
     start, end = _lines(tmp_path)
     assert "declared_peak_mb" not in start and "declared_peak_mb" not in end
+
+
+def _group_em_dir(home):
+    d = home / "state" / "group-em"
+    d.mkdir(parents=True)
+    return d
+
+
+def test_line_carries_box_id_of_the_home_the_directory_resolves_under(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "gem", "live": True})
+    stamped = _group_em_dir(tmp_path / "second")
+    (stamped / "box.json").write_text('{"box_id": "box-abc12345"}', encoding="utf-8")
+    unstamped = _group_em_dir(tmp_path / "first")
+    assert admission_post.post("START", "s1", directory=stamped)["posted"]
+    assert admission_post.post("START", "s1", directory=unstamped)["posted"]
+    (a,) = _lines(stamped)
+    (b,) = _lines(unstamped)
+    assert a["box_id"] == "box-abc12345"
+    assert b["box_id"] == "local"

@@ -72,3 +72,42 @@ def test_hoist_wraps_a_literal_that_takes_a_method_call(monkeypatch):
     out = prompt_fragments.hoist_repeated_fragments(src, anchor="// anchor")
     assert "(_PF0).trim()" in out
     assert prompt_fragments.resolve_fragment_refs(out) == prompt_fragments.fold_literals(src)
+
+
+def _compose_pipeline(monkeypatch, prompt: str) -> str:
+    monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
+    kw = dict(repo_root="REPO", prompt=prompt, sizing_rel=None, run_id=f"run-{len(prompt)}", session_id=None, script_path="x.mjs")
+    try:
+        return ask_compose.compose_ask_script(**kw)
+    except AskPlanBlitzRefused:
+        return ask_compose.compose_ask_script(**kw, **_STUB_KW)
+
+
+def _drop_caches():
+    from coordinator_core.ops.dispatch_emit import agent_body_dedupe
+
+    prompt_fragments._chunks.cache_clear()
+    agent_body_dedupe._code_mask.cache_clear()
+
+
+def test_a_warm_cache_never_serves_one_asks_bytes_to_another(monkeypatch):
+    asks = ["do a big thing", "a different and longer job for the second ask", "third"]
+    _drop_caches()
+    cold = [_compose_pipeline(monkeypatch, a) for a in asks]
+    warm = [_compose_pipeline(monkeypatch, a) for a in reversed(asks)][::-1]
+    assert len(set(cold)) == len(asks)
+    assert warm == cold
+
+
+def test_string_end_finds_the_close_and_flags_an_unterminated_string():
+    assert prompt_fragments.string_end("'ab\\'c' x", 1, "'") == 6
+    assert prompt_fragments.string_end("'ab", 1, "'") == 3
+    assert prompt_fragments.string_end("'ab\\", 1, "'") == 5
+
+
+def test_scrub_masks_string_template_and_comment_contents_but_keeps_newlines():
+    from coordinator_core.ops._workflow_contract import scrub
+
+    src = 'a = \'x\\\'y\' + "q\\\n" // c\n/* d\ne */ `t${1}` b /* open'
+    assert scrub(src) == 'a = \'####\' + "##\n" //##\n/*##\n##*/ `#####` b /*#####'

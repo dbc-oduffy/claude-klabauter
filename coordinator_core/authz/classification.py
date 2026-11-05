@@ -5295,6 +5295,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # in-memory AckStore (or, on this registered handler's own cold/pool
     # path, a fixed unknowable(no-resident-engine) answer). Writes nothing.
     "warm.request_status": OpClass.COMPUTE_ONLY,
+
+    # remote_engine.handle — COMPUTE_ONLY: reads one failover handle file; writes nothing.
+    "remote_engine.handle": OpClass.COMPUTE_ONLY,
 })
 
 

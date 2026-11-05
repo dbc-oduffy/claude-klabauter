@@ -395,7 +395,7 @@ _FINDING_CLASSIFICATION: Dict[str, Any] = {
     ),
     "prime-exit-doc-approval": (
         True,
-        "edit the prime_exit_criterion statement or the named row's `acceptance:`: drop the PM "
+        "edit the prime_exit_criterion statement or the named row's `acceptance:`: drop the "
         "approval of a doc and name the check that proves its content — {detail}",
     ),
     "test-runner-out-of-role-row": (
@@ -3282,16 +3282,19 @@ def gate_plan(worktree_root: Path, plan_path: Path, *, text: Optional[str] = Non
     ``coordinator_core/roadmap/tests/test_prep_gate.py::test_every_real_plan_holds_the_brightline``;
     do not raise the number.
     """
+    from coordinator_core.git.call_io_scope import call_io_scope
+
     root_names = repo_root_names(worktree_root)
-    return evaluate_plan(
-        plan_path,
-        text=text,
-        root_names=root_names,
-        siblings=fleet_siblings(worktree_root),
-        repo_root=worktree_root,
-        nested_names=repo_nested_names(worktree_root, root_names),
-        gitignored_roots=repo_gitignored_roots(worktree_root),
-    )
+    with call_io_scope():
+        return evaluate_plan(
+            plan_path,
+            text=text,
+            root_names=root_names,
+            siblings=fleet_siblings(worktree_root),
+            repo_root=worktree_root,
+            nested_names=repo_nested_names(worktree_root, root_names),
+            gitignored_roots=repo_gitignored_roots(worktree_root),
+        )
 
 
 class CorpusInputs:
@@ -3339,15 +3342,18 @@ def gate_plan_with_corpus(plan_path: Path, corpus: CorpusInputs, *, text: Option
     plan-first, corpus-second calling shape a directory walk wants, alongside
     ``gate_plan``'s repo-root-first, per-call shape.
     """
-    return evaluate_plan(
-        plan_path,
-        text=text,
-        root_names=corpus.root_names,
-        gitignored_roots=corpus.gitignored_roots,
-        siblings=corpus.siblings,
-        repo_root=corpus.repo_root,
-        nested_names=corpus.nested_names,
-    )
+    from coordinator_core.git.call_io_scope import call_io_scope
+
+    with call_io_scope():
+        return evaluate_plan(
+            plan_path,
+            text=text,
+            root_names=corpus.root_names,
+            gitignored_roots=corpus.gitignored_roots,
+            siblings=corpus.siblings,
+            repo_root=corpus.repo_root,
+            nested_names=corpus.nested_names,
+        )
 
 
 # ---------------------------------------------------------------------------

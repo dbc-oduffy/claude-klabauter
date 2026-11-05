@@ -28,6 +28,7 @@ def _run(argv, avail=40):
         cmdline_fn=lambda pid: "",
         rss_fn=lambda p: 0.0,
         alive_fn=lambda p: True,
+        create_time_fn=lambda p: 1.0,
     )
 
 

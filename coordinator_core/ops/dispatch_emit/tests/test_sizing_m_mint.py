@@ -34,7 +34,7 @@ def test_concrete_three_rows_mint_three_rows_with_writes_and_check(tmp_path):
     rows = concrete_acceptance(sizing)
     assert rows == _rows()
     text, path = mint_m_spine(sizing, sizing_rel=SIZING_REL, rows=rows)
-    assert path.as_posix() == "docs/plans/2026-10-01-m-thing.md"
+    assert path.as_posix() == "docs/plans/2026-10/2026-10-01-m-thing.md"
     out = tmp_path / "p.md"
     out.write_text(text, encoding="utf-8", newline="\n")
     spine = read_spine(out)

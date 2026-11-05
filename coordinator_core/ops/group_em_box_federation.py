@@ -93,6 +93,28 @@ def _groupem_box_place(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"error": f"{type(exc).__name__}: {exc}"}
 
 
+SENDER_CLAIM_WINDOW_S = 300
+
+
+def _verified_sender(p: dict, to: str, text: str, now: Optional[float] = None) -> Optional[tuple]:
+    """``(from_box, from_session)`` when ``p`` carries a fresh ``ts`` and a ``sig`` valid under the key pinned for ``from_box``."""
+    import time
+
+    from coordinator_core.group_em import box_key
+
+    ts = p.get("ts")
+    if isinstance(ts, bool) or not isinstance(ts, int):
+        return None
+    if abs((time.time() if now is None else now) - ts) > SENDER_CLAIM_WINDOW_S:
+        return None
+
+    from_box, from_session, sig = _str(p, "from_box"), _str(p, "from_session"), _str(p, "sig")
+    if from_box is None or from_session is None or sig is None:
+        return None
+    claim = {"from_box": from_box, "from_session": from_session, "to_session": to, "text": text, "ts": ts, "sig": sig}
+    return (from_box, from_session) if box_key.verify(claim, from_box) else None
+
+
 @register_op("groupem.box_send")
 def _groupem_box_send(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "groupem.box_send" handler.
@@ -103,6 +125,9 @@ def _groupem_box_send(params: dict, repo_root: Optional[Path] = None) -> dict:
             which cannot know the id the near box registered it under); self-registers if absent.
         to_session (str) -- the EM session the line is addressed to.
         text (str) -- the message.
+        from_box, from_session, sig (str), ts (int epoch seconds) (optional) -- with ``local``: the sender, stamped only when
+            ``ts`` is within ``SENDER_CLAIM_WINDOW_S`` and ``sig`` verifies (``box_key``) under the key pinned for ``from_box``; otherwise ignored
+            and the line is unattributed, stamped with this box's own id.
 
     Returns:
         {"sent": True, "box_id", "path"} | {"sent": False, "reason"} or {"error": str}.
@@ -122,6 +147,9 @@ def _groupem_box_send(params: dict, repo_root: Optional[Path] = None) -> dict:
                 home = settings_home()
                 box_id = box_registry.ensure_identity(home)
                 box_registry.register(home, box_probe.stored_capability(home) or {}, box_id=box_id)
+        sender = _verified_sender(p, to, text) if local else None
+        if sender is not None:
+            return box_send.send(box_id, to, text, from_session=sender[1], from_box=sender[0])
         return box_send.send(box_id, to, text)
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         return {"error": f"{type(exc).__name__}: {exc}"}

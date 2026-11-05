@@ -37,6 +37,7 @@ from coordinator_core import locked_write  # noqa: E402
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
+from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 
 DEFAULT_DELAY_S = 2.0
 #: The hook answers on its own at this share of the caller's 12 s budget (`submit_engine_ask`).
@@ -157,7 +158,7 @@ def measure(delay_s: float = DEFAULT_DELAY_S) -> dict:
     from coordinator_core.hooks import submit_engine_ask as hook
 
     mp = pytest.MonkeyPatch()
-    scratch = Path(tempfile.mkdtemp(prefix="submit-slow-disk-"))
+    scratch = Path(tempfile.mkdtemp(prefix="submit-slow-disk-", dir=str(managed_tempdir())))
     try:
         root = scratch / "repo"
         root.mkdir()

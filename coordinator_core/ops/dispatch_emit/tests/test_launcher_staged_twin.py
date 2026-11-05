@@ -48,18 +48,91 @@ def test_identical_rerun_returns_path_without_token(tmp_path):
     assert "runToken" not in _twin_path(tmp_path).read_text(encoding="utf-8")
 
 
-def test_no_script_refuses_by_name_and_writes_nothing(tmp_path):
-    with pytest.raises(ValueError, match="staged twin write failed: run script 'run1.workflow.mjs' is absent"):
+_UNRECOMPOSABLE = (
+    "staged twin write failed: run script 'run1.workflow.mjs' is absent and cannot be recomposed "
+    r".*start a fresh engine-ask.*state/warp/run1/requirements\.md"
+)
+
+
+@pytest.mark.twin_needs_script
+def test_no_script_refuses_naming_a_fresh_ask_and_writes_nothing(tmp_path):
+    with pytest.raises(ValueError, match=_UNRECOMPOSABLE) as caught:
         _call(tmp_path)
+    assert "re-arm" in str(caught.value) and "re-arm refusal halt" not in str(caught.value)
     assert not _twin_path(tmp_path).exists()
 
 
-def test_missing_script_of_an_emitted_run_refuses_by_name(tmp_path):
+@pytest.mark.twin_needs_script
+def test_missing_script_of_an_emitted_run_without_halt_marker_refuses_with_remedy(tmp_path):
     (tmp_path / "state" / "warp" / "run1").mkdir(parents=True)
     (tmp_path / "state" / "warp" / "run1" / "run.json").write_text("{}", encoding="utf-8")
-    with pytest.raises(ValueError, match="staged twin write failed: run script 'run1.workflow.mjs' is absent"):
+    with pytest.raises(ValueError, match=_UNRECOMPOSABLE):
         _call(tmp_path)
     assert not _twin_path(tmp_path).exists()
+
+
+@pytest.mark.twin_needs_script
+def test_absent_script_is_recomposed_and_the_twin_staged_from_it(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halt_resume_build as hrb
+
+    calls = []
+
+    def fake_recompose(root, run_id):
+        calls.append(run_id)
+        return SCRIPT, ""
+
+    monkeypatch.setattr(hrb, "recompose_script", fake_recompose)
+    rel = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError)
+    assert calls == ["run1"] and rel == nrc.staged_twin_rel("run1", SHA)
+    inline = json.dumps({"handle": HANDLE, "text": RAW.decode()}, ensure_ascii=True)
+    assert _twin_path(tmp_path).read_text(encoding="utf-8") == SCRIPT.replace(
+        nrc.STAGED_INLINE_SLOT, f"const _STAGED_INLINE = {inline};"
+    )
+
+
+@pytest.mark.twin_needs_script
+def test_absent_scratch_script_stages_from_the_run_dirs_kept_composed_script(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halt_resume_build as hrb
+
+    monkeypatch.setattr(hrb, "build", lambda *a: pytest.fail("build ran though a kept script exists"))
+    kept = tmp_path / "state" / "warp" / "run1" / hrb.COMPOSED_SCRIPT_FILE
+    kept.parent.mkdir(parents=True)
+    kept.write_text(SCRIPT, encoding="utf-8")
+    rel = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError)
+    assert rel == nrc.staged_twin_rel("run1", SHA)
+    assert "const _STAGED_INLINE = " in _twin_path(tmp_path).read_text(encoding="utf-8")
+
+
+@pytest.mark.twin_needs_script
+def test_present_script_never_recomposes(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halt_resume_build as hrb
+
+    monkeypatch.setattr(hrb, "recompose_script", lambda *a: pytest.fail("recompose on the warm path"))
+    _script(tmp_path)
+    _call(tmp_path)
+    assert _twin_path(tmp_path).is_file()
+
+
+@pytest.mark.twin_needs_script
+def test_recompose_script_reads_the_built_script_and_names_a_gate_refusal(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halt_resume_build as hrb
+
+    built = tmp_path / "state" / "warp" / "run1" / hrb.COMPOSED_SCRIPT_FILE
+    built.parent.mkdir(parents=True)
+
+    def fake_build(root, run_id):
+        built.write_text(SCRIPT, encoding="utf-8")
+        return {"composed_script_rel": built.relative_to(tmp_path).as_posix()}
+
+    monkeypatch.setattr(hrb, "build", fake_build)
+    assert hrb.recompose_script(tmp_path, "run1") == (SCRIPT, "")
+    built.unlink()
+    monkeypatch.setattr(
+        hrb, "build", lambda root, run_id: {"composed_script_rel": None, "gate_verdict": {"halt": {"reason": "sizing gate said no"}}}
+    )
+    assert hrb.recompose_script(tmp_path, "run1") == (None, "sizing gate said no")
+    monkeypatch.setattr(hrb, "build", lambda root, run_id: None)
+    assert hrb.recompose_script(tmp_path, "run1")[0] is None
 
 
 def test_zero_slot_script_is_a_standalone_run_and_writes_nothing(tmp_path):
@@ -116,9 +189,171 @@ def test_other_sidecar_paths_write_nothing(tmp_path, rel):
 
 def test_over_cap_refuses_and_writes_nothing(tmp_path):
     _script(tmp_path)
-    with pytest.raises(ValueError, match="over the Workflow runner"):
+    with pytest.raises(ValueError, match=f"^{nrc.STAGED_TWIN_OVER_CAP_HEAD}: twin is \\d+ bytes, over the 50-byte cap"):
         _call(tmp_path, cap=50)
     assert not _twin_path(tmp_path).exists()
+    assert not (tmp_path / nrc.staged_spill_rel("run1", SHA)).exists()
+
+
+def test_over_cap_uses_the_distinct_over_cap_builder(tmp_path):
+    class OverCap(ValueError):
+        pass
+
+    _script(tmp_path)
+    with pytest.raises(OverCap, match=nrc.STAGED_TWIN_OVER_CAP_HEAD):
+        twin.ensure_twin(
+            tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=50, refuse=ValueError, refuse_over_cap=OverCap
+        )
+
+
+def _big_manifest(writes_per_row: int, rows: int = 2) -> tuple[bytes, dict]:
+    manifest = {
+        "head_sha": "a" * 40,
+        "rows": [
+            {
+                "id": f"C{i}",
+                "brief_path": f"scratch/b{i}.md",
+                "agent_type": "coordinator:executor",
+                "title": "t" * 200,
+                "writes": [f"pkg/mod{i}/file_{j}.py" for j in range(writes_per_row)],
+            }
+            for i in range(rows)
+        ],
+    }
+    raw = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    handle = {"path": "state/warp/run1/manifest.json", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+    return raw, handle
+
+
+SMALL_CAP = 8000
+
+
+def test_small_manifest_inlines_whole_with_no_spill(tmp_path):
+    _script(tmp_path)
+    raw, handle = _big_manifest(4)
+    rel = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=SMALL_CAP, refuse=ValueError)
+    text = (tmp_path / rel).read_text(encoding="utf-8")
+    assert "pkg/mod0/file_3.py" in text and "full_handle" not in text
+    assert not (tmp_path / nrc.staged_spill_rel("run1", handle["sha256"])).exists()
+
+
+def test_400_writes_over_budget_slims_the_twin_and_spills_the_full_manifest(tmp_path):
+    _script(tmp_path)
+    raw, handle = _big_manifest(400)
+    assert len(raw) > SMALL_CAP
+    rel = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=SMALL_CAP, refuse=ValueError)
+    assert (tmp_path / rel).stat().st_size < SMALL_CAP
+    spill = tmp_path / nrc.staged_spill_rel("run1", handle["sha256"])
+    assert spill.read_bytes() == raw
+    assert hashlib.sha256(spill.read_bytes()).hexdigest() == handle["sha256"]
+
+
+def test_slim_twin_size_is_independent_of_writes_count(tmp_path):
+    sizes = {}
+    for count in (400, 4000):
+        root = tmp_path / f"r{count}"
+        _script(root)
+        raw, handle = _big_manifest(count)
+        rel = twin.ensure_twin(root, "state/warp/run1/manifest.json", raw, handle, max_bytes=SMALL_CAP, refuse=ValueError)
+        sizes[count] = (root / rel).stat().st_size
+    assert abs(sizes[4000] - sizes[400]) < 64
+
+
+def test_slim_inline_text_has_handle_of_its_own_and_counts_writes(tmp_path):
+    _script(tmp_path)
+    raw, handle = _big_manifest(400, rows=1)
+    twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=SMALL_CAP, refuse=ValueError)
+    inline = json.loads(next(
+        ln for ln in (tmp_path / nrc.staged_twin_rel("run1", handle["sha256"])).read_text(encoding="utf-8").splitlines()
+        if ln.startswith("const _STAGED_INLINE = ")
+    )[len("const _STAGED_INLINE = "):-1])
+    assert inline["full_handle"] == handle
+    assert inline[nrc.STAGED_SPILL_KEY] == nrc.staged_spill_rel("run1", handle["sha256"])
+    assert inline["handle"]["sha256"] == hashlib.sha256(inline["text"].encode("ascii")).hexdigest()
+    assert inline["handle"]["bytes"] == len(inline["text"])
+    row = json.loads(inline["text"])["rows"][0]
+    assert row["writes"] == [] and row["writes_count"] == 400 and "title" not in row
+    assert row["id"] == "C0" and row["brief_path"] == "scratch/b0.md"
+
+
+def test_manifest_without_rows_list_inlines_whole_with_no_spill(tmp_path):
+    _script(tmp_path)
+    raw = b'{"other":1}'
+    handle = {"path": "state/warp/run1/manifest.json", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+    twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=CAP, refuse=ValueError)
+    text = (tmp_path / nrc.staged_twin_rel("run1", handle["sha256"])).read_text(encoding="utf-8")
+    assert '"text": "{\\"other\\":1}"' in text and "full_handle" not in text
+    assert not (tmp_path / nrc.staged_spill_rel("run1", handle["sha256"])).exists()
+
+
+def test_spill_write_failure_refuses_by_name(tmp_path):
+    _script(tmp_path)
+    raw, handle = _big_manifest(400)
+    (tmp_path / nrc.staged_spill_rel("run1", handle["sha256"])).mkdir(parents=True)
+    with pytest.raises(ValueError, match="staged twin write failed.*spill"):
+        twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=SMALL_CAP, refuse=ValueError)
+    assert not (tmp_path / nrc.staged_twin_rel("run1", handle["sha256"])).exists()
+
+
+def test_remove_twins_and_sweep_also_remove_the_spill(tmp_path):
+    d = tmp_path / "scratch" / "warp"
+    d.mkdir(parents=True)
+    spill = d / f"run1.staged-{SHA}.spill.json"
+    old = d / f"runA.staged-{SHA}.spill.json"
+    spill.write_text("x")
+    old.write_text("x")
+    os.utime(old, (1000, 1000))
+    assert twin.sweep_expired_twins(tmp_path, now=10_000_000.0) == 1
+    assert not old.exists() and spill.exists()
+    assert twin.remove_twins(tmp_path, "run1") == 1
+    assert not spill.exists()
+
+
+def _manifest_for(raw: bytes) -> dict:
+    return {"path": "state/warp/run1/manifest.json", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+
+def test_new_sha_twin_prunes_this_runs_older_twin_and_spill_but_not_another_runs(tmp_path):
+    _script(tmp_path)
+    _script(tmp_path, run_id="run2")
+    d = tmp_path / "scratch" / "warp"
+    old_sha = "c" * 64
+    old_twin = d / f"run1.staged-{old_sha}.workflow.mjs"
+    old_spill = d / f"run1.staged-{old_sha}.spill.json"
+    other = d / f"run2.staged-{old_sha}.workflow.mjs"
+    for p in (old_twin, old_spill, other):
+        p.write_text("x", encoding="utf-8")
+    _call(tmp_path)
+    assert _twin_path(tmp_path).is_file()
+    assert not old_twin.exists() and not old_spill.exists()
+    assert other.is_file() and (d / "run2.workflow.mjs").is_file()
+
+
+def test_prune_keeps_the_new_twin_and_its_spill(tmp_path):
+    _script(tmp_path)
+    raw, handle = _big_manifest(400)
+    stale = tmp_path / nrc.staged_twin_rel("run1", "d" * 64)
+    stale.write_text("x", encoding="utf-8")
+    twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=SMALL_CAP, refuse=ValueError)
+    assert (tmp_path / nrc.staged_twin_rel("run1", handle["sha256"])).is_file()
+    assert (tmp_path / nrc.staged_spill_rel("run1", handle["sha256"])).is_file()
+    assert not stale.exists()
+
+
+def test_prune_unlink_failure_does_not_refuse_the_twin_write(tmp_path, monkeypatch):
+    _script(tmp_path)
+    stale = tmp_path / nrc.staged_twin_rel("run1", "e" * 64)
+    stale.write_text("x", encoding="utf-8")
+    real_unlink = type(stale).unlink
+
+    def flaky(self, *a, **k):
+        if self.name == stale.name:
+            raise PermissionError("held open")
+        return real_unlink(self, *a, **k)
+
+    monkeypatch.setattr(type(stale), "unlink", flaky)
+    _call(tmp_path)
+    assert _twin_path(tmp_path).is_file() and stale.exists()
 
 
 def test_identical_rerun_does_not_rewrite(tmp_path):

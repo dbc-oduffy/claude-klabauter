@@ -436,4 +436,4 @@ class TestRegistrationQuad:
         assert op_key in _REGISTRY
         assert OP_CLASSIFICATION[op_key] == OpClass.COMPUTE_ONLY
         assert _OP_KEY_SCOPE[op_key] == "none"
-        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks"
+        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks.subagent_arrival_check"

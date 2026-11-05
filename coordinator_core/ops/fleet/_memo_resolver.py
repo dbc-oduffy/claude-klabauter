@@ -454,6 +454,11 @@ def read_registry_repos() -> dict[str, str]:
         for key, val in data.items():
             if key.startswith("repos.") and isinstance(val, str) and val:
                 merged[key] = val
+        nested = data.get("repos")
+        if isinstance(nested, dict):
+            for sub, val in nested.items():
+                if isinstance(val, str) and val:
+                    merged[f"repos.{sub}"] = val
     return merged
 
 

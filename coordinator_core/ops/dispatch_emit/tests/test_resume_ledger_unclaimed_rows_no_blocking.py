@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _stub_wrap(text):
@@ -47,7 +48,7 @@ def test_joining_a_ledger_without_blocking_does_not_throw():
     expr = joins[0].replace("_gate.resume_ledger", "ledger")
     proc = subprocess.run(
         [node, "-e", f"const ledger = {{ kind: 'unclaimed-rows' }}; console.log(JSON.stringify({expr}));"],
-        capture_output=True, text=True, timeout=30,
+        capture_output=True, text=True, timeout=30, **no_console_creationflags(),
     )
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == '""'

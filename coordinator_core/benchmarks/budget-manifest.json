@@ -570,6 +570,38 @@
         "one_handoff_one_sizing_advanced": 0
       },
       "_rationale": "v2 rebuild (docs/plans/2026-10-03-warp-dogfood-follow-ons.md C5; spike docs/research/spike-verdicts/2026-10-03-cascade-terminal-v2.md). Measured with coordinator_core/benchmarks/spawn_counter.py::_count_spawns_attributed over coordinator_core/ops/tests/test_cascade_terminal_op.py::test_handler_one_handoff_one_sizing_under_200ms_zero_spawns: one handoff plus one sizing advanced over a 305-handoff corpus, one commit. target_ms is set so target x (1 + tolerance) stays under the 200ms PROCESS_BAR_MS; spawn_count_budget is the enforced invariant."
+    },
+    "publish.end_of_run_repo_key_literal_gate": {
+      "target_ms": 500,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "Warm typical-round process time of dispatch_end_of_run_repo_key_literal_gate over the claude-klabauter rows, measured in process by coordinator_core/benchmarks/publish_end_of_run_gates_profile.py; the brightline bar, not a measurement."
+    },
+    "publish.end_of_run_live_identifier_gate": {
+      "target_ms": 500,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "Warm typical-round process time of dispatch_end_of_run_live_identifier_gate over the claude-klabauter rows, measured in process by coordinator_core/benchmarks/publish_end_of_run_gates_profile.py; the brightline bar, not a measurement."
+    },
+    "publish.end_of_run_function_gate": {
+      "target_ms": 500,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "Warm typical-round process time (this process plus descendants) of dispatch_end_of_run_function_gate over the gate root, measured by coordinator_core/benchmarks/publish_end_of_run_gates_profile.py; the brightline bar, not a measurement."
+    },
+    "publish.end_of_run_argv_parity_gate": {
+      "target_ms": 500,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "_rationale": "Warm typical-round process time of dispatch_end_of_run_argv_parity_gate over the gate root, measured by coordinator_core/benchmarks/publish_end_of_run_gates_profile.py; the brightline bar, not a measurement."
     }
   },
   "_catering_relay_baseline": {

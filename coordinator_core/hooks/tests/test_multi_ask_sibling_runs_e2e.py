@@ -403,30 +403,9 @@ def test_a_default_launch_two_entry_pm_submission_writes_a_launcher_without_a_mi
 
 
 def _in_run_m_plus_block() -> str:
-    from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+    from coordinator_core.ops.dispatch_emit.tests.test_chain_stage_resume_twin_run_id import _in_run_m_plus_block as block
 
-    script = ask_compose.compose_ask_script(
-        repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
-        wrap_stage=lambda text: ("", []), plan_blitz_text=None, **REVIEW_KW,
-    )
-    start = script.index("if (!_halted && _gate.arm === 'm_plus') {")
-    depth, quote, j = 0, "", script.index("{", start)
-    while j < len(script):
-        ch = script[j]
-        if quote:
-            if ch == "\\":
-                j += 1
-            elif ch == quote:
-                quote = ""
-        elif ch in "'\"":
-            quote = ch
-        else:
-            depth += ch == "{"
-            depth -= ch == "}"
-            if depth == 0:
-                return script[start:j + 1]
-        j += 1
-    raise AssertionError("unbalanced m_plus block")
+    return block()
 
 
 def _run_m_plus_block(tmp_path: Path, reply: dict) -> dict:

@@ -284,6 +284,20 @@ def test_write_reply_refuses_by_name_when_the_twin_cannot_be_written(tmp_path):
         rs.handle_for(tmp_path, path)
 
 
+def test_over_cap_twin_refuses_with_its_own_head_not_the_corrupt_head(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import nested_run_contract as nrc
+
+    _slotted_script(tmp_path)
+    script = tmp_path / "scratch" / "warp" / "run1.workflow.mjs"
+    script.write_text(script.read_text(encoding="utf-8") + "//" + "x" * 600_000 + "\n", encoding="utf-8")
+    path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
+    with pytest.raises(rs.ReplySidecarError) as err:
+        rs.write_reply(tmp_path, path, _manifest())
+    assert isinstance(err.value, rs.StagedTwinOverCapError)
+    assert str(err.value).startswith(nrc.STAGED_TWIN_OVER_CAP_HEAD)
+    assert not str(err.value).startswith(gcc.RELAY_CORRUPT_HEAD)
+
+
 def test_write_reply_for_a_slotless_script_writes_with_no_twin_and_no_refusal(tmp_path):
     _plain_script(tmp_path)
     path = tmp_path / "state" / "warp" / "run1" / "manifest.json"

@@ -265,6 +265,7 @@ from coordinator_core.bounded_slug import bounded_slug
 from coordinator_core.session.output_tree_layout import locate, write_rel
 
 from coordinator_core.ops.sizing_acceptance import ENGINE_SIZE_RULE, sizing_acceptance_skipped  # noqa: F401 -- ENGINE_SIZE_RULE re-exported
+from coordinator_core.roadmap.consumer_clause import consumer_clause_refusal, unowned_seams
 from coordinator_core.roadmap.post_stamp_clause import doc_approval_refusal, suite_tier_refusal
 
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
@@ -822,7 +823,7 @@ DISPOSITION_REGISTRY = (
         "decision_point": "which XL exit does the session pick",
         "inputs": ("route",),
         "judgment_input": (
-            "PM assent plus the falsifiable-restatement test named in "
+            "G-EM assent plus the falsifiable-restatement test named in "
             "docs/plans/2026-09-11-serve-the-arm-that-applies.md"
         ),
     },
@@ -1141,6 +1142,9 @@ def route(
         if not _suite_tier_rewrite_is_safe(exit_criterion):
             raise SizingAssembleError(tier_refusal)
         exit_criterion = SUITE_TIER_REWRITE
+    consumer_refusal = consumer_clause_refusal(exit_criterion)
+    if consumer_refusal is not None:
+        raise SizingAssembleError(consumer_refusal)
     if click_paths and not exit_criterion:
         raise SizingAssembleError("--click-path needs --exit-criterion: a click path belongs to a criterion")
     exit_criterion_field = (
@@ -1322,7 +1326,7 @@ def route(
             ("The ask bundles independent initiatives: offer `split` first. " if bundled_labels else "")
             + "XL resolves to pm-decision, not a room. Surface the exits to the PM — "
             "shape (JTBD unclear), roadmap (spans >=2 workstreams / needs an initiative "
-            "FK), or accept_multi_session (one coherent job, simply large, PM assents). "
+            "FK), or accept_multi_session (one coherent job, simply large, accepted by the G-EM)."
             "The choice is recorded in the sizing-object's xl_exit field; the engine does "
             "not auto-select, and a null xl_exit never means accept."
         )
@@ -1479,10 +1483,10 @@ def route(
             )
         if interaction_mode == "ceo":
             next_move += (
-                f" CEO mode's single touchpoint: ask the PM to {criterion_clause}."
+                f" CEO mode's single touchpoint: ask the APM to {criterion_clause}."
             )
         else:
-            next_move += f" Also ask the PM to {criterion_clause}."
+            next_move += f" Also ask the APM to {criterion_clause}."
 
     fire = None
     if resolved_route in _warp_fire.FIRE_ROUTES:
@@ -1574,7 +1578,28 @@ def _set_scalar(text: str, key: str, raw: str) -> str:
 
     if read_fm_field(text, key) is None:
         return insert_fm_field_raw(text, key, raw)
-    return replace_fm_field_raw(text, key, raw)
+    return _drop_block_list_items(replace_fm_field_raw(text, key, raw), key)
+
+
+def _drop_block_list_items(text: str, key: str) -> str:
+    """Remove the old block-list item lines left under ``key:`` after an inline rewrite.
+
+    ``replace_fm_field_raw`` rewrites only the ``key:`` line, so a prior
+    ``key:`` / ``- item`` block would keep its orphaned items and break the YAML.
+    """
+    lines = text.split("\n")
+    prefix = f"{key}:"
+    for i, line in enumerate(lines):
+        if line.startswith("---") and i > 0:
+            break
+        if line.startswith(prefix):
+            j = i + 1
+            while j < len(lines) and re.match(r"^[ \t]*-(?:[ \t]|$)", lines[j]):
+                j += 1
+            if j > i + 1:
+                del lines[i + 1 : j]
+            break
+    return "\n".join(lines)
 
 
 def _scaffold_missing(
@@ -1745,7 +1770,8 @@ def derive_register(
             rr.ROW_SURFACE: "internal", rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
         }
         turns = sorted(int(k[1:]) for k, _ in texts if k.startswith("T"))
-        return [row], [{"turn": t, "reason": RELAYED_TURN_REASON} for t in turns], ["relayed ask"], []
+        rows = [row] + _seam_rows(doc, texts, relayed_ask, [row])
+        return rows, [{"turn": t, "reason": RELAYED_TURN_REASON} for t in turns], ["relayed ask"], []
     normed = {key: rr._norm(text) for key, text in texts}
     rows: list[dict[str, Any]] = []
     refs: list[str] = []
@@ -1808,7 +1834,44 @@ def derive_register(
         for k, segment in enumerate(segments, 1):
             add(key if len(segments) == 1 else f"{key}.p{k}", segment, key, _anchor_stem(key))
     unrelated.sort(key=lambda e: e["turn"])
+    rows.extend(_seam_rows(doc, texts, relayed_ask, rows))
     return rows, unrelated, refs, dropped
+
+
+def _seam_rows(
+    doc: dict[str, Any], texts: list[tuple[str, str]], relayed_ask: Optional[str],
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Register rows `S<n>` (anchor `seam`) owning the wiring of each producer output the PM
+    words, relayed ask, `em_analysis.em_brief` or `acceptance_rows` leave unconsumed. A seam a
+    row names without the unowned-seam phrase itself already has an owner. Pure."""
+    from coordinator_core.ops import requirement_register as rr
+
+    em = doc.get("em_analysis")
+    em_brief = em.get("em_brief") if isinstance(em, dict) else None
+    sources = [t for _, t in texts] + [relayed_ask or "", em_brief or ""]
+    acceptance = doc.get("acceptance_rows")
+    seams = unowned_seams(sources, acceptance if isinstance(acceptance, list) else None)
+    taken = {str(r[rr.ROW_ID]) for r in rows}
+    out: list[dict[str, Any]] = []
+    for seam in seams:
+        name, phrase = seam["seam"].lower(), seam["source"].lower()
+        if any(
+            name in str(r[rr.ROW_TEXT]).lower() and phrase not in " ".join(str(r[rr.ROW_TEXT]).lower().split())
+            for r in rows + out
+        ):
+            continue
+        n = 1
+        while f"S{n}" in taken:
+            n += 1
+        taken.add(f"S{n}")
+        out.append({
+            rr.ROW_ID: f"S{n}",
+            rr.ROW_TEXT: f"own the wiring of {seam['seam']}: {seam['source']}",
+            rr.ROW_ANCHOR: "seam", rr.ROW_SURFACE: "internal", rr.ROW_STATUS: rr.STATUS_OPEN,
+            rr.ROW_CLAIMED_BY: [],
+        })
+    return out
 
 
 def _derived_register_block(
@@ -2396,6 +2459,16 @@ def build_research_block(
         errors.append("--research-primary repo needs a repo source, --research-target repo=<ref>, or a repo seed")
     if errors:
         return None, errors
+    if "structured" in ordered_sources and not any(t["source"] == "structured" for t in parsed_targets):
+        # structured runs per subject and only a structured target names one: no target, no stage.
+        import sys
+
+        ordered_sources.remove("structured")
+        print(
+            "sizing-assemble: dropped --research-source structured (no --research-target structured=<ref> "
+            "names a subject)",
+            file=sys.stderr,
+        )
     block: dict[str, Any] = {"value_class": value_class}
     if appetite is not None:
         block["appetite"] = appetite
@@ -2561,7 +2634,10 @@ def amend_exit_criterion(root: Path, sizing: str, statement: str, ruling: str) -
     if ruling_file is None or not ruling_file.is_file():
         raise SizingAssembleError(f"--ruling {ruling!r} is not a file under {root.as_posix()}")
     refusal = (
-        post_stamp_refusal(statement) or suite_tier_refusal(statement) or doc_approval_refusal(statement)
+        post_stamp_refusal(statement)
+        or suite_tier_refusal(statement)
+        or doc_approval_refusal(statement)
+        or consumer_clause_refusal(statement)
     )
     if refusal is not None:
         raise SizingAssembleError(refusal)

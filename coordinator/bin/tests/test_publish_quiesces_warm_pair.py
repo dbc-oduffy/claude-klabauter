@@ -424,6 +424,34 @@ def test_a_leg_that_starts_after_the_drain_refuses_before_the_marked_stop(tmp_pa
     assert not env.bc.handover_pending_held(env.repo)
 
 
+def _trace_probe_and_staging(env, monkeypatch) -> None:
+    """Log ("probe", breadcrumb held) at each live-run read and ("stage", ...) at each row staging."""
+    from coordinator_core.warm import live_runs
+
+    inner_find = live_runs.find_live_runs
+    inner_stage = env.publish_mod.process_target
+
+    def find(*a, **k):
+        env.events.append(("probe", env.bc.handover_pending_held()))
+        return inner_find(*a, **k)
+
+    def stage(*a, **k):
+        env.events.append(("stage", env.bc.handover_pending_held()))
+        return inner_stage(*a, **k)
+
+    monkeypatch.setattr(live_runs, "find_live_runs", find)
+    monkeypatch.setattr(env.publish_mod, "process_target", stage)
+
+
+def test_a_non_engine_root_takes_no_handover_breadcrumb_and_no_probe(tmp_path, monkeypatch):
+    env = _setup(tmp_path, monkeypatch, False)
+    _trace_probe_and_staging(env, monkeypatch)
+    rc, err = _run(env)
+    assert rc == 0, err
+    assert env.names("probe") == []
+    assert env.names("stage") == [("stage", False)]
+
+
 def test_live_midstage_run_does_not_bypass_survivor_refusal(tmp_path, monkeypatch):
     env = _setup(tmp_path, monkeypatch, True)
     env.stop_results[:] = [env.survivor_result()]

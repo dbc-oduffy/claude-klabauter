@@ -67,7 +67,7 @@ def _is_advisory(result):
     return (
         result is not None
         and "permissionDecision" not in result["hookSpecificOutput"]
-        and "advisory" in result["hookSpecificOutput"]["additionalContext"]
+        and "[doctrine-surface guard]" in result["hookSpecificOutput"]["additionalContext"]
     )
 
 
@@ -105,6 +105,10 @@ def test_enforcement_points_when_on(author_box, monkeypatch):
     _set_gate(monkeypatch, "on")
     assert _is_advisory(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
     assert not _is_deny(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
-    assert _is_deny(
-        guard_doctrine_surface_bash_write.check(_bash_write_payload(), ["CLAUDE.md"])
-    )
+    (author_box / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    payload = {**_bash_write_payload(), "cwd": str(author_box)}
+    result = guard_doctrine_surface_bash_write.check(payload, ["CLAUDE.md"])
+    assert not _is_deny(result)
+    hso = result["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory:")

@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -535,6 +536,8 @@ def validate(manifest: Manifest, inputs: PipelineInputs) -> Schedule:
     if cyclic:
         reasons.append(f"dependency cycle among stages: {', '.join(cyclic)}")
     skipped = _skipped(manifest, inputs, by_id, order, reasons)
+    if not inputs.subjects and skipped >= set(by_id) and any(_needs_subjects(s, manifest) for s in manifest.stages):
+        reasons.append(f"stages {sorted(by_id)} run per subject but no subjects were given; nothing is left to run")
     _check_lists(manifest, inputs, skipped, reasons)
 
     closure: dict[str, frozenset[str]] = {}
@@ -566,7 +569,10 @@ def validate(manifest: Manifest, inputs: PipelineInputs) -> Schedule:
     levels = _levels([sid for sid in order if sid not in skipped], effective, scope, by_id)
     if reasons:
         raise PipelineEmitRefused(reasons)
-    return Schedule(scope=scope, levels=levels, skipped=frozenset(skipped))
+    schedule = Schedule(scope=scope, levels=levels, skipped=frozenset(skipped))
+    for line in subjectless_advisories(manifest, inputs, schedule):
+        print(f"emit-dispatch-workflow: advisory: {line}", file=sys.stderr)
+    return schedule
 
 
 def _coerce_flag(spec: FlagSpec, raw: object) -> object:
@@ -597,6 +603,8 @@ def _skipped(
     for sid in order:
         stage = by_id[sid]
         when = stage.when
+        if not inputs.subjects and _needs_subjects(stage, manifest):
+            skipped.add(sid)
         if inputs.validator is None and validator_bound(stage, manifest):
             skipped.add(sid)
         if when is not None and when.kind == WHEN_FLAG:
@@ -613,6 +621,24 @@ def _skipped(
         if stage.fan_out.kind == FAN_OUT_OVER and stage.fan_out.source in skipped:
             skipped.add(sid)
     return skipped
+
+
+def _needs_subjects(stage: Stage, manifest: Manifest) -> bool:
+    """A stage that runs once per subject, by manifest mode or its own fan_out."""
+    return manifest.subjects_mode or stage.fan_out.kind == FAN_OUT_PER_SUBJECT or stage.fan_out.over_subject
+
+
+def subjectless_advisories(manifest: Manifest, inputs: PipelineInputs, schedule: Schedule) -> tuple[str, ...]:
+    """One advisory per per-subject stage the validated schedule skipped for want of subjects; empty when subjects were given.
+
+    Consumer: validate, which prints each line to stderr as an advisory.
+    """
+    if inputs.subjects:
+        return ()
+    return tuple(
+        f"stage {s.id!r} runs per subject but no subjects were given; it is skipped"
+        for s in manifest.stages if s.id in schedule.skipped and _needs_subjects(s, manifest)
+    )
 
 
 def _check_inputs(manifest: Manifest, inputs: PipelineInputs, reasons: list[str]) -> None:

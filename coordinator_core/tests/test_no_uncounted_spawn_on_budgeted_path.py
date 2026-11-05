@@ -325,6 +325,12 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/canvas_harvest.py",
         ("_handler",),
     ),
+    # Spawn-free on landing (empty function-granular reachable set; adjudicated on the divergence
+    # check's own report).
+    "remote_engine.handle": (
+        "coordinator_core/ops/remote_engine_handle.py",
+        ("_remote_engine_handle",),
+    ),
     # Spawn-free on landing (empty function-granular reachable set), 2026-10-16.
     "design.registry.lookup": (
         "coordinator_core/ops/design_registry_lookup.py",
@@ -2116,6 +2122,8 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
             "hooks.guard_em_prefire_survey",
             "hooks.submit_engine_ask",
             "hooks.preuse_search_dispatch",
+            "roadmap.blitz_land",
+            "roadmap.blitz_stage",
             "workflow.revise",
             "dispatch.measured_rev",
         )
@@ -2432,74 +2440,6 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "git process for the stub commit plus the gate-report commit under "
         "`test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns` (`assert "
         "len(counted) == budget`, read from the manifest's roadmap.blitz_stage override).",
-    ),
-    (
-        "roadmap.blitz_land",
-        "coordinator_core/ops/ceremony/detached_spawn.py",
-        "spawn_detached",
-        "<dynamic>",
-        0,
-    ): _Legitimation(
-        # The commit route's `store_hygiene.maybe_refresh` launches the daily tier through
-        # `spawn_detached`, only when the store owes maintenance and no claim is live. The
-        # companion substitutes the function object (`detached_spawn.spawn_detached`) and asserts
-        # one call per owed claim and none otherwise; this op's own fixtures never owe maintenance.
-        counter=_SEAM,
-        counted_by="coordinator_core/git/tests/test_store_hygiene.py",
-        executed="Seam substitution under `test_midx_lag_fires_once_per_claim_interval` "
-        "(`len(spawns) == 1`) and `test_not_stale_does_not_spawn` (`spawns == []`); the file's "
-        "only spawn is the Popen behind that call.",
-    ),
-    (
-        "roadmap.blitz_stage",
-        "coordinator_core/ops/ceremony/detached_spawn.py",
-        "spawn_detached",
-        "<dynamic>",
-        0,
-    ): _Legitimation(
-        # The commit route's `store_hygiene.maybe_refresh` launches the daily tier through
-        # `spawn_detached`, only when the store owes maintenance and no claim is live. The
-        # companion substitutes the function object (`detached_spawn.spawn_detached`) and asserts
-        # one call per owed claim and none otherwise; this op's own fixtures never owe maintenance.
-        counter=_SEAM,
-        counted_by="coordinator_core/git/tests/test_store_hygiene.py",
-        executed="Seam substitution under `test_midx_lag_fires_once_per_claim_interval` "
-        "(`len(spawns) == 1`) and `test_not_stale_does_not_spawn` (`spawns == []`); the file's "
-        "only spawn is the Popen behind that call.",
-    ),
-    (
-        "memo.send",
-        "coordinator_core/ops/ceremony/detached_spawn.py",
-        "spawn_detached",
-        "<dynamic>",
-        0,
-    ): _Legitimation(
-        # The commit route's `store_hygiene.maybe_refresh` launches the daily tier through
-        # `spawn_detached`, only when the store owes maintenance and no claim is live. The
-        # companion substitutes the function object (`detached_spawn.spawn_detached`) and asserts
-        # one call per owed claim and none otherwise; this op's own fixtures never owe maintenance.
-        counter=_SEAM,
-        counted_by="coordinator_core/git/tests/test_store_hygiene.py",
-        executed="Seam substitution under `test_midx_lag_fires_once_per_claim_interval` "
-        "(`len(spawns) == 1`) and `test_not_stale_does_not_spawn` (`spawns == []`); the file's "
-        "only spawn is the Popen behind that call.",
-    ),
-    (
-        "hooks.submit_bug_blitz",
-        "coordinator_core/ops/ceremony/detached_spawn.py",
-        "spawn_detached",
-        "<dynamic>",
-        0,
-    ): _Legitimation(
-        # `minted_records.settle` -> `commit_paths` -> `store_hygiene.maybe_refresh` launches the
-        # daily tier through `spawn_detached`, only when the store owes maintenance and no claim is
-        # live. The companion substitutes the spawner and asserts one call per owed claim and none
-        # for a young claim.
-        counter=_SEAM,
-        counted_by="coordinator_core/git/tests/test_store_hygiene.py",
-        executed="Seam substitution under `test_midx_lag_fires_once_per_claim_interval` "
-        "(`len(spawns) == 1`) and `test_young_claim_refuses_without_firing` (`spawns == []`); the "
-        "file's only spawn is the Popen behind that call.",
     ),
     (
         "dispatch.record_halted_run_landed",
@@ -7357,9 +7297,6 @@ def _measure_static_spawn_counts(op_names, entrypoints) -> dict[str, int]:
 #: different delta than this file's own predicates reproduce; the census's raw counts are not
 #: transcribed here without this file's own re-derivation, which is what these two entries are.
 #: Both pinned at their freshly measured 1.
-# Commit-route ops each gained one reachable site on the store-hygiene merge: the commit route
-# calls store_hygiene.maybe_refresh, which launches the daily tier through detached_spawn.spawn_detached
-# (one Popen, only when the store owes maintenance and no claim is live). Ten ops: +1 each.
 _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
@@ -7482,7 +7419,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # 3 -> 4, 2026-10-29: `rollback_check._git`, EXECUTED (safe_commit_offer passes
     # `detect_rollback=True`): 2 spawns (rev-parse + one `git log --first-parent --raw`), 156-188ms
     # process over 3 paths and a 1000-commit window (measured 2026-10-29), under the 500ms bar.
-    # 2 -> 3, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
+    # The store hygiene site is no longer reached from `commit_paths`.
     "session.safe_commit_offer": 2,
     # 20 -> 21, 2026-10-12 (3843db8c19): P-24 runs `machine-local check` once per sentinel
     # run, not per key -- one constant spawn under the probe's own timeout.
@@ -7606,7 +7543,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "research.restructure_for_repeat_topic": 1,
     # 2 -> 3, 2026-10-29: `rollback_check._git`, reach-only (`detect_rollback` stays False); where
     # executed 2 spawns, 156-188ms process (measured 2026-10-29).
-    # 1 -> 2, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
     "research.close": 1,
     "cartography.tree": 1,
     "ceremony.chunk_commits": 1,
@@ -7697,7 +7633,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "repo_setup.validate_target_root": 1,
     # 1 -> 2: the freeze's per-batch commit reaches `git/run.py::run_git` (fresh measure).
     # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
-    # 2 -> 3, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
     "review.freeze_diff": 2,
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
     "review.partition_slices": 2,
@@ -7781,7 +7716,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
     # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only (commit_paths leaves `detect_rollback`
     # False); where executed 2 spawns, 156-188ms process (measured 2026-10-29).
-    # 2 -> 3, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
     "hooks.sessionend_auto_commit": 2,
     "hooks.sessionstart_ensure_http_forwarder": 1,
     "hooks.subagent_zero_tool_use_detect": 1,
@@ -7803,15 +7737,12 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.narrow_criterion: locked_rmw commit via git_native, same site set as other plan writers.
     "plan.narrow_criterion": 4,
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
-    # 3 -> 4, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
     "review_mint.bookkeep_wave": 3,
     # Lowered 6 -> 5 2026-10-02: 261b1cc1df removed one reachable site; 5 -> 4 by 7d1da49c7a.
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
-    # 3 -> 4, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
     "review_mint.record_superseding_review": 3,
     "review_stamp.check": 1,
     # 4 -> 5, 2026-10-29: `rollback_check._git`, reach-only; where executed 2 spawns, 156-188ms process.
-    # 3 -> 4, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
     "review_stamp.mint": 3,
     # --- 2026-10-02 merge reconciliation (claude/admiring-franklin x work/machine-a). The git
     # routing sweep (7481613e80, 7835b34367) moved per-module `subprocess` git calls onto the
@@ -7849,7 +7780,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "dispatch.land_verified_remainder": 2,
     # Two reach-only sites through `commit_paths` (`rollback_check._git`, `detect_rollback` stays False);
     # the op executes 0 spawns (land_credited_profile, C1: `commit_paths` 0 spawns at both scales).
-    # 1 -> 2, 2026-11-04: store +1 (`commit_paths -> store_hygiene.maybe_refresh -> spawn_detached`).
     "dispatch.land_credited": 1,
     # Reach-only static counts, measured 2026-11-03 via `_measure_static_spawn_counts`; ceilings, not execution evidence.
     "agent_pipe.send": 1,

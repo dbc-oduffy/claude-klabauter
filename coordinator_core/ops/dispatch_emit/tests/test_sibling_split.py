@@ -39,7 +39,7 @@ def _plan(rows) -> str:
         out += (
             f"- id: {row_id}\n  title: t{row_id}\n  change_kind: doc-edit\n"
             f"  surface: docs/x/{row_id}.md\n  writes:\n    - docs/x/{row_id}.md\n"
-            f"  queue_scope: project\n  disposition: open\n{edge}  body: |\n    Do {row_id}.\n"
+            f"  queue_scope: project\n  disposition: open\n  disjoint_parallel: true\n{edge}  body: |\n    Do {row_id}.\n"
         )
     return (
         '---\ntitle: "p"\nsizing_object: null\n---\n\n# p\n\n## Goal\n\ng\n\n'

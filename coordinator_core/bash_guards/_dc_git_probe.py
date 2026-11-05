@@ -45,20 +45,20 @@ _CREATIONFLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 #: Wall-clock a single dispatch may spend inside `_run_git` subprocesses
-#: before further probes are declined unspawned. Derived from the harness's
-#: own PreToolUse hook window (15 000 ms, read off a `hook_cancelled`
-#: attachment in a live transcript -- the harness owns that number, this
-#: repo does not), minus the rest of one invocation: interpreter boot, the
-#: `coordinator_core` import, and every non-probing guard's in-process work.
+#: before further probes are declined unspawned. Derived from the door's
+#: 8 000 ms hook read deadline (`warm/door`; the door stops waiting and the
+#: verdict is lost): 8.0 s window - 2.0 s one probe overshoot (the per-call
+#: `timeout`, never clamped) - 2.0 s for interpreter boot, the
+#: `coordinator_core` import and every non-probing guard's in-process work
+#: = 4.0 s. Budget + one overshoot must stay below the window.
 #: Not felt on an unloaded box; binds only under the documented load norm.
 #:
 #: WHY A CEILING AT ALL. Per-probe `timeout=2.0` bounds ONE spawn; nothing
-#: bounded their SUM. A commit-shaped command spawns six git processes on
+#: bounded their SUM. A commit-shaped command spawned six git processes on
 #: this path, so the engine's own worst case (12 s of git, plus boot and
-#: import) sat ABOVE the harness window -- and a hook that overruns its
-#: window is cancelled outright, which loses every guard's verdict, not just
-#: the slow one's.
-_GIT_PROBE_BUDGET_SECONDS = 6.0
+#: import) sat ABOVE the window -- and a hook that overruns it loses every
+#: guard's verdict, not just the slow one's.
+_GIT_PROBE_BUDGET_SECONDS = 4.0
 
 #: Deadline (a `time.monotonic()` stamp) for the dispatch currently in
 #: flight, or `None` when no budget is armed. INERT BY DEFAULT and armed at

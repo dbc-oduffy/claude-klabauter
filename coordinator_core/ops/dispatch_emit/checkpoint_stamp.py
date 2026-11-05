@@ -460,6 +460,35 @@ def _plan_state(worktree_root: Path, rel: str, sha: str, data: bytes) -> str:
     return "clean" if content_matches_index_sha(worktree_root, rel, blob) is True else "dirty"
 
 
+def _land_stamp(worktree_root: Path, commit_rels: list, body: str, session_id: Optional[str]) -> Optional[str]:
+    """Commit ``commit_rels`` with ``body``, retrying a moved ref, then release the claims on them
+    under ``session_id``. Returns the commit sha (None when nothing committed); raises on refusal.
+    Shared by ``stamp_checkpoint`` and the landing-hold replay."""
+    from functools import partial
+
+    from coordinator_core.git.commit import CommitRefused, commit_paths, hash_worktree_blobs_via_spawn
+    from coordinator_core.git.ref_cas_retry import REF_CAS_ATTEMPTS, is_ref_moved
+
+    worktree_root = Path(worktree_root)
+    # Trap: unlike terminal_commit and land_run this loop does not refuse when the peer commit
+    # touched ``commit_rels``; ``ref_cas_retry.retry_ref_moved`` would add that check.
+    for attempt in range(REF_CAS_ATTEMPTS):
+        try:
+            outcome = commit_paths(
+                worktree_root, commit_rels, body, prefer_deliberate_stage=True,
+                blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
+            )
+            break
+        except CommitRefused as exc:
+            if not is_ref_moved(exc) or attempt == REF_CAS_ATTEMPTS - 1:
+                raise
+    if outcome.sha:
+        from coordinator_core.session.scope import release_committed_claims_or_retain
+
+        release_committed_claims_or_retain(worktree_root, commit_rels, session_id, "checkpoint_stamp")
+    return outcome.sha
+
+
 def stamp_checkpoint(
     worktree_root: Path, message: str, sha: str, *, session_id: Optional[str] = None
 ) -> dict:
@@ -512,32 +541,21 @@ def stamp_checkpoint(
         if not commit_rels:
             return out
 
-        from functools import partial
-
-        from coordinator_core.git.commit import CommitRefused, commit_paths, hash_worktree_blobs_via_spawn
         from coordinator_core.git.commit_trailers import apply_missing_trailers
-        from coordinator_core.git.ref_cas_retry import REF_CAS_ATTEMPTS, is_ref_moved
 
         n = sum(len(rows_coded[p]) for p in commit_rels)
         body = f"mark {n} rows coded ({sha[:7]})\n\n{STAMP_TRAILER}: {sha}"
         body = apply_missing_trailers(body, worktree_root, commit_rels, session_id_override=session_id)
-        # Trap: unlike terminal_commit and land_run this loop does not refuse when the peer commit
-        # touched ``commit_rels``; ``ref_cas_retry.retry_ref_moved`` would add that check.
-        for attempt in range(REF_CAS_ATTEMPTS):
-            try:
-                outcome = commit_paths(
-                    worktree_root, commit_rels, body, prefer_deliberate_stage=True,
-                    blob_fallback=partial(hash_worktree_blobs_via_spawn, cwd=worktree_root),
-                )
-                break
-            except CommitRefused as exc:
-                if not is_ref_moved(exc) or attempt == REF_CAS_ATTEMPTS - 1:
-                    raise
-        out["stamp_sha"] = outcome.sha
-        if outcome.sha:
-            from coordinator_core.session.scope import release_committed_claims_or_retain
+        from coordinator_core.session import landing_hold
 
-            release_committed_claims_or_retain(worktree_root, commit_rels, session_id, "checkpoint_stamp")
+        if landing_hold.is_held(str(worktree_root), session_id):
+            landing_hold.defer(
+                str(worktree_root), session_id, "checkpoint_stamp",
+                {"paths": commit_rels, "message": body, "session_id": session_id},
+            )
+            out["stamp_deferred"] = "session-landing-hold"
+            return out
+        out["stamp_sha"] = _land_stamp(worktree_root, commit_rels, body, session_id)
         return out
     except Exception as exc:  # noqa: BLE001 -- the checkpoint commit stands; the stamp is surfaced
         try:

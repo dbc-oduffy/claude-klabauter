@@ -2669,22 +2669,45 @@ def _is_from_argv_result(value: Any) -> bool:
     )
 
 
-def _door_poll_reply(argv: list) -> dict:
+def _door_poll_params_text(argv: list, cwd: Any) -> Optional[str]:
+    """The poll's params JSON text: `--params-file PATH` (relative to the caller's `cwd`) when
+    given, else the first positional. The CLI's own `--params-file` form never reaches its
+    argparse on this path, so it is read here or the documented reconcile is unreachable."""
+    if "--params-file" in argv:
+        i = argv.index("--params-file")
+        if i + 1 >= len(argv) or not isinstance(argv[i + 1], str):
+            return None
+        path = Path(argv[i + 1])
+        if not path.is_absolute() and isinstance(cwd, str) and cwd:
+            path = Path(cwd) / path
+        try:
+            return path.read_text(encoding="utf-8-sig")
+        except OSError:
+            return None
+    positional = [a for a in argv[1:] if isinstance(a, str) and not a.startswith("--")]
+    return positional[0] if positional else None
+
+
+def _door_poll_reply(argv: list, cwd: Any = None) -> dict:
     """The `invoke.from_argv` result for a door-form poll. A finished key whose
     retained result is a from_argv reply is replayed verbatim (the landed op's
     own stdout, stderr and exit code); every other state prints the status
     JSON with exit 0. Only a malformed key exits 1."""
     params: Any = None
-    if len(argv) > 1 and isinstance(argv[1], str):
+    text = _door_poll_params_text(argv, cwd)
+    if text is not None:
         try:
-            params = json.loads(argv[1])
+            params = json.loads(text)
         except ValueError:
             params = None
     status = _store_poll(params) if isinstance(params, Mapping) else None
     if status is None:
         return {
             "stdout": "",
-            "stderr": f"{_REQUEST_STATUS_METHOD} requires 'key' (non-empty string)\n",
+            "stderr": (
+                f"{_REQUEST_STATUS_METHOD} requires 'key' (non-empty string): "
+                "pass '{\"key\": \"<dispatch_key>\"}' or --params-file PATH\n"
+            ),
             "exit_code": 1,
         }
     retained = status.get("result")
@@ -2902,7 +2925,7 @@ def _serve_line(
     if door_poll_argv is not None:
         record_invocation(True)
         _write_and_release(
-            {"jsonrpc": "2.0", "id": request_id, "result": _door_poll_reply(door_poll_argv)}
+            {"jsonrpc": "2.0", "id": request_id, "result": _door_poll_reply(door_poll_argv, (msg.get("params") or {}).get("cwd"))}
         )
         return
 

@@ -41,7 +41,7 @@ def test_reuse_helper_reads_the_gate_and_replays_verdicts():
     script = _compose()
     assert "const _reusePhase = (n) => !_halted && Array.isArray(_gate.resume_phases?.reuse)" in script
     assert "_gate.resume_phases?.verdicts?.[n] ?? null" in script
-    assert script.index("const _reusePhase") < script.index("phase('plan')")
+    assert script.index("const _reusePhase") < script.index("_reusePhase('plan')")
 
 
 def test_plan_review_and_rulings_skip_on_reuse():

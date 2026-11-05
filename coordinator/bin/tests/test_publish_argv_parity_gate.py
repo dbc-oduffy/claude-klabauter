@@ -181,6 +181,25 @@ class TestEndOfRunArgvParityGateLeg:
         assert "argv-parity gate FAILED" in captured.err
         assert "--subject" in captured.err
 
+    def test_gate_still_fails_on_a_drifted_flag_after_a_warm_clean_round(self, tmp_path, capsys):
+        repo_root = _make_repo(tmp_path)
+        _write_clean_tree(repo_root)
+        assert publish.dispatch_end_of_run_argv_parity_gate([repo_root], target_filtered=False) is True
+        assert publish.dispatch_end_of_run_argv_parity_gate([repo_root], target_filtered=False) is True
+
+        _write(
+            repo_root,
+            "coordinator_core/clean_assembler.py",
+            '''
+def build_directive(sid, subject):
+    args = ["--sid", sid, "--subject", subject, "--drifted-flag"]
+    return {"id": "d1", "cli": "known-cli", "args": args, "depends_on": None}
+''',
+        )
+        ok = publish.dispatch_end_of_run_argv_parity_gate([repo_root], target_filtered=False)
+        assert ok is False
+        assert "--drifted-flag" in capsys.readouterr().err
+
     def test_non_degradation_under_target_filtered(self, tmp_path, capsys):
         """FAIL-HARD UNCONDITIONALLY (AC4) -- unlike the identity/install-doc
         legs, this gate must fail identically whether or not `--target`

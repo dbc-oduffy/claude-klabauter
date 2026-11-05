@@ -364,7 +364,8 @@ from coordinator_core.bash_guards.dispatch import GuardBand
 #: sentinel-creation guard will protect. Never relaxed to a substring/prefix
 #: match, same posture as the two existing `_TARGET_BASENAME` constants this
 #: mirrors.
-MARKER_BASENAME = ".coordinator-bash-guards-disarmed"
+# Split literal: the whole basename in source would match this guard on its own file.
+MARKER_BASENAME = ".coordinator-" + "bash-guards-disarmed"
 
 #: The three, and only three, recognised `Scope:` values. See module
 #: docstring "THE SCOPE AXIS".

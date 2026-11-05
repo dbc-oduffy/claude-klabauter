@@ -76,7 +76,8 @@ def probe() -> dict:
 
 
 def stored_capability(home: Optional[Path] = None) -> Optional[dict]:
-    """The ``capability`` dict already in ``<home>/state/group-em/box.json``; None when absent or unreadable.
+    """The non-empty ``capability`` dict already in ``<home>/state/group-em/box.json``; None when
+    absent, empty or unreadable (an empty record makes the register op probe afresh).
 
     Read-only: never mints an identity and never probes.
     """
@@ -86,7 +87,7 @@ def stored_capability(home: Optional[Path] = None) -> Optional[dict]:
     except (OSError, ValueError):
         return None
     cap = record.get("capability") if isinstance(record, dict) else None
-    return cap if isinstance(cap, dict) else None
+    return cap if isinstance(cap, dict) and cap else None
 
 
 def write_capability(home: Optional[Path] = None) -> dict:

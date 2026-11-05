@@ -34,7 +34,7 @@ def test_spent_token_refusal_names_a_call_that_retires_the_run(repo):  # noqa: F
     _halted(repo)
     out = _refuse(repo)
     assert out["halt"]["kind"] == "refusal" and fire_command(REL) in out["halt"]["reason"]
-    assert "new run id" in out["halt"]["reason"]
+    assert "fresh run id" in out["halt"]["reason"]
     assert halted_run_for(repo, REL) == RUN
     assert ask_gate.retire_token_spent_halt(repo, REL) == RUN
     assert halted_run_for(repo, REL) is None

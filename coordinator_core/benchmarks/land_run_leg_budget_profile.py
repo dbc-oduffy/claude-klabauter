@@ -849,7 +849,9 @@ def main(argv: list) -> int:
                 else:
                     rows = run(workdir, siblings, args.tracked, args.chain, args.attribute)
         finally:
-            shutil.rmtree(workdir, ignore_errors=True)
+            from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+            rmtree_or_raise(workdir, label="land-run-leg-budget")
     print(json.dumps([asdict(r) for r in rows], indent=1) if args.json else render(rows))
     if kill_gate(rows):
         print(f"KILL-GATE: {WHOLE_OP} over {BAR_MS:.0f}ms process time (DR-344)", file=sys.stderr)

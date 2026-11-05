@@ -85,16 +85,27 @@ READ_ONLY_GETTEMPDIR = frozenset(
         # Not read-only: a byte-sized --check-only probe file, os.remove'd in a finally.
         ("coordinator_core/ops/gen_claude_author_launcher.py", "main"),
         ("coordinator_core/ops/gen_claude_author_shim.py", "main"),
+        # Passes the temp dir as a probe cwd; writes nothing.
+        ("coordinator_core/bash_guards/_alternative_liveness.py", "_trigger_guard_disk_fill"),
+        ("coordinator_core/guard_routes/assemble.py", "_collect"),
+        # Names the harness `claude` dir under Temp to scan; creates nothing.
+        ("coordinator_core/ops/claude_home_census.py", "claude_temp_root"),
     }
 )
 
 # (repo-relative module path, enclosing function) pairs whose bare creator is
-# removed on every exit path and cannot import a managed root (standalone OSS
-# dist scripts). Closed, like READ_ONLY_GETTEMPDIR.
+# removed on every exit path (standalone OSS dist scripts that cannot import a
+# managed root, and operator measurement scripts). Closed, like READ_ONLY_GETTEMPDIR.
 SELF_CLEANING_CREATORS = frozenset(
     {
         # _cleanup() rmtree's own_temp on every return of main().
         ("setup/dist/oss-only-skills/coordinator-update/lib/compute-update-delta.py", "main"),
+        # Torn down in its finally (reap + rmtree_or_raise); the short Temp path keeps the repo under Windows MAX_PATH.
+        ("coordinator_core/benchmarks/isolated_clone.py", "record_fixture_repo"),
+        # Operator measurement scripts: each mkdtemp is rmtree'd in the finally of its own function.
+        ("scripts/c6b39c_union_verify/isolated_retest.py", "main"),
+        ("scripts/measure_preuse_bash_legs.py", "run_arm"),
+        ("scripts/measure_preuse_bash_legs.py", "main"),
     }
 )
 

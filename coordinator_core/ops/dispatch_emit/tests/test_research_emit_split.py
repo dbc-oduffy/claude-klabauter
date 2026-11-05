@@ -24,7 +24,7 @@ def test_over_the_cap_it_emits_one_script_per_pipeline(monkeypatch, tmp_path, ca
 
     parts = reply["parts"]
     assert list(whole_reply["pipelines"]) == ["nlm-preflight", "web", "notebooklm"]
-    assert [p["pipeline"] for p in parts] == ["nlm-preflight+notebooklm", "web"]
+    assert [p["pipeline"] for p in parts] == ["nlm-preflight", "web", "notebooklm"]
     assert [p["part"] for p in parts] == [f"{i}/{len(parts)}" for i in range(1, len(parts) + 1)]
     assert len(parts) > 1
     assert reply["path"] == parts[0]["path"] and reply["sha256"] == parts[0]["sha256"]

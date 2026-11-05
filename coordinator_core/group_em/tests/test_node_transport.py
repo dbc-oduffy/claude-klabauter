@@ -68,12 +68,51 @@ def test_ssh_list_and_send_through_runner():
     assert all(s["box_id"] == "home" for s in res["sessions"])
     sent = t.send(box, "s1", "hello", "roamer:s9")
     assert sent == {"ok": True, "reply": {"sent": True}}
-    assert calls[0][:4] == ["ssh", "-o", "BatchMode=yes", "192.0.2.2"]
+    assert calls[0][:3] == ["ssh", "-o", "BatchMode=yes"]
+    assert calls[0][5] == "192.0.2.2"
 
 
-def test_ssh_failure_is_ok_false_with_reason():
+def test_ssh_host_may_be_a_wireguard_address():
+    box = _ssh_box("10.8.0.2")
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(argv)
+        return _cp(stdout=json.dumps({"rows": []}))
+
+    t = node_transport.select(box, runner=runner)
+    assert t.kind == "ssh"
+    assert t.list_sessions(box)["ok"] is True
+    assert "10.8.0.2" in calls[0]
+
+
+def test_failed_ssh_send_marks_box_unreachable_and_keeps_prior_sessions(tmp_path):
     box = _ssh_box("h")
-    t = node_transport.select(box, runner=lambda argv, timeout: _cp(returncode=255, stderr="no"))
+    prior = [{"session_id": "s1", "name": "alpha", "cwd": "/a", "status": "idle", "address": "x"}]
+    assert remote_roster._write_snapshot(tmp_path, "home", True, prior, time.time())
+    assert remote_roster.read_snapshot(tmp_path, local_id="me")["home"]["reachable"] is True
+
+    ok = node_transport.select(
+        box, tmp_path, runner=lambda a, t: _cp(stdout=json.dumps({"sent": True}))
+    ).send(box, "s1", "x", "me")
+    assert ok["ok"] is True
+    assert remote_roster.read_snapshot(tmp_path, local_id="me")["home"]["reachable"] is True
+
+    bad = node_transport.select(
+        box, tmp_path, runner=lambda a, t: _cp(returncode=255, stderr="Too many authentication failures")
+    ).send(box, "s1", "x", "me")
+    assert bad == {"ok": False, "reason": "ssh_exit_255"}
+    snap = remote_roster.read_snapshot(tmp_path, local_id="me")["home"]
+    assert snap["reachable"] is False
+    assert [s["session_id"] for s in remote_roster._trim(remote_roster._raw(
+        remote_roster.snapshot_path(tmp_path, "home"))["sessions"])] == ["s1"]
+
+
+def test_ssh_failure_is_ok_false_with_reason(tmp_path):
+    box = _ssh_box("h")
+    t = node_transport.select(
+        box, tmp_path, runner=lambda argv, timeout: _cp(returncode=255, stderr="no")
+    )
     for res in (t.list_sessions(box), t.send(box, "s", "x", "me")):
         assert res["ok"] is False and res["reason"] == "ssh_exit_255"
     bad = {"box_id": "home", "transport": {"kind": "ssh", "host": "-oProxy", "invoke": "/x"}}

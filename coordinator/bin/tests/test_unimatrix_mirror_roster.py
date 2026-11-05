@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import subprocess
 import sys
@@ -186,6 +187,71 @@ def test_lan_reachable_is_a_tcp_connect_to_the_endpoint_ssh_resolves():
     assert not roster.lan_reachable("lan", resolve=lambda a: None, connect=connect)
 
 
+def test_stable_remote_prefers_the_lan_alias_and_skips_mdns_when_it_answers():
+    roster = load("roster")
+
+    def boom(*a, **k):
+        raise AssertionError("mDNS leg ran")
+
+    assert roster.stable_remote("box", reachable=lambda a: a == "box-lan", fields=boom, connect=boom) == "box-lan"
+    assert roster.stable_remote("me@box", reachable=lambda a: a == "me@box-lan", fields=boom, connect=boom) == "me@box-lan"
+
+
+def test_stable_remote_falls_back_to_dot_local_with_the_resolved_user():
+    roster = load("roster")
+    dialled = []
+
+    class Sock:
+        def close(self):
+            pass
+
+    def connect(ep, timeout):
+        dialled.append(ep)
+        return Sock()
+
+    got = roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"user": "kim", "port": "22"},
+                               connect=connect)
+    assert got == "kim@box.local" and dialled == [("box.local", 22)]
+
+
+def test_stable_remote_is_none_when_nothing_answers_or_the_port_is_custom():
+    roster = load("roster")
+
+    def refuse(ep, timeout):
+        raise OSError("no mDNS")
+
+    assert roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"port": "22"}, connect=refuse) is None
+    assert roster.stable_remote("box", reachable=lambda a: False, fields=lambda a: {"port": "2222"},
+                                connect=lambda *a, **k: pytest.fail("dialled a custom port")) is None
+    assert roster.stable_remote("box-lan", reachable=lambda a: pytest.fail("probed -lan-lan"),
+                                fields=lambda a: {}, connect=refuse) is None
+
+
+def test_stable_remote_spends_one_ssh_g_across_both_legs():
+    roster = load("roster")
+    asked = []
+
+    def fields(a):
+        asked.append(a)
+        return {"hostname": "10.0.0.9", "port": "22", "user": "kim"}
+
+    def connect(ep, timeout):
+        if ep[0] != "box.local":
+            raise OSError("lan down")
+
+        class Sock:
+            def close(self):
+                pass
+
+        return Sock()
+
+    assert roster.stable_remote("box", fields=fields, connect=connect) == "kim@box.local"
+    assert asked == ["box-lan"]
+    asked.clear()
+    assert roster.stable_remote("me@box", fields=fields, connect=connect) == "me@box.local"
+    assert asked == ["me@box-lan"]
+
+
 def test_fetch_roster_dials_the_lan_alias_by_default_and_the_tunnel_when_the_lan_is_down(monkeypatch):
     roster = load("roster")
     argvs = []
@@ -237,6 +303,100 @@ def test_roster_mirror_writes_entry_and_key_the_harness_accepts(sessions, monkey
     key_file = sessions / roster.key_name(31337, ep, platform="win32")
     assert key_file.read_text() == "SECRETKEY"
     assert all("SECRETKEY" not in line for line in lines)
+
+
+def _old_relay_roster(box):
+    """What a relay without its re-export filter emits: every registry entry, mirrors included."""
+    return [{"entry": e, "key": "K"} for e in box]
+
+
+def _fake_box(prefix, n):
+    return [{"pid": 1000 + i, "name": f"{prefix}-{i}", "messagingSocketPath": f"/tmp/cc-socks/{prefix}{i}.sock"}
+            for i in range(n)]
+
+
+def test_two_fake_boxes_sync_to_n_plus_m_rows_without_echoes(tmp_path, monkeypatch):
+    roster = load("roster")
+    n, m = 3, 2
+    a_local, b_local = _fake_box("a", n), _fake_box("b", m)
+    # Each box holds a mirror of every session on the other box.
+    a_mirrors = [{**e, "pid": 5000 + i, "messagingSocketPath": f"/tmp/cc-socks/cc-msg-a{i}.sock",
+                  roster.FAR_SOCKET_FIELD: e["messagingSocketPath"], "farPid": e["pid"]}
+                 for i, e in enumerate(b_local)]
+    b_mirrors = [{**e, "pid": 6000 + i, "messagingSocketPath": f"/tmp/cc-socks/cc-msg-b{i}.sock",
+                  roster.FAR_SOCKET_FIELD: e["messagingSocketPath"], "farPid": e["pid"]}
+                 for i, e in enumerate(a_local)]
+    # A mirror recorded without the far-socket field, only marked by its relay.
+    b_mirrors.append({**a_local[0], "pid": 6100, "messagingSocketPath": "pipe-x", "unimatrixMirror": True})
+    for_a = roster.mirrorable(_old_relay_roster(b_local + b_mirrors), set(), set())
+    assert sorted(r["entry"]["name"] for r in for_a.values()) == sorted(e["name"] for e in b_local)
+    for_b = roster.mirrorable(_old_relay_roster(a_local + a_mirrors), set(), set())
+    assert len(for_a) + len(a_local) == n + m and len(for_b) + len(b_local) == n + m
+
+
+def test_mirrorable_drops_skipped_sockets_and_names_a_live_inbound_mirror_reaches():
+    roster = load("roster")
+    rows = _old_relay_roster(_fake_box("b", 3))
+    got = roster.mirrorable(rows, {"/tmp/cc-socks/b0.sock"}, {"b-1"})
+    assert [r["entry"]["name"] for r in got.values()] == ["b-2"]
+
+
+def test_inbound_names_counts_only_live_unimatrix_mirror_entries(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "pid_alive", lambda pid: pid != 2)
+    for pid, extra in ((1, {"unimatrixMirror": True}), (2, {"unimatrixMirror": True}), (3, {}), (4, {"macSocketPath": "x"})):
+        (sessions / f"{pid}.json").write_text(json.dumps({"pid": pid, "name": f"n{pid}", **extra}))
+    (sessions / "5.json").write_text("not json")
+    assert roster.inbound_names() == {"n1"}
+
+
+def test_mirror_records_the_far_pid_for_a_win32_pipe_far_socket(sessions, monkeypatch):
+    roster = load("roster")
+    pipe = "\\\\.\\pipe\\LOCAL\\cc-msg-" + "c" * 32
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "spawn", lambda cmd: FakeProc(31338))
+    monkeypatch.setattr(roster, "proc_start", lambda pid, platform=None: "1")
+    monkeypatch.setattr(roster.time, "sleep", lambda s: None)
+    monkeypatch.setattr(roster, "_is_win", lambda platform=None: True)
+    cfg = roster.parse_args(["bridge.log", "--remote", "farbox", "--key", "k"])
+    row = {"entry": {"pid": 7777, "name": "far-w", "procStart": "x", "pidDomain": "win32:box",
+                     "messagingSocketPath": pipe}, "key": "K"}
+    roster.mirror(row, cfg, lambda m: None)
+    assert json.loads((sessions / "31338.json").read_text())["farPid"] == 7777
+
+
+@pytest.mark.parametrize("far_socket,stored,expect", [
+    ("\\\\.\\pipe\\LOCAL\\cc-msg-" + "d" * 32, 7777, "7777"),
+    ("/tmp/cc-socks/4242.sock", None, "4242"),
+])
+def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkeypatch, far_socket, stored, expect):
+    import types
+    spec = importlib.util.spec_from_file_location("unimatrix_bridge", BIN / "unimatrix-bridge.py")
+    bridge = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bridge)
+    d = tmp_path / "sessions"
+    d.mkdir()
+    entry = {"messagingSocketPath": "/m.sock", "macSocketPath": far_socket}
+    if stored:
+        entry["farPid"] = stored
+    (d / "1.json").write_text(json.dumps(entry))
+    monkeypatch.setattr(bridge, "SESSIONS", str(d))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote=None, port=None)
+    bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
+    argvs = []
+    monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
+    monkeypatch.setattr(bridge.subprocess, "run", lambda argv, **kw: argvs.append(argv) or subprocess.CompletedProcess(argv, 0, b"", b""))
+
+    class Conn:
+        chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
+
+        def read(self):
+            return self.chunks.pop(0)
+
+    bridge.relay_send(Conn())
+    assert argvs[-1][-1] == f"send {expect}"
 
 
 def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):

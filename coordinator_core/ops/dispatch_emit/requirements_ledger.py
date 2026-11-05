@@ -48,7 +48,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     record_dir,
     stamp_run_stage,
 )
-from coordinator_core.ops.dispatch_emit import bug_close, review_floor, run_token
+from coordinator_core.ops.dispatch_emit import bug_close, external_original, review_floor, run_token
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, read_em_brief, read_em_context_paths
@@ -1928,6 +1928,14 @@ def judge(
             if why is not None:
                 failures.append({"id": item.id, "reason": why})
                 status = "not_met"
+        if status == "met" and not design:
+            blocked = external_original.read_refusal(item.id, item.text, row)
+            if blocked is not None:
+                failures.append({
+                    "id": item.id, "reason": blocked["reason"], "status": "BLOCKED",
+                    "capture_age_s": blocked["capture_age_s"],
+                })
+                status = "not_met"
         if status == "met" and _hand_built(row):
             failures.append({"id": item.id, "reason": HAND_BUILT_REASON})
             status = "not_met"
@@ -2024,12 +2032,18 @@ def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id:
             got = judged.get(str(row.get(rr.ROW_ID)))
             if got is None or row.get(rr.ROW_STATUS) in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED):
                 continue
-            status, wired = got.get("status"), got.get("wired") is True
+            status = got.get("status")
+            evidence = rr.wired_evidence(got)
+            wired = got.get("wired") is True and evidence is not None
             memo_owed = status == "post_commit" and "sha_memo" in (got.get("post_commit_acts") or [])
             if status == "post_commit" and not memo_owed:
                 status = "met"
             if status == "met" or memo_owed:
                 row[rr.ROW_WIRED] = wired
+                if wired:
+                    row[rr.ROW_WIRED_EVIDENCE] = evidence
+                else:
+                    row.pop(rr.ROW_WIRED_EVIDENCE, None)
                 if wired and not memo_owed and not _hand_built(got):
                     row[rr.ROW_STATUS] = rr.STATUS_MET
                     ref = f"{run_id}@{sha}"
@@ -2334,7 +2348,7 @@ def _land_on_verdict(
     return full, None
 
 
-_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "retracted_note", "withheld")
+_APPLIED_KEYS = ("widened", "footprint_widened", "research_dropped", "claimed", "stop_after", "withhold_paths", "accept_partial", "credit_chunks", "owned_red", "retracted_note", "retracted_row", "withheld")
 
 
 def _mutation_reply(applied: tuple, refused: tuple, target: str, **fields) -> dict:

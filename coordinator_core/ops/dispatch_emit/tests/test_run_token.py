@@ -115,7 +115,7 @@ def test_an_over_age_claim_whose_holder_lives_is_kept(tmp_path, monkeypatch):
     assert not run_token.redeem(repo, "ask-1", token, "a.mjs")
 
 
-def test_a_same_process_claim_is_adopted_once_its_thread_exits(tmp_path):
+def test_a_same_process_claim_is_adopted_once_its_thread_exits(tmp_path, monkeypatch):
     import threading
 
     repo = _repo(tmp_path)
@@ -126,6 +126,8 @@ def test_a_same_process_claim_is_adopted_once_its_thread_exits(tmp_path):
     holder.join()
     assert won == [True]
     assert not run_token.redeem(repo, "ask-1", "f" * 32, "a.mjs")
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + run_token.THREAD_EXIT_GRACE_SECONDS + 1)
     assert run_token.redeem(repo, "ask-1", token, "a.mjs")
 
 
@@ -321,6 +323,20 @@ def test_racing_redeems_yield_exactly_one_true(tmp_path):
     for t in threads:
         t.join()
     assert results.count(True) == 1 and len(results) == workers
+
+
+def test_a_just_exited_thread_claim_is_not_adopted_inside_the_grace(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    won: list = []
+    holder = threading.Thread(target=lambda: won.append(run_token.redeem(repo, "ask-1", token, "a.mjs")))
+    holder.start()
+    holder.join()
+    assert won == [True]
+    assert not run_token.redeem(repo, "ask-1", token, "a.mjs")  # inside the grace: a racer, not a takeover
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + run_token.THREAD_EXIT_GRACE_SECONDS + 1)
+    assert run_token.redeem(repo, "ask-1", token, "a.mjs")  # past it the dead holder is taken over
 
 
 _LANDED = {"sha": "abc123", "rows": [{"row_id": "r1", "outcome": "committed", "sha": "abc123"}], "paths": ["a.py"]}
@@ -652,20 +668,6 @@ def test_redeem_claim_adopts_a_dead_holder_and_holds_claim_follows_the_adopter(t
     assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", other)
 
 
-def test_redeem_claim_adopts_an_over_budget_live_holder_only_when_a_budget_is_given(tmp_path, monkeypatch):
-    repo = _repo(tmp_path)
-    token = run_token.mint(repo, "ask-1", "a.mjs")
-    first = run_token.redeem_claim(repo, "ask-1", token, "a.mjs")
-    real = time.time()
-    monkeypatch.setattr(run_token.time, "time", lambda: real + 100)
-    assert run_token.redeem_claim(repo, "ask-1", token, "a.mjs") is None
-    assert run_token.redeem_claim(repo, "ask-1", token, "a.mjs", budget_secs=500) is None
-    adopted = run_token.redeem_claim(repo, "ask-1", token, "a.mjs", budget_secs=50)
-    assert adopted is not None and adopted["claimed_at"] != first["claimed_at"]
-    assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", first)
-    assert run_token.holds_claim(repo, "ask-1", token, "a.mjs", adopted)
-
-
 def test_holds_claim_is_false_without_a_claim_or_for_other_credentials(tmp_path):
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
@@ -677,3 +679,29 @@ def test_holds_claim_is_false_without_a_claim_or_for_other_credentials(tmp_path)
     assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", None)
     run_token.consume(repo, "ask-1")
     assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", identity)
+
+
+def test_a_live_holder_past_its_recorded_deadline_is_adopted(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    first = run_token.redeem_claim(repo, "ask-1", token, "a.mjs", budget_secs=30)
+    assert first is not None and first["deadline"] == pytest.approx(first["claimed_at"] + 30)
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")  # in budget: still held
+    assert run_token.redeem_claim(repo, "ask-1", token, "a.mjs", budget_secs=30) is None
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + 31)
+    assert not run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+    second = run_token.redeem_claim(repo, "ask-1", token, "a.mjs", budget_secs=30)
+    assert second is not None and second["deadline"] > first["deadline"]
+    assert not run_token.holds_claim(repo, "ask-1", token, "a.mjs", first)
+    assert run_token.holds_claim(repo, "ask-1", token, "a.mjs", second)
+
+
+def test_a_claim_without_a_deadline_is_not_expired_by_age(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    token = run_token.mint(repo, "ask-1", "a.mjs")
+    claim = run_token.redeem_claim(repo, "ask-1", token, "a.mjs")
+    assert "deadline" not in claim
+    real = time.time()
+    monkeypatch.setattr(run_token.time, "time", lambda: real + 10_000)
+    assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")

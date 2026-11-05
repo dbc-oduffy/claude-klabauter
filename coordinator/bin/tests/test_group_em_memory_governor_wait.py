@@ -38,8 +38,8 @@ def test_first_new_line_wakes_including_runaway(tmp_path):
 def test_partial_line_waits_for_newline(tmp_path):
     log = tmp_path / "governor.log"
     log.write_bytes(b"")
-    sleep = _appender(log, [b"GOVERNOR RES", b"UMED pid=3\r\n"])
-    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=4) == "GOVERNOR RESUMED pid=3"
+    sleep = _appender(log, [b"GOVERNOR PAU", b"SED pid=3\r\n"])
+    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=4) == "GOVERNOR PAUSED pid=3"
 
 
 def test_missing_then_truncated_log(tmp_path):
@@ -49,11 +49,68 @@ def test_missing_then_truncated_log(tmp_path):
     def sleep(_s: float) -> None:
         calls.append(1)
         if len(calls) == 1:
-            log.write_bytes(b"a long first line that sets the offset\n")
+            log.write_bytes(b"GOVERNOR LOW available=1.0 cache=0.5 and a long first line\n")
         elif len(calls) == 2:
             log.write_bytes(b"short\n")
     # Created after start: the first write is new. Truncation then resets to 0.
-    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=3) == "a long first line that sets the offset"
+    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=3) == (
+        "GOVERNOR LOW available=1.0 cache=0.5 and a long first line")
+
+
+_TELEMETRY = [
+    "GOVERNOR DISK pid=44756 io=12",
+    "GOVERNOR DISK-STAT samples=3",
+    "GOVERNOR HEADROOM available=9.5",
+    "GOVERNOR CACHE-TRIM-HINT run elevated: python trim-file-cache.py --apply",
+    "GOVERNOR DEGRADED MemoryError reading the process table",
+    "plain text with no governor prefix",
+]
+
+
+def test_telemetry_never_wakes(tmp_path):
+    log = tmp_path / "governor.log"
+    log.write_bytes(b"")
+    body = "".join(t + "\n" for t in _TELEMETRY).encode()
+    assert w.wait_for_line(log, 0, sleep=_appender(log, [body]), max_polls=4) is None
+
+
+def test_each_telemetry_kind_is_skipped_then_action_wakes(tmp_path):
+    for action in ("LOW available=1.0", "PAUSED pid=2", "RUNAWAY pid=3", "KILLED pid=4 footprint=9MB",
+                   "STILL-CRITICAL after 2 pause(s); nothing left", "CACHE-TRIM fired ok",
+                   "CACHE-TRIM skipped: no live group-em", "EXIT: no live group-em"):
+        log = tmp_path / "governor.log"
+        log.write_bytes(b"")
+        body = "".join(t + "\n" for t in _TELEMETRY) + f"GOVERNOR {action}\n"
+        got = w.wait_for_line(log, 0, sleep=_appender(log, [body.encode()]), max_polls=3)
+        assert got == f"GOVERNOR {action}"
+
+
+def test_telemetry_across_polls_keeps_waiting(tmp_path):
+    log = tmp_path / "governor.log"
+    log.write_bytes(b"")
+    sleep = _appender(log, [b"GOVERNOR DISK pid=1\n", b"GOVERNOR HEADROOM available=9\n",
+                            b"GOVERNOR EXIT: no live group-em\n"])
+    assert w.wait_for_line(log, 0, sleep=sleep, max_polls=5) == "GOVERNOR EXIT: no live group-em"
+
+
+def test_timestamped_lines_classify_by_kind():
+    assert w.is_action_line("2026-11-05T18:54:13Z GOVERNOR PAUSED pid=1")
+    assert not w.is_action_line("2026-11-05T18:54:13Z GOVERNOR DISK pid=44756 io=1")
+    assert not w.is_action_line("2026-11-05T18:54:13Z GOVERNOR CACHE-TRIM-HINT x")
+    assert not w.is_action_line("GOVERNOR")
+    assert not w.is_action_line("")
+
+
+def test_exit_without_action_line_prints_reason(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(w, "wait_for_line", lambda *a, **k: None)
+    assert w.main([str(tmp_path / "governor.log")], thaw=lambda: []) == 0
+    assert "no action line" in capsys.readouterr().out
+
+
+def test_action_line_is_printed(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(w, "wait_for_line", lambda *a, **k: "GOVERNOR LOW available=1.0")
+    assert w.main([str(tmp_path / "g.log")], thaw=lambda: []) == 0
+    assert capsys.readouterr().out.strip() == "GOVERNOR LOW available=1.0"
 
 
 def test_help_exits_zero():

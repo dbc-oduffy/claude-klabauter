@@ -67,7 +67,8 @@ def run(monkeypatch):
 
         def _gate(repo, source_ref=""):
             assert repo == publish._REPO_ROOT
-            return real(root, source_ref)
+            assert source_ref
+            return real(root, _SHA)
 
         monkeypatch.setattr(publish, "_fold_bar_refusal", _gate)
 

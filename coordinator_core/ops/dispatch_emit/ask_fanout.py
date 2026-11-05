@@ -89,7 +89,7 @@ from coordinator_core.ops.sizing_intake_contract import (
     is_path_shaped,
     with_em_context,
 )
-from coordinator_core.session import claimed_write
+from coordinator_core.session import claimed_write, output_tree_layout
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
@@ -818,7 +818,9 @@ def _fanout(
     records: list[tuple[str, str]] = []
     for i, sl in enumerate(slices):
         slug = _slug(sl.label) or f"slice-{i + 1}"
-        rel = f"{Path(home_dir('', 'sizings')).as_posix()}/{today}-{parent_hex}-{i + 1}-{slug}.yaml"
+        rel = output_tree_layout.write_rel(
+            Path(home_dir('', 'sizings')).as_posix(), f"{today}-{parent_hex}-{i + 1}-{slug}.yaml"
+        )
         record = _slice_record(
             sl, name=f"{sl.label}"[:60],
             turns=turns if parent_rel is not None else _slice_turns(sl, turns),

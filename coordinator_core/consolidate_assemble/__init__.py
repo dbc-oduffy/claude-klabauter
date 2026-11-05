@@ -79,7 +79,7 @@ from __future__ import annotations
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Callable, Iterable, Optional
+from typing import Any, Callable, Iterable, NamedTuple, Optional
 
 from coordinator_core.contract.decision_object.envelope import build_envelope
 from coordinator_core.contract.decision_object.judgment import (
@@ -339,31 +339,45 @@ def branches_merged_into(run_git: RunGit, repo_root: Path, target: str) -> set[s
     return names
 
 
-def unique_commits_by_ref(
-    run_git: RunGit, repo_root: Path, base: str, refs: list[str]
-) -> dict[str, list[str]]:
-    """One `git log` over all `refs` excluding `base`; per-ref `<abbrev> <subject>` lines.
+class _RefWalk(NamedTuple):
+    """One ref's slice of the union walk: commit lines, reachable shas, tip sha and tree."""
 
-    Per-ref membership is recovered by walking parent links inside the union, which is
-    closed under "reachable from a tip and not from base", so it equals `base..ref`.
-    Order within a ref follows the union walk.
+    lines: list[str]
+    reachable: frozenset[str]
+    tip: str
+    tree: str
+
+
+def _walk_refs(
+    run_git: RunGit, repo_root: Path, base: str, refs: list[str]
+) -> dict[str, _RefWalk]:
+    """One `git log` over all `refs` excluding `base`, walked per ref by parent links.
+
+    The union is closed under "reachable from a tip and not from base", so each ref's
+    walk equals `base..ref`. A ref with no unique commit carries an empty walk.
+    Rows without a `%T` field (3-field) leave the tree "".
     """
     if not refs:
         return {}
     sep = "\x1f"
-    proc = run_git(["log", f"--format=%H{sep}%P{sep}%h %s", *refs, f"^{base}"], repo_root)
-    rows: dict[str, tuple[list[str], str]] = {}
+    proc = run_git(["log", f"--format=%H{sep}%P{sep}%T{sep}%h %s", *refs, f"^{base}"], repo_root)
+    rows: dict[str, tuple[list[str], str, str]] = {}
     order: list[str] = []
     for line in proc.stdout.splitlines():
-        parts = line.split(sep, 2)
-        if len(parts) != 3:
+        parts = line.split(sep, 3)
+        if len(parts) == 4:
+            sha, parents, tree, subject = parts
+        elif len(parts) == 3:
+            sha, parents, subject = parts
+            tree = ""
+        else:
             continue
-        rows[parts[0]] = (parts[1].split(), parts[2])
-        order.append(parts[0])
+        rows[sha] = (parents.split(), subject, tree)
+        order.append(sha)
 
     tips_proc = run_git(["rev-parse", *[f"{r}^{{commit}}" for r in refs]], repo_root)
     tips = tips_proc.stdout.split()
-    out: dict[str, list[str]] = {}
+    out: dict[str, _RefWalk] = {}
     for ref, tip in zip(refs, tips):
         seen: set[str] = set()
         stack = [tip] if tip in rows else []
@@ -373,8 +387,46 @@ def unique_commits_by_ref(
                 continue
             seen.add(sha)
             stack.extend(rows[sha][0])
-        out[ref] = [rows[sha][1] for sha in order if sha in seen]
+        out[ref] = _RefWalk(
+            [rows[sha][1] for sha in order if sha in seen],
+            frozenset(seen),
+            tip,
+            rows[tip][2] if tip in rows else "",
+        )
     return out
+
+
+def unique_commits_by_ref(
+    run_git: RunGit, repo_root: Path, base: str, refs: list[str]
+) -> dict[str, list[str]]:
+    """Per-ref `<abbrev> <subject>` lines of `base..ref`, one `git log` for all refs.
+
+    Order within a ref follows the union walk.
+    """
+    return {ref: walk.lines for ref, walk in _walk_refs(run_git, repo_root, base, refs).items()}
+
+
+RELATIONS_CAP = 50
+
+
+def branch_relations(walks: dict[str, _RefWalk]) -> list[dict[str, str]]:
+    """Pairwise `ancestor-of` / `same-tree-as` rows over refs that have unique commits.
+
+    A is `ancestor-of` B when A's tip is in B's reachable set and the tips differ.
+    Equal tips, or equal non-empty tip trees, give one `same-tree-as` row per pair.
+    """
+    live = sorted(ref for ref, w in walks.items() if w.lines)
+    rels: list[dict[str, str]] = []
+    for i, a in enumerate(live):
+        wa = walks[a]
+        for b in live[i + 1 :]:
+            wb = walks[b]
+            if wa.tip == wb.tip or (wa.tree and wa.tree == wb.tree):
+                rels.append({"relation": "same-tree-as", "branch": a, "other": b})
+        for b in live:
+            if b != a and wa.tip != walks[b].tip and wa.tip in walks[b].reachable:
+                rels.append({"relation": "ancestor-of", "branch": a, "other": b})
+    return rels
 
 
 def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[str, str]:
@@ -455,14 +507,37 @@ def _test_gate_entry(
     }
 
 
+EVIDENCE_COMMIT_CAP = 10
+EVIDENCE_STAT_FILE_CAP = 15
+
+
+def _cap_stat(block: str) -> str:
+    """Keep a `git show --stat` block's header, its first `EVIDENCE_STAT_FILE_CAP`
+    per-file lines and its summary line; a dropped middle is named, not silent."""
+    lines = block.splitlines(keepends=True)
+    file_idx = [i for i, ln in enumerate(lines) if " | " in ln]
+    if len(file_idx) <= EVIDENCE_STAT_FILE_CAP:
+        return block
+    drop = set(file_idx[EVIDENCE_STAT_FILE_CAP:])
+    kept = [ln for i, ln in enumerate(lines) if i not in drop]
+    at = file_idx[EVIDENCE_STAT_FILE_CAP]
+    marker = f" ... {len(drop)} more file(s) omitted (--full-evidence)\n"
+    return "".join(kept[:at] + [marker] + kept[at:])
+
+
 def brief(
     repo_root: Optional[Path] = None,
     my_email: Optional[str] = None,
     run_git: Optional[RunGit] = None,
     now: Optional[float] = None,
     superseded: Optional[dict[str, str]] = None,
+    full_evidence: bool = False,
 ) -> dict[str, Any]:
-    """`superseded` maps branch name to the operator-supplied superseding sha;
+    """`full_evidence` lifts the per-branch cap of `EVIDENCE_COMMIT_CAP` commit
+    lines (and their `git show --stat` inspections); default evidence carries
+    `commit_count` and, when truncated, `omitted`.
+
+    `superseded` maps branch name to the operator-supplied superseding sha;
     each accepted entry yields a `merge-ours` directive behind the branch's
     `superseded` disposition. A sha that is not an ancestor of HEAD is refused
     (listed in `gates.superseded_refused`, no directive)."""
@@ -516,17 +591,33 @@ def brief(
 
     # Counted against main, not the checked-out branch: a `current` behind main would
     # report every main-only commit as unique to each stale branch.
-    commits_by_ref = unique_commits_by_ref(
+    walks = _walk_refs(
         run_git, repo_root, main_branch or current, [s["entry"]["ref"] for s in stale_branches]
     )
+    commits_by_ref = {ref: w.lines for ref, w in walks.items()}
+    ref_to_name = {s["entry"]["ref"]: s["name"] for s in stale_branches}
+    relations = [
+        {**r, "branch": ref_to_name[r["branch"]], "other": ref_to_name[r["other"]]}
+        for r in branch_relations(walks)
+    ]
+    covered_by: dict[str, list[str]] = {}
+    for r in relations:
+        covered_by.setdefault(r["branch"], []).append(r["other"])
+        if r["relation"] == "same-tree-as":
+            covered_by.setdefault(r["other"], []).append(r["branch"])
     for stale in stale_branches:
         commits = commits_by_ref.get(stale["entry"]["ref"], [])
         stale["commits"] = commits
-        stale["shas"] = [line.split(" ", 1)[0] for line in commits]
+        stale["commit_count"] = len(commits)
+        shown = commits if full_evidence else commits[:EVIDENCE_COMMIT_CAP]
+        stale["shown"] = shown
+        stale["shas"] = [line.split(" ", 1)[0] for line in shown]
         stale["report_row"]["unique_commit_count"] = len(commits)
         all_shas.extend(stale["shas"])
 
     global_stats = inspect_commits(run_git, repo_root, list(dict.fromkeys(all_shas)))
+    if not full_evidence:
+        global_stats = {sha: _cap_stat(block) for sha, block in global_stats.items()}
 
     superseding_ancestors = _ancestors_of_head(
         run_git, repo_root, [superseded[s["name"]] for s in stale_branches if s["name"] in superseded]
@@ -562,7 +653,7 @@ def brief(
                             build_disposition("delete", resolves=[delete_directive_id]),
                             build_disposition("keep"),
                         ],
-                        evidence={"commits": [], "inspections": []},
+                        evidence={"commit_count": 0, "commits": [], "inspections": []},
                         reason="insufficient-evidence",
                         revalidate_at_dispatch=False,
                     )
@@ -571,6 +662,7 @@ def brief(
 
         inspections = [{"sha": sha, "stat": global_stats.get(sha, "")} for sha in shas]
         jp_id = f"j-absorb-{name}"
+        covered = list(dict.fromkeys(covered_by.get(name, [])))
         absorb_directive_id = f"d-absorb-{name}"
         absorb_cli = "merge-only" if recent else "merge-and-delete"
         directives.append(
@@ -611,13 +703,20 @@ def brief(
                 question=(
                     f"Branch {name!r} has {len(commits)} unique commit(s) — absorb, supersede or skip?"
                     + (" (tip is recent: absorb keeps the branch)" if recent else "")
+                    + (f" Covered by {', '.join(covered)}." if covered else "")
                 ),
                 dispositions=[
                     build_disposition("absorb", resolves=[absorb_directive_id]),
                     build_disposition("superseded", resolves=supersede_resolves, guidance=supersede_guidance),
                     build_disposition("skip", resolves=[]),
                 ],
-                evidence={"commits": commits, "inspections": inspections},
+                evidence={
+                    "commit_count": stale["commit_count"],
+                    "commits": stale["shown"],
+                    "inspections": inspections,
+                    **({"covered_by": covered} if covered else {}),
+                    **({"omitted": stale["commit_count"] - len(stale["shown"])} if len(stale["shown"]) < stale["commit_count"] else {}),
+                },
                 reason="insufficient-evidence",
                 revalidate_at_dispatch=False,
             )
@@ -768,6 +867,8 @@ def brief(
             "branches": branches_report,
             "worktrees": worktrees_report,
             "behind_main": behind_main,
+            "relations": relations[:RELATIONS_CAP],
+            **({"relations_omitted": len(relations) - RELATIONS_CAP} if len(relations) > RELATIONS_CAP else {}),
             **({"test_gate": test_gate} if test_gate else {}),
             **({"superseded_refused": superseded_refused} if superseded_refused else {}),
         },
@@ -779,7 +880,10 @@ def brief(
     )
 
 
-_USAGE_TEXT = "consolidate-assemble: usage: consolidate-assemble brief|apply [...]"
+_USAGE_TEXT = (
+    "consolidate-assemble: usage: consolidate-assemble brief [--full-evidence] "
+    "[--superseded <branch>=<sha>]... | apply [...]"
+)
 
 
 def main(argv: list[str]) -> int:
@@ -807,16 +911,28 @@ def main(argv: list[str]) -> int:
 
     superseded: dict[str, str] = {}
     args = list(rest)
+    full_evidence = False
     while args:
         flag = args.pop(0)
+        if flag == "--full-evidence":
+            full_evidence = True
+            continue
         name, sep, sha = (args.pop(0) if args else "").partition("=")
         if flag != "--superseded" or not sep or not name or not sha:
-            print("consolidate-assemble: brief takes --superseded <branch>=<sha>", file=sys.stderr)
+            print(
+                "consolidate-assemble: brief takes --full-evidence and --superseded <branch>=<sha>",
+                file=sys.stderr,
+            )
             return EXIT_USAGE
         superseded[name] = sha
 
     try:
-        decision_object = brief(superseded=superseded) if superseded else brief()
+        brief_kwargs: dict[str, Any] = {}
+        if superseded:
+            brief_kwargs["superseded"] = superseded
+        if full_evidence:
+            brief_kwargs["full_evidence"] = True
+        decision_object = brief(**brief_kwargs)
     except Exception as exc:  # noqa: BLE001 - transport-failure backstop
         print(f"consolidate-assemble: transport failure: {exc}", file=sys.stderr)
         return EXIT_TRANSPORT_FAIL

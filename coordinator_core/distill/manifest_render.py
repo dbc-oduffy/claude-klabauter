@@ -86,7 +86,7 @@ def render_disposal_manifest(manifest: dict[str, Any]) -> str:
             "> ⚠️ **MASS THROTTLE ENGAGED** — this run's eligible set crossed "
             "a named safety threshold (absolute count or ratio). "
             "`distill.apply_disposal` refuses to act on this manifest unless "
-            "the PM stamp's note acknowledges it (`mass-throttle-ack`)."
+            "the disposal stamp's note acknowledges it (`mass-throttle-ack`)."
         )
         lines.append("")
 

@@ -269,6 +269,95 @@ def test_ask_run_halt_takes_the_plain_emit_and_spawns_no_recompose(tmp_path, mon
     assert len(seen) == 1 and spawned == []
 
 
+def _stalled_lookup_refire(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    halted = _halted_repo(tmp_path, "alpha")
+    assert hrr.read_hint(halted.repo, halted.sizing_rel) is None
+    monkeypatch.setattr(halted_run, "halted_run_to_resume", lambda *a, **k: hrr.STALLED)
+    seen: list = []
+
+    def emit(params, root):
+        seen.append(params)
+        return {"path": str(root / "run.js"), "run_id": "r1", "fire_args": {}}
+
+    return hook.evaluate(json.loads(_payload(halted)), emit=emit), seen
+
+
+def test_a_stalled_halted_lookup_with_no_hint_is_a_deferred_emit_not_a_refusal(tmp_path, monkeypatch):
+    env, seen = _stalled_lookup_refire(tmp_path, monkeypatch)
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", env
+    assert "Re-submit once" not in json.dumps(env)
+    assert seen == []
+    assert "deferred emit defer-" in hso["permissionDecisionReason"]
+
+
+def test_a_stalled_lookup_whose_deferred_script_cannot_be_written_still_never_refuses(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    def unwritable(root, params):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(hook, "_write_deferred_script", unwritable)
+    env, seen = _stalled_lookup_refire(tmp_path, monkeypatch)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert "Re-submit once" not in json.dumps(env)
+    assert len(seen) == 1
+
+
+def test_an_unbuilt_lookup_index_on_the_hook_path_answers_without_building_it(tmp_path):
+    """The default hook entry (no `build`) is the emit's lookup; the hook's `build=False` never writes the index."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    halted = _halted_repo(tmp_path, "alpha")
+    _other_halts(halted.repo, halted_run.INLINE_BUILD_MAX_RUNS + 1)
+    sentinel = halted.repo / halted_run.LOOKUP_INDEX_DIR / halted_run.LOOKUP_SENTINEL
+    assert not sentinel.exists()
+    hit = halted_run.halted_run_to_resume(halted.repo, halted.sizing_rel, build=False)
+    assert hit is halted_run.STALLED
+    assert not sentinel.exists()
+    halted_run.halted_run_to_resume(halted.repo, halted.sizing_rel)
+    assert sentinel.exists()
+
+
+def _other_halts(root: Path, count: int) -> None:
+    for n in range(count):
+        d = root / RECORD_DIR_ROOT / f"ask-20261028T{n // 3600 % 24:02d}{n // 60 % 60:02d}{n % 60:02d}-{n:06x}"
+        d.mkdir(parents=True)
+        (d / "halted.json").write_text(
+            json.dumps({"status": "halted", "halted": "x", "sizing_rel": "state/sizings/2026-10-28-other.yaml"}),
+            encoding="utf-8",
+        )
+
+
+def test_a_sizing_with_no_halt_among_many_halts_resumes_nothing_in_one_listing(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    _other_halts(tmp_path, 400)
+    halted_run.rebuild_lookup_index(tmp_path)
+    reads: list = []
+    real = halted_run._read
+    monkeypatch.setattr(halted_run, "_read", lambda d: reads.append(d) or real(d))
+    started = time.perf_counter()
+    route = hook._resume_route(tmp_path, "state/sizings/2026-10-28-none.yaml", {"tool_input": {}}, {}, None, None)
+    assert route == (None, None)
+    assert reads == []
+    assert time.perf_counter() - started < 0.5
+
+
+def test_a_sizing_with_no_halt_among_many_halts_and_no_index_defers_never_refuses(tmp_path):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    _other_halts(tmp_path, 400)
+    envelope, emitted = hook._resume_route(tmp_path, "state/sizings/2026-10-28-none.yaml", {"tool_input": {}}, {}, None, None)
+    assert emitted is None
+    assert "Re-submit once" not in json.dumps(envelope)
+
+
 # Door-free cases: the dispatch-timeout detail and the asks fan-out launcher.
 
 
@@ -382,13 +471,20 @@ def _spent_budget_launch(tmp_path, monkeypatch):
     return launcher.read_text(encoding="utf-8"), deferred[0].read_text(encoding="utf-8")
 
 
+def _params_file_text(root) -> str:
+    """The payload the deferred script's relay reads: the one `defer-params-*.json` under `scratch/warp/`."""
+    files = list((root / "scratch" / "warp").glob("defer-params-*.json"))
+    assert len(files) == 1
+    return files[0].read_text(encoding="utf-8")
+
+
 def test_a_launcher_started_deferred_emit_never_nests_workflow_and_the_launcher_starts_what_it_emits(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit.fan_launcher import DEFERRED_EMIT_KEY
 
     launcher, child = _spent_budget_launch(tmp_path, monkeypatch)
     assert "workflow(" not in child
     assert f"{DEFERRED_EMIT_KEY}: {{ path: scriptPath" in child
-    assert "launcher_child" in child
+    assert "launcher_child" in _params_file_text(tmp_path)
     assert f"result.{DEFERRED_EMIT_KEY}" in launcher and launcher.count("await workflow(") == 1
 
 

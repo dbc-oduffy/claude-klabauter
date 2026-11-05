@@ -33,6 +33,7 @@ def send(
     directory: Optional[Path] = None,
     now: Optional[float] = None,
     from_session: Optional[str] = None,
+    from_box: Optional[str] = None,
 ) -> dict:
     """Append one line addressed to ``to_session`` into box ``box_id``'s inbox; return a reply.
 
@@ -40,7 +41,8 @@ def send(
     ``{sent: False, reason}`` with ``unknown_box``, ``bad_session`` (empty ``to_session``),
     ``write_failed:*``, ``short_write`` or ``not_found_at_path``; else ``{sent: True, box_id, path}``.
     ``text`` is truncated to ``MAX_TEXT`` characters. Stamps ``from_box`` from this box's identity
-    and ``from_session`` when given.
+    and ``from_session`` when given. ``from_box`` overrides the stamp: the caller must have
+    authenticated it (``box_key.verify``); this function trusts it.
     """
     root = box_registry.box_root(box_id, directory)
     if root is None:
@@ -49,7 +51,8 @@ def send(
         return {"sent": False, "reason": "bad_session"}
     line = {
         "ts": time.time() if now is None else now,
-        "from_box": box_registry.local_box_id(
+        "from_box": from_box
+        or box_registry.local_box_id(
             Path(directory).parent.parent if directory is not None else None
         ),
         "to_session": to_session,

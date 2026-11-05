@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.group_em import gem_home, gem_home_sync
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -59,7 +60,7 @@ def test_no_remote_is_noop_for_both_legs(tmp_path):
     for rep in (gem_home_sync.pull_on_entry(home), gem_home_sync.push_leg(home, "m")):
         assert rep["sync"] == "noop"
         assert rep["remote_opt_out"] == "gh-absent"
-    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(home), capture_output=True).returncode != 0
+    assert subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(home), capture_output=True, **no_console_creationflags()).returncode != 0
 
 
 def test_push_leg_commits_and_pushes(tmp_path, remote, seeded):

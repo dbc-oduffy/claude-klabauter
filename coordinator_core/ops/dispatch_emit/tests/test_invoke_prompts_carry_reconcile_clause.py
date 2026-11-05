@@ -6,8 +6,8 @@ import re
 
 import yaml
 
-from coordinator_core.ops.dispatch_emit.ask_compose import ASK_STAGE_RECONCILE_CLAUSE
-from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_STAGE
+from coordinator_core.ops.dispatch_emit.ask_compose import ASK_GATE_RECONCILE_CLAUSE, ASK_STAGE_RECONCILE_CLAUSE
+from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_GATE, OP_ASK_STAGE
 from coordinator_core.ops.dispatch_emit.ask_stage_receipt import ALREADY_STAGED_KEY, STAGE_IN_FLIGHT_KEY
 from coordinator_core.ops.dispatch_emit.emit import _INDETERMINATE_RECONCILE_CLAUSE, compose_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
@@ -42,6 +42,8 @@ def _assert_clause_everywhere(script: str, *, marker: str = _INVOKE_PATH) -> int
             want = RECONCILE_CLAUSE
         elif OP_ASK_STAGE in prompt:
             want = ASK_STAGE_RECONCILE_CLAUSE
+        elif OP_ASK_GATE in prompt:
+            want = ASK_GATE_RECONCILE_CLAUSE
         else:
             want = _INDETERMINATE_RECONCILE_CLAUSE
         assert want in prompt, prompt[:200]

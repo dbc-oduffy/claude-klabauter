@@ -19,8 +19,8 @@ RATCHET_SLACK = 4096
 STAGES = ("planBlitz", "roadmapBlitz", "staged", "core")
 
 STAGE_BUDGETS: dict[str, dict[str, int]] = {
-    "bare": {"planBlitz": 4096, "roadmapBlitz": 37308, "staged": 4096, "core": 276984},
-    "m_plus": {"planBlitz": 248897, "roadmapBlitz": 36956, "staged": 4096, "core": 303119},
+    "bare": {"planBlitz": 4096, "roadmapBlitz": 37308, "staged": 4096, "core": 265805},
+    "m_plus": {"planBlitz": 244669, "roadmapBlitz": 4096, "staged": 4096, "core": 287745},
 }
 
 
@@ -29,7 +29,7 @@ def _strip_variants(text: str) -> list[str]:
 
     strip = getattr(ask_plan_blitz, "strip_comment_lines", None) or ask_compose._strip_comment_lines
     stripped = strip(text)
-    base = [text, stripped]
+    base = [text, stripped, ask_compose._strip_docblocks(stripped)]
     return base + [agent_body_dedupe.strip_code_indentation(v) for v in base]
 
 

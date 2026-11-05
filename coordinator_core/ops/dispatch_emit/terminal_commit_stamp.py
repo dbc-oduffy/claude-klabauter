@@ -245,6 +245,11 @@ def _stamp_coded_commit(
         params["ignored_untracked"] = []
     if session_id is not None:
         params["session_id"] = session_id
+    from coordinator_core.session import landing_hold
+
+    if landing_hold.is_held(str(worktree_root), session_id):
+        landing_hold.defer(str(worktree_root), session_id, "coded_stamp", params)
+        return {"rows_coded": rows_coded, "coded_sha": None, "coded_deferred": "session-landing-hold"}
     try:
         reply = commit_v2(params, repo_root)
     except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
@@ -323,25 +328,26 @@ def _criterion_reason(inline_review: object) -> Optional[str]:
 
 def _stamp_plan_implemented(
     worktree_root: Path, plan_rel: str, sha: str, *, reason: Optional[str] = None,
-    ledger_met: Optional[str] = None,
+    ledger_met: Optional[str] = None, halt_marker: Optional[dict] = None,
 ) -> dict:
     """Write the plan's ``implemented`` status to disk, uncommitted, when the
-    review stamp it now carries records a ``met`` criterion; the caller's commit
+    review stamp it now carries records a judge-authored ``met`` criterion; the caller's commit
     carries it. The verdict is read off the plan on disk, never a param, so only
-    a minted stamp can discharge it. A refusal (open spine rows, the goal gate)
+    a minted stamp can discharge it. ``completion_blockers`` over that stamp (and ``halt_marker``,
+    the run's ``halted.json`` payload) refuses with ``plan_status: not-stamped``; the recorded
+    ``falsifier_verdict``/``falsifier_output`` are the criterion's own ``falsifier`` fields,
+    never synthesised. A refusal (open spine rows, the goal gate)
     is reported and writes nothing. The refusal text is kept from its head: the
     cause leads it and the override boilerplate trails. ``reason`` is the judge's own reason,
-    appended to the stamp prose only; the met check never reads it. ``ledger_met`` (the
-    ``_ledger_met_observation`` line) discharges an undecided criterion (absent or not ``met``/
-    ``not_met``) with source "requirements ledger"; a ``not_met`` criterion still refuses. An
-    ``indeterminate`` stamp is likewise discharged at the transition's ``criterion_refusal`` by
-    the same ``ledger_met``, forwarded to it."""
+    appended to the stamp prose only; the met check never reads it. ``ledger_met`` is accepted
+    for caller compatibility and discharges nothing: a ledger has no judge."""
     import contextlib
     import io
 
     import yaml
 
     from coordinator_core.archive_stamp import cs_stamp_plan_implemented
+    from coordinator_core.ops.dispatch_emit.completion_gate import completion_blockers
     from coordinator_core.ops.plan_status_transition import _FALSIFIER_OUTPUT_MAX
 
     plan_abs = worktree_root / plan_rel
@@ -356,15 +362,17 @@ def _stamp_plan_implemented(
     stamp = fm.get("review_stamp") if isinstance(fm, dict) else None
     criterion = stamp.get("criterion") if isinstance(stamp, dict) else None
     status = criterion.get("status") if isinstance(criterion, dict) else None
-    if status == "met":
-        observation = str(criterion.get("observation") or "").strip()
-        source = criterion.get("sidecar") or "the run's criterion leg"
-    elif ledger_met and ledger_met.strip() and status != "not_met":
-        observation, source = ledger_met.strip(), "requirements ledger"
-    else:
+    if status != "met":
         return {"plan_status": "not-stamped", "plan_status_reason": "review_stamp criterion is not met"}
-    if not observation:
-        return {"plan_status": "not-stamped", "plan_status_reason": "criterion observation is empty"}
+    blockers = completion_blockers(
+        inline_review={"criterion": criterion, "tests": stamp.get("tests")}, halt_marker=halt_marker,
+    )
+    if blockers:
+        return {"plan_status": "not-stamped", "plan_status_reason": "completion gate: " + "; ".join(blockers)}
+    source = criterion.get("sidecar") or "the run's criterion leg"
+    falsifier = criterion["falsifier"]
+    if str(falsifier.get("verdict") or "").strip() != "pass":
+        return {"plan_status": "not-stamped", "plan_status_reason": "falsifier verdict is not pass"}
     err = io.StringIO()
     recorded = isinstance(fm, dict) and fm.get("exit_criterion_met") is not None
     record = (
@@ -372,14 +380,13 @@ def _stamp_plan_implemented(
         if recorded
         else {
             "falsifier_verdict": "pass",
-            "falsifier_output": observation[:_FALSIFIER_OUTPUT_MAX],
+            "falsifier_output": str(falsifier["output"]).strip()[:_FALSIFIER_OUTPUT_MAX],
             "prose": f"criterion met at {sha} per {source}" + (f"; {reason}" if reason else ""),
         }
     )
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(err):
         rc = cs_stamp_plan_implemented(
             str(plan_abs), **record, refuse_open_spine_rows=True, commit=False, ship_sha=sha,
-            ledger_met=ledger_met if status != "met" else None,
         )
     if rc != 0:
         reason = err.getvalue().strip()[:600]

@@ -1121,6 +1121,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/git/commit.py", "_reset_index_paths", "reset"),
         ("coordinator_core/merge_assemble/__init__.py", "compute_version_bump_proposal", "tag"),
         ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "add"),
+        ("coordinator_core/ops/dispatch_emit/clean_overlay_verify.py", "verify", "checkout"),
         ("coordinator_core/ops/fleet_machinery_sweep.py", "_git_rm_cached", "rm"),
         ("coordinator_core/ops/git_maintenance.py", "run_tier", "prune"),
         ("coordinator_core/ops/propagate_body.py", "_commit_delivery", "add"),
@@ -1142,7 +1143,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 38
+_PINNED_VERB_CEILING = 39
 
 
 def _runner_message(sites: list) -> str:

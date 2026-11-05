@@ -1145,23 +1145,28 @@ def install_global_doctrine(coord_root: str, claude_home_dir: str, check_only: b
     `<coord_root>/templates/global-doctrine/rules/*.md` into
     `<claude_home_dir>/.claude/rules/`.
 
-    Global doctrine and rules are copied IN, never OVERWRITTEN and never
-    PRUNED: an existing destination file (CLAUDE.md or a same-named rule) is
-    left exactly as the operator last edited it, and a rule present at the
-    destination but absent from this source tree is never removed -- this
-    function only ever adds files that are missing, matching
-    `coordinator/INSTALL.md`'s "copies in, never overwrites" contract for the
-    operator's own `~/.claude/CLAUDE.md` and `~/.claude/rules/`.
+    Global doctrine and rules are copied IN, never OVERWRITTEN: an existing
+    destination file (CLAUDE.md or a same-named rule) is left exactly as the
+    operator last edited it. The only deletion is the retired rule names in
+    `derive_global_doctrine_live_copy.RETIRED_RULE_NAMES`; any other rule
+    absent from this source tree stays.
 
     Returns `(claude_md_created, rules_created)` -- the CLAUDE.md leg as a
     bool and the list of rule filenames actually copied. Under `check_only`
     nothing is written; the return value reports what WOULD be created.
     """
+    from coordinator_core.hooks.derive_global_doctrine_live_copy import (
+        RETIRED_RULE_NAMES,
+        prune_retired_rules,
+    )
+
     src_doctrine = os.path.join(coord_root, "templates", "global-doctrine", "CLAUDE.md")
     src_rules_dir = os.path.join(coord_root, "templates", "global-doctrine", "rules")
     dest_claude_dir = os.path.join(claude_home_dir, ".claude")
     dest_claude_md = os.path.join(dest_claude_dir, "CLAUDE.md")
     dest_rules_dir = os.path.join(dest_claude_dir, "rules")
+
+    prune_retired_rules(Path(dest_rules_dir), check_only)
 
     claude_md_created = False
     if os.path.isfile(src_doctrine) and not os.path.exists(dest_claude_md):
@@ -1173,7 +1178,7 @@ def install_global_doctrine(coord_root: str, claude_home_dir: str, check_only: b
     rules_created: List[str] = []
     if os.path.isdir(src_rules_dir):
         for name in sorted(os.listdir(src_rules_dir)):
-            if not name.endswith(".md"):
+            if not name.endswith(".md") or name in RETIRED_RULE_NAMES:
                 continue
             src_rule = os.path.join(src_rules_dir, name)
             if not os.path.isfile(src_rule):

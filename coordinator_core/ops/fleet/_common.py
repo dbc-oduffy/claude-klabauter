@@ -34,8 +34,10 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Mapping, NamedTuple, Optional, Tuple, Union, cast
 
@@ -514,6 +516,30 @@ async def _update_index_with_retry(argv: List[str], *, cwd: Path, env: dict) -> 
         last_err = stderr.decode(errors="replace").strip()
         if attempt < _INDEX_RETRY_MAX_ATTEMPTS - 1:
             await asyncio.sleep(delay)
+            delay = min(delay * 2, _INDEX_RETRY_BACKOFF_CAP_S)
+    return last_err or "update-index-failed"
+
+
+def _update_index_with_retry_sync(argv: List[str], *, cwd: Path, env: dict) -> Optional[str]:
+    """Synchronous `_update_index_with_retry`: same retry schedule and return contract.
+
+    Each spawn is bounded by `run_git`'s local-plumbing budget (no wider bound is
+    available to a caller); a timeout counts as a failed attempt. Never raises.
+    """
+    from coordinator_core.git.run import run_git
+
+    delay = _INDEX_RETRY_INITIAL_SLEEP_S
+    last_err = ""
+    for attempt in range(_INDEX_RETRY_MAX_ATTEMPTS):
+        res = run_git(argv[1:], cwd=str(cwd), env=env)
+        if res.returncode == 0:
+            return None
+        if res.timed_out:
+            last_err = "timed out"
+        else:
+            last_err = res.stderr.strip()
+        if attempt < _INDEX_RETRY_MAX_ATTEMPTS - 1:
+            time.sleep(delay)
             delay = min(delay * 2, _INDEX_RETRY_BACKOFF_CAP_S)
     return last_err or "update-index-failed"
 
@@ -1614,6 +1640,86 @@ async def _resync_main_index_for_moves(
             _LOG.error("archive_and_commit: pending-resync record failed: %s", exc)
 
 
+def _resync_main_index_for_moves_sync(
+    moves: List[Move],
+    acted_by_id: dict,
+    *,
+    worktree_root: Path,
+    env: dict,
+    run_git=_update_index_with_retry_sync,
+    committed_blobs: Optional[Mapping[str, str]] = None,
+) -> None:
+    """Synchronous `_resync_main_index_for_moves`: identical contract, no event loop.
+
+    `run_git(argv, *, cwd, env) -> Optional[str]` is sync. See the async form's
+    docstring for the resync rationale, chunking and failure annotation.
+    """
+    from datetime import datetime, timezone
+
+    relevant_moves = [m for m in moves if m.candidate_id in acted_by_id]
+    if not relevant_moves:
+        return
+
+    indexed = None
+    if any(m.restage_src for m in relevant_moves):
+        try:
+            from coordinator_core.git.git_state import read_index
+
+            indexed = read_index(worktree_root)
+        except Exception:  # noqa: BLE001 -- an unreadable index keeps every src in the argv
+            indexed = None
+
+    def _tokens(m: "Move") -> Tuple[str, ...]:
+        if m.restage_src and indexed is not None and rel_id(m.src, worktree_root) not in indexed:
+            return (str(m.dst),)
+        return (str(m.src), str(m.dst))
+
+    for chunk in _argv_group_chunks([(m, _tokens(m)) for m in relevant_moves]):
+        argv = ["git", "restore", "--staged", "--"]
+        for _move, tokens in chunk:
+            argv.extend(tokens)
+
+        restore_err = run_git(argv, cwd=worktree_root, env=env)
+        if restore_err is None:
+            continue
+
+        reason = f"restore-staged-failed: {restore_err}"
+        _LOG.error(
+            "archive_and_commit: main-index resync FAILED after %d attempts"
+            " for batch of %d move(s): %s (main index may be dirty — AC10)",
+            _INDEX_RETRY_MAX_ATTEMPTS, len(chunk), reason,
+        )
+        for move, _tokens in chunk:
+            item = acted_by_id.get(move.candidate_id)
+            if item is not None:
+                item["index_resync_failed"] = reason
+            _persist_index_resync_failure(
+                worktree_root=worktree_root,
+                candidate_id=move.candidate_id,
+                reason=reason,
+                op_label="archive_and_commit",
+            )
+        recorded_at = datetime.now(timezone.utc).isoformat()
+        blobs = committed_blobs or {}
+        try:
+            record_pending(
+                worktree_root,
+                [
+                    PendingResync(
+                        src=rel_id(move.src, worktree_root),
+                        dst=rel_id(move.dst, worktree_root),
+                        candidate_id=move.candidate_id,
+                        committed_blob=blobs.get(move.candidate_id, ""),
+                        op_label="archive_and_commit",
+                        recorded_at=recorded_at,
+                    )
+                    for move, _tokens in chunk
+                ],
+            )
+        except Exception as exc:  # noqa: BLE001 - record fault must not fail the op
+            _LOG.error("archive_and_commit: pending-resync record failed: %s", exc)
+
+
 async def _resync_main_index_for_reaps(
     paths: List[Path],
     reaped_by_id: dict,
@@ -1909,6 +2015,23 @@ async def archive_and_commit(
     moves: List[Move],
     subject: str,
 ) -> Tuple[List[dict], List[dict]]:
+    """Async entry for `archive_and_commit_sync`; same arguments and `(acted, failed)` result.
+
+    A cancelled await abandons the worker thread, which still lands its commit
+    (or reverses its renames) on its own.
+    """
+    # asyncio is imported here, not at module scope: sync-only importers of this
+    # module (goal_append and other fleet ops) must not pay for it.
+    import asyncio
+
+    return await asyncio.to_thread(archive_and_commit_sync, worktree_root, moves, subject)
+
+
+def archive_and_commit_sync(
+    worktree_root: Path,
+    moves: List[Move],
+    subject: str,
+) -> Tuple[List[dict], List[dict]]:
     """DR-211 D3/D4 git-archive helper: os.replace each Move in-process, then
     land the whole batch as ONE commit via `_commit_via_head_spine` (imported
     from `ops.ceremony.git_native` — peer-to-peer import, deliberate; see the
@@ -2046,10 +2169,11 @@ async def archive_and_commit(
       the acted moves' src and dst, never a wildcard.
     - NEVER commits with a trailing `-- <paths>` pathspec — that reads WORKTREE
       content and reopens FORWARD-B (see above). The assembled dict IS the pathspec.
-    - NEVER uses blocking subprocess.run for the remaining git spawn (`git
-      hash-object`) — routed through `_hash_object_stdin_paths`, itself
-      `asyncio`-safe (DR-211 D4 async mandate; ipc.py:80 "single asyncio
-      event loop").
+    - NEVER runs on the event loop's thread: this is the synchronous core, and
+      `archive_and_commit` offloads it with `asyncio.to_thread`. A caller
+      without a loop (`dispatch.terminal_commit`) calls it directly and never
+      imports asyncio. Every git spawn carries a timeout so a worker abandoned
+      by a cancelled async entry cannot hang interpreter exit.
     - NEVER uses `git mv` for the rename itself — os.replace is the mover;
       rename detection at diff time is by content similarity and needs no
       index hint. See F-5.
@@ -2097,13 +2221,6 @@ async def archive_and_commit(
     _update_index_with_retry / _INDEX_RETRY_* for the exponential-backoff
     replacement and its empirical sizing.
     """
-    # asyncio deferred to first use here (not module scope) — this module is imported by
-    # goal_append.py (an eager-loaded op module) and several other sync-only fleet ops;
-    # module-scope `import asyncio` dragged asyncio.base_events (~8ms) into every one of
-    # those import paths even when they never call archive_and_commit/rm_and_commit.
-    # Spec: docs/plans/2026-07-24-canonical-resolution-engine.md task W0-1.
-    import asyncio
-
     try:
         # HEAD-race CAS anchor (b4f0bfe88 etc., 2026-08-18/20): captured once,
         # here, spawn-free (reads .git/HEAD directly) -- and used below both
@@ -2272,9 +2389,7 @@ async def archive_and_commit(
         restage_dst_rel_list = [dst_rel_by_id[m.candidate_id] for m in restage_moves]
         hash_result = None
         if restage_dst_rel_list:
-            hash_result = await asyncio.to_thread(
-                _hash_object_stdin_paths, restage_dst_rel_list, cwd=worktree_root,
-            )
+            hash_result = _hash_object_stdin_paths(restage_dst_rel_list, cwd=worktree_root)
 
         assembled: Dict[str, Union[Tuple[int, str], object]] = {}
         spine_error: Optional[str] = None
@@ -2534,12 +2649,12 @@ async def archive_and_commit(
             for m in acted_moves
             if isinstance(assembled.get(dst_rel_by_id[m.candidate_id]), tuple)
         }
-        await _resync_main_index_for_moves(
+        _resync_main_index_for_moves_sync(
             moves, acted_by_id, worktree_root=worktree_root, env=main_env,
             committed_blobs=committed_blobs,
         )
         try:
-            await _index_resync_drain.drain_pending_resyncs(worktree_root)
+            _index_resync_drain.drain_pending_resyncs_sync(worktree_root)
         except Exception as exc:  # noqa: BLE001 - drain fault must not fail the op
             _LOG.error("archive_and_commit: pending-resync drain failed: %s", exc)
 
@@ -2552,13 +2667,7 @@ async def archive_and_commit(
         # per-Move) — this loop already committed everything together, and
         # `release_committed_claims` itself costs one `git status
         # --porcelain` call regardless of how many paths are passed.
-        # Offloaded via `asyncio.to_thread`: this module's own NEGATIVE-SPEC
-        # ("NEVER uses blocking subprocess.run — all git calls are
-        # asyncio.create_subprocess_exec + await, DR-211 D4 async mandate")
-        # applies to this call too — `release_committed_claims` issues a
-        # synchronous `git status --porcelain` subprocess.
-        await asyncio.to_thread(
-            session_scope.release_committed_claims_or_retain,
+        session_scope.release_committed_claims_or_retain(
             worktree_root,
             (
                 rel_id(p, worktree_root) for m in moves if m.candidate_id in acted_ids
@@ -2571,15 +2680,11 @@ async def archive_and_commit(
         return acted, failed
 
     finally:
-        # Nothing to clean up: this function no longer opens a private
-        # GIT_INDEX_FILE temp file or spawns a `commit-tree`/`update-ref`
-        # child of its own -- `_commit_via_head_spine` lands the commit
-        # in process via a locked ref CAS with zero git spawns, so there is
-        # no orphaned-commit race for `_kill_orphaned_commit` to guard here
-        # (unlike `rm_and_commit` below, whose private-index seam this
-        # chunk deliberately does not touch -- see the dispatch brief).
-        # The `try:` is retained rather than removed outright so this
-        # function's body keeps its existing indentation.
+        # Nothing to clean up: no private GIT_INDEX_FILE, and every git child
+        # here runs under `subprocess.run`, which has returned before control
+        # reaches this point -- no orphaned-commit race for
+        # `_kill_orphaned_commit` to guard (it serves `rm_and_commit`'s
+        # still-async private-index seam).
         pass
 
 

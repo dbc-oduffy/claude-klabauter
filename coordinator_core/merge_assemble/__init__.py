@@ -668,7 +668,7 @@ def build_directives(
                 "the pre-merge project suite and its Step 6 re-validation, which run "
                 "after apply returns; revoking here would destroy it before either "
                 "fires. Run it once validation has passed: `tier-u-grant-cli revoke "
-                f"--only-ceremony {_CEREMONY_NAME}` (guarded: a PM grant is left alone)"
+                f"--only-ceremony {_CEREMONY_NAME}` (guarded: a grant this ceremony did not mint is left alone)"
             ),
         },
     ]

@@ -88,8 +88,19 @@ def _compiler_version(compiler_path: str) -> str:
         return f"(version probe failed: {exc!r})"
 
 
+def _stamp_file_content(engine_root: Path) -> str | None:
+    """Stripped `_engine_stamp` under `engine_root`, None when absent."""
+    try:
+        return (Path(engine_root) / "coordinator_core" / "_engine_stamp").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError:
+        return None
+
+
 def write_provenance(
-    output: Path, compiler_path: str, engine_root: Path, *, image_sha256: str | None = None,
+    output: Path, compiler_path: str, engine_root: Path, *,
+    image_sha256: str | None = None, engine_stamp: str | None = None,
 ) -> Path:
     """Records, next to `output`, the SHA-256 of every source file this
     binary was built from plus the compiler and its version -- so a mismatch
@@ -106,8 +117,12 @@ def write_provenance(
     checked against the artifact beside it; not restated here. Same
     keyword contract as `build.py`'s writer too: `build()` computes the
     digest once, so pass it rather than leave it `None` unless you have no
-    digest handy."""
+    digest handy.
+
+    `engine_stamp` -- the override when given, else the stripped content of
+    `engine_root/coordinator_core/_engine_stamp`."""
     provenance = {
+        "engine_stamp": engine_stamp if engine_stamp is not None else _stamp_file_content(engine_root),
         "sources": {
             path.name: hashlib.sha256(path.read_bytes()).hexdigest()
             for path in (*_SOURCES, _HEADER, _ENV_SET_HEADER)
@@ -148,6 +163,7 @@ def build(
     python_bin: Path | None = None,
     compiler: str | None = None,
     output: Path | None = None,
+    engine_stamp: str | None = None,
 ) -> Path:
     """Compiles the POSIX `door` binary and writes its engine-root sidecar.
 
@@ -218,7 +234,10 @@ def build(
 
     write_sidecar(output, engine_root)
     image_sha256 = hashlib.sha256(output.read_bytes()).hexdigest()
-    write_provenance(output, compiler_path, engine_root, image_sha256=image_sha256)
+    write_provenance(
+        output, compiler_path, engine_root,
+        image_sha256=image_sha256, engine_stamp=engine_stamp,
+    )
     return output
 
 

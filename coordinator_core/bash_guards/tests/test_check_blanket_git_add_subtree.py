@@ -362,6 +362,36 @@ def test_run_record_dir_of_a_different_live_sessions_held_run_is_denied(monkeypa
     assert "state/warp/ask-1/run.json" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_foreign_subtree_denial_tells_the_caller_to_list_the_files(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    (root / "src").mkdir(parents=True)
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(monkeypatch, str(root), dry_run_lines=["add 'src/mine.py'", "add 'src/peer.py'"])
+    _wire_claims(monkeypatch, {"src/mine.py"})
+
+    result = _enveloped(guard.check_blanket_git_add)(
+        "git add src/", session_id="sess1", hook_payload={}
+    )
+
+    assert "naming each file you wrote" in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_root_anchor_denial_omits_the_list_the_files_hint(monkeypatch, tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    monkeypatch.chdir(root)
+    _wire_hazard(monkeypatch)
+    _wire_git(monkeypatch, str(root))
+
+    result = _enveloped(guard.check_blanket_git_add)(
+        "git add -A", session_id="sess1", hook_payload={}
+    )
+
+    assert result is not None
+    assert "naming each file you wrote" not in result["hookSpecificOutput"]["permissionDecisionReason"]
+
+
 def test_run_record_dir_of_the_submitting_sessions_own_run_is_allowed(monkeypatch, tmp_path):
     calls = _held_run_repo(monkeypatch, tmp_path, holder="sess1")
 

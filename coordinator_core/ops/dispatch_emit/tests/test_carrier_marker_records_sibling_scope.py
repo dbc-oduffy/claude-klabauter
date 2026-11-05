@@ -28,7 +28,7 @@ def _plan_file(tmp_path):
         out += (
             f"- id: {row_id}\n  title: t{row_id}\n  change_kind: doc-edit\n"
             f"  surface: docs/x/{row_id}.md\n  writes:\n    - docs/x/{row_id}.md\n"
-            f"  queue_scope: project\n  disposition: open\n{edge}  body: |\n    Do {row_id}.\n"
+            f"  queue_scope: project\n  disposition: open\n  disjoint_parallel: true\n{edge}  body: |\n    Do {row_id}.\n"
         )
     path = tmp_path / "p.md"
     path.write_text(

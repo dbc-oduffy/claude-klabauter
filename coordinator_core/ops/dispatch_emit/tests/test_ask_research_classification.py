@@ -93,8 +93,9 @@ def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 def _assemble(repo: Path, *extra: str, tshirt: str = "XS") -> str:
     path = Path(record_homes.record_path(str(repo), "sizings", _NAME))
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_DRAFT, encoding="utf-8")
-    rel = Path(record_homes.record_path("", "sizings", _NAME)).as_posix()
+    rel = path.relative_to(repo).as_posix()
     code = sa.main(
         [
             "--tshirt", tshirt, "--interaction-mode", "pm", "--exit-criterion", "findings written",

@@ -90,3 +90,13 @@ def test_overlay_flag_reaches_run(monkeypatch):
     monkeypatch.setattr(lgrp, "run", fake_run)
     assert lgrp.main(["--overlay", "a/b.py", "--overlay", "c.py"]) == 0
     assert seen["overlay"] == ("a/b.py", "c.py")
+
+
+def test_copy_lf_folds_crlf_text_and_leaves_binary_alone(tmp_path):
+    text, binary = tmp_path / "a.py", tmp_path / "b.bin"
+    text.write_bytes(b"x = 1\r\ny = 2\r\n")
+    binary.write_bytes(b"\x00\r\n\x01")
+    lgrp._copy_lf(str(text), str(tmp_path / "a2.py"))
+    lgrp._copy_lf(str(binary), str(tmp_path / "b2.bin"))
+    assert (tmp_path / "a2.py").read_bytes() == b"x = 1\ny = 2\n"
+    assert (tmp_path / "b2.bin").read_bytes() == b"\x00\r\n\x01"

@@ -11,6 +11,7 @@ Public surface:
     def engine_site_dir(home: Optional[Path] = None) -> Path: ...
     def stamp(home: Optional[Path] = None) -> Optional[tuple[int, int]]: ...
     def ensure(base_python: str, dep_specs: Sequence[str], home: Optional[Path] = None) -> Path: ...
+    def health(interpreter_path: str, home: Optional[Path] = None) -> EngineSiteHealth: ...
 
 ``home`` is the settings-home root; ``None`` resolves ``settings_home()``.
 """
@@ -18,13 +19,14 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import NamedTuple, Optional, Sequence
 
-from coordinator_core._settings_home import settings_home
+from coordinator_core import _settings_home
 from coordinator_core.win_portability import no_console_creationflags
 
 _DIR_NAME = "engine-site"
@@ -35,7 +37,7 @@ _PROBE_TIMEOUT_S = 30
 
 def engine_site_dir(home: Optional[Path] = None) -> Path:
     """The engine-site directory under the settings home."""
-    return (Path(home) if home is not None else settings_home()) / _DIR_NAME
+    return (Path(home) if home is not None else _settings_home.settings_home()) / _DIR_NAME
 
 
 def _read_stamp(home: Optional[Path]) -> Optional[tuple[tuple[int, int], str]]:
@@ -51,6 +53,44 @@ def stamp(home: Optional[Path] = None) -> Optional[tuple[int, int]]:
     """The major.minor engine-site was provisioned for, or None when unstamped. Zero spawn."""
     read = _read_stamp(home)
     return read[0] if read else None
+
+
+REMEDY = "python3 scripts/setup.py"
+_VERSIONED_BASENAME = re.compile(r"^python(\d+)\.(\d+)(?:\.exe)?$", re.IGNORECASE)
+
+
+class EngineSiteHealth(NamedTuple):
+    """``status``: ok | missing | stamp-mismatch | yaml-absent | unknown. ``remedy`` is the fix command."""
+
+    status: str
+    stamp_minor: Optional[tuple[int, int]]
+    interp_minor: Optional[tuple[int, int]]
+    remedy: str
+
+
+def health(interpreter_path: str, home: Optional[Path] = None) -> EngineSiteHealth:
+    """Will ``interpreter_path`` load yaml from engine-site? File stats only; never spawns.
+
+    The interpreter's minor comes from its realpath basename (``python3.15``); a name
+    carrying no minor (``python.exe``) is ``unknown``, never a guess.
+    """
+    try:
+        match = _VERSIONED_BASENAME.match(os.path.basename(os.path.realpath(interpreter_path)))
+    except (OSError, ValueError):
+        match = None
+    interp = (int(match.group(1)), int(match.group(2))) if match else None
+    stamped = stamp(home)
+    if interp is None:
+        status = "unknown"
+    elif stamped is None:
+        status = "missing"
+    elif stamped != interp:
+        status = "stamp-mismatch"
+    elif not (engine_site_dir(home) / "yaml").is_dir():
+        status = "yaml-absent"
+    else:
+        status = "ok"
+    return EngineSiteHealth(status, stamped, interp, REMEDY)
 
 
 def _specs_digest(dep_specs: Sequence[str]) -> str:

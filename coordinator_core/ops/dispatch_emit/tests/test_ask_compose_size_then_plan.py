@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -65,7 +66,10 @@ def test_scout_reports_inline_through_its_schema_so_no_sidecar_is_owed():
 
 def test_sizing_path_prefix_is_emitted_verbatim():
     script = _compose()
-    assert "const _sizingPathFor = (r) => REPO_ROOT + '/' + 'state/sizings/' + " in script
+    assert re.search(
+        r"const _sizingPathFor = \(r\) => REPO_ROOT \+ '/' \+ 'state/sizings/\d{4}-\d{2}/' \+ '\d{4}-\d{2}-\d{2}-' \+ _slugOf\(r\)",
+        script,
+    )
     assert (
         "const _sizingPath = _boundRelOf(_scouted.sizing_path) ? REPO_ROOT + '/' + _scouted.sizing_path"
         " : _sizingPathFor(_scouted);"

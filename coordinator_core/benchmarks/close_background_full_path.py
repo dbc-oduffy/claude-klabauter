@@ -1,9 +1,10 @@
 """Driver for the close.background job, measured as a process tree.
 
 Each invocation builds a fresh repo under a caller-given directory (one open claimed handoff,
-one open inbox memo, an `archive/` dir (the onboarding marker the sweep leg keys on), a minimal pinboard-only orientation cache, a close-job record queueing all four
-legs), then runs the job in-process. `--setup-only` does everything except the job, so the cost
-of the job is `full - setup-only`.
+one open inbox memo, an `archive/` dir (the onboarding marker the sweep leg keys on), a minimal
+pinboard-only orientation cache, a close-job record queueing all four legs), then runs the job
+in-process. `--setup-only` does everything except the job, so the cost of the job is
+`full - setup-only`.
 
     python -m coordinator_core.benchmarks.close_background_full_path <dir> [--setup-only]
 

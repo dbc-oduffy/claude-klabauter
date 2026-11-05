@@ -139,6 +139,9 @@ def _make_claude_klabauter_fixture(root: Path, target_name: str = "cross-repo-me
     script."""
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
+    # An engine root is a stamped build; the resolver denies an unstamped tree.
+    (root / "coordinator_core").mkdir()
+    (root / "coordinator_core" / "_engine_stamp").write_text("stamp\n", encoding="utf-8")
     sentinel = bin_dir / "archive-stamp-cli"
     sentinel.write_text("#!/bin/sh\necho SENTINEL\n", encoding="utf-8")
     sentinel.chmod(0o755 if sentinel_executable else 0o644)
@@ -204,7 +207,7 @@ def test_claude_klabauter_root_sentinel_file_is_not_a_rung(tmp_path: Path):
     result = _run(forwarder, ml_dir)
 
     assert result.returncode == 1
-    assert "cannot resolve claude-klabauter" in result.stderr
+    assert "no published claude-klabauter engine" in result.stderr
     assert "TARGET_REACHED" not in result.stdout
 
 
@@ -232,7 +235,7 @@ def test_missing_both_fails_loud(tmp_path: Path):
     result = _run(forwarder, ml_dir)
 
     assert result.returncode == 1
-    assert "cannot resolve claude-klabauter" in result.stderr
+    assert "no published claude-klabauter engine" in result.stderr
     assert "machine-local set repos.claude_klabauter" in result.stderr
 
 
@@ -245,7 +248,8 @@ def test_traversal_segment_rejected(tmp_path: Path):
     result = _run(forwarder, ml_dir)
 
     assert result.returncode == 1
-    assert "traversal segment" in result.stderr
+    assert "no published claude-klabauter engine" in result.stderr
+    assert "TARGET_REACHED" not in result.stdout
 
 
 def test_root_resolved_but_coordinator_bin_missing_message(tmp_path: Path):
@@ -257,7 +261,8 @@ def test_root_resolved_but_coordinator_bin_missing_message(tmp_path: Path):
     ml_dir.mkdir()
 
     incomplete_root = tmp_path / "incomplete-claude-klabauter"
-    incomplete_root.mkdir()
+    (incomplete_root / "coordinator_core").mkdir(parents=True)
+    (incomplete_root / "coordinator_core" / "_engine_stamp").write_text("stamp\n", encoding="utf-8")
     _register_root(ml_dir, str(incomplete_root))
 
     result = _run(forwarder, ml_dir)
@@ -276,6 +281,8 @@ def test_coordinator_bin_present_but_sentinel_absent_message(tmp_path: Path):
 
     stale_root = tmp_path / "stale-claude-klabauter"
     (stale_root / "coordinator" / "bin").mkdir(parents=True)
+    (stale_root / "coordinator_core").mkdir()
+    (stale_root / "coordinator_core" / "_engine_stamp").write_text("stamp\n", encoding="utf-8")
     _register_root(ml_dir, str(stale_root))
 
     result = _run(forwarder, ml_dir)
@@ -371,6 +378,8 @@ def test_forwarder_missing_target_exits_127_without_traceback(tmp_path: Path):
     root = tmp_path / "missing-target-claude-klabauter"
     bin_dir = root / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
+    (root / "coordinator_core").mkdir(exist_ok=True)
+    (root / "coordinator_core" / "_engine_stamp").write_text("stamp\n", encoding="utf-8")
     sentinel = bin_dir / "archive-stamp-cli"
     sentinel.write_text("#!/bin/sh\necho SENTINEL\n", encoding="utf-8")
     sentinel.chmod(0o755)
@@ -937,6 +946,8 @@ def _make_install_bin_resolvers_fixture(tmp_path: Path) -> "tuple[Path, Path, Pa
     resolve_claude_klabauter_lib = claude_klabauter_root / "coordinator" / "lib" / "resolve-claude-klabauter"
     agent_bin.mkdir(parents=True)
     resolve_claude_klabauter_lib.mkdir(parents=True)
+    (claude_klabauter_root / "coordinator_core").mkdir()
+    (claude_klabauter_root / "coordinator_core" / "_engine_stamp").write_text("stamp\n", encoding="utf-8")
     shutil.copyfile(_RESOLVE_CLAUDE_KLABAUTER_SRC, resolve_claude_klabauter_lib / "_resolve_claude_klabauter.py")
     # `_install_bin_resolvers` loads coordinator/lib/bin-templates-manifest.py
     # (C12) off the resolved claude-klabauter root before its write loops run — copy

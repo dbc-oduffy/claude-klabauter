@@ -76,3 +76,74 @@ def test_missing_compiler_fails_the_round_naming_the_cause(tmp_path, monkeypatch
 
     door_dir = mirror / "coordinator_core" / "warm" / "door"
     assert (door_dir / "door.exe").read_bytes() == b"MZ-stale"
+
+
+_STAMP_AWARE_BUILD = _STUB_BUILD.replace(
+    "def build(engine_root, *, python_bin=None, compiler=None, output=None):",
+    "def build(engine_root, *, python_bin=None, compiler=None, output=None, engine_stamp=None):",
+).replace(
+    '{"engine_root": str(engine_root), "output": str(output)}',
+    '{"engine_root": str(engine_root), "output": str(output), "engine_stamp": engine_stamp}',
+)
+
+
+def test_engine_stamp_override_reaches_the_mirror_build(tmp_path):
+    mirror = _mirror(tmp_path, _STAMP_AWARE_BUILD)
+
+    assert door_install.rebuild_door_for_mirror(mirror, tmp_path / "k", engine_stamp="sha:X") is True
+
+    call = json.loads((mirror / "coordinator_core/warm/door/call.json").read_text())
+    assert call["engine_stamp"] == "sha:X"
+
+
+def test_absent_keyword_leaves_the_build_call_unchanged(tmp_path):
+    mirror = _mirror(tmp_path, _STAMP_AWARE_BUILD)
+
+    assert door_install.rebuild_door_for_mirror(mirror, tmp_path / "k") is True
+
+    call = json.loads((mirror / "coordinator_core/warm/door/call.json").read_text())
+    assert call["engine_stamp"] is None
+
+
+def test_mirror_predating_the_keyword_fails_naming_the_gap(tmp_path):
+    mirror = _mirror(tmp_path, _STUB_BUILD)
+
+    with pytest.raises(door_install.MirrorDoorRebuildError, match="predates the engine_stamp"):
+        door_install.rebuild_door_for_mirror(mirror, tmp_path / "k", engine_stamp="sha:X")
+
+    assert (mirror / "coordinator_core/warm/door/door.exe").read_bytes() == b"MZ-stale"
+
+
+def _engine_root_with_stamp(tmp_path: Path, stamp: str) -> Path:
+    root = tmp_path / "dest"
+    (root / "coordinator_core").mkdir(parents=True)
+    (root / "coordinator_core" / "_engine_stamp").write_text(f"{stamp}\n")
+    return root
+
+
+def test_windows_provenance_records_override_over_destination_stamp(tmp_path, monkeypatch):
+    monkeypatch.setattr(real_build, "_compiler_version", lambda kind, path: "v")
+    exe = tmp_path / "door.exe"
+    exe.write_bytes(b"MZ")
+    root = _engine_root_with_stamp(tmp_path, "sha:live")
+
+    real_build.write_provenance(exe, "gcc", "cc", root, engine_stamp="sha:X")
+    assert json.loads((tmp_path / "door.exe.provenance.json").read_text())["engine_stamp"] == "sha:X"
+
+    real_build.write_provenance(exe, "gcc", "cc", root)
+    assert json.loads((tmp_path / "door.exe.provenance.json").read_text())["engine_stamp"] == "sha:live"
+
+
+def test_posix_provenance_records_override_over_destination_stamp(tmp_path, monkeypatch):
+    from coordinator_core.warm.door import build_posix
+
+    monkeypatch.setattr(build_posix, "_compiler_version", lambda path: "v")
+    exe = tmp_path / "door"
+    exe.write_bytes(b"ELF")
+    root = _engine_root_with_stamp(tmp_path, "sha:live")
+
+    build_posix.write_provenance(exe, "cc", root, engine_stamp="sha:X")
+    assert json.loads((tmp_path / "door.provenance.json").read_text())["engine_stamp"] == "sha:X"
+
+    build_posix.write_provenance(exe, "cc", root)
+    assert json.loads((tmp_path / "door.provenance.json").read_text())["engine_stamp"] == "sha:live"

@@ -113,6 +113,7 @@ def split(
     from coordinator_core.git.rollback_check import _blob_at_commit
     from coordinator_core.git.since_base_overlap import _head_sha, _lines, _opcodes
     from coordinator_core.ops.dispatch_emit import kept_work
+    from coordinator_core.ops.dispatch_emit.run_hunk_claims import MAX_MATCHED_MIDDLE
 
     root = Path(root)
     common = resolve_git_common_dir(root)
@@ -135,6 +136,16 @@ def split(
     if head_lines is None or wt is None or own_base is None:
         return _refuse(None, "unreadable")
     work = wt.splitlines(keepends=True)
+
+    if not foreign and own_base == head_lines:
+        # No co-claimant and the run's baseline is HEAD: every worktree change is the run's, so the blob
+        # stages whole with no line diff. An untracked file whose baseline is an earlier draft takes the diff.
+        if work == head_lines:
+            return Split(staged_blob=git_objects.write_object(common, b"blob", wt))
+        return Split(
+            staged_blob=git_objects.write_object(common, b"blob", wt),
+            own_headers=[f"@@ -{_span(0, len(head_lines))} +{_span(0, len(work))} @@"],
+        )
 
     blocks = _changed(head_lines, work)
     own_ops = _changed(own_base, work)
@@ -230,7 +241,11 @@ def split(
             own_headers.append(_header(blk))
         elif not has_own:
             out.extend(head_lines[i1:i2])
-        elif (i2 - i1 == j2 - j1 or i1 == i2) and j2 > j1:
+        elif (
+            (i2 - i1 == j2 - j1 or i1 == i2)
+            and j2 > j1
+            and max(i2 - i1, j2 - j1) <= MAX_MATCHED_MIDDLE
+        ):
             for k in range(j2 - j1):
                 line = (j1 + k, j1 + k + 1)
                 if any(_hit(line, o) for o in own_rs):

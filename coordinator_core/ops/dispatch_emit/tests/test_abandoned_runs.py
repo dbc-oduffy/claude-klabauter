@@ -178,9 +178,7 @@ def test_reaper_lands_abandoned_runs_and_orphaned_sizing_in_one_commit(repo):
     assert out["sizings"] == [SIZING]
     assert _git(["rev-parse", "HEAD~1"], repo).strip() == head
     names = set(_git(["show", "--name-only", "--format=", "HEAD"], repo).split())
-    assert names == {
-        f"state/warp/{r}/{f}" for r in (STALE, STALE2) for f in ("ask.md", "run.json")
-    } | {SIZING}
+    assert names == {f"state/run-evidence/{r}/outcome.json" for r in (STALE, STALE2)} | {SIZING}
     assert "Halted-By: abandoned" in _git(["log", "-1", "--format=%B"], repo)
     assert out["committed_sha"] == _git(["rev-parse", "HEAD"], repo).strip()
 
@@ -194,7 +192,7 @@ def test_live_claimed_and_young_runs_stay_dirty(repo):
     for run_id in (LIVE, CLAIMED, YOUNG):
         assert f"state/warp/{run_id}/ask.md" in dirty
     assert HELD_SIZING in dirty
-    assert not any(STALE in p or STALE2 in p for p in dirty)
+    assert not any((STALE in p or STALE2 in p) and not p.startswith("state/warp/") for p in dirty)
     assert SIZING not in dirty
 
 
@@ -202,6 +200,7 @@ def test_live_claimed_and_young_runs_stay_dirty(repo):
 @pytest.mark.cadence
 def test_second_call_is_a_noop(repo):
     _reap(repo)
+    (repo / ".gitignore").write_text("state/warp/\n", encoding="utf-8")
     head = _git(["rev-parse", "HEAD"], repo).strip()
 
     out = _reap(repo)
@@ -275,8 +274,8 @@ def test_superseded_run_reaped_inside_ttl_with_baton_plan_and_evidence(bare):
     assert out["reaped"] == [FOO_OLD]
     assert set(out["artifacts"][FOO_OLD]) == {FOO_SIZING, FOO_BATON, FOO_PLAN, FOO_EVIDENCE}
     assert _committed_names(bare) == {
-        f"state/warp/{FOO_OLD}/{f}" for f in ("ask.md", "run.json")
-    } | {FOO_SIZING, FOO_BATON, FOO_PLAN, FOO_EVIDENCE}
+        f"state/run-evidence/{FOO_OLD}/outcome.json", FOO_SIZING, FOO_BATON, FOO_PLAN, FOO_EVIDENCE,
+    }
     assert f"state/warp/{FOO_NEW}/ask.md" in _porcelain(bare)
 
 
@@ -291,7 +290,8 @@ def test_halt_marked_run_reaped_inside_ttl(bare):
     out = _reap(bare)
 
     assert out["reaped"] == [FOO_OLD]
-    assert f"state/warp/{FOO_OLD}/halted.json" in _committed_names(bare)
+    assert _committed_names(bare) == {f"state/run-evidence/{FOO_OLD}/outcome.json"}
+    assert not any(n.startswith("state/warp/") for n in _committed_names(bare))
 
 
 @pytest.mark.spawns_process
@@ -318,8 +318,7 @@ def test_late_modified_tracked_requirements_reaped_inside_ttl(bare):
     out = _reap(bare)
 
     assert out["reaped"] == [FOO_OLD]
-    assert _committed_names(bare) == {f"state/warp/{FOO_OLD}/requirements.md"}
-    assert _porcelain(bare) == set()
+    assert _committed_names(bare) == {f"state/run-evidence/{FOO_OLD}/outcome.json"}
 
 
 @pytest.mark.spawns_process
@@ -382,6 +381,7 @@ def test_spawn_count_with_and_without_candidates(repo, monkeypatch):
     _reap(repo)
     with_candidates = len(spawns)
     spawns.clear()
+    (repo / ".gitignore").write_text("state/warp/\n", encoding="utf-8")
     _reap(repo)
 
     assert len(spawns) == 1
@@ -447,7 +447,7 @@ def test_dirty_artifacts_of_a_clean_record_dir_are_reaped_in_one_commit(bare):
     assert out["reaped"] == [FOO_OLD]
     assert set(out["artifacts"][FOO_OLD]) == FOO_ARTIFACTS
     landed = set(_git(["diff", "--name-only", f"{head}..HEAD"], bare).split())
-    assert landed == FOO_ARTIFACTS
+    assert landed == FOO_ARTIFACTS | {f"state/run-evidence/{FOO_OLD}/outcome.json"}
     assert out["committed_sha"]
     assert _porcelain(bare) == set()
 

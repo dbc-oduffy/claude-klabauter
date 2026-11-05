@@ -39,8 +39,10 @@ def test_ledger_unserved_is_arm_agnostic_and_releases_the_owes_predicate(monkeyp
     assert "'m_plus'" not in unserved
     owes = script[script.index("const _ledgerOwes"):]
     owes = owes[: owes.index(";\n")]
-    assert owes.startswith("const _ledgerOwes = _resumeLedger && _gate.arm === 'm_plus' && (")
+    assert owes.startswith("const _ledgerOwes = (_resumeLedger && ((_gate.arm === 'm_plus' && (")
     assert owes.endswith(") || _ledgerUnserved")
+    # Unclaimed register rows owe the leg on any arm: the clause sits outside the M+ conjunction.
+    assert ")) || (_gate.resume_ledger.unclaimed_rows ?? []).length > 0))" in owes
     assert script.index("const _ledgerUnserved") < script.index("const _ledgerOwes")
 
 
@@ -66,4 +68,4 @@ def test_a_replan_that_adds_no_row_halts_instead_of_reaching_ledger_check(monkey
 
 def test_the_m_plus_prefix_of_the_owes_predicate_is_unchanged(monkeypatch):
     script = _script(monkeypatch, "s")
-    assert "const _ledgerOwes = _resumeLedger && _gate.arm === 'm_plus' && (((" in script
+    assert "const _ledgerOwes = (_resumeLedger && ((_gate.arm === 'm_plus' && ((_gate.resume_ledger.blocking ?? [])" in script

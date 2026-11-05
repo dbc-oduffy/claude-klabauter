@@ -19,6 +19,10 @@ test: every worker and subprocess writes it, so an entry cannot be attributed
 to a test. At session finish anything but ``coordinator`` left in it is
 reported and turns a passing exit status into 1; the root is then deleted.
 
+Index guard: the repo root's staged-vs-HEAD set is baselined at configure and
+re-read after each test only when the index file's stat changed; a test that
+changes it fails, named, with the paths.
+
 Stdlib + pytest only, and no package-relative imports: repos without
 ``coordinator_core`` load this file by path and register the module object.
 Register via ``pytest_plugins`` / ``-p``, never by re-exporting hook names.
@@ -53,6 +57,8 @@ _WATCHED: "list[Path]" = []
 _SANCTIONED: "list[Path]" = []
 _MINTED: "Path | None" = None
 _REDIRECT: "_Redirect | None" = None
+_INDEX_GUARD: "dict" = {}
+_GIT_ENV_POISON = ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY")
 
 # Mirrors coordinator_core.temp_layout.RUN_TEMP_DIRNAME (pinned by a test).
 _RUN_TEMP_DIRNAME = "run-temp"
@@ -197,6 +203,7 @@ def pytest_configure(config: pytest.Config) -> None:
         if root not in roots and not any(_contains(s, root) for s in _SANCTIONED):
             roots.append(root)
     _WATCHED[:] = roots
+    _arm_index_guard(repo)
 
 
 def _rmtree(path: Path) -> None:
@@ -266,10 +273,92 @@ def _leads_into_sanctioned(root: Path, name: str) -> bool:
     return any(_contains(entry, s) or _contains(s, entry) for s in _SANCTIONED)
 
 
+def _git_dir(repo: Path) -> "Path | None":
+    dot = repo / ".git"
+    try:
+        if dot.is_dir():
+            return dot
+        text = dot.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if text.startswith("gitdir:"):
+        return (repo / text[len("gitdir:"):].strip()).resolve()
+    return None
+
+
+def _index_fingerprint(git_dir: Path) -> "tuple | None":
+    try:
+        st = (git_dir / "index").stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size, getattr(st, "st_ino", 0))
+
+
+def _index_vs_head(repo: Path) -> "frozenset[tuple[str, str]] | None":
+    """Staged differences of `repo` against HEAD as (status, path); None when unreadable."""
+    try:
+        from coordinator_core.git.run import run_git
+    except ImportError:
+        return None
+
+    env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_POISON}
+    proc = run_git(
+        ["--no-optional-locks", "diff", "--cached", "--name-status", "--no-renames", "-z"],
+        cwd=str(repo),
+        env=env,
+        timeout=10,
+        binary=True,
+    )
+    if proc.returncode != 0:
+        return None
+    tokens = proc.stdout_bytes.decode("utf-8", "replace").split("\0")
+    return frozenset(zip(tokens[0::2], tokens[1::2]))
+
+
+def _arm_index_guard(repo: Path) -> None:
+    """Baseline the repo-under-test's staged-vs-HEAD set; disables itself off a git repo."""
+    _INDEX_GUARD.clear()
+    git_dir = _git_dir(repo)
+    if git_dir is None:
+        return
+    baseline = _index_vs_head(repo)
+    if baseline is None:
+        return
+    _INDEX_GUARD.update(
+        repo=repo, git_dir=git_dir, baseline=baseline, fingerprint=_index_fingerprint(git_dir)
+    )
+
+
+def _index_changes() -> "list[str]":
+    """Entries newly staged against HEAD since the last call; one git spawn, and none while
+    the index file's stat is unchanged. Trap: a peer staging into the same tree during a
+    test is indistinguishable from the test, so it is named too."""
+    if not _INDEX_GUARD:
+        return []
+    fingerprint = _index_fingerprint(_INDEX_GUARD["git_dir"])
+    if fingerprint == _INDEX_GUARD["fingerprint"]:
+        return []
+    current = _index_vs_head(_INDEX_GUARD["repo"])
+    _INDEX_GUARD["fingerprint"] = fingerprint
+    if current is None:
+        return []
+    new = sorted(current - _INDEX_GUARD["baseline"])
+    _INDEX_GUARD["baseline"] = current
+    return [f"{status} {path}" for status, path in new]
+
+
 @pytest.fixture(autouse=True)
 def _fs_containment(request: pytest.FixtureRequest):
     before = _snapshot()
     yield
+    staged = _index_changes()
+    if staged:
+        pytest.fail(
+            f"{request.node.nodeid} changed the repo-under-test's index against HEAD: "
+            f"{staged}. A git op that stages or un-tracks must run in a tmp_path repo "
+            "with an explicit cwd/repo_root.",
+            pytrace=False,
+        )
     after = _snapshot()
     gained = [
         f"{root / name}"

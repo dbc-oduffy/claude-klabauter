@@ -211,10 +211,14 @@ def _age_claim(root: Path, age_secs: float) -> bool:
     from coordinator_core.ops.dispatch_emit import run_token
 
     path = run_token._record_path(root, RUN, claimed=True)
+    if path is None:
+        return False
     record = run_token._read(path)
-    if path is None or record is None:
+    if record is None:
         return False
     record["claimed_at"] = time.time() - age_secs
+    if "deadline" in record:
+        record["deadline"] = time.time() - 1.0
     path.write_text(json.dumps(record, sort_keys=True), encoding="utf-8")
     return True
 

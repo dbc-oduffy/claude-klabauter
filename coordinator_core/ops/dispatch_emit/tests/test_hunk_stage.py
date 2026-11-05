@@ -232,3 +232,102 @@ def test_split_spawns_nothing(repo, monkeypatch):
     hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base, foreign=[(RUN_A, base)])
 
     assert spawned == []
+
+
+def _count_opcodes(monkeypatch):
+    from coordinator_core.git import since_base_overlap as sbo
+
+    calls = []
+    real = sbo._opcodes
+
+    def counting(a, b):
+        calls.append(1)
+        return real(a, b)
+
+    monkeypatch.setattr(sbo, "_opcodes", counting)
+    return calls
+
+
+def test_a_new_file_stages_whole_with_no_line_diff(repo, monkeypatch):
+    new = "pkg/new.json"
+    from coordinator_core.git import git_objects
+
+    base = git_objects.write_object(resolve_git_common_dir(repo), b"blob", b"")
+    body = "".join(f'  "k{i}": 0,\n' for i in range(2000))
+    (repo / new).write_bytes(body.encode())
+    calls = _count_opcodes(monkeypatch)
+
+    got = hunk_stage.split(repo, new, own_run_id=RUN_A, own_baseline_blob=base, foreign=[])
+
+    assert calls == []
+    assert got.overlaps == []
+    assert _staged_text(repo, got.staged_blob) == body
+    assert got.own_headers == ["@@ -0,0 +1,2000 @@"]
+
+
+def test_an_untracked_file_with_a_draft_baseline_stages_only_the_runs_lines(repo):
+    new = "pkg/draft.txt"
+    from coordinator_core.git import git_objects
+
+    common = resolve_git_common_dir(repo)
+    base = git_objects.write_object(common, b"blob", b"draft-1\ndraft-2\n")
+    (repo / new).write_bytes(b"draft-1\ndraft-2\nrun-1\n")
+
+    got = hunk_stage.split(repo, new, own_run_id=RUN_A, own_baseline_blob=base, foreign=[])
+
+    assert got.overlaps == []
+    assert _staged_text(repo, got.staged_blob) == "run-1\n"
+
+
+def test_own_baseline_equal_to_head_with_no_foreign_stages_whole_with_no_line_diff(repo, monkeypatch):
+    base = wb.capture(repo, [P])[P]
+    _put(repo, _rows({5: "A", 115: "B"}))
+    calls = _count_opcodes(monkeypatch)
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_A, own_baseline_blob=base, foreign=[])
+
+    assert calls == []
+    assert _staged_text(repo, got.staged_blob) == _rows({5: "A", 115: "B"})
+
+
+def _commit_flat(repo) -> str:
+    flat = "".join("  0,\n" for _ in range(1000))
+    (repo / P).write_bytes(flat.encode())
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-q", "-m", "flat")
+    return flat
+
+
+def test_a_coarse_rewrite_with_no_foreign_hunk_is_attributed_whole(repo):
+    flat = _commit_flat(repo)
+    base = wb.capture(repo, [P])[P]
+    rows = flat.splitlines(keepends=True)
+    for k in range(100, 900):
+        rows[k] = "  1,\n"
+    (repo / P).write_bytes("".join(rows).encode())
+
+    got = hunk_stage.split(
+        repo, P, own_run_id=RUN_B, own_baseline_blob=base, foreign=[(RUN_A, base)]
+    )
+
+    assert got.overlaps == []
+    assert _staged_text(repo, got.staged_blob) == "".join(rows)
+
+
+def test_a_foreign_hunk_sharing_a_coarse_block_refuses_rather_than_line_matching(repo):
+    flat = _commit_flat(repo)
+    base_a = wb.capture(repo, [P])[P]
+    rows = flat.splitlines(keepends=True)
+    rows[50] = "  A,\n"
+    (repo / P).write_bytes("".join(rows).encode())
+    base_b = wb.capture(repo, [P])[P]
+    for k in range(100, 900):
+        rows[k] = "  1,\n"
+    (repo / P).write_bytes("".join(rows).encode())
+
+    got = hunk_stage.split(
+        repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[(RUN_A, base_a)]
+    )
+
+    assert got.staged_blob is None
+    assert got.overlaps

@@ -37,14 +37,19 @@ def _owned_remote(repo_root: Path, branch: str):
     return remote, None
 
 
-def nudge_push(worktree_root: Union[str, Path], repo_root: Union[str, Path]) -> dict:
+def nudge_push(
+    worktree_root: Union[str, Path],
+    repo_root: Union[str, Path],
+    branch: Union[str, None] = None,
+) -> dict:
     """Queue `repo_root` for the cadence push when its branch is an owned work/*.
 
+    `branch` is the caller's already-read current branch; None reads HEAD here.
     Returns {status, reason}: `nudged` (queued; not pushed), `not_pushed`
     (branch/remote policy or nothing ahead; reason says why).
     """
     try:
-        branch = head_branch(worktree_root)
+        branch = branch or head_branch(worktree_root)
         if not branch:
             return _result("not_pushed", "detached or unresolvable HEAD")
         ok, _ = branch_gate(branch)

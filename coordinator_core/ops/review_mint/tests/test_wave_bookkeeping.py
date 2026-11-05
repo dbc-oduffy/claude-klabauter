@@ -101,6 +101,7 @@ def test_bookkeep_wave_writes_one_record_with_merged_fields(two_wave_sidecars):
         plan_id="pln-example-a1b2c3",
         prep_sidecar=".coordinator-local/subagent-share/sess-1/prep.md",
         record_stem=stem,
+        run_diff=["src.py"],
     )
 
     assert record["integrated_from"] == ["wave-code-reviewer", "wave-kira"]
@@ -253,7 +254,7 @@ def test_phantom_prep_sidecar_with_no_real_file_is_recorded_absent(tmp_path):
     assert record["prep_sidecar"] is None
 
 
-_FIRING_KEYS = ["leg", "plan_id", "findings_count", "max_severity", "applied"]
+_FIRING_KEYS = ["leg", "plan_id", "findings_count", "max_severity", "applied", "unapplied_max_severity"]
 
 
 def _firing_sidecar(tmp_path, name, findings, ledger=None, agent="coordinator:code-reviewer", eol="\n"):
@@ -272,9 +273,10 @@ def test_review_firing_rows_code_reviewer_applied_p1(tmp_path):
         tmp_path, "a.md", "### Item A\n- **Severity:** P1\n",
         ledger=[{"id": "f1", "file": "src.py", "status": "applied"}],
     )
-    rows = review_firing_rows([p], "pln-x")
+    rows = review_firing_rows([p], "pln-x", {"src.py": None})
     assert rows == [{"leg": "coordinator:code-reviewer", "plan_id": "pln-x",
-                     "findings_count": 1, "max_severity": "P1", "applied": 1}]
+                     "findings_count": 1, "max_severity": "P1", "applied": 1,
+                     "unapplied_max_severity": None}]
     assert list(rows[0]) == _FIRING_KEYS
 
 
@@ -318,17 +320,19 @@ def test_review_firing_rows_crlf_parses_same(tmp_path):
     from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
 
     args = ("### Item A\n- **Severity:** P1\n",)
-    kw = {"ledger": [{"id": "f1", "status": "applied"}]}
-    lf = review_firing_rows([_firing_sidecar(tmp_path, "lf.md", *args, **kw)], "pln-x")
-    crlf = review_firing_rows([_firing_sidecar(tmp_path, "crlf.md", *args, eol="\r\n", **kw)], "pln-x")
-    assert lf == crlf and lf[0]["max_severity"] == "P1"
+    kw = {"ledger": [{"id": "f1", "file": "src.py", "status": "applied"}]}
+    diff = {"src.py": None}
+    lf = review_firing_rows([_firing_sidecar(tmp_path, "lf.md", *args, **kw)], "pln-x", diff)
+    crlf = review_firing_rows([_firing_sidecar(tmp_path, "crlf.md", *args, eol="\r\n", **kw)], "pln-x", diff)
+    assert lf == crlf and lf[0]["max_severity"] == "P1" and lf[0]["applied"] == 1
 
 
 def test_review_firing_rows_unreadable_sidecar_gives_zero_row(tmp_path):
     from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
 
     assert review_firing_rows([tmp_path / "gone.md"], "pln-x") == [
-        {"leg": "gone", "plan_id": "pln-x", "findings_count": 0, "max_severity": None, "applied": 0}
+        {"leg": "gone", "plan_id": "pln-x", "findings_count": 0, "max_severity": None, "applied": 0,
+         "unapplied_max_severity": None}
     ]
 
 
@@ -377,7 +381,7 @@ def test_unapplied_findings_record_why_each_was_left(tmp_path):
     )
     record = bookkeep_wave(
         [empty, rejected], repo_root=tmp_path, session_id="s", plan_id="pln-x-aaaaaa",
-        prep_sidecar=None, record_stem="rec",
+        prep_sidecar=None, record_stem="rec", run_diff=["src.py"],
     )
     entries = record["unapplied_findings"]
     mine = [e for e in entries if e["sidecar"] == "four-fb340"]
@@ -462,13 +466,97 @@ def test_run_diff_is_read_from_the_relayed_tests_block(tmp_path):
     assert record["review_firings"][0]["applied"] == 1
 
 
-def test_no_recorded_run_diff_leaves_the_reviewer_count_standing(tmp_path):
+def test_no_recorded_run_diff_is_no_evidence(tmp_path):
     record = _bookkeep(tmp_path, _two_applied_findings(tmp_path), stage_returns={"tests": {"status": "pass"}})
 
-    assert record["unapplied_findings"] == []
-    assert record["review_firings"][0]["applied"] == 2
-    assert record["fixes_applied"] == 2
+    assert [(e["finding"], e["reason"]) for e in record["unapplied_findings"]] == [
+        ("f1", "no post-review diff"), ("f2", "no post-review diff")
+    ]
+    assert record["review_firings"][0]["applied"] == 0
+    assert record["fixes_applied"] == 0
     assert record["applied_checked_against_run_diff"] is False
+
+
+def _five_applied_one_evidenced(tmp_path):
+    """The 0ec98fb89e shape: five applied rows, the run diff carries only F2's path."""
+    findings = (
+        "### Finding 1: embed gate\n- **Severity:** P1\n\n"
+        "### Finding 2: docs\n- **Severity:** P2\n\n"
+        "### Finding 3: gate\n- **Severity:** P2\n\n"
+        "### Finding 4: nit\n- **Severity:** nit\n\n"
+        "### Finding 5: more\n- **Severity:** P2\n"
+    )
+    ledger = [{"id": f"F{i}", "file": f"f{i}.py", "before": "a", "after": "b"} for i in range(1, 6)]
+    return _findings_sidecar(tmp_path / "sh", "five.md", findings, ledger)
+
+
+def test_five_applied_rows_diff_carrying_one_path_yields_applied_one_and_four_unapplied(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    sidecar = _five_applied_one_evidenced(tmp_path)
+    text = sidecar.read_text(encoding="utf-8").replace("agent_type:", "applied: 5\nagent_type:", 1)
+    sidecar.write_text(text, encoding="utf-8")
+
+    row = review_firing_rows([sidecar], "pln-x", {"f2.py": None})[0]
+
+    assert (row["findings_count"], row["applied"]) == (5, 1)
+    assert row["unapplied_max_severity"] == "P1"
+    (tmp_path / ".git").mkdir()
+    record = bookkeep_wave(
+        [sidecar], repo_root=tmp_path, session_id="s", plan_id="pln-x-aaaaaa", prep_sidecar=None,
+        record_stem="rec", run_diff={"f2.py": None},
+    )
+    assert [e["finding"] for e in record["unapplied_findings"]] == ["F1", "F3", "F4", "F5"]
+    assert all(e["reason"] == "not in run diff" for e in record["unapplied_findings"])
+
+
+def test_frontmatter_applied_is_never_read_and_no_ledger_counts_zero(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    p = _firing_sidecar(tmp_path, "a.md", "### Item A\n- **Severity:** P1\n")
+    p.write_text(p.read_text(encoding="utf-8").replace("agent_type:", "applied: 4\nagent_type:", 1), encoding="utf-8")
+
+    assert review_firing_rows([p], "pln-x", {"a.py": None})[0]["applied"] == 0
+
+
+def test_applied_row_citing_no_file_counts_unapplied(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    p = _firing_sidecar(
+        tmp_path, "a.md", "### Finding 1: x\n- **Severity:** P0\n",
+        ledger=[{"id": "f1", "status": "applied"}],
+    )
+    row = review_firing_rows([p], "pln-x", {"src.py": None})[0]
+
+    assert (row["applied"], row["unapplied_max_severity"]) == (0, "P0")
+
+
+def test_unapplied_max_severity_matches_by_id_and_fails_closed_when_unmatched(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    findings = "### Finding 1: big\n- **Severity:** P0\n\n### Finding 2: small\n- **Severity:** P2\n"
+    ledger = [
+        {"id": "f1", "file": "a.py", "status": "applied"},
+        {"id": "f2", "status": "em-rejected", "reason": "no"},
+    ]
+    only_small = review_firing_rows([_firing_sidecar(tmp_path, "a.md", findings, ledger=ledger)], "pln-x", {"a.py": None})[0]
+    assert only_small["unapplied_max_severity"] == "P2"
+
+    odd = [{"id": "zz9", "status": "em-rejected", "reason": "no"}]
+    unmatched = review_firing_rows([_firing_sidecar(tmp_path, "b.md", findings, ledger=odd)], "pln-x", {})[0]
+    assert unmatched["unapplied_max_severity"] == "P0"
+
+
+def test_fully_evidenced_wave_has_no_unapplied_severity(tmp_path):
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_firing_rows
+
+    p = _firing_sidecar(
+        tmp_path, "a.md", "### Finding 1: x\n- **Severity:** P0\n",
+        ledger=[{"id": "f1", "file": "a.py", "status": "applied"}],
+    )
+    row = review_firing_rows([p], "pln-x", {"a.py": None})[0]
+
+    assert (row["applied"], row["unapplied_max_severity"]) == (1, None)
 
 
 def test_hunk_ranges_decide_when_the_row_names_a_line(tmp_path):

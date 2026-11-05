@@ -56,7 +56,7 @@ def test_non_m_plus_arm_names_the_refusal_and_the_resize(tmp_path):
     out = _revise(_repo(tmp_path, plan_edge=True, tshirt="S"))
     assert out["next"] == {"kind": "refire", "call": fire_command(REL), "replans": {"plan": PLAN, "rows": ["R4"]}}
     _assert_no_hand_dispatch(out)
-    assert "REGISTER-ROWS-UNCLAIMED" in out["note"] and "M+" in out["note"]
+    assert "omits register row(s) R4" in out["note"] and "on any arm" in out["note"]
 
 
 def test_halted_run_words_the_note_as_halted(tmp_path):
@@ -70,7 +70,7 @@ def test_halted_run_words_the_note_as_halted(tmp_path):
 def test_warning_names_the_engine_route(tmp_path):
     out = _revise(_repo(tmp_path, plan_edge=True))
     assert "Re-plan against the register" not in out["warning"]
-    assert "refire after this run ends re-plans" in out["warning"]
+    assert "ledger re-plan leg adds rows serving them" in out["warning"]
 
 
 def test_refire_is_the_bare_fire_when_the_plan_claims_every_row(tmp_path):

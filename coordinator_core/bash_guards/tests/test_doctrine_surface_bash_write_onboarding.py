@@ -59,12 +59,10 @@ def test_local_config_write_with_command_key_denies(tmp_path):
 
 
 @pytest.mark.parametrize("level", ["warn", "off"])
-def test_guard_level_relaxes(tmp_path, monkeypatch, level):
+def test_guard_level_never_silences_or_lifts_the_advisory(tmp_path, monkeypatch, level):
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     (tmp_path / "CLAUDE.md").write_text("x")
     out = _check("echo hi >> CLAUDE.md", tmp_path)
-    if level == "off":
-        assert out is None
-    else:
-        assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
-        assert "Doctrine surfaces reach every session" in out["hookSpecificOutput"]["additionalContext"]
+    # An unregistered guard resolves to the advisory at every level; `off` no longer silences it.
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "Doctrine surfaces reach every session" in out["hookSpecificOutput"]["additionalContext"]

@@ -8,6 +8,7 @@ No git, no subprocess.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -35,7 +36,7 @@ def manifest_run_id(sidecar_rel: str) -> str | None:
     return parts[2] if _RUN_ID.fullmatch(parts[2]) and ".." not in parts[2] else None
 
 
-_TWIN_NAME = re.compile(r"\.staged-[0-9a-f]{64}\.workflow\.mjs")
+_TWIN_NAME = re.compile(r"\.staged-[0-9a-f]{64}\.(?:workflow\.mjs|spill\.json)")
 
 
 def _unlink_receipt(twin: Path) -> None:
@@ -55,7 +56,7 @@ def _leave_receipt(twin: Path) -> None:
 
 
 def remove_twins(root: Path, run_id: object) -> int:
-    """Unlink every ``scratch/warp/<run_id>.staged-<sha>.workflow.mjs``; return how many were removed.
+    """Unlink every ``scratch/warp/<run_id>.staged-<sha>`` twin (``.workflow.mjs``) and spill (``.spill.json``); return how many were removed.
 
     Exact-name match on this run only (no glob); an invalid run_id removes nothing; OSErrors are
     swallowed after not counting. Zero spawns. Trap: a run's twin is removed only by a commit leg's
@@ -137,6 +138,68 @@ def _resume_block(root: Path, run_id: str) -> dict | None:
     return {key: block[key] for key in _nested.STAGED_RESUME_FIELDS}
 
 
+def _slim_manifest(raw: bytes, handle: Mapping) -> tuple[str, dict] | None:
+    """``(slim text, its handle)`` for a manifest with a ``rows`` list, else None (nothing to slim).
+
+    Each row keeps ``SLIM_ROW_KEYS`` only; ``writes_count`` records the dropped ``writes`` length. Trap: a
+    slim row's ``writes`` is ``[]``, so a reader must resolve the full list from the spill."""
+    try:
+        manifest = json.loads(raw)
+    except ValueError:
+        return None
+    rows = manifest.get("rows") if isinstance(manifest, dict) else None
+    if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+        return None
+    slim_rows = []
+    for row in rows:
+        slim = {key: row[key] for key in _nested.SLIM_ROW_KEYS if key in row}
+        for key in _nested.SPILLED_ROW_KEYS:
+            if isinstance(row.get(key), list):
+                slim[key] = []
+        if isinstance(row.get("writes"), list):
+            slim["writes_count"] = len(row["writes"])
+        slim_rows.append(slim)
+    text = json.dumps({**manifest, "rows": slim_rows}, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return text, {"path": handle.get("path"), "sha256": hashlib.sha256(text.encode("ascii")).hexdigest(), "bytes": len(text)}
+
+
+def _land(target: Path, body: bytes, refuse: Callable[[str], Exception], label: str) -> None:
+    """Write ``body`` to ``target`` atomically and verify it; no write when already identical."""
+    try:
+        if target.read_bytes() == body:
+            return
+    except OSError:
+        pass
+    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_bytes(body)
+        os.replace(tmp, target)
+        if target.read_bytes() != body:
+            raise OSError("file on disk differs from the body written")
+    except OSError as exc:
+        raise refuse(f"staged twin write failed: {label!r}: {exc}") from exc
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _prune_run(root: Path, run_id: str, keep_sha: str) -> None:
+    """Unlink this run's twins and spills of any other sha; failures are ignored. Exact-name match, this run only."""
+    directory = root / _RUN_DIR_ROOT
+    try:
+        names = os.listdir(directory)
+    except OSError:
+        return
+    for name in names:
+        rest = name[len(run_id):]
+        if name.startswith(run_id) and _TWIN_NAME.fullmatch(rest) and keep_sha not in rest:
+            try:
+                (directory / name).unlink()
+                _unlink_receipt(directory / name)
+            except OSError:
+                pass
+
+
 def ensure_twin(
     root: Path,
     sidecar_rel: str,
@@ -145,18 +208,23 @@ def ensure_twin(
     *,
     max_bytes: int,
     refuse: Callable[[str], Exception],
+    refuse_over_cap: Callable[[str], Exception] | None = None,
 ) -> str | None:
     """Leave the staged twin for a launcher child's manifest; return its repo-relative path when the
     twin on disk now holds the body, else None (any other sidecar, a standalone run: no script or no slot).
 
-    ``refuse`` builds the exception raised when the twin exceeds ``max_bytes`` or cannot be left on disk
-    (unreadable script, several slots, uncontained target, write OSError; message starts
-    ``staged twin write failed``); passed in so this module never imports ``reply_sidecar``.
+    ``refuse`` builds the exception raised when the twin cannot be left on disk (unreadable script, several
+    slots, uncontained target, write OSError; message starts ``staged twin write failed``);
+    ``refuse_over_cap`` (default ``refuse``) builds the one raised when the twin still exceeds ``max_bytes``
+    after slimming; both are passed in so this module never imports ``reply_sidecar``.
+    A body over ``max_bytes`` is slimmed when the manifest has a ``rows`` list: row bulk (``SPILLED_ROW_KEYS``)
+    leaves the inline text for a spill file beside the twin holding the full manifest.
     No write when the twin on disk is already identical. The run's escrowed token (if live) is inlined
     as ``runToken`` into the twin only.
 
-    Trap: a run manifest whose run script is absent is refused; None means only "not a run manifest" or
-    "script without an inline slot", never a missing script.
+    An absent run script is recomposed from the run's kept records (``halt_resume_build.recompose_script``)
+    and staged from; it is refused only when that recompose is impossible, naming a fresh ask as the remedy.
+    Trap: None means only "not a run manifest" or "script without an inline slot", never a missing script.
     """
     run_id = manifest_run_id(sidecar_rel)
     if run_id is None:
@@ -168,7 +236,16 @@ def ensure_twin(
     try:
         lines = script.read_bytes().decode("utf-8").splitlines(keepends=True)
     except FileNotFoundError as exc:
-        raise refuse(f"staged twin write failed: run script {script.name!r} is absent") from exc
+        from coordinator_core.ops.dispatch_emit.halt_resume_build import recompose_script
+
+        text, why = recompose_script(Path(root), run_id)
+        if text is None:
+            raise refuse(
+                f"staged twin write failed: run script {script.name!r} is absent and cannot be recomposed ({why}); "
+                f"a re-arm of this run cannot stage: start a fresh engine-ask on the run's sizing, "
+                f"carrying the rows of {_WARP_HOME_REL}/{run_id}/requirements.md"
+            ) from exc
+        lines = text.splitlines(keepends=True)
     except (OSError, UnicodeDecodeError) as exc:
         raise refuse(f"staged twin write failed: run script {script.name!r} is unreadable: {exc}") from exc
     slots = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == _nested.STAGED_INLINE_SLOT]
@@ -176,39 +253,44 @@ def ensure_twin(
         return None
     if len(slots) != 1:
         raise refuse(f"staged twin write failed: run script {script.name!r} has {len(slots)} inline slots, not one")
-    payload = {"handle": dict(handle), "text": raw.decode("ascii")}
+    extras: dict = {}
     resume = _resume_block(Path(root), run_id)
     if resume is not None:
-        payload[_nested.STAGED_RESUME_KEY] = resume
+        extras[_nested.STAGED_RESUME_KEY] = resume
     token = _run_token.escrowed(Path(root), run_id)
     if token is not None:
-        payload["runToken"] = token
-    inline = json.dumps(payload, ensure_ascii=True)
-    ending = lines[slots[0]][len(_nested.STAGED_INLINE_SLOT):]
-    lines[slots[0]] = f"const _STAGED_INLINE = {inline};{ending}"
-    body = "".join(lines).encode("utf-8")
-    if len(body) > max_bytes:
-        raise refuse(f"staged twin is {len(body)} bytes, over the Workflow runner's {max_bytes}-byte cap")
+        extras["runToken"] = token
+    over_cap = refuse_over_cap or refuse
+
+    def render(payload: dict) -> bytes:
+        inline = json.dumps({**payload, **extras}, ensure_ascii=True)
+        out = list(lines)
+        ending = out[slots[0]][len(_nested.STAGED_INLINE_SLOT):]
+        out[slots[0]] = f"const _STAGED_INLINE = {inline};{ending}"
+        return "".join(out).encode("utf-8")
+
     twin_rel = _nested.staged_twin_rel(run_id, sha)
     target = _path_guard.contained_path(Path(root) / twin_rel, [Path(root) / _RUN_DIR_ROOT])
     if target is None:
         raise refuse(f"staged twin write failed: {twin_rel!r} is outside {_RUN_DIR_ROOT}/")
-    try:
-        if target.read_bytes() == body:
-            _leave_receipt(target)
-            return Path(twin_rel).as_posix()
-    except OSError:
-        pass
-    tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
-    try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_bytes(body)
-        os.replace(tmp, target)
-        if target.read_bytes() != body:
-            raise OSError("twin on disk differs from the body written")
-    except OSError as exc:
-        raise refuse(f"staged twin write failed: {twin_rel!r}: {exc}") from exc
-    finally:
-        tmp.unlink(missing_ok=True)
+    body = render({"handle": dict(handle), "text": raw.decode("ascii")})
+    spill_target = None
+    if len(body) > max_bytes:
+        slim = _slim_manifest(raw, handle)
+        if slim is not None:
+            spill_rel = _nested.staged_spill_rel(run_id, sha)
+            spill_target = _path_guard.contained_path(Path(root) / spill_rel, [Path(root) / _RUN_DIR_ROOT])
+            if spill_target is None:
+                raise refuse(f"staged twin write failed: spill {spill_rel!r} is outside {_RUN_DIR_ROOT}/")
+            slim_text, slim_handle = slim
+            body = render(
+                {"handle": slim_handle, "text": slim_text, "full_handle": dict(handle), _nested.STAGED_SPILL_KEY: spill_rel}
+            )
+    if len(body) > max_bytes:
+        raise over_cap(f"{_nested.STAGED_TWIN_OVER_CAP_HEAD}: twin is {len(body)} bytes, over the {max_bytes}-byte cap")
+    if spill_target is not None:
+        _land(spill_target, raw, refuse, f"spill {spill_target.name}")
+    _land(target, body, refuse, twin_rel)
+    _prune_run(Path(root), run_id, sha)
     _leave_receipt(target)
     return Path(twin_rel).as_posix()

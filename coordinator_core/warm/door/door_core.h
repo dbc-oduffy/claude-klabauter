@@ -280,6 +280,16 @@ int door_invocation_declares_stdin_read(
  * limit, which applies here verbatim. */
 int door_basename_is_install_class(const char *basename);
 
+/* Replay-safe invocations: `<basename> <subcommand>` pairs that are
+ * read-only, so a post-delivery failure may be re-run cold. Runtime source
+ * of truth is `door_replay_safe_invocations` in `door_core.c`; semantic
+ * source is each CLI's `REPLAY_SAFE_SUBCOMMANDS` in `coordinator/bin/`;
+ * `test_replay_safe_table_parity.py` links them. Returns 1 when argv[1] is a
+ * listed subcommand of `basename`; fails closed (0) on a NULL basename or an
+ * argv the door cannot read. Exact `strcmp`, as above. */
+int door_invocation_is_replay_safe(
+    const char *basename, int argc, const char *const *argv);
+
 
 int door_hook_event_name(const char *json, size_t len, buf_t *out);
 

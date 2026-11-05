@@ -46,6 +46,7 @@ def test_format_names_pid_and_full_cmdline_and_one_stat_per_disk():
     cmds = {77: "python writer.py --out /x y"}
     lines = gd.format_disk_lines(stats, top, cmds)
     assert lines[0] == ("GOVERNOR DISK pid=77 io=300MB disk=0 data idle=0% queue=12 "
+                        "attribution=box-wide-top-io (pid not proven to write this disk) "
                         "cmd=python writer.py --out /x y")
     stat_lines = [ln for ln in lines if ln.startswith("GOVERNOR DISK-STAT")]
     assert len(stat_lines) == 2

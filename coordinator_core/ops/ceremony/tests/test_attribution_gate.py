@@ -330,3 +330,48 @@ def test_vacated_gate_spawns_no_subprocess(tmp_path):
 
     assert not outcome.passed
     assert after == before
+
+
+def test_mass_rename_builds_the_pool_once_and_still_passes(tmp_path, monkeypatch):
+    """Every head-absent path diffs against one shared pool; rebuilding it per path made a
+    932-rename commit quadratic and outran the 30s op budget (example-retrieval-repo-ff, 2026-11-04)."""
+    from coordinator_core.ops.ceremony import commit_gates
+
+    repo = _init_repo(tmp_path)
+    n = 40
+    olds = [f"old/f{i}.md" for i in range(n)]
+    for i, p in enumerate(olds):
+        _seed_file(repo, p, f"{_ATTR_LINE}\nbody {i}\n")
+    _commit(repo, olds)
+    news = []
+    for i, p in enumerate(olds):
+        new = f"new/f{i}.md"
+        (repo / "new").mkdir(exist_ok=True)
+        _git(["mv", p, new], repo)
+        news.append(new)
+    seen = []
+    real = commit_gates.scan_added_lines
+
+    def spy(new_text, old_text, path):
+        seen.append(old_text)
+        return real(new_text, old_text, path)
+
+    monkeypatch.setattr(commit_gates, "scan_added_lines", spy)
+    outcome = attribution_gate(repo, olds + news, vacated=olds)
+
+    assert outcome.passed, outcome.diagnostics
+    assert len(seen) == n
+    assert len({id(o) for o in seen}) == 1
+
+
+def test_scan_added_lines_reads_a_prebuilt_counter_like_its_text():
+    from collections import Counter
+
+    from coordinator_core.attribution import scan_added_lines
+
+    old = "keep\n"
+    new = f"keep\n{_ATTR_LINE}\n"
+    by_text = scan_added_lines(new, old, "foo.py")
+    by_counter = scan_added_lines(new, Counter(old.splitlines()), "foo.py")
+    assert [(m.line_no, m.text) for m in by_counter] == [(m.line_no, m.text) for m in by_text]
+    assert by_counter

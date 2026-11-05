@@ -33,4 +33,10 @@ def expand_shared(script: str) -> str:
             for part in text.split(emit._SHARED_PATH_MARKER_DELIM)
         )
         out = out.replace("${_shared[%d]}" % index, template)
+        out = out.replace(f"_shared[{index}]", "'" + plus + "'")
     return out
+
+
+def merge_adjacent_literals(script: str) -> str:
+    """``script`` with every ``'a' + 'b'`` joined to ``'ab'``: the same resolved string, one literal."""
+    return script.replace("' + '", "")

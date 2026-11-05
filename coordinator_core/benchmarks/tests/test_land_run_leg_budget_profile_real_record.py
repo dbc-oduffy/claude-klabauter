@@ -184,6 +184,70 @@ def test_seed_real_record_copies_halt_withheld_index_and_sentinel(tmp_path):
     assert (dst / hwi.INDEX_DIR / hwi.SENTINEL).is_file()
 
 
+def _halted_record(clone: Path, run_id: str, status: str = "halted") -> None:
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
+
+    rec = clone / "state" / "warp" / run_id
+    rec.mkdir(parents=True)
+    (rec / "halted.json").write_text(json.dumps({"status": status}))
+    (rec / "manifest.json").write_text("{}")
+    (clone / hwi.INDEX_DIR).mkdir(parents=True, exist_ok=True)
+    (clone / hwi.INDEX_DIR / f"{run_id}.json").write_text(json.dumps({"paths": ["a.py"], "at_ns": 1}))
+
+
+def _fresh_id(tag: str) -> str:
+    from datetime import datetime, timedelta, timezone
+
+    return f"ask-{(datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}-{tag}"
+
+
+def test_scale_halted_runs_copies_only_in_window_halted_runs_inside_the_clone(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
+
+    clone = tmp_path / "clone"
+    live, old, landed = _fresh_id("aaaaaa"), "ask-20200101T000000-bbbbbb", _fresh_id("cccccc")
+    _halted_record(clone, live)
+    _halted_record(clone, old)
+    _halted_record(clone, landed, status="landed")
+    assert prof.in_window_halted_runs(clone) == [live]
+    assert prof.scale_halted_runs(clone, 1) == 1
+    assert not (clone / "state" / "warp" / f"{live}-x2").exists()
+    assert prof.scale_halted_runs(clone, 3) == 3
+    for k in (2, 3):
+        assert (clone / "state" / "warp" / f"{live}-x{k}" / "halted.json").is_file()
+        assert (clone / "state" / "warp" / f"{live}-x{k}" / "manifest.json").is_file()
+        twin = json.loads((clone / hwi.INDEX_DIR / f"{live}-x{k}.json").read_text())
+        assert twin["paths"] == ["a.py"] and twin["at_ns"] > 1
+    assert not (clone / "state" / "warp" / f"{old}-x2").exists()
+    assert not (clone / "state" / "warp" / f"{landed}-x2").exists()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["clone"]
+
+
+def test_scale_below_one_is_refused(tmp_path):
+    with pytest.raises(ValueError):
+        prof.scale_halted_runs(tmp_path, 0)
+
+
+def test_seed_parse_verdicts_fills_the_cache_for_dirty_py_only(tmp_path):
+    from coordinator_core.ops.dispatch_emit import landing_integrity as li
+
+    root = tmp_path / "r"
+    root.mkdir()
+
+    def git(*a):
+        subprocess.run(["git", *a], cwd=str(root), capture_output=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    git("init", "-q")
+    (root / "clean.py").write_bytes(b"x = 1\n")
+    git("add", "clean.py")
+    git("-c", "user.email=t@e.x", "-c", "user.name=t", "commit", "-q", "-m", "c")
+    (root / "dirty.py").write_bytes(b"y = 2\n")
+    (root / "notes.md").write_text("n\n")
+    assert prof.seed_parse_verdicts(root) == 1
+    assert li._verdict_path(root, b"y = 2\n").is_file()
+    assert not li._verdict_path(root, b"x = 1\n").is_file()
+
+
 def test_seed_real_record_without_an_index_copies_none(tmp_path):
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
 

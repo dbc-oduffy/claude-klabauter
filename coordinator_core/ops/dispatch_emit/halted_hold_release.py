@@ -165,6 +165,65 @@ def record_stamps(root: Path) -> list:
     return out
 
 
+SIZING_RUNS_FILE = ".coordinator-local/halt-sizing-runs/sizing-runs.json"
+
+
+def _load_sizing_runs(root: Path) -> dict:
+    import json
+
+    try:
+        data = json.loads((Path(root) / SIZING_RUNS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return {k: v for k, v in data.items() if isinstance(k, str) and isinstance(v, str) and v} if isinstance(data, dict) else {}
+
+
+def _fill_sizings(root: Path, names: list, memo_sizing: dict) -> set:
+    """Fill `memo_sizing[name]` (normalized `run.json` sizing, "" when none) for each of `names`. A name bound to a
+    sizing once is answered from the persistent `SIZING_RUNS_FILE`, so a warm call opens `run.json` only of dirs new
+    since the last call; unbound dirs are re-read (a binding can arrive later). Returns the names answered from the
+    file: a caller that acts on one confirms it against the ledger. Never raises: an unwritable file costs a re-read."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    missing = [n for n in names if n not in memo_sizing]
+    if not missing:
+        return set()
+    import json
+
+    from coordinator_core.atomic_replace import atomic_write_bytes
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    base = Path(root) / RECORD_DIR_ROOT
+    known = _load_sizing_runs(root)
+    from_file: set = set()
+    grown = False
+    for name in missing:
+        value = known.get(name)
+        if value:
+            memo_sizing[name] = value
+            from_file.add(name)
+            continue
+        value = wrd._norm(str(wrd._read_json(base / name / "run.json").get("sizing_rel") or ""))  # `name` is a scanned record dir: no per-dir containment resolve
+        memo_sizing[name] = value
+        if value:
+            known[name] = value
+            grown = True
+    if grown:
+        try:
+            target = Path(root) / SIZING_RUNS_FILE
+            target.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_bytes(target, json.dumps(known, sort_keys=True).encode("utf-8"), preserve_mode=False)
+        except OSError:
+            pass
+    return from_file
+
+
+def rebuild_sizing_runs(root: Path) -> None:
+    """Bind every record dir to its sizing in `SIZING_RUNS_FILE`, so the first release leg after it opens no `run.json`."""
+    _fill_sizings(root, [name for name, _ in record_stamps(root)], {})
+
+
 def _successor_landed(root: Path, run_id: str, sizing: str, *, any_stamp: bool = False) -> bool:
     """A later-stamped record dir binding `sizing` reads `landed`, or its spent token record carries a `landed` dict.
     `any_stamp` weighs every other record dir of the sizing, earlier-minted twins included.
@@ -185,12 +244,16 @@ def _successor_landed(root: Path, run_id: str, sizing: str, *, any_stamp: bool =
     stamped = record_stamps(root)
     if not stamped:
         return False
-    for name, stamp in stamped:
-        if name == run_id or (not any_stamp and (stamp is None or stamp <= own)):
-            continue
-        if name not in memo["sizing"]:
-            memo["sizing"][name] = wrd._norm(str(wrd._read_json(base / name / "run.json").get("sizing_rel") or ""))
+    candidates = [
+        name for name, stamp in stamped
+        if name != run_id and (any_stamp or (stamp is not None and stamp > own))
+    ]
+    cached = _fill_sizings(root, candidates, memo["sizing"])
+    for name in candidates:
         if memo["sizing"][name] != sizing:
+            continue
+        if name in cached and wrd.record_sizing_rel(root, name) != sizing:
+            memo["sizing"][name] = ""  # a cached binding the ledger no longer shows
             continue
         if name not in memo["landed"]:
             marker = halted_run._read(base / name)
@@ -862,46 +925,12 @@ def _anchored_opcodes(base_b: list, kept_b: list) -> Optional[list]:
     a long file) is split at the lines unique to both sides that keep their order (patience anchors), so each
     hunk is matched alone: linear in the file, never one coarse span. Trap: `changed_opcodes` returns a coarse
     span without signalling past its bound, so `exceeds_match_bound` is checked per segment and holds."""
-    from coordinator_core.ops.dispatch_emit.run_hunk_claims import changed_opcodes, exceeds_match_bound
+    from coordinator_core.ops.dispatch_emit.run_hunk_claims import anchored_opcodes, changed_opcodes, exceeds_match_bound
 
     if not exceeds_match_bound(base_b, kept_b):
         return changed_opcodes(base_b, kept_b)
-    base_at: dict = {}
-    kept_at: dict = {}
-    for at, line in enumerate(base_b):
-        base_at[line] = -1 if line in base_at else at
-    for at, line in enumerate(kept_b):
-        kept_at[line] = -1 if line in kept_at else at
-    pairs = sorted((i, kept_at[line]) for line, i in base_at.items() if i >= 0 and kept_at.get(line, -1) >= 0)
-    tails: list = []  # tails[k]: index in `pairs` ending the best order-keeping chain of length k + 1
-    prev: list = []
-    for k, (_i, j) in enumerate(pairs):
-        lo, hi = 0, len(tails)
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if pairs[tails[mid]][1] < j:
-                lo = mid + 1
-            else:
-                hi = mid
-        prev.append(tails[lo - 1] if lo else -1)
-        if lo == len(tails):
-            tails.append(k)
-        else:
-            tails[lo] = k
-    chain: list = []
-    cur = tails[-1] if tails else -1
-    while cur >= 0:
-        chain.append(pairs[cur])
-        cur = prev[cur]
-    chain.reverse()
-    out: list = []
-    cuts = [(-1, -1), *chain, (len(base_b), len(kept_b))]
-    for (ia, ja), (ib, jb) in zip(cuts, cuts[1:]):
-        seg_base, seg_kept = base_b[ia + 1:ib], kept_b[ja + 1:jb]
-        if exceeds_match_bound(seg_base, seg_kept):
-            return None
-        out += [(tag, i1 + ia + 1, i2 + ia + 1, j1 + ja + 1, j2 + ja + 1) for tag, i1, i2, j1, j2 in changed_opcodes(seg_base, seg_kept)]
-    return out
+    ops, coarse = anchored_opcodes(base_b, kept_b)
+    return None if coarse else [op for op in ops if op[0] != "equal"]
 
 
 def _hunks_present_uncached(base: str, kept: str, head: str) -> bool:

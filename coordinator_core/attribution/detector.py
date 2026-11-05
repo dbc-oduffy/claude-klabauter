@@ -6,7 +6,7 @@ import re
 import tokenize
 from collections import Counter
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Union
 
 from .patterns import PATTERNS
 
@@ -159,7 +159,7 @@ def scan_text(text: str, path: str) -> list[Match]:
 
 
 def scan_added_lines(
-    new_text: str, old_text: Optional[str], path: str
+    new_text: str, old_text: Union[str, Counter, None], path: str
 ) -> list[Match]:
     """Matches only for lines whose count in `new_text` rose relative to
     `old_text` -- a `collections.Counter` multiset difference over
@@ -170,7 +170,9 @@ def scan_added_lines(
     "Added" here means "present more times in `new_text` than in
     `old_text`" -- an UNCHANGED line, however many times it repeats,
     contributes 0 to the difference and is never scanned; only the excess
-    occurrences are. `old_text=None` (a path with nothing to compare
+    occurrences are. `old_text` may be a prebuilt line `Counter`: a caller scanning many
+    paths against one shared old text builds it once, since rebuilding it per path is
+    quadratic in a mass rename. `old_text=None` (a path with nothing to compare
     against -- absent at HEAD and unresolved by any rename source) means
     EVERY line in `new_text` counts as added.
 
@@ -190,7 +192,8 @@ def scan_added_lines(
     if old_text is None:
         added_counts: Counter = Counter(new_lines)
     else:
-        added_counts = Counter(new_lines) - Counter(old_text.splitlines())
+        old_counts = old_text if isinstance(old_text, Counter) else Counter(old_text.splitlines())
+        added_counts = Counter(new_lines) - old_counts
     if not added_counts:
         return []
     remaining = dict(added_counts)

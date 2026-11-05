@@ -11,7 +11,6 @@ from __future__ import annotations
 import argparse
 import builtins
 import os
-import shutil
 import statistics
 import sys
 import tempfile
@@ -100,7 +99,9 @@ def measure(peers: int, agents: int, scratch_parent: Optional[str] = None) -> di
             ms = (time.process_time() - p0) * 1000.0
         return {"process_ms": ms, "files_opened": opens.n, "peers": peers, "agents": agents}
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+        rmtree_or_raise(Path(tmp), label="claim-release-scope")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

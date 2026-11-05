@@ -228,6 +228,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("grind", "triage", "classifies a row's fix verdict"),
     _earns("grind", "fix", "fixes the row"),
     _earns("grind", "close", "closes the row's record"),
+    _earns("grind", "split", "writes a triaged row's items to a file in sub-cap pieces, then splits the row over it"),
     _earns("grind", "verify-agent", "runs the row's tests and reports"),
     _earns("grind", "adjudicate", "the APM adjudicates a held row"),
     _floor("grind", "verify-op", "verify runs on an agent with no Edit/Write so the fix agent cannot launder the gate and absorbs the undo op and every non-landing row's undo"),

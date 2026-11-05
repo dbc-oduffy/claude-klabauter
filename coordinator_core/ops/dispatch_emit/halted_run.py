@@ -16,6 +16,7 @@ either rewrites it.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -27,10 +28,11 @@ from coordinator_core.git import call_io_scope
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_HELD_ROWS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
-    stamp_run_stage_at,
+    record_terminal_judge_at, stamp_run_stage_at,
 )
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.ops.dispatch_emit.halt_refire import is_exit_next_action, is_refire_next_action
+from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
 
 HALTED_FILE = "halted.json"
 STATUS_RESUMED = "resumed"
@@ -116,7 +118,113 @@ def _write(record_dir: Path, payload: dict) -> Path:
     target = record_dir / HALTED_FILE
     atomic_write_bytes(target, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
     call_io_scope.invalidate(path=target)
+    _track_lookup(Path(record_dir), payload)
     return target
+
+
+#: Machine-local lookup index: `<LOOKUP_INDEX_DIR>/<sha1(sizing_rel)[:16]>/<run_id>`, one empty file per run whose
+#: marker is `halted` or `resumed` for that sizing. `_write` is the one writer of `halted.json`, so every transition
+#: (halt, `resumed` rewrite, re-halt, landed, closed, superseded) lands here; a per-run file makes each one a single
+#: atomic create or unlink, so peers never lose each other's update. The index answers "does any run hold this
+#: sizing?" and which `ask-*` runs to read; supersession by a newer run is still decided from the run dir names.
+LOOKUP_INDEX_DIR = ".coordinator-local/halted-run-lookup"
+LOOKUP_SENTINEL = ".built-v1"
+
+
+def _lookup_key(sizing_rel: str) -> str:
+    return hashlib.sha1(_norm(sizing_rel).encode("utf-8")).hexdigest()[:16]
+
+
+def _root_of(record_dir: Path) -> Optional[Path]:
+    rd = Path(record_dir)
+    try:
+        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
+    except IndexError:
+        return None
+    return root if root / RECORD_DIR_ROOT / rd.name == rd else None
+
+
+def _track_lookup(record_dir: Path, payload: dict) -> None:
+    """Mirror the marker just written into the lookup index; best-effort, the marker is the truth."""
+    sizing = payload.get("sizing_rel")
+    root = _root_of(record_dir)
+    if not isinstance(sizing, str) or not sizing or root is None or not safe_id(record_dir.name):
+        return
+    entry = root / LOOKUP_INDEX_DIR / _lookup_key(sizing) / record_dir.name
+    try:
+        if payload.get("status") in (STATUS_HALTED, STATUS_RESUMED):
+            entry.parent.mkdir(parents=True, exist_ok=True)
+            entry.touch()
+        else:
+            entry.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def rebuild_lookup_index(repo_root: Path) -> None:
+    """Index every `halted` or `resumed` marker under the record root, then write the sentinel. Add-only, so a
+    transition recorded mid-scan is never undone by a stale read."""
+    root = Path(repo_root)
+    warp = root / RECORD_DIR_ROOT
+    try:
+        names = os.listdir(warp)
+    except OSError:
+        names = []
+    for name in names:
+        if not (name.startswith("warp-") or name.startswith("ask-")) or not safe_id(name):
+            continue
+        marker = _read(warp / name)
+        if marker and marker.get("status") in (STATUS_HALTED, STATUS_RESUMED):
+            _track_lookup(warp / name, marker)
+    sentinel = root / LOOKUP_INDEX_DIR / LOOKUP_SENTINEL
+    sentinel.parent.mkdir(parents=True, exist_ok=True)
+    sentinel.touch()
+
+
+#: A record root with at most this many run dirs is cheap enough to index on the hook path.
+INLINE_BUILD_MAX_RUNS = 64
+
+
+def _small_record_root(repo_root: Path) -> bool:
+    """True when the record root holds at most `INLINE_BUILD_MAX_RUNS` run dirs: one listing, no reads."""
+    try:
+        with os.scandir(Path(repo_root) / RECORD_DIR_ROOT) as it:
+            runs = 0
+            for entry in it:
+                if entry.name.startswith(("warp-", "ask-")):
+                    runs += 1
+                    if runs > INLINE_BUILD_MAX_RUNS:
+                        return False
+    except OSError:
+        return True
+    return True
+
+
+def _indexed_runs(repo_root: Path, sizing_rel: str, *, build: bool = True):
+    """Run ids the lookup index holds for the sizing; the first call on a checkout builds the index.
+    With `build=False` an unbuilt index over more than `INLINE_BUILD_MAX_RUNS` runs answers `STALLED` (the caller cannot prove a negative) instead of scanning."""
+    base = Path(repo_root) / LOOKUP_INDEX_DIR
+    if not (base / LOOKUP_SENTINEL).exists():
+        if not build and not _small_record_root(repo_root):
+            return STALLED
+        rebuild_lookup_index(repo_root)
+    try:
+        return set(os.listdir(base / _lookup_key(sizing_rel)))
+    except OSError:
+        return set()
+
+
+def _warp_stamps(root: Path, prefix: str) -> list:
+    """Stamps of the `<prefix><stamp>` dirs under `root`, from one directory listing; [] on an unreadable root."""
+    stamps = []
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                if entry.name.startswith(prefix) and _STAMP.fullmatch(entry.name[len(prefix):]) and entry.is_dir():
+                    stamps.append(entry.name[len(prefix):])
+    except OSError:
+        return []
+    return stamps
 
 
 def write_halt_marker(
@@ -213,24 +321,12 @@ def halted_ask_run_for(repo_root: Path, sizing_rel: str, *, ignore_superseded: b
     if dated is None:
         return None
     floor = "".join(dated.groups())
-    prefix = f"warp-{stem}-"
     root = Path(repo_root) / RECORD_DIR_ROOT
-    asks = []
-    newest_warp = ""
-    try:
-        with os.scandir(root) as it:
-            for entry in it:
-                name = entry.name
-                if name.startswith("ask-"):
-                    stamp = name[4:]
-                    if _STAMP.fullmatch(stamp) and stamp[:8] >= floor and entry.is_dir():
-                        asks.append(stamp)
-                elif name.startswith(prefix):
-                    stamp = name[len(prefix):]
-                    if _STAMP.fullmatch(stamp) and entry.is_dir() and stamp > newest_warp:
-                        newest_warp = stamp
-    except OSError:
-        return None
+    asks = [
+        name[4:] for name in _indexed_runs(repo_root, norm)
+        if name.startswith("ask-") and _STAMP.fullmatch(name[4:]) and name[4:12] >= floor
+    ]
+    newest_warp = max(_warp_stamps(root, f"warp-{stem}-"), default="") if asks and not ignore_superseded else ""
     for stamp in sorted(asks, reverse=True):
         if stamp < newest_warp and not ignore_superseded:
             return None
@@ -317,9 +413,48 @@ def _is_shell(run_dir: Path) -> bool:
     return isinstance(stage, dict) and stage.get("stage") in (None, "minted")
 
 
-def halted_run_to_resume(repo_root: Path, sizing_rel: str) -> Optional[str]:
+def halted_run_named(repo_root: Path, run_id: object, sizing_rel: str) -> Optional[str]:
+    """`run_id` when it names a `warp-*` or `ask-*` run whose marker is still `halted`, else None.
+
+    A refire carries the run id its halt recorded. A marker bound to another sizing path (the sizing moved or
+    was mutated since the halt) is rebound to `sizing_rel` here, so the sizing-keyed lookups downstream resolve
+    the same run. One marker read; a run that is not halted answers None and the sizing lookup stands."""
+    if not isinstance(run_id, str) or not run_id.startswith(("warp-", "ask-")) or not safe_id(run_id):
+        return None
+    rd = Path(repo_root) / RECORD_DIR_ROOT / run_id
+    marker = _read(rd)
+    if marker is None or marker.get("status") != STATUS_HALTED:
+        return None
+    norm = _norm(sizing_rel)
+    old = marker.get("sizing_rel")
+    if old != norm:
+        _write(rd, {**marker, "sizing_rel": norm})
+        _index_call("add_run", rd, halted_withheld(rd), sizing_rel=norm)
+        if isinstance(old, str) and old:
+            try:
+                (Path(repo_root) / LOOKUP_INDEX_DIR / _lookup_key(old) / run_id).unlink(missing_ok=True)
+            except OSError:
+                pass
+    return run_id
+
+
+def halted_run_to_resume(repo_root: Path, sizing_rel: str, *, build: bool = True, run_id: object = None):
     """The halted run a refire of `sizing_rel` resumes, a `warp-<stem>-*` run or else an `ask-<stamp>`
-    one. The submit hook and the emit body both resolve through here so their lookups cannot drift."""
+    one. The submit hook and the emit body both resolve through here so their lookups cannot drift.
+    A refire's `run_id` (`halted_run_named`) is tried first, so a sizing path change cannot lose the run.
+    A sizing the lookup index holds no run for answers None after one directory listing.
+    The hook passes `build=False`: on a checkout whose index is unbuilt it answers the `warp-<stem>-*` halt
+    (one directory listing) or else `STALLED`, never a scan of every halt record; the deferred emit, which
+    builds, resolves the rest off the hook."""
+    if run_id is not None:
+        named = halted_run_named(repo_root, run_id, sizing_rel)
+        if named is not None:
+            return named
+    runs = _indexed_runs(repo_root, _norm(sizing_rel), build=build)
+    if runs is STALLED:
+        return halted_run_for(repo_root, sizing_rel) or STALLED
+    if not runs:
+        return None
     return halted_run_for(repo_root, sizing_rel) or halted_ask_run_for(repo_root, sizing_rel)
 
 
@@ -553,6 +688,7 @@ def mark_superseded(record_dir: Path, expected: dict, evidence: dict, dispositio
         updated[PATH_DISPOSITIONS_FIELD] = dispositions
     _write(Path(record_dir), updated)
     _live_index_drop(record_dir)
+    _record_judge(record_dir)
     return True
 
 
@@ -580,7 +716,16 @@ def mark_closed(record_dir: Path, reason: str, at: str) -> bool:
     _write(Path(record_dir), {**marker, "status": STATUS_CLOSED, "closed": {"reason": reason, "at": at}})
     _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
+    _record_judge(record_dir)
     return True
+
+
+def _record_judge(record_dir: Path) -> None:
+    """Record the engine's not_met verdict for a run closed or superseded without one; best-effort."""
+    try:
+        record_terminal_judge_at(Path(record_dir))
+    except (ValueError, OSError):
+        pass
 
 
 def mark_predecessors_landed(repo_root: Path, run_id: str, sha: str) -> list:

@@ -340,7 +340,7 @@ def relay_route(two_boxes):
             argv, 0 if reply.get("ok") is True else 1, json.dumps(reply) + "\n", ""
         )
 
-    two_boxes["mp"].setattr(node_transport.SshTransport, "__init__", lambda self, r=None: setattr(self, "runner", runner))
+    two_boxes["mp"].setattr(node_transport.SshTransport, "__init__", lambda self, r=None, directory=None: setattr(self, "runner", runner))
     return {**two_boxes, "dir_a": dir_a, "calls": calls, "runner": runner}
 
 

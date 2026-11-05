@@ -47,7 +47,6 @@ Verdict `gate` means: first fire per (session, shape) emits, repeats are silent.
 | write:block_hand_authored_handoff_creation | 123 | 1 | write_guards/block_hand_authored_handoff_creation.py | hand-made handoff skips scaffold frontmatter, lineage and chain bookkeeping (module purpose; no DR) | gate |
 | write:block_sizing_object_schema_violation | 820 | 2 | write_guards/block_sizing_object_schema_violation.py | schema failure surfacing a session later as a plan-scaffold failure (module purpose; no DR) | gate |
 | write:guard_doctrine_surface_edits | 429 | 3 | write_guards/guard_doctrine_surface_edits.py | DR-277, DR-235, DR-088 | gate |
-| write:nudge_new_sh_file_naked_python | 260 | 2 | write_guards/nudge_new_sh_file_naked_python.py | none (a doctrine statement, no failure) | delete |
 | write:nudge_shell_shaped_spawn | 283 | 1 | write_guards/nudge_shell_shaped_spawn.py | DR-077; docs/plans/2026-08-06-shell-spawn-regrowth-gate | gate |
 | write:nudge_windows_subprocess_popup | 820 | 2 | write_guards/nudge_windows_subprocess_popup.py | DR-077, DR-345; docs/plans/2026-06-19-windows-console-popup-coordinator-doctrine | gate |
 | write:validate_frontmatter_schema_advisory | 4110 | 5 | write_guards/validate_frontmatter_schema_advisory.py | DR-277, DR-156; docs/plans/2026-08-06-repoint-write-enforcement-at-vendored-schemas | gate |

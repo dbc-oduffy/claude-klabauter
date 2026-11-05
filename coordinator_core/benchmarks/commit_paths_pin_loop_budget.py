@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import os
 import statistics
-import subprocess
 import sys
 import tempfile
 import time
@@ -31,6 +30,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise  # noqa: E402
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed  # noqa: E402
 from coordinator_core.git.commit import commit_paths  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 
 #: The brightline process-time bar (CLAUDE.md § The brightline).
 BAR_MS = 500.0
@@ -41,17 +41,14 @@ _FANOUT = 80
 
 
 def _git(root: Path, *args: str) -> None:
-    """Fixture setup only (untimed): `run_git`'s budget cap would cut an 8000-file `add`."""
+    """Fixture setup only (untimed). Each call is held to `run_git`'s local cap, so callers keep calls small."""
     env = dict(
         os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
         GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t.example", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t.example",
     )
-    done = subprocess.run(
-        ["git", "-C", str(root), *args], env=env, capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    done = run_git(["-C", str(root), *args], env=env)
     if done.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args[:2])} failed (rc={done.returncode}): {done.stderr.decode(errors='replace').strip()}")
+        raise RuntimeError(f"git {' '.join(args[:2])} failed (rc={done.returncode}): {done.stderr.strip()}")
 
 
 def _name(i: int) -> str:
@@ -68,7 +65,10 @@ def build_fixture(root: Path) -> list[str]:
         path = root / _name(i)
         path.parent.mkdir(exist_ok=True)
         path.write_bytes(f"line one {i}\nline two {i}\n".encode("ascii"))
-    _git(root, "add", "-A")
+    # One `add -A` over every entry exceeds `run_git`'s local cap; stage per fan-out directory.
+    _git(root, "add", ".gitattributes")
+    for d in range(_FANOUT):
+        _git(root, "add", "--", f"d{d}")
     _git(root, "commit", "-q", "-m", "seed (commit_paths pin-loop bench)")
     _git(root, "tag", "bench-seed")
     return [_name(i) for i in range(CR_PATHS)]

@@ -151,8 +151,8 @@ def test_every_refusal_reason_is_in_the_closed_table():
     assert not any(is_refusal(r) for r in outside)
 
 
-def test_only_the_two_irreversible_kinds_refuse():
-    assert LANDING_REFUSAL_KINDS == {"destructive-git", "secret-in-diff"}
+def test_only_the_irreversible_kinds_refuse():
+    assert LANDING_REFUSAL_KINDS == {"destructive-git", "secret-in-diff", "lost-definition"}
     assert not LANDING_REFUSAL_KINDS & PROVENANCE_KINDS
     for kind in LANDING_REFUSAL_KINDS:
         assert is_refusal(kind)

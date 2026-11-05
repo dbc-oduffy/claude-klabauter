@@ -203,3 +203,80 @@ def test_a_reserved_run_id_fire_does_not_rebind(repo):
     with pytest.raises(ValueError):
         _fire(repo, reserved_run_id="nope")
     assert _marker(repo)["status"] == "halted"
+
+
+MOVED = "state/sizings/2026-11/2026-10-16-refire-c3.yaml"
+
+
+def _halt_bound_elsewhere(repo, run_id=OLDER):
+    """A halted run whose marker names a sizing path other than the refire's (the sizing moved)."""
+    moved = repo / MOVED
+    moved.parent.mkdir(parents=True)
+    moved.write_bytes((repo / REL).read_bytes())
+    rl.start(repo, run_id)
+    rl.bind(repo, run_id, MOVED, ask_text="the ask")
+    write_halt_marker(record_dir(repo, run_id), halted="criterion", sizing_rel=MOVED)
+    moved.unlink()
+
+
+def test_the_refire_envelope_carries_the_halted_run_id_in_its_call():
+    from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_RUN_ID_ARG, refire_next_action_for
+
+    env = refire_next_action_for("parked", run_id=OLDER, sizing_rel=REL, detail="d")
+    assert f'"{RESUME_RUN_ID_ARG}": "{OLDER}"' in env["call"] and env["resume"]["run_id"] == OLDER
+
+
+def test_a_named_halted_run_resolves_though_its_marker_names_another_sizing_path(repo):
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+    _halt_bound_elsewhere(repo)
+    assert halted_run_to_resume(repo, REL) is None
+    assert halted_run_to_resume(repo, REL, run_id=OLDER) == OLDER
+    assert _marker(repo)["sizing_rel"] == REL
+    assert halted_run_to_resume(repo, REL) == OLDER
+
+
+def test_a_moved_sizing_refire_resumes_the_halted_run_and_writes_no_new_sizing(repo):
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+    _halt_bound_elsewhere(repo)
+    before = sorted(p.name for p in (repo / "state" / "sizings").rglob("*") if p.is_file())
+    assert halted_run_to_resume(repo, REL, run_id=OLDER) == OLDER
+    assert _fire(repo)["run_id"] == OLDER
+    assert _marker(repo)["status"] == "resumed"
+    assert sorted(p.name for p in (repo / "state" / "sizings").rglob("*") if p.is_file()) == before
+
+
+@pytest.mark.parametrize("bad", ["../escape", "nope", "warp-missing-20260101T000000-bbbbbb", "", None, 7])
+def test_an_unusable_run_id_leaves_the_sizing_lookup_standing(repo, bad):
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+    _halt(repo)
+    assert halted_run_to_resume(repo, REL, run_id=bad) == OLDER
+    assert halted_run_to_resume(repo, "state/sizings/2026-10-16-other.yaml", run_id=bad) is None
+
+
+def test_a_named_run_that_is_no_longer_halted_is_not_rebound(repo):
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume, mark_landed
+
+    _halt_bound_elsewhere(repo)
+    assert mark_landed(record_dir(repo, OLDER), "d" * 40)
+    assert halted_run_to_resume(repo, REL, run_id=OLDER) is None
+    assert _marker(repo)["sizing_rel"] == MOVED
+
+
+def test_the_submit_hook_resumes_the_named_run_for_a_moved_sizing(repo, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    _halt_bound_elsewhere(repo)
+    launched = []
+
+    def launch(root, parent_id, children, session_id):
+        launched.extend(children)
+        return repo / "launcher.mjs"
+
+    monkeypatch.setattr(hook, "_spawn_recompose", lambda *_a: False)
+    payload = {"tool_input": {"name": hook.SUBMIT_WORKFLOW_NAME, "args": {"sizing": REL, "resume_run_id": OLDER}}}
+    envelope, _ = hook._resume_route(repo, REL, payload, {"ask": True, "sizing_path": REL}, None, launch)
+    assert envelope is not None and [c.run_id for c in launched] == [OLDER]
+    assert "resume_run_id" in hook._ARGS_KEYS

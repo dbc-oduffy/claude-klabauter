@@ -835,8 +835,10 @@ def _without_gate_clearance(row_lines: list[str]) -> list[str]:
         return row_lines
     import yaml
 
+    from coordinator_core.frontmatter.yaml_load import safe_load
+
     try:
-        loaded = yaml.safe_load(''.join(row_lines))
+        loaded = safe_load(''.join(row_lines))
     except yaml.YAMLError:
         return row_lines
     if not (isinstance(loaded, list) and len(loaded) == 1 and isinstance(loaded[0], dict)):

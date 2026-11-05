@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import GAPS_CLOSED_FIELD, HALT_GAP_RULE
 from coordinator_core.ops.dispatch_emit.ask_compose import _LEDGER_CHECK_SCHEMA, compose_ask_script
@@ -42,7 +44,10 @@ def test_judge_clause_carries_halt_gap_lines_and_the_gaps_closed_instruction():
 def test_refire_legs_say_gaps_still_open_and_carry_the_rule(monkeypatch):
     script = _script(monkeypatch)
     assert _OLD_LEAD not in script
-    assert script.count(_NEW_LEAD) == 2
+    # The re-plan, late-rows and remaining-work legs each lead with it.
+    assert script.count(_NEW_LEAD) == 3
+    labels = [script[script.index("label:", m.start()) :].split(",", 1)[0] for m in re.finditer(re.escape(_NEW_LEAD), script)]
+    assert labels == ["label: 'ledger-replan'", "label: 'ledger-late'", "label: 'ledger-remaining'"]
     assert HALT_GAP_RULE in script
 
 

@@ -97,7 +97,8 @@ def settle(
     Returns ``{sha, reaped, withheld}``. ``sha`` is the commit, or None when nothing committed.
     ``withheld`` lists live-peer-claimed paths, left untouched. On ``NothingToCommit`` nothing is
     reaped. On ``CommitRefused`` every path the run created, HEAD does not carry and no peer claims is
-    deleted, ``refused`` carries the reason, and a reused (tracked or ``created: False``) path stays.
+    deleted, ``refused`` carries the reason, and a reused (tracked or ``created: False``) path stays,
+    listed in ``kept`` (left uncommitted and dirty).
     ``repo_root`` is the caller's common dir, kept for signature parity with ``commit_grind_rows``;
     the commit and every read go through ``main_root``. ``run_id`` is for the caller's message."""
     from coordinator_core.git.commit import CommitRefused, NothingToCommit, commit_paths
@@ -126,5 +127,6 @@ def settle(
                 except FileNotFoundError:
                     continue
                 reaped.append(p)
-        return {"sha": None, "reaped": reaped, "withheld": withheld, "refused": str(err)}
+        kept = [p for p in landable if p not in reaped]
+        return {"sha": None, "reaped": reaped, "withheld": withheld, "kept": kept, "refused": str(err)}
     return {"sha": outcome.sha, "reaped": [], "withheld": withheld}

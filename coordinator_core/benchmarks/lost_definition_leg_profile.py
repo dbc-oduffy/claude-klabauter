@@ -24,6 +24,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.git.run import run_git  # noqa: E402
 
 BAR_MS = 500.0
 IMPORTERS = 20
@@ -32,7 +33,9 @@ PKG = "lostdefpkg"
 
 
 def _git(root: Path, *args: str) -> None:
-    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, text=True)
+    res = run_git(["-C", str(root), *args])
+    if res.returncode != 0:
+        raise RuntimeError(f"git {args[0]} failed: {res.stderr.strip()}")
 
 
 def build_fixture(root: Path, importers: int = IMPORTERS, modules: int = MODULES) -> list[str]:

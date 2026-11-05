@@ -581,6 +581,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "lessons.verify_extraction":                "coordinator_core.ops.grind_ops",
     "doctrine.surface_split_regenerate":        "coordinator_core.ops.grind_ops",
     "warm.request_status":                      "coordinator_core.ops.warm_request_status",
+    "remote_engine.handle":                     "coordinator_core.ops.remote_engine_handle",
 }
 
 

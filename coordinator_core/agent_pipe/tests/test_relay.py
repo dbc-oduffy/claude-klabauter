@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.agent_pipe import __main__ as relay
 from coordinator_core.agent_pipe import mailbox
 from coordinator_core.agent_pipe.contract import mailbox_path, run_dir
+from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workflow_watch.mailbox_line import wait_for_line
 
 FAKE = "coordinator_core.agent_pipe.tests.fixtures.fake_agent:FakeAdapter"
@@ -169,6 +170,7 @@ def test_worker_process_exits_with_its_child(home):
         env={**os.environ, "PYTHONPATH": os.pathsep.join(filter(None, [str(Path(__file__).resolve().parents[3]), os.environ.get("PYTHONPATH")]))},
         timeout=60,
         capture_output=True,
+        **no_console_creationflags(),
     )
     assert proc.returncode == 0
     assert [m["content"] for m in _lines()] == ["first", "second"]

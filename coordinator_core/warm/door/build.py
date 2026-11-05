@@ -236,9 +236,22 @@ def build_attribution(module: str = "coordinator_core.warm.door.build") -> dict[
     }
 
 
+def _resolve_engine_stamp(engine_root: Path, override: str | None) -> str | None:
+    """`override` when given, else the stripped stamp file under `engine_root`;
+    None when that file is absent (a direct `write_provenance` caller)."""
+    if override is not None:
+        return override
+    try:
+        return (Path(engine_root) / "coordinator_core" / "_engine_stamp").read_text(
+            encoding="utf-8"
+        ).strip()
+    except OSError:
+        return None
+
+
 def write_provenance(
     output_exe: Path, kind: str, compiler_path: str, engine_root: Path,
-    *, image_sha256: str | None = None,
+    *, image_sha256: str | None = None, engine_stamp: str | None = None,
 ) -> Path:
     """Records, next to `output_exe`, the SHA-256 of the `door.c` this
     binary was built from plus the compiler and its version -- so a
@@ -297,8 +310,13 @@ def write_provenance(
     `image_sha256` keyword: `build()` computes the digest ONCE and passes
     it here, so the finished binary is hashed a single time per build.
     Defaults to `None`/self-computed so a direct or test caller that has
-    no digest handy keeps working unchanged."""
+    no digest handy keeps working unchanged.
+
+    `engine_stamp` -- the override when given, else the stripped content of
+    `engine_root/coordinator_core/_engine_stamp`; recorded so a door built
+    for a scratch publish carries the publish commit's provenance."""
     provenance = {
+        "engine_stamp": _resolve_engine_stamp(engine_root, engine_stamp),
         "door_c_sha256": source_sha256(_SOURCE),
         "sources": {path.name: source_sha256(path) for path in SOURCES},
         "image_sha256": image_sha256 if image_sha256 is not None else _sha256_file(output_exe),
@@ -430,6 +448,7 @@ def build(
     python_bin: Path | None = None,
     compiler: str | None = None,
     output: Path | None = None,
+    engine_stamp: str | None = None,
 ) -> Path:
     """Compiles `door.exe` and writes its sidecar for `engine_root`, so a
     local build stays one command. To ship the SAME compiled `door.exe`
@@ -471,7 +490,10 @@ def build(
 
     write_sidecar(output, engine_root)
     image_sha256 = _sha256_file(output)
-    write_provenance(output, kind, compiler_path, engine_root, image_sha256=image_sha256)
+    write_provenance(
+        output, kind, compiler_path, engine_root,
+        image_sha256=image_sha256, engine_stamp=engine_stamp,
+    )
 
     return output
 

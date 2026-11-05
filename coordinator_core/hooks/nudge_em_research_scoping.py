@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import tempfile
 
 READ_THRESHOLD = 5
 TAIL_CAP = 512 * 1024
@@ -137,7 +136,9 @@ def _scan_turn(transcript_path: str) -> tuple[int, bool, int, str]:
 
 def _sentinel_path(sid: str) -> str:
     safe = re.sub(r"[^A-Za-z0-9._-]", "_", sid)
-    return os.path.join(tempfile.gettempdir(), f"coordinator-research-scoping-{safe}.json")
+    from coordinator_core.temp_layout import managed_tempdir
+
+    return os.path.join(str(managed_tempdir()), f"coordinator-research-scoping-{safe}.json")
 
 
 def _already_signalled(path: str, key: int) -> bool:

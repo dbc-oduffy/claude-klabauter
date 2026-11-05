@@ -96,6 +96,42 @@ def test_launcher_key_outranks_python_pin_and_keeps_repo_args(tmp_path):
     assert ti.DEFECT_PREFIX not in clause
 
 
+def _as_claude_klabauter_root(monkeypatch, root, path):
+    from coordinator_core.install import provisioned_interpreter as pi
+
+    monkeypatch.setattr(pi, "_CLAUDE_KLABAUTER_ROOT", root.resolve())
+    monkeypatch.setattr(ti, "_provisioned_path", lambda: path)
+
+
+def test_claude_klabauter_root_without_pin_falls_to_provisioned_interpreter(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, fast_test_cmd="python3 -m pytest")
+    _as_claude_klabauter_root(monkeypatch, tmp_path, sys.executable)
+    got = ti.resolve_targeted_test_python(repo)
+    assert got == ti.TargetedPython(sys.executable, "provisioned", None)
+    assert sys.executable in ti.interpreter_clause(repo)
+
+
+def test_claude_klabauter_root_pin_outranks_provisioned_and_unresolved_provisioned_is_none(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, targeted_test_python=sys.executable)
+    _as_claude_klabauter_root(monkeypatch, tmp_path, "/never/used")
+    assert ti.resolve_targeted_test_python(repo).source == "targeted_test_python"
+    _as_claude_klabauter_root(monkeypatch, tmp_path, None)
+    unpinned = _repo(tmp_path, fast_test_cmd="python3 -m pytest")
+    assert ti.resolve_targeted_test_python(unpinned) == ti.TargetedPython(None, "none", None)
+
+
+def test_non_claude_klabauter_root_never_consults_provisioned(tmp_path, monkeypatch):
+    from coordinator_core.install import provisioned_interpreter as pi
+
+    monkeypatch.setattr(pi, "_CLAUDE_KLABAUTER_ROOT", (tmp_path / "elsewhere").resolve())
+
+    def boom():
+        raise AssertionError("provisioned consulted")
+
+    monkeypatch.setattr(ti, "_provisioned_path", boom)
+    assert ti.resolve_targeted_test_python(_repo(tmp_path)).source == "none"
+
+
 def test_launcher_missing_or_absolute_is_a_resolution_defect(tmp_path):
     assert ti.DEFECT_PREFIX in ti.interpreter_clause(_repo(tmp_path, targeted_test_launcher="scripts/none.py"))
     assert ti.DEFECT_PREFIX in ti.interpreter_clause(_repo(tmp_path, targeted_test_launcher=sys.executable))

@@ -15,7 +15,6 @@ without any message while no resume child runs.
 from __future__ import annotations
 
 import json
-import os
 import queue
 import re
 import shutil
@@ -30,6 +29,7 @@ from typing import Callable, Dict, List, Mapping, Optional
 
 from coordinator_core.agent_pipe import mailbox
 from coordinator_core.agent_pipe.contract import Adapter, PipeMessage
+from coordinator_core.win_portability import no_console_creationflags
 
 STDIN = "stdin"
 RESUME = "resume"
@@ -85,12 +85,6 @@ def codex_participant(name: str, prompt: str = "", conversation: str = "") -> Pa
     return Participant(name, CodexAdapter(), prompt, RESUME, None, conversation)
 
 
-def _child_flags() -> dict:
-    if os.name == "nt":
-        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    return {}
-
-
 class _Relay:
     def __init__(self, participants, observers, log_session, idle, deadline, max_hops):
         names = [p.name for p in participants]
@@ -131,7 +125,7 @@ class _Relay:
             stderr=subprocess.DEVNULL,
             encoding="utf-8",
             errors="replace",
-            **_child_flags(),
+            **no_console_creationflags(),
         )
         with self.lock:
             self.procs.append(proc)

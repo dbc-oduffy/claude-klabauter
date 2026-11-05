@@ -38,6 +38,7 @@ def test_relayed_ask_registers_only_its_text(tmp_path: Path, monkeypatch) -> Non
     window = [{"turn": n, "ts": "2026-10-08T10:00:00Z", "text": f"session chatter {n}"} for n in range(44, 48)]
     monkeypatch.setattr(pm_turns, "bound_window", lambda *_a, **_k: list(window))
     path = Path(record_homes.record_path(str(tmp_path), "sizings", "2026-10-14-relayed.yaml"))
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_DRAFT, encoding="utf-8")
     rel = path.relative_to(tmp_path).as_posix()
 

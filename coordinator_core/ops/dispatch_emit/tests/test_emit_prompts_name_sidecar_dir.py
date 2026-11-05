@@ -23,8 +23,8 @@ def _calls(script: str) -> list[str]:
 
 
 def _label(call: str) -> str:
-    found = _LABEL_RE.search(call)
-    return found.group(1) if found else call[:80]
+    found = _LABEL_RE.findall(call)
+    return found[-1] if found else call[:80]
 
 
 def _offenders(script: str) -> list[tuple[str, int]]:

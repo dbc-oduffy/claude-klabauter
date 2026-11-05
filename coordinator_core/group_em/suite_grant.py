@@ -127,6 +127,15 @@ def _parse_iso(value: object) -> Optional[float]:
         return None
 
 
+def _box_ok(record: dict) -> bool:
+    """A record with no ``box_id``, or one stamped "local", is valid anywhere; any other
+    ``box_id`` must equal this box's identity."""
+    stamped = record.get("box_id")
+    if stamped is None or stamped == box_registry.LOCAL_BOX_ID:
+        return True
+    return stamped == box_registry.local_box_id()
+
+
 def _parts(path: str) -> tuple[str, ...]:
     return Path(os.path.normcase(os.path.normpath(os.path.abspath(path)))).parts
 
@@ -424,6 +433,7 @@ def issue_suite_grant(
         "grantee_session_id": grantee_sid,
         "grantee_name": row.name if row is not None else "",
         "scope_root": scope_root,
+        "box_id": box_registry.local_box_id(),
         "issued_at": _iso(issued),
         "expires_at": _iso(issued + ttl_minutes * 60),
         "note": note.strip(),
@@ -477,6 +487,7 @@ def _check_local(sid, cwd, repo_root, directory, now) -> tuple[bool, Optional[di
         and record.get("kind") == KIND
         and record.get("issuer_session_id") == holder_sid
         and record.get("grantee_session_id") == sid
+        and _box_ok(record)
         and issued is not None
         and expires is not None
         and issued <= current < expires

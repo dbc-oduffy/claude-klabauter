@@ -36,17 +36,18 @@ _HARNESS = r"""
 
 _FAN = (
     "_rows.X = _runRow('X', [], null, run('X', %s));"
-    "_rows.Y = _runRow('Y', [_rows.X], null, run('Y'));"
+    "_rows.Y = _runRow('Y', [_rows.X], null, run('Y', %s));"
     "_rows.Z = _runRow('Z', [_rows.X], null, run('Z'));"
 )
 
 
-def _go(reply):
+def _go(reply, y_reply=None):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
     proc = subprocess.run(
-        [node, "-"], input=_HARNESS % {"helper": emit._run_row_helper_js(), "rows": _FAN % json.dumps(reply)},
+        [node, "-"],
+        input=_HARNESS % {"helper": emit._run_row_helper_js(), "rows": _FAN % (json.dumps(reply), json.dumps(y_reply))},
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         **no_console_creationflags(),
     )
@@ -54,13 +55,22 @@ def _go(reply):
     return json.loads(proc.stdout)
 
 
-def test_partial_naming_dependent_starts_it_and_holds_the_rest():
+def test_partial_naming_dependent_starts_it_and_releases_the_rest_once_it_finishes_done():
     line = "gate-blocker: needs-dependent: Y live test provisions through Y"
     out = _go(f"PARTIAL: report.md\n{line}")
+    assert out["calls"] == ["X", "Y", "Z"]
+    assert out["owed"] == {"X": line}
+    assert out["heldBy"] == {}
+    assert out["reason"] is None
+
+
+def test_partial_naming_dependent_holds_the_rest_while_the_named_row_did_not_finish_done():
+    line = "gate-blocker: needs-dependent: Y live test provisions through Y"
+    out = _go(f"PARTIAL: report.md\n{line}", y_reply="BLOCKED: provisioning failed")
     assert out["calls"] == ["X", "Y"]
     assert out["owed"] == {"X": line}
     assert out["heldBy"] == {"Z": "X"}
-    assert out["reason"] == "dependents unstarted: Z (held by X)"
+    assert out["reason"].startswith("dependents unstarted: Z (held by X)")
 
 
 def test_unmarked_partial_still_holds_every_dependent():

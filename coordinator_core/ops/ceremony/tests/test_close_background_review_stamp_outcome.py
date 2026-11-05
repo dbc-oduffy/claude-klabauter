@@ -83,7 +83,9 @@ def test_mint_refusal_is_unminted(tmp_path, monkeypatch):
 def test_mirror_follows_a_real_gitignore(tmp_path, monkeypatch, ignored):
     import subprocess
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    from coordinator_core.win_portability import no_console_creationflags
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     (tmp_path / ".gitignore").write_text("state/warp/\n" if ignored else "unrelated/\n", encoding="utf-8")
     _xs_spine(tmp_path)
     monkeypatch.setattr(rs, "mint_receipt", lambda *a, **k: {})

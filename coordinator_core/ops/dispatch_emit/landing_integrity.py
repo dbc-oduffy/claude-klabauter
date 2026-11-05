@@ -339,6 +339,26 @@ class GateFindings(list):
     foreign_evidence: Optional[dict] = None
 
 
+class RetestAwait(Finding):
+    """The gate's answer while the run's retest record is ``running``: not a verdict, an instruction to
+    poll. Carries reason ``TARGETED_TESTS_FAILED`` so consumers that treat that reason as advisory
+    are unchanged; ``retest_await`` is the one reader that tells it apart."""
+
+
+def retest_await(findings: Sequence[Finding], params: Mapping) -> Optional[dict]:
+    """``{awaiting, poll, rerun}`` when ``findings`` is the gate's running-retest answer, else None.
+    ``poll`` reads the record to a verdict; ``rerun`` restarts it, owed only once the poll reports
+    the retest abandoned past its deadline. A landing that reads it re-invokes after the poll and
+    never blocks in the engine."""
+    if not any(isinstance(f, RetestAwait) for f in findings):
+        return None
+    return {
+        "awaiting": "retest",
+        "poll": retest_remedy(params) + " --poll",
+        "rerun": retest_remedy(params),
+    }
+
+
 def landing_test_gate(
     worktree_root: Path, params: Mapping, run_id: Optional[str],
     landed_paths: Optional[Sequence[str]] = None,
@@ -347,7 +367,7 @@ def landing_test_gate(
     repo-wide invariant whose measured set they touch must be in the run's fresh passing retest,
     else one ``TARGETED_TESTS_FAILED`` finding per missing invariant (check ``"failed"``)."""
     findings, check = _landing_test_gate_core(worktree_root, params, run_id)
-    if not landed_paths:
+    if not landed_paths or check == "retest-running":
         return findings, check
     foreign: dict = {}
     owed = invariant_findings(worktree_root, landed_paths, run_id, params, foreign)
@@ -513,13 +533,14 @@ def _landing_test_gate(
     ``failed_targeted_tests`` (including ``"not-run"``, returned before any failure attribution).
     A None ``run_id`` skips the fresh read.
 
-    A ``running`` retest record refuses (check ``"retest-running"``) with the poll command.
+    A ``running`` retest record answers a ``RetestAwait`` (check ``"retest-running"``) with the poll
+    command; ``landing_test_gate`` then skips the invariant check, since no verdict exists yet.
     A recorded fail with no baseline names its failing ids from ``failed_tests`` (top
     level or under ``params.params``), the verdict's, and the task output's digest
     (``params.task_output_path``); with no baseline evidence each id's file is its own refusal (the
     red counts caused, never inferred pre-existing from a path) whose remedy retests that file. With no id known the refusal names the ``failed_tests`` param."""
     if _retest_record_status(worktree_root, run_id) == RETEST_RUNNING:
-        return [tests_failed_finding("",
+        return [RetestAwait("", TARGETED_TESTS_FAILED,
                         "the run's retest is still running; poll: " + retest_remedy(params)
                         + " --poll; if poll reports it abandoned past deadline, re-run: "
                         + retest_remedy(params))], "retest-running"

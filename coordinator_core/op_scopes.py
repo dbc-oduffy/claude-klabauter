@@ -26,6 +26,10 @@ _MappingProxyType = type(type.__dict__)
 
 _OP_KEY_SCOPE: Dict[str, str] = {
     "goal.append":                           "common_dir",
+    "session.landing_hold":                  "common_dir",
+    "handoff.human_gate_clear":              "common_dir",
+    # Acts on the klabauter checkout and settings home, never the caller's worktree.
+    "fleet.klabauter_freshness":             "none",
     "orientation.regenerate_cache":          "common_dir",
     "workflow.fire":                         "common_dir",
     "workflow.fire_status":                  "common_dir",

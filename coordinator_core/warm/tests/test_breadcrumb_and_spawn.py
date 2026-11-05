@@ -662,3 +662,81 @@ def test_should_spawn_refuses_under_a_foreign_marker_and_allows_the_holder(
     assert breadcrumb.publish_marker_blocks_boot(breadcrumb.svc_dir(root))
     monkeypatch.setenv(breadcrumb.PUBLISH_HOLDER_TOKEN_ENV, "tok")
     assert not breadcrumb.publish_marker_blocks_boot(breadcrumb.svc_dir(root))
+
+
+@pytest.fixture
+def admission_root(tmp_path, monkeypatch):
+    monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
+    eng = tmp_path / "engine"
+    eng.mkdir()
+    return eng
+
+
+def test_stage_admission_bound_equals_the_hold_bound():
+    from coordinator_core.warm import live_runs
+
+    assert breadcrumb.STAGE_ADMISSION_BOUND_S == live_runs.HOLD_BOUND_S
+    assert breadcrumb.STAGE_ADMISSION_BOUND_S < breadcrumb.HANDOVER_PENDING_TTL_SECS
+
+
+def test_await_stage_admission_returns_at_once_with_no_handover_pending(admission_root):
+    def no_sleep(_s):
+        raise AssertionError("slept with nothing pending")
+
+    assert breadcrumb.await_stage_admission(admission_root, sleep=no_sleep)
+
+
+def test_await_stage_admission_waits_for_the_breadcrumb_to_clear(admission_root):
+    clock = [0.0]
+    sleeps: list = []
+    with breadcrumb.hold_handover_pending(admission_root) as path:
+
+        def fake_sleep(s):
+            sleeps.append(s)
+            clock[0] += s
+            if len(sleeps) == 3:
+                path.unlink()
+
+        ok = breadcrumb.await_stage_admission(
+            admission_root, bound_s=60.0, poll_s=2.0, sleep=fake_sleep, monotonic=lambda: clock[0]
+        )
+
+    assert ok is True and sleeps == [2.0, 2.0, 2.0]
+
+
+def test_await_stage_admission_gives_up_at_the_bound_and_never_overshoots_it(admission_root):
+    clock = [0.0]
+    sleeps: list = []
+
+    def fake_sleep(s):
+        sleeps.append(s)
+        clock[0] += s
+
+    with breadcrumb.hold_handover_pending(admission_root):
+        ok = breadcrumb.await_stage_admission(
+            admission_root, bound_s=5.0, poll_s=2.0, sleep=fake_sleep, monotonic=lambda: clock[0]
+        )
+
+    assert ok is False and sleeps == [2.0, 2.0, 1.0]
+
+
+def test_await_stage_admission_reads_an_unreadable_breadcrumb_as_clear(admission_root):
+    path = breadcrumb.handover_pending_path(admission_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("{not json", encoding="utf-8")
+
+    assert breadcrumb.await_stage_admission(admission_root, sleep=lambda _s: pytest.fail("slept"))
+
+
+def test_ask_gate_backstop_refuses_a_stage_start_at_once_while_a_handover_is_pending(admission_root, tmp_path):
+    from coordinator_core.ops.dispatch_emit import ask_gate
+
+    (tmp_path / ".git").mkdir()
+    params = {"sizing_path": "state/sizings/x.yaml", "run_id": "run-x"}
+    with breadcrumb.hold_handover_pending():
+        refused = ask_gate._handler(params, tmp_path)
+    assert refused["status"] == "handover_pending" and refused["retry_after"] >= 1
+    assert not (tmp_path / "state").exists() and not (tmp_path / ".git" / "coordinator-warp-run-tokens").exists()
+
+    after = ask_gate._handler(params, tmp_path)
+    assert after.get("status") != "handover_pending"

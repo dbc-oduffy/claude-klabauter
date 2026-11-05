@@ -421,6 +421,17 @@ def _module_file(name: str) -> pathlib.Path | None:
     return None
 
 
+def _import_time_nodes(tree: ast.AST):
+    """Nodes executed when the module is imported: function bodies are skipped, because an import
+    inside a test body (e.g. a spawn-count probe of ops modules) never reaches the analyzer."""
+    stack = list(ast.iter_child_nodes(tree))
+    while stack:
+        node = stack.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            stack.extend(ast.iter_child_nodes(node))
+
+
 def _import_closure(start: pathlib.Path) -> set[pathlib.Path]:
     seen: set[pathlib.Path] = set()
     todo = [start.resolve()]
@@ -431,7 +442,7 @@ def _import_closure(start: pathlib.Path) -> set[pathlib.Path]:
         seen.add(path)
         rel = path.relative_to(gate._REPO_ROOT.resolve()).with_suffix("")
         package = ".".join(rel.parts[:-1] if rel.name == "__init__" else rel.parts[:-1])
-        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+        for node in _import_time_nodes(ast.parse(path.read_text(encoding="utf-8"))):
             names: list[str] = []
             if isinstance(node, ast.Import):
                 names = [a.name for a in node.names]
@@ -449,6 +460,21 @@ def _import_closure(start: pathlib.Path) -> set[pathlib.Path]:
                     if target is not None:
                         todo.append(target)
     return seen
+
+
+def test_import_time_nodes_keep_module_level_imports_and_drop_function_bodies():
+    tree = ast.parse(
+        "import top_level_dep\n"
+        "if True:\n    import guarded_dep\n"
+        "def f():\n    import inside_function_dep\n"
+    )
+    imported = {
+        alias.name
+        for node in _import_time_nodes(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert imported == {"top_level_dep", "guarded_dep"}
 
 
 def test_analyzer_sources_cover_the_gate_import_closure():

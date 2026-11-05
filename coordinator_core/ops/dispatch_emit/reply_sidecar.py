@@ -101,11 +101,19 @@ async function _readStageSidecar(h, root) {
 """
 
 class ReplySidecarError(ValueError):
-    """A handle or its sidecar failed verification; the message starts with ``RELAY_CORRUPT_HEAD``."""
+    """A handle or its sidecar failed verification (message starts with ``RELAY_CORRUPT_HEAD``), or ``StagedTwinOverCapError``."""
 
 
 def _refuse(reason: str) -> ReplySidecarError:
     return ReplySidecarError(f"{_contract.RELAY_CORRUPT_HEAD}: {reason}")
+
+
+class StagedTwinOverCapError(ReplySidecarError):
+    """The staged twin exceeds the Workflow runner cap; the message starts with ``STAGED_TWIN_OVER_CAP_HEAD``, never ``RELAY_CORRUPT_HEAD``."""
+
+
+def _refuse_over_cap(reason: str) -> StagedTwinOverCapError:
+    return StagedTwinOverCapError(reason)
 
 
 def _rel_posix(path: object) -> str:
@@ -192,7 +200,7 @@ def _ensure_reader(root: Path, raw: bytes, body: bytes) -> None:
 def _ensure_twin(root: Path, rel: str, raw: bytes) -> str | None:
     # Trap: the twin inlines the run's escrowed token while its record is live; once the token is claimed or
     # expired the next call rewrites the twin tokenless (the bytes differ); the running copy is unaffected.
-    return _twin.ensure_twin(root, rel, raw, _handle(rel, raw), max_bytes=READER_MAX_BYTES, refuse=_refuse)
+    return _twin.ensure_twin(root, rel, raw, _handle(rel, raw), max_bytes=READER_MAX_BYTES, refuse=_refuse, refuse_over_cap=_refuse_over_cap)
 
 
 def write_reply(root: Path, path: Path, payload: Mapping) -> dict:

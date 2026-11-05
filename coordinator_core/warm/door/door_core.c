@@ -658,6 +658,27 @@ int door_basename_is_install_class(const char *basename) {
     return 0;
 }
 
+/* Replay-safe `<basename> <subcommand>` table -- see door_core.h. Keep this
+ * name and spelling exact; the parity test parses it textually. */
+static const char *const door_replay_safe_invocations[] = {
+    "consolidate-assemble brief",
+};
+
+#define DOOR_REPLAY_SAFE_INVOCATIONS_COUNT \
+    (sizeof(door_replay_safe_invocations) / sizeof(door_replay_safe_invocations[0]))
+
+int door_invocation_is_replay_safe(
+    const char *basename, int argc, const char *const *argv) {
+    if (basename == NULL || argc < 2 || argv == NULL || argv[1] == NULL) return 0;
+    size_t blen = strlen(basename);
+    for (size_t i = 0; i < DOOR_REPLAY_SAFE_INVOCATIONS_COUNT; i++) {
+        const char *entry = door_replay_safe_invocations[i];
+        if (strncmp(entry, basename, blen) != 0 || entry[blen] != ' ') continue;
+        if (strcmp(entry + blen + 1, argv[1]) == 0) return 1;
+    }
+    return 0;
+}
+
 int door_hook_event_name(const char *json, size_t len, buf_t *out) {
     return door_json_top_string(json, len, "hook_event_name", out);
 }

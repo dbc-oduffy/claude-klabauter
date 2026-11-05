@@ -44,7 +44,7 @@ def _delay(monkeypatch, name: str, seconds: float) -> None:
 
 def _phantoms(root: Path) -> list:
     found = [p for p in (root / "state" / "warp").glob("*/run-stage.json")]
-    found += list((root / "scratch" / "warp").glob("*.workflow.mjs"))
+    found += [p for p in (root / "scratch" / "warp").glob("*.workflow.mjs") if not p.name.startswith("spooled-")]
     found += list(run_token._record_path(root, "ask-20000101T000000-000000").parent.glob("ask-*.json"))
     return found
 
@@ -73,8 +73,8 @@ def test_slow_pre_emit_worker_reaching_the_emit_after_the_answer_mints_nothing(r
         env = mod.evaluate(_ask(repo))
     finally:
         hold.set()
-    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
-    assert NOTHING_TAKEN in _reason(env)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert "spooled as" in _reason(env)
     assert drained.wait(10)
     assert _phantoms(repo) == []
 
@@ -103,8 +103,8 @@ def test_slow_emit_answered_nothing_taken_publishes_no_record_when_it_resumes(re
         env = mod.evaluate(_ask(repo), emit=_emit_blocking_then_real(release, done, seen, mint_first=False))
     finally:
         release.set()
-    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
-    assert NOTHING_TAKEN in _reason(env)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    assert "spooled as" in _reason(env)
     assert done.wait(10)
     assert [type(e) for e in seen] == [run_token.RecordWriteCancelled]
     assert _phantoms(repo) == []

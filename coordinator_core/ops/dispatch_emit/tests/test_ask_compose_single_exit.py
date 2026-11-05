@@ -112,8 +112,12 @@ def _top_level_returns(script: str) -> list[int]:
 def test_m_plus_script_has_one_return_and_it_is_the_terminal_one(monkeypatch):
     script = _m_plus_script(monkeypatch)
     found = _top_level_returns(script)
-    assert len(found) == 1, [script[p : p + 40] for p in found]
-    assert script[found[0] :].startswith("return { arm:")
+    # The M+ and roadmap picks hand the run to a chained script and return its result; every other exit is the terminal one.
+    chained = [p for p in found if script.startswith("return (_chained !== null", p)]
+    terminal = [p for p in found if p not in chained]
+    assert len(chained) == 2, [script[p : p + 40] for p in found]
+    assert len(terminal) == 1, [script[p : p + 40] for p in found]
+    assert script[terminal[0] :].startswith("return { arm:")
 
 
 def test_m_plus_prep_is_one_review_prep_call_and_the_no_op_exit_is_still_rewritten(monkeypatch):

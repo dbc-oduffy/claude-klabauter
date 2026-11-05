@@ -66,7 +66,7 @@ class RunCruftSweepDispatchTest(unittest.TestCase):
         self.assertEqual(os.path.splitext(argv[1])[1], ".py")
         self.assertEqual(argv[2:], ["--class", "all", "--apply", "--quiet"])
 
-    def test_t5_spawn_failure_stays_non_blocking(self) -> None:
+    def test_t5_spawn_failure_is_reported_not_clean(self) -> None:
         mod = _load_cli_module()
 
         def _raising_run(argv, **kwargs):
@@ -76,7 +76,7 @@ class RunCruftSweepDispatchTest(unittest.TestCase):
         with mock.patch.object(mod.subprocess, "run", _raising_run):
             rc = mod.run_cruft_sweep(err=err)
 
-        self.assertEqual(rc, 0)
+        self.assertEqual(rc, 1)
         self.assertIn("cruft-sweep Step 1.5 could not be invoked", err.getvalue())
 
 

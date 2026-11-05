@@ -219,12 +219,23 @@ def test_no_subprocess_re_shelled_out_per_call(workspace, monkeypatch):
 
 
 def test_git_common_dir_is_lru_cached_when_common_dir_omitted(workspace):
-    from coordinator_core.lifecycle import git_common_dir
+    from coordinator_core import lifecycle
 
-    assert hasattr(git_common_dir, "cache_info"), (
-        "lifecycle.git_common_dir must stay lru_cache'd — claim_state.py's "
-        "no-common_dir fallback path relies on this to avoid a subprocess "
-        "shell-out per call."
+    repo = workspace[1].parent.parent.parent
+    (repo / ".git").mkdir()
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    assert hasattr(lifecycle.git_common_dir, "cache_clear")
+    lifecycle.git_common_dir.cache_clear()
+    real = lifecycle._repo_root_seam.git_common_dir
+    with mock.patch.object(lifecycle._repo_root_seam, "git_common_dir", side_effect=real) as seam:
+        first = lifecycle.git_common_dir(repo)
+        second = lifecycle.git_common_dir(repo)
+    lifecycle.git_common_dir.cache_clear()
+
+    assert first == second
+    assert seam.call_count == 1, (
+        "lifecycle.git_common_dir must stay memoized — claim_state.py's "
+        "no-common_dir fallback path relies on this to avoid a resolution per call."
     )
 
 

@@ -1133,3 +1133,71 @@ class TestCheckStagedPathspecDivergenceCallSiteIntegration:
         assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
         assert "OFFER:" in result["hookSpecificOutput"]["additionalContext"]
         assert "SC-DR-015" in result["hookSpecificOutput"]["additionalContext"]
+
+
+class TestProbesServedInProcess:
+    """The tripwire probes read the repo in-process; `_run_git` runs only on a None fact."""
+
+    @staticmethod
+    def _forbid_probe(monkeypatch):
+        def _boom(*a, **kw):
+            raise AssertionError("git probe spawned: %r" % (a,))
+
+        monkeypatch.setattr(commit_tripwires, "_run_git", _boom)
+        monkeypatch.setattr(commit_tripwires, "run_git", _boom)
+
+    def test_helpers_answer_without_probe(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        (tmp_path / "sub").mkdir()
+        (tmp_path / "sub" / "a.txt").write_text("a\n", encoding="utf-8")
+        _git(root, "add", "sub/a.txt")
+        self._forbid_probe(monkeypatch)
+        sub = str(tmp_path / "sub")
+        assert Path(commit_tripwires._toplevel(sub)) == tmp_path
+        assert commit_tripwires._show_prefix(sub) == "sub/"
+        assert commit_tripwires._staged_names(root) == ["sub/a.txt"]
+
+    def test_add_plus_delete_staged_set_falls_back_to_probe(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        (tmp_path / "new.txt").write_text("n\n", encoding="utf-8")
+        _git(root, "add", "new.txt")
+        _git(root, "rm", "-q", "README.md")
+        calls = []
+        real = commit_tripwires._run_git
+
+        def _spy(args, *a, **kw):
+            calls.append(args)
+            return real(args, *a, **kw)
+
+        monkeypatch.setattr(commit_tripwires, "_run_git", _spy)
+        assert sorted(commit_tripwires._staged_names(root)) == ["README.md", "new.txt"]
+        assert ["diff", "--cached", "--name-only"] in calls
+
+    def test_index_only_removal_served_without_probe(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        _git(root, "rm", "--cached", "-q", "README.md")
+        self._forbid_probe(monkeypatch)
+        assert commit_tripwires._index_only_removed_paths(["README.md"], root) == ["README.md"]
+        assert commit_tripwires._index_only_removed_paths(["other.txt"], root) == []
+
+    def test_directory_or_glob_pathspec_still_probes(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        (tmp_path / "d").mkdir()
+        (tmp_path / "d" / "x.txt").write_text("x\n", encoding="utf-8")
+        _git(root, "add", "d/x.txt")
+        _git(root, "commit", "-q", "-m", "d")
+        _git(root, "rm", "--cached", "-q", "d/x.txt")
+        for spec in ("d", "d/*.txt"):
+            assert commit_tripwires._removed_from_facts([spec], root) is None
+        assert commit_tripwires._index_only_removed_paths(["d"], root) == ["d/x.txt"]
+
+    def test_schema_bump_and_quad_checks_spawn_nothing(self, tmp_path, monkeypatch):
+        root = _init_repo(tmp_path)
+        (tmp_path / "canonical-structure.yaml").write_text("v: 1\n", encoding="utf-8")
+        (tmp_path / "coordinator-schema-version").write_text("1\n", encoding="utf-8")
+        _git(root, "add", "canonical-structure.yaml")
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
+        self._forbid_probe(monkeypatch)
+        assert "VIOLATION" in commit_tripwires.check_schema_version_bump()
+        assert commit_tripwires.check_bin_sh_polyglot() is None
+        assert commit_tripwires.check_registration_quad_completeness(root) is None

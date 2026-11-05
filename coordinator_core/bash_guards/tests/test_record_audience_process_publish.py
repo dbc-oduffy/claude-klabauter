@@ -159,7 +159,10 @@ def test_post_executor_deny_is_a_record_and_the_write_hook_still_gets_an_envelop
     monkeypatch.setattr(post_exec, "written_text_verifies", lambda payload, subject, root: True)
     monkeypatch.setattr(nd, "_take_escape", lambda *a, **k: False)
     envelope = post_exec.after_executor_deny({"session_id": "s"}, "scratch/x.py")
-    assert isinstance(envelope, dict) and envelope["hookSpecificOutput"]["permissionDecision"] == "deny"
+    # Not a deny_registry entry: the Write/Edit half advises only (eb064799e8).
+    assert isinstance(envelope, dict) and envelope["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "Advisory" in envelope["hookSpecificOutput"]["additionalContext"]
+    assert envelope["guardLevel"] == "log"
     monkeypatch.setattr(post_exec, "written_text_verifies", lambda payload, subject, root: False)
     assert post_exec.after_executor_deny({"session_id": "s"}, "scratch/x.py") is None
 

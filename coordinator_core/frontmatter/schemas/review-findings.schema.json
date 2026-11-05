@@ -67,8 +67,8 @@
               },
               "status": {
                 "type": "string",
-                "enum": ["applied", "em-rejected", "suspended", "open", "em_rejected"],
-                "description": "`applied`: `review-findings-ledger verify` confirmed `before`/`after` evidence against the row's recorded `baseline_sha256`. `em-rejected`: the EM ran `reject`, restoring `before` over `after` and requiring `reason`. `suspended`: logged under a `REJECTED`/`PIVOT` premise verdict, where the reviewer applies nothing — the only verdicts `verify` accepts `suspended` under."
+                "enum": ["applied", "em-rejected", "suspended", "handed-to-em", "open", "em_rejected"],
+                "description": "`applied`: `review-findings-ledger verify` confirmed `before`/`after` evidence against the row's recorded `baseline_sha256`. `em-rejected`: the EM ran `reject`, restoring `before` over `after` and requiring `reason`. `suspended`: logged under a `REJECTED`/`PIVOT` premise verdict, where the reviewer applies nothing — the only verdicts `verify` accepts `suspended` under. `handed-to-em`: a ruling-only reviewer that edits nothing hands the finding to the EM; `verify` accepts it under any verdict and counts it apart."
               },
               "files": {
                 "type": "array",
@@ -107,6 +107,10 @@
         "suspended": {
           "type": "integer",
           "description": "Count of rows with `status: suspended` as of the stamping `verify` run."
+        },
+        "handed_to_em": {
+          "type": "integer",
+          "description": "Count of rows with `status: handed-to-em` as of the stamping `verify` run."
         },
         "verified_at": {
           "type": "string",

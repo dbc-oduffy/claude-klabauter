@@ -72,7 +72,7 @@ def test_op_is_registered_and_scoped():
     from coordinator_core.op_scopes import _OP_KEY_SCOPE
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
-    assert OP_MODULE_MAP["hooks.idle_compact_advisory"] == "coordinator_core.hooks"
+    assert OP_MODULE_MAP["hooks.idle_compact_advisory"] == "coordinator_core.hooks.idle_compact_advisory"
     assert _OP_KEY_SCOPE["hooks.idle_compact_advisory"] == "none"
     from coordinator_core import hooks
 

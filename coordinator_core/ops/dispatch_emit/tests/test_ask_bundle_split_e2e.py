@@ -80,7 +80,7 @@ def test_partition_refusal_stays_a_split_halt_with_the_refusal_text():
 def test_split_never_reaches_roadmap_stage_or_execute():
     script = _script()
     split_at = script.index("if (_halted && _halted.halted === 'split')")
-    assert split_at < script.index("if (!_halted && _gate.arm === 'roadmap')")
+    assert split_at < script.index("if (!_halted && (_gate.arm === 'm_plus' || _gate.arm === 'roadmap')) {")
     after = script[split_at:]
     assert "if (!_viaRoadmap) {\n  if (!_halted) {" in after
     assert "_viaRoadmap = true;" not in _split_stage(script)

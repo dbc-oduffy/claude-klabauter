@@ -176,6 +176,9 @@ def _parse_guard_literals(source: str) -> Optional[Dict[str, Any]]:
     return result
 
 
+_LITERALS_CACHE: Dict[str, Tuple[Tuple[int, int], Optional[Dict[str, Any]]]] = {}
+
+
 def _cheap_guard_metadata(name: str) -> Optional[Tuple[str, List[str], int]]:
     """Stage ONE of the two-stage lazy import (reusing the shape already shipped
     by the DoE-side registry, 9 guards, and the Stop-family registry, 4 guards
@@ -194,10 +197,21 @@ def _cheap_guard_metadata(name: str) -> Optional[Tuple[str, List[str], int]]:
     """
     path = Path(_PKG_DIR) / f"{name}.py"
     try:
-        source = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+        st = path.stat()
+    except OSError:
         return None
-    parsed = _parse_guard_literals(source)
+    key = str(path)
+    stamp = (st.st_mtime_ns, st.st_size)
+    cached = _LITERALS_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        parsed = cached[1]
+    else:
+        try:
+            source = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        parsed = _parse_guard_literals(source)
+        _LITERALS_CACHE[key] = (stamp, parsed)
     if parsed is None:
         return None
     if not (parsed["found_cls"] and parsed["found_matchers"]):

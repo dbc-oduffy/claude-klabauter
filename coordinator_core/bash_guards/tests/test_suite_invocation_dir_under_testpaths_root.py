@@ -205,8 +205,16 @@ def test_glob_matching_one_file_is_still_allowed(repo):
     assert not _denied(repo, f"pytest {_A}/test_0*.py")
 
 
-def test_subagent_directory_deny_is_unchanged(repo):
+def test_subagent_small_directory_is_rewritten_not_denied(repo):
     _populate(repo, _A, 1)
+    _track(repo)
+    verdict = envelope_of(guard.check(_payload(repo, f"pytest {_A}", "a0123456789abcdef")))
+    assert verdict["hookSpecificOutput"]["permissionDecision"] == "allow"
+    assert "with-tier-t-slot" in verdict["hookSpecificOutput"]["updatedInput"]["command"]
+
+
+def test_subagent_over_threshold_directory_still_denies(repo):
+    _populate(repo, _A, _T + 1)
     _track(repo)
     assert _denied(repo, f"pytest {_A}", agent_id="a0123456789abcdef")
 

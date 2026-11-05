@@ -90,7 +90,23 @@ def _isolated_settings_home(checkout: Path) -> Path:
         _CLAUDE_KLABAUTER_ROOT / "coordinator" / "lib" / "resolve-claude-klabauter" / "_resolve_claude_klabauter.py",
         home / "bin" / "_resolve_claude_klabauter.py",
     )
+    _seed_engine_site(home)
+    from coordinator_core.group_em.box_registry import ensure_identity
+
+    ensure_identity(home)
     return home
+
+
+def _seed_engine_site(home: Path) -> None:
+    """An engine-site stamped for the interpreter `python3` resolves to, so the engine-site
+    currency layer reads this machine's PATH rather than deciding the healthy verdict."""
+    interp = shutil.which("python3") or shutil.which("python")
+    match = re.match(r"^python(\d+)\.(\d+)", os.path.basename(os.path.realpath(interp))) if interp else None
+    if not match:
+        return
+    site = home / "engine-site"
+    (site / "yaml").mkdir(parents=True, exist_ok=True)
+    (site / ".engine-site-stamp").write_text(f"{match.group(1)}.{match.group(2)}\nseed\n")
 
 
 def _armed_config_dir(checkout: Path, settings_home: Path) -> Path:
@@ -828,3 +844,74 @@ def test_armed_kill_switch_stays_ok_and_reports_the_boot_banners_full_detail(tmp
     assert layer.status == "ok"
     assert [f.message for f in layer.findings] == [evaluate_hooks_kill_switch_full_detail(tmp_path)]
     assert layer.findings[0].message.strip()
+
+
+def _point_settings_home(monkeypatch, home: Path) -> None:
+    import coordinator_core._settings_home as settings_home_mod
+
+    monkeypatch.setattr(settings_home_mod, "settings_home", lambda: home)
+
+
+def test_box_identity_layer_broken_without_box_json_and_names_remediation(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import doctor
+
+    _point_settings_home(monkeypatch, tmp_path)
+    layer = doctor._check_box_identity()
+
+    assert layer.status == "broken"
+    assert doctor.BOX_IDENTITY_REMEDIATION in layer.findings[0].message
+    assert not (tmp_path / "state" / "group-em" / "box.json").exists()
+
+
+def test_box_identity_layer_ok_with_valid_box_json(tmp_path: Path, monkeypatch):
+    from coordinator_core.group_em.box_registry import ensure_identity
+    from coordinator_core.ops import doctor
+
+    ensure_identity(tmp_path)
+    _point_settings_home(monkeypatch, tmp_path)
+
+    assert doctor._check_box_identity().status == "ok"
+
+
+def test_box_identity_layer_broken_on_malformed_box_json(tmp_path: Path, monkeypatch):
+    from coordinator_core.ops import doctor
+
+    path = tmp_path / "state" / "group-em" / "box.json"
+    path.parent.mkdir(parents=True)
+    path.write_text('{"box_id": "bad id!"}')
+    _point_settings_home(monkeypatch, tmp_path)
+
+    assert doctor._check_box_identity().status == "broken"
+
+
+def test_fix_box_identity_mints_once_and_never_rewrites(tmp_path: Path, monkeypatch):
+    from coordinator_core.group_em.box_registry import local_box_id
+    from coordinator_core.ops import doctor
+
+    _point_settings_home(monkeypatch, tmp_path)
+    report: list = []
+    doctor._fix_box_identity(report)
+    minted = local_box_id(tmp_path)
+
+    assert minted.startswith("box-") and len(minted) == 12
+    assert doctor._check_box_identity().status == "ok"
+
+    doctor._fix_box_identity(report)
+    assert local_box_id(tmp_path) == minted
+    assert "left as is" in report[-1]
+
+
+def test_run_doctor_fix_mints_identity_and_next_run_reports_ok(tmp_path: Path, monkeypatch):
+    from coordinator_core.group_em.box_registry import local_box_id
+    from coordinator_core.ops import doctor
+
+    _point_settings_home(monkeypatch, tmp_path)
+    report, _ = doctor.run_doctor(fix=True)
+    first = next(l for l in report.layers if l.name == "Box identity (box.json)")
+    assert first.status == "broken"
+    assert not report.all_ok
+
+    report2, _ = doctor.run_doctor(fix=False)
+    second = next(l for l in report2.layers if l.name == "Box identity (box.json)")
+    assert second.status == "ok"
+    assert local_box_id(tmp_path).startswith("box-")

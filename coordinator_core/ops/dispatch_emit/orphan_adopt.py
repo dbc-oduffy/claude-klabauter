@@ -157,9 +157,6 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     next_action}` or `{ok: false, reason, ...}` (the verdict's refusal reason, `superseded_by` when
     superseded). Writes `run-stage.json` and `halted.json` only; re-executes nothing."""
     from coordinator_core.lifecycle import main_worktree_root
-    from coordinator_core.ops.dispatch_emit import halt_refire
-    from coordinator_core.ops.dispatch_emit.ask_contract import adopt_run_stage_at
-    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
     from coordinator_core.session.core import resolve_session_id
 
     if repo_root is None:
@@ -173,7 +170,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         session_id = resolve_session_id()
     if not session_id:
         return {"ok": False, "run_id": run_id, "reason": "no-session"}
-    root = main_worktree_root(Path(repo_root))
+    return adopt_orphaned_run(
+        main_worktree_root(Path(repo_root)), run_id, session_id, dry_run=params.get("dry_run") is True
+    )
+
+
+def adopt_orphaned_run(root: Path, run_id: str, session_id: str, *, dry_run: bool = False) -> dict:
+    """Adopt `run_id` under `session_id` when `orphan_verdict` says orphaned; the handler's body, callable without IPC.
+
+    Reply shape as `_handler`. Unless `dry_run`, writes `halted.json` first, then `run-stage.json`."""
+    from coordinator_core.ops.dispatch_emit import halt_refire
+    from coordinator_core.ops.dispatch_emit.ask_contract import adopt_run_stage_at
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+
     verdict = orphan_verdict(root, run_id, session_id)
     if not verdict["orphaned"]:
         out = {"ok": False, "run_id": run_id, "reason": verdict["reason"]}
@@ -195,7 +204,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "ok": True, "run_id": run_id, "adopted_from": adopted_from, "resume_stage": stage,
         "halted": halted, "next_action": next_action,
     }
-    if params.get("dry_run") is True:
+    if dry_run:
         return {**reply, "dry_run": True}
     # Marker first: a failure between the two writes leaves a halted run the refire resumes, never an
     # adopted-but-unhalted one that the verdict reads as "self" and no session can re-adopt.

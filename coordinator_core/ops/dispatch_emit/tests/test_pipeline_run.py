@@ -27,6 +27,11 @@ def test_unemitted_wrong_prefix_and_unsafe_ids_refuse(tmp_path):
     assert pr.emitted_pipeline_run(tmp_path, "pipeline-a/b") is None
 
 
+def test_run_name_keeps_any_pipeline_prefixed_id_and_prefixes_bare_ones():
+    assert pr.run_name("structured", "pipeline-research-x") == "pipeline-research-x"
+    assert pr.run_name("structured", "r1") == "pipeline-structured-r1"
+
+
 def test_revisions_rel_and_marker():
     assert pr.revisions_rel(RID) == f"scratch/warp/{RID}/revisions.md"
     assert pr.reads_revisions(f"x\n{pr.REVISIONS_MARKER}\ny")

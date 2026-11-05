@@ -117,6 +117,7 @@ def test_refused_commit_reaps_only_created_untracked_paths(repo, tmp_path, monke
     assert sorted(out["reaped"]) == ["state/new1.md", "state/new2.md"]
     assert not (repo / "state" / "new1.md").exists()
     assert (repo / "state" / "reused.md").read_text() == "edited\n"
+    assert out["kept"] == ["state/reused.md"]
 
 
 def test_created_flag_on_a_tracked_path_is_never_reaped(repo, tmp_path, monkeypatch):

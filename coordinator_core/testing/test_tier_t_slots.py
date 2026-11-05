@@ -123,8 +123,9 @@ def foreign_suite_holder():
     import sys
 
     from coordinator_core.testing import suite_mutex
+    from coordinator_core.win_portability import no_console_creationflags
 
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"], **no_console_creationflags())
     assert suite_mutex.acquire("other-session", "pytest -n 4", 0.0, pid=child.pid)
     try:
         yield child

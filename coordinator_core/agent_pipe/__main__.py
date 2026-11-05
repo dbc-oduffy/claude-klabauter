@@ -28,6 +28,7 @@ from typing import List, Optional
 
 from coordinator_core.agent_pipe import codex_app_server, mailbox
 from coordinator_core.agent_pipe.contract import Adapter, PipeMessage
+from coordinator_core.win_portability import no_console_creationflags
 
 ADAPTER_ENV = "COORDINATOR_AGENT_PIPE_ADAPTER"
 REQUEST_FILENAME = "request.json"
@@ -60,12 +61,6 @@ def _write_result(run_dir: Path, result: dict) -> None:
     tmp = run_dir / f"{RESULT_FILENAME}.{os.getpid()}.tmp"
     tmp.write_text(json.dumps(result), encoding="utf-8")
     os.replace(tmp, final)
-
-
-def _child_flags() -> dict:
-    if os.name == "nt":
-        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
-    return {}
 
 
 def _append(agent: str, conversation: str, reply_to: str, content: str) -> None:
@@ -151,7 +146,7 @@ def _relay(run_dir: Path, req: dict, adapter: Adapter) -> dict:
             stderr=err,
             encoding="utf-8",
             errors="replace",
-            **_child_flags(),
+            **no_console_creationflags(),
         )
         try:
             if child.stdout is None:

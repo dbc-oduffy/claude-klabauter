@@ -638,7 +638,7 @@ _EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES = frozenset(
         # subtracts from the run's candidate set, never adds a path to a pathspec.
         (
             "coordinator_core/ops/dispatch_emit/land_run.py",
-            "_peer_held",
+            "_bounded_claim_lookup.work",
         ),
         # dispatch.land_credited holds: the bounded form of the same peer-claim read; a slow or raising
         # lookup holds nothing, and a hit only leaves a credited path out of the landing, never adds one.

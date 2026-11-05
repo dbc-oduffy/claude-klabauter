@@ -320,7 +320,7 @@ def verify_stamp_and_throttle(manifest: dict[str, Any]) -> None:
             "distill.apply_disposal refuses: manifest body sha has DRIFTED "
             f"since it was stamped (stamped sha={stamped_sha!r}, current "
             f"computed sha={computed_sha!r}) — re-assemble and get a fresh "
-            "PM stamp; never apply over drifted content."
+            "stamp; never apply over drifted content."
         )
 
     if manifest.get("mass_throttle"):

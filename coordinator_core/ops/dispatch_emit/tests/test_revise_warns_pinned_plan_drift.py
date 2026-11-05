@@ -51,7 +51,7 @@ def test_new_row_unclaimed_by_pinned_plan_warns_naming_the_row_and_the_pull(tmp_
     out = _revise(_repo(tmp_path))
     assert out["item"] == "R2" and "pin_drift" not in out
     assert out["unclaimed_rows"] == ["R2"]
-    assert "R2" in out["warning"] and PLAN in out["warning"] and "will be pulled" in out["warning"]
+    assert "R2" in out["warning"] and PLAN in out["warning"] and "ledger re-plan leg adds rows" in out["warning"]
 
 
 def test_drift_and_unclaimed_row_both_named_in_one_warning(tmp_path):

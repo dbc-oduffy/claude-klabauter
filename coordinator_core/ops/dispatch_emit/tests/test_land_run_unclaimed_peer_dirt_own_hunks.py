@@ -147,14 +147,14 @@ def test_unclaimed_peer_hunk_stays_out_of_the_commit_and_in_the_worktree(repo):
     assert TARGET in {ln[3:] for ln in _git(repo, "status", "--porcelain").splitlines()}
 
 
-def test_peer_hunk_sharing_lines_with_an_own_hunk_refuses_and_commits_nothing(repo):
-    head = _git(repo, "rev-parse", "HEAD").strip()
-    token = _stage(repo, PEER, PEER.replace("peer1\n", "own1\n"))
+def test_unclaimed_peer_hunk_the_run_rewrote_lands_as_the_runs_own(repo):
+    rewritten = PEER.replace("peer1\n", "own1\n")
+    token = _stage(repo, PEER, rewritten)
 
     out = _land(repo, token)
 
-    assert out.get("refused") == "own-hunk-stage-refused", out
-    assert _git(repo, "rev-parse", "HEAD").strip() == head
+    assert out.get("committed") is True, out
+    assert _git(repo, "show", f"HEAD:{TARGET}") == rewritten
 
 
 def test_a_path_with_no_recorded_baseline_lands_whole(repo):

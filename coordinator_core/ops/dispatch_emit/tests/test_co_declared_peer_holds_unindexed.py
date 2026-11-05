@@ -36,3 +36,39 @@ def test_sibling_with_prefixes_or_unreadable_manifest_is_not_indexed(tmp_path, m
     )
     peer_hunk_gate.co_declared_peer_holds(tmp_path, "me", ["a.py"], ["a.py"])
     assert idx.entries(tmp_path) == {}
+
+
+def _expired(monkeypatch, leg_name):
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    def check(leg):
+        if leg == leg_name:
+            raise land_deadline.LandDeadlineExceeded(leg, [], 0.0)
+
+    monkeypatch.setattr(land_deadline, "check", check)
+    return land_deadline
+
+
+def test_without_released_paths_checks_the_deadline_before_reading(tmp_path, monkeypatch):
+    import pytest
+
+    from coordinator_core.ops.dispatch_emit import halted_hold_release
+
+    ld = _expired(monkeypatch, "halted_hold_release.without_released_paths")
+    with pytest.raises(ld.LandDeadlineExceeded):
+        halted_hold_release.without_released_paths(tmp_path, [("a.py", "r1")])
+    monkeypatch.setattr(ld, "check", lambda leg: None)
+    assert halted_hold_release.without_released_paths(tmp_path, [("a.py", "r1")]) == [("a.py", "r1")]
+
+
+def test_merge_ancestry_release_propagates_the_deadline_not_swallows_it(tmp_path, monkeypatch):
+    import pytest
+
+    from coordinator_core.ops.dispatch_emit import merge_ancestry_release
+
+    ld = _expired(monkeypatch, "merge_ancestry_release.release")
+    holds = [("a.py", "r1")]
+    with pytest.raises(ld.LandDeadlineExceeded):
+        merge_ancestry_release.release(tmp_path, holds)
+    monkeypatch.setattr(ld, "check", lambda leg: None)
+    assert merge_ancestry_release.release(tmp_path, holds) == holds

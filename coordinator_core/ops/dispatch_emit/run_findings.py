@@ -39,6 +39,8 @@ def _disposition(status: str, reason: object) -> str:
         return "false-alarm" if isinstance(reason, str) and _FALSE_ALARM_RE.search(reason) else "rejected"
     if status == "suspended":
         return "suspended"
+    if status == "handed-to-em":
+        return "handed-to-em"
     return "unresolved"
 
 

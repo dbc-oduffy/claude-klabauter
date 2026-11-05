@@ -2,7 +2,7 @@
 
 `foreign_dirty` answers "which uncommitted paths are not this row's own edits" (one `git status`
 spawn). `holders_of` answers "which live session holds each" (no spawn). `head_tree` answers "what
-is HEAD plus this row's own edits": one shared base per HEAD sha under `tempfile.gettempdir()`,
+is HEAD plus this row's own edits": one shared base per HEAD sha under `temp_layout.managed_tempdir()`,
 built once from a private index (cold: rev-parse + read-tree + checkout-index = 3 spawns; warm:
 rev-parse = 1 spawn), plus a per-row hardlink mirror with the row's own files overlaid from the
 live tree. Bulk-transfer class (not an engine op, outside the DR-344 bar). The tree lives outside
@@ -16,13 +16,13 @@ import hashlib
 import os
 import re
 import shutil
-import tempfile
 import time
 import uuid
 from pathlib import Path
 from typing import Sequence
 
 from coordinator_core.git.run import run_git
+from coordinator_core.temp_layout import managed_tempdir
 
 UNATTRIBUTED = "unattributed"
 _CACHE_DIRNAME = "coordinator-bug-blitz"
@@ -96,7 +96,7 @@ def holders_of(repo_root: Path, paths: Sequence[str], sid: str) -> dict[str, lis
 
 def _cache_parent(repo_root: Path) -> Path:
     key = hashlib.sha1(str(Path(repo_root).resolve()).encode("utf-8")).hexdigest()[:12]
-    return Path(tempfile.gettempdir()) / _CACHE_DIRNAME / key
+    return managed_tempdir() / _CACHE_DIRNAME / key
 
 
 def _build_base(repo_root: Path, base: Path, sha: str) -> None:

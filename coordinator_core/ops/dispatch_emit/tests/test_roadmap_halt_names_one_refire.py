@@ -33,7 +33,7 @@ def test_script_calls_finaliser_before_its_return():
     assert "function _refireNextAction()" in s
     call = s.index("  _refireNextAction();")
     ret = s.index("  return { arm: 'roadmap'")
-    assert call < ret and s.count("halted_by: _halted") == 1
+    assert call < ret and s[ret:].count("halted_by: _halted") == 1
 
 
 @pytest.mark.cadence

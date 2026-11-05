@@ -100,6 +100,42 @@ def _install_doe_manifest(claude_home: Path, content_root: Path, manifest: dict)
     (machine_local / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
 
 
+class TestReadRegistryReposNestedTable:
+    def _home(self, tmp_path, monkeypatch, body):
+        machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"
+        machine_local.mkdir(parents=True)
+        (machine_local / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
+        (machine_local / "registry.local.toml").write_text(body, encoding="utf-8")
+        monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "claude-home"))
+        monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
+        monkeypatch.delenv("MACHINE_LOCAL_IMPL", raising=False)
+
+    def test_nested_repos_table_is_flattened(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch, "[repos]\nclaude_klabauter = '/abs/claude-klabauter'\nempty = ''\n")
+        assert read_registry_repos() == {"repos.claude_klabauter": "/abs/claude-klabauter"}
+
+    def test_flat_and_nested_merge(self, tmp_path, monkeypatch):
+        self._home(
+            tmp_path, monkeypatch,
+            '"repos.a" = "/abs/a"\n"coordinator.x" = "y"\n[repos]\nb = "/abs/b"\n',
+        )
+        assert read_registry_repos() == {"repos.a": "/abs/a", "repos.b": "/abs/b"}
+
+    def test_resolve_receiver_inbox_via_nested_table(self, tmp_path, monkeypatch):
+        from coordinator_core.ops.fleet._memo_resolver import resolve_receiver_inbox
+
+        repo = tmp_path / "mk"
+        repo.mkdir()
+        self._home(tmp_path, monkeypatch, f"[repos]\nclaude_klabauter = '{repo}'\n")
+        inbox, path, repos = resolve_receiver_inbox("claude-klabauter-em")
+        assert path == repo and inbox is not None and "repos.claude_klabauter" in repos
+        assert resolve_receiver_inbox("no-such-em")[0] is None
+
+    def test_nonrepo_tables_not_swept_in(self, tmp_path, monkeypatch):
+        self._home(tmp_path, monkeypatch, "[engine]\nclaude_klabauter = '/abs/x'\n")
+        assert read_registry_repos() == {}
+
+
 class TestReadRegistryReposFailLoud:
     def test_returns_empty_on_nothing_configured(self, tmp_path, monkeypatch):
         missing_home = tmp_path / "nonexistent-claude-home"

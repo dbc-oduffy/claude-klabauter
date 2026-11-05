@@ -473,6 +473,51 @@ def test_running_record_refuses_with_poll_remedy(tmp_path):
     assert li.landing_test_gate(root, passed, "r1")[1] == "retest-running"
 
 
+def _running(tmp_path):
+    root = _repo(tmp_path)
+    path = li.fresh_verdict_path(root, "r1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_id": "r1", "status": li.RETEST_RUNNING, "tests": ["t.py"]}), encoding="utf-8")
+    return root
+
+
+def test_running_retest_is_an_await_with_poll_and_rerun_steps(tmp_path, monkeypatch):
+    root = _running(tmp_path)
+    monkeypatch.setattr(
+        li, "invariant_findings", lambda *a, **k: pytest.fail("invariant check ran with no verdict"),
+    )
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1", ["x.py"])
+    assert check == "retest-running"
+    step = li.retest_await(findings, _RECORDED_FAIL)
+    assert step["awaiting"] == "retest"
+    assert step["poll"].endswith(" --poll") and li.RETEST_LAUNCHER in step["poll"]
+    assert step["rerun"] == li.retest_remedy(_RECORDED_FAIL)
+
+
+def test_a_real_failure_is_never_an_await(tmp_path):
+    root = _repo(tmp_path)
+    findings, check = li.landing_test_gate(root, _RECORDED_FAIL, "r1")
+    assert check == "failed" and findings
+    assert li.retest_await(findings, _RECORDED_FAIL) is None
+    assert li.retest_await([li.Finding("", li.TARGETED_TESTS_FAILED, "d")], {}) is None
+
+
+def test_fresh_pass_naming_the_invariant_clears_it(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import RETEST_ATTEMPTS_PARAM
+
+    spent = {RETEST_ATTEMPTS_PARAM: MAX_IN_RUN_REMEDY_ATTEMPTS}
+    node = "pkg/tests/test_inv.py::test_invariant"
+    monkeypatch.setattr(li, "landing_invariant_nodes", lambda *a, **k: [node])
+    monkeypatch.setattr(
+        li, "fresh_targeted_verdict", lambda *a, **k: {"status": "pass", "tests": [node]},
+    )
+    assert li.invariant_findings(tmp_path, ["x.py"], "r1", spent) == []
+    monkeypatch.setattr(li, "fresh_targeted_verdict", lambda *a, **k: None)
+    (owed,) = li.invariant_findings(tmp_path, ["x.py"], "r1", spent)
+    assert "no fresh retest verdict exists" in owed.detail
+
+
 def _digest(tmp_path, deviations, wrap=True):
     body = {"deviations": deviations, "tests": {"status": "fail", "per_row": {"failed": []}}}
     path = tmp_path / "task.output"

@@ -90,6 +90,16 @@ def _regex_close(script: str, j: int) -> int:
     return min(j, n)
 
 
+_TEMPLATE_STOP = re.compile(r"[\\`$]")
+_INTERP_STOP = re.compile(r"[`'\"/{}]")
+_SCRUB_STOP = re.compile(r"[/`'\"]")
+_QUOTED_BODY = {q: re.compile(r"(?:\\[\s\S]|[^\\" + q + r"])*") for q in ("'", '"')}
+
+
+def _mask(segment: str) -> str:
+    return "\n".join("#" * len(line) for line in segment.split("\n"))
+
+
 def _template_end(script: str, i: int) -> int:
     """Index of the backtick closing a template literal whose body starts at
     `i` (len(script) when unterminated).
@@ -99,6 +109,10 @@ def _template_end(script: str, i: int) -> int:
     comments inside the interpolation are tracked so its closing `}` is found."""
     n = len(script)
     while i < n:
+        m = _TEMPLATE_STOP.search(script, i)
+        if m is None:
+            return n
+        i = m.start()
         c = script[i]
         if c == "\\":
             i += 2
@@ -109,6 +123,10 @@ def _template_end(script: str, i: int) -> int:
             i += 2
             depth = 1
             while i < n and depth:
+                m = _INTERP_STOP.search(script, i)
+                if m is None:
+                    return n
+                i = m.start()
                 c = script[i]
                 nxt = script[i + 1] if i + 1 < n else ""
                 if c == "`":
@@ -159,63 +177,100 @@ def scrub(script: str) -> str:
     out: List[str] = []
     i = 0
     n = len(script)
-    placeholder = "#"
     while i < n:
+        m = _SCRUB_STOP.search(script, i)
+        if m is None:
+            out.append(script[i:])
+            break
+        if m.start() > i:
+            out.append(script[i : m.start()])
+            i = m.start()
         ch = script[i]
         nxt = script[i + 1] if i + 1 < n else ""
 
         if ch == "/" and nxt == "/":
-            out.append("/")
-            out.append("/")
-            i += 2
-            while i < n and script[i] != "\n":
-                out.append(placeholder)
-                i += 1
+            end = script.find("\n", i + 2)
+            end = n if end < 0 else end
+            out.append("//" + "#" * (end - i - 2))
+            i = end
             continue
 
         if ch == "/" and nxt == "*":
-            out.append("/")
-            out.append("*")
-            i += 2
-            while i < n and not (script[i] == "*" and i + 1 < n and script[i + 1] == "/"):
-                out.append(placeholder if script[i] != "\n" else "\n")
-                i += 1
-            if i < n:
-                out.append("*")
-                out.append("/")
-                i += 2
+            end = script.find("*/", i + 2)
+            if end < 0:
+                out.append("/*" + _mask(script[i + 2 :]))
+                i = n
+            else:
+                out.append("/*" + _mask(script[i + 2 : end]) + "*/")
+                i = end + 2
             continue
 
         if ch == "`":
             end = _template_end(script, i + 1)
-            out.append("`")
-            out.extend("\n" if c == "\n" else placeholder for c in script[i + 1 : end])
+            out.append("`" + _mask(script[i + 1 : end]))
             if end < n:
                 out.append("`")
             i = end + 1
             continue
 
         if ch in ("'", '"'):
-            quote = ch
-            out.append(ch)
-            i += 1
-            while i < n and script[i] != quote:
-                if script[i] == "\\" and i + 1 < n:
-                    out.append(placeholder)
-                    out.append(placeholder if script[i + 1] != "\n" else "\n")
-                    i += 2
-                    continue
-                out.append(placeholder if script[i] != "\n" else "\n")
-                i += 1
-            if i < n:
-                out.append(quote)
-                i += 1
+            end = _QUOTED_BODY[ch].match(script, i + 1).end()
+            if end < n and script[end] == ch:
+                out.append(ch + _mask(script[i + 1 : end]) + ch)
+                i = end + 1
+            else:
+                out.append(ch + _mask(script[i + 1 :]))
+                i = n
             continue
+
+        if ch == "/" and _regex_may_start(out):
+            end = _regex_end(script, i + 1)
+            if end is not None:
+                out.append("/" + "#" * (end - i - 1) + "/")
+                i = end + 1
+                continue
 
         out.append(ch)
         i += 1
 
     return "".join(out)
+
+
+_REGEX_PREV_OPENERS = frozenset("(,=:[!&|?{};+-*%<>~^")
+
+
+def _regex_may_start(out: List[str]) -> bool:
+    """True when a `/` after the emitted chunks `out` opens a regex literal rather than dividing: the
+    previous significant char is an operator or opener, or the previous word is `return`/`typeof`."""
+    tail = ""
+    for k in range(len(out) - 1, -1, -1):
+        piece = out[k] if tail else out[k].rstrip()
+        if piece:
+            tail = piece[-6:] + tail
+            if len(tail) >= 6:
+                break
+    if not tail:
+        return True
+    return tail[-1] in _REGEX_PREV_OPENERS or tail[-6:] in ("return", "typeof")
+
+
+def _regex_end(script: str, start: int) -> Optional[int]:
+    """Index of the `/` closing the regex literal whose body starts at `start`, or None when the line ends first."""
+    in_class = False
+    k, n = start, len(script)
+    while k < n and script[k] != "\n":
+        c = script[k]
+        if c == "\\":
+            k += 2
+            continue
+        if c == "[":
+            in_class = True
+        elif c == "]":
+            in_class = False
+        elif c == "/" and not in_class:
+            return k
+        k += 1
+    return None
 
 
 FORBIDDEN_GLOBALS = [
@@ -244,9 +299,18 @@ FORBIDDEN_GLOBALS = [
 ]
 
 
+_FORBIDDEN_ANCHOR = {
+    "forbidden-global-date-now": "Date.now",
+    "forbidden-global-math-random": "Math.random",
+    "forbidden-global-new-date": "Date",
+}
+
+
 def check_forbidden_globals(scrubbed: str) -> List[Finding]:
     findings: List[Finding] = []
     for pattern, code, message in FORBIDDEN_GLOBALS:
+        if _FORBIDDEN_ANCHOR.get(code, "") not in scrubbed:
+            continue
         for m in pattern.finditer(scrubbed):
             line = scrubbed.count("\n", 0, m.start()) + 1
             findings.append(Finding(Severity.ERROR, code, message, line))

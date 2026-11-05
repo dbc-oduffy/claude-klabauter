@@ -99,7 +99,7 @@ def _drive(setup_mod, tmp_path, repo_root=None):
     repo_root = repo_root or tmp_path / "sandbox-clone"
     repo_root.mkdir(exist_ok=True)
     setup_mod.install_host_sampler_task(repo_root, repo_root)
-    setup_mod.offer_warm_opt_in(repo_root, SimpleNamespace(agent_mode=True))
+    setup_mod.offer_warm_opt_in(repo_root, SimpleNamespace(agent_mode=True, warm=None))
 
 
 def test_sandboxed_install_leaves_job_and_warm_engine_untouched(box, monkeypatch, capsys, setup_mod, tmp_path):

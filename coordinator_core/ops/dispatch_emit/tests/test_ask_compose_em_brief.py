@@ -116,7 +116,32 @@ def test_without_a_brief_the_script_has_no_brief_surface_and_wrap_takes_no_kwarg
     assert seen == [{}]
 
 
-def test_roadmap_arm_refuses_a_brief(monkeypatch):
+_RB = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
+
+
+def test_roadmap_arm_composes_with_a_brief_and_prefixes_the_roadmap_stage(monkeypatch):
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "roadmap")
-    with pytest.raises(AskComposeRefused, match="roadmap"):
+    script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_brief=_BRIEF, roadmap_blitz_text=_RB)
+    stage = script[script.index("async function roadmapBlitz(") :]
+    assert stage.split("\n", 2)[1] == f"const agent = (p, o) => _askAgent({EM_BRIEF_VAR} + p, o);"
+    assert "phase('roadmap-blitz')" in script and "which this script does not embed" not in script
+    assert "const _EM_BRIEF = " in script and script.index("const _EM_BRIEF = ") < script.index("phase('roadmap-blitz')")
+
+
+def test_roadmap_arm_with_a_brief_refuses_when_the_roadmap_stage_cannot_load(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "roadmap")
+    with pytest.raises(AskComposeRefused, match="roadmap stage cannot be embedded"):
         _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_brief=_BRIEF)
+
+
+def test_em_size_rides_every_gate_command_and_is_absent_without_one():
+    sized, _ = _compose(em_size="M", accept_pending=True)
+    assert 'em_size: "M"' in sized and '"em_size":"M"' in sized
+    unsized, _ = _compose(accept_pending=True)
+    assert "em_size" not in unsized
+
+
+def test_em_size_routes_a_roadmap_sizing_into_the_body_that_carries_it(monkeypatch):
+    monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "roadmap")
+    script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_size="M", roadmap_blitz_text=_RB)
+    assert 'em_size: "M"' in script and "phase('roadmap-blitz')" in script

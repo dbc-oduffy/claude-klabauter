@@ -96,6 +96,29 @@ def test_clean_export_reports_zero_residuals_and_passes(tmp_path, capsys):
     assert "codename residuals for claude-klabauter-row: 0 (baseline 0 at 268caaf9c2)" in capsys.readouterr().out
 
 
+def test_gate_second_run_is_served_from_the_destination_git_dir_and_still_fails_a_rename(tmp_path, monkeypatch):
+    src, dest = tmp_path / "src", tmp_path / "dest"
+    (dest / ".git").mkdir(parents=True)
+    src.mkdir()
+    (src / "mod.py").write_text(_SOURCE, encoding="utf-8")
+    target = SimpleNamespace(name="row", source_dir=src, dest_dir=dest)
+    ctx = SimpleNamespace(engine_claude_klabauter=object())
+    section = {"hooks": []}
+    assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)]) is True
+    assert list((dest / ".git" / "claude-klabauter-gate-result").glob("gate-result-repo-key-literal-*.json"))
+
+    from coordinator_core.percolate import engine as pct_engine
+
+    def boom(*args, **kwargs):
+        raise AssertionError("content transform ran on a cached, unchanged tree")
+
+    monkeypatch.setattr(pct_engine, "_apply_content_transforms", boom)
+    assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)]) is True
+    monkeypatch.undo()
+    renaming = {"hooks": ["substitute"], "substitute": [{"key": "repos.x", "value": "repos.y"}]}
+    assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, renaming)]) is False
+
+
 def test_identity_row_passes(tmp_path):
     assert _run(tmp_path, {"hooks": []}) is True
 

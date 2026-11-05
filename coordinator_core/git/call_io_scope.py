@@ -5,15 +5,20 @@ A ``call_io_scope()`` block opens a fresh cache that lives for that ``with`` blo
 ``git_state.index_read_cache_scope``. Outside a scope every helper is a plain uncached
 operation, so callers that never open one behave exactly as before.
 
-Stdlib only: importing this adds nothing to the cold-import set.
+Imports only `contextvars` and `os` at runtime: `typing` and `contextlib` would add ~20 modules to
+the cold-import set of `coordinator_core.ipc`, which is ceilinged.
 """
 
 from __future__ import annotations
 
 import contextvars
 import os
-from contextlib import contextmanager
-from typing import Callable, Dict, Iterator, Optional, Tuple, TypeVar
+
+TYPE_CHECKING = False
+if TYPE_CHECKING:
+    from typing import Callable, Dict, Optional, Tuple, TypeVar
+
+    T = TypeVar("T")
 
 __all__ = [
     "HEAD_NAMESPACE",
@@ -23,8 +28,6 @@ __all__ = [
     "memo",
     "invalidate",
 ]
-
-T = TypeVar("T")
 
 #: Memo namespace for resolved HEAD/ref values; `head_sha` memoises in it. Only the in-process
 #: `cas_ref`/`cas_head_symref` invalidate it: a ref moved by a git subprocess or a peer inside an
@@ -47,14 +50,16 @@ _SCOPE: "contextvars.ContextVar[Optional[_Scope]]" = contextvars.ContextVar(
 )
 
 
-@contextmanager
-def call_io_scope() -> Iterator[None]:
+class call_io_scope:
     """Open an empty per-call cache for this block; a nested scope shadows the outer one."""
-    token = _SCOPE.set(_Scope())
-    try:
-        yield
-    finally:
-        _SCOPE.reset(token)
+
+    __slots__ = ("_token",)
+
+    def __enter__(self) -> None:
+        self._token = _SCOPE.set(_Scope())
+
+    def __exit__(self, *exc_info: object) -> None:
+        _SCOPE.reset(self._token)
 
 
 def scope_open() -> bool:

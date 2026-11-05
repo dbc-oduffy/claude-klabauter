@@ -92,7 +92,7 @@ def test_em_run_with_needs_slot_is_a_known_key_and_reads_without_warning(tmp_pat
     _plan(tmp_path, "  em_run: true\n  needs_slot: true\n")
     with caplog.at_level(logging.WARNING):
         rows = read_spine(tmp_path / PLAN_REL)
-    assert [r.id for r in rows] == ["C1"]
+    assert rows == []  # an em_run row is the EM's, so it is withheld from the dispatched rows
     assert not any("em_run" in r.getMessage() for r in caplog.records)
 
 

@@ -15,7 +15,9 @@ def test_queue_emitter_composes_execute_review(tmp_path):
     prep_at = script.index("const _reviewPrep = ")
     wave_at = script.index("const _reviewWave = ")
     assert grind_at < prep_at < wave_at
-    assert script.index("await _adjudicatePmBound();") > wave_at
+    # PM-bound hand-backs are adjudicated and the ruled rows continued before review freezes the touched files.
+    adjudicate_at = script.index("await _adjudicatePmBound();")
+    assert grind_at < adjudicate_at < script.index("await _continueRuled();") < prep_at
     assert "if (_reviewPaths.length === 0)" in script
 
 

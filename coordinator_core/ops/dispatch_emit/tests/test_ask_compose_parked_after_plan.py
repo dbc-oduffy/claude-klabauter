@@ -90,7 +90,7 @@ def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusa
     scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "S", "ceo", ["--precedent", "shipped-before"])
     assert verdict["arm"] == "s"
     stub = e2e._stub(scout, decision, verdict)
-    stub["plan"] = {"plan_rel": None}
+    stub["plan"] = {"plan_rel": None, "prep_verdict": "PREPPED"}
     out = e2e._run_script(_emit_time_script(), stub)
     halt = out["result"]["halted_by"]
     assert halt["halted"] == HALT_REFUSAL and halt["reason"] == "stop_after=plan but no plan landed", halt

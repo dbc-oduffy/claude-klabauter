@@ -35,10 +35,11 @@ _LOG = "worker.log"
 _PACKAGE_ROOT = str(Path(__file__).resolve().parents[2])
 
 
-def _detach_kwargs() -> Dict[str, Any]:
+def _no_console_detach_kwargs() -> Dict[str, Any]:
+    # Trap: DETACHED_PROCESS must not be ORed in; Win32 then ignores CREATE_NO_WINDOW.
     if os.name == "nt":
         return {
-            "creationflags": getattr(subprocess, "DETACHED_PROCESS", 0)
+            "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)
             | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
         }
     return {"start_new_session": True}
@@ -85,7 +86,7 @@ def _spawn(op: str, p: dict, request: dict) -> dict:
             stderr=log,
             cwd=cwd or str(run_dir),
             env=env,
-            **_detach_kwargs(),
+            **_no_console_detach_kwargs(),
         )
     return {"run_id": run_id, "mailbox": str(mailbox), "run_dir": str(run_dir), "pid": proc.pid}
 

@@ -189,6 +189,19 @@ class TestQuotedArgumentMask:
         assert len(guard._mask_quoted_arguments(_REPRO)) == len(_REPRO)
 
 
+class TestMaskScalesLinearly:
+    def test_many_segments_mask_fast_and_keep_semantics(self):
+        import time
+
+        cmd = "echo a b c; " * 8000 + "echo 'ps -p 1' ; bash -c 'kill -0 1'"
+        t0 = time.process_time()
+        masked = guard._mask_quoted_arguments(cmd)
+        assert time.process_time() - t0 < 1.0
+        assert len(masked) == len(cmd)
+        assert "'xxxxxxx'" in masked
+        assert "'kill -0 1'" in masked
+
+
 class TestEnvelopeOffers:
     def test_keeps_the_two_session_offers(self):
         reason = _reason(_enveloped(guard.check)(_payload("kill -0 $PID")))

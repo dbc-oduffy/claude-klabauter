@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from functools import lru_cache
 
 from coordinator_core.ops.dispatch_emit import prompt_fragments as _pf
 
@@ -25,10 +26,16 @@ _IDENT = re.compile(r"[A-Za-z_$][\w$]*")
 _PURE_CODE = re.compile(r"[\s{}\[\]:,+]*")
 _LITERAL_IDENTS = {"true", "false", "null"}
 _FRAGMENT_REF = re.compile(r"_PFC?\d+")
+#: A run of code characters no branch of `_code_mask.code` acts on.
+_PLAIN_RUN = re.compile(r"[^'\"`/{}]+")
+_ONE = b"\x01"
 
 
-def _code_mask(src: str) -> bytearray:
-    """1 where ``src[i]`` is code, 0 inside strings (quotes included), template text, comments and regexes."""
+@lru_cache(maxsize=2)
+def _code_mask(src: str) -> bytes:
+    """1 where ``src[i]`` is code, 0 inside strings (quotes included), template text, comments and regexes.
+
+    Immutable because the cache hands the same mask to every caller of the same text."""
     n = len(src)
     mask = bytearray(n)
 
@@ -38,10 +45,7 @@ def _code_mask(src: str) -> bytearray:
         while i < n:
             c = src[i]
             if c in "'\"":
-                j = i + 1
-                while j < n and src[j] != c:
-                    j += 2 if src[j] == "\\" else 1
-                i, prev = j + 1, c
+                i, prev = _pf.string_end(src, i + 1, c) + 1, c
                 continue
             if c == "`":
                 i, prev = template(i + 1), "`"
@@ -74,6 +78,14 @@ def _code_mask(src: str) -> bytearray:
                 depth += 1
             elif c == "}":
                 depth -= 1
+            elif c != "/":
+                end = _PLAIN_RUN.match(src, i).end()
+                mask[i:end] = _ONE * (end - i)
+                tail = src[i:end].rstrip()
+                if tail:
+                    prev = tail[-1]
+                i = end
+                continue
             mask[i] = 1
             if not c.isspace():
                 prev = c
@@ -82,6 +94,9 @@ def _code_mask(src: str) -> bytearray:
 
     def template(i: int) -> int:
         while i < n:
+            i = _pf._TEMPLATE_PLAIN.match(src, i).end()
+            if i >= n:
+                break
             c = src[i]
             if c == "\\":
                 i += 2
@@ -94,10 +109,10 @@ def _code_mask(src: str) -> bytearray:
         return i
 
     code(0, False)
-    return mask
+    return bytes(mask)
 
 
-def _brace_end(src: str, mask: bytearray, start: int) -> int:
+def _brace_end(src: str, mask: bytes, start: int) -> int:
     """End-exclusive index of the object literal opening at ``src[start]``, or -1 when unbalanced."""
     depth = 0
     for i in range(start, len(src)):

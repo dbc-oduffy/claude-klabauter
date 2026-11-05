@@ -328,7 +328,9 @@ def spawn_in_capped_job(
     kwargs = dict(popen_kwargs or {})
     if not IS_WINDOWS:
         kwargs["start_new_session"] = True
-        proc = subprocess.Popen(argv, **kwargs)
+        from coordinator_core.win_portability import no_console_creationflags
+
+        proc = subprocess.Popen(argv, **no_console_creationflags(), **kwargs)
 
         def close_posix() -> None:
             try:

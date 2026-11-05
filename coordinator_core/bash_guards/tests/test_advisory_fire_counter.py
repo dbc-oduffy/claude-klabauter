@@ -30,6 +30,7 @@ import pytest
 
 from pathlib import Path
 
+from coordinator_core import machine_profile
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
@@ -125,6 +126,11 @@ class TestFlippedGuardProducesOneRecord:
 
 class TestHardDenyNeverCounted:
     def test_fail_closed_entry_produces_no_record(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            machine_profile,
+            "FLOOR_GUARDS",
+            machine_profile.FLOOR_GUARDS | {"fake-hard-deny-guard"},
+        )
         entry = _fake_hard_deny_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(

@@ -50,7 +50,10 @@ SCRIPT2 = "run2.mjs"
 _SID = "11111111-2222-3333-4444-555555555555"
 _REVIEWED = reviewed()
 _HALT = {"halted": "ledger-check", "plan": PLAN, "items": [{"id": "R1"}]}
-_MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+_MET = {"items": [{
+    "id": "R1", "status": "met", "wired": True,
+    "command": "python -m consumer --run", "observed": "consumer reached the output",
+}]}
 _DISCHARGE = "verified V1 by hand"
 
 

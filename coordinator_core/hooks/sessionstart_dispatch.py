@@ -222,6 +222,24 @@ def _leg_objective_resume(payload: dict) -> "Optional[str]":
     return "\n".join(lines)
 
 
+def _leg_owed_legs(payload: dict) -> "Optional[str]":
+    """Name each undischarged owed leg (`state/owed-legs/`); None when none is open.
+
+    Runs from `_handler` on every matched source, outside `_LEGS` (that tuple is pinned to the
+    DoE registry order). Pure file reads; the repo is the payload cwd's, never the process cwd.
+    """
+    from coordinator_core.ops.dispatch_emit.owed_leg_queue import open_owed_legs, render_owed_legs
+
+    cwd = payload.get("cwd")
+    root = _repo_root_of(cwd if isinstance(cwd, str) and cwd else None)
+    if root is None:
+        return None
+    rows = open_owed_legs(root)
+    if not rows:
+        return None
+    return "OWED LEGS (discharge via plan.tasks.mutate):\n" + render_owed_legs(rows)
+
+
 # (module_key, sources, leg callable name) in DoE REGISTRY order. Each leg takes
 # the payload dict and returns a result `_extract_context` understands, or text.
 _LEGS = (
@@ -298,6 +316,12 @@ async def _handler(params: dict, repo_root=None) -> dict:
         if text:
             texts.append(text)
 
+    try:
+        owed_text = _leg_owed_legs(payload)
+    except Exception:
+        owed_text = None
+    if owed_text:
+        texts.append(owed_text)
     if not texts:
         return no_advisory()
     return context_only("SessionStart", "\n".join(texts))

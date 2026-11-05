@@ -9,7 +9,8 @@ every PyYAML build.
 
 Import-light by design (yaml only): DoE imports `schema_validate.py` by file path.
 `safe_load` reads `SAFE_LOADER` at call time, so rebinding the module attribute steers every
-caller that goes through `safe_load`.
+caller that goes through `safe_load`. A caller passing `SAFE_LOADER` to `yaml.load` itself
+gets libyaml's error wording; embed `str(err)` only from `safe_load`.
 """
 
 from __future__ import annotations

@@ -11,6 +11,7 @@ def _isolate_redirect_state(monkeypatch):
     import tempfile
 
     monkeypatch.setattr(fc, "_REDIRECT", None)
+    monkeypatch.setattr(fc, "_INDEX_GUARD", {})
     monkeypatch.setattr(tempfile, "tempdir", None)
     for key in fc._TEMP_ENV:
         monkeypatch.setenv(key, os.environ.get(key, ""))
@@ -317,3 +318,102 @@ def test_the_session_mktemp_uses_the_counted_maker():
     import _pytest.tmpdir as tmpdir_mod
 
     assert getattr(tmpdir_mod, "make_numbered_dir") is fc._counted_numbered_dir
+
+
+pytest_plugins = ["pytester"]
+
+_GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+
+
+def _git(repo, *args):
+    import subprocess
+
+    subprocess.run([*_GIT, *args], cwd=repo, check=True, capture_output=True)
+
+
+def _tracked_repo(path):
+    path.mkdir(parents=True, exist_ok=True)
+    _git(path, "init", "-q")
+    (path / "tracked.txt").write_text("x")
+    (path / "other.txt").write_text("y")
+    _git(path, "add", "-A")
+    _git(path, "commit", "-q", "-m", "seed")
+    return path
+
+
+def test_index_guard_names_a_new_untrack_and_ignores_an_unchanged_index(tmp_path):
+    repo = _tracked_repo(tmp_path / "r")
+    fc._arm_index_guard(repo)
+    assert fc._INDEX_GUARD
+    assert fc._index_changes() == []
+    _git(repo, "rm", "-q", "--cached", "tracked.txt")
+    assert fc._index_changes() == ["D tracked.txt"]
+    assert fc._index_changes() == []
+
+
+def test_index_guard_skips_the_git_spawn_while_the_index_stat_is_unchanged(tmp_path, monkeypatch):
+    repo = _tracked_repo(tmp_path / "r")
+    fc._arm_index_guard(repo)
+    monkeypatch.setattr(fc, "_index_vs_head", lambda _r: pytest.fail("spawned"))
+    assert fc._index_changes() == []
+
+
+def test_index_guard_is_off_outside_a_git_repo(tmp_path):
+    fc._arm_index_guard(tmp_path)
+    assert not fc._INDEX_GUARD
+    assert fc._index_changes() == []
+
+
+def test_index_guard_ignores_a_preexisting_staged_difference(tmp_path):
+    repo = _tracked_repo(tmp_path / "r")
+    _git(repo, "rm", "-q", "--cached", "other.txt")
+    fc._arm_index_guard(repo)
+    assert fc._index_changes() == []
+
+
+def _run_inner(pytester, tmp_path, body):
+    repo = _tracked_repo(pytester.path)
+    pytester.makepyfile(test_inner=body.format(repo=repr(str(repo))))
+    pytester.makeini("[pytest]\n")
+    env_path = str(Path(fc.__file__).resolve().parents[2])
+    pytester._monkeypatch.setenv("PYTHONPATH", env_path)
+    return pytester.runpytest_subprocess(
+        "-p", "coordinator_core.testing.fs_containment", "-p", "no:cacheprovider",
+        "--basetemp", str(tmp_path / "bt"),
+    )
+
+
+def test_session_names_the_test_that_untracks_a_repo_file(pytester, tmp_path):
+    result = _run_inner(
+        pytester,
+        tmp_path,
+        """
+import subprocess
+
+def test_untracker():
+    subprocess.run(["git", "rm", "-q", "--cached", "tracked.txt"], cwd={repo}, check=True)
+
+def test_innocent():
+    pass
+""",
+    )
+    out = result.stdout.str()
+    assert "test_inner.py::test_untracker" in out
+    assert "D tracked.txt" in out
+    result.assert_outcomes(passed=2, errors=1)
+
+
+def test_session_passes_a_test_that_only_touches_a_tmp_path_repo(pytester, tmp_path):
+    result = _run_inner(
+        pytester,
+        tmp_path,
+        """
+import subprocess
+
+def test_elsewhere(tmp_path):
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    (tmp_path / "f").write_text("x")
+    subprocess.run(["git", "add", "f"], cwd=tmp_path, check=True)
+""",
+    )
+    result.assert_outcomes(passed=1)

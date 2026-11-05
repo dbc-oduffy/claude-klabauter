@@ -135,9 +135,16 @@ def test_plan_rows_serving_does_not_swallow_other_exceptions(tmp_path, monkeypat
         plan_rows_serving(p, ["R1"])
 
 
-def test_xs_arm_sha_free_note_with_owed_work_and_no_writes_replans_in_run(tmp_path):
+def test_xs_arm_sha_free_note_with_owed_work_and_no_writes_refuses_for_want_of_a_replan_leg(tmp_path):
     root = _repo(tmp_path)
     plan = remaining_leg_plan(_rem("do the thing"), ["finish"], [], ["R1"], [], SIZING, root, arm="xs")
+    assert plan["action"] == LEG_REFUSE
+    assert "no re-plan leg" in plan["reason"]
+
+
+def test_non_xs_arm_sha_free_note_with_owed_work_and_no_writes_replans_in_run(tmp_path):
+    root = _repo(tmp_path)
+    plan = remaining_leg_plan(_rem("do the thing"), ["finish"], [], ["R1"], [], SIZING, root, arm="m_plus")
     assert plan["action"] == LEG_DISPATCH
     assert "re-plan leg adds" in plan["reason"]
 

@@ -321,8 +321,8 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     # is gone: locked_rmw now delegates its atomic replace to
     # replace_with_retry() (Windows sharing-violation retry wrapper) rather
     # than calling os.replace directly -- see that function's own entry below.
-    ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit", "Path.rename", "m.dst.rename(m.src)", 1): "archive_and_commit: m.dst.rename(m.src) reverses a stage (git add) that landed on disk before the index update failed -- restores content to the ORIGINAL path, so any pre-existing claim on src (the restored destination) stays correctly attributed; this is an undo, not a forward relocation. Loop var renamed move->m, same call this entry always covered.",
-    ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit", "Path.rename", "move.dst.rename(move.src)", 1): "archive_and_commit: move.dst.rename(move.src) reverses ALL acted renames after a failed batch commit -- same undo-to-original-path reasoning as the m.dst.rename(m.src) entry above. Ordinal reset to 1: the sibling stage-failure reversal above now uses a differently-named loop var (m), so this is the only remaining call with this exact source text.",
+    ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit_sync", "Path.rename", "m.dst.rename(m.src)", 1): "archive_and_commit: m.dst.rename(m.src) reverses a stage (git add) that landed on disk before the index update failed -- restores content to the ORIGINAL path, so any pre-existing claim on src (the restored destination) stays correctly attributed; this is an undo, not a forward relocation. Loop var renamed move->m, same call this entry always covered.",
+    ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit_sync", "Path.rename", "move.dst.rename(move.src)", 1): "archive_and_commit: move.dst.rename(move.src) reverses ALL acted renames after a failed batch commit -- same undo-to-original-path reasoning as the m.dst.rename(m.src) entry above. Ordinal reset to 1: the sibling stage-failure reversal above now uses a differently-named loop var (m), so this is the only remaining call with this exact source text.",
 
     # --- Category 5 (R6): sites the plan's C3 sweep never saw -- added to  ---
     # --- the tree after the sweep (or after the allow-list was last       ---
@@ -387,7 +387,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
         "atomic tmp->final rename (Windows sharing-violation bounded retry); "
         "temp source never claimed -- locked_rmw's own former direct-replace "
         "entry now delegates here",
-    ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit", "os.replace", "os.replace(str(move.src), str(move.dst))", 1):
+    ("coordinator_core", "ops/fleet/_common.py", "archive_and_commit_sync", "os.replace", "os.replace(str(move.src), str(move.dst))", 1):
         "F-5 archival-mover rebuild (2026-08-21, git_objects.py"
         "-> 209x faster than per-item `git mv`): relocates already-shipped/"
         "terminal handoff files, closed-out artifacts with no live session "
@@ -518,6 +518,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "ops/fleet/terminal_sizing_drain.py", "_revert_moves", "Path.rename", "m.dst.rename(m.src)", 1): "undo of land_moves after a failed batch -- restores content to its ORIGINAL path, same reasoning as archive_and_commit's m.dst.rename(m.src) entry",
     ("coordinator_core", "ops/run_paths_trash.py", "trash_declared", "os.rename", "os.rename(target, tomb / f'{target.name}-{time.time_ns()}')", 1): "tombstone delete, same as scratch_delete.delete_declared's entry: a delete, not a relocation; the tombstone holds no session work",
     ("coordinator_core", "warm/tests/test_stall_dump_survives_recycle.py", "test_diagnosis_names_the_record_and_recovers_the_leg_after_release", "Path.rename", "record.rename(named)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "bash_guards/tests/test_git_tree_facts.py", "test_staged_file_replaced_by_dir_and_back", "Path.rename", "(root / 'd').rename(root / 'd_old')", 1): _TMP_FIXTURE_REASON,
     ("coordinator_core", "ops/dispatch_emit/tests/test_halt_commit_relay_layout_e2e.py", "test_another_agents_transcript_behind_a_relay_record_is_denied", "Path.rename", "spawn.rename(spawn.with_name('agent-cafe00000001.jsonl'))", 1): _TMP_FIXTURE_REASON,
     ("coordinator_core", "ops/dispatch_emit/tests/test_spine_read_depends_on_plan.py", "_archive", "Path.rename", "src.rename(dest)", 1): _TMP_FIXTURE_REASON,
     ("coordinator_core", "ops/review_freeze_diff.py", "_shelve_prior_attempt", "Path.rename", "diff_path.rename(diff_path.parent / f'{stem}.attempt{n}.diff')", 1): "shelves an earlier attempt's frozen review diff beside itself under the review-trail machinery directory (gitignored, machine-written); never a T-claimed work path",

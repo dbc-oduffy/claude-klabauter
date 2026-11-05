@@ -806,6 +806,25 @@ static int door_basename_declares_stdin_read_w(
 }
 
 
+/* 1 when `<basename> <argv[1]>` is a replay-safe invocation; 0 on any
+ * conversion failure (fail closed). */
+static int door_invocation_is_replay_safe_w(
+    const wchar_t *basename, int argc, wchar_t **wargv
+) {
+    if (argc < 2 || wargv == NULL || wargv[1] == NULL) return 0;
+    char *basename_u8 = wide_to_utf8(basename, NULL);
+    char *sub_u8 = wide_to_utf8(wargv[1], NULL);
+    int safe = 0;
+    if (basename_u8 && sub_u8) {
+        const char *argv_u8[2] = { "", sub_u8 };
+        safe = door_invocation_is_replay_safe(basename_u8, 2, argv_u8);
+    }
+    free(basename_u8);
+    free(sub_u8);
+    return safe;
+}
+
+
 static int door_basename_is_install_class_w(const wchar_t *basename) {
     int len = 0;
     char *basename_u8 = wide_to_utf8(basename, &len);
@@ -1583,7 +1602,8 @@ static int emit_hook_post_delivery(void) {
  * rewrite when it matched, else a loud pass; any other hook op gets a
  * hook envelope naming the timeout; any other caller keeps the
  * indeterminate refusal (it may have mutated). */
-static int emit_post_delivery_failure(const char *detail) {
+static int emit_post_delivery_failure(const char *detail, int argc, wchar_t **wargv,
+                                      const wchar_t *engine_root_w) {
     if (g_door_hook_mode && g_hook_payload &&
         door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
         char reason[640];
@@ -1595,6 +1615,12 @@ static int emit_post_delivery_failure(const char *detail) {
         return emit_hook_pass_loudly(detail);
     }
     if (g_door_hook_mode) return emit_hook_post_delivery();
+    if (door_invocation_is_replay_safe_w(door_entrypoint_basename(), argc, wargv)) {
+        fwprintf(stderr,
+                 L"[door] %ls %ls got no usable warm response (%hs); re-running cold once (replay-safe)\n",
+                 door_entrypoint_basename(), wargv[1], detail);
+        return fall_through(argc, wargv, engine_root_w);
+    }
     return emit_indeterminate(detail);
 }
 
@@ -2350,7 +2376,8 @@ int main(void) {
     buf_t resp;
     if (!buf_init(&resp, 4096)) {
         CloseHandle(pipe_event); CloseHandle(pipe);
-        return emit_post_delivery_failure("out of memory reading the response");
+        return emit_post_delivery_failure("out of memory reading the response",
+                                          argc, wargv, engine_root_w);
     }
     ULONGLONG read_started = GetTickCount64();
     for (;;) {
@@ -2371,7 +2398,8 @@ int main(void) {
 
         if (got > 0 && !buf_append(&resp, chunk, got)) {
             free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
-            return emit_post_delivery_failure("out of memory reading the response");
+            return emit_post_delivery_failure("out of memory reading the response",
+                                              argc, wargv, engine_root_w);
         }
         if (got > 0 && memchr(chunk, '\n', got) != NULL) break;
 
@@ -2379,7 +2407,8 @@ int main(void) {
             free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
             if (state == 1 || state == -1) {
                 return emit_post_delivery_failure(
-                    "connection closed or read failed after delivery");
+                    "connection closed or read failed after delivery",
+                    argc, wargv, engine_root_w);
             }
 
             char detail[160];
@@ -2387,12 +2416,13 @@ int main(void) {
                      "no response within %us of delivery -- the door stopped "
                      "waiting, the engine did not stop working",
                      (unsigned)(DOOR_READ_DEADLINE_FOR_MODE_MS / 1000u));
-            return emit_post_delivery_failure(detail);
+            return emit_post_delivery_failure(detail, argc, wargv, engine_root_w);
         }
 
         if (resp.len > (16u << 20)) {
             free(resp.data); CloseHandle(pipe_event); CloseHandle(pipe);
-            return emit_post_delivery_failure("response exceeded the sanity size ceiling");
+            return emit_post_delivery_failure("response exceeded the sanity size ceiling",
+                                              argc, wargv, engine_root_w);
         }
     }
     CloseHandle(pipe_event);
@@ -2438,12 +2468,15 @@ int main(void) {
             g_fall_code = error_code;
             goto do_fallback;
         }
-        free(engine_root_w); 
-        return emit_post_delivery_failure(
-            have_error
-                ? "server returned an error that does not prove the op was never dispatched"
-                : "response was not a well-formed success or recognised error envelope"
-        );
+        {
+            int rc = emit_post_delivery_failure(
+                have_error
+                    ? "server returned an error that does not prove the op was never dispatched"
+                    : "response was not a well-formed success or recognised error envelope",
+                argc, wargv, engine_root_w);
+            free(engine_root_w);
+            return rc;
+        }
     }
 
 do_fallback: {

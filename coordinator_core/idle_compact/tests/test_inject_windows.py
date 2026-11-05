@@ -109,7 +109,7 @@ def on_windows(monkeypatch):
     monkeypatch.setattr(iw.sys, "platform", "win32")
 
 
-def test_injector_spawns_detached_child_not_in_process(on_windows):
+def test_injector_spawns_no_window_child_not_in_process(on_windows):
     calls = {}
 
     def popen(cmd, **kw):
@@ -122,7 +122,7 @@ def test_injector_spawns_detached_child_not_in_process(on_windows):
     res = inj.inject(1234)
     assert res.ok
     assert calls["cmd"] == [sys.executable, "-m", "coordinator_core.idle_compact.inject_windows", "1234"]
-    assert calls["kw"]["creationflags"] & 0x00000008
+    assert calls["kw"]["creationflags"] & 0x08000000
 
 
 @pytest.mark.parametrize("code", [iw.EXIT_ATTACH_FAILED, iw.EXIT_OPEN_FAILED, iw.EXIT_WRITE_FAILED, 99])

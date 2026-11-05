@@ -37,7 +37,6 @@ Negative-spec:
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import re
 import sys
@@ -157,7 +156,7 @@ def _baton_drain(ctx: JobContext) -> LegResult:
 
     if not process_artifact_policy.hosts_coordinator_state(ctx.root):
         return LegResult("not-applicable", "repo not opted into coordinator state")
-    from coordinator_core.ops.fleet._common import archive_and_commit
+    from coordinator_core.ops.fleet._common import archive_and_commit_sync
     from coordinator_core.ops.fleet.archive_terminal_handoffs import plan_sweep
 
     ids = [Path(b).as_posix() for b in ctx.claimed_batons]
@@ -165,12 +164,10 @@ def _baton_drain(ctx: JobContext) -> LegResult:
     moves, skipped = plan_sweep(ctx.root, ctx.common_dir, _HANDOFF_SWEEP_CAP, candidate_ids=ids)
     archived = 0
     if moves:
-        acted, failed = asyncio.run(
-            archive_and_commit(
-                worktree_root=ctx.root,
-                moves=moves,
-                subject=f"fleet: archive {len(moves)} terminal handoff(s)\n\nclose.background for run {ctx.run_id}.",
-            )
+        acted, failed = archive_and_commit_sync(
+            worktree_root=ctx.root,
+            moves=moves,
+            subject=f"fleet: archive {len(moves)} terminal handoff(s)\n\nclose.background for run {ctx.run_id}.",
         )
         archived = len(acted)
         if failed:

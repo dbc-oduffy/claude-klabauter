@@ -4,7 +4,7 @@ What the DoE box-onboarding playbook can cite for a third box (Mac Mini, 64GB, e
 
 | # | Item | Status | Cite |
 |---|------|--------|------|
-| 1 | Installer on fresh macOS | GUARDED-STOP on `docs/plans/2026-11/2026-11-05-installer-pep668-guarded-satisfied-no-loop-5005cb.md` | Fix is in the working tree (`provision_deps` in `scripts/setup.py`, delivery note `docs/delivery/2026-11/ask-20261105T150845-5005cb.md`) but not at HEAD, and the plan is `executing`. Until it lands a full `--i-am-agent` install can refuse rc=96 on a PEP-668 interpreter (DR-411; never `--break-system-packages`). Working path today: `python3 scripts/setup.py --register-only`, then `python3 scripts/setup.py --repair forwarders`. |
+| 1 | Installer on fresh macOS | Shipped | `python3 scripts/setup.py --i-am-agent`, one command, no PATH change. On a PEP-668 interpreter with no deps, `provision_deps` in `scripts/setup.py` calls `engine_interpreter.ensure` (`coordinator_core/install/engine_interpreter.py`): one `pip install --target <settings-home>/engine-site`, no venv, never `--break-system-packages` (DR-478, `docs/decisions/DR-engine-interpreter-on-a-guarded-base.md`; DR-411). |
 | 2a | Capability probe | Shipped | `python -m coordinator_core.group_em.box_probe` writes `capability` into `<home>/state/group-em/box.json` (`write_capability`; fields `os`, `arch`, `cpu_count`, `ram_mb`, `python`, `gpu` (null), `has_p4`, `has_ue`; zero spawn, `shutil.which` plus `UE_ROOT`/`UNREAL_ENGINE_ROOT`). File: `coordinator_core/group_em/box_probe.py`. |
 | 2b | Identity, registry row | Shipped | `box_registry.ensure_identity` mints `box.json`; op `groupem.box_register` (`coordinator_core/ops/group_em_box_federation.py`) writes the registry row via `box_registry.register`, including the `transport` record. |
 | 2c | Key issuance | Shipped | `box_key.ensure_key` mints this box's key; op `groupem.box_key_pin` pins a peer's key (`box_key.pin_peer_key`). File: `coordinator_core/group_em/box_key.py`. |
@@ -16,6 +16,6 @@ What the DoE box-onboarding playbook can cite for a third box (Mac Mini, 64GB, e
 
 ## Order on the new box
 
-1. Item 1 working path (`--register-only`, `--repair forwarders`).
+1. Item 1: `python3 scripts/setup.py --i-am-agent`.
 2. Item 2a-2c.
 3. Item 4c registration once the box is reachable; verify with `groupem.box_roster` and a `groupem.box_place` with the requirement above.

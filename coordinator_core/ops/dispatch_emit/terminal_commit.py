@@ -191,6 +191,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     UNCHANGED_SINCE_HALT_REASON,
     StageManifest,
     delivery_note_locate,
+    record_dir as ask_record_dir,
 )
 from coordinator_core.ops.dispatch_emit.reach_claims import REACH_CLAIM_REFUSED, reach_gate  # noqa: E402
 from coordinator_core.ops.dispatch_emit.shipped_claims import refused_code, shipped_gate  # noqa: E402
@@ -1205,10 +1206,10 @@ def _spawn_index_refresh(repo_root: str) -> bool:
         python_exe = ds._resolve_python_exe()
         if not python_exe:
             return False
-        kwargs: dict = (
-            {"start_new_session": True} if hasattr(os, "fork")
-            else {"creationflags": ds._windows_detached_flags()}
-        )
+        if hasattr(os, "fork"):
+            kwargs: dict = {"start_new_session": True}
+        else:
+            kwargs = {"creationflags": ds._windows_detached_flags()}
         subprocess.Popen(
             [python_exe, "-c", _INDEX_REFRESH_CODE, repo_root],
             cwd=repo_root, env=ds._child_env(repo_root, None),
@@ -4117,6 +4118,24 @@ def _terminal_commit_inner(
             and not incomplete_chunks
             and not unsent_memos
         )
+        gate_blockers: list = []
+        gate_marker: Optional[dict] = None
+        gate_record_dir = ask_run_dir
+        if flips and ask_run_dir is not None:
+            from coordinator_core.ops.dispatch_emit import halted_run as _halted_run
+            from coordinator_core.ops.dispatch_emit.completion_gate import completion_blockers
+
+            try:
+                gate_record_dir = ask_record_dir(worktree_root, _run_id_of(params, ask_run_dir, script_path_raw))
+            except ValueError:
+                gate_record_dir = ask_run_dir
+            try:
+                gate_marker = _halted_run.read_strict(gate_record_dir)
+            except ValueError:
+                gate_marker = {"status": _halted_run.STATUS_HALTED, "halted": "unreadable halt marker"}
+            gate_blockers = completion_blockers(inline_review=inline_review, halt_marker=gate_marker)
+            if gate_blockers:
+                flips = False
         archive_targets = ()
         consumed_baton = None
         if shipped_sizing and re.search(
@@ -4177,7 +4196,21 @@ def _terminal_commit_inner(
         coded_stale = reply.pop("coded_index_stale", [])
         if coded_stale:
             reply["index_stale"] = sorted(set(reply.get("index_stale") or []) | set(coded_stale))
-        if request.plan_path and reply.get("review_stamp") == "minted" and broken_tells is not None:
+        if gate_blockers:
+            reply["plan_status"] = "not-stamped"
+            reply["plan_status_reason"] = "completion gate: " + "; ".join(gate_blockers)
+            reply["completion_gate"] = {"blockers": list(gate_blockers)}
+            if not (isinstance(gate_marker, dict) and gate_marker.get("status") in (_halted_run.STATUS_HALTED, _halted_run.STATUS_RESUMED)):
+                try:
+                    _halted_run.write_halt_marker(
+                        gate_record_dir, halted="completion-gate",
+                        sizing_rel=cited_sizing or (ledger.sizing_rel if ledger is not None else None),
+                        plan_rel=request.plan_path,
+                        reason="completion gate: " + "; ".join(gate_blockers),
+                    )
+                except OSError as exc:
+                    reply["completion_gate"]["marker_error"] = repr(exc)
+        elif request.plan_path and reply.get("review_stamp") == "minted" and broken_tells is not None:
             reply["plan_status"] = "not-stamped"
             reply["plan_status_reason"] = (
                 "falsifier integrity BROKEN at pre-dispatch ("
@@ -4194,7 +4227,7 @@ def _terminal_commit_inner(
             reply.update(
                 _stamp_plan_implemented(
                     worktree_root, request.plan_path, str(reply["sha"]),
-                    reason=_criterion_reason(inline_review), ledger_met=ledger_met,
+                    reason=_criterion_reason(inline_review), ledger_met=ledger_met, halt_marker=gate_marker,
                 )
             )
         elif request.plan_path and reply.get("review_stamp") == "minted":
@@ -4362,7 +4395,7 @@ def _terminal_commit_inner(
     if reply.get("committed"):
         from coordinator_core.ops.dispatch_emit import run_push
 
-        reply["push"] = run_push.nudge_push(worktree_root, worktree_root)
+        reply["push"] = run_push.nudge_push(worktree_root, worktree_root, branch=observed_branch)
     if reply.get("committed") or reply.get("nothing_to_commit"):
         _with_siblings(reply)
     elif sibling_paths:

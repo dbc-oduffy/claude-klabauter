@@ -26,6 +26,7 @@ def test_seed_allowlist_contents():
         "coordinator:test-runner",
         "coordinator:exit-criterion-falsifier",
         "example-game-repo-control:ue-infra-engineer",
+        "example-game-repo-control:ue-metahuman-likeness-specialist",
     }
 
 

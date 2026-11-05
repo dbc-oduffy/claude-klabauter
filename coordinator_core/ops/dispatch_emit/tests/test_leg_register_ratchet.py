@@ -61,8 +61,9 @@ _RUNTIME_FLOOR: frozenset[Key] = frozenset(
 )
 _RUNTIME_FLOOR_MAX = 16
 
-#: Judgment legs that sit on the mechanical haiku type; every other such leg is refused.
-_JUDGMENT_ON_MECHANICAL_TYPE: frozenset[Key] = frozenset({("grind", "triage")})
+#: Legs that sit on the mechanical haiku type for a named reason; every other such leg is refused.
+#: `split` relays a verbatim printf chain plus one op, a multi-command prompt op-relay does not carry.
+_JUDGMENT_ON_MECHANICAL_TYPE: frozenset[Key] = frozenset({("grind", "triage"), ("grind", "split")})
 _OP_RELAY_TYPE = "coordinator:op-relay"
 _MECHANICAL_TYPES, _MECHANICAL_MODEL = frozenset({"general-purpose", _OP_RELAY_TYPE}), "haiku"
 _MECHANICAL_TYPE = "general-purpose"

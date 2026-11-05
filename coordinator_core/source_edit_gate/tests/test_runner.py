@@ -21,6 +21,7 @@ import pytest
 
 from coordinator_core.conftest import ForeignProcessKill as ForeignProcessKillLike
 from coordinator_core.source_edit_gate import runner as runner_module
+from coordinator_core.win_portability import no_console_creationflags
 
 
 def _tmp_dirs_matching(prefix: str) -> list:
@@ -42,7 +43,8 @@ def _capped_job_over_patched_popen(monkeypatch):
 
     def fake_capped(argv, *, popen_kwargs=None, **kw):
         seen["popen_kwargs"] = dict(popen_kwargs or {})
-        return subprocess.Popen(argv, **(popen_kwargs or {})), lambda: seen.setdefault("closed", True)
+        spawn_kwargs = {**no_console_creationflags(), **(popen_kwargs or {})}
+        return subprocess.Popen(argv, **spawn_kwargs), lambda: seen.setdefault("closed", True)
 
     monkeypatch.setattr(cr, "spawn_in_capped_job", fake_capped)
     return seen

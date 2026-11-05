@@ -427,6 +427,83 @@ def test_dropping_landing_reads_commit_metadata_for_the_chain(tmp_path: Path, mo
     assert len(findings) == 1 and reads != []
 
 
+def _tiles(ops, a, b) -> bool:
+    i = j = 0
+    for tag, i1, i2, j1, j2 in ops:
+        if (i1, j1) != (i, j) or (tag == "equal" and a[i1:i2] != b[j1:j2]):
+            return False
+        i, j = i2, j2
+    return (i, j) == (len(a), len(b))
+
+
+def _repetitive_pair(n: int):
+    a = [b"    0.0,\n" if i % 5 else f"    {i}.5,\n".encode() for i in range(n)]
+    b = [b"    0.0,\n" if i % 4 else f"    {i}.25,\n".encode() for i in range(n)]
+    b[0], a[-1] = b"first\n", b"last\n"
+    return a, b
+
+
+def test_opcodes_on_a_70k_line_repetitive_pair_tile_both_sides_under_the_bar() -> None:
+    import time
+
+    a, b = _repetitive_pair(70_000)
+    start = time.process_time()
+    ops = since_base_overlap._opcodes(a, b)
+    spent = time.process_time() - start
+
+    assert spent < 0.5, spent
+    assert _tiles(ops, a, b)
+
+
+def test_opcodes_hand_difflib_no_more_than_the_bound_per_side(monkeypatch) -> None:
+    import difflib
+
+    from coordinator_core.ops.dispatch_emit.run_hunk_claims import MAX_MATCHED_MIDDLE
+
+    seen: List[tuple] = []
+    real = difflib.SequenceMatcher
+
+    class Spy(real):
+        def __init__(self, isjunk=None, a="", b="", autojunk=True):
+            seen.append((len(a), len(b)))
+            super().__init__(isjunk, a, b, autojunk)
+
+    monkeypatch.setattr(difflib, "SequenceMatcher", Spy)
+    a, b = _repetitive_pair(20_000)
+    ops = since_base_overlap._opcodes(a, b)
+
+    assert _tiles(ops, a, b)
+    assert all(max(x, y) <= MAX_MATCHED_MIDDLE for x, y in seen)
+    assert any(tag == "replace" and i2 - i1 > MAX_MATCHED_MIDDLE for tag, i1, i2, _j1, _j2 in ops)
+
+
+def test_opcodes_small_middle_matches_difflib_exactly() -> None:
+    import difflib
+
+    a = [f"l{i}\n".encode() for i in range(40)]
+    b = list(a)
+    b[10:12] = [b"x\n"]
+    b.insert(30, b"y\n")
+    want = difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes()
+
+    assert since_base_overlap._opcodes(a, b) == want
+
+
+def test_opcodes_unique_heavy_pair_stays_exact_and_tiles() -> None:
+    a = [f"u{i}\n".encode() for i in range(5_000)]
+    b = list(a)
+    b[0], b[-1] = b"head\n", b"tail\n"
+    del b[2_000:2_010]
+    ops = since_base_overlap._opcodes(a, b)
+
+    assert _tiles(ops, a, b)
+    assert [op for op in ops if op[0] != "equal"] == [
+        ("replace", 0, 1, 0, 1),
+        ("delete", 2_000, 2_010, 2_000, 2_000),
+        ("replace", 4_999, 5_000, 4_989, 4_990),
+    ]
+
+
 def test_module_cannot_spawn() -> None:
     assert not hasattr(since_base_overlap, "subprocess")
 

@@ -1106,6 +1106,71 @@ def _check_hook_interpreter_resolvability() -> Layer:
     return Layer(name, status, findings)
 
 
+def _interpreter_is_externally_managed(interpreter: str) -> bool:
+    """PEP 668 marker next to the interpreter's stdlib, found from its realpath. Stats only."""
+    real = Path(os.path.realpath(interpreter))
+    prefix = real.parent.parent
+    for libdir in (prefix / "Lib", prefix / "lib"):
+        if (libdir / "EXTERNALLY-MANAGED").is_file():
+            return True
+        try:
+            if any((sub / "EXTERNALLY-MANAGED").is_file() for sub in libdir.glob("python3.*")):
+                return True
+        except OSError:
+            continue
+    return False
+
+
+def _check_engine_site_currency() -> Layer:
+    """Layer 8 — does the hook interpreter still load yaml from the engine-site?
+
+    Resolves `python3` (else `python`, as the hook wiring does) with `shutil.which` and asks
+    `engine_interpreter.health` — file stats only, no spawn. A PEP-668 interpreter whose
+    engine-site is missing, stamped for another minor, or without yaml is `broken`: its hooks
+    fail open. An interpreter whose minor is unreadable is `unknown`, never a silent ok. An
+    interpreter that is not externally managed needs no engine-site.
+    """
+    name = "Engine-site currency"
+    from coordinator_core.install import engine_interpreter
+
+    interpreter = shutil.which("python3") or shutil.which("python")
+    if interpreter is None:
+        return Layer(
+            name,
+            "unknown",
+            [Finding("info", f"{name}: neither python3 nor python resolves on PATH — nothing to check.")],
+        )
+    result = engine_interpreter.health(interpreter)
+    if result.status == "ok":
+        return Layer(name, "ok", [])
+    if result.status == "unknown":
+        return Layer(
+            name,
+            "unknown",
+            [Finding(
+                "info",
+                f"cannot read the python minor of '{interpreter}' from its realpath basename — "
+                f"engine-site currency not checked; if it is externally managed, run {result.remedy} from the claude-klabauter checkout root.",
+            )],
+        )
+    if not _interpreter_is_externally_managed(interpreter):
+        return Layer(name, "ok", [])
+
+    def fmt(m):
+        return f"{m[0]}.{m[1]}" if m else "none"
+
+    return Layer(
+        name,
+        "broken",
+        [Finding(
+            "broken",
+            f"engine-site is {result.status} for externally-managed '{interpreter}' "
+            f"(interpreter {fmt(result.interp_minor)}, engine-site stamp {fmt(result.stamp_minor)}) — "
+            f"hooks importing yaml fail open; run {result.remedy} from the claude-klabauter checkout root.",
+        )],
+    )
+
+
 def _check_install_drift() -> Layer:
     """Imports the install script from the content root and runs its manifest/step drift check."""
     name = "Install manifest and steps agree"
@@ -1182,6 +1247,46 @@ def _check_spotlight_exclusion() -> Layer:
     return Layer(name, "ok", [Finding("info", advice)] if advice else [])
 
 
+BOX_IDENTITY_REMEDIATION = "python -m coordinator_core.ops.doctor --fix"
+
+
+def _check_box_identity() -> Layer:
+    """Does `<settings home>/state/group-em/box.json` carry a valid box id? Read-only: one open+read."""
+    name = "Box identity (box.json)"
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.group_em.box_registry import LOCAL_BOX_ID, local_box_id
+
+    home = settings_home()
+    if local_box_id(home) != LOCAL_BOX_ID:
+        return Layer(name, "ok", [])
+    return Layer(
+        name,
+        "broken",
+        [Finding(
+            "broken",
+            f"no valid box.json under {home / 'state' / 'group-em'} — cross-box grants and relay "
+            f"addressing have no id to target; run {BOX_IDENTITY_REMEDIATION}.",
+        )],
+    )
+
+
+def _fix_box_identity(fix_report: List[str]) -> None:
+    """--fix action: mint `box-<uuid8>` into box.json once; an extant id is never rewritten."""
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.group_em.box_registry import LOCAL_BOX_ID, ensure_identity, local_box_id
+
+    home = settings_home()
+    if local_box_id(home) != LOCAL_BOX_ID:
+        fix_report.append("--fix: box.json already carries a valid id — left as is.")
+        return
+    try:
+        box_id = ensure_identity(home)
+    except OSError as exc:
+        fix_report.append(f"--fix: box identity mint FAILED ({type(exc).__name__}: {exc}).")
+        return
+    fix_report.append(f"--fix: minted box identity {box_id} in {home / 'state' / 'group-em' / 'box.json'}.")
+
+
 def run_doctor(
     fix: bool = False, kept_blobs_root: Optional[Path] = None
 ) -> tuple[DoctorReport, List[str]]:
@@ -1194,8 +1299,10 @@ def run_doctor(
     report.layers.append(_check_hook_generation_currency())
     report.layers.append(_check_shim_freshness())
     report.layers.append(_check_hook_interpreter_resolvability())
+    report.layers.append(_check_engine_site_currency())
     report.layers.append(_check_install_drift())
     report.layers.append(_check_spotlight_exclusion())
+    report.layers.append(_check_box_identity())
     from coordinator_core.ops.doctor_boot_banners import boot_banner_layers
 
     report.layers.extend(boot_banner_layers(_config_dir()))
@@ -1209,6 +1316,7 @@ def run_doctor(
     if fix:
         _fix_bare_hook_commands(fix_report)
         _fix_stale_hook_generations(fix_report)
+        _fix_box_identity(fix_report)
 
     return report, fix_report
 

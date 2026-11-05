@@ -184,6 +184,38 @@ def test_malformed_json_reads_ungranted(env):
     assert _check(env) == (False, None)
 
 
+def _stamp(env, box_id):
+    path = _grant_files(env)[0]
+    rec = json.loads(path.read_text(encoding="utf-8"))
+    if box_id is None:
+        rec.pop("box_id", None)
+    else:
+        rec["box_id"] = box_id
+    path.write_text(json.dumps(rec), encoding="utf-8")
+
+
+def test_issue_stamps_local_box_id(env):
+    env["mp"].setattr(suite_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
+    assert _issue(env).record["box_id"] == "box-aaaa1111"
+    assert _check(env)[0] is True
+
+
+def test_grant_from_another_box_reads_ungranted_with_its_record(env):
+    env["mp"].setattr(suite_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
+    _issue(env)
+    _stamp(env, "box-bbbb2222")
+    granted, record = _check(env)
+    assert granted is False and record["box_id"] == "box-bbbb2222"
+
+
+@pytest.mark.parametrize("stamped", [None, "local"])
+def test_unstamped_or_local_grant_stays_valid_after_identity_minted(env, stamped):
+    _issue(env)
+    _stamp(env, stamped)
+    env["mp"].setattr(suite_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
+    assert _check(env)[0] is True
+
+
 def test_unsafe_session_id_reads_ungranted(env):
     assert _check(env, "../x") == (False, None)
     assert _check(env, "") == (False, None)

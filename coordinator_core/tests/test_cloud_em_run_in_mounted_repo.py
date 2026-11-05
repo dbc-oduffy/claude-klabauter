@@ -101,10 +101,13 @@ def test_run_agent_write_into_the_run_repo_is_admitted(fleet):
     assert not _denied(out), out
 
 
-def test_write_into_a_third_registered_repo_is_still_denied(fleet):
+def test_write_into_a_third_registered_repo_is_still_flagged(fleet):
     out = _write(fleet, fleet.c / "docs" / "plans" / "p.md")
-    assert _denied(out), out
-    assert "outside this run's repo (A)" in out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert not _denied(out), out
+    hso = out["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert hso["additionalContext"].startswith("Advisory: BLOCKED")
+    assert "outside this run's repo (A)" in hso["additionalContext"]
 
 
 @pytest.mark.parametrize(

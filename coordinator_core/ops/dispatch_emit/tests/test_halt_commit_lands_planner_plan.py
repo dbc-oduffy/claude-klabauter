@@ -35,9 +35,10 @@ def test_doubled_plan_edge_resolves_to_the_single_date_file(tmp_path):
 
 
 def test_unnamed_plan_falls_back_to_the_sizing_resolver(tmp_path):
+    monthly = "docs/plans/2026-10/2026-10-29-x-aaaaaa.md"
     _write(tmp_path, SIZING)
-    _write(tmp_path, SINGLE)
-    assert _plans(tmp_path) == [SINGLE]
+    _write(tmp_path, monthly)
+    assert _plans(tmp_path) == [monthly]
 
 
 def test_existing_doubled_file_still_resolves_as_named(tmp_path):

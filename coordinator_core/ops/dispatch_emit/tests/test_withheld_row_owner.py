@@ -50,7 +50,7 @@ def test_no_gated_entry_has_empty_owner(tmp_path):
     pred.parent.mkdir(parents=True, exist_ok=True)
     pred.write_text(
         "# p\n\n## Tasks\n\n```yaml plan-tasks\n"
-        "- id: P1\n  title: pred\n  surface: a.py\n  writes: [a.py]\n```\n",
+        "- id: P1\n  title: pred\n  surface: a.py\n  writes: [a.py]\n  disposition: coded\n```\n",
         encoding="utf-8",
     )
     reply = _stage(

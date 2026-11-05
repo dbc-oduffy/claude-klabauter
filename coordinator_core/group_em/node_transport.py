@@ -13,8 +13,8 @@ never raises:
     deliver_grant(box, envelope) -> {ok, reply}   # far box's suite_grant.receive_relayed_grant
 
 Negative-spec:
-    - ``from_session`` is accepted for the receiver-namespace rewrite but neither underlying
-      send path carries it yet; it is not written into the inbox line here.
+    - ``from_session`` rides both send paths; over ssh it travels signed with the near box id, and
+      the far box stamps it only when the signature verifies against its pinned key for that box.
     - The ssh transport is a thin wrapper: ``box_transport`` stays the sole ssh spawn site.
 """
 
@@ -69,7 +69,7 @@ class FsTransport:
         try:
             from coordinator_core.group_em import box_send
 
-            reply = box_send.send(box["box_id"], to_session, text, self.directory)
+            reply = box_send.send(box["box_id"], to_session, text, self.directory, from_session=from_session)
             if reply.get("sent") is True:
                 return {"ok": True, "reply": reply}
             return _fail(str(reply.get("reason", "send_failed")))
@@ -94,8 +94,25 @@ class SshTransport:
 
     kind = "ssh"
 
-    def __init__(self, runner: Any = None) -> None:
+    def __init__(self, runner: Any = None, directory: Optional[Path] = None) -> None:
         self.runner = runner
+        self.directory = directory
+
+    def _mark_unreachable(self, box: dict) -> None:
+        """Write an ``ok=false`` snapshot for ``box`` (prior sessions kept) so the watch holds it.
+
+        Never raises: a marking failure must not mask the send failure being reported.
+        """
+        try:
+            from coordinator_core.group_em import box_registry, remote_roster
+
+            base = self.directory if self.directory is not None else box_registry._group_em_dir()
+            box_id = box["box_id"]
+            prior = remote_roster._raw(remote_roster.snapshot_path(base, box_id))
+            kept = remote_roster._trim(prior.get("sessions")) if prior else []
+            remote_roster._write_snapshot(base, box_id, False, kept, time.time())
+        except Exception:  # noqa: BLE001
+            pass
 
     def list_sessions(self, box: dict, run: Optional[str] = None) -> dict:
         try:
@@ -110,10 +127,22 @@ class SshTransport:
         self, box: dict, to_session: str, text: str, from_session: Optional[str] = None
     ) -> dict:
         try:
-            from coordinator_core.group_em import box_transport
+            from coordinator_core.group_em import box_registry, box_transport
 
-            res = box_transport.send(box, to_session, text, runner=self.runner)
-            return res if res.get("ok") else _fail(str(res.get("reason", "ssh_failed")))
+            home = Path(self.directory).parent.parent if self.directory is not None else None
+            res = box_transport.send(
+                box,
+                to_session,
+                text,
+                runner=self.runner,
+                from_session=from_session,
+                from_box=box_registry.local_box_id(home) if from_session else None,
+                home=home,
+            )
+            if res.get("ok"):
+                return res
+            self._mark_unreachable(box)
+            return _fail(str(res.get("reason", "ssh_failed")))
         except Exception as exc:  # noqa: BLE001 -- the seam contract is never-raise
             return _fail(f"ssh_send_failed:{type(exc).__name__}:{exc}")
 
@@ -165,5 +194,5 @@ def select(box: Any, directory: Optional[Path] = None, runner: Any = None):
     if kind == "fs":
         return FsTransport(directory)
     if kind == "ssh":
-        return SshTransport(runner)
+        return SshTransport(runner, directory)
     return UnknownTransport(str(kind))

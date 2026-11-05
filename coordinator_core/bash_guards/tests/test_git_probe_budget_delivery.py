@@ -150,6 +150,18 @@ def test_probe_budget_declines_unspawned_once_spent(monkeypatch) -> None:
     assert len(spawned) == 2, "the declined probe still spawned: %r" % (spawned,)
 
 
+_DOOR_WINDOW_SECONDS = 8.0
+_PER_PROBE_TIMEOUT_SECONDS = 2.0
+
+
+def test_probe_budget_plus_one_overshoot_stays_inside_the_door_window() -> None:
+    """The budget is checked before each spawn and a spawn may run its full per-probe
+    timeout, so the worst case is budget + one timeout; it must leave the door window room."""
+    budget = dispatch_checks._dc_git_probe._GIT_PROBE_BUDGET_SECONDS
+    assert budget + _PER_PROBE_TIMEOUT_SECONDS < _DOOR_WINDOW_SECONDS
+    assert dispatch_checks._dc_git_probe._run_git.__defaults__[1] == _PER_PROBE_TIMEOUT_SECONDS
+
+
 def test_unarmed_budget_never_declines_a_probe(monkeypatch) -> None:
     spawned = _install_slow_git(monkeypatch, per_spawn_seconds=0.05)
     assert dispatch_checks._git_probe_deadline.get() is None

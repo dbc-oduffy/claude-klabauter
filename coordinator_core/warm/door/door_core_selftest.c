@@ -360,6 +360,25 @@ int main(int argc, char **argv) {
     }
 
     {
+        const char *brief[] = {"d", "brief"};
+        check_int("replay_safe/consolidate_brief",
+                  door_invocation_is_replay_safe("consolidate-assemble", 2, brief), 1);
+        const char *apply[] = {"d", "apply"};
+        check_int("replay_safe/consolidate_apply_is_not",
+                  door_invocation_is_replay_safe("consolidate-assemble", 2, apply), 0);
+        check_int("replay_safe/other_basename_is_not",
+                  door_invocation_is_replay_safe("ping", 2, brief), 0);
+        check_int("replay_safe/prefix_basename_is_not",
+                  door_invocation_is_replay_safe("consolidate", 2, brief), 0);
+        check_int("replay_safe/no_subcommand_is_not",
+                  door_invocation_is_replay_safe("consolidate-assemble", 1, brief), 0);
+        check_int("replay_safe/null_argv_is_not",
+                  door_invocation_is_replay_safe("consolidate-assemble", 2, NULL), 0);
+        check_int("replay_safe/null_basename_is_not",
+                  door_invocation_is_replay_safe(NULL, 2, brief), 0);
+    }
+
+    {
         buf_t out;
         buf_init(&out, 256);
         const char *g = "grep -rn foo .";

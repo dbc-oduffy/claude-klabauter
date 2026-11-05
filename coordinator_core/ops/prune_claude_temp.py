@@ -39,7 +39,8 @@ GENERATES = []
 RETENTION_DAYS = 7
 THROTTLE_SECONDS = 24 * 3600
 STAMP_NAME = ".prune-stamp"
-REPO_SPACES = ("scratch", "tasks", ".coordinator-local/subagent-share")
+_SHARE_SPACE = ".coordinator-local/subagent-share"
+REPO_SPACES = ("scratch", "tasks", _SHARE_SPACE)
 BUDGET_SECONDS = 0.3
 _REPARSE_POINT = 0x400
 _EXT_PREFIX = "\\\\?\\"
@@ -226,6 +227,25 @@ def _reap_tombstones(path: str, budget: "_Budget") -> int:
     return removed
 
 
+def _is_session_unit(name: str) -> bool:
+    """A subagent-share child named for a session: not a dot-dir (`.pre-review`) or a lock."""
+    return not name.startswith(".") and not name.endswith(".lock")
+
+
+def _share_session_live(session_id: str, repo_root: str) -> bool:
+    from coordinator_core.session import liveness
+
+    return bool(liveness.session_live(session_id, cwd=repo_root))
+
+
+def _tombstone_sidecars(repo_root: str, session_id: str, unit_path: str) -> None:
+    from coordinator_core.review_trail.sweep_tombstone import record_swept
+    from coordinator_core.sidecar_reap import _md_files
+
+    files = [f for f, _ in _md_files(unit_path)]
+    record_swept(repo_root, session_id, files, "prune_claude_temp", time.time())
+
+
 def _prune_level(
     path: str,
     level: int,
@@ -236,12 +256,14 @@ def _prune_level(
     budget: "Optional[_Budget]" = None,
     keep: "frozenset[str]" = frozenset(),
     leaf_keep: "frozenset[str]" = frozenset(),
+    share_repo: str = "",
 ) -> int:
     """Delete stale units at `depth` below the root; rmdir emptied intermediates.
 
     `keep` names level-0 children never touched; `leaf_keep` names units (deepest
-    level) never touched. At least one child is examined before the budget can
-    stop the scan."""
+    level) never touched. `share_repo`, set for a repo's subagent-share root, keeps a
+    live session's unit and tombstones a dead session's `*.md` sidecars before the
+    delete. At least one child is examined before the budget can stop the scan."""
     removed = 0
     try:
         children = list(os.scandir(_scan_path(path)))
@@ -281,6 +303,10 @@ def _prune_level(
                     continue
             if _has_fresh_entry(child.path, cutoff):
                 continue
+            if share_repo and is_dir and _is_session_unit(child.name):
+                if _share_session_live(child.name, share_repo):
+                    continue
+                _tombstone_sidecars(share_repo, child.name, child.path)
             if is_dir:
                 _rmtree_tolerant(child.path)
             else:
@@ -591,7 +617,7 @@ def prune(
             removed += _reap_tombstones(str(root / TOMBSTONE_DIRNAME), budget)
         removed += _prune_level(
             str(root), 0, depth, now - retention_days * 86400, session_id, tracked, budget, keep,
-            leaf_keep,
+            leaf_keep, repo_root if repo_root and root == Path(repo_root, *_SHARE_SPACE.split("/")) else "",
         )
         if leaf_keep:
             removed += _prune_live_children(root, leaf_keep, now - retention_days * 86400, budget)

@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import io
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -29,6 +30,8 @@ def hook_run(monkeypatch):
         seen["params"] = params
         return {}
 
+    # main() sets the marker process-wide; registering it here makes teardown restore the original.
+    monkeypatch.setenv("COORDINATOR_HOOK_CONTEXT", "0")
     monkeypatch.setattr(cc_invoke, "require_dispatch_engine_on_path", lambda: None)
     monkeypatch.setattr(ipc, "dispatch_from_hook", _capture)
     return mod, seen
@@ -86,3 +89,30 @@ def test_the_sessions_home_and_project_dir_reach_the_payload(hook_run, monkeypat
     env = seen["params"]["payload"]["env"]
     assert {k: env.get(k) for k in expected} == expected
     assert "UNRELATED_SECRET" not in env
+
+
+def test_dispatch_runs_with_the_hook_marker_set(hook_run, monkeypatch):
+    mod, _ = hook_run
+    import coordinator_core.ipc as ipc
+
+    observed = {}
+
+    def _observe(op, params, origin_worktree=None):
+        observed["marker"] = os.environ.get("COORDINATOR_HOOK_CONTEXT")
+        return {}
+
+    monkeypatch.setattr(ipc, "dispatch_from_hook", _observe)
+    monkeypatch.delenv("COORDINATOR_HOOK_CONTEXT", raising=False)
+
+    _run(mod, monkeypatch, dict(_EVENT))
+
+    assert observed["marker"] == "1"
+
+
+def test_a_refused_op_does_not_set_the_hook_marker(hook_run, monkeypatch):
+    mod, _ = hook_run
+    monkeypatch.delenv("COORDINATOR_HOOK_CONTEXT", raising=False)
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+
+    assert mod.main(["hook-run", "not.a.hook"]) == 2
+    assert "COORDINATOR_HOOK_CONTEXT" not in os.environ

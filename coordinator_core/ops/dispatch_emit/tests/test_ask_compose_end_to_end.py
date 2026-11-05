@@ -231,15 +231,39 @@ def test_raw_ask_composes_the_ceo_xl_exit_and_regates():
     assert "if (!_progressed) break;" in loop
 
 
-def test_raw_ask_roadmap_pick_refuses_naming_the_sizing_refire_and_skips_the_row_phases():
+def test_raw_ask_roadmap_pick_chains_into_the_sizing_script_and_skips_the_row_phases():
     script = _compose(roadmap_blitz_text=_RB_TEXT)
     assert "phase('roadmap-blitz')" not in script
+    assert "which this script does not embed" not in script
     branch = script.index("_gate.arm === 'roadmap'")
-    refusal = script.index("which this script does not embed: resubmit Workflow(", branch)
+    refusal = script.index("and the chained run did not start (' + _why + '): resubmit Workflow(", branch)
     assert branch < script.index("_viaRoadmap = true;") < refusal < script.index("  if (!_viaRoadmap) {") < script.index(_NO_FOLD)
     assert "args: {sizing: " in script[refusal : refusal + 200]
     gated = script[branch : script.index("  if (!_viaRoadmap) {")]
     assert "phase('workstream-complete')" not in gated and "phase('execute')" not in gated
+
+
+def test_raw_ask_roadmap_chain_failure_halts_with_the_filled_refire_not_the_not_embedded_text():
+    script = _compose(roadmap_blitz_text=_RB_TEXT)
+    gated = script[script.index("_gate.arm === 'roadmap'") : script.index("  if (!_viaRoadmap) {")]
+    assert "(_viaRoadmap ? 'the roadmap arm' : 'M+') + ' and the chained run did not start ('" in gated
+    assert "resubmit Workflow({name:" in gated
+
+
+def test_raw_ask_roadmap_chain_is_taken_without_a_loadable_roadmap_stage():
+    script = _compose()
+    assert "async function roadmapBlitz(" not in script
+    assert "await _chain_start(_chainPath, " in script[script.index("_gate.arm === 'roadmap'") :]
+    assert "which this script does not embed" not in script
+
+
+def test_launcher_child_roadmap_pick_returns_the_chain_hand_off():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
+
+    script = _compose(roadmap_blitz_text=_RB_TEXT, launcher_child=True)
+    gated = script[script.index("_gate.arm === 'roadmap'") : script.index("  if (!_viaRoadmap) {")]
+    assert f"return {{ {CHAIN_HANDOFF_KEY}: {{ ask: true, sizing_path: _sizingRel" in gated
+    assert "workflow(" not in gated
 
 
 def test_existing_s_sizing_composes_no_xl_or_roadmap(tmp_path):
@@ -317,6 +341,15 @@ def test_ledger_verdict_carries_root_read_per_item():
     mapped = script[start : script.index("\n", start)]
     assert "root_read: i.root_read" in mapped
     assert "i.root_read != null" in mapped
+
+
+def test_ledger_verdict_carries_original_read_fields_per_item():
+    script = _compose(in_run_commit=True)
+    start = script.index("_nextAction.params.ledger_verdict = ")
+    mapped = script[start : script.index("\n", start)]
+    for field in ("originals_read", "capture_harvested_at", "original_last_edited_at"):
+        assert f"{field}: i.{field}" in mapped
+        assert f'"{field}"' in script
 
 
 def test_every_judgment_stage_reads_the_ledger_at_its_start(m_plus_known_arm):

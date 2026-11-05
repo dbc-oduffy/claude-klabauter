@@ -24,7 +24,7 @@
     {
       "name": "warm-client-in-process",
       "entry_site": "coordinator_core/warm/client.py :: try_warm_dispatch",
-      "seam_keys": ["client_dispatch_entry", "pipe_name_derivation"],
+      "seam_keys": ["client_dispatch_entry", "pipe_name_derivation", "invoke_from_argv_request"],
       "seam_files": [
         "coordinator_core/warm/client.py",
         "coordinator_core/warm/election.py",

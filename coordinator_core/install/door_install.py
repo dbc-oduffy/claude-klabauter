@@ -383,6 +383,7 @@ def rebuild_door_for_mirror(
     *,
     python_bin: Optional[Path] = None,
     compiler: Optional[str] = None,
+    engine_stamp: Optional[str] = None,
 ) -> bool:
     """Rebuilds `door.exe` and its provenance from the MIRROR's transformed
     door sources, so the shipped image carries the published token names.
@@ -396,8 +397,13 @@ def rebuild_door_for_mirror(
 
     Returns False when the mirror carries no door sources or the platform
     cannot build the Windows image. Raises `MirrorDoorRebuildError` on a
-    missing compiler, a failed build, or residual source drift."""
+    missing compiler, a failed build, residual source drift, or an
+    `engine_stamp` the mirror's `build()` cannot accept.
+
+    `engine_stamp` overrides the stamp recorded in the provenance; absent,
+    the builder records `engine_root`'s own stamp file."""
     import importlib.util
+    import inspect
     import tempfile
 
     door_dir = Path(mirror_root) / "coordinator_core" / "warm" / "door"
@@ -413,10 +419,20 @@ def rebuild_door_for_mirror(
     mirror_build = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mirror_build)
 
+    build_kwargs: dict = {}
+    if engine_stamp is not None:
+        if "engine_stamp" not in inspect.signature(mirror_build.build).parameters:
+            raise MirrorDoorRebuildError(
+                f"door rebuild: mirror {build_py} predates the engine_stamp keyword"
+            )
+        build_kwargs["engine_stamp"] = engine_stamp
+
     with tempfile.TemporaryDirectory() as scratch:
         built = Path(scratch) / "door.exe"
         try:
-            mirror_build.build(engine_root, python_bin=python_bin, compiler=compiler, output=built)
+            mirror_build.build(
+                engine_root, python_bin=python_bin, compiler=compiler, output=built, **build_kwargs
+            )
         except SystemExit as exc:
             raise MirrorDoorRebuildError(f"door rebuild failed: {exc.code}") from exc
         shutil.copyfile(built, door_dir / "door.exe")

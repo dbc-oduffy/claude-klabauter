@@ -117,7 +117,7 @@ def test_second_call_returns_same_baton_and_writes_nothing(repo):
     assert second["created"] is False
     assert second["path"] == first["path"] and second["id"] == first["id"]
     assert sizing.read_bytes() == before
-    assert len(list((repo / "state" / "handoffs").glob("*.md"))) == 1
+    assert len(list((repo / "state" / "handoffs").rglob("*.md"))) == 1
 
 
 @pytest.mark.parametrize("tshirt", ["XS"])  # S mints a spec-dispatch baton, so only XS is refused
@@ -321,8 +321,8 @@ def test_sibling_sizings_with_one_intent_mint_distinct_batons(repo):
     first = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
     second = _cli.mint_baton_from_sizing(_SIBLING_REL, str(repo))
 
-    assert first["path"] == "state/handoffs/2026-10-01-fixture.md"
-    assert second["path"] == "state/handoffs/2026-10-01-fixture-sibling.md"
+    assert first["path"] == "state/handoffs/2026-10/2026-10-01-fixture.md"
+    assert second["path"] == "state/handoffs/2026-10/2026-10-01-fixture-sibling.md"
 
 
 def test_occupied_baton_path_refuses_leaving_sizing_byte_identical(repo, monkeypatch):
@@ -342,8 +342,9 @@ def test_occupied_baton_path_refuses_leaving_sizing_byte_identical(repo, monkeyp
     assert sizing.read_bytes() == before
 
 
-def _put_at_derived_path(repo: Path, dlv: str) -> Path:
-    path = repo / "state" / "handoffs" / "2026-10-01-fixture.md"
+def _put_at_derived_path(repo: Path, dlv: str, sharded: bool = True) -> Path:
+    shard = ("2026-10",) if sharded else ()
+    path = repo / "state" / "handoffs" / Path(*shard, "2026-10-01-fixture.md")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         f'---\ntitle: "picked up"\nhandoff_id: hnd-picked-1\ndeliverable_id: {dlv}\n---\n\n# picked up\n',

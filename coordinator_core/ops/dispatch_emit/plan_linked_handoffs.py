@@ -12,6 +12,7 @@ from typing import Any, Optional
 
 import yaml
 
+from coordinator_core.frontmatter.yaml_load import SAFE_LOADER as _LOADER
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.deliverable_cascade import _plan_fk_matches, _plan_origin, _strip_root_prefix
 from coordinator_core.session.record_homes import home_dir
@@ -19,7 +20,6 @@ from coordinator_core.session.record_homes import home_dir
 _HEAD_BYTES = 16384
 _IMPLEMENTED = "implemented"
 _FM_END = re.compile(r"\n---[ \t]*(?:\r?\n|\Z)")
-_LOADER = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
 def _parse_head(text: str) -> dict:

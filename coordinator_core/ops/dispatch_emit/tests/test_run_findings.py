@@ -39,6 +39,7 @@ def test_dispositions_and_role(tmp_path):
         {"id": "F3", "file": "c.py", "status": "em-rejected", "reason": "Not a defect: works as designed"},
         {"id": "F4", "file": "d.py", "status": "suspended"},
         {"id": "F5", "file": "e.py", "status": "proposed"},
+        {"id": "F6", "file": "f.py", "status": "handed-to-em"},
     ]
     rel = _sidecar(tmp_path, "coordinator-code-reviewer.abc123", rows)
     rec = _build(tmp_path, [rel], _scan(("abc123", "review:coordinator:code-reviewer", 100)))
@@ -49,6 +50,7 @@ def test_dispositions_and_role(tmp_path):
         "F3": ("false-alarm", "em-rejected"),
         "F4": ("suspended", "suspended"),
         "F5": ("unresolved", "proposed"),
+        "F6": ("handed-to-em", "handed-to-em"),
     }
     assert all(f["reviewer_role"] == "coordinator:code-reviewer" for f in rec["findings"])
     assert by["F1"]["applying_agent"] == "review:coordinator:code-reviewer"

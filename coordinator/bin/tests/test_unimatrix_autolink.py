@@ -164,19 +164,94 @@ def test_reused_pid_with_a_different_start_stamp_is_not_live(env):
 def test_unreachable_box_logs_one_line_spawns_nothing_and_prints_nothing(env, capsys):
     add_key(env)
     sp = Spawner()
-    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp,
-               probe_fn=lambda r, a, k: "rc=255: Connection timed out")
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, stable_fn=lambda a: None,
+               probe_fn=lambda r, a, k, remote=None: "rc=255: Connection timed out")
     assert sp.cmds == [] and capsys.readouterr().out == ""
     lines = (env.sdir / "autolink.log").read_text().splitlines()
     assert len(lines) == 1 and "machine-a unreachable" in lines[0]
     assert not (env.sdir / "autolink-machine-a.json").exists()
 
 
+def stale_ip_probe(good):
+    """Probe fake: only the names in `good` answer; records every remote dialled."""
+    seen = []
+
+    def fn(roster, alias, key, remote=None):
+        seen.append(remote or alias)
+        return None if (remote or alias) in good else "rc=255: No route to host"
+
+    fn.seen = seen
+    return fn
+
+
+class _Sock:
+    def close(self):
+        pass
+
+
+def test_stale_pinned_ip_links_through_the_first_stable_name_that_answers(env):
+    add_key(env)
+    sp = Spawner()
+    probe_fn = stale_ip_probe({"machine-a-lan"})
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn,
+               stable_fn=lambda a: "machine-a-lan")
+    assert probe_fn.seen == ["machine-a", "machine-a-lan"]
+    assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"machine-a-lan"} and len(sp.cmds) == 2
+    assert "linked via machine-a-lan" in (env.sdir / "autolink.log").read_text()
+
+
+def test_stable_name_that_fails_the_ssh_probe_is_not_linked(env):
+    add_key(env)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=stale_ip_probe(set()),
+               stable_fn=lambda a: "machine-a.local")
+    assert sp.cmds == []
+    assert "machine-a unreachable" in (env.sdir / "autolink.log").read_text()
+
+
+def test_healthy_primary_never_resolves_a_stable_name(env):
+    add_key(env)
+    sp = Spawner()
+
+    def boom(alias):
+        raise AssertionError("stable-name resolution ran on the healthy path")
+
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=stale_ip_probe({"machine-a"}), stable_fn=boom)
+    assert len(sp.cmds) == 2
+
+
+def test_default_run_resolves_stale_alias_through_roster_stable_remote(env, monkeypatch):
+    add_key(env)
+    sp = Spawner()
+    monkeypatch.setattr(env.roster, "ssh_fields", lambda a: {"hostname": "10.1.1.1", "port": "22"})
+    monkeypatch.setattr(env.roster.socket, "create_connection",
+                        lambda ep, timeout: pytest.fail("mDNS leg ran") if ep[0].endswith(".local") else _Sock())
+    probe_fn = stale_ip_probe({"machine-a-lan"})
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn)
+    assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"machine-a-lan"}
+
+
+def test_default_run_falls_through_to_dot_local_when_the_lan_alias_is_down(env, monkeypatch):
+    add_key(env)
+    sp = Spawner()
+    monkeypatch.setattr(env.roster, "ssh_fields", lambda a: {"hostname": "10.1.1.1", "port": "22", "user": "kim"})
+
+    def connect(ep, timeout):
+        if ep[0] == "machine-a.local":
+            return _Sock()
+        raise OSError("down")
+
+    monkeypatch.setattr(env.roster.socket, "create_connection", connect)
+    probe_fn = stale_ip_probe({"kim@machine-a.local"})
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn)
+    assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"kim@machine-a.local"}
+
+
 def test_one_peer_failure_does_not_stop_the_next(env):
     add_key(env)
     sp = Spawner()
-    env.al.run(roster=env.roster, boxes=["down", "up"], spawn=sp,
-               probe_fn=lambda r, a, k: "rc=255" if a == "down" else None)
+    env.al.run(roster=env.roster, boxes=["down", "up"], spawn=sp, stable_fn=lambda a: None,
+               probe_fn=lambda r, a, k, remote=None: "rc=255" if a == "down" else None)
     assert {c[c.index("--remote") + 1] for c in sp.cmds} == {"up"}
 
 

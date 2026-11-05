@@ -138,13 +138,15 @@ def _mask_quoted_arguments(cmd: str) -> str:
     that is plain data (not run by a shell/interpreter/wrapper, no ``$(`` or
     backtick) replaced by ``x``. Unbalanced quotes return ``cmd`` unmasked."""
     out: list = []
-    seg_start = 0
+    seg: list = []
     i = 0
     n = len(cmd)
     while i < n:
         ch = cmd[i]
         if ch == "\\":
-            out.append(cmd[i : i + 2])
+            piece = cmd[i : i + 2]
+            out.append(piece)
+            seg.append(piece)
             i += 2
             continue
         if ch in "'\"":
@@ -154,7 +156,7 @@ def _mask_quoted_arguments(cmd: str) -> str:
             if j >= n:
                 return cmd
             interior = cmd[i + 1 : j]
-            word = _command_word("".join(out)[seg_start:])
+            word = _command_word("".join(seg))
             if (
                 word
                 and not _EXECUTING_COMMAND_RE.match(word)
@@ -162,16 +164,19 @@ def _mask_quoted_arguments(cmd: str) -> str:
                 and "`" not in interior
             ):
                 interior = "x" * len(interior)
-            out.append(cmd[i] + interior + cmd[j])
+            piece = cmd[i] + interior + cmd[j]
+            out.append(piece)
+            seg.append(piece)
             i = j + 1
             continue
         m = _SEGMENT_SPLIT_RE.match(cmd, i)
         if m:
             out.append(m.group())
+            seg = []
             i = m.end()
-            seg_start = sum(len(piece) for piece in out)
             continue
         out.append(ch)
+        seg.append(ch)
         i += 1
     return "".join(out)
 

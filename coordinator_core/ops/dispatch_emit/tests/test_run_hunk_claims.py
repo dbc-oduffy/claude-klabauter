@@ -192,6 +192,37 @@ def test_the_match_bound_matches_at_the_bound_and_stops_just_over_it_under_the_b
     assert rhc.changed_opcodes(over_old, over_new) == [("replace", 0, len(over_old), 0, len(over_new))]
 
 
+def test_anchored_opcodes_flags_a_segment_past_the_bound_and_tiles():
+    old, new = _worst_pair(rhc.MAX_MATCHED_MIDDLE + 1)
+    ops, coarse = rhc.anchored_opcodes(old, new)
+    assert coarse
+    assert ops[0] == ("replace", 0, 1, 0, 1) or ops[0][0] == "replace"
+    assert ops[0][1] == 0 and ops[-1][2] == len(old) and ops[-1][4] == len(new)
+    assert all(a[2] == b[1] and a[4] == b[3] for a, b in zip(ops, ops[1:]))
+
+
+def test_anchored_opcodes_splits_a_unique_heavy_middle_without_coarse():
+    old = [f"u{i}\n".encode() for i in range(3000)]
+    new = list(old)
+    new[0], new[-1] = b"head\n", b"tail\n"
+    ops, coarse = rhc.anchored_opcodes(old, new)
+    assert not coarse
+    assert [op for op in ops if op[0] != "equal"] == [("replace", 0, 1, 0, 1), ("replace", 2999, 3000, 2999, 3000)]
+
+
+def test_anchored_opcodes_line_budget_makes_remaining_segments_coarse():
+    old = [f"u{i}\n".encode() for i in range(3000)]
+    new = list(old)
+    for k in range(0, 3000, 100):
+        new[k] = f"edit{k}\n".encode()
+    free_ops, free_coarse = rhc.anchored_opcodes(old, new)
+    capped_ops, capped_coarse = rhc.anchored_opcodes(old, new, line_budget=20)
+    assert not free_coarse and capped_coarse
+    for ops in (free_ops, capped_ops):
+        assert ops[0][1] == 0 and ops[-1][2] == len(old) and ops[-1][4] == len(new)
+        assert all(a[2] == b[1] and a[4] == b[3] for a, b in zip(ops, ops[1:]))
+
+
 def _numbered(n, edits=()):
     return "".join(f"{'EDIT' if i in edits else 'line'}{i}\n" for i in range(1, n + 1))
 

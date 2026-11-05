@@ -114,3 +114,13 @@ def test_write_capability_survives_non_dict_box_json(tmp_path):
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["box_id"].startswith("box-")
     assert "capability" in data
+
+
+def test_stored_capability_reads_recorded_and_refuses_absent_or_empty(tmp_path):
+    assert box_probe.stored_capability(tmp_path) is None
+    path = tmp_path / "state" / "group-em" / "box.json"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"capability": {}}), encoding="utf-8")
+    assert box_probe.stored_capability(tmp_path) is None
+    box_probe.write_capability(tmp_path)
+    assert box_probe.stored_capability(tmp_path)["os"]

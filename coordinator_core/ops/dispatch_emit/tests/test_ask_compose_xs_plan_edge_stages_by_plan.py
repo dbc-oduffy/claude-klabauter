@@ -1,4 +1,4 @@
-"""An XS-arm sizing with a plan edge stages by plan_path; the XS mint still refuses it by sizing_path."""
+"""An XS-arm sizing with a plan edge stages by plan_path in the gate agent's stage act; the XS mint still refuses it by sizing_path."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, re
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
 
 _STAGE_LEG = "label: 'xs-plan-stage'"
-_PLAN_PARAMS = "plan_path: _gate.resume_plan"
+_EDGE_CLAUSE = ", except that with a resume_plan in the gate reply"
 
 
 def _xs_script(monkeypatch) -> str:
@@ -35,28 +35,41 @@ def test_xs_sizing_without_a_plan_edge_has_no_resume_plan(repo):  # noqa: F811
 
 
 def test_composed_xs_workflow_stages_a_resumed_plan_by_plan_path(monkeypatch):
+    script = _xs_script(monkeypatch).replace("\\'", "'")
+    # The gate agent stages the run itself: a resume_plan in its reply swaps the sizing_path/writes params for plan_path.
+    assert _STAGE_LEG not in script
+    clause = script[script.index("except that with a resume_plan in the gate reply") :]
+    clause = clause[: clause.index("Return its JSON reply verbatim as stage_reply")]
+    assert "drop `writes`, `gated` and `sizing_path`" in clause
+    assert "set `plan_path` to it and `commit_sizing_path` to the sizing_path value" in clause
+    assert "add `only_rows` set to its resume_rows when present" in clause
+def test_composed_xs_workflow_stages_a_resumed_plan_in_the_gate_agents_stage_act(monkeypatch):
     script = _xs_script(monkeypatch)
-    assert script.count(_STAGE_LEG) == 1
-    leg = script.index(_STAGE_LEG)
-    guard = script.rindex("\n  if (!_halted", 0, leg)
-    call = script[guard:leg]
-    assert "_gate.arm === 'xs' && _gate.resume_plan" in call and "!_resumeLedger" in call
-    assert _PLAN_PARAMS in call and " sizing_path:" not in call
+    assert _STAGE_LEG not in script
+    gate_leg = next(ln for ln in script.splitlines() if "label: 'gate'" in ln)
+    base, edge = gate_leg.split(_EDGE_CLAUSE, 1)
+    assert "plan_path" not in base.split(ask_compose.OP_ASK_STAGE, 1)[1]
+    assert "drop `writes`, `gated` and `sizing_path`" in edge
+    assert "`plan_path` to it" in edge and "`only_rows` set to its" in edge
+    assert "`commit_sizing_path` to the sizing_path value" in edge
 
 
-def test_xs_mint_stage_act_and_adoption_skip_a_gate_reply_with_resume_plan(monkeypatch):
+def test_xs_adoption_and_plan_rel_cover_a_gate_reply_with_resume_plan(monkeypatch):
     script = _xs_script(monkeypatch)
-    assert "its arm is XS and it carries no resume_plan" in script.replace("\\'", "'")
-    assert "(_gate.arm === 'xs' && !_gate.resume_plan)" in script
+    assert "its arm is XS: run" in script.replace("\\'", "'")
+    assert "if (!_gate.halt && (_gate.arm === 'xs' || " in script
+    assert "{ await _adoptStageReply(_gate.stage_reply); }" in script
+    assert "(_gate.arm === 'xs' || (_gate.arm === 's' && _gate.resume_plan)" in script
+    assert "_gate.arm === 'xs' && _gate.resume_plan) { _planRel = _gate.resume_plan; }" in script
     assert "sizing_path: _sizingRel, gated: _gated" in script
 
 
-def test_stop_after_script_composes_no_plan_stage_leg(monkeypatch):
+def test_stop_after_script_composes_no_plan_stage_act(monkeypatch):
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
     script = _compose(
         prompt=None, sizing_rel="state/sizings/x.yaml", stop_after=ask_compose.STOP_AFTER_PLAN,
     )
-    assert _STAGE_LEG not in script
+    assert _STAGE_LEG not in script and _EDGE_CLAUSE not in script
 
 
 def test_direct_sizing_path_stage_of_a_plan_edge_xs_sizing_is_still_refused(repo):  # noqa: F811

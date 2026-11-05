@@ -1055,8 +1055,11 @@ static int emit_hook_post_delivery(void) {
     return 0;
 }
 
+static int fall_through(int argc, char **argv, const char *engine_root);
+
 /* Every post-delivery failure of the warm read; the twin of door.c's. */
-static int emit_post_delivery_failure(const char *detail) {
+static int emit_post_delivery_failure(const char *detail, int argc, char **argv,
+                                      const char *engine_root) {
     if (g_door_hook_mode && g_hook_payload &&
         door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
         char reason[640];
@@ -1068,6 +1071,12 @@ static int emit_post_delivery_failure(const char *detail) {
         return emit_hook_pass_loudly(detail);
     }
     if (g_door_hook_mode) return emit_hook_post_delivery();
+    if (door_invocation_is_replay_safe(door_entrypoint_basename(), argc, (const char *const *)argv)) {
+        fprintf(stderr,
+                "[door] %s %s got no usable warm response (%s); re-running cold once (replay-safe)\n",
+                door_entrypoint_basename(), argv[1], detail);
+        return fall_through(argc, argv, engine_root);
+    }
     return emit_indeterminate(detail);
 }
 
@@ -1953,18 +1962,21 @@ int main(int argc, char **argv) {
     buf_t resp;
     if (!buf_init(&resp, 4096)) {
         close(fd);
+        int rc = emit_post_delivery_failure("out of memory reading the response",
+                                            argc, argv, engine_root);
         free(engine_root);
-        return emit_post_delivery_failure("out of memory reading the response");
+        return rc;
     }
     int read_state = read_line_bounded(fd, &resp, DOOR_READ_DEADLINE_FOR_MODE_MS);
     close(fd);
 
     if (read_state != READ_GOT_LINE) {
         free(resp.data);
-        free(engine_root);
         if (read_state == READ_FAILED) {
-            return emit_post_delivery_failure(
-                "connection closed or read failed after delivery");
+            int rc = emit_post_delivery_failure(
+                "connection closed or read failed after delivery", argc, argv, engine_root);
+            free(engine_root);
+            return rc;
         }
 
         char detail[160];
@@ -1972,7 +1984,9 @@ int main(int argc, char **argv) {
                  "no response within %us of delivery -- the door stopped "
                  "waiting, the engine did not stop working",
                  (unsigned)(DOOR_READ_DEADLINE_FOR_MODE_MS / 1000u));
-        return emit_post_delivery_failure(detail);
+        int rc = emit_post_delivery_failure(detail, argc, argv, engine_root);
+        free(engine_root);
+        return rc;
     }
 
     {
@@ -2014,11 +2028,12 @@ int main(int argc, char **argv) {
             free(engine_root);
             return rc;
         }
-        free(engine_root); 
-        return emit_post_delivery_failure(
+        int rc = emit_post_delivery_failure(
             have_error
                 ? "server returned an error that does not prove the op was never dispatched"
-                : "response was not a well-formed success or recognised error envelope"
-        );
+                : "response was not a well-formed success or recognised error envelope",
+            argc, argv, engine_root);
+        free(engine_root);
+        return rc;
     }
 }

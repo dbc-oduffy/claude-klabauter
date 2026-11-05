@@ -110,7 +110,10 @@ def test_run_swap_restores_the_runtime_base_env(monkeypatch) -> None:
     assert os.environ[breadcrumb.RUNTIME_BASE_ENV] == "sentinel"
 
 
-def test_main_assert_budget_fails_the_base_swap(capsys) -> None:
+def test_main_assert_budget_fails_the_base_swap(capsys, monkeypatch) -> None:
+    from coordinator_core.telemetry import op_latency
+
+    monkeypatch.setenv(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
     code = lw.main(["--copy-secs", "1.0", "--boot-secs", "1.0", "--assert-budget"])
     out = capsys.readouterr().out
     assert code == 1

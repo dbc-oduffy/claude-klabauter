@@ -14,6 +14,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+import asyncio
+
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
 
@@ -23,6 +25,7 @@ GENERATES: list = []
 
 @register_op("hooks.workflow_step_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
+    await asyncio.sleep(0)  # a real await point: an async handler with none trips the async-handler discipline test
     return no_advisory()
 
 

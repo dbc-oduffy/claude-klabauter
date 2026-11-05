@@ -120,5 +120,12 @@ def test_readiness_routes_unclaimed_register_rows_to_the_in_run_replan_not_a_jud
 def test_readiness_still_pulls_other_register_defects_for_judgment():
     from coordinator_core.ops.plan_readiness_verdict import readiness_verdict
 
-    out = readiness_verdict(_gate({"status": "FAIL", "kind": "register-pin-missing", "mechanical": False, "repair": None}), None, [])
+    out = readiness_verdict(_gate({"status": "FAIL", "kind": "register-pin-drift", "mechanical": False, "repair": None}), None, [])
     assert out["pull_class"] == "substantive" and "needs judgment" in out["reason"]
+
+
+def test_readiness_repairs_a_missing_register_pin_mechanically():
+    from coordinator_core.ops.plan_readiness_verdict import readiness_verdict
+
+    out = readiness_verdict(_gate({"status": "FAIL", "kind": "register-pin-missing", "mechanical": False, "repair": None}), None, [])
+    assert out["pull_class"] == "mechanical" and out["mechanical_repairs"][0]["kind"] == "register-pin-missing"

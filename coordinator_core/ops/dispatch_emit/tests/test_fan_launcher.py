@@ -625,7 +625,7 @@ def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path)
     body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
     code = (
         "const prompts = [];\n"
-        "const agent = async (p, o) => { prompts.push(p); return {}; };\n"
+        "const agent = async (p, o) => { prompts.push(p); return " + json.dumps(refused) + "; };\n"
         "const workflow = async () => { throw new Error('must not start'); };\n"
         "const parallel = async (fns) => Promise.all(fns.map((f) => f()));\n" + body
         + "\n_startAll().then((r) => console.log(JSON.stringify([r, prompts])));\n"
@@ -637,7 +637,40 @@ def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path)
     assert results[0]["status"] == "emit_refused"
     assert _DECLINE in results[0]["error"]
     assert 'dispatch.reemit {"params_file":' in results[0]["error"]
-    assert prompts == []
+    assert len(prompts) == 1 and "dispatch.emit" in prompts[0]
+
+
+@pytest.mark.spawns_process
+def test_a_rerun_launcher_re_emits_a_refused_child_and_leaves_an_ok_child_alone(tmp_path):
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    refused = {"path": "", "run_id": "", "fire_args": {}, "error": _DECLINE}
+    replies = [refused, _replies("ask-r2")[0]]
+    path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r2"), "sess-1", replies)
+    script = path.read_text(encoding="utf-8")
+    body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
+    fresh = {"path": "scratch/warp/ask-r1.workflow.mjs", "run_id": "ask-r1", "fire_args": {"repoRoot": "/r"}}
+    code = (
+        "const prompts = [];\n"
+        "const agent = async (p, o) => { prompts.push([o.label, p]); return " + json.dumps(fresh) + "; };\n"
+        "const calls = [];\n"
+        "const workflow = async (o) => { calls.push(o.scriptPath); return { done: true }; };\n"
+        "const parallel = async (fns) => Promise.all(fns.map((f) => f()));\n" + body
+        + "\n_startAll().then((r) => console.log(JSON.stringify([r.map((x) => x.status), calls, prompts])));\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    statuses, calls, prompts = json.loads(out.stdout)
+    root = tmp_path.as_posix()
+    assert statuses == ["ok", "ok"]
+    assert [p[0] for p in prompts] == ["re-emit-ask-r1"]
+    assert '"reserved_run_id":"ask-r1"' in prompts[0][1] and '"launcher_child":true' in prompts[0][1].replace(" ", "")
+    assert sorted(calls) == [f"{root}/scratch/warp/ask-r1.workflow.mjs", f"{root}/scratch/warp/ask-r2.workflow.mjs"]
 
 
 @pytest.mark.spawns_process

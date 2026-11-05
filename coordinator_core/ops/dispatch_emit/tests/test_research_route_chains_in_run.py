@@ -38,9 +38,11 @@ def script(request) -> str:
 
 def test_pure_research_halt_chains_its_own_sizing_through_the_research_route(script):
     leg = _leg(script)
-    assert "from_sizing: _sizingRel" in leg
+    assert "_chain_emit(_sizingRel)" in leg
+    assert "from_sizing: _sz," in script
     assert "sizing_path" not in leg and "ask: true" not in leg
-    assert leg.count(_START) == 1
+    assert leg.count("await _chain_start(_chainPath, _chainRunId, _runId)") == 1
+    assert _START in script
     assert "chained_from: _runId" in leg
 
 

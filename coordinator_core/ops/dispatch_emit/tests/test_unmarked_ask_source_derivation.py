@@ -73,22 +73,22 @@ def test_pm_marked_ask_matching_a_turn_runs_pm_matched(repo):
     assert (records / ASK_TEXT_FILE).is_file() and not (records / RELAYED_ASK_FILE).exists()
 
 
-def test_pm_marked_ask_quoting_no_turn_is_refused_before_any_run_dir(repo):
+def test_pm_marked_ask_quoting_no_turn_is_admitted_and_recorded_unreconciled(repo):
     _seed(repo)
-    with pytest.raises(ValueError, match="quotes no recorded PM turn"):
-        _emit(repo, ask="unrecorded words that nobody said", ask_source="pm")
-    assert not list(repo.rglob("ask-*"))
+    out, records = _emit(repo, ask="unrecorded words that nobody said", ask_source="pm")
+    assert out["ask_source"] == "pm" and out["pm_verification"] == "unmatched-admitted"
+    assert "quotes no recorded PM turn" in out["pm_advisory"]
+    assert out["pm_turn_recorded"] is not None
+    assert (records / ASK_TEXT_FILE).is_file()
 
 
-def test_pm_refusal_shows_nearest_turn_diff_and_working_form(repo):
+def test_pm_unmatched_advisory_shows_nearest_turn_and_diff(repo):
     _seed(repo)
     near = TURN.replace("faster", "slower")
-    with pytest.raises(ValueError) as exc:
-        _emit(repo, ask=near, ask_source="pm")
-    text = str(exc.value)
-    assert TURN in text and "'slower'" in text and "'faster'" in text
-    assert "one verbatim turn in `ask`" in text and "`context`" in text
-    assert "relayed" in text and not list(repo.rglob("ask-*"))
+    out, _ = _emit(repo, ask=near, ask_source="pm")
+    text = out["pm_advisory"]
+    assert out["pm_verification"] == "unmatched-admitted"
+    assert "Nearest recorded turn" in text and repr(TURN)[1:40] in text
 
 
 def test_pm_ask_of_joined_verbatim_turns_emits(repo):
@@ -100,10 +100,11 @@ def test_pm_ask_of_joined_verbatim_turns_emits(repo):
     assert (records / ASK_TEXT_FILE).is_file()
 
 
-def test_pm_joined_ask_with_one_bad_piece_is_refused(repo):
+def test_pm_joined_ask_with_one_bad_piece_is_admitted_unreconciled(repo):
     _seed(repo)
-    with pytest.raises(ValueError, match="quotes no recorded PM turn"):
-        _emit(repo, ask=f"{TURN} / words nobody said at all", ask_source="pm")
+    out, _ = _emit(repo, ask=f"{TURN} / words nobody said at all", ask_source="pm")
+    assert out["pm_verification"] == "unmatched-admitted"
+    assert "quotes no recorded PM turn" in out["pm_advisory"]
 
 
 def test_pm_marked_ask_with_no_log_runs_pm_unverifiable(repo):

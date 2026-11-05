@@ -123,7 +123,8 @@ def _assemble(repo: Path, argv: list[str], monkeypatch, mode: str, capsys) -> di
 def _fixture(tmp_path: Path, monkeypatch, capsys, tshirt: str, mode: str, flags: list[str]):
     """Real assemble + real gate in one repo; a second repo for replaying the script's own command."""
     scout = _scout(tshirt, flags)
-    rel = f"state/sizings/{date.today().isoformat()}-{scout['name']}-1.yaml"
+    today = date.today()
+    rel = f"state/sizings/{today:%Y-%m}/{today.isoformat()}-{scout['name']}-1.yaml"
     repo = _make_repo(tmp_path / "captured")
     decision = _assemble(repo, _sizing_args(scout, rel, flags), monkeypatch, mode, capsys)
     verdict = ask_gate.gate(repo, rel, writes=scout["writes"]).to_json()
@@ -165,7 +166,8 @@ def _replayed_decision(seen: dict, repo: Path, monkeypatch, mode: str, capsys, s
     return _assemble(repo, argv[1:], monkeypatch, mode, capsys)
 
 
-_CHILD = "REPO/scratch/warp/warp-child.workflow.mjs"
+_CHILD = "scratch/warp/warp-child.workflow.mjs"
+_CHILD_RESOLVED = "REPO/" + _CHILD
 
 
 def _chain_stub(scout, decision, verdict, emit, child=None):
@@ -186,7 +188,7 @@ def test_m_pick_chains_into_the_sizing_script_without_a_refire_halt(tmp_path, mo
     out = _run_script(script, stub)
     assert out["result"]["plan"] == PLAN_PATH and out["result"]["chained_from"] == "run-1"
     assert "halted_by" not in out["result"]
-    assert out["seen"]["workflows"] == [_CHILD]
+    assert out["seen"]["workflows"] == [_CHILD_RESOLVED]
     assert out["seen"]["labels"] == ["size"]
     assert [p for p in out["seen"]["phases"] if p in ("size", "gate", "plan")] == ["size", "gate", "plan"]
     size_prompt = out["seen"]["prompts"]["size"]
@@ -225,7 +227,7 @@ def test_m_pick_chains_on_the_retry_when_the_gate_agents_chain_emit_is_malformed
     stub = _chain_stub(scout, decision, verdict, {"path": "", "run_id": "", "error": "denied"})
     stub["chain-emit"] = {"path": _CHILD, "run_id": "run-2"}
     out = _run_script(_script(), stub)
-    assert "halted_by" not in out["result"] and out["seen"]["workflows"] == [_CHILD]
+    assert "halted_by" not in out["result"] and out["seen"]["workflows"] == [_CHILD_RESOLVED]
     assert out["seen"]["labels"] == ["size", "chain-emit"]
 
 
@@ -233,9 +235,9 @@ def test_the_m_plus_chain_emits_in_the_gate_agents_tail_and_only_the_research_sp
     script = _script()
     size_leg = next(ln for ln in script.splitlines() if "label: 'size'" in ln)
     assert "dispatch.emit" in size_leg and "chain_emit" in size_leg
-    assert script.count("label: 'chain-emit'") == 3
+    assert script.count("label: 'chain-emit'") == 2
     research = script.index("_halted.halted === 'research'")
-    assert research < script.index("label: 'chain-emit'")
+    assert research < script.index("await _chain_emit(")
     assert script.count("const _emitAgent = ") == 1 and script.count("await _emitAgent()") == 1
     assert script.index("const _emitAgent = ") < script.index("_gate.chain_emit") < script.index("await _emitAgent()")
 

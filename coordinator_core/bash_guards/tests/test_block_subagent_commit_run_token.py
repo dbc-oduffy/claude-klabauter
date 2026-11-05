@@ -149,7 +149,13 @@ def test_spent_receipt_does_not_admit_a_mismatched_invocation(repo, monkeypatch,
     elif case == "expired":
         monkeypatch.setattr(run_token, "TTL_SECONDS", -1)
     assert _check(_cmd(params)) is not None
-    assert _check_t(_file_cmd(repo), _spawn(repo, params, name=f"{case}.jsonl")) is not None
+    file_leg = _check_t(_file_cmd(repo), _spawn(repo, params, name=f"{case}.jsonl"))
+    if case == "no_receipt":
+        # A consumed run leaves a retired receipt that `run_token.halt_admits` honors for the
+        # halted run's record-only commit (9b4d33ffc2); only the inline leg stays refused.
+        assert file_leg is None
+    else:
+        assert file_leg is not None
 
 
 def test_params_without_the_script_are_denied(repo):
@@ -362,7 +368,10 @@ def test_refusal_names_the_write_when_the_file_cannot_be_written(repo, monkeypat
     assert "could not be written" in _reason(_check_t(_file_cmd(repo), tp))
 
 
-def test_record_stores_no_plain_token_and_lives_in_the_git_dir(repo):
+def test_record_stores_no_plain_token_and_lives_in_the_settings_home(repo):
+    from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir
+
     token = run_token.mint(repo, "ask-1", _SCRIPT)
-    files = list((repo / ".git").rglob("ask-1.json"))
+    files = list(engine_record_dir(repo).rglob("ask-1.json"))
     assert len(files) == 1 and token not in files[0].read_text(encoding="utf-8")
+    assert not list((repo / ".git").rglob("ask-1.json"))

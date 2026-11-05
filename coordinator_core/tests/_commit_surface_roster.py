@@ -58,6 +58,10 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/argv_batch.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/checkpoint_hunks.py":
+        "checkpoint hunk attribution helpers (109 lines); not a commit-route narration holder.",
+    "coordinator_core/git/checkpoint_symbols.py":
+        "checkpoint symbol-level attribution helpers (77 lines); not a commit-route narration holder.",
     "coordinator_core/git/checkpoint_guard.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/checkin_attrs.py":

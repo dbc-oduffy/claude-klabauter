@@ -129,6 +129,34 @@ def test_fire_skill_revise_flags(tmp_path):
     assert st["revised"]
 
 
+def _cmd(name: str, tail: str = "") -> str:
+    return user(f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>{tail}")
+
+
+def test_ceremony_skills_disarm_as_skill_use_and_as_command_record(tmp_path):
+    for skill in ("consolidate-git", "merging-to-main"):
+        for form in (skill, "coordinator:" + skill):
+            st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": form})])
+            assert st["disarmed"], form
+        st = run(tmp_path, [_cmd(skill)])
+        assert st["disarmed"], skill
+        st = run(tmp_path, [user("<command-name>/coordinator:" + skill + "</command-name>")])
+        assert st["disarmed"], skill
+
+
+def test_command_record_disarm_is_limited_to_ceremonies_at_window_open(tmp_path):
+    for text in (
+        "do the thing",
+        "<command-name>/plan</command-name>",
+        "<command-name>/pickup</command-name>",
+        "<command-name>/consolidate-gitx</command-name>",
+        "please run <command-name>/consolidate-git</command-name> for me",
+    ):
+        assert not run(tmp_path, [user(text)])["disarmed"], text
+    st = run(tmp_path, [_cmd("merging-to-main"), user("ordinary ask")])
+    assert not st["disarmed"]
+
+
 def test_new_user_resets_flags_but_not_fire_seen(tmp_path):
     from coordinator_core import warp_fire
 

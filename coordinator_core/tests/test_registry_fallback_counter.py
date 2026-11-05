@@ -147,7 +147,7 @@ def test_hooks_scoped_stage_is_counted_on_map_drift(monkeypatch):
     handler = ipc._lazy_import_and_lookup("hooks.track_touched_files")
 
     assert handler is not None, "precondition: the drift path still resolves"
-    assert [c[0][:2] for c in calls] == [("hooks.track_touched_files", fbc.STAGE_HOOKS_SCOPED)]
+    assert [c[0][:2] for c in calls] == [("hooks.track_touched_files", "hooks-scoped")]
     assert calls[0][1]["mapped"] is True
 
 

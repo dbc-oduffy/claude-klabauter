@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.agent_pipe import mailbox, post
 from coordinator_core.agent_pipe.contract import mailbox_path
+from coordinator_core.win_portability import no_console_creationflags
 
 
 @pytest.fixture(autouse=True)
@@ -119,4 +120,4 @@ def test_post_imports_neither_ipc_nor_ops():
         "bad=[m for m in sys.modules if m=='coordinator_core.ipc' or m=='coordinator_core.ops' or m.startswith('coordinator_core.ops.')];"
         "sys.exit(1 if bad else 0)"
     )
-    assert subprocess.run([sys.executable, "-c", code]).returncode == 0
+    assert subprocess.run([sys.executable, "-c", code], **no_console_creationflags()).returncode == 0

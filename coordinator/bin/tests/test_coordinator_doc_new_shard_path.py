@@ -63,10 +63,10 @@ def test_undated_sidecar_stem_stays_flat(cli, monkeypatch):
     assert _rel(cli._default_output_path("review", "t", None, plan_stem="PLAN-STEM")) == "docs/plans/PLAN-STEM.review.md"
 
 
-def test_roadmap_baton_default_is_unchanged(cli, monkeypatch):
+def test_roadmap_baton_default_is_the_month_shard(cli, monkeypatch):
     monkeypatch.setattr(cli, "_today", lambda: _TODAY)
     out = cli._default_output_path("roadmap-baton", "t", None, stub_id="s1")
-    assert _rel(out) == f"state/handoffs/{_TODAY}_000000_roadmap-s1.md"
+    assert _rel(out) == f"state/handoffs/2026-11/{_TODAY}_000000_roadmap-s1.md"
 
 
 # --- _place_in_output_tree ---------------------------------------------------------------------

@@ -82,9 +82,9 @@ import time
 
 from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.bash_guards.leg_attribution import leg
-from coordinator_core.telemetry import op_row_fields
 from coordinator_core.hooks._envelope import allow_advisory, context_only, deny, no_advisory, payload_of
 from coordinator_core.ipc import register_op
+from coordinator_core.telemetry import op_row_fields
 
 
 def _unevaluated(detail: str) -> dict:
@@ -164,6 +164,7 @@ def _prefire_deny(params: dict) -> dict | None:
 def _handler(params: dict, repo_root=None) -> dict:
     """Run `_run_chain` under leg attribution and attach `legs` / `handler_thread_ms`
     to this call's process_time row (`op_row_fields`; a no-op when no row is bound)."""
+    params = payload_of(params)
     token = leg_attribution.begin()
     t0 = time.thread_time()
     try:
@@ -198,7 +199,6 @@ def _run_chain(params: dict) -> dict:
     NEGATIVE SPEC: never refuse the flat shape -- the cold DoE guard chain
     sends it, and must keep reaching the same verdict the doors do.
     """
-    params = payload_of(params)
     if not params:
         return no_advisory()
 

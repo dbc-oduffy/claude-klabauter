@@ -125,8 +125,9 @@ def test_every_run_token_remover_is_allowlisted_with_its_condition():
 def test_run_token_own_unlinks_are_the_protocol_functions_only():
     """`run_token.py` is outside the caller walk; its own `.unlink` calls, the spent-receipt
     removal in `mint` and the escrow TTL reaper `sweep_expired_escrows` included (escrow
-    removal is protocol too), must stay in the protocol functions. `consume` / `discard` unlink
-    through the `_unlink_both` / `_drop_legacy` helpers, so those helpers are protocol too."""
+    removal is protocol too), must stay in the protocol functions. `redeem_claim` is `redeem`'s body
+    (`redeem` delegates); `consume` and `discard` remove through `_unlink_both`, which with
+    `_drop_legacy` is the single record-plus-legacy-copy remover."""
     tree = ast.parse((_PKG / "ops/dispatch_emit/run_token.py").read_text(encoding="utf-8"))
     scopes: set[str] = set()
     for fn in ast.walk(tree):
@@ -136,7 +137,7 @@ def test_run_token_own_unlinks_are_the_protocol_functions_only():
                         and node.func.attr == "unlink"):
                     scopes.add(fn.name)
     # `_bounded_glob` (its nested `work`) reaps TTL-expired legacy unclaimed files in its listing pass.
-    assert scopes == {"mint", "redeem", "sweep_expired_escrows", "_unlink_both", "_drop_legacy",
+    assert scopes == {"mint", "redeem_claim", "_unlink_both", "_drop_legacy", "sweep_expired_escrows",
                       "_bounded_glob", "work"}
 
 

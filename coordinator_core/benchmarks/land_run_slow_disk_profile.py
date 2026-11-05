@@ -42,7 +42,6 @@ import cProfile
 import json
 import os
 import pstats
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -756,7 +755,9 @@ def main(argv: list) -> int:
                     workdir, args.delay_s, args.op_latency_ms / 1000.0, args.tracked, args.chain, args.attribute
                 )
     finally:
-        shutil.rmtree(workdir, ignore_errors=True)
+        from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
+
+        rmtree_or_raise(workdir, label="land-run-slow-disk")
     if args.json:
         print(json.dumps([asdict(r) for r in rows], indent=1))
     elif args.op_latency_wedged or args.conditions == "idle-wait":

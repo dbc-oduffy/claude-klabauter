@@ -7,6 +7,7 @@ run lands the marker itself, as `usage_limit_halt` does. File reads and one atom
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +17,23 @@ from coordinator_core.ops.dispatch_emit.ask_contract import HALT_BLOCKING_FIELD,
 
 def _str(value: object) -> Optional[str]:
     return value if isinstance(value, str) and value else None
+
+
+def _persist_owed(record_dir: Path, halted_by: dict) -> None:
+    """Persist `record_dir/manifest.json` `owed[]` through `write_owed_legs` (idempotent; absent or
+    unreadable manifest and a write failure are tolerated). Runs before the marker gates so a halt
+    already recorded by the script still leaves its owed legs."""
+    try:
+        manifest = json.loads((record_dir / "manifest.json").read_text(encoding="utf-8"))
+        owed = [row for row in manifest.get("owed") or [] if isinstance(row, dict)]
+        if not owed:
+            return
+        from coordinator_core.ops.dispatch_emit.owed_leg_queue import write_owed_legs
+
+        plan = _str(halted_by.get(HALT_PLAN_FIELD)) or _str(manifest.get("plan")) or ""
+        write_owed_legs(record_dir.parents[2], record_dir.name, plan, owed)
+    except Exception:
+        return
 
 
 def land_returned_halt(record_dir: Path, result: dict, *, launched_at: float) -> Optional[Path]:
@@ -29,6 +47,7 @@ def land_returned_halt(record_dir: Path, result: dict, *, launched_at: float) ->
         halted = _str(halted_by.get("halted")) if isinstance(halted_by, dict) else None
         if halted is None:
             return None
+        _persist_owed(Path(record_dir), halted_by)
         commit = result.get("halt_commit")
         if isinstance(commit, dict) and commit.get("committed") is True:
             return None

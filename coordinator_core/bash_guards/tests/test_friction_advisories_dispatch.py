@@ -45,8 +45,8 @@ def test_move_from_inside_cwd_advisory_reaches_the_envelope(tmp_path):
         _payload(f"mv {root}/a {root}/z", f"{root}/a"), host_is_windows=True
     )
     reason = _reason(out)
-    assert "BLOCKED" in reason
-    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny" if isinstance(out, str) else out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "Advisory" in reason
+    assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert f"{root}/a" in reason.replace("\\", "/")
 
 

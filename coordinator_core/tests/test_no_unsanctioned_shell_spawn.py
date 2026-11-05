@@ -264,6 +264,10 @@ def test_allowlist_is_fully_pinned():
 _SHELL_SHAPED = frozenset({SpawnKind.SHELL_BINARY, SpawnKind.SHELL_TRUE})
 
 
+# Git-ignored machine-local scratch (exported tree copies), not repo source.
+_MACHINE_LOCAL_PREFIX = ".coordinator-local/"
+
+
 @functools.lru_cache(maxsize=1)
 def _scan_repo():
     """One `walk_repo(REPO_ROOT)` call, partitioned into reporting buckets.
@@ -287,6 +291,8 @@ def _scan_repo():
     test_tree_count = 0
     shell_unknown_count = 0
     for site in sites:
+        if site.path.replace("\\", "/").startswith(_MACHINE_LOCAL_PREFIX):
+            continue
         if is_test_tree_site(site.path):
             test_tree_count += 1
             continue
@@ -390,3 +396,8 @@ def test_known_open_is_not_stale():
         f"a real unsanctioned production shell-shaped site: {stale}\n"
         "Remove the entry -- the site it exempted was converted or removed."
     )
+
+
+def test_machine_local_prefix_is_gitignored():
+    ignore_lines = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    assert any(line.strip().startswith(_MACHINE_LOCAL_PREFIX.rstrip("/")) for line in ignore_lines)

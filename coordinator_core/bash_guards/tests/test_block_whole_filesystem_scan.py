@@ -75,6 +75,10 @@ def test_allows_scoped(cmd):
     assert _run(cmd) is None
 
 
+def test_root_scan_deny_recommends_example_retrieval_repo():
+    assert "project_semantic_search" in _reason(_run("grep -r foo /"))
+
+
 def test_powershell_tool_is_matched():
     assert _run("find / -name x", tool="PowerShell")
 

@@ -94,7 +94,7 @@ def test_changed_covered_file_is_stale(repo):
     _assert_advisory_only(_terminal(repo))
 
 
-def test_fresh_fail_refuses(repo):
+def test_fresh_fail_stays_advisory_at_terminal_and_refuses_at_landing(repo):
     _fresh(repo, "fail")
     out = _terminal(repo)
     _assert_advisory_only(out)

@@ -197,6 +197,39 @@ def test_verify_accepts_suspended_row_under_premise_verdict(tmp_path):
     assert outcome.stamp["suspended"] == 1
 
 
+@pytest.mark.parametrize("verdict", ["APPROVED_WITH_NOTES", ""])
+def test_verify_accepts_handed_to_em_row_and_counts_it_apart(tmp_path, verdict):
+    target = tmp_path / "src.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"src.py": _sha256("x = 1\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "src.py", "before": "", "after": "", "status": "handed-to-em"}],
+        verdict=verdict,
+    )
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert outcome.ok, outcome.failures
+    assert outcome.stamp["handed_to_em"] == 1
+    assert outcome.stamp["suspended"] == 0
+    assert "handed_to_em: 1" in sidecar.read_text(encoding="utf-8")
+
+
+def test_verify_still_refuses_suspended_row_under_approved_with_notes(tmp_path):
+    target = tmp_path / "src.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    sidecar = _write_sidecar(
+        tmp_path,
+        baseline={"src.py": _sha256("x = 1\n")},
+        findings_count=1,
+        rows=[{"id": "finding-1", "file": "src.py", "before": "", "after": "", "status": "suspended"}],
+        verdict="APPROVED_WITH_NOTES",
+    )
+    outcome = m.verify(sidecar, repo_root=tmp_path)
+    assert not outcome.ok
+    assert any("suspended row needs" in f for f in outcome.failures), outcome.failures
+
+
 @pytest.mark.parametrize("verdict", ["", "PROCEED"])
 def test_verify_refuses_suspended_row_without_premise_verdict(tmp_path, verdict):
     target = tmp_path / "src.py"
@@ -658,6 +691,8 @@ def test_run_diff_check_pins_both_sides_file_and_line():
     assert m.applied_row_in_run_diff({"file": "b.py", "line": 99}, diff)  # no hunks known: file decides
     assert not m.applied_row_in_run_diff({"file": "c.py", "line": 1}, diff)
     assert not m.applied_row_in_run_diff({"file": "d.py"}, diff)
+    assert not m.applied_row_in_run_diff({"id": "x"}, diff)  # no file cited: unevidenced
+    assert not m.applied_row_in_run_diff({"file": ""}, diff)
 
 
 def test_rows_not_in_run_diff_skips_other_statuses_and_peer_hunks():
@@ -666,6 +701,21 @@ def test_rows_not_in_run_diff_skips_other_statuses_and_peer_hunks():
         {"id": "b", "file": "gone.py", "status": "em-rejected", "reason": "no"},
         {"id": "c", "file": "gone.py", "out_of_ask": True},
         {"id": "d", "file": "here.py"},
+        {"id": "e"},
     ]
     missing = m.rows_not_in_run_diff(rows, m.normalize_run_diff(["here.py"]))
-    assert [r["id"] for r in missing] == ["a"]
+    assert [r["id"] for r in missing] == ["a", "e"]
+
+
+def test_diff_evidenced_rows_is_the_complement_over_applied_in_ask_rows():
+    rows = [
+        {"id": "a", "file": "gone.py"},
+        {"id": "b", "file": "here.py", "status": "em-rejected", "reason": "no"},
+        {"id": "c", "file": "here.py", "out_of_ask": True},
+        {"id": "d", "file": "here.py"},
+        {"id": "e"},
+        {"id": "f", "file": "here.py", "line": 50},
+    ]
+    diff = m.normalize_run_diff({"here.py": [(1, 10)]})
+    assert [r["id"] for r in m.diff_evidenced_rows(rows, diff)] == ["d"]
+    assert [r["id"] for r in m.rows_not_in_run_diff(rows, diff)] == ["a", "e", "f"]

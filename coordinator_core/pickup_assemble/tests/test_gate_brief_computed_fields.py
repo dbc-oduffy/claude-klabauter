@@ -85,6 +85,7 @@ def test_gate_notes_only_with_no_sibling_named_is_human_pm(repo, tmp_path, regis
     assert [d["value"] for d in jp["dispositions"]] == ["cleared", "not-cleared"]
     assert all(d["guidance"] for d in jp["dispositions"])
     assert "gate_cleared_by" in jp["dispositions"][0]["guidance"]
+    assert "handoff.human_gate_clear" in jp["dispositions"][0]["guidance"]
 
 
 def test_gate_notes_gate_never_recommends_unresolved(repo, tmp_path, registry):

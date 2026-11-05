@@ -48,6 +48,16 @@ def satisfies(capability: dict, requirement: dict) -> bool:
     return True
 
 
+def _held_by_other_run(path: Path, run: str) -> bool:
+    """True when ``path`` already records a placement for a different run (two runs share a safe filename)."""
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.loads(fh.read())
+    except (OSError, ValueError):
+        return False
+    return isinstance(data, dict) and isinstance(data.get("run"), str) and data["run"] != run
+
+
 def place_run(
     run: str,
     requirement: dict,
@@ -59,7 +69,8 @@ def place_run(
 
     An explicit ``box_id`` wins (reason ``no_box`` if unregistered, ``unsatisfied`` if its capability
     misses ``requirement``); otherwise the first registered box in id order that satisfies it
-    (``unsatisfied`` when none does, ``no_box`` when none is registered). Never raises.
+    (``unsatisfied`` when none does, ``no_box`` when none is registered). A different run already
+    holding the same safe filename is refused (``run_collision``) and keeps its placement. Never raises.
     """
     try:
         requirement = dict(requirement or {})
@@ -87,6 +98,8 @@ def place_run(
         }
         path = _placements_dir(Path(chosen["root"])) / (_safe(run) + ".json")
         path.parent.mkdir(parents=True, exist_ok=True)
+        if _held_by_other_run(path, str(run)):
+            return {"ok": False, "reason": "run_collision", "box_id": chosen["box_id"]}
         atomic_write_bytes(path, (json.dumps(placement, indent=2) + "\n").encode("utf-8"))
         return {"ok": True, "placement": placement}
     except Exception as exc:  # contract: refuse, never raise

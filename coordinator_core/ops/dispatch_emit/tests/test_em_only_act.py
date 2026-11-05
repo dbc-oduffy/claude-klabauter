@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import launches_heavy
-from coordinator_core.ops.dispatch_emit.em_only_act import forbidden_sole_act, row_is_em_performed
+from coordinator_core.ops.dispatch_emit.em_only_act import (
+    code_deliverable,
+    forbidden_sole_act,
+    row_is_em_performed,
+)
 
 CMD = "pwsh -NoProfile -File scripts/build-plugin.ps1 -EngineVersion 5.8 -Plugins X"
 
@@ -92,9 +96,35 @@ def test_blocked_on_an_ordinary_capability_stays_agent():
 
 
 def test_em_run_true_is_em_performed():
-    assert row_is_em_performed(_row("Do it.", writes=["a.py"], em_run=True)) is True
-    assert row_is_em_performed(_row("Do it.", writes=["a.py"], em_run=False)) is False
-    assert row_is_em_performed(_row("Do it.", writes=["a.py"], em_run="true")) is False
+    assert row_is_em_performed(_row("Do it.", writes=["a.md"], em_run=True)) is True
+    assert row_is_em_performed(_row("Do it.", writes=["a.md"], em_run=False)) is False
+    assert row_is_em_performed(_row("Do it.", writes=["a.md"], em_run="true")) is False
+
+
+def test_code_deliverable_suffixes():
+    for path in ("a.py", "b.TS", "c.js", "d.cs", "e.cpp", "f.h", "g.ps1"):
+        assert code_deliverable({"writes": [path]}) is True, path
+    assert code_deliverable({"writes": ["a.md", "b.yaml"]}) is False
+    assert code_deliverable({"writes": []}) is False
+    assert code_deliverable({}) is False
+    assert code_deliverable({"writes_under": ["src/x.py"]}) is True
+    assert code_deliverable({"writes_under": ["docs/"]}) is False
+    assert code_deliverable({"writes": None, "writes_under": "a.py"}) is True
+
+
+def test_declared_em_row_writing_code_routes_to_executor():
+    assert row_is_em_performed({"performer": "em", "writes": ["x.py"]}) is False
+    assert row_is_em_performed({"performer": "em", "writes": []}) is True
+    assert row_is_em_performed({"em_run": True, "writes": ["x.py"]}) is False
+    assert row_is_em_performed({"agent_type": "coordinator:em", "writes": ["x.ps1"]}) is False
+    assert row_is_em_performed({"agent_type": "coordinator:em", "writes_under": ["a/b.cs"]}) is False
+    assert row_is_em_performed({"agent_type": "coordinator:em", "writes": ["x.md"]}) is True
+
+
+def test_em_only_capability_and_forbidden_act_stay_em_for_a_code_row():
+    blocked = _row("Do it.", writes=["a.py"], blocked_on={"capability": "Workflow tool", "probe": "x"})
+    assert row_is_em_performed({**blocked, "performer": "em"}) is True
+    assert row_is_em_performed(_row("Do it.", writes=["a.py"], performer="em")) is False
 
 
 def test_ruling_ask_row_is_em_performed():

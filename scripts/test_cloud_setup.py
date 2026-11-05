@@ -114,6 +114,7 @@ def _isolate_claude_home(tmp_path, monkeypatch):
     # Windows, HOME on POSIX) when CLAUDE_HOME is unset, so point those at tmp too.
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("USERPROFILE", str(tmp_path / "home"))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "isolated-settings-home"))
 
 
 #: The operator's real `.claude` settings, resolved at import -- before any fixture
@@ -380,8 +381,10 @@ def test_host_precondition_refusal_still_writes_the_session_verdict_surface(
     rc = cloud_mod.main()
 
     assert rc == 0
+    claude_home = Path(cloud_mod.os.environ["CLAUDE_HOME"]) / ".claude"
     verdict_path = settings_home / cloud_mod.SESSION_VERDICT_RULE
     assert verdict_path.exists(), "the refusal is the case that most needs the session surface"
+    assert not (claude_home / "rules" / cloud_mod.SESSION_VERDICT_RULE).exists()
     body = verdict_path.read_text()
     assert "host precondition" in body
 

@@ -104,13 +104,20 @@ def _script(monkeypatch) -> str:
     )
 
 
+def _verdict_text_def(script: str) -> str:
+    start = script.index("const _verdictText = () =>")
+    return script[start : script.index("\n", start)]
+
+
 def test_verify_prompt_carries_the_engine_clause_and_root_read(monkeypatch):
     script = _script(monkeypatch)
     assert "label: 'ledger-check'" not in script
     verify_end = script.index("label: 'verify'")
     verify = script[script.rindex("agent(", 0, verify_end) : verify_end]
-    assert "engine-plane row" in verify
-    assert "root_read" in verify
+    assert "_verdictText()" in verify
+    verdict = _verdict_text_def(script)
+    assert "engine-plane row" in verdict
+    assert "root_read" in verdict
     assert "root_read" in str(ask_compose._LEDGER_CHECK_SCHEMA)
 
 
@@ -131,7 +138,9 @@ def test_the_folded_judge_carries_the_engine_clause_and_root_read(monkeypatch):
     assert "label: 'ledger-check'" not in script
     verify_end = script.index("label: 'verify'")
     verify = script[script.rindex("agent(", 0, verify_end) : verify_end]
-    assert "engine-plane row" in verify and "root_read" in verify
+    assert "_verdictText()" in verify
+    verdict = _verdict_text_def(script)
+    assert "engine-plane row" in verdict and "root_read" in verdict
     assert '"root_read"' in script[verify_end:].split("\n", 1)[0]
 
 

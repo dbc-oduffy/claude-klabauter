@@ -2605,24 +2605,32 @@ def _command_wrapped_in_suite_mutex(
     return False
 
 
-_MUTEX_VALUE_FLAGS = frozenset({"--owner-label", "--collection", "--max-runtime"})
+_MUTEX_VALUE_FLAGS = frozenset({"--owner-label", "--collection", "--max-runtime", "--wait-timeout"})
 
 
-def _mutex_flags_include_reuse_fresh(flag_tokens: Sequence[str]) -> bool:
+def _mutex_flags_include(flag_tokens: Sequence[str], wanted: str) -> bool:
     """Walk the wrapper's own flags as ``with-suite-mutex``'s ``_parse_args`` does.
 
-    A space-separated ``--owner-label``/``--collection``/``--max-runtime``
-    consumes the next token as its value, so a ``--reuse-fresh`` in value
-    position is not the flag.
+    A space-separated ``--owner-label``/``--collection``/``--max-runtime``/
+    ``--wait-timeout`` consumes the next token as its value, so a ``wanted``
+    flag in value position is not the flag.
     """
     i = 0
     n = len(flag_tokens)
     while i < n:
         tok = flag_tokens[i]
-        if tok == "--reuse-fresh":
+        if tok == wanted:
             return True
         i += 2 if tok in _MUTEX_VALUE_FLAGS else 1
     return False
+
+
+def _mutex_flags_include_reuse_fresh(flag_tokens: Sequence[str]) -> bool:
+    return _mutex_flags_include(flag_tokens, "--reuse-fresh")
+
+
+def _mutex_flags_include_wait(flag_tokens: Sequence[str]) -> bool:
+    return _mutex_flags_include(flag_tokens, "--wait")
 
 
 def _command_is_reuse_fresh_wrapped(
@@ -2633,7 +2641,8 @@ def _command_is_reuse_fresh_wrapped(
     configured: Sequence["ConfiguredCmd"],
 ) -> bool:
     """True only when every suite-shaped segment is a ``with-suite-mutex``
-    invocation carrying ``--reuse-fresh`` as a flag (before its first ``--``).
+    invocation carrying ``--reuse-fresh`` or ``--wait`` as a flag (before its
+    first ``--``); ``--wait`` is the remedy the mutex refusal recommends.
 
     Such a segment is deferred past the grant and mutex legs: the wrapper's
     miss path enforces the tier-U gate and refuses while the mutex is held.
@@ -2656,7 +2665,7 @@ def _command_is_reuse_fresh_wrapped(
         if idx < n and _base(raw_argv[idx]).lower() in _WITH_SUITE_MUTEX_BASENAMES:
             rest = list(raw_argv[idx + 1:])
             flags = rest[: rest.index("--")] if "--" in rest else rest
-            reuse = _mutex_flags_include_reuse_fresh(flags)
+            reuse = _mutex_flags_include_reuse_fresh(flags) or _mutex_flags_include_wait(flags)
         stripped_segments.append(stripped)
         reuse_flags.append(reuse)
         suite_shaped_flags.append(seg_detected is not None)

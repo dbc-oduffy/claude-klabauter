@@ -3267,9 +3267,12 @@ def _row_prompt_expr(
         if not prompt.startswith(head):
             prompt_literal = _resolve_markers_plus(prompt)
         else:
-            prompt_literal = (
-                f"{shared.expr(head)} + {_resolve_markers_plus(prompt[len(head):])}"
+            tail_literal = (
+                _share_generic_paragraphs(prompt[len(head):], row, shared)
+                if shared.share_row_tails
+                else _resolve_markers_plus(prompt[len(head):])
             )
+            prompt_literal = f"{shared.expr(head)} + {tail_literal}"
     if chatty_brief and chatty_nonce_var:
         pre, post = chatty_brief.split(_chatty.NONCE_SLOT)
         prompt_literal = (
@@ -3279,6 +3282,40 @@ def _row_prompt_expr(
     elif chatty_brief:
         prompt_literal = f"{prompt_literal} + {_js_string_literal(chatty_brief)}"
     return prompt_literal
+
+
+#: A run of generic paragraphs shorter than this is cheaper inline than as a ``_shared`` item.
+_SHARED_PARAGRAPH_MIN_BYTES = 400
+#: Rows past which each row's generic prompt paragraphs are declared once; a small plan keeps its prompts inline.
+_SHARE_ROW_TAILS_MIN_ROWS = 12
+
+
+def _share_generic_paragraphs(tail: str, row: WaveRow, shared: SharedBlocks) -> str:
+    """The JS expression of a row prompt's text after its shared head, with each run of paragraphs
+    that names nothing row-specific (id, title, a path, a runtime marker) declared once in ``shared``.
+
+    Resolves at run time to the byte-identical text ``_resolve_markers_plus(tail)`` would."""
+    specific = [s for s in (row.id, row.title, *row.writes, *row.reads, _SHARED_PATH_MARKER_DELIM) if s]
+    parts = tail.split("\n\n")
+    segments = [p + "\n\n" for p in parts[:-1]] + [parts[-1]]
+    pieces: list[str] = []
+    run: list[str] = []
+
+    def flush() -> None:
+        if not run:
+            return
+        text = "".join(run)
+        pieces.append(shared.expr(text) if len(text.encode("utf-8")) >= _SHARED_PARAGRAPH_MIN_BYTES else _js_string_literal(text))
+        run.clear()
+
+    for seg in segments:
+        if any(s in seg for s in specific):
+            flush()
+            pieces.append(_resolve_markers_plus(seg))
+        else:
+            run.append(seg)
+    flush()
+    return " + ".join(p for p in pieces if p != "''") or "''"
 
 
 #: The script-scope ``_contText(cont, prefix)`` the continuable row calls build their clause from.
@@ -3433,6 +3470,7 @@ class SharedBlocks:
     """
 
     def __init__(self) -> None:
+        self.share_row_tails = False
         self._texts: list[str] = []
         self._index: dict[str, int] = {}
         self._path_lists: list[tuple[str, ...]] = []
@@ -3595,13 +3633,15 @@ _UNJUDGED_CAUSE_JS = (
 #: `differs_from_baseline` is nulled on demotion -- wake_digest reads it ahead
 #: of `status`.
 _JUDGE_VERDICT_RULES_JS = (
-    "((r, g) => { if (!r || typeof r !== 'object') return r; "
+    "((r, g, p) => { if (!r || typeof r !== 'object') return r; "
     # Clauses only a withheld row delivers stay open beside a met criterion; any other
-    # unmet clause keeps the verdict not_met.
+    # unmet clause keeps the verdict not_met. `p` lists the PM-verbatim register row ids:
+    # a withheld clause naming one is never reconciled to met.
     "if (r.status === 'not_met' && Array.isArray(g) && g.length && Array.isArray(r.withheld_clauses) "
     "&& r.withheld_clauses.length && Array.isArray(r.clauses) && r.clauses.length "
     "&& r.clauses.every(c => c && c.status === 'met') "
     "&& r.withheld_clauses.every(w => w && Array.isArray(w.rows) && w.rows.length && w.rows.every(id => g.includes(id))) "
+    "&& !(Array.isArray(p) && r.withheld_clauses.some(w => [...(w.rows || []), ...(w.register_rows || [])].some(id => p.includes(id)))) "
     "&& !String(r.reason ?? '').startsWith('not wired up: ') "
     "&& [undefined, 'pass', 'not_present'].includes(r.falsifier && r.falsifier.verdict)) "
     "{ r = { ...r, status: 'met', reconciled_from: 'not_met' }; } "
@@ -3617,8 +3657,13 @@ _JUDGE_VERDICT_RULES_JS = (
     "const unrun = v === 'error' && r.differs_from_baseline === true; "
     "if (v && v !== 'pass' && v !== 'not_present' && !unrun) why.push('falsifier ' + v); "
     "if (Array.isArray(r.clauses) && r.clauses.some(c => c && c.status !== 'met')) why.push('a clause is not met'); "
+    # The judge's `output_anchor` is the captured falsifier command output; it becomes `falsifier.output`.
+    "const fo = r.falsifier || {}; "
+    "const out = [fo.output, fo.output_anchor].find(x => typeof x === 'string' && x.trim()); "
+    "if (!out) why.push('no captured falsifier output'); "
     "if (why.length) { const reason = 'met demoted: ' + why.join(', '); log(reason); "
     "return { ...r, status: 'indeterminate', differs_from_baseline: null, reason }; } "
+    "r = { ...r, falsifier: { ...fo, output: out } }; "
     "if (unrun) { const reason = ('met; recorded falsifier did not run as authored: ' "
     "+ String((r.falsifier && r.falsifier.output_anchor) ?? '')).slice(0, 200); log(reason); "
     "return { ...r, status: 'met', differs_from_baseline: true, reason }; } return r; } "
@@ -3629,17 +3674,32 @@ _JUDGE_VERDICT_RULES_JS = (
 
 
 def _never_stranding_criterion(
-    call_expr: str, *, judge: bool = False, withheld_ids: Sequence[str] = ()
+    call_expr: str,
+    *,
+    judge: bool = False,
+    withheld_ids: Sequence[str] = (),
+    pm_verbatim_ids: Sequence[str] = (),
 ) -> str:
     """Wrap the criterion leg so a throw (an agentType the firing session
     cannot resolve, a schema refusal) yields ``indeterminate`` instead of
     killing the run after every executor has written: the run must still
     reach its terminal_commit next_action. ``differs_from_baseline: null``
     routes wake_digest's computed status to this ``status`` verbatim.
-    ``judge`` applies DoE's verdict rules to a returned judge result."""
-    gated = f", {json.dumps(list(withheld_ids))}" if withheld_ids else ""
+    ``judge`` applies DoE's verdict rules to a returned judge result and stamps
+    ``authored_by: JUDGE_AGENT`` on it (the engine, never the agent, vouches for authorship);
+    ``pm_verbatim_ids`` are the register rows the not_met-to-met reconcile never flips."""
+    from coordinator_core.ops.dispatch_emit.completion_gate import JUDGE_AGENT
+
+    gated = (
+        f", {json.dumps(list(withheld_ids))}, {json.dumps(list(pm_verbatim_ids))}"
+        if withheld_ids or pm_verbatim_ids
+        else ""
+    )
     if judge:
-        returned = f"{_JUDGE_VERDICT_RULES_JS}(await {call_expr}{gated})"
+        returned = (
+            "((o) => (o && typeof o === 'object' ? { ...o, authored_by: "
+            f"{json.dumps(JUDGE_AGENT)} }} : o))({_JUDGE_VERDICT_RULES_JS}(await {call_expr}{gated}))"
+        )
     else:
         returned = f"await {call_expr}"
     indeterminate = (
@@ -4220,6 +4280,28 @@ def _withheld_judge_rows(plan_text: Optional[str], excluded_rows: Optional[list]
     ]
     seen = {g["id"] for g in gated}
     return gated + [r for r in slot_withheld_rows(raw_by_id) if r["id"] not in seen]
+
+
+def _pm_verbatim_register_ids(plan_text: Optional[str], repo_root: Path) -> list:
+    """Ids of the plan's sizing register rows whose ledger origin is ``pm_verbatims``; empty when
+    the plan cites no readable sizing."""
+    if not plan_text:
+        return []
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops.dispatch_emit.completion_gate import PM_VERBATIM_ORIGIN
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import _ledger_of
+
+    text = plan_text.replace("\r\n", "\n")
+    fm = text.split("\n---", 1)[0] if text.startswith("---\n") else ""
+    rel = rr._fm_scalar(fm, "sizing_object")
+    path = rr._sizing_path(Path(repo_root), rel) if rel else None
+    try:
+        register = rr.read_register(path.read_text(encoding="utf-8")) if path else None
+    except (OSError, ValueError, KeyError, yaml.YAMLError):
+        return []
+    if register is None:
+        return []
+    return [i.id for i in _ledger_of(register.rows, False, None).items if i.origin == PM_VERBATIM_ORIGIN]
 
 
 def _struck_judge_rows(plan_text: Optional[str], repo_root: Path) -> list:
@@ -6393,6 +6475,8 @@ def compose_script(
     body_blocks: list[str] = []
     phase_titles: list[str] = []
     shared = SharedBlocks()
+    if shared is not None:
+        shared.share_row_tails = len(row_pathspecs) > _SHARE_ROW_TAILS_MIN_ROWS
 
     # Review-only carries a caller-provided base, which always wins; every other
     # run resolves its base when it fires.
@@ -7009,6 +7093,9 @@ def compose_script(
             plan_path, Path(repo_root) if repo_root is not None else _REPO_ROOT, plan_text=plan_text
         )
     judge_withheld = _withheld_judge_rows(plan_text, excluded_rows)
+    judge_pm_verbatim = _pm_verbatim_register_ids(
+        plan_text, Path(repo_root) if repo_root is not None else _REPO_ROOT
+    )
     judge_brief_kwargs = dict(
         withheld_rows=judge_withheld,
         struck_rows=_struck_judge_rows(plan_text, Path(repo_root) if repo_root is not None else _REPO_ROOT),
@@ -7073,7 +7160,10 @@ def compose_script(
     )
     if criterion_expr is not None:
         criterion_expr = _never_stranding_criterion(
-            criterion_expr, judge=bool(judge_expr), withheld_ids=[w["id"] for w in judge_withheld]
+            criterion_expr,
+            judge=bool(judge_expr),
+            withheld_ids=[w["id"] for w in judge_withheld],
+            pm_verbatim_ids=judge_pm_verbatim,
         )
     criterion_block = (
         f"  phase({_js_string_literal(_TEST_PHASE_TITLE)});\n"
@@ -7181,6 +7271,7 @@ def compose_script(
                         ),
                         judge=True,
                         withheld_ids=[w["id"] for w in judge_withheld],
+                        pm_verbatim_ids=judge_pm_verbatim,
                     )
                 )
             )

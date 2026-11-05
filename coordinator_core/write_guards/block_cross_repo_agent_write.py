@@ -1,7 +1,8 @@
-"""coordinator_core.write_guards.block_cross_repo_agent_write -- hard-deny
+"""coordinator_core.write_guards.block_cross_repo_agent_write -- advisory-register
 guard: a dispatched agent's Write/Edit into a registered fleet repo other than
-its own run repo is refused unless the run's cross-repo grant ledger names the
-path.
+its own run repo is flagged unless the run's cross-repo grant ledger names the
+path. The write is recoverable by redo (``deny_registry``), so the policy point
+downgrades the verdict to an advisory; the write proceeds.
 
 The emit-time check (``cross_repo_write_refusal.check_cross_repo_writes``)
 reads declared ``writes:``; it never sees an agent's actual tool calls. This

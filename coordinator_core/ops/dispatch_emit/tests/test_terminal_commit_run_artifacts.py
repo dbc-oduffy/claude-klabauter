@@ -392,7 +392,7 @@ def test_the_push_nudge_is_called_after_a_landed_commit(repo, monkeypatch):
     calls: list = []
     monkeypatch.setattr(
         run_push, "nudge_push",
-        lambda w, r: calls.append((w, r)) or {"status": "not_pushed", "reason": "stub"},
+        lambda w, r, branch=None: calls.append((w, r)) or {"status": "not_pushed", "reason": "stub"},
     )
 
     out = _fire(repo)

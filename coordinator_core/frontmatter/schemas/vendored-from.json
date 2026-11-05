@@ -56,8 +56,8 @@
     "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e"
   },
   "handoff.schema.json": {
-    "blob": "5bed1365cf49b6e8fe26e8efe771f202864c2b14",
-    "doe_commit": "c600c919fbe92fdb483d467e896924cddeb1833f"
+    "blob": "37c7a713507164a47c062f3a896294dcc2f34fd4",
+    "doe_commit": "ac6c96fd43dc2eb4ef9f553ab254db9daae1abf3"
   },
   "health-status.schema.json": {
     "blob": "d31ddbff5b35ca0c760aabe3d02de903d19550d8",
@@ -100,8 +100,8 @@
     "doe_commit": "7af1b4d3bf2257d018f152300fb060f5dd2b950b"
   },
   "plan.schema.json": {
-    "blob": "bd78a3bc739ad3b504b603014d06da6d9099add2",
-    "doe_commit": "9a4a178d1330ff9978e92827b70c819d56f51fca"
+    "blob": "a95a38740017b779168262ff149edd9142e6999c",
+    "doe_commit": "ac6c96fd43dc2eb4ef9f553ab254db9daae1abf3"
   },
   "prior-art-check.schema.json": {
     "blob": "70f770c2a1c104737f62f617b071f577575d309f",
@@ -128,8 +128,8 @@
     "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219"
   },
   "review-findings.schema.json": {
-    "blob": "8a43ef2e62f3a4733a899f307e49e49ed91756e6",
-    "doe_commit": "0372942d9ba06c0ea21be2038e34cdd949685887"
+    "blob": "a20c298c1ed7ebcb59c5277791fa27fabb94c9bb",
+    "doe_commit": "56ea0390e26cececdfacbdf89865370f66dc4315"
   },
   "review-sidecar.schema.json": {
     "blob": "69da75a7b40f6917d8a93cec2e16fc0e8c543977",
@@ -152,8 +152,8 @@
     "doe_commit": "b7c1d3c82cbba74c4f48ea7d8d885c943b344158"
   },
   "sizing-object.schema.json": {
-    "blob": "f31610778d0d7939ff54f2ace1ea694f28f0db25",
-    "doe_commit": "8e14712c0cdfb022f27597acbf7f6ce0da2f5c97"
+    "blob": "c9c1044f9939e63b74f5da9ad6e802582b4898f5",
+    "doe_commit": "32a21caa3079861bee184838170a05f208720837"
   },
   "spike-result.schema.json": {
     "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",

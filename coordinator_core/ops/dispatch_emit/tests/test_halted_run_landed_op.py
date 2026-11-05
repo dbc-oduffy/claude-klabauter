@@ -343,7 +343,7 @@ def _plan_marker(root: Path, rid: str, **extra) -> Path:
     marker = d / "halted.json"
     body = {
         "status": "halted", "halted": "ledger-check", "plan": PLAN, "blocking": ["R1"],
-        "run_base_sha": FULL_BASE, "sizing_rel": None, **extra,
+        "run_base_sha": FULL_BASE, "sizing_rel": None, "met_by": {"R1": FULL_BASE}, **extra,
     }
     marker.write_text(json.dumps(body), encoding="utf-8")
     return marker

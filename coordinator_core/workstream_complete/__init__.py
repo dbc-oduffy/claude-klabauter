@@ -1659,14 +1659,13 @@ def drain_terminal_sizings(repo_root: Path) -> dict[str, Any]:
     drain fault cannot fail a close. Safe inside a running event loop (runs on a worker thread).
     """
     try:
-        import asyncio
         import threading
 
         from coordinator_core.ops.fleet.terminal_sizing_drain import drain
 
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
+        # Imports nothing: a loop can only be running if asyncio is already loaded.
+        asyncio_mod = sys.modules.get("asyncio")
+        if asyncio_mod is None or asyncio_mod._get_running_loop() is None:
             result = drain(Path(repo_root))
         else:
             box: dict[str, Any] = {}

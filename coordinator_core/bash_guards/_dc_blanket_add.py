@@ -224,6 +224,7 @@ def check_blanket_git_add(
         return None
 
     matched_cmd = ""
+    _add_foreign_hit = False
     for seg in list(_awk_quote_aware_split(cmd)) + _ga_ps_segments:
         if not seg.strip():
             continue
@@ -386,6 +387,7 @@ def check_blanket_git_add(
                     )
                     if _ga_foreign:
                         should_deny = True
+                        _add_foreign_hit = True
                         deny_reason = "%s [foreign: %s]" % (
                             tok,
                             ", ".join(sorted(_ga_foreign)[:5]),
@@ -513,6 +515,10 @@ def check_blanket_git_add(
         "Use instead:\n"
         "  %s"
         % (matched_cmd, COMMIT_ROUTE)
+    ) + (
+        "\n\nOr: `git add -- <file> <file>` naming each file you wrote, not the directory."
+        if _add_foreign_hit
+        else ""
     ) + ("\n\nOr: %s" % _add_note if _add_note else "")
     return _alt_record(
         "deny", "blanket-git-add",

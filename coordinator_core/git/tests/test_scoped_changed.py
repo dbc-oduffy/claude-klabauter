@@ -478,3 +478,13 @@ def test_root_staged_delete_and_add_under_matching_siblings(tmp_path):
     _git(repo, "add", "r/new/n.txt")
     changed, _ = _check(repo, [], ["r"], [])
     assert changed == {"r/deep/y.txt", "r/new/n.txt"}
+
+
+def test_root_glob_already_holds_the_whole_index_so_ignored_dirs_skip_the_reload(tmp_path, monkeypatch):
+    from coordinator_core.git.scoped_worktree_status import scoped_worktree_status
+
+    repo = _repo(tmp_path, {**_BASE, ".gitignore": "cache/\n"})
+    _write(repo, "cache/a.txt")
+    calls = _count_detail_calls(monkeypatch)
+    scoped_worktree_status(repo, [], [], [""])
+    assert len(calls) == 1

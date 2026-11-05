@@ -12,7 +12,7 @@ the emitted run, in the background, under `claude -p` as interactively; its comp
 notification is the EM's one wake. The stub only ever runs when this hook did not: it returns a
 halt that names the gap, never a run.
 
-`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, stop_after?, chatty?}` (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params["em_size"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
+`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, stop_after?, chatty?}` (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params["em_size"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params["chatty"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, repo?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `"plan"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an entry's `repo` (else the top-level `repo`) is the checkout its run starts in and writes to: entries are partitioned by resolved repo, each repo is cross-repo-checked and fanned out once, and the runs start under one launcher per repo; an `after` edge or a `join` across repos is refused; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: "pm"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op
 or the fan-out, and either beside `{sizing}` is refused) (each ask a
 separate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one
 launcher (`fan_launcher.write_launcher`, given each run's pre-emitted reply) that starts each, with one ready run it fires
@@ -82,8 +82,8 @@ from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
 _ARGS_KEYS: tuple[str, ...] = (
     "ask", "asks", "brief", "brief_file", "chatty", "confirm_split", "context", "cross_repo_approved", "em_context",
-    "em_rationale", "em_size", "join", "repo", "route_preference", "sender", "sizing", "source", "stop_after",
-    "supersedes", "writes",
+    "em_rationale", "em_size", "join", "repo", "resume_run_id", "route_preference", "sender", "sizing", "source",
+    "stop_after", "supersedes", "writes",
 )
 _INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
 
@@ -137,6 +137,13 @@ def _request(
         repo.strip() if isinstance(repo, str) and repo.strip() else None,
         args.get("source"),
     )
+
+
+def _resume_run_id(tool_input: Mapping[str, Any]) -> Optional[str]:
+    """The halted run id a refire's `args.resume_run_id` names, else None."""
+    args = tool_input.get("args")
+    value = args.get("resume_run_id") if isinstance(args, dict) else None
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def _is_peer_delivery(content: Any) -> bool:
@@ -1164,14 +1171,21 @@ def _premint_deferred_envelope(root: Path, params: dict, run_id: str) -> dict:
 
 
 def _deferred_envelope(root: Path, params: dict, over: _EmitOverran) -> dict:
-    """The taken submission for an emit that outran the hook budget with no run minted.
+    """The taken submission for an emit that outran the hook budget with no run minted; a refusal
+    naming `over` when the script cannot be written."""
+    taken = _taken_as_deferred(root, params)
+    return taken if taken is not None else _refuse(over.message)
+
+
+def _taken_as_deferred(root: Path, params: dict) -> Optional[dict]:
+    """The allow envelope taking `params` as a deferred emit, or None when its script cannot be written.
 
     The hook process ends when it answers, so the emit cannot finish on its daemon thread; a
     written script re-runs `dispatch.emit` through an op-relay agent and starts what it emits."""
     try:
         script = _write_deferred_script(root, params)
     except OSError:
-        return _refuse(over.message)
+        return None
     defer_id = script.name.split(".")[0]
     envelope = rewrite_input(
         "PreToolUse",
@@ -1376,6 +1390,9 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
         label = item.get("label")
         if label is not None and not isinstance(label, str):
             return None, f"asks[{i}].label must be a string."
+        repo = item.get("repo")
+        if repo is not None and (not isinstance(repo, str) or not repo.strip()):
+            return None, f"asks[{i}].repo must be a repo path (a non-empty string)."
         writes = item.get("writes")
         if writes is not None and not (isinstance(writes, list) and all(isinstance(w, str) for w in writes)):
             return None, f"asks[{i}].writes must be a list of repo-relative paths."
@@ -1651,6 +1668,34 @@ def _default_fanout(params: dict, repo_root: Path) -> dict:
     return value
 
 
+def _persist_em_context(root: Path, run_id: str, brief: Any) -> None:
+    """Append the refire's EM brief to the run's `notes.jsonl` before any emit or deferral, so the resume
+    path carries it whichever script starts the run. A repeat of the same text appends nothing; a run
+    directory that is absent or unwritable persists nothing (the brief still rides the emit params)."""
+    if not isinstance(brief, str) or not brief.strip():
+        return
+    import json
+    from datetime import datetime, timezone
+
+    from coordinator_core.atomic_append import append_line
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl, run_notes
+    from coordinator_core.session.declared_writes import declare_write
+
+    text = brief.strip().encode("utf-8")[: rl.VERBATIM_BYTE_CAP].decode("utf-8", "ignore")
+    try:
+        dest = rl.run_dir(root, run_id)
+        if not dest.is_dir():
+            return
+        notes = dest / rl.NOTES_FILE
+        if any(e["note"].strip() == text for e in run_notes.entries(notes, run_id)):
+            return
+        line = {"note": text, "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+        append_line(notes, (json.dumps(line, ensure_ascii=False) + "\n").encode("utf-8"))
+        declare_write(notes)
+    except (OSError, ValueError, rl.LedgerRefused):
+        pass
+
+
 def _declared_writes(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapping[str, Any]) -> list[str]:
     """`args.writes`, else the cited sizing's plan-spine writes; empty when neither is declared."""
     args = tool_input.get("args")
@@ -1859,7 +1904,13 @@ def _live_write_overlap_deny(
         if sizing_rel:
             from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
 
-            own = _bounded_call(("halted", str(root), sizing_rel), lambda: halted_run_to_resume(root, sizing_rel))
+            named = _resume_run_id(tool_input)
+            own = _bounded_call(
+                ("halted", str(root), sizing_rel),
+                # Trap: `run_id` only when named; a bare (root, rel) lookup stays callable by test stubs.
+                (lambda: halted_run_to_resume(root, sizing_rel, run_id=named)) if named
+                else (lambda: halted_run_to_resume(root, sizing_rel)),
+            )
         if own is None and sizing_rel:
             # A halt that wrote no halted.json leaves run-stage `staged`; the resume route refires that run.
             own = _bounded_call(("emitted", str(root), sizing_rel), lambda: _unmarked_emitted_run(root, sizing_rel))
@@ -2069,6 +2120,23 @@ def _launch_all(
     """The rewrite to one launcher script that emits and starts every ready run of an asks submission.
 
     `sizing_root` is the root the fan-out wrote the child sizings under; each child emit resolves its sizing there."""
+    script, refusal = _write_group_launcher(root, payload, fan_reply, ready, call_stop, launch, approved, sizing_root)
+    if script is None:
+        return _refuse(refusal or "The engine wrote no launcher.")
+    return _launch_envelope(root, payload, fan_reply, ready, script, advisory)
+
+
+def _write_group_launcher(
+    root: Path,
+    payload: Mapping[str, Any],
+    fan_reply: Mapping[str, Any],
+    ready: Sequence[Any],
+    call_stop: Any,
+    launch: Optional[Callable[..., Path]],
+    approved: bool,
+    sizing_root: Optional[Path] = None,
+) -> tuple[Optional[Path], Optional[str]]:
+    """(launcher script, None) for `ready` under `root`, or (None, refusal text)."""
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
     tool_input = payload["tool_input"]
@@ -2088,12 +2156,11 @@ def _launch_all(
     parent_id = str(fan_reply["parent_id"])
     refusal = _fan_prefire_refusal(root, payload, ready, approved)
     if refusal:
-        return _refuse(refusal)
+        return None, refusal
     try:
-        script = (launch or _default_launch)(root, parent_id, children, session_id)
+        return (launch or _default_launch)(root, parent_id, children, session_id), None
     except Exception as exc:  # the launcher's refusal text is the whole message
-        return _refuse(f"The engine wrote no launcher: {exc}")
-    return _launch_envelope(root, payload, fan_reply, ready, script, advisory)
+        return None, f"The engine wrote no launcher: {exc}"
 
 
 def _launch_envelope(
@@ -2128,6 +2195,203 @@ def _launch_envelope(
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
     hso["permissionDecisionReason"] = f"Engine submission: wrote {Path(script).name} this call."
+    return envelope
+
+
+_MULTI_ROOT_JS = r"""export const meta = { name: 'engine-ask-multi-repo', description: 'Starts one launcher per repo of a multi-repo asks submission' }
+const LAUNCHERS = __LAUNCHERS__;
+const _settled = await parallel(LAUNCHERS.map((scriptPath) => () => workflow({ scriptPath: scriptPath })));
+return { launchers: LAUNCHERS.map((scriptPath, i) => ({
+  scriptPath: scriptPath,
+  result: (_settled[i] === null || _settled[i] === undefined) ? { status: 'failed', error: 'launcher threw' } : _settled[i],
+})) };
+"""
+
+
+def _write_multi_root_script(root: Path, launchers: Sequence[Path]) -> Path:
+    """A script under `root/scratch/warp/` that starts every per-repo launcher in parallel."""
+    import json
+
+    body = _MULTI_ROOT_JS.replace("__LAUNCHERS__", json.dumps([Path(p).as_posix() for p in launchers]))
+    script = root / "scratch" / "warp" / f"multi-repo-{uuid.uuid4().hex[:12]}.workflow.mjs"
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script.write_text(body, encoding="utf-8")
+    return script
+
+
+def _entry_roots(
+    asks: Sequence[Mapping[str, Any]], repo_arg: Optional[str], payload: dict
+) -> tuple[list[Optional[str]], list[Path], Optional[str]]:
+    """(repo string per entry, resolved root per entry, refusal): an entry's own `repo`, else the top-level one,
+    else the session's. One `show_toplevel` per distinct string."""
+    strings = [(item.get("repo") or repo_arg or None) for item in asks]
+    strings = [s.strip() if isinstance(s, str) else s for s in strings]
+    memo: dict = {}
+    roots: list[Path] = []
+    for i, s in enumerate(strings):
+        if s not in memo:
+            memo[s] = _repo_root(s, payload)
+        root = memo[s]
+        if root is None:
+            where = s or payload.get("cwd") or "the session cwd"
+            return strings, roots, f"asks[{i}]: {where} is in no git repo. Name an absolute `repo`."
+        roots.append(root)
+    return strings, roots, None
+
+
+def _asks_by_root(roots: Sequence[Path]) -> dict:
+    """Entry indices grouped by resolved root, in first-seen order."""
+    groups: dict = {}
+    for i, root in enumerate(roots):
+        groups.setdefault(str(root.resolve()), []).append(i)
+    return groups
+
+
+def _multi_root_asks(
+    payload: dict,
+    asks: list,
+    strings: Sequence[Optional[str]],
+    roots: Sequence[Path],
+    join: Optional[dict],
+    supersedes: Optional[str],
+    call_stop: Any,
+    fanout: Optional[FanoutFn],
+    launch: Optional[Callable[..., Path]],
+) -> dict:
+    """The rewrite for an asks submission whose entries resolve to more than one repo.
+
+    Every refusal that needs no fan-out reply (cross-repo, missing context, `after` or `join` across repos,
+    declared writes) runs for all groups before any group's fan-out. Each group then fans out once under its own
+    root and gets its own launcher; one script starts the launchers in parallel."""
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import is_remote_venue
+
+    if join is not None:
+        return _refuse(f"A join has one writer root, but these asks resolve to {len(set(map(str, roots)))} repos. Join runs of one repo.")
+    if supersedes:
+        return _refuse("supersedes rides one ask or sizing, not an asks fan-out across repos.")
+    groups = _asks_by_root(roots)
+    group_of = {i: key for key, members in groups.items() for i in members}
+    labels = [(item.get("label") or "").strip() or f"slice-{k + 1}" for k, item in enumerate(asks)]
+    for i, item in enumerate(asks):
+        if item.get("after") is None:
+            continue
+        try:
+            preds = resolve_after(f"asks[{i}]", item["after"], labels, i)
+        except ValueError as exc:
+            return _refuse(str(exc))
+        for k in preds:
+            if group_of[k] != group_of[i]:
+                return _refuse(
+                    f"asks[{i}].after names asks[{k}], but asks[{i}] runs in {roots[i]} and asks[{k}] in {roots[k]}. "
+                    "An after edge stays within one repo."
+                )
+
+    call_args = payload["tool_input"].get("args")
+    own = _repo_root(None, payload)
+    base_ok = is_remote_venue() or (isinstance(call_args, dict) and call_args.get("cross_repo_approved") is True)
+    approved_of: dict = {}
+    for key, members in groups.items():
+        root = roots[members[0]]
+        _note_root(root)
+        approved_of[key] = base_ok or _names_registered_sibling(strings[members[0]], root)
+        if own is not None and root.resolve() != own.resolve():
+            cross = _cross_repo_refusal(root, own, False, approved_of[key])
+            if cross:
+                return _refuse(cross)
+
+    notes: list[str] = []
+    for i, item in enumerate(asks):
+        paths = [c.strip() for c in _context_items(item.get("context") or [], "context")[0] if is_path_shaped(c)]
+        missing = _missing_context(roots[i], paths)
+        if missing:
+            return _refuse(f"asks[{i}].context {missing}: no such file. Pass inline prose as context text, or fix the path.")
+        notes += [f"asks[{i}] {n}" for n in _resolved_memos(roots[i], paths)]
+    advisory = f" Advisory: context memo {'; '.join(notes)}. The work may already be done." if notes else ""
+
+    session_id = payload.get("session_id") if isinstance(payload.get("session_id"), str) else None
+    payloads: dict = {}
+    fan_items: dict = {}
+    for key, members in groups.items():
+        local = {g: n for n, g in enumerate(members)}
+        items = []
+        for g in members:
+            item = {k: v for k, v in asks[g].items() if k not in (_CHATTY_KEY, "repo")}
+            if item.get("after") is not None:
+                item["after"] = [local[k] for k in resolve_after(f"asks[{g}]", asks[g]["after"], labels, g)]
+            items.append(item)
+        fan_items[key] = items
+        sub_args = {**call_args, "asks": [asks[g] for g in members]}
+        payloads[key] = {**payload, "tool_input": {**payload["tool_input"], "args": sub_args}}
+        why = _fan_prefire_refusal(roots[members[0]], payloads[key], [], approved_of[key])
+        if why:
+            return _refuse(why)
+
+    scripts: list[Path] = []
+    started: list[str] = []
+    tails: list[str] = []
+    recorded: list[tuple[Path, Any, Any]] = []
+    for key, members in groups.items():
+        root = roots[members[0]]
+        fan_params: dict = {"asks": fan_items[key], "session_id": session_id or ""}
+        if own is not None and root.resolve() != own.resolve():
+            fan_params["session_root"] = str(own)
+        if isinstance(call_args.get("sender"), str):
+            fan_params["sender"] = call_args["sender"]
+        if call_args.get("confirm_split") is True:
+            fan_params["confirm_split"] = True
+        try:
+            reply = (fanout or _default_fanout)(fan_params, root)
+        except Exception as exc:  # the engine's refusal text is the whole message
+            return deny("PreToolUse", _cause(exc))
+        if not isinstance(reply, dict):
+            return deny("PreToolUse", f"The fan-out returned no reply: {reply!r}.")
+        if reply.get("error") or reply.get("exit_code") or reply.get("applied") is False:
+            return deny("PreToolUse", str(reply.get("error") or "The fan-out was refused."))
+        writer_root = Path(reply["writer_root"]) if isinstance(reply.get("writer_root"), str) else root
+        parent = _read_parent(writer_root, str(reply.get("parent_id")))
+        ready = [r for r in (parent.runs if parent else ()) if r.status == "ready"]
+        if not ready:
+            return deny("PreToolUse", f"The fan-out under {root} produced no ready run to fire.")
+        unwritten = next((r.slice_sizing for r in ready if not (writer_root / r.slice_sizing).is_file()), None)
+        if unwritten:
+            return deny("PreToolUse", f"The fan-out reported {unwritten} written under {writer_root}, but it is not on disk there.")
+        script, why = _write_group_launcher(
+            root, payloads[key], reply, ready, call_stop, launch, approved_of[key], writer_root
+        )
+        if script is None:
+            return _refuse(why or "The engine wrote no launcher.")
+        scripts.append(Path(script))
+        ids = [r.run_id for r in ready]
+        started += ids
+        tails.append(f"{root}: {_fan_tail(root, reply, ids, launcher=True)}")
+        recorded.append((root, ready, script))
+
+    first_root = roots[next(iter(groups.values()))[0]]
+    entry = _write_multi_root_script(first_root, scripts)
+    call_id = payload.get("tool_use_id")
+    transcript = payload.get("transcript_path") if isinstance(payload.get("transcript_path"), str) else None
+    with contextlib.suppress(OSError):
+        for root, ready, _script in recorded:
+            for r in ready:
+                warp_live.record_submission(
+                    root,
+                    r.run_id,
+                    session_id=session_id,
+                    transcript_path=transcript,
+                    script_path=str(entry),
+                    sizing_rel=r.slice_sizing,
+                    tool_use_id=call_id if isinstance(call_id, str) else None,
+                )
+    envelope = rewrite_input(
+        "PreToolUse",
+        {"scriptPath": str(entry)},
+        f"Submitted to the engine as runs {', '.join(started)} under {len(scripts)} launchers, one per repo.{advisory} "
+        f"{' '.join(tails)} {_revise_hint(started[0])}",
+    )
+    hso = envelope["hookSpecificOutput"]
+    hso["permissionDecision"] = "allow"
+    hso["permissionDecisionReason"] = f"Engine submission: wrote {entry.name} this call."
     return envelope
 
 
@@ -2239,6 +2503,18 @@ def _unmarked_emitted_run(root: Path, sizing_rel: str) -> Optional[str]:
     return None
 
 
+def _adopt_unmarked_run(root: Path, run_id: str, session_id: str) -> None:
+    """Hand an unmarked staged run to the refiring session when its owner session is gone: the halt
+    marker first, then the run-stage rewrite. A live owner, the refiring session itself or a failed
+    write leaves the run as it was; the resume proceeds either way."""
+    from coordinator_core.ops.dispatch_emit.orphan_adopt import adopt_orphaned_run
+
+    try:
+        adopt_orphaned_run(root, run_id, session_id)
+    except (OSError, ValueError):
+        pass
+
+
 def _resume_fire_args(root: Path, run_id: str, sizing_rel: str, session_id: Optional[str]) -> dict:
     """`{"fire_args": ...}` handing the stored resume script a run token, else `{}`.
 
@@ -2308,21 +2584,27 @@ def _resume_route(
     A stored script whose fingerprint matches is the emit result. A missing, stale or stalled
     record spawns the detached recompose and answers a one-child launcher envelope. A halted-run
     lookup that finds nothing is (None, None): the plain emit follows. One that stalls takes the run id
-    from the halt-time hint (`hrr.read_hint`); with no hint the run id is unknown and the call is refused."""
+    from the halt-time hint (`hrr.read_hint`); with no hint the submission is deferred, and the deferred emit resolves the halted run off the hook."""
     import time
 
     from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
     from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
 
+    named_id = _resume_run_id(payload.get("tool_input") or {})
     try:
-        halted_id = _bounded_call(("halted", str(root), sizing_rel), lambda: halted_run_to_resume(root, sizing_rel))
+        halted_id = _bounded_call(
+            ("halted", str(root), sizing_rel),
+            lambda: halted_run_to_resume(root, sizing_rel, build=False, run_id=named_id),
+        )
     except (OSError, ValueError):
         return None, None
     if halted_id is hrr.STALLED:
         halted_id = hrr.read_hint(root, sizing_rel)
         if halted_id is None:
-            return _refuse("The halted-run lookup stalled, so the submission would compose inline. Re-submit once."), None
+            # The deferred emit resolves the halted run off the hook path through the same lookup; when
+            # its script cannot be written the plain emit follows (None, None), never a refusal.
+            return _taken_as_deferred(root, params), None
     if halted_id is None and reserved_run_id is None:
         try:
             halted_id = _bounded_call(("emitted", str(root), sizing_rel), lambda: _unmarked_emitted_run(root, sizing_rel))
@@ -2330,6 +2612,8 @@ def _resume_route(
             return None, None
         if halted_id is hrr.STALLED:
             return _refuse("The emitted-run lookup stalled, so the submission would compose inline. Re-submit once."), None
+        if isinstance(halted_id, str) and session_id:
+            _adopt_unmarked_run(root, halted_id, session_id)
     if not isinstance(halted_id, str):
         return None, None
     rd = record_dir(root, halted_id)
@@ -2341,6 +2625,7 @@ def _resume_route(
             carry_inbox(root, filed_under, halted_id)
         except OSError:
             pass  # the resume proceeds; the queued revisions stay under their own id
+    _persist_em_context(root, halted_id, params.get("ask_brief"))
 
     stored: Optional[dict] = None
     record = _budgeted_read(lambda wait: hrr.read(rd, wait))
@@ -2587,6 +2872,8 @@ def _evaluate(
             asks[0].get("sender") or asks[0].get("relayed_text") or payload["tool_input"]["args"].get("sender")
         ):
             ask, source = asks[0]["ask"], asks[0].get("source")
+            if asks[0].get("repo"):
+                repo_arg = asks[0]["repo"].strip()
             route_pref, em_rationale = asks[0].get("route_preference"), asks[0].get("em_rationale")
             call_stop = asks[0].get("stop_after")
             if asks[0].get(_CHATTY_KEY) is not None:
@@ -2621,12 +2908,26 @@ def _evaluate(
         if home_refusal:
             return _refuse(home_refusal)
 
-    disagree = None if (repo_arg and Path(repo_arg).is_absolute()) else _anchor_disagreement(payload)
+    entry_strings = [(it.get("repo") or repo_arg) for it in asks] if asks is not None else []
+    if asks is not None and any(it.get("repo") for it in asks):
+        names_all = all(isinstance(s, str) and Path(s.strip()).is_absolute() for s in entry_strings)
+    else:
+        names_all = False
+    disagree = None if ((repo_arg and Path(repo_arg).is_absolute()) or names_all) else _anchor_disagreement(payload)
     if disagree:
         return _refuse(
             f"Session anchor {disagree[0]} and launch repo {disagree[1]} are different repos; "
             "the run would resolve to the anchor. Pass an absolute `repo` to choose one."
         )
+
+    if asks is not None and any(it.get("repo") for it in asks):
+        strings, entry_roots, why = _entry_roots(asks, repo_arg, payload)
+        if why:
+            return _refuse(why)
+        if len(_asks_by_root(entry_roots)) > 1:
+            return _multi_root_asks(payload, asks, strings, entry_roots, join, supersedes, call_stop, fanout, launch)
+        asks = [{k: v for k, v in it.items() if k != "repo"} for it in asks]
+        repo_arg = repo_arg or next(s for s in strings if s)
 
     root = _repo_root(repo_arg, payload)
     if root is None:
@@ -2847,10 +3148,12 @@ def _evaluate(
         try:
             minted = _emit_within_budget(lambda p, r: _premint_marker(p, r, chosen), params, root, scan=False)
         except _EmitOverran as over:
+            if over.stalled:  # the disk is stalled: a deferred script would stall on it too
+                return _refuse(over.message)
             if over.minted:  # the marker published as the budget ran out: the chosen id is the run
                 _note_minted(chosen)
-                return _premint_deferred_envelope(root, params, chosen)
-            return _refuse(over.message)
+            # Unminted overrun: the deferred emit adopts the chosen id and mints it in the background.
+            return _premint_deferred_envelope(root, params, chosen)
         except (OSError, ValueError):  # no git dir to hold the marker: the inline emit hands the commit back to the EM
             pass
         if minted is not None:

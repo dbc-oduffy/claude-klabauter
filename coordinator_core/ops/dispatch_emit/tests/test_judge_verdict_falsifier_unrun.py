@@ -77,6 +77,67 @@ def test_error_with_a_non_met_clause_demotes():
 
 
 @pytest.mark.parametrize("verdict", ["pass", "not_present"])
-def test_pass_and_not_present_are_unchanged(verdict):
-    v = _met(falsifier={"present": True, "ran": True, "verdict": verdict})
-    assert _rules(v) == v
+def test_pass_and_not_present_with_output_stay_met_and_carry_it(verdict):
+    f = {"present": True, "ran": True, "verdict": verdict, "output_anchor": "3 passed"}
+    out = _rules(_met(falsifier=f))
+    assert out["status"] == "met" and out["falsifier"]["output"] == "3 passed"
+
+
+@pytest.mark.parametrize("anchor", ["", "   ", None])
+@pytest.mark.parametrize("verdict", ["pass", "not_present"])
+def test_met_with_blank_falsifier_output_demotes(verdict, anchor):
+    f = {"present": True, "ran": True, "verdict": verdict, "output_anchor": anchor}
+    out = _rules(_met(falsifier=f))
+    assert out["status"] == "indeterminate"
+    assert out["reason"] == "met demoted: no captured falsifier output"
+    assert out["differs_from_baseline"] is None
+
+
+def test_met_without_a_falsifier_object_demotes():
+    v = _met()
+    del v["falsifier"]
+    assert _rules(v)["status"] == "indeterminate"
+
+
+def test_an_explicit_output_wins_over_the_anchor():
+    f = {"present": True, "ran": True, "verdict": "pass", "output": "full run", "output_anchor": "a"}
+    assert _rules(_met(falsifier=f))["falsifier"]["output"] == "full run"
+
+
+def test_not_met_is_never_demoted_for_blank_output():
+    out = _rules({"status": "not_met", "reason": "r", "falsifier": {"verdict": "pass", "output_anchor": ""}})
+    assert out["status"] == "not_met"
+
+
+def _stamped(call_expr: str, judge: bool) -> dict:
+    from coordinator_core.ops.dispatch_emit.emit import _never_stranding_criterion
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    script = (
+        "const log = () => {}; "
+        f"({_never_stranding_criterion(call_expr, judge=judge)}).then(v => console.log(JSON.stringify(v)));"
+    )
+    out = subprocess.run(
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+def test_the_engine_stamps_the_judge_agent_on_a_judge_result():
+    from coordinator_core.ops.dispatch_emit.completion_gate import JUDGE_AGENT
+
+    out = _stamped(f"Promise.resolve({json.dumps({**_met(falsifier={'verdict': 'pass', 'output_anchor': 'ok'}), 'authored_by': 'executor-template'})})", True)
+    assert out["status"] == "met" and out["authored_by"] == JUDGE_AGENT
+
+
+def test_the_indeterminate_fallback_carries_no_authorship():
+    out = _stamped("Promise.reject(new Error('boom'))", True)
+    assert out["status"] == "indeterminate" and "authored_by" not in out
+
+
+def test_a_non_judge_leg_is_not_stamped():
+    out = _stamped("Promise.resolve({status: 'met'})", False)
+    assert "authored_by" not in out

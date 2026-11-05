@@ -261,6 +261,9 @@ def scaling(n: int = N_DEFAULT, runs: int = 5) -> Dict[str, float]:
 
 
 def main(argv=None) -> int:
+    from coordinator_core.benchmarks import declare_benchmark_origin
+
+    declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--n", type=int, default=N_DEFAULT)
     ap.add_argument("--json", action="store_true")

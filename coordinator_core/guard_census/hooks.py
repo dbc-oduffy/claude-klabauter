@@ -26,6 +26,7 @@ WIRED = {
     "guard-editor-python-direct": "PreToolUse",
     "guard-manufactured-blocker": "Stop",
     "guard-turn-intent": "Stop",
+    "workflow-step-dispatch": "SubagentStart+SubagentStop",
     "nudge-autonomous-askuserquestion": "PreToolUse",
     "nudge-cross-repo-cwd-boundary": "CwdChanged",
     "nudge-named-agent-report-delivery": "PreToolUse",
@@ -111,6 +112,7 @@ _TEST_MODULES = (
     "test-subagent-zero-tool-use-surface",
     "test-suggest-sonnet-research",
     "test-ue-knowledge-distrust",
+    "test-workflow-step-dispatch",
 )
 
 _DISPATCHED = (
@@ -156,10 +158,13 @@ _DISPATCHED = (
     "guard-repo-setup-claude-home-refusal",
     "guard-terminal-review",
     "guard-test-tree-git-fixture-spawn",
+    "guard-ue-specialist-advisory",
     "hand-dispatch-deny",
     "handoff-segment-inject",
+    "idle-compact-advisory",
     "mise-autofire",
     "nudge-em-code-dispatch",
+    "nudge-em-research-scoping",
     "nudge-em-turn-budget",
     "nudge-foreground-agent-dispatch",
     "nudge-hand-written-plan",
@@ -182,6 +187,7 @@ _DISPATCHED = (
     "example-retrieval-repo-detect",
     "receiver-state-sensor",
     "repin-cloud-engine-root",
+    "rewrite-sendmessage-peer-name",
     "runtime-tripwire-stop-watcher",
     "scratch-size-probe",
     "session-start-announce-job-mode",

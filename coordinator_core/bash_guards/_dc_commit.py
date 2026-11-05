@@ -40,6 +40,7 @@ never the ``dispatch_checks`` facade or another family module.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import os
 import posixpath
@@ -49,7 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING, Tuple
 from coordinator_core import machine_path_leak
-from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared, commit_tripwires
+from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared, _git_tree_facts, commit_tripwires
 from coordinator_core.bash_guards._command_tokenizer import (
     _strip_heredocs as _bt_strip_heredocs,
     segments_from_tokens_with_pipe_flag as _bt_segments_from_tokens_with_pipe_flag,
@@ -110,6 +111,112 @@ from coordinator_core.bash_guards.block_subagent_commit import (
 
 if TYPE_CHECKING:
     from coordinator_core.session.scope import OwnerFact
+
+
+# ---------------------------------------------------------------------------
+# In-process git facts for the commit hot path. Every helper returns None (or
+# falls through to `_run_git`) when `_git_tree_facts` cannot answer; None is
+# never read as "allow". A missing cwd always probes: the facts need a real
+# directory to resolve against.
+# ---------------------------------------------------------------------------
+
+_facts_epoch: "contextvars.ContextVar[Optional[float]]" = contextvars.ContextVar(
+    "_dc_commit_tree_facts_epoch", default=None
+)
+
+
+def _tree_facts(cwd: Optional[str]):
+    """`_git_tree_facts` for `cwd`, with its memo dropped whenever the dispatch changed
+    (the armed probe deadline identifies one dispatch; unarmed never reuses a memo)."""
+    if not cwd:
+        return None
+    deadline = _dc_git_probe._git_probe_deadline.get()
+    if deadline is None or _facts_epoch.get() != deadline:
+        _git_tree_facts.reset()
+        _facts_epoch.set(deadline)
+    return _git_tree_facts
+
+
+def _staged_rows(cwd: Optional[str]) -> Optional[List[Tuple[str, str]]]:
+    """Staged `(letter, path)` rows with rename detection off, or None to probe."""
+    facts = _tree_facts(cwd)
+    if facts is None:
+        return None
+    lines = facts.staged_name_status(cwd)
+    if lines is None:
+        return None
+    rows: List[Tuple[str, str]] = []
+    for line in lines:
+        letter, _, path = line.partition("\t")
+        if not path:
+            return None
+        rows.append((letter, path))
+    return rows
+
+
+def _staged_rows_rename_free(cwd: Optional[str]) -> Optional[List[Tuple[str, str]]]:
+    """`_staged_rows`, or None when an `A` and a `D` coexist: git's default rename detection
+    could fold them into one `R` row, which the reader does not model."""
+    rows = _staged_rows(cwd)
+    if rows is None:
+        return None
+    letters = {letter for letter, _ in rows}
+    if "A" in letters and "D" in letters:
+        return None
+    return rows
+
+
+def _scoped_staged_names(cwd: Optional[str], pathspec: List[str]) -> Optional[List[str]]:
+    """Staged paths under a literal `pathspec` (`diff --cached --name-only -- <pathspec>`),
+    or None to probe. Globs, magic, absolute, backslashed or `..` specs and any
+    case-fold disagreement probe."""
+    rows = _staged_rows_rename_free(cwd)
+    facts = _tree_facts(cwd)
+    if rows is None or facts is None:
+        return None
+    prefix = facts.show_prefix(cwd)
+    if prefix is None:
+        return None
+    specs: List[str] = []
+    for spec in pathspec:
+        if (
+            not spec
+            or spec[0] in ":/-"
+            or "\\" in spec
+            or any(c in spec for c in "*?[")
+        ):
+            return None
+        norm = posixpath.normpath(prefix + spec)
+        if norm == "..":
+            return None
+        if norm.startswith("../"):
+            return None
+        specs.append("" if norm == "." else norm)
+
+    def _hit(path: str, fold: bool) -> bool:
+        p = path.casefold() if fold else path
+        for s in specs:
+            s = s.casefold() if fold else s
+            if not s or p == s or p.startswith(s + "/"):
+                return True
+        return False
+
+    exact = [path for _, path in rows if _hit(path, False)]
+    folded = [path for _, path in rows if _hit(path, True)]
+    if exact != folded:
+        return None
+    return exact
+
+
+def _toplevel_or_probe(cwd: Optional[str]) -> str:
+    """Worktree root of `cwd` ('' when unknown): the in-process fact, else `rev-parse --show-toplevel`."""
+    facts = _tree_facts(cwd)
+    if facts is not None:
+        top = facts.toplevel(cwd)
+        if top:
+            return top
+    rc, out = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], cwd)
+    return out.strip() if rc == 0 else ""
 
 
 def _vc(summary, members, env, report, authorize, *, kind="deny", guard="validate-commit", em_text=None):
@@ -250,8 +357,12 @@ def check_validate_commit(
     # The hook process's own GIT_INDEX_FILE is not the index the commit will
     # use; inheriting it made this probe read an empty/alternate index.
     _probe_env = {"GIT_INDEX_FILE": None}
-    rc, staged_out = _dc_git_probe._run_git(["diff", "--cached", "--name-status", "-M"], _cwd, extra_env=_probe_env)
-    _status_lines: Optional[List[str]] = staged_out.splitlines() if rc == 0 else None
+    _fast_rows = _staged_rows_rename_free(_cwd)
+    if _fast_rows is not None:
+        _status_lines: Optional[List[str]] = [f"{_l}\t{_p}" for _l, _p in _fast_rows]
+    else:
+        rc, staged_out = _dc_git_probe._run_git(["diff", "--cached", "--name-status", "-M"], _cwd, extra_env=_probe_env)
+        _status_lines = staged_out.splitlines() if rc == 0 else None
     from coordinator_core.bash_guards._implausible_index import implausible_deletion_note
     _probe_note = implausible_deletion_note(
         _status_lines, _cwd,
@@ -319,9 +430,13 @@ def check_validate_commit(
     if _commit_seg_tokens is not None:
         _own_pathspec = _bt_commit_own_pathspec(_commit_seg_tokens)
         if _own_pathspec is not None:
-            _rc_scope, _scoped_out = _dc_git_probe._run_git(
-                ["diff", "--cached", "--name-only", "--", *_own_pathspec], _cwd
-            )
+            _fast_scope = _scoped_staged_names(_cwd, _own_pathspec)
+            if _fast_scope is not None:
+                _rc_scope, _scoped_out = 0, "\n".join(_fast_scope)
+            else:
+                _rc_scope, _scoped_out = _dc_git_probe._run_git(
+                    ["diff", "--cached", "--name-only", "--", *_own_pathspec], _cwd
+                )
             if _rc_scope == 0:
                 commit_scope = [l for l in _scoped_out.splitlines() if l]
                 _pathspec_matched_set = set(commit_scope)
@@ -474,7 +589,7 @@ def check_validate_commit(
     # accrues live. The archival-mover leg is done. ---
     scope_strict = not _override("COORDINATOR_SCOPE_STRICT_OFF", payload=payload)
     if session_id:
-        git_root = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()
+        git_root = _toplevel_or_probe(_cwd)
         if git_root:
             sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
             session_dir = os.path.join(sessions_root, session_id)
@@ -1345,7 +1460,7 @@ def check_validate_commit(
     # coordinator_core.claude_md_budget.load_audience_manifest).
     from coordinator_core.claude_md_budget import budget_verdict, load_audience_manifest
 
-    _repo_root_for_governance = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], _cwd)[1].strip()
+    _repo_root_for_governance = _toplevel_or_probe(_cwd)
     _audience_manifest = (
         load_audience_manifest(_repo_root_for_governance) if _repo_root_for_governance else []
     )
@@ -2127,6 +2242,10 @@ def _bt_solo_bare_commit_staged_paths(
     index_file = _bt_git_index_file_env(seg_tokens)
     if index_file:
         extra_env = {"GIT_INDEX_FILE": index_file}
+    if extra_env is None:
+        _rows = _staged_rows(cwd)
+        if _rows is not None:
+            return [p for _, p in _rows]
     rc, out = _dc_git_probe._run_git(["diff", "--cached", "--name-only", "--no-renames"], cwd=cwd, extra_env=extra_env)
     if rc != 0:
         _dc_git_probe._record_probe_fail_open(
@@ -2159,17 +2278,23 @@ def _bt_index_only_removals(
     if not staged:
         return []
     cwd = _bt_probe_cwd(seg_tokens, payload)
-    rc, deleted = _dc_git_probe._run_git(
-        ["diff", "--cached", "--diff-filter=D", "--name-only", "--no-renames"], cwd=cwd
-    )
-    if rc != 0 or not deleted.strip():
+    _rows = _staged_rows(cwd)
+    if _rows is not None:
+        deleted_paths = [p for letter, p in _rows if letter == "D"]
+    else:
+        rc, deleted = _dc_git_probe._run_git(
+            ["diff", "--cached", "--diff-filter=D", "--name-only", "--no-renames"], cwd=cwd
+        )
+        if rc != 0 or not deleted.strip():
+            return []
+        deleted_paths = deleted.splitlines()
+    if not deleted_paths:
         return []
-    rc, top = _dc_git_probe._run_git(["rev-parse", "--show-toplevel"], cwd=cwd)
-    if rc != 0 or not top.strip():
+    root = _toplevel_or_probe(cwd)
+    if not root:
         return []
-    root = top.strip()
     return [
-        p for p in deleted.splitlines()
+        p for p in deleted_paths
         if p in staged and os.path.exists(os.path.join(root, p))
     ]
 
@@ -2252,6 +2377,10 @@ def _bt_sweep_all_holds_unverifiable_paths(
     index_file = _bt_git_index_file_env(seg_tokens)
     if index_file:
         extra_env = {"GIT_INDEX_FILE": index_file}
+    if extra_env is None:
+        _rows = _staged_rows(cwd)
+        if _rows:
+            return True
     rc_staged, out_staged = _dc_git_probe._run_git(
         ["diff", "--cached", "--name-only"], cwd=cwd, extra_env=extra_env
     )

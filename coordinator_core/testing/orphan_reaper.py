@@ -49,8 +49,8 @@ NEGATIVE SPEC
       register as a fixture (nothing here is scoped per-test), and is not a
       general process-management utility — one hook, pure helpers under it.
 
-Registration: the repo-root `conftest.py` re-exports `pytest_sessionfinish`
-by name. That is the only registration site — see its own NEGATIVE SPEC
+Registration: the repo-root `conftest.py` defines `pytest_sessionfinish`,
+which delegates to this module's hook. That is the only registration site — see its own NEGATIVE SPEC
 amendment for why `coordinator_core/conftest.py` is deliberately not a
 second one.
 

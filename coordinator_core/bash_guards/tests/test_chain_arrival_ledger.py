@@ -22,6 +22,7 @@ import sys
 
 import pytest
 
+from coordinator_core import machine_profile
 from coordinator_core.bash_guards import chain_arrival_ledger as cal
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
@@ -138,6 +139,11 @@ class TestDispatchWiring:
     def test_arrival_recorded_regardless_of_eventual_deny(self, tmp_path, monkeypatch):
         entry = self._fake_deny_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
+        monkeypatch.setattr(
+            machine_profile,
+            "FLOOR_GUARDS",
+            machine_profile.FLOOR_GUARDS | {"fake-deny-guard"},
+        )
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
 
         payload = self._payload(session_id="sess-wire-deny", agent_id="agent-123", cwd=str(tmp_path))

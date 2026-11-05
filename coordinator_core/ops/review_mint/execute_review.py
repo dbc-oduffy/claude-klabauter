@@ -1115,10 +1115,9 @@ def _reverify_phase(
         f"run_base_sha: {run_base_sha}"
     ).strip()
     agent_opts = {agent_type: {"effort": _REVERIFY_EFFORT}}
-    if agent_type == _REVERIFY_AGENT_TYPE:
-        from coordinator_core.ops.dispatch_emit.emit import resolve_agent_model
+    from coordinator_core.ops.dispatch_emit.emit import resolve_agent_model
 
-        agent_opts[agent_type]["model"] = resolve_agent_model(agent_type)
+    agent_opts[agent_type]["model"] = resolve_agent_model(_REVERIFY_AGENT_TYPE)
     call = _agent_call_literal(
         agent_type,
         prompt,

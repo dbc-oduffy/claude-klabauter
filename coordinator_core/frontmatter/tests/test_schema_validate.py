@@ -4313,7 +4313,12 @@ _QUEUE_SCHEMA_PINS = {
     # HEAD) by bin/claude-klabauter-revendor-schema.py review-findings.
     #   routine pin move to DoE HEAD ef75e5f; local bytes already equal HEAD
     #   (C1 verdict GO)
-    'review-findings': "ef75e5f766a9ab02d3487f74788d54ed8f1a5abd",
+    # Pin moved 2026-11-05 to 56ea0390e26cececdfacbdf89865370f66dc4315 (DoE
+    # 56ea0390e26cececdfacbdf89865370f66dc4315) by bin/claude-klabauter-revendor-
+    # schema.py review-findings.
+    #   add handed-to-em row status + handed_to_em stamp count for ruling-only
+    #   reviewers (claude-klabauter run ask-20261105T214502-ba98e0)
+    'review-findings': "56ea0390e26cececdfacbdf89865370f66dc4315",
     # Moved off _C1_LANDING_SHA 2026-07-27: DoE landed the optional
     # `reviewed_paths` property at x-schema-version 1.1.0 (their 89c24b12d), in
     # response to this repo's canonical-first ask. Re-vendored from that commit;

@@ -94,6 +94,61 @@ def test_real_verdict_and_unowed_leg_do_not_halt():
     assert _run("null", owed=False) is None
 
 
+_REVERIFY_PROGRAM = """
+const _TEST_GUARD = true;
+let _halted = null, _runId = 'r', _testResult = null;
+%s
+%s
+console.log(JSON.stringify(_halted));
+"""
+
+
+def _run_with_reverify(reverify: str | None) -> object:
+    import json
+
+    decl = "" if reverify is None else f"let _reviewReverify = {reverify};"
+    body = _test_verdict_empty_halt_js(_SIZING).replace("TEST_GUARD", "_TEST_GUARD")
+    out = subprocess.run(
+        [shutil.which("node"), "-"], input=_REVERIFY_PROGRAM % (decl, body), capture_output=True, text=True,
+        check=True, **no_console_creationflags(),
+    ).stdout.strip()
+    return json.loads(out)
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "reverify",
+    [
+        "{ status_after: 'pass', failing: [] }",
+        "{ status_after: 'pass' }",
+        "{ status_after: 'pass', failing: ['a::t1'], pre_existing: ['a::t1'] }",
+        "{ status_after: 'pass', failing: ['a::t1'], kept: ['a::t1'] }",
+    ],
+)
+def test_passing_reverify_stands_in_for_an_empty_test_verdict(reverify):
+    assert _run_with_reverify(reverify) is None
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
+@pytest.mark.spawns_process
+@pytest.mark.parametrize(
+    "reverify",
+    [
+        None,
+        "null",
+        "{ status_after: 'fail', failing: ['a::t1'] }",
+        "{ status_after: 'fail', failing: [] }",
+        "{ status_after: null, failing: [] }",
+        "{ status_after: 'indeterminate' }",
+        "{ status_after: 'pass', failing: ['c::t3'], pre_existing: ['a::t1'] }",
+    ],
+)
+def test_failed_or_absent_reverify_still_halts_on_an_empty_test_verdict(reverify):
+    halted = _run_with_reverify(reverify)
+    assert halted and halted["halted"] == "test_verdict_empty"
+
+
 def test_test_verdict_empty_halt_names_the_refire_not_journal_replay():
     js = _test_verdict_empty_halt_js(_SIZING)
     assert "resumeFromRunId" not in js

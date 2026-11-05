@@ -59,7 +59,7 @@ def test_repeat_halt_is_a_research_halt_carrying_the_findings():
 
 def test_old_halt_string_and_emission_unchanged():
     script = _script()
-    assert "reason: ('plan-blitz reported no ready plan' + (((_blitz?.regate ?? _blitz)?.pulled ?? [])" in script
+    assert "('plan-blitz reported no ready plan' + ((_blitz?.regate ?? _blitz)?.pulled ?? [])" in script
     assert ", blitz: _blitz, sizing: _sizingRel, run_id: _runId };" in script
     assert script.index("plan-blitz reported no ready plan") < script.index("if (_replanCapped && !_pullSplit && !_halted.next_action)")
 

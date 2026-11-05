@@ -6,15 +6,16 @@ PreToolUse(Workflow) hook (`coordinator_core.hooks.submit_engine_ask`) emits the
 from those args and rewrites the call to fire it, so the call the EM makes IS the running
 Workflow: it sizes, plans, executes, reviews, documents and commits in-run, and its completion
 is the EM's one wake. Guards that stop an EM from working by hand name this and nothing else,
-so no guard leaves the next dispatch to the EM's judgment. Leaf module: no imports.
+so no guard leaves the next dispatch to the EM's judgment. Leaf module: stdlib plus `temp_layout` only.
 """
 
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Optional
+
+from coordinator_core.temp_layout import managed_tempdir
 
 #: Routes a single warp run carries end to end (the ask script's XS, S and M+ arms).
 FIRE_ROUTES = frozenset({"dispatch", "spec-dispatch", "plan"})
@@ -50,7 +51,7 @@ NAG_REPEAT_PREFIX = "[engine-ask nag"
 
 
 def _counter_dir() -> Path:
-    return Path(tempfile.gettempdir()) / "coordinator-engine-ask-nag"
+    return managed_tempdir() / "coordinator-engine-ask-nag"
 
 
 def _bump(session_id: str, state_dir: Optional[Path]) -> int:

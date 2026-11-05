@@ -451,6 +451,30 @@ def test_provision_deps_guarded_unsatisfied_provisions_engine_site_returns_own_i
     assert "refusing" not in captured.err
 
 
+@pytest.mark.parametrize("prior,expect_line", [((2, 7), True), (None, False), (tuple(sys.version_info[:2]), False)])
+def test_provision_deps_guarded_names_the_minor_drift_only_when_it_happened(
+    setup_mod, monkeypatch, tmp_path, capsys, prior, expect_line
+):
+    from coordinator_core.install import engine_interpreter
+
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    _stub_candidates(setup_mod, monkeypatch, sys.executable)
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+    monkeypatch.setattr(engine_interpreter, "stamp", lambda home=None: prior)
+    _stub_engine_site_ensure(monkeypatch)
+    _stub_editable_finder_conversion(setup_mod, monkeypatch)
+
+    setup_mod.provision_deps(pyproject_dir, sys.executable)
+
+    now = tuple(sys.version_info[:2])
+    line = f"engine-site re-provisioned: python 2.7 -> {now[0]}.{now[1]}"
+    assert (line in capsys.readouterr().out) is expect_line
+
+
 def test_provision_deps_guarded_engine_site_failure_exits_1(setup_mod, monkeypatch, tmp_path, capsys):
     """A failed engine-site install is a genuine failure (1), never the 96 refusal."""
     pyproject_dir = tmp_path / "root"
@@ -1161,7 +1185,8 @@ def _stub_main_beyond_provisioning(setup_mod, monkeypatch, tmp_path):
         "seed_gem_cross_repo_commit_default", "repair_status_lines",
         "refresh_group_em_home", "migrate_group_em_inbox",
         "apply_transcript_retention_default", "install_global_doctrine_files",
-        "install_precompiled_bytecode", "install_general_work_ensure",
+        "install_precompiled_bytecode", "install_general_work_ensure", "install_box_capability",
+        "install_box_identity",
         "install_repo_discovery", "install_record_receipt", "install_write_hook_plane_verdict",
     ):
         monkeypatch.setattr(setup_mod, name, lambda *a, **k: None)
@@ -4052,11 +4077,13 @@ def test_verify_settings_home_fails_when_the_forwarder_writer_failed(
     writer reported failures: an older image at the path satisfies presence
     for a name the writer failed to refresh."""
     from coordinator_core import _settings_home
+    from coordinator_core.group_em.box_registry import ensure_identity
     from coordinator_core.install import settings_home_report
 
     monkeypatch.setattr(_settings_home, "settings_home", lambda: tmp_path)
     monkeypatch.setattr(settings_home_report, "check_settings_home", lambda *_a: _CompleteReport())
     monkeypatch.setattr(settings_home_report, "format_report_lines", lambda _r: [])
+    ensure_identity(tmp_path)
 
     setup_mod.install_verify_settings_home(
         Path(__file__).resolve().parent.parent, forwarders_failed=forwarders_failed
@@ -4066,6 +4093,23 @@ def test_verify_settings_home_fails_when_the_forwarder_writer_failed(
     assert ("PASS [settings-home] complete" in captured.out) is not forwarders_failed
     assert ("FAIL bin/ forwarders" in captured.out) is forwarders_failed
     assert ("is incomplete" in captured.err) is forwarders_failed
+
+
+def test_verify_settings_home_refuses_pass_without_box_identity(setup_mod, tmp_path, monkeypatch, capsys):
+    from coordinator_core import _settings_home
+    from coordinator_core.group_em import box_registry  # noqa: F401  (bind settings_home before the patch)
+    from coordinator_core.install import settings_home_report
+
+    monkeypatch.setattr(_settings_home, "settings_home", lambda: tmp_path)
+    monkeypatch.setattr(settings_home_report, "check_settings_home", lambda *_a: _CompleteReport())
+    monkeypatch.setattr(settings_home_report, "format_report_lines", lambda _r: [])
+
+    setup_mod.install_verify_settings_home(Path(__file__).resolve().parent.parent)
+
+    captured = capsys.readouterr()
+    assert "PASS [settings-home] complete" not in captured.out
+    assert "FAIL box identity" in captured.out and "doctor --fix" in captured.out
+    assert "is incomplete" in captured.err
 
 
 def _klabauter_setup_run(setup_mod, tmp_path, monkeypatch, capsys, with_claude_klabauter):
@@ -4418,6 +4462,33 @@ def test_handle_test_tooling_with_flag_installs_declared_specs(setup_mod, monkey
 
     assert installs == [("/engine/python", ["pytest>=8.0", "pytest-timeout>=2.3"])]
     assert "pip install" not in capsys.readouterr().out
+
+
+def test_install_box_identity_mints_once_and_never_rewrites(setup_mod, tmp_path, monkeypatch, capsys):
+    from coordinator_core.group_em import box_registry
+    from coordinator_core.group_em.box_registry import local_box_id
+
+    monkeypatch.setattr(box_registry, "settings_home", lambda: tmp_path)
+    claude_klabauter_root = Path(__file__).resolve().parent.parent
+    setup_mod.install_box_identity(claude_klabauter_root)
+    minted = local_box_id(tmp_path)
+    assert minted.startswith("box-")
+    assert minted in capsys.readouterr().out
+
+    setup_mod.install_box_identity(claude_klabauter_root)
+    assert local_box_id(tmp_path) == minted
+
+
+def test_install_box_identity_failure_is_advisory_naming_doctor_fix(setup_mod, monkeypatch, capsys):
+    import coordinator_core.group_em.box_registry as box_registry
+
+    def _boom(home=None):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(box_registry, "ensure_identity", _boom)
+    setup_mod.install_box_identity(Path(__file__).resolve().parent.parent)
+    err = capsys.readouterr().err
+    assert "ADVISORY" in err and "doctor --fix" in err
 
 
 def test_handle_test_tooling_satisfied_prints_no_pip_line(setup_mod, monkeypatch, tmp_path, capsys):
