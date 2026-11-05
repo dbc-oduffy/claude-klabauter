@@ -140,11 +140,12 @@ def _staged_unmarked_run(root: Path, run_id: str, sizing_rel: str) -> None:
     (rd / "run.json").write_text(json.dumps({"sizing_rel": sizing_rel}), encoding="utf-8")
 
 
-def test_a_refire_is_not_denied_by_its_own_staged_run_without_halted_json(tmp_path):
+def test_a_refire_is_not_denied_by_its_own_staged_run_without_halted_json(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     sizing = "state/sizings/2026-11-02-own.yaml"
     own = "warp-2026-11-02-own-20261102T183622-f3eaab"
     _staged_unmarked_run(tmp_path, own, sizing)
+    _workflow_record(monkeypatch, own)
     _live(tmp_path, {own: {"pkg/mod.py"}, "run-other": {"x.py"}})
     tool_input = {"args": {"writes": ["pkg/mod.py"]}}
     assert mod._live_write_overlap_deny(tmp_path, tool_input, {}, sizing) is None
@@ -178,7 +179,32 @@ def test_a_refire_citing_another_sizing_record_of_the_deliverable_is_not_denied_
     assert mod._live_write_overlap_deny(tmp_path, tool_input, older_doc, old) is None
 
 
-def test_a_staged_run_of_another_deliverable_or_a_running_one_still_denies(tmp_path):
+def _workflow_record(monkeypatch, run_id: str) -> None:
+    """A live token record for `run_id` whose harness evidence shows no end."""
+    from coordinator_core import warp_live
+
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([{"run_id": run_id, "minted_at": 1.0}]))
+    monkeypatch.setattr(warp_live, "run_ended_on_evidence", lambda root, rec: False)
+
+
+def test_a_staged_run_of_another_deliverable_with_no_workflow_holds_no_claim(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    (tmp_path / ".git").mkdir()
+    other = _sizing(tmp_path, "2026-11-02-other", "dlv-y")
+    new = _sizing(tmp_path, "2026-11-05-new", "dlv-x")
+    stale = "ask-20261105T155602-6cccf1"
+    _staged_unmarked_run(tmp_path, stale, other)
+    _live(tmp_path, {stale: {"pkg/mod.py"}})
+    tool_input = {"args": {"writes": ["pkg/mod.py"]}}
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([]))
+    assert mod._live_write_overlap_deny(tmp_path, tool_input, {"deliverable_id": "dlv-x"}, new) is None
+    _workflow_record(monkeypatch, stale)
+    why = mod._live_write_overlap_deny(tmp_path, tool_input, {"deliverable_id": "dlv-x"}, new)
+    assert why and f"Run {stale} is live and writes" in why
+
+
+def test_a_staged_run_of_another_deliverable_or_a_running_one_still_denies(tmp_path, monkeypatch):
     import json
 
     (tmp_path / ".git").mkdir()
@@ -189,6 +215,7 @@ def test_a_staged_run_of_another_deliverable_or_a_running_one_still_denies(tmp_p
     peer = "warp-2026-11-02-other-20261102T183622-f3eaab"
     _staged_unmarked_run(tmp_path, peer, other)
     _live(tmp_path, {peer: {"pkg/mod.py"}})
+    _workflow_record(monkeypatch, peer)
     why = mod._live_write_overlap_deny(tmp_path, tool_input, {"deliverable_id": "dlv-x"}, new)
     assert why and peer in why
     mine = "warp-2026-11-02-own-20261102T190000-bbbbbb"
@@ -393,8 +420,9 @@ def test_a_superseded_run_with_a_halted_successor_does_not_block_a_submission(tm
     assert len(seen) == 1
 
 
-def test_a_superseded_run_with_a_live_successor_still_blocks(tmp_path):
+def test_a_superseded_run_with_a_live_successor_still_blocks(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
+    _workflow_record(monkeypatch, OLD_RUN)
     _stage_run(tmp_path, OLD_RUN, "staged")
     _stage_run(tmp_path, NEW_RUN, "running")
     _live(tmp_path, {OLD_RUN: {"pkg/mod.py"}})
@@ -402,8 +430,9 @@ def test_a_superseded_run_with_a_live_successor_still_blocks(tmp_path):
     assert why and OLD_RUN in why
 
 
-def test_a_stale_orphaned_blocker_names_the_adopt_op(tmp_path):
+def test_a_stale_orphaned_blocker_names_the_adopt_op(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
+    _workflow_record(monkeypatch, OLD_RUN)
     _stage_run(tmp_path, OLD_RUN, "staged")
     _live(tmp_path, {OLD_RUN: {"pkg/mod.py"}})
     why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})

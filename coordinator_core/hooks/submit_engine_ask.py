@@ -1761,6 +1761,26 @@ def _ended_on_evidence(root: Path, run_id: str) -> bool:
     return False
 
 
+def _staged_without_workflow(root: Path, run_id: str) -> bool:
+    """True when `run_id` sits at run-stage `staged` and no live token record names it: no workflow
+    runs it, so its stage file holds no write claim. A record present defers to `_ended_on_evidence`."""
+    import json
+
+    from coordinator_core import warp_live
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+
+    if not safe_id(run_id):
+        return False
+    try:
+        stage = json.loads((root / RECORD_DIR_ROOT / run_id / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(stage, dict) or stage.get("stage") != "staged":
+        return False
+    return not any(record.get("run_id") == run_id for record in warp_live._token_records(root))
+
+
 def _sibling_record_run_stopped(root: Path, run_id: str, deliverable_id: str) -> bool:
     """True when `run_id` stopped between stages (run-stage `staged`) bound to another sizing record of
     `deliverable_id`: a refire citing a different record of the deliverable resumes that run's footprint.
@@ -1862,7 +1882,7 @@ def _live_write_overlap_deny(
         def self_ended(rid: str) -> bool:
             return bool(
                 _halt_marker_ended(root, rid) or _stage_halted(root, rid) or _status_of(root, rid) in ("halted", "landed")
-                or _ended_on_evidence(root, rid)
+                or _ended_on_evidence(root, rid) or _staged_without_workflow(root, rid)
                 or (isinstance(deliverable, str) and _sibling_record_run_stopped(root, rid, deliverable))
             )
 

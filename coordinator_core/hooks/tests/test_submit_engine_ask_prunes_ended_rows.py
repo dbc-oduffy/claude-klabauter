@@ -45,7 +45,11 @@ def test_superseded_landed_and_closed_rows_are_dropped(tmp_path):
     assert not _held(tmp_path)
 
 
-def test_a_live_run_still_refuses_and_keeps_its_row(tmp_path):
+def test_a_live_run_still_refuses_and_keeps_its_row(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([{"run_id": "run-live", "minted_at": 1.0}]))
+    monkeypatch.setattr(warp_live, "run_ended_on_evidence", lambda root, rec: False)
     (tmp_path / ".git").mkdir()
     _row(tmp_path, "run-live")
     rd = tmp_path / "state" / "warp" / "run-live"

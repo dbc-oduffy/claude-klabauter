@@ -2323,8 +2323,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "955ee968fb0ab592923e02af3fddbdebd10b903e",
-    "coordinator_core/_engine_stamp": "b7801d47c1e23d64da3a6035377b3cf062efe47e",
+    "coordinator_core/_engine_published_at": "71bb2da7c252b91643a945941b8b210c10576cb5",
+    "coordinator_core/_engine_stamp": "07de8933a47bf161ebf543ea8509a0e2e1c12eca",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -4393,7 +4393,7 @@
     "coordinator_core/hooks/subagent_zero_tool_use_resolve.py": "137bc269e976f7a2c2a58a31d2cb3e77ce48fc6b",
     "coordinator_core/hooks/subagent_zero_tool_use_surface.py": "24a7b8df6f82b4727eb85fe334a05d3490b65285",
     "coordinator_core/hooks/submit_bug_blitz.py": "a0a04ad35d9e7ea5832e3952f8abdb233191a24f",
-    "coordinator_core/hooks/submit_engine_ask.py": "e6d1dcd336eb695e2827d3be249e8807084f5e57",
+    "coordinator_core/hooks/submit_engine_ask.py": "d303740e63bdfdeddd83de0940af88bbd2bdba1e",
     "coordinator_core/hooks/suggest_sonnet_research.py": "164e1eee86c32df38894a53ed42dfc805f76842e",
     "coordinator_core/hooks/support/__init__.py": "93b1799d1ad2e6d4712c9b10fca16f242d46bdd9",
     "coordinator_core/hooks/support/bin_impl_drift.py": "8ad2ef312ecf588f2e24f85e852c141aeb158462",
@@ -4601,14 +4601,14 @@
     "coordinator_core/hooks/tests/test_submit_engine_ask_held_slice.py": "9fd2a44cf062d1f8fcb12b1a95344626db52402a",
     "coordinator_core/hooks/tests/test_submit_engine_ask_io_stall_bound.py": "13c8c61d157c0b90d08bcba20394329d745f92bb",
     "coordinator_core/hooks/tests/test_submit_engine_ask_landed_predecessor.py": "83cbdacb215239a25c4e349c177d5a5ce32adb79",
-    "coordinator_core/hooks/tests/test_submit_engine_ask_live_overlap.py": "aa768f85547563be4cdde3dafed417afd883015a",
+    "coordinator_core/hooks/tests/test_submit_engine_ask_live_overlap.py": "bab34629e965dfbb3f1aec368b4ca3fc2e6ac8d4",
     "coordinator_core/hooks/tests/test_submit_engine_ask_mint_or_refuse.py": "815d86fab0e9fe2b107ee38b2c3b6a4a2d96ce41",
     "coordinator_core/hooks/tests/test_submit_engine_ask_minted_parent_reuse.py": "3579e407b6f1b5f5c977da36f5e54e7d9ffabf0e",
     "coordinator_core/hooks/tests/test_submit_engine_ask_minted_stage_pending.py": "38c709df6bd51f5cb95cddf38a12dbb1d85c9133",
     "coordinator_core/hooks/tests/test_submit_engine_ask_multi_premint.py": "1b69038a66db6c072b33a86c23f516ba045dd912",
     "coordinator_core/hooks/tests/test_submit_engine_ask_overran_no_phantom.py": "d9e1267271fdcdbf1fa790280425b733aa995149",
     "coordinator_core/hooks/tests/test_submit_engine_ask_plan_blitz_halt_refire.py": "16f98dacac9efac94724ea0ab6f60ce54c19e1b8",
-    "coordinator_core/hooks/tests/test_submit_engine_ask_prunes_ended_rows.py": "5b83812e4660e40e63b17e9a1c18eb974a7d28d4",
+    "coordinator_core/hooks/tests/test_submit_engine_ask_prunes_ended_rows.py": "08c50d763d8699e97c8131e6c9ab16d724501441",
     "coordinator_core/hooks/tests/test_submit_engine_ask_real_emit.py": "131752bf0964fa97c9cc2886b59efebb568d91a6",
     "coordinator_core/hooks/tests/test_submit_engine_ask_research_sizing.py": "6563a29738625416476d84c3f8b6d71b1c545aa3",
     "coordinator_core/hooks/tests/test_submit_engine_ask_reserved_id_resume.py": "87e0a2a1f087aafd060d70dd7e17a8d86fcd2482",
@@ -11132,5 +11132,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "6ade6bcecb80f2792031cb4106f7755ac3534e39"
+  "source_head": "bf87d28a69947be3992396f10ba174a721fbef10"
 }
