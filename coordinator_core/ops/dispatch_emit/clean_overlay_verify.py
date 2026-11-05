@@ -21,6 +21,7 @@ from typing import Optional, Sequence
 
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+from coordinator_core.ops.dispatch_emit.test_interpreter import resolve_targeted_test_python
 from coordinator_core.win_portability import no_console_creationflags
 
 VERDICT_FILE = "overlay-verdict.json"
@@ -57,6 +58,13 @@ def _run(argv: list, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     )
 
 
+def _gate_python(root: Path) -> str:
+    """The interpreter the repo's test gate pins (same ladder as `retest_targeted`), read from the live
+    repo's coordinator.local.md; `sys.executable` when none is pinned or the pin does not resolve."""
+    pin = resolve_targeted_test_python(root)
+    return pin.command if pin.command and pin.defect is None else sys.executable
+
+
 def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) -> OverlayVerdict:
     """Clone `root` shared into the run's overlay dir, check out `candidate_sha` detached, run pytest over
     `seeds` there, and reap the overlay on every exit path. Never raises: a setup failure, a timeout or a
@@ -74,7 +82,7 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
         out = _run(["git", "checkout", "--detach", "-q", candidate_sha], dest, SETUP_TIMEOUT_S)
         if out.returncode:
             return OverlayVerdict("inconclusive", f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}", seeds)
-        ran = _run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", *seeds], dest, TEST_TIMEOUT_S)
+        ran = _run([_gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", *seeds], dest, TEST_TIMEOUT_S)
     except (OSError, subprocess.SubprocessError) as exc:
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds)
     finally:

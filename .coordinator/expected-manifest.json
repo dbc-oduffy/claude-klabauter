@@ -2323,8 +2323,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "71bb2da7c252b91643a945941b8b210c10576cb5",
-    "coordinator_core/_engine_stamp": "07de8933a47bf161ebf543ea8509a0e2e1c12eca",
+    "coordinator_core/_engine_published_at": "e8e4744b635ec79fbb89be63b94e9a489a7fc603",
+    "coordinator_core/_engine_stamp": "1c3d2070a030f4fb2d9de2ff497129bd7257b78d",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -5354,7 +5354,7 @@
     "coordinator_core/ops/dispatch_emit/chatty.py": "48fb99ef684696d98a96c2be4ad636fb06d41007",
     "coordinator_core/ops/dispatch_emit/checkpoint_stamp.py": "2396141804c9f71f1386fc9cde2c8f8bd8d175d6",
     "coordinator_core/ops/dispatch_emit/chunk_shaper.py": "047ee1bd652786257011e6e278757daee949f32b",
-    "coordinator_core/ops/dispatch_emit/clean_overlay_verify.py": "f874085d854a8784b6b317de4354e9e4acf5d78d",
+    "coordinator_core/ops/dispatch_emit/clean_overlay_verify.py": "2a0dffd2dd5052a7f1c1cbf9303106e25add5dcd",
     "coordinator_core/ops/dispatch_emit/cli.py": "fcf9296a6a79c86846242c63071a5b7bb728401a",
     "coordinator_core/ops/dispatch_emit/close_without_script.py": "19c5aaff5cf8c829dcecfc883fb9627bae772fdc",
     "coordinator_core/ops/dispatch_emit/cloud_spawn_brief.py": "aaeb10a599c5847969407f00b7341ed6bf54839f",
@@ -6323,7 +6323,7 @@
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_ask_stage_terminal.py": "02ebd96096f8f010f8b7be56a25e5aea7f8d13e9",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_bounded_waits.py": "fc90e82a23f05f6757993af19c308528fae7a1d7",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_cas_retry.py": "9ca0562cd342485f8b5174dbad377f20fdc1a3a6",
-    "coordinator_core/ops/dispatch_emit/tests/test_land_run_clean_overlay_verify.py": "8f97b2b313e9c66516436ee919ba4b034e3f98fe",
+    "coordinator_core/ops/dispatch_emit/tests/test_land_run_clean_overlay_verify.py": "e66193af656af4d4cb81700407fb2834f872f4eb",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_close_job_run_base_fallback.py": "7172dbb8b9399aea7b5519da08cebcf0be92dc5a",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_contract.py": "aa8b4651539554885a15ca13bde22da04a332fdd",
     "coordinator_core/ops/dispatch_emit/tests/test_land_run_credited_rows_land.py": "bc2cdf1be3ddd9dee7778643e3082da9d8c8f6d0",
@@ -11132,5 +11132,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "bf87d28a69947be3992396f10ba174a721fbef10"
+  "source_head": "41193368c500c556d661b0243546017e6d806a39"
 }

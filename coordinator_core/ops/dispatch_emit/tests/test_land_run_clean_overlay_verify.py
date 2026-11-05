@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 
 import pytest
@@ -60,6 +61,37 @@ def test_a_red_in_the_candidate_is_red_even_when_the_worktree_is_clean(tmp_path)
 
     assert out.red, out
     assert not cov.overlay_root(root, "run1").exists()
+
+
+def _pytest_argv_head(monkeypatch, root, head, pin):
+    if pin is not None:
+        (root / "coordinator.local.md").write_text(f'---\ntargeted_test_python: "{pin}"\n---\n', encoding="utf-8")
+    seen = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout):
+        seen.append(argv[0])
+        return real([sys.executable, *argv[1:]] if "pytest" in argv else argv, cwd, timeout)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    cov.verify(root, "run1", head, [READER])
+    return seen[-1]
+
+
+def test_overlay_runs_pytest_under_the_repo_pinned_interpreter(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    shim = tmp_path / "pins" / "python3.99"
+    shim.parent.mkdir()
+    shim.write_text("#!/bin/sh\n", encoding="utf-8")
+    shim.chmod(0o755)
+
+    assert _pytest_argv_head(monkeypatch, root, head, shim) == str(shim)
+
+
+def test_overlay_falls_back_to_sys_executable_when_no_pin_or_the_pin_is_unresolved(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+    assert _pytest_argv_head(monkeypatch, root, head, None) == sys.executable
+    assert _pytest_argv_head(monkeypatch, root, head, tmp_path / "missing" / "python3.99") == sys.executable
 
 
 def test_no_seeds_and_an_unreachable_candidate_are_inconclusive_never_red(tmp_path):
