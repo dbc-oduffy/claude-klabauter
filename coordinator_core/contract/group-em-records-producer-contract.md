@@ -36,14 +36,16 @@ record is on file. Producer: `coordinator_core/group_em/standing.py`.
 
 ## 4. Box hold — `<settings-home>/state/group-em/box/hold.json`
 
-Keys: `set_by_session`, `reason`, `set_at`, `expires_at` (epoch seconds). The reader treats
+Keys: `set_by_session`, `reason`, `set_at`, `expires_at` (epoch seconds), `box_id`
+(additive; readers `.get` it, a missing value means `local`). The reader treats
 absent, expired or malformed as no hold; the effective deadline is
 `min(expires_at, set_at + 1800)`.
 
 ## 5. Suite grants — `<settings-home>/state/group-em/suite-grants/<issuer>/<grantee>.json`
 
 Keys: `schema_version`, `kind` (`group-em-suite-grant`), `issuer_session_id`, `issuer_name`,
-`grantee_session_id`, `grantee_name`, `scope_root`, `issued_at`, `expires_at`, `note`.
+`grantee_session_id`, `grantee_name`, `scope_root`, `issued_at`, `expires_at`, `note`, `box_id`
+(additive; missing or `local` is valid on any box, any other value must equal this box's identity).
 The record authorizes the Tier-U/F suite gate only.
 
 ## 6. Watch heartbeat — `<repo>/state/group-em-watch.json`

@@ -161,3 +161,60 @@ def test_a_mid_stage_run_still_refuses_before_anything_is_copied(tmp_path, monke
     assert rc == 1 and "example-game-repo ask-be779d" in err
     assert env.names("land_diff", "stop") == []
     _assert_released(env)
+
+
+def _spy_slot(env, monkeypatch):
+    """Record the tokens `acquire_slot` hands out so a test proves a slot was really taken."""
+    from coordinator_core.percolate import publish_slot
+
+    taken: "list[str]" = []
+    real = publish_slot.acquire_slot
+
+    def acquire(*a, **k):
+        token = real(*a, **k)
+        taken.append(token)
+        return token
+
+    monkeypatch.setattr(publish_slot, "acquire_slot", acquire)
+    return taken
+
+
+def test_warm_handover_refusal_releases_the_publish_slot(tmp_path, monkeypatch):
+    from coordinator_core.percolate import publish_lease, publish_slot
+    from coordinator_core.warm import live_runs
+
+    monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
+    env = _q._setup(tmp_path, monkeypatch, True)
+    taken = _spy_slot(env, monkeypatch)
+    env.live_runs[:] = [live_runs.LiveRun("example-game-repo", "ask-be779d", "implement", "2026-10-31T22:46:00Z")]
+    env.leg_in_flight = True
+    rc, err = _q._run(env)
+    assert rc == 1 and "not copying" in err, err
+    assert len(taken) == 1
+    assert publish_lease.read(env.repo, publish_slot.SLOT_REMOTE) is None
+
+
+def test_a_release_that_returns_false_is_reported(tmp_path, monkeypatch):
+    from coordinator_core.percolate import publish_slot
+
+    env = _q._setup(tmp_path, monkeypatch, True)
+    taken = _spy_slot(env, monkeypatch)
+    monkeypatch.setattr(publish_slot, "release_slot", lambda root, token: False)
+    rc, err = _q._run(env)
+    assert rc == 0, err
+    assert taken and f"publish slot {taken[0]}" in err and "not released" in err
+
+
+def test_a_release_that_raises_is_reported_and_keeps_the_exit_code(tmp_path, monkeypatch):
+    from coordinator_core.percolate import publish_slot
+
+    env = _q._setup(tmp_path, monkeypatch, True)
+    taken = _spy_slot(env, monkeypatch)
+
+    def boom(root, token):
+        raise RuntimeError("push rejected")
+
+    monkeypatch.setattr(publish_slot, "release_slot", boom)
+    rc, err = _q._run(env)
+    assert rc == 0, err
+    assert taken and "not released" in err and "push rejected" in err

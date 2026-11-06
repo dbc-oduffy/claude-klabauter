@@ -3230,6 +3230,99 @@ def _run_probe_root_channels_reconciled(claude_klabauter_root: Path | None) -> _
         )
 
 
+_PUBLISH_MIRROR_CLEAN_PROBE = "claude-klabauter.publish.mirror_clean"
+
+
+def _run_probe_publish_mirror_clean(claude_klabauter_root: Path | None) -> _ProbeResult:
+    """Probe claude-klabauter.publish.mirror_clean -- does the registered klabauter publish
+    mirror clone carry uncommitted changes (hand-edits to the published engine)?
+
+    Reads `publish.mirrors.claude_klabauter.path` and runs one
+    `git status --porcelain` on that tree.
+
+    Verdict shape:
+      - No mirror registered, or the path is not a directory -> INFO, skipped.
+      - Clean tree -> PASS.
+      - Any modified/untracked path -> DEGRADED, naming the files.
+      - git cannot run or errors -> INFO, skipped.
+
+    Negative-spec: report-only -- never resets, stashes, cleans or switches the clone.
+    """
+    try:
+        from coordinator_core.machine_resolver import registry_get
+
+        raw = registry_get("publish.mirrors.claude_klabauter.path")
+        if not raw:
+            return _ProbeResult(
+                probe=_PUBLISH_MIRROR_CLEAN_PROBE,
+                status=_INFO,
+                detail="publish.mirrors.claude_klabauter.path is not registered; nothing to check.",
+                remediation="—",
+                required=False,
+                skipped=True,
+            )
+        mirror = Path(str(raw)).expanduser()
+        if not mirror.is_dir():
+            return _ProbeResult(
+                probe=_PUBLISH_MIRROR_CLEAN_PROBE,
+                status=_INFO,
+                detail=f"publish mirror path {mirror} is not a directory; nothing to check.",
+                remediation="Re-run python3 scripts/setup.py, or correct publish.mirrors.claude_klabauter.path.",
+                required=False,
+                skipped=True,
+            )
+        proc = subprocess.run(
+            ["git", "--no-optional-locks", "-C", str(mirror), "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode != 0:
+            return _ProbeResult(
+                probe=_PUBLISH_MIRROR_CLEAN_PROBE,
+                status=_INFO,
+                detail=f"git status failed in {mirror}: {proc.stderr.strip()[:200]}",
+                remediation="Confirm the path is a git clone, then re-run the probe.",
+                required=False,
+                skipped=True,
+            )
+        dirty = [line[3:] for line in proc.stdout.splitlines() if line.strip()]
+        data = {"path": str(mirror), "dirty": dirty}
+        if not dirty:
+            return _ProbeResult(
+                probe=_PUBLISH_MIRROR_CLEAN_PROBE,
+                status=_PASS,
+                detail=f"publish mirror {mirror} has no uncommitted changes.",
+                remediation="—",
+                required=False,
+                data=data,
+            )
+        return _ProbeResult(
+            probe=_PUBLISH_MIRROR_CLEAN_PROBE,
+            status=_DEGRADED,
+            detail=(
+                f"publish mirror {mirror} has {len(dirty)} uncommitted path(s) "
+                f"(hand-edits to the published engine): {_capped_join(dirty)}"
+            ),
+            remediation=(
+                f"Review with git -C {mirror} status; port intended edits into claude-klabauter source, "
+                "then restore the clone. This probe never modifies it."
+            ),
+            required=False,
+            data=data,
+        )
+    except Exception as exc:
+        return _ProbeResult(
+            probe=_PUBLISH_MIRROR_CLEAN_PROBE,
+            status=_INFO,
+            detail=f"Unexpected error in publish mirror cleanliness probe: {type(exc).__name__}: {exc}",
+            remediation="Re-run the probe after investigating the error.",
+            required=False,
+            skipped=True,
+        )
+
+
 _ROOT_POINTER_PROBE = "claude-klabauter.root.pointer"
 
 
@@ -5738,6 +5831,7 @@ def run_probes(
     _add(_ROOT_POINTER_PROBE, _run_probe_root_pointer, claude_klabauter_root)
     _add(_MACHINE_PROFILE_PROBE, _run_probe_machine_profile, claude_klabauter_root)
     _add(_ROOT_CHANNELS_PROBE, _run_probe_root_channels_reconciled, claude_klabauter_root)
+    _add(_PUBLISH_MIRROR_CLEAN_PROBE, _run_probe_publish_mirror_clean, claude_klabauter_root)
     _add(_PUBLISH_PROVENANCE_PROBE, _run_probe_publish_provenance, claude_klabauter_root)
     _add(_ENGINE_TARGET_ROLLOUT_PROBE, _run_probe_engine_target_rollout)
     _add(_INVOKE_LATENCY_PROBE, _run_probe_invoke_latency, claude_klabauter_root)

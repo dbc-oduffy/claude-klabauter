@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.git.run import run_git
@@ -259,7 +259,8 @@ def measure(runs: int = DEFAULT_RUNS, asks: int | None = None) -> dict:
         root = scratch / "repo"
         root.mkdir()
         build_fixture(root)
-        return {shape: measure_shape(root, shape, runs) for shape in shapes}
+        with fixture_settings_home(scratch):
+            return {shape: measure_shape(root, shape, runs) for shape in shapes}
     finally:
         rmtree_or_raise(scratch, label="submit-budget-bench")
 

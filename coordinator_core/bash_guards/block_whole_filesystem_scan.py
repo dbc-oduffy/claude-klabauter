@@ -241,12 +241,12 @@ def _huge_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Any
             return _record(
                 f"BLOCKED: `{toks[0]}` over {target} walks the UE engine tree and floods the file cache.",
                 " Use project_engine_type_hierarchy or project_cpp_symbol.",
-                AdaptableOffer(template="example-retrieval-repo engine tool for the symbol", what_to_adapt="the symbol"),
+                AdaptableOffer(template="the engine tool for the symbol", what_to_adapt="the symbol"),
             )
         if kind == "scratch":
             return _record(
                 f"BLOCKED: `{toks[0]}` over scratch root {target} reads every run's output and floods the file cache.",
-                " Scope it to one run dir, e.g. scratch/<run>; for content lookups use example-retrieval-repo (project_semantic_search).",
+                " Scope it to one run dir, e.g. scratch/<run>; for content lookups use project_semantic_search.",
                 AdaptableOffer(template="scan one scratch run dir", what_to_adapt="the run dir"),
             )
     return None
@@ -268,9 +268,9 @@ def _offence(text: str, cwd: Optional[str] = None) -> Any:
                 return _record(
                     f"BLOCKED: `{toks[0]} {root}` is a whole-filesystem scan: it walks every mounted "
                     "drive and pins the box.",
-                    " Scope it to a repo or engine directory; for content lookups use example-retrieval-repo (project_semantic_search).",
+                    " Scope it to a repo or engine directory; for content lookups use project_semantic_search.",
                     AdaptableOffer(
-                        template="example-retrieval-repo project_semantic_search, or scan a repo or engine directory",
+                        template="project_semantic_search, or scan a repo or engine directory",
                         what_to_adapt="the query or scan root",
                     ),
                 )

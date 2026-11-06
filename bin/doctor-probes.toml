@@ -65,6 +65,19 @@ severity_if_fail = "degraded"
 remediation = "Run python3 -m coordinator_core.root_channel_reconcile to list every channel and the path it names, then correct the one that is wrong"
 
 [[probe]]
+id = "claude-klabauter.publish.mirror_clean"
+cluster = "registry"
+weight = "cheap"
+interactivity = "assert"
+fix = "none (a hand-edit to the published engine is either already in source or must be landed there first -- which is an operator decision)"
+symptom_keywords = ["publish mirror dirty", "hand-edit to published engine", "klabauter clone uncommitted changes", "publish.mirrors.claude_klabauter.path"]
+triage = true
+body = "bin/claude-klabauter-doctor-probe.py:_run_probe_publish_mirror_clean"
+required = false
+severity_if_fail = "degraded"
+remediation = "Land each listed change in claude-klabauter source, then git restore it in the mirror clone; the next publish carries it"
+
+[[probe]]
 id = "claude-klabauter.registry.machine_profile"
 cluster = "registry"
 weight = "cheap"

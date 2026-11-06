@@ -28,10 +28,10 @@ REPLACED_EXTRA_KEYS = {
 ENTRY_EVIDENCE_PENDING_KEYS = {"status", "prompt_id", "claimed_at"}
 WHO_EXTRA_KEYS = {"live", "live_reason", "live_state", "entry_status"}
 STANDING_EXTRA_KEYS = {"standing"}
-HOLD_KEYS = {"set_by_session", "reason", "set_at", "expires_at"}
+HOLD_KEYS = {"set_by_session", "reason", "set_at", "expires_at", "box_id"}
 SUITE_GRANT_KEYS = {
     "schema_version", "kind", "issuer_session_id", "issuer_name", "grantee_session_id",
-    "grantee_name", "scope_root", "issued_at", "expires_at", "note",
+    "grantee_name", "scope_root", "issued_at", "expires_at", "note", "box_id",
 }
 
 

@@ -1793,7 +1793,9 @@ _PRODUCTION_PATH_CLAUSE = (
     " When the ask asks to prove a behaviour holds, or names a production entry point or caller, "
     "drive that production entry point end-to-end, from a foreign cwd (not the repo root) where cwd "
     "matters. Verification that exercises only route-authored test fixtures for such an ask does not "
-    "prove the criterion: report it as not proving the criterion, never as met."
+    "prove the criterion: report it as not proving the criterion, never as met. "
+    "Never write the environment (os.environ or a child env) to a file or reply; a probe's files go "
+    "under the run's scratch directory, never the target repo, and are deleted before you return."
 )
 _JUDGE_PATH_CLAUSE = (
     "\n\nThe plan_path below is the plan, or on the XS route (no plan is authored) the sizing: "

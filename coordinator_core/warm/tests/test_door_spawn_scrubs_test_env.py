@@ -56,10 +56,11 @@ _SHIM = '''\
 import json, os, sys
 sys.path.insert(0, os.environ["%(src)s"] or os.getcwd())
 import coordinator_core.warm.server as server
+from coordinator_core.env_redact import redact_env
 
 def _snapshot_main():
     with open(os.environ["%(snap)s"], "w", encoding="utf-8") as fh:
-        json.dump({"pid": os.getpid(), "env": dict(os.environ)}, fh)
+        json.dump({"pid": os.getpid(), "env": redact_env(os.environ)}, fh)
     return 0
 
 server.main = _snapshot_main

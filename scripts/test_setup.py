@@ -475,6 +475,57 @@ def test_provision_deps_guarded_names_the_minor_drift_only_when_it_happened(
     assert (line in capsys.readouterr().out) is expect_line
 
 
+def _guarded_pin_setup(setup_mod, monkeypatch, tmp_path, guarded_minors):
+    """Installer runs as a pin (sys.executable) of a different minor than each guarded fake."""
+    from coordinator_core.install import engine_interpreter
+
+    pyproject_dir = tmp_path / "root"
+    pyproject_dir.mkdir()
+    _fixture_pyproject(pyproject_dir)
+    _stub_settings_home(setup_mod, monkeypatch, tmp_path)
+    paths = [str(tmp_path / f"guarded{i}" / "python3") for i in range(len(guarded_minors))]
+    monkeypatch.setattr(
+        setup_mod,
+        "enumerate_provisioning_candidates",
+        lambda installer_py: [
+            setup_mod.InterpreterCandidate(label=f"guarded {i}", path=p, consumers=("test consumer",))
+            for i, p in enumerate(paths)
+        ],
+    )
+    minors = dict(zip(paths, guarded_minors))
+    monkeypatch.setattr(engine_interpreter, "_minor_of", lambda p: minors[p])
+    monkeypatch.setattr(engine_interpreter, "stamp", lambda home=None: (3, 13))
+    monkeypatch.setattr(setup_mod, "_is_externally_managed", lambda interpreter: True)
+    monkeypatch.setattr(setup_mod, "_engine_installed", lambda interpreter, import_names, engine_root: False)
+    _stub_editable_finder_conversion(setup_mod, monkeypatch)
+    return pyproject_dir, paths
+
+
+def test_provision_deps_guarded_pin_relaunch_provisions_with_guarded_interpreter(
+    setup_mod, monkeypatch, tmp_path, capsys
+):
+    pyproject_dir, paths = _guarded_pin_setup(setup_mod, monkeypatch, tmp_path, [(3, 15)])
+    ensure_calls = _stub_engine_site_ensure(monkeypatch)
+
+    setup_mod.provision_deps(pyproject_dir, sys.executable)
+
+    assert ensure_calls == [paths[0]]
+    assert "engine-site re-provisioned: python 3.13 -> 3.15" in capsys.readouterr().out
+
+
+def test_provision_deps_guarded_set_spanning_two_minors_is_refused(setup_mod, monkeypatch, tmp_path, capsys):
+    pyproject_dir, paths = _guarded_pin_setup(setup_mod, monkeypatch, tmp_path, [(3, 14), (3, 15)])
+    ensure_calls = _stub_engine_site_ensure(monkeypatch)
+
+    with pytest.raises(SystemExit) as exc_info:
+        setup_mod.provision_deps(pyproject_dir, sys.executable)
+
+    assert exc_info.value.code == setup_mod.EXIT_INTERPRETER_UNSUPPORTED
+    err = capsys.readouterr().err
+    assert paths[0] in err and paths[1] in err and "3.14" in err and "3.15" in err
+    assert ensure_calls == []
+
+
 def test_provision_deps_guarded_engine_site_failure_exits_1(setup_mod, monkeypatch, tmp_path, capsys):
     """A failed engine-site install is a genuine failure (1), never the 96 refusal."""
     pyproject_dir = tmp_path / "root"
@@ -2673,6 +2724,59 @@ def test_register_claude_klabauter_root_preserves_existing_valid_klabauter_value
     out = capsys.readouterr().out
     assert f"repos.claude_klabauter {existing}" in out
     assert str(other_sibling) not in out
+
+
+def _mirror_registration_run(setup_mod, tmp_path, monkeypatch, registry):
+    from coordinator_core import machine_resolver
+    from coordinator_core.install import _shared
+
+    monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda plugin_root: ["ml"])
+    sets: list[list[str]] = []
+
+    def _fake_run(argv, *a, **k):
+        sets.append(list(argv))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(setup_mod.subprocess, "run", _fake_run)
+    monkeypatch.setattr(machine_resolver, "registry_get", lambda key, *a, **k: registry.get(key, ""))
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _write_manifest(repo_root, "claude-klabauter")
+    claude_klabauter_root = tmp_path / "claude-klabauter"
+    claude_klabauter_root.mkdir()
+    clone = tmp_path / "claude-klabauter"
+    clone.mkdir()
+    monkeypatch.setattr(setup_mod, "_discover_klabauter_root", lambda repo_root, plugin_root: str(clone))
+    monkeypatch.setattr(setup_mod, "_git_current_branch", lambda path: "candidate")
+    setup_mod.register_claude_klabauter_root(claude_klabauter_root, "test-source", repo_root, _override_args(setup_mod))
+    return clone, {a[2]: a[3] for a in sets if len(a) == 4 and a[1] == "set"}
+
+
+def test_register_claude_klabauter_root_registers_unset_publish_mirror(setup_mod, tmp_path, monkeypatch, capsys):
+    clone, written = _mirror_registration_run(setup_mod, tmp_path, monkeypatch, {})
+    assert written["publish.mirrors.claude_klabauter.path"] == str(clone)
+    assert written["publish.mirrors.claude_klabauter.track_ref"] == "origin/candidate"
+    assert written["publish.mirrors.claude_klabauter.owner"] == "claude-klabauter-em"
+
+
+def test_register_claude_klabauter_root_leaves_differing_publish_mirror_with_advisory(
+    setup_mod, tmp_path, monkeypatch, capsys
+):
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    _, written = _mirror_registration_run(
+        setup_mod, tmp_path, monkeypatch, {"publish.mirrors.claude_klabauter.path": str(other)}
+    )
+    out = capsys.readouterr().out
+    assert not [k for k in written if k.startswith("publish.mirrors.")]
+    assert "[ADVISORY] publish.mirrors.claude_klabauter.path is" in out
+
+
+def test_register_claude_klabauter_root_keeps_existing_mirror_owner(setup_mod, tmp_path, monkeypatch, capsys):
+    reg = {"publish.mirrors.claude_klabauter.owner": "someone-else"}
+    clone, written = _mirror_registration_run(setup_mod, tmp_path, monkeypatch, reg)
+    assert written["publish.mirrors.claude_klabauter.path"] == str(clone)
+    assert "publish.mirrors.claude_klabauter.owner" not in written
 
 
 # ---------------------------------------------------------------------------

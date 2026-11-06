@@ -179,6 +179,29 @@ def test_build_doc_is_route_plan_and_research_doc_keeps_its_route():
     assert research_doc["route"] == "spec-dispatch" and "research" in research_doc
 
 
+def test_split_copies_drop_inherited_ask_parent_and_keep_other_analysis():
+    from coordinator_core.ops.dispatch_emit.research_build_split import split_research_build
+
+    src = _doc(RESEARCH)
+    src["em_analysis"] = {"ask_parent": "ask-parent-X ask-Y", "note": "keep"}
+    research_doc, build_doc = split_research_build(src, REL, WRITES)
+    for doc in (research_doc, build_doc):
+        assert doc["em_analysis"] == {"note": "keep"}
+    assert src["em_analysis"]["ask_parent"] == "ask-parent-X ask-Y"
+
+
+def test_gate_splits_a_child_already_stamped_with_its_own_ask_parent(repo):
+    doc = _doc(RESEARCH)
+    doc["em_analysis"] = {"ask_parent": contract.ask_parent_marker("ask-parent-20261105T235241-853454", "ask-20261105T235241-a1a059")}
+    (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+    v = gate(repo, REL, writes=WRITES)
+    assert v.arm is None and "split" in v.halt, v
+    s = v.halt["split"]
+    for key in ("research", "build"):
+        held = yaml.safe_load((repo / s[key]["sizing"]).read_text(encoding="utf-8"))["em_analysis"]["ask_parent"]
+        assert contract.parse_ask_parent(held) == (s["parent_id"], s[key]["run_id"])
+
+
 def test_split_plan_rel_is_the_month_dir_path():
     from coordinator_core.ops.dispatch_emit.research_build_split import split_plan_rel
 

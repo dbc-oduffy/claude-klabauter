@@ -119,7 +119,15 @@ def test_raised_live_record_write_is_not_reported_detached(tmp_path, monkeypatch
 def test_default_entry_with_mint_blocked_forever_answers_inside_the_bound_without_claiming_a_run(
     tmp_path, monkeypatch, release
 ):
-    monkeypatch.setattr(run_token, "mint", _blocker(release))
+    inner = _blocker(release)
+
+    def mint_stalled_in_record_write(*args, **kwargs):
+        # The real mint enters the gate's "writing" state before its record write; only an
+        # in-flight write is refused, an unreached mint gets the deferred allow.
+        run_token.WRITE_GATE.get().begin()
+        return inner(*args, **kwargs)
+
+    monkeypatch.setattr(run_token, "mint", mint_stalled_in_record_write)
     started = time.monotonic()
     env = mod.evaluate(_payload(_repo(tmp_path), {"ask": "do x"}))
     assert time.monotonic() - started < BOUND_S

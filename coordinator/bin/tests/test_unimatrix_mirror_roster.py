@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import time
@@ -569,11 +570,17 @@ def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path, name):
     log = tmp_path / "sup.log"
     p = subprocess.Popen([sys.executable, str(BIN / f"unimatrix-{name}.py"), str(log),
                           "--remote", "unreachable.invalid", "--key", str(tmp_path / "k")],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    deadline = time.time() + 10
-    while time.time() < deadline and not log.exists():
-        time.sleep(0.05)
-    time.sleep(1)  # the handler is installed just after the log opens
-    p.terminate()
-    assert p.wait(timeout=10) == 143
-    assert "stopped by signal 15" in log.read_text(encoding="utf-8")
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        deadline = time.time() + 10
+        while time.time() < deadline and not log.exists():
+            time.sleep(0.05)
+        time.sleep(1)  # the handler is installed just after the log opens
+        p.terminate()
+        assert p.wait(timeout=10) == 143
+        assert "stopped by signal 15" in log.read_text(encoding="utf-8")
+    finally:
+        # The supervisor polls forever: a failed or interrupted assertion must never leave it running.
+        if p.poll() is None:
+            os.killpg(p.pid, signal.SIGKILL)
+            p.wait(timeout=10)

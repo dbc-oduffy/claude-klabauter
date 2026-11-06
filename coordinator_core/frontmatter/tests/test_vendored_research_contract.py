@@ -40,8 +40,8 @@ def _research_errors(research: dict) -> list[dict]:
 
 
 def test_vendored_versions():
-    assert _version(_SIZING) == "1.51.0"
-    assert _version(_HANDOFF) == "11.3.0"
+    assert _version(_SIZING) == "1.52.0"
+    assert _version(_HANDOFF) == "11.5.0"
     assert _version(_PLAN_TASKS) == "3.23.0"
 
 

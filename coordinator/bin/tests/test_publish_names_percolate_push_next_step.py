@@ -106,7 +106,7 @@ def _wire_common_fakes(
     # DESTINATION rather than per row; default {} models plain rows that
     # share no mirror.
     monkeypatch.setattr(
-        publish, "raw_dest_sigil_by_name", lambda setup_dir: dict(sigils or {})
+        publish, "raw_dest_sigil_by_name", lambda setup_dir, **_: dict(sigils or {})
     )
 
     class _FakeClaudeKlabauter:
@@ -259,7 +259,8 @@ def test_clean_round_prints_the_exact_push_command_for_the_committed_repo(
 
     assert rc == 0
     assert lines == [
-        f"To publish (commit-only round, nothing pushed): "
+        f"To publish (commit-only round, nothing pushed) -- REQUIRED next step; "
+        f"klabauter-promote refuses until it lands: "
         f"git -C {tmp_path / 'dst-row-a'} push origin main"
     ]
 

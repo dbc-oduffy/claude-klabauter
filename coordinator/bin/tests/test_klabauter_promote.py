@@ -59,6 +59,11 @@ _STATUS_CLEAN_NON_CANDIDATE = (
 )
 
 _SYMREF_MAIN = "refs/remotes/origin/main\n"
+_SHA_A = "a" * 40
+_SHA_B = "b" * 40
+_REFS_PUSHED = f"refs/heads/candidate {_SHA_A}\nrefs/remotes/origin/candidate {_SHA_A}\n"
+_REFS_LAGGING = f"refs/heads/candidate {_SHA_B}\nrefs/remotes/origin/candidate {_SHA_A}\n"
+_REFS_ABSENT = f"refs/heads/candidate {_SHA_B}\n"
 _TIP_SUBJECT_OK = "percolate round [source-head abcdef012345]\n"
 
 
@@ -82,6 +87,8 @@ class _SubprocessSpy:
         symref_stdout: str = _SYMREF_MAIN,
         symref_returncode: int = 0,
         symref_stderr: str = "",
+        ls_remote_stdout: str = "",
+        ls_remote_returncode: int = 128,
         merge_base_returncode: int = 0,
         merge_base_stderr: str = "",
         push_returncode: int = 0,
@@ -91,6 +98,9 @@ class _SubprocessSpy:
         source_subject: str = "ship the thing",
         source_returncode: int = 0,
     ):
+        self._ls_remote_stdout = ls_remote_stdout
+        self._ls_remote_returncode = ls_remote_returncode
+        self.for_each_ref_stdout = _REFS_PUSHED
         self._tip_subject = tip_subject
         self._source_subject = source_subject
         self._source_returncode = source_returncode
@@ -117,8 +127,12 @@ class _SubprocessSpy:
             return _completed(0, self._dest, "")
         if "status" in cmd and "--porcelain=v2" in cmd:
             return _completed(self._status_returncode, self._status_stdout, self._status_stderr)
+        if cmd[:1] == ["git"] and "ls-remote" in cmd:
+            return _completed(self._ls_remote_returncode, self._ls_remote_stdout, "")
         if cmd[:1] == ["git"] and "symbolic-ref" in cmd:
             return _completed(self._symref_returncode, self._symref_stdout, self._symref_stderr)
+        if cmd[:1] == ["git"] and "for-each-ref" in cmd:
+            return _completed(0, self.for_each_ref_stdout, "")
         if cmd[:1] == ["git"] and "merge-base" in cmd:
             return _completed(self._merge_base_returncode, "", self._merge_base_stderr)
         if cmd[:1] == ["git"] and "push" in cmd:
@@ -146,6 +160,8 @@ def _run_promote(
     symref_stdout: str = _SYMREF_MAIN,
     symref_returncode: int = 0,
     symref_stderr: str = "",
+    ls_remote_stdout: str = "",
+    ls_remote_returncode: int = 128,
     merge_base_returncode: int = 0,
     merge_base_stderr: str = "",
     push_returncode: int = 0,
@@ -165,6 +181,8 @@ def _run_promote(
         symref_stdout=symref_stdout,
         symref_returncode=symref_returncode,
         symref_stderr=symref_stderr,
+        ls_remote_stdout=ls_remote_stdout,
+        ls_remote_returncode=ls_remote_returncode,
         merge_base_returncode=merge_base_returncode,
         merge_base_stderr=merge_base_stderr,
         push_returncode=push_returncode,
@@ -297,7 +315,7 @@ def test_manual_dry_run_passes_for_a_candidate_tip_committed_a_minute_ago(tmp_pa
     )
     assert rc == _mod._EXIT_OK
     out = capsys.readouterr().out
-    assert "DRY RUN" in out and "predicates 1-4 passed" in out
+    assert "DRY RUN" in out and "predicates 1-5 passed" in out
     assert "UNENFORCED" not in out
 
 
@@ -334,7 +352,7 @@ def test_all_failures_reported_together_not_just_first(tmp_path, monkeypatch, ca
     assert "predicate 1 (clean dest) FAILED" in err
     assert "predicate 2 (no round-failure marker) FAILED" in err
     assert "soak" not in err
-    assert "2 of 4 evidence-bar predicate(s) failed" in err
+    assert "2 of 5 evidence-bar predicate(s) failed" in err
 
 
 # ---------------------------------------------------------------------------
@@ -354,7 +372,7 @@ def test_wip_source_head_refuses_naming_predicate_4(tmp_path, monkeypatch, capsy
     assert rc == _mod._EXIT_USAGE
     err = capsys.readouterr().err
     assert "predicate 4 (source-head not WIP) FAILED" in err
-    assert "1 of 4" in err
+    assert "1 of 5 evidence" in err
     assert [c for c in spy.calls if c[:1] == ["git"] and "push" in c] == []
 
 
@@ -402,6 +420,82 @@ def test_confirm_with_all_predicates_passing_pushes_fast_forward_refspec(tmp_pat
     assert rc == _mod._EXIT_OK
     push_calls = [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
     assert push_calls == [["git", "-C", dest, "push", "origin", "candidate:main"]]
+
+
+_LS_REMOTE_MAIN = "ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"
+
+
+def _pushes(spy):
+    return [c for c in spy.calls if c[:1] == ["git"] and "push" in c]
+
+
+def test_remote_default_wins_over_stale_local_origin_head_pointing_at_candidate(tmp_path, monkeypatch):
+    rc, spy, dest = _run_promote(
+        tmp_path, monkeypatch, confirm=True,
+        symref_stdout="refs/remotes/origin/candidate\n",
+        ls_remote_stdout=_LS_REMOTE_MAIN, ls_remote_returncode=0,
+    )
+    assert rc == _mod._EXIT_OK
+    assert _pushes(spy) == [["git", "-C", dest, "push", "origin", "candidate:main"]]
+    assert ["git", "-C", dest, "ls-remote", "--symref", "origin", "HEAD"] in spy.calls
+
+
+def test_unreachable_remote_falls_back_to_local_origin_head(tmp_path, monkeypatch):
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True)
+    assert rc == _mod._EXIT_OK
+    assert _pushes(spy) == [["git", "-C", dest, "push", "origin", "candidate:main"]]
+
+
+@pytest.mark.parametrize("ls_remote_kwargs", [
+    {},
+    {"ls_remote_stdout": "ref: refs/heads/candidate\tHEAD\nabc\tHEAD\n", "ls_remote_returncode": 0},
+])
+def test_target_equal_to_candidate_refuses_naming_cause_and_never_pushes(
+    tmp_path, monkeypatch, capsys, ls_remote_kwargs,
+):
+    rc, spy, dest = _run_promote(
+        tmp_path, monkeypatch, confirm=True,
+        symref_stdout="refs/remotes/origin/candidate\n", **ls_remote_kwargs,
+    )
+    assert rc == _mod._EXIT_FAIL
+    assert _pushes(spy) == []
+    captured = capsys.readouterr()
+    assert "equals the candidate branch" in captured.err
+    assert "promoted" not in captured.out
+
+
+def _run_with_refs(tmp_path, monkeypatch, refs, *, confirm):
+    original = _SubprocessSpy.__init__
+
+    def patched(self, *a, **kw):
+        original(self, *a, **kw)
+        self.for_each_ref_stdout = refs
+
+    monkeypatch.setattr(_SubprocessSpy, "__init__", patched)
+    return _run_promote(tmp_path, monkeypatch, confirm=confirm)
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+@pytest.mark.parametrize("refs", [_REFS_LAGGING, _REFS_ABSENT])
+def test_unpushed_candidate_refuses_predicate_5_and_never_pushes(
+    tmp_path, monkeypatch, capsys, refs, confirm,
+):
+    rc, spy, dest = _run_with_refs(tmp_path, monkeypatch, refs, confirm=confirm)
+    assert rc == _mod._EXIT_USAGE
+    captured = capsys.readouterr()
+    assert "predicate 5 (candidate pushed) FAILED" in captured.err
+    assert f"git -C {dest} push origin candidate" in captured.err
+    assert "promoted" not in captured.out
+    assert _pushes(spy) == []
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_pushed_candidate_passes_predicate_5(tmp_path, monkeypatch, capsys, confirm):
+    rc, spy, dest = _run_with_refs(tmp_path, monkeypatch, _REFS_PUSHED, confirm=confirm)
+    assert rc == _mod._EXIT_OK
+    assert "predicate 5" not in capsys.readouterr().err
+    assert bool(_pushes(spy)) is confirm
+    assert len([c for c in spy.calls if "for-each-ref" in c]) == 1
 
 
 def test_confirm_forwards_nonzero_push_exit_code(tmp_path, monkeypatch):

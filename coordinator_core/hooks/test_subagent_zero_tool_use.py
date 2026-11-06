@@ -444,7 +444,10 @@ class TestRegistrationQuad:
         assert op_key in _REGISTRY
         assert OP_CLASSIFICATION[op_key] == OpClass.MUTATING
         assert _OP_KEY_SCOPE[op_key] == "common_dir"
-        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks.subagent_zero_tool_use"
+        # C2: hooks.* ops map to the package, not the module. Bare package import
+        # never registers ops; the op resolves via the registry-miss SAFE FALLBACK,
+        # which imports the package and walks _EAGER_HOOK_MODULES (this module is listed).
+        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks"
 
 
 # ---------------------------------------------------------------------------

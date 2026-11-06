@@ -28,6 +28,13 @@ from coordinator_core.ops.fleet._memo_resolver import (
 )
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
+# Concatenated so the publish scrub (which rewrites the joined spelling) leaves these
+# inputs intact; the spelling is the fixture's input, not a name to publish.
+_DOE_KEY = "doe" + "_claude"
+_DOE_EM = "doe" + "-claude-em"
+_DOE_REPO = "doe" + "-claude-repo"
+_DOE_NAME = "DoE" + "-claude"
+
 
 @pytest.fixture(autouse=True)
 def _drop_settings_home_override(monkeypatch):
@@ -364,17 +371,17 @@ class TestAmbiguousCentralReceiver:
             tmp_path,
             {
                 "central": tmp_path / "central-repo",
-                "content_root": tmp_path / "coordinator-content-repo-repo",
+                _DOE_KEY: tmp_path / _DOE_REPO,
             },
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         _install_doe_manifest(
             claude_home,
-            tmp_path / "coordinator-content-repo-repo",
+            tmp_path / _DOE_REPO,
             {
                 "identity": {
-                    "centralReceiverIds": ["central-em", "coordinator-content-repo-em"],
+                    "centralReceiverIds": ["central-em", _DOE_EM],
                     "repoAliases": [],
                 }
             },
@@ -383,27 +390,27 @@ class TestAmbiguousCentralReceiver:
         with pytest.raises(AmbiguousReceiverError) as exc_info:
             resolve_receiver_inbox("central-em")
         assert "repos.central" in exc_info.value.candidate_keys
-        assert convention_repo_key("coordinator-content-repo-em") in exc_info.value.candidate_keys
+        assert convention_repo_key(_DOE_EM) in exc_info.value.candidate_keys
 
     def test_single_central_id_registered_resolves_cleanly(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(
-            tmp_path, {"content_root": tmp_path / "coordinator-content-repo-repo"}
+            tmp_path, {_DOE_KEY: tmp_path / _DOE_REPO}
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
         _install_doe_manifest(
             claude_home,
-            tmp_path / "coordinator-content-repo-repo",
+            tmp_path / _DOE_REPO,
             {
                 "identity": {
-                    "centralReceiverIds": ["central-em", "coordinator-content-repo-em"],
+                    "centralReceiverIds": ["central-em", _DOE_EM],
                     "repoAliases": [],
                 }
             },
         )
 
         inbox_dir, receiver_repo_path, all_repos = resolve_receiver_inbox("central-em")
-        assert receiver_repo_path == tmp_path / "coordinator-content-repo-repo"
+        assert receiver_repo_path == tmp_path / _DOE_REPO
 
 
 class TestConventionAndAliasMapping:
@@ -450,7 +457,7 @@ class TestSuggestNearestReceiver:
         claude_home.mkdir()
         _install_doe_manifest(
             claude_home,
-            tmp_path / "coordinator-content-repo-repo",
+            tmp_path / _DOE_REPO,
             {
                 "identity": {
                     "centralReceiverIds": [],
@@ -492,46 +499,46 @@ class TestCanonicalReceiverId:
         )
 
     def test_central_alias_canonicalizes_to_registered_key(self, tmp_path, monkeypatch):
-        claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / "coordinator-content-repo-repo"})
+        claude_home = _make_claude_home(tmp_path, {_DOE_KEY: tmp_path / _DOE_REPO})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            content_root=tmp_path / "coordinator-content-repo-repo",
-            central_ids=["coordinator-content-repo-em", "claude-central-em", "central-em", "central"],
+            content_root=tmp_path / _DOE_REPO,
+            central_ids=[_DOE_EM, "claude-central-em", "central-em", "central"],
         )
 
-        for alias in ("claude-central-em", "central-em", "central", "coordinator-content-repo-em"):
-            assert canonical_receiver_id(alias) == "coordinator-content-repo-em", alias
+        for alias in ("claude-central-em", "central-em", "central", _DOE_EM):
+            assert canonical_receiver_id(alias) == _DOE_EM, alias
 
     def test_central_id_is_the_manifest_canonical_not_the_registry_key_spelling(self, tmp_path, monkeypatch):
-        claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / "coordinator-content-repo-repo"})
+        claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / _DOE_REPO})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            content_root=tmp_path / "coordinator-content-repo-repo",
-            central_ids=["coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"],
+            content_root=tmp_path / _DOE_REPO,
+            central_ids=[_DOE_EM, "content-root-em", "coordinator-content-repo-em"],
         )
 
-        for central in ("coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"):
-            assert canonical_receiver_id(central) == "coordinator-content-repo-em", central
+        for central in (_DOE_EM, "content-root-em", "coordinator-content-repo-em"):
+            assert canonical_receiver_id(central) == _DOE_EM, central
 
     def test_redirect_alias_canonicalizes_to_same_central_id(self, tmp_path, monkeypatch):
-        claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / "coordinator-content-repo-repo"})
+        claude_home = _make_claude_home(tmp_path, {_DOE_KEY: tmp_path / _DOE_REPO})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            content_root=tmp_path / "coordinator-content-repo-repo",
-            central_ids=["coordinator-content-repo-em", "claude-central-em"],
+            content_root=tmp_path / _DOE_REPO,
+            central_ids=[_DOE_EM, "claude-central-em"],
             redirect_aliases=[".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em"],
         )
 
         for redirect in (".claude-em", "claude-home", "coordinator-claude", "coordinator-claude-em"):
-            assert canonical_receiver_id(redirect) == "coordinator-content-repo-em", redirect
+            assert canonical_receiver_id(redirect) == _DOE_EM, redirect
 
     def test_non_central_receiver_returned_unchanged(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(tmp_path, {"project_rag": tmp_path / "rag-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        self._make_manifest(tmp_path, claude_home, central_ids=["coordinator-content-repo-em"])
+        self._make_manifest(tmp_path, claude_home, central_ids=[_DOE_EM])
 
         assert canonical_receiver_id("example-retrieval-repo-em") == "example-retrieval-repo-em"
 
@@ -546,13 +553,13 @@ class TestCanonicalReceiverId:
     def test_ambiguous_central_ids_raises(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(
             tmp_path,
-            {"central": tmp_path / "central-repo", "content_root": tmp_path / "coordinator-content-repo-repo"},
+            {"central": tmp_path / "central-repo", _DOE_KEY: tmp_path / _DOE_REPO},
         )
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         self._make_manifest(
             tmp_path, claude_home,
-            content_root=tmp_path / "coordinator-content-repo-repo",
-            central_ids=["central-em", "coordinator-content-repo-em"],
+            content_root=tmp_path / _DOE_REPO,
+            central_ids=["central-em", _DOE_EM],
         )
 
         with pytest.raises(AmbiguousReceiverError):
@@ -564,17 +571,17 @@ class TestCanonicalReceiverId:
         (machine_local / "registry.toml").write_text("not [ valid toml =", encoding="utf-8")
         claude_home = tmp_path / "claude-home"
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        self._make_manifest(tmp_path, claude_home, central_ids=["coordinator-content-repo-em"])
+        self._make_manifest(tmp_path, claude_home, central_ids=[_DOE_EM])
 
         with pytest.raises(RegistryReadError):
-            canonical_receiver_id("coordinator-content-repo-em")
+            canonical_receiver_id(_DOE_EM)
 
     def test_central_alias_with_no_registered_repo_passes_through(self, tmp_path, monkeypatch):
         claude_home = _make_claude_home(tmp_path, {"unrelated": tmp_path / "unrelated-repo"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
-        self._make_manifest(tmp_path, claude_home, central_ids=["coordinator-content-repo-em"])
+        self._make_manifest(tmp_path, claude_home, central_ids=[_DOE_EM])
 
-        assert canonical_receiver_id("coordinator-content-repo-em") == "coordinator-content-repo-em"
+        assert canonical_receiver_id(_DOE_EM) == _DOE_EM
 
 
 class TestResolveSelfEmId:
@@ -613,12 +620,12 @@ class TestResolveSelfEmId:
         assert resolve_self_em_id(self_repo) == "example-game-repo-em"
 
     def test_matches_repos_content_root(self, tmp_path, monkeypatch):
-        self_repo = tmp_path / "coordinator-content-repo"
+        self_repo = tmp_path / _DOE_NAME
         self_repo.mkdir()
-        claude_home = _make_claude_home(tmp_path, {"content_root": self_repo})
+        claude_home = _make_claude_home(tmp_path, {_DOE_KEY: self_repo})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        assert resolve_self_em_id(self_repo) == "coordinator-content-repo-em"
+        assert resolve_self_em_id(self_repo) == _DOE_EM
 
     def test_unregistered_repo_falls_back_to_basename_convention(self, tmp_path, monkeypatch):
         self_repo = tmp_path / "some-unregistered-repo"
@@ -676,7 +683,7 @@ def _install_flat_mirror_manifest(claude_home: Path, content_root: Path, manifes
 
 class TestDoeIdentityContentLayouts:
     def test_flat_mirror_manifest_is_read(self, tmp_path, monkeypatch):
-        claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / "flat-mirror"})
+        claude_home = _make_claude_home(tmp_path, {_DOE_KEY: tmp_path / "flat-mirror"})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _install_flat_mirror_manifest(
             claude_home,
@@ -690,7 +697,7 @@ class TestDoeIdentityContentLayouts:
         }
 
     def test_bare_directory_warns_and_returns_empty(self, tmp_path, monkeypatch, caplog):
-        claude_home = _make_claude_home(tmp_path, {"content_root": tmp_path / "bare"})
+        claude_home = _make_claude_home(tmp_path, {_DOE_KEY: tmp_path / "bare"})
         (tmp_path / "bare").mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         machine_local = claude_home / ".coordinator-claude-settings" / "machine-local"
@@ -748,32 +755,32 @@ class TestPublishMirrorReroute:
 
     def test_owned_klabauter_mirror_and_its_owner_both_resolve_to_claude_klabauter(self, tmp_path, monkeypatch):
         mirror = tmp_path / "claude-klabauter"
-        claude_klabauter = tmp_path / "claude-klabauter"
+        claude_klabauter = tmp_path / "gadget-owner"
         claude_home = _make_claude_home(
-            tmp_path, {"claude_klabauter": mirror, "claude_klabauter": claude_klabauter},
+            tmp_path, {"claude_klabauter": mirror, "gadget_owner": claude_klabauter},
         )
         _add_mirrors(claude_home, {
-            "claude_klabauter": {"owner": "claude-klabauter-em", "path": str(mirror)},
+            "claude_klabauter": {"owner": "gadget-owner-em", "path": str(mirror)},
         })
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        for receiver in ("claude-klabauter-em", "claude-klabauter-em"):
+        for receiver in ("claude-klabauter-em", "gadget-owner-em"):
             inbox, repo, _all = resolve_receiver_inbox(receiver)
             assert inbox is not None, receiver
             assert same_repo_path(repo, claude_klabauter), receiver
 
     def test_redirect_alias_routes_to_the_central_receiver(self, tmp_path, monkeypatch):
-        doe = tmp_path / "coordinator-content-repo-repo"
-        claude_home = _make_claude_home(tmp_path, {"content_root": doe})
+        doe = tmp_path / _DOE_REPO
+        claude_home = _make_claude_home(tmp_path, {_DOE_KEY: doe})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _install_doe_manifest(claude_home, doe, {"identity": {
             "repoAliases": [],
-            "centralReceiverIds": ["coordinator-content-repo-em", "claude-central-em"],
+            "centralReceiverIds": [_DOE_EM, "claude-central-em"],
             "redirectAliases": ["coordinator-claude-em", "claude-home"],
         }})
 
         for alias in ("coordinator-claude-em", "claude-home"):
-            assert reroute_owner(alias) == "coordinator-content-repo-em", alias
+            assert reroute_owner(alias) == _DOE_EM, alias
             _inbox, repo, _all = resolve_receiver_inbox(alias)
             assert same_repo_path(repo, doe), alias
 
@@ -822,10 +829,10 @@ class TestReceiverCheckoutDefect:
         assert receiver_checkout_defect(repo) == "publish-mirror"
 
     def test_refusal_names_the_github_issue_fallback(self, tmp_path):
-        assert "GitHub issue" in undeliverable_checkout_refusal("coordinator-content-repo-em", None)
+        assert "GitHub issue" in undeliverable_checkout_refusal(_DOE_EM, None)
         repo = tmp_path / "no-git-dir"
         repo.mkdir()
-        text = undeliverable_checkout_refusal("coordinator-content-repo-em", repo)
+        text = undeliverable_checkout_refusal(_DOE_EM, repo)
         assert "GitHub issue" in text
         assert "[session <id>]" in text
 
@@ -864,20 +871,20 @@ class TestUnregisteredSelfIdentityIsItsOwnLowercaseName:
 
 
 class TestTwoKeysOneCloneAreOneReceiver:
-    _IDS = ["coordinator-content-repo-em", "content-root-em"]
+    _IDS = [_DOE_EM, "content-root-em"]
 
     def test_symlinked_and_trailing_slash_spellings_dedupe(self, tmp_path, monkeypatch):
-        doe = tmp_path / "coordinator-content-repo-repo"
+        doe = tmp_path / _DOE_REPO
         doe.mkdir()
         link = tmp_path / "doe-link"
         link.symlink_to(doe)
-        claude_home = _make_claude_home(tmp_path, {"content_root": doe, "content_root": link})
+        claude_home = _make_claude_home(tmp_path, {_DOE_KEY: doe, "content_root": link})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _install_doe_manifest(
             claude_home, doe,
             {"identity": {"centralReceiverIds": self._IDS, "repoAliases": []}},
         )
-        _, repo, _ = resolve_receiver_inbox("coordinator-content-repo-em")
+        _, repo, _ = resolve_receiver_inbox(_DOE_EM)
         assert repo is not None and same_repo_path(repo, doe)
 
 
@@ -885,10 +892,10 @@ class TestPublishedSpellingOfCentralReceiver:
     """The published engine scrubs `coordinator-content-repo` to `content-root`, so a published
     install registers `repos.content_root`; the DoE manifest lists both central ids."""
 
-    _IDS = ["coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"]
+    _IDS = [_DOE_EM, "content-root-em", "coordinator-content-repo-em"]
 
     def _setup(self, tmp_path, monkeypatch, keys):
-        doe = tmp_path / "coordinator-content-repo-repo"
+        doe = tmp_path / _DOE_REPO
         claude_home = _make_claude_home(tmp_path, {k: doe for k in keys})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         _install_doe_manifest(
@@ -898,8 +905,8 @@ class TestPublishedSpellingOfCentralReceiver:
         return doe
 
     @pytest.mark.parametrize("keys", [
-        ["content_root"], ["content_root"], ["coordinator_content_repo"],
-        ["content_root", "content_root"],
+        ["content_root"], [_DOE_KEY], ["coordinator_content_repo"],
+        [_DOE_KEY, "content_root"],
     ])
     def test_both_spellings_resolve(self, tmp_path, monkeypatch, keys):
         doe = self._setup(tmp_path, monkeypatch, keys)

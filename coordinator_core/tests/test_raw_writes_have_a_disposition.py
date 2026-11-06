@@ -771,6 +771,11 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/write_guards/guard_doctrine_surface_edits.py': ('in-repo-non-state', 'raw-write site(s), no state/-component signal: _write_repo_identity_advisory_log'),
     'coordinator_core/advisory_census.py': ('outside-repo', 'sandbox git dir, content root and roster written under a caller-given scratch root, never the repo: _make_sandbox, _provision_content_root, _provision_roster'),
     'coordinator_core/ops/dispatch_emit/land_remainder_verify.py': ('ignored-target', 'land-remainder-verdict.json under the gitignored run scratch dir scratch/warp/<run_id>/: _write_verdict'),
+    'coordinator_core/install/engine_interpreter.py': ('outside-repo', 'engine-site venv and its stamp file under <settings-home>/engine-site, never the repo: ensure'),
+    'coordinator_core/install/klabauter_freshness_apply.py': ('outside-repo', 'freshness record json via tmp + os.replace under the settings home, never the repo: _write_record'),
+    'coordinator_core/ops/dispatch_emit/deferred_emit_script.py': ('ignored-target', 'deferred-emit script and params/brief spills under the gitignored scratch/warp/: _spill_long_brief, write_deferred_script'),
+    'coordinator_core/ops/dispatch_emit/owed_leg_queue.py': ('in-repo-non-state', 'owed-leg yaml records under the tracked state/owed-legs/ via open(..., "w"), no declare_write: write_owed_legs'),
+    'coordinator_core/ops/review_reachability.py': ('in-repo-non-state', 'no file write: the write_/open( tokens are the pipeline-output scan patterns it matches in a reviewed diff: _pipeline_outputs'),
     'coordinator_core/ops/pm_directive_map.py': ('outside-repo', 'disposition and unmapped sidecars beside pm_turns.jsonl in the per-session baton directory, never the repo: append_disposition, the unmapped-file write'),
 }
 

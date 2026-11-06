@@ -369,3 +369,29 @@ def test_local_only_writes_the_pair_outside_any_checkout(tmp_path):
     local.mkdir()
     assert _emit(tmp_path, out_stem=str(local / "run1"), local_only=True) == claims_emit.EXIT_OK
     assert (local / "run1.claims.json").is_file() and (local / "run1.claims.meta.json").is_file()
+
+
+ALLOWED_CLAIM_TYPES = ("fact", "limitation", "opinion", "pattern", "recommendation", "feature_update")
+
+
+def test_claim_type_enum_is_the_pinned_contract():
+    with open(claims_emit.DEFAULT_SCHEMA_PATH, encoding="utf-8") as f:
+        schema = json.load(f)
+    assert tuple(schema["properties"]["type"]["enum"]) == ALLOWED_CLAIM_TYPES
+
+
+@pytest.mark.parametrize("claim_type", ALLOWED_CLAIM_TYPES)
+def test_every_allowed_claim_type_is_accepted(tmp_path, claim_type):
+    assert _emit(tmp_path, claims=[{**VALID_CLAIM, "type": claim_type}]) == claims_emit.EXIT_OK
+
+
+def test_type_inference_is_refused_naming_the_allowed_types_and_writes_nothing(tmp_path, capsys):
+    rc = _emit(tmp_path, claims=[{**VALID_CLAIM, "type": "inference"}])
+
+    assert rc == claims_emit.EXIT_PRODUCER_FAILURE
+    err = capsys.readouterr().err
+    assert "inference" in err
+    for allowed in ALLOWED_CLAIM_TYPES:
+        assert allowed in err
+    assert not (tmp_path / "run1.claims.json").exists()
+    assert not (tmp_path / "run1.claims.meta.json").exists()

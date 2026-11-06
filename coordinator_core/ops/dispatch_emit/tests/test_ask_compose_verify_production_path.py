@@ -9,7 +9,9 @@ _ENTRY_POINT = "drive that production entry point end-to-end"
 _FOREIGN_CWD = "from a foreign cwd (not the repo root) where cwd matters"
 _FIXTURE_ONLY = "exercises only route-authored test fixtures"
 _NOT_PROVING = "does not prove the criterion"
-_CLAUSES = (_ENTRY_POINT, _FOREIGN_CWD, _FIXTURE_ONLY, _NOT_PROVING)
+_NO_ENV_DUMP = "Never write the environment (os.environ or a child env) to a file or reply"
+_PROBE_SCRATCH = "scratch directory, never the target repo, and are deleted before you return"
+_CLAUSES = (_ENTRY_POINT, _FOREIGN_CWD, _FIXTURE_ONLY, _NOT_PROVING, _NO_ENV_DUMP, _PROBE_SCRATCH)
 
 
 def _stub_wrap(text):

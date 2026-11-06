@@ -436,4 +436,6 @@ class TestRegistrationQuad:
         assert op_key in _REGISTRY
         assert OP_CLASSIFICATION[op_key] == OpClass.COMPUTE_ONLY
         assert _OP_KEY_SCOPE[op_key] == "none"
-        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks.subagent_arrival_check"
+        # C2 (see ops/_registry_map.py): hook ops map to the package, not the
+        # module, so the registry resolves them without importing each hook.
+        assert OP_MODULE_MAP[op_key] == "coordinator_core.hooks"

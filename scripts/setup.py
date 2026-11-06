@@ -1272,8 +1272,9 @@ def provision_deps(
     itself exits `EXIT_ENGINE_AT_DEV_TREE` rather than passing over it.
 
     A guarded (PEP-668) candidate that is not already satisfied is not
-    refused: `engine_interpreter.ensure(sys.executable, dep_specs)` installs the declared
-    deps with one `pip --target <settings-home>/engine-site` (DR-478) and the
+    refused: `engine_interpreter.ensure(<guarded interpreter>, dep_specs)` installs the declared
+    deps with one `pip --target <settings-home>/engine-site` (DR-478), stamped with the
+    guarded minor (guarded candidates of differing minors exit 96) and the
     installer's own interpreter is returned as `engine_python` — no second
     interpreter; hooks and shims keep the system one. Guarded candidates skip
     the per-candidate pip loop and the editable-finder step, since nothing is
@@ -1380,8 +1381,24 @@ def provision_deps(
 
         prior_minor = engine_interpreter.stamp()
         try:
-            engine_interpreter.ensure(sys.executable, dep_specs)
-            now_minor = tuple(sys.version_info[:2])
+            # Hooks run under the guarded interpreter, not the installer (which may be the
+            # relaunched example-retrieval-repo pin): engine-site must be built and stamped by it.
+            minors = {c.path: tuple(engine_interpreter._minor_of(c.path)) for c in guarded}
+            if len(set(minors.values())) > 1:
+                print(
+                    "FAIL [deps] guarded interpreters span more than one python minor, but "
+                    "engine-site holds a single stamp: "
+                    + ", ".join(f"{p} ({m[0]}.{m[1]})" for p, m in minors.items()),
+                    file=sys.stderr,
+                )
+                print(
+                    "  Remediation: leave one guarded minor on the box (uninstall or re-point the "
+                    "others), then re-run: python3 scripts/setup.py",
+                    file=sys.stderr,
+                )
+                _exit_flushed(EXIT_INTERPRETER_UNSUPPORTED)
+            engine_interpreter.ensure(guarded[0].path, dep_specs)
+            now_minor = minors[guarded[0].path]
             if prior_minor is not None and prior_minor != now_minor:
                 print(
                     "engine-site re-provisioned: python "
@@ -1397,9 +1414,8 @@ def provision_deps(
             _exit_flushed(1)
         print(f"PASS [deps] engine-site provisioned for {len(guarded)} guarded interpreter(s).")
 
-    # Guarded candidates are served by engine-site: nothing is installed into them. Trap: ensure()
-    # stamps the installer's own major.minor, so a guarded candidate of another minor is skipped
-    # here yet ignores the site at runtime; the dialect-guard step (exit 98) is what catches it.
+    # Guarded candidates are served by engine-site: nothing is installed into them. All guarded
+    # candidates share the one minor ensure() stamped (a mixed set exits above).
     engine_site_paths = {c.path for c in guarded} if not container_optin_honoured else set()
 
     engine_py: str | None = None
@@ -2724,22 +2740,38 @@ def register_claude_klabauter_root(
         discovered_klabauter = _discover_klabauter_root(repo_root, plugin_root_str)
         if discovered_klabauter:
             key_values["engine.target"] = "candidate"
-            key_values["repos.claude_klabauter"] = discovered_klabauter
-            # Only declare a
-            # track_ref for a tree that IS this
-            # box's registered publish mirror -- a track_ref written for
-            # an undiscovered/mismatched mirror is a dangling declaration
-            # that breaks the next publish round (a registered mirror) or
-            # targets a mirror that was never registered at all. Never
-            # move the tree here -- moving a discovered git checkout the
-            # installer merely found is a publish-plane action this
-            # installer does not own.
+            # One-clone topology (docs/reference/klabauter-release-channels.md): the
+            # discovered clone IS this box's publish mirror. An unset mirror path is
+            # registered; a path registered to a different tree is left alone (advisory),
+            # so no track_ref/owner is declared for a mirror this run does not own.
+            # Never move the tree here -- moving a discovered git checkout the
+            # installer merely found is a publish-plane action this installer does not own.
             from coordinator_core.machine_resolver import registry_get
             from coordinator_core.win_portability import same_path
 
             mirror_path = registry_get("publish.mirrors.claude_klabauter.path")
-            if mirror_path and same_path(discovered_klabauter, mirror_path):
+            if mirror_path and not same_path(discovered_klabauter, mirror_path):
+
+                def _mirror_differs_advisory(
+                    discovered_klabauter=discovered_klabauter, mirror_path=mirror_path
+                ) -> None:
+                    print()
+                    print(
+                        f"[ADVISORY] publish.mirrors.claude_klabauter.path is {mirror_path}, "
+                        f"not the discovered clone {discovered_klabauter}; left unchanged. "
+                        "To publish from the discovered clone: "
+                        f"machine-local set publish.mirrors.claude_klabauter.path {discovered_klabauter}"
+                    )
+
+                pending_advisories.append(_mirror_differs_advisory)
+            else:
                 key_values["publish.mirrors.claude_klabauter.track_ref"] = "origin/candidate"
+                if not mirror_path:
+                    key_values["publish.mirrors.claude_klabauter.path"] = discovered_klabauter
+                if not registry_get("publish.mirrors.claude_klabauter.owner"):
+                    key_values["publish.mirrors.claude_klabauter.owner"] = "claude-klabauter-em"
+            key_values["repos.claude_klabauter"] = discovered_klabauter
+            if "publish.mirrors.claude_klabauter.track_ref" in key_values:
 
                 def _track_ref_advisory(discovered_klabauter=discovered_klabauter) -> None:
                     current_branch = _git_current_branch(Path(discovered_klabauter))

@@ -68,6 +68,7 @@ def stubbed(mod, monkeypatch):
         ("_run_probe_stable_pid_miss", "_STABLE_PID_MISS_PROBE"),
         ("_run_probe_root_pointer", "_ROOT_POINTER_PROBE"),
         ("_run_probe_root_channels_reconciled", "_ROOT_CHANNELS_PROBE"),
+        ("_run_probe_publish_mirror_clean", "_PUBLISH_MIRROR_CLEAN_PROBE"),
         ("_run_probe_publish_provenance", "_PUBLISH_PROVENANCE_PROBE"),
         ("_run_probe_engine_target_rollout", "_ENGINE_TARGET_ROLLOUT_PROBE"),
         ("_run_probe_invoke_latency", "_INVOKE_LATENCY_PROBE"),

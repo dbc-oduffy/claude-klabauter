@@ -60,6 +60,9 @@ def _stub_claude(tmp_path: Path) -> Path:
         import os
         import sys
 
+        sys.path.insert(0, __ENGINE_ROOT__)
+        from coordinator_core.env_redact import redact_env
+
         actions = os.environ.get("STUB_ACTIONS")
         if actions:
             for path, content in json.loads(actions):
@@ -69,12 +72,14 @@ def _stub_claude(tmp_path: Path) -> Path:
 
         record_path = os.environ["RECORD_PATH"]
         with open(record_path, "w", encoding="utf-8") as fh:
-            json.dump({"argv": sys.argv[1:], "env": dict(os.environ)}, fh)
+            json.dump({"argv": sys.argv[1:], "env": redact_env(os.environ)}, fh)
         sys.stdout.buffer.write(b"stub-claude-stdout-marker\\n")
         sys.stdout.flush()
         sys.exit(int(os.environ.get("EXIT_CODE", "0")))
         """
     )
+    engine_root = str(Path(__file__).resolve().parents[3])
+    body = body.replace("__ENGINE_ROOT__", repr(engine_root))
     stub.write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
     stub.chmod(stub.stat().st_mode | stat.S_IEXEC)
     if sys.platform == "win32":

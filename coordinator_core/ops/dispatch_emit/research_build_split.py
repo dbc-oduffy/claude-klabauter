@@ -45,7 +45,17 @@ def split_research_build(
     build_doc.pop("research", None)
     build_doc["route"] = "plan"
     build_doc["writes"] = [str(w).strip() for w in writes if str(w).strip()]
+    for doc in (research_doc, build_doc):
+        _drop_ask_parent(doc)
     return research_doc, build_doc
+
+
+def _drop_ask_parent(doc: dict) -> None:
+    """Remove an inherited `em_analysis.ask_parent` from a split copy: the fan-out stamps the new split
+    parent, and refuses a sizing that already carries one."""
+    analysis = doc.get("em_analysis")
+    if isinstance(analysis, dict):
+        analysis.pop("ask_parent", None)
 
 
 def notebooklm_targets_or_halt(research: Mapping) -> tuple[list[dict], Optional[str]]:

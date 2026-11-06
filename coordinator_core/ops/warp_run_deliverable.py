@@ -23,6 +23,7 @@ from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, record_dir
 from coordinator_core.ops.dispatch_emit.commit_request import MalformedCommitRequestError, parse_marker
+from coordinator_core.session import record_homes
 
 RECONCILED_FILE = "reconciled.json"
 COMMIT_REQUEST_FILE = "commit-request.txt"
@@ -128,14 +129,15 @@ def run_records(repo_root: Path) -> Iterator[RunRecord]:
 def _tracked_outcome_records(root: Path, seen: set) -> Iterator[RunRecord]:
     """`RunRecord`s of runs another box ran, read from the tracked `outcome.json` (the run dir is
     local-only); a `landed` outcome counts as reconciled, a halted one as still open."""
+    evidence_dir = Path(record_homes.home_dir(str(root), "run-evidence"))
     try:
-        names = sorted(p.name for p in (root / "state" / "run-evidence").iterdir() if p.is_dir())
+        names = sorted(p.name for p in evidence_dir.iterdir() if p.is_dir())
     except OSError:
         return
     for name in names:
         if name in seen:
             continue
-        outcome = _read_json(root / "state" / "run-evidence" / name / "outcome.json")
+        outcome = _read_json(evidence_dir / name / "outcome.json")
         if not outcome:
             continue
         sizing_rel = outcome.get("sizing_rel")
