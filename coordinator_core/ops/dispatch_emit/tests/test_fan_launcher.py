@@ -325,7 +325,7 @@ def test_launcher_no_longer_reads_the_sidecar(tmp_path):
     assert "stage_pending repeated for a handle already supplied" in script
 
 
-def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=None, emit_run_id="ask-r1", emit_stem=None) -> list:
+def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=None, emit_run_id="ask-r1", emit_stem=None, twin_path=None) -> list:
     """Run _runChild in node with stubs; returns [result, paths workflow() was started with]."""
     import shutil
     import subprocess
@@ -334,7 +334,7 @@ def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=
     if node is None:
         pytest.skip("node not available")
     body = script.split("\n", 1)[1].split("const _settled", 1)[0].replace("export const meta", "const meta")
-    pending = {"stage_pending": {"handle": {"sha256": sha}}}
+    pending = {"stage_pending": {"handle": {"sha256": sha}, **({"twin_path": twin_path} if twin_path is not None else {})}}
     root = re.search(r"const REPO_ROOT = (\".*?\");", body).group(1)
     code = (
         f"const PENDING = {json.dumps(pending)};\n"
@@ -362,6 +362,24 @@ def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path):
     root = tmp_path.as_posix()
     assert calls[1] == {"scriptPath": f"{root}/{staged_twin_rel('ask-r1', sha)}"}
     assert all(set(c) == {"scriptPath"} for c in calls)
+
+
+@pytest.mark.spawns_process
+def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    stale, fresh = "3c" * 32, "2d" * 32
+    result, calls, _ = _run_child_stage(script, stale, twin_path=staged_twin_rel("ask-r1", fresh))
+    assert result["status"] == "ok"
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('ask-r1', fresh)}"}
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("bad", ["scratch/warp/ask-other.staged-" + "2d" * 32 + ".workflow.mjs", "scratch/warp/../x", 7])
+def test_a_named_twin_of_another_run_or_shape_is_refused_by_name(tmp_path, bad):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    result, calls, _ = _run_child_stage(script, "2d" * 32, twin_path=bad)
+    assert result["status"] == "failed" and "twin_path is not a staged twin of this run" in result["error"]
+    assert len(calls) == 1
 
 
 @pytest.mark.spawns_process

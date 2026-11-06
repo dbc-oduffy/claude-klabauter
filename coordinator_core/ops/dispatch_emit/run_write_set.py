@@ -93,6 +93,12 @@ def _credited_writes(root: Path, base: Path, manifest: dict, sizing_rel: Optiona
 
 
 def _without_peer_held(root: Path, ordered: list, own_session: str, run_id: str) -> tuple:
+    return _split_peer_held(root, ordered, own_session, run_id)[0]
+
+
+def _split_peer_held(root: Path, ordered: list, own_session: str, run_id: str) -> tuple:
+    """``(kept, held)``: ``kept`` is ``ordered`` minus peer-held paths; ``held`` is ``land_run._peer_held``'s
+    ``{path: [peer session ids]}`` over ``ordered``. One claim lookup."""
     # Lazy: land_run imports refire_inherited_scope, which reaches this module.
     from coordinator_core.ops.dispatch_emit import land_run
 
@@ -110,7 +116,7 @@ def _without_peer_held(root: Path, ordered: list, own_session: str, run_id: str)
             run_base = None
     held = land_run._peer_held(
         root, ordered, own_session or None, run_id, None, plan_rel=plan_rel, run_base=run_base)
-    return tuple(p for p in ordered if p not in held)
+    return tuple(p for p in ordered if p not in held), {p: list(held[p]) for p in ordered if p in held}
 
 
 def run_write_set(root: Path, run_id: str, own_session: str) -> tuple:
@@ -118,6 +124,12 @@ def run_write_set(root: Path, run_id: str, own_session: str) -> tuple:
     footprint `writes` when present, the writes of credited plan rows, then `halted_withheld` and `withhold.jsonl` keys.
     Scratch paths and paths a live peer holds (`land_run._peer_held`) are dropped; a dead or
     abandoned session's claim keeps the path. Empty when the record is unreadable."""
+    return run_write_set_split(root, run_id, own_session)[0]
+
+
+def run_write_set_split(root: Path, run_id: str, own_session: str) -> tuple:
+    """`(kept, held)`: `run_write_set`'s tuple plus `{path: [peer session ids]}` for each path the
+    filter dropped as peer-held, in write-set order. `((), {})` when the record is unreadable."""
     from coordinator_core.ops.dispatch_emit import run_withhold
     from coordinator_core.ops.dispatch_emit.halted_run import halted_withheld
 
@@ -125,7 +137,7 @@ def run_write_set(root: Path, run_id: str, own_session: str) -> tuple:
     base = record_dir(root, run_id)
     manifest = _json_object(base / "manifest.json")
     if manifest is None:
-        return ()
+        return (), {}
     footprint = _json_object(base / LEG_FOOTPRINT_FILE)
     sizing_rel = _sizing_rel(base)
     raw = [
@@ -140,7 +152,7 @@ def run_write_set(root: Path, run_id: str, own_session: str) -> tuple:
         n = _norm(p)
         if n and n != "." and not n.startswith(_SCRATCH_PREFIX):
             seen.setdefault(n, None)
-    return _without_peer_held(root, list(seen), own_session, run_id)
+    return _split_peer_held(root, list(seen), own_session, run_id)
 
 
 def unclaimed_dirty(root: Path, paths: Iterable[str], own_session: str, run_id: str = "") -> tuple:

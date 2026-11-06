@@ -1601,6 +1601,43 @@ def _held_entries(params: dict) -> dict:
     return out
 
 
+def _kept_regrades(
+    worktree_root: Path, artifacts, record_dir_rel: Optional[str], resume: object,
+    request: CommitRequest, incomplete: set, held: set,
+) -> dict:
+    """``{chunk id: evidence}`` for incomplete chunks a halted record's ``kept.json`` holds: the chunk
+    declares paths, every recorded fingerprint still equals the tree, no live note names the row, and
+    no report of this run reads undelivered. Record dirs read: the resumed predecessor, this run's
+    own and its superseded ones (later wins). A hold still bars it."""
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import kept_work, requirements_ledger
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    candidates = [c for c in request.chunks if c.id in incomplete and c.paths and c.id not in held]
+    if not candidates:
+        return {}
+    rels = list(artifacts.record_dirs) if artifacts is not None else []
+    if record_dir_rel and record_dir_rel not in rels:
+        rels.insert(0, record_dir_rel)
+    dirs = [worktree_root / d for d in reversed(rels)]
+    prior = resume.get("run_id") if isinstance(resume, dict) else None
+    if isinstance(prior, str) and safe_id(prior):
+        dirs.insert(0, worktree_root / RECORD_DIR_ROOT / prior)
+    out: dict = {}
+    for chunk in candidates:
+        text = _read_rel(worktree_root, chunk.report) if chunk.report else None
+        if text is not None and not _is_delivered_report(text):
+            continue
+        for d in dirs:
+            entry = kept_work.read(d)["chunks"].get(chunk.id)
+            if entry and set(chunk.paths) <= set(entry.get("paths") or ()) and kept_work.still_kept(
+                worktree_root, entry, requirements_ledger.read_notes(d), chunk.id, record_dir=d
+            ):
+                out[chunk.id] = f"kept: {len(entry['paths'])} path(s) fingerprint-equal to {d.name}/kept.json"
+                break
+    return out
+
+
 def _held_ids(params: dict) -> set:
     return set(_held_entries(params)) - _released_ids(params)
 
@@ -2464,6 +2501,11 @@ def _terminal_commit_inner(
         cited_sizing or (next(iter(artifacts.by_class.get("sizing", ())), None) if artifacts is not None else None),
     )
     more_regraded.update({k: v for k, v in credited_regraded.items() if k not in more_regraded})
+    kept_regraded = _kept_regrades(
+        worktree_root, artifacts, record_dir_rel, params.get(TERMINAL_RESUME_LEDGER_PARAM), request,
+        incomplete_chunks - set(more_regraded), held_now,
+    )
+    more_regraded.update(kept_regraded)
     if isinstance(close_ctx, dict) and close_ctx.get("kind") == "xs-s-run":
         more_regraded.update(_xs_closeout_regrades(
             worktree_root, request, incomplete_chunks - set(more_regraded) - _held_ids(params),

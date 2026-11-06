@@ -51,6 +51,12 @@ def test_bounded_single_write_excludes_sibling_synthesis_keeps_census() -> None:
     assert ac.research_is_bounded_single_write(synth, ["out.md"]) is False
 
 
+def test_scout_schema_accepts_then_build_as_a_boolean() -> None:
+    props = ac.ASK_SCOUT_SCHEMA["properties"]["research"]["properties"]
+    assert props["then_build"] == {"type": "boolean"}
+    assert "then_build" in ac.RESEARCH_CLASSIFY_CLAUSE
+
+
 def test_halt_research_differs_from_room() -> None:
     assert ac.HALT_RESEARCH == "research"
     assert ac.HALT_RESEARCH != ac.HALT_ROOM

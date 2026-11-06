@@ -920,6 +920,18 @@ def _refuse_non_ask_chain_parent(params: dict) -> None:
         )
 
 
+_RUN_STAMP_TAIL = re.compile(r"-\d{8}T\d{6}-[0-9a-f]{6}$")
+
+
+def _unstamped_stem(sizing_rel: str) -> str:
+    """Sizing stem with any run id already carried stripped, so a mint appends exactly one stamp."""
+    stem = Path(sizing_rel).stem
+    if _RUN_STAMP_TAIL.search(stem):
+        stem = _RUN_STAMP_TAIL.sub("", stem)
+        stem = stem.removeprefix("warp-")
+    return stem
+
+
 def _preminted_ask_run_id(value: Any) -> str:
     """The raw-ask run id the submit hook minted before answering; refuses any other shape."""
     from coordinator_core.ops.dispatch_emit.run_token import is_ask_run_id
@@ -1591,6 +1603,7 @@ def _research_route_setup(
     members_brief = research_emit.bind_context(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
+    members_brief = research_emit.bind_output_paths(root, scratch_rel, members_brief)
     if shape.get("primary") == research_emit.REPO_PIPELINE:
         members_brief = _append_code_rank_line(root, scratch_rel, members_brief)
     content_root = _pipeline_content_root()
@@ -2544,7 +2557,7 @@ def _dispatch_emit_body(
                     )
                     pm_turn_recorded = recorded.get("turn") if recorded.get("ok") else None
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
-        run_id = f"warp-{Path(sizing_rel).stem}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
+        run_id = f"warp-{_unstamped_stem(sizing_rel)}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
         if not sizing_rel and params.get("preminted_run_id") is not None:
             run_id = _preminted_ask_run_id(params["preminted_run_id"])
         reserved_parent = None

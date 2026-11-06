@@ -1128,7 +1128,7 @@ _ADOPT_STAGE_REPLY_READER_JS = "    got = await _readStageSidecar(r.manifest_han
 # Trap: a launcher-child script holds no reader branch at all, so `workflow(` is absent from its bytes.
 _ADOPT_STAGE_REPLY_LAUNCHER_JS = (
     "    got = _adoptStagedInline(r.manifest_handle);\n"
-    "    if (got === null) { if (!_stagePending) _stagePending = { handle: r.manifest_handle }; return; }\n"
+    "    if (got === null) { if (!_stagePending) _stagePending = { handle: r.manifest_handle, ...(typeof r.twin_path === 'string' ? { twin_path: r.twin_path } : {}) }; return; }\n"
 )
 # Trap: depends on _verifyReplyText, and the slot line must precede it; the text still passes the verify before JSON.parse.
 _ADOPT_STAGED_INLINE_JS = """function _adoptStagedInline(h) {
@@ -6026,11 +6026,21 @@ def _chain_stage_loop_js() -> str:
     prefix, middle, suffix = _twin_affixes()
     return "\n".join([
         f"      for (let _rd = 0; _why === null && _chained !== null && typeof _chained === 'object' && _chained.{STAGE_PENDING_KEY}; _rd++) {{",
-        f"        const _sh = _chained.{STAGE_PENDING_KEY}.handle && _chained.{STAGE_PENDING_KEY}.handle.sha256;",
-        "        if (_rd >= 2 || typeof _sh !== 'string' || !/^[0-9a-f]{64}$/.test(_sh)) { _why = 'stage_pending was not resumable'; break; }",
+        f"        const _sp = _chained.{STAGE_PENDING_KEY}; const _sh = _sp.handle && _sp.handle.sha256;",
+        "        if (_rd >= 2) { _why = 'stage_pending was not resumable'; break; }",
         f"        const _bn = _chainPath.split('/').pop(); const _rs = {_lit(RUN_SCRIPT_SUFFIX)};",
         "        if (!_bn.endsWith(_rs) || _bn.length === _rs.length || _bn.indexOf('.staged-') !== -1) { _why = 'stage resume path is not a run script'; break; }",
-        f"        const _tp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/' + {_lit(prefix)} + _bn.slice(0, _bn.length - _rs.length) + {_lit(middle)} + _sh + {_lit(suffix)};",
+        f"        const _pre = {_lit(prefix)} + _bn.slice(0, _bn.length - _rs.length) + {_lit(middle)}; const _suf = {_lit(suffix)}; const _tw = _sp.twin_path;",
+        "        let _rel;",
+        "        if (_tw !== undefined && _tw !== null) {",
+        "          if (typeof _tw !== 'string' || _tw.length !== _pre.length + 64 + _suf.length || !_tw.startsWith(_pre) || !_tw.endsWith(_suf) "
+        "|| !/^[0-9a-f]{64}$/.test(_tw.slice(_pre.length, _pre.length + 64))) { _why = 'stage_pending twin_path is not a staged twin of this run'; break; }",
+        "          _rel = _tw;",
+        "        } else {",
+        "          if (typeof _sh !== 'string' || !/^[0-9a-f]{64}$/.test(_sh)) { _why = 'stage_pending was not resumable'; break; }",
+        "          _rel = _pre + _sh + _suf;",
+        "        }",
+        "        const _tp = REPO_ROOT.split(String.fromCharCode(92)).join('/') + '/' + _rel;",
         "        try { _chained = await workflow({ scriptPath: _tp }); }",
         "        catch (e) { _why = 'stage resume threw: ' + String(e && e.message ? e.message : e); }",
         "      }",

@@ -19,6 +19,7 @@ import re
 from dataclasses import dataclass, replace
 from typing import Mapping, Sequence
 
+from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit.emit import (
     _AGENT_MODELS,
     _EXECUTOR_AGENT_TYPE,
@@ -808,6 +809,42 @@ def _segment(
     return data, body, active
 
 
+RESEARCH_CLOSE_OP = "research.close"
+
+_CLOSE_SCHEMA = {
+    "type": "object",
+    "required": ["exit_code", "reply"],
+    "properties": {"exit_code": {"type": "integer"}, "reply": {"type": "string"}},
+}
+
+
+def _close_agent_options(agent_type_host: str | None) -> str:
+    return ", ".join([
+        f"agentType: {_js_string_literal(_degrade_agent_type(OP_RUNNER_AGENT_TYPE, agent_type_host))}",
+        f"model: {_js_string_literal(resolve_agent_model(OP_RUNNER_AGENT_TYPE))}",
+        f"schema: {json.dumps(_CLOSE_SCHEMA, sort_keys=True)}",
+    ])
+
+
+def _close_in_run_js(options: str) -> list[str]:
+    """JS declaring `closeInRun(action)`: one op-runner call running `coordinator-invoke research.close '<params>'`, resolving the parsed stdout (null when the call threw)."""
+    return [
+        r"""const closeInRun = async (action) => {
+  const cmd = 'coordinator-invoke ' + action.op + " '" + String(JSON.stringify(action.params)).replace(/'/g, "'\\''") + "'";
+  try {
+    const r = await agent('Run this single command and return its exit code and its stdout verbatim as reply. Run nothing else.\n\n' + cmd, { label: 'research-close', """
+        + options
+        + r""" });
+    let parsed = null;
+    try { parsed = JSON.parse(String(r?.reply ?? '')); } catch (e) { parsed = null; }
+    return parsed ?? { committed: false, exit_code: r?.exit_code ?? null, reply: r?.reply ?? null };
+  } catch (e) {
+    return null;
+  }
+};"""
+    ]
+
+
 def compose_chain_script(
     segments: Sequence[Segment],
     *,
@@ -892,9 +929,18 @@ def compose_chain_script(
             out += [f"segment{index + 1}: {{"] + data + body + ["}", ""]
     else:
         out += parts[0][2][1]
+    closes = next_action is not None and next_action.get("op") == RESEARCH_CLOSE_OP
     if not scoped:
         if next_action is None:
             out += ["return results;", ""]
+        elif closes:
+            out += [
+                f"const NEXT_ACTION = {json.dumps(dict(next_action), sort_keys=True)};",
+                *_close_in_run_js(_close_agent_options(agent_type_host)),
+                "const closed = await closeInRun(NEXT_ACTION);",
+                "return { results, closed, ...(closed?.committed === true ? {} : { next_action: NEXT_ACTION }) };",
+                "",
+            ]
         else:
             out += [f"return {{ results, next_action: {json.dumps(dict(next_action), sort_keys=True)} }};", ""]
     elif next_action is None:
@@ -907,14 +953,31 @@ def compose_chain_script(
             "const haltedLegs = new Set(segment_halts.map((h) => h.leg));",
             "const delivered = SEGMENT_LEGS.some(([, leg]) => !haltedLegs.has(leg));",
             "const haltedSegments = SEGMENT_LEGS.filter(([, leg]) => haltedLegs.has(leg)).map(([name]) => name);",
-            "return {",
-            "  results,",
-            "  segment_halts,",
-            "  ...(delivered ? { next_action: haltedLegs.size === 0 ? NEXT_ACTION : "
-            "{ ...NEXT_ACTION, params: { ...NEXT_ACTION.params, halted_segments: [...new Set(haltedSegments)] } } } : {}),",
-            "};",
-            "",
         ]
+        if closes:
+            out += [
+                "const effective = haltedLegs.size === 0 ? NEXT_ACTION : "
+                "{ ...NEXT_ACTION, params: { ...NEXT_ACTION.params, halted_segments: [...new Set(haltedSegments)] } };",
+                *_close_in_run_js(_close_agent_options(agent_type_host)),
+                "const closed = delivered ? await closeInRun(effective) : null;",
+                "return {",
+                "  results,",
+                "  segment_halts,",
+                "  closed,",
+                "  ...(delivered && closed?.committed !== true ? { next_action: effective } : {}),",
+                "};",
+                "",
+            ]
+        else:
+            out += [
+                "return {",
+                "  results,",
+                "  segment_halts,",
+                "  ...(delivered ? { next_action: haltedLegs.size === 0 ? NEXT_ACTION : "
+                "{ ...NEXT_ACTION, params: { ...NEXT_ACTION.params, halted_segments: [...new Set(haltedSegments)] } } } : {}),",
+                "};",
+                "",
+            ]
     text = "\n".join(out)
     size = len(text.encode("utf-8"))
     if size > WORKFLOW_SCRIPT_CAP_BYTES:

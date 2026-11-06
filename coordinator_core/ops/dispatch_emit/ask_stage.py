@@ -2228,7 +2228,11 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
         with leg("preflight"):
             recorded = ask_stage_receipt.landed(prior_dir, digest, spine_sha)
             if recorded is not None:
-                return {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
+                again = {"manifest_handle": recorded, ask_stage_receipt.ALREADY_STAGED_KEY: True}
+                _, again_twin = reply_sidecar.handle_and_twin(root, prior_dir / "manifest.json")
+                if again_twin is not None:
+                    again["twin_path"] = again_twin
+                return again
             running = ask_stage_receipt.in_flight(prior_dir, digest)
             if running is not None:
                 return {ask_stage_receipt.STAGE_IN_FLIGHT_KEY: running}
@@ -2274,7 +2278,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             with leg("stamp"):
                 stamp = stamp_plan_executing(root, params["plan_path"])
         with leg("receipt"):
-            handle = reply_sidecar.handle_for(root, record_dir(root, run_id) / "manifest.json")
+            handle, twin_rel = reply_sidecar.handle_and_twin(root, record_dir(root, run_id) / "manifest.json")
             ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}
@@ -2293,6 +2297,8 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             with leg("release"):
                 ask_stage_receipt.release(prior_dir)
     reply = {"manifest_handle": handle}
+    if twin_rel is not None:
+        reply["twin_path"] = twin_rel
     if stamp is not None and stamp["outcome"] != "unchanged":
         reply[PLAN_EXECUTING_STAMP_KEY] = stamp
     return reply

@@ -47,7 +47,9 @@ def test_next_action_return_spreads_halted_segments_only_when_a_leg_delivered(tm
     )
     assert 'const NEXT_ACTION = {"op": "research.close", "params": {"a": 1}};' in script
     assert 'const SEGMENT_LEGS = [["pre", "nb"], ["nb", "nb"], ["web", "web"]];' in script
-    assert "...(delivered ? { next_action:" in script and "halted_segments: [...new Set(haltedSegments)]" in script
+    assert "const closed = delivered ? await closeInRun(effective) : null;" in script
+    assert "...(delivered && closed?.committed !== true ? { next_action: effective } : {})" in script
+    assert "halted_segments: [...new Set(haltedSegments)]" in script
 
 
 def test_one_segment_without_legs_is_byte_identical_to_the_plain_script(tmp_path):

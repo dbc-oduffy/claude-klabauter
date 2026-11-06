@@ -168,3 +168,48 @@ def test_adopt_of_a_whole_inline_carries_no_spill_mark():
     h = {"path": "state/warp/r/manifest.json", "sha256": hashlib.sha256(text.encode()).hexdigest(), "bytes": len(text)}
     got = _adopt_with_node({"handle": h, "text": text}, h)
     assert "spill" not in got["manifest"]
+
+
+def _run_chain_loop(pending: dict) -> dict:
+    """Run the chain resume loop in node against a stubbed workflow(); returns {chained, why, calls}."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node unavailable")
+    code = (
+        "const REPO_ROOT = '/r';\n"
+        "const calls = [];\n"
+        f"const PENDING = {json.dumps({'stage_pending': pending})};\n"
+        "const workflow = async (o) => { calls.push(o.scriptPath); return { done: true }; };\n"
+        "(async () => {\n  let _why = null; let _chained = PENDING; const _chainPath = '/r/scratch/warp/ask-r1.workflow.mjs';\n"
+        + ask_compose._chain_stage_loop_js()
+        + "\n  console.log(JSON.stringify({ chained: _chained, why: _why, calls }));\n})();\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    got = _run_chain_loop({"handle": {"sha256": "3c" * 32}, "twin_path": staged_twin_rel("ask-r1", "2d" * 32)})
+    assert got["why"] is None and got["calls"] == ["/r/" + staged_twin_rel("ask-r1", "2d" * 32)]
+
+
+def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    got = _run_chain_loop({"handle": {"sha256": "ab" * 32}})
+    assert got["why"] is None and got["calls"] == ["/r/" + staged_twin_rel("ask-r1", "ab" * 32)]
+
+
+def test_a_named_twin_of_another_run_is_refused_and_nothing_starts():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    got = _run_chain_loop({"handle": {"sha256": "2d" * 32}, "twin_path": staged_twin_rel("ask-other", "2d" * 32)})
+    assert "twin_path is not a staged twin of this run" in got["why"] and got["calls"] == []

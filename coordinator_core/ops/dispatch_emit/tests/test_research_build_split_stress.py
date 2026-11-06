@@ -220,6 +220,22 @@ def test_no_writes_research_sizing_does_not_split(repo):
     assert [p.name for p in (repo / "state" / "sizings").iterdir()] == [Path(REL).name]
 
 
+def test_then_build_split_releases_its_writes_less_build_on_close(repo, tmp_path):
+    s = _split(repo, research={**RESEARCH, "then_build": True}, writes=[])
+    assert _status(repo, s["build"]["run_id"]) == "unbound"
+    out = _close(repo, tmp_path, s)
+    assert s["build"]["run_id"] in out["released_runs"], out
+
+
+def test_writes_less_build_sibling_reenters_the_gate_without_resplitting(repo):
+    s = _split(repo, research={**RESEARCH, "then_build": True}, writes=[])
+    build_rel = s["build"]["sizing"]
+    v = gate(repo, build_rel, writes=[])
+    assert "split" not in (v.halt or {}), v
+    assert "writes" not in (v.halt or {}).get("reason", ""), v
+    assert "research" not in yaml.safe_load((repo / build_rel).read_text(encoding="utf-8"))
+
+
 def test_non_research_sizing_does_not_split(repo):
     _put(repo, None)
     v = gate(repo, REL, writes=WRITES)

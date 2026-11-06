@@ -319,6 +319,7 @@ ASK_SCOUT_SCHEMA = {
                     },
                 },
                 "questions": {"type": "array", "items": _STR},
+                "then_build": {"type": "boolean"},
             },
         },
         "acceptance_rows": {
@@ -347,7 +348,9 @@ RESEARCH_CLASSIFY_CLAUSE = (
     "only when the ask's deliverable is knowledge -- a question answered, a survey, a comparison, "
     "a diagnosis written up -- rather than a change to files; otherwise return it null. A pure "
     "research ask returns `writes` as []: the research route's findings artifact is not a write. "
-    "An ask that also asks for a build returns both `research` and its `writes`. "
+    "An ask that also asks for a build returns both `research` and its `writes`; a research-then-build "
+    "ask whose writes only the research can determine returns `writes` as [] and sets "
+    "`research.then_build` true. "
     "Class: `scouts` for a bare question a few searches answer; `corpus` for a comprehension "
     "ask -- understand a repo or topic, survey, compare or rank candidates -- at any target count; "
     "`deep` only when the EM is stuck delivering something and needs the unblock team; `spike` "

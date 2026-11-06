@@ -191,7 +191,7 @@ def _research_build_split_verdict(
         "sizings": [
             {"sizing": rels[0], "label": "research", "ids": ["research"], "writes": []},
             {"sizing": rels[1], "label": "build", "ids": ["build"], "blocked_by": ["research"],
-             "writes": [str(w) for w in build_doc["writes"]]},
+             "writes": [str(w) for w in build_doc.get("writes", ())]},
         ],
         "edges_from": "blocked_by",
     }
@@ -217,7 +217,7 @@ def _research_build_split_verdict(
     }
     return _halt(
         HALT_RESEARCH,
-        f"research sizing {sizing_rel} also names writes: split into research run {split['research']['run_id']} "
+        f"research sizing {sizing_rel} also asks for a build: split into research run {split['research']['run_id']} "
         f"and build run {split['build']['run_id']}, held after it",
         route=RESEARCH_HANDBACK_ROUTE,
         fire=reply["fire"],
@@ -677,7 +677,7 @@ def _arm_verdict(
         )
     research = sizing.get("research")
     if isinstance(research, dict) and research and not research_is_bounded_single_write(sizing, writes):
-        if writes:
+        if writes or research.get("then_build") is True:
             return _research_build_split_verdict(repo_root, sizing, sizing_rel, writes)
         return _halt(
             HALT_RESEARCH,
@@ -1478,7 +1478,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                     out["halt"] = {"kind": HALT_REFUSAL, "reason": rehalt}
                     return out
             stamp = stamp_plan_executing(root, plan_rel)
-            out["manifest_handle"] = reply_sidecar.handle_for(root, record_dir(root, params["run_id"]) / "manifest.json")
+            out["manifest_handle"], twin_rel = reply_sidecar.handle_and_twin(
+                root, record_dir(root, params["run_id"]) / "manifest.json"
+            )
+            if twin_rel is not None:
+                out["twin_path"] = twin_rel
             ask_stage_receipt.write_gate(record_dir(root, params["run_id"]), out["manifest_handle"])
             if stamp["outcome"] != "unchanged":
                 out[PLAN_EXECUTING_STAMP_KEY] = stamp

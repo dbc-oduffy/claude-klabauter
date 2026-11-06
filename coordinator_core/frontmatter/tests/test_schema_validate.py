@@ -3560,6 +3560,29 @@ class TestPlansIndexRoutingExclusion:
         assert resolved is not None
         assert resolved['schemaName'] == 'plan'
 
+    def test_plan_adjacent_evidence_yaml_resolves_to_none(self):
+        schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
+        for path in (
+            'docs/plans/2026-11/2026-11-05-x-8a0ad1.evidence.yaml',
+            'docs/plans/2026-11-05-x.evidence.yaml',
+        ):
+            assert match_schema(path, None, schemas) is None
+            assert match_schema(path, {'title': 'x'}, schemas) is None
+
+    def test_plan_md_beside_evidence_yaml_still_resolves_to_plan(self):
+        schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
+        resolved = match_schema('docs/plans/2026-11/2026-11-05-x-8a0ad1.md', None, schemas)
+        assert resolved is not None
+        assert resolved['schemaName'] == 'plan'
+
+    def test_evidence_yaml_helper_is_the_lint_tree_exclusion(self):
+        from coordinator_core.frontmatter.schema_validate import _is_plan_dir_index_routing_excluded
+        assert _is_plan_dir_index_routing_excluded('docs/plans/2026-11/a.evidence.yaml', None)
+        assert not _is_plan_dir_index_routing_excluded('docs/plans/2026-11/a.md', None)
+        assert not _is_plan_dir_index_routing_excluded(
+            'docs/plans/2026-11/a.evidence.yaml', {'kind': 'plan'}
+        )
+
     def test_problems_index_md_no_frontmatter_resolves_to_none(self):
         """`_RECORD_DIR_INDEX_PREFIXES` also covers `docs/problems/` — an
         INDEX.md there with no declared `kind:` is routing-excluded the same

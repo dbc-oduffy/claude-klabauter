@@ -52,10 +52,15 @@ def _emit(repo, capsys, depth):
     return Path(reply["path"]).read_text(encoding="utf-8")
 
 
+def _scout_lines(script: str) -> str:
+    """The script minus op-runner calls: the in-run research.close leg runs on haiku by design, never as a scout."""
+    return "\n".join(line for line in script.splitlines() if "op-runner" not in line)
+
+
 def test_deeper_runs_one_sonnet_scout_per_question(repo, capsys):
     script = _emit(repo, capsys, "deeper")
     assert "members" not in script
-    assert "model: 'haiku'" not in script
+    assert "model: 'haiku'" not in _scout_lines(script)
     assert script.count("model: 'sonnet'") >= 1
 
 
@@ -67,5 +72,5 @@ def test_standard_keeps_grouped_haiku_scouts(repo, capsys):
 
 def test_deepest_also_runs_sonnet_scouts(repo, capsys):
     script = _emit(repo, capsys, "deepest")
-    assert "model: 'haiku'" not in script
+    assert "model: 'haiku'" not in _scout_lines(script)
     assert "members" not in script

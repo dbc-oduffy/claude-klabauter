@@ -354,6 +354,15 @@ def test_sidecars_yaml_and_directory_index_are_skipped(tree, capsys):
     assert out['ok'] and out['violations'] == []
 
 
+def test_plan_adjacent_evidence_yaml_is_not_swept_but_plan_md_is(tree, capsys):
+    _write(tree, 'docs/plans/2026-11/p1-8a0ad1.evidence.yaml', 'title: x\nstatus: bogus\n')
+    _write(tree, 'docs/plans/2026-11/p1-8a0ad1.md', _record('title: "Plan"\nstatus: "bogué中"\n'))
+    out = _sweep(tree, capsys)
+    files = {v['file'] for v in out['violations']}
+    assert 'docs/plans/2026-11/p1-8a0ad1.md' in files
+    assert not any(f.endswith('.evidence.yaml') for f in files)
+
+
 def test_human_output_and_exit_code(tree, capsys):
     _seed(tree)
     capsys.readouterr()

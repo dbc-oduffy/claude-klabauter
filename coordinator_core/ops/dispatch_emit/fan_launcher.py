@@ -132,6 +132,16 @@ function _pathRunId(p) {
   return (b.endsWith(RUN_SCRIPT_SUFFIX) && b.indexOf('.staged-') === -1) ? b.slice(0, b.length - RUN_SCRIPT_SUFFIX.length) : '';
 }
 
+// A stage reply that names its staged twin wins over a path derived from the handle sha, which a restage leaves stale. null: none named; false: named but not this run's twin.
+function _replyTwinRel(pending, stem) {
+  const t = pending.twin_path;
+  if (t === undefined || t === null) return null;
+  const pre = TWIN_PREFIX + stem + TWIN_MIDDLE;
+  const ok = typeof t === 'string' && t.length === pre.length + 64 + TWIN_SUFFIX.length && t.startsWith(pre)
+    && t.endsWith(TWIN_SUFFIX) && /^[0-9a-f]{64}$/.test(t.slice(pre.length, pre.length + 64));
+  return ok ? t : false;
+}
+
 // The only foreign run id accepted: the one this emit minted as the redirect for this child's halted run.
 function _isOwnRedirect(child, e) {
   const r = e.__REDIRECT_KEY__;
@@ -197,7 +207,7 @@ async function _emitLeg(child, emitParams, label) {
 // A recomposed run this emit minted that nothing started is closed engine-side, all in one leg after the children settle; the engine leaves a run that already progressed.
 async function _abandonAll() {
   if (ABANDON_IDS.length === 0) return;
-  const params = JSON.stringify({ emits: ABANDON_IDS.map((e) => ({ ...e })) }).replace(/'/g, "'\\''");
+  const params = JSON.stringify({ _caller_cwd: REPO_ROOT, emits: ABANDON_IDS.map((e) => ({ ...e })) }).replace(/'/g, "'\\''");
   try {
     await agent(
       'Your whole task is the command below; its arguments are your only authority. '
@@ -219,7 +229,7 @@ async function _startLoop(child, firstPath) {
 
 async function _startLoopRun(child, firstPath, state) {
   let scriptPath = firstPath;
-  let lastSha = null;
+  let lastTwinRel = null;
   let deferredDone = false;
   for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
     let result;
@@ -247,19 +257,27 @@ async function _startLoopRun(child, firstPath, state) {
     if (round >= MAX_STAGE_ROUNDS) {
       return { run_id: child.run_id, status: 'failed', error: 'stage_pending after ' + MAX_STAGE_ROUNDS + ' stage rounds' };
     }
-    const sha = handle && typeof handle === 'object' ? handle.sha256 : undefined;
-    if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) {
-      return { run_id: child.run_id, status: 'failed', error: 'stage_pending handle sha256 is not 64 lowercase hex' };
-    }
-    if (lastSha === sha) {
-      return { run_id: child.run_id, status: 'failed', error: 'stage_pending repeated for a handle already supplied' };
-    }
-    lastSha = sha;
     const base = firstPath.split('/').pop();
     if (!base.endsWith(RUN_SCRIPT_SUFFIX) || base.length === RUN_SCRIPT_SUFFIX.length || base.indexOf('.staged-') !== -1) {
       return { run_id: child.run_id, status: 'failed', error: 'stage resume path is not a run script: ' + firstPath };
     }
-    const twinRel = TWIN_PREFIX + base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length) + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+    const stem = base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length);
+    const named = _replyTwinRel(pending, stem);
+    if (named === false) {
+      return { run_id: child.run_id, status: 'failed', error: 'stage_pending twin_path is not a staged twin of this run: ' + String(pending.twin_path) };
+    }
+    let twinRel = named;
+    if (named === null) {
+      const sha = handle && typeof handle === 'object' ? handle.sha256 : undefined;
+      if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) {
+        return { run_id: child.run_id, status: 'failed', error: 'stage_pending handle sha256 is not 64 lowercase hex' };
+      }
+      twinRel = TWIN_PREFIX + stem + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+    }
+    if (lastTwinRel === twinRel) {
+      return { run_id: child.run_id, status: 'failed', error: 'stage_pending repeated for a handle already supplied' };
+    }
+    lastTwinRel = twinRel;
     scriptPath = REPO_ROOT + '/' + twinRel;
   }
   return { run_id: child.run_id, status: 'failed', error: 'stage rounds exhausted' };

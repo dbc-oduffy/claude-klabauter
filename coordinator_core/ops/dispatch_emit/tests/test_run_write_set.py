@@ -173,3 +173,23 @@ def test_unclaimed_dirty_modified_untracked_and_foreign(tmp_path, monkeypatch):
     got = rws.unclaimed_dirty(tmp_path, ["clean.py", "mod.py", "theirs.py", "new.py", "gone.py"], "me")
     assert sorted(got) == ["gone.py", "mod.py", "new.py"]
     assert rws.unclaimed_dirty(tmp_path, [], "me") == ()
+
+
+def test_split_names_each_peer_held_path_with_its_holders_and_keeps_the_rest(tmp_path, monkeypatch):
+    _record(tmp_path)
+    _claims(monkeypatch, {"pkg/f.py": ["other", "another"], "pkg/a.py": ["me"]})
+    kept, held = rws.run_write_set_split(tmp_path, RUN, "me")
+    assert held == {"pkg/f.py": ["other", "another"]}
+    assert "pkg/f.py" not in kept and "pkg/a.py" in kept
+    assert kept == rws.run_write_set(tmp_path, RUN, "me")
+
+
+def test_split_without_a_peer_hold_has_an_empty_held_map(tmp_path, monkeypatch):
+    _record(tmp_path)
+    _claims(monkeypatch, {"pkg/a.py": ["me"]})
+    assert rws.run_write_set_split(tmp_path, RUN, "me")[1] == {}
+
+
+def test_split_with_missing_manifest_is_empty_pair(tmp_path, monkeypatch):
+    _claims(monkeypatch, {})
+    assert rws.run_write_set_split(tmp_path, RUN, "me") == ((), {})

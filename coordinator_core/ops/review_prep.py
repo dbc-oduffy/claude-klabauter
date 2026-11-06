@@ -1032,7 +1032,7 @@ def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, o
     the calling session itself. Raises ValueError (one fact) on an unsafe run_id, a missing manifest,
     a non-list-of-str field, a missing footprint under ``leg``, or an empty write set. Spawns nothing."""
     from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
-    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set
+    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set_split
 
     base = record_dir(repo_root, run_id)
     manifest = _read_json_object(base / "manifest.json")
@@ -1046,9 +1046,14 @@ def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, o
         writes = footprint.get("writes") if footprint is not None else None
         if not isinstance(writes, list) or not all(isinstance(p, str) for p in writes):
             raise ValueError(f"no readable leg footprint writes list for run {run_id!r}")
-    resolved = list(run_write_set(repo_root, run_id, own_session))
+    kept, held = run_write_set_split(repo_root, run_id, own_session)
+    resolved = list(kept)
     if not resolved:
-        raise ValueError(f"run {run_id!r} has no reviewable paths (none declared, or all scratch or claimed by another session)")
+        named = "; ".join(f"{p} (held by {', '.join(sids)})" for p, sids in held.items())
+        raise ValueError(
+            f"run {run_id!r} has no reviewable paths (none declared, or all scratch or claimed by another session)"
+            + (f"; peer-held: {named}" if named else "")
+        )
     return resolved
 
 

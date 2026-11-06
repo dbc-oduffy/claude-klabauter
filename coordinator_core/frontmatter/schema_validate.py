@@ -7452,13 +7452,18 @@ _RECORD_DIR_INDEX_PREFIXES: tuple[str, ...] = ('docs/plans/', 'docs/decisions/',
 #: excluded from routing unless they declare a `kind:`.
 _PLAN_EVIDENCE_PREFIX = 'docs/plans/evidence/'
 
+#: A plan-adjacent `<plan>.evidence.yaml` is evidence, not a plan; excluded from
+#: routing unless it declares a `kind:`.
+_PLAN_EVIDENCE_SIDECAR_SUFFIX = '.evidence.yaml'
+
 
 def _is_plan_dir_index_routing_excluded(normalised_repo_rel_path: str, frontmatter: dict | None) -> bool:
     """True when `normalised_repo_rel_path` (already backslash-normalised) is
     an `INDEX.md`/`README.md` directory index in one of
     `_RECORD_DIR_INDEX_PREFIXES` with no declared `kind:` — see `match_schema`'s
     second-amendment docstring. Also true for any file under
-    `_PLAN_EVIDENCE_PREFIX` (any depth) with no declared `kind:`.
+    `_PLAN_EVIDENCE_PREFIX` (any depth), and any `docs/plans/**/*.evidence.yaml`
+    (`_PLAN_EVIDENCE_SIDECAR_SUFFIX`), with no declared `kind:`.
     Shared by `match_schema` (per-file resolution) and `lint_tree`'s
     whole-tree collection loop, which otherwise falls back to
     validating an unresolved file against whichever schema's glob collected
@@ -7467,6 +7472,11 @@ def _is_plan_dir_index_routing_excluded(normalised_repo_rel_path: str, frontmatt
     """
     no_declared_kind = frontmatter is None or frontmatter.get('kind') is None
     if normalised_repo_rel_path.startswith(_PLAN_EVIDENCE_PREFIX):
+        return no_declared_kind
+    if (
+        normalised_repo_rel_path.startswith('docs/plans/')
+        and normalised_repo_rel_path.endswith(_PLAN_EVIDENCE_SIDECAR_SUFFIX)
+    ):
         return no_declared_kind
     in_record_dir = any(
         normalised_repo_rel_path.startswith(prefix) for prefix in _RECORD_DIR_INDEX_PREFIXES

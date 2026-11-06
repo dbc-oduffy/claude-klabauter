@@ -34,17 +34,23 @@ def split_research_build(
     """Return `(research_sizing_doc, build_sizing_doc)` as deep copies of `sizing`.
 
     Research doc: `research` kept, `writes` removed. Build doc: `research` removed, `writes` set to the
-    non-empty entries of `writes`. `sizing_rel` is only named in the ValueError for a sizing with no
-    research block, which has nothing to split."""
+    non-empty entries of `writes`, or dropped when there are none (a research-then-build ask whose
+    writes the research has yet to determine). `sizing_rel` is only named in the ValueError for a
+    sizing with no research block, which has nothing to split."""
     research = sizing.get("research")
     if not (isinstance(research, Mapping) and research):
         raise ValueError(f"sizing {sizing_rel}: no research block to split")
     research_doc = copy.deepcopy(dict(sizing))
     research_doc.pop("writes", None)
+    research_doc["research"].pop("then_build", None)
     build_doc = copy.deepcopy(dict(sizing))
     build_doc.pop("research", None)
     build_doc["route"] = "plan"
-    build_doc["writes"] = [str(w).strip() for w in writes if str(w).strip()]
+    kept = [str(w).strip() for w in writes if str(w).strip()]
+    if kept:
+        build_doc["writes"] = kept
+    else:
+        build_doc.pop("writes", None)
     for doc in (research_doc, build_doc):
         _drop_ask_parent(doc)
     return research_doc, build_doc

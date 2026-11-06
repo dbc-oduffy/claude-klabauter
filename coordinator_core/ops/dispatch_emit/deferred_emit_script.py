@@ -61,6 +61,15 @@ function _normPath(p) {
   const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
   return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : REPO_ROOT + '/' + s.replace(/^\.\//, '');
 }
+// A stage reply that names its staged twin wins over a path derived from the handle sha, which a restage leaves stale. null: none named; false: named but not this run's twin.
+function _replyTwinRel(pending, stem) {
+  const t = pending.twin_path;
+  if (t === undefined || t === null) return null;
+  const pre = TWIN_PREFIX + stem + TWIN_MIDDLE;
+  const ok = typeof t === 'string' && t.length === pre.length + 64 + TWIN_SUFFIX.length && t.startsWith(pre)
+    && t.endsWith(TWIN_SUFFIX) && /^[0-9a-f]{64}$/.test(t.slice(pre.length, pre.length + 64));
+  return ok ? t : false;
+}
 async function _startLoop(firstPath) {
   let path = firstPath;
   let lastSha = null;
@@ -69,15 +78,22 @@ async function _startLoop(firstPath) {
     const pending = (result !== null && typeof result === 'object') ? result.__PENDING_KEY__ : null;
     if (!pending) return { ok: true, result: result };
     if (round >= MAX_STAGE_ROUNDS) return { ok: false, error: 'stage_pending after ' + MAX_STAGE_ROUNDS + ' stage rounds' };
-    const sha = pending.handle && typeof pending.handle === 'object' ? pending.handle.sha256 : undefined;
-    if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) return { ok: false, error: 'stage_pending handle sha256 is not 64 lowercase hex' };
-    if (lastSha === sha) return { ok: false, error: 'stage_pending repeated for a handle already supplied' };
-    lastSha = sha;
     const base = firstPath.split('/').pop();
     if (!base.endsWith(RUN_SCRIPT_SUFFIX) || base.length === RUN_SCRIPT_SUFFIX.length || base.indexOf('.staged-') !== -1) {
       return { ok: false, error: 'stage resume path is not a run script: ' + firstPath };
     }
-    path = REPO_ROOT + '/' + TWIN_PREFIX + base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length) + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+    const stem = base.slice(0, base.length - RUN_SCRIPT_SUFFIX.length);
+    const named = _replyTwinRel(pending, stem);
+    if (named === false) return { ok: false, error: 'stage_pending twin_path is not a staged twin of this run: ' + String(pending.twin_path) };
+    let twinRel = named;
+    if (named === null) {
+      const sha = pending.handle && typeof pending.handle === 'object' ? pending.handle.sha256 : undefined;
+      if (typeof sha !== 'string' || !/^[0-9a-f]{64}$/.test(sha)) return { ok: false, error: 'stage_pending handle sha256 is not 64 lowercase hex' };
+      twinRel = TWIN_PREFIX + stem + TWIN_MIDDLE + sha + TWIN_SUFFIX;
+    }
+    if (lastSha === twinRel) return { ok: false, error: 'stage_pending repeated for a handle already supplied' };
+    lastSha = twinRel;
+    path = REPO_ROOT + '/' + twinRel;
   }
   return { ok: false, error: 'stage rounds exhausted' };
 }

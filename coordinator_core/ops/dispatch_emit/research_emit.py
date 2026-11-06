@@ -33,11 +33,12 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask", "research_block"]
+__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "bind_output_paths", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask", "research_block"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
 _CONTEXT_HEADING = "## Context files"
+_OUTPUT_PREFIX = "Output paths:"
 MAX_SLUG_LEN = 48
 DIGEST_LEN = 6
 SCRIPT_SUFFIX = ".workflow.mjs"
@@ -110,7 +111,7 @@ def run_id_for(root: Path, run_dir_root: str, prefix: str, digest: str, now: str
         if not (base / run_id / SUBMISSION_FILE).exists():
             return run_id
     fresh, bump = f"{prefix}{now}-{digest}", 0
-    while (base / fresh).exists() or (base / f"{fresh}{SCRIPT_SUFFIX}").exists():
+    while (base / fresh / SUBMISSION_FILE).exists() or (base / f"{fresh}{SCRIPT_SUFFIX}").exists():
         bump += 1
         fresh = f"{prefix}{now}{bump}-{digest}"
     return fresh
@@ -430,6 +431,40 @@ def bind_context(root: Path, scratch_rel: str, brief_rel: str, context: Sequence
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(f"The brief is `{brief_rel}`; read it first.\n\n{section}", encoding="utf-8", newline="\n")
     return rel
+
+
+def bind_output_paths(root: Path, scratch_rel: str, brief_rel: str) -> str:
+    """State this run's `output_path` and `advisory_path` in the brief members read; return its path.
+
+    The web scope template defaults the synthesis to `<run dir>/synthesis.md`, the run dir being
+    the parent of the scratch dir: right for a `docs/research` workdir, `scratch/warp/` (shared by
+    every run) for the per-run default. A scratch under `docs/research` is left to that default;
+    any other gets `<scratch>/synthesis.md` and `<scratch>/outputs/advisory.md`. An ask or brief
+    file under `scratch_rel` gains the section in place; any other brief (a sizing) is never
+    edited: `<scratch>/brief.md` points at it and carries the section.
+    """
+    base = scratch_rel.rstrip("/")
+    if base.split("/")[:2] == ["docs", "research"]:
+        return brief_rel
+    section = (
+        f"{_OUTPUT_PREFIX} Unless this request names another output path, the run writes its final "
+        f"document to `{base}/synthesis.md` and its advisory to `{base}/outputs/advisory.md`.\n"
+    )
+    own = {f"{base}/{ASK_FILE}", f"{base}/{BRIEF_FILE}"}
+    target = root / (brief_rel if brief_rel in own else f"{base}/{BRIEF_FILE}")
+    if brief_rel in own:
+        existing = target.read_text(encoding="utf-8")
+        heading = re.search(r"^## ", existing, flags=re.MULTILINE)
+        if heading:
+            head, tail = existing[: heading.start()].rstrip("\n"), existing[heading.start():]
+            text = (head + "\n\n" if head else "") + section + "\n" + tail
+        else:
+            text = existing.rstrip("\n") + "\n\n" + section
+    else:
+        text = f"The brief is `{brief_rel}`; read it first.\n\n{section}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8", newline="\n")
+    return brief_rel if brief_rel in own else f"{base}/{BRIEF_FILE}"
 
 
 _GATED_STAGES = ("scope", "scout", "workers", "sweep")

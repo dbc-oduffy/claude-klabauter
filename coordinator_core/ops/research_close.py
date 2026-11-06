@@ -62,7 +62,8 @@ Before any copy, every output is scanned for secret-shaped values (a run can rea
 third-party tree that commits credentials); a hit refuses the close naming file, line and
 pattern, never the value. Before any copy, untracked files under ``docs/research/`` written
 since the run began and outside the run dir are partitioned by ``claim_index.commit_set`` (the
-caller's ``session_id`` param, else the ambient session): those this session solely claims refuse the
+caller's ``session_id`` param, else the ambient session): those this session solely claims, and that
+sit outside any run's ``<topic>/<date>-<slug>`` dir, refuse the
 close (``deliverable: false``, ``strays`` listed, nothing written; move each into scratch and
 re-close); every other one is listed as ``peer_files`` on the success reply and never touched.
 
@@ -404,12 +405,19 @@ def _own_strays(worktree: Path, strays: list[str], session_id: Optional[str]) ->
     """The `strays` this session holds the sole write claim on (DR-258 ``commit_set``).
 
     Without a session id nothing is attributable, so nothing is own: the close never refuses
-    on a file it cannot show is the caller's.
+    on a file it cannot show is the caller's. A stray under another run's ``<topic>/<date>-<slug>``
+    directory is that run's deliverable, never own (one session runs several research runs).
     """
     if not strays or not session_id:
         return []
     mine = set(claim_index.commit_set(session_id, cwd=str(worktree)).paths)
-    return [s for s in strays if s in mine]
+    return [s for s in strays if s in mine and not _under_a_run_dir(s)]
+
+
+def _under_a_run_dir(rel: str) -> bool:
+    """True when the repo-relative `rel` sits below a conforming ``docs/research/<topic>/<date>-<slug>/``."""
+    parts = Path(rel).relative_to(_RESEARCH_DIR).parts
+    return len(parts) > 2 and layout.classify("/".join(parts[:2])) == layout.RUN_DIR
 
 
 def _close_committed(
@@ -613,7 +621,8 @@ def _close_archived(
     if dropped or (meta.get("sizing_rel") and not group_runs):
         released_runs = _release_build_sibling(worktree, run_id, trail_rel, meta.get("sizing_rel"))
         if released_runs is not None:
-            note["released_runs"] = released_runs
+            note["released_runs"] = [r.run_id for r in released_runs]
+            note["released_fires"] = _released_fires(released_runs)
     shared = {
         **note,
         "exit_code": 0,
@@ -659,8 +668,8 @@ def _split_ask_run(worktree: Path, sizing_rel: str) -> Optional[tuple[str, str]]
 
 def _release_build_sibling(
     worktree: Path, run_id: str, trail_rel: str, sizing_rel: Optional[str] = None,
-) -> Optional[list[str]]:
-    """Run ids freed by closing the research run ``run_id``, or None when no sibling status is found.
+) -> Optional[list]:
+    """``SiblingRun`` records freed by closing the research run ``run_id``, or None when no sibling status is found.
 
     The trail record marks the halted-shaped status ``closed_by`` so its ``after`` successor releases.
     A pipeline-research run has no status under its own id: the split ask run whose parent-record
@@ -694,7 +703,14 @@ def _release_build_sibling(
         )
     except (OSError, ValueError, KeyError, TypeError):
         return []
-    return [r.run_id for r in parent.runs if fire_command(r.slice_sizing) in fired]
+    return [r for r in parent.runs if fire_command(r.slice_sizing) in fired]
+
+
+def _released_fires(runs: list) -> list[dict]:
+    """``{run_id, sizing, fire}`` per released run: the submit call that starts it."""
+    from coordinator_core.warp_fire import fire_command
+
+    return [{"run_id": r.run_id, "sizing": r.slice_sizing, "fire": fire_command(r.slice_sizing)} for r in runs]
 
 
 def _missing_claims(scratch: Path, require_claims) -> Optional[dict]:

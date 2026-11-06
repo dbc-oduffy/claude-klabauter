@@ -225,19 +225,28 @@ def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     return _handle(rel, raw)
 
 
-def handle_for(root: Path, path: Path) -> dict:
-    """The handle over the file's current bytes."""
+def handle_and_twin(root: Path, path: Path) -> tuple[dict, str | None]:
+    """The handle over the file's current bytes and the repo-relative staged twin written for those bytes.
+
+    Trap: the twin is None for a sidecar with no run script/slot; never derive its path from a cached handle.
+    """
     rel = _relative_to_root(root, path)
     try:
         raw = _contain(root, rel).read_bytes()
     except OSError as exc:
         raise _refuse(f"sidecar {rel!r} is unreadable: {exc}") from exc
+    twin = None
     try:
         _ensure_reader(root, raw, _reader_body(raw))
-        _ensure_twin(root, rel, raw)
+        twin = _ensure_twin(root, rel, raw)
     except UnicodeDecodeError:
         pass
-    return _handle(rel, raw)
+    return _handle(rel, raw), twin
+
+
+def handle_for(root: Path, path: Path) -> dict:
+    """The handle over the file's current bytes."""
+    return handle_and_twin(root, path)[0]
 
 
 def _checked_handle(handle: object) -> Mapping:

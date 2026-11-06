@@ -65,6 +65,28 @@ def test_gate_default_entry_yields_ready_research_and_held_build(repo):
     assert by_id[b["run_id"]]["status"] == "after" and by_id[r["run_id"]]["status"] == "ready"
 
 
+def test_then_build_with_empty_writes_splits_a_writes_less_build_sibling(repo):
+    _put(repo, {**RESEARCH, "then_build": True})
+    v = gate(repo, REL, writes=[])
+    assert v.arm is None and v.halt["kind"] == "research"
+    split = v.halt["split"]
+    r, b = split["research"], split["build"]
+    assert (r["status"], b["status"]) == ("ready", "after")
+    assert b["after"] == [r["run_id"]]
+    build_doc = yaml.safe_load((repo / b["sizing"]).read_text(encoding="utf-8"))
+    assert "research" not in build_doc and "writes" not in build_doc and build_doc["route"] == "plan"
+    research_doc = yaml.safe_load((repo / r["sizing"]).read_text(encoding="utf-8"))
+    assert "then_build" not in research_doc["research"]
+
+
+def test_no_then_build_and_empty_writes_stays_a_bare_research_halt(repo):
+    _put(repo, RESEARCH)
+    v = gate(repo, REL, writes=[])
+    assert v.halt["kind"] == "research" and "split" not in v.halt
+    _put(repo, {**RESEARCH, "then_build": False})
+    assert "split" not in gate(repo, REL, writes=[]).halt
+
+
 def test_notebooklm_without_targets_or_questions_halts_naming_them(repo):
     _put(repo, {"value_class": "scouts", "appetite": "small", "sources": ["notebooklm"]})
     v = gate(repo, REL, writes=["docs/a.md"])
