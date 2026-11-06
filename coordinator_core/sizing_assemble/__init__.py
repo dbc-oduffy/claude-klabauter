@@ -2137,13 +2137,15 @@ def _write_back(
                 text = write_fm_nested_field(text, "exit_criterion", _render_block(existing))
         if research:
             text = write_fm_nested_field(text, "research", _render_block(research))
-        if design_route is not None:
-            from coordinator_core.ops.dispatch_emit import design_route as _dr
+        from coordinator_core.ops.dispatch_emit import design_route as _dr
 
-            try:
-                block = _dr.with_route(doc.get(_dr.DESIGN_ROUTE_KEY), design_route)
-            except ValueError as exc:
-                raise MutateAbort(str(exc)) from exc
+        own_route = doc.get(_dr.DESIGN_ROUTE_KEY)
+        try:
+            block = _dr.with_route(own_route, design_route) if design_route is not None else None
+            block = _carry_prior_design_approval(target, block, own_route)
+        except ValueError as exc:
+            raise MutateAbort(str(exc)) from exc
+        if block is not None:
             text = write_fm_nested_field(text, _dr.DESIGN_ROUTE_KEY, _render_block(block))
         if acceptance_rows:
             text = write_fm_nested_field(text, "acceptance_rows", _render_block(acceptance_rows))
@@ -2256,6 +2258,70 @@ def _write_back(
         },
         **({"register_coverage": register_coverage} if register_coverage else {}),
     }
+
+
+_ASK_RUN_SUFFIX = re.compile(r"-([0-9a-f]{6})\.yaml$")
+
+
+def _prior_design_route(target: Path) -> Optional[dict[str, Any]]:
+    """The newest other sizing of the same ask (same trailing run-id suffix) recording a design approval.
+
+    Returns that sizing's wrapped design_route block, or None. Reads month dirs only; no spawn."""
+    import yaml
+
+    from coordinator_core.ops.dispatch_emit import design_route as _dr
+
+    m = _ASK_RUN_SUFFIX.search(target.name)
+    if not m:
+        return None
+    base = next((p for p in (target.parent, *target.parents) if p.name == "sizings"), target.parent)
+    found = [
+        p
+        for p in (*base.glob(f"*-{m.group(1)}.yaml"), *base.glob(f"*/*-{m.group(1)}.yaml"))
+        if p.name != target.name
+    ]
+    for path in sorted(found, key=lambda p: p.stat().st_mtime, reverse=True):
+        try:
+            doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        except Exception:  # noqa: BLE001
+            continue
+        prior = doc.get(_dr.DESIGN_ROUTE_KEY) if isinstance(doc, dict) else None
+        if prior is not None and not _dr.block_errors(prior) and _dr.wrap(prior)["approval"] is not None:
+            return _dr.wrap(prior)
+    return None
+
+
+def _carry_prior_design_approval(
+    target: Path, block: Optional[dict[str, Any]], own: Any
+) -> Optional[dict[str, Any]]:
+    """`block` (or the record's own design_route) with a prior same-ask sizing's recorded approval carried in.
+
+    Carries board_url and approval only onto an unapproved block of the same route; never writes an
+    approval the prior sizing did not record. Returns None when nothing is to be written."""
+    from coordinator_core.ops.dispatch_emit import design_route as _dr
+
+    base = block
+    if base is None and own is not None and not _dr.block_errors(own):
+        base = _dr.wrap(own)
+    if base is not None and base["approval"] is not None:
+        return block
+    prior = _prior_design_route(target)
+    if prior is None:
+        return block
+    if base is None:
+        base = {**prior, "approval": None, "board_url": None}
+    if base["route"] != prior["route"]:
+        return block
+    merged = {
+        **base,
+        "authority": base["authority"] if base["authority"] is not None else prior["authority"],
+        "board_url": prior["board_url"],
+        "approval": dict(prior["approval"]),
+    }
+    errors = _dr.block_errors(merged)
+    if errors:
+        raise ValueError("; ".join(errors))
+    return merged
 
 
 def parse_acceptance_rows(raw: str) -> tuple[Optional[list[dict[str, Any]]], list[str]]:

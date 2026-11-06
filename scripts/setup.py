@@ -1932,9 +1932,10 @@ def migrate_legacy_content_root() -> None:
 
 #: Registry keys naming the content SOURCE checkout, tried in order, when the
 #: sibling-dir default turns out to be a registered publish mirror.
+_PLUGIN_SOURCE_PATH_KEY = "plugin.mirrors.coordinator-claude.source_path"
 _CONTENT_SOURCE_REGISTRY_KEYS = (
     "engine.working_repos.content_root",
-    "plugin.mirrors.coordinator-claude.source_path",
+    _PLUGIN_SOURCE_PATH_KEY,
 )
 
 
@@ -1961,7 +1962,11 @@ def _content_source_from_registry() -> "tuple[Path, str] | None":
         if not raw.is_dir():
             print(f"[ADVISORY] {key} names {raw}, which does not exist; skipping this rung.", file=sys.stderr)
             continue
-        derived = _resolve_plugin_root_for_machine_local(raw) or raw
+        if key == _PLUGIN_SOURCE_PATH_KEY and raw.name == "coordinator":
+            # That key names the plugin root `<clone>/coordinator`; the content source is the clone.
+            derived = raw.parent
+        else:
+            derived = _resolve_plugin_root_for_machine_local(raw) or raw
         if _is_publish_mirror(derived) or _is_publish_mirror(raw):
             continue
         return derived, key
@@ -4996,6 +5001,9 @@ def _reset_resolution_journal() -> None:
         print(f"[ADVISORY] resolution journal not reset: {exc}", file=sys.stderr)
 
 
+_CLAUDE_KLABAUTER_SOURCE_PATH_KEY = "plugin.mirrors.project-makima.source_path"
+
+
 def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path, args: Args, *, write=None) -> None:
     """Install-chain step: pin unset `repos.*` keys (and the general-work root) to clones found by origin remote.
 
@@ -5031,6 +5039,9 @@ def install_repo_discovery(repo_root: Path, claude_klabauter_root_resolved: Path
             print(f"[OK] {key} -> {clone}")
         for key in ambiguous:
             print(f"[ADVISORY] {key}: several clones match by remote; set it by hand.", file=sys.stderr)
+        if resolve_repo_identity(repo_root) == IDENTITY_AUTHORING and not is_set(_CLAUDE_KLABAUTER_SOURCE_PATH_KEY):
+            write(_CLAUDE_KLABAUTER_SOURCE_PATH_KEY, str(claude_klabauter_root_resolved))
+            print(f"[OK] {_CLAUDE_KLABAUTER_SOURCE_PATH_KEY} -> {claude_klabauter_root_resolved}")
     except Exception as exc:  # noqa: BLE001 -- discovery must never break the install
         print(f"[ADVISORY] repo discovery skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
 

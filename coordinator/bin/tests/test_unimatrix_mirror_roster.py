@@ -396,6 +396,9 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
         def read(self):
             return self.chunks.pop(0)
 
+        def close(self):
+            pass
+
     bridge.relay_send(Conn())
     assert argvs[-1][-1] == f"send {expect}"
 

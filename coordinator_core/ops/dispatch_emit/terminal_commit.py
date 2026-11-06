@@ -949,10 +949,12 @@ def _undeclared_dirty(
 
 def _own_drift_actuals(
     worktree_root: Path, run_dir: Optional[Path], drift: Sequence, declared: Sequence[str],
-    session_id: Optional[str], review_writes: Optional[dict],
+    session_id: Optional[str], review_writes: Optional[dict], reviewed: Optional[dict] = None,
 ) -> dict:
     """``{path: actual}`` for each content-sha256 entry of a commit_v2 ``blob_drift`` list whose
-    current bytes are the run's own last recorded write (``drift_attribution.classify``: the run
+    current bytes are the bytes the run's review pass read (``reviewed``, ``{path: sha256}`` of the
+    stored review prep: the reviewed bytes are the ones that land, whoever wrote them) or are the
+    run's own last recorded write (``drift_attribution.classify``: the run
     session's and the fix-pass agents' touch ledgers, not bounded by the run record's start, so a
     refire keeps the run's earlier own write). The ledgers read are the session's, every review
     writer's and every agent the session dispatched (the reverify, verify and evidence legs write
@@ -968,6 +970,13 @@ def _own_drift_actuals(
     }
     if not actual:
         return {}
+    read_equal = {
+        p: a for p, a in actual.items()
+        if isinstance(reviewed, dict) and reviewed.get(drift_attribution._norm(p)) == a
+    }
+    actual = {p: a for p, a in actual.items() if p not in read_equal}
+    if not actual:
+        return read_equal
     owned = drift_attribution.classify(
         worktree_root, run_dir if run_dir is not None else worktree_root, list(actual), declared,
         session_id=session_id,
@@ -977,7 +986,7 @@ def _own_drift_actuals(
         ),
         run_started_at=0.0,
     )[drift_attribution.RUN_OWNED]
-    return {p: actual[p] for p in owned}
+    return {**read_equal, **{p: actual[p] for p in owned}}
 
 
 def _run_owned_dirt(
@@ -3798,6 +3807,7 @@ def _terminal_commit_inner(
     ):
         own_now = _own_drift_actuals(
             worktree_root, ask_run_dir, reply["blob_drift"], declared_writes, session_id, review_writes,
+            reviewed_bytes,
         )
         if own_now:
             commit_params["expected_content_sha256"] = {**commit_params["expected_content_sha256"], **own_now}

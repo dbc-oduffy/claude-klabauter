@@ -117,7 +117,7 @@ const _chainJson = JSON.stringify({ ...chainParams, __LAUNCHER_PARAM__: true });
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
 if (!_blankPath(_rp)) {
-  chain = { path: _rp, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
+  chain = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
 } else {
   chain = await agent(
     __AUTHORITY__
@@ -131,8 +131,11 @@ if (!_blankPath(_rp)) {
   );
 }
 if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
-const _chainRun = _pathRunId(chain.path);
-if (_chainRun === '' || _chainRun === ASK_RUN_ID || _chainRun === _pathRunId(ASK_SCRIPT_PATH)) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id');
+// Trap: the path basename is the trusted run id; the emit's minted run_id stands in only when the basename yields none (a path the
+// suffix/staged check rejects), and the ask-equal refusal below still catches a relay that copied the ask's own id.
+let _chainRun = _pathRunId(chain.path);
+if (_chainRun === '' && typeof chain.run_id === 'string') _chainRun = chain.run_id.trim();
+if (_chainRun === '' || _chainRun === ASK_RUN_ID || _chainRun === _pathRunId(ASK_SCRIPT_PATH)) return _fail('chain emit path run id ' + JSON.stringify(_chainRun) + ' is not a fresh run id (path ' + JSON.stringify(chain.path) + ')');
 const chained = await _startLoop(_normPath(chain.path));
 if (!chained.ok) return _fail(chained.error);
 const r = chained.result;

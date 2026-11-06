@@ -1,9 +1,14 @@
 """dispatch.terminal_commit re-takes the expectation for a drifted path whose bytes are the run's
-own last recorded write and re-lands once; a path whose bytes match no run write still refuses."""
+own last recorded write, or the bytes its review pass read, and re-lands once; a path whose bytes
+match neither still refuses.
+
+The run's executor writes reach no touch ledger, so the attribution set cannot prove the final
+bytes; bytes equal to the stored review prep's `reviewed_sha256` are provable and are accepted."""
 
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -104,3 +109,39 @@ def test_the_fix_pass_agents_are_named_to_the_attribution(repo, monkeypatch):
     )
     assert seen["agent_ids"] == ["agent-1"]
     assert seen["session_id"] == SID
+
+
+def test_bytes_the_review_read_land_though_the_ledger_names_older_bytes(repo, monkeypatch):
+    """The executor's final write is in no ledger; the session's newest hashed event (B) is the
+    expectation, the disk holds the bytes the review read (A)."""
+    (repo / "a.py").write_text("A\n", encoding="utf-8", newline="")
+    os.utime(repo / "a.py", (2500.0, 2500.0))
+    _review(repo, {"a.py": _sha("A\n")}, 2000.0)
+    _record_at(repo, "a.py", _sha("B\n"), 3000.0)
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["committed"] is True, out
+    assert _commit_calls(seen) == [{"a.py": _sha("B\n")}, {"a.py": _sha("A\n")}]
+
+
+def test_bytes_the_review_did_not_read_still_refuse_with_a_newer_ledger_event(repo, monkeypatch):
+    (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
+    os.utime(repo / "a.py", (2500.0, 2500.0))
+    _review(repo, {"a.py": _sha("A\n")}, 2000.0)
+    _record_at(repo, "a.py", _sha("B\n"), 3000.0)
+    head = _git(["rev-parse", "HEAD"], repo)
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["committed"] is False
+    assert out["refused"] == "blob-drift"
+    assert len(seen) == 1
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_review_read_equal_is_per_path_in_a_mixed_drift(repo):
+    drift = [
+        {"path": "a.py", "basis": "content-sha256", "expected": _sha("X\n"), "actual": _sha("A\n")},
+        {"path": "b.py", "basis": "content-sha256", "expected": _sha("X\n"), "actual": _sha("FOREIGN\n")},
+    ]
+    got = terminal_commit._own_drift_actuals(
+        repo, None, drift, ["a.py", "b.py"], SID, None, {"a.py": _sha("A\n"), "b.py": _sha("B\n")}
+    )
+    assert got == {"a.py": _sha("A\n")}

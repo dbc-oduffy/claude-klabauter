@@ -1,0 +1,30 @@
+{
+ "arm": "s",
+ "baton": null,
+ "exit_code": 0,
+ "exit_criterion": "A suite command run as with-suite-mutex -- zsh -c with a pytest body is not refused by the guard, no remedy text ever begins with a second with-suite-mutex, and tests covering touched files pass.",
+ "falsifier": {
+  "baseline_output": "False",
+  "expected_when_true": "True",
+  "how": "cd /Users/example-operator/X/claude-klabauter && PYTHONPATH=. python3 -I -c 'import sys; sys.path.insert(0,\".\"); from coordinator_core.bash_guards import check_test_suite_invocation as g; cmd = \"with-suite-mutex -- zsh -c '\\''cd /x && python3.13 -m pytest -m \\\"not cadence\\\"'\\''\"; print(g._command_wrapped_in_suite_mutex(cmd, None, [\"coordinator_core\"], None, []))'"
+ },
+ "gated": [],
+ "halt": null,
+ "intent": "Make check-test-suite-invocation recognise a suite command already held under with-suite-mutex (including a shell -c body), never emit a doubled with-suite-mutex remedy, and stop the -k/-m \"name test files\" note from appearing on a Tier-U-granted broad run.",
+ "jtbd_unclear": false,
+ "name": "suite-mutex-guard-wrapped-shell",
+ "premise_evidence": "Read check_test_suite_invocation.py: _expand_segments replaces a chained sh -c segment with its payload segments, so _command_wrapped_in_suite_mutex sees the inner pytest segment without the with-suite-mutex prefix; _deny_reason_wrapper_required blindly prefixes the command; _selection_flag_note is appended regardless of grant. Guard is registered BOX_DEGRADING in deny_registry (irreversible class, so denying is legal) but the false positive is an engine bug. One module plus its test file, no unknown mechanisms. Baseline predicate call returned False.",
+ "premise_provenance": "read",
+ "research": null,
+ "route": "spec-dispatch",
+ "sizing_path": "state/sizings/2026-11/2026-11-06-b329a5-2-suite-mutex-guard-wrapped-shell.yaml",
+ "sizing_present": true,
+ "stderr": "embedded 0 pm_verbatims",
+ "stdout": "sizing-assemble exit 0: tshirt S, route spec-dispatch, written to state/sizings/2026-11/2026-11-06-b329a5-2-suite-mutex-guard-wrapped-shell.yaml (full JSON elided)",
+ "tshirt": "S",
+ "well_trodden_step_change": false,
+ "writes": [
+  "coordinator_core/bash_guards/check_test_suite_invocation.py",
+  "coordinator_core/bash_guards/tests/test_check_test_suite_invocation.py"
+ ]
+}

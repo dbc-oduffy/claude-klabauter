@@ -2,7 +2,7 @@
 coordinator_core.ops.verify_ue_overrides — plain module, no registered op.
 
 Purpose: walks the machine-local-registered UE-context directories
-(repos.claude_unreal_holodeck, repos.claude_unreal_holodeck5, optional
+(repos.claude_unreal_holodeck, repos.project_rag, optional
 repos.dronesim) and asserts each carries the expected UE plugin override keys in its
 .claude/settings.json enabledPlugins object. Exits 0 on success, 1 with diagnostic
 output on failure. This is a MANUAL diagnostic — per docs/wiki/per-project-plugin-
@@ -17,7 +17,7 @@ ladder.
 
 machine-local keys consumed (must be set in registry.local.toml):
     repos.claude_unreal_holodeck  — root of the example-game-workbench-repo repo
-    repos.claude_unreal_holodeck5             — root of the example-retrieval-repo repo
+    repos.project_rag             — root of the example-retrieval-repo repo
     repos.dronesim                — root of the example-sim-repo UE project (optional; skipped
                                      if unset on this machine)
 
@@ -76,7 +76,7 @@ _EITHER_VENDOR_GAME_DEV = (
 
 _UE_CONTEXT_REPO_KEYS = (
     "repos.claude_unreal_holodeck",
-    "repos.claude_unreal_holodeck5",
+    "repos.project_rag",
     "repos.dronesim",
 )
 

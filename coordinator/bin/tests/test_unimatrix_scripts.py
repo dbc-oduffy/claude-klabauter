@@ -105,6 +105,9 @@ def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
         def read(self):
             return self.chunks.pop(0)
 
+        def close(self):
+            pass
+
     for lan_up, expect in ((True, "lan"), (False, "wg")):
         Conn.chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
         monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun, up=lan_up: lan if up else tun)

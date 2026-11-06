@@ -1234,7 +1234,7 @@ _REASON_HASATTR_FCHMOD_FEATURE_GUARD = (
 #: of that repo's canonical clone directory), named here so a typo in a
 #: nested key is a NameError at import rather than a silently-inert grant.
 REPO_PROJECT_MAKIMA = "claude_klabauter"
-REPO_CLAUDE_UNREAL_HOLODECK0 = "content_root"
+REPO_DOE_CLAUDE = "content_root"
 REPO_CLAUDE_UNREAL_HOLODECK = "claude_unreal_holodeck"
 
 
@@ -1268,7 +1268,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         REPO_CLAUDE_UNREAL_HOLODECK: {
             "plugin/example-game-repo-control/bin/example-game-repo-control": _EXAMPLE_GAME_REPO_FORWARDER_REASON,
         },
-        REPO_CLAUDE_UNREAL_HOLODECK0: {
+        REPO_DOE_CLAUDE: {
             "coordinator/bin/pre_commit_corpus_artifact_guard.py": _REASON_PRE_COMMIT_HOOK_COPY,
         },
         REPO_PROJECT_MAKIMA: {
@@ -1307,7 +1307,7 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         # for the false-positive measurement that drove the arm removal, and this
         # module's own docstring (L106) for the decision to retain the class name
         # as an empty BLOCKING slot rather than delete it outright.
-        # the two REPO_CLAUDE_UNREAL_HOLODECK0 entries formerly here
+        # the two REPO_DOE_CLAUDE entries formerly here
         # (coordinator/bin/stable-suite-run.py,
         # coordinator/tests/test_cc_root_source_guard.py) exempted a class
         # that can no longer fire in ANY repo: C1 dropped path_separator's
@@ -1468,7 +1468,7 @@ EXEMPT_PREFIXES: Dict[str, Dict[str, str]] = {
         "coordinator_core/publish/tests/fixtures/golden-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
         "coordinator_core/publish/tests/fixtures/input-tree/sub/": _FROZEN_FIXTURE_BYTES_REASON,
     },
-    REPO_CLAUDE_UNREAL_HOLODECK0: {
+    REPO_DOE_CLAUDE: {
         "state/review-trail/diffs/m8-baseline/": _M8_REVIEW_TRAIL_SNAPSHOT_REASON,
     },
 }

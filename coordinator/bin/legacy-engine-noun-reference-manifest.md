@@ -625,23 +625,23 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator/tests/test_percolate_preflight_scratch_publish_coordinator_root.py:74` | PROSE-ONLY | `# `_resolve_claude_klabauter_root()`'s rung 1.5 (settings-home `.claude-klabauter-live-root`` |
 | `coordinator/tests/test_percolate_preflight_scratch_publish_coordinator_root.py:100` | - | `assert "repos.claude_klabauter" in err` |
 | `coordinator/tests/test_percolate_resolve_target.py:230` | - | `"plugin-source:claude-klabauter/coordinator=bin,lib"` |
-| `coordinator/tests/test_percolate_resolve_target.py:243` | PROSE-ONLY | `# plugin.mirrors.claude-klabauter.source_path: deliberately absent` |
+| `coordinator/tests/test_percolate_resolve_target.py:243` | PROSE-ONLY | `# plugin.mirrors.project-makima.source_path: deliberately absent` |
 | `coordinator/tests/test_percolate_resolve_target.py:244` | PROSE-ONLY | `# repos.claude_klabauter: deliberately absent` |
 | `coordinator/tests/test_percolate_resolve_target.py:251` | - | `assert "plugin-source:claude-klabauter/coordinator" in err.message` |
-| `coordinator/tests/test_percolate_resolve_target.py:252` | - | `assert "plugin.mirrors.claude-klabauter.source_path" in err.message` |
+| `coordinator/tests/test_percolate_resolve_target.py:252` | - | `assert "plugin.mirrors.project-makima.source_path" in err.message` |
 | `coordinator/tests/test_percolate_resolve_target.py:253` | - | `assert "repos.claude_klabauter" in err.message` |
 | `coordinator/tests/test_percolate_resolve_target.py:254` | - | `assert "machine-local set repos.claude_klabauter" in err.message` |
-| `coordinator/tests/test_percolate_resolve_target.py:258` | PROSE-ONLY | `"""When `plugin.mirrors.claude-klabauter.source_path` is unset but the` |
+| `coordinator/tests/test_percolate_resolve_target.py:258` | PROSE-ONLY | `"""When `plugin.mirrors.project-makima.source_path` is unset but the` |
 | `coordinator/tests/test_percolate_resolve_target.py:259` | PROSE-ONLY | `already-provisioned `repos.claude_klabauter` key IS set (the standing` |
 | `coordinator/tests/test_percolate_resolve_target.py:260` | PROSE-ONLY | `fleet convention — repos.content_root / repos.claude_klabauter are set on` |
 | `coordinator/tests/test_percolate_resolve_target.py:268` | - | `"repos.claude_klabauter": "/abs/repos/claude-klabauter",` |
 | `coordinator/tests/test_percolate_resolve_target.py:273` | - | `assert fields[6] == "/abs/repos/claude-klabauter/coordinator=bin,lib"` |
-| `coordinator/tests/test_percolate_resolve_target.py:284` | - | `"plugin.mirrors.claude-klabauter.source_path": "/abs/plugin/claude-klabauter",` |
+| `coordinator/tests/test_percolate_resolve_target.py:284` | - | `"plugin.mirrors.project-makima.source_path": "/abs/plugin/claude-klabauter",` |
 | `coordinator/tests/test_percolate_resolve_target.py:285` | - | `"repos.claude_klabauter": "/abs/repos/claude-klabauter-STALE",` |
 | `coordinator/tests/test_percolate_resolve_target.py:290` | - | `assert fields[6] == "/abs/plugin/claude-klabauter/coordinator=bin,lib"` |
 | `coordinator/tests/test_percolate_resolve_target.py:360` | PROSE-ONLY | `fallback repos.claude_klabauter key is present or absent, so long as` |
-| `coordinator/tests/test_percolate_resolve_target.py:361` | PROSE-ONLY | `plugin.mirrors.claude-klabauter.source_path is set (i.e. the new fallback` |
-| `coordinator/tests/test_percolate_resolve_target.py:383` | - | `claude_klabauter_source = full_registry.get("plugin.mirrors.claude-klabauter.source_path")` |
+| `coordinator/tests/test_percolate_resolve_target.py:361` | PROSE-ONLY | `plugin.mirrors.project-makima.source_path is set (i.e. the new fallback` |
+| `coordinator/tests/test_percolate_resolve_target.py:383` | - | `claude_klabauter_source = full_registry.get("plugin.mirrors.project-makima.source_path")` |
 | `coordinator/tests/test_percolate_resolve_target.py:385` | - | `"expected at least one plugin-source:claude-klabauter row — this test's "` |
 | `coordinator/tests/test_percolate_resolve_target.py:386` | - | `"fallback-neutrality leg is keyed on repos.claude_klabauter"` |
 | `coordinator/tests/test_percolate_resolve_target.py:405` | - | `out_with = _resolve_all({**full_registry, "repos.claude_klabauter": claude_klabauter_source})` |
@@ -1007,10 +1007,10 @@ The `CLAUDE_KLABAUTER_ROOT` env-var subset is not re-derived here; it cites `doc
 | `coordinator_core/hooks/check_claude_md_size.py:13` | PROSE-ONLY | `coordinator-claude-depends-on-claude-klabauter direction the tri-plane split` |
 | `coordinator_core/hooks/foreign_path_filter.py:12` | - | `"repos.claude_klabauter",` |
 | `coordinator_core/hooks/oss_operative_strings.py:44` | PROSE-ONLY | `(`CLAUDE_KLABAUTER_ROOT`, `REPO_PROJECT_MAKIMA`, `repos.claude_klabauter`,` |
-| `coordinator_core/hooks/oss_operative_strings.py:45` | PROSE-ONLY | ``plugin.mirrors.claude-klabauter.source_path`) is operative regardless of` |
+| `coordinator_core/hooks/oss_operative_strings.py:45` | PROSE-ONLY | ``plugin.mirrors.project-makima.source_path`) is operative regardless of` |
 | `coordinator_core/hooks/oss_operative_strings.py:276` | - | `"claude-klabauter",` |
 | `coordinator_core/hooks/oss_operative_strings.py:387` | PROSE-ONLY | `(`CLAUDE_KLABAUTER_ROOT`, `REPO_PROJECT_MAKIMA`, `repos.claude_klabauter`,` |
-| `coordinator_core/hooks/oss_operative_strings.py:388` | PROSE-ONLY | ``plugin.mirrors.claude-klabauter.source_path`);` |
+| `coordinator_core/hooks/oss_operative_strings.py:388` | PROSE-ONLY | ``plugin.mirrors.project-makima.source_path`);` |
 | `coordinator_core/hooks/oss_operative_strings.py:413` | PROSE-ONLY | `# `mirrors-claude-klabauter-path`) also falls into this branch and` |
 | `coordinator_core/hooks/repin_cloud_engine_root.py:7` | PROSE-ONLY | `Design agreed on claude-klabauter#67 (comments 5785027514, 5785078234) between` |
 | `coordinator_core/hooks/repin_cloud_engine_root.py:43` | PROSE-ONLY | `Spec backlink: claude-klabauter#67 (comments 5785027514, 5785078234)` |

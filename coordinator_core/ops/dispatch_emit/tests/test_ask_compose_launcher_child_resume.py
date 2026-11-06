@@ -208,6 +208,62 @@ def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha():
     assert got["why"] is None and got["calls"] == ["/r/" + staged_twin_rel("ask-r1", "ab" * 32)]
 
 
+def _adopt_launcher_reply(reply: dict, recovered: dict | None) -> dict:
+    """Run the launcher-child stage-reply adopter in node on `reply`; `recovered` is the stage-recover return (None: none wired)."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node unavailable")
+    code = (
+        "(async () => {\n"
+        "let _stagedManifest = null, _stageRefusal = null, _relayGap = null, _parked = null, _diskHalt = null;\n"
+        "let _stageRecoverCalls = 0;\n"
+        "const _adoptStagedInline = () => null; const _wholeManifestGap = () => null;\n"
+        + ask_compose._ADOPT_STAGE_REPLY_HEAD_JS
+        + (
+            f"  _stageRecover = async () => {{ _stageRecoverCalls++; return {{ stage_reply: {json.dumps(recovered)} }}; }};\n"
+            if recovered is not None else ""
+        )
+        + ask_compose._ADOPT_STAGE_REPLY_LAUNCHER_JS
+        + ask_compose._ADOPT_STAGE_REPLY_TAIL_JS
+        + f"\n  await _adoptStageReply({json.dumps(reply)});\n"
+        "  console.log(JSON.stringify({ pending: _stagePending, calls: _stageRecoverCalls }));\n"
+        "})();\n"
+    )
+    out = subprocess.run([node, "-e", code], capture_output=True, text=True, timeout=30,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+_H_OLD = {"path": "state/warp/r/manifest.json", "sha256": "6f" * 32, "bytes": 10}
+_H_NEW = {"path": "state/warp/r/manifest.json", "sha256": "89" * 32, "bytes": 11}
+
+
+def test_a_replayed_reply_without_a_twin_path_takes_the_twin_from_a_fresh_stage_op_reply():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    twin = staged_twin_rel("ask-r1", "89" * 32)
+    got = _adopt_launcher_reply({"manifest_handle": _H_OLD}, {"manifest_handle": _H_NEW, "twin_path": twin})
+    assert got["pending"] == {"handle": _H_NEW, "twin_path": twin} and got["calls"] == 1
+
+
+def test_a_reply_that_names_its_twin_path_is_kept_and_runs_no_recover():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    twin = staged_twin_rel("ask-r1", "6f" * 32)
+    got = _adopt_launcher_reply({"manifest_handle": _H_OLD, "twin_path": twin}, {"manifest_handle": _H_NEW, "twin_path": "x"})
+    assert got["pending"] == {"handle": _H_OLD, "twin_path": twin} and got["calls"] == 0
+
+
+def test_a_recover_reply_that_names_no_twin_leaves_the_replayed_handle():
+    got = _adopt_launcher_reply({"manifest_handle": _H_OLD}, {"manifest_handle": _H_NEW})
+    assert got["pending"] == {"handle": _H_OLD} and got["calls"] == 1
+
+
 def test_a_named_twin_of_another_run_is_refused_and_nothing_starts():
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 

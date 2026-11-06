@@ -42,7 +42,7 @@ curatable, and are computed here rather than hand-listed — see
   - An env-var or dotted/hyphenated registry-key IDENTIFIER TOKEN that has a
     sibling repo's name embedded as one of its `_`/`.`-delimited components
     (`CLAUDE_KLABAUTER_ROOT`, `REPO_PROJECT_MAKIMA`, `repos.claude_klabauter`,
-    `plugin.mirrors.claude-klabauter.source_path`) is operative regardless of
+    `plugin.mirrors.project-makima.source_path`) is operative regardless of
     which specific token it is — this is ONE SHAPE RULE
     (`is_identifier_shape_operative`), not four entries, and it covers every
     future sibling name with no per-name edit either.
@@ -385,7 +385,7 @@ def is_identifier_shape_operative(token: str, sibling_names: Iterable = SIBLING_
 
       - an env var, or a dotted/hyphenated registry key
         (`CLAUDE_KLABAUTER_ROOT`, `REPO_PROJECT_MAKIMA`, `repos.claude_klabauter`,
-        `plugin.mirrors.claude-klabauter.source_path`);
+        `plugin.mirrors.project-makima.source_path`);
       - a minted stable artifact id — see `is_stable_artifact_id`.
 
     Independent of which specific token it is — that is the point: shape

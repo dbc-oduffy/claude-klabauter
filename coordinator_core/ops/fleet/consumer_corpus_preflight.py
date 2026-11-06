@@ -203,20 +203,20 @@ NON_FLEET_EXCLUDED_KEYS: Dict[str, str] = {
     "repos.example-smoke-test-fixture": "per-machine smoke-test fixture (registered path is /tmp scratch), not a repo",
     "repos.holodeck-python-audit": "UE consumer-project Saved/ scratch dir (python audit recall log), not a git working tree",
     "repos.delphios": "example-os-repo release/binary-assembly shell (packages the assembled fleet into one binary) — not an authoring EM working tree",
-    "repos.claude_unreal_holodeck8": "standalone product repo (example-repo MVP), not part of the coordinator EM fleet",
-    "repos.claude_unreal_holodeck7": "standalone product repo (FIFA stats), not part of the coordinator EM fleet",
+    "repos.geneva_mvp": "standalone product repo (example-repo MVP), not part of the coordinator EM fleet",
+    "repos.fifa_stats": "standalone product repo (FIFA stats), not part of the coordinator EM fleet",
     "repos.fifa_26wcle_data": "standalone data repo, distinct from example_stats_repo, not part of the coordinator EM fleet",
     "repos.experiments": "generic per-machine scratch/experiments repo, not part of the coordinator EM fleet",
     "repos.dronesim": "standalone product repo (example-sim-repo), not part of the coordinator EM fleet",
-    "repos.claude_unreal_holodeck9": "standalone product repo (example-voice-system), not part of the coordinator EM fleet",
-    "repos.claude_unreal_holodeck4": "standalone product repo (Example Store), not part of the coordinator EM fleet",
+    "repos.nimbalyst": "standalone product repo (example-voice-system), not part of the coordinator EM fleet",
+    "repos.delphi_store": "standalone product repo (Example Store), not part of the coordinator EM fleet",
     # 2026-09-06: five keys that had been sitting unclassified, blocking the
     # handoff 8.10.0 -> 10.0.0 major re-vendor. Each verified by RESOLVED PATH,
     # not by name — the two aliases below resolve to a tree FLEET_REPO_KEYS
     # already scans under a different key, so promoting either would double-count
     # that repo's corpus and silently inflate every count this oracle reports.
     "repos.claude_klabauter": "published engine mirror (percolate publish target), not an authoring EM working tree — its handoff corpus, if any, is a transformed copy of claude-klabauter's",
-    "repos.example_doctrine_repo": "ALIAS: resolves to the same tree as repos.claude_unreal_holodeck3, already scanned as coordinator-content-repo — classifying it fleet would double-count that corpus",
+    "repos.example_doctrine_repo": "ALIAS: resolves to the same tree as repos.content_root, already scanned as coordinator-content-repo — classifying it fleet would double-count that corpus",
     "repos.holodeck": "ALIAS: resolves to the same tree as repos.claude_unreal_holodeck, already scanned as example-game-workbench-repo — classifying it fleet would double-count that corpus",
     "repos.fleet_root": "the PARENT DIRECTORY holding the fleet's repos, not a repo itself — a scan rooted here would walk every tree at once",
     "repos.memo_probe_receiver": "memo-delivery smoke-test fixture under the settings home's machine-local dir, not a repo",

@@ -3,7 +3,9 @@ from __future__ import annotations
 import fnmatch
 import re
 
-_TOKEN_TEMPLATE = 'PROTECTED-LITERAL-{index}'
+# Terminated, so no token is a prefix of another: restoring PROTECTED-LITERAL-1 must not
+# rewrite the head of PROTECTED-LITERAL-14 (that left '<literal-1>4' in published bytes).
+_TOKEN_TEMPLATE = 'PROTECTED-LITERAL-{index}-END'
 
 #: `<repo>:` qualifier a store may put on an `exclude_paths` value (e.g.
 #: `coordinator-content-repo:coordinator/templates/x`); the published `rel_path` is repo-relative, so

@@ -285,6 +285,23 @@ def parse_args(argv):
     return a
 
 
+def bare_name(name):
+    """The session name without its box label; non-strings pass through."""
+    return name.partition("@")[0] if isinstance(name, str) else name
+
+
+def box_label(remote):
+    """Which box a mirror is on: the ssh alias without any `user@` prefix."""
+    return str(remote).rpartition("@")[2]
+
+
+def labelled(name, remote):
+    """The name, an at sign, then the box, for a mirror's session name; idempotent, so a re-mirror never stacks labels."""
+    if not isinstance(name, str) or not name:
+        return name
+    return f"{bare_name(name)}@{box_label(remote)}"
+
+
 def inbound_names():
     """Names a far box already reaches us by: live local entries its own relay holds (`unimatrixMirror`).
 
@@ -301,7 +318,7 @@ def inbound_names():
         except (OSError, ValueError):
             continue
         if isinstance(d, dict) and d.get("unimatrixMirror") and isinstance(d.get("pid"), int) and pid_alive(d["pid"]):
-            names.add(d.get("name"))
+            names.add(bare_name(d.get("name")))
     return names
 
 
@@ -314,7 +331,7 @@ def mirrorable(rows, skip, inbound):
     return {r["entry"]["messagingSocketPath"]: r for r in rows
             if r["entry"]["messagingSocketPath"] not in skip
             and not (r["entry"].get("unimatrixMirror") or r["entry"].get(FAR_SOCKET_FIELD))
-            and r["entry"].get("name") not in inbound}
+            and bare_name(r["entry"].get("name")) not in inbound}
 
 
 def fetch_roster(remote, key, tunnel_remote=None):
@@ -362,6 +379,8 @@ def mirror(row, cfg, say):
                          cfg.remote, cfg.key, tunnel_remote=cfg.tunnel_remote))
     time.sleep(1)
     d = {k: v for k, v in e.items() if k not in ("pid", "procStart", "pidDomain", "messagingSocketPath")}
+    if "name" in d:
+        d["name"] = labelled(d["name"], cfg.remote)
     d.update(pid=b.pid, procStart=proc_start(b.pid), pidDomain=pid_domain(),
              messagingSocketPath=endpoint, farPid=e["pid"], **{FAR_SOCKET_FIELD: far_sock}, **engine_fields(row))
     sess = sessions_dir()

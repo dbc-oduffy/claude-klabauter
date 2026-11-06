@@ -13,14 +13,14 @@
     {
       "row": "claude-klabauter",
       "path": "content_root.py",
-      "literal": "repos.claude_unreal_holodeck3",
+      "literal": "repos.content_root",
       "source": 1,
       "published": 2
     },
     {
       "row": "claude-klabauter",
       "path": "content_root.py",
-      "literal": "repos.claude_unreal_holodeck6",
+      "literal": "repos.doe_claude",
       "source": 1,
       "published": 0
     },
@@ -34,14 +34,14 @@
     {
       "row": "claude-klabauter",
       "path": "machine_resolver.py",
-      "literal": "repos.claude_unreal_holodeck3",
+      "literal": "repos.content_root",
       "source": 5,
       "published": 7
     },
     {
       "row": "claude-klabauter",
       "path": "machine_resolver.py",
-      "literal": "repos.claude_unreal_holodeck6",
+      "literal": "repos.doe_claude",
       "source": 2,
       "published": 0
     },
@@ -69,14 +69,14 @@
     {
       "row": "claude-klabauter",
       "path": "ops/check_machine_local_regeneratability.py",
-      "literal": "repos.claude_unreal_holodeck7",
+      "literal": "repos.fifa_stats",
       "source": 1,
       "published": 0
     },
     {
       "row": "claude-klabauter",
       "path": "ops/check_machine_local_regeneratability.py",
-      "literal": "repos.claude_unreal_holodeck8",
+      "literal": "repos.geneva_mvp",
       "source": 1,
       "published": 0
     },
@@ -111,7 +111,7 @@
     {
       "row": "claude-klabauter",
       "path": "ops/fleet/consumer_corpus_preflight.py",
-      "literal": "repos.claude_unreal_holodeck4",
+      "literal": "repos.delphi_store",
       "source": 1,
       "published": 0
     },
@@ -139,14 +139,14 @@
     {
       "row": "claude-klabauter",
       "path": "ops/fleet/consumer_corpus_preflight.py",
-      "literal": "repos.claude_unreal_holodeck7",
+      "literal": "repos.fifa_stats",
       "source": 1,
       "published": 0
     },
     {
       "row": "claude-klabauter",
       "path": "ops/fleet/consumer_corpus_preflight.py",
-      "literal": "repos.claude_unreal_holodeck8",
+      "literal": "repos.geneva_mvp",
       "source": 1,
       "published": 0
     },
@@ -167,7 +167,7 @@
     {
       "row": "claude-klabauter",
       "path": "ops/fleet/consumer_corpus_preflight.py",
-      "literal": "repos.claude_unreal_holodeck9",
+      "literal": "repos.nimbalyst",
       "source": 1,
       "published": 0
     },
@@ -209,7 +209,7 @@
     {
       "row": "claude-klabauter",
       "path": "ops/check_machine_local_regeneratability.py",
-      "literal": "repos.claude_unreal_holodeck5",
+      "literal": "repos.project_rag",
       "source": 1,
       "published": 0,
       "note": "G-EM group-em-c9 2026-11-01: same unshipped scrub #17 class; remove when #17 lands"
@@ -217,7 +217,7 @@
     {
       "row": "claude-klabauter",
       "path": "ops/verify_ue_overrides.py",
-      "literal": "repos.claude_unreal_holodeck5",
+      "literal": "repos.project_rag",
       "source": 1,
       "published": 0,
       "note": "G-EM group-em-c9 2026-11-01: same unshipped scrub #17 class; remove when #17 lands"

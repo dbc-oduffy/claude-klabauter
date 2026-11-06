@@ -27,7 +27,7 @@ SUPERSEDED 2026-08-19 — Check 1 no longer iterates ``COORDINATOR_OWNED_KEYS``.
     because a hardcoded key literal cannot survive publication: percolation
     depersonalizes sibling-repo codenames, so the PUBLISHED engine compared
     ``repos.example_retrieval_repo`` against an operator registry that says
-    ``repos.claude_unreal_holodeck5``. Every renamed literal missed, and Check 1 degenerated
+    ``repos.project_rag``. Every renamed literal missed, and Check 1 degenerated
     twice over — a WARN per renamed key on every ceremony, AND no ability to
     detect a genuinely unclassified key, since it already reported those keys as
     unclassified unconditionally. Observed live: 7 of 14 literals renamed, a
@@ -78,7 +78,7 @@ Negative-spec (do NOT "fix" while porting):
       removed a tautological ``repos.*`` prefix branch; do not resurrect that shape). AC8
       of the plan above (DR-132 conformance) added a second, equally bounded arm: a dotted
       key matches a family entry that is a strict dotted-prefix of it — e.g.
-      ``engine.working_repos.claude_unreal_holodeck3`` is satisfied by a bare ``"engine.working_repos"``
+      ``engine.working_repos.content_root`` is satisfied by a bare ``"engine.working_repos"``
       entry. DoE has declared that exact family entry on their plane (delivery memo
       cross-repo/inbox/2026-08-07-coordinator-content-repo-em-dr132-conformance-fixture-delivered.md:
       "The prefix-family match arm on the consumer side remains yours."). Do NOT widen this
@@ -146,11 +146,11 @@ COORDINATOR_OWNED_KEYS: List[str] = [
     "plugin.mirrors",
     "publish.targets",
     "repos.dronesim",
-    "repos.claude_unreal_holodeck5",
+    "repos.project_rag",
     "repos.project_rag_ue_addon",
     "repos.claude_unreal_holodeck",
-    "repos.claude_unreal_holodeck8",
-    "repos.claude_unreal_holodeck7",
+    "repos.geneva_mvp",
+    "repos.fifa_stats",
     "repos.experiments",
     "repos.project_opticon",
     "repos.delphios",
@@ -184,7 +184,7 @@ def _key_matches_regen_entry(canon_key: str, regen_key: str) -> bool:
     ever the bare *canonical* key satisfied by a dotted regen sub-entry
     (``plugin.mirrors.coordinator-claude``), while ``engine.working_repos`` is only
     ever the bare *regen* entry satisfying a dotted specific key
-    (``engine.working_repos.claude_unreal_holodeck3``) — but that's a property of today's data,
+    (``engine.working_repos.content_root``) — but that's a property of today's data,
     not something this function enforces; the stray opposite-direction branches are
     simply always False given the current key list. A plain ``str.startswith`` would
     also match a key that merely shares a leading substring without a dotted-segment
@@ -316,7 +316,7 @@ def _declared_owned_keys(ml_dir: Path) -> List[str]:
     Derived rather than hardcoded, because a hardcoded key list cannot survive
     publication. Percolation depersonalizes sibling-repo codenames, so the
     PUBLISHED engine carries ``repos.example_retrieval_repo`` where the
-    operator's real machine-local registry says ``repos.claude_unreal_holodeck5``. Every
+    operator's real machine-local registry says ``repos.project_rag``. Every
     renamed literal then misses, and check 1 degenerates twice over: it emits a
     WARN per renamed key on every ceremony, and it can no longer detect a
     genuinely unclassified key, because it already reports those keys as

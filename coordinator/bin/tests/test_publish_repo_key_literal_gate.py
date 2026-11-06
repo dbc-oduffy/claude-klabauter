@@ -189,3 +189,48 @@ def test_codename_in_a_file_the_allowlist_withholds_is_not_counted(tmp_path, cap
 def test_codename_in_a_published_file_still_fails_under_an_allowlist(tmp_path, capsys):
     assert _allowlisted_run(tmp_path, "pub.py,held.py") is False
     assert "codename residuals for claude-klabauter-row: 1" in capsys.readouterr().out
+
+
+def _git_source(tmp_path: Path, tracked: "dict[str, str]") -> Path:
+    import subprocess
+
+    src = tmp_path / "src"
+    src.mkdir()
+    for rel, text in tracked.items():
+        (src / rel).parent.mkdir(parents=True, exist_ok=True)
+        (src / rel).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(src)], check=True)
+    subprocess.run(["git", "-C", str(src), "add", "--", *tracked], check=True)
+    return src
+
+
+def _install_md_run(src: Path, allowlist: str = "INSTALL.md") -> bool:
+    target = SimpleNamespace(name="row", source_dir=src, allowlist=allowlist)
+    ctx = SimpleNamespace(engine_claude_klabauter=object())
+    section = {"hooks": ["substitute"], "substitute": [{"key": "repos.x", "value": "repos.y"}]}
+    return publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)])
+
+
+def test_gitignored_scratch_copy_is_not_scanned_on_a_dot_source_install_md_row(tmp_path):
+    src = _git_source(tmp_path, {"INSTALL.md": "hello\n", ".gitignore": "scratch/\n"})
+    (src / "scratch").mkdir()
+    (src / "scratch" / "_engine_root.py").write_text(_SOURCE, encoding="utf-8")
+    assert _install_md_run(src) is True
+
+
+def test_untracked_drifting_file_is_not_scanned(tmp_path):
+    src = _git_source(tmp_path, {"INSTALL.md": "hello\n"})
+    (src / "other.py").write_text(_SOURCE, encoding="utf-8")
+    assert _install_md_run(src) is True
+
+
+def test_tracked_allowlisted_drift_still_fails(tmp_path, capsys):
+    src = _git_source(tmp_path, {"INSTALL.md": "hello\n", "mod.py": _SOURCE})
+    assert _install_md_run(src, "INSTALL.md,mod.py") is False
+    err = capsys.readouterr().err
+    assert "repos.x" in err and "mod.py" in err
+
+
+def test_tracked_file_the_allowlist_withholds_is_not_scanned(tmp_path):
+    src = _git_source(tmp_path, {"INSTALL.md": "hello\n", "held.py": _SOURCE})
+    assert _install_md_run(src) is True

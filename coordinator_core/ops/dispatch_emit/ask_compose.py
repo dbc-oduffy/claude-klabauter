@@ -1109,9 +1109,20 @@ _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
 _ADOPT_STAGE_REPLY_HEAD_JS = (
     "  let _stagePending = null;\n"
     "  let _noFoldCause = null;\n"
+    "  let _stageRecover = null;\n"
+    "  let _stageRecovered = false;\n"
+    # A cached pre-ship-5 fold-site return carries the handle at its top level and no `stage_reply`.
+    "  const _legacyStageReply = (x) => {\n"
+    "    if (x && typeof x === 'object' && !Array.isArray(x) && (x.stage_reply === undefined || x.stage_reply === null) "
+    "&& x.manifest_handle && typeof x.manifest_handle === 'object') x.stage_reply = { manifest_handle: x.manifest_handle };\n"
+    "  };\n"
     # A soft (plan-blitz readyOp) reply's `error` is the pass-through's prose: `_adoptReadyError` owns
     # the refusal there. The manifest is only ever the sidecar text that matched its handle.
+    # An absent reply re-runs the stage once through `_stageRecover` (a fresh agent: a replayed one would
+    # return the cached, stage-less result again).
     "  const _adoptStageReply = async (r, soft) => {\n"
+    "    if ((r === null || r === undefined) && !soft && !_stageRecovered && !_stagedManifest && typeof _stageRecover === 'function') "
+    "{ _stageRecovered = true; const _rec = await _stageRecover(); r = _rec ? _rec.stage_reply : r; }\n"
     "    if (r === null || r === undefined || typeof r !== 'object' || Array.isArray(r)) { if (!_noFoldCause) _noFoldCause = 'stage_reply absent from the agent return'; return; }\n"
     "    if (r.error && r.manifest_handle) { if (!soft && !_relayGap) _relayGap = "
     "'stage reply carries both error and manifest_handle'; return; }\n"
@@ -1130,7 +1141,19 @@ _ADOPT_STAGE_REPLY_READER_JS = "    got = await _readStageSidecar(r.manifest_han
 # Trap: a launcher-child script holds no reader branch at all, so `workflow(` is absent from its bytes.
 _ADOPT_STAGE_REPLY_LAUNCHER_JS = (
     "    got = _adoptStagedInline(r.manifest_handle);\n"
-    "    if (got === null) { if (!_stagePending) _stagePending = { handle: r.manifest_handle, ...(typeof r.twin_path === 'string' ? { twin_path: r.twin_path } : {}) }; return; }\n"
+    # Trap: a replayed reply without `twin_path` names a handle the refire may have restaged past; the stage op's
+    # own reply (idempotent, one fresh agent) names the twin on disk, so the launched path is never rebuilt from a stale sha.
+    "    if (got === null) {\n"
+    "      if (!_stagePending) {\n"
+    "        let _tr = r;\n"
+    "        if (typeof r.twin_path !== 'string' && !soft && !_stageRecovered && typeof _stageRecover === 'function') {\n"
+    "          _stageRecovered = true; const _rec = await _stageRecover(); const _rr = _rec ? _rec.stage_reply : null;\n"
+    "          if (_rr && typeof _rr === 'object' && _rr.manifest_handle && typeof _rr.twin_path === 'string') _tr = _rr;\n"
+    "        }\n"
+    "        _stagePending = { handle: _tr.manifest_handle, ...(typeof _tr.twin_path === 'string' ? { twin_path: _tr.twin_path } : {}) };\n"
+    "      }\n"
+    "      return;\n"
+    "    }\n"
 )
 # Trap: depends on _verifyReplyText, and the slot line must precede it; the text still passes the verify before JSON.parse.
 _ADOPT_STAGED_INLINE_JS = """function _adoptStagedInline(h) {
@@ -1191,6 +1214,43 @@ def _stage_reply_js(launcher_child: bool = False) -> str:
             + _ADOPT_STAGE_REPLY_LAUNCHER_CHILD_JS
         )
     return VERIFY_REPLY_JS + READ_STAGE_SIDECAR_JS + _ADOPT_STAGE_REPLY_JS
+
+
+#: JS: the `dispatch.ask_stage` params for a recovery stage. Trap: `_gate` may be undeclared or still unassigned
+#: where a fold site runs, so it is read inside try.
+_STAGE_RECOVER_PARAMS_JS = (
+    "  const _stageRecoverParams = () => {\n"
+    "    let _g = null;\n"
+    "    try { _g = _gate; } catch (e) { _g = null; }\n"
+    "    const _plan = _planRel || (_g && typeof _g.resume_plan === 'string' && _g.resume_plan ? _g.resume_plan : null);\n"
+    "    if (_plan) {\n"
+    "      const _only = (_g && Array.isArray(_g.resume_rows) && _g.resume_rows.length) ? { only_rows: _g.resume_rows } : {};\n"
+    "      return { run_id: _runId, plan_path: _plan, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+    "...(_sizingRel ? { commit_sizing_path: _sizingRel } : {}), ..._only };\n"
+    "    }\n"
+    "    return { run_id: _runId, writes: _writes, cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID, "
+    "sizing_path: _sizingRel, gated: _gated };\n"
+    "  };\n"
+)
+
+
+def _stage_recover_js(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
+    """The script block that sets `_stageRecover`: a fresh stage-recover agent runs the stage op once and returns
+    its reply, for a fold-site return that carries no `stage_reply` (a result cached under an engine that did not
+    ask for one). Trap: the prompt differs from the folded agent's, so a resume cannot replay the stage-less result."""
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        f"Run `{_INVOKE} {OP_ASK_STAGE} '",
+        "js:JSON.stringify(_stageRecoverParams())",
+        f"'{_repo_flag(repo_root)}` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
+        "{\"error\": ...} refusal). Commit nothing.",
+    )
+    call = _agent(
+        prompt, label="stage-recover", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
+        run_id=run_id,
+    )
+    return _STAGE_RECOVER_PARAMS_JS + f"  _stageRecover = async () => {call};"
 
 
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -3666,6 +3726,7 @@ def compose_ask_script(
     b.append("  let _stagedManifest = null;")
     b.append(_ADMIT_MANIFEST_JS)
     b.append(_stage_reply_js(launcher_child))
+    b.append(_stage_recover_js(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id))
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append("  let _splitExit = null;")
@@ -3779,14 +3840,14 @@ def compose_ask_script(
             "return {manifest_handle: <it verbatim>} as stage_reply; when it carries `manifest` holding an `error`, return "
             "{error: <that text>} as stage_reply; either way run no stage command. "
             "As your very last act otherwise, stage the run, but only when the gate reply's halt is null and its arm "
-            f"is XS: run `{_INVOKE} {OP_ASK_STAGE} '<params>'{_repo_flag(repo_root)}` once, <params> being exactly this JSON object, "
+            f"is XS, or is S with a resume_plan in the gate reply: run `{_INVOKE} {OP_ASK_STAGE} '<params>'{_repo_flag(repo_root)}` once, <params> being exactly this JSON object, "
             "with no key added, dropped or renamed: ",
             *params,
             ", except that with a resume_plan in the gate reply you drop `writes`, `gated` and `sizing_path`, set "
             "`plan_path` to it and `commit_sizing_path` to the sizing_path value, and add `only_rows` set to its "
             "resume_rows when present. "
             "Return its JSON reply verbatim as stage_reply (a manifest_handle, or the {\"error\": ...} refusal). "
-            "On any other arm run no stage command and return no stage_reply.",
+            "On any other arm, or S with no resume_plan, run no stage command and return no stage_reply.",
         )
 
     def _gate_agent_call(label: str, phase_title: str, stage_act: bool = False) -> str:
@@ -4233,12 +4294,14 @@ def compose_ask_script(
         )
         if sized_in_run:
             b.append(
+                "  _legacyStageReply(_scouted);\n"
                 f"  if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_scouted.stage_reply); }}"
                 f"{_fold_decline_js(clean_js)}"
             )
         else:
             b.append(
-                "  if (_gate && typeof _gate.arm === 'string') { _gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; "
+                "  if (_gate && typeof _gate.arm === 'string') { _legacyStageReply(_gate); "
+                "_gate = { ..._gate, arm: _gate.arm.trim().toLowerCase() }; "
                 f"if ({clean_js} && {arms_js}) {{ await _adoptStageReply(_gate.stage_reply); }}"
                 f"{_fold_decline_js(clean_js)} }}"
             )

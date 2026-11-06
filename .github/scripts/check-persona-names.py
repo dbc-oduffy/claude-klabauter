@@ -263,6 +263,7 @@ WIRE_LITERAL_RE = re.compile(
 # verbatim, the same "the two lists have to agree by hand" precedent `_repo.py`'s
 # `SKIP_DIR_NAMES` docstring already names for this harness.
 PROTECTED_LITERALS = (
+    "plugin.mirrors.project-makima.source_path",
     ".project-rag",
     "repos.project_rag",
     "repos.project_rag_ue_addon",
