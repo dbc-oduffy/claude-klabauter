@@ -74,6 +74,7 @@ from typing import Any, Optional
 from coordinator_core.frontmatter.schema_validate import parse_yaml
 from coordinator_core.resolve_coordinator_clone import ResolveCoordinatorCloneError
 from coordinator_core.plan_assemble import residue
+from coordinator_core.session.output_tree_layout import write_rel
 from coordinator_core.roadmap_planning_assemble.scaffold_directive import (
     Flag,
     build_scaffold_directive,
@@ -129,7 +130,7 @@ def _plan_scaffold_directive(sizing_object_path: Optional[Path]) -> dict[str, An
     slug = _LEADING_DATE.sub("", slug) or "untitled"
     resolved: dict[str, Any] = {
         "title": intent,
-        "out": f"docs/plans/{today}-{slug}.md",
+        "out": write_rel("docs/plans", f"{today}-{slug}.md"),
     }
     directive = build_scaffold_directive(
         "d-scaffold-plan",

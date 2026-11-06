@@ -20,11 +20,18 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     read the issuer's signed grant envelope (one JSON line on stdin) and hand
                     it to suite_grant.receive_relayed_grant; prints its JSON reply, exit 0 only
                     when accepted. Argv must restate the envelope or the grant is refused.
+  membership get    print the held signed membership snapshot (canonical JSON line, then its
+                    base64 signature line); exit 1 when none is held.
+  membership put    read the snapshot line and base64 signature line on stdin, verify against
+                    the pinned signer key and the held epoch, adopt, and reconcile the
+                    relay-managed authorized_keys lines (from= pins generated); prints a JSON
+                    reply, exit 0 only when adopted. The relay never signs.
 
 Wire facts this relies on (Claude Code 2.1.3xx, peerProtocol 1): a message is one
 JSON line per connection, sender writes and closes, receiver sends nothing back.
 A receiver only accepts a socket listed in ~/.claude/sessions with a key file.
 """
+import base64
 import hashlib
 import json
 import os
@@ -60,6 +67,8 @@ def parse_mode(original_command):
         return "send", int(cmd[1])
     if len(cmd) == 2 and cmd[0] == "inbox" and NAME_RE.fullmatch(cmd[1]):
         return "inbox", cmd[1]
+    if cmd == ["membership", "get"] or cmd == ["membership", "put"]:
+        return "membership", cmd[1]
     if cmd and cmd[0] == "grant":
         return grant_args(original_command)
     return None
@@ -465,12 +474,146 @@ def grant(args, line, receive=None):
     return (receive or receive_grant())(env)
 
 
+def settings_home():
+    return Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
+
+
+def load_membership():
+    """The membership library beside this relay, loaded by path; None when it is not vendored here."""
+    import importlib.util
+    path = Path(__file__).with_name("unimatrix-membership.py")
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("unimatrix_membership", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_KEY_TYPES = r"(?:ssh-ed25519|ssh-rsa|ecdsa-sha2-\S+|sk-\S+)"
+_COMMAND_RE = re.compile(r'command="((?:[^"\\]|\\.)*)"')
+_KEY_RE = re.compile(rf"\s{_KEY_TYPES}\s+(\S+)")
+
+
+def managed_key_body(line):
+    """Key body of an authorized_keys line whose forced command names this relay; None for any other line."""
+    text = line.strip()
+    if not text or text.startswith("#"):
+        return None
+    cmd = _COMMAND_RE.search(text)
+    if not cmd or "unimatrix-relay.py" not in cmd.group(1):
+        return None
+    key = _KEY_RE.search(text, cmd.end())
+    return key.group(1) if key else None
+
+
+def relay_line(key_body):
+    """The restrict line for `key_body` with this copy's interpreter and path, quoted as the installer does."""
+    parts = [f'\\"{p}\\"' if " " in p else p for p in (sys.executable, str(Path(__file__).resolve()))]
+    return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} unimatrix'
+
+
+def windows_admin():
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    return bool(ctypes.windll.shell32.IsUserAnAdmin())
+
+
+def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin):
+    """Make the relay-managed lines of `path` equal the generated lines for `members`.
+
+    Only lines whose forced command names unimatrix-relay.py are touched; every other line keeps its
+    exact bytes. A managed line already equal to its generated line stays in place; any other managed
+    line (a revoked or never-signed key, a stale pin) is dropped. Returns admin | unchanged | updated.
+    """
+    if is_admin():
+        return "admin"
+    want = {}
+    for m, line in zip(members, membership.authorized_keys_lines(members, relay_line)):
+        want[m["relay_pub"].split()[1]] = line
+    path = Path(path)
+    old = path.read_text(encoding="utf-8") if path.is_file() else ""
+    out, kept = [], set()
+    for raw in old.splitlines(keepends=True):
+        body = managed_key_body(raw)
+        if body is None:
+            out.append(raw)
+        elif body in want and body not in kept and raw.rstrip("\r\n") == want[body]:
+            kept.add(body)
+            out.append(raw)
+    if out and not out[-1].endswith("\n"):
+        out[-1] += "\n"
+    out += [line + "\n" for body, line in want.items() if body not in kept]
+    new = "".join(out)
+    if new == old:
+        return "unchanged"
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(new, encoding="utf-8")
+        if os.name == "posix":
+            os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
+    return "updated"
+
+
+def membership_get(home, membership):
+    """(snapshot line, base64 sig line) of the held snapshot, or None when none is held. Never verifies or signs."""
+    snap, sig = membership.load_snapshot(home)
+    if snap is None:
+        return None
+    return membership.canonical_bytes(snap).decode("ascii"), base64.b64encode(sig).decode("ascii")
+
+
+def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, notifier=None,
+                   is_admin=windows_admin, run=subprocess.run):
+    """Verify and adopt a pushed snapshot, then reconcile authorized_keys; return the reply dict.
+
+    The pin and the epoch gate inside `membership.adopt` are the only defence: a refusal (bad
+    signature, replayed epoch, fork, no pin, malformed input) appends one `refused` event and changes
+    nothing. The relay never signs."""
+    notifier = notifier or membership.notify
+    try:
+        snap = json.loads(snapshot_line)
+        sig = base64.b64decode(sig_line.strip(), validate=True)
+        if not isinstance(snap, dict) or not sig:
+            raise ValueError("snapshot or signature empty")
+    except ValueError as ex:
+        notifier(home, {"kind": "refused", "detail": f"malformed push: {type(ex).__name__}"})
+        return {"ok": False, "reason": "malformed"}
+    try:
+        members = membership.adopt(home, snap, sig, notifier=notifier, run=run)
+    except membership.MembershipError as ex:
+        return {"ok": False, "reason": f"refused: {ex}"[:200]}
+    return {"ok": True, "epoch": snap["epoch"],
+            "authorized_keys": reconcile_authorized_keys(members, authorized_keys, membership, is_admin)}
+
+
 def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
         sys.exit("usage: roster | send <pid> | inbox <name> | source | "
-                 "grant <grantee> <note> <ttl> <repo>")
+                 "grant <grantee> <note> <ttl> <repo> | membership get | membership put")
     mode, arg = parsed
+    if mode == "membership":
+        membership = load_membership()
+        if membership is None:
+            sys.exit("membership library not vendored beside the relay")
+        home = settings_home()
+        if arg == "get":
+            held = membership_get(home, membership)
+            if held is None:
+                sys.exit("no membership snapshot held")
+            print(held[0])
+            print(held[1])
+            return
+        reply = membership_put(home, sys.stdin.readline(), sys.stdin.readline(), membership,
+                               Path.home() / ".ssh" / "authorized_keys")
+        print(json.dumps(reply))
+        sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "grant":
         reply = grant(arg, sys.stdin.readline())
         print(json.dumps(reply))

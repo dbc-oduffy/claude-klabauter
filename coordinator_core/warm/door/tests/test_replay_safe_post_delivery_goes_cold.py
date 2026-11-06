@@ -65,7 +65,16 @@ class _PeerDeathServer:
 
 @pytest.fixture
 def runtime_base():
-    base = Path(os.path.realpath(tempfile.mkdtemp(prefix="rs-", dir="/tmp")))
+    from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.warm.election import SUN_PATH_MAX_BYTES
+
+    roots = [r for r in ("/tmp", str(managed_tempdir())) if os.path.isdir(r)]
+    roots.sort(key=lambda r: len(os.fsencode(os.path.realpath(r))))
+    base = Path(os.path.realpath(tempfile.mkdtemp(prefix="rs-", dir=roots[0])))
+    projected = len(os.fsencode(str(base))) + len("/coordinator/warm/") + 16 + 1 + 16 + 5
+    if projected > SUN_PATH_MAX_BYTES:
+        shutil.rmtree(base, ignore_errors=True)
+        pytest.skip(f"runtime base {str(base)!r} leaves no room under the sun_path budget (projected {projected})")
     try:
         yield base
     finally:

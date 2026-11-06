@@ -121,21 +121,17 @@ def pid_alive(pid):
     return True
 
 
-def _filetime(pid):
-    # The harness compares procStart to the raw 100 ns creation FILETIME, as a string.
-    import ctypes
-    from ctypes import wintypes
-    k32 = ctypes.windll.kernel32
-    k32.OpenProcess.restype = wintypes.HANDLE
-    h = k32.OpenProcess(0x1000, False, pid)
-    if not h:
-        raise OSError(f"cannot open pid {pid}")
-    times = [wintypes.FILETIME() for _ in range(4)]
-    ok = k32.GetProcessTimes(h, *[ctypes.byref(t) for t in times])
-    k32.CloseHandle(h)
-    if not ok:
-        raise OSError(f"GetProcessTimes failed for pid {pid}")
-    return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
+_LIVENESS = []
+
+
+def _liveness():
+    if not _LIVENESS:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("unimatrix_liveness", HERE / "unimatrix-liveness.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _LIVENESS.append(mod)
+    return _LIVENESS[0]
 
 
 def _ps_lstart(pid):
@@ -147,8 +143,15 @@ def _ps_lstart(pid):
 
 
 def proc_start(pid, platform=None):
-    """Raw process-start stamp the harness compares as a string."""
-    return _filetime(pid) if _is_win(platform) else _ps_lstart(pid)
+    """Raw process-start stamp the harness compares as a string.
+
+    Read without a spawn through the liveness module; `ps` only when that read raises OSError off Windows."""
+    try:
+        return _liveness().proc_start(pid, platform)
+    except OSError:
+        if _is_win(platform):
+            raise
+        return _ps_lstart(pid)
 
 
 def pid_domain(platform=None):

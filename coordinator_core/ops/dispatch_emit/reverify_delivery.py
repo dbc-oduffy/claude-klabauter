@@ -736,6 +736,28 @@ def charged_status(tests: Optional[dict]) -> Optional[str]:
     return "pass" if pre and measured and not outside and not over_count else status
 
 
+def wiring_downgrade(
+    repo_root: Path, plan_path: Optional[str], verdict: Optional[str], unbacked: List[dict]
+) -> Tuple[Optional[str], List[dict]]:
+    """A PASS for a plan whose `wiring:` has a non-wired part becomes FAIL with one
+    `{part, status, reason}` unbacked entry per such part. Any other verdict, or a plan path that
+    does not resolve to a file, passes through; `unbacked` is copied, never mutated."""
+    if verdict != "PASS" or not plan_path:
+        return verdict, unbacked
+    from coordinator_core.ops import wiring_contract
+
+    path = Path(plan_path)
+    path = path if path.is_absolute() else Path(repo_root) / path
+    fm = _frontmatter(path) if path.is_file() else None
+    if not isinstance(fm, dict):
+        return verdict, unbacked
+    bad = [v for v in wiring_contract.part_verdicts(fm, Path(repo_root)) if v["status"] != wiring_contract.STATUS_WIRED]
+    if not bad:
+        return verdict, unbacked
+    entries = [{"part": v["id"], "status": v["status"], "reason": v["reason"]} for v in bad]
+    return "FAIL", list(unbacked) + entries
+
+
 def record_delivery_verdict(
     *,
     repo_root: Path,
@@ -749,13 +771,16 @@ def record_delivery_verdict(
     tests: Optional[dict] = None,
     foreign_claims: Optional[List[str]] = None,
     diff_sha: Optional[str] = None,
+    plan_path: Optional[str] = None,
 ) -> str:
     """Exclusive-create the superseding delivery-verdict record; returns its repo-relative path.
-    `diff_sha` binds the record to the reviewed terminal commit a null-slot re-run judged."""
+    `diff_sha` binds the record to the reviewed terminal commit a null-slot re-run judged.
+    `plan_path` lets a PASS be downgraded to FAIL when that plan's `wiring:` has a non-wired part."""
     if verdict is None:
         _refuse_unless_zero_claim_settled(unbacked, criterion, tests)
     elif verdict not in ("PASS", "FAIL"):
         raise ReverifyRefused(f"reverify-delivery: result verdict {verdict!r} is neither PASS nor FAIL")
+    verdict, unbacked = wiring_downgrade(repo_root, plan_path, verdict, unbacked)
     now = datetime.now(timezone.utc)
     stem = re.sub(r"[^A-Za-z0-9_.-]", "-", Path(supersedes).stem)
     rel = VERDICT_DIR / now.strftime("%Y-%m") / f"{stem}.{now.strftime('%Y%m%dT%H%M%S%fZ')}.md"
@@ -1617,6 +1642,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             tests=result.get("tests") or None,
             foreign_claims=live_foreign_claims(repo_root, frozen or [], ident["head_sha"]),
             diff_sha=ident.get("diff_sha"),
+            plan_path=ident.get("plan_path"),
         )
         settle_tests_sidecar(
             repo_root,
@@ -1625,13 +1651,16 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             agent_type=ident.get("tests_agent_type"),
         )
         if result.get("verdict") is not None:
+            sidecar_verdict, sidecar_unbacked = wiring_downgrade(
+                repo_root, ident.get("plan_path"), result["verdict"], result.get("claims_unbacked") or []
+            )
             persist_delivery_sidecar(
                 repo_root=repo_root,
                 plan_path=ident.get("plan_path"),
                 session_id=args.session_id,
                 head_sha=ident["head_sha"],
-                verdict=result["verdict"],
-                unbacked=result.get("claims_unbacked") or [],
+                verdict=sidecar_verdict,
+                unbacked=sidecar_unbacked,
             )
     except (OSError, ValueError, KeyError) as exc:
         print(f"reverify-delivery: {exc}", file=sys.stderr)

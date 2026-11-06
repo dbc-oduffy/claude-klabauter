@@ -165,3 +165,26 @@ def test_note_only_item_title_is_not_gap_prefixed(tmp_path):
 def test_note_only_item_derives_from_serving_writes(tmp_path):
     rows, under = derive_ledger_rows({}, ["finish the gate"], ["R1"], {"R1": ["a/x.py"]}, [], tmp_path)
     assert under == [] and rows[0]["writes"] == ["a/x.py"]
+
+
+def test_mixed_plan_body_and_ordinary_item_splits_into_dispatchable_siblings(tmp_path):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit.emit import _is_immutable_body_path, _row_agent_type
+
+    for rel in ("docs/plans/2026-11/p.md", "docs/plans/2026-11/p.evidence.yaml", "a/x.py"):
+        _touch(tmp_path, rel)
+    rows, under = derive_ledger_rows(
+        {"R1": {"remaining": ["move docs/plans/2026-11/p.md and docs/plans/2026-11/p.evidence.yaml and edit a/x.py"]}},
+        [], ["R1"], {}, [], tmp_path)
+    assert under == []
+    assert [r["id"] for r in rows] == ["LR1", "LR1-2"]
+    assert all(r["register_rows"] == ["R1"] for r in rows)
+    assert rows[0]["body"] == rows[1]["body"]
+    assert not any(_is_immutable_body_path(w) for w in rows[0]["writes"])
+    assert rows[1]["writes"] == ["docs/plans/2026-11/p.md"]
+    assert {w for r in rows for w in r["writes"]} == {
+        "docs/plans/2026-11/p.md", "docs/plans/2026-11/p.evidence.yaml", "a/x.py"}
+    for r in rows:
+        _row_agent_type(SimpleNamespace(
+            id=r["id"], writes=r["writes"], agent_type=None, change_kind=r["change_kind"], body=r["body"]))

@@ -158,6 +158,40 @@ def test_cloud_box_skips_without_gating(probe_env, monkeypatch):
     assert mod._local_reduce_overall([r]) == mod._INFO
 
 
+def test_no_claude_host_skips_without_gating(tmp_path, monkeypatch):
+    mod = _require_module()
+    content = tmp_path / "content"
+    (content / "coordinator").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
+    monkeypatch.setenv("MACHINE_LOCAL_REPOS_CONTENT_ROOT", str(content))
+    monkeypatch.setenv("PATH", str(tmp_path / "emptybin"))
+    _pin_locality(monkeypatch, "attended")
+
+    r = mod._run_probe_launch_chain()
+
+    assert r.skipped is True
+    assert r.required is False
+    assert mod._local_reduce_overall([r]) == mod._INFO
+
+
+def test_remediation_names_flat_checkout_paths(probe_env, tmp_path):
+    mod = _require_module()
+    content = tmp_path / "content"
+    tmpl_dir = content / "templates" / "shell"
+    tmpl_dir.mkdir(parents=True)
+    suffix = "ps1" if __import__("os").name == "nt" else "sh"
+    (tmpl_dir / f"claude-author-shim.{suffix}.tmpl").write_text("x", encoding="utf-8")
+    (content / "bin").mkdir()
+    (content / "bin" / "gen-claude-author-shim.py").write_text("", encoding="utf-8")
+    _shim_path(mod, probe_env).unlink(missing_ok=True)
+
+    r = mod._run_probe_launch_chain()
+
+    assert r.required is True
+    assert str(tmpl_dir / f"claude-author-shim.{suffix}.tmpl") in r.remediation
+    assert str(content / "bin" / "gen-claude-author-shim.py") in r.remediation
+
+
 def test_suspect_locality_still_gates(probe_env, monkeypatch):
     mod = _require_module()
     _shim_path(mod, probe_env).unlink(missing_ok=True)

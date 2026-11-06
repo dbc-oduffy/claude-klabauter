@@ -36,3 +36,18 @@ def test_inline_body_text_refusal_names_file_path_or_stdin(tmp_path):
     assert proc.returncode == 2
     assert "takes a file path, or - for stdin" in proc.stderr
     assert "Errno" not in proc.stderr
+
+
+def test_help_names_feature_off_route_and_summary_cap(tmp_path):
+    env = {**os.environ, "CLAUDE_HOME": str(tmp_path), "COORDINATOR_SETTINGS_HOME": str(tmp_path),
+           "COORDINATOR_ENGINE_ROOT": str(_ENGINE_ROOT), "COORDINATOR_WARM": "0"}
+    top = subprocess.run([sys.executable, str(_BIN / "cross-repo-memo.py"), "--help"], env=env,
+                         capture_output=True, text=True, timeout=120,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert top.returncode == 0
+    assert "machine-local set coordinator.feature.cross_repo_memos on" in top.stdout
+    assert "--summary is capped at 240 chars" in top.stdout
+    draft = subprocess.run([sys.executable, str(_BIN / "cross-repo-memo.py"), "draft", "--help"], env=env,
+                           capture_output=True, text=True, timeout=120,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert "≤240 chars" in draft.stdout

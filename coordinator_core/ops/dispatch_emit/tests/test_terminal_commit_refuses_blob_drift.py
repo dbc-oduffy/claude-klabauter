@@ -199,7 +199,7 @@ def test_a_rewrite_after_the_review_still_refuses_with_the_reviewed_hash(repo, m
 
 
 def test_a_session_write_after_the_review_wins(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
+    (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
     os.utime(repo / "a.py", (2500.0, 2500.0))
     _record_at(repo, "a.py", _sha("A\n"), 3000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
@@ -218,8 +218,17 @@ def test_the_remedy_names_a_registered_op():
     assert "workflow.revise" in OP_MODULE_MAP
 
 
-def test_on_an_equal_timestamp_the_session_write_wins(repo, monkeypatch):
+def test_post_review_session_write_commits_when_the_bytes_are_the_reviewed_bytes(repo, monkeypatch):
     (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
+    _record_at(repo, "a.py", _sha("A\n"), 3000.0)
+    _review(repo, {"a.py": _sha("B\n")}, 2000.0)
+    out, seen = _fire(repo, monkeypatch, _WITH_BASE)
+    assert out["committed"] is True, out
+    assert seen[-1]["expected_content_sha256"] == {"a.py": _sha("B\n")}
+
+
+def test_on_an_equal_timestamp_the_session_write_wins(repo, monkeypatch):
+    (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 2000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
@@ -228,7 +237,7 @@ def test_on_an_equal_timestamp_the_session_write_wins(repo, monkeypatch):
 
 
 def test_an_unparseable_review_stamp_is_no_review_basis(repo, monkeypatch):
-    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
+    (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, 2000.0)
     sidecar = next((repo / ".coordinator-local").rglob("*-prep.review-prep.md"))

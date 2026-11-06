@@ -2130,6 +2130,13 @@ def _launch_chain_claude_home() -> Path:
     return Path(os.environ.get("CLAUDE_HOME") or Path.home())
 
 
+def _claude_host_present(claude_dir: Path) -> bool:
+    """True when this box has a Claude host: `claude` on PATH or a `.claude` dir."""
+    import shutil
+
+    return shutil.which("claude") is not None or claude_dir.is_dir()
+
+
 def _run_probe_launch_chain() -> _ProbeResult:
     """Probe claude-klabauter.launch.shim_chain — gating per RESULT (see `required` below).
 
@@ -2201,6 +2208,20 @@ def _run_probe_launch_chain() -> _ProbeResult:
             data=data,
         )
 
+    if not _claude_host_present(shell_dir.parent):
+        return _ProbeResult(
+            probe=_LAUNCH_CHAIN_PROBE,
+            status=_INFO,
+            detail=(
+                "no Claude host on this box (no `claude` on PATH, no "
+                f"{shell_dir.parent}) — the shim chain does not apply"
+            ),
+            remediation="—",
+            required=False,
+            skipped=True,
+            data=data,
+        )
+
     try:
         from coordinator_core.content_root import read_content_root
 
@@ -2222,11 +2243,21 @@ def _run_probe_launch_chain() -> _ProbeResult:
         )
     data["content_root"] = str(content_root)
 
+    tmpl_name = f"claude-author-shim.{'ps1' if is_windows else 'sh'}.tmpl"
+    root = Path(str(content_root))
+    tmpl = next(
+        (p for p in (root / "coordinator" / "templates" / "shell" / tmpl_name,
+                     root / "templates" / "shell" / tmpl_name) if p.is_file()),
+        root / "templates" / "shell" / tmpl_name,
+    )
+    gen = next(
+        (p for p in (root / "coordinator" / "bin" / "gen-claude-author-shim.py",
+                     root / "bin" / "gen-claude-author-shim.py") if p.is_file()),
+        None,
+    )
     fix = (
-        f"python3 <engine-clone>/coordinator/bin/gen-claude-author-shim.py --shell "
-        f"{'powershell' if is_windows else 'bash'} --template "
-        f"{content_root}/coordinator/templates/shell/"
-        f"claude-author-shim.{'ps1' if is_windows else 'sh'}.tmpl"
+        f"python3 {gen or '<engine-clone>/coordinator/bin/gen-claude-author-shim.py'} "
+        f"--shell {'powershell' if is_windows else 'bash'} --template {tmpl}"
     )
 
     if not shim.is_file():

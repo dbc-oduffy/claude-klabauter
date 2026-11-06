@@ -675,8 +675,8 @@ def _note_route(root: Path, run: Mapping, run_id: str, paths: Sequence[str]) -> 
     ).replace("'", "'\\''") + "'"
     return (
         f"note not stored: run {run_id}'s write footprint does not cover {', '.join(paths)}, so no leg could "
-        f"act on it. Cover them with a plan row: {call}. Once that row lands in the plan, re-send the note "
-        "to this run_id; it is accepted and reaches the briefs."
+        f"act on it ({_edge_state(root, sizing_rel)}). Cover them with a plan row: {call}. Once that row "
+        "lands in the plan the sizing names, re-send the note to this run_id; it is accepted and reaches the briefs."
     )
 
 
@@ -2440,10 +2440,44 @@ def _sizing_plan(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], 
     edge = sizing.get("plan") if isinstance(sizing, dict) else None
     if not (isinstance(edge, str) and edge.strip()):
         return None, None, ""
-    plan = contained_path(Path(root) / edge, [Path(root) / "docs" / "plans"])
-    if plan is None or not plan.is_file():
+    edge = edge.strip()
+    plans = [Path(root) / "docs" / "plans"]
+    plan = contained_path(Path(root) / edge, plans)
+    if plan is not None and plan.is_file():
+        return edge, plan, sizing_text
+    found = _relocated_plan(Path(root), edge, sizing_rel, plans)
+    if found is None:
         return None, None, ""
-    return edge, plan, sizing_text
+    return found[0], found[1], sizing_text
+
+
+def _relocated_plan(
+    root: Path, edge: str, sizing_rel: str, plans: list[Path]
+) -> Optional[tuple[str, Path]]:
+    """The plan a stale sizing `plan:` edge meant: the edge's file name directly under `docs/plans/` or
+    under its `YYYY-MM/` folder, accepted only when its text names `sizing_rel`, so a same-named
+    unrelated plan is never adopted. At most two stat calls and one read."""
+    name = Path(edge.replace("\\", "/")).name
+    sizing_name = Path(sizing_rel.replace("\\", "/")).name
+    for rel in (f"docs/plans/{name}", f"docs/plans/{name[:7]}/{name}"):
+        cand = contained_path(root / rel, plans)
+        if cand is None or not cand.is_file():
+            continue
+        try:
+            text = cand.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if sizing_name in text:
+            return rel, cand
+    return None
+
+
+def _edge_state(root: Path, sizing_rel: Optional[str]) -> str:
+    """What `_sizing_plan` read, for a refusal: the plan file, or why there is none."""
+    plan_rel = _sizing_plan(root, sizing_rel)[0]
+    if plan_rel:
+        return f"the plan it read is {plan_rel}"
+    return "it read no plan: the sizing names no readable `plan:` edge"
 
 
 def pinned_plan_drift(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:

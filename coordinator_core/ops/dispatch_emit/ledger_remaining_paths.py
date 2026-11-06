@@ -277,6 +277,7 @@ def derive_ledger_rows(
         HALT_GAP_RULE,
         LEDGER_DERIVED_ROW_PREFIX,
     )
+    from coordinator_core.ops.dispatch_emit.emit import _is_immutable_body_path
 
     rerule = note_rerules(notes)
     sha_notes = [str(n) for n in notes if sha_tokens(n)]
@@ -312,12 +313,8 @@ def derive_ledger_rows(
             if not rerule:
                 underivable.append(item)
             continue
-        rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}"
-        n = 1
-        while rid in taken:
-            n += 1
-            rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}-{n}"
-        taken.add(rid)
+        body_writes = [w for w in writes if _is_immutable_body_path(w)]
+        partitions = [p for p in ([w for w in writes if w not in body_writes], body_writes) if p]
         lines = [
             f"Ledger item {item} is open. Gaps to close (each line is still true; make it false):",
             *(f"- {s}" for s in steps),
@@ -328,15 +325,23 @@ def derive_ledger_rows(
         if dropped:
             lines.append("Not declared (no tracked or present path): " + ", ".join(dropped))
         lines.append(f"Done when: no gap line above holds at HEAD and the ledger check judges {item} met.")
-        rows.append({
-            "id": rid,
-            "title": GAP_TITLE_PREFIX + steps[0] if steps else f"Serve revise note for {item}",
-            "change_kind": "code-edit",
-            "writes": writes,
-            "register_rows": [item],
-            "disposition": "open",
-            "body": "\n".join(lines),
-        })
+        for part in partitions:
+            rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}"
+            n = 1
+            while rid in taken:
+                n += 1
+                rid = f"{LEDGER_DERIVED_ROW_PREFIX}{item}-{n}"
+            taken.add(rid)
+            rows.append({
+                "id": rid,
+                "title": (GAP_TITLE_PREFIX + steps[0] if steps else f"Serve revise note for {item}")
+                + (" (plan body)" if part is body_writes and len(partitions) > 1 else ""),
+                "change_kind": "code-edit",
+                "writes": part,
+                "register_rows": [item],
+                "disposition": "open",
+                "body": "\n".join(lines),
+            })
     return rows, underivable
 
 

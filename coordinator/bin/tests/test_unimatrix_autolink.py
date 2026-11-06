@@ -47,6 +47,9 @@ def env(tmp_path, monkeypatch):
     live = set()
     monkeypatch.setattr(roster, "pid_alive", lambda pid: pid in live)
     monkeypatch.setattr(roster, "proc_start", lambda pid: f"start-{pid}")
+    liveness = al._liveness()
+    monkeypatch.setattr(liveness, "pid_alive", lambda pid: pid in live)
+    monkeypatch.setattr(liveness, "proc_start", lambda pid, platform=None: roster.proc_start(pid))
 
     class E:
         pass
@@ -433,3 +436,282 @@ def test_cli_entrypoint_unconfigured_is_silent_exit_zero_and_logs_reason(tmp_pat
                        env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(home)})
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
     assert "no supervisors started" in (home / "unimatrix" / "autolink.log").read_text()
+
+
+def seed_live_pair(e, alias, pids=(2001, 2002)):
+    e.sdir.mkdir(parents=True, exist_ok=True)
+    e.live.update(pids)
+    rec = {"bridge": {"pid": pids[0], "procStart": f"start-{pids[0]}"},
+           "inbox": {"pid": pids[1], "procStart": f"start-{pids[1]}"}}
+    (e.sdir / f"autolink-{alias}.json").write_text(json.dumps(rec))
+
+
+def boom(*a, **kw):
+    raise AssertionError("called on the healthy path")
+
+
+def test_healthy_cache_makes_no_key_probe_or_spawn_call_and_logs_nothing(env):
+    seed_live_pair(env, "machine-a")
+    (env.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": ["machine-a"]}))
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom, stable_fn=boom)
+    assert not (env.sdir / "autolink.log").exists()
+
+
+def test_live_record_skips_key_resolution_for_that_alias_only(env, tmp_path):
+    seed_live_pair(env, "up")
+    kd = write_key(tmp_path / "kd")
+    keyed = []
+
+    def key_fn(r, a):
+        keyed.append(a)
+        return kd
+
+    env.al.run(roster=env.roster, boxes=["up", "down"], spawn=Spawner(), probe_fn=ok, key_fn=key_fn)
+    assert keyed == ["down"]
+
+
+def test_failing_probe_twice_inside_the_window_probes_once(env):
+    add_key(env)
+    calls = []
+
+    def fail(r, a, k, remote=None):
+        calls.append(a)
+        return "rc=255"
+
+    kw = dict(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=fail, stable_fn=lambda a: None)
+    env.al.run(now=1000.0, **kw)
+    env.al.run(now=1030.0, **kw)
+    assert calls == ["machine-a"]
+    env.al.run(now=1000.0 + 61, **kw)
+    assert calls == ["machine-a", "machine-a"]
+    assert len(log_lines(env)) == 2
+
+
+def test_successful_probe_clears_the_backoff(env):
+    add_key(env)
+    env.sdir.mkdir(parents=True, exist_ok=True)
+    live = env.al._liveness()
+    live.note_probe(env.sdir, "machine-a", False, 1000.0)
+    assert live.backoff_until(env.sdir, "machine-a") > 1000.0
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), probe_fn=ok, now=1000.0 + 61)
+    assert live.backoff_until(env.sdir, "machine-a") == 0.0
+
+
+def test_full_run_writes_the_boxes_cache(env):
+    add_key(env)
+    env.al.run(roster=env.roster, boxes=["machine-a", "other"], spawn=Spawner(), probe_fn=ok)
+    assert json.loads((env.sdir / "autolink-boxes.json").read_text()) == {"aliases": ["machine-a", "other"]}
+
+
+def test_zero_alias_run_writes_an_empty_cache_so_the_next_start_is_silent(env):
+    env.al.run(roster=env.roster, boxes=[], spawn=boom, probe_fn=boom)
+    assert json.loads((env.sdir / "autolink-boxes.json").read_text()) == {"aliases": []}
+    n = len(log_lines(env))
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom, key_fn=boom)
+    assert len(log_lines(env)) == n
+
+
+def test_unreadable_registry_does_not_write_a_cache(env):
+    env.al.run(roster=env.roster, spawn=boom, probe_fn=boom)
+    assert not (env.sdir / "autolink-boxes.json").exists()
+    assert "unreadable" in log_lines(env)[0]
+
+
+# ---- membership snapshot as the member source ----------------------------------------------------
+
+import base64  # noqa: E402
+import shutil  # noqa: E402
+
+needs_keygen = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="ssh-keygen required")
+
+
+def _keygen(path):
+    subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-f", str(path)], check=True, capture_output=True)
+    return path, Path(str(path) + ".pub").read_text().strip()
+
+
+class Snap:
+    """A signed membership state builder over the real membership library and a real ed25519 signer key."""
+
+    def __init__(self, env, tmp_path):
+        self.m = env.al._membership()
+        self.env = env
+        self.signer, self.pub = _keygen(tmp_path / "signer")
+        self.relay_pub = _keygen(tmp_path / "relay")[1]
+        self.snap = None
+
+    def member(self, box, user="kim"):
+        return {"box": box, "host": f"{box}.local", "user": user, "relay_pub": self.relay_pub, "from_cidrs": []}
+
+    def sign(self, change, key=None):
+        snap = self.m.next_snapshot(self.snap, change)
+        sig = self.m.FakeSigner(key or self.signer, environ={}).sign(self.m.canonical_bytes(snap))
+        return snap, sig
+
+    def adopt(self, *boxes):
+        if self.m.load_pin(self.env.home) is None:
+            self.m.write_pin(self.env.home, self.pub)
+        for b in boxes:
+            snap, sig = self.sign({"op": "join", "member": self.member(b)})
+            self.m.adopt(self.env.home, snap, sig, notifier=lambda *a, **k: None)
+            self.snap = snap
+
+
+@pytest.fixture
+def snap(env, tmp_path):
+    return Snap(env, tmp_path)
+
+
+def remotes(sp):
+    return {c[c.index("--remote") + 1] for c in sp.cmds}
+
+
+@needs_keygen
+def test_snapshot_members_link_by_record_host_minus_self_with_far_boxes_unset(env, snap, capsys):
+    add_key(env)
+    snap.adopt("me", "machine-a", "bishop")
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names={"me"}, pull_fn=lambda *a: False)
+    assert remotes(sp) == {"kim@machine-a.local", "kim@bishop.local"} and len(sp.cmds) == 4
+    assert capsys.readouterr().out == ""
+    assert json.loads((env.sdir / "autolink-boxes.json").read_text()) == {
+        "aliases": ["kim@bishop.local", "kim@machine-a.local"], "epoch": 3}
+
+
+@needs_keygen
+def test_snapshot_member_key_is_resolved_by_box_name_and_no_stable_name_is_tried(env, snap):
+    add_key(env)
+    snap.adopt("machine-a")
+    seen = []
+
+    def key_fn(r, name):
+        seen.append(name)
+        return str(env.key)
+
+    def probe_fail(roster, alias, key, remote=None):
+        return "rc=255"
+
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=probe_fail, key_fn=key_fn, self_names=set(),
+               pull_fn=lambda *a: False)
+    assert seen == ["machine-a"]
+    assert "kim@machine-a.local unreachable" in log_lines(env)[0] and "pinned address stale" not in "".join(log_lines(env))
+
+
+@needs_keygen
+def test_unverifiable_snapshot_links_nothing_logs_one_line_and_ignores_far_boxes(env, snap, tmp_path, capsys):
+    add_key(env)
+    snap.adopt("machine-a")
+    d = env.sdir / "membership"
+    other, _ = _keygen(tmp_path / "forger")
+    forged, sig = snap.sign({"op": "join", "member": snap.member("evil")}, key=other)
+    (d / "snapshot.json").write_bytes(snap.m.canonical_bytes(forged))
+    (d / "snapshot.sig").write_bytes(sig)
+    (d / "verified.json").unlink()
+    (env.home / "bin" / "_machine_local.py").write_text("print('fallbackbox')\n")
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set())
+    assert sp.cmds == [] and capsys.readouterr().out == ""
+    lines = log_lines(env)
+    assert len(lines) == 1 and "nothing linked from it" in lines[0]
+
+
+def test_no_snapshot_falls_back_to_far_boxes_and_logs_that_doctor_flags_it(env):
+    add_key(env)
+    (env.home / "bin" / "_machine_local.py").write_text("print('machine-a')\n")
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), key_fn=lambda r, a: str(env.key))
+    assert remotes(sp) == {"machine-a"}
+    assert "unimatrix doctor will flag it" in log_lines(env)[0]
+
+
+@needs_keygen
+def test_no_signer_is_constructed_by_a_snapshot_run(env, snap, monkeypatch):
+    add_key(env)
+    snap.adopt("machine-a")
+
+    def refuse(*a, **kw):
+        raise AssertionError("a signer was constructed")
+
+    monkeypatch.setattr(snap.m, "FakeSigner", refuse)
+    monkeypatch.setattr(snap.m, "AgentSigner", refuse)
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
+    assert (env.sdir / "autolink-kim_at_machine_a.local.json").is_file()
+
+
+@needs_keygen
+def test_unchanged_snapshot_second_start_spawns_no_keygen(env, snap, monkeypatch):
+    add_key(env)
+    snap.adopt("machine-a")
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
+
+    def no_run(*a, **kw):
+        raise AssertionError("ssh-keygen spawned for an unchanged snapshot")
+
+    # the verified-digest cache answers an unchanged snapshot without any spawn
+    status, targets, epoch, _ = env.al.member_targets(env.roster, None, set(), run=no_run)
+    assert status == "ok" and epoch == 1 and list(targets) == ["kim@machine-a.local"]
+
+
+@needs_keygen
+def test_pull_adopts_a_higher_epoch_from_an_answering_member_and_links_the_new_member(env, snap, tmp_path):
+    add_key(env)
+    snap.adopt("machine-a")
+    held = dict(snap.snap)
+    snap.adopt("bishop")
+    higher, sig = snap.snap, (env.sdir / "membership" / "snapshot.sig").read_bytes()
+    # roll the box back to epoch 1, then let a peer answer `membership get` with epoch 2
+    d = env.sdir / "membership"
+    m = snap.m
+    (d / "snapshot.json").write_bytes(m.canonical_bytes(held))
+    first_sig = m.FakeSigner(snap.signer, environ={}).sign(m.canonical_bytes(held))
+    (d / "snapshot.sig").write_bytes(first_sig)
+    (d / "verified.json").unlink()
+    calls = []
+
+    def fake_run(cmd, **kw):
+        calls.append(cmd)
+        out = m.canonical_bytes(higher) + b"\n" + base64.b64encode(sig) + b"\n"
+        return subprocess.CompletedProcess(cmd, 0, out, b"")
+
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(),
+               pull_fn=lambda roster, remote, key: env.al.pull_membership(roster, remote, key, run=fake_run))
+    assert calls and calls[0][-2:] == ["membership", "get"] and "kim@machine-a.local" in calls[0]
+    assert m.load_snapshot(env.home)[0]["epoch"] == 2
+    assert remotes(sp) == {"kim@machine-a.local", "kim@bishop.local"}
+    assert json.loads((env.sdir / "autolink-boxes.json").read_text())["epoch"] == 2
+
+
+@needs_keygen
+def test_pull_ignores_an_equal_or_lower_epoch_and_a_failed_ask(env, snap):
+    snap.adopt("machine-a")
+    m = snap.m
+    sig = (env.sdir / "membership" / "snapshot.sig").read_bytes()
+    out = m.canonical_bytes(snap.snap) + b"\n" + base64.b64encode(sig) + b"\n"
+    same = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 0, out, b"")
+    failed = lambda cmd, **kw: subprocess.CompletedProcess(cmd, 1, b"", b"no membership snapshot held")
+    assert env.al.pull_membership(env.roster, "kim@x", "/k", run=same) is False
+    assert env.al.pull_membership(env.roster, "kim@x", "/k", run=failed) is False
+    assert not (env.sdir / "membership" / "events.log").exists() or "refused" not in (env.sdir / "membership" / "events.log").read_text()
+
+
+@needs_keygen
+def test_a_moved_epoch_defeats_the_healthy_cache_so_a_new_member_links(env, snap):
+    add_key(env)
+    snap.adopt("machine-a")
+    seed_live_pair(env, "kim_at_machine_a.local")
+    (env.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": ["kim@machine-a.local"], "epoch": 1}))
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=boom, key_fn=boom, self_names=set())
+    assert sp.cmds == []
+    snap.adopt("bishop")
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
+    assert remotes(sp) == {"kim@bishop.local"}
+
+
+def test_missing_membership_library_means_transition_fallback(env, monkeypatch):
+    def gone():
+        raise FileNotFoundError("unimatrix-membership.py")
+
+    monkeypatch.setattr(env.al, "_membership", gone)
+    assert env.al.member_targets(env.roster)[0] == "none"

@@ -265,7 +265,9 @@ def test_gates_receive_the_staged_union_never_the_dest(monkeypatch, tmp_path):
         if name not in _END_OF_RUN_GATE_NAMES:
             continue
         seen_gate_names.add(name)
-        non_root_kwarg_names = {"percolate_root", "out"}
+        # `round_pinned_shas` is a source-root -> pinned-commit map (checker bytes come from the pinned
+        # commit's blobs), not a tree the gate scans.
+        non_root_kwarg_names = {"percolate_root", "out", "round_pinned_shas"}
         values_in_scope = list(args) + [v for k, v in kwargs.items() if k not in non_root_kwarg_names]
         root_values = []
         for value in values_in_scope:

@@ -32,26 +32,25 @@ def _git(root: Path, *args: str) -> None:
     )
 
 
-_REPO_TEMPLATE: list = []
+@pytest.fixture(scope="session")
+def _repo_template(tmp_path_factory):
+    tpl = tmp_path_factory.mktemp("retest-tpl") / "repo"
+    tpl.mkdir()
+    _git(tpl, "init", "-q")
+    _git(tpl, "config", "user.email", "t@example.invalid")
+    _git(tpl, "config", "user.name", "t")
+    (tpl / "test_a.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
+    _git(tpl, "add", "test_a.py")
+    _git(tpl, "commit", "-q", "-m", "init")
+    return tpl
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path, monkeypatch, _repo_template):
     import shutil
-    import tempfile
 
-    if not _REPO_TEMPLATE:
-        tpl = Path(tempfile.mkdtemp(prefix="retest-tpl-")) / "repo"
-        tpl.mkdir()
-        _git(tpl, "init", "-q")
-        _git(tpl, "config", "user.email", "t@example.invalid")
-        _git(tpl, "config", "user.name", "t")
-        (tpl / "test_a.py").write_text("def test_a():\n    pass\n", encoding="utf-8")
-        _git(tpl, "add", "test_a.py")
-        _git(tpl, "commit", "-q", "-m", "init")
-        _REPO_TEMPLATE.append(tpl)
     root = tmp_path / "repo"
-    shutil.copytree(_REPO_TEMPLATE[0], root)
+    shutil.copytree(_repo_template, root)
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     return root
 

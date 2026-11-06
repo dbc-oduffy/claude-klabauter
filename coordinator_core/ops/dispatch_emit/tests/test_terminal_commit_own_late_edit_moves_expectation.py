@@ -1,6 +1,8 @@
 """dispatch.terminal_commit moves the blob-drift expectation onto bytes the run's own record dir
 holds (``kept.json`` / ``measured-rev.json``) when no touch ledger carries the writer's hash, as an
-executor's Write/Edit does not; bytes matching none of the run's records still refuse."""
+executor's Write/Edit does not; bytes matching none of the run's records still refuse. It also
+credits bytes the run's stored review prep read, found by run id when the prep does not cover a
+declared note."""
 
 from __future__ import annotations
 
@@ -87,6 +89,78 @@ def test_run_recorded_blobs_reads_only_the_asked_paths(tmp_path):
     assert drift_attribution.run_recorded_blobs(tmp_path, ["./a.py"]) == {"a.py": ["b" * 40, "d" * 40]}
     assert drift_attribution.run_recorded_blobs(None, ["a.py"]) == {}
     assert drift_attribution.run_recorded_blobs(tmp_path / "missing", ["a.py"]) == {}
+
+
+def _fire_with_note(repo, monkeypatch) -> tuple[dict, list]:
+    """The commit declares a delivery note beside ``a.py``; the stored review prep reads only ``a.py``."""
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+    from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
+
+    request = CommitRequest(chunks=(
+        ChunkCommit(id="C4", title="t4", paths=("a.py",)),
+        ChunkCommit(id="docs", title="note", paths=("note.md",)),
+    ))
+    (repo / "note.md").write_text("note\n", encoding="utf-8", newline="")
+    (repo / "run.mjs").write_text("// s\n" + render_marker(request) + "\n", encoding="utf-8", newline="")
+    token = run_token.mint(repo, RUN_ID, "run.mjs")
+    seen: list = []
+    real = terminal_commit.reentrant_dispatch
+
+    def spy(op, params, **kw):
+        if op == "ceremony.commit_v2":
+            seen.append(dict(params))
+        return real(op, params, **kw)
+
+    monkeypatch.setattr(terminal_commit, "reentrant_dispatch", spy)
+    out = terminal_commit._handler(
+        {"script_path": "run.mjs", "incomplete_chunks": [], "inline_review": reviewed(),
+         "session_id": SID, "run_id": RUN_ID, "run_token": token},
+        repo_root=repo / ".git",
+    )
+    return out, seen
+
+
+def _store_review_pointer(repo, reviewed: dict) -> None:
+    from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift import (
+        BASE,
+        _review,
+    )
+
+    _review(repo, reviewed, 2000.0)
+    share = repo / ".coordinator-local" / "subagent-share" / SID
+    (share / f"ptr-run-{RUN_ID}.review-prep-ptr.json").write_text(
+        json.dumps({"sidecar": f"manifest-run-1-{BASE[:12]}-prep.review-prep.md", "ambiguous": False}),
+        encoding="utf-8",
+    )
+
+
+def test_a_late_leg_edit_the_review_read_lands_though_the_prep_never_covered_a_declared_note(repo, monkeypatch):
+    (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
+    _read_event(repo, "a.py", _sha("A\n"), 1000.0)
+    _store_review_pointer(repo, {"a.py": _sha("B\n")})
+    out, seen = _fire_with_note(repo, monkeypatch)
+    assert out["committed"] is True, out
+    assert seen[-1]["expected_content_sha256"]["a.py"] == _sha("B\n")
+
+
+def test_a_foreign_rewrite_after_that_review_still_refuses(repo, monkeypatch):
+    (repo / "a.py").write_text("FOREIGN\n", encoding="utf-8", newline="")
+    _read_event(repo, "a.py", _sha("A\n"), 1000.0)
+    _store_review_pointer(repo, {"a.py": _sha("B\n")})
+    head = _git(["rev-parse", "HEAD"], repo)
+    out, _ = _fire_with_note(repo, monkeypatch)
+    assert out["committed"] is False
+    assert out["refused"] == "blob-drift"
+    assert _git(["rev-parse", "HEAD"], repo) == head
+
+
+def test_run_reviewed_hashes_needs_a_run_and_a_stored_reply(repo):
+    assert drift_attribution.run_reviewed_hashes(repo, SID, RUN_ID) == {}
+    assert drift_attribution.run_reviewed_hashes(repo, SID, None) == {}
+    _store_review_pointer(repo, {"./a.py": _sha("B\n")})
+    assert drift_attribution.run_reviewed_hashes(repo, SID, RUN_ID) == {"a.py": _sha("B\n")}
+    assert drift_attribution.run_reviewed_hashes(repo, SID, "other-run") == {}
 
 
 def test_own_drift_actuals_without_a_record_dir_is_unchanged(repo):

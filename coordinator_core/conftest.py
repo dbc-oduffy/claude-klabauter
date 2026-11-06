@@ -1768,7 +1768,11 @@ _real_os_kill = os.kill
 
 
 def _guarded_os_kill(pid, sig):
-    _refuse_foreign(pid, f"os.kill(sig={sig!r})")
+    # On POSIX, signal 0 to one pid delivers nothing: it is a liveness probe (fs_containment's dead-run
+    # sweep probes every basetemp owner), and refusing it aborted every pytest start while any peer's
+    # pytest was live. Trap: on Windows signal 0 is CTRL_C_EVENT, and pid <= 0 reaches a whole group.
+    if not (sig == 0 and sys.platform != "win32" and isinstance(pid, int) and pid > 0):
+        _refuse_foreign(pid, f"os.kill(sig={sig!r})")
     return _real_os_kill(pid, sig)
 
 

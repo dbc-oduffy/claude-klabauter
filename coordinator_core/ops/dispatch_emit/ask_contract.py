@@ -1178,6 +1178,20 @@ RUN_STAGE_FILE = "run-stage.json"
 RUN_STAGES = ("minted", "staged", "halted", "landed")
 
 
+def _stage_after_mint_stamp(stage: str, prior: dict[str, Any] | None) -> str:
+    """The stage a stamp records. A `minted` stamp over a run already past mint never demotes it: a
+    `staged` record, or a `halted` one carrying `staged_at`, reads `staged`; a `landed` record stays
+    `landed`. Every other stamp is taken as given."""
+    if stage != "minted" or not prior:
+        return stage
+    was = prior.get("stage")
+    if was == "staged" or (was == "halted" and "staged_at" in prior):
+        return "staged"
+    if was == "landed":
+        return "landed"
+    return stage
+
+
 def write_run_stage_at(
     record_path: Path, stage: str, *, steps_planned: int | None = None, now: str | None = None,
     warp_run: str | None = None, session_id: str | None = None,
@@ -1205,6 +1219,7 @@ def write_run_stage_at(
             None if in_warm_served_request() else resolve_session_id() or None
         )
         data["started_at"] = stamp
+    stage = _stage_after_mint_stamp(stage, prior)
     data["stage"] = stage
     data["last_activity_at"] = stamp
     if stage == "staged" and "staged_at" not in data:

@@ -1859,3 +1859,25 @@ def test_a_repeat_refire_does_not_duplicate_the_persisted_em_context(tmp_path, m
     (stored,) = rl.read_notes(rd)
     mod._persist_em_context(root, _SPENT_RUN, stored)
     assert rl.read_notes(rd) == [stored] and _REFIRE_CONTEXT in stored
+
+
+def _count_mints(monkeypatch) -> list:
+    minted: list = []
+    monkeypatch.setattr(run_token, "escrowed", lambda root, run_id: None)
+    monkeypatch.setattr(run_token, "mint", lambda *a, **k: minted.append(a) or "tok")
+    monkeypatch.setattr(run_token, "escrow", lambda *a, **k: None)
+    return minted
+
+
+def test_launcher_run_token_is_minted_while_hook_budget_remains(tmp_path, monkeypatch):
+    minted = _count_mints(monkeypatch)
+    monkeypatch.setattr(mod, "_BUDGET", [5000.0])
+    mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
+    assert len(minted) == 1
+
+
+def test_launcher_run_token_mint_is_skipped_once_hook_budget_is_spent(tmp_path, monkeypatch):
+    minted = _count_mints(monkeypatch)
+    monkeypatch.setattr(mod, "_BUDGET", [0.0])
+    mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
+    assert minted == []

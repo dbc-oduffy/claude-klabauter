@@ -1895,6 +1895,30 @@ def _stamp_implemented(opts: _Opts) -> int:
             )
             gate_text = rebuild(split, recorded_fm)
 
+        # Wiring refusal: no attestation or --override-reason discharges it.
+        if worktree_root is not None:
+            from coordinator_core.ops import wiring_contract
+
+            try:
+                wiring_fm = yaml.safe_load(split.fm_text)
+            except yaml.YAMLError:
+                wiring_fm = None if "wiring" in split.fm_text else {}
+            if not isinstance(wiring_fm, dict):
+                wiring_refusal = "wiring: malformed"
+            elif "wiring" not in wiring_fm:
+                wiring_refusal = None
+            else:
+                wiring_refusal = wiring_contract.refusal(
+                    wiring_fm,
+                    Path(worktree_root),
+                    git_native.rev_parse_head(worktree_root).stdout.strip(),
+                )
+            if wiring_refusal is not None:
+                raise MutateAbort(
+                    f"{_PROG}: refusing to stamp implemented: {opts.plan}: "
+                    f"{wiring_refusal}; fix the part or stamp closed_partial"
+                )
+
         if worktree_root is not None and not decision_attested:
             from coordinator_core.execute_plan_assemble.goal_gate import (
                 _evaluate_goal_falsifier_gate,

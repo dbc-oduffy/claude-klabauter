@@ -237,21 +237,54 @@ REANCHORED = "re-anchored at baseline_ref"
 
 def _own_context(plan_text: str, repo_root: Path) -> Optional[tuple[str, dict]]:
     """(baseline_ref, {path: run_id} the plan's own run wrote) or None when the plan names no
-    baseline_ref or sizing, or the run wrote nothing."""
+    sizing, the run wrote nothing, or no baseline resolves. The baseline is the plan's falsifier
+    ``baseline_ref``, else the first halt of the run's halt chain."""
     from coordinator_core.ops import _own_run_premise
     from coordinator_core.roadmap.prep_gate import plan_frontmatter
 
     try:
         fm = plan_frontmatter(plan_text)
-        pec = fm.get("prime_exit_criterion")
-        falsifier = pec.get("falsifier") if isinstance(pec, dict) else None
-        ref = falsifier.get("baseline_ref") if isinstance(falsifier, dict) else None
-        if not _text(ref):
-            return None
+        ref = _falsifier_ref(fm)
         own = _own_run_premise.own_run_paths(Path(repo_root), fm.get("sizing_object"))
+        if own and not ref:
+            ref = _run_baseline(Path(repo_root), next(iter(own.values())))
     except Exception:
         return None
-    return (ref.strip(), own) if own else None
+    return (ref, own) if own and ref else None
+
+
+def _run_baseline(repo_root: Path, run_id: str) -> Optional[str]:
+    """The sha ``run_id`` began from: the first halt of its ledger-check halt chain, else the
+    ``run_base_sha`` its halt record names (a review_blocked halt joins no chain). The record is
+    the worktree ``halted.json``, else the one in the run's halt commit (a committed halt leaves
+    no worktree record). Up to three ``git log`` spawns; only reached on the broke path."""
+    from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit import ask_contract as ac
+    from coordinator_core.ops.dispatch_emit import halt_baseline
+    from coordinator_core.ops.dispatch_emit.emit import resume_landed_state
+
+    rel = f"{ac.RECORD_DIR_ROOT}/{run_id}/halted.json"
+    halted = ac._read_json_object(ac.record_dir(repo_root, run_id) / "halted.json")
+    plan_rel = (halted or {}).get(ac.HALT_PLAN_FIELD)
+    if halted is None or not _text(plan_rel):
+        done = run_git(
+            ["log", "-n", "1", f"--grep=^warp: record halted {run_id} ",
+             f"--format=%H%x1f%(trailers:key={ac.HALT_PLAN_TRAILER},valueonly)"],
+            cwd=str(repo_root),
+        )
+        sha, _, trailer = done.stdout.partition("\x1f") if done.returncode == 0 else ("", "", "")
+        sha = sha.strip()
+        if halted is None and sha:
+            halted = ac._read_json_at_commit(repo_root, sha, rel)
+        if not _text(plan_rel):
+            plan_rel = trailer.strip()
+    if _text(plan_rel):
+        state = resume_landed_state(repo_root, plan_rel)
+        first = halt_baseline.chain_first_halt(repo_root, plan_rel, run_id, state)
+        if first:
+            return first
+    base = (halted or {}).get("run_base_sha")
+    return base if isinstance(base, str) and ac._FULL_SHA_RE.fullmatch(base) else None
 
 
 def _checked_paths(anchor: dict) -> Optional[list[str]]:

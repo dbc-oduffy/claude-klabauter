@@ -31,6 +31,21 @@ def test_console_and_group_wide_pids_refused(sent, pid):
 def test_parent_process_refused(sent):
     guarded, calls = sent
     with pytest.raises(guarded.__globals__["ForeignProcessKill"]):
+        guarded(os.getppid(), 15)
+    assert calls == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="signal 0 is CTRL_C_EVENT on Windows")
+def test_a_posix_liveness_probe_of_a_foreign_pid_passes(sent):
+    guarded, calls = sent
+    guarded(os.getppid(), 0)
+    assert calls == [(os.getppid(), 0)]
+
+
+def test_a_windows_signal_zero_to_a_foreign_pid_refused(sent, monkeypatch):
+    guarded, calls = sent
+    monkeypatch.setattr(sys, "platform", "win32")
+    with pytest.raises(guarded.__globals__["ForeignProcessKill"]):
         guarded(os.getppid(), 0)
     assert calls == []
 

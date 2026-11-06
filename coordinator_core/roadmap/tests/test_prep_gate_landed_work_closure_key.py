@@ -1,5 +1,5 @@
-"""An uncleared ``landed-work`` gate with no ``closure_key`` is warned about in the
-EXTERNAL_DEPS result and never changes the verdict, status or withheld rows.
+"""An uncleared ``landed-work`` gate with no ``closure_key`` has no clearance path: EXTERNAL_DEPS
+refuses it as ``external-gate-unclearable``, and a keyed or cleared gate stays clean.
 """
 
 from __future__ import annotations
@@ -27,21 +27,22 @@ def _ext(tmp_path, extra: str, slug: str) -> dict:
     return pg.gate_plan(tmp_path, plan)["classes"]["EXTERNAL_DEPS"]
 
 
-def test_unkeyed_landed_work_gate_warns_without_changing_verdict(tmp_path):
+def test_unkeyed_landed_work_gate_is_a_defect_naming_the_repair(tmp_path):
     ext = _ext(tmp_path, "", "2026-10-03-unkeyed.md")
+    assert ext["status"] == "DEFECT"
+    assert ext["kind"] == "external-gate-unclearable"
+    assert "C1: external_gate[0] requires landed-work" in ext["detail"]
+    assert "closure_key: {kind: deliverable|memo-thread, id}" in ext["detail"]
+
+
+def test_keyed_gate_passes_and_withholds(tmp_path):
+    extra = "      closure_key: {kind: deliverable, id: d-1}\n"
+    ext = _ext(tmp_path, extra, "2026-10-03-keyed.md")
     assert ext["status"] == "PASS"
     assert ext["withheld"] == ["C1"]
-    assert len(ext["warnings"]) == 1
-    assert ext["warnings"][0].startswith("C1: external_gate[0] requires landed-work")
-    assert "closure_key" in ext["warnings"][0]
 
 
-def test_keyed_gate_carries_no_warning(tmp_path):
-    extra = "      closure_key: {kind: deliverable, id: d-1}\n"
-    assert _ext(tmp_path, extra, "2026-10-03-keyed.md")["warnings"] == []
-
-
-def test_cleared_gate_carries_no_warning(tmp_path):
+def test_cleared_gate_passes_and_withholds_nothing(tmp_path):
     ext = _ext(tmp_path, "      cleared: true\n", "2026-10-03-cleared.md")
-    assert ext["warnings"] == []
+    assert ext["status"] == "PASS"
     assert ext["withheld"] == []

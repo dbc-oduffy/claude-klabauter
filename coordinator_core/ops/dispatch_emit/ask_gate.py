@@ -1612,11 +1612,11 @@ def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str
         serving = {b: lrp.plan_rows_serving(plan, [b]) for b in blocking}
     except (OSError, ValueError, lrp.PlanRowsUnreadable) as exc:
         raise AskStageError(str(exc)) from exc
-    reuse: dict[str, str] = {}
+    reuse: dict[str, list[str]] = {}
     for row in spine:
         rid, item = str(row.get("id") or ""), (row.get("register_rows") or [None])[0]
         if rid.startswith(LEDGER_DERIVED_ROW_PREFIX) and item in blocking and row.get("disposition") == "open":
-            reuse.setdefault(str(item), rid)
+            reuse.setdefault(str(item), []).append(rid)
     unserved = resume_out.get(RESUME_LEDGER_UNSERVED_FIELD) or []
     todo = [b for b in blocking if b not in reuse and b not in unserved]
     rows, underivable = lrp.derive_ledger_rows(
@@ -1636,7 +1636,7 @@ def _derive_resume_rows(root: Path, plan_rel: str, resume_out: dict) -> list[str
         error = _append_spine_row(root, plan_rel, row)
         if error:
             raise AskStageError(f"derived row {row['id']} not written: {error}")
-    return [*reuse.values(), *(r["id"] for r in rows)]
+    return [*(rid for ids in reuse.values() for rid in ids), *(r["id"] for r in rows)]
 
 
 def _append_spine_row(root: Path, plan_rel: str, row: dict) -> Optional[str]:

@@ -180,6 +180,17 @@ _SANCTIONED_SITES: dict[tuple[str, str], str] = {
         "synthetic engine root under a caller-passed `work_dir`, else the default temp; "
         "a fake-pair fixture, not an engine clone"
     ),
+    ("coordinator_core/benchmarks/release_claims_bulk_bench.py", "mkdtemp"): (
+        "synthetic-repo scratch under the operator's `--scratch-dir`, else the default temp; "
+        "not an engine clone"
+    ),
+    ("coordinator_core/benchmarks/sizing_assemble_process_budget.py", "mkdtemp"): (
+        "scratch under `managed_tempdir()`, the managed temp root; not an engine clone"
+    ),
+    ("coordinator_core/warm/door/tests/test_replay_safe_post_delivery_goes_cold.py", "mkdtemp"): (
+        "`runtime_base` picks `/tmp` before the managed temp root for the AF_UNIX sun_path "
+        "byte budget, not repo placement"
+    ),
     ("coordinator_core/resource_lifecycle/tests/test_lease.py", "mkdtemp"): (
         "POSIX `/tmp` base keeps the lease socket path under the AF_UNIX sun_path byte budget; "
         "chosen for socket length, not repo placement"

@@ -65,6 +65,19 @@ def test_a_retracted_note_resumes_carrying_no_notes(repo):  # noqa: F811
     _assert_all_landed_resume(v, [])
 
 
+def test_notes_of_two_runs_are_named_by_distinct_ids(repo):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit import op
+
+    _link(repo)
+    own = rl.run_dir(repo, NEW)
+    (own / rl.NOTES_FILE).write_text(json.dumps({"note": "second", "at": "2026-10-21T23:55:00Z"}) + "\n", encoding="utf-8")
+    carried = op._live_carried_notes(repo, NEW, PREV)
+    assert [n["id"] for n in carried] == ["N1", "N1"]
+    ids = [op._inherited_note_id(n, NEW) for n in carried]
+    assert ids == [f"{PREV}:N1", "N1"]
+    assert len(set(ids)) == len(ids)
+
+
 def test_no_note_resumes_carrying_no_notes(repo):  # noqa: F811
     _put_s(repo, requirement_register=SETTLED)
     _landed_repo(repo, CODED)

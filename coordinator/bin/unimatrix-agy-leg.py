@@ -80,7 +80,7 @@ def send(text):
 
 
 def spool_path():
-    """The pending-message spool: $AGY_LEG_SPOOL else <conv>.queue.jsonl beside the leg log."""
+    """The pending-message spool: the AGY_LEG_SPOOL env var, else the conversation's queue.jsonl beside the leg log."""
     return os.environ.get("AGY_LEG_SPOOL") or os.path.join(
         os.path.dirname(os.path.abspath(log_path())), f"{os.environ['ANTIGRAVITY_CONVERSATION_ID']}.queue.jsonl")
 

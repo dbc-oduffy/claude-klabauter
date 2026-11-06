@@ -52,6 +52,7 @@ from coordinator_core.ops.dispatch_emit.sizing_fire import DATE_HEAD_PATTERN, PL
 from coordinator_core.ops.dispatch_emit.pre_halt_credit import CREDIT_MATCH_JS, SINCE_HALT_CREDIT_JS
 from coordinator_core.ops.dispatch_emit.memo_rows import MEMO_CLOSE_KEY
 from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
+from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_INDETERMINATE
 from coordinator_core.ops._workflow_contract import agent_options_phase_titles
 from coordinator_core.ops._anchor_check import GRAMMAR as _ANCHOR_GRAMMAR
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -410,6 +411,24 @@ ASK_GATE_RECONCILE_CLAUSE = (
     f"{OP_ASK_GATE} command exactly once more and return its reply verbatim. "
     "A -32004 is never itself the gate's failure."
 )
+
+
+#: Output markers of a warm-dispatch indeterminate reply from `sizing-assemble`; the composed scout halt matches them.
+SIZING_ASSEMBLE_INDETERMINATE_RE = r"/-32004|warm dispatch indeterminate/i"
+
+
+def sizing_assemble_reconcile_clause(sizing_rel: str) -> str:
+    """Scout clause for a -32004 `sizing-assemble` reply: reconcile once, then trust the sizing file on disk.
+
+    The door may have delivered the write before it lost the reply, so the file, not the reply, is the proof.
+    """
+    return (
+        "If the sizing-assemble command replies with error code -32004 (or its output says warm dispatch "
+        "indeterminate), run its reconcile_command once when the output names one; then read the sizing at "
+        f"{sizing_rel}: when that file exists and parses, sizing-assemble ran, so return exit_code 0 with "
+        "the output you saw as stdout; otherwise return the original exit_code and output. "
+        "A -32004 is never itself the assemble's failure."
+    )
 
 
 _ROW_EFFORT = "medium"
@@ -4034,7 +4053,9 @@ def compose_ask_script(
         )
         scout_closing_tail = (
             "\n\nReturn its exit code as exit_code, its stdout verbatim as stdout and its stderr as "
-            "stderr. Do not edit, retry or repair it. (2) Only when exit_code is 0, run the next command "
+            "stderr. Do not edit or repair it, and retry it only as the -32004 clause below says. "
+            + sizing_assemble_reconcile_clause(sizing_write_rel)
+            + " (2) Only when exit_code is 0, run the next command "
             "with <name> filled as above and <your writes> replaced by the JSON array you return as writes:\n\n"
             + gate_template
             + "\n\nand return its JSON reply verbatim as arm, halt, baton, sizing_path and (when present) resume_plan, "
@@ -4276,6 +4297,17 @@ def compose_ask_script(
             f"{_lit(HALT_REFUSAL)}, reason: {_lit(SCOUT_DID_NOT_ASSEMBLE_REASON)}, "
             "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
             ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId }; }"
+        )
+        b.append(
+            "  else if (_scouted.exit_code !== 0 && "
+            f"{SIZING_ASSEMBLE_INDETERMINATE_RE}.test([_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '')).join('\\n'))) {{ "
+            "if (_scouted.sizing_present === true) _sizingRel = _sizingPath.slice(REPO_ROOT.length + 1); "
+            f"_halted = {{ halted: {_lit(REVERIFY_INDETERMINATE)}, "
+            "reason: 'sizing-assemble reply was indeterminate (-32004) and the sizing was not confirmed written; "
+            "the run is resumable, nothing downstream ran', "
+            "detail: [_scouted.stderr, _scouted.stdout].map((s) => String(s ?? '').trim())"
+            ".filter((s) => s).join('\\n').slice(0, 600), run_id: _runId, "
+            f"next_action: 'Refire: ' + {_refire_js(sizing_rel)} }}; }}"
         )
         b.append(
             "  else if (_scouted.exit_code !== 0) { _halted = { halted: "

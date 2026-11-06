@@ -343,6 +343,78 @@ def test_baseline_only_anchor_still_contradicts_without_own_run_write_or_baselin
     assert v["verdict"] == "CONTRADICTED"
 
 
+def _plan(falsifier_ref=None):
+    falsifier = f"  falsifier:\n    baseline_ref: {falsifier_ref}\n" if falsifier_ref else ""
+    return f"---\nsizing_object: sz.yaml\nprime_exit_criterion:\n  statement: s\n{falsifier}---\n# p\n"
+
+
+def _own_run(monkeypatch, ap, written, baseline):
+    from coordinator_core.ops import _own_run_premise
+
+    monkeypatch.setattr(_own_run_premise, "own_run_paths", lambda root, sizing: written)
+    monkeypatch.setattr(ap, "_run_baseline", lambda root, run_id: baseline)
+
+
+@pytest.mark.spawns_process
+def test_plan_without_baseline_ref_judges_own_run_anchor_at_the_run_halt_baseline(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    _own_run(monkeypatch, ap, {"mod.py": "ask-1"}, sha)
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [], [], _plan(), tmp_path)
+    assert (v["verdict"], v["source"]) == ("RESOLVES", "engine-check")
+    assert v["observed"].startswith(ap.REANCHORED)
+
+
+@pytest.mark.spawns_process
+def test_plan_without_baseline_ref_keeps_a_file_the_run_did_not_write_contradicted(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    sha = _repo_with_baseline(tmp_path)
+    _own_run(monkeypatch, ap, {"other.py": "ask-1"}, sha)
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [], [], _plan(), tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+    _own_run(monkeypatch, ap, {"mod.py": "ask-1"}, None)
+    (v,) = ap.anchor_verdicts([BASELINE_ONLY], [], [], _plan(), tmp_path)
+    assert v["verdict"] == "CONTRADICTED"
+
+
+def test_falsifier_baseline_ref_wins_over_the_run_halt_baseline(monkeypatch, tmp_path):
+    from coordinator_core.ops import _anchor_premise as ap
+
+    _own_run(monkeypatch, ap, {"mod.py": "ask-1"}, "halt-sha")
+    assert ap._own_context(_plan("abc1234"), tmp_path) == ("abc1234", {"mod.py": "ask-1"})
+    assert ap._own_context(_plan(), tmp_path) == ("halt-sha", {"mod.py": "ask-1"})
+
+
+@pytest.mark.spawns_process
+def test_run_baseline_reads_run_base_sha_from_a_committed_review_blocked_halt(tmp_path):
+    import json
+    import subprocess
+
+    from coordinator_core.ops import _anchor_premise as ap
+
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+    def git(*a):
+        return subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True,
+                              text=True, creationflags=flags).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    run = "ask-20261106T000000-abcdef"
+    base = "a" * 40
+    record = tmp_path / "state" / "warp" / run
+    record.mkdir(parents=True)
+    (record / "halted.json").write_text(json.dumps({"halted": "review_blocked", "run_base_sha": base}))
+    git("add", "-A")
+    git("commit", "-q", "-m", f"warp: record halted {run} run artifacts", "-m", "Halted-By: review_blocked")
+    (record / "halted.json").unlink()
+    assert ap._run_baseline(tmp_path, run) == base
+    assert ap._run_baseline(tmp_path, "ask-20261106T000001-abcdef") is None
+
+
 def _anchors(*ids):
     return [{**GOOD, "id": i} for i in ids]
 

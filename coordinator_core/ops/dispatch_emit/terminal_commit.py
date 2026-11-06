@@ -950,7 +950,7 @@ def _undeclared_dirty(
 def _own_drift_actuals(
     worktree_root: Path, run_dir: Optional[Path], drift: Sequence, declared: Sequence[str],
     session_id: Optional[str], review_writes: Optional[dict], reviewed: Optional[dict] = None,
-    record_dir: Optional[Path] = None,
+    record_dir: Optional[Path] = None, run_id: Optional[str] = None,
 ) -> dict:
     """``{path: actual}`` for each content-sha256 entry of a commit_v2 ``blob_drift`` list whose
     current bytes are the bytes the run's review pass read (``reviewed``, ``{path: sha256}`` of the
@@ -962,7 +962,10 @@ def _own_drift_actuals(
     under types the review-writer set omits). A path whose bytes are a blob the run's own record
     dir holds (``record_dir``: ``kept.json``, ``measured-rev.json``) is owned too: an executor's
     Write/Edit reaches no ledger, and these are the bytes its chunk left. Those are the bytes the
-    run left; a foreign or unrecorded rewrite is absent and keeps refusing. Hash-only, no spawn."""
+    run left; a foreign or unrecorded rewrite is absent and keeps refusing. When ``reviewed`` is
+    empty (the commit's prep lookup requires the prep to cover every declared path, which a delivery
+    note or sizing record defeats) the run's stored review prep is read by ``run_id`` alone.
+    Hash-only, no spawn."""
     from coordinator_core.ops.dispatch_emit import drift_attribution
     from coordinator_core.ops.dispatch_emit.terminal_commit_review import REVIEW_RECORD_AGENT
 
@@ -973,6 +976,8 @@ def _own_drift_actuals(
     }
     if not actual:
         return {}
+    if not (isinstance(reviewed, dict) and reviewed):
+        reviewed = drift_attribution.run_reviewed_hashes(worktree_root, session_id, run_id)
     read_equal = {
         p: a for p, a in actual.items()
         if isinstance(reviewed, dict) and reviewed.get(drift_attribution._norm(p)) == a
@@ -3830,6 +3835,7 @@ def _terminal_commit_inner(
         own_now = _own_drift_actuals(
             worktree_root, ask_run_dir, reply["blob_drift"], declared_writes, session_id, review_writes,
             reviewed_bytes, _own_record_dir(worktree_root, art_run_id, ask_run_dir),
+            _run_id_of(params, ask_run_dir, script_path_raw),
         )
         if own_now:
             commit_params["expected_content_sha256"] = {**commit_params["expected_content_sha256"], **own_now}

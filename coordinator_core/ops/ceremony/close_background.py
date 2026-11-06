@@ -65,6 +65,7 @@ BACKGROUND_LEGS: tuple[str, ...] = (
     "baton-ship",
     "lessons",
     "close-commit",
+    "clean-clone-proof",
     "baton-drain",
     "orientation-refresh",
     "memo-lifecycle",
@@ -1305,6 +1306,32 @@ def _symbol_knowledge(ctx: JobContext) -> LegResult:
     return symbol_knowledge_leg(ctx)
 
 
+def _clean_clone_proof(ctx: JobContext) -> LegResult:
+    """Spawn the clean-clone runner detached for the terminal sha; never waits for it."""
+    if not ctx.terminal_sha:
+        return LegResult("not-applicable", "no terminal commit")
+    import subprocess
+
+    from coordinator_core.ops.ceremony.detached_spawn import _child_env, _windows_detached_flags
+    from coordinator_core.ops.clean_clone_proof_contract import RUNNER_MODULE
+
+    kwargs: dict = {"creationflags": _windows_detached_flags()} if sys.platform == "win32" else {"start_new_session": True}
+    try:
+        subprocess.Popen(
+            [sys.executable, "-m", RUNNER_MODULE, "--repo", str(ctx.root), "--run-id", ctx.run_id],
+            cwd=str(ctx.root),
+            env=_child_env(str(ctx.root)),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            **kwargs,
+        )
+    except Exception as exc:  # noqa: BLE001 -- a spawn failure is this leg's failure, not the job's
+        return _failed("clean-clone spawn: ", exc)
+    return LegResult("ran", "clean-clone proof spawned")
+
+
 DEFAULT_RUNNERS: Mapping[str, Runner] = {
     "review-stamp": _review_stamp,
     "coded-stamp": _coded_stamp,
@@ -1315,6 +1342,7 @@ DEFAULT_RUNNERS: Mapping[str, Runner] = {
     "baton-ship": _baton_ship,
     "lessons": _lessons,
     "close-commit": _close_commit,
+    "clean-clone-proof": _clean_clone_proof,
     "baton-drain": _baton_drain,
     "orientation-refresh": _orientation_refresh,
     "memo-lifecycle": _memo_lifecycle,

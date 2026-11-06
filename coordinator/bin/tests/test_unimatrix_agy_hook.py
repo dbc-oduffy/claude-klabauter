@@ -58,7 +58,7 @@ def test_no_leg_rewrites_with_detached_launch_and_asks(home):
     new = out["overwrite"]["CommandLine"]
     assert new.endswith("ls -la")
     assert str(pre.LAUNCH) in new and CONV in new and "4242" in new
-    assert "nohup" in new and "/Users/" not in new.replace(str(pre.LAUNCH), "")
+    assert "nohup" in new and "/Users/" not in new.replace(str(pre.LAUNCH), "").replace(sys.executable, "")
 
 
 def test_current_leg_leaves_command_alone(home, ls_server):
@@ -152,6 +152,49 @@ def test_no_path_emits_allow_or_force_ask(home, monkeypatch):
         for payload in (run_payload(), run_payload(name="read_file"), {}, []):
             text = json.dumps(pre.decide(payload, 4242))
             assert '"allow"' not in text and "force_ask" not in text
+
+
+SEND = str(pre.SEND_SCRIPT)
+PY = sys.executable
+
+
+def test_exact_peer_reply_is_allowed_without_rewrite(home, monkeypatch):
+    stub_guard(monkeypatch, {"decision": "ask"})
+    for cmd in (f"{PY} {SEND} --to coordinator-content-repo-ea 'Reviewed: two issues (a), (b)'", f"{PY} {SEND} --list"):
+        out = pre.decide(run_payload(cmd=cmd), 4242)
+        assert out["decision"] == "allow" and "overwrite" not in out
+
+
+@pytest.mark.parametrize("tmpl", [
+    "{PY} {SEND}x --to a hi",
+    "{PY} /elsewhere/unimatrix-send.py --to a hi",
+    "other-python {SEND} --to a hi",
+    "{SEND} --to a hi",
+    "echo hi; {PY} {SEND} --to a hi",
+    "{PY} {SEND} --to a hi; rm -rf x",
+    "{PY} {SEND} --to a hi && id",
+    "{PY} {SEND} --to a hi | cat",
+    "{PY} {SEND} --to a hi > /tmp/f",
+    "{PY} {SEND} --to a $(id)",
+    "{PY} {SEND} --to a `id`",
+    "FOO=1 {PY} {SEND} --to a hi",
+    "x {PY} {SEND} --to a hi",
+    "{PY}",
+    "{PY} {SEND} --to a 'unterminated",
+])
+def test_non_exact_send_commands_keep_ask(home, monkeypatch, tmpl):
+    stub_guard(monkeypatch, {"decision": "ask"})
+    out = pre.decide(run_payload(cmd=tmpl.format(PY=PY, SEND=SEND)), 4242)
+    assert out["decision"] == "ask"
+
+
+def test_peer_reply_allow_needs_run_command_and_yields_to_guard_deny(home, monkeypatch):
+    cmd = f"{PY} {SEND} --to a hi"
+    stub_guard(monkeypatch, {"decision": "ask"})
+    assert pre.decide(run_payload(name="write_file", cmd=cmd), 4242)["decision"] == "ask"
+    deny = {"decision": "deny", "reason": "blocked"}
+    stub_guard(monkeypatch, deny)
+    assert pre.decide(run_payload(cmd=cmd), 4242) == deny
 
 
 def test_engine_root_argument_reaches_the_guard(home, monkeypatch, capsys):

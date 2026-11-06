@@ -27,6 +27,16 @@ def _engine(monkeypatch, tmp_path):
 
 
 @pytest.fixture(autouse=True)
+def _doctrine_beside_plugin(monkeypatch, tmp_path):
+    # claude-klabauter carries no global-doctrine/ tree: a minimal one beside a stand-in plugin root keeps installs complete.
+    doc = tmp_path / "std-doctrine" / "global-doctrine"
+    (doc / "rules").mkdir(parents=True)
+    (doc / "CLAUDE.md").write_text("# doctrine\n", encoding="utf-8")
+    (doc / "rules" / "rules.md").write_text("- a rule\n", encoding="utf-8")
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
+
+
+@pytest.fixture(autouse=True)
 def _no_real_scheduler(monkeypatch):
     monkeypatch.setattr(ui, "run_schtasks", lambda *a: None)
     fake = _FakeWinreg()
@@ -67,9 +77,20 @@ def test_range_constant_and_scripts():
         "unimatrix-host-guard.py",
         "unimatrix-doctrine-seed.py",
         "unimatrix-autolink.py",
+        "unimatrix-liveness.py",
         "unimatrix-mirror-all.py",
         "unimatrix-reshape.py",
+        "unimatrix-membership.py",
+        "unimatrix-doctor.py",
+        "unimatrix-pair.py",
     )
+
+
+def test_publish_list_names_the_membership_scripts():
+    text = (ui._BIN_DIR.parents[1] / "setup" / "publish-targets.portable").read_text(encoding="utf-8")
+    line = next(l for l in text.splitlines() if l.startswith("claude-klabauter-coordinator-bin|"))
+    names = set(line.split("|")[6].split(","))
+    assert {"unimatrix-membership.py", "unimatrix-doctor.py", "unimatrix-pair.py"} <= names
 
 
 def test_vendored_scripts_cover_real_autolink_closure():
@@ -869,7 +890,7 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
     root = tmp_path / "door-root"
     root.mkdir()
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
-    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "no-plugin")
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root))
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 0 and f"governance engine root: {root} (settings-home ladder)" in out
@@ -886,7 +907,7 @@ def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
         "def resolve_engine_root(script_file):\n    raise RuntimeError('no engine root\\nfix it')\n",
         encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
-    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "no-plugin")
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
     monkeypatch.setattr(ui, "_BIN_DIR", bin_dir)
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 0 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out
@@ -1163,6 +1184,21 @@ def test_pair_main_prints_line_and_block_and_exits_zero(monkeypatch, tmp_path):
                and 'unimatrix-relay.py"' in l for l in text.splitlines())
 
 
+def test_pair_with_signer_pin_emits_request_flow_and_no_hand_edit(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    pin = home / "unimatrix" / "membership" / "signer.pub"
+    mem = ui._sibling("unimatrix-membership.py")
+    pin.parent.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(mem, "load_pin", lambda h: "ssh-ed25519 AAAA")
+    box = _FarBox(tmp_path / "far")
+    buf = io.StringIO()
+    assert ui.main(["--pair", "x"], out=buf, pair_run=box) == 0
+    text = buf.getvalue()
+    assert "unimatrix-pair.py request --box x" in text and "Host x" not in text
+    assert "authorized_keys line" not in text and "ssh-ed25519 AAAAPAIRBODY" not in text
+    assert not (tmp_path / "far" / ".ssh").exists()
+
+
 def test_pair_main_refuses_with_nonzero_when_key_cannot_be_recorded(monkeypatch, tmp_path):
     _pair_home(monkeypatch, tmp_path, reader=False)
     buf = io.StringIO()
@@ -1315,7 +1351,8 @@ def test_plugin_root_doctrine_found_in_the_root_itself(monkeypatch, tmp_path):
 def test_without_plugin_root_the_engine_tree_warns_and_skips(monkeypatch, tmp_path):
     _engine_tree_and_plugin(monkeypatch, tmp_path)
     home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy"))
-    assert rc == 0 and "WARN: codex coordinator doctrine not installed" in out
+    assert rc == 7 and "WARN: codex coordinator doctrine not installed" in out
+    assert "PARTIAL INSTALL: not installed: codex coordinator doctrine, agy coordinator doctrine" in out
     assert not (home / ".codex" / "AGENTS.md").exists() or "coordinator-doctrine" not in (
         home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
 
@@ -1329,3 +1366,76 @@ def test_plugin_root_uninstall_removes_what_install_seeded(monkeypatch, tmp_path
     assert not (home / ".gemini" / "config" / "skills.json").exists()
     assert not (home / ".gemini" / "GEMINI.md").exists()
     assert not list((home / ".agents" / "skills").glob("*"))
+
+
+def test_flat_checkout_templates_doctrine_seeds_codex_and_agy(monkeypatch, tmp_path):
+    flat = tmp_path / "flat"
+    (flat / "templates" / "global-doctrine" / "rules").mkdir(parents=True)
+    (flat / "templates" / "global-doctrine" / "CLAUDE.md").write_text("# flat\n", encoding="utf-8")
+    (flat / "templates" / "global-doctrine" / "rules" / "rules.md").write_text("- r\n", encoding="utf-8")
+    (flat / "coordinator").mkdir()
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "none" / "coordinator")
+    assert ui.doctrine_root(flat / "coordinator") == flat / "templates"
+    assert ui.doctrine_root(flat) == flat / "templates"
+    home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy", "--plugin-root", str(flat / "coordinator")))
+    assert rc == 0 and "PARTIAL" not in out
+    for rules in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
+        assert "# flat" in rules.read_text(encoding="utf-8")
+
+
+def test_missing_peer_doctrine_template_still_writes_send_rule_and_flags_partial(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "PEER_DOCTRINE_TEMPLATE", tmp_path / "absent-peer-doctrine.md")
+    home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy"))
+    assert rc == 7
+    assert "PARTIAL INSTALL: not installed: codex peer doctrine, agy peer doctrine" in out
+    assert "codex send rule" in out and "codex send rule not installed" not in out
+    assert (home / ".codex" / "rules" / "unimatrix.rules").is_file()
+    assert "coordinator-doctrine" in (home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_unwritable_send_rule_is_named_in_the_partial_line(monkeypatch, tmp_path):
+    def boom(path, text):
+        raise OSError("read-only rules dir")
+    monkeypatch.setattr(ui, "seed_file", boom)
+    _, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex"))
+    assert rc == 7 and "PARTIAL INSTALL: not installed: codex send rule" in out
+
+
+def test_complete_codex_and_agy_install_prints_no_partial_line(monkeypatch, tmp_path):
+    _, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy"))
+    assert rc == 0 and "PARTIAL INSTALL" not in out
+
+
+def test_codex_only_install_skips_claude_gate_even_with_claude_on_path(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(ui.shutil, "which", lambda name: "/usr/bin/claude")
+
+    def probe():
+        raise AssertionError("the Claude gate must not run for --hosts codex")
+    monkeypatch.setattr(ui, "probe_claude_version", probe)
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "codex"], dest_dir=tmp_path / "d", out=buf) == 0
+    assert "gate skipped" in buf.getvalue()
+
+
+def test_agy_config_seeded_empty_0600_only_when_absent(monkeypatch, tmp_path):
+    home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "agy"))
+    cfg = home / ".gemini" / "config" / "config.json"
+    assert rc == 0 and cfg.read_text(encoding="utf-8").strip() == "{}"
+    if sys.platform != "win32":
+        assert (cfg.stat().st_mode & 0o777) == 0o600
+    cfg.write_text('{"mine": 1}', encoding="utf-8")
+    rc = ui.main(["--install", "--hosts", "agy"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=io.StringIO())
+    assert rc == 0 and cfg.read_text(encoding="utf-8") == '{"mine": 1}'
+
+
+def test_hosts_writes_only_named_host_paths(monkeypatch, tmp_path):
+    home, rc, _ = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex"))
+    assert rc == 0 and (home / ".codex").exists()
+    assert not (home / ".gemini").exists()
+    home2 = tmp_path / "home2"
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: home2))
+    rc = ui.main(["--install", "--hosts", "agy"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=io.StringIO())
+    assert rc == 0 and (home2 / ".gemini").exists()
+    assert not (home2 / ".codex").exists() and not (home2 / ".agents").exists()

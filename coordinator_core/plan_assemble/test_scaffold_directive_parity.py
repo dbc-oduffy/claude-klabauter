@@ -223,7 +223,7 @@ class TestLeadingDateSlug:
 
         today = date.today().isoformat()
         out = self._out(tmp_path, monkeypatch, "2026-10-27 My Plan")
-        assert out == f"docs/plans/{today}-my-plan.md"
+        assert out == f"docs/plans/{today[:7]}/{today}-my-plan.md"
 
     def test_non_date_intent_keeps_digits(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -232,7 +232,19 @@ class TestLeadingDateSlug:
 
         today = date.today().isoformat()
         out = self._out(tmp_path, monkeypatch, "2026 roadmap")
-        assert out == f"docs/plans/{today}-2026-roadmap.md"
+        assert out == f"docs/plans/{today[:7]}/{today}-2026-roadmap.md"
+
+    def test_writer_out_equals_reporter_s_plan_path(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from datetime import date
+
+        from coordinator_core.ops.dispatch_emit.sizing_fire import s_plan_path
+
+        today = date.today().isoformat()
+        out = self._out(tmp_path, monkeypatch, "My Plan")
+        assert out == s_plan_path(f"state/sizings/{today[:7]}/{today}-my-plan.yaml")
+        assert out != f"docs/plans/{today}-my-plan.md"
 
 
 class TestSpecDispatchRouteScaffoldsNothing:

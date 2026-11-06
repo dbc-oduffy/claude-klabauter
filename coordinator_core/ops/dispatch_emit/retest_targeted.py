@@ -288,7 +288,7 @@ _OPTION_PLUGINS = {"--timeout": "pytest-timeout", "--timeout-method": "pytest-ti
 
 def _declared_spec(root: Path, plugin: str) -> str:
     """The ``plugin`` requirement as ``pyproject.toml`` declares it in a ``[project.optional-dependencies]``
-    extra (e.g. ``pytest-timeout>=2.3``), else the bare name."""
+    extra (the pytest-timeout entry with its minimum-version bound), else the bare name."""
     try:
         import tomllib
 

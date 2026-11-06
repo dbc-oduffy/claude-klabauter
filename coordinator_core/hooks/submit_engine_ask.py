@@ -91,6 +91,7 @@ _ARGS_KEYS: tuple[str, ...] = (
     "stop_after", "supersedes", "writes",
 )
 _INPUT_KEYS: tuple[str, ...] = ("run_id", "repo")
+_HOOK_ITEM_KEYS: tuple[str, ...] = tuple(dict.fromkeys((*ASKS_ITEM_KEYS, "repo", "chatty")))
 
 
 def _em_size_param(tool_input: Mapping[str, Any], multi_ask: bool) -> tuple[Optional[str], Optional[str]]:
@@ -359,8 +360,27 @@ def _repo_root(repo_arg: Optional[str], payload: dict) -> Optional[Path]:
             anchor = resolve_launch_anchor(session_id, cwd)
     base = anchor or cwd
     start = str(Path(base) / repo_arg) if repo_arg and base else (repo_arg or base)
+    if repo_arg and not Path(start).exists():
+        return None
     top = show_toplevel(start)
     return Path(top) if top else None
+
+
+_REGISTRY_REPO_PREFIXES = ("repos.", "engine.working_repos.")
+
+
+def _registry_repo(repo: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    """(repo, refusal): a `repos.<key>` / `engine.working_repos.<key>` value becomes its registered absolute path
+    through the single-key registry resolver; an unknown key is refused naming it; any other value passes through."""
+    if not (isinstance(repo, str) and repo.strip().startswith(_REGISTRY_REPO_PREFIXES)):
+        return repo, None
+    from coordinator_core import machine_resolver
+
+    key = repo.strip()
+    path = machine_resolver.registry_get(key)
+    if not path:
+        return repo, f"`repo` {key!r} names no registry key on this machine. Pass an absolute `repo` path."
+    return path, None
 
 
 def _sizing_home(sizing: str) -> tuple[str, Optional[str], Optional[str]]:
@@ -1362,7 +1382,7 @@ def _asks(tool_input: Mapping[str, Any]) -> tuple[Optional[list], Optional[str]]
     for i, item in enumerate(asks):
         if not isinstance(item, dict) or not isinstance(item.get("ask"), str) or not item["ask"].strip():
             return None, f"asks[{i}] carries no ask text."
-        unknown = unknown_keys_refusal(f"asks[{i}]", item, ASKS_ITEM_KEYS + (_CHATTY_KEY,))
+        unknown = unknown_keys_refusal(f"asks[{i}]", item, _HOOK_ITEM_KEYS)
         if unknown:
             return None, unknown
         if item.get(_CHATTY_KEY) is not None:
@@ -2388,6 +2408,13 @@ def _multi_root_asks(
     started: list[str] = []
     tails: list[str] = []
     recorded: list[tuple[Path, Any, Any]] = []
+    written: list[str] = []
+
+    def _late(text: str, *, refuse: bool = False) -> dict:
+        # Earlier groups already fanned out: their parent records stay on disk with no launcher started.
+        left = f" Already written by earlier groups, no launcher started: parents {', '.join(written)}." if written else ""
+        return _refuse(text + left) if refuse else deny("PreToolUse", text + left)
+
     for key, members in groups.items():
         root = roots[members[0]]
         fan_params: dict = {"asks": fan_items[key], "session_id": session_id or ""}
@@ -2400,24 +2427,25 @@ def _multi_root_asks(
         try:
             reply = (fanout or _default_fanout)(fan_params, root)
         except Exception as exc:  # the engine's refusal text is the whole message
-            return deny("PreToolUse", _cause(exc))
+            return _late(_cause(exc))
         if not isinstance(reply, dict):
-            return deny("PreToolUse", f"The fan-out returned no reply: {reply!r}.")
+            return _late(f"The fan-out returned no reply: {reply!r}.")
         if reply.get("error") or reply.get("exit_code") or reply.get("applied") is False:
-            return deny("PreToolUse", str(reply.get("error") or "The fan-out was refused."))
+            return _late(str(reply.get("error") or "The fan-out was refused."))
+        written.append(str(reply.get("parent_id")))
         writer_root = Path(reply["writer_root"]) if isinstance(reply.get("writer_root"), str) else root
         parent = _read_parent(writer_root, str(reply.get("parent_id")))
         ready = [r for r in (parent.runs if parent else ()) if r.status == "ready"]
         if not ready:
-            return deny("PreToolUse", f"The fan-out under {root} produced no ready run to fire.")
+            return _late(f"The fan-out under {root} produced no ready run to fire.")
         unwritten = next((r.slice_sizing for r in ready if not (writer_root / r.slice_sizing).is_file()), None)
         if unwritten:
-            return deny("PreToolUse", f"The fan-out reported {unwritten} written under {writer_root}, but it is not on disk there.")
+            return _late(f"The fan-out reported {unwritten} written under {writer_root}, but it is not on disk there.")
         script, why = _write_group_launcher(
             root, payloads[key], reply, ready, call_stop, launch, approved_of[key], writer_root
         )
         if script is None:
-            return _refuse(why or "The engine wrote no launcher.")
+            return _late(why or "The engine wrote no launcher.", refuse=True)
         scripts.append(Path(script))
         ids = [r.run_id for r in ready]
         started += ids
@@ -2618,6 +2646,8 @@ def _ensure_launcher_run_token(root: Path, run_id: str, sizing_rel: str, session
         )
         run_token.escrow(root, run_id, token)
 
+    if _wait_ms(None) <= 0:
+        return
     state, err = _write_leg("run_token.mint", ensure, gated=True)
     if state == "raised" and not isinstance(err, (OSError, ValueError)):
         raise err
@@ -2939,6 +2969,18 @@ def _evaluate(
             item_context, _ = _context_items(asks[0].get("context") or [], "context")
             asks = None
 
+    repo_arg, key_refusal = _registry_repo(repo_arg)
+    if key_refusal:
+        return _refuse(key_refusal)
+    if asks is not None:
+        resolved_asks = []
+        for i, item in enumerate(asks):
+            value, key_refusal = _registry_repo(item.get("repo"))
+            if key_refusal:
+                return _refuse(f"asks[{i}]: {key_refusal}")
+            resolved_asks.append({**item, "repo": value} if item.get("repo") else item)
+        asks = resolved_asks
+
     defaulted_pm = False
     defaulted_relayed = False
     if ask is not None and source is None:
@@ -2953,6 +2995,7 @@ def _evaluate(
     brief, brief_refusal = _brief_params(payload["tool_input"])
     if brief_refusal:
         return _refuse(brief_refusal)
+    _add_context(brief, item_context)
     if isinstance(item_em_context, str) and item_em_context.strip():
         brief["ask_brief"] = with_em_context(brief.get("ask_brief"), item_em_context)
         brief[EM_CONTEXT_DIGEST_PARAM] = em_context_digest(item_em_context)
@@ -2965,12 +3008,9 @@ def _evaluate(
         if home_refusal:
             return _refuse(home_refusal)
 
-    entry_strings = [(it.get("repo") or repo_arg) for it in asks] if asks is not None else []
-    if asks is not None and any(it.get("repo") for it in asks):
-        names_all = all(isinstance(s, str) and Path(s.strip()).is_absolute() for s in entry_strings)
-    else:
-        names_all = False
-    _add_context(brief, item_context)
+    names_all = asks is not None and any(it.get("repo") for it in asks) and all(
+        isinstance(s, str) and Path(s.strip()).is_absolute() for s in ((it.get("repo") or repo_arg) for it in asks)
+    )
     disagree = None if ((repo_arg and Path(repo_arg).is_absolute()) or names_all) else _anchor_disagreement(payload)
     if disagree:
         return _refuse(

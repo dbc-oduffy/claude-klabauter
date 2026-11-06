@@ -40,6 +40,20 @@ def pytest_configure(config) -> None:
     )
 
 
+_DESKTOP_NOTIFIERS = frozenset({"osascript", "notify-send"})
+
+
+@pytest.fixture(autouse=True)
+def _no_desktop_notifier(monkeypatch):
+    """A test never raises a real desktop notification: unimatrix-membership's default notifier
+    shells to osascript, and a test that forgets its stub pops a "join the unimatrix" alert on the
+    PM's screen every run. A test that sets its own `shutil.which` stub still wins."""
+    import shutil
+
+    real_which = shutil.which
+    monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None if os.path.basename(str(cmd)) in _DESKTOP_NOTIFIERS else real_which(cmd, *a, **k))
+
+
 @pytest.fixture(autouse=True)
 def _stub_fold_bar_verdict(request, monkeypatch):
     """Round and publish tests drive fake trees with no recorded suite verdict. A module sets

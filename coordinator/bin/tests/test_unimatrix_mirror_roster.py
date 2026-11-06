@@ -66,10 +66,31 @@ def test_proc_start_posix_branch_is_the_ps_lstart_string(monkeypatch):
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, stdout="Wed Nov  4 01:19:29 2026\n")
 
+    def unreadable(pid, platform=None):
+        raise OSError("spawn-free read failed")
+
+    monkeypatch.setattr(roster._liveness(), "proc_start", unreadable)
     monkeypatch.setattr(roster.subprocess, "run", fake_run)
-    # The harness matches ps byte for byte: the padded one-digit day must survive.
+    # The fallback matches ps byte for byte: the padded one-digit day must survive.
     assert roster.proc_start(77, platform="darwin") == "Wed Nov  4 01:19:29 2026"
     assert seen["cmd"] == ["ps", "-o", "lstart=", "-p", "77"]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX proc_start")
+def test_proc_start_of_a_live_pid_spawns_nothing(monkeypatch):
+    roster = load("roster")
+
+    def no_spawn(*a, **kw):
+        raise AssertionError("proc_start spawned a process")
+
+    monkeypatch.setattr(roster.subprocess, "run", no_spawn)
+    monkeypatch.setattr(roster.subprocess, "Popen", no_spawn)
+    stamp = roster.proc_start(os.getpid())
+    assert re.fullmatch(r"[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}", stamp)
+
+
+def test_roster_has_no_private_filetime_reader():
+    assert not hasattr(load("roster"), "_filetime")
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="GetProcessTimes is Windows-only")

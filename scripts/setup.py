@@ -5142,6 +5142,11 @@ def install_foreign_hosts(claude_klabauter_root_resolved: Path, args: Args, chec
                 f"[host:{host}] binary={hp.binary or 'absent'} mcp={result.mcp} "
                 f"config={result.config_path}"
             )
+            verb = {"written": "writes", "would-write": "would write"}.get(str(result.mcp))
+            if verb:
+                print(f"  {verb}: {result.config_path} (example-retrieval-repo MCP entry only; other keys kept)")
+            else:
+                print(f"  writes: nothing (mcp {result.mcp})")
             for note in result.notes:
                 print(f"  note: {note}")
             for item in hp.unreachable:

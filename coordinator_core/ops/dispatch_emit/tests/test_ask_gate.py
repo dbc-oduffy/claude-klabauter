@@ -581,3 +581,28 @@ def test_a_refusal_naming_a_sizing_defect_keeps_kind_reason_and_extras(repo):
 
     v = ask_gate._refuse("status: draft", design_route={"x": 1})
     assert v.arm is None and v.halt == {"kind": "refusal", "reason": "status: draft", "design_route": {"x": 1}}
+
+
+def test_resume_reuses_every_open_sibling_row_of_a_split_ledger_item(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus
+    from coordinator_core.ops.dispatch_emit import ask_gate
+    from coordinator_core.ops.dispatch_emit import ledger_remaining_paths as lrp
+    from coordinator_core.ops import plan_tasks_render
+
+    plan = tmp_path / "docs/plans/p.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("x", encoding="utf-8")
+    spine = [
+        {"id": "LR1", "register_rows": ["LR1"], "disposition": "open"},
+        {"id": "LR1-2", "register_rows": ["LR1"], "disposition": "open"},
+        {"id": "LR1-3", "register_rows": ["LR1"], "disposition": "done"},
+        {"id": "L9", "register_rows": ["OTHER"], "disposition": "open"},
+    ]
+    monkeypatch.setattr(
+        plan_tasks_render, "load_rows", lambda _t: SimpleNamespace(status=LocateStatus.LOCATED, rows=spine)
+    )
+    monkeypatch.setattr(lrp, "plan_rows_serving", lambda *_a, **_k: [])
+    out = ask_gate._derive_resume_rows(tmp_path, "docs/plans/p.md", {"blocking": ["LR1"]})
+    assert out == ["LR1", "LR1-2"]

@@ -53,6 +53,7 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.reachability_docs import doc_entries, doc_verdicts
 from coordinator_core.ops.reachability_registration import registration_entries, registration_verdicts
+from coordinator_core.ops.reachability_targets import registered_target_verdicts
 
 _CODE_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".py", ".rs")
 _JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs")
@@ -79,7 +80,7 @@ _MANIFESTS = (
     "package.json", "pyproject.toml", "setup.py", "setup.cfg", "hooks.json", "plugin.json",
     "manifest.json", ".claude/settings.json", ".claude/settings.local.json",
 )
-_ALL_ENTRY_KINDS = ("exported-function", "cli", "hook", "api-route", "page", "doc", "op", "pipeline-output")
+_ALL_ENTRY_KINDS = ("exported-function", "cli", "hook", "api-route", "page", "doc", "op", "pipeline-output", "registered-target")
 _REGISTRATION_KINDS = ("cli", "hook", "op")
 # A pipeline output is a string-literal repo-relative path a Python script writes; a consumer is any
 # other non-test file holding that literal.
@@ -461,6 +462,8 @@ def _summary(ents: list[dict], cps: list[dict]) -> str:
         return [(sum(1 for i in items if i["verdict"] == v), v) for v in verdicts]
     parts = [f"{n} {'entry point' if n == 1 else 'entry points'} {v}" for n, v in
              counts(ents, ("reachable", "unreachable", "undecidable")) if n]
+    if n := sum(1 for e in ents if e["verdict"] == "missing-target"):
+        parts.append(f"{n} registered {'target' if n == 1 else 'targets'} missing-target")
     parts += [f"{n} click {'path' if n == 1 else 'paths'} {v}" for n, v in
               counts(cps, ("reachable", "broken", "undecidable")) if n]
     return (", ".join(parts) or "no entry points or click paths in the diff")[:300]
@@ -557,6 +560,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         resolved.update({("doc", "", r): v for r, v in doc_verdicts(root, doc_rels, added, _index()).items()})
     if reg_found:
         resolved.update(registration_verdicts(root, reg_found, added, _index(), new=frozenset(created)))
+    if "registered-target" in kinds:
+        scoped = {r: ls for r, ls in added.items() if declared is None or _declared(r)}
+        targets = registered_target_verdicts(root, scoped)
+        found += list(targets)
+        resolved.update(targets)
     if any(k == "pipeline-output" for k, _, _ in found):
         resolved.update(_output_verdicts(root, found, writes, _index()))
     ents = _verdicts(root, found, sym_hits, route_hits, barrels, lambda: _manifest_text(root), sym_counts, resolved)

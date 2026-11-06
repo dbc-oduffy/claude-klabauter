@@ -855,6 +855,12 @@ def _live_carried_notes(root: Path, run_id: str, prior: Optional[str]) -> list[d
     return out
 
 
+def _inherited_note_id(note: dict, run_id: str) -> str:
+    """A note's id as the refire names it: bare for this run's own, `<run>:<id>` for a predecessor's,
+    since note ids are per-run ordinals and two runs' `N1` would collide."""
+    return note["id"] if note["run"] == run_id else f"{note['run']}:{note['id']}"
+
+
 def _start_requirements(ask_ctx: dict, *, all_of_pm_ask: bool) -> Optional[object]:
     """Make the run ledger-bearing and, for a `--sizing` run, seed that sizing's
     requirement_register with its PM words and the ask now; a raw ask's sizing is minted in-run and
@@ -3156,7 +3162,7 @@ def _dispatch_emit_body(
             for i in (bound.items if bound is not None else ())
             if i.origin == "revision"
         ] + [
-            {"id": n["id"], "first_line": n["note"].split("\n", 1)[0].strip(), "kind": "note"}
+            {"id": _inherited_note_id(n, ask_ctx["run_id"]), "first_line": n["note"].split("\n", 1)[0].strip(), "kind": "note"}
             for n in ask_ctx["carried_notes"]
         ]
         receipt_plan_path = None

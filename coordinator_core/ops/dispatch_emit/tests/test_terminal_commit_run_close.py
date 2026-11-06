@@ -69,8 +69,16 @@ def _judge(**criterion) -> dict:
     return review
 
 
+def _judge_backed_review() -> dict:
+    from coordinator_core.ops.dispatch_emit.completion_gate import JUDGE_AGENT
+
+    review = _judge(authored_by=JUDGE_AGENT, falsifier={"verdict": "pass", "output":"a.py present at HEAD"})
+    review["tests"] = {"status": "pass", "run": 1, "failed": 0, "sidecar": None}
+    return review
+
+
 def test_plan_run_reply_carries_every_leg(env):
-    out = _fire(env)
+    out = _fire(env, review=_judge_backed_review())
 
     close = out["close"]
     assert close["applies"] is True and close["run_id"] == "run" and close["kind"] == "plan-run"
@@ -94,7 +102,9 @@ def test_queued_legs_name_a_job_record_that_exists(env):
     close = _fire(env)["close"]
 
     queued = [leg for leg, r in close["legs"].items() if r["status"] == "queued"]
-    assert sorted(queued) == ["baton-drain", "orientation-refresh", "post-close", "review", "symbol-knowledge"]
+    assert sorted(queued) == [
+        "baton-drain", "clean-clone-proof", "orientation-refresh", "post-close", "review", "symbol-knowledge",
+    ]
     record = env["repo"] / run_close.close_job_path("run")
     assert json.loads(record.read_text(encoding="utf-8"))["legs"].keys() == set(queued)
     assert all(run_close.close_job_path("run") in close["legs"][leg]["detail"] for leg in queued)

@@ -159,6 +159,23 @@ def run_recorded_blobs(record_dir: Optional[Path], paths: Iterable[str]) -> Dict
     return found
 
 
+def run_reviewed_hashes(root: Path, session_id: Optional[str], run_id: Optional[str]) -> Dict[str, str]:
+    """`{path: sha256}` of the bytes the run's stored review prep read, found through the run-keyed
+    pointer alone. Unlike the commit's own prep lookup it does not require the prep's `paths` to
+    cover every path the commit declares (a delivery note or sizing record the review never read),
+    so late-leg bytes the review read stay credited. Empty with no run, no unique stored reply or no
+    `reviewed_sha256`. Reads a pointer and a sidecar; spawns nothing."""
+    if not session_id or not run_id:
+        return {}
+    from coordinator_core.ops import review_prep
+
+    reply = review_prep.stored_reply_for_run(Path(root), session_id, None, run_key=run_id)
+    reviewed = reply.get("reviewed_sha256") if isinstance(reply, dict) else None
+    if not isinstance(reviewed, dict):
+        return {}
+    return {_norm(p): h for p, h in reviewed.items() if isinstance(p, str) and isinstance(h, str) and h}
+
+
 def classify(
     root: Path,
     run_dir: Path,

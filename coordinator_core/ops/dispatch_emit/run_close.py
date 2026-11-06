@@ -48,6 +48,7 @@ RUN_BOUND_LEGS: tuple[str, ...] = (
     "completion-entry",
     "baton-ship",
     "close-commit",
+    "clean-clone-proof",
     "baton-drain",
     "orientation-refresh",
     "memo-lifecycle",

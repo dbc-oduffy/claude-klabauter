@@ -93,7 +93,7 @@ def test_second_call_same_sha_is_idempotent(repo):
     _call(root, run_id="A", sha=first)
     before = (root / c.status_rel("A")).read_bytes()
     out = _call(root, run_id="A", sha=first)
-    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **_no_close(first)}
+    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, "landed_without_verdict": True, **_no_close(first)}
     assert "never halted" in out["close"]["detail"]
     assert (root / c.status_rel("A")).read_bytes() == before
 
@@ -142,6 +142,7 @@ def test_solo_halted_run_records_landed_marker(repo):
     assert len(out.pop("records_commit")) == 40
     assert out == {
         "ok": True, "run_id": SOLO, "sha": first, "written": True, "shas": [first], "covers": {},
+        "landed_without_verdict": True,
         "recorded": f"state/warp/{SOLO}/halted.json",
         "close": {"status": "not-applicable", "detail": "halt record names no plan"}, "blocking_rows": [],
     }
@@ -156,7 +157,7 @@ def test_solo_second_call_is_idempotent(repo):
     _call(root, run_id=SOLO, sha=first)
     before = marker.read_bytes()
     out = _call(root, run_id=SOLO, sha=first)
-    assert out == {"ok": True, "run_id": SOLO, "sha": first, "written": False, **JOB_NA_SOLO}
+    assert out == {"ok": True, "run_id": SOLO, "sha": first, "written": False, "landed_without_verdict": True, **JOB_NA_SOLO}
     assert marker.read_bytes() == before
 
 
@@ -306,7 +307,7 @@ def test_abbreviated_sha_idempotent_after_landing(repo):
     _seed(root, {"A": {"status": "halted"}})
     _call(root, run_id="A", sha=first[:10])
     out = _call(root, run_id="A", sha=first[:10])
-    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, **_no_close(first)}
+    assert out == {"ok": True, "run_id": "A", "sha": first, "written": False, "landed_without_verdict": True, **_no_close(first)}
 
 
 def test_ambiguous_abbreviation_refuses_by_name(repo, monkeypatch):

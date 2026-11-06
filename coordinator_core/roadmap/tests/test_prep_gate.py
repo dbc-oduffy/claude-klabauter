@@ -629,8 +629,8 @@ def test_an_unreadable_schema_passes_rather_than_refusing_every_plan(
 # ---------------------------------------------------------------------------
 
 
-def _external_plan(tmp_path, gate_block: str = "") -> Path:
-    spine = f"""- id: C1
+def _external_spine(gate_block: str = "") -> str:
+    return f"""- id: C1
   title: Reaches out
   body: Call the sibling repo's gate once it clears.
   change_kind: code-edit
@@ -639,7 +639,10 @@ def _external_plan(tmp_path, gate_block: str = "") -> Path:
   queue_scope: project
   disposition: open
 {gate_block}"""
-    return _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine)
+
+
+def _external_plan(tmp_path, gate_block: str = "") -> Path:
+    return _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=_external_spine(gate_block))
 
 
 def test_a_row_naming_a_sibling_repo_without_a_gate_is_not_prepped(tmp_path):
@@ -688,6 +691,7 @@ def test_landed_work_withholds_its_own_row_and_the_plan_still_certifies(tmp_path
     - owner_repo: coordinator-content-repo
       condition: the schema lands
       requires: {pg.REQUIRES_LANDED}
+      closure_key: {{kind: deliverable, id: d-1}}
 """
     report = _gate(tmp_path, _external_plan(tmp_path, block))
     assert report["verdict"] == pg.PREPPED
@@ -710,10 +714,32 @@ def test_commit_in_owner_repo_withholds_its_row_and_the_plan_still_certifies(tmp
       condition: someone commits there
       requires: {pg.REQUIRES_COMMIT}
 """
-    report = _gate(tmp_path, _external_plan(tmp_path, block))
+    schedulable = """- id: C2
+  title: Local work
+  body: Do the named work and pin it with a test.
+  change_kind: code-edit
+  surface: coordinator_core/example.py
+  writes: [coordinator_core/example.py]
+  queue_scope: project
+  disposition: open
+"""
+    spine = _external_spine(block) + schedulable
+    (tmp_path / "coordinator_core").mkdir()
+    report = _gate(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
     assert report["verdict"] == pg.PREPPED
     assert report["classes"]["EXTERNAL_DEPS"]["status"] == "PASS"
     assert report["withheld_rows"] == ["C1"]
+
+
+def test_a_plan_whose_only_row_needs_a_cross_repo_commit_is_not_prepped(tmp_path):
+    block = f"""  external_gate:
+    - owner_repo: coordinator-content-repo
+      condition: someone commits there
+      requires: {pg.REQUIRES_COMMIT}
+"""
+    report = _gate(tmp_path, _external_plan(tmp_path, block))
+    assert report["verdict"] == pg.NOT_PREPPED
+    assert report["classes"]["EXTERNAL_DEPS"]["kind"] == "no-row-can-clear"
 
 
 def test_a_commit_gated_row_says_so_rather_than_only_being_withheld(tmp_path):
@@ -729,6 +755,7 @@ def test_a_commit_gated_row_says_so_rather_than_only_being_withheld(tmp_path):
     - owner_repo: coordinator-content-repo
       condition: they land the op
       requires: {pg.REQUIRES_LANDED}
+      closure_key: {{kind: deliverable, id: d-1}}
 """
     commit = _gate(tmp_path / "c", _external_plan(tmp_path / "c", commit_block))
     landed = _gate(tmp_path / "l", _external_plan(tmp_path / "l", landed_block))

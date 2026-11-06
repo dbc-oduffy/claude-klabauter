@@ -1899,6 +1899,8 @@ def _external_deps(
     bad_requires: List[str] = []
     commit_gated: List[str] = []
     unkeyed_landed: List[str] = []
+    unclearable: set = set()
+    schedulable: List[str] = []
     withheld: List[str] = []
     cache: dict = {} if plan_edge_cache is None else plan_edge_cache
     dangling: List[str] = _frontmatter_edge_dangling(plan_edges, repo_root, cache)
@@ -1933,6 +1935,7 @@ def _external_deps(
         # PARTIAL-FIRE excluding 62 rows.
         if _row_is_unschedulable(row):
             continue
+        schedulable.append(row_id)
         row_exempt, row_waiting, row_dangling = _sibling_plan_edges(row, row_id, repo_root, cache)
         dangling += row_dangling
         if row_waiting:
@@ -1990,19 +1993,16 @@ def _external_deps(
                 owner = entry.get("owner_repo") or "a sibling repo"
                 commit_gated.append(f"{row_id}: commit into {owner}")
                 withheld.append(row_id)
+                unclearable.add(row_id)
             else:
                 withheld.append(row_id)
-                if requires == REQUIRES_LANDED and not entry.get("closure_key"):
+                if not entry.get("closure_key"):
                     unkeyed_landed.append(
                         f"{row_id}: external_gate[{index}] requires landed-work but "
                         "carries no closure_key — it has no clearance path; add "
                         "closure_key: {kind: deliverable|memo-thread, id}"
                     )
-
-    def _warned(result: Dict[str, Any]) -> Dict[str, Any]:
-        # Non-verdict: never alters status, kind or withheld.
-        result["warnings"] = list(unkeyed_landed)
-        return result
+                    unclearable.add(row_id)
 
     collapsed = [
         line if count == 1 else f"{line} (x{count})"
@@ -2014,16 +2014,12 @@ def _external_deps(
         # differs — one replaces a stand-in with the path it stands for, the
         # other adds a gate — and a tally that names only the second sends the
         # author to the wrong fix.
-        return _warned(
-            _defect("path-placeholder", "; ".join(placeholders + defects), withheld=withheld)
-        )
+        return _defect("path-placeholder", "; ".join(placeholders + defects), withheld=withheld)
     if dangling:
-        return _warned(
-            _defect(
-                "predecessor-plan-dangling",
-                "; ".join(dangling + defects),
-                withheld=withheld,
-            )
+        return _defect(
+            "predecessor-plan-dangling",
+            "; ".join(dangling + defects),
+            withheld=withheld,
         )
     if defects:
         detail = "; ".join(defects)
@@ -2037,7 +2033,22 @@ def _external_deps(
                 "the row that creates it. Writing files deeper inside it does not "
                 "declare that the tree gains a root"
             )
-        return _warned(_defect("external-dep-undeclared", detail, withheld=withheld))
+        return _defect("external-dep-undeclared", detail, withheld=withheld)
+    if unkeyed_landed:
+        return _defect("external-gate-unclearable", "; ".join(unkeyed_landed), withheld=withheld)
+    if schedulable and all(row_id in unclearable for row_id in schedulable):
+        # Asks whether any row can ever clear, not whether every row is withheld:
+        # a row waiting on a sibling plan edge or a keyed gate is clearable.
+        detail = (
+            f"no schedulable row can clear in this run: {', '.join(schedulable)} "
+            "each need a cross-repo commit or an unkeyed landed-work gate"
+        )
+        if commit_gated:
+            detail += (
+                f" — cross-repo commit ({'; '.join(commit_gated)}): the run belongs in "
+                "the owner repo (engine-ask with `repo:` naming it)"
+            )
+        return _defect("no-row-can-clear", detail, withheld=withheld)
     if withheld:
         # Both populations named, because the withheld set alone says a row is
         # held and not what would release it — one waits for a peer's landing,
@@ -2050,8 +2061,8 @@ def _external_deps(
             )
         if waiting:
             detail += f" — sibling-plan predecessors: {'; '.join(waiting)}"
-        return _warned(_pass(detail, withheld=withheld))
-    return _warned(_pass("no declared path leaves this repo"))
+        return _pass(detail, withheld=withheld)
+    return _pass("no declared path leaves this repo")
 
 
 # ---------------------------------------------------------------------------
