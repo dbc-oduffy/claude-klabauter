@@ -11,6 +11,7 @@ Cleanup, controller only, at session finish: a run it minted the basetemp for
 is deleted on pass (exit 0) or nothing collected (exit 5). Any other exit keeps
 the dir, marks it, and prunes marked siblings beyond the newest 3 failing runs.
 An explicit ``--basetemp`` and an xdist worker never delete.
+At configure the same controller removes unmarked ``<pid>-<hex>`` siblings whose pid is dead.
 
 Redirect: the controller points TMP/TEMP/TMPDIR and ``tempfile.tempdir`` at
 ``<gettempdir()>/coordinator/<repo>/run-temp/<pid>-<hex>/`` (workers inherit it;
@@ -33,13 +34,14 @@ from __future__ import annotations
 import fnmatch
 import os
 import shutil
-import stat
 import sys
 import tempfile
 import warnings
 from pathlib import Path
 
 import pytest
+
+from coordinator_core.owner_safe_rmtree import make_removable
 
 # Stable markers of live peer processes, measured in a claude-klabauter fast-suite run
 # (2026-10-03): Claude Code's atomic ~/.claude.json writes and a concurrent
@@ -159,11 +161,53 @@ def _counted_numbered_dir(root: Path, prefix: str, mode: int = 0o700) -> Path:
         return path
 
 
+def _counted_make_counted_dir(self, prefix: str) -> Path:
+    """`TempPathFactory._make_counted_dir` (pytest >= 9) routed through `_counted_numbered_dir`.
+
+    Drops the per-call `<prefix>current` symlink re-point the stock maker does.
+    """
+    return _counted_numbered_dir(self.getbasetemp(), prefix)
+
+
 def _install_counted_numbered_dir() -> None:
+    """Hook whichever numbered-dir maker the installed pytest's `mktemp` uses."""
     import _pytest.tmpdir as tmpdir_mod
 
-    if getattr(tmpdir_mod, "make_numbered_dir", None) is not None:
+    if getattr(tmpdir_mod.TempPathFactory, "_make_counted_dir", None) is not None:
+        tmpdir_mod.TempPathFactory._make_counted_dir = _counted_make_counted_dir  # type: ignore[method-assign]
+    elif getattr(tmpdir_mod, "make_numbered_dir", None) is not None:
         setattr(tmpdir_mod, "make_numbered_dir", _counted_numbered_dir)
+
+
+def _sweep_dead_runs(parent: Path) -> None:
+    """Remove unmarked `<pid>-<hex>` run dirs under `parent` whose owning pid is dead.
+
+    A run killed before sessionfinish (suite ceiling, ENOSPC) never deletes or marks its
+    basetemp. Marked dirs belong to `_prune_kept`; a live or unreadable pid is kept, so a
+    concurrent run is never reaped.
+    """
+    try:
+        from coordinator_core.group_em.session_registry import pid_alive
+        from coordinator_core.temp_layout import parse_pytest_run_dir
+
+        children = list(parent.iterdir())
+    except (ImportError, OSError):
+        return
+    for child in children:
+        try:
+            pid = parse_pytest_run_dir(child.name)
+            if (
+                pid is None
+                or pid == os.getpid()
+                or child.is_symlink()
+                or not child.is_dir()
+                or (child / _KEPT_MARKER).exists()
+                or pid_alive(pid)
+            ):
+                continue
+            _rmtree(child)
+        except OSError:
+            continue
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -175,6 +219,7 @@ def pytest_configure(config: pytest.Config) -> None:
     if config.option.basetemp is None and controller:
         basetemp = _per_run_basetemp(config.rootpath)
         basetemp.parent.mkdir(parents=True, exist_ok=True)
+        _sweep_dead_runs(basetemp.parent)
         config.option.basetemp = str(basetemp)
         _MINTED = basetemp
     nested = Path(tempfile.gettempdir()).parent.name == _RUN_TEMP_DIRNAME
@@ -209,7 +254,7 @@ def pytest_configure(config: pytest.Config) -> None:
 def _rmtree(path: Path) -> None:
     def handler(func, p, _exc):
         try:
-            os.chmod(p, stat.S_IWRITE)
+            make_removable(p)
             func(p)
         except OSError:
             pass

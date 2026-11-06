@@ -255,3 +255,73 @@ def test_paths_outside_owned_subtrees_untouched(home):
     report = _prune(roots, FakeUv(roots.uv_cache), uv_cap=MiB, cache_total_cap=MiB)
     assert ladder.exists()
     assert report.still_over is True
+
+
+def _logged(roots):
+    return [ln.split("\t") for ln in roots.deletion_log.read_text(encoding="utf-8").splitlines()]
+
+
+def test_total_cap_never_deletes_the_coordinator_runtime_dir(home, tmp_path):
+    roots = resolve_roots(home=home, environ={"COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings")})
+    lock = _file(roots.cache / "coordinator" / "warm" / "abc123" / "warm.json.boot.lock", 4 * MiB, 1_400_000_000.0)
+    junk = _file(roots.cache / "junk" / "j.bin", 4 * MiB, 1_500_000_000.0)
+    report = _prune(roots, FakeUv(roots.uv_cache), cache_total_cap=MiB)
+    assert lock.exists() and lock.parent.stat().st_mode & 0o700 == 0o700
+    assert not junk.exists()
+    assert report.still_over is True
+
+
+def test_every_applied_deletion_appends_path_bytes_reason(home, tmp_path):
+    settings = tmp_path / "settings"
+    roots = resolve_roots(home=home, environ={"COORDINATOR_SETTINGS_HOME": str(settings)})
+    assert roots.deletion_log == settings / "disk-budget" / "deletions.log"
+    old = _file(roots.cache / "old-tool" / "a.bin", 4 * MiB, 1_500_000_000.0)
+    _file(roots.cache / "new-tool" / "a.bin", 4 * MiB, 1_700_000_000.0)
+    for n in range(4):
+        _file(roots.codex_runtimes / f"v{n}" / "r.bin", 10, 1_600_000_000.0 + n)
+    _prune(roots, FakeUv(roots.uv_cache), cache_total_cap=6 * MiB)
+    rows = _logged(roots)
+    by_path = {r[3]: r for r in rows}
+    assert not old.exists()
+    assert by_path[str(old.parent)][1:3] == [str(4 * MiB), "cache-total-over-cap-unrecognised"]
+    assert {Path(p).name for p in by_path if "codex-runtimes" in p} == {"v0", "v1"}
+    assert all(len(r) == 4 for r in rows)
+
+
+def test_dry_run_writes_no_deletion_log(home, tmp_path):
+    roots = resolve_roots(home=home, environ={"COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings")})
+    _file(roots.cache / "junk" / "j.bin", 4 * MiB)
+    disk_budget.prune_cache(
+        Policy(cache_total_cap=MiB), time.monotonic() + 30, roots=roots,
+        runner=FakeUv(roots.uv_cache), apply=False, free_probe=_pressed,
+    )
+    assert not roots.deletion_log.exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory modes")
+def test_unremovable_dir_keeps_owner_rwx_when_delete_fails(home, tmp_path):
+    roots = resolve_roots(home=home, environ={"COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings")})
+    _file(roots.cache / "junk" / "sub" / "j.bin", 4 * MiB)
+    (roots.cache / "junk" / "sub").chmod(0o500)
+    try:
+        _prune(roots, FakeUv(roots.uv_cache), cache_total_cap=MiB)
+        assert not (roots.cache / "junk").exists()
+    finally:
+        for p in (roots.cache / "junk" / "sub", roots.cache / "junk"):
+            if p.exists():
+                p.chmod(0o700)
+
+
+def test_projects_deletions_are_logged(home, tmp_path, monkeypatch):
+    import disk_budget_projects
+
+    roots = resolve_roots(home=home, environ={"COORDINATOR_SETTINGS_HOME": str(tmp_path / "settings")})
+
+    def fake(*_a, **_k):
+        report = disk_budget.SweepReport()
+        report.deleted.append(("subagent", "/p/s.jsonl", 123, "age"))
+        return report
+
+    monkeypatch.setattr(disk_budget_projects, "prune_projects", fake)
+    disk_budget.prune_projects(Policy(), time.monotonic() + 30, roots=roots)
+    assert _logged(roots)[0][1:] == ["123", "projects:subagent:age", "/p/s.jsonl"]

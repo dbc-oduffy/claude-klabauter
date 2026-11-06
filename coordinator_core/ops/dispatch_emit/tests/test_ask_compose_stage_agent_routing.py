@@ -212,7 +212,9 @@ def test_declared_ue_repo_routes_sid_and_docs_checker(monkeypatch, tmp_path, _ue
     types, _models, routed = ask_compose._resolve_stage_agents(root, "x", ())
     assert types["plan_review"] == types["code_review"] == GAME and routed
     wave = _compose(repo_root=root, **_named_fragment())
-    assert GAME in wave and DOCS in wave and "coordinator:code-reviewer" in wave
+    assert GAME in wave and "coordinator:code-reviewer" in wave
+    assert "label: 'diff-docs-check'" in wave and f"agentType: '{DOCS}'" in wave
+    assert f"label: 'review:{DOCS}'" not in wave, "docs-checker no longer joins the named review wave"
 
 
 def test_ue_marker_repo_routes_sid(tmp_path, _ue_cache):

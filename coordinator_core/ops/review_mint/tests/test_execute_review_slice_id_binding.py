@@ -39,11 +39,12 @@ def _prep_rewrite(body):
     return f"(r, n) => n === 1 ? {{ ...r, prep: {{ ...r.prep, slices: {body} }} }} : r"
 
 
-def test_a_prep_naming_the_whole_diffs_slices_beyond_its_dispatched_group_halts():
+def test_a_prep_naming_the_whole_diffs_slices_beyond_its_dispatched_group_is_dropped_with_an_advisory():
     result = _run_in_wave(_FULL, 9, patch=_prep_rewrite("_full.slices"))
-    assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
-    assert "outside its dispatched group" in result["halted"]
-    assert result["wave"] is None
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][1]["slice_id"] == _bound_group_one("r.prep.slices")
+    [advisory] = result["prep"]["advisories"]
+    assert "wave agent 1" in advisory and "outside its group 1 of" in advisory
 
 
 def test_a_prep_naming_a_slice_id_no_run_slice_carries_halts():
@@ -80,10 +81,34 @@ def test_a_prep_listing_member_ids_as_strings_is_bound_to_the_group():
     assert _bound_group_one("r.prep.slices.map(s => s.id)") == expected
 
 
-def test_a_prep_naming_a_non_member_alongside_a_member_still_halts():
+def test_a_prep_naming_a_non_member_alongside_a_member_keeps_the_verdict_and_advises():
     result = _run_in_wave(_FULL, 9, patch=_prep_rewrite("[r.prep.slices[0], _full.slices[_full.slices.length - 1]]"))
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][1] is not None
+    assert result["wave"][1]["slice_id"] == _bound_group_one("r.prep.slices")
+    [advisory] = result["prep"]["advisories"]
+    assert _full_last_id() in advisory
+
+
+def test_a_prep_naming_only_foreign_slices_is_still_bound_to_its_group():
+    expected = _bound_group_one("r.prep.slices")
+    result = _run_in_wave(_FULL, 9, patch=_prep_rewrite("[_full.slices[_full.slices.length - 1]]"))
+    assert "halted" not in result and result["wave"][1]["slice_id"] == expected
+    assert len(result["prep"]["advisories"]) == 1
+
+
+def test_an_id_no_run_slice_carries_still_halts_even_beside_a_member():
+    patch = _prep_rewrite("[r.prep.slices[0], { ...r.prep.slices[0], id: 'zz-nonexistent' }]")
+    result = _run_in_wave(_FULL, 9, patch=patch)
     assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
-    assert "outside its dispatched group" in result["halted"]
+
+
+def test_a_clean_wave_carries_no_advisories():
+    assert "advisories" not in _run_in_wave(_FULL, 9)["prep"]
+
+
+def _full_last_id():
+    return _FULL["slices"][-1]["id"]
 
 
 def test_unbound_reply_still_falls_back_to_resolution_and_halt():

@@ -23,7 +23,9 @@ _FOREIGN = "other/tests/test_peer.py::test_b"
 
 def test_review_recovery_sits_between_the_review_wave_and_the_blocked_halt():
     script = _compose(**_JUDGE_KW)
-    halt = ask_compose._review_blocked_halt_js(None)
+    # The composer's sharing passes rewrite the halt's body, so locate it by its declaration.
+    assert ask_compose._review_blocked_halt_js(None).startswith("  const _reviewBlockedHalt = () => {")
+    halt = "const _reviewBlockedHalt = () => {"
 
     recover_at = script.index("const _reviewRecover = async")
     assert script.index("phase('Review wave')") < recover_at < script.index(halt)

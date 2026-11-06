@@ -71,12 +71,12 @@ def _configure(monkeypatch, tmp_path, **kw):
     import tempfile
 
     temp = tmp_path / "Temp"
-    temp.mkdir()
+    temp.mkdir(exist_ok=True)
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
     monkeypatch.setattr(fc, "_SANCTIONED", [])
     monkeypatch.setattr(fc, "_WATCHED", [])
     repo = tmp_path / "myrepo"
-    repo.mkdir()
+    repo.mkdir(exist_ok=True)
     cfg = _Cfg(repo, **kw)
     fc.pytest_configure(cfg)
     return cfg, temp
@@ -317,7 +317,24 @@ def test_counted_numbered_dir_never_scans_the_root(tmp_path, monkeypatch):
 def test_the_session_mktemp_uses_the_counted_maker():
     import _pytest.tmpdir as tmpdir_mod
 
-    assert getattr(tmpdir_mod, "make_numbered_dir") is fc._counted_numbered_dir
+    if hasattr(tmpdir_mod.TempPathFactory, "_make_counted_dir"):
+        assert tmpdir_mod.TempPathFactory._make_counted_dir is fc._counted_make_counted_dir
+    else:
+        assert getattr(tmpdir_mod, "make_numbered_dir") is fc._counted_numbered_dir
+
+
+def test_the_hooked_factory_maker_makes_unscanned_dirs_without_current_link(tmp_path):
+    import _pytest.tmpdir as tmpdir_mod
+
+    if not hasattr(tmpdir_mod.TempPathFactory, "_make_counted_dir"):
+        pytest.skip("pytest without TempPathFactory._make_counted_dir")
+    fc._NEXT_NUMBER.clear()
+    factory = tmpdir_mod.TempPathFactory(None, 3, "all", None, _ispytest=True)
+    factory._basetemp = tmp_path
+    factory._trace = lambda *a, **k: None
+    made = [factory.mktemp("w").name for _ in range(2)]
+    assert made == ["w0", "w1"]
+    assert not (tmp_path / "wcurrent").exists()
 
 
 pytest_plugins = ["pytester"]
@@ -417,3 +434,65 @@ def test_elsewhere(tmp_path):
 """,
     )
     result.assert_outcomes(passed=1)
+
+
+def _dead_pid():
+    import subprocess
+    import sys
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "pass"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    proc.wait()
+    return proc.pid
+
+
+def _seed_root(monkeypatch, tmp_path):
+    import tempfile
+
+    from coordinator_core import temp_layout
+
+    temp = tmp_path / "Temp"
+    temp.mkdir()
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
+    repo = tmp_path / "myrepo"
+    repo.mkdir()
+    root = temp_layout.pytest_basetemp_root(repo)
+    root.mkdir(parents=True)
+    return root
+
+
+def test_configure_reaps_only_unmarked_dead_pid_run_dirs(tmp_path, monkeypatch):
+    root = _seed_root(monkeypatch, tmp_path)
+    dead = root / f"{_dead_pid()}-abcdef"
+    import subprocess
+    import sys
+
+    sleeper = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    try:
+        live = root / f"{sleeper.pid}-abcdef"
+        kept = root / f"{_dead_pid()}-fedcba"
+        foreign = root / "not-a-run-dir"
+        for d in (dead, live, kept, foreign):
+            d.mkdir()
+            (d / "f.txt").write_text("x")
+        (kept / fc._KEPT_MARKER).touch()
+        cfg, _ = _configure(monkeypatch, tmp_path)
+        assert not dead.exists()
+        assert live.is_dir() and kept.is_dir() and foreign.is_dir()
+        assert Path(cfg.option.basetemp).parent == root
+    finally:
+        sleeper.kill()
+        sleeper.wait()
+
+
+def test_worker_configure_reaps_nothing(tmp_path, monkeypatch):
+    root = _seed_root(monkeypatch, tmp_path)
+    dead = root / f"{_dead_pid()}-abcdef"
+    dead.mkdir()
+    _configure(monkeypatch, tmp_path, worker=True)
+    assert dead.is_dir()

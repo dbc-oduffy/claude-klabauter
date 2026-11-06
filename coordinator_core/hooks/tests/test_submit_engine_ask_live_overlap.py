@@ -486,3 +486,106 @@ def test_emit_without_a_uuid_session_id_binds_no_override(tmp_path):
     mod._emit_within_budget(emit, {"session_id": "s1"}, tmp_path, 5.0)
     mod._emit_within_budget(emit, {}, tmp_path, 5.0)
     assert seen == [outside, outside]
+
+
+PARENT = "ask-20261105T161243-0e64be"
+
+
+def _idle_staged_parent(root: Path, hours: float) -> None:
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    rd = root / "state" / "warp" / PARENT
+    rd.mkdir(parents=True, exist_ok=True)
+    stamp = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (rd / "run-stage.json").write_text(json.dumps({"stage": "staged", "last_activity_at": stamp}), encoding="utf-8")
+
+
+def _token(monkeypatch, minted_ago_hours: float, launched: bool) -> None:
+    from coordinator_core import warp_live
+
+    record = {
+        "run_id": PARENT, "minted_at": time.time() - minted_ago_hours * 3600,
+        "session_id": "s-owner", "script_path": "/x/run.js",
+    }
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([record]))
+    monkeypatch.setattr(warp_live, "run_ended_on_evidence", lambda root, rec: False)
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda session, minted: False)
+    monkeypatch.setattr(warp_live, "_own_launch_ids", lambda *a, **k: ["task-1"] if launched else [])
+
+
+def test_an_idle_staged_parent_with_a_stale_token_and_no_workflow_allows_the_refire(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    _idle_staged_parent(tmp_path, hours=15)
+    _token(monkeypatch, minted_ago_hours=15, launched=False)
+    _live(tmp_path, {PARENT: {"pkg/mod.py"}})
+    assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {}) is None
+
+
+def test_an_idle_staged_parent_with_a_running_workflow_still_denies(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    _idle_staged_parent(tmp_path, hours=15)
+    _token(monkeypatch, minted_ago_hours=15, launched=True)
+    _live(tmp_path, {PARENT: {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and f"Run {PARENT} is live and writes" in why
+
+
+def test_a_recently_active_staged_parent_with_no_launch_yet_still_denies(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    _idle_staged_parent(tmp_path, hours=0.1)
+    _token(monkeypatch, minted_ago_hours=0.1, launched=False)
+    _live(tmp_path, {PARENT: {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and PARENT in why
+
+
+def _owned_idle_staged_parent(root: Path, hours: float, session: str) -> None:
+    import json
+    from datetime import datetime, timedelta, timezone
+
+    rd = root / "state" / "warp" / PARENT
+    rd.mkdir(parents=True, exist_ok=True)
+    stamp = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    (rd / "run-stage.json").write_text(
+        json.dumps({"stage": "staged", "last_activity_at": stamp, "session_id": session}), encoding="utf-8"
+    )
+
+
+def test_a_dead_owner_idle_staged_run_under_the_stale_bound_with_no_workflow_allows(tmp_path, monkeypatch):
+    from coordinator_core.session import liveness
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(liveness, "session_live", lambda session: False)
+    _owned_idle_staged_parent(tmp_path, hours=5 + 50 / 60, session="dead-session")
+    _token(monkeypatch, minted_ago_hours=6, launched=False)
+    _live(tmp_path, {PARENT: {"pkg/mod.py"}})
+    assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {}) is None
+
+
+def test_a_live_owner_idle_staged_run_under_the_stale_bound_still_denies(tmp_path, monkeypatch):
+    from coordinator_core.session import liveness
+
+    (tmp_path / ".git").mkdir()
+    monkeypatch.setattr(liveness, "session_live", lambda session: True)
+    _owned_idle_staged_parent(tmp_path, hours=5 + 50 / 60, session="live-session")
+    _token(monkeypatch, minted_ago_hours=6, launched=False)
+    _live(tmp_path, {PARENT: {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and PARENT in why
+
+
+def test_a_dead_owner_blocker_with_a_running_workflow_denies_and_names_the_reap_op(tmp_path, monkeypatch):
+    """A dead owner clears only a run showing no workflow; one with a launch still refuses, naming the retiring op."""
+    (tmp_path / ".git").mkdir()
+    _owned_idle_staged_parent(tmp_path, hours=5 + 50 / 60, session="dead-session")
+    _token(monkeypatch, minted_ago_hours=6, launched=True)
+    _live(tmp_path, {PARENT: {"pkg/mod.py"}})
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and "dispatch.reap_abandoned_runs" in why
+
+
+def test_the_dead_owner_idle_bound_equals_the_reapers_quiet_bound():
+    from coordinator_core.ops.dispatch_emit import abandoned_runs
+
+    assert mod._DEAD_OWNER_IDLE_SECONDS == abandoned_runs.TOKENLESS_QUIET_SECONDS

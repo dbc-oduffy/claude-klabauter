@@ -27,9 +27,10 @@ from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.git import call_io_scope
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
-    HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_HELD_ROWS_FIELD, HALT_PLAN_FIELD, RECORD_DIR_ROOT, RUN_DIR_ROOT,
-    record_terminal_judge_at, stamp_run_stage_at,
+    HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_HELD_ROWS_FIELD, HALT_PLAN_FIELD, HALT_RAG_CORPUS_DOWN,
+    RECORD_DIR_ROOT, RUN_DIR_ROOT, record_terminal_judge_at, refire_next_action_for, stamp_run_stage_at,
 )
+from coordinator_core.ops.dispatch_emit.rag_use import RESTORE_MESSAGE
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
 from coordinator_core.ops.dispatch_emit.halt_refire import is_exit_next_action, is_refire_next_action
 from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
@@ -128,11 +129,12 @@ def _write(record_dir: Path, payload: dict) -> Path:
 #: atomic create or unlink, so peers never lose each other's update. The index answers "does any run hold this
 #: sizing?" and which `ask-*` runs to read; supersession by a newer run is still decided from the run dir names.
 LOOKUP_INDEX_DIR = ".coordinator-local/halted-run-lookup"
-LOOKUP_SENTINEL = ".built-v1"
+LOOKUP_SENTINEL = ".built-v2"
 
 
 def _lookup_key(sizing_rel: str) -> str:
-    return hashlib.sha1(_norm(sizing_rel).encode("utf-8")).hexdigest()[:16]
+    """Keyed on the sizing's stem, so a sizing that moved between `state/sizings/` and its month subdir keeps its runs."""
+    return hashlib.sha1(PurePosixPath(_norm(sizing_rel)).stem.encode("utf-8")).hexdigest()[:16]
 
 
 def _root_of(record_dir: Path) -> Optional[Path]:
@@ -260,7 +262,12 @@ def write_halt_marker(
         payload[HALT_HELD_ROWS_FIELD] = list(held_rows)
     if reason:
         payload[HALT_REASON_FIELD] = reason
-    if next_action is not None and (is_refire_next_action(next_action) or is_exit_next_action(next_action)):
+    accepted = next_action is not None and (is_refire_next_action(next_action) or is_exit_next_action(next_action))
+    if not accepted and halted == HALT_RAG_CORPUS_DOWN and sizing_rel:
+        next_action, accepted = refire_next_action_for(
+            halted, run_id=Path(record_dir).name, sizing_rel=_norm(sizing_rel), detail=RESTORE_MESSAGE
+        ), True
+    if accepted:
         payload[HALT_NEXT_ACTION_FIELD] = next_action
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
@@ -485,9 +492,14 @@ def halted_run_for(repo_root: Path, sizing_rel: str) -> Optional[str]:
             skipped += 1
             continue
         marker = _read(root / name)
-        if marker is None or marker.get("sizing_rel") != norm:
+        bound = marker.get("sizing_rel") if marker else None
+        if not isinstance(bound, str) or PurePosixPath(_norm(bound)).stem != PurePosixPath(norm).stem:
             return None
         status = marker.get("status")
+        if bound != norm and status in (STATUS_HALTED, STATUS_RESUMED):
+            marker = {**marker, "sizing_rel": norm}
+            _write(root / name, marker)
+            _index_call("add_run", root / name, halted_withheld(root / name), sizing_rel=norm)
         if status == STATUS_HALTED:
             return name
         if status == STATUS_RESUMED and skipped:

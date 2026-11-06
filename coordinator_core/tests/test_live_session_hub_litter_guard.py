@@ -123,6 +123,46 @@ def test_an_unusable_stamp_fails_closed(tmp_path, monkeypatch, meta_body):
             pass
 
 
+class _FakeRequest:
+    def __init__(self, nodeid):
+        self.node = type("N", (), {"nodeid": nodeid})()
+
+
+def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path, monkeypatch):
+    hub = tmp_path / "coordinator-sessions"
+    (hub / "test-c8-litter").mkdir(parents=True)
+    monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
+    monkeypatch.setattr(cc_conftest, "_hub_entry_writers", {})
+    monkeypatch.setattr(cc_conftest, "_hub_written", set())
+
+    with pytest.raises(pytest.fail.Exception) as excinfo:
+        with cc_conftest._watch_preexisting_hub_litter(str(hub)):
+            writer = cc_conftest._no_writes_into_live_hub_entries.__wrapped__(
+                _FakeRequest("tests/test_writer.py::test_the_writer")
+            )
+            next(writer)
+            (hub / "test-c8-litter" / "em-turns.json").write_text("{}", encoding="utf-8")
+            with pytest.raises(AssertionError, match="test-c8-litter"):
+                next(writer)
+            # A later, innocent test is tearing down when the session guard fires.
+            cc_conftest._record_hub_entry_writers([], "tests/test_later.py::test_innocent")
+
+    message = str(excinfo.value)
+    assert "test-c8-litter <- tests/test_writer.py::test_the_writer" in message
+    assert "test_innocent" not in message
+
+
+def test_append_guard_says_so_when_no_writer_was_captured(tmp_path, monkeypatch):
+    hub = tmp_path / "coordinator-sessions"
+    (hub / "test-c8-litter").mkdir(parents=True)
+    monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
+    monkeypatch.setattr(cc_conftest, "_hub_entry_writers", {})
+
+    with pytest.raises(pytest.fail.Exception, match="writer not captured"):
+        with cc_conftest._watch_preexisting_hub_litter(str(hub)):
+            (hub / "test-c8-litter" / "x.json").write_text("{}", encoding="utf-8")
+
+
 def test_no_claude_pid_in_our_env_fails_closed(tmp_path, monkeypatch):
     """Without our own `CLAUDE_PID` there is nothing to compare against, so the
     guard must behave exactly as it did before this exemption existed rather

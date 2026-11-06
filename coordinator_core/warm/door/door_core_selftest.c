@@ -438,6 +438,25 @@ int main(int argc, char **argv) {
     }
 #endif
 
+    {
+        buf_t fa;
+        if (!buf_init(&fa, 512)) { printf("FAIL buf_init\n"); return 1; }
+        check_int("engine_failure_allow/build",
+                  build_hook_engine_failure_allow_envelope(&fa, "worker_died \"x\"", "PreToolUse"), 1);
+        buf_append(&fa, "", 1);
+        long nl = 0;
+        for (size_t i = 0; i + 1 < fa.len; i++) if (fa.data[i] == '\n') nl++;
+        check_int("engine_failure_allow/one_newline", nl, 1);
+        check_int("engine_failure_allow/trailing_newline", fa.data[fa.len - 2] == '\n', 1);
+        check_int("engine_failure_allow/no_permission_decision",
+                  strstr(fa.data, "permissionDecision") == NULL, 1);
+        check_int("engine_failure_allow/names_detail",
+                  strstr(fa.data, "engine failed (worker_died \\\"x\\\"); guard not evaluated, command allowed.") != NULL, 1);
+        check_int("engine_failure_allow/additional_context",
+                  strstr(fa.data, "\"additionalContext\":\"coordinator: engine failed") != NULL, 1);
+        free(fa.data);
+    }
+
     printf("%s: %d checks, %d failures\n",
            failures == 0 ? "PASS" : "FAIL", checks, failures);
     return failures == 0 ? 0 : 1;

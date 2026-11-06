@@ -140,6 +140,14 @@ def run_write_set(root: Path, run_id: str, own_session: str) -> tuple:
 def run_write_set_split(root: Path, run_id: str, own_session: str) -> tuple:
     """`(kept, held)`: `run_write_set`'s tuple plus `{path: [peer session ids]}` for each path the
     filter dropped as peer-held, in write-set order. `((), {})` when the record is unreadable."""
+    ordered, held = run_write_set_full(root, run_id, own_session)
+    return tuple(p for p in ordered if p not in held), held
+
+
+def run_write_set_full(root: Path, run_id: str, own_session: str) -> tuple:
+    """`(ordered, held)`: the run's whole write set in first-seen order, peer-held paths included,
+    plus `{path: [peer session ids]}` for those a live peer holds. A read-only consumer (review prep)
+    keeps every path and names the held ones. `((), {})` when the record is unreadable."""
     from coordinator_core.ops.dispatch_emit import run_withhold
     from coordinator_core.ops.dispatch_emit.halted_run import halted_withheld
 
@@ -162,7 +170,8 @@ def run_write_set_split(root: Path, run_id: str, own_session: str) -> tuple:
         n = _norm(p)
         if n and n != "." and not n.startswith(_SCRATCH_PREFIX):
             seen.setdefault(n, None)
-    return _split_peer_held(root, list(seen), own_session, run_id)
+    ordered = list(seen)
+    return tuple(ordered), _split_peer_held(root, ordered, own_session, run_id)[1]
 
 
 def unclaimed_dirty(root: Path, paths: Iterable[str], own_session: str, run_id: str = "") -> tuple:

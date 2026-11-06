@@ -145,3 +145,68 @@ def test_em_size_routes_a_roadmap_sizing_into_the_body_that_carries_it(monkeypat
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "roadmap")
     script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_size="M", roadmap_blitz_text=_RB)
     assert 'em_size: "M"' in script and "phase('roadmap-blitz')" in script
+
+
+_CTX = "pinned citation form [rag:tool(args)] " * 4
+_SID = "sid-arrival-check"
+
+
+@pytest.fixture
+def raw_ask_repo(tmp_path, monkeypatch):
+    from coordinator_core.ops import baton_pm_turns as PT
+    from coordinator_core.session_baton import store
+
+    root = tmp_path / "repo"
+    (root / ".git" / "objects").mkdir(parents=True)
+    (root / ".git" / "refs").mkdir()
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (tmp_path / "hub" / _SID).mkdir(parents=True)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
+    assert PT.append_turn("split these two jobs please", session_id=_SID)["ok"]
+    monkeypatch.chdir(root)
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
+    monkeypatch.delenv("DELIVERABLE_ID", raising=False)
+    monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n")
+    return root
+
+
+def _emit(root, **over):
+    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+
+    params = {"ask": "build it", "ask_source": "relayed", "target_root": root.as_posix(), "session_id": _SID, **over}
+    return _dispatch_emit(params, repo_root=root)
+
+
+def test_a_digest_with_no_loaded_brief_refuses_naming_the_missing_em_context(raw_ask_repo):
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+    from coordinator_core.ops.sizing_intake_contract import em_context_digest
+
+    with pytest.raises(SizingFireRefused, match="em_context .* did not arrive"):
+        _emit(raw_ask_repo, em_context_digest=em_context_digest(_CTX))
+
+
+def test_a_digest_beside_a_brief_without_the_matching_block_refuses(raw_ask_repo):
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+    from coordinator_core.ops.sizing_intake_contract import em_context_digest, with_em_context
+
+    with pytest.raises(SizingFireRefused, match="did not arrive"):
+        _emit(raw_ask_repo, ask_brief=with_em_context(None, _CTX + "x"), em_context_digest=em_context_digest(_CTX))
+
+
+@pytest.mark.parametrize("via_file", [False, True])
+def test_a_matching_digest_proceeds_inline_or_from_a_spilled_file(raw_ask_repo, via_file):
+    from coordinator_core.ops.sizing_intake_contract import em_context_digest, with_em_context
+
+    brief = with_em_context("prose first", _CTX)
+    if via_file:
+        (raw_ask_repo / "scratch").mkdir()
+        (raw_ask_repo / "scratch" / "b.md").write_text(brief, encoding="utf-8")
+        brief_params = {"ask_brief_file": "scratch/b.md"}
+    else:
+        brief_params = {"ask_brief": brief}
+    result = _emit(raw_ask_repo, em_context_digest=em_context_digest(_CTX), **brief_params)
+    assert "path" in result, result
+
+
+def test_a_run_with_no_digest_is_unchecked(raw_ask_repo):
+    assert "path" in _emit(raw_ask_repo)

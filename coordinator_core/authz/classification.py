@@ -2555,6 +2555,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.run_terminality": OpClass.COMPUTE_ONLY,
+    # dispatch.docs_check_rag_gate — COMPUTE_ONLY: reads the run's agent transcripts and returns a verdict;
+    # writes no file and spawns no process (ops/dispatch_emit/docs_check_gate_op.py).
+    # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.docs_check_rag_gate": OpClass.COMPUTE_ONLY,
     # dispatch.land_combined_index — MUTATING: writes tree and commit objects, advances HEAD, and records
     # fully-landed halted runs (ops/dispatch_emit/combined_landing.py).
     # DR-208 five-question affirmation: 1 YES (git objects, HEAD ref, run markers); 2 No; 3 YES;

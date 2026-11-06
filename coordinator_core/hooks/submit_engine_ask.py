@@ -76,7 +76,12 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
     resolve_after,
     unknown_keys_refusal,
 )
-from coordinator_core.ops.sizing_intake_contract import is_path_shaped, with_em_context
+from coordinator_core.ops.sizing_intake_contract import (
+    EM_CONTEXT_DIGEST_PARAM,
+    em_context_digest,
+    is_path_shaped,
+    with_em_context,
+)
 from coordinator_core.warp_fire import SUBMIT_WORKFLOW_NAME, is_submit_name
 
 # Every `args` key this hook reads; a key outside it is refused by name. A key read below must be added here.
@@ -248,14 +253,16 @@ def _brief_params(tool_input: Mapping[str, Any]) -> tuple[dict, Optional[str]]:
     em_context = args.get("em_context")
     if em_context is not None and not isinstance(em_context, str):
         return {}, "em_context must be a string."
-    if isinstance(em_context, str) and em_context.strip():
-        params["ask_brief"] = with_em_context(params.get("ask_brief"), em_context)
     context = args.get("context")
     if context is not None:
         items, bad = _context_items(context, "context")
         if bad:
             return {}, bad
         _add_context(params, items)
+    if isinstance(em_context, str) and em_context.strip():
+        # Trap: the EM block stays last in `ask_brief`, so the text after its marker is exactly what the digest names.
+        params["ask_brief"] = with_em_context(params.get("ask_brief"), em_context)
+        params[EM_CONTEXT_DIGEST_PARAM] = em_context_digest(em_context)
     return params, None
 
 
@@ -1826,6 +1833,52 @@ def _staged_without_workflow(root: Path, run_id: str) -> bool:
     return not any(record.get("run_id") == run_id for record in warp_live._token_records(root))
 
 
+_STALE_STAGED_SECONDS = 6 * 3600
+# Must equal ops.dispatch_emit.abandoned_runs.TOKENLESS_QUIET_SECONDS (copied, not imported: hook import cost); a drift lets this gate clear a run the reaper still keeps.
+_DEAD_OWNER_IDLE_SECONDS = 3600
+
+
+def _staged_idle_seconds(root: Path, run_id: str) -> Optional[float]:
+    """Seconds since a `staged` run's `run-stage.json` `last_activity_at`; None when the stage is not
+    `staged` or the stamp is absent or unparseable."""
+    import json
+    import time
+
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
+    from coordinator_core.ops.dispatch_emit.halted_hunk_attribution import _iso_epoch
+
+    if not safe_id(run_id):
+        return None
+    try:
+        stage = json.loads((root / RECORD_DIR_ROOT / run_id / RUN_STAGE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(stage, dict) or stage.get("stage") != "staged":
+        return None
+    epoch = _iso_epoch(stage.get("last_activity_at"))
+    return None if epoch is None else time.time() - epoch
+
+
+def _stale_token_without_workflow(root: Path, run_id: str) -> bool:
+    """True when `run_id` sits at run-stage `staged` idle past `_STALE_STAGED_SECONDS` and its live token
+    record joins no launch (`warp_live` records-only read): no workflow runs it, so the token holds no claim.
+    Reads records only, never a transcript; a run with launch ids reads live."""
+    idle = _staged_idle_seconds(root, run_id)
+    if idle is None or idle <= _DEAD_OWNER_IDLE_SECONDS:
+        return False
+    if idle <= _STALE_STAGED_SECONDS and _orphan_verdict(root, run_id).get("orphaned") is not True:
+        return False
+    from coordinator_core import warp_live
+
+    for record in warp_live._token_records(root):
+        if record.get("run_id") == run_id:
+            return not warp_live._record_live(
+                root, record, None, None, warp_live._launch_dirs(None), records_only=True
+            )
+    return False
+
+
 def _sibling_record_run_stopped(root: Path, run_id: str, deliverable_id: str) -> bool:
     """True when `run_id` stopped between stages (run-stage `staged`) bound to another sizing record of
     `deliverable_id`: a refire citing a different record of the deliverable resumes that run's footprint.
@@ -1883,7 +1936,10 @@ def _stale_blocker_remedy(root: Path, run_id: str) -> str:
 
     verdict = _orphan_verdict(root, run_id)
     if verdict.get("orphaned") is True and verdict.get("recorded_session"):
-        return f" Its owner session is gone; `{adopt_call(run_id, root)}` takes it over or closes it."
+        return (
+            f" Its owner session is gone; `{adopt_call(run_id, root)}` takes it over or closes it,"
+            " and `dispatch.reap_abandoned_runs` retires it once abandoned."
+        )
     return ""
 
 
@@ -1934,6 +1990,7 @@ def _live_write_overlap_deny(
             return bool(
                 _halt_marker_ended(root, rid) or _stage_halted(root, rid) or _status_of(root, rid) in ("halted", "landed")
                 or _ended_on_evidence(root, rid) or _staged_without_workflow(root, rid)
+                or _stale_token_without_workflow(root, rid)
                 or (isinstance(deliverable, str) and _sibling_record_run_stopped(root, rid, deliverable))
             )
 
@@ -2898,7 +2955,7 @@ def _evaluate(
         return _refuse(brief_refusal)
     if isinstance(item_em_context, str) and item_em_context.strip():
         brief["ask_brief"] = with_em_context(brief.get("ask_brief"), item_em_context)
-    _add_context(brief, item_context)
+        brief[EM_CONTEXT_DIGEST_PARAM] = em_context_digest(item_em_context)
     if asks is not None:
         if "ask_brief" in brief or "ask_brief_file" in brief:
             return _refuse("A brief rides one run, not a set of sibling runs. Put each run's directives in its ask text.")
@@ -2913,6 +2970,7 @@ def _evaluate(
         names_all = all(isinstance(s, str) and Path(s.strip()).is_absolute() for s in entry_strings)
     else:
         names_all = False
+    _add_context(brief, item_context)
     disagree = None if ((repo_arg and Path(repo_arg).is_absolute()) or names_all) else _anchor_disagreement(payload)
     if disagree:
         return _refuse(

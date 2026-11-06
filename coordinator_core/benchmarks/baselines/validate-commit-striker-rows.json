@@ -1,0 +1,67 @@
+{
+  "schema": "validate-commit-machine-a-rows/v1",
+  "replay": "coordinator_core/benchmarks/validate_commit_machine_a_replay.py",
+  "bar_ms": 500,
+  "baseline_ref": "64c538dd60",
+  "baseline_note": "Measured with the checkout at 8fd1f13557; git diff 64c538dd60 8fd1f13557 is empty for coordinator_core/bash_guards, coordinator_core/git and hooks/preuse_bash_dispatch.py, so the guard code is the base's. Unit: leg thread CPU of the validate-commit leg (leg_attribution), warm second call; spawns are git Popen constructions inside that leg. Never wall clock (DR-344).",
+  "harvest": {
+    "stall_dumps_dir": "<svc_dir>/stall-dumps (this box: ~/.cache/coordinator/warm/6b3d2ca9081f2342/stall-dumps)",
+    "records_read": 13,
+    "records_with_validate_commit_leg": 0,
+    "result": "None of the 13 records (20261105T203621Z .. 20261106T125401Z) carries a validate-commit leg: their legs-ms headers name consolidate_assemble, merge_assemble, orphan_branch_sweep, stage_dirt_snapshot and git_index._parse_index_bytes. The 08:34:26Z door miss has no stall dump on disk (the nearest, 20261106T083119Z, is a consolidate_assemble wait). Its 3178ms validate-commit figure is the op-latency leg row quoted in docs/research/warm-engine-saturation-research-c9a9b1-0f1b16/.../synthesis.md (L2: 3178ms thread CPU on one call, 22 slow calls), not a dump.",
+    "machine_a_group_em_70": "r60: 16 slow validate-commit calls, 156594ms thread total, 11891ms max (mean ~9787ms). r15: 12 calls, 118281ms (mean ~9857ms). Source: same synthesis.md, Machine-a script rows. The report gives NO command form, staged width, dirty-tree size, tracked-file count, history depth or rename/deletion mix."
+  },
+  "rows": [
+    {
+      "id": "local-pathspec-narrow",
+      "command_form": "pathspec",
+      "shape": {"staged_modified": 5},
+      "shape_source": "this repo (claude-klabauter) as the Mac door-miss repo: the clone keeps its own ~88k-path index and full history (58692 commits; history depth is not varied)",
+      "unknown_fields": ["command_form of the 08:34:26Z call", "staged width of the 08:34:26Z call", "dirty-tree size", "rename/deletion mix"],
+      "baseline": {"validate_commit_process_ms": 434.0, "validate_commit_cold_process_ms": 434.5, "validate_commit_spawns": 0, "total_process_ms": 461.5}
+    },
+    {
+      "id": "local-bare-mixed-wide",
+      "command_form": "bare",
+      "shape": {"staged_modified": 40, "staged_added": 10, "staged_deleted": 5, "staged_renamed": 5, "dirty_modified": 20, "untracked": 20},
+      "shape_source": "this repo's own index; the staged mix is a width/rename/deletion probe, not a recorded call (an A plus D pair defeats the rename-free fast path and costs one git spawn)",
+      "unknown_fields": ["whether any recorded call had this mix"],
+      "baseline": {"validate_commit_process_ms": 321.5, "validate_commit_cold_process_ms": 321.5, "validate_commit_spawns": 1, "total_process_ms": 365.4}
+    },
+    {
+      "id": "scale-500k-pathspec",
+      "command_form": "pathspec",
+      "shape": {"tracked_files": 500000, "staged_modified": 5},
+      "shape_source": "DERIVED, not recorded: the machine-a's tracked-path count is unknown. Cost on this box is linear in index size (100k: 470ms, 250k: 978ms, 500k: 2087ms warm), so a mean of ~9.8s implies an index several times larger than any row here; 500k is the smallest pinned size that is already over the bar.",
+      "unknown_fields": ["tracked-path count of the machine-a repos (derived, not read)", "command_form", "staged width", "dirty-tree size", "history depth"],
+      "baseline": {"validate_commit_process_ms": 2096.7, "validate_commit_cold_process_ms": 2163.7, "validate_commit_spawns": 0, "total_process_ms": 2123.1}
+    },
+    {
+      "id": "scale-750k-bare-mixed",
+      "command_form": "bare",
+      "shape": {"tracked_files": 750000, "staged_modified": 40, "staged_added": 10, "staged_deleted": 5, "staged_renamed": 5, "dirty_modified": 20, "untracked": 20},
+      "shape_source": "DERIVED, as scale-500k-pathspec, widest staged mix. 1,000,000 tracked paths was tried and rejected: the instrumented call spent the 4.0s git-probe budget and the guard fell back to its fail-open defaults, so the row stopped measuring one code path.",
+      "unknown_fields": ["tracked-path count of the machine-a repos (derived, not read)", "command_form", "history depth"],
+      "baseline": {"validate_commit_process_ms": 2022.9, "validate_commit_cold_process_ms": 1921.7, "validate_commit_spawns": 1, "total_process_ms": 2134.4}
+    }
+  ],
+  "base_measurement": {
+    "falsifier_bites": true,
+    "rows_over_bar": ["scale-500k-pathspec", "scale-750k-bare-mixed"],
+    "rows_under_bar": ["local-pathspec-narrow", "local-bare-mixed-wide"],
+    "spawns_flat": false,
+    "spawns_by_row": {"local-pathspec-narrow": 0, "local-bare-mixed-wide": 1, "scale-500k-pathspec": 0, "scale-750k-bare-mixed": 1},
+    "live_tree_control": "The same pathspec commit measured against the live checkout (not a clone) cost 203ms leg CPU, 0 spawns: the sparse shared clone costs about twice the live tree (434ms), so the local rows are an upper bound for this repo.",
+    "not_reproduced": "The Mac 08:34:26Z 3178ms is NOT reproduced at this repo's own index size (321-434ms). It is reproduced in order of magnitude only by inflating the index; the pinned rows establish the mechanism and its scaling, not the machine-a's repo."
+  },
+  "attribution": {
+    "method": "time.process_time brackets around every function of the guard modules and coordinator_core.git, plus a line tracer on check_validate_commit's own frame charged to the nearest preceding '# Check N' banner (replay's monkeypatch layer; no cProfile). Third, instrumented call per row: inflated, read as shares.",
+    "dominant_cost": "In-process Python, no git spawn: coordinator_core/git/git_state.py::_parse_index_bytes (full index parse, read_index(fresh=True)) called 3x per guard call, plus _git_tree_facts.py::_nest_index and ::_tree_sha (whole-index tree hashing) inside _compute_staged_name_status, which runs 2x per guard call. At 500k paths: _parse_index_bytes 1891ms of 2097ms (90%), _nest_index 386ms, _tree_sha exclusive ~600ms, _compute_staged_name_status 1999ms inclusive.",
+    "by_check_500k_pathspec_ms": {"prelude (staged rows, before Check 1)": 1891, "Check 13 (commit_tripwires.check_staged_pathspec_divergence, re-reads the index)": 1174, "Checks 9-11 (commit_tripwires.check_schema_version_bump, reads the plugin repo's index)": 158},
+    "note_overlap": "Check 13 re-derives staged rows via _git_tree_facts after the prelude; the per-region figures are inclusive of callees and the regions overlap in function terms (prelude and Check 13 both land in _compute_staged_name_status).",
+    "constant_cost": "Checks 9-11 cost ~150-165ms on every row independent of the commit repo's size: check_schema_version_bump parses the settings-home plugin repo's index (a second repo).",
+    "git_tripwire_unbudgeted": "commit_tripwires._run_git calls git.run.run_git outside the 4.0s probe deadline (plan AP1/AP2); this replay saw 0-1 git spawns in the leg, so the unbudgeted spawns are not the cost on these rows.",
+    "spawns": "0 on the rename-free staged shapes, 1 when an A and a D coexist (fallback `git diff --cached --name-status -M`): the spawn count is shape-dependent at base."
+  },
+  "premise_verdict": "yes: rows built from the machine-a's only recorded property (a mean ~9.8s guard-body CPU, not a queue) reproduce a validate-commit leg over 500ms (2.0-2.1s) and attribute it to in-process index parse and tree hashing that scale with tracked-path count; the machine-a's real tracked-path count is unknown and the 3178ms Mac figure is not reproduced at this repo's size."
+}

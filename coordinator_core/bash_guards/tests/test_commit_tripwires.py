@@ -1201,3 +1201,95 @@ class TestProbesServedInProcess:
         assert "VIOLATION" in commit_tripwires.check_schema_version_bump()
         assert commit_tripwires.check_bin_sh_polyglot() is None
         assert commit_tripwires.check_registration_quad_completeness(root) is None
+
+
+class TestDivergenceOnOversizedIndex:
+    """Over the in-process index bound Check 13 never parses the index: same verdict, scoped git reads."""
+
+    @staticmethod
+    def _seed(tmp_path):
+        root = _init_repo(tmp_path)
+        (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        _git(root, "commit", "-q", "-m", "seed")
+        (tmp_path / "shared.txt").write_text("line1\nMINE\n", encoding="utf-8")
+        _git(root, "add", "shared.txt")
+        return root
+
+    @staticmethod
+    def _forbid_parse(monkeypatch):
+        from coordinator_core.git import git_state
+
+        def _boom(*a, **k):
+            raise AssertionError("index parsed in-process")
+
+        monkeypatch.setattr(git_state, "read_index", _boom)
+        monkeypatch.setattr(commit_tripwires, "_diverging_paths", _boom)
+
+    def test_diverged_and_clean_verdicts_match(self, tmp_path, monkeypatch):
+        from coordinator_core.bash_guards import _git_tree_facts
+
+        root = self._seed(tmp_path)
+        cmd = 'git commit -m "t" -- shared.txt'
+        (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
+        expected = commit_tripwires.check_staged_pathspec_divergence(cmd, root)
+        assert expected is not None and expected.startswith("OFFER:")
+        _git_tree_facts.reset()
+        monkeypatch.setattr(_git_tree_facts, "INPROCESS_INDEX_BYTES_MAX", 0)
+        self._forbid_parse(monkeypatch)
+        assert commit_tripwires.check_staged_pathspec_divergence(cmd, root) == expected
+        (tmp_path / "shared.txt").write_text("line1\nMINE\n", encoding="utf-8")
+        _git_tree_facts.reset()
+        assert commit_tripwires.check_staged_pathspec_divergence(cmd, root) is None
+
+    def test_spent_budget_says_indeterminate_not_silent(self, tmp_path, monkeypatch):
+        from coordinator_core.bash_guards import _dc_git_probe, _git_tree_facts
+
+        root = self._seed(tmp_path)
+        (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
+        monkeypatch.setattr(_git_tree_facts, "INPROCESS_INDEX_BYTES_MAX", 0)
+        monkeypatch.setattr(_dc_git_probe, "_git_probe_budget_spent", lambda: True)
+        self._forbid_parse(monkeypatch)
+        result = commit_tripwires.check_staged_pathspec_divergence(
+            'git commit -m "t" -- shared.txt', root
+        )
+        assert result is not None and "shared.txt" in result
+
+
+class TestRunGitHonoursDispatchDeadline:
+    """`_run_git` declines unspawned once the armed probe budget is spent, and still spawns before."""
+
+    def test_spent_budget_declines_with_spent_rc(self, tmp_path, monkeypatch):
+        from coordinator_core.bash_guards import _dc_git_probe
+
+        root = _init_repo(tmp_path)
+
+        def _boom(*a, **kw):
+            raise AssertionError("git spawned past the spent budget")
+
+        monkeypatch.setattr(commit_tripwires, "run_git", _boom)
+        monkeypatch.setattr(_dc_git_probe, "_git_probe_budget_spent", lambda: True)
+        _dc_git_probe._git_probe_last_failure.set(None)
+        assert commit_tripwires._run_git(["rev-parse", "HEAD"], cwd=root) == (
+            _dc_git_probe._GIT_PROBE_BUDGET_SPENT_RC, "",
+        )
+        assert _dc_git_probe._git_probe_last_failure.get()
+
+    def test_unspent_budget_still_runs_through_the_shared_runner(self, tmp_path, monkeypatch):
+        from coordinator_core.bash_guards import _dc_git_probe
+
+        root = _init_repo(tmp_path)
+        seen = []
+        real = commit_tripwires.run_git
+        monkeypatch.setattr(commit_tripwires, "run_git", lambda *a, **k: seen.append(a) or real(*a, **k))
+        monkeypatch.setattr(_dc_git_probe, "_git_probe_budget_spent", lambda: False)
+        rc, out = commit_tripwires._run_git(["rev-parse", "--show-toplevel"], cwd=root)
+        assert rc == 0 and out.strip() and len(seen) == 1
+
+    def test_spent_budget_means_callers_fail_open(self, tmp_path, monkeypatch):
+        from coordinator_core.bash_guards import _dc_git_probe
+
+        root = _init_repo(tmp_path)
+        monkeypatch.setattr(_dc_git_probe, "_git_probe_budget_spent", lambda: True)
+        monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
+        assert commit_tripwires._read_settings_content("nonexistent/settings.json", root) is None

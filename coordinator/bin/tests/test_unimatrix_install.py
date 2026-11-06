@@ -29,6 +29,8 @@ def _engine(monkeypatch, tmp_path):
 @pytest.fixture(autouse=True)
 def _no_real_scheduler(monkeypatch):
     monkeypatch.setattr(ui, "run_schtasks", lambda *a: None)
+    fake = _FakeWinreg()
+    monkeypatch.setattr(ui, "_winreg", lambda: fake)
 
 
 def _run(argv, text, dest=None, hooks=None):
@@ -954,35 +956,98 @@ def test_linux_login_agent_is_a_oneshot_user_unit_enabled_by_symlink(monkeypatch
     assert not (units / ui.LOGIN_UNIT).exists() and not link.is_symlink()
 
 
-def test_windows_login_agent_is_one_onlogon_task_overwritten_in_place(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, "platform", "win32")
-    run, calls = _scheduler()
-    assert ui.register_login_agent(tmp_path / "u", schtasks=run)[0] == "registered"
-    assert ui.register_login_agent(tmp_path / "u", schtasks=run)[0] == "registered"
-    argv = calls[0]
-    assert argv[:2] == ("/Create", "/TN") and argv[2] == ui.LOGIN_TASK_NAME and argv[-1] == "/F"
-    assert argv[argv.index("/SC") + 1] == "ONLOGON"
-    assert not {"/MO", "/RI", "/DU", "MINUTE"} & set(argv)
-    tr = argv[argv.index("/TR") + 1]
-    assert ui.AUTOLINK_SCRIPT in tr and sys.executable in tr
-    assert calls[0] == calls[1]
+class _FakeKey:
+    def __init__(self, values):
+        self.values = values
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
 
 
-def test_windows_login_agent_uninstall_deletes_task_and_tolerates_absence(monkeypatch):
+class _FakeWinreg:
+    """In-memory winreg: HKCU Run values only."""
+
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_SET_VALUE = 2
+    REG_SZ = 1
+
+    def __init__(self, fail=False):
+        self.values, self.fail, self.opened = {}, fail, []
+
+    def CreateKeyEx(self, root, sub, reserved, access):
+        if self.fail:
+            raise PermissionError("denied")
+        self.opened.append((root, sub))
+        return _FakeKey(self.values)
+
+    def OpenKey(self, root, sub, reserved, access):
+        self.opened.append((root, sub))
+        return _FakeKey(self.values)
+
+    def SetValueEx(self, key, name, reserved, kind, data):
+        assert kind == self.REG_SZ
+        key.values[name] = data
+
+    def DeleteValue(self, key, name):
+        if name not in key.values:
+            raise FileNotFoundError(name)
+        del key.values[name]
+
+
+@pytest.fixture
+def winreg_fake(monkeypatch):
+    fake = _FakeWinreg()
+    monkeypatch.setattr(ui, "_winreg", lambda: fake)
     monkeypatch.setattr(sys, "platform", "win32")
+    return fake
+
+
+def test_windows_login_agent_is_an_hkcu_run_value_overwritten_in_place(winreg_fake, tmp_path):
+    run, calls = _scheduler(task_exists=False)
+    assert ui.register_login_agent(tmp_path / "u", schtasks=run)[0] == "registered"
+    assert ui.register_login_agent(tmp_path / "u", schtasks=run)[0] == "registered"
+    assert winreg_fake.opened[0] == ("HKCU", ui.RUN_KEY)
+    assert list(winreg_fake.values) == [ui.LOGIN_TASK_NAME]
+    cmd = winreg_fake.values[ui.LOGIN_TASK_NAME]
+    assert ui.AUTOLINK_SCRIPT in cmd and str(tmp_path / "u") in cmd
+    assert not any(c[0] == "/Create" for c in calls)
+
+
+def test_windows_run_command_prefers_pythonw_beside_the_interpreter(monkeypatch, tmp_path):
+    (tmp_path / "python.exe").write_text("", encoding="utf-8")
+    (tmp_path / "pythonw.exe").write_text("", encoding="utf-8")
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "python.exe"))
+    cmd = ui._windows_run_command(tmp_path / "u")
+    assert "pythonw.exe" in cmd and ui.AUTOLINK_SCRIPT in cmd
+    (tmp_path / "pythonw.exe").unlink()
+    assert "pythonw.exe" not in ui._windows_run_command(tmp_path / "u")
+
+
+def test_windows_registration_migrates_an_existing_scheduled_task(winreg_fake, tmp_path):
     run, calls = _scheduler(task_exists=True)
-    assert ui.unregister_login_agent(schtasks=run) == "removed"
+    assert ui.register_login_agent(tmp_path / "u", schtasks=run)[0] == "registered"
     assert calls[-1] == ("/Delete", "/TN", ui.LOGIN_TASK_NAME, "/F")
+    assert ui.LOGIN_TASK_NAME in winreg_fake.values
+
+
+def test_windows_login_agent_uninstall_deletes_value_and_task_and_tolerates_absence(winreg_fake, tmp_path):
+    run, calls = _scheduler(task_exists=True)
+    ui.register_login_agent(tmp_path, schtasks=_scheduler(task_exists=False)[0])
+    assert ui.unregister_login_agent(schtasks=run) == "removed"
+    assert winreg_fake.values == {} and calls[-1] == ("/Delete", "/TN", ui.LOGIN_TASK_NAME, "/F")
     run, calls = _scheduler(task_exists=False)
     assert ui.unregister_login_agent(schtasks=run) == "absent"
-    assert all(c[0] == "/Query" for c in calls)
+    ui.register_login_agent(tmp_path, schtasks=run)
+    assert ui.unregister_login_agent(schtasks=run) == "removed" and winreg_fake.values == {}
 
 
-def test_windows_schtasks_failure_is_a_skip_not_an_error(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, "platform", "win32")
-    state, _ = ui.register_login_agent(tmp_path, schtasks=lambda *a: _Proc(1))
-    assert state == "skipped"
-    assert ui.register_login_agent(tmp_path, schtasks=lambda *a: None)[0] == "skipped"
+def test_windows_registry_failure_is_a_skip_not_an_error(winreg_fake, tmp_path):
+    winreg_fake.fail = True
+    state, where = ui.register_login_agent(tmp_path, schtasks=_scheduler(task_exists=False)[0])
+    assert state == "skipped" and "HKCU Run" in where and winreg_fake.values == {}
 
 
 def test_main_install_registers_one_login_agent_and_uninstall_removes_it(monkeypatch, tmp_path):
@@ -1006,15 +1071,15 @@ def test_main_default_install_writes_the_agent_under_home_and_never_the_real_one
     assert rc == 0 and (home / "Library" / "LaunchAgents" / f"{ui.LOGIN_AGENT_LABEL}.plist").is_file()
 
 
-def test_main_windows_install_uses_the_injected_scheduler(monkeypatch, tmp_path):
-    monkeypatch.setattr(sys, "platform", "win32")
+def test_main_windows_install_registers_the_run_value_and_migrates_the_task(winreg_fake, monkeypatch, tmp_path):
     _stub_src(monkeypatch, tmp_path)
     _home(monkeypatch, tmp_path)
     run, calls = _scheduler()
     buf = io.StringIO()
     rc = ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf,
                  hooks_path=tmp_path / "g" / "hooks.json", schtasks=run)
-    assert rc == 0 and "login agent registered" in buf.getvalue() and calls[0][0] == "/Create"
+    assert rc == 0 and "login agent registered" in buf.getvalue() and calls[0][0] == "/Query"
+    assert ui.LOGIN_TASK_NAME in winreg_fake.values
 
 
 class _PairBox:
@@ -1211,3 +1276,56 @@ def test_pair_windows_admin_far_box_is_not_written(monkeypatch, tmp_path):
     assert status == "admin" and seen and "C:\\Python312\\python.exe" in line
     buf = io.StringIO()
     assert ui.main(["--pair", "x"], out=buf, pair_run=run) == 0 and "administrators_authorized_keys" in buf.getvalue()
+
+
+def _engine_tree_and_plugin(monkeypatch, tmp_path):
+    engine = tmp_path / "engine-tree" / "coordinator"
+    engine.mkdir(parents=True)
+    monkeypatch.setattr(ui, "PLUGIN_ROOT", engine)
+    monkeypatch.setattr(ui, "SKILLS_ROOT", engine / "skills")
+    plugin = tmp_path / "doe" / "coordinator"
+    doc = plugin.parent / "global-doctrine"
+    (doc / "rules").mkdir(parents=True)
+    (doc / "CLAUDE.md").write_text("# doctrine\n", encoding="utf-8")
+    (doc / "rules" / "rules.md").write_text("- a rule\n", encoding="utf-8")
+    (plugin / "skills" / "one").mkdir(parents=True)
+    (plugin / "skills" / "one" / "SKILL.md").write_text("# one\n", encoding="utf-8")
+    return plugin
+
+
+def test_plugin_root_seeds_doctrine_and_skills_from_outside_the_engine_tree(monkeypatch, tmp_path):
+    plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
+    home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy", "--plugin-root", str(plugin)))
+    assert rc == 0 and "WARN" not in out
+    for rules in (home / ".codex" / "AGENTS.md", home / ".gemini" / "GEMINI.md"):
+        assert "<!-- BEGIN coordinator-doctrine" in rules.read_text(encoding="utf-8")
+    assert _hooks_file(home / ".gemini" / "config" / "skills.json")["entries"] == [{"path": str(plugin / "skills")}]
+    assert any((home / ".agents" / "skills").glob("*.coordinator-managed"))
+
+
+def test_plugin_root_doctrine_found_in_the_root_itself(monkeypatch, tmp_path):
+    _engine_tree_and_plugin(monkeypatch, tmp_path)
+    plugin = tmp_path / "flat"
+    (plugin / "global-doctrine").mkdir(parents=True)
+    (plugin / "global-doctrine" / "CLAUDE.md").write_text("x\n", encoding="utf-8")
+    assert ui.doctrine_root(plugin) == plugin
+    assert ui.doctrine_root(tmp_path / "elsewhere" / "none") is None
+
+
+def test_without_plugin_root_the_engine_tree_warns_and_skips(monkeypatch, tmp_path):
+    _engine_tree_and_plugin(monkeypatch, tmp_path)
+    home, rc, out = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy"))
+    assert rc == 0 and "WARN: codex coordinator doctrine not installed" in out
+    assert not (home / ".codex" / "AGENTS.md").exists() or "coordinator-doctrine" not in (
+        home / ".codex" / "AGENTS.md").read_text(encoding="utf-8")
+
+
+def test_plugin_root_uninstall_removes_what_install_seeded(monkeypatch, tmp_path):
+    plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
+    home, rc, _ = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex,agy", "--plugin-root", str(plugin)))
+    assert rc == 0 and (home / ".gemini" / "config" / "skills.json").exists()
+    buf = io.StringIO()
+    assert ui.main(["--uninstall", "--hosts", "codex,agy", "--plugin-root", str(plugin)], out=buf) == 0
+    assert not (home / ".gemini" / "config" / "skills.json").exists()
+    assert not (home / ".gemini" / "GEMINI.md").exists()
+    assert not list((home / ".agents" / "skills").glob("*"))

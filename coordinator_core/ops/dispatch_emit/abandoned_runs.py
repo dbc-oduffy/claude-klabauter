@@ -404,5 +404,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except OpUnavailableError:
         return {**base, "ok": False, "error": "ceremony.commit_v2 is not registered"}
     if not isinstance(reply, dict) or reply.get("error") or not reply.get("committed"):
+        if isinstance(reply, dict) and reply.get("nothing_to_commit"):
+            return base  # the reap's records already match HEAD: nothing left to commit is success
         return {**base, "ok": False, "error": f"commit_v2 landed nothing: {reply!r}"}
     return {**base, "committed_sha": reply.get("sha")}

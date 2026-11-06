@@ -27,6 +27,7 @@ import re
 import socket
 import subprocess
 import sys
+import threading
 from pathlib import Path
 
 IS_WIN = sys.platform == "win32"
@@ -137,7 +138,7 @@ def localize(frame, line, box=None):
     name = _from_name(frame)
     if not name:
         return line
-    want = f"{name}@{box}" if box else name
+    want = f"{name}.{box}" if box else name
     for d in mirrors:
         if d.get(FAR_SOCKET_FIELD) and d.get("name") == want and d.get("messagingSocketPath"):
             return _readdress(frame, src, "uds:" + d["messagingSocketPath"])
@@ -150,6 +151,14 @@ def registration_payload(entry, key):
     The relay names the key file itself, so nothing but the entry and the key is sent.
     """
     return json.dumps(json.loads(entry)).encode() + b"\n" + key.encode() + b"\n"
+
+
+def log_far_stderr(stream):
+    """Why did the far `inbox` refuse or die: copy its stderr (the refusal reason) into the log."""
+    for raw in stream:
+        text = raw.decode("utf-8", "replace").rstrip()
+        if text:
+            log.write(f"far: {text}\n")
 
 
 def main(argv=None):
@@ -165,7 +174,9 @@ def main(argv=None):
     remote = pick_remote(a.remote, a.tunnel_remote)
     p = subprocess.Popen(["ssh", "-i", a.key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30",
                           remote, f"inbox {a.name}"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         creationflags=flags)
+                         stderr=subprocess.PIPE, creationflags=flags)
+    far_err = threading.Thread(target=log_far_stderr, args=(p.stderr,), daemon=True)
+    far_err.start()
     # The key goes over ssh stdin only, never argv or the log.
     p.stdin.write(registration_payload(entry, key))
     p.stdin.flush()
@@ -200,7 +211,9 @@ def main(argv=None):
         except OSError as e:
             log.write(f"handoff failed: {e}\n")
         auth = b""
-    log.write(f"inbox ended rc={p.wait()}\n")
+    rc = p.wait()
+    far_err.join(timeout=2)
+    log.write(f"inbox ended rc={rc}\n")
 
 
 if __name__ == "__main__":

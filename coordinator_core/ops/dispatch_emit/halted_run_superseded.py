@@ -12,7 +12,9 @@ as none refuses naming every such path; so does a run with no superseded path (a
 ``dispatch.record_halted_run_landed`` records those). Any gap leaves marker and index unchanged.
 On success the marker is rewritten ``status: superseded`` with ``superseded_evidence: {path: sha}``
 (superseded paths only: the newest post-halt commit touching the path) and ``path_dispositions`` (every path),
-and the run leaves the halt-withheld index. It never marks a run landed. Three git spawns: ``rev-list`` (anchor),
+and the run leaves the halt-withheld index. When it was the last open run of its sizing, each live parent ask of that
+sizing ends: live token dropped, ``live_run_writes`` row removed, run-stage stamped ``halted`` (no extra spawn; a child
+still halted, resumed or token-held leaves the parent untouched). It never marks a run landed. Three git spawns: ``rev-list`` (anchor),
 ``log --name-only``, ``cat-file --batch-check`` (HEAD, kept and anchor blobs in one batch).
 Legacy route (anchored at the commit that first added halted.json when one exists, else the halt anchor): taken ONLY when the halt has neither a kept file nor a withheld-prints file (written before both); a
 present but unreadable, malformed or blob-less one refuses fail-closed. A withheld path whose newest post-halt touch
@@ -275,6 +277,7 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
     if not halted_run.mark_superseded(record, marker, evidence, dispositions):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
+    _end_parent_ask(root, run_id, marker.get("sizing_rel"))
     reply = {
         "ok": True, "run_id": run_id, "evidence": evidence, "dispositions": dispositions, "legacy": True,
         "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),
@@ -283,6 +286,62 @@ def _legacy_close(root: Path, record: Path, marker: dict, run_id: str, paths: li
     if isinstance(memo, str) and memo:
         reply["memo_id"] = memo
     return reply
+
+
+def _sizing_stem(root: Path, ask_id: str, token_sizing: object) -> Optional[str]:
+    """Stem of the sizing an ask run is bound to: its ``run.json``, else the sizing on its live token."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    sizing = token_sizing
+    try:
+        data = json.loads((root / RECORD_DIR_ROOT / ask_id / "run.json").read_text(encoding="utf-8"))
+        if isinstance(data, dict) and isinstance(data.get("sizing_rel"), str):
+            sizing = data["sizing_rel"]
+    except (OSError, ValueError):
+        pass
+    return posixpath.splitext(posixpath.basename(sizing.replace("\\", "/")))[0] if isinstance(sizing, str) and sizing else None
+
+
+def _end_parent_ask(root: Path, run_id: str, sizing_rel: object) -> None:
+    """After ``run_id`` closed, end every live parent ask of its sizing whose children are all over: drop its
+    live token and ``live_run_writes`` row and stamp its run-stage ``halted``. A child is open while its marker is
+    ``halted``/``resumed`` or a token record names it; a parent claimed mid terminal-commit keeps its claim.
+    No git spawn; never raises (the close already landed)."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_run, live_run_index, live_run_writes, run_token
+        from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, stamp_run_stage_at
+
+        if not isinstance(sizing_rel, str) or not sizing_rel:
+            return
+        stem = posixpath.splitext(posixpath.basename(sizing_rel.replace("\\", "/")))[0]
+        held = {r.get("run_id"): r for r in run_token.held_records(root)}
+        rows = live_run_index.read(root, 150.0)
+        parents = {
+            rid: rec.get("sizing_rel") for rid, rec in held.items()
+            if isinstance(rid, str) and rid.startswith("ask-") and rid != run_id
+        }
+        for rid in rows if isinstance(rows, dict) else ():
+            if rid.startswith("ask-") and rid != run_id:
+                parents.setdefault(rid, None)
+        parents = {rid: s for rid, s in parents.items() if _sizing_stem(root, rid, s) == stem}
+        if not parents:
+            return
+        warp = root / RECORD_DIR_ROOT
+        siblings = [n for n in (f"warp-{stem}-{s}" for s in halted_run._warp_stamps(warp, f"warp-{stem}-")) if n != run_id]
+        open_children = set(halted_run._indexed_runs(root, sizing_rel) or ())
+        if any(name in held or name in open_children for name in siblings) or open_children - set(parents):
+            return
+        for rid in sorted(parents):
+            if run_token._read_rec(root, rid, claimed=True) is None:
+                run_token.discard(root, rid)
+            live_run_writes.index_remove(root, rid)
+            stamp_run_stage_at(warp / rid, "halted")
+    except Exception as exc:  # noqa: BLE001
+        import sys
+
+        print(f"advisory: parent ask of {run_id} left live: {type(exc).__name__}: {exc}", file=sys.stderr)
 
 
 def _refused_at_stage(root: Path, record: Path, run_id: str) -> Optional[dict]:
@@ -387,6 +446,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not halted_run.mark_superseded(record, marker, evidence, dispositions):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     halted_withheld_index.remove_run(root, run_id)
+    _end_parent_ask(root, run_id, marker.get("sizing_rel"))
     return {
         "ok": True, "run_id": run_id, "evidence": evidence, "dispositions": dispositions,
         "recorded": (record / halted_run.HALTED_FILE).relative_to(root).as_posix(),

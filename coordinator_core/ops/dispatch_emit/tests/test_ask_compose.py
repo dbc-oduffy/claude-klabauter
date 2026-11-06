@@ -285,7 +285,7 @@ def test_the_verdict_follows_the_verify_agents_own_scoped_test_run():
     """C5: the criterion is ruled on a tree the tests have already run against. The order lives
     inside the one agent's prompt, and the re-run for a review fix is the same `_testWanted` guard."""
     script = _compose(**_JUDGE_KW)
-    assert "_reviewApplied = (Array.isArray(_reviewWave)" in script
+    assert "_reviewApplied = _waveList().reduce(" in script
     assert script.index("const _reviewApplied") < script.index("const _testWanted") < script.index("label: 'verify'")
     assert script.index("(1) TESTS.") < script.index("(2) DOCS.") < script.index("(3) VERDICT.")
     assert "Run the scoped test targets: [" in script and "_manifest.test_targets" in script

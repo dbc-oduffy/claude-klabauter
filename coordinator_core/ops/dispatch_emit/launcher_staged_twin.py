@@ -183,16 +183,45 @@ def _land(target: Path, body: bytes, refuse: Callable[[str], Exception], label: 
         tmp.unlink(missing_ok=True)
 
 
+_KEEP_SHAS = 3
+_SHA_IN_NAME = re.compile(r"\.staged-([0-9a-f]{64})\.")
+
+
 def _prune_run(root: Path, run_id: str, keep_sha: str) -> None:
-    """Unlink this run's twins and spills of any other sha; failures are ignored. Exact-name match, this run only."""
+    """Unlink this run's twins and spills except those of ``keep_sha`` and the newest ``_KEEP_SHAS - 1`` other
+    engine-staged shas (a twin carrying its fire receipt); a receiptless twin is never kept.
+
+    Failures are ignored. Exact-name match, this run only. Trap: a refire names the twin of the manifest
+    it was handed, so a revise that restages mid-recompose must leave that earlier twin on disk; the
+    bound keeps the token-bearing file count finite."""
     directory = root / _RUN_DIR_ROOT
     try:
         names = os.listdir(directory)
     except OSError:
         return
+    newest: dict[str, int] = {}
+    members: dict[str, list[str]] = {}
     for name in names:
         rest = name[len(run_id):]
-        if name.startswith(run_id) and _TWIN_NAME.fullmatch(rest) and keep_sha not in rest:
+        match = _SHA_IN_NAME.match(rest) if name.startswith(run_id) and _TWIN_NAME.fullmatch(rest) else None
+        if match is None:
+            continue
+        sha = match.group(1)
+        members.setdefault(sha, []).append(name)
+        try:
+            newest[sha] = max(newest.get(sha, 0), (directory / name).stat().st_mtime_ns)
+        except OSError:
+            pass
+    staged = [
+        sha
+        for sha, files in members.items()
+        if sha != keep_sha and any((directory / f"{n}.emitted.json").exists() for n in files if n.endswith(".workflow.mjs"))
+    ]
+    kept = set(sorted(staged, key=lambda sha: newest.get(sha, 0), reverse=True)[: _KEEP_SHAS - 1])
+    for sha in members:
+        if sha == keep_sha or sha in kept:
+            continue
+        for name in members[sha]:
             try:
                 (directory / name).unlink()
                 _unlink_receipt(directory / name)

@@ -330,11 +330,13 @@ int door_repo_root_search_precheck(const char *cmd, size_t len, const char *cwd_
 
 int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *event_name);
 
-/* Hook-mode answer after the request was delivered and the engine gave none in
- * time: systemMessage + additionalContext naming `op` and the read deadline,
- * no permissionDecision. Unlike the pass-loudly envelope it does not claim the
- * guard never ran -- the op may have completed. */
-int build_hook_post_delivery_envelope(buf_t *out, const char *op, long deadline_ms, const char *event_name);
+/* Hook-mode allow when the engine failed (worker_died, no answer in time) and
+ * the command is not irreversible: ONE output line, systemMessage
+ * "coordinator: engine failed (<detail>); guard not evaluated, command
+ * allowed." plus the same text as additionalContext for `event_name`. Never
+ * carries a permissionDecision. `detail` is JSON-escaped; NULL/empty reads
+ * "no detail". */
+int build_hook_engine_failure_allow_envelope(buf_t *out, const char *detail, const char *event_name);
 
 /* Hook-mode answer after the ask was written to the spool: names `spool_id`,
  * no permissionDecision. */

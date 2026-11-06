@@ -29,7 +29,6 @@ import asyncio
 import json
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -46,6 +45,7 @@ if str(_REPO) not in sys.path:
 from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
+from coordinator_core.owner_safe_rmtree import make_removable  # noqa: E402
 
 BAR_MS = 500.0
 MOVABLE = 701
@@ -212,7 +212,7 @@ def _init_git(root: Path) -> None:
 
 def _rmtree(path: Path) -> None:
     def _onerror(func: Callable[..., Any], target: str, _exc: Any) -> None:
-        os.chmod(target, stat.S_IWRITE)
+        make_removable(target)
         func(target)
 
     shutil.rmtree(path, onerror=_onerror)

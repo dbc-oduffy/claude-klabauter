@@ -124,6 +124,41 @@ def session_agent_ids(root: Path, session_id: Optional[str]) -> List[str]:
     return out
 
 
+def run_recorded_blobs(record_dir: Optional[Path], paths: Iterable[str]) -> Dict[str, List[str]]:
+    """`{path: [git blob sha]}` the run's own record dir holds for `paths`: the chunk blobs and
+    post-checkpoint blobs of `kept.json`, and the `measured-rev.json` blobs. The executor's
+    Write/Edit reaches no touch ledger (the write hook files it under the subagent's own session),
+    so these engine-written records are the only proof of the bytes a chunk left. Feeds `classify`'s
+    `own_blobs`: a foreign rewrite changes the bytes and matches none. Reads two files, spawns nothing."""
+    if record_dir is None:
+        return {}
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    wanted = {_norm(p) for p in paths if _norm(p)}
+    found: Dict[str, List[str]] = {}
+
+    def _add(rel: object, blob: object) -> None:
+        key = _norm(rel) if isinstance(rel, str) else ""
+        if key in wanted and isinstance(blob, str) and blob and blob not in found.setdefault(key, []):
+            found[key].append(blob)
+
+    kept = kept_work.read(Path(record_dir))
+    for entry in kept["chunks"].values():
+        recorded = entry.get("paths") if isinstance(entry, dict) else None
+        for rel, blob in (recorded.items() if isinstance(recorded, dict) else ()):
+            _add(rel, blob)
+    for rel, blob in kept[kept_work.POST_CHECKPOINT_KEY].items():
+        _add(rel, blob)
+    try:
+        measured = json.loads((Path(record_dir) / "measured-rev.json").read_text(encoding="utf-8"))
+        blobs = measured.get("blobs")
+    except (OSError, ValueError, AttributeError):
+        blobs = None
+    for rel, blob in (blobs.items() if isinstance(blobs, dict) else ()):
+        _add(rel, blob)
+    return found
+
+
 def classify(
     root: Path,
     run_dir: Path,

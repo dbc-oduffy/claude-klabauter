@@ -587,3 +587,26 @@ def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path, name):
         if p.poll() is None:
             os.killpg(p.pid, signal.SIGKILL)
             p.wait(timeout=10)
+
+
+def test_fetch_roster_retries_one_transient_stall_but_not_a_persistent_failure(monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
+    calls = []
+
+    def flaky(argv, **kw):
+        calls.append(argv)
+        if len(calls) == 1:
+            raise subprocess.TimeoutExpired(argv, 20)
+        return subprocess.CompletedProcess(argv, 0, b'{"entry": {}}\n', b"")
+
+    monkeypatch.setattr(roster.subprocess, "run", flaky)
+    assert roster.fetch_roster("lan", "k", None) == [{"entry": {}}]
+    assert len(calls) == 2 and "ConnectTimeout=5" in calls[0] and "ServerAliveInterval=5" in calls[0]
+
+    calls.clear()
+    monkeypatch.setattr(roster.subprocess, "run", lambda argv, **kw: calls.append(argv) or subprocess.CompletedProcess(
+        argv, 255, b"", b"ssh: connect to host lan port 22: Operation timed out\n"))
+    with pytest.raises(OSError, match="rc=255"):
+        roster.fetch_roster("lan", "k", None)
+    assert len(calls) == 2

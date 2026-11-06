@@ -2111,11 +2111,16 @@ def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optio
 
 
 def _firing_sessions(root: Path, run_id: object, session_id: Optional[str]) -> set:
-    """Sessions that are this landing's own hand: the landing caller and the session on the run's token."""
+    """Sessions that are this landing's own hand: the landing caller, the session on the run's token and the run's recorded emitter."""
     own = {session_id} if session_id else set()
     if isinstance(run_id, str):
         try:
             from coordinator_core.ops.dispatch_emit import run_token
+            from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
+
+            emitter = recorded_emitter(root, run_id)
+            if emitter:
+                own.add(emitter)
 
             for claimed in (True, False):
                 record = run_token._read(run_token._record_path(root, run_id, claimed=claimed))

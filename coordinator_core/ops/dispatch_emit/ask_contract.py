@@ -40,6 +40,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY, ROUTES as DESIGN_ROUTES
 from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.dispatch_emit import review_floor
+from coordinator_core.ops.dispatch_emit.rag_use import HALT_RAG_CORPUS_DOWN  # noqa: F401  re-export: one kind string
 from coordinator_core.ops.dispatch_emit.route_preference import ROUTE_PREFERENCE_FILE, ROUTE_VERDICT_KEY
 from coordinator_core.session.record_homes import home_dir
 
@@ -79,6 +80,9 @@ def size_misaligned(em_size: Optional[str], engine_tshirt: str) -> bool:
 
 
 HALT_SPLIT = "split"
+
+#: The docs-checker cited a example-retrieval-repo or live-editor call the run's transcripts do not show.
+HALT_CITATION_UNBACKED = "citation_unbacked"
 HALT_RESEARCH = "research"
 #: Raised by the ask script when an ask_stage refusal starts with design_route.STAGE_REFUSAL_PREFIX;
 #: the PM's recorded design_approval clears it.

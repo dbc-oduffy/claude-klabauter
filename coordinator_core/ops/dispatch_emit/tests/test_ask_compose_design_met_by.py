@@ -57,7 +57,8 @@ def test_verify_prompt_defaults_design_met_by_to_the_wave_senior_front_end_sidec
     at = script.index(marker, start)
     assert "Default met_by for a design-registry item" in script[start:at]
     tail = script[at + len(marker):][:900]
-    assert "_reviewWave" in tail
+    assert "_waveList()" in tail  # the composer shares the array-guarded _reviewWave read as _waveList()
+    assert "const _waveList = () => (Array.isArray(_reviewWave) ? _reviewWave : []);" in script
     assert "senior-front-end$/.test(String(w.agent_type" in tail
     assert "w.sidecar_path.replace(" in tail
     assert "'none'" in tail

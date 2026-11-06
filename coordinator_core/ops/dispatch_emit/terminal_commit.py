@@ -950,6 +950,7 @@ def _undeclared_dirty(
 def _own_drift_actuals(
     worktree_root: Path, run_dir: Optional[Path], drift: Sequence, declared: Sequence[str],
     session_id: Optional[str], review_writes: Optional[dict], reviewed: Optional[dict] = None,
+    record_dir: Optional[Path] = None,
 ) -> dict:
     """``{path: actual}`` for each content-sha256 entry of a commit_v2 ``blob_drift`` list whose
     current bytes are the bytes the run's review pass read (``reviewed``, ``{path: sha256}`` of the
@@ -958,8 +959,10 @@ def _own_drift_actuals(
     session's and the fix-pass agents' touch ledgers, not bounded by the run record's start, so a
     refire keeps the run's earlier own write). The ledgers read are the session's, every review
     writer's and every agent the session dispatched (the reverify, verify and evidence legs write
-    under types the review-writer set omits). Those are the bytes the run left; a foreign or
-    unrecorded rewrite is absent and keeps refusing. Hash-only, no spawn."""
+    under types the review-writer set omits). A path whose bytes are a blob the run's own record
+    dir holds (``record_dir``: ``kept.json``, ``measured-rev.json``) is owned too: an executor's
+    Write/Edit reaches no ledger, and these are the bytes its chunk left. Those are the bytes the
+    run left; a foreign or unrecorded rewrite is absent and keeps refusing. Hash-only, no spawn."""
     from coordinator_core.ops.dispatch_emit import drift_attribution
     from coordinator_core.ops.dispatch_emit.terminal_commit_review import REVIEW_RECORD_AGENT
 
@@ -984,9 +987,25 @@ def _own_drift_actuals(
             {a for a in (review_writes or {}).values() if a and a != REVIEW_RECORD_AGENT}
             | set(drift_attribution.session_agent_ids(worktree_root, session_id))
         ),
+        own_blobs=drift_attribution.run_recorded_blobs(record_dir, list(actual)),
         run_started_at=0.0,
     )[drift_attribution.RUN_OWNED]
     return {**read_equal, **{p: actual[p] for p in owned}}
+
+
+def _own_record_dir(worktree_root: Path, art_run_id: object, ask_run_dir: Optional[Path]) -> Optional[Path]:
+    """The run's record directory, or None: ``ask_run_dir`` when the manifest named one, else
+    ``ask_contract.record_dir`` for a safe run id."""
+    if ask_run_dir is not None:
+        return ask_run_dir
+    if not isinstance(art_run_id, str) or not art_run_id:
+        return None
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    try:
+        return ask_contract.record_dir(worktree_root, art_run_id)
+    except ValueError:
+        return None
 
 
 def _run_owned_dirt(
@@ -2320,8 +2339,11 @@ def _terminal_commit_inner(
                     plan_pp = PurePosixPath(request.plan_path)
                     ev_rel = str(plan_pp.with_name(plan_pp.stem + _EVIDENCE_SIDECAR_SUFFIX))
                     ev_before = _tr.compute_content_hash(worktree_root / ev_rel)
+                    from coordinator_core.ops.criterion_evidence import REVIEW_ROW_FIELDS as _ROW_FIELDS
+
                     written = _criterion_evidence_record(
-                        {"plan_path": request.plan_path, "reviews": record["review_firings"]},
+                        {"plan_path": request.plan_path,
+                         "reviews": [{k: row.get(k) for k in _ROW_FIELDS} for row in record["review_firings"]]},
                         repo_root=worktree_root,
                     )
                     if isinstance(written, dict) and written.get("error"):
@@ -3807,7 +3829,7 @@ def _terminal_commit_inner(
     ):
         own_now = _own_drift_actuals(
             worktree_root, ask_run_dir, reply["blob_drift"], declared_writes, session_id, review_writes,
-            reviewed_bytes,
+            reviewed_bytes, _own_record_dir(worktree_root, art_run_id, ask_run_dir),
         )
         if own_now:
             commit_params["expected_content_sha256"] = {**commit_params["expected_content_sha256"], **own_now}
@@ -4211,6 +4233,7 @@ def _terminal_commit_inner(
                     snapshot=snapshot,
                     flip_plan=request.plan_path if flips else None,
                     flip_reason=_criterion_reason(inline_review), ledger_met=ledger_met,
+                    inline_review=inline_review,
                     receipt=request.plan_path if plan_commits and reply.get("review_stamp") == "minted" else None,
                     trailers=(f"Sizing-Shipped: {shipped_sizing} {reply['sha']}",) if shipped_sizing else (),
                     commit=stamp_commit,
@@ -4280,6 +4303,7 @@ def _terminal_commit_inner(
                 _stamp_plan_implemented(
                     worktree_root, request.plan_path, str(reply["sha"]),
                     reason=_criterion_reason(inline_review), ledger_met=ledger_met, halt_marker=gate_marker,
+                    inline_review=inline_review,
                 )
             )
         elif request.plan_path and reply.get("review_stamp") == "minted":

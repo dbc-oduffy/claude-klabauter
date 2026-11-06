@@ -13,6 +13,7 @@ import json
 import posixpath
 import re
 import shlex
+from collections import Counter
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
@@ -97,7 +98,9 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     TERMINAL_RESUME_LEDGER_PARAM,
     RECORD_DIR_ROOT,
     RELAYED_ASK_FILE,
+    HALT_CITATION_UNBACKED,
     HALT_DESIGN_REVIEW,
+    HALT_RAG_CORPUS_DOWN,
     HALT_REFUSAL,
     REGISTER_ROWS_UNCLAIMED_REFUSAL,
     HALT_RESEARCH,
@@ -170,6 +173,7 @@ REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
+from coordinator_core.ops.dispatch_emit.rag_use import RESTORE_MESSAGE
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
@@ -245,16 +249,20 @@ from coordinator_core.session import output_tree_layout
 from coordinator_core.session.record_homes import home_dir
 
 _OWNER_ROWS_JS = "_crossRepoRows"
-# A wave entry claiming applied findings while the re-verify recorded an empty run diff (`edited` and
-# `created` both empty) is demoted to applied 0, so findings > applied reaches the blocked halt. No
-# recorded diff (no `edited` list) or a reused wave leaves the reviewer's count standing; per-finding
-# file/hunk checks live in `wave_bookkeeping`.
+# A wave entry claiming applied findings is demoted to applied 0, so findings > applied reaches the
+# blocked halt, when the re-verify recorded an empty run diff, or when none of the files of the entry's
+# prep slice(s) is in `edited`/`created`. No recorded diff (no `edited` list), a slice with no listed
+# files or a reused wave leaves the reviewer's count standing; per-finding checks live in `wave_bookkeeping`.
 _WAVE_DIFF_RECONCILE_JS = (
-    "  if (!_reviewReused && _reviewReverify && typeof _reviewReverify === 'object' && Array.isArray(_reviewReverify.edited) "
-    "&& Array.isArray(_reviewWave) && !_reviewReverify.edited.length "
-    "&& !(Array.isArray(_reviewReverify.created) && _reviewReverify.created.length)) { "
-    "_reviewWave = _reviewWave.map((w) => (w && (w.applied ?? 0) > 0 "
-    "? { ...w, applied_claimed: w.applied, applied: 0, unapplied_reason: 'not in run diff' } : w)); }"
+    "  if (!_reviewReused && Array.isArray(_reviewReverify?.edited) && Array.isArray(_reviewWave)) { "
+    "const n = (p) => String(p).split('\\\\').join('/').replace(/^\\.\\//, ''), "
+    "d = new Set([..._reviewReverify.edited, ...(_reviewReverify.created ?? [])].map(n)), sl = (typeof _reviewPrep !== 'undefined' && _reviewPrep?.slices) || [], "
+    "z = (w, r) => ({ ...w, applied_claimed: w.applied, applied: 0, unapplied_reason: r }); "
+    "_reviewWave = _reviewWave.map((w) => { "
+    "if (!(w?.applied > 0)) return w; "
+    "if (!d.size) return z(w, 'not in run diff'); "
+    "const f = String(w.slice_id ?? '').split('+').flatMap((id) => (sl.find((x) => x?.id === id)?.files ?? []).map(n)); "
+    "return !f.length || f.some((x) => d.has(x)) ? w : z(w, 'not in run diff: ' + f.join(', ')); }); }"
 )
 # Wave entries carrying a non-empty string verdict and a non-empty sidecar_path; mirrors
 # `review_floor.verdict_count` minus the file-exists check, which only the lander can make. An expression
@@ -459,10 +467,14 @@ def _agent(
             clause = _lit(_emit._INVOKE_LITERAL_CLAUSE) + " + " + clause
     if stager is not None and stage_as:
         prompt_expr = stage_literal_runs(prompt_expr, stage_as, stager)
+    schema_js = json.dumps(schema, sort_keys=True)
+    judge = (schema.get("properties") or {}).get("judge")
+    if isinstance(judge, _JudgeSchemaRef):
+        schema_js = schema_js.replace(json.dumps(judge, sort_keys=True), _JUDGE_SCHEMA_VAR, 1)
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
         f"agentType: {_lit(agent_type)}, {model_opt}{effort_opt}"
-        f"schema: {json.dumps(schema, sort_keys=True)} }})"
+        f"schema: {schema_js} }})"
     )
 
 
@@ -509,6 +521,8 @@ _PLAN_REVIEW_AGENT_TYPE = "coordinator:staff-eng"
 _PLAN_REVIEW_EFFORT = "low"
 _CODE_REVIEW_AGENT_TYPE = "coordinator:code-reviewer"
 _DOCS_CHECKER_AGENT_TYPE = "coordinator:docs-checker"
+#: Named by string: the op registers in `docs_check_gate_op`, which composition never imports.
+_OP_DOCS_CHECK_RAG_GATE = "dispatch.docs_check_rag_gate"
 _STAGE_DEFAULTS = {
     "plan": _PLAN_AUTHOR_AGENT_TYPE,
     "plan_review": _PLAN_REVIEW_AGENT_TYPE,
@@ -604,7 +618,8 @@ def _resolve_stage_agents(
 def _ue_docs_checker(repo_root: str) -> tuple[bool, Optional[str]]:
     """`(is UE repo, docs-checker agent_model)`; the model is `None` for a non-UE repo or a type `emit._AGENT_MODELS` pins.
 
-    A UE repo's plan-review and code-review waves each carry a `coordinator:docs-checker` leg.
+    A UE repo's run carries a gated `coordinator:docs-checker` leg on the plan and another on the diff,
+    each ahead of its review.
     """
     if not _ue_route_source.is_ue_repo(repo_root):
         return False, None
@@ -616,10 +631,46 @@ def _ue_docs_checker(repo_root: str) -> tuple[bool, Optional[str]]:
         raise AskComposeRefused(f"stage agent routing refused: {exc}") from exc
 
 
+def _docs_check_gate_js(
+    *, check_call: str, label: str, repo_root: str, run_id: str, check_var: str, gate_var: str, indent: str, plan_js: str
+) -> list[str]:
+    """JS lines running one docs-check leg, its `dispatch.docs_check_rag_gate` relay, and the halt they decide.
+
+    A checker verdict `rag_down`, a gate verdict `rag_corpus_down` or a gate reply carrying no verdict sets
+    `_halted` to `rag_corpus_down` with the restore message; a gate verdict `citation_unbacked` sets it to
+    `citation_unbacked` naming the unbacked citations. Declares `check_var` and `gate_var` in the caller's scope.
+    """
+    gate_prompt = _cat(
+        f"Run `{_INVOKE} {_OP_DOCS_CHECK_RAG_GATE} '",
+        "js:JSON.stringify({ run_id: _runId, label: " + _lit(label) + ", session_id: _SESSION_ID })",
+        f"'{_repo_flag(repo_root)}` once and return its JSON reply as verdict, message, reason and unbacked. "
+        "Do not edit, retry or repair anything.",
+    )
+    gate_call = _agent(
+        gate_prompt, label=f"{label}-gate", phase="plan" if label.startswith("plan") else "review",
+        agent_type=_OP_RELAY_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_DOCS_GATE_SCHEMA,
+        effort=_MECHANICAL_EFFORT, run_id=run_id,
+    )
+    down = (
+        f"{check_var}?.verdict === 'rag_down' || typeof {gate_var}?.verdict !== 'string' "
+        f"|| {gate_var}.verdict === {_lit(HALT_RAG_CORPUS_DOWN)}"
+    )
+    return [
+        f"{indent}const {check_var} = await {check_call};",
+        f"{indent}const {gate_var} = await {gate_call};",
+        f"{indent}if ({down}) _halted = {{ halted: {_lit(HALT_RAG_CORPUS_DOWN)}, reason: {_lit(RESTORE_MESSAGE)}, "
+        f"next_action: {_lit(RESTORE_MESSAGE)}, leg: {_lit(label)}, run_id: _runId, sizing: _sizingRel, plan: {plan_js} }};",
+        f"{indent}else if ({gate_var}.verdict === {_lit(HALT_CITATION_UNBACKED)}) _halted = {{ halted: {_lit(HALT_CITATION_UNBACKED)}, "
+        f"reason: 'docs-check citations the run does not back: ' + (Array.isArray({gate_var}.unbacked) ? {gate_var}.unbacked : [])"
+        f".map(String).join('; ').slice(0, 280), unbacked: {gate_var}.unbacked ?? [], leg: {_lit(label)}, "
+        f"run_id: _runId, sizing: _sizingRel, plan: {plan_js} }};",
+    ]
+
+
 def _roster_has_named_wave_entry(fragment: Any) -> bool:
     """True when a review-wave stage carries an `accepts_signals: named` entry.
 
-    Engine-derived reviewers (routed code reviewer, UE docs-checker) join the wave only through
+    The engine-derived routed code reviewer joins the wave only through
     that entry; a roster without it composes without them, never refuses.
     """
     stages = ((fragment or {}).get("execute_review") or {}).get("stages") or []
@@ -768,7 +819,14 @@ _FALSIFIER_PROP = {"falsifier": {"type": ["object", "null"]}}
 _SPINE_REVIEW_SCHEMA = _obj(
     ["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_REVIEW_SIGNALS_PROP}
 )
-_DOCS_CHECK_SCHEMA = _obj(["verdict"], {"verdict": _STR, "plan_rel": _STR})
+_DOCS_CHECK_SCHEMA = _obj(
+    ["verdict"],
+    {"verdict": {"type": "string", "enum": ["ok", "corrected", "rag_down"]}, "plan_rel": _STR},
+)
+_DOCS_GATE_SCHEMA = _obj(
+    ["verdict"],
+    {"verdict": _STR, "message": _STR, "reason": _STR, "unbacked": {"type": "array", "items": _STR}},
+)
 _XL_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
     {
@@ -1121,7 +1179,8 @@ _ADOPT_STAGE_REPLY_HEAD_JS = (
     # An absent reply re-runs the stage once through `_stageRecover` (a fresh agent: a replayed one would
     # return the cached, stage-less result again).
     "  const _adoptStageReply = async (r, soft) => {\n"
-    "    if ((r === null || r === undefined) && !soft && !_stageRecovered && !_stagedManifest && typeof _stageRecover === 'function') "
+    f"    if ((r === null || r === undefined || (typeof r === 'object' && !Array.isArray(r) && !r.manifest_handle && !r.error && !r.{PARKED_REPLY_KEY})) "
+    "&& !soft && !_stageRecovered && !_stagedManifest && typeof _stageRecover === 'function') "
     "{ _stageRecovered = true; const _rec = await _stageRecover(); r = _rec ? _rec.stage_reply : r; }\n"
     "    if (r === null || r === undefined || typeof r !== 'object' || Array.isArray(r)) { if (!_noFoldCause) _noFoldCause = 'stage_reply absent from the agent return'; return; }\n"
     "    if (r.error && r.manifest_handle) { if (!soft && !_relayGap) _relayGap = "
@@ -1141,12 +1200,12 @@ _ADOPT_STAGE_REPLY_READER_JS = "    got = await _readStageSidecar(r.manifest_han
 # Trap: a launcher-child script holds no reader branch at all, so `workflow(` is absent from its bytes.
 _ADOPT_STAGE_REPLY_LAUNCHER_JS = (
     "    got = _adoptStagedInline(r.manifest_handle);\n"
-    # Trap: a replayed reply without `twin_path` names a handle the refire may have restaged past; the stage op's
-    # own reply (idempotent, one fresh agent) names the twin on disk, so the launched path is never rebuilt from a stale sha.
+    # Trap: a replayed reply, with or without `twin_path`, names a twin the refire may have restaged past and pruned; the
+    # stage op's own reply (idempotent, one fresh agent) names the twin on disk, so the launched path is never a stale one.
     "    if (got === null) {\n"
     "      if (!_stagePending) {\n"
     "        let _tr = r;\n"
-    "        if (typeof r.twin_path !== 'string' && !soft && !_stageRecovered && typeof _stageRecover === 'function') {\n"
+    "        if (!soft && !_stageRecovered && typeof _stageRecover === 'function') {\n"
     "          _stageRecovered = true; const _rec = await _stageRecover(); const _rr = _rec ? _rec.stage_reply : null;\n"
     "          if (_rr && typeof _rr === 'object' && _rr.manifest_handle && typeof _rr.twin_path === 'string') _tr = _rr;\n"
     "        }\n"
@@ -1991,6 +2050,18 @@ def _verify_call(
     )
 
 
+_JUDGE_SCHEMA_VAR = "_JUDGE_SCHEMA"
+
+
+def _compact_json(obj: Any) -> str:
+    """Key-sorted JSON with no padding after separators, for schemas inlined into the script."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+
+
+class _JudgeSchemaRef(dict):
+    """A judge verdict schema that `_agent` serializes as `_JUDGE_SCHEMA`; the composer declares that const once."""
+
+
 def _verify_schema(judge_schema: Optional[dict]) -> dict:
     """The merged leg's result schema: `ask_contract.ASK_VERIFY_RETURN_KEYS`, with the test result
     and the judge verdict nested because their `status` keys collide."""
@@ -2001,7 +2072,7 @@ def _verify_schema(judge_schema: Optional[dict]) -> dict:
     }
     required = ["items"]
     if judge_schema is not None:
-        properties["judge"] = judge_schema
+        properties["judge"] = _JudgeSchemaRef(judge_schema)
         required.append("judge")
     return _obj(required, properties)
 
@@ -3542,8 +3613,6 @@ def compose_ask_script(
     if _roster_has_named_wave_entry(review_roster_fragment):
         if code_review_routed and stage_types["code_review"] not in reviewers:
             reviewers.append(stage_types["code_review"])
-        if ue_repo and _DOCS_CHECKER_AGENT_TYPE not in reviewers:
-            reviewers.append(_DOCS_CHECKER_AGENT_TYPE)
     review = parse_execute_review(review_roster_fragment, required_reviewers=reviewers)
 
     intake = _intake_sizing(repo_root, sizing_rel)
@@ -4775,8 +4844,16 @@ def compose_ask_script(
                 docs_check_prompt, label="plan-docs-check", phase="plan", agent_type=_DOCS_CHECKER_AGENT_TYPE,
                 agent_model=docs_checker_model, schema=_DOCS_CHECK_SCHEMA, run_id=run_id,
             )
-            b.append(f"      await {docs_call};")
-        b.append(f"      const _spineReview = await {review_call};")
+            b.extend(
+                _docs_check_gate_js(
+                    check_call=docs_call, label="plan-docs-check", repo_root=repo_root, run_id=run_id,
+                    check_var="_planDocsCheck", gate_var="_planDocsGate", indent="      ",
+                    plan_js="(_gate.spine_plan ?? null)",
+                )
+            )
+            b.append(f"      let _spineReview = null;\n      if (!_halted) _spineReview = await {review_call};")
+        else:
+            b.append(f"      const _spineReview = await {review_call};")
         if fold_falsifier:
             b.append("      _planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);")
         b.append("      _spineFallback = _spineReview?.plan_rel || _gate.spine_plan;")
@@ -4787,7 +4864,7 @@ def compose_ask_script(
             "      const _wrongReviewer = (_spineReview?.review_signals ?? []).some((s) => "
             f"_signalSelects[s] !== undefined && _signalSelects[s] !== {_lit(stage_types['plan_review'])});"
         )
-        b.append("      if (!_wrongReviewer) {")
+        b.append("      if (!_wrongReviewer" + (" && !_halted" if ue_repo else "") + ") {")
         b.append("      if (_spineReview?.verdict === 'ready') {")
         b.append("        _planRel = _spineFallback;")
         if fold_stage:
@@ -5102,7 +5179,7 @@ def compose_ask_script(
     elif launcher_child:
         b.append(
             f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ return {{ {CHAIN_HANDOFF_KEY}: "
-            f"{_chain_emit_params_js('_sizingRel', tail_js=', ...(_gate.chain_emit ?? {})', stop_after=stop_after)}, "
+            f"{_chain_emit_params_js('_sizingRel', tail_js=_LAUNCHER_RELAY_TAIL_JS, stop_after=stop_after)}, "
             "sizing: _sizingRel, run_id: _runId }; }"
         )
     else:
@@ -5158,7 +5235,7 @@ def compose_ask_script(
         elif launcher_child:
             b.append(
                 f"    return {{ {CHAIN_HANDOFF_KEY}: "
-                f"{_chain_emit_params_js('_sizingRel', tail_js=', ...(_gate.chain_emit ?? {})', stop_after=stop_after)}, "
+                f"{_chain_emit_params_js('_sizingRel', tail_js=_LAUNCHER_RELAY_TAIL_JS, stop_after=stop_after)}, "
                 "sizing: _sizingRel, run_id: _runId };"
             )
         else:
@@ -5465,6 +5542,31 @@ def compose_ask_script(
         "  const _reviewSeed = (!_reviewReused && Array.isArray(_phaseVerdict('review')?.wave)) "
         "? _phaseVerdict('review').wave.filter((w) => w && !(" + _BLOCKED_UNAPPLIED_JS + ")) : [];"
     )
+    if ue_repo:
+        diff_docs_prompt = _cat(
+            f"{head}\n\n{anchor}\n\n",
+            "Docs-check this run's diff: verify every Unreal Engine API, class, module and behavior claim in "
+            f"the changes since {run_base_sha or 'the run base'} to ",
+            "js:_reviewPaths.join(', ')",
+            ", against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
+            "with Edit. Return `verdict` ok or corrected.",
+        )
+        diff_docs_call = _agent(
+            diff_docs_prompt, label="diff-docs-check", phase="review", agent_type=_DOCS_CHECKER_AGENT_TYPE,
+            agent_model=docs_checker_model, schema=_DOCS_CHECK_SCHEMA, run_id=run_id,
+        )
+        b.append(
+            "  if (!_halted && !_reviewReused && !_noReviewPaths && "
+            f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{"
+        )
+        b.extend(
+            _docs_check_gate_js(
+                check_call=diff_docs_call, label="diff-docs-check", repo_root=repo_root, run_id=run_id,
+                check_var="_diffDocsCheck", gate_var="_diffDocsGate", indent="    ",
+                plan_js="(typeof _planRel !== 'undefined' ? _planRel : null)",
+            )
+        )
+        b.append("  }")
     b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
         f"  if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{\n"
@@ -5569,6 +5671,8 @@ def compose_ask_script(
         *verdict_parts, DEFAULT_MET_BY_CLAUSE, "js:" + _SFE_WAVE_SIDECARS_JS, "js:" + _RESUME_LEDGER_CLAUSE_JS,
         "js:" + _LATE_ROWS_CLAUSE_JS, "js:" + _MEMO_CLOSE_CLAUSE_JS,
     )
+    if judged:
+        b.append(f"  const {_JUDGE_SCHEMA_VAR} = {_compact_json(judge_brief[1])};")
     b.append("  const _verdictText = () => (" + _cat(*verdict_parts) + ");")
     verdict_parts = ("js:_verdictText()",)
     verify_call = _verify_call(
@@ -6068,6 +6172,13 @@ def _chain_emit_params_js(
 
 _CHAIN_EMIT_PARAMS_JS = _chain_emit_params_js("_sizingRel")
 
+# Launcher hand-off tail: the launcher fails a hand-off carrying `error` without emitting, so an errored or absent
+# gate relay is dropped here and the launcher's own `chain-emit` leg runs instead.
+_LAUNCHER_RELAY_TAIL_JS = (
+    ", ...((_gate.chain_emit && typeof _gate.chain_emit === 'object' && !Array.isArray(_gate.chain_emit) && "
+    "!(typeof _gate.chain_emit.error === 'string' && _gate.chain_emit.error !== '')) ? _gate.chain_emit : {})"
+)
+
 
 _CHAIN_STAGE_FN = "_chain_stage_pending_loop"
 
@@ -6566,6 +6677,86 @@ def _hoist_baseline_clears(script: str) -> str:
 _INVOKE_FN = "_PF9001"
 
 
+_CHAIN_PARAMS_FN = "_chainParamsQ"
+_CHAIN_PARAMS_USE = re.compile(
+    r"""JSON\.stringify\(\{ ask: true, sizing_path: _sizingRel, [^\n]*?\}\)\.split\("'"\)\.join\("'" \+ '"' \+ "'" \+ '"' \+ "'"\)"""
+)
+
+
+def _share_chain_params(script: str) -> str:
+    """Replace three or more identical single-quote-safe `_sizingRel` chain-emit params expressions with one `_chainParamsQ()` call."""
+    uses = _CHAIN_PARAMS_USE.findall(script)
+    if len(uses) < 3 or len(set(uses)) != 1:
+        return script
+    body = script.replace(uses[0], f"{_CHAIN_PARAMS_FN}()")
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_CHAIN_PARAMS_FN} = () => {uses[0]};\n" + body[at:]
+
+
+_WAVE_LIST_FN = "_waveList"
+_WAVE_LIST_EXPR = "(Array.isArray(_reviewWave) ? _reviewWave : [])"
+_WAVE_LIST_USE = re.compile(r"(?<!receipt: 'review: ' \+ )" + re.escape(_WAVE_LIST_EXPR))
+
+
+def _share_review_wave_list(script: str) -> str:
+    """Replace the array-guarded `_reviewWave` read with one `_waveList()` call, ahead of the manifest marker line's declaration.
+
+    The verdict-count receipt keeps its inline read.
+    """
+    if len(_WAVE_LIST_USE.findall(script)) < 3:
+        return script
+    body = _WAVE_LIST_USE.sub(f"{_WAVE_LIST_FN}()", script)
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_WAVE_LIST_FN} = () => {_WAVE_LIST_EXPR};\n" + body[at:]
+
+
+_POSIX_FN = "_posixRel"
+_POSIX_LAMBDA = "(p) => { let s = String(p).replace(/\\\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; }"
+_POSIX_USE = re.compile(r"(const \w+ = )" + re.escape(_POSIX_LAMBDA) + ";")
+
+
+def _share_posix_rel(script: str) -> str:
+    """Replace each `const <name> = <posix-relative normalizer>;` with an alias of one `_posixRel`, declared ahead of the manifest marker line."""
+    if len(_POSIX_USE.findall(script)) < 3:
+        return script
+    body = _POSIX_USE.sub(lambda m: f"{m.group(1)}{_POSIX_FN};", script)
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_POSIX_FN} = {_POSIX_LAMBDA};\n" + body[at:]
+
+
+_SIDECAR_DIR_USE = re.compile(r"sidecar_dir: (\.coordinator-local/workflow-sidecars/[\w.-]+/[\w.-]+/)(?=[\w.-]+/?')")
+
+
+def _share_sidecar_dir(script: str) -> str:
+    """Cut each `sidecar_dir:` run prefix (three or more uses) that ends a single-quoted literal with its leaf to one `_PF91nn` operand, declared ahead of the manifest marker line."""
+    if not _prompt_fragments.HOIST_ENABLED:
+        return script
+    counts = Counter(_SIDECAR_DIR_USE.findall(script))
+    shared = {pre: f"_PF{9100 + i}" for i, (pre, n) in enumerate(sorted(counts.items())) if n >= 3}
+    if not shared:
+        return script
+    body = _SIDECAR_DIR_USE.sub(lambda m: f"' + {shared[m.group(1)]} + '" if m.group(1) in shared else m.group(0), script)
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    decls = "".join(f"const {name} = 'sidecar_dir: {pre}';\n" for pre, name in shared.items())
+    return body[:at] + decls + body[at:]
+
+
+_REFIRE_FN = "_refireCmd"
+
+
+def _share_refire(script: str) -> str:
+    """Replace each three-or-more copies of the run-time `_refire_js(None)` expression with one `_refireCmd()` call.
+
+    The declaration goes ahead of the manifest marker line; the arrow reads `_sizingRel` at call time.
+    """
+    expr = _refire_js(None)
+    if script.count(expr) < 3:
+        return script
+    body = script.replace(expr, f"{_REFIRE_FN}()")
+    at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
+    return body[:at] + f"const {_REFIRE_FN} = () => {expr};\n" + body[at:]
+
+
 def _hoist_invoke(script: str) -> str:
     """Declare the quoted `coordinator-invoke` command word once, ahead of the manifest marker line, and cut each
     single-quoted literal that spells it into a `_PF9001` operand.
@@ -6616,6 +6807,11 @@ def _finish_script(
     script, emit_fns = _share_chain_emit(script)
     script = _attach_chain_helpers(script, emit_fns + verdict_fn + start_fns)
     script = _declare_stage_plan_params(script)
+    script = _share_refire(script)
+    script = _share_posix_rel(script)
+    script = _share_sidecar_dir(script)
+    script = _share_chain_params(script)
+    script = _share_review_wave_list(script)
     script = _hoist_invoke(script)
     script = _prompt_fragments.hoist_repeated_fragments(script, anchor=ASK_MANIFEST_MARKER)
     script = _agent_body_dedupe.dedupe_agent_payloads(script, anchor=ASK_MANIFEST_MARKER)

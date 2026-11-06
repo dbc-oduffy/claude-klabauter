@@ -1328,13 +1328,29 @@ def _writes_into_hub_entries(written, hub: str) -> "list[str]":
     )
 
 
+_hub_entry_writers: "dict[str, str]" = {}
+
+
+def _record_hub_entry_writers(leaked: "list[str]", nodeid: str) -> None:
+    """Remember the first test that wrote each top-level hub entry in `leaked`."""
+    for rel in leaked:
+        _hub_entry_writers.setdefault(rel.split(os.sep, 1)[0], nodeid)
+
+
+def _writers_of(names: "list[str]") -> str:
+    """`name <- nodeid` pairs for the entries whose writing test was captured."""
+    known = [f"{n} <- {_hub_entry_writers[n]}" for n in names if n in _hub_entry_writers]
+    return "; ".join(known) if known else "writer not captured (child process?)"
+
+
 @_pytest.fixture(autouse=True)
-def _no_writes_into_live_hub_entries():
+def _no_writes_into_live_hub_entries(request):
     """Fail a test whose own process wrote into a non-UUID entry of the real hub.
 
     Attribution is by audit hook, not by before/after stat: peers write the hub's
     shared infrastructure entries continuously, so a stat delta cannot tell their
-    writes from this test's. Writes from a spawned child are not seen."""
+    writes from this test's. Writes from a spawned child are not seen. The writing
+    test is kept in `_hub_entry_writers` for the session-scoped append guard."""
     global _hub_watch_active
     hub = _LIVE_HUB
     _hub_written.clear()
@@ -1345,6 +1361,7 @@ def _no_writes_into_live_hub_entries():
         _hub_watch_active = False
     leaked = _writes_into_hub_entries(list(_hub_written), hub)
     _hub_written.clear()
+    _record_hub_entry_writers(leaked, request.node.nodeid)
     assert not leaked, (
         f"test wrote into existing entries of the REAL session hub {hub}: "
         f"{leaked!r} — the code under test resolved the hub from the process cwd "
@@ -1452,10 +1469,11 @@ def _watch_preexisting_hub_litter(hub: str):
     if appended:
         _pytest.fail(
             f"_no_appends_into_preexisting_hub_litter: fixture-named dir(s) {appended!r} "
-            f"in the REAL session hub {hub} were written into during this run -- "
+            f"in the REAL session hub {hub} were written into during this run "
+            f"({_writers_of(appended)}) -- "
             "a test or child process resolved the hub from the process cwd while "
-            "taking its session id from a fixture. Delete the dir, find the writer "
-            "with `-k`, and point it at a tmp_path repo.",
+            "taking its session id from a fixture. Delete the dir and point the "
+            "writer at a tmp_path repo.",
             pytrace=False,
         )
 

@@ -41,13 +41,14 @@ def holds_path(
     root: Path, holder: str, path: str, own_run_id: Optional[str], own_plan: Optional[str] = None,
 ) -> bool:
     """False when ``holder`` is a halted run whose ``halted_hold_release.held_paths`` omits ``path``: a
-    declared-but-not-withheld path no longer holds. A holder with no halt record, or a resumed one, holds."""
+    declared-but-not-withheld path no longer holds. A holder that is not halted (a resumed run, one recorded
+    landed) holds unless ``released_holder`` frees it; a holder with no run record holds."""
     try:
         from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import halted_hold_release
 
         if not warp_run_deliverable._halted(Path(root), holder):
-            return True
+            return not released_holder(root, holder, own_run_id, own_plan)
         return str(path).replace("\\", "/") in halted_hold_release.held_paths(Path(root), holder, own_run_id, own_plan)
     except (OSError, ValueError):  # unreadable record: the holder holds
         return True
@@ -182,7 +183,7 @@ def refusal_message(holds: Iterable, run_id: str, root: Optional[Path] = None) -
     oldest first as ``held by <run_id> (minted <iso>)``; a touch-claim session keeps its session wording.
     Route one: wait for the holder to land, then re-fire (the run's refire command when ``root``
     resolves its sizing). Route two: leave the paths out via ``peer_claim_contract.WITHHOLD_CALL``."""
-    from coordinator_core.ops.dispatch_emit import peer_claim_contract
+    from coordinator_core.ops.dispatch_emit import halted_run_route, peer_claim_contract
 
     holds = sorted(holds)
     claims: dict = {}
@@ -210,7 +211,9 @@ def refusal_message(holds: Iterable, run_id: str, root: Optional[Path] = None) -
 
         wait = f"Wait for the holder to land, then {sibling_claims.reland_remedy(sizing)}"
     withhold = peer_claim_contract.WITHHOLD_CALL.format(run_id=run_id)
+    holder_runs = sorted({h for _r, _p, hs in holds for h in hs if str(h).startswith("ask-")})
+    release = halted_run_route.route_line(holder_runs[0] if holder_runs else "<holder run id>")
     return (
         f"{SHARED_PATH_SIBLING_HELD}: {named}. A met row's product path lands with its tests or not at all. "
-        f"{wait} Or leave them out: {withhold}"
+        f"{wait} {release} Or leave them out: {withhold}"
     )

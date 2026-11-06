@@ -113,7 +113,9 @@ const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...chainPar
 const _fail = (why) => ({ status: 'failed', run_id: ASK_RUN_ID, error: 'the chained run did not complete (' + why + '); the ask run ' + ASK_RUN_ID + ' stays resumable' });
 // Trap: the payload rides a quoted heredoc on stdin; JSON.stringify escapes every newline, so the body is one line and cannot equal the tag.
 const _chainTag = 'CHAIN_PARAMS_JSON';
-const _chainJson = JSON.stringify({ ...chainParams, __LAUNCHER_PARAM__: true });
+// Trap: the hand-off the ask script returns names the sizing and no EM brief, so the chained run would compose without it; the deferred params' brief keys ride the hop.
+const _briefCarry = __BRIEF_CARRY__;
+const _chainJson = JSON.stringify({ ...chainParams, ..._briefCarry, __LAUNCHER_PARAM__: true });
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
 if (!_blankPath(_rp)) {
@@ -183,8 +185,15 @@ def _stage_loop_values(start_args: Optional[dict] = None) -> dict:
     }
 
 
-def _chain_follow_values() -> dict:
-    """The `_CHAIN_FOLLOW_JS` and `_EMIT_RELAY_JS` placeholders shared by both start scripts."""
+def _brief_carry(params: dict) -> dict:
+    """The EM-brief keys of `params` a chained run must receive unchanged: the brief (or its spill file) and its digest."""
+    from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_DIGEST_PARAM
+
+    return {k: params[k] for k in ("ask_brief", "ask_brief_file", EM_CONTEXT_DIGEST_PARAM) if params.get(k)}
+
+
+def _chain_follow_values(brief_carry: Optional[dict] = None) -> dict:
+    """The `_CHAIN_FOLLOW_JS` and `_EMIT_RELAY_JS` placeholders shared by both start scripts; `brief_carry` rides the chain hop."""
     import json
 
     from coordinator_core.ops.dispatch_emit.fan_launcher import _EMIT_OP, _INVOKE, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM
@@ -192,6 +201,7 @@ def _chain_follow_values() -> dict:
 
     return {
         "__CHAIN_KEY__": CHAIN_HANDOFF_KEY,
+        "__BRIEF_CARRY__": json.dumps(brief_carry or {}, ensure_ascii=True),
         "__LAUNCHER_PARAM__": LAUNCHER_CHILD_EMIT_PARAM,
         "__AUTHORITY__": json.dumps(EMIT_RELAY_AUTHORITY),
         "__INVOKE__": json.dumps(_INVOKE),
@@ -219,7 +229,7 @@ def write_deferred_script(root: Path, params: dict) -> Path:
         params = {**params, LAUNCHER_CHILD_EMIT_PARAM: True}
         start_values = {
             **_stage_loop_values(),
-            **_chain_follow_values(),
+            **_chain_follow_values(_brief_carry(params)),
         }
         start = re.sub("|".join(start_values), lambda m: start_values[m.group(0)], _DEFERRED_START_JS)
     params_json = json.dumps(params, default=str, ensure_ascii=True)

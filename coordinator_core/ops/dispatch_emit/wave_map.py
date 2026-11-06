@@ -750,6 +750,32 @@ def _topological_order(rows: list[EmitterRow], preds: dict[str, set[str]]) -> li
     return ordered
 
 
+def _blocked_rows_last(
+    rows: list[EmitterRow], preds: dict[str, set[str]]
+) -> list[EmitterRow]:
+    """``rows`` with every ``blocked_on`` row no other row needs moved to the end.
+
+    A blocked row placed first becomes the ``after`` predecessor of every
+    write-overlapping sibling (``dag_from_waves``), and it never lands in-run.
+    Placed last it takes the edges to its siblings instead. A blocked row that
+    some non-blocked row transitively depends on (declared or read-after-write)
+    keeps its place: those edges are real.
+    """
+    needed: set[str] = set()
+    stack = [row.id for row in rows if not row.blocked_on]
+    while stack:
+        for pred in preds[stack.pop()]:
+            if pred not in needed:
+                needed.add(pred)
+                stack.append(pred)
+    deferred = {row.id for row in rows if row.blocked_on and row.id not in needed}
+    if not deferred:
+        return rows
+    return [r for r in rows if r.id not in deferred] + [
+        r for r in rows if r.id in deferred
+    ]
+
+
 def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
     provenance: dict[tuple[str, str], str] = {}
     full_preds = _predecessors(rows, provenance)
@@ -760,7 +786,7 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
     rows = [row for row in rows if row.id not in held]
 
     preds = _predecessors(rows)
-    order = _topological_order(rows, preds)
+    order = _topological_order(_blocked_rows_last(rows, preds), preds)
 
     wave_of: dict[str, int] = {}
     waves: list[list[EmitterRow]] = []

@@ -361,8 +361,11 @@ def check_validate_commit(
     if _fast_rows is not None:
         _status_lines: Optional[List[str]] = [f"{_l}\t{_p}" for _l, _p in _fast_rows]
     else:
-        rc, staged_out = _dc_git_probe._run_git(["diff", "--cached", "--name-status", "-M"], _cwd, extra_env=_probe_env)
-        _status_lines = staged_out.splitlines() if rc == 0 else None
+        _facts = _tree_facts(_cwd)
+        _status_lines = _facts.staged_name_status_renames(_cwd) if _facts is not None else None
+        if _status_lines is None:
+            rc, staged_out = _dc_git_probe._run_git(["diff", "--cached", "--name-status", "-M"], _cwd, extra_env=_probe_env)
+            _status_lines = staged_out.splitlines() if rc == 0 else None
     from coordinator_core.bash_guards._implausible_index import implausible_deletion_note
     _probe_note = implausible_deletion_note(
         _status_lines, _cwd,

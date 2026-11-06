@@ -470,10 +470,10 @@ def ensure_private_dir(path: Path, *, base: Optional[Path] = None) -> Path:
         raise InsecureRuntimeDirError(
             f"runtime directory is owned by uid {st.st_uid}, not {os.getuid()}: {str(path)!r}"
         )
-    if st.st_mode & 0o077:
+    if (st.st_mode & 0o077) or (st.st_mode & 0o700) != 0o700:
         os.chmod(path, 0o700)
         st = os.lstat(path)
-        if st.st_mode & 0o077:
+        if (st.st_mode & 0o077) or (st.st_mode & 0o700) != 0o700:
             raise InsecureRuntimeDirError(
                 f"runtime directory is mode {_stat.S_IMODE(st.st_mode):04o} after chmod, "
                 f"not 0700: {str(path)!r}"

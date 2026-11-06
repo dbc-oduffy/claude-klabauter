@@ -230,10 +230,9 @@ def test_a_named_halted_run_resolves_though_its_marker_names_another_sizing_path
     from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
 
     _halt_bound_elsewhere(repo)
-    assert halted_run_to_resume(repo, REL) is None
-    assert halted_run_to_resume(repo, REL, run_id=OLDER) == OLDER
-    assert _marker(repo)["sizing_rel"] == REL
     assert halted_run_to_resume(repo, REL) == OLDER
+    assert _marker(repo)["sizing_rel"] == REL
+    assert halted_run_to_resume(repo, REL, run_id=OLDER) == OLDER
 
 
 def test_a_moved_sizing_refire_resumes_the_halted_run_and_writes_no_new_sizing(repo):

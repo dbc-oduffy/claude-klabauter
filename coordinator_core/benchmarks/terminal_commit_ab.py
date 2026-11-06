@@ -35,7 +35,6 @@ import random
 import re
 import shutil
 import statistics
-import stat
 import subprocess
 import sys
 import tarfile
@@ -53,6 +52,7 @@ from coordinator_core.benchmarks.tests.test_terminal_commit_process_budget impor
     SAMPLES,
 )
 from coordinator_core.git.run import run_git
+from coordinator_core.owner_safe_rmtree import make_removable
 from coordinator_core.win_portability import no_console_creationflags
 
 DRIVER = "coordinator_core.benchmarks.terminal_commit_full_path"
@@ -284,7 +284,7 @@ def check_out_dir(out_dir: Path, repo_root: Path = _REPO_ROOT) -> Path:
 
 def _rmtree(path: Path) -> None:
     def _chmod_retry(func, target, _exc):
-        os.chmod(target, stat.S_IWRITE)
+        make_removable(target)
         func(target)
 
     if sys.version_info >= (3, 12):

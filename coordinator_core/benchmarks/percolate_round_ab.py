@@ -91,6 +91,7 @@ from typing import Iterator, List, Optional
 from coordinator_core.benchmarks import declare_benchmark_origin
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.git.run import GitResult, run_git
+from coordinator_core.owner_safe_rmtree import make_removable
 from coordinator_core.benchmarks.timer import SUBPROCESS_CREATIONFLAGS
 from coordinator_core.temp_layout import managed_tempdir
 
@@ -341,7 +342,7 @@ def _git(args: List[str], *, cwd: Optional[Path] = None, remote: bool = False) -
 
 
 def _onerror_clear_readonly(func, path, exc_info):
-    os.chmod(path, stat.S_IWRITE)
+    make_removable(path)
     func(path)
 
 

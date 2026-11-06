@@ -390,6 +390,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "dispatch.emit":                          "coordinator_core.ops.dispatch_emit.op",
     "dispatch.terminal_commit":                "coordinator_core.ops.dispatch_emit.terminal_commit",
     "dispatch.land_run":                       "coordinator_core.ops.dispatch_emit.land_run",
+    "dispatch.docs_check_rag_gate":            "coordinator_core.ops.dispatch_emit.docs_check_gate_op",
     "dispatch.land_credited":                  "coordinator_core.ops.dispatch_emit.land_credited",
     "dispatch.land_verified_remainder":        "coordinator_core.ops.dispatch_emit.land_remainder",
     "dispatch.adopt_orphaned_run":             "coordinator_core.ops.dispatch_emit.orphan_adopt",

@@ -17,7 +17,10 @@ gone; without that variable it runs until killed.
 Usage (agy runs this): nohup python3 unimatrix-agy-leg.py <sock> > unimatrix-agy-leg.out 2>&1 &
 The log path is $AGY_LEG_LOG else unimatrix-agy-leg.log beside this script.
 """
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows: main() refuses before any lock is taken; importing must still work
+    fcntl = None
 import json
 import os
 import socket

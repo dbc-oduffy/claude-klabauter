@@ -21,10 +21,11 @@ def load(name):
     return mod
 
 
+if sys.platform == "win32":
+    pytest.skip("fake leg uses an AF_UNIX socket", allow_module_level=True)
+
 agy = load("unimatrix-peer-agy")
 leg = load("unimatrix-agy-leg")
-
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="fake leg uses an AF_UNIX socket")
 
 
 def row(content, source="MODEL", type_="PLANNER_RESPONSE", tool_calls=None):

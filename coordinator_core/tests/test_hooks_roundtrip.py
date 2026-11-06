@@ -762,11 +762,13 @@ def test_postuse_session_no_matching_sentinels_returns_no_advisory() -> None:
     _unlink_if_exists(state_path)
 
 
-def test_postuse_merge_contract_both_fire() -> None:
+def test_postuse_merge_contract_both_fire(tmp_path, monkeypatch) -> None:
     """Both checks fire → post_advisory with texts merged via blank-line separator.
 
     Tests the merge contract by injecting a compaction-occurred sentinel and a
-    matching runtime-tripwire structure under a temp .git tree.
+    matching runtime-tripwire structure under a temp .git tree. The handler's
+    em-turn leg resolves its hub from the process cwd, so cwd is pinned to the
+    temp repo to keep its `em-turns.json` out of the real hub.
     """
     import time
     import unittest.mock as mock
@@ -774,54 +776,54 @@ def test_postuse_merge_contract_both_fire() -> None:
     import coordinator_core.hooks.postuse_advisory_dispatch as pad_mod
     from coordinator_core.hooks.postuse_advisory_dispatch import _handler
 
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmp = Path(tmpdir)
+    tmp = tmp_path
+    monkeypatch.chdir(tmp)
 
-        test_sid = "test-c8-merge-12ab34cd"
-        agent_dir = tmp / ".git" / "coordinator-sessions" / ".agents" / test_sid
-        agent_dir.mkdir(parents=True)
+    test_sid = "test-c8-merge-12ab34cd"
+    agent_dir = tmp / ".git" / "coordinator-sessions" / ".agents" / test_sid
+    agent_dir.mkdir(parents=True)
 
-        em_sid = "test-c8-em-session-56ef"
-        (agent_dir / "em-session-id.txt").write_text(em_sid + "\n")
+    em_sid = "test-c8-em-session-56ef"
+    (agent_dir / "em-session-id.txt").write_text(em_sid + "\n")
 
-        em_session_dir = tmp / ".git" / "coordinator-sessions" / em_sid
-        em_session_dir.mkdir(parents=True)
+    em_session_dir = tmp / ".git" / "coordinator-sessions" / em_sid
+    em_session_dir.mkdir(parents=True)
 
-        past_ts = int(time.time()) - 3600
-        dispatch_file = em_session_dir / "dispatched-agents.txt"
-        dispatch_file.write_text(f"{test_sid}\tclaude-sonnet-4-5\texecutor\t{past_ts}\n")
+    past_ts = int(time.time()) - 3600
+    dispatch_file = em_session_dir / "dispatched-agents.txt"
+    dispatch_file.write_text(f"{test_sid}\tclaude-sonnet-4-5\texecutor\t{past_ts}\n")
 
-        transcript = tmp / "transcript.jsonl"
-        transcript.write_text('{"model": "claude-sonnet-4-5", "role": "assistant", "content": "hi"}\n')
+    transcript = tmp / "transcript.jsonl"
+    transcript.write_text('{"model": "claude-sonnet-4-5", "role": "assistant", "content": "hi"}\n')
 
-        compaction_sentinel = os.path.join(
-            tempfile.gettempdir(), f"compaction-occurred-{test_sid}"
-        )
-        pre_size = os.path.getsize(str(transcript)) * 10
-        Path(compaction_sentinel).write_text(str(pre_size))
+    compaction_sentinel = os.path.join(
+        tempfile.gettempdir(), f"compaction-occurred-{test_sid}"
+    )
+    pre_size = os.path.getsize(str(transcript)) * 10
+    Path(compaction_sentinel).write_text(str(pre_size))
 
-        cp_state_path = pad_mod._advisory_state_path(tempfile.gettempdir(), test_sid)
-        rt_bark_sentinel = os.path.join(tempfile.gettempdir(), f"rt-bark-once-{test_sid}")
-        _unlink_if_exists(cp_state_path)
-        _unlink_if_exists(rt_bark_sentinel)
+    cp_state_path = pad_mod._advisory_state_path(tempfile.gettempdir(), test_sid)
+    rt_bark_sentinel = os.path.join(tempfile.gettempdir(), f"rt-bark-once-{test_sid}")
+    _unlink_if_exists(cp_state_path)
+    _unlink_if_exists(rt_bark_sentinel)
 
-        mock_rt = "RUNTIME TRIPWIRE — test-injected tripwire text"
+    mock_rt = "RUNTIME TRIPWIRE — test-injected tripwire text"
 
-        def fake_rt(session_id, agent_id):
-            return mock_rt
+    def fake_rt(session_id, agent_id):
+        return mock_rt
 
-        with mock.patch.object(pad_mod, "_check_runtime_tripwire_sync", side_effect=fake_rt):
-            result = _run(_handler(
-                {
-                    "session_id": test_sid,
-                    "transcript_path": str(transcript),
-                    "agent_id": "",
-                }
-            ))
+    with mock.patch.object(pad_mod, "_check_runtime_tripwire_sync", side_effect=fake_rt):
+        result = _run(_handler(
+            {
+                "session_id": test_sid,
+                "transcript_path": str(transcript),
+                "agent_id": "",
+            }
+        ))
 
-        _unlink_if_exists(compaction_sentinel)
-        _unlink_if_exists(cp_state_path)
-        _unlink_if_exists(rt_bark_sentinel)
+    _unlink_if_exists(compaction_sentinel)
+    _unlink_if_exists(cp_state_path)
+    _unlink_if_exists(rt_bark_sentinel)
 
     hso = _hso(result)
     assert hso["hookEventName"] == "PostToolUse"

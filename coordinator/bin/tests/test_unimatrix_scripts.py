@@ -2,7 +2,9 @@
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import sys
 from pathlib import Path
 
 import pytest
@@ -173,6 +175,108 @@ def test_relay_refuses_a_name_a_live_local_session_holds(monkeypatch):
     monkeypatch.setattr(relay, "entries", lambda: iter([(11, {"name": "local-1"}, "11.k.key")]))
     with pytest.raises(SystemExit, match="live local session"):
         relay.check_name_free("local-1")
+
+
+def test_relay_reclaims_a_name_held_only_by_a_recycled_pid(monkeypatch, tmp_path):
+    relay = load("relay")
+    (tmp_path / "11.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "11.k.key").write_text("k", encoding="utf-8")
+    corpse = {"name": "far-1", "unimatrixMirror": True, "procStart": "Fri Nov  6 09:00:00 2026"}
+    monkeypatch.setattr(relay, "SESS", str(tmp_path))
+    monkeypatch.setattr(relay, "entries", lambda: iter([(11, corpse, "11.k.key")]))
+    monkeypatch.setattr(relay, "proc_start", lambda pid: "Fri Nov  6 10:30:00 2026")
+    stale = relay.check_name_free("far-1")
+    assert stale == [(11, "11.k.key", False)]
+    killed = []
+    monkeypatch.setattr(relay.os, "kill", lambda pid, sig: killed.append(pid))
+    relay.drop_stale(stale)
+    assert not (tmp_path / "11.json").exists() and not (tmp_path / "11.k.key").exists()
+    assert killed == []
+
+
+def test_relay_supersedes_a_live_holder_registered_from_the_same_client(monkeypatch, tmp_path):
+    relay = load("relay")
+    (tmp_path / "12.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "12.k.key").write_text("k", encoding="utf-8")
+    ghost = {"name": "far-1", "unimatrixMirror": True, "procStart": "same", "unimatrixClient": "10.0.0.5"}
+    monkeypatch.setattr(relay, "SESS", str(tmp_path))
+    monkeypatch.setattr(relay, "entries", lambda: iter([(12, ghost, "12.k.key")]))
+    monkeypatch.setattr(relay, "proc_start", lambda pid: "same")
+    freed = relay.check_name_free("far-1", "10.0.0.5")
+    assert freed == [(12, "12.k.key", True)]
+    killed = []
+    monkeypatch.setattr(relay.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    relay.drop_stale(freed)
+    assert killed == [(12, relay.signal.SIGTERM)]
+    assert not (tmp_path / "12.json").exists()
+
+
+@pytest.mark.parametrize("client", ["", "10.0.0.6"])
+def test_relay_refuses_a_live_holder_from_another_or_unknown_client(monkeypatch, client):
+    relay = load("relay")
+    live = {"name": "far-1", "unimatrixMirror": True, "procStart": "same", "unimatrixClient": "10.0.0.5"}
+    monkeypatch.setattr(relay, "entries", lambda: iter([(12, live, "12.k.key")]))
+    monkeypatch.setattr(relay, "proc_start", lambda pid: "same")
+    with pytest.raises(SystemExit, match="already mirrored by live relay pid 12"):
+        relay.check_name_free("far-1", client)
+
+
+def test_relay_still_refuses_a_live_holder_whose_start_stamp_matches(monkeypatch):
+    relay = load("relay")
+    live = {"name": "far-1", "unimatrixMirror": True, "procStart": "Fri Nov  6 09:00:00 2026"}
+    monkeypatch.setattr(relay, "entries", lambda: iter([(11, live, "11.k.key")]))
+    monkeypatch.setattr(relay, "proc_start", lambda pid: "Fri Nov  6 09:00:00 2026")
+    with pytest.raises(SystemExit, match="already mirrored by live relay pid 11"):
+        relay.check_name_free("far-1")
+
+
+def test_relay_inbox_default_invocation_mints_the_socket_after_a_reboot(monkeypatch, tmp_path):
+    relay = load("relay")
+    # AF_UNIX paths cap near 104 bytes, which tmp_path overruns; the socket dir must be short.
+    sessions, socks = tmp_path / "sessions", Path("/tmp") / f"ccs-{tmp_path.name[-12:]}"
+    sessions.mkdir()
+    corpse = {"name": "far-1", "unimatrixMirror": True, "procStart": "old"}
+    (sessions / "7.json").write_text(json.dumps(corpse), encoding="utf-8")
+    (sessions / "7.k.key").write_text("k", encoding="utf-8")
+    monkeypatch.setattr(relay, "SESS", str(sessions))
+    monkeypatch.setattr(relay, "SOCKS", str(socks))
+    monkeypatch.setattr(relay, "entries", lambda: iter([(7, corpse, "7.k.key")]))
+    monkeypatch.setattr(relay, "proc_start", lambda pid: "new")
+    seen = {}
+    monkeypatch.setattr(relay, "serve", lambda srv, fd, out: seen.update(sock=(socks / "unimatrix-far-1.sock").exists()))
+    stdin = tmp_path / "stdin"
+    stdin.write_text(json.dumps({"cwd": "/w"}) + "\nkeybody\n", encoding="utf-8")
+    monkeypatch.setattr(relay.sys, "stdin", stdin.open("r", encoding="utf-8"))
+    try:
+        relay.inbox("far-1")
+    finally:
+        for f in socks.glob("*"):
+            f.unlink()
+        socks.rmdir()
+    assert seen == {"sock": True}
+    assert not (sessions / "7.json").exists()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="fake ssh is a /bin/sh script")
+def test_inbox_client_logs_the_far_refusal_reason(monkeypatch, tmp_path):
+    inbox = load("inbox")
+    sessions, bindir = tmp_path / "sessions", tmp_path / "bin"
+    sessions.mkdir()
+    bindir.mkdir()
+    (sessions / "5.json").write_text('{"pid": 5}', encoding="utf-8")
+    (sessions / "5.h.key").write_text("k", encoding="utf-8")
+    ssh = bindir / "ssh"
+    ssh.write_text("#!/bin/sh\nhead -n 2 >/dev/null\necho 'name n already mirrored by live relay pid 9' >&2\nexit 1\n", encoding="utf-8")
+    ssh.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}{os.pathsep}{os.environ['PATH']}")
+    monkeypatch.setattr(inbox, "SESSIONS", str(sessions))
+    monkeypatch.setattr(inbox, "pick_remote", lambda lan, tunnel: lan)
+    logfile = tmp_path / "inbox.log"
+    inbox.main(["5", "n", str(logfile), "--remote", "far", "--key", "k"])
+    inbox.log.close()
+    text = logfile.read_text(encoding="utf-8")
+    assert "far: name n already mirrored by live relay pid 9" in text
+    assert "inbox ended rc=1" in text
 
 
 def test_relay_roster_prints_only_non_mirror_sessions(monkeypatch, tmp_path, capsys):

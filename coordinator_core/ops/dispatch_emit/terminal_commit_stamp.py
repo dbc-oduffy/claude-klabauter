@@ -108,6 +108,7 @@ def _stamp_coded_commit(
     receipt: Optional[str] = None,
     trailers: tuple = (), commit: bool = True, archive_after_flip: tuple = (),
     flip_reason: Optional[str] = None,
+    inline_review: Optional[dict] = None,
     outside_rows: Optional[dict] = None,
     ledger_met: Optional[str] = None,
     memo_closes: Optional[dict] = None,
@@ -200,6 +201,7 @@ def _stamp_coded_commit(
 
         flip_result = _tc._stamp_plan_implemented(
             worktree_root, flip_plan, sha, reason=flip_reason, ledger_met=ledger_met,
+            inline_review=inline_review,
         )
         if flip_result.get("plan_status") == "implemented":
             if before is not None:
@@ -329,6 +331,7 @@ def _criterion_reason(inline_review: object) -> Optional[str]:
 def _stamp_plan_implemented(
     worktree_root: Path, plan_rel: str, sha: str, *, reason: Optional[str] = None,
     ledger_met: Optional[str] = None, halt_marker: Optional[dict] = None,
+    inline_review: Optional[dict] = None,
 ) -> dict:
     """Write the plan's ``implemented`` status to disk, uncommitted, when the
     review stamp it now carries records a judge-authored ``met`` criterion; the caller's commit
@@ -340,7 +343,9 @@ def _stamp_plan_implemented(
     is reported and writes nothing. The refusal text is kept from its head: the
     cause leads it and the override boilerplate trails. ``reason`` is the judge's own reason,
     appended to the stamp prose only; the met check never reads it. ``ledger_met`` is accepted
-    for caller compatibility and discharges nothing: a ledger has no judge."""
+    for caller compatibility and discharges nothing: a ledger has no judge. The minted stamp's schema
+    cannot carry ``authored_by``/``falsifier`` or the test count, so ``inline_review`` (the run's own
+    review document) supplies them when given; the plan's stamp must still read ``met``."""
     import contextlib
     import io
 
@@ -364,8 +369,13 @@ def _stamp_plan_implemented(
     status = criterion.get("status") if isinstance(criterion, dict) else None
     if status != "met":
         return {"plan_status": "not-stamped", "plan_status_reason": "review_stamp criterion is not met"}
+    if isinstance(inline_review, dict) and isinstance(inline_review.get("criterion"), dict):
+        criterion = {**criterion, **inline_review["criterion"], "status": status}
+        tests = inline_review.get("tests")
+    else:
+        tests = stamp.get("tests")
     blockers = completion_blockers(
-        inline_review={"criterion": criterion, "tests": stamp.get("tests")}, halt_marker=halt_marker,
+        inline_review={"criterion": criterion, "tests": tests}, halt_marker=halt_marker,
     )
     if blockers:
         return {"plan_status": "not-stamped", "plan_status_reason": "completion gate: " + "; ".join(blockers)}

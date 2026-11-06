@@ -1,9 +1,9 @@
-"""The door's hook mode answers a post-delivery failure with a hook envelope.
+"""The door's hook mode answers a post-delivery failure with a one-line hook envelope.
 
-A hook op that is not the pre-checked entrypoint gets a systemMessage +
-additionalContext envelope naming the op and the hook read deadline, never the
-bare JSON-RPC indeterminate body (the hook dispatcher renders that as "said
-nothing"); the non-hook path keeps the JSON-RPC body.
+A non-irreversible hook payload gets a systemMessage + additionalContext allow
+advisory naming the failure detail, never the bare JSON-RPC indeterminate body
+(the hook dispatcher renders that as "said nothing"); an irreversible payload
+is denied; the non-hook path keeps the JSON-RPC body.
 """
 
 from __future__ import annotations
@@ -44,20 +44,19 @@ def test_both_doors_answer_hook_mode_post_delivery_with_the_hook_envelope(source
     text = source.read_text(encoding="utf-8")
     failure = text[text.index("static int emit_post_delivery_failure("):]
     failure = failure[: failure.index("\n}\n")]
-    assert "if (g_door_hook_mode) return emit_hook_post_delivery();" in failure
+    assert "if (g_door_hook_mode) return emit_hook_post_delivery(detail);" in failure
     assert failure.index("g_precheck_armed") < failure.index("emit_hook_post_delivery") < failure.index("emit_indeterminate")
-    assert "build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS" in text
+    assert "door_engine_failure_allow_envelope(&out, detail, event_name)" in text
     assert "!g_precheck_armed && !g_door_hook_mode" in text, "the server's indeterminate body must not pass through in hook mode"
 
 
-def test_the_envelope_builder_is_a_pass_not_a_deny_and_does_not_claim_the_guard_did_not_run():
-    core = (_DOOR_DIR / "door_core.c").read_text(encoding="utf-8")
-    start = core.index("int build_hook_post_delivery_envelope(")
-    body = re.sub(r'"\s*\n\s*"', "", core[start: core.index("\n}\n", start)])
+@pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
+def test_the_engine_failure_builder_is_a_pass_not_a_deny_and_one_line(source):
+    text = source.read_text(encoding="utf-8")
+    start = text.index("static int door_engine_failure_allow_envelope(")
+    body = re.sub(r'"\s*\n\s*"', "", text[start: text.index("\n}\n", start)])
     assert "permissionDecision" not in body
-    assert "did not run" not in body
-    assert "may have completed" in body
-    assert "Check for an existing run record" in body
+    assert "guard not evaluated, command allowed." in body
 
 
 _MATCHER_MAIN = r'''
@@ -198,7 +197,7 @@ def _run_hook_door(root: Path, entrypoint: str, timeout: float = 30, command: st
 @pytest.mark.warm_tier
 @pytest.mark.cadence
 @WINDOWS_ONLY
-def test_a_wedged_engine_yields_a_hook_envelope_naming_the_op_and_the_deadline(tmp_path):
+def test_a_wedged_engine_yields_a_one_line_allow_naming_the_deadline(tmp_path):
     from coordinator_core.warm.tests.test_door_read_deadline import _WedgedServer
 
     root = make_stub_engine_root(tmp_path)
@@ -213,10 +212,10 @@ def test_a_wedged_engine_yields_a_hook_envelope_naming_the_op_and_the_deadline(t
     body = json.loads(proc.stdout.decode("utf-8"))
     assert "jsonrpc" not in body and "error" not in body
     assert "permissionDecision" not in json.dumps(body)
+    assert proc.stdout.decode("utf-8").count("\n") == 1
     for text in (body["systemMessage"], body["hookSpecificOutput"]["additionalContext"]):
-        assert _ENTRYPOINT in text
-        assert f"{deadline_ms} ms" in text
-        assert "may have completed" in text
+        assert f"{deadline_ms // 1000}s" in text
+        assert "command allowed" in text
     assert body["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
 
 
@@ -245,4 +244,12 @@ def test_a_wedged_engine_denies_git_push_and_passes_a_commit_message_that_mentio
 
     body = json.loads(mentioned.stdout.decode("utf-8"))
     assert "permissionDecision" not in json.dumps(body)
-    assert "did not run" in json.dumps(body)
+    assert "command allowed" in json.dumps(body)
+
+
+@pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
+def test_both_doors_bound_the_advisory_detail_so_the_suffix_survives(source):
+    text = source.read_text(encoding="utf-8")
+    start = text.index("static int emit_hook_post_delivery(")
+    body = text[start: text.index("\n}\n", start)]
+    assert 'snprintf(detail, sizeof detail, "%.200s"' in body

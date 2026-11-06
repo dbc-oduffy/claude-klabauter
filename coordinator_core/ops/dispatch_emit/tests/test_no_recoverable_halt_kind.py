@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import halt_remedy_class as hrc
 from coordinator_core.ops.dispatch_emit.tests.test_no_mechanical_halt_reaches_em import _halt_constants
-from coordinator_core.ops.dispatch_emit.ask_contract import REGISTER_ROWS_UNCLAIMED_REFUSAL
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    HALT_CITATION_UNBACKED,
+    HALT_RAG_CORPUS_DOWN,
+    REGISTER_ROWS_UNCLAIMED_REFUSAL,
+)
 from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
     REVERIFY_INDETERMINATE,
     REVIEW_REVERIFY_FAILED,
@@ -28,8 +32,13 @@ def _emitted_kinds() -> set[str]:
     return kinds
 
 
+#: Halts a bare refire cannot clear: the leg re-halts until example-retrieval-repo is restored or the checker's
+#: citations are backed. They stand in this bucket only until `halt_remedy_class` classes them itself.
+NON_RECOVERABLE_BY_REFIRE_ALONE = {HALT_RAG_CORPUS_DOWN, HALT_CITATION_UNBACKED}
+
+
 def _bucket(kind: str) -> list[str]:
-    return [
+    registry = [
         name for name, hit in (
             ("mechanical", hrc.is_mechanical(kind)),
             ("irreversible", hrc.is_irreversible(kind)),
@@ -37,6 +46,9 @@ def _bucket(kind: str) -> list[str]:
             ("recoverable-debt", kind in hrc.RECOVERABLE_DEBT),
         ) if hit
     ]
+    if not registry and kind in NON_RECOVERABLE_BY_REFIRE_ALONE:
+        return ["non-recoverable-by-refire-alone"]
+    return registry
 
 
 def test_every_halt_kind_is_in_exactly_one_bucket():

@@ -191,6 +191,14 @@ def _run_git(args: List[str], cwd: Optional[str] = None, timeout: Optional[float
     treats it as narrow-only -- a caller can ask this read to give up
     sooner, and no value it passes can buy more time than the seam allows.
     """
+    from coordinator_core.bash_guards import _dc_git_probe
+
+    if _dc_git_probe._git_probe_budget_spent():
+        _dc_git_probe._git_probe_last_failure.set(
+            "the guard's %.1fs git-probe budget was already spent, so this probe was never spawned"
+            % _dc_git_probe._GIT_PROBE_BUDGET_SECONDS
+        )
+        return _dc_git_probe._GIT_PROBE_BUDGET_SPENT_RC, ""
     result = run_git(args, cwd=cwd, timeout=timeout)
     return result.returncode, result.stdout
 
@@ -815,6 +823,36 @@ def _removed_from_facts(paths: List[str], cwd: Optional[str]) -> Optional[List[s
     return sorted(removed)
 
 
+def _diverging_scoped(paths: List[str], cwd: Optional[str]) -> List[str]:
+    """`diverging_paths(paths, cwd, fail_loud=True)`, answered without parsing the whole index when
+    it is over `INPROCESS_INDEX_BYTES_MAX`: staged (A/M) rows from the one memoised status spawn,
+    intersected with a single `git diff --name-only` scoped to those paths (worktree vs index).
+    A pathspec that is not a literal file path (glob, directory, magic) names no index entry, as in
+    `diverging_paths`. Rows or the prefix unreadable raises `DivergenceCheckFailed`: indeterminate."""
+    here = cwd or os.getcwd()
+    if not _git_tree_facts.index_over_bound(here):
+        return _diverging_paths(paths, cwd, fail_loud=True)
+    rows = _git_tree_facts.staged_name_status(here)
+    prefix = _git_tree_facts.show_prefix(here)
+    if rows is None or prefix is None:
+        raise DivergenceCheckFailed("staged rows unreadable on an oversized index -- divergence indeterminate")
+    literal = [_pathspec_literal(p, prefix, here) for p in paths]
+    staged = {row.partition("\t")[2] for row in rows if row[:1] in ("A", "M")}
+    candidates = sorted({rel for rel in literal if rel is not None and rel in staged})
+    if not candidates:
+        return []
+    top = _git_tree_facts.toplevel(here)
+    rc, out = _run_git(
+        ["--literal-pathspecs", "diff", "--name-only", "-z", "--", *candidates], cwd=top
+    )
+    if rc != 0:
+        raise DivergenceCheckFailed(
+            f"scoped `git diff --name-only` failed (rc={rc}) for {len(candidates)} path(s) "
+            "-- divergence indeterminate"
+        )
+    return sorted(p for p in out.split("\0") if p)
+
+
 def check_staged_pathspec_divergence(
     cmd: str,
     cwd: Optional[str] = None,
@@ -881,7 +919,7 @@ def check_staged_pathspec_divergence(
     # concurrency on one repo, rising with concurrency, on a box specced for
     # 50-70 sessions.
     try:
-        diverging = _diverging_paths(all_paths, cwd, fail_loud=True)
+        diverging = _diverging_scoped(all_paths, cwd)
     except DivergenceCheckFailed:
         # Say so rather than warn about paths we cannot name. This check is an
         # advisory offer, so an indeterminate read must not become a block --

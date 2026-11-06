@@ -266,11 +266,13 @@ def check(
             if head_lines is None:
                 notes.append(f"{NOTE_UNREADABLE}:{path}")
             continue
+        # A replace that is no shorter than the span it overwrites rewrites or extends those lines in
+        # place (a modification); only a pure delete or a replace's surplus head lines are dropped.
         tracked = [
             i
-            for tag, i1, i2, _j1, _j2 in _opcodes(head_lines, new_lines)
+            for tag, i1, i2, j1, j2 in _opcodes(head_lines, new_lines)
             if tag in ("delete", "replace")
-            for i in range(i1, i2)
+            for i in range(i1 + (j2 - j1 if tag == "replace" else 0), i2)
         ]
         if not tracked:
             continue

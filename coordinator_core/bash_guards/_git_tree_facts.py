@@ -16,7 +16,9 @@ Contract, shared by every function:
   dispatches interleave (see `_dc_git_probe._git_probe_deadline`). `reset()` clears it.
 
 `staged_name_status` diffs `git_state.read_index` against HEAD's tree, pruning by
-in-memory tree hashes so only changed directories' tree objects are read.
+in-memory tree hashes so only changed directories' tree objects are read. An index over
+`INPROCESS_INDEX_BYTES_MAX` is not parsed here: one budgeted `git diff --cached -M -z` answers
+both `staged_name_status` and `staged_name_status_renames`.
 """
 
 from __future__ import annotations
@@ -169,6 +171,76 @@ def _plain_path(path: str) -> bool:
     return all(32 <= ord(c) < 127 and c not in '"\\' for c in path)
 
 
+#: Largest index (bytes) the in-process staged diff reads. The question it bounds: "can this
+#: diff finish inside the 200ms leg bar" -- parse plus tree hashing cost ~2.5us per entry, so
+#: 4 MiB (~30k entries) is ~75ms; a larger index is answered by one `git diff --cached` spawn.
+INPROCESS_INDEX_BYTES_MAX = 4 * 1024 * 1024
+
+
+def _index_too_large(top: str) -> bool:
+    from coordinator_core.git.git_dir import resolve_git_dir
+
+    try:
+        return (resolve_git_dir(top) / "index").stat().st_size > INPROCESS_INDEX_BYTES_MAX
+    except OSError:
+        return False
+
+
+def _spawn_status_m(top: str) -> Optional[Tuple[List[str], List[str]]]:
+    """One budgeted `git diff --cached --name-status -M -z`: `(rename_free_rows, m_lines)`.
+
+    `rename_free_rows` expands each `R` into `D old` + `A new` (what `--no-renames` prints);
+    `m_lines` are the `-M` lines (`R100\\told\\tnew`). None when the dispatch's probe budget is
+    spent, git fails, or a row letter other than A/M/D/R appears.
+    """
+    import os
+
+    from coordinator_core.bash_guards import _dc_git_probe
+    from coordinator_core.git.run import run_git
+
+    if _dc_git_probe._git_probe_budget_spent():
+        _dc_git_probe._git_probe_last_failure.set(
+            "the guard's git-probe budget was already spent, so the staged diff was never spawned"
+        )
+        return None
+    env = {k: v for k, v in os.environ.items() if k != "GIT_INDEX_FILE"}
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    res = run_git(["diff", "--cached", "--name-status", "-M", "-z"], cwd=top, env=env, binary=True)
+    if res.returncode != 0:
+        _dc_git_probe._git_probe_last_failure.set("git exited %d" % res.returncode)
+        return None
+    toks = [t.decode("utf-8", "surrogateescape") for t in res.stdout_bytes.split(b"\0")]
+    if toks and toks[-1] == "":
+        toks.pop()
+    free: List[Tuple[str, str]] = []
+    m_lines: List[str] = []
+    i = 0
+    while i < len(toks):
+        status = toks[i]
+        letter = status[:1]
+        if letter == "R" and i + 2 < len(toks):
+            old, new = toks[i + 1], toks[i + 2]
+            free.append((old, f"D\t{old}"))
+            free.append((new, f"A\t{new}"))
+            m_lines.append(f"{status}\t{old}\t{new}")
+            i += 3
+        elif letter in ("A", "M", "D") and i + 1 < len(toks):
+            free.append((toks[i + 1], f"{letter}\t{toks[i + 1]}"))
+            m_lines.append(f"{letter}\t{toks[i + 1]}")
+            i += 2
+        else:
+            return None
+    free.sort(key=lambda row: row[0].encode("utf-8", "surrogateescape"))
+    return [line for _, line in free], m_lines
+
+
+def _compute_spawn_status(cwd: str) -> Optional[Tuple[List[str], List[str]]]:
+    top = _compute_toplevel(cwd)
+    if top is None:
+        return None
+    return _spawn_status_m(top)
+
+
 def _compute_staged_name_status(cwd: str) -> Optional[List[str]]:
     from coordinator_core.git import git_state
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -177,6 +249,9 @@ def _compute_staged_name_status(cwd: str) -> Optional[List[str]]:
     top = _compute_toplevel(cwd)
     if top is None:
         return None
+    if _index_too_large(top):
+        both = _memoised("spawn_status", cwd, _compute_spawn_status)
+        return None if both is None else both[0]
     snap = git_state.read_index(top, fresh=True)
     head_tree = git_state.head_tree_sha(top)
     if head_tree is None or len(head_tree) != 40:
@@ -280,5 +355,23 @@ def head_commit(cwd: str) -> Optional[str]:
 def staged_name_status(cwd: str) -> Optional[List[str]]:
     """Staged changes as `diff --cached --name-status` lines ('A\\tpath', 'M\\tpath', 'D\\tpath'),
     or None to probe. An empty list means nothing is staged. Rename detection (-M) is not
-    performed: a caller that needs it, a SHA-256 repo or a missing object yields None."""
+    performed: a caller that needs it, a SHA-256 repo or a missing object yields None.
+    An index over `INPROCESS_INDEX_BYTES_MAX` is answered by one memoised git spawn instead."""
     return _memoised("staged_name_status", cwd, _compute_staged_name_status)
+
+
+def index_over_bound(cwd: str) -> bool:
+    """True when the repo's index exceeds `INPROCESS_INDEX_BYTES_MAX`: a caller that would parse
+    the whole index in-process should ask git for a scoped answer instead."""
+    top = toplevel(cwd)
+    return top is not None and _index_too_large(top)
+
+
+def staged_name_status_renames(cwd: str) -> Optional[List[str]]:
+    """`diff --cached --name-status -M` lines (`R100\\told\\tnew`), or None to probe. Answered only
+    for an index over `INPROCESS_INDEX_BYTES_MAX`, from the same single spawn as `staged_name_status`."""
+    top = toplevel(cwd)
+    if top is None or not _index_too_large(top):
+        return None
+    both = _memoised("spawn_status", cwd, _compute_spawn_status)
+    return None if both is None else both[1]

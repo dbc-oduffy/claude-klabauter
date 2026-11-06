@@ -632,3 +632,40 @@ def test_derived_only_cycle_no_longer_raises(caplog):
     with caplog.at_level("WARNING", logger=wave_map.__name__):
         build_waves(rows)
     assert caplog.text.count("dropped derived edge") == 2
+
+
+def _blocked(id_, writes, depends_on=None):
+    return _row(id_, writes, depends_on)._replace(blocked_on=True)
+
+
+def _after(rows):
+    return {n.row.id: set(n.after) for n in wave_map.build_dag(rows).nodes}
+
+
+def test_blocked_row_is_placed_after_its_overlap_siblings():
+    rows = [
+        _blocked("B", ["shared.py"]),
+        _row("S1", ["shared.py", "a.py"]),
+        _row("S2", ["shared.py", "b.py"]),
+    ]
+    after = _after(rows)
+    assert "B" not in after["S1"]
+    assert "B" not in after["S2"]
+    assert {"S1", "S2"} <= after["B"]
+
+
+def test_unblocked_overlap_keeps_declared_order_placement():
+    rows = [_row("B", ["shared.py"]), _row("S1", ["shared.py"])]
+    after = _after(rows)
+    assert after["S1"] == {"B"}
+    assert after["B"] == set()
+
+
+def test_sibling_declaring_depends_on_blocked_row_still_waits():
+    rows = [
+        _blocked("B", ["shared.py"]),
+        _row("S1", ["shared.py"], depends_on=[{"chunk": "B", "gate_kind": "unspecified"}]),
+    ]
+    after = _after(rows)
+    assert "B" in after["S1"]
+    assert "S1" not in after["B"]

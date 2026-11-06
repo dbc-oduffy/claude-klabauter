@@ -639,3 +639,62 @@ def test_stale_run_held_by_a_live_owner_is_never_reaped(repo, monkeypatch):
     monkeypatch.setattr(ar, "run_owner_holds", lambda root, r: r == STALE)
     out = _reap(repo, dry_run=True)
     assert STALE not in out["reaped"] and STALE2 in out["reaped"]
+
+
+def _stage(root: Path, run_id: str, session_id: str) -> None:
+    from datetime import datetime, timezone
+
+    rec = root / "state" / "warp" / run_id
+    rec.mkdir(parents=True, exist_ok=True)
+    (rec / "run-stage.json").write_text(
+        json.dumps({
+            "stage": "staged", "session_id": session_id,
+            "last_activity_at": datetime.now(timezone.utc).isoformat(),
+        }),
+        encoding="utf-8",
+    )
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_staged_run_of_a_dead_owner_is_reaped_and_a_live_owner_is_kept(bare, monkeypatch):
+    from coordinator_core.session import liveness
+
+    dead, alive = "ask-20261001T000010-dead01", "ask-20261001T000011-live01"
+    for run_id, sid in ((dead, "fe7a1a9f-0000-4000-8000-000000000001"), (alive, "fe7a1a9f-0000-4000-8000-000000000002")):
+        _stage(bare, run_id, sid)
+        _record(bare, run_id, age=run_token.TTL_SECONDS + 3600)
+    monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid.endswith("2"))
+
+    out = _reap(bare)
+
+    assert out["reaped"] == [dead]
+    assert {"run_id": alive, "reason": "live-workflow"} in out["skipped"]
+
+
+def test_reap_whose_records_already_match_head_is_ok(bare, monkeypatch):
+    from coordinator_core.warm import entry_seam
+
+    _record(bare, STALE, age=run_token.TTL_SECONDS + 3600)
+    monkeypatch.setattr(
+        entry_seam, "reentrant_dispatch",
+        lambda *a, **k: {"committed": False, "error": "nothing to commit -- all 2 path(s) already match HEAD.",
+                         "nothing_to_commit": True},
+    )
+
+    out = _reap(bare)
+
+    assert out["ok"] is True
+    assert out["reaped"] == [STALE]
+    assert "error" not in out
+
+
+def test_reap_commit_that_fails_for_another_reason_stays_an_error(bare, monkeypatch):
+    from coordinator_core.warm import entry_seam
+
+    _record(bare, STALE, age=run_token.TTL_SECONDS + 3600)
+    monkeypatch.setattr(entry_seam, "reentrant_dispatch", lambda *a, **k: {"committed": False, "error": "boom"})
+
+    out = _reap(bare)
+
+    assert out["ok"] is False

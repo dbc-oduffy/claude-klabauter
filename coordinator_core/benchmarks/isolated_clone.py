@@ -65,7 +65,6 @@ from __future__ import annotations
 import contextlib
 import os
 import shutil
-import stat
 import subprocess
 import sys
 import tempfile
@@ -73,6 +72,7 @@ import time
 from pathlib import Path
 from typing import Iterator, List, Optional, Tuple
 
+from coordinator_core.owner_safe_rmtree import make_removable
 from coordinator_core.win_portability import no_console_creationflags
 
 _TERMINATE_TIMEOUT_SECS = 5.0
@@ -160,7 +160,7 @@ def _rmtree_clearing_readonly(root: Path) -> None:
 
     def _retry(func, path, _exc):
         try:
-            os.chmod(path, stat.S_IWRITE)
+            make_removable(path)
             func(path)
         except OSError:
             pass

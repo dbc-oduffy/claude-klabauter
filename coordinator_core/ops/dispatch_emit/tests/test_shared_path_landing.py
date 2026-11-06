@@ -58,6 +58,19 @@ def test_firing_sessions_names_caller_and_run_token_session(tmp_path):
     assert land_run._firing_sessions(tmp_path, "no-such-run", None) == set()
 
 
+def test_firing_sessions_includes_recorded_emitter_and_peer_claim_by_emitter_is_self(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_run, land_run
+
+    monkeypatch.setattr(halted_run, "recorded_emitter", lambda root, rid: "lead-1" if rid == "r1" else None)
+    assert land_run._firing_sessions(tmp_path, "r1", "driver") == {"driver", "lead-1"}
+    assert land_run._firing_sessions(tmp_path, "r2", "driver") == {"driver"}
+    _claims(monkeypatch, ["lead-1"])
+    selves = land_run._firing_sessions(tmp_path, "r1", "driver")
+    assert land_run._peer_held(tmp_path, ["a/x.py"], "driver", "r1", None, self_sessions=selves) == {}
+    _claims(monkeypatch, ["lead-1", "sib"])
+    assert land_run._peer_held(tmp_path, ["a/x.py"], "driver", "r1", None, self_sessions=selves) == {"a/x.py": ["sib"]}
+
+
 def test_withheld_product_paths_all_reasons_unique_sorted():
     assert spl.withheld_product_paths(UNLANDED) == ["a/x.py", "b/y.py", "c/z.py"]
     assert spl.withheld_product_paths([]) == []

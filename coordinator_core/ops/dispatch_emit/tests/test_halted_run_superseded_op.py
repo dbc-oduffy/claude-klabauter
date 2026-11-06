@@ -652,3 +652,78 @@ def test_unhalted_run_without_stage_receipt_refuses(refused):
     root, record = refused
     (record / "stage-receipt.json").unlink()
     assert _call(root)["ok"] is False
+
+
+SIZING = "state/sizings/psz.yaml"
+CHILD = "warp-psz-20261026T000000-abcdef"
+PARENT = "ask-20261026T000000-0e64be"
+
+
+def _halt_child(root, run_id, base, path="a.txt"):
+    record = root / ask_contract.RECORD_DIR_ROOT / run_id
+    halted_run.write_halt_marker(record, halted=run_id, sizing_rel=SIZING, run_base_sha=base)
+    ask_contract.write_run_stage_at(record, "halted", now=HALT_AT)
+    halted_run.record_withheld(record, {path: "kept"})
+    kept_work.write(record, {"c": {"paths": {path: _blob(root, "kept-" + run_id)}}}, None)
+    return record
+
+
+def _parent(root):
+    """A staged parent ask of SIZING holding a live token and a live-run index row."""
+    import json
+    import time
+
+    from coordinator_core.ops.dispatch_emit import live_run_writes, run_token
+
+    record = root / ask_contract.RECORD_DIR_ROOT / PARENT
+    record.mkdir(parents=True)
+    (record / "run.json").write_text(json.dumps({"sizing_rel": SIZING}), encoding="utf-8")
+    ask_contract.write_run_stage_at(record, "staged", now=HALT_AT)
+    run_token.mint(root, PARENT, "scratch/w.mjs", session_id="s", sizing_rel=SIZING)
+    live_run_writes.index_mint(root, PARENT, time.time())
+    return record
+
+
+def _parent_held(root) -> tuple:
+    from coordinator_core.ops.dispatch_emit import live_run_index, run_token
+
+    rows = live_run_index.read(root, 150.0)
+    return run_token.is_live(root, PARENT), isinstance(rows, dict) and PARENT in rows
+
+
+def test_closing_last_child_ends_parent_token_row_and_stage(tmp_path):
+    _git(tmp_path, "init", "-q")
+    base = _commit(tmp_path, {"a.txt": "a0"}, date="2026-01-01T00:00:00Z")
+    _halt_child(tmp_path, CHILD, base)
+    parent = _parent(tmp_path)
+    assert _parent_held(tmp_path) == (True, True)
+    _commit(tmp_path, {"a.txt": "a-later"})
+    assert _call(tmp_path, CHILD)["ok"] is True
+    assert _parent_held(tmp_path) == (False, False)
+    assert ask_contract.read_run_stage(tmp_path, PARENT)["stage"] == "halted"
+    assert parent.is_dir()
+
+
+def test_closing_a_child_while_a_sibling_stays_halted_leaves_parent_live(tmp_path):
+    _git(tmp_path, "init", "-q")
+    base = _commit(tmp_path, {"a.txt": "a0", "b.txt": "b0"}, date="2026-01-01T00:00:00Z")
+    _halt_child(tmp_path, CHILD, base)
+    _halt_child(tmp_path, "warp-psz-20261026T000100-fedcba", base, path="b.txt")
+    _parent(tmp_path)
+    _commit(tmp_path, {"a.txt": "a-later"})
+    assert _call(tmp_path, CHILD)["ok"] is True
+    assert _parent_held(tmp_path) == (True, True)
+    assert ask_contract.read_run_stage(tmp_path, PARENT)["stage"] == "staged"
+
+
+def test_parent_of_another_sizing_is_untouched(tmp_path):
+    import json
+
+    _git(tmp_path, "init", "-q")
+    base = _commit(tmp_path, {"a.txt": "a0"}, date="2026-01-01T00:00:00Z")
+    _halt_child(tmp_path, CHILD, base)
+    record = _parent(tmp_path)
+    (record / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/other.yaml"}), encoding="utf-8")
+    _commit(tmp_path, {"a.txt": "a-later"})
+    assert _call(tmp_path, CHILD)["ok"] is True
+    assert _parent_held(tmp_path) == (True, True)

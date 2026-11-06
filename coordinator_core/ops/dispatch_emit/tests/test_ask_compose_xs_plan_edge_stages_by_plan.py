@@ -56,7 +56,7 @@ def test_composed_xs_workflow_stages_a_resumed_plan_in_the_gate_agents_stage_act
 
 def test_xs_adoption_and_plan_rel_cover_a_gate_reply_with_resume_plan(monkeypatch):
     script = _xs_script(monkeypatch)
-    assert "its arm is XS: run" in script.replace("\\'", "'")
+    assert "its arm is XS, or is S with a resume_plan in the gate reply: run" in script.replace("\\'", "'")
     assert "if (!_gate.halt && (_gate.arm === 'xs' || " in script
     assert "{ await _adoptStageReply(_gate.stage_reply); }" in script
     assert "(_gate.arm === 'xs' || (_gate.arm === 's' && _gate.resume_plan)" in script

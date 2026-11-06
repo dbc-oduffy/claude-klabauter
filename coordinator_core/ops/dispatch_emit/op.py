@@ -333,6 +333,33 @@ from coordinator_core.ops.review_mint.roster import (
 from coordinator_core.session.record_homes import home_dir
 from coordinator_core.ops._param_alias import aliased_param, spellings
 
+def _require_em_context_arrival(params: dict, em_brief: Any, root: Path) -> None:
+    """Refuse a run whose params name an `em_context_digest` when no EM-context block in its brief matches it.
+    No digest, no check. Trap: the digest names the full brief, which `load_em_brief` truncates past its byte cap."""
+    from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER, em_context_digest
+
+    digest = params.get("em_context_digest")
+    if not digest:
+        return
+    text = params.get("ask_brief")
+    if not text and params.get("ask_brief_file"):
+        try:
+            text = (Path(root) / str(params["ask_brief_file"])).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None
+    if not text and em_brief is not None:
+        text = em_brief.text
+    if isinstance(text, str) and EM_CONTEXT_MARKER in text:
+        if em_context_digest(text.rsplit(EM_CONTEXT_MARKER, 1)[1]) == digest:
+            return
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
+
+    raise SizingFireRefused([
+        f"em_context {str(digest)[:12]} did not arrive: the loaded brief has no matching EM-context block. "
+        "Resubmit with em_context."
+    ])
+
+
 def _installed_plugin_root() -> Optional[str]:
     """The coordinator plugin's content root from the on-disk install (the
     harness install record, then the configured content root); None when no
@@ -1161,6 +1188,7 @@ _PARAM_FIELDS = (
     Field("context", "str_list"),
     Field("ask_brief", "str"),
     Field("ask_brief_file", "str"),
+    Field("em_context_digest", "str"),
     Field("stop_after", "str"),
     Field("ask_source", "str"),
     Field("session_root", "str"),
@@ -2684,6 +2712,7 @@ def _dispatch_emit_body(
                     text=sizing_brief, source=sizing_rel,
                     context=em_brief.context if em_brief is not None else (),
                 )
+        _require_em_context_arrival(params, em_brief, ask_root)
         if em_brief is not None:
             ask_ctx["em_brief"] = em_brief
             receipt_extras = {"em_brief": _ask_brief.receipt_fields(em_brief)}

@@ -43,7 +43,7 @@ def test_halt_clause_names_kind_op_call_and_refire():
     assert f"op: '{REPIN_OP}'" in clause
     assert "coordinator-invoke" in clause and f"{REPIN_OP} \\'" in clause
     assert "JSON.stringify(_repinParams)" in clause
-    assert "refire: (_sizingRel ?" in clause
+    assert "refire: _refireCmd()" in clause  # the composer shares the run-time refire expression as _refireCmd()
 
 
 def test_clause_extracts_premise_check_from_review_entry_and_rows():

@@ -48,7 +48,7 @@ one contiguous balanced group at ``group_index`` of ``min(slices, group_count)``
 ``execute_review._GROUP_SLICES_JS`` applies; every other field is the whole-run reply. Without
 them ``slices`` is the full list.
 
-``run_id`` (instead of ``paths``) resolves the declared paths via ``declared_paths_for_run``: the run
+``run_id`` (instead of ``paths``) resolves the declared paths via ``declared_paths_and_held`` (peer-held paths included): the run
 manifest's ``review_declared_paths``, plus the leg footprint's ``writes`` only when ``leg`` is true.
 ``leg`` is explicit because ``leg-footprint.json`` outlives the ledger resume that wrote it, so
 presence cannot signal this fire has a leg. A run_id resolving to no path is a refusal naming the
@@ -82,7 +82,7 @@ import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path, PureWindowsPath
-from typing import Callable, List, Mapping, Optional, Sequence
+from typing import Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
@@ -603,10 +603,13 @@ def review_prep(
     run_id: str = "",
     live_runs: Optional[Mapping[str, LiveRun]] = None,
     undeclared_edits: Sequence[str] = (),
+    peer_held: Sequence[str] = (),
 ) -> dict:
     """Freeze, partition and claim-check one run's diff once per ``slice_prefix``; see the module
     docstring. ``undeclared_edits`` names the members of ``paths`` that no row declared and that
     changed since the stage dirt snapshot; the reply and sidecar carry them as ``undeclared_edits``.
+    ``peer_held`` names members of ``paths`` a live session touches; they stay in review and ride on
+    the reply's ``peer_held`` next to those ``live_runs`` withholds.
     With ``live_runs``, a path another live run withholds or claims stays in review and is
     listed in ``peer_held``; the peer-hunks gate settles it at commit. The handler derives ``live_runs``
     from halted runs' withheld sets (``land_run.foreign_halted_withheld``) when ``params.run_id`` is
@@ -622,9 +625,8 @@ def review_prep(
         return _fail("group_index must be in [0, group_count) and group_count at least 1")
     excluded = [{"path": p, "reason": "outside-repo"} for p in paths if not _inside_repo(p)]
     paths = [posixpath.normpath(p.replace("\\", "/")) if ".." in p else p for p in paths if _inside_repo(p)]
-    peer_held = (
-        [p for p in paths if blocks(owns_path(run_id, p, live_runs, plan_path))] if live_runs else []
-    )
+    run_held = [p for p in paths if blocks(owns_path(run_id, p, live_runs, plan_path))] if live_runs else []
+    peer_held = [*run_held, *(p for p in peer_held if p in paths and p not in run_held)]
     if not paths:
         # A pathspec-less `git diff <base>` would diff the whole tree: answer before any git, lock or sidecar.
         zero = _fail("")
@@ -1025,14 +1027,18 @@ def _read_json_object(path: Path) -> Optional[dict]:
     return bounded_json_object(path)
 
 
-def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, own_session: str = "") -> List[str]:
-    """The run's whole write set (``run_write_set``: manifest ``review_declared_paths``, leg
-    footprint writes, credited chunk writes, halted-withheld paths), deduped, minus paths a live
-    session other than ``own_session`` holds; an empty ``own_session`` lets ``_peer_held`` resolve
-    the calling session itself. Raises ValueError (one fact) on an unsafe run_id, a missing manifest,
-    a non-list-of-str field, a missing footprint under ``leg``, or an empty write set. Spawns nothing."""
+def declared_paths_and_held(
+    repo_root: Path, run_id: str, *, leg: bool = False, own_session: str = ""
+) -> Tuple[List[str], Dict[str, List[str]]]:
+    """``(paths, held)``: the run's whole write set (``run_write_set``: manifest ``review_declared_paths``,
+    leg footprint writes, credited chunk writes, halted-withheld paths), deduped, peer-held paths
+    included, plus ``{path: [session ids]}`` for those a live session other than ``own_session`` holds.
+    Review is read-only, so a path the run wrote stays reviewable when a peer touched it. An empty
+    ``own_session`` lets ``_peer_held`` resolve the calling session itself. Raises ValueError (one fact)
+    on an unsafe run_id, a missing manifest, a non-list-of-str field, a missing footprint under ``leg``,
+    or an empty write set. Spawns nothing."""
     from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
-    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set_split
+    from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set_full
 
     base = record_dir(repo_root, run_id)
     manifest = _read_json_object(base / "manifest.json")
@@ -1046,8 +1052,17 @@ def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, o
         writes = footprint.get("writes") if footprint is not None else None
         if not isinstance(writes, list) or not all(isinstance(p, str) for p in writes):
             raise ValueError(f"no readable leg footprint writes list for run {run_id!r}")
-    kept, held = run_write_set_split(repo_root, run_id, own_session)
-    resolved = list(kept)
+    ordered, held = run_write_set_full(repo_root, run_id, own_session)
+    if not ordered:
+        raise ValueError(f"run {run_id!r} has no reviewable paths (none declared, or all scratch)")
+    return list(ordered), held
+
+
+def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, own_session: str = "") -> List[str]:
+    """``declared_paths_and_held``'s paths minus those a live peer holds: the landing-side view.
+    Raises ValueError naming each peer-held path and holder when none survive."""
+    ordered, held = declared_paths_and_held(repo_root, run_id, leg=leg, own_session=own_session)
+    resolved = [p for p in ordered if p not in held]
     if not resolved:
         named = "; ".join(f"{p} (held by {', '.join(sids)})" for p, sids in held.items())
         raise ValueError(
@@ -1102,7 +1117,7 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
             return _fail("review.prep leg must be a boolean")
         try:
             with review_prep_legs.leg("handler.declared_paths"):
-                paths = declared_paths_for_run(
+                paths, held_by_peer = declared_paths_and_held(
                     repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
                 )
         except ValueError as exc:
@@ -1112,6 +1127,7 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
         paths = [*paths, *undeclared]
     else:
         undeclared = []
+        held_by_peer = {}
         if leg is not None:
             return _fail("review.prep leg is accepted only with run_id")
         if not isinstance(paths, list):
@@ -1154,4 +1170,5 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
         run_id=run_id,
         live_runs=live_runs,
         undeclared_edits=undeclared,
+        peer_held=list(held_by_peer),
     )

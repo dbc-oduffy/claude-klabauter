@@ -728,20 +728,19 @@ int build_hook_pass_loudly_envelope(buf_t *out, const char *reason, const char *
     return ok;
 }
 
-int build_hook_post_delivery_envelope(buf_t *out, const char *op, long deadline_ms, const char *event_name) {
+int build_hook_engine_failure_allow_envelope(buf_t *out, const char *detail, const char *event_name) {
     char text[384];
     snprintf(text, sizeof text,
-             "the engine did not answer %s within the %ld ms hook read deadline; the op may "
-             "have completed. Check for an existing run record before re-submitting.",
-             (op && *op) ? op : "this op", deadline_ms);
+             "coordinator: engine failed (%.200s); guard not evaluated, command allowed.",
+             (detail && *detail) ? detail : "no detail");
     int ok = 1;
-    ok &= buf_append_cstr(out, "{\"systemMessage\":\"coordinator: ");
+    ok &= buf_append_cstr(out, "{\"systemMessage\":\"");
     ok &= buf_append_json_escaped(out, text, strlen(text));
     ok &= buf_append_cstr(out, "\",\"suppressOutput\":false");
     if (event_name && *event_name && strcmp(event_name, "SessionEnd") != 0) {
         ok &= buf_append_cstr(out, ",\"hookSpecificOutput\":{\"hookEventName\":\"");
         ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
-        ok &= buf_append_cstr(out, "\",\"additionalContext\":\"coordinator: ");
+        ok &= buf_append_cstr(out, "\",\"additionalContext\":\"");
         ok &= buf_append_json_escaped(out, text, strlen(text));
         ok &= buf_append_cstr(out, "\"}");
     }

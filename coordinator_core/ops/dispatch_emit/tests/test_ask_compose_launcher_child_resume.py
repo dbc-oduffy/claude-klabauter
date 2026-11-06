@@ -251,12 +251,13 @@ def test_a_replayed_reply_without_a_twin_path_takes_the_twin_from_a_fresh_stage_
     assert got["pending"] == {"handle": _H_NEW, "twin_path": twin} and got["calls"] == 1
 
 
-def test_a_reply_that_names_its_twin_path_is_kept_and_runs_no_recover():
+def test_a_reply_that_names_its_twin_path_is_still_replaced_by_the_fresh_stage_op_twin():
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
-    twin = staged_twin_rel("ask-r1", "6f" * 32)
-    got = _adopt_launcher_reply({"manifest_handle": _H_OLD, "twin_path": twin}, {"manifest_handle": _H_NEW, "twin_path": "x"})
-    assert got["pending"] == {"handle": _H_OLD, "twin_path": twin} and got["calls"] == 0
+    old = staged_twin_rel("ask-r1", "6f" * 32)
+    new = staged_twin_rel("ask-r1", "89" * 32)
+    got = _adopt_launcher_reply({"manifest_handle": _H_OLD, "twin_path": old}, {"manifest_handle": _H_NEW, "twin_path": new})
+    assert got["pending"] == {"handle": _H_NEW, "twin_path": new} and got["calls"] == 1
 
 
 def test_a_recover_reply_that_names_no_twin_leaves_the_replayed_handle():

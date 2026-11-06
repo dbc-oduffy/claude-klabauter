@@ -31,6 +31,7 @@ import os
 import re
 import select
 import shlex
+import signal
 import socket
 import stat
 import subprocess
@@ -246,16 +247,84 @@ def pid_domain():
     return "darwin" if sys.platform == "darwin" else "linux"
 
 
-def check_name_free(name):
-    """Exit unless `name` is neither a live local session nor held by a live mirror relay."""
+def proc_start(pid):
+    """Raw `ps` start stamp of `pid` ('' when no such process); None when ps cannot answer."""
+    try:
+        return subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                              capture_output=True, text=True).stdout.strip()
+    except OSError:
+        return None
+
+
+def stale_holder(pid, d):
+    """Is this mirror entry a corpse: its pid is live only because the OS recycled it?
+
+    A hard reset leaves mirror entries behind; a recycled pid passes `alive` and would
+    hold the name forever. A mirror records the start stamp it was born with, so a
+    different stamp on that pid means another process. No recorded stamp, or ps unable
+    to answer, is never proof of staleness.
+    """
+    recorded = d.get("procStart")
+    if not isinstance(recorded, str) or not recorded:
+        return False
+    actual = proc_start(pid)
+    return actual is not None and actual != recorded
+
+
+def client_address():
+    """Source address of the ssh client driving this relay ('' when not under sshd)."""
+    parts = os.environ.get("SSH_CONNECTION", "").split()
+    return parts[0] if parts else ""
+
+
+def superseded_holder(d, client):
+    """Is this live mirror relay held open by a dead connection of the same near box?
+
+    A near box that hard-resets leaves its old `inbox` relay alive on a half-open ssh; the
+    restarted client (one per name per near box) asks for the same name from the same
+    address, so the old relay can only be that client's own ghost. No recorded or current
+    address, or a different one, never proves it.
+    """
+    recorded = d.get("unimatrixClient")
+    return bool(client) and isinstance(recorded, str) and recorded == client
+
+
+def check_name_free(name, client=""):
+    """Exit unless `name` is neither a live local session nor held by a live mirror relay.
+
+    Returns (pid, key file, kill) for each mirror holder of `name` that does not count as a
+    holder: a recycled-pid corpse (kill False) or a live relay superseded by `client`'s own
+    reconnect (kill True).
+    """
     live = list(entries())
     if any(d.get("name") == name and not d.get("unimatrixMirror") for _, d, _ in live):
         sys.exit(f"name {name} belongs to a live local session")
     # A second live mirror would duplicate the name, and its bind would orphan the older
     # relay on an unlinked socket; the caller stops the old one first.
-    held = [p for p, d, _ in live if d.get("name") == name and d.get("unimatrixMirror")]
+    mirrors = [(p, d, k) for p, d, k in live if d.get("name") == name and d.get("unimatrixMirror")]
+    freed = [(p, k, False) for p, d, k in mirrors if stale_holder(p, d)]
+    freed += [(p, k, True) for p, d, k in mirrors
+              if p not in {f[0] for f in freed} and superseded_holder(d, client)]
+    held = [p for p, _, _ in mirrors if p not in {f[0] for f in freed}]
     if held:
         sys.exit(f"name {name} already mirrored by live relay pid {held[0]}")
+    return freed
+
+
+def drop_stale(freed):
+    """Stop each superseded relay, then remove the registry entry and key of every freed holder."""
+    base = os.path.expanduser(SESS)
+    for pid, key, kill in freed:
+        if kill:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except OSError:
+                pass
+        for f in (f"{pid}.json", key):
+            try:
+                os.unlink(os.path.join(base, f))
+            except OSError:
+                pass
 
 
 def mirror_entry(raw, name):
@@ -306,7 +375,8 @@ def serve(srv, stdin_fd, out):
 def inbox(name):
     if endpoint_kind() == "pipe":
         sys.exit("inbox: mirror sessions are hosted on macOS/Linux boxes only")
-    check_name_free(name)
+    client = client_address()
+    drop_stale(check_name_free(name, client))
     entry = mirror_entry(json.loads(sys.stdin.readline()), name)
     key_body = sys.stdin.readline().rstrip("\n")
     pid = os.getpid()
@@ -323,7 +393,7 @@ def inbox(name):
     ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
                         capture_output=True, text=True, check=True).stdout.strip()
     entry.update(pid=pid, procStart=ps, pidDomain=pid_domain(),
-                 messagingSocketPath=path, unimatrixMirror=True)
+                 messagingSocketPath=path, unimatrixMirror=True, unimatrixClient=client)
     entry_path = os.path.join(os.path.expanduser(SESS), f"{pid}.json")
     key_path = os.path.join(os.path.expanduser(SESS), key_file_name(pid, path))
     with open(entry_path, "w", encoding="utf-8") as fh:

@@ -808,6 +808,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.run_terminality — COMPUTE_ONLY, but "common_dir": run_dir is repo-relative, read in the CALLING
     # repo's state/warp (as fleet.handoffs_for_plan), so the warm engine must resolve the caller's worktree.
     "dispatch.run_terminality":                 "common_dir",
+    # dispatch.docs_check_rag_gate — COMPUTE_ONLY, "common_dir": detects UE and example-retrieval-repo in the CALLING
+    # repo (`repo_root`), so the warm engine must resolve the caller's worktree.
+    "dispatch.docs_check_rag_gate":             "common_dir",
     # close.background — MUTATING: pays the run's queued close legs; the caller's own worktree.
     "close.background":                         "common_dir",
     # close.review — MUTATING: pays the run's queued review leg; the caller's own worktree.

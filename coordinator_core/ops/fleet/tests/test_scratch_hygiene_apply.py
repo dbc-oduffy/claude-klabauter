@@ -161,6 +161,27 @@ def test_remove_tree_no_follow_on_plain_tree(tmp_path):
     assert not root.exists()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX directory mode bits")
+def test_rmdir_retry_keeps_owner_rwx_on_directory(tmp_path, monkeypatch):
+    root = tmp_path / "t"
+    root.mkdir()
+    root.chmod(0o500)
+    real_rmdir = os.rmdir
+    modes: list[int] = []
+
+    def flaky_rmdir(p, *a, **kw):
+        if not modes:
+            modes.append(-1)
+            raise PermissionError(13, "denied", str(p))
+        modes.append(os.stat(p).st_mode & 0o777)
+        return real_rmdir(p, *a, **kw)
+
+    monkeypatch.setattr(os, "rmdir", flaky_rmdir)
+    remove_tree_no_follow(root)
+    assert modes[1] & 0o700 == 0o700
+    assert not root.exists()
+
+
 def test_missing_entry_reported_deleted(fx):
     gone = fx.scratch / "never-existed"
     out = apply_purge(fx.repo_root, [purge_record(REPO_NAME, gone, "would-delete", repo_root=fx.repo_root)], recheck=_always_delete)

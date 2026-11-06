@@ -1393,6 +1393,9 @@ OP_TIMEOUT_OVERRIDES = type(type.__dict__)(dict(_OP_TIMEOUT_OVERRIDES))
 _NEVER_DENY_ON_MISSING_KEY_OPS = frozenset({
     "hooks.preuse_bash_dispatch",
     "hooks.postuse_stop_family_dispatch",
+    "hooks.guard_manufactured_blocker",
+    "hooks.guard_turn_intent",
+    "hooks.guard_terminal_review",
 })
 
 
@@ -2577,8 +2580,9 @@ async def _dispatch_message_impl(msg: dict) -> dict:
         # correctness -- misattributing a touched-file write to the wrong
         # repo is worse than the refusal AC-1c already gives them, and
         # test_dispatch_message.py pins that fail-loud contract for those.
-        # This degrade applies only to the PreToolUse/PostToolUse guard-
-        # chain composition ops named in the issue, where `repo_root` is
+        # This degrade applies only to the Pre/PostToolUse guard-chain
+        # composition ops and the Stop guard ops (a non-Claude host payload
+        # carries no _origin_worktree), where `repo_root` is
         # used only to scope the composed guard chain, not to attribute a
         # write.
         if method in _NEVER_DENY_ON_MISSING_KEY_OPS:
@@ -3138,9 +3142,14 @@ async def dispatch_message(
     _op_token = _dispatch_op_var.set(method if isinstance(method, str) else None)
     # Bound BEFORE the handler's to_thread hop (op_row_fields' trap): only mutation of
     # this dict crosses back from the handler's context copy.
-    from coordinator_core.telemetry import op_row_fields as _op_row_fields
+    _op_row_fields = None
+    _row_fields_token = None
+    try:
+        from coordinator_core.telemetry import op_row_fields as _op_row_fields
 
-    _row_fields_token = _op_row_fields.begin()
+        _row_fields_token = _op_row_fields.begin()
+    except Exception:
+        _op_row_fields = None
     try:
         response = await _dispatch_message_impl(msg)
         error = response.get("error") if isinstance(response, dict) else None
@@ -3162,7 +3171,10 @@ async def dispatch_message(
     finally:
         _corr_id_var.reset(_corr_token)
         _dispatch_op_var.reset(_op_token)
-        _row_fields = _op_row_fields.drain(_row_fields_token)
+        try:
+            _row_fields = _op_row_fields.drain(_row_fields_token) if _op_row_fields is not None else {}
+        except Exception:
+            _row_fields = {}
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
         span_ms = (_time.process_time() - process_start) * 1000.0
         uncontaminated = _exit_dispatch(_record)

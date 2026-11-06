@@ -1571,10 +1571,35 @@ static int emit_indeterminate(const char *detail) {
     return 1;
 }
 
-/* Hook mode, pre-check not armed: the op may have completed, so the caller
- * gets a hook envelope naming the deadline and the op, never the JSON-RPC body. */
-static int emit_hook_post_delivery(void) {
+/* One-line allow advisory for a post-delivery engine failure of a
+ * non-irreversible payload; never carries a permissionDecision. */
+static int door_engine_failure_allow_envelope(buf_t *out, const char *detail, const char *event_name) {
+    char text[384];
+    snprintf(text, sizeof text,
+             "coordinator: engine failed (%s); guard not evaluated, command allowed.",
+             (detail && *detail) ? detail : "no detail");
+    int ok = 1;
+    ok &= buf_append_cstr(out, "{\"systemMessage\":\"");
+    ok &= buf_append_json_escaped(out, text, strlen(text));
+    ok &= buf_append_cstr(out, "\",\"suppressOutput\":false");
+    if (event_name && *event_name && strcmp(event_name, "SessionEnd") != 0) {
+        ok &= buf_append_cstr(out, ",\"hookSpecificOutput\":{\"hookEventName\":\"");
+        ok &= buf_append_json_escaped(out, event_name, strlen(event_name));
+        ok &= buf_append_cstr(out, "\",\"additionalContext\":\"");
+        ok &= buf_append_json_escaped(out, text, strlen(text));
+        ok &= buf_append_cstr(out, "\"}");
+    }
+    ok &= buf_append_cstr(out, "}\n");
+    return ok;
+}
+
+/* Hook mode, non-irreversible payload: an engine-ask is spooled, anything else
+ * gets the one-line engine-failure allow advisory, never the JSON-RPC body. */
+static int emit_hook_post_delivery(const char *full_detail) {
     buf_t event, out;
+    /* Bounded so the advisory's trailing "command allowed." survives its fixed buffer. */
+    char detail[201];
+    snprintf(detail, sizeof detail, "%.200s", full_detail ? full_detail : "");
     const char *event_name = NULL;
     int have_event = buf_init(&event, 32);
     if (have_event && g_hook_payload &&
@@ -1585,7 +1610,7 @@ static int emit_hook_post_delivery(void) {
     int spooled = spool_submit_ask("coordinator-door: engine gave no answer in time", spool_id);
     int built = buf_init(&out, 1024) &&
         (spooled ? build_hook_spooled_envelope(&out, spool_id, event_name)
-                 : build_hook_post_delivery_envelope(&out, g_hook_op, DOOR_HOOK_READ_DEADLINE_MS, event_name));
+                 : door_engine_failure_allow_envelope(&out, detail, event_name));
     if (have_event) free(event.data);
     if (!built) {
         fwprintf(stderr, L"door: engine gave no answer in time: %hs\n", g_hook_op);
@@ -1597,11 +1622,10 @@ static int emit_hook_post_delivery(void) {
     return 0;
 }
 
-/* Every post-delivery failure of the warm read. For the pre-checked hook
- * entrypoint the guard is idempotent, so the answer is the pre-check's
- * rewrite when it matched, else a loud pass; any other hook op gets a
- * hook envelope naming the timeout; any other caller keeps the
- * indeterminate refusal (it may have mutated). */
+/* Every post-delivery failure of the warm read. Hook mode: an irreversible
+ * payload is denied; else the pre-check's rewrite when it matched; else the
+ * one-line allow advisory. Any other caller keeps the indeterminate refusal
+ * (it may have mutated). */
 static int emit_post_delivery_failure(const char *detail, int argc, wchar_t **wargv,
                                       const wchar_t *engine_root_w) {
     if (g_door_hook_mode && g_hook_payload &&
@@ -1610,11 +1634,8 @@ static int emit_post_delivery_failure(const char *detail, int argc, wchar_t **wa
         door_irreversible_deny_reason(reason, sizeof reason, detail);
         return emit_hook_deny(reason);
     }
-    if (g_precheck_armed) {
-        if (emit_precheck_if_matched()) return 0;
-        return emit_hook_pass_loudly(detail);
-    }
-    if (g_door_hook_mode) return emit_hook_post_delivery();
+    if (g_precheck_armed && emit_precheck_if_matched()) return 0;
+    if (g_door_hook_mode) return emit_hook_post_delivery(detail);
     if (door_invocation_is_replay_safe_w(door_entrypoint_basename(), argc, wargv)) {
         fwprintf(stderr,
                  L"[door] %ls %ls got no usable warm response (%hs); re-running cold once (replay-safe)\n",

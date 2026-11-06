@@ -257,6 +257,41 @@ def test_ensure_private_dir_lands_0700_under_a_permissive_umask(tmp_path: Path) 
 
 
 @posix_only
+@pytest.mark.parametrize("bad_mode", [0o200, 0o500, 0o600, 0o000])
+def test_ensure_private_dir_repairs_a_leaf_lacking_owner_rwx(tmp_path: Path, bad_mode: int) -> None:
+    """A leaf with no group/other bits but missing owner r/w/x (a 0200 left by
+    an rmtree retry) is repaired to 0700, not accepted."""
+    import os
+    import stat
+
+    leaf = tmp_path / "svc"
+    leaf.mkdir(mode=0o700)
+    os.chmod(leaf, bad_mode)
+    try:
+        target = election.ensure_private_dir(leaf)
+        assert stat.S_IMODE(os.lstat(target).st_mode) == 0o700
+    finally:
+        os.chmod(leaf, 0o700)
+
+
+@posix_only
+def test_ensure_private_dir_still_refuses_a_symlink_to_a_bad_mode_dir(tmp_path: Path) -> None:
+    import os
+
+    real = tmp_path / "real"
+    real.mkdir(mode=0o700)
+    os.chmod(real, 0o200)
+    link = tmp_path / "link"
+    link.symlink_to(real, target_is_directory=True)
+    try:
+        with pytest.raises(election.InsecureRuntimeDirError):
+            election.ensure_private_dir(link)
+        assert (os.lstat(real).st_mode & 0o777) == 0o200
+    finally:
+        os.chmod(real, 0o700)
+
+
+@posix_only
 def test_ensure_private_dir_refuses_a_symlink(tmp_path: Path) -> None:
     real = tmp_path / "real"
     real.mkdir(mode=0o700)

@@ -18,6 +18,7 @@ import pytest
 import coordinator_core.ipc
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit.completion_gate import JUDGE_AGENT
 from coordinator_core.ops.dispatch_emit.commit_request import (
     MARKER_PREFIX,
     ChunkCommit,
@@ -43,6 +44,14 @@ _REVIEWED = {
     "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
     "wave_reviews": [{"agent_type": "coordinator:reviewer", "verdict": "PASS", "sidecar_path": "../wave-review.md"}],
 }
+
+
+# A met criterion the completion gate accepts: judge-authored, with captured falsifier output.
+_JUDGED = {
+    "status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md",
+    "authored_by": JUDGE_AGENT, "falsifier": {"verdict": "pass", "output": "a.py exists at HEAD"},
+}
+_TESTS_PASS = {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"}
 
 
 def _call(repo: Path, params: dict) -> dict:
@@ -311,6 +320,10 @@ def test_zero_stage_inline_review_runs_bookkeep_wave_and_review_stamp_mints(repo
                 "prep_sidecar": prep_rel,
                 "plan_id": plan_id,
                 "wave_sidecar_paths": [wave_sidecar_rel],
+                "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [],
+                         "slice_files": ["coordinator_core/foo.py"]},
+                "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
+                "tests": {**_TESTS_PASS, "edited": ["coordinator_core/foo.py"]},
             },
         },
     )
@@ -965,7 +978,7 @@ def test_a_digest_carrying_stage_returns_mints_the_review_stamp_into_the_coded_c
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
         "tests": {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"},
-        "criterion": {"status": "met", "observation": "a.py exists", "sidecar": None},
+        "criterion": {**_JUDGED, "observation": "a.py exists", "sidecar": None},
     }
     out = _call(repo, {"script_path": script, "incomplete_chunks": [], "session_id": session,
                        "inline_review": inline_review})
@@ -1043,15 +1056,15 @@ def test_a_met_criterion_on_the_last_open_row_flips_the_plan_implemented(repo):
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
-        "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
-        "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+        "tests": dict(_TESTS_PASS),
+        "criterion": dict(_JUDGED),
     }
     # The 500ms budget is pinned by the tree measure in
     # coordinator_core/benchmarks/tests/test_terminal_commit_process_budget.py.
     out = _call(repo, {"script_path": script, "incomplete_chunks": [],
                        "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
     assert out["review_stamp"] == "minted", out.get("review_stamp_refusal")
-    assert out["plan_status"] == "implemented", out.get("plan_status_refusal")
+    assert out["plan_status"] == "implemented", (out.get("plan_status_refusal"), out.get("plan_status_reason"))
     committed = _show(repo, "HEAD:docs/plan.md")
     assert "status: implemented" in committed
     assert "falsifier_output: a.py exists at HEAD" in committed
@@ -1071,8 +1084,8 @@ def test_a_retried_flip_over_an_already_recorded_verdict_stays_implemented(repo)
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
-        "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
-        "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+        "tests": dict(_TESTS_PASS),
+        "criterion": dict(_JUDGED),
     }
     out = _call(repo, {"script_path": script, "incomplete_chunks": [],
                        "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
@@ -1080,7 +1093,7 @@ def test_a_retried_flip_over_an_already_recorded_verdict_stays_implemented(repo)
     plan = repo / "docs" / "plan.md"
     plan.write_text(plan.read_text(encoding="utf-8").replace("status: implemented", "status: executing", 1),
                     encoding="utf-8")
-    retry = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", out["sha"])
+    retry = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", out["sha"], inline_review=inline_review)
     assert retry == {"plan_status": "implemented"}, retry
     assert "status: implemented" in plan.read_text(encoding="utf-8")
 
@@ -1097,8 +1110,8 @@ def test_a_met_criterion_flips_a_plan_that_was_never_committed(repo):
         "plan_id": "pln-x-123456", "prep_sidecar": None, "wave_sidecar_paths": [],
         "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
         "delivery": {"verdict": "PASS", "product_files": 1, "claims_unbacked": 0},
-        "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
-        "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+        "tests": dict(_TESTS_PASS),
+        "criterion": dict(_JUDGED),
     }
     out = _call(repo, {"script_path": script, "incomplete_chunks": [],
                        "session_id": "11111111-2222-3333-4444-555555555555", "inline_review": inline_review})
@@ -1204,8 +1217,8 @@ def test_a_zero_file_pass_rerun_lands_a_fresh_review_anchor_and_stamps_the_plan(
             "prep": {"run_base_sha": "a" * 40, "product_files": files, "foreign_claims": [],
                      "slice_files": ["a.py"]},
             "delivery": {"verdict": verdict, "product_files": files, "claims_unbacked": 0},
-            "tests": {"status": "not_run", "run": 0, "failed": 0, "sidecar": None},
-            "criterion": {"status": "met", "observation": "a.py exists at HEAD", "sidecar": "j.md"},
+            "tests": dict(_TESTS_PASS),
+            "criterion": dict(_JUDGED),
         }
 
     s1, s2 = "11111111-2222-3333-4444-555555555555", "99999999-2222-3333-4444-555555555555"
@@ -1321,7 +1334,9 @@ def test_a_goal_gate_refusal_keeps_its_cause_in_the_reported_text(repo):
     plan.write_text(
         plan.read_text(encoding="utf-8").replace(
             "---\n\n# Plan",
-            "review_stamp:\n  criterion:\n    status: met\n    observation: a.py exists\n---\n\n# Plan", 1),
+            "review_stamp:\n  tests: {status: pass, run: 1, failed: 0, sidecar: t.md}\n  criterion:\n"
+            f"    status: met\n    observation: a.py exists\n    authored_by: {JUDGE_AGENT}\n"
+            "    falsifier: {verdict: pass, output: a.py}\n---\n\n# Plan", 1),
         encoding="utf-8")
     out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", "a" * 40)
     assert out["plan_status"] == "refused", out
@@ -1435,7 +1450,7 @@ def _review_record_call(repo: Path, *, with_plan: bool, allow_empty: bool = Fals
         (repo / "docs" / "plans" / "ex.md").write_text(
             f"---\nplan_id: {_RR_PLAN_ID}\n---\n# Ex\n", encoding="utf-8"
         )
-        _git(["add", "-A"], repo)
+        _git(["add", "docs/plans/ex.md"], repo)
         _git(["commit", "-q", "-m", "add plan"], repo)
         plan_rel = "docs/plans/ex.md"
     request = CommitRequest(
@@ -1458,6 +1473,9 @@ def _review_record_call(repo: Path, *, with_plan: bool, allow_empty: bool = Fals
                 "prep_sidecar": f"{base}/prep.md",
                 "plan_id": _RR_PLAN_ID,
                 "wave_sidecar_paths": [f"{base}/wave-code-reviewer.md"],
+                "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [],
+                         "slice_files": ["foo.py"]},
+                "tests": {**_TESTS_PASS, "edited": ["foo.py"]},
             },
         },
     )
@@ -1475,7 +1493,7 @@ def test_review_firing_writes_reviews_row_into_terminal_commit(repo):
 
     out = _review_record_call(repo, with_plan=True)
     assert out["committed"] is True, out
-    assert "review_record_error" not in out
+    assert "review_record_error" not in out, out.get("review_record_error")
     sidecar = repo / "docs" / "plans" / "ex.evidence.yaml"
     reviews = yaml.safe_load(sidecar.read_text(encoding="utf-8"))["reviews"]
     assert len(reviews) == 1
@@ -1487,7 +1505,7 @@ def test_review_firing_writes_reviews_row_into_terminal_commit(repo):
         "max_severity": "P1",
         "applied": 1,
     }
-    assert "docs/plans/ex.evidence.yaml" in _commit_files(repo, out["sha"])
+    assert "docs/plans/ex.evidence.yaml" in _commit_files(repo, out["process_sha"])
 
 
 def test_review_firing_without_plan_path_writes_no_evidence(repo):

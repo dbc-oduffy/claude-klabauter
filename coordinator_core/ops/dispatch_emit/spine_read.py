@@ -976,6 +976,7 @@ class EmitterRow(NamedTuple):
     appends: tuple = ()
     memo_send: Optional[Mapping] = None
     disjoint_parallel: bool = False
+    blocked_on: bool = False
 
 
 _YAML_LOADER = SAFE_LOADER
@@ -1502,6 +1503,7 @@ def read_spine(
                 ),
                 memo_send=memo_draft_fields(raw)[0] if memo_row_dispatchable(raw) else None,
                 disjoint_parallel=raw.get("disjoint_parallel") is True,
+                blocked_on=bool(raw.get("blocked_on")),
             )
         )
 

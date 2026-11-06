@@ -111,9 +111,17 @@ def test_a_sibling_sizing_with_an_extended_stem_does_not_shadow_the_newest_dir(t
     assert hr.halted_run_for(tmp_path, SIZING) == d.name
 
 
+def test_a_marker_bound_to_the_same_stem_in_another_dir_resolves_and_is_rebound(tmp_path):
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="x", sizing_rel="state/sizings/2026-11/2026-10-16-foo.yaml")
+    assert hr.halted_run_to_resume(tmp_path, SIZING) == d.name
+    assert json.loads((d / hr.HALTED_FILE).read_text())["sizing_rel"] == SIZING
+    assert hr.halted_run_to_resume(tmp_path, SIZING, build=False) == d.name
+
+
 def test_sizing_rel_mismatch(tmp_path):
     hr.write_halt_marker(_dir(tmp_path, "20261016T010000-aaaaaa"), halted="x",
-                         sizing_rel="state/sizings/other/2026-10-16-foo.yaml")
+                         sizing_rel="state/sizings/other/2026-10-16-bar.yaml")
     assert hr.halted_run_for(tmp_path, SIZING) is None
 
 
@@ -578,3 +586,23 @@ def test_the_hook_path_builds_a_small_unbuilt_index_inline(tmp_path):
     sentinel = tmp_path / hr.LOOKUP_INDEX_DIR / hr.LOOKUP_SENTINEL
     assert hr.halted_run_to_resume(tmp_path, SIZING, build=False) is None
     assert sentinel.exists()
+
+
+def test_rag_corpus_down_marker_carries_the_restore_message_in_a_refire_envelope(tmp_path):
+    from coordinator_core.ops.dispatch_emit.rag_use import RESTORE_MESSAGE
+
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    data = json.loads(hr.write_halt_marker(d, halted="rag_corpus_down", sizing_rel=SIZING).read_text())
+    assert data["next_action"]["detail"] == RESTORE_MESSAGE
+    assert data["next_action"]["kind"] == "refire"
+    other_dir = _dir(tmp_path, "20261016T020000-bbbbbb")
+    other = json.loads(hr.write_halt_marker(other_dir, halted="criterion_not_met", sizing_rel=SIZING).read_text())
+    assert "next_action" not in other
+
+
+def test_citation_unbacked_marker_names_the_unbacked_citations_through_its_reason(tmp_path):
+    reason = "docs-check citations the run does not back: [rag: project_symbol FooBar]"
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    data = json.loads(hr.write_halt_marker(d, halted="citation_unbacked", sizing_rel=SIZING, reason=reason).read_text())
+    assert data["reason"] == reason
+    assert "next_action" not in data

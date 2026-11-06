@@ -7,11 +7,11 @@ immediately before deletion, so one that became young, live or linked since plan
 from __future__ import annotations
 
 import os
-import stat
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
 
 from coordinator_core.install.junction import is_junction, remove_junction
+from coordinator_core.owner_safe_rmtree import make_removable
 from coordinator_core.ops.fleet.scratch_hygiene_plan import _is_link
 from coordinator_core.ops.fleet.scratch_hygiene_records import purge_record
 from coordinator_core.temp_layout import FLEET_DIRNAME, coordinator_temp_root
@@ -33,7 +33,7 @@ def _unlink_file(path: Path) -> None:
     try:
         os.unlink(path)
     except PermissionError:
-        os.chmod(path, stat.S_IWRITE)
+        make_removable(path)
         os.unlink(path)
 
 
@@ -52,7 +52,7 @@ def remove_tree_no_follow(path: Path) -> None:
             try:
                 os.rmdir(current)
             except PermissionError:
-                os.chmod(current, stat.S_IWRITE)
+                make_removable(current)
                 os.rmdir(current)
             continue
         stack.append((current, True))

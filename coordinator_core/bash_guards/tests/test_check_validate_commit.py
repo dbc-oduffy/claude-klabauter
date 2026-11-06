@@ -1068,3 +1068,48 @@ class TestCheckEightFrontmatterMutation:
         )
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
+class TestOversizedIndexSingleStatusSpawn:
+    """An index over the in-process bound is read by ONE `git diff --cached` spawn that serves
+    the add+delete (rename) shape too, with the same verdict as the in-process read."""
+
+    @staticmethod
+    def _stage_rename(tmp_path):
+        root = _init_repo(tmp_path)
+        _git(root, "mv", "README.md", "MOVED.md")
+        (tmp_path / "extra.txt").write_text("e\n", encoding="utf-8")
+        _git(root, "add", "extra.txt")
+        return root
+
+    @staticmethod
+    def _status_spawns(monkeypatch):
+        from coordinator_core.git import run as git_run
+
+        seen = []
+        real = git_run.run_git
+
+        def _spy(args, *a, **kw):
+            seen.append(list(args))
+            return real(args, *a, **kw)
+
+        monkeypatch.setattr(git_run, "run_git", _spy)
+        return seen
+
+    def test_verdict_equals_in_process_and_status_is_one_spawn(self, tmp_path, monkeypatch):
+        from coordinator_core.bash_guards import _dc_git_probe, _git_tree_facts
+
+        root = self._stage_rename(tmp_path)
+        cmd = 'git commit -m "move"'
+        baseline = dispatch_checks.check_validate_commit(cmd, "no-session", cwd=root)
+        _git_tree_facts.reset()
+        monkeypatch.setattr(_git_tree_facts, "INPROCESS_INDEX_BYTES_MAX", 0)
+        seen = self._status_spawns(monkeypatch)
+        _dc_git_probe._arm_git_probe_deadline()
+        try:
+            spawned = dispatch_checks.check_validate_commit(cmd, "no-session", cwd=root)
+        finally:
+            _dc_git_probe._disarm_git_probe_deadline()
+        assert spawned == baseline
+        status_calls = [a for a in seen if a[:2] == ["diff", "--cached"] and "--name-status" in a]
+        assert len(status_calls) == 1

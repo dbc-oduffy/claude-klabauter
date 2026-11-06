@@ -10,11 +10,13 @@ mark rides `em_analysis.intake` instead.
 
 from __future__ import annotations
 
+import hashlib
 import re
 from typing import Iterable, Mapping, Optional
 
 EM_BRIEF_KEY = "em_brief"
 EM_CONTEXT_PATHS_KEY = "em_context_paths"
+EM_CONTEXT_DIGEST_PARAM = "em_context_digest"
 EM_CONTEXT_MARKER = "EM context (not the PM's words):"
 _LINE_REF = re.compile(r":\d+$")
 INTAKE_MARK_KEY = "intake"
@@ -34,6 +36,11 @@ def read_em_brief(doc: Mapping) -> Optional[str]:
     if not isinstance(value, str):
         return None
     return value.strip() or None
+
+
+def em_context_digest(text: str) -> str:
+    """sha256 hex of `text.strip()`: the identity of an EM-context block as `with_em_context` writes it."""
+    return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()
 
 
 def with_em_context(brief: Optional[str], text: str) -> str:

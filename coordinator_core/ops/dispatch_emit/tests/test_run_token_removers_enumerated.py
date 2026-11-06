@@ -51,6 +51,8 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
         1, "grind commit landed"),
     ("ops/dispatch_emit/land_run_fanout.py", "land"): (
         1, "fanout commit landed"),
+    ("ops/dispatch_emit/halted_run_superseded.py", "_end_parent_ask"): (
+        1, "every child run of the parent ask's sizing is over and the parent is unclaimed (not mid terminal-commit)"),
     ("ops/dispatch_emit/release_run_token.py", "_handler"): (
         1, "sanctioned peer release of an unclaimed record"),
 }

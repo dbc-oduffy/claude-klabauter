@@ -327,3 +327,63 @@ def test_memoised_per_dispatch_and_reset(repo):
     assert facts.head_commit(cwd) == first
     facts.reset()
     assert facts.head_commit(cwd) == _git(repo, "rev-parse", "HEAD") != first
+
+
+class TestOversizedIndexIsOneSpawn:
+    """An index over INPROCESS_INDEX_BYTES_MAX is answered by one memoised git spawn, never parsed."""
+
+    @staticmethod
+    def _changes(root):
+        (root / "a.txt").write_text("changed")
+        (root / "new.txt").write_text("n")
+        _git(root, "rm", "-q", "d/e/z.txt")
+        _git(root, "mv", "keep/k.txt", "keep/renamed.txt")
+        _git(root, "add", "-A")
+
+    def test_spawn_rows_equal_git_and_in_process(self, tmp_path, monkeypatch):
+        root = _staged_repo(tmp_path)
+        self._changes(root)
+        in_process = facts.staged_name_status(str(root))
+        facts.reset()
+        monkeypatch.setattr(facts, "INPROCESS_INDEX_BYTES_MAX", 0)
+        from coordinator_core.git import git_state
+
+        monkeypatch.setattr(
+            git_state, "read_index", lambda *a, **k: (_ for _ in ()).throw(AssertionError("parsed"))
+        )
+        assert facts.staged_name_status(str(root)) == in_process == _git_staged(root)
+        lines = facts.staged_name_status_renames(str(root))
+        assert any(line.startswith("R") and line.endswith("keep/k.txt\tkeep/renamed.txt") for line in lines)
+
+    def test_one_spawn_serves_both_answers(self, tmp_path, monkeypatch):
+        from coordinator_core.git import run as git_run
+
+        root = _staged_repo(tmp_path)
+        self._changes(root)
+        monkeypatch.setattr(facts, "INPROCESS_INDEX_BYTES_MAX", 0)
+        calls = []
+        real = git_run.run_git
+        monkeypatch.setattr(git_run, "run_git", lambda *a, **k: calls.append(a) or real(*a, **k))
+        facts.staged_name_status(str(root))
+        facts.staged_name_status_renames(str(root))
+        facts.staged_name_status(str(root))
+        assert len(calls) == 1
+
+    def test_small_index_is_not_renames_answered(self, tmp_path):
+        root = _staged_repo(tmp_path)
+        self._changes(root)
+        assert facts.staged_name_status_renames(str(root)) is None
+
+    def test_spent_budget_declines_unspawned(self, tmp_path, monkeypatch):
+        from coordinator_core.bash_guards import _dc_git_probe
+        from coordinator_core.git import run as git_run
+
+        root = _staged_repo(tmp_path)
+        self._changes(root)
+        monkeypatch.setattr(facts, "INPROCESS_INDEX_BYTES_MAX", 0)
+        monkeypatch.setattr(_dc_git_probe, "_git_probe_budget_spent", lambda: True)
+        monkeypatch.setattr(
+            git_run, "run_git", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned"))
+        )
+        assert facts.staged_name_status(str(root)) is None
+        assert _dc_git_probe._git_probe_last_failure.get()
