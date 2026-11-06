@@ -6737,7 +6737,9 @@ def _share_sidecar_dir(script: str) -> str:
         return script
     body = _SIDECAR_DIR_USE.sub(lambda m: f"' + {shared[m.group(1)]} + '" if m.group(1) in shared else m.group(0), script)
     at = body.rfind("\n", 0, body.index(ASK_MANIFEST_MARKER)) + 1
-    decls = "".join(f"const {name} = 'sidecar_dir: {pre}';\n" for pre, name in shared.items())
+    # Trap: these consts evaluate eagerly above the marker. A template literal is outside the fragment hoist's
+    # reach (it rewrites quoted literals only); hoisted, the value would read a `_PFn` declared below and throw.
+    decls = "".join(f"const {name} = `sidecar_dir: {pre}`;\n" for pre, name in shared.items())
     return body[:at] + decls + body[at:]
 
 

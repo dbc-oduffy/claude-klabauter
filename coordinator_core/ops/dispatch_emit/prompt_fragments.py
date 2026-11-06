@@ -538,12 +538,15 @@ _DEF_RE = re.compile(r"^const (_PF\d+) = ([^\n]*);\n", re.M)
 _REF = re.compile(r"\b_PF\d+\b")
 _OPERAND = r"(?:_PFC?\d+|'(?:\\.|[^\\'])*')"
 _COMPOSITE_RE = re.compile(rf"^const (_PFC\d+) = ({_OPERAND}(?: \+ {_OPERAND})*);\n", re.M)
+_PLAIN_TEMPLATE = re.compile(r"^`([^`$\\'\n]*)`$")
 
 
 def resolve_fragment_refs(script: str) -> str:
     """Inverse of the hoist for tests: drop the const lines, inline `_PFC*` then `_PF*` references, fold adjacent literals."""
     composites = dict(_COMPOSITE_RE.findall(script))
-    defs = dict(_DEF_RE.findall(script))
+    # A plain template-literal value (the sidecar_dir alias, kept out of the hoist's reach) inlines as the
+    # single-quoted literal it replaced, so the fold below rejoins it.
+    defs = {k: _PLAIN_TEMPLATE.sub(r"'\1'", v) for k, v in _DEF_RE.findall(script)}
     body = _DEF_RE.sub("", _COMPOSITE_RE.sub("", script))
     for ref in sorted(composites, key=lambda r: int(r[4:]), reverse=True):
         body = re.sub(rf"\b{ref}\b", lambda _m, r=ref: composites[r], body)

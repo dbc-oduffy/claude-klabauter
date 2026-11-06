@@ -41,7 +41,13 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.owner_safe_rmtree import make_removable
+# Trap: sibling repos load this file by path (spec_from_file_location) with no engine on sys.path,
+# so the package import needs the engine root this file sits under.
+_ENGINE_ROOT = str(Path(__file__).resolve().parents[2])
+if _ENGINE_ROOT not in sys.path:
+    sys.path.append(_ENGINE_ROOT)
+
+from coordinator_core.owner_safe_rmtree import make_removable  # noqa: E402
 
 # Stable markers of live peer processes, measured in a claude-klabauter fast-suite run
 # (2026-10-03): Claude Code's atomic ~/.claude.json writes and a concurrent
