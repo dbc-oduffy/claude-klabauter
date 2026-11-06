@@ -79,6 +79,7 @@ from typing import Callable, Dict, List, Mapping, NamedTuple, Optional, Sequence
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.git import index_write
+from coordinator_core.warm import dispatch_fence
 from coordinator_core.git.git_dir import resolve_git_dir, resolve_git_common_dir
 from coordinator_core.git.machine_local_paths import machine_local_refusal
 from coordinator_core.git.path_canon import first_non_canonical_path_refusal
@@ -2009,6 +2010,13 @@ def commit_paths(
     # pre-commit bytes under a moved HEAD reads as staged deletions of every added path, and
     # only the lock holder can write it. A busy lock is therefore a pre-ref refusal.
     prepared = _prepare_index_splice(repo, index_updates, merge_view)
+    if dispatch_fence.current_dispatch_fenced():
+        prepared.abort()
+        raise CommitRefused(
+            "dispatch was reported killed before the ref update -- nothing committed; "
+            "the commit object is unreferenced.",
+            cause="dispatch-fenced",
+        )
     # The splice build is the slow part of the lock window: a thread abandoned during it frees
     # its own lock here, or learns an acquirer already reclaimed it, instead of moving the ref.
     if dispatch_abandon.is_abandoned() or not prepared.held():

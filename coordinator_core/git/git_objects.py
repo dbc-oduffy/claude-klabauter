@@ -1452,6 +1452,27 @@ def _log_all_ref_updates(gitdir: Path) -> bool:
 REFLOG_APPEND_DEADLINE_SECS = 1.0
 
 
+_DATED_IDENT_RE = re.compile(r"> \d+ [+-]\d{4}$")
+
+
+def _reflog_identity(committer: str) -> str:
+    """`Name <email> <epoch> <+hhmm>`, the only identity shape git's reflog parser accepts.
+    Callers pass `Name <email>`; a line without the date is skipped by `git reflog`, so every
+    engine-made ref move vanishes from the reflog recovery reads."""
+    ident = committer.strip()
+    if _DATED_IDENT_RE.search(ident):
+        return ident
+    now = time.time()
+    offset = time.localtime(now).tm_gmtoff // 60
+    sign = "+" if offset >= 0 else "-"
+    return f"{ident} {int(now)} {sign}{abs(offset) // 60:02d}{abs(offset) % 60:02d}"
+
+
+def _one_line(message: str) -> str:
+    """A reflog message is one line: an embedded newline would start a malformed entry."""
+    return " ".join(line.strip() for line in message.splitlines() if line.strip())
+
+
 def append_reflog(gitdir: Path, ref: str, old: Optional[str], new: str, committer: str, message: str) -> bool:
     """Append one reflog line; False when the write outlived `REFLOG_APPEND_DEADLINE_SECS`
     (the caller moves on; the line may still land later, out of order with later appends).
@@ -1460,7 +1481,7 @@ def append_reflog(gitdir: Path, ref: str, old: Optional[str], new: str, committe
         return True
     log_path = gitdir / "logs" / ref
     old_hex = old if old else "0" * 40
-    line = f"{old_hex} {new} {committer}\t{message}\n".encode("utf-8")
+    line = f"{old_hex} {new} {_reflog_identity(committer)}\t{_one_line(message)}\n".encode("utf-8")
 
     failure: list = []
 
