@@ -2356,8 +2356,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "906805d3aca382aab980e60226aae8c30ba8dcdc",
-    "coordinator_core/_engine_stamp": "694093379877b3a32ca2fde5a6c2cb880f82036b",
+    "coordinator_core/_engine_published_at": "48e447ff53212ed6b78baa8c88c037c5efd9dda3",
+    "coordinator_core/_engine_stamp": "b55360be09f688884baab8736669f66c2430c433",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -10570,7 +10570,7 @@
     "coordinator_core/warm/push_cadence.py": "e5809c47dee26629415e23fd843bce1ed2deab46",
     "coordinator_core/warm/push_sweep_order.py": "4f4658b3a4329705144c1d1fbb407444a8e5d493",
     "coordinator_core/warm/serve_classifier.py": "81e966c1521dd141063556cc558b0d26db20997f",
-    "coordinator_core/warm/server.py": "2c3ae27871d024decd381c2a5b1930ec777c8671",
+    "coordinator_core/warm/server.py": "88265d59f104984d6d0a09ac5c763c7e0e9af533",
     "coordinator_core/warm/settings.py": "2dd31b738a88a3b46cb71c1d24332a7088953890",
     "coordinator_core/warm/settings_home_claim.py": "9f626ce1df8eaed6777d2eb094391cae7371249d",
     "coordinator_core/warm/skew.py": "081ac3ff6f51b9183f8981d1a183ad20f926a4d2",
@@ -10608,7 +10608,7 @@
     "coordinator_core/warm/tests/test_dispatch_pool_recovery.py": "f9ef2e69483cb9681d5b6895ebe29092f65d57c0",
     "coordinator_core/warm/tests/test_door_build_provenance.py": "13afd35d351108d70621d3fb09f2f15a01f9b1af",
     "coordinator_core/warm/tests/test_door_credential.py": "1917ca1cfe703431bd03c66e024ecbaeb30db1b1",
-    "coordinator_core/warm/tests/test_door_frame_takes_guard_lane.py": "4a88e1b97cd27d27ca79556431b96ea890d69108",
+    "coordinator_core/warm/tests/test_door_frame_takes_guard_lane.py": "d78a2f457a8d9b3e839943ed3f7f2889a0dc942d",
     "coordinator_core/warm/tests/test_door_read_deadline.py": "b0910c23543c6e5859d09e8546bc6fd13781dd82",
     "coordinator_core/warm/tests/test_door_read_deadline_posix.py": "c3721f61815c618f7c1352dca4f178c0c72b5453",
     "coordinator_core/warm/tests/test_door_refuses_foreign_engine_root.py": "a3cc9c3e62878e58236e136152c5d434def9a7c4",
@@ -11350,5 +11350,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "f485b33b681f081f8c83f03f2651749fb9cf663c"
+  "source_head": "2f96dd80d21e0c3f325c8ce3f14402a8131cef9c"
 }

@@ -160,7 +160,28 @@ def test_named_entrypoint_never_resolves_to_its_first_argument(tmp_path, monkeyp
         (_door_frame([_HOOK_OP], entrypoint="coordinator-invoke"), _HOOK_OP),
         (_door_frame([]), "invoke.from_argv"),
         ({"method": "invoke.from_argv", "params": "x"}, "invoke.from_argv"),
+        (_door_frame([_HOOK_OP], entrypoint="hook-run"), _HOOK_OP),
+        (_door_frame(["--advisory", _HOOK_OP], entrypoint="hook-run"), _HOOK_OP),
+        (_door_frame(["--check-all"], entrypoint="hook-run"), "hook-run"),
     ],
 )
 def test_effective_method(frame, expected):
     assert server._effective_method(frame) == expected
+
+
+def test_live_hook_run_frame_is_served_on_guard_lane_with_resolved_op(tmp_path, monkeypatch):
+    """The frame every harness hook produces: `hook-run hooks.<name>` through the door."""
+    release = threading.Event()
+    served_on: dict = {}
+    ctx = _saturated_ctx(tmp_path, monkeypatch, release, served_on)
+    guard_io = _FakeIO(_door_frame([_HOOK_OP], 4000, entrypoint="hook-run"))
+    try:
+        ctx._enqueue_connection(guard_io, admitted=False)
+        assert _wait(lambda: bool(guard_io.written), _BAR_SECS)
+        assert _wait(
+            lambda: any(r.get("op") == _HOOK_OP and "wrapper" in r for r in telemetry.request_samples()), 2.0
+        ), telemetry.request_samples()
+        row = [r for r in telemetry.request_samples() if r.get("op") == _HOOK_OP][-1]
+        assert row["lane"] == "guard", row
+    finally:
+        _settle(ctx, release)

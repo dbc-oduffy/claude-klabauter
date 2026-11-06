@@ -1679,6 +1679,10 @@ _HOOK_LANE_PREFIXES = hook_http.ROUTABLE_OP_PREFIXES + ("bash_guards.",)
 #: `params.argv[0]` is the op name.
 _DEFAULT_DOOR_ENTRYPOINT = "coordinator-invoke"
 
+#: The one door entrypoint for every DoE-registered hook (`coordinator/bin/hook-run.py`):
+#: its op is the `hooks.<name>` argument, never the entrypoint name.
+_HOOK_RUN_ENTRYPOINT = "hook-run"
+
 
 def _effective_method(msg: Any) -> Any:
     """The op a frame asks for. An `invoke.from_argv` door frame resolves to `params.argv[0]`
@@ -1691,9 +1695,15 @@ def _effective_method(msg: Any) -> Any:
     if not isinstance(params, Mapping):
         return method
     entrypoint = params.get("entrypoint")
+    argv = params.get("argv")
+    if entrypoint == _HOOK_RUN_ENTRYPOINT and isinstance(argv, list):
+        # Every live harness hook arrives this way: `hook-run [--advisory] hooks.<name>`.
+        for arg in argv:
+            if isinstance(arg, str) and arg.startswith("hooks."):
+                return arg
+        return entrypoint
     if entrypoint and entrypoint != _DEFAULT_DOOR_ENTRYPOINT:
         return entrypoint if isinstance(entrypoint, str) else method
-    argv = params.get("argv")
     if isinstance(argv, list) and argv and isinstance(argv[0], str):
         return argv[0]
     return method
