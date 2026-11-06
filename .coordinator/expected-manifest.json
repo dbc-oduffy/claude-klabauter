@@ -2356,8 +2356,8 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "92be553f7c109ac26a79c585b42e5d5e04337550",
-    "coordinator_core/_engine_stamp": "cf981259931118130cffadfbdfc2e5f65761b1f2",
+    "coordinator_core/_engine_published_at": "906805d3aca382aab980e60226aae8c30ba8dcdc",
+    "coordinator_core/_engine_stamp": "694093379877b3a32ca2fde5a6c2cb880f82036b",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
     "coordinator_core/_repo_root_probe.py": "2d8edfa8cd9343436a650584da430aa87ae0397d",
@@ -10570,7 +10570,7 @@
     "coordinator_core/warm/push_cadence.py": "e5809c47dee26629415e23fd843bce1ed2deab46",
     "coordinator_core/warm/push_sweep_order.py": "4f4658b3a4329705144c1d1fbb407444a8e5d493",
     "coordinator_core/warm/serve_classifier.py": "81e966c1521dd141063556cc558b0d26db20997f",
-    "coordinator_core/warm/server.py": "3463a24c3cac064019f641ce3e652fb92981930a",
+    "coordinator_core/warm/server.py": "2c3ae27871d024decd381c2a5b1930ec777c8671",
     "coordinator_core/warm/settings.py": "2dd31b738a88a3b46cb71c1d24332a7088953890",
     "coordinator_core/warm/settings_home_claim.py": "9f626ce1df8eaed6777d2eb094391cae7371249d",
     "coordinator_core/warm/skew.py": "081ac3ff6f51b9183f8981d1a183ad20f926a4d2",
@@ -10608,6 +10608,7 @@
     "coordinator_core/warm/tests/test_dispatch_pool_recovery.py": "f9ef2e69483cb9681d5b6895ebe29092f65d57c0",
     "coordinator_core/warm/tests/test_door_build_provenance.py": "13afd35d351108d70621d3fb09f2f15a01f9b1af",
     "coordinator_core/warm/tests/test_door_credential.py": "1917ca1cfe703431bd03c66e024ecbaeb30db1b1",
+    "coordinator_core/warm/tests/test_door_frame_takes_guard_lane.py": "4a88e1b97cd27d27ca79556431b96ea890d69108",
     "coordinator_core/warm/tests/test_door_read_deadline.py": "b0910c23543c6e5859d09e8546bc6fd13781dd82",
     "coordinator_core/warm/tests/test_door_read_deadline_posix.py": "c3721f61815c618f7c1352dca4f178c0c72b5453",
     "coordinator_core/warm/tests/test_door_refuses_foreign_engine_root.py": "a3cc9c3e62878e58236e136152c5d434def9a7c4",
@@ -10717,7 +10718,7 @@
     "coordinator_core/warm/tests/test_reconcile_poll_cannot_false_negative.py": "6b92e719b65a2966d427617f2b7473274f64c0d1",
     "coordinator_core/warm/tests/test_reentry_goes_through_the_seam.py": "9627b836683feef6640fc3f23a0b81f80f9cca4f",
     "coordinator_core/warm/tests/test_respawn_test_env_scrub.py": "d3f09dc0b8c78ddb39ae2c7cfc5da04052441288",
-    "coordinator_core/warm/tests/test_retired_worker_cap.py": "1fd915c8090d63da6ce53a1c7d1306a9c407e95f",
+    "coordinator_core/warm/tests/test_retired_worker_cap.py": "ce6526be4722471a8f2a82ea3b260ba186226456",
     "coordinator_core/warm/tests/test_routable_fence_widening.py": "32085f6bbc77cf7182959775431bdfb15f94dc2b",
     "coordinator_core/warm/tests/test_saturated_pool_queued_request_never_runs_late.py": "9b5ef74c5e1e20ac69a810751a5cc048ef4158b2",
     "coordinator_core/warm/tests/test_serve_classifier.py": "35e1a8fcde384a1cb5515d32aea563a055789df2",
@@ -11349,5 +11350,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "4db2a956e77624178e6fbeb635eadea05d5392c5"
+  "source_head": "f485b33b681f081f8c83f03f2651749fb9cf663c"
 }

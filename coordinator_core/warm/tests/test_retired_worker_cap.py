@@ -57,7 +57,7 @@ def test_stalled_pool_at_retired_cap_refuses_instead_of_recycling():
         _recycle_stalled_pool=lambda *a: recycled.append(a),
     )
     ctx.__dict__["_retired_procs"] = [_Proc(True) for _ in range(server._MAX_RETIRED_WORKERS)]
-    out = server._ServerContext._pool_dispatch(ctx, {"jsonrpc": "2.0", "id": 7, "method": "ops.x"})
+    out = server._ServerContext._pool_dispatch_untimed(ctx, {"jsonrpc": "2.0", "id": 7, "method": "ops.x"})
     assert recycled == []
     assert out["id"] == 7
     assert out["error"]["data"]["diagnosis"]["phase"] == "saturated"

@@ -1675,6 +1675,42 @@ def _withdrawal_deadline_secs(method: Optional[str], msg: Any = None) -> float:
 _HOOK_LANE_PREFIXES = hook_http.ROUTABLE_OP_PREFIXES + ("bash_guards.",)
 
 
+#: The `entrypoint` the door omits from its frame: the `coordinator-invoke` image, whose
+#: `params.argv[0]` is the op name.
+_DEFAULT_DOOR_ENTRYPOINT = "coordinator-invoke"
+
+
+def _effective_method(msg: Any) -> Any:
+    """The op a frame asks for. An `invoke.from_argv` door frame resolves to `params.argv[0]`
+    when it targets the default image, and to the named CLI when `params.entrypoint` names
+    another (a CLI's first argument is never an op). Every other frame is its own method."""
+    method = msg.get("method") if isinstance(msg, Mapping) else None
+    if method != "invoke.from_argv":
+        return method
+    params = msg.get("params")
+    if not isinstance(params, Mapping):
+        return method
+    entrypoint = params.get("entrypoint")
+    if entrypoint and entrypoint != _DEFAULT_DOOR_ENTRYPOINT:
+        return entrypoint if isinstance(entrypoint, str) else method
+    argv = params.get("argv")
+    if isinstance(argv, list) and argv and isinstance(argv[0], str):
+        return argv[0]
+    return method
+
+
+def _tag_wrapper(wrapper: str, op: Any, start_ts: float, end_ts: float) -> None:
+    """Add `wrapper` to the ring row this thread just recorded (matched on op and both
+    timestamps). `telemetry.record_request` has no `wrapper` keyword; never raises."""
+    try:
+        for row in reversed(telemetry.request_samples()):
+            if row.get("op") == op and row.get("start_ts") == start_ts and row.get("end_ts") == end_ts:
+                row["wrapper"] = wrapper
+                return
+    except Exception:  # noqa: BLE001 -- telemetry never fails a caller
+        return
+
+
 def _is_hook_lane(method: Any) -> bool:
     return (
         isinstance(method, str)
@@ -3662,13 +3698,18 @@ class _ServerContext:
             try:
                 outcome = "error" if isinstance(response, dict) and "error" in response else "ok"
                 session = caller.session_id if caller is not None else None
+                resolved = _effective_method(msg)
                 if pending is not None:
                     pending.update(
-                        op=msg.get("method"), session=session, outcome=outcome, dispatch_key=dispatch_key
+                        op=resolved,
+                        wrapper=msg.get("method") if resolved != msg.get("method") else None,
+                        session=session,
+                        outcome=outcome,
+                        dispatch_key=dispatch_key,
                     )
                 else:
                     telemetry.record_request(
-                        op=msg.get("method"),
+                        op=resolved,
                         session=session,
                         enqueue_ts=stamp[0] if stamp is not None else None,
                         start_ts=start_ts,
@@ -3707,15 +3748,14 @@ class _ServerContext:
         """
         _disarm_accept = lambda: None  # noqa: E731
         try:
+            _eff = _effective_method(msg)
             pool = self._ensure_dispatch_pool()
             holders = self._stalled_holders()
             saturated = len(holders) >= DISPATCH_PROCESS_POOL_SIZE
             if self._saturation_confirmed(saturated) and self._retired_workers_alive() < _MAX_RETIRED_WORKERS:
                 self._recycle_stalled_pool(pool, holders)
                 pool = self._ensure_dispatch_pool()
-            elif saturated and not (
-                _is_hook_lane(msg.get("method")) or _is_light_mutating(msg.get("method"))
-            ):
+            elif saturated and not (_is_hook_lane(_eff) or _is_light_mutating(_eff)):
                 return _pool_saturated_envelope(
                     msg, holders, getattr(self, "_worker_stderr_dir", None)
                 )
@@ -3734,11 +3774,12 @@ class _ServerContext:
                 getattr(self, "engine_root", None),
             )
             gate = self._admission_gate()
-            _hook = _is_hook_lane(_method)
-            _light = _is_light_mutating(_method)
+            _resolved = _eff
+            _hook = _is_hook_lane(_resolved)
+            _light = _is_light_mutating(_resolved)
             if dispatch_key is not None:
                 _ack_store.mark_queued(dispatch_key)
-            _gate_wait = gate.acquire(_op_may_mutate(_method), _deadline, _hook, _light)
+            _gate_wait = gate.acquire(_op_may_mutate(_resolved), _deadline, _hook, _light)
             if _gate_wait is not None and dispatch_key is not None:
                 _ack_store.mark_dispatched(dispatch_key)
             if _gate_wait is None:
@@ -4318,7 +4359,7 @@ class _ServerContext:
                 self._queue.put(io)
                 continue
             try:
-                method = json.loads(line).get("method") if line else None
+                method = _effective_method(json.loads(line)) if line else None
             except Exception:  # noqa: BLE001 -- non-JSON: the shared path answers it
                 method = None
             replay = _ReplayIO(io, line)
@@ -4385,6 +4426,8 @@ class _ServerContext:
                 lane=lane,
                 dispatch_key=row.get("dispatch_key"),
             )
+            if row.get("wrapper"):
+                _tag_wrapper(row["wrapper"], row.get("op"), start_ts, end_ts)
             if end_ts - (enqueue_ts if enqueue_ts is not None else start_ts) > telemetry.SLOW_REQUEST_SECS:
                 threading.Thread(
                     target=telemetry.flush_requests, args=(self.engine_root,), daemon=True
