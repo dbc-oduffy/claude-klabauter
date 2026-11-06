@@ -1411,10 +1411,29 @@ def _trail_run_dir(worktree_root: Path, wave_result: Dict[str, Any]) -> Optional
     return worktree_root.joinpath(*parts[:3])
 
 
+def _wave_trail_files(
+    worktree_root: Path, run_dir: Path, wave_result: Dict[str, Any]
+) -> List[str]:
+    """Repo-relative files that belong to this wave only: everything under its slot
+    dir, plus the run dir's top-level `wave-<N>.*` files. RUN-NOTES, other waves'
+    slots and other `wave-<M>.*` files are never named. A slot that IS the run dir
+    contributes no files of its own (it would be every wave's)."""
+    slot_raw = wave_result.get("trailSlotDir") or wave_result.get("trailDir")
+    slot = Path(str(slot_raw).replace("\\", "/"))
+    if not slot.is_absolute():
+        slot = worktree_root / slot
+    found = set()
+    if slot != run_dir and slot.is_dir():
+        found.update(p for p in slot.rglob("*") if p.is_file())
+    prefix = f"wave-{wave_result.get('waveIndex')}."
+    found.update(p for p in run_dir.glob(f"{prefix}*") if p.is_file())
+    return sorted(p.relative_to(worktree_root).as_posix() for p in found)
+
+
 def land_trail(worktree_root: Path, wave_result: Dict[str, Any]) -> Dict[str, Any]:
     """Commit the wave's trail files in one `ceremony.commit_v2` call.
 
-    Paths are the files under the run dir, named one by one: never a directory
+    Paths are the wave's own files (`_wave_trail_files`), named one by one: never a directory
     pathspec. Gitignored ones (`fire-*.mjs`, `.emitted.json`) are dropped by the
     committer; a path a live peer session holds is left out and reported. Never
     raises: a commit failure is reported on the row and the landing proceeds.
@@ -1426,9 +1445,7 @@ def land_trail(worktree_root: Path, wave_result: Dict[str, Any]) -> Dict[str, An
     run_dir = _trail_run_dir(worktree_root, wave_result)
     if run_dir is None or not run_dir.is_dir():
         return out
-    rels = sorted(
-        p.relative_to(worktree_root).as_posix() for p in run_dir.rglob("*") if p.is_file()
-    )
+    rels = _wave_trail_files(worktree_root, run_dir, wave_result)
     if not rels:
         return out
     try:

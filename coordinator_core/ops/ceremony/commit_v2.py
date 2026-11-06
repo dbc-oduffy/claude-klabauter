@@ -110,6 +110,7 @@ from coordinator_core.session import liveness as session_liveness
 from coordinator_core.session import scope as session_scope
 from coordinator_core.session import touch_record
 from coordinator_core import dispatch_abandon
+from coordinator_core.warm import dispatch_fence
 from coordinator_core.ops.ceremony.commit_v2_phases import PhaseLedger
 from coordinator_core.telemetry import spawn_counter
 
@@ -733,6 +734,16 @@ def _error(message: str, **extra: object) -> dict:
     return result
 
 
+_FENCED_MESSAGE = (
+    "This dispatch was reported killed; its commit is refused. "
+    "Read `warm.request_status`, then re-run the op."
+)
+
+
+def _fenced_error() -> dict:
+    return _error(_FENCED_MESSAGE, refused="dispatch-fenced")
+
+
 _RETRY_LANDED_WINDOW_COMMITS = 20
 _RETRY_LANDED_WINDOW_SECS = 900  # a retry follows its timeout within seconds; bounds adopting an old commit
 
@@ -829,6 +840,8 @@ def _land(
     """One `commit_paths` attempt; `allow_empty` is tried only after `NothingToCommit` with no predecessor."""
 
     def _attempt(empty_ok: bool) -> CommitOutcome:
+        if dispatch_fence.current_dispatch_fenced():
+            raise CommitRefused(_FENCED_MESSAGE, cause="dispatch-fenced")
         return commit_paths(
             worktree_root,
             paths,
@@ -892,6 +905,8 @@ def _land(
         ), None)
     except (CommitRefused, FilterUnsupported) as exc:
         cause = getattr(exc, "cause", "")
+        if cause == "dispatch-fenced":
+            return _Landing(None, None, [], _fenced_error(), None)
         return _Landing(None, None, [], _error(str(exc), **({"cause": cause} if cause else {})), None)
     return _Landing(outcome, None, [], None, None)
 
@@ -1267,6 +1282,8 @@ def _parse_params(params: dict, repo_root: Optional[Path]):
 
 def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) -> dict:
     """JSON-RPC "ceremony.commit_v2" handler: params in `_parse_params`, landing through `commit_paths`."""
+    if dispatch_fence.current_dispatch_fenced():
+        return _fenced_error()
     with ledger.phase("param_validation"):
         parsed = _parse_params(params, repo_root)
     if isinstance(parsed, dict):

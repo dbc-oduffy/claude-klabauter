@@ -207,6 +207,7 @@ from coordinator_core.telemetry import spawn_counter as _spawn_counter
 from coordinator_core.warm import (
     breadcrumb,
     caller_context,
+    dispatch_fence,
     election,
     hook_http,
     idle,
@@ -1081,9 +1082,11 @@ def _pool_dispatch_worker(
         return {_NOT_DISPATCHED_MARKER: True}
     _declare_queue_wait(stamp, msg.get("method") if isinstance(msg, dict) else None)
     disarm = _arm_stall_dump(stall_secs, claim, _op_repo_root(msg))
+    dispatch_fence.hold(claim_dir, dispatch_key if claim is not None else None)
     try:
         return _pool_dispatch_worker_body(msg, caller)
     finally:
+        dispatch_fence.release()
         disarm()
 
 
@@ -3628,11 +3631,14 @@ class _ServerContext:
 
     def _terminate_overdue_worker(self, pool: Any, claim: Optional[Path], dispatch_key: Optional[str]) -> bool:
         """Terminate the worker holding an op past its result deadline. Its pid is the one
-        its claim file records; `pool._processes` maps pid to process. Stamps `killed`
-        first, then swaps `pool` out under `_dispatch_pool_lock` (the executor breaks
-        when a child dies; the next `_ensure_dispatch_pool` rebuilds). Neighbours on the
-        same pool read BrokenProcessPool -> `worker-lost`. False when no worker is found
-        (nothing is killed and the caller falls back to the abandoned path)."""
+        its claim file records; `pool._processes` maps pid to process. Writes
+        a kill fence beside the claim, then `stamp_killing` (the record reads `killed`
+        only once the worker is observed dead), then swaps `pool` out under
+        `_dispatch_pool_lock` (the executor breaks when a child dies; the next
+        `_ensure_dispatch_pool` rebuilds). No join: a survivor must not block the accept
+        path. Neighbours on the same pool read BrokenProcessPool -> `worker-lost`. False
+        when no worker is found (nothing is killed and the caller falls back to the
+        abandoned path)."""
         try:
             pid = int(claim.read_text(encoding="ascii").strip()) if claim is not None else None
         except (OSError, ValueError):
@@ -3641,7 +3647,8 @@ class _ServerContext:
         if proc is None:
             return False
         if dispatch_key is not None:
-            _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_KILLED)
+            dispatch_fence.write(claim.parent, dispatch_key)
+            _ack_store.stamp_killing(dispatch_key, pid, proc.is_alive)
         with self._dispatch_pool_lock:
             if self._dispatch_pool is pool:
                 self._dispatch_pool = None

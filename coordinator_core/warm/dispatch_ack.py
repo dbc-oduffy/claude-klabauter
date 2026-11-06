@@ -271,10 +271,15 @@ class AckStore:
                 return
             if record["state"] != _ADMITTED and not (
                 record["state"] == _STAMPED
-                and record["outcome"] == OUTCOME_ABANDONED
+                and (
+                    record["outcome"] == OUTCOME_ABANDONED
+                    or (record["outcome"] == OUTCOME_KILLED and "is_alive" in record)
+                )
                 and outcome in _FINISHED_OUTCOMES
             ):
                 return
+            for stale in ("is_alive", "worker_pid", "worker_dead"):
+                record.pop(stale, None)
             if record.get("restarted") and outcome in _UNKNOWABLE_OUTCOMES:
                 return
             record["state"] = _STAMPED
@@ -293,6 +298,23 @@ class AckStore:
                     record["result_dropped"] = dropped
             if outcome in _FINISHED_OUTCOMES:
                 self._pin(key)
+            self._changed.notify_all()
+
+    def stamp_killing(self, key: str, worker_pid: Optional[int], is_alive: Callable[[], bool]) -> None:
+        """The accept process is terminating `key`'s worker: stamp `killed` and keep
+        `worker_pid` and the `is_alive` probe on the record. `status` reads `killed`
+        only once the probe reads dead; while it reads alive the record reads
+        `executing`/overdue and a late result/error `stamp` still lands. Same
+        no-op rules as `stamp` for an unknown, non-admitted or restarted record."""
+        with self._lock:
+            record = self._records.get(key)
+            if record is None or record["state"] != _ADMITTED or record.get("restarted"):
+                return
+            record["state"] = _STAMPED
+            record["outcome"] = OUTCOME_KILLED
+            record["error_code"] = None
+            record["worker_pid"] = worker_pid
+            record["is_alive"] = is_alive
             self._changed.notify_all()
 
     def reconcile_restarted(self, keys: Optional[Any] = None) -> int:
@@ -490,6 +512,30 @@ class AckStore:
                         payload["result_dropped"] = record.get("result_dropped", DROPPED_EVICTED)
                 self._pinned.pop(key, None)
                 return payload
+            if outcome == OUTCOME_KILLED and ("is_alive" in record or record.get("worker_dead")):
+                pid = record.get("worker_pid")
+                alive = False
+                probe = record.get("is_alive")
+                if probe is not None:
+                    try:
+                        alive = bool(probe())
+                    except Exception:  # noqa: BLE001 -- a probe that cannot answer reads dead
+                        alive = False
+                if alive:
+                    return {
+                        "state": STATE_EXECUTING,
+                        "overdue": True,
+                        "worker_alive": True,
+                        "worker_pid": pid,
+                    }
+                record.pop("is_alive", None)
+                record["worker_dead"] = True
+                return {
+                    "state": STATE_UNKNOWABLE,
+                    "reason": OUTCOME_KILLED,
+                    "worker_alive": False,
+                    "worker_pid": pid,
+                }
             if outcome in _UNKNOWABLE_OUTCOMES:
                 # No named reason in § 6 covers a stamped abandoned/worker-lost
                 # outcome; the outcome value itself is the honest reason a

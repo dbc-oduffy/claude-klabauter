@@ -124,12 +124,16 @@ def test_a_worker_past_its_deadline_is_terminated_and_the_pool_serves_the_next_o
         key = error["data"]["dispatch_key"]
         assert error["data"]["reconcile"] == "warm.request_status"
 
-        assert store.status(key) == {
-            "state": dispatch_ack.STATE_UNKNOWABLE,
-            "reason": dispatch_ack.OUTCOME_KILLED,
-        }
         pids = [int(p.read_text()) for p in claim_dir.iterdir() if p.name == key]
         assert pids and _gone(pids[0])
+        status = store.status(key)
+        assert status == {
+            "state": dispatch_ack.STATE_UNKNOWABLE,
+            "reason": dispatch_ack.OUTCOME_KILLED,
+            "worker_alive": False,
+            "worker_pid": pids[0],
+        }
+        assert (claim_dir / f"{key}.killed").exists()
         assert ctx._dispatch_pool is None
 
         (reply,) = _serve(_frame({"argv": ["y"]}, id_=2), ctx._pool_dispatch)
@@ -139,6 +143,24 @@ def test_a_worker_past_its_deadline_is_terminated_and_the_pool_serves_the_next_o
     finally:
         for pool in (first_pool, *survivors):
             pool.shutdown(wait=False, cancel_futures=True)
+
+
+def test_the_worker_holds_its_dispatch_for_the_op_and_clears_it_after(tmp_path, monkeypatch):
+    from coordinator_core.warm import dispatch_fence
+
+    seen = []
+
+    def _body(msg, caller):
+        dispatch_fence.write(tmp_path, "k-1")
+        seen.append(dispatch_fence.current_dispatch_fenced())
+        return {"ok": True}
+
+    monkeypatch.setattr(server, "_pool_dispatch_worker_body", _body)
+
+    server._pool_dispatch_worker({"method": "x"}, None, "k-1", str(tmp_path))
+
+    assert seen == [True]
+    assert dispatch_fence.current_dispatch_fenced() is False
 
 
 def _gone(pid: int) -> bool:

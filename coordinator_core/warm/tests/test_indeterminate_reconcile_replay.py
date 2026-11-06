@@ -228,9 +228,12 @@ def _worker_hold_then_land(msg, caller, dispatch_key=None, claim_dir=None, stall
     return server._pool_dispatch_worker(msg, caller, dispatch_key, claim_dir, stall_secs)
 
 
-def test_real_pool_timeout_carries_the_poll_and_the_poll_replays_the_landed_op(
-    tmp_path, monkeypatch, _fresh_store
-):
+def _status(key) -> dict:
+    (reply,) = _serve(_poll_frame(key), _no_dispatch)
+    return json.loads(reply["result"]["stdout"])
+
+
+def _timed_out_pool_ctx(tmp_path, monkeypatch):
     claim_dir = tmp_path / "dispatch-claims"
     claim_dir.mkdir()
     stderr_dir = tmp_path / "pool-worker-stderr"
@@ -256,17 +259,55 @@ def test_real_pool_timeout_carries_the_poll_and_the_poll_replays_the_landed_op(
     )
     try:
         (timed_out,) = _serve(frame, ctx._pool_dispatch)
-        error = timed_out["error"]
-        assert error["code"] == server.WARM_DISPATCH_INDETERMINATE
-        data = error["data"]
-        key = data["dispatch_key"]
-        assert data["reconcile"] == "warm.request_status"
-        assert key in data["reconcile_command"]
-        assert "coordinator-invoke" in data["reconcile_command"]
-        assert "warm.request_status" in data["reconcile_command"]
+    except BaseException:
+        release.write_text("1")
+        pool.shutdown(wait=True)
+        raise
+    error = timed_out["error"]
+    assert error["code"] == server.WARM_DISPATCH_INDETERMINATE
+    data = error["data"]
+    assert data["reconcile"] == "warm.request_status"
+    assert data["dispatch_key"] in data["reconcile_command"]
+    assert "coordinator-invoke" in data["reconcile_command"]
+    assert "warm.request_status" in data["reconcile_command"]
+    return data["dispatch_key"], release, pool, claim_dir
+
+
+def test_timeout_reply_names_the_poll_and_a_dead_worker_reads_killed(tmp_path, monkeypatch):
+    key, release, pool, claim_dir = _timed_out_pool_ctx(tmp_path, monkeypatch)
+    try:
+        deadline = time.monotonic() + 30
+        status = _status(key)
+        while status.get("state") == dispatch_ack.STATE_EXECUTING and time.monotonic() < deadline:
+            time.sleep(0.1)
+            status = _status(key)
+        assert status["state"] == dispatch_ack.STATE_UNKNOWABLE
+        assert status["reason"] == dispatch_ack.OUTCOME_KILLED
+        assert status["worker_alive"] is False
+        assert isinstance(status["worker_pid"], int)
+        assert (claim_dir / f"{key}.killed").exists()
+    finally:
+        release.write_text("1")
+        pool.shutdown(wait=True)
+
+
+def test_a_worker_that_survives_terminate_reads_executing_and_its_late_result_replays(tmp_path, monkeypatch):
+    monkeypatch.setattr(multiprocessing.process.BaseProcess, "terminate", lambda self: None)
+    key, release, pool, claim_dir = _timed_out_pool_ctx(tmp_path, monkeypatch)
+    try:
+        status = _status(key)
+        assert status["state"] == dispatch_ack.STATE_EXECUTING
+        assert status["overdue"] is True
+        assert status["worker_alive"] is True
+        assert (claim_dir / f"{key}.killed").exists()
 
         release.write_text("1")
-        (reply,) = _serve(_poll_frame(key, wait_secs=60), _no_dispatch)
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            (reply,) = _serve(_poll_frame(key), _no_dispatch)
+            if reply["result"] == _LANDED:
+                break
+            time.sleep(0.1)
         assert reply["result"] == _LANDED
     finally:
         release.write_text("1")
