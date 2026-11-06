@@ -12,7 +12,10 @@ Three scenarios, each against a tmp directory this script creates and removes (n
 ``hold_ms`` is the caller's blocked time (``perf_counter``): a parked caller burns no CPU, so ``cpu_ms`` (process time)
 stays near zero and cannot show the hold; ``spawns`` counts child processes. ``measure()`` is the entry the tests drive.
 
-Run: ``python coordinator_core/benchmarks/engine_stall_repro.py [--json] [--guard-secs N] [--bar-ms N] [--enforce-bar]``.
+``--guard-under-load`` runs a fourth scenario, ``guard-under-load``: every pool worker held on ``dispatch.ask_stage``, then one
+``hooks.preuse_write_dispatch`` through the accept path; ``hold_ms`` is its end-minus-enqueue, ``cpu_ms`` process time.
+
+Run: ``python coordinator_core/benchmarks/engine_stall_repro.py [--json] [--guard-secs N] [--bar-ms N] [--enforce-bar] [--guard-under-load]``.
 """
 
 from __future__ import annotations
@@ -40,6 +43,8 @@ from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 
 #: The per-scenario caller-hold bar (plan acceptance 1).
 BAR_MS = 300.0
+#: The guard-under-load bar: the brightline end-to-end budget (DR-344).
+GUARD_BAR_MS = 500.0
 #: The stalled-sink scenario never waits past this, so the probe itself cannot hang.
 GUARD_SECS = 5.0
 #: Longest a blocked probe writer waits for release, so an abandoned thread always ends.
@@ -47,6 +52,11 @@ _GATE_MAX_SECS = 15.0
 CONCURRENT_THREADS = 8
 APPENDS_PER_THREAD = 5
 SCENARIOS = ("concurrent-append", "rotation-all-sinks-peer-held", "stalled-sink-record-append")
+#: Run only through ``--guard-under-load``; it drives the real accept path, so it is not in the default sweep.
+GUARD_SCENARIO = "guard-under-load"
+_GUARD_OP = "hooks.preuse_write_dispatch"
+_GUARD_HOLD_OP = "dispatch.ask_stage"
+_GUARD_HOLD_SECS = 2.0
 
 
 def _wait_drained(pred, secs: float = 3.0) -> None:
@@ -202,10 +212,114 @@ def _scenario_stalled_sink(tmp: Path, guard_secs: float) -> dict:
         spawn_mp.undo()
 
 
+class _GuardVersionState:
+    server_sha = "deadbeef"
+
+    def is_skewed(self, client_token: str) -> bool:
+        return False
+
+
+class _GuardFakeIO:
+    """One-frame connection double: serves a single JSON-RPC line, records what the engine writes back."""
+
+    def __init__(self, method: str, request_id: int):
+        frame = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": {}, "_engine_token": "client-token"}
+        self._lines = [(json.dumps(frame) + "\n").encode("utf-8")]
+        self.written: list = []
+
+    def readline(self) -> bytes:
+        return self._lines.pop(0) if self._lines else b""
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+
+    def flush(self) -> None:
+        pass
+
+    def close(self) -> None:
+        pass
+
+
+def _wait_until(pred, secs: float) -> bool:
+    deadline = time.monotonic() + secs
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(0.005)
+    return pred()
+
+
+def _all_workers_held(ctx, pool_size: int) -> bool:
+    """Every front thread is inside a holder. A server without ``_busy_workers`` (the HEAD base) is saturated once its queue drains."""
+    busy = getattr(ctx, "_busy_workers", None)
+    if busy is not None:
+        return busy() == pool_size
+    return ctx._queue.empty()
+
+
+def _scenario_guard_under_load(tmp: Path, guard_secs: float) -> dict:
+    """Accept-path guard check with every pool worker held: ``hold_ms`` is the guard's end-minus-enqueue."""
+    import concurrent.futures
+
+    from coordinator_core.warm import server, telemetry
+
+    hold_secs = min(guard_secs, _GUARD_HOLD_SECS)
+    release = threading.Event()
+    def body(msg, caller):
+        if msg["method"] == _GUARD_HOLD_OP:
+            release.wait(hold_secs)
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"ok": msg["method"]}}
+
+    mp = pytest.MonkeyPatch()
+    spawn_mp = pytest.MonkeyPatch()
+    ctx = None
+    try:
+        mp.setattr(server, "_pool_dispatch_worker_body", body)
+        mp.setattr(telemetry, "flush_requests", lambda *_a, **_k: None)
+        telemetry._REQUESTS.clear()
+        ctx = server._ServerContext(
+            name="pipe-guard-repro", sid="sid-guard-repro", version_state=_GuardVersionState(), engine_root=tmp
+        )
+        ctx._claim_dir = tmp / "claims"
+        ctx._claim_dir.mkdir()
+        ctx._dispatch_pool = concurrent.futures.ThreadPoolExecutor(
+            max_workers=server.WORKER_POOL_SIZE + server._LIGHT_RESERVE_WORKERS
+        )
+        ctx._start_worker_pool(pool_size=server.WORKER_POOL_SIZE)
+        holders = [_GuardFakeIO(_GUARD_HOLD_OP, i) for i in range(server.WORKER_POOL_SIZE)]
+        guard_io = _GuardFakeIO(_GUARD_OP, 1000)
+        for io in holders:
+            ctx._enqueue_connection(io, admitted=False)
+        saturated = _wait_until(lambda: _all_workers_held(ctx, server.WORKER_POOL_SIZE), 5.0)
+        with _count_spawns_attributed(spawn_mp) as spawns:
+            cpu0 = time.process_time()
+            t0 = time.perf_counter()
+            ctx._enqueue_connection(guard_io, admitted=False)
+            answered = _wait_until(lambda: bool(guard_io.written), hold_secs + 5.0)
+            hold_ms = (time.perf_counter() - t0) * 1000.0
+            cpu_ms = (time.process_time() - cpu0) * 1000.0
+        rows = [r for r in telemetry.request_samples() if r.get("op") == _GUARD_OP]
+        row = rows[-1] if rows else None
+        row_ms = round((row["end_ts"] - row["enqueue_ts"]) * 1000.0, 1) if row and "end_ts" in row and "enqueue_ts" in row else None
+        return _record(
+            "guard-under-load", hold_ms, cpu_ms, len(spawns),
+            "guard op queued behind every held pool worker (server._enqueue_connection -> _worker_loop)",
+            workers_held=server.WORKER_POOL_SIZE, saturated=saturated, answered=answered,
+            guard_row_end_minus_enqueue_ms=row_ms, guard_row_busy_workers=row.get("busy_workers") if row else None,
+        )
+    finally:
+        release.set()
+        if ctx is not None and getattr(ctx, "_dispatch_pool", None) is not None:
+            ctx._dispatch_pool.shutdown(wait=False, cancel_futures=True)
+        mp.undo()
+        spawn_mp.undo()
+
+
 _RUNNERS = {
     "concurrent-append": _scenario_concurrent_append,
     "rotation-all-sinks-peer-held": _scenario_rotation_all_sinks,
     "stalled-sink-record-append": _scenario_stalled_sink,
+    GUARD_SCENARIO: _scenario_guard_under_load,
 }
 
 
@@ -225,13 +339,24 @@ def main(argv: "list[str] | None" = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--json", action="store_true", help="emit the records as JSON")
     ap.add_argument("--guard-secs", type=float, default=GUARD_SECS)
-    ap.add_argument("--bar-ms", type=float, default=BAR_MS)
+    ap.add_argument("--bar-ms", type=float, default=None, help=f"default {BAR_MS}, or {GUARD_BAR_MS} with --guard-under-load")
     ap.add_argument("--enforce-bar", action="store_true", help="exit 1 when any scenario's hold exceeds --bar-ms")
+    ap.add_argument(
+        "--guard-under-load", action="store_true",
+        help="run only the guard-verdict scenario: every pool worker held, report the guard's end-minus-enqueue ms",
+    )
     args = ap.parse_args(argv)
     from coordinator_core.benchmarks import declare_benchmark_origin
 
     declare_benchmark_origin()
-    records = measure(args.guard_secs)
+    if args.guard_under_load:
+        if args.bar_ms is None:
+            args.bar_ms = GUARD_BAR_MS
+        records = measure(args.guard_secs, scenarios=(GUARD_SCENARIO,))
+    else:
+        if args.bar_ms is None:
+            args.bar_ms = BAR_MS
+        records = measure(args.guard_secs)
     over = [r["scenario"] for r in records if r["hold_ms"] > args.bar_ms]
     if args.json:
         print(json.dumps({"bar_ms": args.bar_ms, "over_bar": over, "records": records}, indent=2))

@@ -18,6 +18,16 @@ def test_neither_constant_claims_absence_means_safe_to_rerun() -> None:
         assert "Reconcile against real state" not in text
 
 
+def test_both_client_mutating_texts_say_how_to_check_a_commit_landed() -> None:
+    for text in (
+        client._MUTATION_INDETERMINATE_MESSAGE,
+        client._OP_TIMEOUT_INDETERMINATE_MESSAGE,
+    ):
+        assert "git log -1 -- <path>" in text
+        assert "git status" in text
+        assert "was delivered" not in text
+
+
 def test_envelope_selects_fire_and_forget_text(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.authz import completion_evidence
 

@@ -339,13 +339,13 @@ def test_mass_rename_builds_the_pool_once_and_still_passes(tmp_path, monkeypatch
 
     repo = _init_repo(tmp_path)
     n = 40
-    olds = [f"old/f{i}.md" for i in range(n)]
+    olds = [f"old/f{i}.py" for i in range(n)]
     for i, p in enumerate(olds):
         _seed_file(repo, p, f"{_ATTR_LINE}\nbody {i}\n")
     _commit(repo, olds)
     news = []
     for i, p in enumerate(olds):
-        new = f"new/f{i}.md"
+        new = f"new/f{i}.py"
         (repo / "new").mkdir(exist_ok=True)
         _git(["mv", p, new], repo)
         news.append(new)

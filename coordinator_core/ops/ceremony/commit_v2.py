@@ -93,6 +93,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     split_process_paths,
     claude_md_budget_gate,
     declared_deletion_gate,
+    import_closure_gate,
     machine_path_leak_gate,
     op_scope_coverage_gate,
     registration_quad_gate,
@@ -445,9 +446,9 @@ def _pre_commit_gates(
 
     Runs now, in order: `declared_deletion_gate`, `carry_gate`, `residue_gate`,
     `op_scope_coverage_gate`, `leak_gate`, `registration_quad_gate`,
-    `claude_md_budget_gate`, `machine_path_leak_gate`, `attribution_gate`.
+    `claude_md_budget_gate`, `machine_path_leak_gate`, `import_closure_gate`, `attribution_gate`.
     `read_source` is the post-commit reader (`commit_source.post_commit_reader`): the last
-    three and `op_scope_coverage_gate` judge the tree this commit lands, never the
+    four and `op_scope_coverage_gate` judge the tree this commit lands, never the
     worktree or the index.
 
     `run_commit_pipeline` ran four; C3 repointed every caller onto this op,
@@ -557,6 +558,7 @@ def _pre_commit_gates(
         ("registration_quad_gate", partial(registration_quad_gate, read_source=read_source)),
         ("claude_md_budget_gate", partial(claude_md_budget_gate, read_source=read_source)),
         ("machine_path_leak_gate", partial(machine_path_leak_gate, read_source=read_source)),
+        ("import_closure_gate", partial(import_closure_gate, read_source=read_source)),
         ("attribution_gate", partial(
             attribution_gate, vacated=deleted_paths,
             prefer_staged=prefer_staged, deliberate_stage=deliberate_stage,

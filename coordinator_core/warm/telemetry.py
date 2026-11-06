@@ -90,6 +90,7 @@ NEGATIVE-SPEC:
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import threading
@@ -127,6 +128,9 @@ __all__ = [
     "SERVER_BOOT_FILENAME",
     "server_boot_path",
     "record_server_boot",
+    "PROCESS_STARTS_FILENAME",
+    "process_starts_path",
+    "record_process_start",
     "server_boot_samples",
     "ELECTION_LOST_FILENAME",
     "election_lost_path",
@@ -135,6 +139,14 @@ __all__ = [
     "WORKER_POOL_DEPTH_FILENAME",
     "worker_pool_depth_path",
     "record_worker_pool_depth",
+    "REQUEST_TELEMETRY_FILENAME",
+    "REQUEST_TELEMETRY_KEEP",
+    "request_telemetry_path",
+    "record_request",
+    "request_samples",
+    "SLOW_REQUEST_SECS",
+    "slow_request_rows",
+    "flush_requests",
     "PUSH_SWEEP_FILENAME",
     "push_sweep_path",
     "record_sweep",
@@ -266,9 +278,15 @@ def record_server_boot(
     ready_secs: float,
     pid: int,
     engine_root: Optional[Path] = None,
+    parent_pid: Optional[int] = None,
+    boot_reason: Optional[str] = None,
 ) -> None:
     """Append one row measuring a warm server's own boot: spawn -> endpoint
     bound (`listener_secs`) and spawn -> ready to answer (`ready_secs`).
+
+    `parent_pid` (default `os.getppid()`) and `boot_reason` (supervisor
+    respawn / door spawn / election / handover, as the caller names it;
+    omitted when unnamed) make a restart attributable from disk.
 
     THE MEASUREMENT THREE OTHER FILES CANNOT PRODUCE. Boot time has been
     argued all week from proxies, and every proxy is censored by WHEN
@@ -295,11 +313,54 @@ def record_server_boot(
         "listener_secs": round(listener_secs, 3),
         "ready_secs": round(ready_secs, 3),
         "pid": pid,
+        "parent_pid": os.getppid() if parent_pid is None else parent_pid,
     }
+    if boot_reason is not None:
+        record["boot_reason"] = boot_reason
     path = server_boot_path(engine_root)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         with locked_write.held_lock(path, holder_label="warm.telemetry.server_boot", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+PROCESS_STARTS_FILENAME = "process-starts.jsonl"
+
+
+def process_starts_path(engine_root: Optional[Path] = None) -> Path:
+    return svc_dir(engine_root) / PROCESS_STARTS_FILENAME
+
+
+def record_process_start(
+    *,
+    pid: int,
+    role: str,
+    parent_pid: Optional[int] = None,
+    reason: Optional[str] = None,
+    engine_root: Optional[Path] = None,
+) -> None:
+    """Append one row per process start (`role`: server / pool worker /
+    supervisor, as the caller names it) so a restart or a replaced pool
+    worker is attributable from disk. `parent_pid` defaults to
+    `os.getppid()`; `reason` is omitted when unnamed. Best-effort: never
+    raises. No production caller yet (speculative: server/supervisor start
+    sites are the intended consumers, as is `boot_reason` on
+    `record_server_boot`)."""
+    record = {
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "pid": pid,
+        "role": role,
+        "parent_pid": os.getppid() if parent_pid is None else parent_pid,
+    }
+    if reason is not None:
+        record["reason"] = reason
+    path = process_starts_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.process_starts", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
@@ -448,6 +509,100 @@ def record_worker_pool_depth(
         with locked_write.held_lock(path, holder_label="warm.telemetry.worker_pool_depth", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
             with path.open("a", encoding="utf-8") as fh:
                 fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+    except Exception:
+        return
+
+
+REQUEST_TELEMETRY_FILENAME = "request-telemetry.jsonl"
+REQUEST_TELEMETRY_KEEP = 512
+SLOW_REQUEST_SECS = 8.0
+
+_REQUESTS: "collections.deque" = collections.deque(maxlen=REQUEST_TELEMETRY_KEEP)
+
+
+def request_telemetry_path(engine_root: Optional[Path] = None) -> Path:
+    """`<svc dir>/request-telemetry.jsonl` -- per-request rows flushed from
+    the in-memory ring by `flush_requests`."""
+    return svc_dir(engine_root) / REQUEST_TELEMETRY_FILENAME
+
+
+def record_request(
+    *,
+    op: Optional[str] = None,
+    session: Optional[str] = None,
+    enqueue_ts: Optional[float] = None,
+    start_ts: Optional[float] = None,
+    end_ts: Optional[float] = None,
+    busy_workers: Optional[int] = None,
+    outcome: Optional[str] = None,
+    pid: Optional[int] = None,
+    worker_pid: Optional[int] = None,
+    lane: Optional[str] = None,
+    dispatch_key: Optional[str] = None,
+) -> None:
+    """Append one request row to the bounded in-memory ring. No I/O, never
+    raises; the oldest row is evicted past `REQUEST_TELEMETRY_KEEP`. Keys
+    whose value is None are omitted. `worker_pid` is the pool worker that
+    ran the request, `lane` the pool lane, `dispatch_key` the pool's
+    in-flight claim key."""
+    try:
+        fields = {
+            "op": op,
+            "session": session,
+            "enqueue_ts": enqueue_ts,
+            "start_ts": start_ts,
+            "end_ts": end_ts,
+            "busy_workers": busy_workers,
+            "outcome": outcome,
+            "pid": pid,
+            "worker_pid": worker_pid,
+            "lane": lane,
+            "dispatch_key": dispatch_key,
+        }
+        row = {k: v for k, v in fields.items() if v is not None}
+        if enqueue_ts is not None and start_ts is not None:
+            row["queue_wait_ms"] = (start_ts - enqueue_ts) * 1000.0
+        _REQUESTS.append(row)
+    except Exception:
+        return
+
+
+def request_samples() -> list:
+    """Snapshot of the ring, oldest first."""
+    return list(_REQUESTS)
+
+
+def slow_request_rows(rows, threshold_secs: float = SLOW_REQUEST_SECS) -> list:
+    """Pure filter: the rows whose `end_ts - enqueue_ts` exceeds
+    `threshold_secs`, each reduced to op, session, queue_wait_ms and
+    busy_workers (absent keys omitted). Rows lacking either timestamp are
+    skipped."""
+    out: list = []
+    for r in rows:
+        enq, end = r.get("enqueue_ts"), r.get("end_ts")
+        if enq is None or end is None or end - enq <= threshold_secs:
+            continue
+        out.append({k: r[k] for k in ("op", "session", "queue_wait_ms", "busy_workers") if k in r})
+    return out
+
+
+def flush_requests(engine_root: Optional[Path] = None) -> None:
+    """Drain the ring into `request_telemetry_path` with one locked append.
+    Best-effort: never raises; rows are dropped if the lock or write fails."""
+    rows: list = []
+    try:
+        while True:
+            rows.append(_REQUESTS.popleft())
+    except IndexError:
+        pass
+    if not rows:
+        return
+    path = request_telemetry_path(engine_root)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with locked_write.held_lock(path, holder_label="warm.telemetry.requests", timeout=BEST_EFFORT_LOCK_TIMEOUT_SECS):
+            with path.open("a", encoding="utf-8") as fh:
+                fh.write("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows))
     except Exception:
         return
 

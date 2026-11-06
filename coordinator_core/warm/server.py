@@ -447,6 +447,53 @@ DISPATCH_PROCESS_POOL_SIZE = min(_DISPATCH_POOL_IO_CAP, WORKER_POOL_SIZE, max(1,
 ACCEPTOR_POOL_SIZE = PENDING_LISTENER_POOL_SIZE
 
 
+#: Per-worker-thread `(enqueue_ts, start_ts, busy_workers_at_enqueue)` set by
+#: `_ServerContext._worker_loop` and read by `_pool_dispatch` to stamp the request row.
+_REQUEST_STAMP = threading.local()
+
+#: Per-serve-thread dict `_serve_queued` opens and `_pool_dispatch` fills (op, session, outcome);
+#: `_serve_queued` records the one telemetry row from it at exit, whichever lane served the request.
+_REQUEST_ROW = threading.local()
+
+
+#: Reader threads of the reserved guard lane (`_ServerContext._guard_lane_loop`); they never run a heavy op.
+_GUARD_LANE_THREADS = 4
+
+#: A guard-lane reader waits this long for a request line before handing the connection to the shared queue,
+#: so a silent client cannot hold a lane thread.
+_GUARD_LANE_READ_WAIT_SECS = 0.25
+
+
+def _line_ready_within(io: Any, secs: float) -> bool:
+    """False only when `io` has a selectable fd and nothing is readable within `secs`; other io kinds read as ready."""
+    try:
+        if os.name == "nt":
+            return True
+        import select
+
+        fd = getattr(io, "_select_fd", None)
+        return fd is None or bool(select.select([fd], [], [], secs)[0])
+    except Exception:  # noqa: BLE001 -- no selectable fd (fake or pipe io): read blockingly as before
+        return True
+
+
+class _ReplayIO:
+    """Connection wrapper whose first `readline` returns a line a guard-lane reader already consumed."""
+
+    def __init__(self, io: Any, line: bytes) -> None:
+        self._io = io
+        self._line: Optional[bytes] = line
+
+    def readline(self) -> bytes:
+        if self._line is not None:
+            line, self._line = self._line, None
+            return line
+        return self._io.readline()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._io, name)
+
+
 class InFlightCounter:
 
     def __init__(self) -> None:
@@ -1423,6 +1470,7 @@ def _arm_accept_stall(
     key: Optional[str],
     phase: list,
     repo_root=None,
+    engine_root=None,
 ) -> Callable[[], None]:
     """Accept-process twin of `_arm_stall_dump`: a request still without a worker
     claim after `stall_secs` writes a record naming `phase[0]` (`gate`, `submit` or
@@ -1444,6 +1492,8 @@ def _arm_accept_stall(
         try:
             if claim is not None and claim.exists():
                 return
+            if engine_root is not None:
+                telemetry.flush_requests(engine_root)
             frame = sys._current_frames().get(conn_ident)
             chain = []
             while frame is not None:
@@ -3196,6 +3246,7 @@ def _wrap_handle(handle: int) -> Any:
 
 def _wrap_socket(conn: Any) -> Any:
     io = conn.makefile("rwb")
+    io._select_fd = conn.fileno()  # BufferedRWPair has no fileno(); the guard lane selects on this
     conn.close()
     return io
 
@@ -3244,6 +3295,59 @@ def _refuse_while_draining(conn: Any, *, server_sha: Optional[str]) -> None:
             target.close()
         except OSError:
             pass
+
+
+_NOT_READY_POLL_SECS = 0.05
+
+
+class _NotReadyAnswerer:
+    """Answers connections that reach a bound listen socket before the real
+    acceptors exist, with the determinate ENGINE_SKEW `_refuse_while_draining`
+    sends, so `warm.client` treats them as provably not executed and goes cold
+    at once instead of waiting out `_preload_op_registry`.
+
+    Accept and `stop()` share one lock: after `stop()` returns, this thread
+    never takes another connection, so the real acceptors inherit every later
+    arrival. Never raises; each refusal runs on its own short thread so a slow
+    reader cannot hold up the next caller.
+    """
+
+    def __init__(self, listen_socket: Any, *, server_sha: Optional[str]) -> None:
+        self._sock = listen_socket
+        self._server_sha = server_sha
+        self._lock = threading.Lock()
+        self._stopped = False
+        self._thread = threading.Thread(
+            target=self._loop, daemon=True, name="warm-not-ready-answerer"
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        with self._lock:
+            self._stopped = True
+        self._thread.join(timeout=1.0)
+
+    def _loop(self) -> None:
+        import select
+
+        while True:
+            with self._lock:
+                if self._stopped:
+                    return
+                try:
+                    readable, _, _ = select.select([self._sock], [], [], _NOT_READY_POLL_SECS)
+                    conn = self._sock.accept()[0] if readable else None
+                except (OSError, ValueError):
+                    return
+            if conn is not None:
+                threading.Thread(
+                    target=_refuse_while_draining,
+                    args=(conn,),
+                    kwargs={"server_sha": self._server_sha},
+                    daemon=True,
+                ).start()
 
 
 def _spawn_background(fn: Callable[..., Any], *args: Any) -> None:
@@ -3321,6 +3425,8 @@ class _ServerContext:
         self._pool_outstanding = InFlightCounter()
         self.telemetry = telemetry.ServerTelemetry()
         self._queue: "queue.Queue[Any]" = queue.Queue()
+        self._enqueue_stamps: "dict[int, tuple]" = {}
+        self._busy_workers = InFlightCounter()
         self._listening_lock = threading.Lock()
         self._listening = True
         self._stopped = threading.Event()
@@ -3331,6 +3437,9 @@ class _ServerContext:
         self._dispatch_pool: Optional["concurrent.futures.ProcessPoolExecutor"] = None
         self._dispatch_pool_lock = threading.Lock()
         self._worker_threads: "list[threading.Thread]" = []
+        self._pool_size = WORKER_POOL_SIZE
+        self._guard_queue: "queue.Queue[Any]" = queue.Queue()
+        self._guard_threads: "list[threading.Thread]" = []
 
     def close_listener(self) -> None:
         """STOPS ACCEPTING; DOES NOT CLOSE THE ENDPOINT. Flips one
@@ -3539,6 +3648,46 @@ class _ServerContext:
         caller: Optional[CallerContext] = None,
         dispatch_key: Optional[str] = None,
     ) -> dict:
+        """`_pool_dispatch_untimed` plus one `telemetry.record_request` row
+        (op, session, enqueue/start/end, busy workers). The row is recorded in
+        memory only; `_idle_tick` and the accept stall watcher flush it."""
+        stamp = getattr(_REQUEST_STAMP, "value", None)
+        start_ts = stamp[1] if stamp is not None else time.time()
+        pending = getattr(_REQUEST_ROW, "value", None)
+        response: Optional[dict] = None
+        try:
+            response = self._pool_dispatch_untimed(msg, caller=caller, dispatch_key=dispatch_key)
+            return response
+        finally:
+            try:
+                outcome = "error" if isinstance(response, dict) and "error" in response else "ok"
+                session = caller.session_id if caller is not None else None
+                if pending is not None:
+                    pending.update(
+                        op=msg.get("method"), session=session, outcome=outcome, dispatch_key=dispatch_key
+                    )
+                else:
+                    telemetry.record_request(
+                        op=msg.get("method"),
+                        session=session,
+                        enqueue_ts=stamp[0] if stamp is not None else None,
+                        start_ts=start_ts,
+                        end_ts=time.time(),
+                        busy_workers=stamp[2] if stamp is not None else None,
+                        outcome=outcome,
+                        pid=os.getpid(),
+                        dispatch_key=dispatch_key,
+                    )
+            except Exception:  # noqa: BLE001 -- telemetry never fails a caller
+                pass
+
+    def _pool_dispatch_untimed(
+        self,
+        msg: dict,
+        *,
+        caller: Optional[CallerContext] = None,
+        dispatch_key: Optional[str] = None,
+    ) -> dict:
         """The `dispatch=` callable a real accept-loop worker thread
         (`_worker_loop`) hands to `_handle_connection` -- submits the call
         to `DISPATCH_PROCESS_POOL_SIZE` worker PROCESSES and blocks this
@@ -3582,6 +3731,7 @@ class _ServerContext:
                 dispatch_key if _is_safe_dispatch_key(dispatch_key) else None,
                 _phase,
                 _op_repo_root(msg),
+                getattr(self, "engine_root", None),
             )
             gate = self._admission_gate()
             _hook = _is_hook_lane(_method)
@@ -3904,6 +4054,7 @@ class _ServerContext:
         telemetry.record_worker_pool_depth(
             depth=self.worker_pool_depth(), pid=os.getpid(), engine_root=self.engine_root
         )
+        telemetry.flush_requests(self.engine_root)
 
     def _final_sweep(self) -> None:
         """The mandatory final sweep (`warm.push_cadence` module docstring,
@@ -4086,6 +4237,11 @@ class _ServerContext:
             thread = threading.Thread(target=self._worker_loop, daemon=True)
             thread.start()
             self._worker_threads.append(thread)
+        self._pool_size = pool_size
+        for _ in range(_GUARD_LANE_THREADS):
+            thread = threading.Thread(target=self._guard_lane_loop, daemon=True)
+            thread.start()
+            self._guard_threads.append(thread)
 
     def worker_pool_depth(self) -> int:
         """Live `_worker_loop` thread count for this running server -- AC1's
@@ -4141,29 +4297,100 @@ class _ServerContext:
         own survival for the NEXT connection in the queue.
         """
         while True:
-            io = self._queue.get()
+            self._serve_queued(self._queue.get(), lane="worker")
+
+    def _guard_lane_loop(self) -> None:
+        """Reserved lane for a saturated pool: `_enqueue_connection` routes here only when every
+        `_worker_loop` thread is busy or the shared queue already holds a pool's worth. Reads the
+        request line, serves a hook-class or light op on this thread, and hands any other op back
+        to the shared queue behind the held workers. Never runs a heavy op itself."""
+        while True:
+            io = self._guard_queue.get()
+            stamp = self._enqueue_stamps.pop(id(io), (None, None))
+            if not _line_ready_within(io, _GUARD_LANE_READ_WAIT_SECS):
+                self._enqueue_stamps[id(io)] = stamp
+                self._queue.put(io)
+                continue
             try:
-                _handle_connection(
-                    io,
-                    version_state=self.version_state,
-                    server_sha=self.version_state.server_sha,
-                    close_listener=self.close_listener,
-                    drain=self._drain,
-                    in_flight=self.in_flight,
-                    dispatch=self._pool_dispatch,
-                    record_invocation=self.record_invocation,
-                    record_exit=self.record_exit,
-                    record_served_repo=self.record_served_repo,
-                    already_entered=True,
-                    engine_root=self.engine_root,
-                )
-            except Exception as exc:  # noqa: BLE001 -- see docstring: a dead worker is a permanent capacity loss, not a single lost response
-                print(
-                    f"[warm-server] worker thread survived an unhandled exception "
-                    f"from _handle_connection (likely a write to an abandoned "
-                    f"connection); continuing to drain the queue: {exc!r}",
-                    file=sys.stderr,
-                )
+                line = io.readline()
+            except Exception:  # noqa: BLE001 -- unreadable: the shared path reads it again and answers
+                self._enqueue_stamps[id(io)] = stamp
+                self._queue.put(io)
+                continue
+            try:
+                method = json.loads(line).get("method") if line else None
+            except Exception:  # noqa: BLE001 -- non-JSON: the shared path answers it
+                method = None
+            replay = _ReplayIO(io, line)
+            if method is not None and (_is_hook_lane(method) or _is_light_mutating(method)):
+                self._serve_queued(replay, stamp, lane="guard")
+            else:
+                self._enqueue_stamps[id(replay)] = stamp
+                self._queue.put(replay)
+
+    def _serve_queued(self, io: Any, stamp: Optional[tuple] = None, lane: str = "pool") -> None:
+        """One queued connection's lifecycle on the calling worker thread: stamp, busy-count, hand to `_handle_connection`.
+        Records one telemetry row at exit (`lane` guard, worker or pool) once `_pool_dispatch` named the op;
+        a row past `telemetry.SLOW_REQUEST_SECS` hands the ring flush to a daemon thread."""
+        if stamp is None:
+            stamp = self._enqueue_stamps.pop(id(io), (None, None))
+        enqueue_ts, busy_at_enqueue = stamp
+        start_ts = time.time()
+        _REQUEST_STAMP.value = (enqueue_ts, start_ts, busy_at_enqueue)
+        _REQUEST_ROW.value = row = {}
+        self._busy_workers.enter()
+        try:
+            _handle_connection(
+                io,
+                version_state=self.version_state,
+                server_sha=self.version_state.server_sha,
+                close_listener=self.close_listener,
+                drain=self._drain,
+                in_flight=self.in_flight,
+                dispatch=self._pool_dispatch,
+                record_invocation=self.record_invocation,
+                record_exit=self.record_exit,
+                record_served_repo=self.record_served_repo,
+                already_entered=True,
+                engine_root=self.engine_root,
+            )
+        except Exception as exc:  # noqa: BLE001 -- see docstring: a dead worker is a permanent capacity loss, not a single lost response
+            print(
+                f"[warm-server] worker thread survived an unhandled exception "
+                f"from _handle_connection (likely a write to an abandoned "
+                f"connection); continuing to drain the queue: {exc!r}",
+                file=sys.stderr,
+            )
+        finally:
+            self._busy_workers.exit()
+            _REQUEST_STAMP.value = None
+            _REQUEST_ROW.value = None
+            self._record_served_row(row, lane, enqueue_ts, start_ts, busy_at_enqueue)
+
+    def _record_served_row(
+        self, row: dict, lane: str, enqueue_ts: Optional[float], start_ts: float, busy_at_enqueue: Optional[int]
+    ) -> None:
+        """Ring-only row for one served request; never raises, never writes disk on this thread."""
+        try:
+            end_ts = time.time()
+            telemetry.record_request(
+                op=row.get("op"),
+                session=row.get("session"),
+                enqueue_ts=enqueue_ts,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                busy_workers=busy_at_enqueue,
+                outcome=row.get("outcome") or "undispatched",
+                pid=os.getpid(),
+                lane=lane,
+                dispatch_key=row.get("dispatch_key"),
+            )
+            if end_ts - (enqueue_ts if enqueue_ts is not None else start_ts) > telemetry.SLOW_REQUEST_SECS:
+                threading.Thread(
+                    target=telemetry.flush_requests, args=(self.engine_root,), daemon=True
+                ).start()
+        except Exception:  # noqa: BLE001 -- telemetry never fails a caller
+            pass
 
     def _admit(self) -> bool:
         """Atomically test `_listening` and claim an `in_flight` slot.
@@ -4188,7 +4415,12 @@ class _ServerContext:
         """
         if not admitted:
             self.in_flight.enter()
-        self._queue.put(io)
+        self._enqueue_stamps[id(io)] = (time.time(), self._busy_workers())
+        saturated = self._busy_workers() + self._queue.qsize() >= self._pool_size
+        if saturated and any(t.is_alive() for t in self._guard_threads):
+            self._guard_queue.put(io)
+        else:
+            self._queue.put(io)
 
     def _start_pending_listener_pool(
         self, first_handle: int, *, pool_size: int = PENDING_LISTENER_POOL_SIZE
@@ -4463,6 +4695,14 @@ def _run_guarded() -> int:
 
     _suppress_pool_worker_consoles()
 
+    not_ready = (
+        _NotReadyAnswerer(elected.listen_socket, server_sha=version_state.server_sha)
+        if elected.listen_socket is not None
+        else None
+    )
+    if not_ready is not None:
+        not_ready.start()
+
     _preload_op_registry()
 
     # ...and this is the first instant a connection gets a PROMPT answer:
@@ -4531,6 +4771,9 @@ def _run_guarded() -> int:
         spawn_epoch=spawn_epoch,
         listener_at=listener_at,
     )
+
+    if not_ready is not None:
+        not_ready.stop()
 
     # Dispatch on WHICH ENDPOINT WAS WON, not on the platform read again.
     # The value that decides is the value that gets passed, so the

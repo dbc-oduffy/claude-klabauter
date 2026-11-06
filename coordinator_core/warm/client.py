@@ -1137,7 +1137,9 @@ _MUTATION_INDETERMINATE_MESSAGE = (
     "Deliberately NOT retried and NOT re-run cold here: a mutation the engine "
     "IS executing, re-executed, is the double-execution this refusal prevents "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
-    "d4c7d9dc8e14.yaml). Retry is NOT safe: reconcile first."
+    "d4c7d9dc8e14.yaml). Retry is NOT safe: run the printed warm.request_status "
+    "poll (phase queued = never ran; running/done = ran); for a commit, "
+    "`git log -1 -- <path>` or `git status` shows whether it landed."
 )
 
 
@@ -1161,7 +1163,8 @@ _OP_TIMEOUT_INDETERMINATE_MESSAGE = (
     "Deliberately NOT retried here: re-executing a dispatched mutation whose "
     "outcome is unknown is exactly the double-execution this refusal prevents "
     "(state/bug-backlog/2026-08-19-scoped-git-commit-still-reports-a-landed-"
-    "d4c7d9dc8e14.yaml). Retry is NOT safe: reconcile first."
+    "d4c7d9dc8e14.yaml). Retry is NOT safe: reconcile first; for a commit, "
+    "`git log -1 -- <path>` or `git status` shows whether it landed."
 )
 
 

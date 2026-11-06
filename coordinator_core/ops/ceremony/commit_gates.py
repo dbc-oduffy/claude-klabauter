@@ -702,20 +702,24 @@ def _head_text(
 class _AnyAttributionPattern:
     """Lazy `search` over the alternation, so importing this module compiles nothing."""
 
-    @staticmethod
-    @functools.lru_cache(maxsize=1)
-    def _compiled() -> "re.Pattern[str]":
-        from coordinator_core.attribution.patterns import PATTERNS
+    class _compiled:
+        @functools.cached_property
+        def pattern(self) -> str:
+            from coordinator_core.attribution.patterns import PATTERNS
 
-        return re.compile(
-            "|".join(
+            return "|".join(
                 f"(?i:{p.pattern})" if p.flags & re.IGNORECASE else f"(?:{p.pattern})"
                 for p in PATTERNS.values()
             )
-        )
+
+        @functools.cached_property
+        def regex(self) -> "re.Pattern[str]":
+            return re.compile(self.pattern)
+
+    _compiled = _compiled()
 
     def search(self, text: str):
-        return self._compiled().search(text)
+        return self._compiled.regex.search(text)
 
 
 _ANY_ATTRIBUTION_PATTERN = _AnyAttributionPattern()
