@@ -68,18 +68,42 @@ def ok(roster, alias, key):
     return None
 
 
-def test_unconfigured_exits_silently_without_touching_state(env, capsys):
-    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
+def log_lines(env):
+    return (env.sdir / "autolink.log").read_text().splitlines()
+
+
+def test_unconfigured_prints_nothing_and_logs_the_reason(env, capsys):
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok)
     out = capsys.readouterr()
-    assert out.out == "" and out.err == ""
-    assert not env.sdir.exists()
+    assert out.out == "" and out.err == "" and sp.cmds == []
+    lines = log_lines(env)
+    assert len(lines) == 1 and "unimatrix.far_boxes unreadable" in lines[0] and "no supervisors started" in lines[0]
 
 
-def test_no_far_box_with_key_present_is_silent(env, capsys):
+def test_registry_key_unset_logs_the_no_alias_line(env):
+    reader = env.home / "bin" / "_machine_local.py"
+    reader.write_text("import sys\nsys.exit(1)\n")
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
+    lines = log_lines(env)
+    assert len(lines) == 1 and lines[0].endswith(" no unimatrix.far_boxes configured; no supervisors started")
+
+
+def test_registry_value_with_only_unsafe_aliases_logs_it(env):
+    reader = env.home / "bin" / "_machine_local.py"
+    reader.write_text("print('-oProxyCommand=x')\n")
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok)
+    lines = log_lines(env)
+    assert sp.cmds == [] and len(lines) == 1 and "lists no valid alias" in lines[0]
+
+
+def test_no_far_box_with_key_present_logs_and_spawns_nothing(env, capsys):
     add_key(env)
     sp = Spawner()
     env.al.run(roster=env.roster, boxes=[], spawn=sp, probe_fn=ok)
     assert sp.cmds == [] and capsys.readouterr().out == ""
+    assert "no unimatrix.far_boxes configured; no supervisors started" in log_lines(env)[0]
 
 
 def test_far_box_without_relay_key_logs_one_line_and_prints_nothing(env, capsys):
@@ -273,6 +297,7 @@ def test_held_lock_blocks_a_concurrent_spawn(env):
     sp = Spawner()
     env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok)
     assert sp.cmds == []
+    assert "lock held" in log_lines(env)[0]
 
 
 def test_stale_lock_is_taken_over(env):
@@ -401,9 +426,10 @@ def test_default_resolution_path_matches_todays_shared_key(env):
     assert {key_of(c) for c in sp.cmds} == {str(env.key)} and len(sp.cmds) == 4
 
 
-def test_cli_entrypoint_unconfigured_is_silent_exit_zero(tmp_path):
+def test_cli_entrypoint_unconfigured_is_silent_exit_zero_and_logs_reason(tmp_path):
     home = tmp_path / "s"
     home.mkdir()
     r = subprocess.run([sys.executable, str(BIN / "unimatrix-autolink.py")], capture_output=True, text=True,
                        env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(home)})
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
+    assert "no supervisors started" in (home / "unimatrix" / "autolink.log").read_text()

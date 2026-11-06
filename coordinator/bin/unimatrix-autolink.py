@@ -10,9 +10,10 @@ that alias's relay key (`-o IdentitiesOnly=yes` is applied by the supervisors' s
 The key per alias is the machine-local `unimatrix.keys.<alias>`, else the IdentityFile `ssh -G` gives
 the alias (an existing non-default file), else the shared key (settings home, else the group-em home).
 
-Silent exit 0 when no alias is listed. An alias with no existing key appends one line to the log and
-is skipped; other aliases still link.
-An unreachable far box appends one line to `<settings home>/unimatrix/autolink.log`.
+When no alias is listed (or the registry is unreadable) it appends one reason line to the log and exits 0:
+a receive-only box reads "no unimatrix.far_boxes configured; no supervisors started". An alias with no
+existing key appends one line to the log and is skipped; other aliases still link. A held per-peer lock
+logs its skip. An unreachable far box appends one line to `<settings home>/unimatrix/autolink.log`.
 Nothing is ever printed and the exit status is always 0: a session start must not fail on it.
 """
 import importlib.util
@@ -46,23 +47,34 @@ def state_dir(roster):
     return roster.settings_home() / "unimatrix"
 
 
-def read_far_boxes(roster):
-    """Configured ssh aliases; empty when the key, the reader, or any valid alias is absent."""
+NO_ALIAS_REASON = "no unimatrix.far_boxes configured; no supervisors started"
+
+
+def far_boxes_status(roster):
+    """(aliases, reason): reason names why `aliases` is empty, and is None when it is not."""
     reader = roster.settings_home() / "bin" / "_machine_local.py"
     if not reader.is_file():
-        return []
+        return [], f"{REGISTRY_KEY} unreadable (machine-local reader missing: {reader}); no supervisors started"
     try:
         r = subprocess.run([sys.executable, str(reader), "get", REGISTRY_KEY],
                            capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
-    except (OSError, subprocess.SubprocessError):
-        return []
-    if r.returncode:
-        return []
+    except (OSError, subprocess.SubprocessError) as ex:
+        return [], f"{REGISTRY_KEY} unreadable ({type(ex).__name__}); no supervisors started"
+    raw = r.stdout.strip() if not r.returncode else ""
+    if not raw:
+        return [], NO_ALIAS_REASON
     seen = []
-    for tok in re.split(r"[,\s]+", r.stdout.strip()):
+    for tok in re.split(r"[,\s]+", raw):
         if tok and ALIAS_RE.fullmatch(tok) and tok not in seen:
             seen.append(tok)
-    return seen
+    if not seen:
+        return [], f"{REGISTRY_KEY} lists no valid alias ({raw[:80]!r}); no supervisors started"
+    return seen, None
+
+
+def read_far_boxes(roster):
+    """Configured ssh aliases; empty when the key, the reader, or any valid alias is absent."""
+    return far_boxes_status(roster)[0]
 
 
 def slug(alias):
@@ -157,6 +169,7 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn
     rec_path = sdir / f"autolink-{slug(alias)}.json"
     lock = sdir / f"autolink-{slug(alias)}.lock"
     if not acquire_lock(lock):
+        say(f"far box {alias}: link lock held by another start; skipped")
         return
     try:
         rec = read_record(rec_path)
@@ -232,15 +245,19 @@ def resolve_key(roster, alias, local_fn=None, ssh_fn=None):
 def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, stable_fn=None):
     key_fn = key_fn or resolve_key
     roster = roster or _roster()
-    boxes = read_far_boxes(roster) if boxes is None else boxes
-    if not boxes:
-        return
+    reason = NO_ALIAS_REASON
+    if boxes is None:
+        boxes, reason = far_boxes_status(roster)
     sdir = state_dir(roster)
     sdir.mkdir(parents=True, exist_ok=True)
 
     def say(msg):
         with open(sdir / "autolink.log", "a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {msg}\n")
+
+    if not boxes:
+        say(reason or NO_ALIAS_REASON)
+        return
 
     for alias in boxes:
         try:

@@ -15,6 +15,7 @@ from typing import Iterable, Optional
 
 from coordinator_core.ops.dispatch_emit import run_credit
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_FOOTPRINT_FILE, record_dir
+from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
 
 _SCRATCH_PREFIX = "scratch/"
 _PLAN_LINE = re.compile(r"^plan:\s*[\"']?([^\"'\s#]+)", re.MULTILINE)
@@ -114,9 +115,17 @@ def _split_peer_held(root: Path, ordered: list, own_session: str, run_id: str) -
             run_base = halted_run_base(base) or recorded_run_base(root, run_id)
         except Exception:  # noqa: BLE001 -- no base: the checkpoint walk stops at the first non-checkpoint commit
             run_base = None
+    selves = land_run._firing_sessions(root, run_id, own_session or None) if run_id else set()
+    emitter = recorded_emitter(root, run_id) if run_id else None
+    if emitter:
+        selves.add(emitter)
     held = land_run._peer_held(
         root, ordered, own_session or None, run_id, None, plan_rel=plan_rel, run_base=run_base,
-        self_sessions=land_run._firing_sessions(root, run_id, own_session or None) if run_id else ())
+        self_sessions=selves)
+    if selves:
+        # The run's lead/firing session is self for review: its other runs' declarations never withhold this run's paths.
+        held = {p: [s for s in sids if s not in selves] for p, sids in held.items()}
+        held = {p: sids for p, sids in held.items() if sids}
     return tuple(p for p in ordered if p not in held), {p: list(held[p]) for p in ordered if p in held}
 
 

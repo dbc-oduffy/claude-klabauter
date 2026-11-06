@@ -471,8 +471,11 @@ def _repo_style_plugin_pairs(plugins_root: Path) -> "list[Tuple[str, Path]]":
             or not top.is_dir()
         ):
             continue
+        # Bounded to the two documented depths, never `**`: a plugin dir can be a whole
+        # repo checkout (scratch/, state/warp/), and an unbounded walk on every Bash call
+        # saturated Machine-a's warm pool on 2026-11-06 (11.2s per call, then a hang restart).
         try:
-            agent_files = list(top.glob("**/agents/*.md"))
+            agent_files = list(top.glob("agents/*.md")) + list(top.glob("*/agents/*.md"))
         except OSError:
             continue  # unreadable marketplace dir; skip it
         for md_path in agent_files:
