@@ -2943,6 +2943,57 @@ def seed_gem_cross_repo_commit_default(*, get=None, put=None) -> None:
     print(f"[OK] {GEM_CROSS_REPO_COMMIT_KEY} = on (default; set off to block Group EM cross-repo commits)")
 
 
+def write_rag_state_dir_pointer(rag_root: Path, settings_home_path: Path) -> Path:
+    """Write `<settings-home>/rag-state-dir`, the one-line pointer the door and `_rag_serving` read
+    to find the rag verdict directory: `%LOCALAPPDATA%/<name>/state` on Windows, `~/.<name>/state`
+    elsewhere. `<name>` is the rag checkout's directory name, else the legacy name when only that
+    state directory exists, so a renamed checkout still points at the directory the server writes."""
+    local = os.environ.get("LOCALAPPDATA", "")
+
+    def state_for(name: str) -> Path:
+        return Path(local) / name / "state" if local else Path.home() / f".{name}" / "state"
+
+    state = state_for(rag_root.name)
+    legacy = state_for("project-rag")
+    if not state.is_dir() and legacy.is_dir():
+        state = legacy
+    pointer = settings_home_path / "rag-state-dir"
+    settings_home_path.mkdir(parents=True, exist_ok=True)
+    pointer.write_text(str(state) + "\n", encoding="utf-8")
+    return pointer
+
+
+def ensure_rag_state_dir_pointer() -> None:
+    """Install step, every run: write `<settings-home>/rag-state-dir` when it is missing and example-retrieval-repo is
+    detected; print an [ADVISORY] naming it missing when it stays so. An existing non-empty pointer, or
+    `COORDINATOR_RAG_STATE_DIR`, is left alone. The pointer lives in the settings home, so
+    `COORDINATOR_DISABLE_MACHINE_MUTATION` (machine state outside it) does not gate this step."""
+    try:
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.install import rag_fleet_registration as reg
+
+        home = settings_home()
+        pointer = home / "rag-state-dir"
+        if os.environ.get("COORDINATOR_RAG_STATE_DIR", "").strip():
+            return
+        if pointer.is_file() and pointer.read_text(encoding="utf-8").strip():
+            return
+        rag = reg.detect_example_retrieval_repo()
+        if rag is None:
+            print(
+                f"[ADVISORY] rag-state-dir missing ({pointer}): example-retrieval-repo not detected, so the door's "
+                "rag nudge reads nothing; set repos.project_rag and re-run scripts/setup.py, "
+                "or export COORDINATOR_RAG_STATE_DIR.",
+                file=sys.stderr,
+            )
+            return
+        written = write_rag_state_dir_pointer(rag.root, home)
+    except (ImportError, OSError, RuntimeError) as exc:
+        print(f"[ADVISORY] rag-state-dir pointer skipped ({exc}); re-run scripts/setup.py.", file=sys.stderr)
+        return
+    print(f"[OK] rag-state-dir pointer written: {written}")
+
+
 def register_fleet_with_example_retrieval_repo(repo_root: Path) -> None:
     """Hand every fleet repo to example-retrieval-repo through one detached worker; silent when example-retrieval-repo is absent.
 
@@ -5297,6 +5348,7 @@ def main(argv: list[str]) -> int:
     if not args.register_only:
         install_repo_discovery(repo_root, claude_klabauter_root_resolved, args)
     offer_warm_opt_in(repo_root, args)
+    ensure_rag_state_dir_pointer()
     if not args.register_only:
         register_fleet_with_example_retrieval_repo(repo_root)
     seed_heavy_admission_defaults()

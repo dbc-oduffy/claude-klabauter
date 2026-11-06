@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _SRC = Path(__file__).resolve().parents[1] / "unimatrix-install.py"
 _spec = importlib.util.spec_from_file_location("unimatrix_install", _SRC)
 ui = importlib.util.module_from_spec(_spec)
@@ -888,7 +890,8 @@ def test_main_success_says_wiring_verified_and_enforcement_unverified(monkeypatc
 
 def test_default_install_resolves_engine_root_through_settings_home_door(monkeypatch, tmp_path):
     root = tmp_path / "door-root"
-    root.mkdir()
+    (root / "coordinator_core").mkdir(parents=True)
+    (root / "coordinator_core" / "_engine_stamp").write_text("stamped\n", encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root))
@@ -1306,7 +1309,9 @@ def test_pair_windows_admin_far_box_is_not_written(monkeypatch, tmp_path):
         if "input" in kw and "IsUserAnAdmin" in kw["input"]:
             seen.append(kw["input"])
             return done("admin\n")
-        return done("win32\tC:\\Python312\\python.exe\tC:\\Users\\me\\.coordinator-claude-settings\n")
+        bs = chr(92)
+        win_home = bs.join(["C:", "Users", "me", ".coordinator-claude-settings"])
+        return done(f"win32\tC:{bs}Python312{bs}python.exe\t{win_home}\n")
 
     status, line = ui.install_over_link("x", "B", run=run)
     assert status == "admin" and seen and "C:\\Python312\\python.exe" in line

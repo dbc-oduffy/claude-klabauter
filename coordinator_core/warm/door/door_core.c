@@ -645,6 +645,7 @@ static const char *const door_install_class_basenames[] = {
     "repo-setup-args-and-register",
     "run-platform-localize",
     "seed-marketplace-enabledplugins",
+    "unimatrix-install",
 };
 
 #define DOOR_INSTALL_CLASS_BASENAMES_COUNT \
@@ -900,7 +901,9 @@ int build_indeterminate_envelope(buf_t *out, const char *detail) {
         "warm engine and did not get back a response it could prove was "
         "safe to re-run. The op may have COMPLETED. Reconcile against "
         "real state before re-running; the door will not re-execute a "
-        "delivered request. (";
+        "delivered request. To tell whether it landed: for a commit, run "
+        "`git log -1 -- <path>` and `git status` and look for your commit; "
+        "for any other op, call warm.request_status. (";
     int ok = 1;
     ok &= buf_append_cstr(out,
         "{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32004,\"message\":\"");
@@ -923,7 +926,7 @@ int build_indeterminate_envelope(buf_t *out, const char *detail) {
  * ========================================================================= */
 #define PRECHECK_NOTE \
     "Repo-root search rewritten to `git grep` (tracked files only); for content lookups use " \
-    "example-retrieval-repo (project_semantic_search), for untracked paths the Grep tool."
+    "the project index (project_semantic_search), for untracked paths the Grep tool."
 
 #ifdef _WIN32
 #define PC_STAT_STRUCT struct _stat
@@ -1413,24 +1416,57 @@ static int pc_key_is(const buf_t *key, const char *name) {
     return key->len == strlen(name) && memcmp(key->data, name, key->len) == 0;
 }
 
-/* Mirrors `_example_retrieval_repo_serving.serves_repo` for a cwd that is a repo root (the precheck only
+/* Mirrors `_rag_serving.serves_repo` for a cwd that is a repo root (the precheck only
  * rewrites there): the per-box `rag-nudge-server.json` verdict must be fresh (<= 30 min), have
  * `"reachable": true`, and list the cwd's directory name (ASCII case-insensitive) in `sources`.
- * Any read or parse failure is "not served", so the rewrite proceeds. One stat plus one read. */
+ * Any read or parse failure is "not served", so the rewrite proceeds. One stat plus one read.
+ * Trap: the verdict directory is named by `$COORDINATOR_RAG_STATE_DIR`, else by the first line of
+ * `<settings-home>/rag-state-dir` (written by scripts/setup.py on every install run, upgrades
+ * included, or reported missing there); `_rag_serving._state_dir` must resolve the same way.
+ * No codename literal may appear in this file. */
 #define PC_VERDICT_MAX_AGE_S 1800
 #define PC_VERDICT_MAX_BYTES 65536
+#define PC_VERDICT_FILE "rag-nudge-server.json"
+#define PC_STATE_DIR_ENV "COORDINATOR_RAG_STATE_DIR"
+#define PC_STATE_DIR_POINTER "rag-state-dir"
 
-static int pc_verdict_path(char *dst, size_t cap) {
-    const char *local = getenv("LOCALAPPDATA");
+static int pc_settings_home(char *dst, size_t cap) {
+    const char *sh = getenv("COORDINATOR_SETTINGS_HOME");
     int n;
-    if (local && local[0]) {
-        n = snprintf(dst, cap, "%s/example-retrieval-repo/state/rag-nudge-server.json", local);
+    if (sh && sh[0]) {
+        n = snprintf(dst, cap, "%s", sh);
     } else {
-        const char *home = getenv("USERPROFILE");
+        const char *home = getenv("CLAUDE_HOME");
+        if (!home || !home[0]) home = getenv("USERPROFILE");
         if (!home || !home[0]) home = getenv("HOME");
         if (!home || !home[0]) return 0;
-        n = snprintf(dst, cap, "%s/.project-rag/state/rag-nudge-server.json", home);
+        n = snprintf(dst, cap, "%s/.coordinator-claude-settings", home);
     }
+    return n > 0 && (size_t)n < cap;
+}
+
+static int pc_verdict_path(char *dst, size_t cap) {
+    const char *dir = getenv(PC_STATE_DIR_ENV);
+    int n;
+    if (dir && dir[0]) {
+        n = snprintf(dst, cap, "%s/" PC_VERDICT_FILE, dir);
+        return n > 0 && (size_t)n < cap;
+    }
+    char ptr[1024];
+    if (!pc_settings_home(ptr, sizeof ptr)) return 0;
+    size_t used = strlen(ptr);
+    n = snprintf(ptr + used, sizeof ptr - used, "/" PC_STATE_DIR_POINTER);
+    if (n < 0 || (size_t)n >= sizeof ptr - used) return 0;
+    FILE *f = fopen(ptr, "rb");
+    if (!f) return 0;
+    char line[900];
+    size_t got = fread(line, 1, sizeof line - 1, f);
+    fclose(f);
+    size_t len = 0;
+    while (len < got && line[len] != '\n' && line[len] != '\r') len++;
+    while (len > 0 && (line[len - 1] == ' ' || line[len - 1] == '\t')) len--;
+    if (len == 0) return 0;
+    n = snprintf(dst, cap, "%.*s/" PC_VERDICT_FILE, (int)len, line);
     return n > 0 && (size_t)n < cap;
 }
 
@@ -1758,6 +1794,18 @@ int door_payload_is_irreversible(const char *payload, size_t plen) {
 out:
     free(key.data); free(tool.data); free(event.data); free(cmd.data);
     return r;
+}
+
+int door_hook_first_read_ms(const char *op) {
+    return (op && strcmp(op, "hooks.submit_engine_ask") == 0) ? DOOR_HOOK_LIVE_READ_MS
+                                                              : DOOR_HOOK_PROBE_MS;
+}
+
+int door_hook_read_plan(const char *op, int peer_open, int engine_alive) {
+    int first = door_hook_first_read_ms(op);
+    if (first >= DOOR_HOOK_LIVE_READ_MS) return 0;
+    if (!peer_open || !engine_alive) return 0;
+    return DOOR_HOOK_LIVE_READ_MS - first;
 }
 
 void door_irreversible_deny_reason(char *dst, size_t cap, const char *detail) {

@@ -276,8 +276,10 @@ extern char **environ;
 
 /* Hook-mode read bound; the twin of door.c's DOOR_HOOK_READ_DEADLINE_MS (see
  * there for why it sits under DoE hooks.json's `"timeout": 15`). */
-#define DOOR_HOOK_READ_DEADLINE_MS 8000
-#define DOOR_READ_DEADLINE_FOR_MODE_MS (g_door_hook_mode ? DOOR_HOOK_READ_DEADLINE_MS : DOOR_READ_DEADLINE_MS)
+#define DOOR_HOOK_READ_DEADLINE_MS 500
+/* The one hook op that does real work in-line (mints and emits runs); every
+ * other hook read is a guard verdict held to the 500ms bar. */
+#define DOOR_HOOK_SUBMIT_READ_DEADLINE_MS 8000
 
 
 #define DOOR_RESPONSE_CEILING (16u << 20)
@@ -945,6 +947,95 @@ static char g_hook_op[128] = "";
 
 #define DOOR_SUBMIT_ASK_OP "hooks.submit_engine_ask"
 
+static int door_hook_read_deadline_ms(void) {
+    return strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) == 0 ? DOOR_HOOK_SUBMIT_READ_DEADLINE_MS
+                                                      : DOOR_HOOK_READ_DEADLINE_MS;
+}
+
+_Static_assert(DOOR_HOOK_READ_DEADLINE_MS == DOOR_HOOK_PROBE_MS &&
+               DOOR_HOOK_SUBMIT_READ_DEADLINE_MS == DOOR_HOOK_LIVE_READ_MS,
+               "door_core.h hook bounds drifted from this file's macros");
+
+/* Total ms the hook read actually allowed, set once the plan is known; 0 until then. */
+static int g_hook_read_total_ms = 0;
+
+/* Non-consuming: 0 only on EOF or a hard socket error. No bytes pending is "open". */
+static int hook_peer_open(int fd) {
+    char c;
+    for (;;) {
+        ssize_t n = recv(fd, &c, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (n > 0) return 1;
+        if (n == 0) return 0;
+        if (errno == EINTR) continue;
+        return errno == EAGAIN || errno == EWOULDBLOCK;
+    }
+}
+
+/* kill(pid,0) on the process holding the other end of the socket. An unreadable peer pid answers
+ * 1 (peer-open alone decides). */
+static int hook_engine_alive(int fd) {
+    pid_t peer = 0;
+#if defined(__APPLE__)
+    socklen_t len = sizeof peer;
+    if (getsockopt(fd, 0 /* SOL_LOCAL */, 0x002 /* LOCAL_PEERPID */, &peer, &len) != 0) return 1;
+#elif defined(SO_PEERCRED)
+    struct ucred cred;
+    socklen_t len = sizeof cred;
+    if (getsockopt(fd, SOL_SOCKET, SO_PEERCRED, &cred, &len) != 0) return 1;
+    peer = cred.pid;
+#else
+    (void)fd;
+#endif
+    if (peer <= 0) return 1;
+    return kill(peer, 0) == 0 || errno == EPERM;
+}
+
+/* Hook-mode read: PROBE first; on expiry extend by door_hook_read_plan only while the peer is
+ * open and its process alive, so a dead or closed engine fails open at the probe. */
+static int read_hook_line(int fd, buf_t *resp) {
+    int first = door_hook_first_read_ms(g_hook_op);
+    g_hook_read_total_ms = first;
+    int state = read_line_bounded(fd, resp, first);
+    if (state != READ_DEADLINE) return state;
+    int more = door_hook_read_plan(g_hook_op, hook_peer_open(fd), hook_engine_alive(fd));
+    if (more <= 0) return READ_DEADLINE;
+    g_hook_read_total_ms = first + more;
+    return read_line_bounded(fd, resp, more);
+}
+
+static long long g_call_started_ms = 0;
+
+/* Appends one line per fail-open to <settings>/state/door-fail-open.log so a
+ * stall names its cause. One O_APPEND write; every failure here is silent --
+ * the log never changes the verdict. The engine's pid/start time are not
+ * known to the door and are logged as "-". */
+static void door_log_fail_open(const char *cause) {
+    char home[PATH_MAX];
+    if (!settings_home_path(home, sizeof home)) return;
+    char path[PATH_MAX + 32];
+    if (snprintf(path, sizeof path, "%s/state", home) >= (int)sizeof path) return;
+    (void)mkdir(path, 0700);
+    if (snprintf(path, sizeof path, "%s/state/door-fail-open.log", home) >= (int)sizeof path) return;
+    int fd = open(path, O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0600);
+    if (fd < 0) return;
+    time_t now = time(NULL);
+    struct tm tmv;
+    char ts[32] = "-";
+    if (gmtime_r(&now, &tmv)) strftime(ts, sizeof ts, "%Y-%m-%dT%H:%M:%SZ", &tmv);
+    long long elapsed = g_call_started_ms ? monotonic_ms() - g_call_started_ms : 0;
+    char line[512];
+    int n = snprintf(line, sizeof line,
+                     "ts=%s deadline_ms=%d elapsed_ms=%lld op=%s door_pid=%ld engine_pid=- engine_start=- cause=%.160s\n",
+                     ts, !g_door_hook_mode ? DOOR_READ_DEADLINE_MS
+                         : g_hook_read_total_ms ? g_hook_read_total_ms : door_hook_read_deadline_ms(),
+                     elapsed, g_hook_op[0] ? g_hook_op : "-", (long)getpid(), cause ? cause : "-");
+    if (n > 0) {
+        if ((size_t)n >= sizeof line) { n = (int)sizeof line - 1; line[n - 1] = '\n'; }
+        write_all_fd(fd, line, (size_t)n);
+    }
+    close(fd);
+}
+
 /* An engine-ask submission the engine could not take is kept on disk, no engine call.
  * 1 = spooled (id in `id`), 0 = not an ask or the write failed. */
 static int spool_submit_ask(const char *reason, char id[17]) {
@@ -960,6 +1051,7 @@ static int spool_submit_ask(const char *reason, char id[17]) {
 }
 
 static int emit_hook_pass_loudly(const char *reason) {
+    door_log_fail_open(reason);
     buf_t event, out;
     const char *event_name = NULL;
     char spool_id[17] = "";
@@ -1087,6 +1179,7 @@ static int fall_through(int argc, char **argv, const char *engine_root);
 /* Every post-delivery failure of the warm read; the twin of door.c's. */
 static int emit_post_delivery_failure(const char *detail, int argc, char **argv,
                                       const char *engine_root) {
+    door_log_fail_open(detail);
     if (g_door_hook_mode && g_hook_payload &&
         door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
         char reason[640];
@@ -1370,19 +1463,19 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
 
     char script_path[PATH_MAX];
     if (resolve_fallback_script(engine_root, script_path) != 0) {
-        if (advisory) return 0;
+        if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and no cold entrypoint resolved");
     }
 
     int in_pipe[2], out_pipe[2];
     if (pipe(in_pipe) != 0) {
-        if (advisory) return 0;
+        if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
     if (pipe(out_pipe) != 0) {
         close(in_pipe[0]);
         close(in_pipe[1]);
-        if (advisory) return 0;
+        if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
@@ -1410,7 +1503,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     if (rc != 0) {
         close(in_pipe[1]);
         close(out_pipe[0]);
-        if (advisory) return 0;
+        if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard could not be started");
     }
 
@@ -1423,7 +1516,19 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     buf_t verdict;
     int verdict_ok = buf_init(&verdict, 4096);
     char chunk[4096];
+    long long cold_started = monotonic_ms();
+    int cold_timed_out = 0;
     for (;;) {
+        int budget = remaining_ms(cold_started, door_hook_read_deadline_ms());
+        if (budget == 0) { cold_timed_out = 1; break; }
+        struct pollfd pfd;
+        pfd.fd = out_pipe[0];
+        pfd.events = POLLIN;
+        pfd.revents = 0;
+        int pr = poll(&pfd, 1, budget);
+        if (pr < 0 && errno == EINTR) continue;
+        if (pr == 0) { cold_timed_out = 1; break; }
+        if (pr < 0) break;
         ssize_t got = read(out_pipe[0], chunk, sizeof(chunk));
         if (got > 0) {
             if (verdict_ok) verdict_ok = buf_append(&verdict, chunk, (size_t)got);
@@ -1435,6 +1540,21 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     close(out_pipe[0]);
 
     int status = 0;
+    if (cold_timed_out) {
+        kill(pid, SIGKILL);
+        if (verdict_ok) free(verdict.data);
+        while (waitpid(pid, &status, 0) < 0) {
+            if (errno != EINTR) break;
+        }
+        if (g_hook_payload && door_payload_is_irreversible(g_hook_payload, g_hook_payload_len)) {
+            char reason[640];
+            door_log_fail_open("cold guard gave no verdict within the hook deadline; irreversible denied");
+            door_irreversible_deny_reason(reason, sizeof reason, "cold guard gave no verdict within the hook deadline");
+            return emit_hook_deny(reason);
+        }
+        if (advisory) { door_log_fail_open("cold guard gave no verdict within the hook deadline"); return 0; }
+        return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict in time");
+    }
     while (waitpid(pid, &status, 0) < 0) {
         if (errno != EINTR) break;
     }
@@ -1447,7 +1567,7 @@ static int hook_fall_through(int argc, char **argv, const char *engine_root) {
     }
     if (!answered || i == verdict.len) {
         if (verdict_ok) free(verdict.data);
-        if (advisory) return 0;
+        if (advisory) { door_log_fail_open("advisory hook: cold guard path gave no verdict"); return 0; }
         return emit_hook_pass_loudly("coordinator-door: engine unreachable and the cold guard returned no verdict");
     }
     write_all_fd(STDOUT_FILENO, verdict.data, verdict.len);
@@ -1541,6 +1661,7 @@ int main(int argc, char **argv) {
 
     
     g_door_hook_mode = door_stdin_mode_is_hook();
+    g_call_started_ms = monotonic_ms();
 
     /* THE READ ITSELF, gated on the flag above and nowhere else -- an
      * ordinary caller (mode not declared) never reaches this block, so its
@@ -1991,7 +2112,8 @@ int main(int argc, char **argv) {
         free(engine_root);
         return rc;
     }
-    int read_state = read_line_bounded(fd, &resp, DOOR_READ_DEADLINE_FOR_MODE_MS);
+    int read_state = g_door_hook_mode ? read_hook_line(fd, &resp)
+                                      : read_line_bounded(fd, &resp, DOOR_READ_DEADLINE_MS);
     close(fd);
 
     if (read_state != READ_GOT_LINE) {
@@ -2005,9 +2127,9 @@ int main(int argc, char **argv) {
 
         char detail[160];
         snprintf(detail, sizeof(detail),
-                 "no response within %us of delivery -- the door stopped "
+                 "no response within %ums of delivery -- the door stopped "
                  "waiting, the engine did not stop working",
-                 (unsigned)(DOOR_READ_DEADLINE_FOR_MODE_MS / 1000u));
+                 (unsigned)(g_door_hook_mode ? g_hook_read_total_ms : DOOR_READ_DEADLINE_MS));
         int rc = emit_post_delivery_failure(detail, argc, argv, engine_root);
         free(engine_root);
         return rc;

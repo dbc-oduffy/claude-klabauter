@@ -877,9 +877,7 @@ def _land(
         # a peer holding `.git/index.lock` lands here routinely. Recovered as a SUCCESS with a warning.
         # `cast`: `IndexStaleAfterCommit.outcome` is typed `object` to avoid an import cycle.
         if exc.outcome is None:
-            # No raiser on the commit path omits it; if one ever does, say so
-            # rather than inventing a sha -- but never downgrade to `_error`,
-            # because the commit landed either way.
+            # No raiser omits it; if one does, say so rather than invent a sha -- never `_error`.
             return _Landing(None, None, [], _error(
                 f"{exc} (the outcome was not carried out of the raise site, so "
                 "no sha can be reported -- resolve it with `git log -1`)"
@@ -1393,13 +1391,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             eol_drifts = []
             eol_repaired = []
 
-    # Attach Session-Id / Deliverable-Id (whichever are resolvable and not
-    # already present) via the shared applier -- this route lands via
-    # `commit_paths`' hand-rolled object-write plumbing, which fires NO git
-    # hooks (`prepare-commit-msg` included), so this call is this route's
-    # ONLY attach point (docs/dispatch-briefs/.../C3.md; commit_trailers.py
-    # module docstring). Never blocks: `apply_missing_trailers` degrades to
-    # `message` unchanged on any resolution failure.
+    # Attach Session-Id / Deliverable-Id via the shared applier: this route's object-write
+    # plumbing fires no git hooks, so this is its only attach point. Never blocks.
     #
     # `commit_paths` honours `commit.gpgsign`; a signing failure lands the commit unsigned and
     # `outcome.sign_warning` is surfaced into `warnings` below.
@@ -1633,11 +1626,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         )
 
     if no_delta:
-        # The k-of-N face of the zero-delta bug, and it belongs in `warnings`
-        # for the same reason the divergence above does: the caller named
-        # these paths and they are not in the commit, which is indistinguish-
-        # able from delivery on the success line alone. Bounded at five like
-        # every other join in this envelope.
+        # The k-of-N face of the zero-delta bug: named paths absent from the commit read as delivery
+        # on the success line alone, so they belong in `warnings`. Bounded at five.
         # `PhantomDeletionDeclared` is raised before any write, so `no_delta` is only "already at HEAD".
         matched = list(no_delta)
         declared = len(raw_paths) + len(raw_removed)

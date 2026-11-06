@@ -19,6 +19,7 @@
     ],
     "hooks_path": "hooks.json",
     "ignore_top_level": [
+      ".claude-plugin",
       ".git",
       ".github",
       "__pycache__",
@@ -27,9 +28,12 @@
       "templates",
       "tests"
     ],
+    "manifest_path": "plugin.json",
     "max_text_bytes": 24000,
     "plugin_root_token": "${PLUGIN_DIR}",
     "rules_path": "rules/coordinator-doctrine.md",
+    "rules_trigger": "always_on",
+    "source_manifest_path": ".claude-plugin/plugin.json",
     "tiers": {
       "haiku": "flash_lite",
       "opus": "pro",
@@ -39,9 +43,18 @@
       ".json",
       ".md"
     ],
+    "tool_hook_events": [
+      "PostToolUse",
+      "PreToolUse"
+    ],
     "tools": {
       "Bash": "run_command",
       "Edit": "edit_file",
+      "Glob": "find_by_name",
+      "Grep": "grep_search",
+      "MultiEdit": "multi_replace_file_content",
+      "NotebookEdit": "notebook_edit",
+      "Read": "view_file",
       "Write": "write_file"
     },
     "valid_tiers": [

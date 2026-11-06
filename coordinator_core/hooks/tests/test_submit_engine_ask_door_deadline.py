@@ -28,7 +28,8 @@ def _define(source: Path, macro: str) -> int:
 
 def test_the_hook_deadline_constant_is_the_doors_define_in_both_doors():
     for door in (DOOR_WINDOWS_C, DOOR_POSIX_C):
-        assert _define(door, "DOOR_HOOK_READ_DEADLINE_MS") == mod._DOOR_HOOK_READ_DEADLINE_S * 1000, door.name
+        assert _define(door, "DOOR_HOOK_SUBMIT_READ_DEADLINE_MS") == mod._DOOR_HOOK_READ_DEADLINE_S * 1000, door.name
+        assert _define(door, "DOOR_HOOK_READ_DEADLINE_MS") == 500, door.name
 
 
 def test_default_budget_answers_inside_the_door_deadline(monkeypatch):

@@ -10,9 +10,7 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import socket
-import subprocess
 import time
 from pathlib import Path
 
@@ -20,17 +18,14 @@ import pytest
 
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.warm.tests.door_test_support import DOOR_POSIX_C, DOOR_WINDOWS_C
+from coordinator_core.warm.door.tests.test_hook_mode_post_delivery_names_timeout import (  # noqa: F401 -- fixture
+    _posix_hook_run,
+    posix_door,
+)
 from coordinator_core.warm.tests.test_door_read_deadline_posix import runtime_base  # noqa: F401 -- fixture
-from coordinator_core.win_portability import no_console_creationflags
 
-_DOOR_DIR = Path(__file__).resolve().parents[1]
 _BAR_MS = 500
 _POSIX_ONLY = pytest.mark.skipif(os.name == "nt", reason="drives the POSIX door")
-_ALLOW_REPLY = (
-    '{"jsonrpc":"2.0","id":1,"result":{"stdout":"{\\"hookSpecificOutput\\":{\\"hookEventName\\":'
-    '\\"PreToolUse\\",\\"permissionDecision\\":\\"allow\\"}}\\n","stderr":"","exit_code":0}}\n'
-).encode()
-
 
 def _define(source: Path, macro: str) -> int:
     match = re.search(rf"^#define\s+{macro}\s+(\d+)\s*$", source.read_text(encoding="utf-8"), re.MULTILINE)
@@ -95,59 +90,8 @@ def test_an_overrun_submit_hook_answer_is_logged(tmp_path, monkeypatch):
 # --- POSIX door ---
 
 
-@pytest.fixture(scope="module")
-def posix_door(tmp_path_factory) -> Path:
-    compiler = next((shutil.which(c) for c in ("cc", "clang", "gcc") if shutil.which(c)), None)
-    if compiler is None or os.name == "nt":
-        pytest.skip("no C compiler or not POSIX")
-    out = tmp_path_factory.mktemp("posix-door-c6") / "coordinator-invoke"
-    subprocess.run(
-        [compiler, "-O2", "-std=c11", '-DPYTHON_BIN="python3"', '-DBUILD_ENGINE_ROOT=""', "-o", str(out),
-         str(_DOOR_DIR / "door_posix.c"), str(_DOOR_DIR / "door_core.c")],
-        check=True, capture_output=True, **no_console_creationflags(),
-    )
-    return out
-
-
-def _run(door: Path, root: Path, runtime_base: Path, settings: Path):
-    settings.mkdir(exist_ok=True)
-    env = dict(os.environ)
-    env.update(
-        COORDINATOR_DOOR_ENGINE_ROOT=str(root),
-        COORDINATOR_WARM_RUNTIME_BASE=str(runtime_base),
-        COORDINATOR_SETTINGS_HOME=str(settings),
-        COORDINATOR_DOOR_STDIN_MODE="hook",
-    )
-    payload = json.dumps({"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": "echo hi"}}).encode()
-    started = time.monotonic()
-    proc = subprocess.run(
-        [str(door), "hooks.preuse_bash_dispatch"], input=payload, capture_output=True, env=env,
-        cwd=str(root), timeout=30, **no_console_creationflags(),
-    )
-    return proc, (time.monotonic() - started) * 1000.0
-
-
 def _silent_cold_guard(root: Path) -> None:
     (root / "coordinator" / "bin" / "coordinator-invoke.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
-
-
-@pytest.mark.spawns_process
-@pytest.mark.warm_tier
-@_POSIX_ONLY
-def test_a_warm_engine_answers_under_the_bar_and_logs_nothing(posix_door, tmp_path, runtime_base):
-    from coordinator_core.warm.tests import test_door_read_deadline_posix as posix
-
-    root = posix._make_stub_engine_root(tmp_path)
-    sock = posix._socket_path_for(runtime_base, root)
-    posix._make_socket_dir(sock)
-    server = posix._ReplyingServer(sock, _ALLOW_REPLY)
-    try:
-        proc, elapsed_ms = _run(posix_door, root, runtime_base, tmp_path / "settings")
-    finally:
-        server.close()
-    assert json.loads(proc.stdout.decode("utf-8"))["hookSpecificOutput"]["permissionDecision"] == "allow"
-    assert elapsed_ms < _BAR_MS
-    assert _log_lines(tmp_path / "settings") == []
 
 
 @pytest.mark.spawns_process
@@ -165,30 +109,9 @@ def test_no_engine_listening_fails_open_inside_the_bar_and_logs(posix_door, tmp_
         corpse = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         corpse.bind(str(sock))
         corpse.close()
-    proc, elapsed_ms = _run(posix_door, root, runtime_base, tmp_path / "settings")
+    proc, elapsed_ms = _posix_hook_run(posix_door, root, runtime_base, tmp_path / "settings")
 
     assert "command allowed" in proc.stdout.decode("utf-8") or "guard did not run" in proc.stdout.decode("utf-8")
     assert elapsed_ms < _BAR_MS
     (line,) = _log_lines(tmp_path / "settings")
     assert "cause=" in line and "op=hooks.preuse_bash_dispatch" in line and f"deadline_ms={_BAR_MS}" in line
-
-
-@pytest.mark.spawns_process
-@pytest.mark.warm_tier
-@_POSIX_ONLY
-def test_an_engine_that_accepts_but_never_answers_is_cut_off_at_the_hook_deadline_and_logs(posix_door, tmp_path, runtime_base):
-    from coordinator_core.warm.tests import test_door_read_deadline_posix as posix
-
-    root = posix._make_stub_engine_root(tmp_path)
-    sock = posix._socket_path_for(runtime_base, root)
-    posix._make_socket_dir(sock)
-    server = posix._WedgedServer(sock)
-    try:
-        proc, elapsed_ms = _run(posix_door, root, runtime_base, tmp_path / "settings")
-    finally:
-        server.close()
-
-    assert "command allowed" in json.loads(proc.stdout.decode("utf-8"))["systemMessage"]
-    assert elapsed_ms < _BAR_MS + 400, "the wait must end at the hook deadline, not the 8s submit bound"
-    (line,) = _log_lines(tmp_path / "settings")
-    assert "no response within 500ms" in line and f"deadline_ms={_BAR_MS}" in line

@@ -528,8 +528,9 @@ def _charge(started: float) -> None:
 #: and denies with no run id, so the hook answers on its own at `_EMIT_BUDGET_SHARE` of it. The
 #: effective budget is the lesser of the caller's and the door's `_DOOR_HOOK_READ_DEADLINE_S`.
 _CALLER_BUDGET_S = 12.0
-#: Twin of `DOOR_HOOK_READ_DEADLINE_MS` in warm/door/door.c and door_posix.c: past it the door gives
-#: up and relays no hook answer. Pinned equal by test_submit_engine_ask_door_deadline.py.
+#: Twin of `DOOR_HOOK_SUBMIT_READ_DEADLINE_MS` in warm/door/door.c and door_posix.c (the door's longer
+#: bound for this op alone; every other hook read is held to `DOOR_HOOK_READ_DEADLINE_MS`, 500ms):
+#: past it the door gives up and relays no hook answer. Pinned equal by test_submit_engine_ask_door_deadline.py.
 _DOOR_HOOK_READ_DEADLINE_S = 8.0
 _EMIT_BUDGET_SHARE = 0.8
 _FANOUT_TAIL_GRACE_S = 0.25
@@ -636,11 +637,36 @@ _MINTED_OP = "dispatch.minted_run"
 _ENVELOPE_GRACE_S = 0.35
 
 
+def _log_fail_open(cause: str, call: Optional[dict] = None) -> None:
+    """Appends one line to `<settings>/state/door-fail-open.log`, the same shape the door twins write
+    (`door_log_fail_open`). Never raises and never changes the verdict."""
+    import time
+    from datetime import datetime, timezone
+
+    try:
+        from coordinator_core._settings_home import settings_home
+        from coordinator_core.atomic_append import append_line
+
+        state = settings_home() / "state"
+        state.mkdir(parents=True, exist_ok=True)
+        started = call.get("t0") if call else None
+        elapsed = int((time.monotonic() - started) * 1000) if isinstance(started, float) else 0
+        line = (
+            f"ts={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} deadline_ms={int(_caller_budget_s() * _ANSWER_SHARE * 1000)} "
+            f"elapsed_ms={elapsed} op=hooks.submit_engine_ask door_pid=- engine_pid={os.getpid()} engine_start=- "
+            f"cause={cause[:160]}\n"
+        )
+        append_line(state / "door-fail-open.log", line.encode("utf-8"))
+    except Exception:
+        return
+
+
 def _answer_overran(call: dict) -> dict:
     """The answer for a call still running at the answer deadline. A run it minted rides an allow that
     starts it (`_minted_start_envelope`); a deny only when no run was minted or the disk is stalled."""
     import time
 
+    _log_fail_open("submit hook outran its answer deadline", call)
     gate_state = _cancel_call_gates(call)
     minted = _minted_since_start(call)
     deadline = time.monotonic() + _SCAN_GRACE_S

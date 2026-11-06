@@ -53,6 +53,43 @@ def test_no_stamp_keeps_the_destination_behaviour(calls, tmp_path):
     assert calls == [{}]
 
 
+def _door_union(tmp_path, *, core_text, recorded_core):
+    import hashlib
+    import json
+
+    union = tmp_path / "u"
+    door = union / publish._DOOR_DIR_REL
+    door.mkdir(parents=True)
+    (door / "door.c").write_bytes(b"int main;\n")
+    (door / "door_core.c").write_bytes(core_text)
+    (door / "door.exe.provenance.json").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "door.c": hashlib.sha256(b"int main;\n").hexdigest(),
+                    "door_core.c": hashlib.sha256(recorded_core).hexdigest(),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    return union
+
+
+def test_unrebuilt_door_with_drifted_provenance_is_refused(calls, tmp_path, capsys):
+    union = _door_union(tmp_path, core_text=b"scrubbed\n", recorded_core=b"original\n")
+    ok, files = publish._rebuild_round_door(tmp_path, union, warm=False)
+    assert (ok, files) == (False, {})
+    err = capsys.readouterr().err
+    assert "FATAL" in err and "door_core.c" in err
+
+
+def test_unrebuilt_door_with_matching_provenance_stays_ok(calls, tmp_path, capsys):
+    union = _door_union(tmp_path, core_text=b"same\n", recorded_core=b"same\n")
+    assert publish._rebuild_round_door(tmp_path, union, warm=False) == (True, {})
+    assert "FATAL" not in capsys.readouterr().err
+
+
 def test_round_stamp_is_the_scoped_sha_of_the_round_pin(monkeypatch, tmp_path):
     engine = SimpleNamespace(source_dir=tmp_path / "coordinator_core")
     seen: dict = {}

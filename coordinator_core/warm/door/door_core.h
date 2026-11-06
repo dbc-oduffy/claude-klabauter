@@ -508,4 +508,20 @@ int is_provably_undispatched(long code);
  * drift between the two doors. */
 int build_indeterminate_envelope(buf_t *out, const char *detail);
 
+/* Hook-mode read bounds shared by both twins. PROBE is the first-line wait that answers "is the
+ * engine still there"; LIVE is the total bound for an engine that is connected and alive but has
+ * not yet answered (under the DoE hooks.json 15s hook timeout). Also the submit-ask total bound. */
+#define DOOR_HOOK_PROBE_MS 500
+#define DOOR_HOOK_LIVE_READ_MS 8000
+
+/* First-read bound in ms for a hook op: LIVE for hooks.submit_engine_ask (in-line work, bound
+ * unchanged), PROBE for every other op. Pure; no I/O. */
+int door_hook_first_read_ms(const char *op);
+
+/* Called once the first read expired with no line. Returns the ADDITIONAL ms to keep reading, or
+ * 0 = fail open now. Guard ops extend (LIVE - PROBE) only while the peer is still open (no EOF,
+ * no read error) AND the engine pid answers; a dead or hung-closed engine returns 0. The submit
+ * op returns 0: its first read is already LIVE. Pure; the twins supply the two platform probes. */
+int door_hook_read_plan(const char *op, int peer_open, int engine_alive);
+
 #endif /* DOOR_CORE_H */

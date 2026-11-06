@@ -3,6 +3,9 @@ import ast
 import importlib.util
 import io
 import json
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -99,12 +102,119 @@ def test_hooks_at_root_schema_matchers_and_plugin_root(plugin, tmp_path):
     assert not (out / "hooks" / "hooks.json").exists()
     data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
     assert "description" not in data
-    pre = data["hooks"]["PreToolUse"]
+    assert "hooks" not in data
+    pre = data["pre-tool-use"]["PreToolUse"]
     assert [g["matcher"] for g in pre] == ["run_command", "edit_file|write_file", "Weird"]
     assert "description" not in pre[0]["hooks"][0]
     assert pre[0]["hooks"][0]["command"] == "python ${PLUGIN_DIR}/hooks/scripts/run.py"
-    assert "UserPromptSubmit" not in data["hooks"]
+    assert not any("UserPromptSubmit" in v for v in data.values())
     assert {("matcher", "hooks/hooks.json"), ("hook-event", "hooks/hooks.json")} <= _unmapped(report)
+
+
+def test_hooks_json_is_keyed_by_hook_name_with_count_matching_source_events(plugin, tmp_path):
+    hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    hooks["hooks"]["SessionStart"] = [{"hooks": [{"type": "command", "command": "s"}]}]
+    hooks["hooks"]["PostToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "p"}]}]
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps(hooks), encoding="utf-8")
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
+    supported = set(hooks["hooks"]) & set(gen.load_table()["agy"]["hook_events"])
+    assert "hooks" not in data
+    assert len(data) == len(supported) == 3
+    for name, body in data.items():
+        assert isinstance(body, dict) and len(body) == 1, name
+        (event,) = body
+        assert event in supported and isinstance(body[event], list) and body[event], name
+
+
+def test_claude_only_tool_names_are_rewritten_in_matchers(plugin, tmp_path):
+    claude_only = {"Read", "Grep", "Glob", "MultiEdit", "NotebookEdit"}
+    hooks = {"hooks": {"PreToolUse": [
+        {"matcher": "Read|Grep|Glob", "hooks": [{"type": "command", "command": "a"}]},
+        {"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "b"}]},
+        {"matcher": "Write|Edit|MultiEdit|Bash|PowerShell", "hooks": [{"type": "command", "command": "c"}]},
+    ]}}
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps(hooks), encoding="utf-8")
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    pre = json.loads((out / "hooks.json").read_text(encoding="utf-8"))["pre-tool-use"]["PreToolUse"]
+    assert [g["matcher"] for g in pre] == [
+        "view_file|grep_search|find_by_name",
+        "write_file|edit_file|multi_replace_file_content|notebook_edit",
+        "write_file|edit_file|multi_replace_file_content|run_command|PowerShell"]
+    for g in pre:
+        assert not claude_only & set(g["matcher"].split("|"))
+    assert any(u["kind"] == "matcher" and "'PowerShell'" in u["reason"] for u in report["unmapped"])
+    assert not any(u["kind"] == "matcher" and any(f"'{t}'" in u["reason"] for t in claude_only) for u in report["unmapped"])
+
+
+def test_non_tool_events_are_flat_command_handlers_and_tool_events_stay_grouped(plugin, tmp_path):
+    hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    hooks["hooks"]["SessionStart"] = [{"matcher": "startup", "hooks": [
+        {"type": "command", "command": "s1"}, {"type": "command", "command": "s2"}]}]
+    hooks["hooks"]["Stop"] = [{"hooks": [{"type": "command", "command": "stop"}]}]
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps(hooks), encoding="utf-8")
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    named = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
+    data = {event: entries for body in named.values() for event, entries in body.items()}
+    assert data["SessionStart"] == [{"type": "command", "command": "s1"}, {"type": "command", "command": "s2"}]
+    assert data["Stop"] == [{"type": "command", "command": "stop"}]
+    assert all("hooks" in g for g in data["PreToolUse"])
+    for event, entries in data.items():
+        for e in entries:
+            for h in e["hooks"] if event in ("PreToolUse", "PostToolUse") else [e]:
+                assert h.get("command"), (event, h)
+    assert any(u["kind"] == "matcher" and "SessionStart" in u["reason"] for u in report["unmapped"])
+
+
+def test_manifest_written_at_root_from_source_manifest(plugin, tmp_path):
+    (plugin / ".claude-plugin").mkdir()
+    (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps(
+        {"name": "coord", "version": "4.6.17", "description": "D", "logo": "assets/logo.png", "author": "x"}), encoding="utf-8")
+    (plugin / "assets").mkdir()
+    (plugin / "assets" / "logo.png").write_bytes(b"\x89PNG\x00")
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    assert json.loads((out / "plugin.json").read_text(encoding="utf-8")) == {
+        "name": "coord", "version": "4.6.17", "description": "D", "logo": "assets/logo.png"}
+    assert (out / "assets" / "logo.png").read_bytes() == b"\x89PNG\x00"
+    assert ("surface", ".claude-plugin") not in _unmapped(report)
+
+
+def test_manifest_without_source_has_no_logo_and_reports(plugin, tmp_path):
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    manifest = json.loads((out / "plugin.json").read_text(encoding="utf-8"))
+    assert manifest == {"name": "plugin"}
+    assert ("manifest", ".claude-plugin/plugin.json") in _unmapped(report)
+
+
+def test_agy_plugin_validate_accepts_generated_tree(plugin, tmp_path):
+    agy = shutil.which("agy")
+    if not agy:
+        pytest.skip("agy not on PATH (validate proves the tree loads, not that a hook fires: "
+                    "${PLUGIN_DIR} expansion and a guard running need a live agy session, covered by nothing here)")
+    (plugin / ".claude-plugin").mkdir()
+    (plugin / ".claude-plugin" / "plugin.json").write_text(
+        json.dumps({"name": "coord", "version": "1.0.0", "description": "D"}), encoding="utf-8")
+    hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))
+    hooks["hooks"]["SessionStart"] = [{"hooks": [{"type": "command", "command": "s"}]}]
+    hooks["hooks"]["PreToolUse"] = [
+        {"matcher": "Read|Grep|Glob", "hooks": [{"type": "command", "command": "a"}]},
+        {"matcher": "Write|Edit|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "b"}]}]
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps(hooks), encoding="utf-8")
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    proc = subprocess.run([agy, "plugin", "validate", str(out), "--strict", "--json"],
+                          capture_output=True, text=True, timeout=60,
+                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert re.search(r'"hooks"\s*:\s*2\b', proc.stdout), proc.stdout
+    assert not re.search(r'"warnings"\s*:\s*(\[\s*[^\]\s]|[1-9])', proc.stdout), proc.stdout
+    assert not re.search(r"never match", proc.stdout), proc.stdout
+    assert "coordinator-doctrine" in proc.stdout and "no valid trigger" not in proc.stdout, proc.stdout
 
 
 def test_commands_become_skills_and_skill_folder_matches_frontmatter_name(plugin, tmp_path):
@@ -123,7 +233,7 @@ def test_rules_written_at_table_path_and_unknown_surface_reported(plugin, tmp_pa
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
     rules = gen.load_table()["agy"]["rules_path"]
-    assert (out / rules).read_bytes() == b"# doctrine\n\n- rule\n"
+    assert (out / rules).read_bytes() == b"---\ntrigger: always_on\n---\n# doctrine\n\n- rule\n"
     assert ("surface", "extras") in _unmapped(report)
     assert json.loads((out / "UNMAPPED.json").read_text(encoding="utf-8"))["unmapped"] == report["unmapped"]
 

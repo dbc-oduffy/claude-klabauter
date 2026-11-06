@@ -840,13 +840,13 @@ def _example_retrieval_repo_serving_setup(served: bool):
         import json
 
         (scratch_dir / ".git").mkdir(exist_ok=True)
-        state = scratch_dir.parent / (scratch_dir.name + "-lad") / "project-rag" / "state"
+        state = scratch_dir.parent / (scratch_dir.name + "-lad") / "state"
         state.mkdir(parents=True, exist_ok=True)
         sources = [scratch_dir.name] if served else ["unrelated"]
         (state / "rag-nudge-server.json").write_text(
             json.dumps({"reachable": True, "sources": sources}), encoding="utf-8"
         )
-        mp.setenv("LOCALAPPDATA", str(state.parent.parent))
+        mp.setenv("COORDINATOR_RAG_STATE_DIR", str(state))
         return {_CWD_OVERRIDE_KEY: str(scratch_dir)}
 
     return setup
@@ -1371,6 +1371,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-empty-source-push",
+        "block-empty-source-push-control",
+        "git push origin main",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-push-pr-non-owned-remote",
         "block-push-pr-non-owned-remote-control",
         "git fetch upstream",
@@ -1637,6 +1645,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         _DENY,
         False,
         setup=_external_workspace_vcs_write_setup,
+    ),
+    CorpusRow(
+        "block-empty-source-push",
+        "block-empty-source-push-fire",
+        "git push origin :refs/heads/x",
+        True,
+        _DENY,
+        False,
     ),
     CorpusRow(
         "block-push-pr-non-owned-remote",

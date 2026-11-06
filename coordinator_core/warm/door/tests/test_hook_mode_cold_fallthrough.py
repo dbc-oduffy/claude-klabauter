@@ -185,7 +185,7 @@ def test_an_unreachable_engine_still_yields_the_repo_root_search_rewrite(door, t
         "command": "git grep -Il metahuman_reference -- ':(exclude,glob)**/.git/**'",
         "description": "d",
     }
-    assert "project-rag" in hso["additionalContext"]
+    assert "project_semantic_search" in hso["additionalContext"]
 
 
 def test_the_rewrite_is_not_taken_for_another_entrypoint_or_outside_a_repo_root(door, tmp_path, runtime_base):

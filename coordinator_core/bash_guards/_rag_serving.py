@@ -1,7 +1,8 @@
 """Does a example-retrieval-repo server serve this repo? One local file read, no network.
 
 The example-retrieval-repo hooks leave a per-box verdict file (`rag-nudge-server.json`, under
-`$LOCALAPPDATA/example-retrieval-repo/state` or `~/.project-rag/state`) listing the source names
+the directory named by `$COORDINATOR_RAG_STATE_DIR` or `<settings-home>/rag-state-dir`;
+only this module, never the door, also falls back to the legacy per-OS location) listing the source names
 the running server serves. A repo counts as served when its root directory's name
 matches a listed source (case-insensitive) and the verdict is reachable and fresh.
 Every failure reads as "not served": a recommendation is only ever added, never required.
@@ -16,15 +17,35 @@ from pathlib import Path
 from typing import Dict, FrozenSet, Optional, Tuple
 
 _VERDICT_FILE = "rag-nudge-server.json"
+_POINTER_FILE = "rag-state-dir"
 _MAX_AGE_S = 30 * 60
 
 _parsed: Dict[Tuple[str, int], FrozenSet[str]] = {}
 
 
+def _state_dir() -> Optional[Path]:
+    """`$COORDINATOR_RAG_STATE_DIR`, else the first line of `<settings-home>/rag-state-dir`
+    (written by scripts/setup.py). The door's `pc_verdict_path` resolves the same way."""
+    env = os.environ.get("COORDINATOR_RAG_STATE_DIR", "")
+    if env:
+        return Path(env)
+    try:
+        from coordinator_core._settings_home import settings_home
+
+        lines = (settings_home() / _POINTER_FILE).read_text(encoding="utf-8").splitlines()
+    except Exception:  # noqa: BLE001 -- any failure reads as "not served"
+        return None
+    first = lines[0].strip() if lines else ""
+    return Path(first) if first else None
+
+
 def _verdict_path() -> Path:
+    base = _state_dir()
+    if base is not None:
+        return base / _VERDICT_FILE
     local = os.environ.get("LOCALAPPDATA", "")
-    base = Path(local) / "project-rag" / "state" if local else Path.home() / ".project-rag" / "state"
-    return base / _VERDICT_FILE
+    legacy = Path(local) / "project-rag" / "state" if local else Path.home() / ".project-rag" / "state"
+    return legacy / _VERDICT_FILE
 
 
 def _served_sources() -> FrozenSet[str]:

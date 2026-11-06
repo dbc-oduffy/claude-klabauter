@@ -4,6 +4,11 @@
 plugin tree: same inputs give the same bytes on every OS (pathlib only, sorted traversal, LF text,
 no symlinks). Anything the host table cannot translate is listed in UNMAPPED.json at the tree root.
 Stdlib only; no subprocess, no LLM step.
+
+agy hooks.json is a top-level object keyed by hook name, each value {"<Event>": [...]} (shape from
+the agy 1.4.12 strict-validate relay; no agy doc on the build box). `agy plugin validate` proves the
+file loads, not that a hook fires: ${PLUGIN_DIR} expansion and a guard running need a live agy
+session, which nothing here covers.
 """
 import json
 import re
@@ -242,6 +247,24 @@ def _hook_matcher(matcher, event, plan):
     return "|".join(mapped)
 
 
+def _flatten_groups(groups, event, plan):
+    """agy takes bare command handlers for a non-tool event; a matcher/hooks group is rejected whole."""
+    flat = []
+    for group in groups:
+        if isinstance(group, dict) and isinstance(group.get("hooks"), list):
+            if "matcher" in group:
+                plan.miss("matcher", "hooks/hooks.json", f"{event}: matcher {group['matcher']!r} dropped; agy {event} takes none")
+            flat += group["hooks"]
+        else:
+            flat.append(group)
+    return flat
+
+
+def _hook_name(event):
+    """agy hook name for one event's handlers: the event in kebab case (PreToolUse -> pre-tool-use)."""
+    return re.sub(r"(?<!^)(?=[A-Z])", "-", event).lower()
+
+
 def _hooks(plan, plugin_root):
     src = plugin_root / "hooks" / "hooks.json"
     if not src.is_file():
@@ -268,10 +291,15 @@ def _hooks(plan, plugin_root):
                 plan.miss("hook-event", "hooks/hooks.json", f"event {event!r} has no agy equivalent")
                 del events[event]
                 continue
-            for group in events[event] if isinstance(events[event], list) else []:
+            groups = events[event] if isinstance(events[event], list) else []
+            if event not in plan.cfg["tool_hook_events"]:
+                events[event] = _flatten_groups(groups, event, plan)
+                continue
+            for group in groups:
                 if isinstance(group, dict) and isinstance(group.get("matcher"), str):
                     group["matcher"] = _hook_matcher(group["matcher"], event, plan)
-    plan.put(plan.cfg["hooks_path"], _json_bytes(data), "hooks", "hooks/hooks.json")
+    named = {_hook_name(event): {event: events[event]} for event in sorted(events)} if isinstance(events, dict) else {}
+    plan.put(plan.cfg["hooks_path"], _json_bytes(named), "hooks", "hooks/hooks.json")
 
 
 def _rules(plan, plugin_root):
@@ -279,12 +307,45 @@ def _rules(plan, plugin_root):
     if text is None:
         plan.miss("rules", DOCTRINE_SOURCES[0], "no global-doctrine/CLAUDE.md beside the plugin root")
         return
-    data = plan.rewrite(text).encode("utf-8")
+    head, body = _split_frontmatter(plan.rewrite(text))
+    head = list(head or [])
+    i, _ = _field(head, "trigger")
+    line = f"trigger: {plan.cfg['rules_trigger']}"
+    if i is None:
+        head.insert(0, line)
+    else:
+        head[i] = line
+    data = _join_frontmatter(head, body).encode("utf-8")
     cap = plan.cfg["max_text_bytes"]
     if len(data) > cap:
         plan.miss("oversize", DOCTRINE_SOURCES[0], f"{len(data)} bytes exceeds the {cap}-byte cap")
         return
     plan.put(plan.cfg["rules_path"], data, "rules", DOCTRINE_SOURCES[0])
+
+
+def _manifest(plan, plugin_root):
+    """plugin.json at the output root: name, version, description, logo from the source manifest."""
+    src = plugin_root / plan.cfg["source_manifest_path"]
+    source = {}
+    if src.is_file():
+        try:
+            loaded = json.loads(src.read_text(encoding="utf-8"))
+            source = loaded if isinstance(loaded, dict) else {}
+        except ValueError as exc:
+            plan.miss("manifest", plan.cfg["source_manifest_path"], f"unparseable JSON: {exc}")
+    else:
+        plan.miss("manifest", plan.cfg["source_manifest_path"], "no source plugin manifest; name taken from the directory")
+    manifest = {"name": source.get("name") or plugin_root.resolve().name}
+    for key in ("version", "description"):
+        if isinstance(source.get(key), str):
+            manifest[key] = source[key]
+    logo = source.get("logo")
+    if isinstance(logo, str) and logo:
+        manifest["logo"] = logo
+        logo_path = plugin_root / logo
+        if not Path(logo).is_absolute() and ".." not in Path(logo).parts and logo_path.is_file():
+            plan.put_file(Path(logo).as_posix(), logo_path, "file", logo)
+    plan.put(plan.cfg["manifest_path"], _json_bytes(manifest), "manifest", plan.cfg["source_manifest_path"])
 
 
 def _copied_dirs(plan, plugin_root):
@@ -344,6 +405,7 @@ def generate(plugin_root, out_dir, host="agy"):
         for kind, source in _inventory(plugin_root):
             plan.miss(kind, source, NO_MAP)
     else:
+        _manifest(plan, plugin_root)
         _agents(plan, plugin_root)
         _command_skills(plan, plugin_root)
         _skills(plan, plugin_root)

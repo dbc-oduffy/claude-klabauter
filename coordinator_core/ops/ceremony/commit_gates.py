@@ -376,22 +376,10 @@ def deletion_block_gate(
 
     parsed = parse_step267_blocks(msg_text)
 
-    # Assertion-1 needs a WIDER set than Assertion-3 does -- see
-    # `_parse_name_status_rename_sources`'s own docstring: a Deleted-claimed
-    # path whose old location git paired into a rename (identical/
-    # near-identical content staged at a new path in the SAME batch) has
-    # genuinely vacated that path in the staged tree, even though it is not
-    # a bare `D` line. Scoped by `gate_scope` the same way `staged_deletions`
-    # is.
-    #
-    # In-process (`_staged_deletions_and_renames_in_process`, no `git`
-    # spawn) whenever `gate_scope` is non-empty -- the common, scoped
-    # caller shape. `IndexParseError` (mid-merge-conflict index) falls back
-    # to the original unscoped `diff --cached --name-status --find-renames`
-    # spawn, filtered client-side, mirroring `_swept_rename_delete_paths`'s
-    # own fallback contract. The unscoped case (`gate_scope` empty --
-    # `whole_index=True`'s no-pathspec mode) has no bounded candidate set to
-    # check `head_blobs` against, so it keeps the spawn unconditionally.
+    # Assertion-1 needs rename sources too (a Deleted-claimed path git paired into a rename has
+    # vacated). In-process when `gate_scope` is set; `IndexParseError` falls back to the
+    # `diff --cached --name-status` spawn, filtered client-side. The unscoped case has no bounded
+    # candidate set for `head_blobs`, so it keeps the spawn.
     if gate_scope:
         try:
             staged_deletions_set, rename_sources_set = _staged_deletions_and_renames_in_process(
@@ -412,30 +400,14 @@ def deletion_block_gate(
 
     staged_or_renamed_away_set = staged_deletions_set | rename_sources_set
 
-    # Assertion-2's two reads answer ONE question -- does a Kept-claimed path
-    # still exist -- and nothing else in this function consumes either set, so
-    # a message with no Kept-claims skips both reads outright rather than
-    # computing and discarding them. Both legs are now index-vs-HEAD lookups
-    # via `git_state` (no `git` spawn for the staged-set leg; the HEAD-tree
-    # leg is `head_blobs`, scoped to exactly `parsed.kept_claimed` -- a
-    # membership check on a handful of paths, never the unscopeable full
-    # `ls-tree -r HEAD` walk (~27k paths on this repo) the old form issued).
-    # Kept-claims are the rare shape on this commit path; the empty case is
-    # the hot one.
+    # Assertion-2's reads only answer a Kept-claim, so a message without one skips both; the
+    # HEAD leg is `head_blobs` scoped to `parsed.kept_claimed`, never a full `ls-tree -r HEAD`.
     staged_all_set: Set[str] = set()
     tracked_at_head: Set[str] = set()
     diagnostics: List[str] = []
     if parsed.kept_claimed:
-        # `read_index` raises `IndexParseError` on ANY unmerged (stage != 0)
-        # entry -- an ordinary mid-merge-conflict repo state, not only a
-        # malformed index (git_state.py:47-50's contract: it never degrades
-        # silently). Every other production caller of `read_index` /
-        # `_index_blobs` catches this; this gate must too, or a conflicted
-        # index turns "gate computes a refusal" into "the commit op crashes"
-        # (code-review finding F1). Matches `_index_blobs`'s own posture
-        # (git_native.py `_GIT_READ_FAILED`): a read it cannot answer is a
-        # refusal, never a pass, and the refusal stays visible in
-        # `diagnostics` rather than failing silently.
+        # `read_index` raises `IndexParseError` on any unmerged entry (mid-merge-conflict): a read
+        # it cannot answer is a refusal, never a pass, and never a crash; it stays in `diagnostics`.
         try:
             all_staged = list(read_index(cwd).keys())
         except IndexParseError as exc:
@@ -1292,6 +1264,254 @@ def machine_path_leak_gate(
         detail = machine_path_leak.leak_detail(rel, data.decode("utf-8", errors="replace"))
         if detail and not machine_path_leak.fixture_suppressible(rel, detail):
             diagnostics.append(detail)
+    if not diagnostics:
+        return GateOutcome(passed=True, skipped=False, diagnostics=[])
+    return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)
+
+
+_IMPORT_ERROR_NAMES = frozenset(
+    {"ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
+)
+
+
+_TRY_NODES = (ast.Try, ast.TryStar)
+
+
+def _guards_import_error(node: ast.Try) -> bool:
+    """True when a handler of `node` would swallow a failed import (bare, or a named catch-all)."""
+    for handler in node.handlers:
+        caught = handler.type
+        if caught is None:
+            return True
+        elts = caught.elts if isinstance(caught, ast.Tuple) else [caught]
+        for elt in elts:
+            tail = elt.attr if isinstance(elt, ast.Attribute) else getattr(elt, "id", None)
+            if tail in _IMPORT_ERROR_NAMES:
+                return True
+    return False
+
+
+def _unguarded_imports(tree: ast.AST) -> List[ast.stmt]:
+    """Every `import` / `from ... import` outside a `try` that swallows ImportError."""
+    found: List[ast.stmt] = []
+
+    def visit(stmts: Sequence[ast.stmt]) -> None:
+        for node in stmts:
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                found.append(node)
+                continue
+            if isinstance(node, _TRY_NODES):
+                if not _guards_import_error(node):
+                    visit(node.body)
+                visit(node.orelse)
+                visit(node.finalbody)
+                for handler in node.handlers:
+                    visit(handler.body)
+                continue
+            for field in ("body", "orelse"):
+                inner = getattr(node, field, None)
+                if isinstance(inner, list):
+                    visit(inner)
+            for case in getattr(node, "cases", ()):
+                visit(case.body)
+
+    visit(getattr(tree, "body", []))
+    return found
+
+
+@functools.lru_cache(maxsize=2048)
+def _top_level_def(name: str) -> "re.Pattern[bytes]":
+    n = re.escape(name.encode("utf-8"))
+    return re.compile(rb"^(?:(?:async[ \t]+)?def|class)[ \t]+" + n + rb"\b|^" + n + rb"[ \t]*[:=][^=]", re.M)
+
+
+def _target_names(target: ast.AST, out: Set[str]) -> None:
+    if isinstance(target, ast.Name):
+        out.add(target.id)
+    elif isinstance(target, ast.Starred):
+        _target_names(target.value, out)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            _target_names(elt, out)
+
+
+def _module_bindings(tree: ast.Module) -> Tuple[Set[str], bool]:
+    """(names bound at module level, open); `open` when a star import, `__getattr__` or `globals()` may supply more."""
+    names: Set[str] = set()
+    is_open = False
+
+    def walk(stmts: Sequence[ast.stmt]) -> None:
+        nonlocal is_open
+        for st in stmts:
+            if isinstance(st, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                names.add(st.name)
+                if st.name == "__getattr__":
+                    is_open = True
+            elif isinstance(st, ast.Assign):
+                for tgt in st.targets:
+                    _target_names(tgt, names)
+            elif isinstance(st, (ast.AnnAssign, ast.AugAssign)):
+                _target_names(st.target, names)
+            elif isinstance(st, ast.Import):
+                for alias in st.names:
+                    names.add(alias.asname or alias.name.split(".")[0])
+            elif isinstance(st, ast.ImportFrom):
+                for alias in st.names:
+                    if alias.name == "*":
+                        is_open = True
+                    else:
+                        names.add(alias.asname or alias.name)
+            elif isinstance(st, (ast.For, ast.AsyncFor)):
+                _target_names(st.target, names)
+                walk(st.body)
+                walk(st.orelse)
+            elif isinstance(st, (ast.With, ast.AsyncWith)):
+                for item in st.items:
+                    if item.optional_vars is not None:
+                        _target_names(item.optional_vars, names)
+                walk(st.body)
+            elif isinstance(st, (ast.If, ast.While)):
+                walk(st.body)
+                walk(st.orelse)
+            elif type(st).__name__ == "TypeAlias":
+                _target_names(st.name, names)
+            elif type(st).__name__ == "Match":
+                is_open = True
+            elif isinstance(st, _TRY_NODES):
+                walk(st.body)
+                for handler in st.handlers:
+                    walk(handler.body)
+                walk(st.orelse)
+                walk(st.finalbody)
+            elif isinstance(st, ast.Expr) and isinstance(st.value, ast.Call):
+                fn = st.value.func
+                if isinstance(fn, ast.Attribute) and isinstance(fn.value, ast.Call):
+                    inner = fn.value.func
+                    if getattr(inner, "id", None) == "globals":
+                        is_open = True
+
+    walk(tree.body)
+    return names, is_open
+
+
+def import_closure_gate(
+    worktree_root: Union[str, Path],
+    gate_paths: Sequence[str],
+    read_source: Callable[[str], Optional[bytes]],
+) -> GateOutcome:
+    """Refuse a changed `.py` whose intra-repo `import` / `from x import y` does not resolve in the landed tree.
+
+    Not covered: keyword arguments, dynamic imports, attribute access, third-party modules,
+    `except ImportError`-guarded imports, unchanged importers; dynamically provided names pass.
+    """
+    candidates = [p for p in gate_paths if p.endswith(".py")]
+    if not candidates:
+        return GateOutcome(passed=True, skipped=True, diagnostics=[])
+
+    source_cache: Dict[str, Optional[bytes]] = {}
+    bindings_cache: Dict[str, Optional[Tuple[Set[str], bool]]] = {}
+    top_cache: Dict[str, bool] = {}
+
+    def read(rel: str) -> Optional[bytes]:
+        if rel not in source_cache:
+            source_cache[rel] = read_source(rel)
+        return source_cache[rel]
+
+    def module_file(parts: Sequence[str]) -> Optional[str]:
+        if not parts:
+            return None
+        base = "/".join(parts)
+        for rel in (base + ".py", base + "/__init__.py"):
+            if read(rel) is not None:
+                return rel
+        return None
+
+    def is_submodule(parts: Sequence[str], name: str) -> bool:
+        return module_file(list(parts) + [name]) is not None or is_namespace_dir(list(parts) + [name])
+
+    def is_namespace_dir(parts: Sequence[str]) -> bool:
+        return (Path(worktree_root).joinpath(*parts)).is_dir()
+
+    def top_in_tree(top: str) -> bool:
+        if top not in top_cache:
+            top_cache[top] = (read(top + "/__init__.py") is not None) or (read(top + ".py") is not None)
+        return top_cache[top]
+
+    def bindings_of(rel: str) -> Optional[Tuple[Set[str], bool]]:
+        if rel not in bindings_cache:
+            data = read(rel)
+            result: Optional[Tuple[Set[str], bool]] = None
+            if data is not None:
+                try:
+                    result = _module_bindings(ast.parse(data))
+                except (SyntaxError, ValueError, RecursionError):
+                    result = (set(), True)
+            bindings_cache[rel] = result
+        return bindings_cache[rel]
+
+    diagnostics: List[str] = []
+    seen: Set[str] = set()
+
+    def report(msg: str) -> None:
+        if msg not in seen:
+            seen.add(msg)
+            diagnostics.append(msg)
+
+    def check_from(rel: str, lineno: int, parts: List[str], names: List[str]) -> None:
+        shown = ".".join(parts) or "."
+        target = module_file(parts)
+        wanted = [n for n in names if n != "*"]
+        if target is None:
+            if is_namespace_dir(parts):
+                return
+            missing = [n for n in wanted if not is_submodule(parts, n)]
+            if missing:
+                path = "/".join(parts)
+                add = f"{path}.py (or {path}/__init__.py)" if parts else "the package root"
+                report(f"{rel}:{lineno}: `from {shown} import {', '.join(missing)}` -- "
+                       f"module `{shown}` is not in the landed tree; add {add}")
+            return
+        blob = read(target)
+        pending = [n for n in wanted if blob is None or not _top_level_def(n).search(blob)]
+        if not pending:
+            return
+        info = bindings_of(target)
+        if info is None or info[1]:
+            return
+        for name in pending:
+            if name not in info[0] and not is_submodule(parts, name):
+                report(f"{rel}:{lineno}: `from {shown} import {name}` -- `{name}` is not defined "
+                       f"or re-exported by {target} in the landed tree; add it there")
+
+    for rel in candidates:
+        data = read(rel)
+        if data is None or b"import" not in data:
+            continue
+        try:
+            tree = ast.parse(data)
+        except (SyntaxError, ValueError, RecursionError):
+            continue
+        pkg = rel.split("/")[:-1]
+        for node in _unguarded_imports(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    parts = alias.name.split(".")
+                    if top_in_tree(parts[0]) and module_file(parts) is None and not is_namespace_dir(parts):
+                        path = "/".join(parts)
+                        report(f"{rel}:{node.lineno}: `import {alias.name}` -- module is not in "
+                               f"the landed tree; add {path}.py (or {path}/__init__.py)")
+                continue
+            if node.level:
+                keep = len(pkg) - (node.level - 1)
+                if keep < 0:
+                    continue
+                parts = pkg[:keep] + (node.module.split(".") if node.module else [])
+            else:
+                parts = node.module.split(".") if node.module else []
+                if not parts or not top_in_tree(parts[0]):
+                    continue
+            check_from(rel, node.lineno, parts, [a.name for a in node.names])
+
     if not diagnostics:
         return GateOutcome(passed=True, skipped=False, diagnostics=[])
     return GateOutcome(passed=False, skipped=False, diagnostics=diagnostics)

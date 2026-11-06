@@ -164,7 +164,7 @@ def forced_command_interpreter():
     Homebrew python3 wins over sys.executable when one exists."""
     if sys.platform == "darwin":
         for cand in HOMEBREW_PYTHONS:
-            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+            if os.path.isfile(cand) and os.name == "posix" and os.access(cand, os.X_OK):
                 return cand
     return sys.executable
 

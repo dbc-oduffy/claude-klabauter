@@ -143,6 +143,7 @@ import time
 from pathlib import Path
 from typing import Iterable, NamedTuple, Optional
 
+from coordinator_core._settings_home import FORBID_REAL_SETTINGS_HOME_ENV
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.engine_root import is_engine_root
 
@@ -205,6 +206,54 @@ _PREBUILT_PROVENANCE = _DOOR_DIR / (
 class DoorInstallError(RuntimeError):
     """Raised by `install_door()` on a fatal precondition -- an invalid
     `engine_root`, or (check-only mode) a stale/absent install."""
+
+
+_FORBID_REAL_SETTINGS_HOME_ENV = FORBID_REAL_SETTINGS_HOME_ENV
+
+
+def _under_test_or_sandbox() -> bool:
+    return bool(
+        os.environ.get("PYTEST_CURRENT_TEST")
+        or os.environ.get("COORDINATOR_DISABLE_MACHINE_MUTATION")
+    )
+
+
+def _real_settings_homes() -> "list[str]":
+    """This operator's live settings homes, derived from the account home and never from
+    `COORDINATOR_SETTINGS_HOME`, so an env override cannot hide the live tree."""
+    homes = []
+    forbidden = os.environ.get(_FORBID_REAL_SETTINGS_HOME_ENV)
+    if forbidden:
+        homes.append(forbidden)
+    if os.name != "nt":
+        try:
+            import pwd
+
+            homes.append(str(Path(pwd.getpwuid(os.getuid()).pw_dir) / ".coordinator-claude-settings"))
+        except (KeyError, ImportError, OSError):
+            pass
+    elif not forbidden:
+        # No account-home database on Windows; a quarantined run names the live home through
+        # the forbid env above, so only an unquarantined run falls back to the profile.
+        try:
+            homes.append(str(Path.home() / ".coordinator-claude-settings"))
+        except (RuntimeError, KeyError):
+            pass
+    return [os.path.normcase(os.path.realpath(h)) for h in homes]
+
+
+def _refuse_live_bin_under_test(bin_dst: Path) -> None:
+    """Raises `DoorInstallError` when a test or sandboxed run targets the live settings bin.
+    Installing a working-tree door there replaces the published door for every live hook."""
+    if not _under_test_or_sandbox():
+        return
+    target = os.path.normcase(os.path.realpath(bin_dst))
+    for home in _real_settings_homes():
+        if target == home or target.startswith(home + os.sep):
+            raise DoorInstallError(
+                f"door_install: refusing to write {bin_dst}: it is under the live settings home "
+                f"{home} while a test or sandbox marker is set. Point bin_dst at tmp_path."
+            )
 
 
 def rebuild_and_verify_prebuilt(
@@ -892,6 +941,7 @@ def install_door(bin_dst: Path, engine_root: Path, *, check_only: bool = False) 
             "(would install)"
         )
 
+    _refuse_live_bin_under_test(bin_dst)
     bin_dst.mkdir(parents=True, exist_ok=True)
 
     dest_provenance = installed_provenance_path(bin_dst)
@@ -1249,6 +1299,7 @@ def install_named_forwarder(
             f"door_install: named forwarder check failed -- {dest} missing (would install)"
         )
 
+    _refuse_live_bin_under_test(bin_dst)
     if source is None:
         source = install_door(bin_dst, engine_root, check_only=False)
 

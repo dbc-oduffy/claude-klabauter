@@ -230,6 +230,8 @@ int main(int argc, char **argv) {
         check_int("envelope/have_error", have_error, 1);
         check_int("envelope/code", code, JSONRPC_WARM_DISPATCH_INDETERMINATE);
         check_int("envelope/not_undispatched", is_provably_undispatched(code), 0);
+        check_int("envelope/names_commit_check", strstr(env.data, "git log -1 -- <path>") != NULL, 1);
+        check_int("envelope/names_request_status", strstr(env.data, "warm.request_status") != NULL, 1);
         free(rf.stdout_buf.data);
         free(rf.stderr_buf.data);
         free(env.data);
@@ -456,6 +458,20 @@ int main(int argc, char **argv) {
                   strstr(fa.data, "\"additionalContext\":\"coordinator: engine failed") != NULL, 1);
         free(fa.data);
     }
+
+    check_int("hook_plan/probe_constant", DOOR_HOOK_PROBE_MS, 500);
+    check_int("hook_plan/live_constant", DOOR_HOOK_LIVE_READ_MS, 8000);
+    check_int("hook_plan/guard_first_read_is_probe", door_hook_first_read_ms("hooks.preuse_bash_dispatch"), 500);
+    check_int("hook_plan/submit_first_read_is_live", door_hook_first_read_ms("hooks.submit_engine_ask"), 8000);
+    check_int("hook_plan/null_op_first_read_is_probe", door_hook_first_read_ms(NULL), 500);
+    check_int("hook_plan/guard_live_peer_extends", door_hook_read_plan("hooks.preuse_bash_dispatch", 1, 1), 7500);
+    check_int("hook_plan/validate_commit_live_peer_extends", door_hook_read_plan("validate-commit", 1, 1), 7500);
+    check_int("hook_plan/guard_closed_peer_fails_open", door_hook_read_plan("hooks.preuse_bash_dispatch", 0, 1), 0);
+    check_int("hook_plan/guard_dead_engine_fails_open", door_hook_read_plan("hooks.preuse_bash_dispatch", 1, 0), 0);
+    check_int("hook_plan/guard_both_down_fails_open", door_hook_read_plan("hooks.preuse_bash_dispatch", 0, 0), 0);
+    check_int("hook_plan/submit_adds_nothing_live", door_hook_read_plan("hooks.submit_engine_ask", 1, 1), 0);
+    check_int("hook_plan/submit_adds_nothing_closed", door_hook_read_plan("hooks.submit_engine_ask", 0, 0), 0);
+    check_int("hook_plan/null_op_treated_as_guard", door_hook_read_plan(NULL, 1, 1), 7500);
 
     printf("%s: %d checks, %d failures\n",
            failures == 0 ? "PASS" : "FAIL", checks, failures);

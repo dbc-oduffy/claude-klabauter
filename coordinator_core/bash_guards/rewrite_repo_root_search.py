@@ -35,8 +35,8 @@ CLASS = "advisory-rewrite"
 MATCHERS = COMMAND_TOOL_NAMES
 LEG_ID = "rewrite-repo-root-search"
 
-ADVISORY = "use `git grep` (tracked files only) or the Grep tool; for content lookups use example-retrieval-repo (project_semantic_search)"
-REWRITE_NOTE = "Repo-root search rewritten to `git grep` (tracked files only); for content lookups use example-retrieval-repo (project_semantic_search), for untracked paths the Grep tool."
+ADVISORY = "use `git grep` (tracked files only) or the Grep tool; for content lookups use the project index (project_semantic_search)"
+REWRITE_NOTE = "Repo-root search rewritten to `git grep` (tracked files only); for content lookups use the project index (project_semantic_search), for untracked paths the Grep tool."
 
 _PRE_FILTER_RE = re.compile(r"\b(?:find|rg|grep|egrep|fgrep)\b")
 _COMPLEX_RE = re.compile(r"[<>$`()]")

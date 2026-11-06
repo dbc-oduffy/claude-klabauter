@@ -44,7 +44,8 @@ def test_default_setup_on_standalone_plugin_clone_rewrites_foreign_body(stub_env
 
     assert _run(stub_env, _standalone_plugin_clone(stub_env), check_only=False) == 0
     assert body.read_bytes() == wrapper_src.read_bytes()
-    assert os.access(body, os.X_OK)
+    if os.name == "posix":
+        assert os.access(body, os.X_OK)
 
 
 def test_check_only_leaves_foreign_body_untouched(stub_env) -> None:  # noqa: F811

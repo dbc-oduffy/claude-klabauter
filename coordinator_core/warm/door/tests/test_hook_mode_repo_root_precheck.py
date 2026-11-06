@@ -140,11 +140,13 @@ def _precheck(selftest: Path, cwd: Path, cmd: str):
 @pytest.fixture(autouse=True)
 def _no_ambient_rag_verdict(tmp_path, monkeypatch):
     """Point the verdict lookup at an empty dir so the box's real verdict never leaks in."""
-    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "no-verdict"))
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
+    monkeypatch.setenv("COORDINATOR_RAG_STATE_DIR", str(tmp_path / "no-verdict" / "state"))
 
 
 def _write_verdict(tmp_path: Path, sources, reachable=True, age_s: float = 0) -> None:
-    state = tmp_path / "no-verdict" / "project-rag" / "state"
+    state = tmp_path / "no-verdict" / "state"
     state.mkdir(parents=True, exist_ok=True)
     verdict = state / "rag-nudge-server.json"
     verdict.write_text(json.dumps({"reachable": reachable, "sources": sources}), encoding="utf-8")
@@ -178,10 +180,30 @@ def test_an_unserved_repo_still_gets_the_git_grep_rewrite(selftest, repo, tmp_pa
 
 
 def test_a_malformed_verdict_reads_as_not_served(selftest, repo, tmp_path):
-    state = tmp_path / "no-verdict" / "project-rag" / "state"
+    state = tmp_path / "no-verdict" / "state"
     state.mkdir(parents=True)
     (state / "rag-nudge-server.json").write_text('{"reachable": true, "sources": [', encoding="utf-8")
     assert _precheck(selftest, repo, "grep -rn foo .") is not None
+
+
+def test_the_settings_home_pointer_names_the_verdict_dir_when_the_env_var_is_unset(
+    selftest, repo, tmp_path, monkeypatch
+):
+    monkeypatch.delenv("COORDINATOR_RAG_STATE_DIR")
+    state = tmp_path / "pointed" / "state"
+    state.mkdir(parents=True)
+    (state / "rag-nudge-server.json").write_text(
+        json.dumps({"reachable": True, "sources": [repo.name]}), encoding="utf-8"
+    )
+    assert _precheck(selftest, repo, "grep -rn foo .") is not None
+    home = tmp_path / "settings-home"
+    home.mkdir()
+    (home / "rag-state-dir").write_text(str(state) + "\n", encoding="utf-8")
+    assert _precheck(selftest, repo, "grep -rn foo .") is None
+
+
+def test_door_core_holds_no_retrieval_repo_codename():
+    assert "project-rag" not in (_DOOR_DIR / "door_core.c").read_text(encoding="utf-8")
 
 
 def _python_rewrite(cmd: str, cwd: Path):
@@ -234,10 +256,10 @@ def test_the_incident_commands_are_in_the_subset(selftest, repo):
         assert hso is not None and hso["updatedInput"]["command"] == want
 
 
-def test_the_note_is_byte_equal_to_the_python_rewrite_note_and_names_example_retrieval_repo(selftest, repo):
+def test_the_note_is_byte_equal_to_the_python_rewrite_note_and_names_the_search_tool(selftest, repo):
     hso = _precheck(selftest, repo, "grep -rn foo .")
     assert hso["additionalContext"] == leg.REWRITE_NOTE
-    assert "project-rag" in hso["additionalContext"]
+    assert "project_semantic_search" in hso["additionalContext"]
 
 
 def test_no_cwd_or_a_cwd_without_git_yields(selftest, repo, nonrepo):
@@ -297,7 +319,10 @@ def _define(source: Path, macro: str) -> int:
 def test_the_hook_deadline_sits_under_the_caller_timeout_in_both_doors():
     windows = _define(DOOR_WINDOWS_C, "DOOR_HOOK_READ_DEADLINE_MS")
     assert windows == _define(DOOR_POSIX_C, "DOOR_HOOK_READ_DEADLINE_MS")
-    assert windows < 12_000, "DoE hooks.json timeout is 15 s and the caller's child budget 12 s"
+    assert windows == 500, "a hook read is held to the 500ms brightline"
+    for source in (DOOR_WINDOWS_C, DOOR_POSIX_C):
+        submit = _define(source, "DOOR_HOOK_SUBMIT_READ_DEADLINE_MS")
+        assert windows < submit < 12_000, "DoE hooks.json timeout is 15 s and the caller's child budget 12 s"
     assert _define(DOOR_WINDOWS_C, "DOOR_READ_DEADLINE_MS") == 40_000
     assert _define(DOOR_POSIX_C, "DOOR_READ_DEADLINE_MS") == 40_000
 
@@ -338,7 +363,7 @@ def test_a_starved_engine_still_yields_the_rewrite(tmp_path, repo):
     hso = json.loads(proc.stdout.decode("utf-8"))["hookSpecificOutput"]
     assert hso["updatedInput"]["command"] == "git grep -Il metahuman_reference -- ':(exclude,glob)**/.git/**'"
     assert hso["updatedInput"]["description"] == "d"
-    assert "project-rag" in hso["additionalContext"]
+    assert "project_semantic_search" in hso["additionalContext"]
 
 
 @pytest.mark.spawns_process
@@ -387,3 +412,24 @@ def test_a_wedged_engine_is_bounded_by_the_hook_deadline_and_still_yields_the_re
     body = json.loads(other.stdout.decode("utf-8"))
     assert "updatedInput" not in body.get("hookSpecificOutput", {})
     assert "did not run" in json.dumps(body)
+
+
+def _load_setup():
+    import importlib.util
+
+    root = Path(__file__).resolve().parents[4]
+    spec = importlib.util.spec_from_file_location("_setup_under_test", root / "scripts" / "setup.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@pytest.mark.parametrize("legacy_only, expect_legacy", [(True, True), (False, False)])
+def test_state_dir_pointer_follows_the_directory_that_exists(tmp_path, monkeypatch, legacy_only, expect_legacy):
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    own = tmp_path / ".renamed-checkout" / "state"
+    legacy = tmp_path / ".project-rag" / "state"
+    (legacy if legacy_only else own).mkdir(parents=True)
+    pointer = _load_setup().write_rag_state_dir_pointer(tmp_path / "renamed-checkout", tmp_path / "sh")
+    assert pointer.read_text(encoding="utf-8").strip() == str(legacy if expect_legacy else own)
