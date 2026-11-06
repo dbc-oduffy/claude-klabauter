@@ -1424,7 +1424,9 @@ def _write_decline(
     return 0
 
 
-def _refresh_mirror_blobs(*, schema_names: list[str], doe_clone_arg: str | None = None) -> int:
+def _refresh_mirror_blobs(
+    *, schema_names: list[str], doe_clone_arg: str | None = None, dry_run: bool = False
+) -> int:
     """Recompute `mirror_blob` for manifest entries from the recorded DoE base bytes.
 
     A local schema whose LF blob equals the entry's recorded `blob` is the DoE base, so
@@ -1464,13 +1466,16 @@ def _refresh_mirror_blobs(*, schema_names: list[str], doe_clone_arg: str | None 
         if entry.get("mirror_blob") != mirror_blob:
             updates[key] = {**entry, "mirror_blob": mirror_blob}
             _info(f"  {name}: mirror_blob {mirror_blob[:9]}")
-    if updates:
+    if updates and not dry_run:
         _write_manifest(updates)
-    _info(f"Refreshed {len(updates)} mirror_blob(s) in {_rel(_MANIFEST_FILE)}.")
+    verb = "Would refresh" if dry_run else "Refreshed"
+    _info(f"{verb} {len(updates)} mirror_blob(s) in {_rel(_MANIFEST_FILE)}.")
     return 0
 
 
-def _record_base(*, schema_names: list[str], doe_clone_arg: str | None, ref: str) -> int:
+def _record_base(
+    *, schema_names: list[str], doe_clone_arg: str | None, ref: str, dry_run: bool = False
+) -> int:
     """Record the vendored-from base for schemas already byte-identical to DoE.
 
     Backfill for schemas vendored before the manifest existed. Pin-tracked schemas
@@ -1507,9 +1512,10 @@ def _record_base(*, schema_names: list[str], doe_clone_arg: str | None, ref: str
             "mirror_blob": _mirror_blob_of(path.name, incoming),
         }
         _info(f"  {name}: base {sha[:9]}")
-    if updates:
+    if updates and not dry_run:
         _write_manifest(updates)
-    _info(f"Recorded {len(updates)} base(s) in {_rel(_MANIFEST_FILE)}.")
+    verb = "Would record" if dry_run else "Recorded"
+    _info(f"{verb} {len(updates)} base(s) in {_rel(_MANIFEST_FILE)}.")
     return 0
 
 
@@ -1518,10 +1524,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.list:
         return _print_list()
     if args.refresh_mirror_blobs:
-        return _refresh_mirror_blobs(schema_names=list(args.schema), doe_clone_arg=args.doe_clone)
+        return _refresh_mirror_blobs(
+            schema_names=list(args.schema), doe_clone_arg=args.doe_clone, dry_run=args.dry_run
+        )
     if args.record_base:
         return _record_base(
-            schema_names=list(args.schema), doe_clone_arg=args.doe_clone, ref=args.ref
+            schema_names=list(args.schema),
+            doe_clone_arg=args.doe_clone,
+            ref=args.ref,
+            dry_run=args.dry_run,
         )
     if args.decline:
         return _write_decline(

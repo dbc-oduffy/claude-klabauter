@@ -762,9 +762,38 @@ def _write_snapshot(directory, box_id, sessions, fetched_at=None, ok=True):
 
 
 def _remote(tmp_path, key, **kw):
+    kw.setdefault("build_roster", lambda repo_root=None: [])
     return send_pass.resolve_addressee(
         str(tmp_path), key, snapshot_dir=str(tmp_path), local_id="here", **kw
     )
+
+
+def test_resolve_addressee_remote_name_held_by_local_session_refused(tmp_path):
+    _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
+    rows = [_Row("local-sid", "alpha")]
+    assert _remote(tmp_path, "mac1:s1", build_roster=lambda repo_root=None: rows) is None
+
+
+def test_resolve_addressee_remote_name_held_on_third_box_refused(tmp_path):
+    _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
+    _write_snapshot(tmp_path, "dp2", [{"session_id": "s9", "name": "alpha"}])
+    assert _remote(tmp_path, "mac1:s1") is None
+
+
+def test_resolve_addressee_remote_unique_name_resolves_despite_other_boxes(tmp_path):
+    _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
+    _write_snapshot(tmp_path, "dp2", [{"session_id": "s9", "name": "beta"}])
+    rows = [_Row("local-sid", "gamma")]
+    assert _remote(tmp_path, "mac1:s1", build_roster=lambda repo_root=None: rows) == "alpha"
+
+
+def test_resolve_addressee_remote_unreadable_local_roster_refused(tmp_path):
+    _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
+
+    def boom(repo_root=None):
+        raise OSError("roster down")
+
+    assert _remote(tmp_path, "mac1:s1", build_roster=boom) is None
 
 
 def test_resolve_addressee_remote_key_resolves_to_snapshot_name(tmp_path):

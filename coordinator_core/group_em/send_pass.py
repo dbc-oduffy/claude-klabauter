@@ -522,13 +522,21 @@ def _suppressed(session_id, why, reason=None, obligations=None, remaining=None, 
 
 
 def _resolve_remote(
-    box_id: str, sid: str, snapshot_dir: Optional[str], local_id: Optional[str]
+    box_id: str,
+    sid: str,
+    snapshot_dir: Optional[str],
+    local_id: Optional[str],
+    repo_root: Optional[str] = None,
+    build_roster: Optional[Callable[..., list]] = None,
 ) -> Optional[str]:
+    """Far session's name, or None when the name is not unique across this box, the far box
+    and every other reachable box. An unreadable local roster refuses, never assumes no clash."""
     if not machinery_paths.safe_session_id(sid):
         return None
     try:
         base = Path(snapshot_dir) if snapshot_dir else settings_home() / "state" / "group-em"
-        snap = remote_roster.read_snapshot(base, local_id=local_id).get(box_id)
+        snapshots = remote_roster.read_snapshot(base, local_id=local_id)
+        snap = snapshots.get(box_id)
     except Exception:
         return None
     if not snap or not snap.get("reachable"):
@@ -544,7 +552,30 @@ def _resolve_remote(
         return None
     holders = {s.get("session_id") for s in sessions if s.get("name") == resolved}
     holders.discard(None)
-    return None if len(holders) > 1 else resolved
+    if len(holders) > 1:
+        return None
+    for other_id, other in snapshots.items():
+        if other_id == box_id or not isinstance(other, dict) or not other.get("reachable"):
+            continue
+        if any(isinstance(s, dict) and s.get("name") == resolved for s in other.get("sessions") or []):
+            return None
+    roster_fn = build_roster if build_roster is not None else peer_roster.build_roster
+    try:
+        local_rows = list(roster_fn(repo_root=repo_root))
+    except Exception:
+        return None
+    if any(isinstance(row, dict) for row in local_rows):
+        # Same wiring trap as resolve_addressee's guard: dict rows mean the
+        # read_pass.build_roster was injected, and a silent None here would
+        # make every far peer unaddressable while reading as a clean refusal.
+        raise TypeError(
+            "_resolve_remote needs session.peer_roster.build_roster "
+            "(PeerRow rows); got dict rows, which is group_em.read_pass."
+            "build_roster -- same name, different shape"
+        )
+    if any(getattr(row, "name", None) == resolved for row in local_rows):
+        return None
+    return resolved
 
 
 def resolve_addressee(
@@ -559,7 +590,7 @@ def resolve_addressee(
     if isinstance(peer_session_id, str) and remote_identity.SEP in peer_session_id:
         box_id, sid = remote_identity.parse_key(peer_session_id, local_id)
         if box_id != (local_id if local_id is not None else box_registry.local_box_id()):
-            return _resolve_remote(box_id, sid, snapshot_dir, local_id)
+            return _resolve_remote(box_id, sid, snapshot_dir, local_id, repo_root, build_roster)
         peer_session_id = sid
     if not machinery_paths.safe_session_id(peer_session_id):
         return None

@@ -79,6 +79,40 @@ def test_unreachable_box_contributes_no_rows_and_is_named_unreachable():
     assert read_pass.unreachable_boxes(snap) == frozenset({"boxB"})
 
 
+def test_same_name_on_two_boxes_gets_distinct_box_labelled_names():
+    snap = {
+        box: {
+            "reachable": True,
+            "sessions": [{"session_id": sid, "name": "example-game-repo-7e", "cwd": "/r", "status": "idle", "address": "example-game-repo-7e"}],
+        }
+        for box, sid in (("mac", "56c6a5"), ("machine-b", "6d1190"))
+    }
+    rows = _live_peers(snap, local_agents=[])
+    remote = [r for r in rows if r.get("remote")]
+    assert {r["name"] for r in remote} == {"example-game-repo-7e"}
+    assert sorted(r["nameAtBox"] for r in remote) == ["example-game-repo-7e@machine-b", "example-game-repo-7e@mac"]
+
+
+def test_local_row_is_box_labelled_beside_a_same_name_remote_row():
+    snap = {"mac": {"reachable": True, "sessions": [{"session_id": "56c6a5", "name": "example-game-repo-7e", "status": "idle"}]}}
+    rows = _live_peers(snap, local_agents=[{"sessionId": "loc1", "name": "example-game-repo-7e", "cwd": "/r", "status": "idle"}])
+    local = [r for r in rows if not r.get("remote")]
+    remote = [r for r in rows if r.get("remote")]
+    assert local[0]["nameAtBox"] == "example-game-repo-7e@boxA"
+    assert local[0]["nameAtBox"] != remote[0]["nameAtBox"] == "example-game-repo-7e@mac"
+
+
+def test_nameless_local_row_has_no_box_labelled_name():
+    (row,) = _live_peers({}, local_agents=[{"sessionId": "loc1", "cwd": "/r", "status": "idle"}])
+    assert row["nameAtBox"] is None
+
+
+def test_nameless_remote_session_has_no_box_labelled_name():
+    snap = {"boxB": {"reachable": True, "sessions": [{"session_id": "s1", "status": "idle"}]}}
+    (row,) = read_pass.remote_peer_rows(snap)
+    assert row["name"] is None and row["nameAtBox"] is None
+
+
 def test_remote_row_without_a_session_id_is_skipped():
     snap = {"boxB": {"reachable": True, "sessions": [{"session_id": "", "status": "busy"}, {"status": "busy"}]}}
     assert read_pass.remote_peer_rows(snap) == []

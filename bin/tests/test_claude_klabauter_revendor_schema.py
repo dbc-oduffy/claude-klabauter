@@ -1045,6 +1045,19 @@ class TestMirrorBlob:
         assert manifest["alpha.schema.json"]["doe_commit"] == "d" * 40
         assert "mirror_blob" not in manifest["moved.schema.json"]
 
+    def test_refresh_dry_run_writes_nothing(
+        self, sandbox: dict[str, Path], fake_clone: Path
+    ) -> None:
+        schemas = sandbox["schemas"]
+        (schemas / "alpha.schema.json").write_bytes(_SCRUBBED_SCHEMA)
+        before = json.dumps(
+            {"alpha.schema.json": {"doe_commit": "d" * 40, "blob": _mod._git_blob_sha(_SCRUBBED_SCHEMA)}}
+        )
+        (schemas / "vendored-from.json").write_text(before)
+
+        assert _mod.main(["--refresh-mirror-blobs", "--dry-run"]) == 0
+        assert (schemas / "vendored-from.json").read_text() == before
+
     def test_refresh_reads_the_base_from_doe_when_local_has_moved(
         self, sandbox: dict[str, Path], fake_clone: Path
     ) -> None:

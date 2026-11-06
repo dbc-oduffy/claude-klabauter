@@ -259,12 +259,20 @@ def unreachable_boxes(snapshot: Mapping[str, Mapping[str, Any]]) -> frozenset:
     return frozenset(box for box, entry in snapshot.items() if not entry.get("reachable"))
 
 
+def _box_labelled_name(name: Any, box_id: str) -> Optional[str]:
+    """``name@box_id`` for a non-empty string name, else ``None``."""
+    if isinstance(name, str) and name:
+        return f"{name}@{box_id}"
+    return None
+
+
 def remote_peer_rows(snapshot: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]]:
     """One roster row per session in every reachable box of ``snapshot``.
 
     Rows share the local row shape (``sessionId``/``status``/``cwd``/``name``) plus
-    ``box_id``, ``peerKey``, ``address`` and ``remote: True``; a session without a usable
-    id is skipped.
+    ``box_id``, ``peerKey``, ``address``, ``remote: True`` and ``nameAtBox``
+    (``name@box_id``, ``None`` when nameless; the bare ``name`` is unchanged); a session
+    without a usable id is skipped.
     """
     rows: list[dict[str, Any]] = []
     for box_id, entry in snapshot.items():
@@ -282,6 +290,7 @@ def remote_peer_rows(snapshot: Mapping[str, Mapping[str, Any]]) -> list[dict[str
                     "status": session.get("status"),
                     "cwd": session.get("cwd"),
                     "name": session.get("name"),
+                    "nameAtBox": _box_labelled_name(session.get("name"), box_id),
                     "address": session.get("address"),
                     "box_id": box_id,
                     "peerKey": key,
@@ -304,7 +313,7 @@ def live_peers(
     a fleet of departed peers. Eval-sandbox children are dropped; each
     `exclude_session_ids` entry is removed by exact session id.
 
-    Every row carries `box_id` and `peerKey` (`<box_id>:<session_id>`): local rows
+    Every row carries `box_id`, `nameAtBox` and `peerKey` (`<box_id>:<session_id>`): local rows
     the local box id, remote rows (`include_remote`, from `snapshot` or a fresh
     `read_remote_snapshot()`) their own box id and `remote: True`. The local-registry
     refusals above guard the local read only; an unreachable remote box contributes no
@@ -317,7 +326,10 @@ def live_peers(
         **({"box_wide": True} if box_wide else {}),
     )
     local_id = box_registry.local_box_id()
-    agents = [dict(agent, box_id=local_id) for agent in agents]
+    agents = [
+        dict(agent, box_id=local_id, nameAtBox=_box_labelled_name(agent.get("name"), local_id))
+        for agent in agents
+    ]
     for agent in agents:
         sid = agent.get("sessionId")
         if isinstance(sid, str) and sid:

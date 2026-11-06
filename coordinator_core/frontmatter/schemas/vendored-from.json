@@ -15,9 +15,9 @@
     "mirror_blob": "b3e7179704f4e344c4a60f8300d180d68d38c1ef"
   },
   "capability-manifest.schema.json": {
-    "blob": "3636d914df851a34734e23bbf21372a8211ca416",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219",
-    "mirror_blob": "3636d914df851a34734e23bbf21372a8211ca416"
+    "blob": "533220f83e013171827552503c9a2fbc8027938e",
+    "doe_commit": "9eaf5d7b9981036892d09d8e4251a385c133ccd8",
+    "mirror_blob": "2451d137fefb5f5b7c3e9de73ac6992a9a4bcd8d"
   },
   "chatty-roster.schema.json": {
     "blob": "98ff3260c539d0c71ef5a74cc1efabc9f13ef022",
@@ -55,9 +55,9 @@
     "mirror_blob": "1510b28ef08266b87f27f16eec01963f78b02393"
   },
   "fleet-capability-index.schema.json": {
-    "blob": "71439f31ce3e1a7d76a961411a8038efa97eede3",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219",
-    "mirror_blob": "71439f31ce3e1a7d76a961411a8038efa97eede3"
+    "blob": "5b2695d20749f9631b048fc919b7bfb65e6334de",
+    "doe_commit": "9eaf5d7b9981036892d09d8e4251a385c133ccd8",
+    "mirror_blob": "408fda4ffacf49d8191e4ce4f39fc91236a5bb04"
   },
   "goal.schema.json": {
     "blob": "3810bd754326a81eaa59fa9f7f4c466a9084cca0",
@@ -65,9 +65,9 @@
     "mirror_blob": "3d69558b87bf07f332464aa4c23433d24695d1c9"
   },
   "handoff-archived.schema.json": {
-    "blob": "c45753a4646163f50ad91a53cc0a63b6d1d8e4b4",
-    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e",
-    "mirror_blob": "faacba3f1065c572a8e93d8776d61216197160df"
+    "blob": "7d63580a4de3069b114e367770140b414b15c5ec",
+    "doe_commit": "9eaf5d7b9981036892d09d8e4251a385c133ccd8",
+    "mirror_blob": "2e70e54908d4a17b644c90e6f6764e4c62f0305c"
   },
   "handoff.schema.json": {
     "blob": "37c7a713507164a47c062f3a896294dcc2f34fd4",
@@ -120,9 +120,9 @@
     "mirror_blob": "80aafde5f3c7ae10273a189b17d1ac8200f3d5f9"
   },
   "plan-tasks.schema.json": {
-    "blob": "ddc69f183031698dcd0bed7ca5851a807b8704b8",
-    "doe_commit": "7af1b4d3bf2257d018f152300fb060f5dd2b950b",
-    "mirror_blob": "626135e5841450f4ca1a71b0c579d445e6722e60"
+    "blob": "0e5b3d2a87b455508d015d3765a2c75ea704b48d",
+    "doe_commit": "9eaf5d7b9981036892d09d8e4251a385c133ccd8",
+    "mirror_blob": "0e5b3d2a87b455508d015d3765a2c75ea704b48d"
   },
   "plan.schema.json": {
     "blob": "a95a38740017b779168262ff149edd9142e6999c",
@@ -155,9 +155,9 @@
     "mirror_blob": "7f3441ee29d933e6bf250ea14a662a3663b0fc3f"
   },
   "research-synthesis.schema.json": {
-    "blob": "d9070c6c1878823a4511e1f3acb75a4c9eba819c",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219",
-    "mirror_blob": "d9070c6c1878823a4511e1f3acb75a4c9eba819c"
+    "blob": "f790ef478d11dd3b3a24ff97b3ae134ef07500e3",
+    "doe_commit": "9eaf5d7b9981036892d09d8e4251a385c133ccd8",
+    "mirror_blob": "f790ef478d11dd3b3a24ff97b3ae134ef07500e3"
   },
   "review-findings.schema.json": {
     "blob": "a20c298c1ed7ebcb59c5277791fa27fabb94c9bb",
@@ -195,9 +195,9 @@
     "mirror_blob": "085907dfe4b76ab955c0fa2da816993749b40252"
   },
   "spike-result.schema.json": {
-    "blob": "16517aac6822aeecaaa34398370e2e2363877b7a",
-    "doe_commit": "33a89a443a9e6377f7c5222a3e988437c375984e",
-    "mirror_blob": "16517aac6822aeecaaa34398370e2e2363877b7a"
+    "blob": "7841a771783db326b190cb7cbf47aa94353d2b65",
+    "doe_commit": "9eaf5d7b9981036892d09d8e4251a385c133ccd8",
+    "mirror_blob": "60b3687677ee26d52b84103ee8eeedd33fa983af"
   },
   "spine.schema.json": {
     "blob": "229b83d4739a065bb8b181ca305b6b8bf42051d6",
@@ -205,9 +205,9 @@
     "mirror_blob": "229b83d4739a065bb8b181ca305b6b8bf42051d6"
   },
   "strategic-self-description.schema.json": {
-    "blob": "c799c2a5a45b449766afdabd3ff74c162a3a38c5",
-    "doe_commit": "cb819d590e88a1324e0f59d7dde7749746f22219",
-    "mirror_blob": "c799c2a5a45b449766afdabd3ff74c162a3a38c5"
+    "blob": "c49918a779cd15797fa46d80198492286ebe681c",
+    "doe_commit": "9eaf5d7b9981036892d09d8e4251a385c133ccd8",
+    "mirror_blob": "281c3be70b15d55dc4ed68e1d17738031c00174f"
   },
   "workstream-event.schema.json": {
     "blob": "b8660d97aa0af0c9872bc2e05238c60a3962a20f",
