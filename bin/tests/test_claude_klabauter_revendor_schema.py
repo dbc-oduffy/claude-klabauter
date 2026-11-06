@@ -974,3 +974,94 @@ class TestFleetCorpusGate:
         )
         assert reasons == [] and notes == []
         assert called["n"] == 0, "gate must stay behind the major-bump condition, not run on every re-vendor"
+
+
+# ---------------------------------------------------------------------------
+# mirror_blob: blob of the publish-scrubbed base, recorded beside `blob`
+# ---------------------------------------------------------------------------
+
+_SCRUBBED_SCHEMA = (
+    b'{"x-schema-name": "alpha", "x-schema-version": "1.0.0", '
+    b'"x-bump-note": "claude-klabauter re-vendors 1.1.0"}\n'
+)
+
+
+def _plan_stub(path: Path, incoming: bytes):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(vendored_path=path, incoming=incoming)
+
+
+class TestMirrorBlob:
+    def test_new_entry_records_blob_of_the_scrubbed_base(self, sandbox: dict[str, Path]) -> None:
+        from coordinator_core.percolate.mirror_text import mirror_text
+
+        updates = _mod._manifest_updates(
+            [_plan_stub(sandbox["schemas"] / "alpha.schema.json", _SCRUBBED_SCHEMA)], "c" * 40
+        )
+        scrubbed = mirror_text(_SCRUBBED_SCHEMA.decode(), "coordinator_core/frontmatter/schemas/alpha.schema.json")
+        entry = updates["alpha.schema.json"]
+        assert scrubbed.encode() != _SCRUBBED_SCHEMA, "fixture must exercise the scrub"
+        assert entry["blob"] == _mod._git_blob_sha(_SCRUBBED_SCHEMA)
+        assert entry["mirror_blob"] == _mod._git_blob_sha(scrubbed.encode())
+        assert entry["doe_commit"] == "c" * 40
+
+    def test_stale_mirror_blob_alone_rewrites_the_entry_keeping_its_commit(
+        self, sandbox: dict[str, Path]
+    ) -> None:
+        blob = _mod._git_blob_sha(_SCRUBBED_SCHEMA)
+        (sandbox["schemas"] / "vendored-from.json").write_text(
+            json.dumps({"alpha.schema.json": {"doe_commit": "d" * 40, "blob": blob, "mirror_blob": "0" * 40}})
+        )
+        plan = _plan_stub(sandbox["schemas"] / "alpha.schema.json", _SCRUBBED_SCHEMA)
+
+        updates = _mod._manifest_updates([plan], "c" * 40)
+
+        assert updates["alpha.schema.json"]["doe_commit"] == "d" * 40
+        assert updates["alpha.schema.json"]["mirror_blob"] != "0" * 40
+
+        _mod._write_manifest(updates)
+        assert _mod._manifest_updates([plan], "c" * 40) == {}, "a current entry is left alone"
+
+    def test_refresh_backfills_from_local_bytes_and_skips_a_moved_schema(
+        self, sandbox: dict[str, Path], fake_clone: Path
+    ) -> None:
+        schemas = sandbox["schemas"]
+        (schemas / "alpha.schema.json").write_bytes(_SCRUBBED_SCHEMA)
+        (schemas / "moved.schema.json").write_bytes(b'{"edited": true}\n')
+        (schemas / "vendored-from.json").write_text(
+            json.dumps(
+                {
+                    "alpha.schema.json": {"doe_commit": "d" * 40, "blob": _mod._git_blob_sha(_SCRUBBED_SCHEMA)},
+                    "moved.schema.json": {"doe_commit": "d" * 40, "blob": "1" * 40},
+                }
+            )
+        )
+
+        assert _mod._refresh_mirror_blobs(schema_names=[], doe_clone_arg=str(fake_clone)) == 0
+
+        manifest = json.loads((schemas / "vendored-from.json").read_text())
+        assert len(manifest["alpha.schema.json"]["mirror_blob"]) == 40
+        assert manifest["alpha.schema.json"]["doe_commit"] == "d" * 40
+        assert "mirror_blob" not in manifest["moved.schema.json"]
+
+    def test_refresh_reads_the_base_from_doe_when_local_has_moved(
+        self, sandbox: dict[str, Path], fake_clone: Path
+    ) -> None:
+        sha = _commit_schema(fake_clone, "alpha", _SCRUBBED_SCHEMA)
+        schemas = sandbox["schemas"]
+        (schemas / "alpha.schema.json").write_bytes(b'{"local": "ahead"}\n')
+        (schemas / "vendored-from.json").write_text(
+            json.dumps({"alpha.schema.json": {"doe_commit": sha, "blob": _mod._git_blob_sha(_SCRUBBED_SCHEMA)}})
+        )
+
+        _mod._refresh_mirror_blobs(schema_names=["alpha"], doe_clone_arg=str(fake_clone))
+
+        manifest = json.loads((schemas / "vendored-from.json").read_text())
+        expected = _mod._mirror_blob_of("alpha.schema.json", _SCRUBBED_SCHEMA)
+        assert manifest["alpha.schema.json"]["mirror_blob"] == expected
+
+    def test_every_real_manifest_entry_carries_a_mirror_blob(self) -> None:
+        manifest = json.loads(_REAL_MANIFEST.read_text(encoding="utf-8"))
+        bad = [k for k, v in manifest.items() if len(str(v.get("mirror_blob", ""))) != 40]
+        assert not bad, bad

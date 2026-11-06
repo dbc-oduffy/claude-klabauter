@@ -1168,6 +1168,94 @@ def test_wrapper_leg_rejects_decoy_wrap_of_a_no_op_segment(grant_repo, free_mute
     assert "Detected: python -m pytest" in reason
 
 
+def _grant(grant_repo):
+    _write_live_session(grant_repo, _GRANT_SID)
+    assert grant_module.write_tier_u_grant(
+        "pm", "yes, run the full suite", session_id=_GRANT_SID, cwd=str(grant_repo)
+    )
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "with-suite-mutex -- zsh -c 'cd x && python3.13 -m pytest tests/'",
+        "with-suite-mutex -- bash -c 'cd x; pytest'",
+        "with-suite-mutex --owner-label gate -- sh -c 'true && python -m pytest'",
+        "with-suite-mutex -- zsh -c 'python3.13 -m pytest'",
+        "with-suite-mutex -- zsh -c 'cd x && bash -c \"cd y && pytest\"'",
+        "zsh -c 'cd x && with-suite-mutex -- pytest'",
+    ],
+)
+def test_wrapper_leg_accepts_a_suite_mutex_held_shell_c_body(grant_repo, free_mutex, cmd):
+    _grant(grant_repo)
+    assert _enveloped(guard.check)(_payload(cmd, grant_repo)) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "zsh -c 'with-suite-mutex -- true && python -m pytest'",
+        "zsh -c 'cd x && pytest'",
+        "with-suite-mutex -- true && zsh -c 'cd x && pytest'",
+        "with-suite-mutex -- true && python -m pytest tests/",
+    ],
+)
+def test_wrapper_leg_still_denies_a_shell_c_body_the_mutex_does_not_hold(
+    grant_repo, free_mutex, cmd
+):
+    _grant(grant_repo)
+    reason = _reason(_enveloped(guard.check)(_payload(cmd, grant_repo)))
+    assert "Route this through the suite mutex" in reason
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "with-suite-mutex -- true && python -m pytest",
+        "with-suite-mutex --wait -- true && pytest",
+        "FOO=1 with-suite-mutex -- true && pytest",
+        "pytest",
+        "cd x && pytest",
+    ],
+)
+def test_wrapper_remedy_never_doubles_the_wrapper(grant_repo, free_mutex, cmd):
+    _grant(grant_repo)
+    reason = _reason(_enveloped(guard.check)(_payload(cmd, grant_repo)))
+    assert "Route this through the suite mutex" in reason
+    assert "with-suite-mutex -- with-suite-mutex" not in reason
+    assert "with-suite-mutex -- FOO=1 with-suite-mutex" not in reason
+    if cmd.startswith(("with-suite-mutex", "FOO=1")):
+        assert "with-suite-mutex -- <the suite segment" in reason
+    else:
+        assert "with-suite-mutex -- %s\n" % cmd in reason
+
+
+_BROAD_M = "-m 'not cadence and not pending_fix and not designed_red'"
+
+
+def test_granted_broad_run_wrapper_deny_carries_no_selection_note(grant_repo, free_mutex):
+    _grant(grant_repo)
+    reason = _reason(_enveloped(guard.check)(_payload("pytest coordinator_core/ " + _BROAD_M, grant_repo)))
+    assert "Route this through the suite mutex" in reason
+    assert "filter selection, not collection" not in reason
+
+
+def test_granted_broad_run_mutex_deny_carries_no_selection_note(grant_repo, held_mutex):
+    _grant(grant_repo)
+    cmd = "with-suite-mutex -- pytest coordinator_core/ " + _BROAD_M
+    reason = _reason(_enveloped(guard.check)(_payload(cmd, grant_repo)))
+    assert "Wait for the in-flight suite run" in reason
+    assert "filter selection, not collection" not in reason
+
+
+def test_ungranted_and_subagent_broad_runs_keep_the_selection_note(grant_repo, free_mutex):
+    cmd = "pytest coordinator_core/ " + _BROAD_M
+    sub = _reason(_enveloped(guard.check)(_payload(cmd, grant_repo, agent_id=_AGENT_ID)))
+    assert "filter selection, not collection" in sub
+    ungranted = _reason(_enveloped(guard.check)(_payload("pytest coordinator_core/ -k expr", grant_repo)))
+    assert "filter selection, not collection" in ungranted
+
+
 def test_wrapper_leg_still_allows_a_legitimately_chained_wrap(grant_repo, free_mutex):
     """A real chained command (a benign ``cd`` ahead of the wrapped suite
     invocation) must keep working -- the decoy fix must not regress this."""

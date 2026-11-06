@@ -43,6 +43,9 @@ STAGE_REPLY_SCHEMA = {
     "additionalProperties": False,
     "properties": {
         "manifest_handle": HANDLE_SCHEMA,
+        # Trap: additionalProperties is False, so a reply key absent here is dropped by the
+        # relaying agent's structured output and the launcher falls back to a stale handle sha.
+        "twin_path": {"type": "string"},
         "error": {"type": "string"},
         "owed_em_ids": {"type": "array", "items": {"type": "string"}},
         "owed_plan": {"type": ["string", "null"]},

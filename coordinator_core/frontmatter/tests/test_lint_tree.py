@@ -7,6 +7,7 @@ reaches them.
 from __future__ import annotations
 
 import builtins
+import importlib.util
 import io
 import json
 import os
@@ -398,7 +399,12 @@ def test_warm_run_in_a_fresh_interpreter_never_imports_the_validator(tree, capsy
         "sys.stderr.write(json.dumps({'sv': 'coordinator_core.frontmatter.schema_validate' in sys.modules,"
         " 'dag': 'coordinator_core.dag' in sys.modules, 'rc': rc}))\n"
     )
-    env = dict(os.environ, PYTHONPATH=str(_CLAUDE_KLABAUTER_ROOT))
+    yaml_spec = importlib.util.find_spec('yaml')
+    if yaml_spec is None or not yaml_spec.submodule_search_locations:
+        pytest.skip('PyYAML is not importable by the test interpreter')
+    # The child must resolve yaml from the parent's location (user site or inherited path).
+    yaml_root = os.path.dirname(list(yaml_spec.submodule_search_locations)[0])
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(_CLAUDE_KLABAUTER_ROOT), yaml_root]))
     # The fixture fingerprints private copies; the child fingerprints the real files. Content is
     # identical, so the first child run only restamps the store and the second replays warm.
     for _ in range(2):

@@ -5524,7 +5524,13 @@ def check_schema_drift_batch(
             'This is NOT a drift finding — the comparison never ran.'
         )
 
-    base_blobs = {path: _recorded_base_blob(path) for path, _ref in pairs}
+    manifests = {directory: _load_manifest(directory) for directory in {p.parent for p, _r in pairs}}
+    base_blobs = {
+        path: _recorded_base_blob(path, manifests[path.parent]) for path, _ref in pairs
+    }
+    mirror_blobs = {
+        path: _recorded_mirror_blob(path, manifests[path.parent]) for path, _ref in pairs
+    }
     tokens = sorted(
         {f'{ref}:coordinator/schemas/{path.name}' for path, ref in pairs}
         | {blob for blob in base_blobs.values() if blob}
@@ -5544,6 +5550,8 @@ def check_schema_drift_batch(
             ref,
             blobs.get(f'{ref}:coordinator/schemas/{path.name}'),
             blobs.get(base_blobs[path]) if base_blobs[path] else None,
+            base_blob=base_blobs[path],
+            mirror_blob=mirror_blobs[path],
         )
         for path, ref in pairs
     ]
@@ -5552,21 +5560,48 @@ def check_schema_drift_batch(
 VENDORED_FROM_MANIFEST = 'vendored-from.json'
 
 
-def _recorded_base_blob(schema_path: Path) -> str | None:
+def _load_manifest(directory: Path) -> object:
+    """The parsed manifest beside the schemas, or None when absent or unparseable."""
+    try:
+        return json.loads((directory / VENDORED_FROM_MANIFEST).read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+
+
+def _manifest_blob_field(schema_path: Path, key: str, manifest: object) -> str | None:
+    if manifest is None:
+        manifest = _load_manifest(schema_path.parent)
+    try:
+        blob = manifest[schema_path.name][key]
+    except (KeyError, TypeError):
+        return None
+    return blob if isinstance(blob, str) and re.fullmatch(r'[0-9a-f]{40}', blob) else None
+
+
+def _recorded_base_blob(schema_path: Path, manifest: object = None) -> str | None:
     """The DoE blob sha `schema_path` was vendored from, per the manifest beside it.
 
     The manifest (`vendored-from.json`, written by `bin/claude-klabauter-revendor-schema.py`)
     keeps the base out of the schema bytes, which stay identical to DoE's. None
     when the manifest, or this schema's entry, is absent or malformed.
     """
-    try:
-        manifest = json.loads(
-            (schema_path.parent / VENDORED_FROM_MANIFEST).read_text(encoding='utf-8')
-        )
-        blob = manifest[schema_path.name]['blob']
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    return blob if isinstance(blob, str) and re.fullmatch(r'[0-9a-f]{40}', blob) else None
+    return _manifest_blob_field(schema_path, 'blob', manifest)
+
+
+def _recorded_mirror_blob(schema_path: Path, manifest: object = None) -> str | None:
+    """Git blob sha of the publish-scrubbed bytes of the recorded base, per the manifest.
+
+    A mirror whose scrub rewrote text inside the schema holds bytes that differ from
+    DoE's; a hash keeps the scrub's output recognisable without shipping its table.
+    None when absent or malformed.
+    """
+    return _manifest_blob_field(schema_path, 'mirror_blob', manifest)
+
+
+def _git_blob_sha(text: str) -> str:
+    """Git blob sha of `text` as LF UTF-8 bytes, computed without a spawn."""
+    data = text.replace('\r\n', '\n').replace('\r', '\n').encode('utf-8')
+    return hashlib.sha1(b'blob %d\0' % len(data) + data).hexdigest()  # noqa: S324
 
 
 def _direction_from_base(local: str, doe: str, base: str | None) -> str | None:
@@ -5585,8 +5620,13 @@ def _drift_verdict(
     ref: str,
     doe_content: str | None,
     base_content: str | None = None,
+    base_blob: str | None = None,
+    mirror_blob: str | None = None,
 ) -> "SchemaDriftError | None":
     """One vendored schema against its already-fetched DoE text: None, or the finding.
+
+    A local copy whose blob equals `mirror_blob` is the publish scrub of the recorded
+    base: it is judged against `base_blob` (DoE unmoved: no finding; moved: BEHIND).
 
     Pure of subprocess. `check_schema_drift`'s docstring is the contract for the
     message, including why the remedy is stated by direction rather than as a `cp`.
@@ -5607,6 +5647,12 @@ def _drift_verdict(
     local_content = schema_path.read_text(encoding='utf-8')
 
     if local_content != doe_content:
+        if mirror_blob and base_blob and _git_blob_sha(local_content) == mirror_blob:
+            if _git_blob_sha(doe_content) == base_blob:
+                return None
+            direction = DIRECTION_WE_BEHIND
+        else:
+            direction = _direction_from_base(local_content, doe_content, base_content)
         # Negative-spec: this message MUST NOT prescribe an unconditional
         # downward `cp`. It used to, and that string is a twice-confirmed trap:
         # (a) cross-repo/inbox 2026-07-30 (example-market-data-repo-em) -- a vendored
@@ -5618,7 +5664,6 @@ def _drift_verdict(
         # mirror-vs-fork is a per-file property and co-location in schemas/ is
         # not evidence of a shared contract. Both contents are in hand at this
         # raise, so direction is stated, never guessed by the reader.
-        direction = _direction_from_base(local_content, doe_content, base_content)
         remedy = {
             DIRECTION_WE_AHEAD: (
                 'Vendored copy was edited locally; DoE is still at the recorded base. '

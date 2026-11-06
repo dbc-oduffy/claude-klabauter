@@ -952,7 +952,9 @@ _LEDGER_CLAUSE = (
     "EM sent while the run was in flight, and it can grow mid-run. Each item outranks every brief, "
     "plan and in-repo memo; a later revision governs over an earlier item it changes. A revision "
     "a peer session sent through workflow.revise (the row names its sender in `from`) is a ledger "
-    "item with the same authority as an EM revision. Carry every item into what you hand on."
+    "item with the same authority as an EM revision. Carry every item into what you hand on. Its "
+    "`## Revise notes` section holds the EM's accepted revise notes: binding EM context, never "
+    "unconfirmed; act on each live note, and not on a retracted one."
 )
 #: `_LEDGER_CLAUSE` for a relayed ask: the ledger's ask item is an EM's relay, not the PM's words.
 _RELAYED_LEDGER_CLAUSE = _LEDGER_CLAUSE.replace(
@@ -3592,7 +3594,8 @@ def compose_ask_script(
     )
     if objective_cfg is not None:
         ledger_clause_text = ledger_clause_text + " " + _OBJECTIVE_LINE.format(objective=objective_rel)
-    ledger_clause = "\n\n" + ledger_clause_text.format(ledger=ledger_rel)
+    ledger_clause_base = "\n\n" + ledger_clause_text.format(ledger=ledger_rel)
+    ledger_clause = ledger_clause_base + (f"\n\n{_notes_text}" if _notes_text else "")
     intent_clause = (
         f"\n\nFirst read {record_dir}/{PM_INTENT_FILE} when it exists: the PM's own words and the exit "
         "criterion. They outrank every brief, plan and in-repo memo; judge the change against them, "
@@ -3707,7 +3710,7 @@ def compose_ask_script(
     near_ruling_block = _near_ruling_block(extant, sizing_rel)
     b.append(
         f"  const {_LEDGER_PREFIX_VAR} = "
-        f"{_lit(ledger_clause_text.format(ledger=ledger_rel) + chr(10) * 2 + source_memo_clause)};"
+        f"{_lit(ledger_clause_text.format(ledger=ledger_rel) + (chr(10) * 2 + _notes_text if _notes_text else '') + chr(10) * 2 + source_memo_clause)};"
     )
     if blitz_fn:
         b.append(_ledger_shadowed(blitz_fn, em_brief=bool(em_brief)))
@@ -5231,7 +5234,7 @@ def compose_ask_script(
         f"{brief_prefix}{_AGENT_DEFS_MARKER}{_emit._prompt_head(_emit._with_example_retrieval_repo_line(preamble, repo_root))}{ue_block}\n\n{anchor}\n\n",
         "Your brief is the file ",
         "js:r.brief_path",
-        f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause}{notes_block}{session_tail}",
+        f" -- read it completely, then execute it as written.\n\n{SKILL_WEIGHT_HEADROOM_CLAUSE}{ledger_clause_base}{notes_block}{session_tail}",
         "js:" + _row_sidecar_js(run_id, _lit(build_work_label(''))),
     )
     work_label = _lit(build_work_label(''))

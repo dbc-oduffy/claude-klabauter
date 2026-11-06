@@ -714,9 +714,11 @@ def format_report_lines(report: SettingsHomeReport) -> list[str]:
         stale_byte_copies = [n for n in report.forwarder_unverified if n in BYTE_COPIED_BIN_SOURCES]
         if stale_byte_copies:
             lines.append(
-                f"    remediation ({', '.join(stale_byte_copies)}): run "
-                "`install-claude-author-wrapper` -- rewrites the body to the registered engine's "
-                "wrapper source"
+                f"    remediation ({', '.join(stale_byte_copies)}): re-run "
+                "`python3 scripts/setup.py` -- the claude-author step (Step 3.5b) rewrites "
+                + ", ".join(f"<settings-home>/bin/{n}" for n in stale_byte_copies)
+                + " to the registered engine's wrapper source "
+                "(`install-claude-author-wrapper` writes ~/.local/bin/claude-author, not that file)"
             )
 
         if report.forwarder_excluded:

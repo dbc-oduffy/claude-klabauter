@@ -17,6 +17,7 @@ vendored schemas.
 
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 import shutil
@@ -290,6 +291,54 @@ def test_base_read_adds_no_spawn(spawns, fake_doe, vendored) -> None:
 
     assert len([argv for argv in spawns if "cat-file" in argv]) == 1
     assert len(spawns) == 2, spawns
+
+
+def _record_mirror(fake_doe: Path, vendored: list[Path], scrubbed_marker: str) -> None:
+    """Manifest as the mirror carries it: base blob plus the blob of the scrubbed local bytes."""
+    _record_base(fake_doe, vendored)
+    manifest_path = vendored[0].parent / "vendored-from.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    _put(vendored[0], _body(scrubbed_marker))
+    data = vendored[0].read_bytes()
+    manifest[vendored[0].name]["mirror_blob"] = hashlib.sha1(
+        b"blob %d\0" % len(data) + data
+    ).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def test_scrubbed_local_matching_mirror_blob_with_unmoved_doe_is_green(fake_doe, vendored) -> None:
+    _record_mirror(fake_doe, vendored, "scrubbed")
+
+    assert check_schema_drift_batch(_pairs(vendored), fake_doe) == [None] * len(vendored)
+
+
+def test_scrubbed_local_with_moved_doe_says_re_vendor(fake_doe, vendored) -> None:
+    _record_mirror(fake_doe, vendored, "scrubbed")
+    _doe_edit(fake_doe, "doe rewrote this")
+
+    error = check_schema_drift_batch(_pairs(vendored), fake_doe)[0]
+
+    assert "Re-vendor: python3 bin/claude-klabauter-revendor-schema.py handoff.schema.json" in str(error)
+    assert "Memo DoE" not in str(error)
+
+
+def test_edited_scrubbed_local_still_reports_drift(fake_doe, vendored) -> None:
+    _record_mirror(fake_doe, vendored, "scrubbed")
+    _put(vendored[0], _body("scrubbed and then edited"))
+
+    error = check_schema_drift_batch(_pairs(vendored), fake_doe)[0]
+
+    assert "Memo DoE" in str(error)
+
+
+def test_mirror_blob_without_base_blob_is_not_trusted(fake_doe, vendored) -> None:
+    _record_mirror(fake_doe, vendored, "scrubbed")
+    manifest_path = vendored[0].parent / "vendored-from.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest[vendored[0].name]["blob"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    assert check_schema_drift_batch(_pairs(vendored), fake_doe)[0] is not None
 
 
 def _load_revendor():

@@ -17,6 +17,10 @@ RETRACTS_FIELD = "retracts"
 REASON_CAP = 500
 DROP_FIELD = "staging_drop"
 _ID_RE = re.compile(r"^N[1-9][0-9]*$")
+_BINDING = "the EM's words, not PM verbatim; binding EM context, act on them"
+#: Heading over live notes in a leg prompt; the requirements.md view uses ``VIEW_HEADING``, same framing.
+HEADING = f"## EM revise notes ({_BINDING})"
+VIEW_HEADING = f"## Revise notes ({_BINDING})"
 
 
 def entries(path: Path, run_id: str) -> list[dict]:
@@ -126,7 +130,7 @@ def brief_block(items: list[dict]) -> str:
     notes = live(items)
     if not notes:
         return ""
-    lines = ["## EM revise notes (the EM's words, not PM verbatim; act on them)", ""]
+    lines = [HEADING, ""]
     for e in notes:
         lines += [f"{e['run']} {e['id']} at {e['at']}:", ""]
         # \x01 is the compose-time marker delimiter: left in, it splices note text into the script as JS.
@@ -137,13 +141,10 @@ def brief_block(items: list[dict]) -> str:
 
 
 def render_section(items: list[dict]) -> list[str]:
-    """Lines of the ``## Revise notes`` view section; ``[]`` when ``items`` is empty."""
+    """Lines of the requirements.md notes section, under ``VIEW_HEADING``; ``[]`` when ``items`` is empty."""
     if not items:
         return []
-    lines = [
-        "## Revise notes (EM framing: the EM's words, not PM verbatim; the ledger grades them)",
-        "",
-    ]
+    lines = [VIEW_HEADING, ""]
     for e in items:
         r = e.get("retracted")
         if r is None:

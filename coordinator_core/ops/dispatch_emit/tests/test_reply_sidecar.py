@@ -324,3 +324,16 @@ def test_write_reply_and_handle_for_without_a_run_script_refuse_by_name(tmp_path
 def test_check_relay_default_cause_unchanged():
     msg = gcc.check_relay("record-urlenc", "abc", "9", "0" * 64)
     assert msg.endswith("the agent's copy of the pieces is damaged")
+
+
+def test_stage_reply_schema_carries_every_key_the_stage_ops_reply_with():
+    """A key the stage ops return but this schema omits never reaches the run script (additionalProperties is False)."""
+    import inspect
+
+    from coordinator_core.ops.dispatch_emit import ask_gate, ask_stage, reply_sidecar
+
+    props = reply_sidecar.STAGE_REPLY_SCHEMA["properties"]
+    assert reply_sidecar.STAGE_REPLY_SCHEMA["additionalProperties"] is False
+    for mod in (ask_stage, ask_gate):
+        if '"twin_path"' in inspect.getsource(mod):
+            assert "twin_path" in props, f"{mod.__name__} replies with twin_path; the stage reply schema drops it"

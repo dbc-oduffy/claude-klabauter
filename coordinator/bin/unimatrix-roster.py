@@ -343,6 +343,14 @@ def log_label(entry):
     return str(entry["pid"])
 
 
+ENGINE_FIELDS = ("engine_sha", "engine_checkout_sha", "engine_freshness")
+
+
+def engine_fields(row):
+    """The far box's engine identity fields present on a roster row; nothing else is passed."""
+    return {k: row[k] for k in ENGINE_FIELDS if k in row}
+
+
 def mirror(row, cfg, say):
     e = row["entry"]
     far_sock = e["messagingSocketPath"]
@@ -355,7 +363,7 @@ def mirror(row, cfg, say):
     time.sleep(1)
     d = {k: v for k, v in e.items() if k not in ("pid", "procStart", "pidDomain", "messagingSocketPath")}
     d.update(pid=b.pid, procStart=proc_start(b.pid), pidDomain=pid_domain(),
-             messagingSocketPath=endpoint, farPid=e["pid"], **{FAR_SOCKET_FIELD: far_sock})
+             messagingSocketPath=endpoint, farPid=e["pid"], **{FAR_SOCKET_FIELD: far_sock}, **engine_fields(row))
     sess = sessions_dir()
     write_json_atomic(os.path.join(sess, f"{b.pid}.json"), d)
     with open(os.path.join(sess, key_name(b.pid, endpoint)), "w", encoding="utf-8") as kf:

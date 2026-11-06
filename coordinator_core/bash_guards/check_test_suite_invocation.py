@@ -1078,38 +1078,71 @@ def _expand_shell_c_segments(
     shell ``-c`` wrapper, the payload is a single segment (the
     ``_strip_command_prefix`` unwrap already covers it), or the depth cap is
     reached."""
+    held = _expand_shell_c_held(argv, depth, False)
+    return None if held is None else [(seg, joiner) for seg, joiner, _h in held]
+
+
+def _starts_with_suite_mutex(argv: Sequence[str]) -> bool:
+    """Is ``argv``'s command word (past ``VAR=value`` assignments) ``with-suite-mutex``?"""
+    idx = 0
+    while idx < len(argv) and _ENV_ASSIGN_RE.match(argv[idx]):
+        idx += 1
+    return idx < len(argv) and _base(argv[idx]).lower() in _WITH_SUITE_MUTEX_BASENAMES
+
+
+def _expand_shell_c_held(
+    argv: Sequence[str], depth: int, held: bool
+) -> Optional[List[Tuple[List[str], str, bool]]]:
+    """``_expand_shell_c_segments`` with a third field per segment: whether it
+    runs inside a ``with-suite-mutex`` that wraps the shell (``held`` seeds it
+    for ``argv`` itself; a payload segment inherits it, and a payload segment
+    that is itself a ``with-suite-mutex`` call holds its own payload)."""
     if depth >= _SHELL_C_EXPANSION_DEPTH:
         return None
     _rest, payload = _peel_prefix(argv)
     if payload is None:
         return None
+    held = held or _starts_with_suite_mutex(argv)
     inner_segments, inner_joiners, _bash = _raw_unbound_segment_argvs(payload, None)
-    flat: List[Tuple[List[str], str]] = []
+    flat: List[Tuple[List[str], str, bool]] = []
     for seg, joiner in zip(inner_segments, inner_joiners):
-        nested = _expand_shell_c_segments(seg, depth + 1)
+        nested = _expand_shell_c_held(seg, depth + 1, held)
         if nested is None:
-            flat.append((seg, joiner))
+            flat.append((seg, joiner, held))
         else:
-            flat.append((nested[0][0], joiner))
+            flat.append((nested[0][0], joiner, nested[0][2]))
             flat.extend(nested[1:])
     return flat if len(flat) > 1 else None
+
+
+def _expand_segments_held(
+    segments: List[List[str]], joiners: List[str]
+) -> Tuple[List[List[str]], List[str], List[bool]]:
+    """Replace each chained ``sh -c`` segment by its payload's segments; the
+    third list marks the segments that came out of a ``with-suite-mutex``-held
+    shell body."""
+    out_s: List[List[str]] = []
+    out_j: List[str] = []
+    out_h: List[bool] = []
+    for seg, joiner in zip(segments, joiners):
+        expanded = _expand_shell_c_held(seg, 0, False)
+        if expanded is None:
+            out_s.append(seg)
+            out_j.append(joiner)
+            out_h.append(False)
+            continue
+        for k, (inner, inner_joiner, inner_held) in enumerate(expanded):
+            out_s.append(inner)
+            out_j.append(joiner if k == 0 else inner_joiner)
+            out_h.append(inner_held)
+    return out_s, out_j, out_h
 
 
 def _expand_segments(
     segments: List[List[str]], joiners: List[str]
 ) -> Tuple[List[List[str]], List[str]]:
     """Replace each chained ``sh -c`` segment by its payload's segments."""
-    out_s: List[List[str]] = []
-    out_j: List[str] = []
-    for seg, joiner in zip(segments, joiners):
-        expanded = _expand_shell_c_segments(seg)
-        if expanded is None:
-            out_s.append(seg)
-            out_j.append(joiner)
-            continue
-        for k, (inner, inner_joiner) in enumerate(expanded):
-            out_s.append(inner)
-            out_j.append(joiner if k == 0 else inner_joiner)
+    out_s, out_j, _held = _expand_segments_held(segments, joiners)
     return out_s, out_j
 
 
@@ -2577,16 +2610,16 @@ def _command_wrapped_in_suite_mutex(
     stripped_segments: List[List[str]] = []
     wrapped_flags: List[bool] = []
     suite_shaped_flags: List[bool] = []
-    for variants in _segment_argv_variants(cmd, dialect):
+    raw_segments, raw_joiners, bash_leg = _raw_unbound_segment_argvs(cmd, dialect)
+    segments, joiners, held_flags = _expand_segments_held(raw_segments, raw_joiners)
+    all_variants = (
+        bind_literal_iterations(segments, joiners) if bash_leg else [[seg] for seg in segments]
+    )
+    for variants, held in zip(all_variants, held_flags):
         stripped, seg_detected = _judge_variants(variants, testpaths, cwd)
         if not stripped:
             continue
-        raw_argv = variants[0]
-        idx = 0
-        n = len(raw_argv)
-        while idx < n and _ENV_ASSIGN_RE.match(raw_argv[idx]):
-            idx += 1
-        wrapped = idx < n and _base(raw_argv[idx]).lower() in _WITH_SUITE_MUTEX_BASENAMES
+        wrapped = held or _starts_with_suite_mutex(variants[0])
         stripped_segments.append(stripped)
         wrapped_flags.append(wrapped)
         suite_shaped_flags.append(seg_detected is not None)
@@ -2688,7 +2721,14 @@ def _deny_reason_wrapper_required(
     route through ``with-suite-mutex`` and so would hold no mutex while it
     runs. Names the wrapped form of the caller's OWN command so the fix is a
     copy-paste, matching the register/length of the sibling deny texts in
-    this module."""
+    this module. A command already led by ``with-suite-mutex`` (a decoy leg
+    holding it while the suite segment runs bare) is never prefixed a second
+    time; the remedy names the suite segment instead."""
+    wrapped = (
+        "<the suite segment of your command>"
+        if _starts_with_suite_mutex(_tokens(cmd_safe.strip()))
+        else cmd_safe
+    )
     return (
         "Route this through the suite mutex so no other run overlaps "
         "yours:\n"
@@ -2698,7 +2738,7 @@ def _deny_reason_wrapper_required(
         "  Detected: %s\n"
         "  Command:  %s"
     ) % (
-        cmd_safe,
+        wrapped,
         "A suite command" if cloud_box else "A granted Tier-U/F command",
         detected,
         cmd_safe,
@@ -3891,10 +3931,13 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return None
 
     cmd_safe = _sanitize(cmd)
-    note = _selection_flag_note(segments_argv or ())
-
-    if any(_has_variable_path_operand(argv) for argv in segments_argv or ()):
-        note += _VARIABLE_PATH_OPERAND_NOTE
+    selection_note = _selection_flag_note(segments_argv or ())
+    variable_note = (
+        _VARIABLE_PATH_OPERAND_NOTE
+        if any(_has_variable_path_operand(argv) for argv in segments_argv or ())
+        else ""
+    )
+    note = selection_note + variable_note
 
     if is_subagent:
         return _deny(
@@ -3950,6 +3993,9 @@ def _check_core(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         grant_record: Optional[Dict[str, Any]] = None
         if not granted:
             granted, grant_record = _tier_u_grant(cwd)
+        if granted:
+            # A granted broad run chose its filter deliberately; the note is for the ungranted.
+            note = variable_note
         if not granted:
             by_tier = {entry.tier: entry.cmd for entry in configured}
             is_tie = (

@@ -50,7 +50,7 @@ def _assert_carried(repo, new_id):
     assert by_note[LIVE_A]["retracted"] is None and by_note[LIVE_B]["retracted"] is None
     assert by_note[GONE]["retracted"]["reason"] == RETRACT_REASON
     view = (rl.run_dir(repo, new_id) / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
-    assert "## Revise notes" in view
+    assert run_notes.VIEW_HEADING in view
     assert f"> {LIVE_A}" in view and f"> {LIVE_B}" in view
     assert f"> {GONE}" not in view and "was retracted" in view
 
@@ -86,7 +86,7 @@ def test_a_refire_composes_the_carried_notes_under_the_em_label(repo, monkeypatc
     assert reply["run_id"] != ASK
     assert {e["note"] for e in seen["kw"]["carried_notes"]} >= {LIVE_A, LIVE_B}
     text = seen["script"] + "\n".join((seen["kw"].get("staged_out") or {}).values())
-    label = "## EM revise notes (the EM's words, not PM verbatim; act on them)"
+    label = run_notes.HEADING
     assert label in text
     assert f"> {LIVE_A}" in text and f"> {LIVE_B}" in text
     assert f"> {GONE}" not in text
@@ -97,7 +97,7 @@ def test_a_fresh_fire_composes_no_notes_block(repo, monkeypatch):  # noqa: F811
     _fire(repo)
     assert list(seen["kw"]["carried_notes"]) == []
     text = seen["script"] + "\n".join((seen["kw"].get("staged_out") or {}).values())
-    assert "## EM revise notes" not in text
+    assert run_notes.HEADING not in text
 
 
 def test_a_blocked_rebind_carries_the_halted_warp_runs_notes(repo, composed, monkeypatch):  # noqa: F811
@@ -146,7 +146,7 @@ def test_a_halted_ask_run_behind_a_newer_unmarked_warp_dir_still_carries_its_not
     assert halted_run.halted_ask_run_for(repo, REL) is None
 
 
-EM_LABEL = "## EM revise notes (the EM's words, not PM verbatim; act on them)"
+EM_LABEL = run_notes.HEADING
 
 
 def _assert_leg_carries(leg_text, what):

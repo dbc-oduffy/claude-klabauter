@@ -115,7 +115,8 @@ def _split_peer_held(root: Path, ordered: list, own_session: str, run_id: str) -
         except Exception:  # noqa: BLE001 -- no base: the checkpoint walk stops at the first non-checkpoint commit
             run_base = None
     held = land_run._peer_held(
-        root, ordered, own_session or None, run_id, None, plan_rel=plan_rel, run_base=run_base)
+        root, ordered, own_session or None, run_id, None, plan_rel=plan_rel, run_base=run_base,
+        self_sessions=land_run._firing_sessions(root, run_id, own_session or None) if run_id else ())
     return tuple(p for p in ordered if p not in held), {p: list(held[p]) for p in ordered if p in held}
 
 

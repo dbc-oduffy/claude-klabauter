@@ -1351,6 +1351,34 @@ def retire_legacy_doe_launchers(claude_home_dir: str, settings_bin: str, check_o
     return retired
 
 
+def _converge_claude_author_body(
+    wrapper_src: str, link_target: str, settings_bin: str, *, check_only: bool
+) -> None:
+    """Make ``<settings_bin>/claude-author`` byte-equal to ``wrapper_src``.
+
+    Runs from Step 3.5b and from the standalone-plugin skip branch, so a
+    body that is another root's forwarder converges whichever branch the run
+    takes. Atomic (`os.replace`); a no-op when the bytes already match.
+    """
+    if os.path.isfile(link_target) and filecmp.cmp(wrapper_src, link_target, shallow=False):
+        return
+    if check_only:
+        print(f"claude_author_wrapper: would copy wrapper source onto {link_target}")
+        return
+    os.makedirs(settings_bin, exist_ok=True)
+    body_tmp = f"{link_target}.tmp-{os.getpid()}"
+    try:
+        shutil.copy2(wrapper_src, body_tmp)
+        os.chmod(body_tmp, os.stat(body_tmp).st_mode | 0o111)
+        os.replace(body_tmp, link_target)
+    except OSError as exc:
+        with contextlib.suppress(OSError):
+            os.unlink(body_tmp)
+        print(f"FATAL: failed to install claude-author wrapper body to {link_target}: {exc}", file=sys.stderr)
+        sys.exit(1)
+    print(f"claude_author_wrapper: body installed ({link_target})")
+
+
 def _install_claude_author_wrapper(
     coord_root: str,
     claude_home_dir: str,
@@ -1508,30 +1536,15 @@ def _install_claude_author_wrapper(
     # this pass lands the wrapper bytes there, so a body that is not this
     # root's source (trampoline, or another engine root's build) is converged
     # below -- the same bytes `install-claude-author-wrapper` copies through the link.
-    body_current = os.path.isfile(link_target) and filecmp.cmp(wrapper_src, link_target, shallow=False)
-
     if check_only:
         if os.path.islink(wrapper_dst) and os.readlink(wrapper_dst) == link_target:
             print(f"claude_author_wrapper: ready (symlink {wrapper_dst} -> {link_target})")
         else:
             print(f"claude_author_wrapper: would symlink {wrapper_dst} -> {link_target}")
-        if not body_current:
-            print(f"claude_author_wrapper: would copy wrapper source onto {link_target}")
+        _converge_claude_author_body(wrapper_src, link_target, settings_bin, check_only=True)
         return
 
-    if not body_current:
-        os.makedirs(settings_bin, exist_ok=True)
-        body_tmp = f"{link_target}.tmp-{os.getpid()}"
-        try:
-            shutil.copy2(wrapper_src, body_tmp)
-            os.chmod(body_tmp, os.stat(body_tmp).st_mode | 0o111)
-            os.replace(body_tmp, link_target)
-        except OSError as exc:
-            with contextlib.suppress(OSError):
-                os.unlink(body_tmp)
-            print(f"FATAL: failed to install claude-author wrapper body to {link_target}: {exc}", file=sys.stderr)
-            sys.exit(1)
-        print(f"claude_author_wrapper: body installed ({link_target})")
+    _converge_claude_author_body(wrapper_src, link_target, settings_bin, check_only=False)
 
     os.makedirs(local_bin, exist_ok=True)
     already_correct = os.path.islink(wrapper_dst) and os.readlink(wrapper_dst) == link_target
@@ -1939,6 +1952,23 @@ def _run_body(
             "working repo; the plugin loads through the marketplace",
             mandatory=False,
         )
+        # The launch chain is skipped, but the settings-home body is still
+        # verified byte-for-byte by `--check`; the forwarder loop never
+        # overwrites a present byte-copied name, so converge it here.
+        if os.name != "nt":
+            wrapper_src_path = str(claude_author_wrapper_source(Path(claude_klabauter_root)))
+            if os.path.isfile(wrapper_src_path) and (
+                check_only
+                or not _substrate_plane_check_module._refuse_machine_mutation(
+                    os.path.join(settings_bin, "claude-author"),
+                    what="converge the claude-author body",
+                    check_temp_path=False,
+                )
+            ):
+                _converge_claude_author_body(
+                    wrapper_src_path, os.path.join(settings_bin, "claude-author"), settings_bin,
+                    check_only=check_only,
+                )
     else:
         # -- Step 3.5b -- claude-author wrapper install --
         _install_claude_author_wrapper(coord_root, claude_home_dir, check_only, orch, claude_klabauter_root, settings_bin)

@@ -458,6 +458,13 @@ def _build_stub_content_root(base_dir: str) -> str:
 
 
 @pytest.fixture(autouse=True)
+def _forwarder_selfheal_off(monkeypatch):
+    """`hooks.sweep_boot` self-heals `<settings-home>/bin` forwarders; a test that
+    runs the handler must opt in (``monkeypatch.delenv``) rather than inherit a write."""
+    monkeypatch.setenv("COORDINATOR_FORWARDER_SELFHEAL_OFF", "1")
+
+
+@pytest.fixture(autouse=True)
 def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     """Redirect every home-resolution env var into a per-test throwaway dir.
 

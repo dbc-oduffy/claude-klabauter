@@ -99,6 +99,14 @@ def _resolve_this_repo_root() -> "Optional[str]":
 def _selfheal_forwarders() -> None:
     if os.environ.get("COORDINATOR_FORWARDER_SELFHEAL_OFF"):
         return
+    from coordinator_core._settings_home import RealSettingsHomeLeakError, settings_home
+
+    try:
+        settings_home()
+    except RealSettingsHomeLeakError:
+        raise
+    except Exception:
+        return
     try:
         from coordinator_core.install.forwarder_self_heal import self_heal_forwarders
 

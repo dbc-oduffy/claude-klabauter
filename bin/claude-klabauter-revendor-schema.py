@@ -494,18 +494,31 @@ def _load_manifest() -> dict[str, dict[str, str]]:
     return data
 
 
-def _manifest_updates(plans: list["_Plan"], sha: str) -> dict[str, dict[str, str]]:
-    """Entries to record: each plan's incoming blob, where the manifest lacks it.
+def _mirror_blob_of(name: str, incoming: bytes) -> str:
+    """Git blob sha of the bytes the publish scrub emits for schema `name` holding `incoming`."""
+    from coordinator_core.percolate.mirror_text import mirror_text
 
-    An entry whose blob already matches keeps its original commit.
+    rel = f"coordinator_core/frontmatter/schemas/{name}"
+    return _git_blob_sha(_lf(mirror_text(_lf(incoming).decode("utf-8"), rel).encode("utf-8")))
+
+
+def _manifest_updates(plans: list["_Plan"], sha: str) -> dict[str, dict[str, str]]:
+    """Entries to record: each plan's incoming blob and mirror blob, where the manifest lacks them.
+
+    An entry whose blob already matches keeps its original commit; a stale mirror_blob
+    alone rewrites only that key.
     """
     manifest = _load_manifest()
     updates: dict[str, dict[str, str]] = {}
     for plan in plans:
         key = plan.vendored_path.name
         blob = _git_blob_sha(plan.incoming)
-        if (manifest.get(key) or {}).get("blob") != blob:
-            updates[key] = {"doe_commit": sha, "blob": blob}
+        mirror_blob = _mirror_blob_of(key, plan.incoming)
+        entry = manifest.get(key) or {}
+        if entry.get("blob") != blob:
+            updates[key] = {"doe_commit": sha, "blob": blob, "mirror_blob": mirror_blob}
+        elif entry.get("mirror_blob") != mirror_blob:
+            updates[key] = {**entry, "mirror_blob": mirror_blob}
     return updates
 
 
@@ -1298,6 +1311,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--refresh-mirror-blobs",
+        action="store_true",
+        help=(
+            "Recompute mirror_blob in vendored-from.json for the named schemas (default: all) "
+            "from the local bytes, where those equal the recorded base. Needs no DoE clone."
+        ),
+    )
+    p.add_argument(
         "--decline",
         action="store_true",
         help=(
@@ -1403,6 +1424,52 @@ def _write_decline(
     return 0
 
 
+def _refresh_mirror_blobs(*, schema_names: list[str], doe_clone_arg: str | None = None) -> int:
+    """Recompute `mirror_blob` for manifest entries from the recorded DoE base bytes.
+
+    A local schema whose LF blob equals the entry's recorded `blob` is the DoE base, so
+    no DoE clone is read. A schema that has moved off its base reads the base from the
+    DoE clone at the entry's `doe_commit`; a base that cannot be read, or whose blob is not
+    the recorded one, is skipped, since a mirror_blob must describe the base.
+    """
+    clone: Path | None = None
+    manifest = _load_manifest()
+    names = [_normalize_schema_name(n) for n in schema_names] or [
+        k[: -len(_SCHEMA_SUFFIX)] for k in sorted(manifest) if k.endswith(_SCHEMA_SUFFIX)
+    ]
+    updates: dict[str, dict[str, str]] = {}
+    for name in names:
+        key = f"{name}{_SCHEMA_SUFFIX}"
+        path = _SCHEMAS_DIR / key
+        entry = manifest.get(key)
+        if entry is None or not path.exists():
+            _info(f"  skipped {name}: not in {_rel(_MANIFEST_FILE)} or not vendored")
+            continue
+        base = _lf(path.read_bytes())
+        if _git_blob_sha(base) != entry.get("blob"):
+            if clone is None:
+                try:
+                    clone = Path(doe_clone_arg).expanduser().resolve() if doe_clone_arg else resolve_doe_clone()
+                except DoeResolveError as exc:
+                    _die(str(exc))
+                    raise AssertionError  # unreachable
+            try:
+                base = _lf(_git_show_bytes(clone, str(entry.get("doe_commit")), f"{_DOE_SCHEMAS_REL}/{key}"))
+            except SystemExit:
+                base = b""
+            if _git_blob_sha(base) != entry.get("blob"):
+                _info(f"  skipped {name}: recorded base unreadable from the DoE clone")
+                continue
+        mirror_blob = _mirror_blob_of(key, base)
+        if entry.get("mirror_blob") != mirror_blob:
+            updates[key] = {**entry, "mirror_blob": mirror_blob}
+            _info(f"  {name}: mirror_blob {mirror_blob[:9]}")
+    if updates:
+        _write_manifest(updates)
+    _info(f"Refreshed {len(updates)} mirror_blob(s) in {_rel(_MANIFEST_FILE)}.")
+    return 0
+
+
 def _record_base(*, schema_names: list[str], doe_clone_arg: str | None, ref: str) -> int:
     """Record the vendored-from base for schemas already byte-identical to DoE.
 
@@ -1434,7 +1501,11 @@ def _record_base(*, schema_names: list[str], doe_clone_arg: str | None, ref: str
         if _lf(path.read_bytes()) != _lf(incoming):
             _info(f"  skipped {name}: bytes differ from DoE at {sha[:9]}")
             continue
-        updates[path.name] = {"doe_commit": sha, "blob": _git_blob_sha(incoming)}
+        updates[path.name] = {
+            "doe_commit": sha,
+            "blob": _git_blob_sha(incoming),
+            "mirror_blob": _mirror_blob_of(path.name, incoming),
+        }
         _info(f"  {name}: base {sha[:9]}")
     if updates:
         _write_manifest(updates)
@@ -1446,6 +1517,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     if args.list:
         return _print_list()
+    if args.refresh_mirror_blobs:
+        return _refresh_mirror_blobs(schema_names=list(args.schema), doe_clone_arg=args.doe_clone)
     if args.record_base:
         return _record_base(
             schema_names=list(args.schema), doe_clone_arg=args.doe_clone, ref=args.ref

@@ -84,7 +84,7 @@ def test_brief_block_quotes_live_only_and_is_not_pm_verbatim(tmp_path):
     _write(p, {"note": "keep\nthis", "at": "t1"}, {"note": "gone", "at": "t2"},
            {"retracts": "N2", "reason": "r", "at": "t3"})
     text = run_notes.brief_block(run_notes.entries(p, "run-7"))
-    assert text.startswith("## EM revise notes (the EM's words, not PM verbatim; act on them)")
+    assert text.startswith(run_notes.HEADING)
     assert "run-7 N1 at t1" in text and "> keep" in text and "> this" in text
     assert "gone" not in text and "N2" not in text
     assert "not requirements" not in "\n".join(
@@ -106,7 +106,8 @@ def test_render_section_live_retracted_and_call(tmp_path):
     _write(p, {"note": "line one\nline two", "at": "t1"}, {"note": "gone", "at": "t2"},
            {"retracts": "N2", "reason": "applied by hand", "at": "t3"})
     text = "\n".join(run_notes.render_section(run_notes.entries(p, "run-9")))
-    assert text.startswith("## Revise notes (EM framing")
+    assert text.startswith(run_notes.VIEW_HEADING)
+    assert "ledger grades" not in text and "unconfirmed" not in text
     assert "run-9 N1 at t1" in text
     assert "> line one" in text and "> line two" in text
     assert "N2" in text and "retracted (applied by hand)" in text and "not to be acted on" in text

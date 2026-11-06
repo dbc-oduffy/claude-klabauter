@@ -331,9 +331,10 @@ def test_byte_copied_member_diverging_from_this_roots_source_is_unverified(
         "body not this root's" in line and _BYTE_COPIED_NAME in line
         for line in format_report_lines(report)
     )
+    remediation = [line for line in format_report_lines(report) if "remediation" in line]
     assert any(
-        "install-claude-author-wrapper" in line for line in format_report_lines(report)
-    ), "a stale byte-copied body must name the one command that rewrites it"
+        "scripts/setup.py" in line and f"bin/{_BYTE_COPIED_NAME}" in line for line in remediation
+    ), "a stale byte-copied body must name the step that rewrites <settings-home>/bin/<name>"
 
 
 @_byte_copied_is_a_forwarder_slot
