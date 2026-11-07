@@ -93,6 +93,8 @@ fire a second driver to repair a notification failure.
 `agent_pipe.roster.resolve` reads `roster.json` first, then the SessionStart hook's `peers.json`.
 A resolved Codex identity still requires a working delivery leg. A `handed-off` delivery status
 means the leg started; it does not prove the receiving thread consumed the message.
+Codex workflow notices use `thread/queue/add` instead of starting another turn against the
+TUI's held writer. Their `queued` status confirms persistent queue acceptance, not consumption.
 
 ## Codex context compaction
 

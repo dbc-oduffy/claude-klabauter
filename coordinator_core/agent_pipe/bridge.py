@@ -213,6 +213,13 @@ def _deliver_codex(binding: dict, msg: BridgeMessage) -> Delivery:
         return Delivery("unroutable", "codex binding has no app-server argv", msg)
     text = _body(msg)
 
+    if msg.from_identity == "workflow.fire":
+        try:
+            codex_app_server.enqueue(argv, binding["id"], text, msg.id)
+        except Exception as exc:  # queue acceptance must survive a short-lived caller
+            return Delivery("unroutable", f"codex queue: {exc}", msg)
+        return Delivery("queued", None, msg)
+
     def run() -> None:
         try:
             for _ in codex_app_server.deliver(argv, binding["id"], text):

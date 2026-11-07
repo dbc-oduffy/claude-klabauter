@@ -176,7 +176,7 @@ class _Conn:
 
 
 @contextmanager
-def _connect(argv: list[str]) -> Iterator[_Conn]:
+def _connect(argv: list[str], *, experimental: bool = False, timeout: float = _HANDSHAKE_TIMEOUT_S) -> Iterator[_Conn]:
     """Spawn the proxy, upgrade, `initialize`/`initialized`; always kills the child."""
     try:
         proc = subprocess.Popen(
@@ -189,21 +189,43 @@ def _connect(argv: list[str]) -> Iterator[_Conn]:
         conn = _Conn(proc)
         conn.upgrade()
         # TRAP: the daemon drops frames written before it answers 101; wait for the reply.
-        deadline = time.monotonic() + _HANDSHAKE_TIMEOUT_S
+        deadline = time.monotonic() + timeout
         while not conn.upgraded.wait(0.05):
             if time.monotonic() > deadline or not conn.inbox.empty():
                 break
         if not conn.upgraded.is_set():
             raise AppServerUnreachable(-1, "no upgrade reply from the app-server")
-        conn.request("initialize", {"clientInfo": _CLIENT_INFO}, deadline, unreachable=True)
+        init = {"clientInfo": _CLIENT_INFO}
+        if experimental:
+            init["capabilities"] = {"experimentalApi": True}
+        conn.request("initialize", init, deadline, unreachable=True)
         conn.send({"jsonrpc": "2.0", "method": "initialized"})
         yield conn
     finally:
         proc.kill()
         try:
-            proc.wait(timeout=5)
+            proc.wait(timeout=min(5, timeout))
         except subprocess.TimeoutExpired:
             pass
+
+
+def enqueue(argv: list[str], thread_id: str, text: str, message_id: str) -> str:
+    """Persist a completion notice for a live TUI; never resume or start a competing writer.
+
+    The returned submission id confirms queue acceptance, not consumption by the TUI.
+    """
+    deadline = time.monotonic() + 0.2
+    with _connect(argv, experimental=True, timeout=0.2) as conn:
+        result = conn.request(
+            "thread/queue/add",
+            {"threadId": thread_id, "clientUserMessageId": message_id,
+             "input": [{"type": "text", "text": text}]},
+            deadline,
+        ) or {}
+        submission = result.get("queuedSubmission") or {}
+        if not submission.get("id"):
+            raise AppServerError(-1, "thread/queue/add returned no submission id")
+        return submission["id"]
 
 
 def loaded_threads(argv: list[str]) -> list[str]:

@@ -1,9 +1,10 @@
 """workflow_fire.notify -- one-shot completion message from a finished fire to its ``notify_to`` roster identity.
 
-``notify_terminal`` routes through ``agent_pipe.bridge`` (claude mailbox, codex/agy/grok legs). The agy,
-grok and codex legs hand off detached, so the call returns without waiting on the remote turn.
+``notify_terminal`` routes through ``agent_pipe.bridge`` (claude mailbox, codex/agy/grok legs).
+Codex notices wait for persistent queue acceptance, never a remote turn; agy/grok hand off detached.
 Trap: a ``handed-off`` Delivery means the leg started, not that the peer received the text; a later
 ``leg-failed`` lands in bridge.log.jsonl. ``notify_status`` records the Delivery status verbatim.
+``queued`` means Codex accepted the notice in its inbox, not that its TUI consumed it.
 Trap: the text reports driver exit, not workflow completion -- the headless driver exiting says nothing
 about whether the run reached commit or halt.
 """
