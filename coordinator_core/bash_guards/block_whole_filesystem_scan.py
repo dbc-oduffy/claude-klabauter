@@ -8,6 +8,8 @@ Denied when the search root is `/`, a drive root (`C:`, `C:/`, `C:` plus a backs
   - `grep -r` / `-R` / `--recursive` with a root operand.
   - recursive `grep`/`rg`, `find -exec` or `du` over a UE install root (`UE_5.x`), its
     Engine/Plugins or Engine/Source subtree, or a `scratch/` root; one run dir under scratch allows.
+    A target that stats as a regular file (resolved against the command's `cd` cwd) is a
+    read, not a walk, and allows.
 A root that appears only inside a pattern or option value (`-path /x/y`,
 `-name`, the pattern operand) is not a search root and is allowed.
 
@@ -18,6 +20,7 @@ A repo-root `grep -r`/`rg`/`find` is not a whole-drive scan: it allows here and 
 from __future__ import annotations
 
 import fnmatch
+import os
 import re
 from typing import Any, Dict, List, Optional
 
@@ -237,6 +240,8 @@ def _huge_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Any
         if eff and not (target.startswith(("/", "\\", "~")) or re.match(r"^[A-Za-z]:", target)):
             path = resolve_relative(eff, target) or target
         kind = _huge_tree_kind(path)
+        if kind and os.path.isfile(path):
+            continue
         if kind == "engine":
             return _record(
                 f"BLOCKED: `{toks[0]}` over {target} walks the UE engine tree and floods the file cache.",

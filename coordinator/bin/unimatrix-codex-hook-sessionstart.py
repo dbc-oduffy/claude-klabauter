@@ -1,15 +1,18 @@
 """Codex SessionStart hook: bind this Codex thread to a stable peer name in peers.json.
 
 Reads the hook payload on stdin ({"session_id": <thread id>, "cwd": ...}). Fires on every thread
-start, resume, clear and fork, so each one rebinds the same peer name to the current thread id; the
-router rescans peers.json, so no Codex restart is needed and nothing depends on the id staying put.
+start, resume, clear and fork, so each one rebinds the thread's peer name (kept while its checkout
+is unchanged) to the current thread id; the router rescans peers.json, so no Codex restart is needed
+and nothing depends on the id staying put.
 
-Peer name: the UNIMATRIX_PEER_NAME env var, else codex- plus the cwd basename. Prints a systemMessage so the
-registration shows in the TUI. Never fails the session: every path exits 0.
+Peer name: <checkout basename of the payload cwd>-<2 hex>, unique per thread, the same shape Claude
+sessions use; the agent kind is the peers.json vendor field. No env var is read. Prints a
+systemMessage so the registration shows in the TUI. Never fails the session: every path exits 0.
 
 register_peer() is the shared registration helper: it takes the vendor and target, so another
 vendor's SessionStart hook differs only in payload field names and vendor.
 """
+import hashlib
 import importlib.util
 import json
 import os
@@ -34,21 +37,51 @@ def load_sibling(name):
     return mod
 
 
-def peer_name(payload, env=None):
-    """Stable peer name: the env override, else codex-<cwd basename>, else codex."""
-    env = os.environ if env is None else env
-    explicit = NAME_RE.sub("-", (env.get("UNIMATRIX_PEER_NAME") or "").strip()).strip("-")
-    if explicit:
-        return explicit
+def checkout_name(cwd):
+    """Basename of the checkout holding cwd (nearest ancestor with .git), else of cwd itself."""
+    path = Path(cwd)
+    root = next((p for p in (path, *path.parents) if (p / ".git").exists()), path)
+    return NAME_RE.sub("-", root.name).strip("-")
+
+
+def peer_base(payload):
+    """Repo part of the peer name from the session's own payload cwd; "codex" when there is none.
+
+    UNIMATRIX_PEER_NAME is deliberately not read: it names the launching shell's own peer, and a
+    Codex started from that shell inherits it.
+    """
     cwd = payload.get("cwd")
-    base = NAME_RE.sub("-", Path(cwd).name).strip("-") if isinstance(cwd, str) and cwd else ""
-    return f"{VENDOR}-{base}" if base else VENDOR
+    return (checkout_name(cwd) if isinstance(cwd, str) and cwd else "") or VENDOR
+
+
+def session_name(rows, base, vendor, thread):
+    """<base>-<2 hex>, unique per thread: this thread's own bound name is kept, else a free suffix.
+
+    The suffix starts at a hash of the thread id so a name is stable across restarts and is only
+    moved off when another thread already holds it.
+    """
+    own = re.compile(re.escape(base) + r"-[0-9a-f]{2}")
+    taken = {}
+    for r in rows:
+        if isinstance(r, dict):
+            if r.get("vendor") == vendor and r.get("target") == thread and own.fullmatch(str(r.get("name"))):
+                return r["name"]
+            taken[r.get("name")] = r.get("target")
+    start = hashlib.sha1(thread.encode("utf-8")).digest()[0]
+    for i in range(256):
+        name = f"{base}-{(start + i) % 256:02x}"
+        if name not in taken:
+            return name
+    raise ValueError(f"no free {base}-<hex> peer name")
 
 
 def register_peer(peers_file, name, vendor, target):
     """Upsert {name, vendor, target} into peers_file atomically; return "added", "rebound" or "present".
 
-    The file's other rows are kept as written; a missing file is created. An unreadable or
+    name may be a callable taking the current rows and returning the name, so it is chosen under the lock.
+
+    The file's other rows are kept as written, except a row of the same vendor and target under
+    another name (a stale binding of this thread); a missing file is created. An unreadable or
     non-list file raises ValueError and is left untouched.
     """
     peers_file = Path(peers_file)
@@ -66,17 +99,26 @@ def register_peer(peers_file, name, vendor, target):
             rows = data.get("peers") if isinstance(data, dict) else data
             if not isinstance(rows, list):
                 raise ValueError(f"{peers_file}: expected a list of peers or {{\"peers\": [...]}}")
+        if callable(name):
+            name = name(rows)
         row = {"name": name, "vendor": vendor, "target": target}
+        stale = [r for r in rows if isinstance(r, dict) and r.get("name") != name
+                 and r.get("vendor") == vendor and r.get("target") == target]
+        rows = [r for r in rows if not any(r is s for s in stale)]
         status = "added"
         for i, existing in enumerate(rows):
             if isinstance(existing, dict) and existing.get("name") == name:
                 if existing.get("vendor") == vendor and existing.get("target") == target:
-                    return "present"
+                    if not stale:
+                        return "present"
+                    status = "rebound"
+                    break
                 rows[i] = row
                 status = "rebound"
                 break
         else:
             rows.append(row)
+            status = "rebound" if stale else "added"
         out = {**data, "peers": rows} if isinstance(data, dict) else rows
         tmp = Path(f"{peers_file}.{os.getpid()}.tmp")
         tmp.write_text(json.dumps(out, indent=2) + "\n", encoding="utf-8")
@@ -86,16 +128,22 @@ def register_peer(peers_file, name, vendor, target):
         lock.close()
 
 
-def run(payload, peers_file=None, env=None):
+def run(payload, peers_file=None):
     """Register the payload's thread; return the hook's stdout object, or None when nothing applies."""
     thread = payload.get("session_id")
     if not isinstance(thread, str) or not thread.strip():
         return None
     if peers_file is None:
         peers_file = load_sibling("unimatrix-peer-router").default_peers_file()
-    name = peer_name(payload, env)
-    status = register_peer(peers_file, name, VENDOR, thread)
-    return {"systemMessage": f"unimatrix: peer {name} bound to Codex thread {thread} ({status})"}
+    base = peer_base(payload)
+    chosen = []
+
+    def pick(rows):
+        chosen.append(session_name(rows, base, VENDOR, thread))
+        return chosen[0]
+
+    status = register_peer(peers_file, pick, VENDOR, thread)
+    return {"systemMessage": f"unimatrix: peer {chosen[0]} bound to Codex thread {thread} ({status})"}
 
 
 def main():

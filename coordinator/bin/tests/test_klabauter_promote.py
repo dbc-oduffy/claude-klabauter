@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
@@ -97,7 +98,13 @@ class _SubprocessSpy:
         tip_subject: str = _TIP_SUBJECT_OK,
         source_subject: str = "ship the thing",
         source_returncode: int = 0,
+        remote_main_stdout: Optional[str] = None,
+        remote_main_returncode: int = 0,
     ):
+        self._remote_main_stdout = (
+            f"{_SHA_A}\trefs/heads/main\n" if remote_main_stdout is None else remote_main_stdout
+        )
+        self._remote_main_returncode = remote_main_returncode
         self._ls_remote_stdout = ls_remote_stdout
         self._ls_remote_returncode = ls_remote_returncode
         self.for_each_ref_stdout = _REFS_PUSHED
@@ -127,6 +134,8 @@ class _SubprocessSpy:
             return _completed(0, self._dest, "")
         if "status" in cmd and "--porcelain=v2" in cmd:
             return _completed(self._status_returncode, self._status_stdout, self._status_stderr)
+        if cmd[:1] == ["git"] and "ls-remote" in cmd and "--symref" not in cmd:
+            return _completed(self._remote_main_returncode, self._remote_main_stdout, "")
         if cmd[:1] == ["git"] and "ls-remote" in cmd:
             return _completed(self._ls_remote_returncode, self._ls_remote_stdout, "")
         if cmd[:1] == ["git"] and "symbolic-ref" in cmd:
@@ -171,10 +180,14 @@ def _run_promote(
     tip_subject: str = _TIP_SUBJECT_OK,
     source_subject: str = "ship the thing",
     source_returncode: int = 0,
+    remote_main_stdout: Optional[str] = None,
+    remote_main_returncode: int = 0,
 ):
     dest = str(tmp_path / "dest")
     spy = _SubprocessSpy(
         dest=dest,
+        remote_main_stdout=remote_main_stdout,
+        remote_main_returncode=remote_main_returncode,
         status_stdout=status_stdout,
         status_returncode=status_returncode,
         status_stderr=status_stderr,
@@ -601,6 +614,58 @@ def test_confirm_also_fast_forwards_the_local_main_branch(tmp_path, monkeypatch)
     rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True)
     assert rc == _mod._EXIT_OK
     assert ["git", "-C", dest, "fetch", ".", "candidate:main"] in spy.calls
+
+
+def test_confirm_with_override_pushes_from_the_clone_never_the_live_dest(tmp_path, monkeypatch):
+    clone = tmp_path / "clone"
+    rc, spy, live = _run_promote(
+        tmp_path, monkeypatch, confirm=True, extra_argv=["--dest-root-override", str(clone)],
+    )
+    clone_dest = os.path.realpath(clone)
+    assert rc == _mod._EXIT_OK
+    assert _pushes(spy) == [["git", "-C", clone_dest, "push", "origin", "candidate:main"]]
+    git_dirs = {c[2] for c in spy.calls if c[:2] == ["git", "-C"]}
+    assert live not in git_dirs and clone_dest in git_dirs
+
+
+def test_override_nested_in_live_dest_is_a_usage_error_and_pushes_nothing(tmp_path, monkeypatch, capsys):
+    rc, spy, live = _run_promote(
+        tmp_path, monkeypatch, confirm=True,
+        extra_argv=["--dest-root-override", str(tmp_path / "dest" / "inner")],
+    )
+    assert rc == _mod._EXIT_USAGE
+    assert _pushes(spy) == []
+    assert "must be distinct" in capsys.readouterr().err
+
+
+def test_confirm_reads_remote_main_once_and_reports_promoted_when_it_equals_the_candidate(
+    tmp_path, monkeypatch, capsys,
+):
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True)
+    assert rc == _mod._EXIT_OK
+    assert capsys.readouterr().out.count("promoted 'candidate' onto 'main'") == 1
+    main_reads = [c for c in spy.calls if "ls-remote" in c and "refs/heads/main" in c]
+    assert main_reads == [["git", "-C", dest, "ls-remote", "origin", "refs/heads/main"]]
+
+
+@pytest.mark.parametrize("remote_main_stdout", [f"{_SHA_B}\trefs/heads/main\n", ""])
+def test_confirm_with_remote_main_not_at_candidate_fails_naming_both_shas(
+    tmp_path, monkeypatch, capsys, remote_main_stdout,
+):
+    rc, spy, dest = _run_promote(
+        tmp_path, monkeypatch, confirm=True, remote_main_stdout=remote_main_stdout,
+    )
+    assert rc == _mod._EXIT_FAIL
+    captured = capsys.readouterr()
+    assert "promoted 'candidate' onto" not in captured.out
+    assert _SHA_A in captured.err
+    assert (_SHA_B in captured.err) or ("unreadable" in captured.err)
+
+
+def test_confirm_with_unreadable_remote_fails_non_zero(tmp_path, monkeypatch, capsys):
+    rc, spy, dest = _run_promote(tmp_path, monkeypatch, confirm=True, remote_main_returncode=128)
+    assert rc == _mod._EXIT_FAIL
+    assert "promoted 'candidate' onto" not in capsys.readouterr().out
 
 
 def test_promote_candidate_takes_only_confirm_as_a_keyword():

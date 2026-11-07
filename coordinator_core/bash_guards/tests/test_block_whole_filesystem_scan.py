@@ -168,6 +168,40 @@ def test_allows_scoped_run_dir_and_non_recursive(cmd):
     assert _run(cmd) is None, cmd
 
 
+def _engine_file(tmp_path):
+    src = tmp_path / "UE_5.8" / "Engine" / "Plugins" / "MetaHuman" / "Source"
+    (src / "Pal" / "Public").mkdir(parents=True)
+    (src / "Pal" / "Public" / "Inst.h").write_text("x")
+    return src
+
+
+def test_engine_single_regular_file_passes_by_absolute_and_cd_relative_path(tmp_path):
+    src = _engine_file(tmp_path)
+    f = src / "Pal" / "Public" / "Inst.h"
+    for cmd in (
+        f"rg -n foo {f.as_posix()}",
+        f"cd {src.as_posix()} && rg -n 'a|b' Pal/Public/Inst.h",
+        f"cd {src.as_posix()} && grep -rn foo Pal/Public/Inst.h",
+        f"rg -n foo {f.as_posix()} {f.as_posix()}",
+    ):
+        assert _run(cmd) is None, cmd
+
+
+def test_engine_directory_glob_variable_and_missing_file_still_deny(tmp_path):
+    src = _engine_file(tmp_path)
+    for cmd in (
+        f"cd {src.as_posix()} && rg -n foo Pal",
+        f"cd {src.as_posix()} && rg -n foo Pal/Public",
+        f"cd {src.as_posix()} && rg -n foo Pal/Public/*.h",
+        f"cd {src.as_posix()} && rg -n foo $D",
+        f"cd {src.as_posix()} && rg -n foo Pal/Public/Missing.h",
+        f"cd {src.as_posix()} && rg -n foo Pal/Public/Inst.h {src.as_posix()}",
+        f"cd {src.as_posix()} && grep -rn foo Pal",
+    ):
+        out = _run(cmd)
+        assert out and out["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
+
+
 def test_scratch_cwd_with_bare_recursive_target_denies(tmp_path):
     d = tmp_path / "scratch"
     d.mkdir()

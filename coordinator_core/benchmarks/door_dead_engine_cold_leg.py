@@ -476,7 +476,7 @@ def dead_door_leg(engine: DeadEngine, runs: int, accept_rc: Sequence[int] = (0,)
 
 def bounded_wait_leg(engine: DeadEngine, runs: int) -> dict:
     """Candidate A components: boot-to-ready wall time, server CPU at ready, and the warm door call."""
-    wall, cpu, warm = [], [], []
+    wall, cpu, warm, warm_procs = [], [], [], []
     for _ in range(runs):
         engine.reset()
         started = time.monotonic()
@@ -489,13 +489,14 @@ def bounded_wait_leg(engine: DeadEngine, runs: int) -> dict:
             cpu.append(ready_cpu)
             if not engine.is_warm_answer(engine.door_call()):
                 raise RuntimeError("a door call after the server answered still fell through cold")
-            warm.append(measure_process([str(engine.door_path), OP], engine.env(), str(engine.root))
-                        ["process_time_ms"])
+            res = measure_process([str(engine.door_path), OP], engine.env(), str(engine.root))
+            warm.append(res["process_time_ms"])
+            warm_procs.append(res["procs_per_call"])
         finally:
             server.terminate()
             engine.reset()
     return {"boot_ready_wall_ms": summarize(wall), "boot_ready_cpu_ms": summarize(cpu),
-            "warm_call_ms": summarize(warm), "runs": runs}
+            "warm_call_ms": summarize(warm), "warm_procs_per_call": summarize(warm_procs), "runs": runs}
 
 
 def floors_leg(engine: DeadEngine, runs: int) -> dict:
