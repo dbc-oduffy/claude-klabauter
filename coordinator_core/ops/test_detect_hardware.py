@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import detect_hardware as dh
 
 

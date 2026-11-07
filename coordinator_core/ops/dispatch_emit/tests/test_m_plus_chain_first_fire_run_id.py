@@ -15,6 +15,8 @@ from coordinator_core.hooks.tests.test_multi_ask_sibling_runs_e2e import _run_m_
 from coordinator_core.ops.dispatch_emit import ask_compose, op
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put
 
+pytestmark = pytest.mark.complete
+
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 _RUN_ID_REASON = "emit reply run_id is not a run id"
 

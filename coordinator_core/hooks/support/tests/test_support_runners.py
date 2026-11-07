@@ -18,6 +18,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks.support import (
     forwarder_resolve,
     guard_runner,

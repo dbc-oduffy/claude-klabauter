@@ -20,6 +20,8 @@ from coordinator_core.roadmap.probe_store import (
     store_path,
 )
 
+pytestmark = pytest.mark.complete
+
 REL = "docs/plans/p.md"
 REPLY = {"plan": REL, "verdict": "PREPPED", "process_ms": 9}
 

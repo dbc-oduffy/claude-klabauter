@@ -45,6 +45,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.frontmatter.schema_validate import (
     parse_frontmatter,
     validate,

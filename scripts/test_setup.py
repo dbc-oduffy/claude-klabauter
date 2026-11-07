@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _SETUP_PY_PATH = Path(__file__).resolve().parent / "setup.py"
 
 

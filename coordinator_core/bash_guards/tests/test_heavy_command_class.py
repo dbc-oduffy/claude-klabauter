@@ -5,6 +5,8 @@ import pytest
 from coordinator_core.bash_guards._heavy_admission_contract import HeavyClass as H
 from coordinator_core.bash_guards._heavy_command_class import classify
 
+pytestmark = pytest.mark.complete
+
 CWD = {"cwd": "."}
 
 HEAVY = [

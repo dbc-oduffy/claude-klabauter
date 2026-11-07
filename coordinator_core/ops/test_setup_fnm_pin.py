@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.setup_fnm_pin import main
 from coordinator_core.testing.fake_machine_local import write_fake_executable
 

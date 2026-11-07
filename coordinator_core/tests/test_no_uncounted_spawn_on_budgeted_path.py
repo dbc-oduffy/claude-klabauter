@@ -272,6 +272,8 @@ from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     _load_file_records,
 )
 
+pytestmark = pytest.mark.complete
+
 #: The eight LIVE `spawn_count_budget` rows in `coordinator_core/benchmarks/budget-manifest.json`,
 #: manifest key -> (relpath, tuple-of-top-level-entrypoint-function-names). Resolved and verified
 #: against `state/audits/2026-08-19-opro-03-c08-budgeted-op-spawn-trace.md`'s per-op sections and

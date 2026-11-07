@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.write_guards import block_consumed_handoff_edit as guard
 
 

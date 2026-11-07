@@ -10,7 +10,10 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="POSIX transport")
+pytestmark = [
+    pytest.mark.skipif(sys.platform == "win32", reason="POSIX transport"),
+    pytest.mark.complete,
+]
 
 _LIB = Path(__file__).resolve().parents[1] / "lib"
 if str(_LIB) not in sys.path:

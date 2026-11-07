@@ -21,6 +21,8 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
 )
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
 
+pytestmark = pytest.mark.complete
+
 _BASE = "abc1234def"
 _TERMINAL = "fed4321cba"
 _SESSION = "9d860631-c114-462a-a6ee-f685cc671ced"

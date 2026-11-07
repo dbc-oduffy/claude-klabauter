@@ -24,6 +24,8 @@ from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.session_baton import store
 
+pytestmark = pytest.mark.complete
+
 SENTINEL = ("SENTINEL-EM-CONTEXT-7f3a " + "pinned citation form [rag:tool(args)]. " * 8).strip()
 SID = "sid-arrival"
 VERBATIM = "split these two jobs please, they are unrelated"

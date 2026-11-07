@@ -7,6 +7,9 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 
 
+pytestmark = pytest.mark.complete
+
+
 def _slice(label, rows=(), writes=None):
     return c.AskSlice(label=label, ask=label, rows=tuple(rows), writes=writes)
 

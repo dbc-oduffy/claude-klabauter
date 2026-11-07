@@ -9,6 +9,8 @@ import pytest
 from coordinator_core.benchmarks import terminal_sizing_drain_budget as bench
 from coordinator_core.ops.fleet import terminal_sizing_drain as drain_mod
 
+pytestmark = pytest.mark.complete
+
 
 @pytest.fixture(scope="module")
 def corpus(tmp_path_factory) -> Path:

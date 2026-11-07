@@ -8,6 +8,9 @@ import coordinator_core.ipc as ipc
 from coordinator_core.invoke.__main__ import _dispatch_argv
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture(autouse=True)
 def _registered_ping_op():
     saved = ipc._REGISTRY.get("test.warm_fail_hard_ping")

@@ -25,6 +25,8 @@ import pytest
 
 from coordinator_core.ops import check_native_door_interpreter_handoff as guard
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FIXTURES = Path(__file__).resolve().parent / "fixtures" / "native_door_handoff"
 

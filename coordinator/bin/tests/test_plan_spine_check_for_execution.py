@@ -4,6 +4,10 @@ and LEGACY-READS stay advisory always; paths compare backslash-insensitive; the
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.util
 import sys
 from pathlib import Path

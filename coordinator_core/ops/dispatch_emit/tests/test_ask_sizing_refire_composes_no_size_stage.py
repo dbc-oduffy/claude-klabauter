@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.benchmarks import sizing_assemble_process_budget as fixture
 from coordinator_core.hooks import submit_engine_ask as hook
 from coordinator_core.ops.dispatch_emit import ask_compose

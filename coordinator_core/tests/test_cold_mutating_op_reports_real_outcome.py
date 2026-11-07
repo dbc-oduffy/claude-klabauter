@@ -9,6 +9,10 @@ import coordinator_core.ipc as ipc
 from coordinator_core import dispatch_abandon
 from coordinator_core.telemetry import op_latency
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _OP = "ceremony.fake_cold_mutating"
 
 

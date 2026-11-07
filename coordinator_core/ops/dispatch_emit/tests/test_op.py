@@ -26,6 +26,8 @@ from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
 from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing, repo  # noqa: F401
 
+pytestmark = pytest.mark.complete
+
 _FIXTURE_PLAN = textwrap.dedent(
     """\
     ---

@@ -7,6 +7,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit import research_emit as re_
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused

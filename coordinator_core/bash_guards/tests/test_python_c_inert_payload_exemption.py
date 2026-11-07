@@ -47,6 +47,8 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.bash_guards.tests import test_block_subagent_commit as base
 
+pytestmark = pytest.mark.complete
+
 HELPER = "coordinator/bin/scoped-git-commit"
 
 # ---------------------------------------------------------------------------

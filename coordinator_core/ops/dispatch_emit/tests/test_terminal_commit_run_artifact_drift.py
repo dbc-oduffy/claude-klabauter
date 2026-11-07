@@ -132,7 +132,8 @@ def test_reread_is_reported_beside_the_runs_landed_artifacts(tmp_path, monkeypat
     out, _ = _fire(tmp_path, monkeypatch, drift={OWN})
     assert out["committed"] is True, out
     assert out["run_artifacts"] == {
-        "landed": [OWN, "state/warp/run-1/run.json"], "withheld": {}, "reread": [OWN],
+        "landed": [OWN], "withheld": {}, "reread": [OWN],
+        "ignored_excluded": ["state/warp/run-1/run.json"],
     }, out
 
 

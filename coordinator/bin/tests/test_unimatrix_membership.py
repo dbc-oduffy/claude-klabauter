@@ -9,7 +9,10 @@ import pytest
 
 BIN = Path(__file__).resolve().parents[1]
 
-pytestmark = pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="ssh-keygen required")
+pytestmark = [
+    pytest.mark.complete,
+    pytest.mark.skipif(shutil.which("ssh-keygen") is None, reason="ssh-keygen required"),
+]
 
 
 def load(name):

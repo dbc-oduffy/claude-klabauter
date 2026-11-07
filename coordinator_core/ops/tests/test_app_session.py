@@ -35,6 +35,8 @@ from pathlib import Path
 import psutil
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import _app_session_runtime as runtime_mod
 from coordinator_core.ops import _git_root_util
 from coordinator_core.ops import _registry_map

@@ -252,14 +252,25 @@ def _stamp_coded_commit(
     if landing_hold.is_held(str(worktree_root), session_id):
         landing_hold.defer(str(worktree_root), session_id, "coded_stamp", params)
         return {"rows_coded": rows_coded, "coded_sha": None, "coded_deferred": "session-landing-hold"}
+    from coordinator_core.git import ref_cas_retry
+
+    def _cas_lost(r) -> bool:
+        return isinstance(r, dict) and not r.get("committed") and ref_cas_retry.is_ref_moved_text(r.get("error"))
+
+    overlap = None
     try:
-        reply = commit_v2(params, repo_root)
+        reply, overlap = ref_cas_retry.retry_ref_moved(
+            worktree_root, paths, lambda: commit_v2(params, repo_root), _cas_lost
+        )
     except Exception as exc:  # noqa: BLE001 -- surfaced; product commit stands
         reply = {"committed": False, "error": repr(exc)}
     if not isinstance(reply, dict) or not reply.get("committed"):
         restore()
         detail = reply.get("error") if isinstance(reply, dict) else reply
-        return {"coded_stamp_error": f"coded-stamp commit did not land: {detail!r}"}
+        lead = "retry: ref moved; " if _cas_lost(reply) else ""
+        if overlap:
+            lead = f"retry: ref moved onto a stamped path ({overlap}); "
+        return {"coded_stamp_error": f"{lead}coded-stamp commit did not land: {detail!r}"}
     out = {"rows_coded": rows_coded, "coded_sha": reply.get("sha"), "_committed": paths, **lost_receipt}
     if flip_result is not None:
         out["_flip"] = flip_result

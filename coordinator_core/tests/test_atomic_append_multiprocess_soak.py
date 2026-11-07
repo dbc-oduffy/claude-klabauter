@@ -7,6 +7,8 @@ import pytest
 
 from coordinator_core import atomic_append
 
+pytestmark = pytest.mark.complete
+
 _WORKERS = 6
 _CALLS = 200
 _SINK_NAMES = ("bad.jsonl", "good_a.jsonl", "good_b.jsonl")

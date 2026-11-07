@@ -21,7 +21,7 @@ import pytest
 from coordinator_core.git import commit_walk, git_objects, rollback_check
 from coordinator_core.git.rollback_check import ABSENT, find_exact_blob_rollbacks
 
-pytestmark = pytest.mark.slow
+pytestmark = [pytest.mark.slow, pytest.mark.complete]
 
 _COMMITS = 1100
 _PATHS = 60

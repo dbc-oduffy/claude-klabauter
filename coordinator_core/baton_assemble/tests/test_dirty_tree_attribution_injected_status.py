@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.baton_assemble as ba
 from coordinator_core.pickup_assemble.tests._git_harness import (
     git as _git,

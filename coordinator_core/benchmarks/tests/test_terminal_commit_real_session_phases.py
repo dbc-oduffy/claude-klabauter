@@ -7,6 +7,8 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_real_session_shape as shape
 from coordinator_core.ops.dispatch_emit import process_artifact_policy, terminal_commit
 
+pytestmark = pytest.mark.complete
+
 _PRE_COMMIT_LEGS = (
     "locate_run_dir",
     "contested_by_live_peers",

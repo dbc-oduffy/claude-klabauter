@@ -26,6 +26,8 @@ import pytest
 
 from coordinator_core.benchmarks import validate_commit_machine_a_replay as replay
 
+pytestmark = pytest.mark.complete
+
 _ROWS = replay.load_rows()["rows"]
 
 

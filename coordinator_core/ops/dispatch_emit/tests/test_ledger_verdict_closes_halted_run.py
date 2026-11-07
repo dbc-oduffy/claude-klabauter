@@ -5,6 +5,8 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import yaml
 
 from coordinator_core.benchmarks.budget import load_manifest

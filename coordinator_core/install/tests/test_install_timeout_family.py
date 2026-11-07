@@ -32,6 +32,8 @@ import pytest
 
 from coordinator_core.install import timeouts
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _INSTALL_PKG = _REPO_ROOT / "coordinator_core" / "install"
 

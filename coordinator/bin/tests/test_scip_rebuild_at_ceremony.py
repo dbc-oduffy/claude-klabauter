@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _TOOL = Path(__file__).resolve().parents[1] / "scip-rebuild-at-ceremony.py"
 
 

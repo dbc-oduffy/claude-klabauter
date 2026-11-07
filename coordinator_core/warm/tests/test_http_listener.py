@@ -13,6 +13,9 @@ import pytest
 from coordinator_core.warm import http_listener
 
 
+pytestmark = pytest.mark.complete
+
+
 def _post(port: int, payload: dict, token: str | None = None, timeout: float = 5.0):
     body = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(

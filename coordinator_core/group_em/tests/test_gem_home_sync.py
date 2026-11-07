@@ -10,6 +10,8 @@ import pytest
 from coordinator_core.group_em import gem_home, gem_home_sync
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = pytest.mark.complete
+
 
 def _git(cwd: Path, *args: str) -> str:
     res = subprocess.run(

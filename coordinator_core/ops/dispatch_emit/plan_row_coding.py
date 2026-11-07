@@ -383,6 +383,40 @@ def _is_foreign_executor_commit(message: str, plan_path: str) -> bool:
     return False
 
 
+_DELIVERABLE_TRAILER = re.compile(r"^Deliverable-Id:[ \t]*(?P<v>\S+)[ \t]*$", re.MULTILINE)
+_PLAN_DELIVERABLE = re.compile(r"^deliverable_id:[ \t]*[\"']?(?P<v>[^\"'\s#]+)", re.MULTILINE)
+
+
+def _plan_deliverable_id(worktree_root: Path, plan_path: str) -> Optional[str]:
+    """The ``deliverable_id`` of the plan's frontmatter, None when the plan has none."""
+    text = read_rel(worktree_root, plan_path) or ""
+    head = text.split("\n---", 1)[0] if text.startswith("---") else ""
+    m = _PLAN_DELIVERABLE.search(head)
+    return m.group("v") if m else None
+
+
+def _carries_foreign_identity(message: str, deliverable_id: Optional[str]) -> bool:
+    """True when the commit names deliverables and none is this plan's: another deliverable's work."""
+    named = {m.group("v") for m in _DELIVERABLE_TRAILER.finditer(message)}
+    return bool(named) and (deliverable_id is None or deliverable_id not in named)
+
+
+_WITHHELD_LINE = re.compile(r"^Checkpoint-Withheld:[ \t]*(?P<v>\S.*?)[ \t]*$", re.MULTILINE)
+
+
+def _withheld_paths(message: str) -> frozenset:
+    """Forward-slash path of every ``Checkpoint-Withheld:`` line: writes a checkpoint commit held back."""
+    return frozenset(m.group("v").replace("\\", "/").removeprefix("./") for m in _WITHHELD_LINE.finditer(message or ""))
+
+
+def _carries_row_evidence(message: str, deliverable_id: Optional[str], plan_path: str) -> bool:
+    """True when the commit names this plan: its ``Deliverable-Id`` trailer or a ``Halt-Plan`` line."""
+    if deliverable_id is not None and deliverable_id in {m.group("v") for m in _DELIVERABLE_TRAILER.finditer(message)}:
+        return True
+    m = _HALT_PLAN_LINE.search(message)
+    return m is not None and m.group("v") == plan_path
+
+
 def _tree_entry(common_dir: Path, tree_sha: str, name: str, absent):
     """``(mode, sha)`` of the ``name`` entry of one tree, ``absent`` when it has none, None if unreadable."""
     from coordinator_core.git.git_objects import read_object
@@ -399,6 +433,7 @@ def _tree_entry(common_dir: Path, tree_sha: str, name: str, absent):
 def outside_landings(
     worktree_root: Path, terminal_sha: str, plan_path: Optional[str], chunks: list, *,
     include_start: bool = False, after_creation: bool = False, skip_foreign_runs: bool = False,
+    require_evidence: bool = False,
 ) -> dict:
     """Chunk id -> landing shas (newest first) of commits outside this run that landed every declared write.
 
@@ -408,6 +443,10 @@ def outside_landings(
     than the plan counts. A commit lands a path when its blob differs from its first
     parent's. A chunk is present only when every entry of ``paths`` has a landing commit.
     ``skip_foreign_runs`` also steps over another plan's checkpoint and a halt-record commit naming another plan.
+    A merge commit and a commit whose ``Deliverable-Id`` trailers exclude the plan's deliverable are always
+    stepped over: a touch of a shared file by someone else's work is not this row's landing.
+    ``require_evidence`` also steps over every commit that does not name this plan (its ``Deliverable-Id``
+    or a ``Halt-Plan`` line), so a bare file touch is never credit.
     """
     from coordinator_core.git.commit_walk import commit_meta as _commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -453,6 +492,7 @@ def outside_landings(
             blobs[key] = result
         return blobs[key]
 
+    deliverable_id = _plan_deliverable_id(worktree_root, plan_path)
     common_dir = resolve_git_common_dir(worktree_root)
     meta = commit_meta(common_dir, terminal_sha)
     parents = (meta or {}).get("parents") or []
@@ -477,6 +517,10 @@ def outside_landings(
         )
         if skip_foreign_runs and _is_foreign_executor_commit(message, plan_path):
             stepped_over = True
+        if len(meta.get("parents") or []) > 1 or _carries_foreign_identity(message, deliverable_id):
+            stepped_over = True
+        if require_evidence and not _carries_row_evidence(message, deliverable_id, plan_path):
+            stepped_over = True
         if not stepped_over:
             walked.append((sha, parent))
         if parent is None:
@@ -489,7 +533,8 @@ def outside_landings(
             hit = next(
                 (
                     csha for csha, parent in walked
-                    if _blob_at_commit(common_dir, csha, path)
+                    if not _withheld_paths((commit_meta(common_dir, csha) or {}).get("message") or "").intersection(chunk.paths)
+                    and _blob_at_commit(common_dir, csha, path)
                     != (_blob_at_commit(common_dir, parent, path) if parent else ABSENT)
                 ),
                 None,
@@ -517,7 +562,8 @@ def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list
     plan file's creation commit, itself excluded, so a write at or before the plan never counts. A row with no ``writes`` is absent.
 
     Trap: another plan's checkpoint or another run's halt-record commit landing a shared file is that
-    plan's work, not this row's, so such commits are never credited (``skip_foreign_runs``)."""
+    plan's work, not this row's, so such commits are never credited (``skip_foreign_runs``). Merge
+    commits and commits not naming this plan (``Deliverable-Id`` or ``Halt-Plan``) are never credited either."""
     from types import SimpleNamespace
 
     from coordinator_core.git.git_state import head_sha
@@ -534,6 +580,6 @@ def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list
         cid: shas[0]
         for cid, shas in outside_landings(
             worktree_root, head, plan_path, chunks, include_start=True, after_creation=True,
-            skip_foreign_runs=True,
+            skip_foreign_runs=True, require_evidence=True,
         ).items()
     }

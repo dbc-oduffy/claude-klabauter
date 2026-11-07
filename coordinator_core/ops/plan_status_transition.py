@@ -1563,6 +1563,35 @@ def _with_register_tally(fm_text: str, worktree_root: Path, plan_display: str) -
     return write_fm_nested_field(fm_text, "review_stamp", "".join("  " + l + "\n" for l in dumped.splitlines()))
 
 
+def _register_coverage_refusal(split, worktree_root: Path) -> Optional[str]:
+    """The `register: R<n> not_built (...)` sentence for a plan whose `register_claims` cites a sizing
+    holding a register row no spine row claims or whose claimants' writes are all absent; None for a
+    plan without `register_claims`, an unreadable sizing (the tally leg refuses that), or no spine."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops import requirement_register as rr
+    from coordinator_core.ops import wiring_contract
+    from coordinator_core.ops._sizing_citation import resolve_sizing_citation
+    from coordinator_core.ops.dispatch_emit.requirements_ledger import ruled_out_ids
+
+    sizing_rel, _ = rr.plan_claims(split.fm_text)
+    if not sizing_rel:
+        return None
+    sizing_path = resolve_sizing_citation(worktree_root, sizing_rel)
+    if sizing_path is None:
+        return None
+    try:
+        register = rr.read_register(sizing_path.read_text(encoding="utf-8"))
+        located = locate_fenced_block(split.body_with_leading_newline)
+        spine = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+    except (OSError, yaml.YAMLError):
+        return None
+    if register is None or not isinstance(spine, list):
+        return None
+    return wiring_contract.register_coverage_refusal(
+        spine, register.rows, worktree_root, exclude=ruled_out_ids(register.rows)
+    )
+
+
 def _close_halted_sibling_runs(plan_path: Path, worktree_root: Optional[Path]) -> None:
     """Close the halted run of *plan_path*'s cited sizing and report what the close frees.
 
@@ -1917,6 +1946,12 @@ def _stamp_implemented(opts: _Opts) -> int:
                 raise MutateAbort(
                     f"{_PROG}: refusing to stamp implemented: {opts.plan}: "
                     f"{wiring_refusal}; fix the part or stamp closed_partial"
+                )
+            coverage_refusal = _register_coverage_refusal(split, Path(worktree_root))
+            if coverage_refusal is not None:
+                raise MutateAbort(
+                    f"{_PROG}: refusing to stamp implemented: {opts.plan}: "
+                    f"{coverage_refusal}; claim the row or stamp closed_partial"
                 )
 
         if worktree_root is not None and not decision_attested:

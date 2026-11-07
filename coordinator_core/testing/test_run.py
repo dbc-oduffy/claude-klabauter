@@ -16,6 +16,9 @@ from coordinator_core.testing.run import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture(autouse=True)
 def _ambient_spawn_depth_is_zero(monkeypatch) -> None:
     """A suite run by an engine spawner carries depth 1; these tests set their own depth."""

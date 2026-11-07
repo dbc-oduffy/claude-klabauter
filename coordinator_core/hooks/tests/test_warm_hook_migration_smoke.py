@@ -11,6 +11,8 @@ import asyncio
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks.preuse_agent_dispatch import _handler as agent_dispatch
 from coordinator_core.hooks.preuse_skill_dispatch import _handler as skill_dispatch
 from coordinator_core.hooks.block_dispatch_suite_invocation import _handler as suite_invocation

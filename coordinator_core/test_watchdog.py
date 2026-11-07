@@ -13,6 +13,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.watchdog import Watchdog, cs_timeout
 
 

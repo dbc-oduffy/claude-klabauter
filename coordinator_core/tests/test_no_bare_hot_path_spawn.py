@@ -168,6 +168,8 @@ from coordinator_core.spawn_policy.spawn_names import (
     SPAWN_NAMES_BY_MODULE as _SPAWN_NAMES_BY_MODULE,
 )
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 #: STAGE 2 scope (repo-wide, C10's closing step). The one place this gate's

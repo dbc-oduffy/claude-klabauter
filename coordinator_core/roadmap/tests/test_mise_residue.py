@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.roadmap import census, mise_residue as mr
 
 # `.coordinator-local/` is ignored by every consumer repo; `state/mise-workflows/*.seam/` is not.

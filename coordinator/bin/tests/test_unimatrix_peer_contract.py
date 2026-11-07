@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 BIN = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("unimatrix_peer_contract", BIN / "unimatrix-peer-contract.py")
 pc = importlib.util.module_from_spec(_spec)

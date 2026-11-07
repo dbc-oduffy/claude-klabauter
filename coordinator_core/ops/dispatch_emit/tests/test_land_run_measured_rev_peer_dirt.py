@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_met_over_footprint_b
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = pytest.mark.complete
+
 REG = "coordinator_core/ops/_registry_map.py"
 SEED = "".join(f"line{i}\n" for i in range(1, 13))
 PEER_AT_BASELINE = SEED.replace("line2\n", "peer-two\n")

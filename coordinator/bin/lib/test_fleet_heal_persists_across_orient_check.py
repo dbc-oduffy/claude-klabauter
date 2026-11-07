@@ -1,6 +1,10 @@
 """A fleet heal of prepare-commit-msg survives the next orient check-only read."""
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import sys
 from pathlib import Path
 

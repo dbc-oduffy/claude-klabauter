@@ -29,6 +29,10 @@ Run:
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import asyncio
 import contextlib
 import importlib.machinery

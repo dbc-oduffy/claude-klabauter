@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "run-outcome-audit.py"
 _spec = importlib.util.spec_from_file_location("run_outcome_audit", _SCRIPT)
 audit_mod = importlib.util.module_from_spec(_spec)

@@ -21,6 +21,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 
+pytestmark = pytest.mark.complete
+
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _RUN_ID = "run-1"
 # repo_root is the fake "REPO", so head_sha cannot supply the base the run-prep review needs.
@@ -944,3 +946,45 @@ def test_rag_first_line_reaches_the_stage_head_and_row_prompt_only_when_served(m
     assert marker in _compose()
     monkeypatch.setattr(ask_compose._emit, "_example_retrieval_repo_brief_line", lambda root: None)
     assert marker not in _compose()
+
+
+def test_blitz_baton_id_falls_back_to_the_sizing_stem_and_refuses_when_neither(m_plus_known_arm):
+    script = _compose()
+    lines = [ln for ln in script.splitlines() if "batons: [{" in ln]
+    assert lines
+    for ln in lines:
+        assert "id: _gate.baton?.id ?? ((_sizingRel ?? '').split('/').pop().replace(/\\.yaml$/, '')" in ln
+        assert "throw new Error('plan-blitz baton has no id: the gate returned none and no sizing stem')" in ln
+
+
+@pytest.mark.spawns_process
+def test_blitz_baton_id_expression_evaluates_to_stem_and_throws_when_empty(m_plus_known_arm):
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    line = next(ln for ln in _compose().splitlines() if "batons: [{" in ln)
+    start = line.index("id: _gate.baton?.id") + len("id: ")
+    expr = line[start:line.index(", title:", start)]
+
+    def _eval(gate, sizing_rel):
+        prog = (
+            f"const _gate = {json.dumps(gate)}; const _sizingRel = {json.dumps(sizing_rel)};\n"
+            f"try {{ console.log(JSON.stringify(['ok', {expr}])); }} "
+            "catch (e) { console.log(JSON.stringify(['threw', e.message])); }"
+        )
+        out = subprocess.run(
+            [node, "-e", prog], capture_output=True, text=True, check=True,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return json.loads(out.stdout)
+
+    assert _eval({"baton": {"id": "gate-id"}}, "a/b/stem-1.yaml") == ["ok", "gate-id"]
+    assert _eval({}, "a/b/stem-1.yaml") == ["ok", "stem-1"]
+    status, msg = _eval({}, "")
+    assert status == "threw" and "baton has no id" in msg
+    status, _ = _eval({}, None)
+    assert status == "threw"

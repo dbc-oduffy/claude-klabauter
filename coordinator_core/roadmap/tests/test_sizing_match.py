@@ -9,6 +9,9 @@ import pytest
 from coordinator_core.roadmap import sizing_match as sm
 
 
+pytestmark = pytest.mark.complete
+
+
 def _git(root: Path, *args: str) -> None:
     res = sm.run_git(["-C", str(root), *args])
     assert res.returncode == 0, res.stderr

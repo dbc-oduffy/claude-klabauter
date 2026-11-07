@@ -24,6 +24,8 @@ from coordinator_core.frontmatter.primitives import (
     write_fm_nested_field,
 )
 
+pytestmark = pytest.mark.complete
+
 
 def _doc(fm_body: str, body: str = '\n# Body\n', preamble: str = '') -> str:
     return f'{preamble}---\n{fm_body}\n---{body}'

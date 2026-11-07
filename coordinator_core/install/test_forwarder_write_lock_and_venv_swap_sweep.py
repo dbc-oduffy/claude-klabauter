@@ -13,6 +13,9 @@ from coordinator_core.install import uninstall_legs
 from coordinator_core.locked_write import LockTimeout, held_lock
 
 
+pytestmark = pytest.mark.complete
+
+
 def _target_map_for(tmp_path: Path) -> "dict[str, str]":
     return {"widget": "widget.py"}
 

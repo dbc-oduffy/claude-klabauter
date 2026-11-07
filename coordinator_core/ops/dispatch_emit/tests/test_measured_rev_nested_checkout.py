@@ -7,6 +7,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
+pytestmark = pytest.mark.complete
+
 RUN = "ask-nested-1"
 
 

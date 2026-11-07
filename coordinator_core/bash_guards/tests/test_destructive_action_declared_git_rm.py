@@ -10,6 +10,8 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 from coordinator_core.guard_messages.testing import envelope_of
 
+pytestmark = pytest.mark.complete
+
 RUN = "warp-2026-10-25-demo-20261025T000000-abcdef"
 ROW = "C2"
 SESSION = "sess-emitter"

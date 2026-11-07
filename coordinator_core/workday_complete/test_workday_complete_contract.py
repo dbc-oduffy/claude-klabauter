@@ -46,6 +46,8 @@ import pytest
 from coordinator_core.ops import workday_complete_step2_5_dirty_tree as step2_5_dirty_tree
 from coordinator_core.workday_complete import brief as wc_brief
 
+pytestmark = pytest.mark.complete
+
 # Documented consumes-manifest members that are never a `directives[].cli`
 # value because they are invoked by a DISPATCHED WORKER rather than the
 # assembler itself (module docstring's negative-spec, third bullet) — a

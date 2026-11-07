@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import wiring_contract as wc
 from coordinator_core.ops.dispatch_emit.run_truth_contract import STATUS_UNWIRED
 
@@ -122,9 +124,118 @@ def test_bare_string_or_blank_sha_is_sha_missing(tmp_path):
     assert _one(tmp_path, runs_evidence=blank)["reason"] == "evidence-sha-missing"
 
 
+def test_off_route_with_reason_is_reported_never_refused(tmp_path):
+    fm = {"wiring": [_part(tmp_path), {"id": "inj", "status": "off_route", "off_route_reason": "example-game-repo"}]}
+    assert wc.refusal(fm, tmp_path, H) is None
+    v = wc.part_verdicts(fm, tmp_path, H)[1]
+    assert (v["id"], v["status"], v["reason"]) == ("inj", "off_route", "example-game-repo")
+
+
+@pytest.mark.parametrize("why", [None, "", "   ", 3])
+def test_off_route_without_reason_is_malformed_and_refuses(tmp_path, why):
+    part = {"id": "inj", "status": "off_route"}
+    if why is not None:
+        part["off_route_reason"] = why
+    fm = {"wiring": [part]}
+    assert wc.part_verdicts(fm, tmp_path, H)[0]["status"] == "malformed"
+    assert "wiring: inj malformed" in wc.refusal(fm, tmp_path, H)
+
+
+def test_off_route_consumes_not_required_and_produces_do_not_feed(tmp_path):
+    off = {"id": "inj", "status": "off_route", "off_route_reason": "r", "consumes": ["x"], "produces": ["y"]}
+    assert wc.refusal({"wiring": [off]}, tmp_path, H) is None
+    fm = {"wiring": [off, _part(tmp_path, id="B", consumes=["y"])]}
+    msg = wc.refusal(fm, tmp_path, H)
+    assert "B" in msg and "unfed-consumes" in msg and "y" in msg
+
+
+def _coverage(tmp_path, spine, ids=("R1", "R2", "R3"), exclude=()):
+    return wc.register_coverage_refusal(spine, [{"id": i} for i in ids], tmp_path, exclude)
+
+
+def test_register_coverage_names_unclaimed_and_writes_absent(tmp_path):
+    (tmp_path / "a.py").write_text("")
+    spine = [
+        {"id": "C1", "writes": ["a.py"], "register_rows": ["R1"]},
+        {"id": "C2", "writes": ["gone.py"], "register_rows": ["R3"]},
+    ]
+    assert _coverage(tmp_path, spine) == (
+        "register: R2 not_built (unclaimed); register: R3 not_built (writes-absent)"
+    )
+
+
+def test_register_coverage_passes_when_every_row_has_a_present_write(tmp_path):
+    (tmp_path / "a.py").write_text("")
+    spine = [{"id": "C1", "writes": ["gone.py", "a.py"], "register_rows": ["R1", "R2"]}]
+    assert _coverage(tmp_path, spine, ids=("R1", "R2")) is None
+
+
+def test_register_coverage_row_with_empty_writes_claims_nothing_built(tmp_path):
+    spine = [{"id": "C1", "writes": [], "register_rows": ["R1"]}]
+    assert _coverage(tmp_path, spine, ids=("R1",)) == "register: R1 not_built (writes-absent)"
+
+
+def test_register_coverage_ruled_out_row_and_wont_do_claimant(tmp_path):
+    (tmp_path / "a.py").write_text("")
+    spine = [{"id": "C1", "writes": ["a.py"], "register_rows": ["R2"], "disposition": "wont_do"}]
+    assert _coverage(tmp_path, spine, ids=("R2",), exclude=("R2",)) is None
+    assert _coverage(tmp_path, spine, ids=("R2",)) == "register: R2 not_built (unclaimed)"
+
+
 def test_one_good_entry_outweighs_a_stale_one(tmp_path):
     ev = [
         wc.evidence_entry(_REAL, "b" * 40, False),
         wc.evidence_entry(_REAL, H, False),
     ]
     assert _one(tmp_path, runs_evidence=ev)["status"] == "wired"
+
+
+def _seam(tmp_path, *parts):
+    return {"wiring": [_part(tmp_path, id=pid, **keys) for pid, keys in parts]}
+
+
+def test_unfed_consumes_is_refused_naming_part_and_entry(tmp_path):
+    fm = _seam(tmp_path, ("A", {"consumes": ["x"]}))
+    msg = wc.refusal(fm, tmp_path, H)
+    assert "unfed-consumes" in msg and "A" in msg and "x" in msg
+
+
+def test_consumes_fed_by_another_part_is_accepted(tmp_path):
+    fm = _seam(tmp_path, ("A", {"consumes": ["x"]}), ("B", {"produces": ["x"]}))
+    assert wc.refusal(fm, tmp_path, H) is None
+
+
+def test_part_cannot_feed_itself(tmp_path):
+    fm = _seam(tmp_path, ("A", {"consumes": ["x"], "produces": ["x"]}))
+    assert "unfed-consumes" in wc.refusal(fm, tmp_path, H)
+
+
+def test_consumes_external_is_exempt(tmp_path):
+    fm = _seam(tmp_path, ("A", {"consumes": ["x"], "consumes_external": ["x", "plan-9"]}))
+    assert wc.refusal(fm, tmp_path, H) is None
+
+
+def test_unconsumed_produces_is_reported_never_refused(tmp_path):
+    fm = _seam(tmp_path, ("A", {"produces": ["out"]}))
+    assert wc.refusal(fm, tmp_path, H) is None
+    assert wc.unconsumed_produces(fm) == [("A", "out")]
+
+
+def test_legacy_parts_without_seam_keys_unchanged(tmp_path):
+    fm = _seam(tmp_path, ("A", {}), ("B", {}))
+    assert wc.refusal(fm, tmp_path, H) is None
+    assert wc.unfed_consumes(fm) == [] and wc.unconsumed_produces(fm) == []
+
+
+def test_unfed_consumes_joins_other_part_refusals(tmp_path):
+    fm = _seam(tmp_path, ("A", {"consumes": ["x"]}), ("B", {"status": "not_built"}))
+    msg = wc.refusal(fm, tmp_path, H)
+    assert "B not_built (declared)" in msg and "unfed-consumes" in msg
+
+
+@pytest.mark.parametrize("key", ["consumes", "produces", "consumes_external"])
+@pytest.mark.parametrize("value", ["x", {"a": 1}, [1]])
+def test_non_list_seam_key_is_malformed(tmp_path, key, value):
+    v = _one(tmp_path, **{key: value})
+    assert v["status"] == "malformed" and key in v["reason"]
+    assert wc.refusal({"wiring": [_part(tmp_path, **{key: value})]}, tmp_path, H)

@@ -11,6 +11,8 @@ import pytest
 from coordinator_core.git import call_io_scope, checkin_attrs
 from coordinator_core.git.commit import commit_paths
 
+pytestmark = pytest.mark.complete
+
 
 def _git(root: Path, *args: str) -> None:
     env = dict(

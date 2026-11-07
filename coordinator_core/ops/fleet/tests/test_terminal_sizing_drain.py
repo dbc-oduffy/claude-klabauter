@@ -11,6 +11,8 @@ from unittest.mock import patch
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.ceremony import git_native
 from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.ops.fleet import archive_sizings, terminal_sizing_drain

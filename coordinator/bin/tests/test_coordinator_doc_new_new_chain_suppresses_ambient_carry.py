@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _CLI = Path(__file__).resolve().parents[1] / "coordinator-doc-new.py"
 
 

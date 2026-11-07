@@ -6,6 +6,8 @@ import pytest
 
 from coordinator_core import atomic_append
 
+pytestmark = pytest.mark.complete
+
 _real_write = atomic_append.os.write
 
 

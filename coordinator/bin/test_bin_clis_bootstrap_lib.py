@@ -67,6 +67,10 @@ repo-root `bin/` only, a dominating assignment to `sys.path[0]` also counts
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import ast
 from pathlib import Path
 from typing import Any

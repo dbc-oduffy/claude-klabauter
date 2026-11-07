@@ -16,6 +16,11 @@ from coordinator_core.ops.dispatch_emit import ask_brief, op
 from coordinator_core.ops.dispatch_emit.request_validation import Field
 
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
+
 def _repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / ".git" / "objects").mkdir(parents=True)

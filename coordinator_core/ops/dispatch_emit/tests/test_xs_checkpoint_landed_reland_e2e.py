@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit import review_edits, sibling_claims
 from coordinator_core.ops.dispatch_emit.ask_contract import RESUMED_RUN_ID_KEY, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import run_base_rel
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler as ask_gate_handler
+from coordinator_core.ops.dispatch_emit.tests import test_ask_commit_halt_refire_e2e
 from coordinator_core.ops.dispatch_emit.tests.test_ask_commit_halt_refire_e2e import (  # noqa: F401
     RUN,
     RUN2,
@@ -31,7 +32,13 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 PRODUCT = "a.py"
 FOREIGN = "coordinator/tests/test_foreign_shape.py"
-FOREIGN_BYTES = "def test_a():\n    assert 1 == 1  # in-flight edit of a concurrent run\n"
+FOREIGN_BYTES = "def test_a():\n"
+_MET_EVIDENCED = {"items": [{"id": "R1", "status": "met", "wired": True, "command": "pytest -q", "observed": "1 passed"}]}
+
+
+@pytest.fixture(autouse=True)
+def _wired_verdict_carries_evidence(monkeypatch):
+    monkeypatch.setattr(test_ask_commit_halt_refire_e2e, "_MET", _MET_EVIDENCED)
 
 
 def _make_xs(root) -> None:

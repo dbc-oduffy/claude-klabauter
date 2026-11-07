@@ -11,6 +11,8 @@ from coordinator_core.agent_pipe.contract import mailbox_path
 from coordinator_core.agent_pipe.tests.fixtures.fake_peer import SCRIPT, FakePeerAdapter, conversation_of
 from coordinator_core.session import core
 
+pytestmark = pytest.mark.complete
+
 LOG = "peer-log"
 READY = "ready"  # a resume peer's first run must emit a message so its conversation id is known
 

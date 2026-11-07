@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.baton_close_report_contract import CONFLICT_RULE_OWN_PLAN, ResidueReason
 from coordinator_core.ops.baton_close_report_decide import (
     STATUS_MISSING,

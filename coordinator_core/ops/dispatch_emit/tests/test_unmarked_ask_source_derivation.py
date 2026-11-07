@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import baton_pm_turns as pm_turns
 from coordinator_core.ops.dispatch_emit import ask_compose, op
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RELAYED_ASK_FILE, record_dir

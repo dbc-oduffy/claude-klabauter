@@ -18,6 +18,8 @@ from coordinator_core.install.substrate import (
     BYTE_COPIED_BIN_SOURCES,
 )
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _FOREIGN_MARKER = "from _resolve_other_engine_root import exec_cli"

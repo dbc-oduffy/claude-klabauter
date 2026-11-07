@@ -24,6 +24,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_inherits_halted_base i
     repo,
 )
 
+pytestmark = pytest.mark.complete
+
 LANDED = {"sha": "d" * 40, "rows": ["C1"], "paths": []}
 
 

@@ -11,6 +11,8 @@ import pytest
 
 from coordinator_core.benchmarks import isolated_clone as ic
 
+pytestmark = pytest.mark.complete
+
 _SETTLE_SECS = 5.0
 _ENTRYPOINT = "box-memory-snapshot"
 

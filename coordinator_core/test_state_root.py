@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import state_root as sr
 from coordinator_core.artifact_subject import Subject
 from coordinator_core.meta_repo_identity import MetaRepoResolutionError

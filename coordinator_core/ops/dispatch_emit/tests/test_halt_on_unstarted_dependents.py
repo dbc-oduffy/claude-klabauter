@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.emit import compose_script, derive_plan_context
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow

@@ -18,6 +18,8 @@ from coordinator_core.tests import _amp_scan_incremental as inc
 from coordinator_core.tests import test_no_unbatched_per_item_git_spawn as gate
 from coordinator_core.tests._amp_scan_incremental import scan_incremental
 
+pytestmark = pytest.mark.complete
+
 pytest_plugins = ("pytester",)
 
 _ALL_ROUTES = {

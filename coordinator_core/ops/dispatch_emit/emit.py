@@ -5151,6 +5151,7 @@ _CHECKPOINT_COMMIT_SCHEMA = {
         "outcome": {"type": "string", "enum": ["committed", "commit-failed"]},
         "sha": {"type": "string"},
         "reason": {"type": "string"},
+        "withheld_paths": {"type": "array", "items": {"type": "string"}},
     },
 }
 
@@ -5745,6 +5746,7 @@ def _checkpoint_commit_js(
         "committed without a sha. "
         + _INDETERMINATE_RECONCILE_CLAUSE
         + " On commit-failed, put the verbatim refusal in `reason`."
+        " Copy the reply's `checkpoint_withheld_paths` verbatim into `withheld_paths`."
         + _dispatching_session_id_paragraph(session_id)
     )
     commit_type = _js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))
@@ -5856,12 +5858,16 @@ def _checkpoint_commit_js(
         ),
         "      return;",
         "    }",
+        "    const _pending = [...new Set([..._carried, ...done])];",
         "    _carried.length = 0;",
+        "    const _withheld = new Set(Array.isArray(r.withheld_paths) ? r.withheld_paths : []);",
+        "    const _heldBack = _pending.filter((i) => [..._landed[i].paths, ..._landed[i].declared].some((p) => _withheld.has(p)));",
+        "    _heldBack.forEach((i) => _carried.push(i));",
         "    if (typeof r.sha === 'string' && r.sha) _checkpointShas.push(r.sha);",
     ]
     if seam is not None:
         lines.append("    if (!r.sha) return;")
-        lines.append("    done.forEach((i) => _seamCommitted.push(i));")
+        lines.append("    done.filter((i) => !_heldBack.includes(i)).forEach((i) => _seamCommitted.push(i));")
         lines.append("    await _seamLeg(n, r.sha);")
     lines.append("  }")
     if seam is not None:

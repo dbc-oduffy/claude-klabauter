@@ -16,7 +16,7 @@ import pytest
 
 from coordinator_core.warm import dispatch_ack, server
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 _WAIT = 90.0
 _DEADLINE = 1.0

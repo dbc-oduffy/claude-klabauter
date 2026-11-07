@@ -11,6 +11,8 @@ import tempfile
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.guard_advisory_counter as counter
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_em_post_fire_shell_write as guard

@@ -15,6 +15,8 @@ from coordinator_core.ops import _app_session_validate_contract as contract
 from coordinator_core.ops import _app_session_validate_run as runner
 from coordinator_core.ops import app_session
 
+pytestmark = pytest.mark.complete
+
 SECRET = "s3cr3t-value-XYZZY-91"
 KEY = "web"
 HANDLE_KEY = "web@validate"

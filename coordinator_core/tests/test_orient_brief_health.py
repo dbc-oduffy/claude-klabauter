@@ -17,6 +17,9 @@ import pytest
 from coordinator_core.orient_brief import _health
 
 
+pytestmark = pytest.mark.complete
+
+
 class _Spawned(AssertionError):
     pass
 

@@ -6,6 +6,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit.run_close_baton_ship import baton_ship_leg
 from coordinator_core.ops.tests.test_handoff_correct_body import (
     _AUTHOR_SESSION,

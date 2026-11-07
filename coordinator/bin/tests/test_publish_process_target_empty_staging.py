@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _FILES = 3000
 _NAMED = ("plug0/f0.txt", "plug1/f1.txt", "plug2/f2.txt")

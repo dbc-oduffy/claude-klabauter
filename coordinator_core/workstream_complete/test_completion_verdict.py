@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.workstream_complete import completion_verdict as cv
 from coordinator_core.workstream_complete.directives_spine_worklist import SpineRowItem
 

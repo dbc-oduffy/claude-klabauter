@@ -42,6 +42,10 @@ from typing import Optional
 
 from coordinator_core.warm import cookie, skew, supervisor
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 
 #: Cookie minted by the most recent `_bind_handler`, so `_post` can present
 #: it without every call site threading it. The listener now REQUIRES the

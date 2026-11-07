@@ -34,6 +34,8 @@ import stat
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.install.substrate import _install_one
 
 # NTFS has no POSIX exec bit, and `os.chmod` cannot fabricate one on Windows

@@ -11,6 +11,10 @@ from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests import test_submit_engine_ask_real_emit as real
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 repo = real.repo
 RUN_ID = "ask-20261029T200000-e3414a"
 

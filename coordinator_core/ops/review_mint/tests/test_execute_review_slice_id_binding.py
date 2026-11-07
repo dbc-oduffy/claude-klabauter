@@ -8,6 +8,10 @@ from coordinator_core.ops.review_mint.tests.test_execute_review import (
     _wave_block,
 )
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _BIND_SEPARATE = "r.slice_id = g.map(s => s.id).join('+')"
 _BIND_IN_WAVE = "r.review.slice_id = _own.map(_sid).join('+')"
 

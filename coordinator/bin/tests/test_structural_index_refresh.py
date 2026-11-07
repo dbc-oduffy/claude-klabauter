@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _SRC = Path(__file__).resolve().parents[1] / "structural-index-refresh.py"
 _spec = importlib.util.spec_from_file_location("structural_index_refresh_cli", _SRC)
 sir = importlib.util.module_from_spec(_spec)

@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit import agent_route as ar
 from coordinator_core.ops.dispatch_emit import ask_contract
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
+pytestmark = pytest.mark.complete
+
 UE = "example-game-repo-control:ue-editor"
 UE_TRIAGE = "example-game-repo-control:ue-triage"
 MCP = "mcp__example_game_repo-control__"

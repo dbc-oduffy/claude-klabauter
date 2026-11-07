@@ -43,6 +43,9 @@ import pytest
 from coordinator_core.contract import apply_base
 
 
+pytestmark = pytest.mark.complete
+
+
 def _handler_ok(args: list[str], repo_root: Path) -> dict[str, Any]:
     return {"args": args, "repo_root": str(repo_root)}
 

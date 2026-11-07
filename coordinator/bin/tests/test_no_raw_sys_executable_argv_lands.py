@@ -31,6 +31,10 @@ import ast
 import json
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 BASELINE_PATH = Path(__file__).parent / "raw_sys_executable_argv_baseline.json"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SWEPT_DIRS = ("coordinator/bin", "coordinator/lib")

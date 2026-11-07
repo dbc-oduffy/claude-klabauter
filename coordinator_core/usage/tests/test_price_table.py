@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _PATH = Path(__file__).resolve().parents[1] / "price_table.py"
 
 

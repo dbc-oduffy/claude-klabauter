@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _IMPL = Path(__file__).resolve().parents[2] / "templates" / "bin" / "_machine_local.py"
 _spec = importlib.util.spec_from_file_location("_machine_local_ported_verbs_under_test", _IMPL)
 _ml = importlib.util.module_from_spec(_spec)

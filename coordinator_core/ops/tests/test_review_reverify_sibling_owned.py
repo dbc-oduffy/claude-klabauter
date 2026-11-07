@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.session.machinery_paths import share_dir
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.ops import review_reverify as rr

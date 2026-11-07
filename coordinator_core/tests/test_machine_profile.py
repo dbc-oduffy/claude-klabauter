@@ -12,6 +12,8 @@ from coordinator_core import machine_profile as mp
 
 # The registry reader caches on mtime; each rewrite must advance it by a full
 # second or a coarse-resolution filesystem serves the previous contents.
+pytestmark = pytest.mark.complete
+
 _last_mtime: dict = {}
 
 

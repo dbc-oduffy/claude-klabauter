@@ -10,6 +10,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 REPO = Path(__file__).resolve().parents[3]
 SCAN = (
     sorted((REPO / "coordinator_core" / "install").glob("*.py"))

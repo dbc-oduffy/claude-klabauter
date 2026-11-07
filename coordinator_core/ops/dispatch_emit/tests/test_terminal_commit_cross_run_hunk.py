@@ -171,7 +171,10 @@ def test_b_commit_settles_a_halted_peers_unproduced_hunk_and_leaves_it_dirty(rep
     assert RUN_A in settled[0]["detail"], settled
 
 
-def test_b_commit_still_refuses_a_live_peers_unproduced_hunk(repo):
+def test_b_commit_still_refuses_a_live_peers_unproduced_hunk(repo, monkeypatch):
+    from coordinator_core.session import touch_record
+
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
     seed = _git(["rev-parse", "HEAD"], repo)
     (repo / "state" / "warp" / RUN_A / "halted.json").unlink()
     run_token.mint(repo, RUN_A, "run-a.mjs", session_id="5e1f0000-0000-4000-8000-0000000000a1")
@@ -179,8 +182,8 @@ def test_b_commit_still_refuses_a_live_peers_unproduced_hunk(repo):
     out = _fire_b(repo)
 
     assert out.get("committed") is False, out
-    assert out["refused"] == "foreign-hunk-unproduced", out
-    assert f"probable owner {RUN_A}" in out["error"], out
+    assert out["refused"] == "peer-claim", out
+    assert "5e1f0000-0000-4000-8000-0000000000a1" in out["error"], out
     assert _git(["rev-parse", "HEAD"], repo) == seed
     assert f"x_{A_LINE} = 'A-EDIT'" in (repo / X).read_bytes().decode("utf-8")
 

@@ -19,7 +19,7 @@ pr = base.pr
 box = base.box
 FakeSender, frame_to, post_frame, until, run = base.FakeSender, base.frame_to, base.post_frame, base.until, base.run
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="unix sockets")
+pytestmark = [pytest.mark.complete, pytest.mark.skipif(os.name == "nt", reason="unix sockets")]
 
 
 def register_sender(box, name, endpoint, pid, started):

@@ -14,6 +14,8 @@ import pytest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops import plan_readiness_verdict as op
 
+pytestmark = pytest.mark.complete
+
 REL = "docs/plans/2026-10-15-fixture.md"
 SCHEMA = Path(op.__file__).resolve().parents[1] / "contract" / "readiness-verdict.schema.json"
 

@@ -31,6 +31,8 @@ from coordinator_core.tests.fleet_mode_independence_fixtures import (
     write_guard_cases,
 )
 
+pytestmark = pytest.mark.complete
+
 _GUARD_DIRS = ("write_guards", "bash_guards")
 _FLEET_MODULES = (
     "coordinator_core.session.fleet_mode",

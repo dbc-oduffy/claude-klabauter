@@ -9,6 +9,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import halted_run as hr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
+pytestmark = pytest.mark.complete
+
 SIZING = "state/sizings/2026-10-16-foo.yaml"
 STEM = "2026-10-16-foo"
 

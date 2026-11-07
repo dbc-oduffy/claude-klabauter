@@ -13,6 +13,8 @@ from coordinator_core.roadmap.post_stamp_clause import (
     suite_tier_refusal,
 )
 
+pytestmark = pytest.mark.complete
+
 FOLLOW_ONS = (
     "A warp run on this sizing reaches dispatch.land_run with the DoE-gated row "
     "listed incomplete; after terminal_commit the index equals HEAD; a warp-minted baton "

@@ -23,6 +23,8 @@ import pytest
 
 from coordinator_core.ops import verify_coverage as vc
 
+pytestmark = pytest.mark.complete
+
 
 # ---------------------------------------------------------------------------
 # Fixture helpers

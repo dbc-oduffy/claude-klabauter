@@ -5226,6 +5226,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
 
     # RECORD authz-unclassified-ops-at-head — six registered ops missing
     # from this registry, leaving the registration-quad and drift-guard
+    # roadmap.wiring_seams — COMPUTE_ONLY: ops/roadmap_wiring_seams.py reads batons
+    # and plan frontmatter and returns findings. Negative-spec: reads files only.
+    "roadmap.wiring_seams": OpClass.COMPUTE_ONLY,
+
     # tests RED at HEAD.
     #
     # roadmap.blitz_land — MUTATING: ops/roadmap_blitz_land.py wraps

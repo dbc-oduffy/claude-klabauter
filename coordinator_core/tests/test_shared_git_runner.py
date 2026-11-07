@@ -136,6 +136,8 @@ from coordinator_core.spawn_policy import is_test_tree_site
 from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
 from coordinator_core.spawn_policy.detect import _RECOGNIZED as _SPAWN_TARGETS
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _THIS_FILE = pathlib.Path(__file__).resolve()
 

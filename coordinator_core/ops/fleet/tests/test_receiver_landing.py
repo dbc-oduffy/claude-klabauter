@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.git import git_objects
 from coordinator_core.ops.fleet import _receiver_landing as RL
 from coordinator_core.session import day_branch_cut_lock

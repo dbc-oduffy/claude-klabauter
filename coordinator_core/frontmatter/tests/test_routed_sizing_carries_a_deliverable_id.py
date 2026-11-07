@@ -52,6 +52,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SIZINGS_DIR = _REPO_ROOT / "state" / "sizings"
 

@@ -11,6 +11,10 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import repo 
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import repo  # noqa: F401  (fixture)
 from coordinator_core.ops.tests.test_review_reverify import BASE, PREFIX, SESSION, world  # noqa: F401  (fixture)
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _LINES = 4000
 _BAR_SECONDS = 0.15  # DR-344 bar is 500ms; process time, never wall clock
 

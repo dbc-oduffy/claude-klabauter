@@ -45,6 +45,8 @@ from typing import Iterator, List, Set, Tuple
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 GUARD_PACKAGES = (
     "coordinator_core.bash_guards",
     "coordinator_core.write_guards",

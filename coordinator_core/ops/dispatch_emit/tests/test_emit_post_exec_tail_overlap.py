@@ -19,6 +19,8 @@ from coordinator_core.ops.dispatch_emit.pathspec import terminal_test_scope
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops.review_mint.post_exec_tail import VERIFY_WALL_BUDGET_S, group_slice_prefix
 
+pytestmark = pytest.mark.complete
+
 _ROOT = Path(__file__).resolve().parents[4]
 _GOLDEN = _ROOT / "coordinator_core" / "benchmarks" / "fixtures" / "emit_full_path_plan.expected.script.mjs"
 _BARRIER = "await Promise.all(Object.values(_rows));"

@@ -10,6 +10,8 @@ import yaml
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = pytest.mark.complete
+
 REL = "state/sizings/2026-10-01-gate.yaml"
 ACCEPTED = {"pm_quote": "yes", "on": "2026-10-01", "mode": "pm"}
 

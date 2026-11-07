@@ -65,6 +65,8 @@ from typing import Callable, Optional
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.warm import server
 from coordinator_core.warm.caller_context import resolve_caller_context
 

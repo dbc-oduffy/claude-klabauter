@@ -19,6 +19,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 

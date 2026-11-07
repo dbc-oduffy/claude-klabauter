@@ -35,6 +35,8 @@ from coordinator_core.frontmatter.schema_corpus import published_subset_reason
 from coordinator_core.ops.records_query import liveness as _records_liveness
 from coordinator_core.testing.content_root import resolve_content_root
 
+pytestmark = pytest.mark.complete
+
 CONTENT_ROOT = Path(resolve_content_root() or "/content-root-unresolved")
 DOE_COORDINATOR_ROOT = CONTENT_ROOT / "coordinator"
 DOE_SCHEMAS_DIR = DOE_COORDINATOR_ROOT / "schemas"

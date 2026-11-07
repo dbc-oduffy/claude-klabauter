@@ -9,6 +9,8 @@ from datetime import datetime, timezone
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.session import harness_registry as hr
 
 _HAS_TZSET = hasattr(time, "tzset")

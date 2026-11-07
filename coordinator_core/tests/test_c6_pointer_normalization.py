@@ -31,6 +31,8 @@ from typing import Set
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import dag
 from coordinator_core.content_root import read_content_root
 

@@ -8,6 +8,10 @@ from pathlib import Path
 from coordinator_core.benchmarks import land_swap_hook_window as lw
 from coordinator_core.warm import breadcrumb
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 BUDGET = breadcrumb.DRAIN_WAIT_SECS
 
 

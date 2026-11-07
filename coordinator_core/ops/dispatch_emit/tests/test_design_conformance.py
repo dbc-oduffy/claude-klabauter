@@ -11,6 +11,8 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import design_conformance as dc
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 
+pytestmark = pytest.mark.complete
+
 REL = "state/sizings/2026-10-16-design.yaml"
 BOARD = "https://claude.ai/design/p/abc123"
 OTHER_BOARD = "https://claude.ai/design/p/zzz999"

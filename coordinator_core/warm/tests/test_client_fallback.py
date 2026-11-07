@@ -31,6 +31,8 @@ import pytest
 from coordinator_core.warm import client
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
+pytestmark = pytest.mark.complete
+
 _REAL_ENGINE_TOKEN = client.engine_token
 
 

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.warm.door.tests.test_hook_mode_post_delivery_names_timeout import (  # noqa: F401 -- fixture
     _fail_open_lines,
     _posix_hook_run,

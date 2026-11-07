@@ -13,6 +13,8 @@ import pytest
 from coordinator_core import ipc
 from coordinator_core.warm import dispatch_ack, server
 
+pytestmark = pytest.mark.complete
+
 CLIENT_DEADLINE = 0.5
 MUTATING = "dispatch.land_run"
 

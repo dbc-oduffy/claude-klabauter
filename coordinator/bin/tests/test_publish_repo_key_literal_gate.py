@@ -6,6 +6,10 @@ Run: python -m pytest coordinator/bin/tests/test_publish_repo_key_literal_gate.p
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.util
 import sys
 from pathlib import Path

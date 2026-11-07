@@ -18,6 +18,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest import (
 )
 from coordinator_core.session.record_homes import home_dir
 
+pytestmark = pytest.mark.complete
+
 _RUN_ID = "20261019T000000-naming"
 _ITEMS = 8
 

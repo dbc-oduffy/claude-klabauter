@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.testing.content_root import content_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as advisory_guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as deny_guard

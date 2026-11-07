@@ -44,6 +44,8 @@ from coordinator_core.testing.content_root import content_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as deny_guard
 
+pytestmark = pytest.mark.complete
+
 _content_root, _doe_present = content_root_and_present()
 
 

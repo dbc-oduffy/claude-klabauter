@@ -17,9 +17,10 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32", reason="door_install_posix_build is POSIX-only"
-)
+pytestmark = [
+    pytest.mark.skipif(sys.platform == "win32", reason="door_install_posix_build is POSIX-only"),
+    pytest.mark.complete,
+]
 
 
 def _stamp_engine_root(root):

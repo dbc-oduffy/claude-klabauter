@@ -42,6 +42,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.text.refresh_queries as _rq_mod
 from coordinator_core.text.refresh_queries import (
     ArgParseError,

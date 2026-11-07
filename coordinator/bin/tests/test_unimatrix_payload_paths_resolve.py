@@ -11,6 +11,8 @@ from pathlib import Path, PurePosixPath
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 REPO = Path(__file__).resolve().parents[3]
 TARGETS = REPO / "setup" / "publish-targets.portable"
 BIN = REPO / "coordinator" / "bin"

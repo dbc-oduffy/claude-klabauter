@@ -24,6 +24,10 @@ import inspect
 
 from coordinator_core.ceremony_common import apply_halt
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _JP_TWO_WAY: dict = {
     "id": "jp1",
     "dispositions": [

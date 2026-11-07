@@ -103,10 +103,33 @@ def test_a_peer_with_recent_activity_at_minted_still_withholds(repo):
     assert not (peer / "halted.json").exists()
 
 
-def test_a_peer_stale_past_minted_is_not_released(repo):
+def test_a_staged_peer_idle_past_the_minted_bound_still_withholds(repo):
     _peer(repo, stage="staged", age=warp_run_deliverable.MINTED_STALE_SECONDS + 600)
     with pytest.raises(ValueError, match="no reviewable paths"):
         _paths(repo)
+
+
+def test_a_staged_peer_idle_past_the_staged_bound_releases_its_paths_and_is_halted(repo):
+    peer = _peer(repo, stage="staged", age=warp_run_deliverable.STAGED_STALE_SECONDS + 600)
+    assert _paths(repo) == [PATH]
+    marker = json.loads((peer / "halted.json").read_text(encoding="utf-8"))
+    assert marker["halted"] == warp_run_deliverable.ABANDONED_AT_STAGED
+    assert "staged" in marker["reason"]
+
+
+def test_a_staged_peer_with_recent_activity_still_withholds(repo):
+    peer = _peer(repo, stage="staged", age=60)
+    with pytest.raises(ValueError, match="no reviewable paths"):
+        _paths(repo)
+    assert not (peer / "halted.json").exists()
+
+
+def test_a_stale_staged_peer_with_a_fresh_artifact_still_withholds(repo):
+    peer = _peer(repo, stage="staged", age=warp_run_deliverable.STAGED_STALE_SECONDS + 600)
+    (peer / "resume.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="no reviewable paths"):
+        _paths(repo)
+    assert not (peer / "halted.json").exists()
 
 
 def test_a_peer_with_no_stage_record_still_withholds(repo):

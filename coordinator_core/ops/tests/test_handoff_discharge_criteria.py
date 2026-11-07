@@ -54,6 +54,10 @@ from coordinator_core.ops.tests.test_handoff_correct_body import (
     _set_calling_session,
 )
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _DISCHARGE_OP_NAME = "handoff.discharge_criteria"
 assert _DISCHARGE_OP_NAME in _REGISTRY, (
     f"import guard failed: {_DISCHARGE_OP_NAME!r} not in _REGISTRY — "

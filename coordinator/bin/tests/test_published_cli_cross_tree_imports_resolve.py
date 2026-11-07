@@ -31,6 +31,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _LIVE = pathlib.Path(__file__).resolve().parents[3]
 
 _LIB_DIRS = ("coordinator/bin/lib", "coordinator/lib")

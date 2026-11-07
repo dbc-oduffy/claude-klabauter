@@ -13,6 +13,8 @@ import pytest
 
 from coordinator_core.roadmap import blitz_stage as bs
 
+pytestmark = pytest.mark.complete
+
 CLUSTERS = """# Clusters — rm-test
 
 > Stub slug prefix: `rmt`.

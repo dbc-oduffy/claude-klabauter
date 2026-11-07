@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import dispatch_checks
 
 

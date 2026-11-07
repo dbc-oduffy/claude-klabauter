@@ -62,6 +62,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 #: The identity vars whose direct reading is the defect's shape.
 SESSION_ENV_NAMES = frozenset(
     {"COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"}

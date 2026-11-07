@@ -11,6 +11,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import machine_resolver
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_compose import _commit_stage_call

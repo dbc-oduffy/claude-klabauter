@@ -14,6 +14,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import env_locality as EL
 
 

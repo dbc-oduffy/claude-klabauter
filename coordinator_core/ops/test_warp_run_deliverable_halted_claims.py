@@ -8,6 +8,8 @@ from calendar import timegm
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import warp_run_deliverable as wrd
 from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED

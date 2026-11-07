@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _CLI_PATH = Path(__file__).resolve().parent.parent / "coordinator-doc-new.py"
 _TODAY = "2026-11-03"
 

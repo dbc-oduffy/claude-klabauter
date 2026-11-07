@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.session.guard_foreign_platform_paths import (
     detect_foreign_platform_paths,
     detect_foreign_platform_paths_in_prose,

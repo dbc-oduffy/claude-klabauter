@@ -303,37 +303,102 @@ _RECORD_CACHE: dict = {}
 _RECORD_CACHE_MAX = 4096
 
 
+def _read_signed(key: str, sig: tuple, fetched: Optional[dict] = None) -> Optional[dict]:
+    """The record at `key` whose stat signature is `sig`: the cached read while `sig` is unchanged, else
+    `fetched[key]` (a `_read_batch` result) or one bounded read, cached. None when the file is unreadable.
+    The returned dict is shared; copy before mutating."""
+    hit = _RECORD_CACHE.get(key)
+    if hit is not None and hit[0] == sig:
+        return hit[1]
+    record = fetched.get(key) if fetched is not None else _read(Path(key))
+    if record is None:
+        _RECORD_CACHE.pop(key, None)
+        return None
+    if len(_RECORD_CACHE) >= _RECORD_CACHE_MAX:
+        _RECORD_CACHE.clear()
+    _RECORD_CACHE[key] = (sig, record)
+    return record
+
+
+def read_cached(path: Optional[Path]) -> Optional[dict]:
+    """`_read(path)` for the question "is this one run's token readable, and what does it say?": one stat,
+    then the record cache `_cached_records` shares. An absent file costs the stat alone (no worker thread),
+    an unchanged one nothing more, so a scan over many runs reads each token file once. The dict is a copy."""
+    if path is None:
+        return None
+    key = str(path)
+    try:
+        st = os.stat(key)
+    except OSError:
+        _RECORD_CACHE.pop(key, None)
+        return None
+    record = _read_signed(key, (st.st_mtime_ns, st.st_size))
+    return None if record is None else dict(record)
+
+
 def _cached_records(directory: Path) -> list[tuple[str, dict]]:
     """`directory`'s `*.json` records, sorted by name. One listing; a file is opened only when its
     (mtime, size) from the listing differs from the cached read, so an unchanged token dir opens nothing.
     A write replaces the file (new mtime/size) and so invalidates its own entry."""
-    import os
-
     records: list[tuple[str, dict]] = []
     try:
         with os.scandir(directory) as it:
             entries = sorted((e for e in it if e.name.endswith(".json")), key=lambda e: e.name)
+            signed = []
             for entry in entries:
                 try:
                     st = entry.stat()
                 except OSError:
                     continue
-                sig = (st.st_mtime_ns, st.st_size)
-                hit = _RECORD_CACHE.get(entry.path)
-                if hit is not None and hit[0] == sig:
-                    record = hit[1]
-                else:
-                    record = _read(Path(entry.path))
-                    if record is None:
-                        _RECORD_CACHE.pop(entry.path, None)
-                        continue
-                    if len(_RECORD_CACHE) >= _RECORD_CACHE_MAX:
-                        _RECORD_CACHE.clear()
-                    _RECORD_CACHE[entry.path] = (sig, record)
-                records.append((entry.name[:-5], dict(record)))
+                signed.append((entry, (st.st_mtime_ns, st.st_size)))
+            misses = [e.path for e, sig in signed if (_RECORD_CACHE.get(e.path) or (None,))[0] != sig]
+            fetched = _read_batch(misses) if misses else {}
+            for entry, sig in signed:
+                record = _read_signed(entry.path, sig, fetched)
+                if record is not None:
+                    records.append((entry.name[:-5], dict(record)))
     except OSError:
         return []
     return records
+
+
+def _read_batch(keys: list) -> dict:
+    """`{path: record}` for the token files at `keys`, all read on ONE bounded worker thread (a thread per
+    small file is the cost of a cold token dir). The wait is `JSON_READ_DEADLINE_MS` plus 1ms per file; a
+    file the worker has not reached by then, or that is absent, oversize or not a JSON object, is absent
+    from the result. The worker is left to finish after a stall."""
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import JSON_READ_DEADLINE_MS, JSON_READ_MAX_BYTES
+
+    got: list = []
+    done = threading.Event()
+
+    def work() -> None:
+        try:
+            for key in keys:
+                try:
+                    with open(key, "rb") as fh:
+                        got.append((key, fh.read(JSON_READ_MAX_BYTES + 1)))
+                except OSError:
+                    continue
+        finally:
+            done.set()
+
+    try:
+        threading.Thread(target=work, daemon=True).start()
+    except RuntimeError:
+        return {}
+    done.wait((JSON_READ_DEADLINE_MS + len(keys)) / 1000.0)
+    out: dict = {}
+    for key, raw in list(got):
+        if len(raw) > JSON_READ_MAX_BYTES:
+            continue
+        try:
+            parsed = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if isinstance(parsed, dict):
+            out[key] = parsed
+    return out
 
 
 def _fresh(record: dict) -> bool:

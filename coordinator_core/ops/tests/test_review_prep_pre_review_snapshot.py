@@ -11,6 +11,8 @@ import pytest
 
 from coordinator_core.ops import review_prep as rp
 
+pytestmark = pytest.mark.complete
+
 SESSION = "sess-snap"
 BASE = "a" * 40
 

@@ -18,7 +18,7 @@ from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import retest_targeted
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 RUN_ID = "run-pd"
 MACHINERY = "coordinator_core/session/tests/test_machinery_paths.py"

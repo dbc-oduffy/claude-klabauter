@@ -35,6 +35,8 @@ from coordinator_core.ceremony_common.phantom_resolves_sweep import (
     discover_brief_defining_packages,
 )
 
+pytestmark = pytest.mark.complete
+
 _COORDINATOR_CORE_ROOT = Path(__file__).resolve().parents[1]
 
 #: dynamic-suffix bases (per-package) -- resolves ids only ever emitted

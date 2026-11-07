@@ -50,6 +50,8 @@ import pytest
 
 from coordinator_core.ops.fleet._common import _kill_orphaned_commit
 
+pytestmark = pytest.mark.complete
+
 ENGINE_ROOT = Path(__file__).resolve().parents[4]
 KILL_NAME = "_kill_orphaned_commit"
 

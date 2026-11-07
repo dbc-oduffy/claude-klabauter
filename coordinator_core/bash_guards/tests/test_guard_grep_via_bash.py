@@ -45,6 +45,8 @@ import inspect
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY
 from coordinator_core.bash_guards import _dc_rewrites, dispatch_checks
 from coordinator_core.bash_guards import guard_grep_via_bash as guard

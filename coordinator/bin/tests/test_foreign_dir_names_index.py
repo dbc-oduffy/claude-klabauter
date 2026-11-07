@@ -29,6 +29,10 @@ Run: python -m pytest coordinator/bin/tests/test_foreign_dir_names_index.py -q
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.util
 import sys
 import types

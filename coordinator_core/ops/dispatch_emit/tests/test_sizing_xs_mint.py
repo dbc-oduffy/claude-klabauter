@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import inventory_mint as im
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine

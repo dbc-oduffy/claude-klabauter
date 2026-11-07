@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.fleet import _findings_reap
 from coordinator_core.ops.fleet import reap_unintegrated_findings as reaper
 

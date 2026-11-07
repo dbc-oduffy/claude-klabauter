@@ -30,6 +30,8 @@ import pytest
 
 from coordinator_core.session import scope, touch_record
 
+pytestmark = pytest.mark.complete
+
 
 @pytest.fixture()
 def repo(tmp_path):

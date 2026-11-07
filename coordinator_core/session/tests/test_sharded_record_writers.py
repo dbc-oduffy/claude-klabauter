@@ -25,6 +25,8 @@ from coordinator_core.ops.generator_census.assemble import _is_test_scaffolding
 from coordinator_core.session import output_tree_layout as otl
 from coordinator_core.session import record_homes
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _SCAN_TOPS = ("coordinator_core", "coordinator/bin")
 _CLI_PATH = Path(_REPO_ROOT) / "coordinator" / "bin" / "coordinator-doc-new.py"

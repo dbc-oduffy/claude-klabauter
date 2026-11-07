@@ -20,6 +20,8 @@ from coordinator_core.testing import scoped_pytest as sp
 from coordinator_core.testing import watch_parent
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = pytest.mark.complete
+
 _REPO = Path(__file__).resolve().parents[2]
 _GIB = 1 << 30
 

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit.spine_read import (
     KNOWN_DISPOSITIONS,
     NON_DISPATCHABLE_DISPOSITIONS,

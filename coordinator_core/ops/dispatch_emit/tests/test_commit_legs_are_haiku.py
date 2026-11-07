@@ -7,6 +7,10 @@ from pathlib import Path
 from coordinator_core.ops.dispatch_emit import leg_register as lr
 from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _composed
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _COMMIT_AGENT = "coordinator:git-commit-agent"
 _REQUIRED = {
     ("ask", "commit"),

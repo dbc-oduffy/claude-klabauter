@@ -45,6 +45,9 @@ from coordinator_core.install.sandbox_check import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 def test_reporter_counts_pass_fail_independently_of_skip_and_info():
     r = Reporter()
     r.ok("a")

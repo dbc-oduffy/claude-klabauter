@@ -73,6 +73,8 @@ from pathlib import Path
 import pytest
 
 #: The one retired root-resolution var name this ratchet governs.
+pytestmark = pytest.mark.complete
+
 ROOT_ENV_NAMES = frozenset({"CLAUDE_KLABAUTER_ROOT"})
 
 #: Family prefixes this ratchet governs -- widened from `coordinator_core/ops/`

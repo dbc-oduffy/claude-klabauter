@@ -49,6 +49,9 @@ from coordinator_core.ops.ceremony.receipt_schema import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 def test_schema_version_is_integer() -> None:
     """SCHEMA_VERSION must be an integer, not a semver string."""
     assert isinstance(SCHEMA_VERSION, int)

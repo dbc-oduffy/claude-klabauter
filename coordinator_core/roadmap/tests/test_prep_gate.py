@@ -26,6 +26,8 @@ import pytest
 
 from coordinator_core.roadmap import prep_gate as pg
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 

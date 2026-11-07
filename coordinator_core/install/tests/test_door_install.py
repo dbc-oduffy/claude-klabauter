@@ -16,6 +16,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.install import door_install
 from coordinator_core.warm.door import build as door_build
 

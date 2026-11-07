@@ -16,6 +16,8 @@ from coordinator_core.ops.dispatch_emit.fan_launcher import launcher_rel
 from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED, MINTED_STALE_SECONDS
 from coordinator_core.session_baton import store
 
+pytestmark = pytest.mark.complete
+
 SID = "sid-minted-parent"
 NOW = 1_800_000_000.0
 PARAMS = {"asks": [{"ask": f"job {i}", "writes": [f"d{i}"]} for i in range(3)], "session_id": SID}

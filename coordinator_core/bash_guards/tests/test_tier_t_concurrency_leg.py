@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.guard_messages.testing import envelope_of
 

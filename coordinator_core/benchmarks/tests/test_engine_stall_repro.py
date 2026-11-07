@@ -3,6 +3,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import atomic_append
 from coordinator_core.benchmarks import engine_stall_repro as probe
 from coordinator_core.telemetry import log_rotation

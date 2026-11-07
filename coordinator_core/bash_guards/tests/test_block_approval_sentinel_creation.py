@@ -11,6 +11,8 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._alternative_liveness import _BACKTICK_RE
 from coordinator_core.guard_messages.testing import envelope_of
 
+pytestmark = pytest.mark.complete
+
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))

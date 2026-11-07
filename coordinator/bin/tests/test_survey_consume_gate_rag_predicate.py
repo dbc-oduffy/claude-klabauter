@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 GATE_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "survey-consume-gate.py"
 
 

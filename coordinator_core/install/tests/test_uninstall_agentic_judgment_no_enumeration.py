@@ -62,6 +62,10 @@ from coordinator_core.install.write_surface_discovery import (
     discover_declarations,
 )
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PAGE_PATH = REPO_ROOT / "docs" / "wiki" / "uninstall-agentic-judgment.md"
 

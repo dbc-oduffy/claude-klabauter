@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_publish_stamp_names_the_copied_tree as base  # noqa: E402
 

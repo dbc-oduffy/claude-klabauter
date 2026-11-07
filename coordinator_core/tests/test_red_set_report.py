@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2] / "coordinator" / "bin" / "red-set-report.py"
 )
@@ -53,7 +55,7 @@ def synthetic_suite(tmp_path: Path) -> Path:
 def test_marked_failure_excluded_from_unmarked_set(synthetic_suite: Path):
     report = red_set_report.derive_red_set(
         str(synthetic_suite),
-        marker_expr="not designed_red and not cadence and not pending_fix",
+        marker_expr="not designed_red and not cadence and not complete and not pending_fix",
     )
     marked_ids = {nodeid.split("::")[-1] for nodeid in report["marked_failed"]}
     assert "test_marked_failure" in marked_ids
@@ -64,7 +66,7 @@ def test_marked_failure_excluded_from_unmarked_set(synthetic_suite: Path):
 def test_unmarked_failure_reported_as_unmarked(synthetic_suite: Path):
     report = red_set_report.derive_red_set(
         str(synthetic_suite),
-        marker_expr="not designed_red and not cadence and not pending_fix",
+        marker_expr="not designed_red and not cadence and not complete and not pending_fix",
     )
     unmarked_ids = {nodeid.split("::")[-1] for nodeid in report["unmarked_failed"]}
     assert "test_unmarked_failure" in unmarked_ids
@@ -73,7 +75,7 @@ def test_unmarked_failure_reported_as_unmarked(synthetic_suite: Path):
 def test_unfiltered_totals_include_all_three_cells(synthetic_suite: Path):
     report = red_set_report.derive_red_set(
         str(synthetic_suite),
-        marker_expr="not designed_red and not cadence and not pending_fix",
+        marker_expr="not designed_red and not cadence and not complete and not pending_fix",
     )
     unfiltered = report["unfiltered"]
     assert unfiltered["total"] == 3

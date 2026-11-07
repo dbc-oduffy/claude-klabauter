@@ -12,7 +12,7 @@ from coordinator_core.authoring_leaks import import_closure, leak_gate
 from coordinator_core.ops.ceremony import commit_gates
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 N = 2000
 N_PY = 2

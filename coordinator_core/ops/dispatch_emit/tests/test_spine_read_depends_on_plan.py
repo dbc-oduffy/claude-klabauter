@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit.spine_read import (
     DanglingPlanDependencyError,
     read_spine,

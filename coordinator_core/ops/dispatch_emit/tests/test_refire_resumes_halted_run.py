@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, write_halt_marker
 
+pytestmark = pytest.mark.complete
+
 REL = "state/sizings/2026-10-16-refire-c3.yaml"
 OLDER = "warp-2026-10-16-refire-c3-20260101T000000-aaaaaa"
 BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"

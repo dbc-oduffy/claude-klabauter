@@ -5,6 +5,8 @@ import uuid
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks import preuse_search_dispatch as m
 
 

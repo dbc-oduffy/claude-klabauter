@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import ipc
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.benchmarks.budget import resolve_budget

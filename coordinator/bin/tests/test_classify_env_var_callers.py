@@ -6,6 +6,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN = pathlib.Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BIN.parent.parent
 _SCRIPT = _BIN / "classify-env-var-callers.py"

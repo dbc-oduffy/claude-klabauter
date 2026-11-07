@@ -55,17 +55,22 @@ def fire_token_matches(receipt: Mapping, env: object) -> bool:
 
 
 def write_fire_receipt(
-    script_path: Path, plan_path: "str | None" = None, plans: "list[str] | None" = None
+    script_path: Path,
+    plan_path: "str | None" = None,
+    plans: "list[str] | None" = None,
+    script_bytes: "bytes | None" = None,
 ) -> None:
     """Write `<script_path>.emitted.json` through the engine's own `emission_receipt._write_emission_receipt`.
 
     Best-effort: a receipt that fails to write is narrated on stderr and never fails the emit;
     the script is the deliverable and the receipt is evidence about it. `plans` is recorded
-    only when non-empty.
+    only when non-empty. `script_bytes` (the bytes just written) spares the receipt a read-back.
     """
     try:
         from coordinator_core.ops.dispatch_emit.emission_receipt import _write_emission_receipt
 
-        _write_emission_receipt(script_path, plan_path, {}, extras={"plans": plans} if plans else None)
+        _write_emission_receipt(
+            script_path, plan_path, {}, extras={"plans": plans} if plans else None, script_bytes=script_bytes
+        )
     except Exception as exc:  # noqa: BLE001 -- best-effort; must never fail the emit
         print(f"  WARNING: could not write emission receipt for {Path(script_path).name}: {exc}", file=sys.stderr)

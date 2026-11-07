@@ -56,6 +56,10 @@ from pathlib import Path
 
 from coordinator_core.tests.test_no_direct_retired_root_env_reads import ROOT_ENV_NAMES
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Repo-relative, forward-slash paths this ratchet does not govern, each with

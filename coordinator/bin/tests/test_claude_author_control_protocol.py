@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _LIB = str(Path(__file__).resolve().parents[1] / "lib")
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)

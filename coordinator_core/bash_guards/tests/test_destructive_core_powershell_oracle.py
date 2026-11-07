@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import dispatch
 
 

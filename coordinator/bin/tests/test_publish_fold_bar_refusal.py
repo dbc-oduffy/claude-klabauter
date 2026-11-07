@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 REAL_FOLD_BAR = True
 
 _BIN_DIR = Path(__file__).resolve().parent.parent

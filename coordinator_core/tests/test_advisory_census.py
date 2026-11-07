@@ -10,6 +10,8 @@ import pytest
 
 from coordinator_core import advisory_census as census
 
+pytestmark = pytest.mark.complete
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 CORPUS = FIXTURES / "pretooluse_advisory_corpus.jsonl"
 BASELINE = FIXTURES / "pretooluse_advisory_baseline.json"

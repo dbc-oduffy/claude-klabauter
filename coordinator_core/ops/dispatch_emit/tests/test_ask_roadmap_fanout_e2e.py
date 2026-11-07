@@ -6,6 +6,8 @@ from unittest import mock
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit import leg_register as lr

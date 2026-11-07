@@ -93,6 +93,8 @@ import pathlib
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 BENCHMARKS_DIR = pathlib.Path(__file__).resolve().parent.parent
 TESTS_DIR_NAME = "tests"
 DECLARE_ORIGIN_NAME = "declare_benchmark_origin"

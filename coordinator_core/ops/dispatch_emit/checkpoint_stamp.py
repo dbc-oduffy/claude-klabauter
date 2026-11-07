@@ -93,6 +93,46 @@ def run_halted_trailer_lines(bases) -> list:
     return _trailer_lines(RUN_HALTED_TRAILER, bases)
 
 
+CHECKPOINT_WITHHELD_TRAILER = "Checkpoint-Withheld"
+_CHECKPOINT_WITHHELD_LINE = re.compile(r"^" + CHECKPOINT_WITHHELD_TRAILER + r":[ \t]*(?P<v>\S.*?)[ \t]*$", re.M)
+
+
+def _forward(path: str) -> str:
+    text = path.replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return text
+
+
+def checkpoint_withheld_trailer_lines(paths) -> list:
+    """One ``Checkpoint-Withheld: <path>`` line per distinct non-blank path: forward slashes, sorted."""
+    clean = {_forward(p.strip()) for p in paths if isinstance(p, str) and p.strip()}
+    return [f"{CHECKPOINT_WITHHELD_TRAILER}: {p}" for p in sorted(clean) if p]
+
+
+def checkpoint_withheld(message: str) -> frozenset:
+    """The forward-slash path of every ``Checkpoint-Withheld:`` line in ``message``."""
+    return frozenset(_forward(m.group("v")) for m in _CHECKPOINT_WITHHELD_LINE.finditer(message or ""))
+
+
+def _rows_declaring(plan_text: str, row_ids: set, paths: frozenset) -> set:
+    """The ``row_ids`` of the plan spine whose declared ``writes`` include any of ``paths``."""
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops.dispatch_emit.plan_row_coding import yaml_load
+
+    located = locate_fenced_block(plan_text)
+    if located.status != LocateStatus.LOCATED:
+        return set()
+    rows = yaml_load(located.body) or []
+    if not isinstance(rows, list):
+        return set()
+    return {
+        str(r["id"]) for r in rows
+        if isinstance(r, dict) and str(r.get("id")) in row_ids
+        and any(isinstance(w, str) and _forward(w) in paths for w in r.get("writes") or ())
+    }
+
+
 def is_landing_message(message: str) -> bool:
     """True for a run landing: a ``Lands-Chunks:``/``Inline-Review:`` line on a non-checkpoint message."""
     return bool(_LANDING_TRAILER_LINE.search(message)) and parse_checkpoint(message) is None
@@ -511,6 +551,7 @@ def stamp_checkpoint(
         from coordinator_core.ops.dispatch_emit.worktree_snapshot import read_rel
         from coordinator_core.session.claimed_write import replace_text
 
+        withheld = checkpoint_withheld(message)
         ids = sorted(cp.row_ids - cp.gate_owed - cp.stop_rule)
         by_plan = source_rows_by_plan(worktree_root, cp.plan_rel, ids)
         rows_coded: dict = {}
@@ -519,7 +560,10 @@ def stamp_checkpoint(
             original = read_rel(worktree_root, plan_rel)
             if original is None:
                 continue
-            updated, flipped = flip_rows_coded(original, set(by_plan[plan_rel]), sha)
+            wanted = set(by_plan[plan_rel])
+            if withheld:
+                wanted -= _rows_declaring(original, wanted, withheld)
+            updated, flipped = flip_rows_coded(original, wanted, sha)
             if not flipped:
                 continue
             invalid = check_plan_tasks_source(updated)

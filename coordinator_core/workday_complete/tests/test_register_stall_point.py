@@ -5,6 +5,10 @@ from __future__ import annotations
 from coordinator_core.ops.requirement_register import StallReport
 from coordinator_core.workday_complete import brief as wc_brief
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _GOALS = {"today": [], "stale": [], "unreadable_error": None}
 _DIRTY = {"ambiguous": False, "evidence": "synthetic: clean"}
 _ID = "jp_requirement_register_stall"

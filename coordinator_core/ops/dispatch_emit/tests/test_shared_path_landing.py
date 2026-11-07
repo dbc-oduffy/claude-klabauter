@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import land_run_contract, peer_claim_contract, shared_path_landing as spl
 
 UNLANDED = [

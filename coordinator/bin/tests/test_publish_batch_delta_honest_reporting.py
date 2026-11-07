@@ -6,6 +6,10 @@ diff-scaled round subsumes it.
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.util
 import sys
 import time

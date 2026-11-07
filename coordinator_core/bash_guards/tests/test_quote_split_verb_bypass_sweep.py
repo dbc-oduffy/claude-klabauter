@@ -32,6 +32,8 @@ import pytest
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.session import touch_record
 
+pytestmark = pytest.mark.complete
+
 CWD = str(Path(__file__).resolve().parents[3])
 
 _PROBE_SESSION_ID = "quote-split-sweep"

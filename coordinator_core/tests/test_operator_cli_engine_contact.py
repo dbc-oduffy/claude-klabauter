@@ -41,6 +41,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BIN = REPO_ROOT / "coordinator" / "bin"
 BASELINE_PATH = Path(__file__).parent / "operator_cli_inprocess_baseline.txt"

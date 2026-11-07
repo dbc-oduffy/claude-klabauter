@@ -19,6 +19,8 @@ import pytest
 from coordinator_core import bounded_io
 from coordinator_core.tests import hot_path_stall_probe as probe
 
+pytestmark = pytest.mark.complete
+
 BUDGET_S = 0.25
 
 

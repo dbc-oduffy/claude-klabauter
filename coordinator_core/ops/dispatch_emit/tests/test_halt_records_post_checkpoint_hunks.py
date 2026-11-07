@@ -88,9 +88,14 @@ def _checkpointed_shape(root, monkeypatch, *, review_source="answers") -> None:
     )
 
 
+def _read_record(root, rel) -> dict:
+    """Run state under state/warp is gitignored, so the record is read from the working tree."""
+    return json.loads((root / rel).read_text(encoding="utf-8"))
+
+
 def _assert_recorded(root, out, paths=FILES) -> None:
     assert out["committed"] is True, out
-    kept = json.loads(_git(["show", f"HEAD:{KEPT_REL}"], root))
+    kept = _read_record(root, KEPT_REL)
     assert kept["post_checkpoint"] == _blobs(root, paths)
     for p in paths:
         assert out["run_artifacts"]["withheld"][p] == RUN_DIRT
@@ -98,12 +103,13 @@ def _assert_recorded(root, out, paths=FILES) -> None:
     assert [l for l in message.splitlines() if l.startswith("Kept-Post-Checkpoint: ")] == [
         f"Kept-Post-Checkpoint: {p}" for p in sorted(paths)
     ]
-    halted = json.loads(_git(["show", f"HEAD:{HALTED_REL}"], root))
+    halted = _read_record(root, HALTED_REL)
     assert halted["next_action"]["resume"]["stage"]["post_checkpoint"] == sorted(paths)
     assert out["kept"]["post_checkpoint"] == sorted(paths)
     landed = _git(["show", "--name-only", "--format=", "HEAD"], root).split()
     assert not set(paths) & set(landed)
     assert set(paths) <= set(_status(root))
+    assert KEPT_REL not in landed and HALTED_REL not in landed
 
 
 def test_review_hunks_on_checkpointed_rows_are_recorded_withheld_and_named(repo, monkeypatch):
@@ -162,7 +168,7 @@ def test_file_only_a_sibling_declares_is_not_recorded(repo, monkeypatch):
     out = _call(repo)
 
     _assert_recorded(repo, out, FILES[:1])
-    kept = json.loads(_git(["show", f"HEAD:{KEPT_REL}"], repo))
+    kept = _read_record(repo, KEPT_REL)
     assert "sibling_only.py" not in kept["post_checkpoint"]
     assert "sibling_only.py" not in out["run_artifacts"]["withheld"]
 
@@ -189,7 +195,7 @@ def test_dirty_file_of_an_unfinished_row_in_the_request_is_not_recorded(repo, mo
     out = _call(repo)
 
     assert out["committed"] is True, out
-    assert "post_checkpoint" not in json.loads(_git(["show", f"HEAD:{KEPT_REL}"], repo))
+    assert "post_checkpoint" not in _read_record(repo, KEPT_REL)
     assert "post_checkpoint" not in out["kept"]
     assert "Kept-Post-Checkpoint" not in _git(["log", "-1", "--format=%B"], repo)
 
@@ -247,7 +253,7 @@ def test_uncoded_rows_in_the_request_are_withheld_not_recorded(repo, monkeypatch
     out = _call(repo, {**_halt(), "plan": PLAN} if plan_field else None)
 
     assert out["committed"] is True, out
-    assert "post_checkpoint" not in json.loads(_git(["show", f"HEAD:{KEPT_REL}"], repo))
+    assert "post_checkpoint" not in _read_record(repo, KEPT_REL)
     for p in COMPOSED.values():
         assert out["run_artifacts"]["withheld"][p] == RUN_DIRT
 
@@ -260,7 +266,7 @@ def test_unreadable_plan_is_surfaced_and_credits_no_row(repo, monkeypatch):
 
     assert out["committed"] is True, out
     assert PLAN in out["coded_rows_unreadable"]
-    assert "post_checkpoint" not in json.loads(_git(["show", f"HEAD:{KEPT_REL}"], repo))
+    assert "post_checkpoint" not in _read_record(repo, KEPT_REL)
     for p in COMPOSED.values():
         assert out["run_artifacts"]["withheld"][p] == RUN_DIRT
 
@@ -289,15 +295,19 @@ def test_blobs_that_could_not_be_written_are_not_recorded_and_are_reported(repo,
 
     _checkpointed_shape(repo, monkeypatch)
 
-    def boom(*a, **k):
-        raise OSError("disk full")
+    real_write_object = git_objects.write_object
+
+    def boom(gitdir, kind, payload, *a, **k):
+        if payload.endswith(b" reviewed\n"):
+            raise OSError("disk full")
+        return real_write_object(gitdir, kind, payload, *a, **k)
 
     monkeypatch.setattr(git_objects, "write_object", boom)
 
     out = _call(repo)
 
     assert out["committed"] is True, out
-    assert "post_checkpoint" not in json.loads(_git(["show", f"HEAD:{KEPT_REL}"], repo))
+    assert "post_checkpoint" not in _read_record(repo, KEPT_REL)
     assert out["post_checkpoint_unpersisted"] == sorted(FILES)
     assert "post_checkpoint" not in out["kept"]
     for p in FILES:
@@ -340,8 +350,8 @@ def test_second_halt_of_a_same_id_refire_carries_the_prior_record_forward(repo, 
 
     out = _call(repo)
 
-    assert out["committed"] is True, out
-    kept = json.loads(_git(["show", f"HEAD:{KEPT_REL}"], repo))
+    assert out["nothing_to_commit"] is True and out["committed"] is False, out
+    kept = _read_record(repo, KEPT_REL)
     assert kept["post_checkpoint"] == _blobs(repo)
     assert all(out["run_artifacts"]["withheld"][p] == RUN_DIRT for p in FILES)
 
@@ -356,8 +366,8 @@ def test_prior_record_drops_a_path_that_is_no_longer_dirty(repo, monkeypatch):
 
     out = _call(repo)
 
-    assert out["committed"] is True, out
-    kept = json.loads(_git(["show", f"HEAD:{KEPT_REL}"], repo))
+    assert out["nothing_to_commit"] is True and out["committed"] is False, out
+    kept = _read_record(repo, KEPT_REL)
     assert sorted(kept["post_checkpoint"]) == sorted(FILES[1:])
 
 
@@ -387,3 +397,33 @@ def test_halt_starts_no_extra_process_for_the_recorded_hunks(repo, tmp_path, mon
     assert out["kept"]["post_checkpoint"] == sorted(FILES)
     assert baseline > 0
     assert len(calls) == baseline
+
+
+def test_commit_request_written_between_scopes_is_seen_by_the_next_scope(tmp_path):
+    """The per-call read cache never outlives its scope: a request written after one scope's absent read
+    is declared by the next scope (and by an unscoped read)."""
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    path = tmp_path / wrd.RUN_DIR_ROOT / "r1" / wrd.COMMIT_REQUEST_FILE
+    path.parent.mkdir(parents=True)
+    with call_io_scope.call_io_scope():
+        assert call_io_scope.read_bytes(path) is None
+        assert call_io_scope.read_bytes(path) is None
+    path.write_text("x", encoding="utf-8")
+    with call_io_scope.call_io_scope():
+        assert call_io_scope.read_bytes(path) == b"x"
+    assert call_io_scope.read_bytes(path) == b"x"
+
+
+def test_invalidate_makes_a_mid_scope_write_visible_to_the_same_scope(tmp_path):
+    """Absence is cached per scope; a writer inside the scope drops the entry so its own re-read sees the file."""
+    from coordinator_core.git import call_io_scope
+
+    path = tmp_path / "commit-request.txt"
+    with call_io_scope.call_io_scope():
+        assert call_io_scope.read_bytes(path) is None
+        path.write_text("x", encoding="utf-8")
+        assert call_io_scope.read_bytes(path) is None
+        call_io_scope.invalidate(path=path)
+        assert call_io_scope.read_bytes(path) == b"x"

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN_PROBE = Path(__file__).parent.parent.parent.resolve() / "bin" / "claude-klabauter-doctor-probe.py"
 
 

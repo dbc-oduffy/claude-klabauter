@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
+pytestmark = pytest.mark.complete
+
 RUN = "ask-20261013T000000-abc123"
 REL = "state/sizings/2026-10-13-ledger.yaml"
 

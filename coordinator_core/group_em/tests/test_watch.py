@@ -23,6 +23,8 @@ from unittest import mock
 from coordinator_core.group_em import watch
 
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = "/repo/root"
 
 

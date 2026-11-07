@@ -69,6 +69,9 @@ import pytest
 from coordinator_core.warm import serve_classifier as sc
 
 
+pytestmark = pytest.mark.complete
+
+
 def _verdict_entries(verdict: sc.ServeVerdict) -> list[tuple[str, str, str]]:
     """One `ServeVerdict` -> its baseline-comparable `(name, reason, text)`
     entries. Resolution/arity failures short-circuit (a name with no script

@@ -50,6 +50,8 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (  # noqa: F
     test_write_guard_rows_fire_as_expected,
 )
 
+pytestmark = pytest.mark.complete
+
 _CORPUS_PATH = Path(__file__).with_name("guard_message_corpus.py")
 
 

@@ -39,7 +39,7 @@ from coordinator_core.warm.tests.door_test_support import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process, pytest.mark.warm_tier]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.warm_tier, pytest.mark.complete]
 
 _DOOR_DIR = Path(__file__).resolve().parents[1]
 _FIXTURE = Path(__file__).resolve().parents[3] / "bash_guards" / "tests" / "fixtures" / "repo_root_search_shapes.json"

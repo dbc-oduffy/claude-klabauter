@@ -84,6 +84,8 @@ from typing import NamedTuple
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 def _bin_lib_module_names() -> frozenset[str]:

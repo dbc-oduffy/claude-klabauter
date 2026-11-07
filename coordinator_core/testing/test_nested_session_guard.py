@@ -16,6 +16,8 @@ import pytest
 from coordinator_core.testing import nested_session_guard as nsg
 from coordinator_core.testing import spawn_depth as sd
 
+pytestmark = pytest.mark.complete
+
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 _SCRUB = (

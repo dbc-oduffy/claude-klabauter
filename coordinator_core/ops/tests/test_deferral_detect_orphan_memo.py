@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.deferral_detect_orphan_memo import (
     _SLUG_OWNING_GLOBS,
     _handler,

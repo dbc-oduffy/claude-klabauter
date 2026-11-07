@@ -11,6 +11,10 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO = Path(__file__).resolve().parents[3]
 _FACADE_MODULE = "coordinator_core.bash_guards.dispatch_checks"
 _FACADE_ATTRS = frozenset({"dispatch_checks", "_dc"})

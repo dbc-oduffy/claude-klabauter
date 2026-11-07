@@ -15,6 +15,8 @@ from coordinator_core.agent_pipe.contract import mailbox_path, run_dir
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workflow_watch.mailbox_line import wait_for_line
 
+pytestmark = pytest.mark.complete
+
 FAKE = "coordinator_core.agent_pipe.tests.fixtures.fake_agent:FakeAdapter"
 
 

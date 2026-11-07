@@ -13,6 +13,8 @@ from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
 from coordinator_core.hooks.dispatch_escape import ESCAPE_LOG_NAME
 
+pytestmark = pytest.mark.complete
+
 SID = "sess-verify-1"
 
 

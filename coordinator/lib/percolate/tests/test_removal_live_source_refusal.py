@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from percolate.diff_commit import RemovalSourceLiveError, refuse_removals_with_live_source  # noqa: E402

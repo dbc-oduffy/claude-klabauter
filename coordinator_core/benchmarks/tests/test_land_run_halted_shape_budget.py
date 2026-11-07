@@ -10,7 +10,7 @@ from coordinator_core.benchmarks import land_run_leg_budget_profile as prof
 from coordinator_core.benchmarks.land_run_slow_disk_profile import _bind_session
 
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 PER_LEG_BAR_MS = 500.0
 IMPORT_CLOSURE_LEGS = (

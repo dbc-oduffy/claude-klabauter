@@ -71,6 +71,8 @@ from coordinator_core.ops import gen_claude_author_launcher as _launcher_module
 from coordinator_core.ops import install_health_run as _health_module
 from coordinator_core.ops import register_coordinator_mirror as _mirror_module
 
+pytestmark = pytest.mark.complete
+
 
 # ---------------------------------------------------------------------------
 # Fixtures / stub-tree builder

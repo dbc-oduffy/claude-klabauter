@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _SCRIPT = Path(__file__).resolve().parents[1] / "deferral-prose-audit.py"
 _spec = importlib.util.spec_from_file_location("deferral_prose_audit", _SCRIPT)
 audit = importlib.util.module_from_spec(_spec)

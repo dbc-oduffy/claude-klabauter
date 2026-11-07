@@ -11,6 +11,8 @@ from coordinator_core.codex_runner import agy
 from coordinator_core.codex_runner.contract import FALLBACK_REVIEWER, RunRequest
 from coordinator_core.codex_runner.resolve import CodexUnavailable
 
+pytestmark = pytest.mark.complete
+
 FIX = Path(__file__).parent / "fixtures"
 FAKE = [sys.executable, str(FIX / "fake_agy.py")]
 GOOD = {

@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 TOOL = Path(__file__).resolve().parents[1] / "census-recheck.py"
 

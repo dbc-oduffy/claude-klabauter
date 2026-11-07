@@ -20,6 +20,8 @@ from coordinator_core.ops.dispatch_emit.nested_run_contract import (
 )
 from coordinator_core.ops.dispatch_emit.reply_sidecar import READ_STAGE_SIDECAR_JS, VERIFY_REPLY_JS
 
+pytestmark = pytest.mark.complete
+
 
 def _children(*ids: str) -> list:
     return [

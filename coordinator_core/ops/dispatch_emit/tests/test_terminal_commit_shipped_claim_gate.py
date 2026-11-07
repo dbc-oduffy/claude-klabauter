@@ -6,10 +6,13 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import run_token, shipped_claims, terminal_commit
-from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR
+from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_commits_delivered_rows import (
     _REVIEWED,
     _SID,
+    DLV,
+    PLAN,
     RUN,
     _git,
     _verdict,
@@ -20,6 +23,12 @@ from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_commits_delivered
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 NOTE = f"{DELIVERY_NOTE_DIR}/{RUN}.md"
+
+
+def _declare(root, *paths) -> None:
+    """Make the run's row declare `paths`: a shipped claim no row declares is dropped as foreign, never refused."""
+    request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=tuple(paths)),), deliverable_id=DLV, plan_path=PLAN)
+    _write(root, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
 
 
 def _call(root, token=None) -> dict:
@@ -35,6 +44,8 @@ def _call(root, token=None) -> dict:
 def test_a_shipped_file_the_landing_does_not_carry_refuses_with_head_unmoved(repo):  # noqa: F811
     _write(repo, "a.py", "def a_tool():\n    return 1\n")
     _write(repo, "ghost.py", "x = 1\n")
+    _write(repo, ".gitignore", "scratch/\n.coordinator-local/\nghost.py\n")  # declared yet ignored: never lands
+    _declare(repo, "a.py", "ghost.py")
     _write(repo, NOTE, "# Delivery\n\n## What shipped\n\n- `ghost.py`\n")
     token = run_token.mint(repo, RUN, "run.mjs")
     before = _git(repo, "rev-parse", "HEAD")
@@ -90,6 +101,7 @@ def test_a_content_withheld_shipped_path_still_refuses(repo):  # noqa: F811
     _write(repo, "a.py", "def a_tool():\n    return 1\n")
     _write(repo, "b.py", "def b_tool():\n    return 1\n")
     _write(repo, NOTE, "# Delivery\n\n## What shipped\n\n- `a.py`\n- `b.py`\n")
+    _declare(repo, "a.py", "b.py")
     _stamp_withhold(repo, "b.py", "peer owns this file")
 
     out = _call(repo)

@@ -6,6 +6,8 @@ import textwrap
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.spawn_policy.detect import (
     ExcludedReport,
     SpawnKind,

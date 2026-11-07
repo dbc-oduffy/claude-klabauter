@@ -428,7 +428,7 @@ def _withheld_keys(record: Path) -> set:
 
     return set(landing_halted_view.shared(
         "withheld_keys", str(record),
-        lambda: frozenset(_normalize_key(p) for p in halted_run.halted_withheld_strict(record)),
+        lambda: frozenset(_normalize_key(p) for p in _withheld_strict(record)),
     ))
 
 
@@ -450,9 +450,18 @@ def _dirty_withheld(root: Path, state: dict) -> Optional[frozenset]:
 
 
 def _halted_marker(record: Path) -> Optional[dict]:
-    from coordinator_core.ops.dispatch_emit import halted_run
+    """`halted_run._read(record)`, parsed once per release scope (`landing_halted_view`); callers never mutate it."""
+    from coordinator_core.ops.dispatch_emit import halted_run, landing_halted_view
 
-    return halted_run._read(record)
+    return landing_halted_view.shared("marker", str(record), lambda: halted_run._read(record))
+
+
+def _withheld_strict(record: Path) -> dict:
+    """`halted_run.halted_withheld_strict(record)`, computed once per release scope; an unreadable record
+    raises each time (exceptions are not cached)."""
+    from coordinator_core.ops.dispatch_emit import halted_run, landing_halted_view
+
+    return landing_halted_view.shared("withheld_strict", str(record), lambda: halted_run.halted_withheld_strict(record))
 
 
 def _record(root: Path, run_id: str) -> Path:
@@ -496,7 +505,7 @@ def stale_release(root: Path, run_id: str, now: Optional[float] = None) -> Optio
 
         root = Path(root)
         record = _record(root, run_id)
-        marker = halted_run._read(record)
+        marker = _halted_marker(record)
         if not marker or marker.get("status") not in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
             return None
         clock = run_id_mint_epoch(run_id)
@@ -580,7 +589,7 @@ def _release_head(root: Path, halted_run_id: str) -> tuple:
     from coordinator_core.ops import warp_run_deliverable as wrd
     from coordinator_core.ops.dispatch_emit import halted_run
 
-    marker = halted_run._read(_record(root, halted_run_id))
+    marker = _halted_marker(_record(root, halted_run_id))
     status = marker.get("status") if marker else None
     if status == halted_run.STATUS_LANDED:
         return (RELEASE_RECORDED_LANDED, marker, "", status, False)
@@ -622,7 +631,7 @@ def _withheld_clean(root: Path, record: Path) -> bool:
     from coordinator_core.ops.dispatch_emit import halted_run
 
     try:
-        withheld = list(halted_run.halted_withheld_strict(record))
+        withheld = list(_withheld_strict(record))
         if not withheld:
             return False
         state = _SCOPE.get()
@@ -701,7 +710,7 @@ def _held_tail(root: Path, halted_run_id: str) -> frozenset:
 
     record = _record(root, halted_run_id)
     held = frozenset(wrd.halted_withheld_paths(root, halted_run_id)) - set(released_path_reasons(root, halted_run_id))
-    marker = halted_run._read(record)
+    marker = _halted_marker(record)
     if held and marker:
         with contextlib.suppress(Exception):  # unknown: the hold stands
             held -= {wrd._norm(p) for p in kept_at_head_paths(root, record, marker)}
@@ -976,7 +985,7 @@ def _kept_plan_read(record: Path):
     from coordinator_core.ops.dispatch_emit import halted_run, kept_work
 
     try:
-        withheld = halted_run.halted_withheld_strict(record)
+        withheld = _withheld_strict(record)
     except halted_run.UnreadableHaltRecord:
         return None
     if not withheld:
@@ -1010,7 +1019,7 @@ def prefetch_kept_at_head(root: Path, run_ids) -> None:
         specs: list = []
         for run_id in run_ids:
             record = _record(Path(root), run_id)
-            marker = halted_run._read(record)
+            marker = _halted_marker(record)
             if not marker or marker.get("status") != halted_run.STATUS_HALTED or irrelevant(Path(root), record, marker):
                 continue
             plan = _kept_plan(record)
@@ -1196,7 +1205,7 @@ def _kept_at_head(root: Path, record: Path, marker: dict) -> bool:
     if state is not None and key in state["memo"]:
         return state["memo"][key]
     try:
-        withheld = set(halted_run.halted_withheld_strict(record))
+        withheld = set(_withheld_strict(record))
     except halted_run.UnreadableHaltRecord:
         return False
     result = bool(withheld) and kept_at_head_paths(root, record, marker) == withheld
@@ -1285,7 +1294,7 @@ def _holder_hunks(root: Path, run_id: str, path: str, head_lines: list, common: 
     from coordinator_core.ops.dispatch_emit.run_hunk_claims import exceeds_match_bound
 
     record = _record(root, run_id)
-    marker = halted_run._read(record)
+    marker = _halted_marker(record)
     if not marker or marker.get("status") != halted_run.STATUS_HALTED:
         return None
     plan = _kept_plan(record)

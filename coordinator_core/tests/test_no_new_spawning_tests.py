@@ -342,6 +342,8 @@ from coordinator_core.spawn_policy.marker_check import (
 )
 from coordinator_core.spawn_policy.wrapper_resolution import WrapperResolver
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # ---------------------------------------------------------------------------

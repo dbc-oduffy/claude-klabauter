@@ -101,7 +101,7 @@ def test_rows_landed_outside_executor_counts_head_but_not_the_plan_creation_comm
     _git(tmp_path, "init", "-q")
     _commit(tmp_path, {"seed": "0"}, "seed")
     _commit(tmp_path, {_REL: _PLAN, "c1.py": "1"}, "plan and write")
-    head = _commit(tmp_path, {"c2.py": "1"}, "hand edit at head")
+    head = _commit(tmp_path, {"c2.py": "1"}, "hand edit at head\n\nDeliverable-Id: dlv-t-111111")
     rows = [
         {"id": "C1", "writes": ["c1.py"]},
         {"id": "C2", "writes": ["c2.py"]},

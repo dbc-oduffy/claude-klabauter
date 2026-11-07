@@ -23,6 +23,8 @@ from coordinator_core.frontmatter import lint_tree
 from coordinator_core.frontmatter import schema_validate as sv
 from coordinator_core.git import git_state
 
+pytestmark = pytest.mark.complete
+
 _CLAUDE_KLABAUTER_ROOT = Path(__file__).resolve().parents[3]
 _HANDOFF_FM = "kind: session-handoff\nhandoff_id: {hid}\n{extra}"
 

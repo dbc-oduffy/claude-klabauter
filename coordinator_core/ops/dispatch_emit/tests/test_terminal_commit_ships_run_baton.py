@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import completion_receipt, run_close, terminal_commit
 from coordinator_core.ops.dispatch_emit import run_close_completion
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, write_run_baton

@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _m_repo, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
 
+pytestmark = pytest.mark.complete
+
 RUN = "ask-20261001T000000-aaaaaa"
 NEW_RUN = "ask-20261002T000000-bbbbbb"
 REVIEWS = [{"reviewer": "staff-eng", "verdict": "WARN"}]

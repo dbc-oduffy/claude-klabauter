@@ -20,6 +20,8 @@ import pytest
 from coordinator_core.warm import breadcrumb, server
 from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE, _indeterminate_envelope
 
+pytestmark = pytest.mark.complete
+
 _MUTATING = "test.mutating_op"
 
 

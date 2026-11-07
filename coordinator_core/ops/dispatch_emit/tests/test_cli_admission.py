@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 
 _ADMISSION_MODULE_NAME = "coordinator_core.ops.dispatch_emit.admission"

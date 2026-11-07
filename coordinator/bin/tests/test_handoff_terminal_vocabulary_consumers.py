@@ -59,6 +59,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 CANON = frozenset({"shipped", "abandoned", "continued", "closed"})
 
 # The widened >=2-token-overlap property (see

@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import merge_assemble
 from coordinator_core.merge_assemble import apply as merge_apply
 

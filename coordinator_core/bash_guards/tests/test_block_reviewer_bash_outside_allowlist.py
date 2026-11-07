@@ -17,6 +17,8 @@ from coordinator_core.guard_messages.alternative_record import (
 from coordinator_core.guard_messages.render import render
 from coordinator_core.guard_messages.testing import envelope_of
 
+pytestmark = pytest.mark.complete
+
 _record_check = guard.check
 
 

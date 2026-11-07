@@ -12,6 +12,8 @@ from coordinator_core.ops._anchor_premise import (
     unjudged,
 )
 
+pytestmark = pytest.mark.complete
+
 GOOD = {"id": "AP1", "claim": "data lives in x", "check": {"command": "grep -c a b", "expect": "1"}}
 
 

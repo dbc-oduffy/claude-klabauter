@@ -61,6 +61,9 @@ import pytest
 from coordinator_core.ops.ceremony import detached_spawn
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture
 def repo_root(tmp_path: Path) -> str:
     return str(tmp_path)

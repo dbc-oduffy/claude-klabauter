@@ -6,6 +6,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from pathlib import Path
 
 _BIN_DIR = Path(__file__).resolve().parent.parent

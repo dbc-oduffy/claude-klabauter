@@ -25,6 +25,10 @@ Spec backlink: coordinator-content-repo:pln-gate-2-w2-3-live-caller-switch-3e51c
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.machinery
 import importlib.util
 import io

@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import repo as _bare_repo
 
+pytestmark = pytest.mark.complete
+
 BOARD_URL = "https://claude.ai/artifact/fixture-canvas-001"
 PLAN_REL = "docs/plans/2026-10-16-canvas-fixture.md"
 HARVEST = "docs/design/canvas-fixture/harvest/harvest.json"

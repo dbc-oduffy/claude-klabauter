@@ -19,6 +19,9 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops.review_mint.execute_review import compose_execute_review
 from coordinator_core.ops.review_mint.roster import parse_execute_review
+import pytest
+
+pytestmark = pytest.mark.complete
 
 Key = tuple[str, str]
 

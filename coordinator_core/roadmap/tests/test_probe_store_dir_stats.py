@@ -6,6 +6,10 @@ import os
 from coordinator_core.engine_root import ENGINE_CHECKOUT_ROOT
 from coordinator_core.roadmap import probe_store
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 
 def _sig(st):
     return (st.st_size, st.st_mtime_ns)

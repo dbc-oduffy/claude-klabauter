@@ -33,7 +33,7 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
 )
 from coordinator_core.guard_messages.testing import envelope_of
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 SUB_ID = "a1b2c3d4e5f6a7b8"
 

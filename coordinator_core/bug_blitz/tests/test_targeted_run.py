@@ -14,6 +14,8 @@ from coordinator_core.bug_blitz.contract import EXIT_CODES, record_schema_path
 from coordinator_core.bug_blitz.tests.test_runner_shapes_admitted import ADMITTED_HEADS
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = pytest.mark.complete
+
 
 @pytest.fixture(autouse=True)
 def _settings_home(tmp_path, monkeypatch):

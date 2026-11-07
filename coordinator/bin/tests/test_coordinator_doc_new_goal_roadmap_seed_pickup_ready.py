@@ -19,6 +19,10 @@ Spec backlink: cross-repo/inbox/2026-08-06-example-market-data-repo-em-pickup-re
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.machinery
 import importlib.util
 import unittest

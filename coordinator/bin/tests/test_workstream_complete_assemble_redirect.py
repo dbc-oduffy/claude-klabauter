@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BIN_DIR = REPO_ROOT / "coordinator" / "bin"
 sys.path.insert(0, str(BIN_DIR / "lib"))

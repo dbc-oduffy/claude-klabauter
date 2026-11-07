@@ -224,6 +224,7 @@ from coordinator_core.ops.check_posix_exec_assumptions import (
 from coordinator_core.ops.session._path_shape_regexes import WIN_DRIVE_RE
 from coordinator_core.bash_guards.dispatch_checks import _bt_python3_invocation
 
+pytestmark = pytest.mark.complete
 
 _PROBE_SESSION_ID = "test-session-abc123"
 

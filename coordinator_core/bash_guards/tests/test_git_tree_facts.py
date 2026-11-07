@@ -11,6 +11,8 @@ import pytest
 from coordinator_core.bash_guards import _git_tree_facts as facts
 from coordinator_core.git import repo_root
 
+pytestmark = pytest.mark.complete
+
 _ENV = {
     **os.environ,
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@e",

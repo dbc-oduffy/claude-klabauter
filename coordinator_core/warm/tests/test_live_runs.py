@@ -14,6 +14,8 @@ import pytest
 from coordinator_core.session import liveness
 from coordinator_core.warm import live_runs
 
+pytestmark = pytest.mark.complete
+
 NOW = datetime(2026, 10, 31, 23, 0, 0, tzinfo=timezone.utc)
 
 

@@ -239,9 +239,14 @@ and never a fall-through. Coverage:
 `coordinator_core/warm/tests/test_door_read_deadline.py` (cadence-tiered;
 stub pipes only, no live warm server).
 
-No retry, no backoff, no spawn logic lives here. If the server is not up,
-the Python client already owns spawning one — that is what the fallback
-call reaches.
+No retry and no backoff live here. On a no-server miss only
+(`ENOENT`/`ECONNREFUSED`, never a full backlog) the door spawns the warm
+server detached (`door_maybe_spawn_server`), then runs the cold leg. A
+non-hook op's cold child gets `COORDINATOR_WARM_BOOT_WAIT_SECS=0`
+(`DOOR_COLD_BOOT_WAIT_SECS`, beside `DOOR_DRAIN_WAIT_MS`) unless the caller
+set it, so it answers loudly at once instead of sleeping for the booting
+server; so does a non-hook fall-through with no usable service directory.
+Hook mode keeps `hook_fall_through`.
 
 ## Engine root resolution
 

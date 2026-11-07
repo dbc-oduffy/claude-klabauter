@@ -9,6 +9,8 @@ import pytest
 from coordinator_core.install import klabauter_freshness as kf
 from coordinator_core.install import klabauter_freshness_apply as apply
 
+pytestmark = pytest.mark.complete
+
 _ENV = {
     "GIT_AUTHOR_NAME": "t",
     "GIT_AUTHOR_EMAIL": "t@example.invalid",

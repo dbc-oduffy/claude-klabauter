@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 BIN = Path(__file__).resolve().parents[1]
 
 
@@ -635,7 +637,7 @@ def test_no_signer_is_constructed_by_a_snapshot_run(env, snap, monkeypatch):
     monkeypatch.setattr(snap.m, "FakeSigner", refuse)
     monkeypatch.setattr(snap.m, "AgentSigner", refuse)
     env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
-    assert (env.sdir / "autolink-kim_at_machine_a.local.json").is_file()
+    assert (env.sdir / f"autolink-{env.al.slug('kim@machine-a.local')}.json").is_file()
 
 
 @needs_keygen
@@ -699,7 +701,7 @@ def test_pull_ignores_an_equal_or_lower_epoch_and_a_failed_ask(env, snap):
 def test_a_moved_epoch_defeats_the_healthy_cache_so_a_new_member_links(env, snap):
     add_key(env)
     snap.adopt("machine-a")
-    seed_live_pair(env, "kim_at_machine_a.local")
+    seed_live_pair(env, env.al.slug("kim@machine-a.local"))
     (env.sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": ["kim@machine-a.local"], "epoch": 1}))
     sp = Spawner()
     env.al.run(roster=env.roster, spawn=sp, probe_fn=boom, key_fn=boom, self_names=set())

@@ -18,6 +18,9 @@ import pytest
 from coordinator_core.warm import front_door, front_door_routing, lifecycle
 
 
+pytestmark = pytest.mark.complete
+
+
 class _NoDials:
     def record(self, **_kw):
         pass

@@ -26,6 +26,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 # ---------------------------------------------------------------------------
 # Path setup — locate CLI relative to this test file
 # test file: coordinator/bin/tests/test_lesson_promote.py

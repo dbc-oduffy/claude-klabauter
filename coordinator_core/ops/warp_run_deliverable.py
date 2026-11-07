@@ -53,8 +53,11 @@ def _norm(path: str) -> str:
 
 
 def _read_json(path: Path) -> dict:
+    from coordinator_core.git import call_io_scope
+
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(path)
+        data = json.loads(raw) if raw is not None else None
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -65,11 +68,15 @@ def sizing_scalar(repo_root: Path, sizing_rel: str, key: str) -> str:
     the file or key is absent. No YAML parse: the commit hot path pays for a line scan only."""
     if not sizing_rel or not key:
         return ""
+    from coordinator_core.git import call_io_scope
+
     try:
-        text = (Path(repo_root) / sizing_rel).read_text(encoding="utf-8")
+        raw = call_io_scope.read_bytes(Path(repo_root) / sizing_rel)
     except OSError:
         return ""
-    match = re.search(_SCALAR_RE.format(key=re.escape(key)), text, re.MULTILINE)
+    if raw is None:
+        return ""
+    match = re.search(_SCALAR_RE.format(key=re.escape(key)), raw.decode("utf-8"), re.MULTILINE)
     if match is None:
         return ""
     return next((g for g in match.groups() if g is not None), "").strip()
@@ -177,6 +184,27 @@ def live_run_deliverable_id(repo_root: Path, session_id: str, paths: Iterable[st
     return next(iter(ids)) if len(ids) == 1 else ""
 
 
+def _fresh_entry(root: Path, run_id: str):
+    """`halted_withheld_index.fresh_entry` for `run_id` under `root`: `halted_run.fresh_index_entry`
+    without deriving the root from a record-dir `Path` (a hot per-run call of the claim pass)."""
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    return halted_withheld_index.fresh_entry(root, run_id)
+
+
+def _no_marker(root: Path, run_id: str) -> bool:
+    """Whether `run_id`'s `state/warp` record dir exists and holds no `halted.json`: two stats, no
+    record-dir resolve. The answer to "is this run halted, landed or resumed?" for a token-only run, which
+    is most of the in-window runs. False when the dir is absent (the marker may sit under `scratch/warp`),
+    when the id is not a single safe segment, or when a marker exists: the caller reads it."""
+    from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE
+
+    if not isinstance(run_id, str) or not safe_id(run_id):
+        return False
+    rdir = os.path.join(root, RECORD_DIR_ROOT, run_id)
+    return not os.path.exists(os.path.join(rdir, HALTED_FILE)) and os.path.isdir(rdir)
+
+
 def _halted(root: Path, run_id: str) -> bool:
     """A run whose record carries a `halted` marker writes nothing more; its token stays fresh for
     the TTL and its declaration contests no live write. Its declared writes stay held against
@@ -185,8 +213,10 @@ def _halted(root: Path, run_id: str) -> bool:
     live again."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
+    if _no_marker(root, run_id):
+        return False
     try:
-        if halted_run.fresh_index_entry(record_dir(root, run_id)) is not None:
+        if _fresh_entry(root, run_id) is not None:
             return True
         marker = halted_run.read_strict_run(record_dir(root, run_id))
     except halted_run.UnreadableHaltRecord:
@@ -202,6 +232,8 @@ def resumed_run_released(root: Path, run_id: str, exclude_run: Optional[str]) ->
     marker, or any other status, is False without consulting the predicate."""
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
 
+    if _no_marker(root, run_id):
+        return False
     try:
         marker = halted_run.read_strict_run(record_dir(root, run_id))
         if marker is None or marker.get("status") not in (halted_run.STATUS_RESUMED, halted_run.STATUS_LANDED):
@@ -216,6 +248,8 @@ def _landed(root: Path, run_id: str) -> bool:
     commit: it writes nothing more and claims nothing, whatever its token's remaining TTL."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
+    if _no_marker(root, run_id):
+        return False
     try:
         marker = halted_run.read_strict_run(record_dir(root, run_id))
     except ValueError:  # UnreadableHaltRecord, or not a run id: no landed record
@@ -246,8 +280,11 @@ def _manifest_declared_uncached(run_id: str, root: Path) -> tuple:
     paths: list = []
     prefixes: list = []
     unreadable = False
+    from coordinator_core.git import call_io_scope
+
     try:
-        text = (record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8")
+        raw_manifest = call_io_scope.read_bytes(record_dir(root, run_id) / "manifest.json")
+        text = raw_manifest.decode("utf-8") if raw_manifest is not None else None
     except (OSError, ValueError):
         text = None
     if text is not None:
@@ -260,7 +297,8 @@ def _manifest_declared_uncached(run_id: str, root: Path) -> tuple:
         except (ValueError, KeyError, TypeError):
             unreadable = True
     try:
-        request = parse_marker((root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE).read_text(encoding="utf-8"))
+        raw_request = call_io_scope.read_bytes(root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE)
+        request = parse_marker(raw_request.decode("utf-8")) if raw_request is not None else None
     except OSError:
         request = None
     except MalformedCommitRequestError:
@@ -288,6 +326,9 @@ def _withheld_paths(root: Path, run_id: str) -> set:
 #: died or was stopped before the ledger advanced it, and it holds nothing against a peer.
 MINTED_STALE_SECONDS = 1800
 ABANDONED_AT_MINTED = "abandoned_at_minted"
+#: A run at stage `staged` with no live session and no activity this long (hours) holds nothing.
+STAGED_STALE_SECONDS = 4 * 3600
+ABANDONED_AT_STAGED = "abandoned_at_staged"
 
 
 def _stamp_epoch(value: object) -> Optional[float]:
@@ -369,9 +410,11 @@ def _descends_from(root: Path, run_id: str, ancestor: str, ancestor_sizing: str)
     return False
 
 
-def _descendant_activity_epoch(root: Path, run_id: str, now: float) -> Optional[float]:
+def _descendant_activity_epoch(
+    root: Path, run_id: str, now: float, bound: float = MINTED_STALE_SECONDS,
+) -> Optional[float]:
     """Newest activity epoch among live descendant runs of `run_id` (`_descends_from`), None when no
-    descendant was active within `MINTED_STALE_SECONDS` of `now`. A descendant that is halted or
+    descendant was active within `bound` seconds of `now`. A descendant that is halted or
     landed does not count. Candidates are the `RECORD_DIR_ROOT` entries whose directory mtime falls
     in the window (an atomic stage write or a new artifact bumps it), so the scan is one listing plus
     reads for the few recent dirs; stat/read calls only."""
@@ -381,7 +424,7 @@ def _descendant_activity_epoch(root: Path, run_id: str, now: float) -> Optional[
         with os.scandir(Path(root) / RECORD_DIR_ROOT) as entries:
             recent = [
                 e.name for e in entries
-                if e.name != run_id and e.is_dir() and now - e.stat().st_mtime <= MINTED_STALE_SECONDS
+                if e.name != run_id and e.is_dir() and now - e.stat().st_mtime <= bound
             ]
     except OSError:
         return None
@@ -391,14 +434,24 @@ def _descendant_activity_epoch(root: Path, run_id: str, now: float) -> Optional[
         if _halted(root, name) or _landed(root, name):
             continue
         seen = _own_activity_epoch(root, name)
-        if seen is not None and now - seen <= MINTED_STALE_SECONDS and (newest is None or seen > newest):
+        if seen is not None and now - seen <= bound and (newest is None or seen > newest):
             newest = seen
     return newest
 
 
 def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bool:
-    """True when the run's `run-stage.json` reads `minted` with its freshest activity older than
-    `MINTED_STALE_SECONDS`. Freshest activity is the later of the stage stamp (`last_activity_at`,
+    """`_stale_at` for stage `minted` and `MINTED_STALE_SECONDS`."""
+    return _stale_at(root, run_id, "minted", MINTED_STALE_SECONDS, now)
+
+
+def _stale_at_staged(root: Path, run_id: str, now: Optional[float] = None) -> bool:
+    """`_stale_at` for stage `staged` and `STAGED_STALE_SECONDS`."""
+    return _stale_at(root, run_id, "staged", STAGED_STALE_SECONDS, now)
+
+
+def _stale_at(root: Path, run_id: str, stage_name: str, bound: float, now: Optional[float] = None) -> bool:
+    """True when the run's `run-stage.json` reads `stage_name` with its freshest activity older than
+    `bound` seconds. Freshest activity is the later of the stage stamp (`last_activity_at`,
     else `started_at`), the newest artifact the launcher left in the run's record/scratch dirs
     (`_freshest_run_artifact_epoch`), and, once those read stale, any live descendant run's activity
     (`_descendant_activity_epoch`): an ask run driven through a child warp run stays at `minted`.
@@ -408,7 +461,7 @@ def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bo
     from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
 
     stage = read_run_stage(root, run_id)
-    if not stage or stage.get("stage") != "minted":
+    if not stage or stage.get("stage") != stage_name:
         return False
     seen = _stamp_epoch(stage.get("last_activity_at"))
     if seen is None:
@@ -419,26 +472,29 @@ def _stale_at_minted(root: Path, run_id: str, now: Optional[float] = None) -> bo
     if artifact is not None and artifact > seen:
         seen = artifact
     current = time.time() if now is None else now
-    if current - seen <= MINTED_STALE_SECONDS:
+    if current - seen <= bound:
         return False
-    child = _descendant_activity_epoch(root, run_id, current)
-    return child is None or current - child > MINTED_STALE_SECONDS
+    child = _descendant_activity_epoch(root, run_id, current, bound)
+    return child is None or current - child > bound
 
 
-def _halt_abandoned(root: Path, run_id: str) -> None:
-    """Record the terminal `halted` outcome of a run stale at `minted`, so `_halted` sees it and the
-    firing EM finds a halt record. Best effort: a failed write leaves the run merely released."""
+def _halt_abandoned(root: Path, run_id: str, stage_name: str = "minted") -> None:
+    """Record the terminal `halted` outcome of a run stale at `minted` or `staged`, so `_halted` sees
+    it and the firing EM finds a halt record. Best effort: a failed write leaves the run merely
+    released."""
     from coordinator_core.ops.dispatch_emit import halted_run
 
+    staged = stage_name == "staged"
+    bound = STAGED_STALE_SECONDS if staged else MINTED_STALE_SECONDS
     try:
         halted_run.write_halt_marker(
             record_dir(root, run_id),
-            halted=ABANDONED_AT_MINTED,
+            halted=ABANDONED_AT_STAGED if staged else ABANDONED_AT_MINTED,
             sizing_rel=record_sizing_rel(root, run_id) or None,
-            reason=f"abandoned: stuck at stage minted for over {MINTED_STALE_SECONDS}s with no activity",
+            reason=f"abandoned: stuck at stage {stage_name} for over {bound}s with no activity",
         )
     except Exception:  # noqa: BLE001 -- the release does not depend on the record
-        logging.getLogger(__name__).warning("run %s: abandoned-at-minted halt record not written", run_id)
+        logging.getLogger(__name__).warning("run %s: abandoned-at-%s halt record not written", run_id, stage_name)
 
 
 def _live_peer_run(
@@ -446,7 +502,8 @@ def _live_peer_run(
 ) -> bool:
     """True when a held `record` is a live peer's run: fresh (claimed records included), a
     non-empty `session_id` other than `exclude_session` that is `touch_record.session_live`, not
-    halted, not landed, not stale at stage `minted` (`_stale_at_minted`; such a run is halted here),
+    halted, not landed, not stale at stage `minted` or `staged` (`_stale_at_minted`,
+    `_stale_at_staged`; such a run is halted here),
     not minted with an unproven runner (`warp_live.runner_unproven`; resumable, not held),
     and (when given) strictly senior to `minted_before=(minted_at, run_id)`. Inside a `call_io_scope`
     the record-reading tail is answered once per run and `cwd`: the landing's several claim scans
@@ -471,6 +528,9 @@ def _live_peer_tail(root: Path, run_id: str, sid: str, cwd: Optional[str]) -> bo
         return False
     if _stale_at_minted(root, run_id):
         _halt_abandoned(root, run_id)
+        return False
+    if _stale_at_staged(root, run_id):
+        _halt_abandoned(root, run_id, "staged")
         return False
     from coordinator_core import warp_live
 
@@ -664,12 +724,12 @@ def _index_clear(root: Path, run_id: str, wanted: set) -> bool:
     declared footprint cover any of `wanted`, and it left no `commit-request.txt` (the footprint the entry
     does not carry): such a run claims none of them, so its marker is never opened. Absent, stale or
     covering entries are False, and the caller reads the marker."""
-    from coordinator_core.ops.dispatch_emit import halted_run, run_ownership
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops.dispatch_emit import run_ownership
 
     try:
-        rdir = record_dir(root, run_id)
-        entry = halted_run.fresh_index_entry(rdir)
-        if entry is None or (root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE).exists():
+        entry = _fresh_entry(root, run_id)
+        if entry is None or call_io_scope.read_bytes(root / RUN_DIR_ROOT / run_id / COMMIT_REQUEST_FILE) is not None:
             return False
     except (OSError, ValueError):
         return False
@@ -696,11 +756,19 @@ def _halted_claims(
             continue
         if _halted(root, run_id):
             halted_ids.append(run_id)
+    markers: dict = {}
+
+    def strict_marker(run_id: str):
+        # One parse per run for this pass; UnreadableHaltRecord is not cached, it re-raises.
+        if run_id not in markers:
+            markers[run_id] = halted_run.read_strict_run(record_dir(root, run_id))
+        return markers[run_id]
+
     plans = []
     for run_id in halted_ids:
         try:
             rdir = record_dir(root, run_id)
-            marker = halted_run._read(rdir)
+            marker = strict_marker(run_id)
         except Exception:  # noqa: BLE001 -- unreadable record: read (and held) on demand
             continue
         if marker is not None:
@@ -708,8 +776,8 @@ def _halted_claims(
     halted_hold_release.prefetch_kept_blobs(root, plans)
     for run_id in halted_ids:
         try:
-            if halted_run.fresh_index_entry(record_dir(root, run_id)) is None:
-                halted_run.read_strict_run(record_dir(root, run_id))
+            if _fresh_entry(root, run_id) is None:
+                strict_marker(run_id)
         except halted_run.UnreadableHaltRecord as exc:
             for path in wanted:
                 claims.setdefault(path, set()).add(exc.reason)
@@ -719,7 +787,7 @@ def _halted_claims(
         if held & wanted:
             try:
                 rdir = record_dir(root, run_id)
-                marker = halted_run.read_strict_run(rdir)
+                marker = strict_marker(run_id)
                 if marker is not None:
                     freed = {_norm(p) for p in halted_hold_release.kept_at_head_paths(root, rdir, marker)}
             except Exception:  # noqa: BLE001 -- unreadable record: nothing freed, the hold stands

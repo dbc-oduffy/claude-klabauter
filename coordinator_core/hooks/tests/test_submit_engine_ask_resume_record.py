@@ -15,6 +15,8 @@ from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 
+pytestmark = pytest.mark.complete
+
 SIZING_REL = "state/sizings/2026-10-29-resume-fixture.yaml"
 PLAN_REL = "docs/plans/2026-10-29-resume-fixture.md"
 HALTED_ID = "warp-2026-10-29-resume-fixture-20261029T010101-abc123"

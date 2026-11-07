@@ -23,6 +23,8 @@ import pytest
 from coordinator_core.ceremony_common import cli_dispatch
 from coordinator_core.workweek_complete import apply as wk_apply
 
+pytestmark = pytest.mark.complete
+
 _STDOUT_BYTES = 256 * 1024
 _BUFFER_BYTES = 1024 * 1024
 _FLOOR_BYTES = 128 * 1024

@@ -57,6 +57,10 @@ from coordinator_core.ops.tests.test_handoff_correct_body import (
     _seed_claimed_handoff,
 )
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _APPEND_OP_NAME = "handoff.append_session_ledger"
 assert _APPEND_OP_NAME in _REGISTRY, (
     f"import guard failed: {_APPEND_OP_NAME!r} not in _REGISTRY — "

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import ipc
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.op_scopes import OP_KEY_SCOPE

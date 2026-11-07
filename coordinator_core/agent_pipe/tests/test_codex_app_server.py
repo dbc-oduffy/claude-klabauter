@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.agent_pipe import codex_app_server as cas
 from coordinator_core.agent_pipe.tests.fixtures.fake_app_server import CAPTURE, SCRIPT
 

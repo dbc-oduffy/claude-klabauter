@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import ask_gate, resume_snapshot
 from coordinator_core.ops.dispatch_emit.ask_contract import LedgerHalt, ResumePlan
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage_handler

@@ -70,6 +70,10 @@ import os
 import sys
 import unittest
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _ENGINE_ROOT = os.path.abspath(os.path.join(_THIS_DIR, "..", "..", ".."))
 if _ENGINE_ROOT not in sys.path:

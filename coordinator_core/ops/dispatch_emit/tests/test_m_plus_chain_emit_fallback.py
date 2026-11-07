@@ -23,6 +23,8 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests import test_launcher_child_m_plus_chains_incident as launcher
 from coordinator_core.ops.dispatch_emit.tests import test_size_then_plan_e2e as e2e
 
+pytestmark = pytest.mark.complete
+
 _NOT_RUN = {
     "error": "not run: gate reply carried arm m_plus with null halt but dispatch.emit was not run by this scout"
 }

@@ -1331,6 +1331,14 @@ static int resolve_fallback_script(const char *engine_root, char *script_path) {
 #define DOOR_DRAIN_WAIT_MS 500
 #define DOOR_DRAIN_POLL_MS 20
 
+/* DEAD-ENGINE NON-HOOK COLD LEG. After RESPAWN ON MISS the cold child is
+ * handed `DOOR_COLD_BOOT_WAIT_ENV=DOOR_COLD_BOOT_WAIT_SECS`: it answers the
+ * op at once, loudly, instead of sleeping for the booting server. Billed
+ * budget of that wait: 0 (`warm/invoke/warm_miss.py :: WARM_BOOT_WAIT_SECS`).
+ * A caller-set value wins (setenv overwrite=0). */
+#define DOOR_COLD_BOOT_WAIT_ENV "COORDINATOR_WARM_BOOT_WAIT_SECS"
+#define DOOR_COLD_BOOT_WAIT_SECS "0"
+
 static int door_publish_marker_held(const char *svc_dir) {
     char marker[PATH_MAX];
     int n = snprintf(marker, sizeof(marker), "%s/publish.marker", svc_dir);
@@ -1885,6 +1893,13 @@ int main(int argc, char **argv) {
          * exit code. */
         if (g_connect_no_server && chosen_dir[0] != '\0') {
             door_maybe_spawn_server(engine_root, chosen_dir);
+        }
+        /* No usable service directory (`chosen_dir` empty) is also a
+         * no-server fall-through: no engine to wait for. */
+        if (!g_door_hook_mode &&
+            (g_connect_no_server || chosen_dir[0] == '\0')) {
+            (void)setenv(DOOR_COLD_BOOT_WAIT_ENV,
+                         DOOR_COLD_BOOT_WAIT_SECS, 0);
         }
         int rc = fall_through(argc, argv, engine_root);
         free(engine_root);

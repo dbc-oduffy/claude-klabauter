@@ -26,6 +26,8 @@ from coordinator_core.ops.dispatch_emit.op import (
 from coordinator_core.ops.dispatch_emit.tests.test_op import _write_fixture_plan
 from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 
+pytestmark = pytest.mark.complete
+
 _RECEIPT_KEYS = {"sha256", "session_id", "emitted_at", "plan", "findings", "landing_markers"}
 
 

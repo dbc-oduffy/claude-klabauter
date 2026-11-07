@@ -8,6 +8,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import ask_contract as ac
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl

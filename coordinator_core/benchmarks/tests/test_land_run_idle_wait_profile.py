@@ -7,6 +7,9 @@ import pytest
 from coordinator_core.benchmarks import land_run_slow_disk_profile as prof
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture(scope="module")
 def rows(tmp_path_factory):
     workdir = tmp_path_factory.mktemp("lriw")

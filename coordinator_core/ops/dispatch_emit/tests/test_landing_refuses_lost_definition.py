@@ -10,7 +10,7 @@ from coordinator_core.ops.dispatch_emit import land_run, landing_integrity as li
 from coordinator_core.ops.dispatch_emit.tests.test_landing_integrity import _w
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process  # repo setup only; the calls under test are spawn-guarded
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]  # repo setup only; the calls under test are spawn-guarded
 
 # (module file, attribute the worktree adds, caller source) -- the three incidents.
 INCIDENTS = [

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import disk_budget  # noqa: E402
 from disk_budget import GiB, Policy, resolve_roots  # noqa: E402

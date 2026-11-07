@@ -74,6 +74,10 @@ from coordinator_core.tests.test_no_bare_hot_path_spawn import (
     _is_no_console_shaped,
 )
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 #: Trees this gate scans. Broader than the sibling gate's `coordinator_core`

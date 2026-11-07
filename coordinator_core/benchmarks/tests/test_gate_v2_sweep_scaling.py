@@ -12,6 +12,10 @@ import subprocess
 from coordinator_core.benchmarks import gate_v2_sweep_profile as prof
 from coordinator_core.ops import roadmap_plan_gate as op
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 N = prof.N_DEFAULT
 
 # sha256 of the sorted-key JSON of each shape's report over `build_corpus(tmp, N)`, taken at base 24ee6f09ae.

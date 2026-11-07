@@ -5,6 +5,8 @@ from __future__ import annotations
 import time
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards.guard_subagent_heavy_ue_launch import check as _check
 from coordinator_core.bash_guards.roster import guard_roster
 from coordinator_core.guard_messages.testing import envelope_of

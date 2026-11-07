@@ -23,6 +23,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _FIXTURE_PATH = Path(__file__).resolve().parent / "fixtures" / "commit_surface_protected_blocks.json"
 

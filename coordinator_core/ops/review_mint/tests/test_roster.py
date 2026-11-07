@@ -3,6 +3,8 @@ import math
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.review_mint import roster
 from coordinator_core.ops.review_mint.roster import (
     DELIVERY_NOT_ROSTERED,

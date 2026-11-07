@@ -15,6 +15,8 @@ import yaml
 
 from coordinator_core.ops import plan_seam_check as op
 
+pytestmark = pytest.mark.complete
+
 HEAD = "a" * 40
 RANGE = "b" * 40 + ".." + "c" * 40
 

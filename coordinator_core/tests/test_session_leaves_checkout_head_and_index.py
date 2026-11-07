@@ -10,6 +10,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 ROOT_CONFTEST = Path(__file__).resolve().parents[2] / "conftest.py"
 
 _CONFTEST = '''

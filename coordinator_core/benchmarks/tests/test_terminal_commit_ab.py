@@ -16,6 +16,8 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_ab as ab
 from coordinator_core.git.git_state import head_sha
 
+pytestmark = pytest.mark.complete
+
 _REPO = Path(__file__).resolve().parents[3]
 
 

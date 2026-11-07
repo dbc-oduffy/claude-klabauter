@@ -27,6 +27,8 @@ from typing import List, Optional
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core._content_root_primitive import (
     FLAT_CONTENT_ROOT_MARKER as _FLAT_CONTENT_ROOT_MARKER,
 )

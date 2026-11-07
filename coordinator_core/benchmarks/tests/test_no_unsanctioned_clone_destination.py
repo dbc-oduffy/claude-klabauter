@@ -54,6 +54,10 @@ import ast
 from pathlib import Path
 from typing import Iterator, NamedTuple
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _ENGINE_PKG = Path(__file__).resolve().parents[2]
 
 # THROWAWAY-MINTING sinks only, and this narrowness is load-bearing.

@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import doctor_boot_banners as banners
 
 _SCRIPT = "hooks/scripts/guard_a.py"

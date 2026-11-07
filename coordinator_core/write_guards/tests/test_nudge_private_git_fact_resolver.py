@@ -24,6 +24,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.write_guards import nudge_private_git_fact_resolver as guard
 
 

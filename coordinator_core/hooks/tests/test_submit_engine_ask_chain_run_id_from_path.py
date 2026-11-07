@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks.tests.test_submit_engine_ask_emit_budget import _reply, _run_deferred
 
 _PARAMS = {"ask": "build the thing", "session_id": ""}

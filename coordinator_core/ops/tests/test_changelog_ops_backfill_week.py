@@ -10,6 +10,8 @@ import pytest
 
 from coordinator_core.ops import changelog_ops
 
+pytestmark = pytest.mark.complete
+
 WEEK = "2026-03-02"  # a Monday
 
 

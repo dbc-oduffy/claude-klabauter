@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests.test_submit_engine_ask_minted_stage_pending import (
     FIRE_ARGS, RUN_ID, RUN_REL, _direct_script, _node, _pending, _starts, repo,  # noqa: F401

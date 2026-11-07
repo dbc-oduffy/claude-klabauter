@@ -35,9 +35,13 @@ from __future__ import annotations
 import shlex
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.bash_guards import commit_tripwires as ct
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.guard_messages.testing import envelope_of
+
+pytestmark = pytest.mark.complete
 
 
 def _enveloped(check):

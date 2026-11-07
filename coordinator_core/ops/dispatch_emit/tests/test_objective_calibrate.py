@@ -14,7 +14,7 @@ from coordinator_core.ops.dispatch_emit import objective_contract as oc
 from coordinator_core.ops.dispatch_emit.objective_calibrate import calibrate
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 RUN = "run-x"
 

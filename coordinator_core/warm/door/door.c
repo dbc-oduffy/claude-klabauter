@@ -1802,6 +1802,15 @@ static int door_ensure_dir_recursive_w(wchar_t *path) {
 #define DOOR_DRAIN_WAIT_MS 500
 #define DOOR_DRAIN_POLL_MS 20
 
+/* DEAD-ENGINE NON-HOOK COLD LEG. After RESPAWN ON MISS the cold child (which
+ * inherits this process's environment: CreateProcessW lpEnvironment NULL) is
+ * handed `DOOR_COLD_BOOT_WAIT_ENV_W=DOOR_COLD_BOOT_WAIT_SECS_W`: it answers
+ * the op at once, loudly, instead of sleeping for the booting server. Billed
+ * budget of that wait: 0 (`invoke/warm_miss.py :: WARM_BOOT_WAIT_SECS`). A
+ * caller-set value wins. Twin of door_posix.c. */
+#define DOOR_COLD_BOOT_WAIT_ENV_W L"COORDINATOR_WARM_BOOT_WAIT_SECS"
+#define DOOR_COLD_BOOT_WAIT_SECS_W L"0"
+
 static int door_svc_dir_w(wchar_t *out, size_t cap, const char *clone_hash) {
     wchar_t base[MAX_PATH];
     DWORD n = GetEnvironmentVariableW(L"COORDINATOR_WARM_RUNTIME_BASE", base, MAX_PATH);
@@ -2198,6 +2207,13 @@ int main(void) {
          * docstring for the full contract. */
         if (pipe_err == ERROR_FILE_NOT_FOUND) {
             door_maybe_spawn_server(engine_root_w, clone_hash);
+            SetLastError(ERROR_SUCCESS);
+            if (!g_door_hook_mode &&
+                GetEnvironmentVariableW(DOOR_COLD_BOOT_WAIT_ENV_W, NULL, 0) == 0 &&
+                GetLastError() == ERROR_ENVVAR_NOT_FOUND) {
+                (void)SetEnvironmentVariableW(DOOR_COLD_BOOT_WAIT_ENV_W,
+                                              DOOR_COLD_BOOT_WAIT_SECS_W);
+            }
         }
         return fall_through_and_free(argc, wargv, engine_root_w);
     }

@@ -7,6 +7,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.warm import dispatch_ack
 
 

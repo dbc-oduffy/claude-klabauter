@@ -13,6 +13,8 @@ import re
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow

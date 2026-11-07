@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _PUBLISH = Path(__file__).resolve().parents[1] / "publish.py"
 _FILES = (
     "coordinator/bin/publish.py",

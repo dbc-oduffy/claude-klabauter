@@ -1496,6 +1496,13 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 checkpoint_withheld_paths=checkpoint_withheld,
                 checkpoint_withheld_reasons=checkpoint_reasons,
             )
+        if checkpoint_withheld:
+            # Same `message` reaches stamp_checkpoint, which skips rows declaring a withheld path.
+            from coordinator_core.ops.dispatch_emit.checkpoint_stamp import checkpoint_withheld_trailer_lines
+
+            message = f"{message.rstrip(chr(10))}\n" + "\n".join(
+                checkpoint_withheld_trailer_lines(checkpoint_withheld)
+            ) + "\n"
         with ledger.phase("checkpoint_symbols"):
             symbol_refusal = _checkpoint_symbol_refusal(
                 worktree_root, raw_paths, raw_deleted, expectations["supplied_blobs"]

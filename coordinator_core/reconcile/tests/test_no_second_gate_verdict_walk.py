@@ -59,6 +59,10 @@ import ast
 from pathlib import Path
 from typing import Iterator, List, Tuple
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 #: The ONE module permitted to co-locate a `blocked_by` read with a

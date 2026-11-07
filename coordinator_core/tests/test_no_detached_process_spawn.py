@@ -47,6 +47,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _ENGINE_ROOT = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _ENGINE_ROOT.parent
 

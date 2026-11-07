@@ -13,6 +13,10 @@ from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops.review_mint.execute_review import OperativeCriterion
 from coordinator_core.ops.review_mint.final_review import final_review_mandate
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _ROOT = Path(__file__).resolve().parents[4]
 _CRITERION = "the emitted script ends review with one verified final Opus pass"
 _FIRST = "coordinator_core/ops/dispatch_emit/wave_map.py"

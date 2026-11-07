@@ -86,6 +86,8 @@ import pytest
 # ---------------------------------------------------------------------------
 # Production directories to audit
 # ---------------------------------------------------------------------------
+pytestmark = pytest.mark.complete
+
 _HANDLER_DIRS: list[pathlib.Path] = [
     pathlib.Path("coordinator_core/ops"),
     pathlib.Path("coordinator_core/hooks"),

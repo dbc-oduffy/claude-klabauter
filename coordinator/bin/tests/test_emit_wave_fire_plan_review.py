@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import yaml
 
 _BIN = Path(__file__).resolve().parents[1]

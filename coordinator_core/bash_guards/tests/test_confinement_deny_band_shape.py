@@ -98,6 +98,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     CorpusRow,
 )
 
+pytestmark = pytest.mark.complete
 
 _KNOWN_ALLOW_WITH_CONTENT_EXCEPTIONS: frozenset = frozenset()
 

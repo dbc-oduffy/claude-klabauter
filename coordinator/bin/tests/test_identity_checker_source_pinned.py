@@ -6,6 +6,10 @@ Run: python -m pytest coordinator/bin/tests/test_identity_checker_source_pinned.
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.util
 import subprocess
 import sys

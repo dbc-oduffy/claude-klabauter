@@ -40,6 +40,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 # ---------------------------------------------------------------------------
 # Import guard — MUST precede any test so @register_op fires first.
 # this file never imported the op module, so register_op never fired and the

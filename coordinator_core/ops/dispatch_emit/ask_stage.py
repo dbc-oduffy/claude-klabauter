@@ -109,7 +109,7 @@ from coordinator_core.ops.dispatch_emit.request_validation import Field, validat
 from coordinator_core.ops.dispatch_emit import halt_tree_evict, kept_work, requirements_ledger, resume_snapshot, row_returns, sibling_split
 from coordinator_core.ops.dispatch_emit.land_run import _DELIVERED_REPORT_RE, _UNDELIVERED_REPORT_RE
 from coordinator_core.ops.dispatch_emit.self_dr_discharge import discharge_clauses
-from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, SizingFireRefused, load_sizing, resolve_arm
+from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, OUTSIDE_CREDIT_REASON, SizingFireRefused, load_sizing, resolve_arm
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import mint_xs_spine
 from coordinator_core.ops.dispatch_emit.spine_read import (
     EM_OWNED_REASONS,
@@ -1434,13 +1434,19 @@ def stage(
     ]
     ledger_item_ids, withheld_ids = requirements_ledger.ledger_ids(register_rows)
     review_declared = _reviewable(_dedupe_preserve_order(review_paths))
+    review_code = review_floor.code_paths(review_declared)
+    if ledger_resume and only_rows is not None:
+        # A resume's landed rows stay out of the declared set but still owe the review floor.
+        review_code = _dedupe_preserve_order(
+            [*review_code, *review_floor.code_paths(commit_pathspec_or_none(dropped_landed) or [])]
+        )
     with leg("baseline"):
         write_baseline = _stage_write_baseline(root, manifest_rows, record, run_sizing_rel)
     manifest = StageManifest(
         run_dir=_rel(root, run_dir),
         rows=tuple(manifest_rows),
         review_declared_paths=review_declared,
-        review_code_paths=tuple(review_floor.code_paths(review_declared)),
+        review_code_paths=tuple(review_code),
         marker_path=_rel(root, marker_path),
         plan_id=_plan_id(plan_text),
         gated=tuple(gated),
@@ -1501,6 +1507,7 @@ def stage(
 
 CRITERION_UNREACHABLE_AT_STAGING = "CRITERION-UNREACHABLE-AT-STAGING"
 
+_OUTSIDE_CREDIT_RE = re.compile(re.escape(OUTSIDE_CREDIT_REASON).replace(re.escape("{sha}"), r"(\S+)"))
 _PREDECESSOR_PLAN_RE = re.compile(r"depends_on_plan (\S+\.md)\b")
 
 
@@ -2023,8 +2030,19 @@ def _checkout_convert(root: Path, rel: str, data: bytes) -> Optional[bytes]:
 
 
 def manifest_payload(root: Path, manifest: StageManifest) -> dict:
-    """`manifest.to_json()` plus `head_sha`: the execute-start HEAD (stage commits nothing), None when unresolvable."""
-    return {**manifest.to_json(), "head_sha": read_head_sha(root)}
+    """`manifest.to_json()` plus `head_sha`: the execute-start HEAD (stage commits nothing), None when unresolvable.
+
+    Adds `outside_credited` (`[{id, sha}]`) when a dropped row was credited as landed outside the executor,
+    so the stage reply names each credited row and sha beside the one notes line."""
+    payload = {**manifest.to_json(), "head_sha": read_head_sha(root)}
+    credited = [
+        {"id": d["id"], "sha": m.group(1)}
+        for d in manifest.dropped_rows
+        if (m := _OUTSIDE_CREDIT_RE.match(str(d.get("reason") or "")))
+    ]
+    if credited:
+        payload["outside_credited"] = credited
+    return payload
 
 
 def _consume_park_marker(root: Path, run_id: str) -> bool:

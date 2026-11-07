@@ -81,6 +81,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import invoke_from_argv
 from coordinator_core.ops.invoke_from_argv import (
     _entrypoint_argv_shape,

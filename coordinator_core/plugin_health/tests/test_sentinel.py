@@ -39,6 +39,8 @@ from coordinator_core.plugin_health.sentinel import (
     probe_p17,
 )
 
+pytestmark = pytest.mark.complete
+
 
 def test_resolve_claude_home_falls_back_to_home_when_unset():
     assert _resolve_claude_home(None) == Path.home() / ".claude"

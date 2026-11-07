@@ -5,6 +5,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.group_em import nomination, session_registry, suite_grant
 from coordinator_core.session import grant as session_grant
 

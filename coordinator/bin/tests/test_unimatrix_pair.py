@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN = Path(__file__).resolve().parents[1]
 
 

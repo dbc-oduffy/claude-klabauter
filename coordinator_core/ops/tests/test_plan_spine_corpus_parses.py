@@ -33,6 +33,8 @@ import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 
+pytestmark = pytest.mark.complete
+
 _PLANS = Path(__file__).resolve().parents[3] / "docs" / "plans"
 
 

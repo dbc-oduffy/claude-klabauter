@@ -11,6 +11,9 @@ import pytest
 from coordinator_core.install import prereq_probe as pp
 
 
+pytestmark = pytest.mark.complete
+
+
 def _cp(returncode=0, stdout="", stderr=""):
     return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 

@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import yaml
 
 import coordinator_core.sizing_assemble as sa

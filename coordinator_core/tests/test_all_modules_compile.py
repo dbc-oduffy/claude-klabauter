@@ -4,6 +4,10 @@ from __future__ import annotations
 import warnings
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SWEPT_DIRS = ("coordinator_core", "coordinator/bin")
 

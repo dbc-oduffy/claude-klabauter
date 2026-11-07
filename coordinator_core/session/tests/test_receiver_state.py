@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.session import receiver_state as rs
 

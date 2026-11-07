@@ -8,12 +8,15 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Iterable, Optional
 
 from coordinator_core.ops.dispatch_emit import kept_work
 
 PRINTS_FILE = "write_prints.json"
+AGENT_RUNS_FILE = "agent_runs.json"
 
 
 def _norm(path: object) -> str:
@@ -91,13 +94,108 @@ def _peer_edit_since_last_print(root: Path, run_id: str, rel: str, tool_input: o
     return kept_work.blob_sha(text.replace(new, old, 1).encode("utf-8")) != prior
 
 
+def _bound_agents(root: Path, run_id: str) -> frozenset:
+    """Agent ids bound to `run_id` in its record dir's `agent_runs.json`; empty when absent or unreadable."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        data = json.loads((record_dir(root, run_id) / AGENT_RUNS_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return frozenset()
+    return frozenset(a for a in data if isinstance(a, str)) if isinstance(data, dict) else frozenset()
+
+
+def _bind(root: Path, run_id: str, agent_id: str) -> None:
+    """Add `agent_id` to the run's `agent_runs.json`; atomic replace."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    target = record_dir(root, run_id) / AGENT_RUNS_FILE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    lock = target.with_name(f"{AGENT_RUNS_FILE}.lock")
+    held = _take_lock(lock)
+    try:
+        merged = {a: True for a in _bound_agents(root, run_id)}
+        merged[agent_id] = True
+        tmp = target.with_name(f"{AGENT_RUNS_FILE}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8")
+        os.replace(tmp, target)
+    finally:
+        if held:
+            try:
+                lock.unlink()
+            except OSError:
+                pass
+
+
+def _take_lock(lock: Path) -> bool:
+    """Create `lock` exclusively, spinning up to ~1s; a lock older than 2s is a dead holder's and is broken.
+    False when not taken (the caller proceeds unlocked rather than drop the binding)."""
+    deadline = time.monotonic() + 1.0
+    while True:
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+            return True
+        except FileExistsError:
+            try:
+                if time.time() - lock.stat().st_mtime > 2.0:
+                    lock.unlink()
+                    continue
+            except OSError:
+                continue
+        except OSError:
+            return False
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.005)
+
+
+def _footprint_holds(root: Path, run_id: str, rel: str) -> bool:
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.live_run_writes import manifest_footprint
+
+    try:
+        manifest = json.loads((record_dir(root, run_id) / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(manifest, dict) and rel in {_norm(p) for p in manifest_footprint(manifest)}
+
+
+def resolve_run(root: Path, session_id: str, agent_id: str, rel: str) -> Optional[str]:
+    """The live run of `session_id` that owns a subagent write of `rel`, else None (ambiguous or none).
+
+    Order: the run whose `agent_runs.json` binds `agent_id`; else the unique run whose manifest footprint
+    holds `rel`; else the session's single live run. The last two bind `agent_id` to the run found.
+    Zero spawn; never raises.
+    """
+    try:
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        runs = sorted(
+            {r["run_id"] for r in run_token.live_records(Path(root)) if r.get("session_id") == session_id}
+        )
+        if not runs:
+            return None
+        bound = [r for r in runs if agent_id in _bound_agents(Path(root), r)]
+        if len(bound) == 1:
+            return bound[0]
+        if bound:
+            return None
+        owners = [r for r in runs if _footprint_holds(Path(root), r, _norm(rel))]
+        found = owners[0] if len(owners) == 1 else (runs[0] if not owners and len(runs) == 1 else None)
+        if found is not None:
+            _bind(Path(root), found, agent_id)
+        return found
+    except Exception:  # noqa: BLE001 -- unresolved: the checkpoint withholds
+        return None
+
+
 def record_write(
     root: Path, session_id: str, agent_id: str, path: str, tool_input: object = None
 ) -> Optional[str]:
-    """Print `path` for the one live run of `session_id` at the moment its executor wrote it.
+    """Print `path` for the live run that owns the subagent's write at the moment its executor wrote it.
 
     Only a subagent write counts (`agent_id` set): the EM's own hand edits are not the run's bytes.
-    Records nothing when zero or several live runs hold the session, or the path is outside `root`.
+    Records nothing when `resolve_run` finds no unique run, or the path is outside `root`.
     An `Edit` (`tool_input`) that started from bytes other than the run's last print drops the print,
     so the checkpoint withholds the path rather than absorbing the peer's edit.
     Returns the run id recorded for, else None. Zero spawn; never raises.
@@ -105,15 +203,12 @@ def record_write(
     if not (session_id and agent_id):
         return None
     try:
-        from coordinator_core.ops.dispatch_emit import run_token
-
         rel = _repo_relative(Path(root), path)
         if rel is None:
             return None
-        runs = {r["run_id"] for r in run_token.live_records(Path(root)) if r.get("session_id") == session_id}
-        if len(runs) != 1:
+        run_id = resolve_run(Path(root), session_id, agent_id, rel)
+        if run_id is None:
             return None
-        (run_id,) = runs
         if _peer_edit_since_last_print(Path(root), run_id, rel, tool_input):
             drop(Path(root), run_id, rel)
             return run_id

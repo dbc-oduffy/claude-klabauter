@@ -9,6 +9,8 @@ import pytest
 from coordinator_core.content_root import read_content_root
 from coordinator_core.ops.dispatch_emit import emit
 
+pytestmark = pytest.mark.complete
+
 _MODEL_LINE = re.compile(r"^model:\s*['\"]?([A-Za-z0-9._-]+)['\"]?\s*$", re.MULTILINE)
 
 

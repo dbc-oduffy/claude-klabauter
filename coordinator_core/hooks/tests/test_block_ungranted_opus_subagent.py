@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.hooks.block_ungranted_opus_subagent as mod
 import coordinator_core.hooks.block_unenumerated_agent_type as unenumerated_mod
 

@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import ipc
 
 FIX = Path(__file__).parent / "fixtures" / "plan_merge"

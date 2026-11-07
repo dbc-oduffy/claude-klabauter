@@ -43,6 +43,10 @@ Spec backlink: state/dispatch-briefs/2026-08-20-a-refusal-cannot-exit-zero/C31.m
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import ast
 import os
 import re

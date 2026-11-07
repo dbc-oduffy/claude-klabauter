@@ -20,6 +20,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_dev_repo_sentinel_removal as guard
 from coordinator_core.bash_guards import dispatch

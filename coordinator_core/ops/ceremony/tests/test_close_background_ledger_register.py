@@ -95,6 +95,31 @@ def test_xs_close_with_unclaimed_ledger_met_row_writes_it_met_and_ships(tmp_path
     assert out["doc"]["status"] == "shipped"
 
 
+def test_criterion_partial_on_a_ledger_met_row_does_not_override_met_nor_block_ship(tmp_path):
+    _init_repo(tmp_path)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / PLAN).write_text(f"---\nplan_id: p\nsizing_object: {SIZING}\n---\nbody\n", encoding="utf-8")
+    (tmp_path / SIZING).write_text(_wb_sizing_text([_wb_row("R1", claimed=False, anchor="relayed")]), encoding="utf-8")
+    criterion = {
+        "status": "met", "observation": "ok",
+        "register_rows": [{"id": "R1", "claim": "this-plan", "status": "partial", "wired": False}],
+    }
+    run_close.write_close_job(
+        tmp_path, RUN, ("sizing-ship",), datetime.now().astimezone() + timedelta(minutes=10),
+        plan_rel=PLAN, terminal_sha=SHA, criterion=criterion,
+        inputs={"ledger_met": "ledger-met: R1", "ledger_judged": ["R1"]},
+    )
+    ctx = cb.JobContext(tmp_path, tmp_path / ".git", RUN, (), None, SHA, run_close._load(tmp_path, RUN))
+    result = cb._sizing_ship(ctx)
+    text = (tmp_path / SIZING).read_text(encoding="utf-8")
+    row = {r["id"]: r for r in rr.read_register(text).rows}["R1"]
+
+    assert (row["status"], row["wired"]) == ("met", True)
+    assert "is partial" not in result.detail
+    assert yaml.safe_load(text)["status"] == "shipped"
+
+
 def test_refused_ship_records_failed_with_the_reason(tmp_path):
     out = _xs_close(tmp_path, extra_rows=(_wb_row("T23", claimed=False, anchor="relayed"),))
 

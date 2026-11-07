@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 BIN = Path(__file__).resolve().parents[1]
 _spec = importlib.util.spec_from_file_location("box_memory_snapshot", BIN / "box-memory-snapshot.py")
 mod = importlib.util.module_from_spec(_spec)

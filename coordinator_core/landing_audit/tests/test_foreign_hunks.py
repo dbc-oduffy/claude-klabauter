@@ -7,7 +7,7 @@ import pytest
 from coordinator_core.landing_audit.foreign_hunks import audit, landings, run_manifest_writes
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 RUN_A = "ask-20261029T010101-aaaaaa"
 RUN_B = "ask-20261029T020202-bbbbbb"

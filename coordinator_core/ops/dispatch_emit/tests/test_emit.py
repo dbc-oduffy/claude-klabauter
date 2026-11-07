@@ -34,6 +34,8 @@ from ._shared_expand import expand_shared
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
+pytestmark = pytest.mark.complete
+
 _AGENT_CALL_RE = re.compile(r"agent\s*\(")
 _META_PHASE_LINE_RE = re.compile(r"phases\s*:\s*\[([^\]]*)\]")
 _JS_STRING_LITERAL_RE = re.compile(r"'((?:[^'\\]|\\.)*)'")

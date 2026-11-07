@@ -17,6 +17,10 @@ Spec backlink: coordinator/docs/wiki/machine-local-registry.md §4a
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import io
 import json
 import os

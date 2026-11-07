@@ -19,6 +19,8 @@ from coordinator_core.session import output_tree_layout as otl
 from coordinator_core.session import record_homes
 from coordinator_core.tests.git_seed import seeded_repo
 
+pytestmark = pytest.mark.complete
+
 _CLI_PATH = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "coordinator-doc-new.py"
 _TODAY = "2026-11-03"
 _MONTH = "2026-11"

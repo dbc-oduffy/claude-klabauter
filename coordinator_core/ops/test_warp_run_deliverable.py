@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import warp_run_deliverable as wrd
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker

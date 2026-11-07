@@ -16,6 +16,8 @@ from coordinator_core.execute_plan_assemble.falsifier_shape import (
     _DISPOSITION_REF_SHA_RE,
 )
 
+pytestmark = pytest.mark.complete
+
 _SCHEMA = (
     Path(__file__).resolve().parents[2]
     / "frontmatter" / "schemas" / "plan-tasks.schema.json"

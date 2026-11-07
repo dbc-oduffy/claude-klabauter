@@ -46,6 +46,8 @@ from coordinator_core.guard_messages.alternative_record import (
 )
 from coordinator_core.subagent_sandbox.engine import load_policy
 
+pytestmark = pytest.mark.complete
+
 
 def _record(*members, kind="deny", summary="BLOCKED: fake finding.", **extra) -> AlternativeRecord:
     return AlternativeRecord(verdict_kind=kind, summary=summary, members=members, guard_name="fake", **extra)

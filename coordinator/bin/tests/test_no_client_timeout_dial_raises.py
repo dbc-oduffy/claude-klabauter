@@ -31,6 +31,10 @@ keeps the guard readable while the peer work retiring that var's read lands.
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import ast
 import unittest
 from pathlib import Path

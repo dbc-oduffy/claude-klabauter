@@ -3,6 +3,10 @@ and anchor-premise defects, and passes the control plan that prep_gate passes.
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.util
 import sys
 from pathlib import Path

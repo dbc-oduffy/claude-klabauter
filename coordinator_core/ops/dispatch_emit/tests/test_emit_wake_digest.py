@@ -26,6 +26,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit.emit import _BLOCKED_STATUS_JS_RE, compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
+pytestmark = pytest.mark.complete
+
 
 def _row(id_, writes, **kwargs):
     return WaveRow(

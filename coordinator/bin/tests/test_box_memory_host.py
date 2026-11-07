@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _HOST = Path(__file__).resolve().parents[1] / "lib" / "box_memory_host.py"
 _spec = importlib.util.spec_from_file_location("box_memory_host_under_test", _HOST)
 host = importlib.util.module_from_spec(_spec)

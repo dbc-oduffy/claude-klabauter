@@ -33,6 +33,8 @@ from coordinator_core.win_portability import is_executable
 # ---------------------------------------------------------------------------
 
 
+pytestmark = pytest.mark.complete
+
 _HOME_VARS = ("CLAUDE_HOME", "HOME", "USERPROFILE")
 
 

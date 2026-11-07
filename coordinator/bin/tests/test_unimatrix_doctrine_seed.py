@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 BIN = Path(__file__).resolve().parents[1]
 REPO = BIN.parents[1]
 

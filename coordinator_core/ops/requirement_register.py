@@ -510,6 +510,36 @@ def unclaimed_ids(
     return out
 
 
+_NON_CLAIMING_DISPOSITIONS = frozenset({"wont_do", "backlogged", "spun_off"})
+
+
+def spine_claimants(spine_rows: Iterable[Mapping[str, Any]]) -> dict[str, list[str]]:
+    """`{register id: [spine row ids claiming it]}` from each row's `register_rows`. A row
+    dispositioned wont_do/backlogged/spun_off claims nothing."""
+    out: dict[str, list[str]] = {}
+    for srow in spine_rows:
+        if not isinstance(srow, Mapping) or srow.get("disposition") in _NON_CLAIMING_DISPOSITIONS:
+            continue
+        ids = srow.get("register_rows")
+        if not isinstance(ids, (list, tuple)):
+            continue
+        for rid in ids:
+            owners = out.setdefault(str(rid), [])
+            sid = str(srow.get("id", ""))
+            if sid not in owners:
+                owners.append(sid)
+    return out
+
+
+def spine_unclaimed_ids(
+    register_rows: Sequence[Mapping[str, Any]],
+    spine_rows: Iterable[Mapping[str, Any]],
+    exclude: Iterable[Any] = (),
+) -> list[str]:
+    """Register-row ids no live spine row claims, outside `exclude`."""
+    return unclaimed_ids(register_rows, spine_claimants(spine_rows).keys(), exclude)
+
+
 def _owes_unclaimed_work(row: Mapping[str, Any]) -> bool:
     """True for a claimant-less row that is not met-and-wired and not deferred/waived with a ruling."""
     if claimants(row):

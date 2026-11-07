@@ -14,6 +14,9 @@ from coordinator_core.benchmarks.process_time import batched_process_time_ms
 from coordinator_core.session import claim_index, touch_record
 
 
+pytestmark = pytest.mark.complete
+
+
 def _write(path, content):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:

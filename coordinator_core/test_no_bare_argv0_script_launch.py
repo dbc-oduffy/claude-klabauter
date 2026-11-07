@@ -117,6 +117,8 @@ from typing import Dict, List, Optional, Tuple
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _SCAN_ROOT = Path(__file__).resolve().parent
 

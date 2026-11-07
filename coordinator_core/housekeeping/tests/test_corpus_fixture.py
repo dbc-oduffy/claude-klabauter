@@ -25,6 +25,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.housekeeping.tests.corpus_fixture import (
     ARCHIVE_TOTAL_TARGET,
     DECOY_COUNT,

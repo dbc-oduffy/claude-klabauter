@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.daily_branch import (
     format_span_suffix,
     has_remote_prefix,

@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _NO_CONSOLE = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 

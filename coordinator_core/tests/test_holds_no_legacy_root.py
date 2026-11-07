@@ -22,6 +22,10 @@ from pathlib import Path
 
 from coordinator_core.tests import _legacy_root_scan as scan
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _ALLOWLIST = _REPO_ROOT / "docs" / "research" / "2026-09-30-content-root-allowlist.md"
 _BLOCK = re.compile(r"```allowlist\n(.*?)```", re.DOTALL)

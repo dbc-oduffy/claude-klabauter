@@ -32,6 +32,9 @@ from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import RELAY_SHA256_JS, relay_digest
 
 
+pytestmark = pytest.mark.complete
+
+
 def _terminal_call(**kw) -> str:
     kw.setdefault("label", "commit")
     kw.setdefault("phase_title", "Grind")

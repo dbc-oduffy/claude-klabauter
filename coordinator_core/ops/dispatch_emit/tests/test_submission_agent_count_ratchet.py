@@ -17,6 +17,8 @@ from coordinator_core.ops.dispatch_emit.tests import test_leg_register_ratchet a
 
 #: Per-child legs allowed to run an op, by label prefix: a chain hop fires only on an M+ hand-off after
 #: that child's own run. Shrink-only.
+pytestmark = pytest.mark.complete
+
 _PER_CHILD_CONDITIONAL: frozenset[str] = frozenset({"chain-emit-"})
 _PER_CHILD_CONDITIONAL_MAX = 1
 

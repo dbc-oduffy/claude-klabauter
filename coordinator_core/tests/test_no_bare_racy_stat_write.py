@@ -9,6 +9,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _racy_stat_detector import find_sites, site_keys  # noqa: E402

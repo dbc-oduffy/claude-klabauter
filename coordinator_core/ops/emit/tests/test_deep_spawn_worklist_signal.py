@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.emit.context import EmitContext
 from coordinator_core.ops.emit.sections import routine_signals
 from coordinator_core.ops.emit.sections.routine_signals import _deep_spawn_worklist_signal

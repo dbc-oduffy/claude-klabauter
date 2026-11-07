@@ -13,6 +13,8 @@ from coordinator_core.hooks import guard_em_prefire_survey as g
 from coordinator_core.session import em_prefire_window as epw
 from coordinator_core.session import engine_route_state as ers
 
+pytestmark = pytest.mark.complete
+
 SID = "sess-1"
 
 

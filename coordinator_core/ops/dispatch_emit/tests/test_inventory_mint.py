@@ -14,6 +14,8 @@ from coordinator_core.ops.dispatch_emit import inventory_mint as im
 from coordinator_core.ops.dispatch_emit.emit import _BRIEF_PRECEDENCE_CLAUSE, emit_script
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
+pytestmark = pytest.mark.complete
+
 
 def _write_inventory(tmp_path, body: str, name: str = "20260918T000000-fixture.md"):
     path = tmp_path / name

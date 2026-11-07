@@ -70,9 +70,9 @@ def _landed(root, out: dict) -> set:
 
 def test_a_stranded_run_refires_and_lands_its_own_product_without_the_siblings_dirt(halted, monkeypatch):
     base = _git(halted, "rev-parse", "HEAD").strip()
-    _put(halted, RESIDUE, "b = 9  # foreign\n")
+    _put(halted, RESIDUE, "b = 1\nforeign = 9\n")
     _git(halted, "commit", "-q", "-am", "foreign edit after the run base")
-    _put(halted, RESIDUE, "b = 2  # reworded by the reviewer\n")
+    _put(halted, RESIDUE, "b = 2\n")
     _sibling_live(halted)
     monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
     monkeypatch.setattr(review_edits, "review_writes", lambda root, sid, since: {RESIDUE: "reviewer"})

@@ -27,6 +27,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.scratchpad_sweep import (
     _apply_size_cut,
     _build_slug_to_root_map,

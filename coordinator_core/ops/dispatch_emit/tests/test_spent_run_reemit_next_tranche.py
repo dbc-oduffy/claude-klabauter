@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.emission_receipt import stamp_landed
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit

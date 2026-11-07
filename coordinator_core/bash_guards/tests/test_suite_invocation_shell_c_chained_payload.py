@@ -6,6 +6,8 @@ import shlex
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 
 _FAST = "python3 bin/run-fast-tests.py"

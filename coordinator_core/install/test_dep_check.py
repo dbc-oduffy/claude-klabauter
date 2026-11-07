@@ -42,6 +42,8 @@ from typing import List
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.install import dep_check
 
 

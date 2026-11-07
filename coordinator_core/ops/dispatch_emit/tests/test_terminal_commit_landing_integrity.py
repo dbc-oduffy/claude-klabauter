@@ -116,7 +116,9 @@ def test_a_caller_reading_a_name_only_the_worktree_callee_binds_is_refused_by_th
 
     assert out["committed"] is False, out
     text = str(out)
-    assert "import_closure" in text and "new_fn" in text, out
+    # The lost-definition landing gate fires ahead of the import_closure detector and names the same
+    # worktree-only symbol; either gate is a correct refusal.
+    assert ("import_closure" in text or "lost-definition" in text) and "new_fn" in text, out
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 

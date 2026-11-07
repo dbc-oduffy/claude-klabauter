@@ -7,6 +7,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.tests.register_rows import (
     RegisterId,
     Resolution,

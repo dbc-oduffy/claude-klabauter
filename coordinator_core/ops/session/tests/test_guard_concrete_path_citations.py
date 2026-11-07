@@ -36,6 +36,11 @@ from coordinator_core.ops.session.guard_concrete_path_citations import (
 )
 
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
+
 def _rules(findings):
     return {f.rule for f in findings}
 

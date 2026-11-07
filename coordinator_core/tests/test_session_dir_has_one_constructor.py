@@ -70,6 +70,8 @@ from typing import List, Optional, Tuple
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 #: Scanned trees. ``coordinator/bin`` is included because

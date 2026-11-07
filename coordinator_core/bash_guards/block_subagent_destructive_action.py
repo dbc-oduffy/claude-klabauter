@@ -2552,7 +2552,37 @@ def _clone_into_scratch(remaining: List[str]) -> bool:
         dest_name = positionals[1]
     else:
         return False
-    return _dest_in_scratch(dest_name) or _clone_dest_in_session_scratchpad(dest_name)
+    return (
+        _dest_in_scratch(dest_name)
+        or _clone_dest_in_session_scratchpad(dest_name)
+        or _clone_dest_empty_or_absent(dest_name)
+    )
+
+
+_DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:[/\\]")
+
+
+def _clone_dest_empty_or_absent(dest_name: str) -> bool:
+    """`dest_name` names no path yet or an empty directory: git writes nothing existing. A drive-
+    letter spelling (`F:/dev/x`) is absolute on every host; a relative one needs the payload cwd.
+    One stat/scandir probe, no spawn."""
+    dest_name = dest_name.replace("\\", "/")
+    if _DRIVE_ABS_RE.match(dest_name) or os.path.isabs(dest_name):
+        dest = Path(dest_name)
+    else:
+        ctx = _SCRATCH_CTX.get()
+        if ctx is None:
+            return False
+        dest = ctx[0] / dest_name
+    try:
+        if not os.path.lexists(dest):
+            return True
+        if not dest.is_dir() or dest.is_symlink():
+            return False
+        with os.scandir(dest) as it:
+            return next(it, None) is None
+    except OSError:
+        return False
 
 
 #: `git init` options that take a separate argument. `--template` copies hooks from a caller-
@@ -3203,13 +3233,9 @@ def _evaluate_git_segment_anchored(
     if subcmd == "clone":
         if _clone_into_scratch(list(remaining or ())):
             return None
-        ctx = _SCRATCH_CTX.get()
-        if ctx is not None:
-            return f"git clone (only into {(ctx[1] / 'scratch').as_posix()}/ or the session scratchpad)"
         return (
-            "git clone (only into a repo's scratch/ or the session scratchpad; no repo resolved -- "
-            "clone to an absolute path under the session scratchpad, or run it from the repo "
-            "checkout with no cd/-C beyond one leading `cd <abs dir> &&`)"
+            "git clone (destination must be an empty or absent directory, without "
+            "--template/--separate-git-dir/-u/--upload-pack/-c; clone into a fresh path)"
         )
     if subcmd == "init":
         if _init_into_scratch(list(remaining or ())) or _scratchpad_fixture_init(list(remaining or ())):

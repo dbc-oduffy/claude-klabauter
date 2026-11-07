@@ -14,6 +14,8 @@ import pytest
 
 from coordinator_core.bash_guards.tests import guard_message_corpus as corpus
 
+pytestmark = pytest.mark.complete
+
 
 def _is_git(args) -> bool:
     argv = args if isinstance(args, (list, tuple)) else [args]

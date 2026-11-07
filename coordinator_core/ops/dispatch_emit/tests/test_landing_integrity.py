@@ -10,6 +10,8 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
+pytestmark = pytest.mark.complete
+
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 
 

@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import gen_claude_author_shim as gcds
 from coordinator_core.ops.gen_claude_author_shim import (
     EXPECTED_SOURCE_LINE,

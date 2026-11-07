@@ -9,6 +9,8 @@ import pytest
 
 from coordinator_core.ops.daily_summary_gap import GapRefusal, compose_daily_summary_gap
 
+pytestmark = pytest.mark.complete
+
 DAY = "2026-01-15"
 
 

@@ -17,6 +17,10 @@ from coordinator_core.ops.ceremony.renderers import (
     render_plans_index_markdown,
 )
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _MD_LINK_TARGET_RE = re.compile(r"\]\(([^)]+)\)")
 
 

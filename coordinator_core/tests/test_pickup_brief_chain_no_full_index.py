@@ -7,6 +7,8 @@ import pytest
 
 from coordinator_core import dag, pickup_brief
 
+pytestmark = pytest.mark.complete
+
 _CORPUS = 3000
 
 

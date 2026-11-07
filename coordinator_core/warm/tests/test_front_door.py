@@ -30,6 +30,8 @@ import pytest
 
 from coordinator_core.warm import breadcrumb, front_door, skew, supervisor
 
+pytestmark = pytest.mark.complete
+
 pytestmark_win = pytest.mark.skipif(sys.platform != "win32", reason="SO_EXCLUSIVEADDRUSE is Windows-only")
 
 

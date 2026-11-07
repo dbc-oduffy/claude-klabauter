@@ -4936,6 +4936,9 @@ def compose_ask_script(
                 f"await {_PLAN_BLITZ_FN}({{ {blitz_spread}mode: 'single', {ready_op_js}repoRoot: REPO_ROOT, waveIndex: 0, "
                 "gateReportPath: REPO_ROOT + '/' + _sizingRel, "
                 f"trailDir: {_lit(run_dir + '/' + _BLITZ_TRAIL)}, batons: [{{ ...(_gate.baton ?? {{}}), "
+                "id: _gate.baton?.id ?? ((_sizingRel ?? '').split('/').pop().replace(/\\.yaml$/, '')"
+                " "
+                "|| (() => { throw new Error('plan-blitz baton has no id: the gate returned none and no sizing stem'); })()), "
                 f"title: _gate.baton?.title ?? {json.dumps(_static_baton['title'])}, "
                 f"exitCriterion: _gate.baton?.exitCriterion ?? _gate.exit_criterion ?? {json.dumps(_static_baton['exitCriterion'])}, "
                 "sized: true, sizingObject: _sizingRel, tshirt: _gate.tshirt, route: _gate.baton?.route ?? _gate.route, "
@@ -5635,7 +5638,7 @@ def compose_ask_script(
     b.append(_review_blocked_halt_js(sizing_rel))
     b.append(
         f"  const _reviewVerdicts = {_VERDICT_COUNT_JS};\n"
-        "  if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) { _halted = { halted: "
+        "  if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && !_metBySkipped) { _halted = { halted: "
         f"{_lit(HALT_REVIEW_FLOOR)}, reason: 'review: 0 verdicts on a code-editing run (' + "
         f"_manifest.{_REVIEW_CODE_KEY}.slice(0, 5).join(', ') + ')', run_id: _runId, "
         "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"

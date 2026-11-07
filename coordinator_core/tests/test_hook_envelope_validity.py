@@ -80,6 +80,8 @@ from coordinator_core._hook_envelope import (
     rewrite_input,
 )
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = [
     REPO_ROOT / "coordinator_core" / "bash_guards",

@@ -129,6 +129,15 @@ def sibling_run_id(i: int) -> str:
     return f"plan-{stamp}-{i:06x}"
 
 
+def _siblings_live():
+    """Patch scope in which every minted sibling session reads live (`add_siblings` mints sessions with no session dir)."""
+    from unittest import mock
+
+    from coordinator_core.session import touch_record
+
+    return mock.patch.object(touch_record, "session_live", lambda sid, cwd=None: True)
+
+
 def add_siblings(root: Path, count: int) -> list:
     """`count` unlanded sibling runs in `root`: a minted token, a `run.json` naming a sizing, the
     sizing naming a plan, the plan a `## Tasks` spine whose `writes` are the sibling's own
@@ -428,6 +437,7 @@ def run(workdir: Path, siblings: int, tracked: int, chain: int, attribute: bool)
     _bind_session()
     with ExitStack() as stack:
         root, base = build_land_fixture(workdir, mode="clean", tracked=tracked, chain=chain, stack=stack)
+        stack.enter_context(_siblings_live())
         add_siblings(root, siblings)
         rows = profile_land(root, base, attribute=attribute)
     for row in rows:

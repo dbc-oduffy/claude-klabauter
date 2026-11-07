@@ -6,10 +6,13 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import run_token, shipped_claims, terminal_commit
-from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR
+from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
+from coordinator_core.ops.dispatch_emit.ask_contract import DELIVERY_NOTE_DIR, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_commits_delivered_rows import (
     _REVIEWED,
     _SID,
+    DLV,
+    PLAN,
     RUN,
     _git,
     _verdict,
@@ -48,7 +51,14 @@ def _call(root, token=None) -> dict:
 
 def test_a_retry_after_a_shipped_claim_refusal_lands_nothing(repo, halt_closed):  # noqa: F811
     _write(repo, "a.py", "def a_tool():\n    return 1\n")
+    # A claim no row declares is dropped as foreign; ghost.py is declared by C1 yet ignored, so it never lands.
     _write(repo, "ghost.py", "x = 1\n")
+    _write(repo, ".gitignore", "scratch/\n.coordinator-local/\nghost.py\n")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py", "ghost.py")),),
+        deliverable_id=DLV, plan_path=PLAN,
+    )
+    _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
     _write(repo, NOTE, "# Delivery\n\n## What shipped\n\n- `a.py`\n- `ghost.py`\n")
     token = run_token.mint(repo, RUN, "run.mjs")
     before = _git(repo, "rev-parse", "HEAD")

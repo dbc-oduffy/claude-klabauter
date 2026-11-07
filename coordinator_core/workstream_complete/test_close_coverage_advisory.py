@@ -60,6 +60,8 @@ from coordinator_core.ops.gate_validate_invocable import DimensionResult, Verdic
 from coordinator_core.workstream_complete import apply as ws_apply
 from coordinator_core.workstream_complete import directives_review
 
+pytestmark = pytest.mark.complete
+
 
 def _sibling_directive(id_: str) -> dict[str, Any]:
     """A plain, unrelated directive with no `depends_on` of its own —

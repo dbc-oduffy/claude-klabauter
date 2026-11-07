@@ -89,6 +89,9 @@ from coordinator_core.reconcile.gate_eval import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 def _roadmap_handoff(handoff_id: str, blocked_by, blocks=None) -> dict:
     return {
         "id": handoff_id,

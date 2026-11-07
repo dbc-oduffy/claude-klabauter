@@ -9,6 +9,8 @@ import pytest
 
 import coordinator_core
 
+pytestmark = pytest.mark.complete
+
 ROOT = Path(coordinator_core.__file__).resolve().parent
 SCANNED_DIRS = ("ops", "session")
 SANCTIONED_READER = Path("ops/dispatch_emit/halt_resume_record.py")

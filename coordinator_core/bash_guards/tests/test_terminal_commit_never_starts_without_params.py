@@ -25,6 +25,8 @@ from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 from coordinator_core.guard_messages.testing import envelope_of
 
+pytestmark = pytest.mark.complete
+
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))

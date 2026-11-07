@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import launch_records, warp_live
 from coordinator_core.ops.dispatch_emit import run_token
 

@@ -36,6 +36,8 @@ import pytest
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 
+pytestmark = pytest.mark.complete
+
 _DOC_PATH = (
     Path(__file__).resolve().parents[3]
     / "docs"

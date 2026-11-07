@@ -7,6 +7,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import land_deadline
 from coordinator_core.telemetry import spawn_counter
 
+pytestmark = pytest.mark.complete
+
 BUDGET = land_deadline.LAND_BUDGET_SECS
 
 
@@ -308,8 +310,12 @@ def test_a_reviewed_run_over_in_ttl_sibling_runs_starts_integrity_and_commit_ins
     assert calls, "the foreign-halted listing never ran"
 
 
-def test_foreign_halted_withheld_listing_skips_token_only_runs_and_keeps_halted_ones(tmp_path):
+def test_foreign_halted_withheld_listing_skips_token_only_runs_and_keeps_halted_ones(tmp_path, monkeypatch):
     import json
+
+    from coordinator_core.session import touch_record
+
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
 
     from coordinator_core.benchmarks import land_run_leg_budget_profile as lb
     from coordinator_core.ops.dispatch_emit import halted_run, land_run, sibling_claims

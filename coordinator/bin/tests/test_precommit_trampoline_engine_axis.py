@@ -49,6 +49,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _LIB_DIR = _BIN_DIR / "lib"

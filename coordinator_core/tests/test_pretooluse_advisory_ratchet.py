@@ -13,6 +13,8 @@ import pytest
 
 from coordinator_core import advisory_census
 
+pytestmark = pytest.mark.complete
+
 FIXTURES = Path(__file__).parent / "fixtures"
 CORPUS = FIXTURES / "pretooluse_advisory_corpus.jsonl"
 PIN_PATH = FIXTURES / "pretooluse_advisory_baseline.json"

@@ -39,6 +39,8 @@ import pytest
 
 import coordinator_core.sizing_assemble as sa
 
+pytestmark = pytest.mark.complete
+
 
 def test_express_lane_short_circuits_to_dispatch():
     decision = sa.route(appetite="small", estimate={"tshirt": "XL"}, express_lane=True)

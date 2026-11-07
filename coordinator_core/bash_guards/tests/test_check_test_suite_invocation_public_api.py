@@ -6,6 +6,8 @@ import pytest
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.guard_messages.testing import envelope_of
 
+pytestmark = pytest.mark.complete
+
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))

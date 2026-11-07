@@ -50,6 +50,10 @@ import ast
 import os
 from typing import Optional
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _ENGINE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 EXEMPT: dict[tuple[str, str], str] = {

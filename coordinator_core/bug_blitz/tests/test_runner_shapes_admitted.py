@@ -13,6 +13,8 @@ from coordinator_core.bash_guards.check_test_suite_invocation import (
     classify_runner_footprint,
 )
 
+pytestmark = pytest.mark.complete
+
 _PY = sys.executable
 
 # Runner table the targeted-run selector imports: a head absent here is not admitted.

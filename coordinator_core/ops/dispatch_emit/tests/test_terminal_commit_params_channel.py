@@ -9,6 +9,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as ch
 from coordinator_core.win_portability import no_console_creationflags
 

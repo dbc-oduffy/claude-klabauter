@@ -10,6 +10,8 @@ import pytest
 
 from coordinator_core.ops import distill_apply_disposal as mod
 
+pytestmark = pytest.mark.complete
+
 
 def _run(n: int, tmp_path: Path, monkeypatch, fail_log_add: bool) -> list[tuple[str, ...]]:
     calls: list[tuple[str, ...]] = []

@@ -18,6 +18,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW,
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: F401  # fold_manifest writes its sidecar under it
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = pytest.mark.complete
+
 _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
 
 

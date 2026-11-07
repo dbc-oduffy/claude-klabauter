@@ -1,6 +1,10 @@
 """The scoped-pytest bin launcher answers --help and runs one node id from a foreign cwd."""
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import subprocess
 import sys
 from pathlib import Path

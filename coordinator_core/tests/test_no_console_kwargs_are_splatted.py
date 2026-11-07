@@ -7,6 +7,10 @@ a TypeError. It must be splatted (`**_NO_CONSOLE`).
 import ast
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO = Path(__file__).resolve().parents[2]
 _ROOTS = (_REPO / "coordinator_core", _REPO / "coordinator" / "bin")
 _HELPERS = {"no_console_creationflags", "no_console_kwargs"}

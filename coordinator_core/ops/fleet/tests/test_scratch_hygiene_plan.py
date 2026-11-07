@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.install.junction import is_junction
 from coordinator_core.ops.fleet import scratch_hygiene_plan as plan
 from coordinator_core.ops.fleet.tests._scratch_hygiene_fixture import build_two_root_fixture

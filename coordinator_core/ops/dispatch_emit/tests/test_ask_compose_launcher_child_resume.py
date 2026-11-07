@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import _BLITZ_FN, _SIZING
 
+pytestmark = pytest.mark.complete
+
 _GUARD_OPEN = "  if (!_STAGED_RESUME) {\n  phase('size');"
 
 

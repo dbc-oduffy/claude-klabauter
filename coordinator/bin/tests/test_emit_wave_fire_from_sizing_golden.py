@@ -11,6 +11,8 @@ from pathlib import Path
 from _roster_fixture import write_roster_fragment
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import yaml
 
 _BIN = Path(__file__).resolve().parents[1]

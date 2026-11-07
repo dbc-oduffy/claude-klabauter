@@ -91,6 +91,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 CORE_ROOT = Path(__file__).resolve().parents[3]
 
 _EXCLUDED_DIR_SEGMENTS = {"tests", "__pycache__"}

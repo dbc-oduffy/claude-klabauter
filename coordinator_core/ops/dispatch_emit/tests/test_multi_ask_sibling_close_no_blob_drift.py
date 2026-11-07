@@ -160,7 +160,7 @@ def test_ask_run_path_delivery_note_rewrite_lands_and_is_not_reread(repo, tmp_pa
     _write(repo, B_NOTE, SEED + "note rewritten after the expectation\n")
     out, seen = _fire(repo, monkeypatch, tmp_path, RUN_B, [PRODUCT[RUN_B], SIZING[RUN_B], B_RECORD], ask_run=True)
     assert out["committed"] is True, out
-    assert sorted(out["run_artifacts"]["reread"]) == sorted([SIZING[RUN_B], B_RECORD])
+    assert sorted(out["run_artifacts"]["reread"]) == [SIZING[RUN_B]]
     expected = seen[0]["expected_content_sha256"]
     assert expected[B_NOTE] == _sha((repo / B_NOTE).read_text(encoding="utf-8"))
     assert SIZING[RUN_B] not in expected
@@ -174,7 +174,7 @@ def test_child_bs_own_stage_rewrites_are_reread_and_land(repo, tmp_path, monkeyp
     _write(repo, B_NOTE, SEED + "note\n")
     out, seen = _fire(repo, monkeypatch, tmp_path, RUN_B, declared)
     assert out["committed"] is True, out
-    assert sorted(out["run_artifacts"]["reread"]) == sorted([SIZING[RUN_B], B_RECORD, B_NOTE])
+    assert sorted(out["run_artifacts"]["reread"]) == sorted([SIZING[RUN_B], B_NOTE])
     expected = seen[0].get("expected_content_sha256", {})
     assert SIZING[RUN_B] not in expected
     assert B_RECORD not in expected

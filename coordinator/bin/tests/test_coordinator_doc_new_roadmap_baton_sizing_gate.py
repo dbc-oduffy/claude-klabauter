@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _CLI_PATH = _REPO_ROOT / "coordinator" / "bin" / "coordinator-doc-new.py"
 

@@ -24,6 +24,9 @@ from coordinator_core.install.write_surface import ShapedClause, StaticClause, v
 from coordinator_core.trusted_root_guard import UntrustedRootError
 
 
+pytestmark = pytest.mark.complete
+
+
 def _make_exe(path: Path) -> None:
     """Create a file at *path* that ``win_portability.is_executable`` treats
     as launchable on the current OS.

@@ -4985,6 +4985,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "Return ``{exit_code, ok, count, findings, unchecked}`` for the roadmap's cross-plan seams.\n\ncoordinator_core.ops.roadmap_wiring_seams — \"roadmap.wiring_seams\" op (COMPUTE_ONLY).\n\nPurpose: the cross-plan twin of ``wiring_contract.unfed_consumes``. For each roadmap\nbaton's plan, every ``consumes_external`` entry that names another plan in the roadmap\nis judged: ``external-unproduced`` when that plan's ``wiring:`` has no part that\n``produces`` the artifact, ``external-not-upstream`` when that plan's baton is not in\nthe consumer baton's transitive ``blocked_by`` closure.\n\nEntry forms: ``<plan-id>:<artifact>`` (both checks), a bare ``<plan-id>`` (upstream\ncheck only), ``<repo>:<path>@<sha>`` (reported unchecked, ``repo-path-sha``). A\n``<plan-id>`` is the plan's ``plan_id``/``deliverable_id`` or its baton's id. An entry\nnaming no plan of the roadmap is reported unchecked, ``plan-not-in-roadmap``.\n\nParams (all optional): ``roadmap_id`` (keep only batons carrying it; default every live\nbaton that carries one).\n\nReturns ``{exit_code, ok, count, findings, unchecked}``; ``findings`` rows are\n``{code, part, plan, entry, artifact, detail}``, ``unchecked`` rows\n``{part, plan, entry, reason}``.\n\nNegative-spec:\n  - Reads files only; spawns nothing and writes nothing.\n  - Does NOT edit ``wiring_contract.py``; ``unfed_consumes`` stays single-plan.",
+      "module": "coordinator_core.ops.roadmap_wiring_seams",
+      "name": "roadmap.wiring_seams",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Return ``{exit_code, ok, count, findings, unchecked}`` for the roadmap's cross-plan seams.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"run.paths_trash\": params `run_id`, `chunk_id`, `paths` (list of str).\n\ncoordinator_core.ops.run_paths_trash -- op \"run.paths_trash\": delete a chunk's declared paths\nanywhere in the repo by trash-then-prune, without a shell remove.\n\nReuses scratch.delete's manifest lookup, index check, link check and tombstone dir\n(``scratch/.deleted/``); only the path-scope rule differs. Each admitted path is moved with one\n``os.rename``; the detached prune pass reclaims the bytes. No process is spawned and no tree is\nwalked.",
       "module": "coordinator_core.ops.run_paths_trash",
       "name": "run.paths_trash",

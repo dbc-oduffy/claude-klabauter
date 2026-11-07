@@ -21,7 +21,7 @@ _ROWS = "".join(
     f"- id: {i}\n  title: t{i}\n  change_kind: code-edit\n  surface: {i.lower()}.py\n  disposition: open\n  deferred: false\n"
     for i in ("C1", "C2")
 )
-_PLAN = f"---\ntitle: p\n---\n\n## Tasks\n\n```yaml plan-tasks\n{_ROWS}```\n"
+_PLAN = f"---\ntitle: p\ndeliverable_id: dlv-t-111111\n---\n\n## Tasks\n\n```yaml plan-tasks\n{_ROWS}```\n"
 
 
 def _rows(text: str) -> dict:

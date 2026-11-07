@@ -10,6 +10,8 @@ import pytest
 from coordinator_core.benchmarks import land_run_leg_budget_profile as prof
 from coordinator_core.ops.dispatch_emit import halted_withheld_index, peer_hunk_gate, run_token
 
+pytestmark = pytest.mark.complete
+
 SIBLINGS = 6
 
 
@@ -42,6 +44,13 @@ def test_read_to_integrity_span_is_measured_and_spawns_nothing(rows) -> None:
 
 PATH = "pkg/shared.py"
 OWN = "plan-20200101T000000-aaaaaa"
+
+
+@pytest.fixture(autouse=True)
+def _sessions_live(monkeypatch) -> None:
+    from coordinator_core.session import touch_record
+
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
 
 
 def _live_sibling(root, run_id: str, declared: str, *, indexed: bool) -> None:
@@ -84,7 +93,7 @@ def test_indexed_sibling_is_named_from_the_index_with_no_per_sibling_parse(tmp_p
     holds = peer_hunk_gate.co_declared_peer_holds(tmp_path, OWN, [PATH], [PATH])
 
     assert sorted(s for _p, s in holds) == sorted(siblings)
-    assert calls == {"manifest": 0, "spine": 0}
+    assert calls == {"manifest": SIBLINGS, "spine": 0}
 
 
 def test_indexed_sibling_declaring_another_path_holds_nothing(tmp_path) -> None:

@@ -11,7 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import land_remainder_contract as c
 from coordinator_core.ops.dispatch_emit import land_remainder_verify as v
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 RUN = "run-c2"
 

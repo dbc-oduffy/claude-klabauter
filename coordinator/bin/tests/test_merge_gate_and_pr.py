@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN_DIR = Path(__file__).parent.parent
 
 

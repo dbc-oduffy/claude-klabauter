@@ -36,6 +36,9 @@ from coordinator_core.telemetry.op_latency import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 def _run(coro):
     """Run an async coroutine synchronously — no pytest-asyncio dependency.
 

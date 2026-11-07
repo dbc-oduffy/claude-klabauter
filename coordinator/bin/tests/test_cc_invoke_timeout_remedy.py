@@ -61,6 +61,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 # ---------------------------------------------------------------------------
 # Path setup — locate cc_invoke.py relative to this test file
 # test file: coordinator/bin/tests/test_cc_invoke_timeout_remedy.py

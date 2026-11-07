@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.fleet._memo_resolver import (
     AmbiguousReceiverError,
     RegistryReadError,

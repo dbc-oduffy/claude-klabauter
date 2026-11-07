@@ -131,6 +131,10 @@ import re
 from pathlib import Path
 from typing import NamedTuple, Optional
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _THIS_FILE = Path(__file__).resolve()
 _INSTALL_DIR = _THIS_FILE.parent.parent
 

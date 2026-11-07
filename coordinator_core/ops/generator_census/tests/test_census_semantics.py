@@ -22,6 +22,8 @@ from coordinator_core.ops.generator_census import GeneratorRecord, Pair, store
 from coordinator_core.ops.generator_census.assemble import assemble
 from coordinator_core.ops.staleness_git import Verdict
 
+pytestmark = pytest.mark.complete
+
 OLD = 1_700_000_000
 R = "coordinator_core/m.py"
 

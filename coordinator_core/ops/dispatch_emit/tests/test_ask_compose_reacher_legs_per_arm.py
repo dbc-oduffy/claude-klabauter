@@ -7,6 +7,8 @@ import re
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit.tests._reacher_leg_probe import (
     ARMS,
     SIZES,

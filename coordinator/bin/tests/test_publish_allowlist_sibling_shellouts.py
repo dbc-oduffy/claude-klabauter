@@ -31,6 +31,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _TESTS_DIR = Path(__file__).resolve().parent
 _BIN_DIR = _TESTS_DIR.parent
 _REPO_ROOT = _BIN_DIR.parent.parent

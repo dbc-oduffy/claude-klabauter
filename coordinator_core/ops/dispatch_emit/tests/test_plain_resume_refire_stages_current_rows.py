@@ -6,6 +6,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import ask_gate, reply_sidecar, resume_snapshot
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put

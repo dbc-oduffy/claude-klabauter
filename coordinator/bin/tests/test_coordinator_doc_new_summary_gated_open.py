@@ -34,6 +34,10 @@ Run:
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import contextlib
 import importlib.machinery
 import importlib.util

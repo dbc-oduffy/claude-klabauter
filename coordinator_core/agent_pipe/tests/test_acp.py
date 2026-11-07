@@ -12,6 +12,8 @@ from coordinator_core.agent_pipe.acp import AcpDriver, AcpError
 from coordinator_core.agent_pipe.grok import GROK_ACP_ARGV, GrokAcpDriver
 from coordinator_core.agent_pipe.session_driver import ALLOW_ONCE, REJECT_ONCE, Decision
 
+pytestmark = pytest.mark.complete
+
 FAKE = [sys.executable, str(Path(__file__).parent / "fixtures" / "fake_acp_agent.py")]
 
 

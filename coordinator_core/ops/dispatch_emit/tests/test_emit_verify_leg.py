@@ -21,6 +21,8 @@ from .test_emit_wake_digest import (
     _row,
 )
 
+pytestmark = pytest.mark.complete
+
 _TESTABLE = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
 _PROSE = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
 _JUDGE_TYPE = "coordinator:exit-criterion-judge"

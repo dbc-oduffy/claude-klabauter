@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _SRC = Path(__file__).resolve().parents[1] / "group-em-memory-governor.py"
 _spec = importlib.util.spec_from_file_location("group_em_memory_governor", _SRC)
 assert _spec is not None and _spec.loader is not None

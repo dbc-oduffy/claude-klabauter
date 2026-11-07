@@ -39,6 +39,8 @@ from coordinator_core.ops.dispatch_emit.queue_select import Manifest, ManifestEn
 
 from .conftest import REVIEW_KW
 
+pytestmark = pytest.mark.complete
+
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
 _GOLDEN_PATH = Path(__file__).parent / "fixtures" / "grind-fixture.golden.mjs"
 

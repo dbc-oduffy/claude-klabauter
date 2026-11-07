@@ -26,7 +26,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_after_partial_ledger_h
 )
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"

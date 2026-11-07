@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator.lib.home_resolution_lint import HomeResolutionLintEngine
 
 

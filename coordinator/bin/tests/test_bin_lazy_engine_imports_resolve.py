@@ -23,6 +23,10 @@ paths. Module-level unindented imports are already proven by importing the CLI.
 
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import re
 from pathlib import Path
 

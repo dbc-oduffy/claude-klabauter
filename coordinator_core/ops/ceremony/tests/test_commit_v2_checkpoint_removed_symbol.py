@@ -58,7 +58,7 @@ def repo(tmp_path, monkeypatch):
     session_core.init(SELF, cwd=str(root))
     monkeypatch.setattr(checkpoint_hunks, "checkpoint_run_id", lambda root, message, sid: "run1")
     monkeypatch.setattr(
-        checkpoint_hunks, "checkpoint_own_blobs", lambda root, run, paths, message="": ({}, [])
+        checkpoint_hunks, "checkpoint_own_blobs", lambda root, run, paths, message="", reasons=None: ({}, [])
     )
     return root
 

@@ -92,6 +92,7 @@ _HOST_CAP_RES = (
                 r"-- this box caps vitest at \d+ workers\."), "<VITEST_CAP_CLAUSE>"),
     (re.compile(r"(Run pytest only as `)[^\s`]+( -m coordinator_core\.testing\.scoped_pytest)"),
      r"\1<TEST_PYTHON>\2"),
+    (re.compile(r"(Run Python as `)[^\s`]+(` \(this repo)"), r"\1<PINNED_PYTHON>\2"),
 )
 
 

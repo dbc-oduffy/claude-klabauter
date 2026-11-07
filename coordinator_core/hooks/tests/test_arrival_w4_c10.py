@@ -22,6 +22,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks import (
     assert_em_role,
     guard_hook_generation_self_probe,

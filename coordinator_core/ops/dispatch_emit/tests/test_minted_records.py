@@ -10,7 +10,7 @@ import pytest
 from coordinator_core.git import commit as commit_mod
 from coordinator_core.ops.dispatch_emit import minted_records
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 _NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 

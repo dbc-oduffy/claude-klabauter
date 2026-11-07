@@ -17,6 +17,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import asyncio
 import subprocess
 

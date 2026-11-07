@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import run_token, sibling_claims
 from coordinator_core.session import core as session_core
 
@@ -253,6 +255,16 @@ def test_live_peer_with_superseded_sizing_still_claims(repo):
     assert sibling_claims.sibling_run_claims(repo, OWN, ["p/a.py"]) == {"p/a.py": live}
 
 
+def test_fresh_token_run_of_a_dead_session_is_not_unlanded_but_a_live_one_is(repo):
+    dead = _aged(100, "dddddd")
+    _declare(repo, dead, "p/a.py")
+    run_token.mint(repo, dead, "d.mjs", session_id="5e1f0000-0000-4000-8000-0000000000d9")
+    live = _aged(90, "eeeeee")
+    _declare(repo, live, "p/b.py")
+    run_token.mint(repo, live, "e.mjs", session_id=SELF)
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == [live]
+
+
 def test_fresh_token_run_minted_at_or_after_minted_before_is_junior_and_claims_nothing(repo):
     live = _aged(100, "cccccc")
     _declare(repo, live, "p/a.py")
@@ -476,3 +488,66 @@ def test_one_claim_pass_parses_each_run_manifest_once_over_many_paths(repo, monk
     with_scope = sibling_claims.shared_dir_holds(repo, OWN, ["p/own.py"], wanted)
     assert len(calls) == len(set(calls))
     assert with_scope == []
+
+
+def test_token_scan_reads_each_token_file_once_on_one_worker_not_a_thread_per_file(repo, monkeypatch):
+    """The cold token listing is one bounded batch; the per-run point reads after it are cache hits."""
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    runs = [_aged(100 - i, f"{i:06x}") for i in range(6)]
+    for i, run_id in enumerate(runs):
+        _declare(repo, run_id, f"p/d{i}.py")
+        run_token.mint(repo, run_id, "r.mjs", session_id=SELF)
+    run_token._RECORD_CACHE.clear()
+    reads = []
+    real = halt_resume_record.bounded_read
+    monkeypatch.setattr(halt_resume_record, "bounded_read", lambda p, *a, **k: reads.append(str(p)) or real(p, *a, **k))
+    assert sorted(r["run_id"] for r in run_token.held_records(repo)) == sorted(runs)
+    assert sibling_claims._unlanded_run_ids(repo, OWN) == sorted(runs)
+    tokens = {str(run_token._record_path(repo, r, claimed=c)) for r in runs for c in (False, True)}
+    assert tokens.isdisjoint(reads)
+
+
+def test_read_cached_costs_an_absent_token_no_read_and_follows_a_rewrite(repo, monkeypatch):
+    """Absent: a stat only. Present and unchanged: one read. Rewritten or removed: the next call sees it."""
+    from coordinator_core.ops.dispatch_emit import halt_resume_record
+
+    run_id = _aged(100, "abcdef")
+    run_token.mint(repo, run_id, "r.mjs", session_id=SELF)
+    path = run_token._record_path(repo, run_id, claimed=False)
+    reads = []
+    real = halt_resume_record.bounded_read
+    monkeypatch.setattr(halt_resume_record, "bounded_read", lambda p, *a, **k: reads.append(str(p)) or real(p, *a, **k))
+    run_token._RECORD_CACHE.clear()
+    assert run_token.read_cached(run_token._record_path(repo, run_id, claimed=True)) is None
+    assert reads == []
+    first = run_token.read_cached(path)
+    assert first["run_id"] == run_id and len(reads) == 1
+    assert run_token.read_cached(path) == first and len(reads) == 1
+    rewritten = dict(first, session_id="rewritten", pad="x" * 8)
+    path.write_text(json.dumps(rewritten), encoding="utf-8")
+    assert run_token.read_cached(path)["session_id"] == "rewritten"
+    path.unlink()
+    assert run_token.read_cached(path) is None
+
+
+def test_prefetch_set_holds_only_runs_with_a_halt_marker(repo):
+    """A token-only run has no kept blobs to batch, so it is not in the prefetch set."""
+    marked, token_only = _aged(100, "aaaaaa"), _aged(90, "bbbbbb")
+    _halt(_declare(repo, marked, "p/a.py"))
+    _declare(repo, token_only, "p/b.py")
+    run_token.mint(repo, token_only, "b.mjs", session_id=SELF)
+    assert sibling_claims._in_window_run_ids(repo, OWN) == [marked]
+
+
+def test_marker_less_run_is_not_halted_but_a_marker_run_still_is(repo):
+    """The no-marker fast path answers False only for an existing dir without `halted.json`."""
+    from coordinator_core.ops import warp_run_deliverable as wrd
+
+    clean, marked = _aged(100, "cccccc"), _aged(90, "dddddd")
+    _declare(repo, clean, "p/a.py")
+    _halt(_declare(repo, marked, "p/b.py"))
+    assert wrd._no_marker(repo, clean) and not wrd._no_marker(repo, marked)
+    assert not wrd._no_marker(repo, "ask-missing-dir")
+    assert not wrd._halted(repo, clean) and not wrd._landed(repo, clean)
+    assert wrd._halted(repo, marked)

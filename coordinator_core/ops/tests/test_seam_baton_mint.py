@@ -17,6 +17,8 @@ from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import _SCHEMAS_DIR, validate_frontmatter
 from coordinator_core.ops import seam_baton_mint as op
 
+pytestmark = pytest.mark.complete
+
 
 @pytest.fixture(autouse=True)
 def _seams(monkeypatch):

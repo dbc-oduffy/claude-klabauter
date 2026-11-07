@@ -10,6 +10,8 @@ import pytest
 
 from coordinator_core.warm import breadcrumb, pair_stop
 
+pytestmark = pytest.mark.complete
+
 SUP = ("coordinator_core", "warm", "supervisor.py")
 SRV = ("coordinator_core", "warm", "server.py")
 

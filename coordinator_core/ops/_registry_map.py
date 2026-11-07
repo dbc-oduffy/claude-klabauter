@@ -234,6 +234,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "roadmap.link_stubs":                     "coordinator_core.ops.roadmap_link_stubs",
     "roadmap.link_plan":                      "coordinator_core.ops.roadmap_link_plan",
     "roadmap.plan_gate":                      "coordinator_core.ops.roadmap_plan_gate",
+    "roadmap.wiring_seams":                   "coordinator_core.ops.roadmap_wiring_seams",
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
     "roadmap.blitz_stage":                    "coordinator_core.ops.roadmap_blitz_stage",
     # plan.prep_gate — the mise-prep authoring bar, REPORTED per class. Read twin

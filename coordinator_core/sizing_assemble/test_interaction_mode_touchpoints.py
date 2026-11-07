@@ -21,6 +21,8 @@ import pytest
 import coordinator_core.sizing_assemble as sa
 from coordinator_core.session.mode_resolution import INTERACTION_MODES
 
+pytestmark = pytest.mark.complete
+
 
 def _touchpoint_ids(mode: str, tshirt: str, route: str | None = None) -> list[str]:
     route = route or sa._BASE_ROUTE_BY_TSHIRT[tshirt]

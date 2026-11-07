@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit import run_token, sibling_split, wake_di
 from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path, render_params_block
 from coordinator_core.win_portability import no_console_creationflags
 
+pytestmark = pytest.mark.complete
+
 PARAMS = {
     "run_id": "r1",
     "run_token": "tok",

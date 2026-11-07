@@ -20,7 +20,7 @@ from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.symbol_knowledge import agent_batches, flag, sidecar
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 RUN = "run-e2e"
 PARENT_SRC = "def alpha():\n    return 1\n\n\ndef _hidden():\n    return 2\n"

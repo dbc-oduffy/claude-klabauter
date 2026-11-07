@@ -37,6 +37,7 @@ Negative-spec:
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
@@ -358,6 +359,21 @@ def _meta(ctx: JobContext, sha: Optional[str]) -> Optional[dict]:
     return commit_meta(ctx.common_dir, sha) if sha else None
 
 
+def _withheld_declared(ctx: JobContext, sha: Optional[str], paths: Any) -> bool:
+    """True when the commit's ``Checkpoint-Withheld:`` trailer names any of ``paths``: no credit for it."""
+    return bool(_withheld_of(str(ctx.common_dir), sha).intersection(paths))
+
+
+@functools.lru_cache(maxsize=256)
+def _withheld_of(common_dir: str, sha: Optional[str]) -> frozenset:
+    """The paths a commit's trailer withholds; a sha is immutable, so read once per commit."""
+    from coordinator_core.git.commit_walk import commit_meta
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import checkpoint_withheld
+
+    meta = commit_meta(common_dir, sha) if sha else None
+    return frozenset(checkpoint_withheld((meta or {}).get("message") or ""))
+
+
 def _blob(ctx: JobContext, sha: Optional[str], rel: str) -> Any:
     from coordinator_core.git.rollback_check import _blob_at_commit
 
@@ -491,12 +507,13 @@ def _checkpoint_of(ctx: JobContext, plan_rel: str, sha: str, chunks: list) -> di
     from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
         CHECKPOINT_PLAN_LINE,
         CHECKPOINT_SUBJECT,
+        checkpoint_withheld,
         is_stamp_commit,
     )
 
     parents = (_meta(ctx, sha) or {}).get("parents") or []
     cur = parents[0] if parents else None
-    checkpoints: list = []  # newest first: (sha, parent, named ids)
+    checkpoints: list = []  # newest first: (sha, parent, named ids, withheld paths)
     for _ in range(_HALTED_WALK_CAP):
         meta = _meta(ctx, cur)
         if meta is None:
@@ -510,13 +527,13 @@ def _checkpoint_of(ctx: JobContext, plan_rel: str, sha: str, chunks: list) -> di
         if not subject or not meta.get("parents") or not plan or plan.group("v") != plan_rel:
             break
         named = {i.strip() for i in subject.group("ids").split(",") if i.strip()}
-        checkpoints.append((cur, meta["parents"][0], named))
+        checkpoints.append((cur, meta["parents"][0], named, checkpoint_withheld(message)))
         cur = meta["parents"][0]
     out: dict = {}
     for chunk in chunks:
         hits = [
-            (csha, named) for csha, parent, named in reversed(checkpoints)
-            if any(_blob(ctx, csha, p) != _blob(ctx, parent, p) for p in chunk.paths)
+            (csha, named) for csha, parent, named, withheld in reversed(checkpoints)
+            if not withheld.intersection(chunk.paths) and any(_blob(ctx, csha, p) != _blob(ctx, parent, p) for p in chunk.paths)
         ]
         if hits:
             out[chunk.id] = next((h[0] for h in hits if chunk.id in h[1]), hits[0][0])
@@ -548,7 +565,7 @@ def _review_only_hits(ctx: JobContext, sha: str, review_only: Mapping[str, Any],
     no_delta: list = []
     for row in rows:
         paths = [p for p in row.get("paths") or [] if isinstance(p, str)]
-        hit = next((c for c, parent in delta if any(_blob(ctx, c, p) != _blob(ctx, parent, p) for p in paths)), None)
+        hit = next((c for c, parent in delta if not _withheld_declared(ctx, c, paths) and any(_blob(ctx, c, p) != _blob(ctx, parent, p) for p in paths)), None)
         if hit is None:
             no_delta.append(str(row["id"]))
         else:
@@ -605,7 +622,7 @@ def _coded_stamp(ctx: JobContext) -> LegResult:
         paths = [w for w in (rows.get(cid, {}).get("writes") or []) if isinstance(w, str) and w]
         if not paths:
             groups.setdefault((sha, prc.NOOP_DETAIL), set()).add(cid)
-        elif any(_blob(ctx, sha, p) != _blob(ctx, parent, p) for p in paths):
+        elif not _withheld_declared(ctx, sha, paths) and any(_blob(ctx, sha, p) != _blob(ctx, parent, p) for p in paths):
             groups.setdefault((sha, None), set()).add(cid)
         else:
             undecided.append(SimpleNamespace(id=cid, paths=paths))
@@ -986,7 +1003,10 @@ def _ledger_met_rows(ctx: JobContext) -> list:
     judged = {str(i) for i in inputs.get("ledger_judged") or ()}
     ids = [i.strip() for i in text.split(":", 1)[1].split(",") if i.strip()]
     return [
-        {"id": i, "claim": "this-plan", "status": "met", "wired": True, "observed_ref": "requirements ledger"}
+        {
+            "id": i, "claim": "this-plan", "status": "met", "wired": True, "observed_ref": "requirements ledger",
+            "command": "requirements ledger", "observed": f"{i} judged met by the requirements ledger",
+        }
         for i in ids if i in judged
     ]
 
@@ -1009,7 +1029,16 @@ def _sizing_ship(ctx: JobContext) -> LegResult:
     criterion = _criterion(ctx)
     ledger_rows = _ledger_met_rows(ctx)
     if ledger_rows:
-        merged = {**(criterion or {}), "register_rows": [*((criterion or {}).get("register_rows") or []), *ledger_rows]}
+        ledger_ids = {r["id"] for r in ledger_rows}
+        # The ledger verdict is the one source for a row it judged met: the criterion's own verdict on that id is dropped from both writes.
+        criterion = {
+            **(criterion or {}),
+            "register_rows": [
+                r for r in ((criterion or {}).get("register_rows") or [])
+                if not (isinstance(r, dict) and str(r.get("id")) in ledger_ids)
+            ],
+        }
+        merged = {**criterion, "register_rows": [*criterion["register_rows"], *ledger_rows]}
         settled = register_gate.register_writeback(
             ctx.root, plan_rel, {"criterion": merged}, sha, also_claim=[r["id"] for r in ledger_rows]
         )

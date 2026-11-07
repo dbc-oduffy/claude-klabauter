@@ -36,6 +36,8 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fixture_scratch_spans,
 )
 
+pytestmark = pytest.mark.complete
+
 REGENERATE_ENV = "REGENERATE_GUARD_RENDER_BASELINE"
 
 FIXTURE_PATH =Path(__file__).with_name("fixtures") / "guard_render_baseline.json"

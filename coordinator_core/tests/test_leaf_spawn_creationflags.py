@@ -64,6 +64,8 @@ from coordinator_core.spawn_policy import SpawnParseError, is_test_tree_site
 from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
 from coordinator_core.win_portability import leaf_spawn_creationflags
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 #: Scope for axes (a)/(c). Was narrowed to the two shipped planes

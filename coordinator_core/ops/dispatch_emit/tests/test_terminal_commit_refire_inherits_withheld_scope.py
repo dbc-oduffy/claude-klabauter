@@ -9,6 +9,10 @@ from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, ManifestRow, StageManifest
 from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE, capture, fingerprint
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 SIZING = "state/sizings/2026-10-25-inherit.yaml"
 PLAN = "docs/plans/inherit.md"
 DIRTY = "pkg/carried.py"

@@ -11,6 +11,10 @@ from pathlib import Path
 from coordinator_core.install.write_surface import ShapedClause
 from coordinator_core.install.write_surface_discovery import discover_declarations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO = Path(__file__).resolve().parents[3]
 
 #: writer_id -> why it is not an install-run writer.

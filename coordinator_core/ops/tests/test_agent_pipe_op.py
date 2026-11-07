@@ -8,6 +8,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.agent_pipe.contract import mailbox_path
 from coordinator_core.ipc import CallerFacingValidationError
 from coordinator_core.ops import agent_pipe as op

@@ -29,6 +29,8 @@ import pytest
 from coordinator_core.ops.ceremony import branch_resolution
 from coordinator_core.session import claimed_plan, session_facts
 
+pytestmark = pytest.mark.complete
+
 _SID = "sess-c2-contract-test-001"
 _SID_PICKUP = "sess-c2-pickup-kind-test-001"
 _SID_GOVERNING_PLAN = "sess-c7b-governing-plan-test-001"

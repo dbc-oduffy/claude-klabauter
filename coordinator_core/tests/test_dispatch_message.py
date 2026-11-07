@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.ipc as ipc
 from coordinator_core.ipc import (
     PARSE_ERROR,

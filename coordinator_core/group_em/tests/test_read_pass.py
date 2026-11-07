@@ -16,6 +16,8 @@ import types
 import json
 
 import pytest
+
+pytestmark = pytest.mark.complete
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 

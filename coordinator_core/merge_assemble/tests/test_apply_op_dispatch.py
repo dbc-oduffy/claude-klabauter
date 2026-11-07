@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.contract.apply_base as apply_base
 from coordinator_core.authz.dispatchable import ASSEMBLER_DISPATCHABLE
 from coordinator_core.authz.registration_quad import _live_registry

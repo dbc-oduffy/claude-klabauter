@@ -20,7 +20,7 @@ if _BIN_DIR not in sys.path:
 
 from percolate.import_closure import find_commit_from_import_name_violations  # noqa: E402
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 
 def _write(root: Path, rel: str, src: str) -> None:

@@ -311,6 +311,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "roadmap.link_stubs":                    "common_dir",
     "roadmap.link_plan":                     "common_dir",
     "roadmap.plan_gate":                     "common_dir",
+    "roadmap.wiring_seams":                  "common_dir",
     "roadmap.blitz_land":                    "common_dir",
     "roadmap.blitz_stage":                   "common_dir",
     # plan.prep_gate — keyed on git_common_dir: reads one main-worktree-rooted

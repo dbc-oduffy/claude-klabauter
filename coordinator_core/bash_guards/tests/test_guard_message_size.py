@@ -136,6 +136,8 @@ from coordinator_core.bash_guards.tests.guard_message_exemptions import (
     GUARD_MESSAGE_EXEMPTIONS,
 )
 
+pytestmark = pytest.mark.complete
+
 
 @dataclass(frozen=True)
 class _Cell:

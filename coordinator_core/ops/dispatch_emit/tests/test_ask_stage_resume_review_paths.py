@@ -34,6 +34,30 @@ def test_fresh_run_review_paths_are_just_its_rows(tmp_path, monkeypatch):
     assert set(m.review_declared_paths) == {"docs/x/C1.md", "docs/x/C2.md"}
 
 
+def _code_row(rid: str) -> str:
+    return (
+        f"- id: {rid}\n  title: t{rid}\n  change_kind: code-edit\n  surface: pkg/{rid}.py\n"
+        f"  writes:\n    - pkg/{rid}.py\n"
+    )
+
+
+def test_ledger_resume_review_code_paths_include_landed_code_not_declared(tmp_path, monkeypatch):
+    _plan(tmp_path, _code_row("C1") + _row("C2"))
+    _capture_overlap(monkeypatch)
+    m = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL, only_rows=["C2"], ledger_resume=True)
+    assert "pkg/C1.py" in m.review_code_paths
+    assert "pkg/C1.py" not in m.review_declared_paths
+    assert len(m.review_code_paths) == len(set(m.review_code_paths))
+
+
+def test_non_resume_only_rows_code_paths_unchanged_by_resume_branch(tmp_path, monkeypatch):
+    _plan(tmp_path, _code_row("C1") + _row("C2"))
+    _capture_overlap(monkeypatch)
+    m = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL, only_rows=["C2"])
+    assert "pkg/C1.py" in m.review_declared_paths
+    assert list(m.review_code_paths).count("pkg/C1.py") == 1
+
+
 def test_ledger_resume_review_paths_exclude_dropped_rows(tmp_path, monkeypatch):
     _plan(tmp_path, _row("C1") + _row("C2"))
     _capture_overlap(monkeypatch)

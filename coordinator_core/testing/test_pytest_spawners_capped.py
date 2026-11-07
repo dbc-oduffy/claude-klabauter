@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = ("coordinator_core", "coordinator/bin")
 _SKIP_DIRS = frozenset({"tests", "fixtures", "__pycache__"})

@@ -150,3 +150,6 @@ Saved/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Tool caches (clangd writes .cache/clangd); ignored as standard in every repo.
+.cache/

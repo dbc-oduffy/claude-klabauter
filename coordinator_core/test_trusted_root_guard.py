@@ -15,6 +15,9 @@ from coordinator_core.trusted_root_guard import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 def _env(**overrides):
     base = {"HOME": "/home/tester", "CLAUDE_HOME": "", "COORDINATOR_PLUGIN_ROOT_TRUSTED": ""}
     base.update(overrides)

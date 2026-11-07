@@ -35,6 +35,8 @@ from coordinator_core.spawn_policy import (
     walk_repo,
 )
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 

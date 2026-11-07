@@ -16,6 +16,8 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
     ZERO_FAIL_UNATTRIBUTED,
 )
 
+pytestmark = pytest.mark.complete
+
 CORE = Path(__file__).resolve().parents[3]
 DISPATCH_EMIT = CORE / "ops" / "dispatch_emit"
 SCAN_ROOTS = (CORE / "ops", CORE / "bash_guards")

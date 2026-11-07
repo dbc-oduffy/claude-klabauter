@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN_LIB_DIR = Path(__file__).resolve().parents[1] / "lib"
 if str(_BIN_LIB_DIR) not in sys.path:
     sys.path.insert(0, str(_BIN_LIB_DIR))

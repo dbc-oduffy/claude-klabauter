@@ -14,6 +14,8 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, execute
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
 from coordinator_core.testing.git_write import write_seen_by_git
 
+pytestmark = pytest.mark.complete
+
 _SESSION = "9d860631-c114-462a-a6ee-f685cc671ced"
 
 

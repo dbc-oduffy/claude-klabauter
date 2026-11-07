@@ -102,6 +102,8 @@ import pytest
 
 from coordinator_core.ceremony_common.phantom_resolves_sweep import discover_consumes_manifest_modules
 
+pytestmark = pytest.mark.complete
+
 _BIN_ROOT = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 
 

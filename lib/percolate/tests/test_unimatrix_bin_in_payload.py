@@ -2,6 +2,10 @@
 that INSTALL.md names, so `find_missing_doc_refs` reports no bin/unimatrix-* pair."""
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import shutil
 import sys
 from pathlib import Path

@@ -10,6 +10,8 @@ import types
 import psutil
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.detect_guardless_sessions import (
     ProcessObservation,
     _CommandLineUnavailable,

@@ -17,8 +17,11 @@ _spec = importlib.util.spec_from_file_location("unimatrix_peer_codex", BIN / "un
 pcx = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pcx)
 
-pytestmark = pytest.mark.skipif(
-    sys.platform == "win32", reason="asyncio unix-socket streams are unavailable on Windows")
+pytestmark = [
+    pytest.mark.skipif(
+        sys.platform == "win32", reason="asyncio unix-socket streams are unavailable on Windows"),
+    pytest.mark.complete,
+]
 
 GUID = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 

@@ -10,7 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import foreign_hunks as fh
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 PATH = "src/x.py"
 HOLDER = "ask-20261026T000000-aaaaaa"

@@ -10,7 +10,7 @@ import pytest
 from coordinator_core.ops.reverify_scope import _SUITE_BOUND, select_tests, split_pre_existing
 
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 
 def _git(root: Path, *args: str) -> str:

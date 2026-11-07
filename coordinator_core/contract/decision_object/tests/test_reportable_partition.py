@@ -58,6 +58,10 @@ from coordinator_core.contract.decision_object.judgment import (
 # `phantom_resolves_sweep.py`'s own `no_directive_backing_ids`/
 # `dynamic_suffix_bases` named-exemption pattern.
 # ---------------------------------------------------------------------------
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _RESOLVER_BACKED_OUT_OF_SCOPE_IDS = frozenset(
     {
         "review-partition-strategy",

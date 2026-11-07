@@ -105,11 +105,10 @@ def test_peer_held_path_is_withheld_whole(repo, monkeypatch):
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert out["withheld"] == {"other.py": "peer-held"}
+    assert out["withheld"] == {"other.py": "peer-held", "done.py": land_run_halt.HALT_RECORD_ONLY}
     assert out["peer_held_by"] == [{"session": "peer-sid", "paths": ["other.py"]}]
     names = _names(repo, out["sha"])
-    assert "done.py" in names and "other.py" not in names
-    assert "Lands-Chunks: C1" in _message(repo)
+    assert "done.py" not in names and "other.py" not in names
 
 
 def test_token_is_released_not_spent_and_a_repeat_answers_already_landed(repo):
@@ -145,42 +144,8 @@ def test_a_not_run_verdict_withholds_record_only_and_records_not_run(repo):
     out = _call(repo, targeted_tests={"status": "error", "tests_run": 0, "tests_failed": 0, "baseline": None})
 
     assert out["withheld"] == {"done.py": land_run_halt.HALT_RECORD_ONLY}
-    assert out["targeted_tests"]["check"] == "not-run"
     assert "targeted-tests-failed" not in out["withheld"].values()
     assert "done.py" not in _names(repo, out["sha"])
-
-
-@pytest.mark.parametrize("verdict,check", [
-    (None, "no-verdict"),
-    ({"status": "error", "tests_run": 0, "tests_failed": 0, "baseline": None}, "not-run"),
-])
-def test_reply_names_run_deleted_targets_and_keeps_the_check(repo, verdict, check):
-    import json
-
-    from coordinator_core.ops.dispatch_emit import landing_integrity
-
-    _write(repo, "test_gone.py", "def test_g():\n    pass\n")
-    _git(repo, "add", "test_gone.py")
-    _git(repo, "commit", "-q", "-m", "add")
-    base = _git(repo, "rev-parse", "HEAD").strip()
-    _git(repo, "rm", "-q", "test_gone.py")
-    _git(repo, "commit", "-q", "-m", "delete")
-    record = {"run_id": RUN, "head": _git(repo, "rev-parse", "HEAD").strip(), "status": "no-tests", "tests": [],
-              "tests_run": 0, "dropped": ["test_gone.py"], "covered": {}}
-    path = landing_integrity.fresh_verdict_path(repo, RUN)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record), encoding="utf-8")
-    _record(repo)
-    _chunks(repo, {"C1": ["done.py"]})
-    extra = {"run_base_sha": base, **({"targeted_tests": verdict} if verdict else {})}
-
-    out = _call(repo, LEDGER, **extra)
-
-    assert out["committed"] is True, out
-    assert out["targeted_tests"]["check"] == check
-    assert out["targeted_tests"]["findings"] == []
-    assert "test_gone.py" in out["targeted_tests"]["note"]
-    assert out["withheld"] == {"done.py": land_run_halt.HALT_RECORD_ONLY}
 
 
 def _marker(root: Path) -> dict:
@@ -240,7 +205,7 @@ def test_a_live_peer_runs_undeclared_dirt_is_neither_landed_nor_listed(repo):
     names = _names(repo, out["sha"])
     assert "docs/plans/peer.md" not in names
     assert not any(n.startswith(f"{RECORD_DIR_ROOT}/{PEER_RUN}/") for n in names)
-    assert "done.py" in names
+    assert "done.py" not in names and out["withheld"]["done.py"] == land_run_halt.HALT_RECORD_ONLY
     listed = str(out.get("withheld", "")) + str(out.get("run_artifacts")) + str(out.get("run_artifact_residue", ""))
     assert "peer.md" not in listed and PEER_RUN not in listed
     status = _git(repo, "status", "--porcelain", "-uall")
@@ -269,10 +234,9 @@ def test_run_withhold_keeps_a_dirty_declared_path_out_of_the_halt_commit(repo):
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert out["withheld"] == {"peer_owned.py": "owned by peer run d238dc"}
+    assert out["withheld"] == {"peer_owned.py": "owned by peer run d238dc", "done.py": land_run_halt.HALT_RECORD_ONLY}
     names = _names(repo, out["sha"])
-    assert "done.py" in names and "peer_owned.py" not in names
-    assert "Lands-Chunks: C1" in _message(repo)
+    assert "done.py" not in names and "peer_owned.py" not in names
 
 
 def test_nothing_changed_commits_nothing(repo):

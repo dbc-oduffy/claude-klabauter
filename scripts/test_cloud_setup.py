@@ -34,6 +34,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _CLOUD_SETUP_PY_PATH = Path(__file__).resolve().parent / "cloud_setup.py"
 
 

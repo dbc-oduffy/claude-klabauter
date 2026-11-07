@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.docgen import template_format as tf
 from coordinator_core.ops.docgen.render import RenderError, render_document, render_template
 

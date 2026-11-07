@@ -12,7 +12,7 @@ _GATE = (
     "((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {"
 )
 _HALT = (
-    "if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && _reviewPrep?.product_files !== 0) "
+    "if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0 && !_metBySkipped) "
     "{ _halted = { halted: 'review_floor'"
 )
 _SIDECAR_CLAUSE = "typeof w.sidecar_path === 'string' && w.sidecar_path.trim()"

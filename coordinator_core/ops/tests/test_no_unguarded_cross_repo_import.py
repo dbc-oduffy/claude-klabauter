@@ -43,6 +43,10 @@ import ast
 from pathlib import Path
 from typing import List
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _ENGINE_ROOT = Path(__file__).resolve().parents[2]
 
 #: Directory/file name fragments marking a module as test-only.

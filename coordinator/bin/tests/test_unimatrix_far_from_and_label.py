@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 BIN = Path(__file__).resolve().parents[1]
 FAR_SOCK = "/tmp/cc-socks/4242.sock"
 FAR_CC_MSG = "/tmp/cc-socks/cc-msg-" + "f" * 32 + ".sock"

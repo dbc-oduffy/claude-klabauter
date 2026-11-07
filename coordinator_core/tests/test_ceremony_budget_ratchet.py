@@ -37,6 +37,8 @@ import pytest
 from coordinator_core import ipc
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 
+pytestmark = pytest.mark.complete
+
 PINNED_CEILING_SECS = 2.0
 PINNED_BACKSTOP_SECS = 30.0
 

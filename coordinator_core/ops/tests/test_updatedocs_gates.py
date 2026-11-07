@@ -44,6 +44,9 @@ import coordinator_core.ops.updatedocs_gates as udg  # noqa: F401
 from coordinator_core.ipc import _REGISTRY
 
 
+pytestmark = pytest.mark.complete
+
+
 def _run(coro):
     if asyncio.iscoroutine(coro):
         return asyncio.run(coro)

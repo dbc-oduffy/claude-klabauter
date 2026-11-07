@@ -74,6 +74,10 @@ from coordinator_core.tests._home_resolution_lint_baseline import (
     X_OK_BASELINE,
 )
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 # Rule 5 (`rung_order`, C5) baseline lives HERE rather than in
 # `_home_resolution_lint_baseline.py` -- that module is owned by C8's
 # re-seed pass.

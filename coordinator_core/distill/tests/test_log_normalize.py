@@ -48,6 +48,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.distill._common import parse_distillation_log
 from coordinator_core.distill.log_normalize import (
     AlreadyCanonicalError,

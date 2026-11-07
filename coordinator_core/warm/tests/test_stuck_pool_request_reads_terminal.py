@@ -14,6 +14,8 @@ import pytest
 
 from coordinator_core.warm import dispatch_ack, server
 
+pytestmark = pytest.mark.complete
+
 _WAIT = 90.0
 _DEADLINE = 1.0
 _METHOD = "ceremony.commit_v2"

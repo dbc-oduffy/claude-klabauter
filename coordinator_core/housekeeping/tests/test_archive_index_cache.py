@@ -30,6 +30,9 @@ from coordinator_core.housekeeping.archive_index import (
 from coordinator_core.housekeeping.tests.corpus_fixture import build_corpus
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture(scope="module")
 def corpus(tmp_path_factory):
     root = tmp_path_factory.mktemp("archive_index_cache_corpus")

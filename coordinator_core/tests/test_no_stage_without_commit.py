@@ -32,6 +32,10 @@ import pathlib
 from coordinator_core.spawn_policy import is_test_tree_site
 from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _THIS_FILE = pathlib.Path(__file__).resolve()
 _SCOPE_ROOTS: tuple[str, ...] = ("coordinator_core", "coordinator/bin")

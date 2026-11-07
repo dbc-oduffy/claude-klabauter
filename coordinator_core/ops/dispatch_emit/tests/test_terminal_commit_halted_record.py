@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.run_artifacts import outcome_rel
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -116,15 +117,14 @@ def test_sizing_refusal_lands_one_commit_of_record_and_leaves_unrelated_dirt(rep
     assert out["committed"] is True
     assert _git(["rev-parse", "HEAD~1"], repo).strip() == head
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    # run-stage.json rides every terminal commit: the stage stamp is written before staging.
-    assert sorted(names) == sorted(
-        f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json", "run-stage.json")
-    )
+    # Run state (state/warp) is local and gitignored in real repos: only the tracked outcome rides the commit.
+    assert names == [outcome_rel(RUN)]
     message = _git(["log", "-1", "--format=%B"], repo)
     assert "Halted-By: refusal" in message
     assert REASON in message
     status = _status(repo)
-    assert set(status) == others
+    local_record = {f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json", "run-stage.json")}
+    assert set(status) == others | local_record
     assert _git(["diff", "--cached", "--name-only"], repo) == ""
 
 
@@ -135,9 +135,7 @@ def test_halt_after_stage_lands_manifest_and_requirements(repo):
 
     assert out["committed"] is True
     names = _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
-    assert len(names) == 7  # five record files + halted.json + run-stage.json
-    assert f"{RECORD_DIR_ROOT}/{RUN}/run-stage.json" in names
-    assert all(n.startswith(f"{RECORD_DIR_ROOT}/{RUN}/") for n in names)
+    assert names == [outcome_rel(RUN)]  # run state stays local; only the tracked outcome lands
     assert "Halted-By: ledger-check" in _git(["log", "-1", "--format=%B"], repo)
 
 
@@ -150,11 +148,8 @@ def test_tracked_record_file_deleted_from_disk_lands(repo):
     out = _call(repo)
 
     assert out["committed"] is True, out
-    assert sorted(_git(["show", "--name-status", "--format=", "HEAD"], repo).splitlines()) == [
-        f"A\t{RECORD_DIR_ROOT}/{RUN}/halted.json",
-        f"A\t{RECORD_DIR_ROOT}/{RUN}/run-stage.json",
-        f"D\t{RECORD_DIR_ROOT}/{RUN}/run.json",
-    ]
+    # Run state is local: the tracked run.json deletion is not landed, only the outcome is.
+    assert _git(["show", "--name-status", "--format=", "HEAD"], repo).splitlines() == [f"A\t{outcome_rel(RUN)}"]
 
 
 def test_nothing_changed_returns_nothing_to_commit(repo):
@@ -369,7 +364,7 @@ def test_halted_run_lands_done_chunk_not_unfinished_one(repo):
     assert out["withheld"]["done.py"] == "halt-record-only"
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names and "half.py" not in names
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert outcome_rel(RUN) in names
     assert _status(repo)["half.py"] == "??"
 
 
@@ -452,7 +447,7 @@ def test_refusal_halt_lands_record_only_and_withholds_chunk_product(repo):
     assert out["withheld"] == {"done.py": "halt-record-only", "product.py": "halt-record-only"}
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names and "product.py" not in names
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert outcome_rel(RUN) in names
     assert "Lands-Chunks" not in _git(["log", "-1", "--format=%B"], repo)
 
 
@@ -475,13 +470,15 @@ def test_run_json_sizing_lands_when_dirty_and_is_skipped_otherwise(repo):
     assert "Lands-Chunks" not in _git(["log", "-1", "--format=%B"], repo)
     assert "landed_chunks" not in out
 
-    record = {f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "run.json", "halted.json", "run-stage.json")}
+    record = {outcome_rel(RUN)}
     for named in ("state/sizings/own.yaml", "../outside.yaml", "/abs/outside.yaml", "state/sizings/absent.yaml"):
         (repo / RECORD_DIR_ROOT / RUN / "ask.md").write_text(f"again {named}\n", encoding="utf-8")
         _name_sizing(repo, named)
         again = _call(repo)
-        assert again["committed"] is True, again
-        assert set(_landed(repo, again, "--name-only")) <= record, named
+        # The outcome already landed; a record-only rerun has nothing new to commit.
+        assert again["committed"] is True or again["nothing_to_commit"] is True, again
+        if again["committed"]:
+            assert set(_landed(repo, again, "--name-only")) <= record, named
 
 
 def test_peer_held_run_json_sizing_is_withheld(repo, monkeypatch):
@@ -527,7 +524,8 @@ def test_halt_lands_plan_baton_sizing_and_evidence_sidecar(repo):
     } <= names
     assert "Lands-Artifacts:" in _git(["log", "-1", "--format=%B"], repo)
     assert "run_artifact_residue" not in out
-    assert set(_status(repo)) == others
+    local_record = {f"{RECORD_DIR_ROOT}/{RUN}/{n}" for n in ("ask.md", "pm-intent.md", "run.json", "halted.json", "run-stage.json")}
+    assert set(_status(repo)) == others | local_record
 
 
 def test_halt_lands_superseded_predecessor_record(repo):
@@ -543,8 +541,9 @@ def test_halt_lands_superseded_predecessor_record(repo):
 
     assert out["committed"] is True, out
     names = set(_landed(repo, out, "--name-only"))
-    assert f"{RECORD_DIR_ROOT}/{old}/ask.md" in names
-    assert not [p for p in _status(repo) if p.startswith(f"{RECORD_DIR_ROOT}/")]
+    # A superseded predecessor's record is run state: it stays local, never in the commit.
+    assert f"{RECORD_DIR_ROOT}/{old}/ask.md" not in names
+    assert outcome_rel(RUN) in names
 
 
 def test_halt_withholds_unclaimed_docs_stage_path(repo):

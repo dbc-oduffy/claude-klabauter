@@ -67,6 +67,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks import postuse_advisory_dispatch as pad
 from coordinator_core.session import context_usage_sidecar as sidecar_module
 from coordinator_core.temp_layout import managed_tempdir

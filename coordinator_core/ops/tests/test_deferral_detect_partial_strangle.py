@@ -34,6 +34,8 @@ from typing import Optional
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.deferral_detect_partial_strangle import (
     _extract_fenced_manifest_block,
     _handler,

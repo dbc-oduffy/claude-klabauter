@@ -37,6 +37,9 @@ from coordinator_core.session.touch_record import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture(autouse=True)
 def _reset_writer_identity_memo():
     """C1's per-process memo must not leak between tests -- each test that

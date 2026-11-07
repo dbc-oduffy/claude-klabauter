@@ -9,6 +9,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan

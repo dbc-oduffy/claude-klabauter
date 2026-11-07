@@ -351,3 +351,19 @@ def test_a_server_error_other_than_minus_32004_still_gets_the_door_generic_text(
 def test_the_posix_door_passes_a_server_minus_32004_through():
     source = read(DOOR_WINDOWS_C.with_name("door_posix.c"))
     assert "error_code == JSONRPC_WARM_DISPATCH_INDETERMINATE" in source
+
+
+def test_dead_engine_non_hook_arm_turns_the_cold_boot_wait_off():
+    """Twin of the POSIX arm: after the spawn, non-hook only, caller value wins."""
+    source = read(DOOR_WINDOWS_C)
+    assert 'L"COORDINATOR_WARM_BOOT_WAIT_SECS"' in source
+    assert '#define DOOR_COLD_BOOT_WAIT_SECS_W L"0"' in source
+    assert source.index("#define DOOR_DRAIN_WAIT_MS") < source.index(
+        "#define DOOR_COLD_BOOT_WAIT_SECS_W"
+    )
+    start = source.index("RESPAWN ON MISS -- the no-server branch only. ERROR_FILE")
+    arm = source[start : source.index("return fall_through_and_free", start)]
+    assert arm.index("door_maybe_spawn_server(") < arm.index("SetEnvironmentVariableW(")
+    assert "!g_door_hook_mode" in arm
+    assert "ERROR_ENVVAR_NOT_FOUND" in arm
+    assert source.count("SetEnvironmentVariableW(DOOR_COLD_BOOT_WAIT_ENV_W") == 1

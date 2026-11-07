@@ -11,6 +11,9 @@ import pytest
 from coordinator_core.git import store_hygiene as sh
 
 
+pytestmark = pytest.mark.complete
+
+
 def _store(tmp_path, packs=0):
     pack_dir = tmp_path / "objects" / "pack"
     pack_dir.mkdir(parents=True)

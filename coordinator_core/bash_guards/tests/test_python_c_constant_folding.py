@@ -62,6 +62,8 @@ from coordinator_core.bash_guards.tests import test_block_subagent_commit as bas
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.guard_messages.testing import envelope_of
 
+pytestmark = pytest.mark.complete
+
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))

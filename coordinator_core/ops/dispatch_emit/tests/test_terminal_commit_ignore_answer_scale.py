@@ -10,6 +10,8 @@ import pytest
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.dispatch_emit import terminal_commit
 
+pytestmark = pytest.mark.complete
+
 BULK = "bulk_ignored"
 LANDABLE = ["state/debt-backlog/d1.yaml", "state/debt-backlog/d2.yaml"]
 

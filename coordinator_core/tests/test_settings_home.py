@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.testing import symlink_capability
 
 from coordinator_core._settings_home import (

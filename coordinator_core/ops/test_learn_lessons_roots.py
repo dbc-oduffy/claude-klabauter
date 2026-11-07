@@ -13,6 +13,11 @@ from coordinator_core.ops.learn_lessons_roots import main
 from coordinator_core.testing.fake_machine_local import write_fake_machine_local
 
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
+
 def _make_machine_local(bin_dir: Path, repos: dict, publish_targets=(), extra=None) -> Path:
     extra_dict = extra or {}
     python_body = f"""

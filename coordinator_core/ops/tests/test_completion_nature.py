@@ -25,6 +25,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.completion_nature import classify_nature
 
 

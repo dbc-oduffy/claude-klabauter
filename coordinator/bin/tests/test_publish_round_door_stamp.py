@@ -53,6 +53,19 @@ def test_no_stamp_keeps_the_destination_behaviour(calls, tmp_path):
     assert calls == [{}]
 
 
+def test_scratch_clone_round_bakes_the_live_root(monkeypatch, tmp_path):
+    from coordinator_core.install import door_install
+
+    live, clone = tmp_path / "live", tmp_path / "clone"
+    live.mkdir()
+    clone.mkdir()
+    baked: list = []
+    monkeypatch.setattr(door_install, "rebuild_door_for_mirror", lambda m, e, **k: baked.append(Path(e)) or False)
+    monkeypatch.setattr(publish, "_DEST_ROOT_OVERRIDE", publish.DestRootOverride.of(live, clone))
+    publish._rebuild_round_door(clone, tmp_path / "u", warm=False)
+    assert baked == [live.resolve()]
+
+
 def _door_union(tmp_path, *, core_text, recorded_core):
     import hashlib
     import json

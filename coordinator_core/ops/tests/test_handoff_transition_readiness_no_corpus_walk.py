@@ -16,6 +16,8 @@ import pytest
 
 import coordinator_core.ops.handoff_transition as ht
 
+pytestmark = pytest.mark.complete
+
 ARCHIVED_HANDOFFS = 3000
 PLANS = 1500
 PROCESS_TIME_BAR_S = 0.5

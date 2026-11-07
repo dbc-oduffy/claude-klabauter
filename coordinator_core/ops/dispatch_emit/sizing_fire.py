@@ -46,6 +46,8 @@ from coordinator_core.session.output_tree_layout import locate, write_rel
 from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
 
 ARM_XS, ARM_S, ARM_M_PLUS, ARM_ROADMAP = "xs", "s", "m_plus", "roadmap"
+
+OUTSIDE_CREDIT_REASON = "landed outside the executor at {sha}"
 ARM_ROUTE = {ARM_XS: "dispatch", ARM_S: "spec-dispatch", ARM_M_PLUS: "plan", ARM_ROADMAP: "roadmap"}
 _PM_DECISION = "pm-decision"
 _ROADMAP_EXIT = "roadmap"
@@ -439,7 +441,7 @@ def resumable_plan(
                 root, plan_rel, [r for r in rows if r.get("id") in open_ids and r.get("id") not in named]
             )
             landed_open += tuple((i, outside[i]) for i in open_ids if i in outside)
-            reasons.update({i: f"landed outside the executor at {outside[i]}" for i in open_ids if i in outside})
+            reasons.update({i: OUTSIDE_CREDIT_REASON.format(sha=outside[i]) for i in open_ids if i in outside})
             open_ids = [i for i in open_ids if i not in outside]
     ledger_reasons = tuple(sorted((i, r) for i, r in reasons.items() if i not in pending))
     pointer = _own_pointer(root, plan_rel, sizing_rel)

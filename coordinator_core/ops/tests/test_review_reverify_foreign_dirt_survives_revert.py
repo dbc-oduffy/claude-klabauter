@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.review_reverify import review_reverify
 from coordinator_core.ops.tests.test_review_reverify_head_clamp import BASE_FILES, PREFIX, SESSION, Repo
 

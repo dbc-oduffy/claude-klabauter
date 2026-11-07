@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.write_guards import guard_memory_store_cap as guard
 
 

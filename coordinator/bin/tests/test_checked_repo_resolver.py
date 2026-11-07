@@ -42,6 +42,8 @@ import unittest
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import sys
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))

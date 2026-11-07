@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.docgen import template_format, volatility as vol
 
 ALL_TYPES = template_format.available_template_types()

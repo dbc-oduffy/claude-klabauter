@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 
 _SRC = Path(__file__).resolve().parents[1] / "fleet-test-write-scan.py"
 _spec = importlib.util.spec_from_file_location("fleet_test_write_scan", _SRC)

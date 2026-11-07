@@ -11,6 +11,8 @@ import pytest
 from coordinator_core.ops.dispatch_emit import run_close as rc
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
 
+pytestmark = pytest.mark.complete
+
 T0 = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
 
 

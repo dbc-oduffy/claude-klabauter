@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 MSG = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
 
 

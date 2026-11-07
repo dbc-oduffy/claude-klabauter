@@ -14,6 +14,8 @@ from coordinator_core.housekeeping.tests.corpus_fixture import (
     build_corpus,
 )
 
+pytestmark = pytest.mark.complete
+
 
 def test_list_live_handoffs_is_non_recursive_and_skips_archive_decoys(tmp_path):
     fixture = build_corpus(tmp_path)

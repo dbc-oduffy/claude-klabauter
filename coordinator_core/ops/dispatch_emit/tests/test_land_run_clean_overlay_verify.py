@@ -25,7 +25,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_foreign_dirt_in_reac
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
 from coordinator_core.ops.dispatch_emit.tests.test_reverify_measures_landing_tree_e2e import _stage
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 READER = "t/test_reader.py"
 _READER_SRC = (

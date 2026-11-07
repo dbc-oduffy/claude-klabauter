@@ -10,6 +10,10 @@ from coordinator_core.ops.dispatch_emit.agent_sidecar import SIDECAR_DIR_MARKER_
 from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _emit_scripts
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _LABEL_RE = re.compile(r"label: ('[^']*'|\"[^\"]*\")")
 
 

@@ -14,7 +14,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = pytest.mark.spawns_process
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 _WRAPPER = Path(__file__).resolve().parents[1] / "coordinator-publish.py"
 

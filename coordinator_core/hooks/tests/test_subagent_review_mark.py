@@ -33,6 +33,8 @@ from unittest import mock
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.hooks import subagent_review_mark as mod
 
 

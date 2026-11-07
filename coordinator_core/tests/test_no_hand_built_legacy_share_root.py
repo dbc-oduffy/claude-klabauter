@@ -36,6 +36,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 _SCAN_ROOTS = ("coordinator_core", os.path.join("coordinator", "bin"))

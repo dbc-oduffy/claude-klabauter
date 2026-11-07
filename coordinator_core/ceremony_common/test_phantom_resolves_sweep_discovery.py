@@ -9,6 +9,11 @@ from coordinator_core.ceremony_common.phantom_resolves_sweep import (
 )
 
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
+
 def test_discover_brief_defining_packages_finds_a_newly_planted_package(tmp_path: Path) -> None:
     fake_root = tmp_path / "coordinator_core"
     pkg_dir = fake_root / "fourth_ceremony_assemble"

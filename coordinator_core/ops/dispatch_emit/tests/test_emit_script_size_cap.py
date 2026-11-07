@@ -19,6 +19,9 @@ from coordinator_core.ops.dispatch_emit.emit import (
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 
+pytestmark = pytest.mark.complete
+
+
 def _wave_row(id_, writes):
     return WaveRow(
         id=id_,

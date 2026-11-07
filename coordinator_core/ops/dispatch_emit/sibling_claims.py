@@ -50,8 +50,11 @@ def _norm(path: object) -> str:
 
 
 def _read_json(path: Path) -> dict:
+    from coordinator_core.git import call_io_scope
+
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        raw = call_io_scope.read_bytes(path)
+        data = json.loads(raw) if raw is not None else None
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
@@ -59,14 +62,21 @@ def _read_json(path: Path) -> dict:
 
 def _in_window_run_ids(root: Path, own_run_id: Optional[str]) -> list:
     """Run ids other than `own_run_id` in the record dir whose stamp is inside the token TTL (an unstamped
-    dir is excluded, as `_unlanded_run_ids` never lists a halted run without one), from one scan: the set
-    `halted_hold_release.prefetch_kept_at_head` batches blobs for, from `halted_hold_release.record_stamps`. Never raises."""
-    from coordinator_core.ops.dispatch_emit import halted_hold_release, run_token
+    dir is excluded, as `_unlanded_run_ids` never lists a halted run without one) and whose `state/warp` dir
+    holds a `halted.json`, from one scan: the set `halted_hold_release.prefetch_kept_at_head` batches blobs
+    for, from `halted_hold_release.record_stamps`. A token-only run has no marker and nothing to prefetch (one
+    existence check, no record-dir resolve or marker parse); a halted run kept only under `scratch/warp` falls
+    back to its own blob batch. Never raises."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
     now = time.time()
+    base = os.path.join(root, RECORD_DIR_ROOT)
     out = []
     for run_id, stamp in halted_hold_release.record_stamps(root):
-        if run_id != own_run_id and stamp is not None and now - stamp <= run_token.TTL_SECONDS:
+        if run_id != own_run_id and stamp is not None and now - stamp <= run_token.TTL_SECONDS and os.path.exists(
+            os.path.join(base, run_id, halted_run.HALTED_FILE)
+        ):
             out.append(run_id)
     return out
 
@@ -142,7 +152,8 @@ def _unlanded_run_ids(
     covering: Optional[Sequence[str]] = None,
 ) -> list:
     """Run ids other than `own_run_id` that are halted and unresumed, or hold a fresh token
-    (unclaimed or claimed), sorted. One record-dir scan; the token is a point read per run, never a
+    (unclaimed or claimed) and are a live peer's (`warp_run_deliverable._live_peer_run`), sorted.
+    One record-dir scan; the token is a point read per run, never a
     token-store listing. A stamped run id older than the token TTL is never opened. A halted run
     `halted_hold_release.release_reason` frees (against `own_run_id`/`own_plan`), and a resumed run
     whose successor landed or whose sizing is superseded, is not listed. A listed halted run may
@@ -162,9 +173,12 @@ def _unlanded_run_ids(
         if stamp is not None and now - stamp > run_token.TTL_SECONDS:
             continue
         try:
-            marker = _indexed_halt_marker(root / RECORD_DIR_ROOT / run_id)
-            if marker is None:
-                marker = halted_run.read_strict_run(root / RECORD_DIR_ROOT / run_id)
+            if warp_run_deliverable._no_marker(root, run_id):
+                marker = None
+            else:
+                marker = _indexed_halt_marker(root / RECORD_DIR_ROOT / run_id)
+                if marker is None:
+                    marker = halted_run.read_strict_run(root / RECORD_DIR_ROOT / run_id)
         except halted_run.UnreadableHaltRecord:
             found.append(run_id)
             continue
@@ -177,11 +191,13 @@ def _unlanded_run_ids(
                 found.append(run_id)
             continue
         for claimed in (False, True):
-            record = run_token._read(run_token._record_path(root, run_id, claimed=claimed))
+            record = run_token.read_cached(run_token._record_path(root, run_id, claimed=claimed))
             if record is not None and run_token._fresh(record):
                 if minted_before is not None and (record.get("minted_at"), run_id) >= tuple(minted_before):
                     break
-                if not warp_run_deliverable.resumed_run_released(root, run_id, own_run_id):
+                if (marker is None or not warp_run_deliverable.resumed_run_released(root, run_id, own_run_id)) and (
+                    warp_run_deliverable._live_peer_run(root, record, "", str(root))
+                ):
                     found.append(run_id)
                 break
     return found
@@ -303,7 +319,7 @@ def _own_dirty(root: Path, run_id: str, hot: set, dirty, attributable=None) -> s
 
 def _held_extras(
     root: Path, run_id: str, dirty=None, wanted: Optional[set] = None, attributable=None,
-    own_run_id: Optional[str] = None, own_plan: Optional[str] = None,
+    own_run_id: Optional[str] = None, own_plan: Optional[str] = None, halted: Optional[bool] = None,
 ) -> set:
     """`_extra_declared`, narrowed for a halted run to `halted_hold_release.held_paths` against
     `own_run_id`/`own_plan` (empty once a release rule frees the run) plus the run's own sizing file
@@ -314,7 +330,7 @@ def _held_extras(
     from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run
 
     extra = _extra_declared(root, run_id)
-    if warp_run_deliverable._halted(root, run_id):
+    if warp_run_deliverable._halted(root, run_id) if halted is None else halted:
         try:
             held = extra & halted_hold_release.held_paths(root, run_id, own_run_id, own_plan)
         except halted_run.UnreadableHaltRecord as exc:
@@ -422,14 +438,18 @@ def sibling_run_claims(
                 claims.setdefault(path, run_ids[0])
             if unlanded is None:
                 unlanded = _unlanded_run_ids(root, own_run_id, own_plan, minted_before)
-            extras = {run_id: _held_extras(root, run_id, dirty, wanted, attr, own_run_id, own_plan) for run_id in unlanded}
+            halted_ids = {run_id for run_id in unlanded if warp_run_deliverable._halted(root, run_id)}
+            extras = {
+                run_id: _held_extras(root, run_id, dirty, wanted, attr, own_run_id, own_plan, run_id in halted_ids)
+                for run_id in unlanded
+            }
             for path, sessions in sorted(live.items()):
                 owner = next((r for r in unlanded if _declares(root, r, path)), sessions[0])
                 claims.setdefault(path, owner)
             for run_id in unlanded:
                 for path in sorted(extras[run_id] & wanted):
                     claims.setdefault(path, run_id)
-                if warp_run_deliverable._halted(root, run_id):
+                if run_id in halted_ids:
                     paths, prefixes, _unreadable = warp_run_deliverable._manifest_declared(run_id, root)
                     if paths or prefixes:
                         hot = {p for p in wanted if p not in claims and _declares(root, run_id, p)}

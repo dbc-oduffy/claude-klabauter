@@ -15,11 +15,14 @@ since they need no git_root at all.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 from coordinator_core.guard_messages.testing import envelope_of
+
+pytestmark = pytest.mark.complete
 
 
 def _enveloped(check):
@@ -4622,6 +4625,13 @@ def test_subagent_clone_implicit_trailing_name_from_scratch_cwd_allowed(scratch_
     assert _enveloped(guard.check)(_at(f"git clone {url}", main / "scratch")) is None
 
 
+def _occupy(cwd, dest):
+    """Make `dest` (resolved against `cwd`) a non-empty directory so the clone has something to overwrite."""
+    d = Path(os.path.normpath(cwd / dest.replace("\\", "/")))
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "keep").write_text("x")
+
+
 @pytest.mark.parametrize(
     "dest",
     [
@@ -4638,11 +4648,13 @@ def test_subagent_clone_implicit_trailing_name_from_scratch_cwd_allowed(scratch_
 )
 def test_subagent_clone_outside_scratch_denied_for_every_spelling(scratch_tree, dest):
     main, _clone = scratch_tree
+    _occupy(main, dest)
     assert _enveloped(guard.check)(_at(f"git clone {_URL} {dest}", main)) is not None
 
 
 def test_subagent_clone_decoy_segment_cannot_lend_its_backslashes(scratch_tree):
     main, _clone = scratch_tree
+    _occupy(main, "scratchx")
     assert _enveloped(guard.check)(_at(f"git clone {_URL} scratchx; echo {_URL} scratch\\x", main)) is not None
 
 
@@ -4652,11 +4664,14 @@ def test_subagent_clone_absolute_outside_scratch_denied(scratch_tree):
     sibling_bs = sibling_fwd.replace("/", "\\")
     scratchy = (main / "scratchy" / "x").as_posix()
     for dest in (sibling_fwd, f'"{sibling_bs}"', scratchy, scratchy.replace("/", "\\")):
+        _occupy(main, dest.strip('"'))
         assert _enveloped(guard.check)(_at(f"git clone {_URL} {dest}", main)) is not None
 
 
 def test_subagent_clone_outside_scratch_or_with_a_hook_vector_is_denied(scratch_tree):
     main, _clone = scratch_tree
+    _occupy(main, "elsewhere")
+    _occupy(main / "scratch", "../../r")
     assert _enveloped(guard.check)(_at("git clone https://github.com/o/r.git elsewhere", main)) is not None
     assert _enveloped(guard.check)(_at("git clone https://github.com/o/r.git ../../r", main / "scratch")) is not None
     assert _enveloped(guard.check)(_at("git clone --template=/t https://h/o/r.git scratch/x", main)) is not None

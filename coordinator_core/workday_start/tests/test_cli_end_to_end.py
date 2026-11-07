@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
 from coordinator_core.ceremony_common.run import ledger, single_flight
 from coordinator_core.ceremony_common.run.runner import ChildOutcome

@@ -179,6 +179,8 @@ from typing import Dict, FrozenSet, List, Optional, Tuple
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 _SCAN_ROOT = "coordinator_core"

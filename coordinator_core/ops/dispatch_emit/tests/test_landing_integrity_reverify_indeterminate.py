@@ -6,6 +6,10 @@ from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 IND = landing_targeted_tests.REVIEW_REVERIFY_INDETERMINATE
 
 

@@ -38,6 +38,8 @@ import pytest
 from coordinator_core import baton_assemble as ba
 from coordinator_core.baton_assemble import apply as ba_apply
 
+pytestmark = pytest.mark.complete
+
 
 def _live_handoff_path(harness, name: str):
     """The one live handoff named `name`. Trap: d1 scaffolds into a <YYYY-MM> month shard, and

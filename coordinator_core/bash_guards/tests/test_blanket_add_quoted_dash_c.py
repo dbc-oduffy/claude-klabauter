@@ -12,6 +12,8 @@ from coordinator_core.bash_guards import _dc_git_shared, dispatch_checks
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+pytestmark = pytest.mark.complete
+
 
 def _git(repo: Path, *args: str) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, **no_console_passthrough_kwargs())

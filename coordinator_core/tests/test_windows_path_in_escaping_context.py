@@ -90,6 +90,8 @@ from coordinator_core.tests.test_re_sub_replacement_template_is_literal_or_calla
     find_non_literal_sub_replacements,
 )
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCAN_ROOT = _REPO_ROOT / "coordinator_core"
 

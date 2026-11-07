@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import deliverable_equivalence
 from coordinator_core.ops import deliverable_ledger_write
 from coordinator_core.ops.deliverable_ledger_write import (

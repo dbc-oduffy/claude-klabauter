@@ -5,6 +5,8 @@ import pytest
 
 from coordinator_core.testing import fs_containment as fc
 
+pytestmark = pytest.mark.complete
+
 
 @pytest.fixture(autouse=True)
 def _isolate_redirect_state(monkeypatch):

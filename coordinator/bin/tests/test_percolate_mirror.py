@@ -17,6 +17,8 @@ from typing import List
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 

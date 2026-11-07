@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.ops.dispatch_emit as _pkg
 import coordinator_core.sizing_assemble as sa
 from coordinator_core.ops.dispatch_emit import cli as cli_module

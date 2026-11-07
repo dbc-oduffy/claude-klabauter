@@ -26,6 +26,8 @@ from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import (
 )
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PKG = REPO_ROOT / "coordinator_core"
 

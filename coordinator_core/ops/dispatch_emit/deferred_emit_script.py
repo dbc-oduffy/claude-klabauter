@@ -247,8 +247,11 @@ def write_deferred_script(root: Path, params: dict) -> Path:
     }
     script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
     script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(re.sub("|".join(values), lambda m: values[m.group(0)], _DEFERRED_JS), encoding="utf-8")
+    body = re.sub("|".join(values), lambda m: values[m.group(0)], _DEFERRED_JS)
+    # Encoded once and written raw, so the receipt hashes what landed without a read-back.
+    script_bytes = body.encode("utf-8")
+    script.write_bytes(script_bytes)
     from coordinator_core.ops.workflow_fire.receipt import write_fire_receipt
 
-    write_fire_receipt(script)
+    write_fire_receipt(script, script_bytes=script_bytes)
     return script

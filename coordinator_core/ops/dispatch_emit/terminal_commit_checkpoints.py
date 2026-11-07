@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
     is_stamp_commit,
     CHECKPOINT_PLAN_LINE,
     CHECKPOINT_SUBJECT,
+    checkpoint_withheld,
 )
 from coordinator_core.ops.dispatch_emit.plan_row_coding import (
     yaml_load as _yaml_load,
@@ -171,13 +172,13 @@ def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: O
         if not subject or not meta.get("parents") or (plan_path and (not plan or plan.group("v") != plan_path)):
             break
         named = {i.strip() for i in subject.group("ids").split(",") if i.strip()}
-        checkpoints.append((sha, meta["parents"][0], named))
+        checkpoints.append((sha, meta["parents"][0], named, checkpoint_withheld(message)))
         sha = meta["parents"][0]
     out: dict = {}
     for chunk in chunks:
         hits = [
-            (csha, named) for csha, parent, named in reversed(checkpoints)
-            if any(_blob_at_commit(common_dir, csha, p) != _blob_at_commit(common_dir, parent, p) for p in chunk.paths)
+            (csha, named) for csha, parent, named, withheld in reversed(checkpoints)
+            if not withheld.intersection(chunk.paths) and any(_blob_at_commit(common_dir, csha, p) != _blob_at_commit(common_dir, parent, p) for p in chunk.paths)
         ]
         if hits:
             out[chunk.id] = next((h[0] for h in hits if chunk.id in h[1]), hits[0][0])

@@ -13,6 +13,10 @@ from pathlib import Path
 
 import coordinator_core
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _PKG = Path(coordinator_core.__file__).resolve().parent
 _REMOVERS = {"consume", "discard"}
 _MODULE = "run_token"

@@ -6,6 +6,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import orient_brief
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
 from coordinator_core.contract.decision_object.reader_result import ReaderResult

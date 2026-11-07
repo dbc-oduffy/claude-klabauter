@@ -17,6 +17,8 @@ from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 from .conftest import REVIEW_KW
 
+pytestmark = pytest.mark.complete
+
 P1, P2, P3 = "docs/plans/p1.md", "docs/plans/p2.md", "docs/plans/p3.md"
 ABSENT_EDGES = SeamInputs({}, False)
 

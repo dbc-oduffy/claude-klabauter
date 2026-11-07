@@ -698,6 +698,15 @@ def _land(
 
     if not paths and not deleted and not outcome_changed:
         _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
+        if (worktree_root / record_dir_rel).is_dir():
+            halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
+        if (worktree_root / record_dir_rel / kept_work.KEPT_FILE).is_file():
+            _record_kept(
+                worktree_root, record_dir_rel, owner, eviction.kept_view(withheld) if eviction else withheld,
+                halted, [], params.get(CONSUMED_RETURNS_PARAM),
+                post_candidates=[p for p in post_candidates if p in snapshot.changed], landed=landed_now,
+                common_dir=resolve_git_common_dir(worktree_root), manifest_doc=manifest_doc,
+            )
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         return {
             "committed": False, "sha": None, "nothing_to_commit": True,

@@ -11,6 +11,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import machine_profile, warp_fire
 from coordinator_core.session import engine_route_state as ers
 from coordinator_core.session import xs_lane_budget

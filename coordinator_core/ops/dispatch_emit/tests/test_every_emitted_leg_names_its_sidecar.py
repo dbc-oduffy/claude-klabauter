@@ -17,6 +17,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_ha
     _stage,
 )
 
+pytestmark = pytest.mark.complete
+
 _LABEL_RE = re.compile(r"label: ('[^']*'|\"[^\"]*\")")
 _HEREDOC_PHRASES = ("Bash heredoc", "never skip it")
 _HOISTED_PROMPT_REF = re.compile(r"\b(_\w*Prompt)\b")

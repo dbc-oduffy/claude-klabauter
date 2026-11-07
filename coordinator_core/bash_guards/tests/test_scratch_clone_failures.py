@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import subprocess
 
+import pytest
+
 from coordinator_core.bash_guards._unborn_scratch_repo import (
     UNPUSHED,
     UNREADABLE,
     scratch_clone_failures,
 )
+
+pytestmark = pytest.mark.complete
 
 
 def _scratch_repo(tmp_path):

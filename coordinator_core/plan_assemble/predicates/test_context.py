@@ -6,6 +6,10 @@ from coordinator_core.plan_assemble import _dispatch_brief, _PlanAssembleExitCod
 from coordinator_core.plan_assemble import residue as residue_mod
 from coordinator_core.plan_assemble.predicates import PredicateContext, undetermined
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 
 _PLAN_TEXT = """---
 title: "fixture plan"

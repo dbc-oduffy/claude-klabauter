@@ -11,6 +11,10 @@ from pathlib import Path
 from coordinator_core.completion_receipts.day import receipts_for_day
 from coordinator_core.workday_complete import brief as wc_brief
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 DAY = "2026-10-01"
 
 

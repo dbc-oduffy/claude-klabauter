@@ -10,6 +10,9 @@ import pytest
 from coordinator_core.group_em import gem_home
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     settings = tmp_path / "settings"

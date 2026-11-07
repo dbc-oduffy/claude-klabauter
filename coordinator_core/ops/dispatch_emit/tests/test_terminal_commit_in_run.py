@@ -304,7 +304,16 @@ def test_the_implemented_stamp_prose_carries_the_reason(tmp_path, monkeypatch, r
         return 0
 
     monkeypatch.setattr(archive_stamp, "cs_stamp_plan_implemented", fake)
-    out = terminal_commit._stamp_plan_implemented(tmp_path, "docs/plans/p.md", "abc123", reason=reason)
+    judged = {
+        "criterion": {
+            "authored_by": "coordinator:exit-criterion-judge",
+            "falsifier": {"verdict": "pass", "output": "1 passed"},
+        },
+        "tests": {"status": "pass", "run": 1},
+    }
+    out = terminal_commit._stamp_plan_implemented(
+        tmp_path, "docs/plans/p.md", "abc123", reason=reason, inline_review=judged
+    )
     assert out == {"plan_status": "implemented"}
     assert seen["prose"] == "criterion met at abc123 per s1" + tail
     assert seen["falsifier_verdict"] == "pass"

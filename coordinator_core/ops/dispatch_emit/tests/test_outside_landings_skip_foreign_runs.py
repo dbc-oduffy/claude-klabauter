@@ -28,7 +28,7 @@ def _plan(rows: dict) -> str:
         f"  disposition: open\n  deferred: false\n"
         for i, w in rows.items()
     )
-    return f"---\ntitle: p\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"
+    return f"---\ntitle: p\ndeliverable_id: dlv-t-111111\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"
 
 
 def _git(root: Path, *args: str) -> str:
@@ -81,7 +81,7 @@ def test_this_plans_own_halt_record_still_resolves_the_row(tmp_path):
 def test_a_hand_commit_after_the_foreign_one_resolves_with_its_own_sha(tmp_path):
     repo = _repo(tmp_path)
     _foreign_checkpoint(repo, "1")
-    hand = _commit(repo, {"c1.py": "2"}, "hand edit")
+    hand = _commit(repo, {"c1.py": "2"}, "hand edit" + "\n\nDeliverable-Id: dlv-t-111111")
     assert rows_landed_outside_executor(repo, _REL, _ROW) == {"C1": hand}
 
 
@@ -106,7 +106,7 @@ def test_foreign_predicate_both_sides():
 def test_the_walk_spawns_no_process(tmp_path, monkeypatch):
     repo = _repo(tmp_path)
     _foreign_checkpoint(repo, "1")
-    hand = _commit(repo, {"c1.py": "2"}, "hand edit")
+    hand = _commit(repo, {"c1.py": "2"}, "hand edit" + "\n\nDeliverable-Id: dlv-t-111111")
 
     def _boom(*a, **k):
         raise AssertionError("spawned")

@@ -15,6 +15,8 @@ from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import review_edit_source, review_edits
 from coordinator_core.session.machinery_paths import share_dir
 
+pytestmark = pytest.mark.complete
+
 _REAL_RUN = subprocess.run
 SESSION = "sess-own"
 PREFIX = "prep-hc"

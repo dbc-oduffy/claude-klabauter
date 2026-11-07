@@ -8,6 +8,11 @@ from pathlib import Path
 from coordinator_core.benchmarks import land_run_leg_budget_profile as lb
 
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
+
 def _bind_env(monkeypatch) -> None:
     for name in ("COORDINATOR_INVOCATION_ORIGIN", "COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.setenv(name, "x")

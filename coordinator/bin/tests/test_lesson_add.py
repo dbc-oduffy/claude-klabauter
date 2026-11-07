@@ -20,6 +20,10 @@ Spec backlink: coordinator-content-repo:pln-strang-08-arm-the-doe-queue-fa-36567
 """
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.machinery
 import importlib.util
 import io

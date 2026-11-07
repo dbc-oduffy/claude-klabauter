@@ -87,6 +87,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _CC_DIR = Path(__file__).resolve().parent.parent.parent
 _OPS_INIT_PATH = _CC_DIR / "ops" / "__init__.py"
 _REGISTRY_MAP_PATH = _CC_DIR / "ops" / "_registry_map.py"

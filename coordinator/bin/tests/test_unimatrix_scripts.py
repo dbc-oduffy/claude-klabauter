@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 BIN = Path(__file__).resolve().parents[1]
 NAMES = ("bridge", "relay", "rekey", "inbox")
 
@@ -230,6 +232,7 @@ def test_relay_still_refuses_a_live_holder_whose_start_stamp_matches(monkeypatch
         relay.check_name_free("far-1")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="relay inbox mints an AF_UNIX socket under /tmp; the relay exits off POSIX")
 def test_relay_inbox_default_invocation_mints_the_socket_after_a_reboot(monkeypatch, tmp_path):
     relay = load("relay")
     # AF_UNIX paths cap near 104 bytes, which tmp_path overruns; the socket dir must be short.

@@ -48,6 +48,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.cutover_gate import UnsupportedGateSourceKind, _is_prose, derive
 
 

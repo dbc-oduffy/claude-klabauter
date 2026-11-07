@@ -2,6 +2,10 @@
 that carries no coordinator/hooks/scripts/_engine_root.py."""
 from __future__ import annotations
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 import importlib.util
 import json
 import shutil

@@ -6,6 +6,8 @@ import sys
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.search import sources_powershell as sp
 from coordinator_core.search.engine import MAX_RENDER_BYTES, Unanswerable
 

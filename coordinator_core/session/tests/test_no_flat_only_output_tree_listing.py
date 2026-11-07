@@ -25,6 +25,10 @@ from coordinator_core.ops.generator_census.assemble import _is_test_scaffolding
 from coordinator_core.ops.generator_census.declarations import DECLARATION_NAMES
 from coordinator_core.session import output_tree_layout
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 _SCAN_TOPS = ("coordinator_core", "coordinator/bin")
 

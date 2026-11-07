@@ -13,6 +13,8 @@ import subprocess
 import jsonschema
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit import wake_digest as wd
 from coordinator_core.win_portability import no_console_creationflags

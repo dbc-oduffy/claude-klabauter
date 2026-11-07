@@ -1,6 +1,8 @@
 """gate_v2.compute_gate_report: fail-closed invariants, candidacy withdrawals, gates, waves, plan link."""
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.git.git_state import IndexParseError
 from coordinator_core.roadmap import gate_v2
 

@@ -6,6 +6,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.ipc as ipc
 from coordinator_core.telemetry import op_latency
 from coordinator_core.warm import dispatch_ack, server

@@ -8,6 +8,8 @@ import pytest
 from coordinator_core.bash_guards import _blanket_disarm as bd
 from coordinator_core.bash_guards.dispatch import GuardBand
 
+pytestmark = pytest.mark.complete
+
 
 @pytest.fixture(autouse=True)
 def _isolated_marker(tmp_path, monkeypatch):

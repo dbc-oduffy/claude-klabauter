@@ -13,6 +13,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.group_em import nomination
 from coordinator_core.session import harness_registry
 from coordinator_core.session import liveness as _liveness

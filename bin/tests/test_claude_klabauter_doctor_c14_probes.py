@@ -39,6 +39,8 @@ from typing import Optional
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 # ---------------------------------------------------------------------------
 # Module loader
 # ---------------------------------------------------------------------------

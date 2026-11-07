@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.snippet_sync.verify import (
     SnippetCommentResidueError,
     _assert_no_residual_comment_fragments,

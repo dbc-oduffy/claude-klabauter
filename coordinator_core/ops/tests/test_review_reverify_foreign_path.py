@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops import review_prep as rp
 from coordinator_core.ops import review_reverify_probe as probe
 from coordinator_core.ops import review_reverify as rr

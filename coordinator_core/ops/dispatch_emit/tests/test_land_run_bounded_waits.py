@@ -15,6 +15,8 @@ from coordinator_core.benchmarks import land_run_slow_disk_profile as prof
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit import land_deadline
 
+pytestmark = pytest.mark.complete
+
 SLOW_SECS = 40.0
 
 

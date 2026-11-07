@@ -60,6 +60,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 import coordinator_core.bash_guards as _bash_guards_pkg
 from coordinator_core.bash_guards._dialect import Dialect
 from coordinator_core.bash_guards._verdict import collecting, was_silent

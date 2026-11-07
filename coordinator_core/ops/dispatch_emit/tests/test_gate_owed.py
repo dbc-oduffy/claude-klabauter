@@ -10,6 +10,8 @@ from coordinator_core.ops.dispatch_emit import gate_owed
 from coordinator_core.win_portability import no_console_creationflags
 
 # (reply text, expected kind or None)
+pytestmark = pytest.mark.complete
+
 CASES = [
     ("PARTIAL: r.md\ngate-blocker: guard-denied: pnpm typecheck (heavy-admission)", "guard-denied"),
     ("PARTIAL: r.md\ngate-blocker: outside-footprint: peer WIP", "outside-footprint"),

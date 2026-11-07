@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _ROOT = Path(__file__).resolve().parents[1]
 
 # Remedy phrasings that send the reader to a PM (DR-NO-PM-UNLOCKS seed corpus).

@@ -7,6 +7,8 @@ import re
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import yaml
 
 from coordinator_core import warp_fire

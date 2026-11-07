@@ -83,6 +83,8 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_row,
 )
 
+pytestmark = pytest.mark.complete
+
 #: Bands whose guards can emit advisory/deny text an agent reads --
 #: CONFINEMENT_DENY is deliberately excluded -- see module docstring.
 _ADVISORY_BANDS = (GuardBand.ADVISORY_REWRITE, GuardBand.PLATFORM_CONDITIONED_DENY)

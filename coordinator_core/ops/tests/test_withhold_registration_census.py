@@ -51,6 +51,8 @@ from coordinator_core.ops import emit_withheld_knobs as ewk
 #: `assert "COORDINATOR_..." not in <haystack>` — the whole withhold-shaped family. The
 #: haystack token is captured permissively (identifiers, dots, brackets, quoted subscripts)
 #: because the classifier below, not this regex, carries the discriminating judgment.
+pytestmark = pytest.mark.complete
+
 _ASSERT_RE = re.compile(
     r'assert\s+"(COORDINATOR_[A-Z0-9_]+)"\s+not\s+in\s+([A-Za-z_][A-Za-z0-9_.\[\]"\']*)'
 )

@@ -5,6 +5,8 @@ import json
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import block_worktree_sentinel_creation as guard
 from coordinator_core.bash_guards import block_approval_sentinel_creation as doctrine_guard
 from coordinator_core.bash_guards import dispatch

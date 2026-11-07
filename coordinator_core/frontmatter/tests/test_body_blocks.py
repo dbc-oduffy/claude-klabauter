@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.frontmatter.body_blocks import (
     LocateStatus,
     locate_fenced_block,

@@ -44,6 +44,9 @@ import pytest
 from coordinator_core.warm import supervisor
 
 
+pytestmark = pytest.mark.complete
+
+
 def test_pinned_hosts_are_exactly_the_two_loopback_spellings():
     assert supervisor._pinned_hosts(58894) == {"127.0.0.1:58894", "localhost:58894"}
 

@@ -19,6 +19,8 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     fire_row_for_audience,
 )
 
+pytestmark = pytest.mark.complete
+
 
 def _legacy_dict_guards() -> List[str]:
     pinned = set(dispatch._PINNED_DICT_RETURNS)

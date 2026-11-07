@@ -16,7 +16,7 @@ from coordinator_core.ops.dispatch_emit import land_remainder_contract as contra
 from coordinator_core.ops.dispatch_emit import land_remainder_writeset as writeset
 from coordinator_core.win_portability import no_console_creationflags
 
-pytestmark = [pytest.mark.spawns_process]
+pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 RUN = "warp-test-run"
 

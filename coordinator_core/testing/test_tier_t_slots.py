@@ -18,6 +18,8 @@ import os
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.testing import tier_t_slots
 
 

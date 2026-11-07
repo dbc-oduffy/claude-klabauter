@@ -36,6 +36,8 @@ import pytest
 
 from coordinator_core.ipc import get_op_handler
 
+pytestmark = pytest.mark.complete
+
 _OP_NAME_RE = re.compile(r'"([a-z_][a-z0-9_]*(?:\.[a-z0-9_]+)+)"')
 
 

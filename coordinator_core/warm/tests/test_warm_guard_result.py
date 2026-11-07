@@ -16,6 +16,8 @@ from typing import Any
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.warm.warm_guard_result import (
     DENY,
     GUARD_DID_NOT_RUN,

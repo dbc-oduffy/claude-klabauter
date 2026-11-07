@@ -19,6 +19,8 @@ from coordinator_core.ops.review_mint.roster import (
     parse_execute_review,
 )
 
+pytestmark = pytest.mark.complete
+
 
 def _v5_fragment() -> dict:
     """DoE D1's pinned example, verbatim (review-inside-execute-plan.md

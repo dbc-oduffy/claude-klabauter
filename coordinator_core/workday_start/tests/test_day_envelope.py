@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ceremony_common.run import decide, envelope as envelope_mod
 from coordinator_core.ops import agent_worktree_sweep
 from coordinator_core.workday_start import day_envelope as mod

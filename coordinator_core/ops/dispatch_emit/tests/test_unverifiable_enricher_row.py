@@ -4,6 +4,8 @@ from .conftest import REVIEW_KW
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit.emit import (
     UnverifiableEnricherRowError,
     _verification_requires_a_run,

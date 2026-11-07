@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import coordinator_core.ops.check_unmanaged_temp_creation as m
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 
 def test_no_unmanaged_temp_creation_site():
     findings = m.scan()

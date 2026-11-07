@@ -43,6 +43,8 @@ import re
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 # `.git/` and `.coordinator-local/` are machinery, not source. `.git/` earns its

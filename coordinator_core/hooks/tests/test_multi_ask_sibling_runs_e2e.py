@@ -24,6 +24,8 @@ from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.session_baton import store
 
+pytestmark = pytest.mark.complete
+
 SID = "sess-sibling-e2e"
 VERBATIM = "fix the parser and also rename the exporter, they are unrelated jobs"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"

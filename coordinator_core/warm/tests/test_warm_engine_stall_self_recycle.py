@@ -13,6 +13,9 @@ import pytest
 from coordinator_core.warm import dispatch_ack, server
 
 
+pytestmark = pytest.mark.complete
+
+
 class _FakePool:
     def __init__(self, *_a, **_k):
         self.submitted = []

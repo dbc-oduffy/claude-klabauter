@@ -10,6 +10,9 @@ from coordinator_core.benchmarks import measure
 from coordinator_core.telemetry import op_latency
 
 
+pytestmark = pytest.mark.complete
+
+
 @pytest.fixture(autouse=True)
 def _restore_benchmark_origin_env(monkeypatch):
     # measure.main declares benchmark origin into the process-global env;

@@ -109,6 +109,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 # ---------------------------------------------------------------------------
 # Live-root resolver names (established 2026-07-27 by reading the tree; see
 # module docstring "Resolver names" above for provenance of each entry).

@@ -5,6 +5,8 @@ import tempfile
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.session import guard_unlock_sentinel as gus
 from coordinator_core.temp_layout import fleet_temp_root
 

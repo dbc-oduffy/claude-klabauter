@@ -39,6 +39,8 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks
 
+pytestmark = pytest.mark.complete
+
 
 def _fires(cmd: str) -> bool:
     return dispatch_checks.check_git_commit_safe_commit_advise(cmd, "sess-c1a") is not None

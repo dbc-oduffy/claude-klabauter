@@ -207,6 +207,7 @@ def _write_emission_receipt(
     params: dict,
     extras: Optional[dict] = None,
     sha256: Optional[str] = None,
+    script_bytes: Optional[bytes] = None,
 ) -> Optional[str]:
     """Write the provenance sidecar. Best-effort: never fails the emit.
 
@@ -231,6 +232,10 @@ def _write_emission_receipt(
     ``None`` (every pre-existing caller) computes it here, unchanged from
     before this parameter existed.
 
+    ``script_bytes``, when supplied, are the exact bytes the caller just wrote to the
+    script: the receipt reads nothing back (a read is a charged round trip on a slow
+    disk), and the digest is taken over them unless ``sha256`` names it.
+
     Returns the receipt path as a string, or ``None`` if it could not be
     written.
 
@@ -248,9 +253,14 @@ def _write_emission_receipt(
     """
     receipt_path = emission_receipt_path(guarded_script_path)
     try:
-        script_bytes = guarded_script_path.read_bytes()
+        if script_bytes is None:
+            script_bytes = guarded_script_path.read_bytes()
+            if sha256 is None:
+                sha256 = _script_sha256(guarded_script_path)
+        elif sha256 is None:
+            sha256 = hashlib.sha256(script_bytes).hexdigest()
         receipt = {
-            "sha256": sha256 if sha256 is not None else _script_sha256(guarded_script_path),
+            "sha256": sha256,
             "session_id": _receipt_session_id(params),
             "emitted_at": datetime.now().isoformat(timespec="seconds"),
             "plan": Path(plan_path).name if plan_path else None,

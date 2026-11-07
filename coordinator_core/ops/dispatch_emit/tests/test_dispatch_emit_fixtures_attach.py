@@ -11,6 +11,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 pytest_plugins = ["pytester"]
 
 _OPS = Path(__file__).resolve().parents[2]

@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import test_percolate_round as base  # noqa: E402  same-directory harness
 

@@ -25,6 +25,9 @@ import pytest
 from coordinator_core.group_em import idle_report
 
 
+pytestmark = pytest.mark.complete
+
+
 def _record(minutes_ago, now, **extra):
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(now - minutes_ago * 60)) + ".000Z"
     record = {"type": "assistant", "timestamp": stamp,

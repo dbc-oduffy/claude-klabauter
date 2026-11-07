@@ -73,6 +73,8 @@ from coordinator_core.ops.ceremony.receipt_schema import (
 )
 
 
+pytestmark = pytest.mark.complete
+
 _ALL_J_STEPS = [
     STEP_1A,
     STEP_1_2,

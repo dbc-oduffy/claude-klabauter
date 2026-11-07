@@ -119,6 +119,10 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Source roots swept for first-party import statements. Deliberately WIDER

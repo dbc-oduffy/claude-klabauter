@@ -25,6 +25,8 @@ import time
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core import ipc
 from coordinator_core.hooks import group_em_autofire as gea
 from coordinator_core.hooks import handoff_segment_inject as hsi

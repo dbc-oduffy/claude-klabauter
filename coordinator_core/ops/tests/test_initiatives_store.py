@@ -27,6 +27,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.emit.sections.initiatives import _simple_yaml_load
 
 # ---------------------------------------------------------------------------

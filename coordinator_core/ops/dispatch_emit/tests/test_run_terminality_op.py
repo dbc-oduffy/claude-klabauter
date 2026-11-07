@@ -8,6 +8,8 @@ import subprocess
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
 from coordinator_core.ops.dispatch_emit import run_terminality as op
 

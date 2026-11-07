@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.bash_guards import block_subagent_destructive_action as destructive
 from coordinator_core.guard_messages.alternative_record import (
     AdaptableOffer,

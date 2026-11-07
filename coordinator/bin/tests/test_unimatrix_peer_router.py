@@ -19,7 +19,7 @@ _spec = importlib.util.spec_from_file_location("unimatrix_peer_router", BIN / "u
 pr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pr)
 
-pytestmark = pytest.mark.skipif(os.name == "nt", reason="unix sockets")
+pytestmark = [pytest.mark.complete, pytest.mark.skipif(os.name == "nt", reason="unix sockets")]
 
 
 @pytest.fixture

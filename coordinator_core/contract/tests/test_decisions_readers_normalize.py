@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.workday_complete.apply import _closed_by_resolved_jp
 
 _ROOT = Path(__file__).resolve().parents[2]

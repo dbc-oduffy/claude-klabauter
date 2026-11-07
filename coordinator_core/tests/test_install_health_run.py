@@ -46,6 +46,9 @@ from coordinator_core.ops.install_health_run import (
 )
 
 
+pytestmark = pytest.mark.complete
+
+
 def _mk_root(tmp_path: Path) -> Path:
     root = tmp_path / "root"
     (root / "coordinator" / "bin" / "install-health").mkdir(parents=True)

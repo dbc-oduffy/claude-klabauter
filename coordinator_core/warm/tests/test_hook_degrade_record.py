@@ -7,6 +7,8 @@ import urllib.request
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.warm import http_listener, telemetry
 
 

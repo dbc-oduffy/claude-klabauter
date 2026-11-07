@@ -21,6 +21,8 @@ from coordinator_core.session.record_homes import home_dir, record_path
 
 from .conftest import REVIEW_KW
 
+pytestmark = pytest.mark.complete
+
 RUN = "20260930T000000-lanes"
 _HEADER = (
     "| id | spec path | summary | footprint | deps | verification | complexity | disposition |\n"

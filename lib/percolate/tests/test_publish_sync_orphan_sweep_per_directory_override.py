@@ -28,6 +28,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
     sys.path.insert(0, str(_COORDINATOR_LIB))

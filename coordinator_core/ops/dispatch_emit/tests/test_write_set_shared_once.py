@@ -21,6 +21,11 @@ from coordinator_core.ops.dispatch_emit.emit import (
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 
+import pytest
+
+pytestmark = pytest.mark.complete
+
+
 def _mega_row(n: int) -> WaveRow:
     writes = [f"state/audits/mega_row_sentinel_{i:04d}.yaml" for i in range(n)]
     return WaveRow(

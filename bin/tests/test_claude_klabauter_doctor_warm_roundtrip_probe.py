@@ -35,6 +35,8 @@ from typing import Optional
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).parent.parent.parent.resolve()
 _BIN_PROBE = _REPO_ROOT / "bin" / "claude-klabauter-doctor-probe.py"
 

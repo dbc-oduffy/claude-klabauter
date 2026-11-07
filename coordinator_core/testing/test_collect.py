@@ -33,6 +33,8 @@ from coordinator_core.testing.collect import (
 )
 from coordinator_core.testing.content_root import content_root_and_present
 
+pytestmark = pytest.mark.complete
+
 _TESTING_PKG_DIR = Path(__file__).resolve().parent
 _REAL_TEST_MODULES = {
     "test_collect.py",

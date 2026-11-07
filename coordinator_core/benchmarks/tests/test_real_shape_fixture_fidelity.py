@@ -16,6 +16,8 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 
 
+pytestmark = pytest.mark.complete
+
 _SETTINGS_HOME_DIR = "settings-home"
 
 

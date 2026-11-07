@@ -19,6 +19,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.session import fleet_delegation as fd
 from coordinator_core.session.grant_authorship import AuthorshipVerdict, Verdict
 

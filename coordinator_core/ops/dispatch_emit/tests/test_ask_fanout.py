@@ -6,6 +6,8 @@ import json
 import os
 
 import pytest
+
+pytestmark = pytest.mark.complete
 import yaml
 
 from coordinator_core.ops import baton_pm_turns as PT

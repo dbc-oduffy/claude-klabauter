@@ -87,6 +87,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Live source trees. Deliberately excludes archive/, state/, tasks/, and

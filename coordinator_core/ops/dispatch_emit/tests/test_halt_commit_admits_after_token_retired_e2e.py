@@ -17,6 +17,7 @@ from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.run_artifacts import outcome_rel
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -114,8 +115,8 @@ def _assert_record_landed(root: Path, out: dict) -> None:
     assert out.get("refused") is None, out
     assert out["committed"] is True, out
     names = _git(["show", "--name-only", "--format=", "HEAD"], root).split()
-    for name in ROW_FILES:
-        assert f"{RECORD_DIR_ROOT}/{RUN}/{name}" in names
+    # Run state (state/warp) is gitignored in real repos: the tracked outcome is what lands.
+    assert outcome_rel(RUN) in names, names
 
 
 def test_aged_live_token_admits_guard_and_lands_halt(repo, tmp_path):

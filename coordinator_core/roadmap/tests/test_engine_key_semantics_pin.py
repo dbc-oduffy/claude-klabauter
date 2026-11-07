@@ -12,6 +12,8 @@ from coordinator_core.engine_root import ENGINE_CHECKOUT_ROOT
 from coordinator_core.roadmap import probe_store
 from coordinator_core.roadmap.probe_store import engine_key
 
+pytestmark = pytest.mark.complete
+
 
 def _reference_key(sha, root):
     """HEAD's digest recomputed from the closure file list and one os.stat per file."""

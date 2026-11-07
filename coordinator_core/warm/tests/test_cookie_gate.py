@@ -29,6 +29,9 @@ import pytest
 from coordinator_core.warm import cookie, supervisor
 
 
+pytestmark = pytest.mark.complete
+
+
 class _Ctx:
 
     in_flight = None

@@ -48,6 +48,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REGISTRY_PATH = REPO_ROOT / "state" / "bash-guards" / "known-red.json"
 REGENERATE_SCRIPT = REPO_ROOT / "coordinator" / "bin" / "regenerate-known-red-registry.py"

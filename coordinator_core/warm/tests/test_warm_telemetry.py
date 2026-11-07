@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.complete
+
 from coordinator_core.warm import telemetry
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 
