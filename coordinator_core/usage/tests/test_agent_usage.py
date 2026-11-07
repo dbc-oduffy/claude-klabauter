@@ -215,6 +215,25 @@ def test_failed_rag_call_then_grep_records_fallback(tmp_path):
     assert res["run_total"]["rag_uptake"]["fallback_agents"] == 1
 
 
+def test_rag_failures_split_by_kind(tmp_path):
+    rag = "mcp__project-rag__project_engine_examples"
+
+    def res(tid, text):
+        return {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": tid, "is_error": True, "content": text}]}}
+    lines = [
+        _tool_msg("m1", "r1", [_tu("a", rag), _tu("b", rag), _tu("c", rag)], _u(1, 1, 0, 0)),
+        res("a", "stalled_stage dispatch: timed out after 25s"),
+        res("b", "connect ECONNREFUSED 127.0.0.1"),
+        res("c", [{"type": "text", "text": "boom"}]),
+    ]
+    (tmp_path / "agent-s.jsonl").write_text(
+        "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+    _journal(tmp_path, [("s", "s")])
+    row = scan_run(str(tmp_path))["agents"][0]
+    assert (row["rag_failed"], row["rag_timeouts"], row["rag_refused"]) == (3, 1, 1)
+
+
 def test_rag_uptake_ratio_none_without_searchers(tmp_path):
     _agent(tmp_path, "a", [("m1", "r1", OPUS, _u(1, 1, 0, 0))])
     _journal(tmp_path, [("a", "a")])

@@ -2169,10 +2169,11 @@ def _bounded_claim_lookup(claim_index, paths: list, cwd: str) -> dict:
 def _peer_held(
     root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object,
     *, plan_rel: Optional[str] = None, run_base: Optional[str] = None, minted_before: Optional[tuple] = None,
-    self_sessions: Collection = (),
+    self_sessions: Collection = (), declaration_only: Optional[set] = None,
 ) -> dict:
     """``{path: [peer session ids]}`` (DR-462) a live peer session's touch claim or a senior live peer
     run's declared writes holds over ``paths``; ``minted_before`` is ``_own_run_seniority``'s answer.
+    ``declaration_only`` is an out-set: it receives the held paths no live touch claim holds.
     A touch claim by ``own_sid`` or any of ``self_sessions`` (the run's firing session) is self, never a
     peer; another run's declared writes still hold even from that session.
     A bare declaration never holds a path this run's own checkpoint landed; a live touch claim still
@@ -2230,6 +2231,8 @@ def _peer_held(
     for path, sids in sorted((claims or {}).items()):
         if path in own or is_per_run_artifact(path):
             continue
+        if declaration_only is not None and path not in held:
+            declaration_only.add(path)
         for sid in sids:
             if sid not in held.setdefault(path, []):
                 held[path].append(sid)
@@ -3594,13 +3597,22 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     carried_probe = [*candidates, *art_present, *art_deleted]
     prep = inline_review.get("prep")
     run_base = prep.get("run_base_sha") if isinstance(prep, dict) else None
+    decl_only: set = set()
     peer_held = _peer_held(
         root, carried_probe, session_id, rid, script_path,
         plan_rel=request.plan_path, run_base=run_base if isinstance(run_base, str) else None,
         minted_before=own_seniority, self_sessions=_firing_sessions(root, rid, session_id),
+        declaration_only=decl_only,
+    )
+    from coordinator_core.ops.dispatch_emit import co_declared_settle as _cds
+
+    # Hold scan repeats inside settle(); eligibility here is advisory, the post-_integrity loop re-withholds.
+    deferred = _cds.settle_eligible(
+        root, sibling_run_id, [p for p in candidates if p in decl_only and (root / p).is_file()],
+        own_declared=declared, own_plan=request.plan_path, minted_before=own_seniority,
     )
     for p in candidates:
-        if p in peer_held:
+        if p in peer_held and p not in deferred:
             withhold_reason[p] = "peer-held"
             if p in recorded_changed:
                 recorded_reason[p] = "peer-held"
@@ -3715,8 +3727,18 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         for cid in evidence_rows:
             stranded.pop(cid, None)
 
-    if credit_gate.no_credited_landing(set(stranded), {c.id for c in contributing}, landed_ids):
-        shown = "; ".join(f"{cid}: {', '.join(ps)}" for cid, ps in sorted(stranded.items()))
+    gate_stranded = {c: list(ps) for c, ps in stranded.items()}
+    from coordinator_core.ops.dispatch_emit import shared_path_landing as _spl
+
+    if not set(paths) - set(art_present):  # a commit of only the run record, its product held by another live session
+        for row, p, _holders in _spl.sibling_held_product(
+            unlanded, peer_held, root=root, own_session=session_id,
+            own_run_id=str(sibling_run_id or rid), own_plan=request.plan_path,
+        ):
+            if row not in landed_ids:
+                gate_stranded.setdefault(row, []).append(p)
+    if credit_gate.no_credited_landing(set(gate_stranded), {c.id for c in contributing}, landed_ids):
+        shown = "; ".join(f"{cid}: {', '.join(ps)}" for cid, ps in sorted(gate_stranded.items()))
         why = "".join(f" {cid} blocker: {text}." for cid, text in sorted(blockers.items()) if cid in stranded)
         return _error(
             f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}.{why} "
@@ -3830,6 +3852,33 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     except land_deadline.LandDeadlineExceeded:
         _remove(root, receipt_paths)
         raise
+    for p in sorted(deferred):
+        if p in settled_stage:
+            peer_held.pop(p, None)
+        elif p in paths:
+            paths.remove(p)
+            withhold_reason[p] = "peer-held"
+            named_out.add(p)
+            if p in recorded_changed:
+                recorded_reason[p] = "peer-held"
+    from coordinator_core.ops.dispatch_emit import peer_hunk_gate as _phg
+
+    # A per-run artifact still co-declared after settle is withheld unless its sibling is halted; an
+    # UNREADABLE_PEER_CLAIMS sibling has unknown halt state and withholds too.
+    for f in findings:
+        if (
+            f.reason != _phg.PEER_HUNKS_CO_DECLARED or f.path not in paths or f.path in settled_stage
+            or not _cds.is_per_run_artifact(f.path)
+        ):
+            continue
+        sibling = f.detail.partition(":")[0]
+        if sibling != _phg.UNREADABLE_PEER_CLAIMS and _cds.sibling_halted(root, sibling):
+            continue
+        paths.remove(f.path)
+        withhold_reason[f.path] = "peer-held"
+        named_out.add(f.path)
+        if f.path in recorded_changed:
+            recorded_reason[f.path] = "peer-held"
     for p, (hunks, holder, _partial) in list(halted_clear.items()):
         if p not in paths:
             continue

@@ -55,14 +55,19 @@ def _parent_of(root: Path, run_id: str) -> Optional[str]:
     return parent if isinstance(parent, str) and parent else None
 
 
-def _same_parent_live(root: Path, run_id: str, sibling: str) -> bool:
-    """A live (not halted) sibling recorded under the same parent as `run_id`."""
+def sibling_halted(root: Path, sibling: str) -> bool:
+    """Whether `sibling` is a halted run (public face of the halt predicate `_same_parent_live` uses)."""
     from coordinator_core.ops import warp_run_deliverable
 
+    return bool(warp_run_deliverable._halted(root, sibling))
+
+
+def _same_parent_live(root: Path, run_id: str, sibling: str) -> bool:
+    """A live (not halted) sibling recorded under the same parent as `run_id`."""
     own = _parent_of(root, run_id)
     if own is None or _parent_of(root, sibling) != own:
         return False
-    return not warp_run_deliverable._halted(root, sibling)
+    return not sibling_halted(root, sibling)
 
 
 def _lines(root: Path, path: str) -> list:
@@ -138,9 +143,87 @@ def _settle_path(root: Path, run_id: str, path: str, diff, siblings: list) -> Op
     if is_per_run_artifact(path):
         return _settle_artifact(root, run_id, path, diff, siblings)
     split = rhc.own_hunks(root, run_id, path, list(diff.hunks), {s: True for s in siblings})
-    if split.overlapping or split.unattributed or not split.own:
+    if split.overlapping or not split.own:
+        return None
+    if split.unattributed and not _junior_siblings_hold(root, path, diff, split, siblings):
         return None
     return list(split.own)
+
+
+def _junior_siblings_hold(root: Path, path: str, diff, split, siblings: list) -> bool:
+    """True when every unattributed hunk is a sibling's alone: each sibling's baseline is exactly HEAD plus
+    this run's own hunks (it started after they were written, so it is not a competing claimant on its own
+    delta, which the run's older baseline also spans) and its delta covers the hunk. Any unknown is False."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+    from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
+
+    if split.nonrun or not siblings:
+        return False
+    common = resolve_git_common_dir(root)
+    expected = settled_blob(root, path, diff.head_bytes, split.own)
+    tree = _lines(root, path)
+    covered: list = []
+    for sib in siblings:
+        base = hha._baseline(root, sib)
+        sha = base.get(path) if isinstance(base, dict) else None
+        if sha != expected:
+            return False
+        spans = rhc._claimant_delta(root, common, sib, path, tree, coarse_ok=True)
+        if spans is None:
+            return False
+        covered.extend(spans)
+    for hunk in split.unattributed:
+        lo, hi = rhc._new_span(hunk)
+        if not any(a <= hi and lo <= b for a, b in covered):
+            return False
+    return True
+
+
+def _qualifies(root: Path, run_id: str, path: str, sibs: list) -> bool:
+    """The one settle rule: no unreadable claim, and a per-run artifact or every sibling live on the same parent.
+    Any unknown (parentage, halt state) disqualifies."""
+    from coordinator_core.ops.dispatch_emit.peer_hunk_gate import UNREADABLE_PEER_CLAIMS
+
+    try:
+        return UNREADABLE_PEER_CLAIMS not in sibs and (
+            is_per_run_artifact(path) or all(_same_parent_live(root, run_id, s) for s in sibs)
+        )
+    except Exception:  # noqa: BLE001 -- unknown parentage holds
+        return False
+
+
+def settle_eligible(
+    root: Path,
+    run_id: Optional[str],
+    paths: Iterable[str],
+    *,
+    own_declared: Iterable[str],
+    own_plan: Optional[str] = None,
+    minted_before: Optional[tuple] = None,
+) -> frozenset:
+    """The subset of `paths` held by at least one co-declaring run, every hold of which `settle` would qualify
+    (same rule via `_qualifies`). A path with no hold, or any unknown, is not eligible. Never raises."""
+    try:
+        if not run_id:
+            return frozenset()
+        root = Path(root)
+        from coordinator_core.ops.dispatch_emit import halted_hold_release, land_deadline
+        from coordinator_core.ops.dispatch_emit.peer_hunk_gate import co_declared_peer_holds
+
+        if land_deadline.expired():
+            return frozenset()  # advisory leg: the next checked leg ends the landing under its own name
+
+        holds = co_declared_peer_holds(
+            root, run_id, list(paths), list(own_declared), own_plan=own_plan, minted_before=minted_before
+        )
+        pairs = halted_hold_release.without_released_paths(root, [(str(p), str(s)) for p, s in holds])
+        by_path: dict = {}
+        for path, sibling in pairs:
+            by_path.setdefault(_norm(path), []).append(sibling)
+        return frozenset(p for p, sibs in by_path.items() if _qualifies(root, run_id, p, sibs))
+    except Exception:  # noqa: BLE001 -- unknown is not eligible
+        return frozenset()
 
 
 def settle(
@@ -164,22 +247,12 @@ def settle(
     if not run_id or not pairs:
         return {}, pairs
     from coordinator_core.ops.dispatch_emit import halted_hold_release, own_hunk_stage
-    from coordinator_core.ops.dispatch_emit.peer_hunk_gate import UNREADABLE_PEER_CLAIMS
 
     pairs = halted_hold_release.without_released_paths(root, pairs)
     by_path: dict = {}
     for path, sibling in pairs:
         by_path.setdefault(_norm(path), []).append(sibling)
-    candidates = []
-    for path, sibs in by_path.items():
-        try:
-            ok = UNREADABLE_PEER_CLAIMS not in sibs and (
-                is_per_run_artifact(path) or all(_same_parent_live(root, run_id, s) for s in sibs)
-            )
-        except Exception:  # noqa: BLE001 -- unknown parentage holds
-            ok = False
-        if ok:
-            candidates.append(path)
+    candidates = [path for path, sibs in by_path.items() if _qualifies(root, run_id, path, sibs)]
     stage: dict = {}
     if candidates:
         try:

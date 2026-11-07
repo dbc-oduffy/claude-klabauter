@@ -71,27 +71,35 @@ def test_each_leg_halts_on_the_gate_and_checker_verdicts(monkeypatch, tmp_path, 
     root = _ue_declared_repo(tmp_path)
     script = _m_plus(monkeypatch, root) if leg == "plan" else _compose(repo_root=root, **_named_fragment())
     fragments = re.findall(r"^(?:const|let|var) _PF\w+ = .*;$", script, re.M)
-    halt = [ln.strip() for ln in script.splitlines() if ln.strip().startswith((f"if ({check_var}", f"else if ({gate_var}"))]
-    assert len(halt) == 2
+    halt = [ln.strip() for ln in script.splitlines() if ln.strip().startswith((f"if (({check_var}", f"else if ({gate_var}"))]
+    assert len(halt) == 3
     harness = (
         "\n".join(fragments)
-        + "\nlet _halted = null; const _runId = 'r', _sizingRel = 's'; let _planRel = 'p'; const _gate = { spine_plan: 'p' };\n"
-        + f"function run(chk, gate) {{ _halted = null; const {check_var} = chk, {gate_var} = gate;\n"
+        + "\nlet _halted = null; let _ragDegraded = []; const _runId = 'r', _sizingRel = 's'; let _planRel = 'p'; const _gate = { spine_plan: 'p' };\n"
+        + f"function run(chk, gate) {{ _halted = null; _ragDegraded = []; const {check_var} = chk, {gate_var} = gate;\n"
         + "\n".join(halt)
-        + "\n return _halted; }\n"
+        + "\n return _halted || { continued: _ragDegraded }; }\n"
         "console.log(JSON.stringify([\n"
+        "  run({verdict:'ok'}, {verdict:'degraded', rag_calls:2, rag_failed:1, rag_timeouts:1, rag_refused:0, reason:'t'}),\n"
         "  run({verdict:'ok'}, {verdict:'ok'}),\n"
         "  run({verdict:'ok'}, {verdict:'rag_corpus_down'}),\n"
         "  run({verdict:'rag_down'}, {verdict:'ok'}),\n"
         "  run({verdict:'ok'}, {verdict:'citation_unbacked', unbacked:['[rag: project_symbol Foo]']}),\n"
         "  run({verdict:'ok'}, {}),\n"
+        "  run({verdict:'rag_down'}, {verdict:'degraded', rag_calls:2, rag_failed:2, rag_timeouts:2, rag_refused:0, reason:'t'}),\n"
         "]));"
     )
     script_path = tmp_path / "halt_harness.js"
     script_path.write_text(harness, encoding="utf-8")
     out = subprocess.run(["node", str(script_path)], capture_output=True, text=True, check=True).stdout
-    ok, down, rag_down, unbacked, no_verdict = json.loads(out)
-    assert ok is None
+    degraded, ok, down, rag_down, unbacked, no_verdict, checker_down_gate_degraded = json.loads(out)
+    assert degraded == {"continued": [{
+        "leg": f"{leg}-docs-check", "rag_calls": 2, "rag_failed": 1, "rag_timeouts": 1, "rag_refused": 0, "reason": "t",
+    }]}
+    assert ok == {"continued": []}
+    assert checker_down_gate_degraded == {"continued": [{
+        "leg": f"{leg}-docs-check", "rag_calls": 2, "rag_failed": 2, "rag_timeouts": 2, "rag_refused": 0, "reason": "t",
+    }]}
     for halted in (down, rag_down, no_verdict):
         assert halted["halted"] == HALT_RAG_CORPUS_DOWN and halted["reason"] == RESTORE_MESSAGE
         assert halted["next_action"] == RESTORE_MESSAGE

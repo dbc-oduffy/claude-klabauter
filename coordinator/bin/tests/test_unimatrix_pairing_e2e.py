@@ -195,9 +195,10 @@ def test_pairing_end_to_end(world, monkeypatch):
     b_lines = w.ak_b.read_text().splitlines()
     a_line = next(ln for ln in b_lines if body(w.keys["a"][1]) in ln)
     assert a_line.startswith(f'from="{CIDR}",restrict,command=')
-    # A's reconcile dropped the unsigned relay line and kept the personal key byte for byte
+    # A's reconcile kept the never-enrolled relay line byte for byte, reported it, and kept the personal key
     a_text = w.ak_a.read_text()
-    assert body(w.keys["stranger"][1]) not in a_text and a_text.startswith(personal)
+    assert stranger_line in a_text and a_text.startswith(personal)
+    assert [e for e in events(w.home_a) if e["kind"] == "unenrolled"]
 
     # approve C then revoke C: each signs once and notifies on A and on B
     before = w.signer.calls

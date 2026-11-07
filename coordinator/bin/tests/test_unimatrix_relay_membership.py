@@ -84,7 +84,7 @@ def test_put_adopts_rewrites_only_managed_lines_with_from_pins_and_notifies(env)
     pin(env)
     foreign = "ssh-ed25519 AAAAFOREIGNKEYBODYxxxxxxxx me@laptop\n"
     comment = "# keep me\n"
-    stale = R.relay_line(body(env, "other")) + "\n"
+    stale = R.relay_line(body(env, "a")).replace("restrict,", "restrict,port-forwarding,") + "\n"
     env["ak"].write_text(comment + foreign + stale, encoding="utf-8")
     snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
     reply = push(env, snap, sig)
@@ -92,7 +92,7 @@ def test_put_adopts_rewrites_only_managed_lines_with_from_pins_and_notifies(env)
     text = env["ak"].read_text(encoding="utf-8")
     lines = text.splitlines()
     assert lines[0] == "# keep me" and lines[1] == foreign.strip()
-    assert body(env, "other") not in text
+    assert "port-forwarding" not in text
     managed = [l for l in lines if R.managed_key_body(l)]
     assert managed == ['from="192.168.1.0/24",' + R.relay_line(body(env, "a"))]
     assert [e["kind"] for e in env["events"]] == ["join"]
@@ -114,6 +114,45 @@ def test_put_is_idempotent_and_revoke_removes_the_line(env):
     text = env["ak"].read_text()
     assert body(env, "a") not in text and body(env, "b") in text
     assert [e["kind"] for e in env["events"]][-1] == "revoke"
+
+
+def test_genesis_keeps_an_unlisted_relay_line_and_reports_it_unenrolled(env):
+    pin(env)
+    hand = R.relay_line(body(env, "other")) + "\n"
+    env["ak"].write_text(hand, encoding="utf-8")
+    snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    reply = push(env, snap, sig)
+    assert reply["ok"] is True
+    text = env["ak"].read_text(encoding="utf-8")
+    assert text.startswith(hand) and body(env, "a") in text
+    unenrolled = [e for e in env["events"] if e["kind"] == "unenrolled"]
+    assert len(unenrolled) == 1 and body(env, "other")[:24] in unenrolled[0]["detail"]
+
+
+def test_later_adoption_still_keeps_the_unlisted_line_and_revoking_a_listed_key_drops_only_it(env):
+    pin(env)
+    hand = R.relay_line(body(env, "other")) + "\n"
+    env["ak"].write_text(hand, encoding="utf-8")
+    s1, g1 = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    s2, g2 = sign(env, s1, {"op": "join", "member": member(env, "b", "beta")})
+    s3, g3 = sign(env, s2, {"op": "revoke", "box": "alpha"})
+    for s, g in ((s1, g1), (s2, g2), (s3, g3)):
+        assert push(env, s, g)["ok"] is True
+    text = env["ak"].read_text(encoding="utf-8")
+    assert hand in text and body(env, "b") in text and body(env, "a") not in text
+
+
+def test_stale_pin_of_a_listed_key_is_regenerated(env):
+    pin(env)
+    s1, g1 = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    push(env, s1, g1)
+    good = env["ak"].read_text(encoding="utf-8")
+    env["ak"].write_text(good.replace("restrict,", "restrict,port-forwarding,"), encoding="utf-8")
+    s2, g2 = sign(env, s1, {"op": "join", "member": member(env, "b", "beta")})
+    push(env, s2, g2)
+    text = env["ak"].read_text(encoding="utf-8")
+    assert "port-forwarding" not in text and good.strip() in text
+    assert not [e for e in env["events"] if e["kind"] == "unenrolled"]
 
 
 def refused(env, reply, snap_state):

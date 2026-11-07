@@ -59,30 +59,48 @@ def agent_meta(run_dir: str, agent_id: str, transcript: Optional[str]) -> dict:
     return {}
 
 
-def _errored_ids(raw: str) -> set:
-    """tool_use ids whose tool_result block on this transcript line has is_error true."""
+_REFUSED_MARKERS = ("connection refused", "connect refused", "econnrefused")
+_TIMEOUT_MARKERS = ("timed out", "timeout", "stalled_stage")
+
+
+def _failure_kind(content: Any) -> str:
+    """"refused" (definite down), "timeout" or "other" for an errored tool_result's content."""
+    if isinstance(content, list):
+        text = " ".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    else:
+        text = str(content or "")
+    low = text.lower()
+    if any(m in low for m in _REFUSED_MARKERS):
+        return "refused"
+    if any(m in low for m in _TIMEOUT_MARKERS):
+        return "timeout"
+    return "other"
+
+
+def _errored_ids(raw: str) -> dict:
+    """{tool_use id: failure kind} of the errored tool_result blocks on this transcript line."""
     try:
         event = json.loads(raw)
     except ValueError:
-        return set()
+        return {}
     msg = event.get("message") if isinstance(event, dict) else None
     content = msg.get("content") if isinstance(msg, dict) else None
     if not isinstance(content, list):
-        return set()
-    return {b.get("tool_use_id") for b in content
+        return {}
+    return {b.get("tool_use_id"): _failure_kind(b.get("content")) for b in content
             if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("is_error")}
 
 
-def _messages(path: str, failed: Optional[set] = None) -> list[dict]:
+def _messages(path: str, failed: Optional[dict] = None) -> list[dict]:
     """Assistant usage messages, one per (message.id, requestId), last row wins.
 
-    When `failed` is given, tool_use ids of errored tool_results are added to it."""
+    When `failed` is given, errored tool_results are recorded in it as {tool_use id: kind}."""
     latest: dict[Any, dict] = {}
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
             for n, raw in enumerate(handle):
                 if failed is not None and '"is_error"' in raw and '"tool_result"' in raw:
-                    failed |= _errored_ids(raw)
+                    failed.update(_errored_ids(raw))
                 parsed = usage_line(raw, n)
                 if parsed is not None:
                     key, model, usage, _speed = parsed
@@ -164,12 +182,12 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
         "agent_id": agent_id, "label": label, "model": None, "speed": None,
         **_zero(), "unpriced": False, "unpriced_tokens": 0,
         "tool_calls": 0, "rag_calls": 0, "search_calls": 0, "rag_failed": 0, "rag_fallback": 0,
-        "peak_context": 0, "max_same_file_reads": 0,
+        "rag_timeouts": 0, "rag_refused": 0, "peak_context": 0, "max_same_file_reads": 0,
     }
     priced = 0
     models: dict[str, int] = {}
     reads: dict[str, int] = {}
-    failed: set = set()
+    failed: dict = {}
     messages = _messages(path, failed) if path else []
     rag_failed_seen = False
     for m in messages:
@@ -187,6 +205,11 @@ def _agent_row(run_dir: str, agent_id: str, label: str) -> dict[str, Any]:
                 row["rag_calls"] += 1
                 if tid in failed:
                     row["rag_failed"] += 1
+                    kind = failed[tid]
+                    if kind == "timeout":
+                        row["rag_timeouts"] += 1
+                    elif kind == "refused":
+                        row["rag_refused"] += 1
                     rag_failed_seen = True
             if name == "Read" and fp:
                 k = _norm_path(fp)

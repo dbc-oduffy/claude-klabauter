@@ -8,8 +8,9 @@ and not under ``repo_root``, when its normalised relative form escapes via
 
 Outside paths split two ways:
 
-- **Sibling-repo writes** -- the path resolves under a git checkout sitting
-  next to ``repo_root``. These are carried: ``dispatch.land_run``
+- **Sibling-repo writes** -- the path resolves under a git checkout: one
+  sitting next to ``repo_root``, or, for an absolute path, any checkout found
+  by probing the path's own ancestors for ``.git``. These are carried: ``dispatch.land_run``
   lands one ``ceremony.commit_v2`` per repo (``split_sibling_paths``). On a
   remote (cloud) venue the run proceeds; elsewhere it halts on the
   ``approve_cross_repo_write`` touchpoint until the PM approves, and that
@@ -23,8 +24,8 @@ and sit uncommitted on disk. ``split_sibling_paths`` is the one resolver
 both the emit check and the commit use; never re-derive it.
 
 Negative-spec: this module does not walk the tree or call ``git status``.
-It is pure path arithmetic plus one targeted ``.git``-presence probe on the
-candidate a row itself named -- never a directory scan.
+It is pure path arithmetic plus targeted ``.git``-presence probes on the
+candidate a row itself named and its ancestors (bounded) -- never a directory scan.
 
 ``gated_rows`` is the gate ledger: it reads the ``exclusions`` ledger
 ``read_spine`` fills and never re-derives gating. It withholds, never refuses;
@@ -138,17 +139,46 @@ def _is_sibling_repo_dir(repo_root: Path, segment: str) -> bool:
     return (candidate / ".git").exists()
 
 
+_CHECKOUT_PROBE_DEPTH = 24
+
+
+def _checkout_of_absolute(normalized: str, repo_root: Path) -> Optional[tuple[Path, str]]:
+    """``(checkout root, relative posix path)`` for an absolute ``normalized`` path inside any git
+    checkout other than ``repo_root``, found by probing the path's own ancestors for ``.git``
+    (at most ``_CHECKOUT_PROBE_DEPTH`` stats, never a directory scan); else None. A path under
+    ``repo_root`` or a session scratchpad is never a cross-repo write."""
+    if _under_root(normalized, _posix(str(repo_root))) or in_session_scratchpad(normalized):
+        return None
+    path = Path(normalized)
+    if not path.is_absolute():
+        return None
+    for depth, ancestor in enumerate(path.parents):
+        if depth >= _CHECKOUT_PROBE_DEPTH:
+            return None
+        if ancestor.parent == ancestor:
+            return None
+        if (ancestor / ".git").exists():
+            rel = posixpath.relpath(normalized, _posix(str(ancestor)))
+            return ancestor, rel
+    return None
+
+
 def sibling_write(raw: str, repo_root: Path) -> Optional[tuple[Path, str]]:
-    """``(sibling_worktree_root, repo-relative posix path)`` when ``raw``
-    resolves under a git checkout that sits next to ``repo_root``; else None."""
+    """``(checkout_root, repo-relative posix path)`` when ``raw`` resolves under a git checkout
+    other than ``repo_root``: a checkout beside ``repo_root`` (relative or absolute path), or for
+    an absolute path any checkout found by an ancestor ``.git`` probe; else None."""
     repo_root = Path(repo_root)
     posix = _posix(raw)
     if _is_absolute(posix):
         normalized = posixpath.normpath(posix)
         parent = _posix(str(repo_root.parent)).rstrip("/") + "/"
         if not normalized.startswith(parent):
-            return None
+            return _checkout_of_absolute(normalized, repo_root)
         rest = normalized[len(parent):]
+        segment = _first_segment(rest)
+        if segment is None or "/" not in rest or not _is_sibling_repo_dir(repo_root, segment):
+            return _checkout_of_absolute(normalized, repo_root)
+        return repo_root.parent / segment, rest.split("/", 1)[1]
     else:
         normalized = posixpath.normpath(posix)
         rest = normalized[3:] if normalized.startswith("../") else normalized
@@ -219,7 +249,7 @@ def _absent_sibling_name(raw: str, repo_root: Path) -> Optional[str]:
     if _is_absolute(posix):
         parent = _posix(str(repo_root.parent)).rstrip("/") + "/"
         normalized = posixpath.normpath(posix)
-        if not normalized.startswith(parent):
+        if not normalized.startswith(parent) or _checkout_of_absolute(normalized, repo_root):
             return None
         rest = normalized[len(parent):]
     else:

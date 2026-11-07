@@ -6,6 +6,17 @@ verification live in unimatrix-membership.py; authorized_keys reconcile and `mem
 unimatrix-relay.py. This file wires them: build the next snapshot, sign, adopt locally through the relay's
 own put path, push to each reachable member over this box's relay key.
 
+Signer key setup (once, then pin on every box):
+  1. In 1Password create an SSH Key item (type Ed25519), suggested title `unimatrix-signer`, in a vault
+     the 1Password SSH agent exposes: Personal, Private or Employee by default, or any vault listed in
+     the agent's agent.toml.
+  2. Confirm the agent offers it: `ssh-add -L` lists the key (SSH_AUTH_SOCK pointing at the 1Password agent).
+  3. Export the item's public key to a file (e.g. unimatrix-signer.pub).
+  4. On every box run `unimatrix-pair.py pin <pubfile>`.
+
+Adoption never drops a relay authorized_keys line whose key no held snapshot ever listed; such lines are
+kept and reported as `unenrolled` events. Only a key the prior snapshot listed and the new one omits is dropped.
+
 Usage: unimatrix-pair.py pin <pubfile> | request [--box B] [--cidr C]... | approve <request-file|-> |
        revoke <box> | fetch <host>
 """

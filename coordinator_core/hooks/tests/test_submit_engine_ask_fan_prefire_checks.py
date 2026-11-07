@@ -83,6 +83,16 @@ def test_b2_a_write_outside_every_checkout_refuses_the_fan_before_the_launcher(r
     assert _no_launcher(repo)
 
 
+def test_b2_an_absolute_write_in_a_distant_checkout_asks_for_approval_not_unreachable(repo, tmp_path):
+    distant = tmp_path / "deep" / "elsewhere" / "ue-project"
+    (distant / ".git").mkdir(parents=True)
+    env = mod.evaluate(_payload(repo, str(distant / "Config" / ".gitignore")))
+    assert env["hookSpecificOutput"]["permissionDecision"] == "deny", env
+    assert "approve_cross_repo_write" in _reason(env)
+    assert "outside every git checkout" not in _reason(env)
+    assert _no_launcher(repo)
+
+
 def test_a_refused_child_emit_is_named_by_the_launcher_after_the_hook_answered(repo):
     env = mod.evaluate(_payload(repo))
     text = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")

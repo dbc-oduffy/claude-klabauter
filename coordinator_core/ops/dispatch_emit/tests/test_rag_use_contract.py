@@ -82,7 +82,24 @@ def _verdict(**kw):
 
 def test_verdict_down_when_no_calls_or_all_failed():
     assert _verdict(rag_calls=0) == "rag_corpus_down"
-    assert _verdict(rag_calls=4, rag_failed=4) == "rag_corpus_down"
+    assert _verdict(rag_calls=4, rag_failed=4, rag_refused=4) == "rag_corpus_down"
+    assert _verdict(rag_calls=4, rag_failed=4) == "degraded"
+
+
+def test_verdict_timeout_only_is_degraded_not_down():
+    assert _verdict(rag_calls=4, rag_failed=4, rag_timeouts=4) == "degraded"
+    assert _verdict(rag_calls=4, rag_failed=1, rag_timeouts=1) == "degraded"
+
+
+def test_verdict_failure_while_queryable_is_degraded():
+    assert _verdict(rag_calls=2, rag_failed=2, engine_queryable=True) == "degraded"
+
+
+def test_verdict_definite_down_still_halts():
+    assert _verdict(rag_calls=3, rag_failed=3, rag_refused=3) == "rag_corpus_down"
+    assert _verdict(rag_calls=3, rag_failed=3, rag_timeouts=2, rag_refused=1) == "rag_corpus_down"
+    assert _verdict(rag_calls=3, rag_failed=1, rag_timeouts=1, engine_queryable=False) == "rag_corpus_down"
+    assert _verdict(rag_calls=0, engine_queryable=True) == "rag_corpus_down"
 
 
 def test_verdict_ok_on_any_success():

@@ -520,12 +520,16 @@ def windows_admin():
     return bool(ctypes.windll.shell32.IsUserAnAdmin())
 
 
-def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin):
+def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin, listed=frozenset(),
+                              unenrolled=None):
     """Make the relay-managed lines of `path` equal the generated lines for `members`.
 
     Only lines whose forced command names unimatrix-relay.py are touched; every other line keeps its
-    exact bytes. A managed line already equal to its generated line stays in place; any other managed
-    line (a revoked or never-signed key, a stale pin) is dropped. Returns admin | unchanged | updated.
+    exact bytes. A managed line already equal to its generated line stays in place; a stale pin of a
+    member key is regenerated; a line for a key in `listed` (key bodies a prior snapshot listed) that
+    `members` omits is dropped (a revocation). A managed line for any other key was never enrolled: it
+    is kept byte-for-byte and its key body is appended to `unenrolled` when given.
+    Returns admin | unchanged | updated.
     """
     if is_admin():
         return "admin"
@@ -539,6 +543,10 @@ def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin)
         body = managed_key_body(raw)
         if body is None:
             out.append(raw)
+        elif body not in want and body not in listed:
+            out.append(raw)
+            if unenrolled is not None and body not in unenrolled:
+                unenrolled.append(body)
         elif body in want and body not in kept and raw.rstrip("\r\n") == want[body]:
             kept.add(body)
             out.append(raw)
@@ -585,11 +593,19 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
         notifier(home, {"kind": "refused", "detail": f"malformed push: {type(ex).__name__}"})
         return {"ok": False, "reason": "malformed"}
     try:
+        prior, _ = membership.load_snapshot(home)
+        try:
+            listed = {m["relay_pub"].split()[1] for m in prior["members"]} if prior else set()
+        except (KeyError, IndexError, TypeError, AttributeError):
+            listed = set()
         members = membership.adopt(home, snap, sig, notifier=notifier, run=run)
     except membership.MembershipError as ex:
         return {"ok": False, "reason": f"refused: {ex}"[:200]}
-    return {"ok": True, "epoch": snap["epoch"],
-            "authorized_keys": reconcile_authorized_keys(members, authorized_keys, membership, is_admin)}
+    unenrolled = []
+    result = reconcile_authorized_keys(members, authorized_keys, membership, is_admin, listed, unenrolled)
+    for body in unenrolled:
+        notifier(home, {"kind": "unenrolled", "epoch": snap["epoch"], "detail": f"relay line kept, key {body[:24]} not in any snapshot"})
+    return {"ok": True, "epoch": snap["epoch"], "authorized_keys": result}
 
 
 def main():

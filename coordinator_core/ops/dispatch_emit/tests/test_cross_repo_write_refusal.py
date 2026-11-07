@@ -182,6 +182,73 @@ def test_split_sibling_paths_buckets_per_repo(tmp_path: Path) -> None:
     assert siblings == {peer: ["x/y.py", "z.py", "w.py"]}
 
 
+def test_absolute_write_in_distant_checkout_asks_pm_records_grant_and_splits(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    repo_root.mkdir(parents=True)
+    distant = tmp_path / "elsewhere" / "deep" / "ue-project"
+    (distant / ".git").mkdir(parents=True)
+    target = (distant / "Config" / "x" / ".gitignore").as_posix()
+    rows = [_row("W", [target])]
+
+    with pytest.raises(CrossRepoApprovalNeeded) as excinfo:
+        check_cross_repo_writes(rows, repo_root, env=LOCAL)
+    assert "approve_cross_repo_write" in str(excinfo.value)
+
+    assert check_cross_repo_writes(rows, repo_root, approved=True, env=LOCAL, session_id="s1") == [
+        "ue-project"
+    ]
+    ledger = repo_root / ".git" / "coordinator-sessions" / "s1" / "cross-repo-writes.txt"
+    assert ledger.read_text(encoding="utf-8").split() == [target]
+
+    home, siblings = split_sibling_paths(["a.md", target], repo_root)
+    assert home == ["a.md"]
+    assert siblings == {distant: ["Config/x/.gitignore"]}
+
+
+def test_absolute_write_in_no_checkout_stays_unreachable_and_own_repo_is_home(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    plain = tmp_path / "plain" / "dir"
+    plain.mkdir(parents=True)
+    with pytest.raises(CrossRepoWriteError) as excinfo:
+        check_cross_repo_writes([_row("N", [str(plain / "a.md")])], repo_root, env=LOCAL)
+    assert not isinstance(excinfo.value, CrossRepoApprovalNeeded)
+    assert "outside every git checkout" in str(excinfo.value)
+
+    own = str(repo_root / "docs" / "a.md")
+    assert split_sibling_paths([own], repo_root) == ([own], {})
+    check_cross_repo_writes([_row("O", [own])], repo_root, env=LOCAL)  # does not raise
+
+
+def test_absolute_write_in_distant_provisioned_checkout_still_refused(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops import sibling_repo_provision_contract as contract
+    from coordinator_core.ops.dispatch_emit import cross_repo_write_refusal as mod
+
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    repo_root.mkdir(parents=True)
+    distant = tmp_path / "elsewhere" / "pub-target"
+    (distant / ".git").mkdir(parents=True)
+    monkeypatch.setattr(mod, "provisioned_target_of", lambda path, root: "pub-target")
+    with pytest.raises(CrossRepoWriteError) as excinfo:
+        check_cross_repo_writes(
+            [_row("P", [str(distant / "x.py")])], repo_root, approved=True, env=LOCAL
+        )
+    assert not isinstance(excinfo.value, CrossRepoApprovalNeeded)
+    assert "publish target" in str(excinfo.value)
+    assert contract.ROUTE_REMEDY in str(excinfo.value)
+
+
+def test_checkout_probe_is_bounded(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    repo_root.mkdir(parents=True)
+    far = tmp_path / "far"
+    (far / ".git").mkdir(parents=True)
+    deep = far.joinpath(*[f"d{i}" for i in range(40)]) / "f.md"
+    with pytest.raises(CrossRepoWriteError) as excinfo:
+        check_cross_repo_writes([_row("D", [str(deep)])], repo_root, env=LOCAL)
+    assert not isinstance(excinfo.value, CrossRepoApprovalNeeded)
+
+
 def test_read_spine_cleared_gate_owners_are_per_call_not_shared(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import spine_read
 

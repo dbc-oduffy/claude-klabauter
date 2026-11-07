@@ -10,7 +10,7 @@ to). A server the door merely spawns detached is NOT in that figure; it is repor
 `detached_server_boot_cpu_ms` so it is never claimed as free. A sleeping wait burns no CPU, so a candidate
 that waits is billed its full wait budget on top of its process time.
 
-Legs (`--door posix|windows`; the windows arm builds `door.exe` and runs only on Windows):
+Legs (`--door posix|windows`; the windows arm builds the door as `coordinator-invoke.exe` and runs only on Windows):
   baseline       the door at `--door-ref` (default: the pinned base sha) against a dead engine.
   bounded_wait   candidate A: boot the server, wait for it to answer, then take the warm call. Measures the
                  boot-to-ready wall time (a feasibility figure: how long the wait would need to be), the
@@ -216,7 +216,9 @@ def build_door(door: str, sources: Path, engine_root: Path, out_dir: Path) -> Pa
         patch = {"_SOURCE": sources / "door.c", "_CORE_SOURCE": sources / "door_core.c",
                  "_CORE_HEADER": sources / "door_core.h", "_ENV_SET_HEADER": sources / "door_env_set.h",
                  "SOURCES": tuple(sources / n for n in SOURCE_FILES["windows"])}
-        output = out_dir / "door.exe"
+        # The door resolves its CLI from its own image name; a bare `door` image has no door.py and
+        # refuses. Name it as installed (door_install.DOOR_INSTALLED_NAME on Windows).
+        output = out_dir / "coordinator-invoke.exe"
     saved = {k: getattr(builder, k) for k in patch}
     try:
         for k, v in patch.items():

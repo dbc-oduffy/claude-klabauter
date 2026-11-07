@@ -1,11 +1,11 @@
 """`dispatch.docs_check_rag_gate`: did the docs-checker leg use example-retrieval-repo when it had to.
 
 Reads the docs-checker child's own transcript (no subprocess): a UE repo with
-Example-retrieval-repo installed whose docs-checker made no successful example-retrieval-repo call is `rag_corpus_down`.
+Example-retrieval-repo installed whose docs-checker made no successful example-retrieval-repo call is `rag_corpus_down`; failures that were only timeouts yield `degraded`.
 An unlocatable or unreadable transcript on such a repo is also `rag_corpus_down`: unknown never
 passes a UE fact stage. Otherwise every `[rag:]`/`[live:]` citation in the checker's final text
 must be backed by a tool call in any agent transcript of the run (`citation_unbacked` if not).
-Precedence: rag_corpus_down > citation_unbacked > ok.
+Precedence: rag_corpus_down > citation_unbacked > degraded > ok.
 """
 
 from __future__ import annotations
@@ -113,9 +113,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Verdict for the docs-checker leg `label` of run `run_id`.
 
     Params: ``repo_root``, ``run_id``, ``label``, optional ``session_id`` (else the caller's
-    session). Returns ``{verdict: not_applicable|ok|rag_corpus_down|citation_unbacked, message?,
-    reason?, rag_calls?, rag_failed?, unbacked?}``; ``message`` is the restore text on
-    ``rag_corpus_down``; ``unbacked`` lists the citations no run call backs.
+    session), optional bool ``engine_queryable`` (False is a definite down). Returns ``{verdict: not_applicable|ok|degraded|rag_corpus_down|citation_unbacked,
+    message?, reason?, rag_calls?, rag_failed?, rag_timeouts?, rag_refused?, unbacked?}``;
+    ``message`` is the restore text on ``rag_corpus_down``; ``degraded`` (timeout-only failures)
+    halts nothing and still runs the citation check; ``unbacked`` lists the citations no run
+    call backs.
     """
     root = str(params.get("repo_root") or repo_root or Path.cwd())
     if not (rag_use.is_ue_repo(root) and rag_use.rag_installed(root)):
@@ -139,10 +141,17 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except Exception as exc:  # noqa: BLE001 -- unknown never passes a UE fact stage
         return _down(f"transcript unreadable: {type(exc).__name__}: {exc}")
     calls, failed = int(row.get("rag_calls") or 0), int(row.get("rag_failed") or 0)
+    timeouts, refused = int(row.get("rag_timeouts") or 0), int(row.get("rag_refused") or 0)
+    queryable = params.get("engine_queryable")
     verdict = rag_use.docs_check_rag_verdict(
-        ue=True, rag_installed=True, rag_calls=calls, rag_failed=failed
+        ue=True, rag_installed=True, rag_calls=calls, rag_failed=failed,
+        rag_timeouts=timeouts, rag_refused=refused,
+        engine_queryable=queryable if isinstance(queryable, bool) else None,
     )
-    out: dict = {"verdict": verdict, "rag_calls": calls, "rag_failed": failed}
+    out: dict = {
+        "verdict": verdict, "rag_calls": calls, "rag_failed": failed,
+        "rag_timeouts": timeouts, "rag_refused": refused,
+    }
     if verdict == rag_use.HALT_RAG_CORPUS_DOWN:
         out["message"] = rag_use.RESTORE_MESSAGE
         return out

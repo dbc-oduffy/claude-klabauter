@@ -174,7 +174,7 @@ REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
-from coordinator_core.ops.dispatch_emit.rag_use import RESTORE_MESSAGE
+from coordinator_core.ops.dispatch_emit.rag_use import DEGRADED as RAG_DEGRADED, RESTORE_MESSAGE
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
@@ -655,14 +655,17 @@ def _docs_check_gate_js(
 ) -> list[str]:
     """JS lines running one docs-check leg, its `dispatch.docs_check_rag_gate` relay, and the halt they decide.
 
-    A checker verdict `rag_down`, a gate verdict `rag_corpus_down` or a gate reply carrying no verdict sets
-    `_halted` to `rag_corpus_down` with the restore message; a gate verdict `citation_unbacked` sets it to
-    `citation_unbacked` naming the unbacked citations. Declares `check_var` and `gate_var` in the caller's scope.
+    A checker verdict `rag_down` (unless the gate verdict is `degraded`: timeout-only failures),
+    a gate verdict `rag_corpus_down` or a gate reply carrying no verdict sets `_halted` to
+    `rag_corpus_down` with the restore message; a gate verdict `citation_unbacked` sets it to
+    `citation_unbacked` naming the unbacked citations; a gate verdict `degraded` halts nothing and
+    is pushed onto `_ragDegraded`, which the run's return carries as `rag_degraded`. Declares
+    `check_var` and `gate_var` in the caller's scope.
     """
     gate_prompt = _cat(
         f"Run `{_INVOKE} {_OP_DOCS_CHECK_RAG_GATE} '",
         "js:JSON.stringify({ run_id: _runId, label: " + _lit(label) + ", session_id: _SESSION_ID })",
-        f"'{_repo_flag(repo_root)}` once and return its JSON reply as verdict, message, reason and unbacked. "
+        f"'{_repo_flag(repo_root)}` once and return its JSON reply as verdict, message, reason, unbacked, rag_calls, rag_failed, rag_timeouts and rag_refused. "
         "Do not edit, retry or repair anything.",
     )
     gate_call = _agent(
@@ -671,7 +674,7 @@ def _docs_check_gate_js(
         effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
     down = (
-        f"{check_var}?.verdict === 'rag_down' || typeof {gate_var}?.verdict !== 'string' "
+        f"({check_var}?.verdict === 'rag_down' && {gate_var}?.verdict !== {_lit(RAG_DEGRADED)}) || typeof {gate_var}?.verdict !== 'string' "
         f"|| {gate_var}.verdict === {_lit(HALT_RAG_CORPUS_DOWN)}"
     )
     return [
@@ -683,6 +686,10 @@ def _docs_check_gate_js(
         f"reason: 'docs-check citations the run does not back: ' + (Array.isArray({gate_var}.unbacked) ? {gate_var}.unbacked : [])"
         f".map(String).join('; ').slice(0, 280), unbacked: {gate_var}.unbacked ?? [], leg: {_lit(label)}, "
         f"run_id: _runId, sizing: _sizingRel, plan: {plan_js} }};",
+        f"{indent}else if ({gate_var}.verdict === {_lit(RAG_DEGRADED)}) _ragDegraded.push({{ leg: {_lit(label)}, "
+        f"rag_calls: {gate_var}.rag_calls ?? null, rag_failed: {gate_var}.rag_failed ?? null, "
+        f"rag_timeouts: {gate_var}.rag_timeouts ?? null, rag_refused: {gate_var}.rag_refused ?? null, "
+        f"reason: {gate_var}.reason ?? null }});",
     ]
 
 
@@ -844,7 +851,11 @@ _DOCS_CHECK_SCHEMA = _obj(
 )
 _DOCS_GATE_SCHEMA = _obj(
     ["verdict"],
-    {"verdict": _STR, "message": _STR, "reason": _STR, "unbacked": {"type": "array", "items": _STR}},
+    {
+        "verdict": _STR, "message": _STR, "reason": _STR, "unbacked": {"type": "array", "items": _STR},
+        "rag_calls": {"type": "number"}, "rag_failed": {"type": "number"},
+        "rag_timeouts": {"type": "number"}, "rag_refused": {"type": "number"},
+    },
 )
 _XL_SCHEMA = _obj(
     ["verdict", "pmOnly", "ruling"],
@@ -3810,6 +3821,7 @@ def compose_ask_script(
     b.append("  let _planRel = null;")
     b.append("  " + PLAN_PATH_JS)
     b.append("  let _gated = [];")
+    b.append("  let _ragDegraded = [];")
     b.append("  let _manifest = null;")
     b.append("  let _stagedManifest = null;")
     b.append(_ADMIT_MANIFEST_JS)
@@ -6142,6 +6154,7 @@ def compose_ask_script(
         f"owed_next_action: {_owed_handback_js(sizing_rel)} || _haltNextActionText() || null, "
         "blocked: _blockedChunks, held_by: _heldBy, unanswered: _unansweredBriefs, "
         "stopped_by: _stoppedBy, not_started: _notStarted, halted_by: _halted, halt_commit: _haltCommit, "
+        "rag_degraded: _ragDegraded, "
         "review: { prep: _reviewPrep, wave: _reviewWave, delivery: _deliveryVerdict, "
         "integration: _reviewIntegration, reverify: _reviewReverify, "
         f"receipt: 'review: ' + {_VERDICT_COUNT_JS} + ' verdicts' }}, "

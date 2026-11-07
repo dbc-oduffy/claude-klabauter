@@ -992,7 +992,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "Verdict for the docs-checker leg `label` of run `run_id`.\n\nParams: ``repo_root``, ``run_id``, ``label``, optional ``session_id`` (else the caller's\nsession). Returns ``{verdict: not_applicable|ok|rag_corpus_down|citation_unbacked, message?,\nreason?, rag_calls?, rag_failed?, unbacked?}``; ``message`` is the restore text on\n``rag_corpus_down``; ``unbacked`` lists the citations no run call backs.",
+      "description": "Verdict for the docs-checker leg `label` of run `run_id`.\n\nParams: ``repo_root``, ``run_id``, ``label``, optional ``session_id`` (else the caller's\nsession), optional bool ``engine_queryable`` (False is a definite down). Returns ``{verdict: not_applicable|ok|degraded|rag_corpus_down|citation_unbacked,\nmessage?, reason?, rag_calls?, rag_failed?, rag_timeouts?, rag_refused?, unbacked?}``;\n``message`` is the restore text on ``rag_corpus_down``; ``degraded`` (timeout-only failures)\nhalts nothing and still runs the citation check; ``unbacked`` lists the citations no run\ncall backs.",
       "module": "coordinator_core.ops.dispatch_emit.docs_check_gate_op",
       "name": "dispatch.docs_check_rag_gate",
       "op_class": "compute_only",

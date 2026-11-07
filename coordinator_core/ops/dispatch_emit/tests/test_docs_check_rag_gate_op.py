@@ -81,10 +81,65 @@ def test_one_successful_rag_call_is_ok(env):
     assert call()["verdict"] == "ok"
 
 
-def test_every_rag_call_failed_is_rag_corpus_down(env):
+def test_unclassified_all_failed_is_degraded_not_down(env):
     _repo, transcript, call = env
     transcript([_tool_use("m1", "mcp__project-rag__project_symbol"), _tool_error("m1")])
-    assert call()["verdict"] == "rag_corpus_down"
+    assert call()["verdict"] == "degraded"
+
+
+def test_engine_queryable_false_is_rag_corpus_down_despite_successful_call(env):
+    _repo, transcript, call = env
+    transcript([_tool_use("m1", "mcp__project-rag__project_symbol")])
+    out = call(engine_queryable=False)
+    assert out["verdict"] == rag_use.HALT_RAG_CORPUS_DOWN
+    assert out["message"] == rag_use.RESTORE_MESSAGE
+
+
+def test_engine_queryable_true_or_absent_does_not_down_a_working_corpus(env):
+    _repo, transcript, call = env
+    transcript([_tool_use("m1", "mcp__project-rag__project_symbol")])
+    assert call(engine_queryable=True)["verdict"] == "ok"
+    assert call()["verdict"] == "ok"
+
+
+def _tool_error_kind(msg_id, text):
+    return json.dumps({"message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": f"t-{msg_id}", "is_error": True, "content": text}]}})
+
+
+def test_timeout_only_failure_is_degraded_with_counts(env):
+    _repo, transcript, call = env
+    transcript([
+        _tool_use("m1", "mcp__project-rag__project_engine_examples"),
+        _tool_error_kind("m1", "request timed out after 25s"),
+    ])
+    out = call()
+    assert out["verdict"] == "degraded"
+    assert (out["rag_calls"], out["rag_failed"], out["rag_timeouts"], out["rag_refused"]) == (1, 1, 1, 0)
+    assert "message" not in out
+
+
+def test_degraded_still_runs_the_citation_check(env):
+    _repo, transcript, call = env
+    transcript([
+        _tool_use("m1", "mcp__project-rag__project_engine_examples"),
+        _tool_error_kind("m1", "request timed out after 25s"),
+        _text("m2", "[live: inspect L_Main]"),
+    ])
+    out = call()
+    assert out["verdict"] == "citation_unbacked"
+    assert out["unbacked"] == ["[live: inspect L_Main]"]
+
+
+def test_refused_connection_stays_rag_corpus_down(env):
+    _repo, transcript, call = env
+    transcript([
+        _tool_use("m1", "mcp__project-rag__project_symbol"),
+        _tool_error_kind("m1", "connection refused"),
+    ])
+    out = call()
+    assert out["verdict"] == "rag_corpus_down"
+    assert out["message"] == rag_use.RESTORE_MESSAGE
 
 
 def test_unreadable_transcript_on_ue_rag_repo_is_down(env):
