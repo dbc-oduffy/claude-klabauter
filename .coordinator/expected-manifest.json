@@ -957,7 +957,7 @@
     "coordinator/bin/publish-resolve-target.py": "1bf3db81840e305c065e4b4de85a7c5414d31ffe",
     "coordinator/bin/publish-strip-inventory.cmd": "aefb208c57a959ea667f0564d73a85633d4c3583",
     "coordinator/bin/publish-strip-inventory.py": "99da381428c8bd02aeced3ee50f338f080484588",
-    "coordinator/bin/published-name-map.json": "0967ef424bce6791893e9a57bb952f80fd536e93",
+    "coordinator/bin/published-name-map.json": "da4b3fa2f0b25a3fa82c127708461f650e27a571",
     "coordinator/bin/push-hold.cmd": "7c295de7e219b2475216dab124bc306bacd64025",
     "coordinator/bin/push-hold.py": "66ba24238bb6ae470fa2a30b8ded3ec6ddb9b6d5",
     "coordinator/bin/query-commit-closures.cmd": "2284445c76886198e1bc9a9bf05e85d618fc2dd6",
@@ -2358,7 +2358,7 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "0244f9e559236736cbbdb500ff0557f7a09be59d",
+    "coordinator_core/_engine_published_at": "c3d771a910328f604ef93b626095c58fff62c8bb",
     "coordinator_core/_engine_stamp": "0ed48210d20ff2bfd0ffce2380da999cdfdc7bcf",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
@@ -11219,6 +11219,7 @@
     "coordinator_core/yaml_flat.py": "5f6a266bea882c86367efdf4ea91e406def5f9ec",
     "docs/install/agent-install-manifest.json": "f73e0c092c92945d3a78bec8e5e877762c3e0d01",
     "docs/project-tracker.md": "a01e1d6311d14c5309a8e3650cd6ebf95ef3414a",
+    "docs/reference/codex-engine-ask-route.md": "6317e3369d08797d97a8ac6cee91f184baec7703",
     "docs/reference/fleet-shared-environment-contract.md": "97cefce4d7061819760d0ed7e83b1b39c053fe87",
     "docs/reference/guard-override-keys.md": "b4b77233d62110eff770a7c764584b4207a2107e",
     "docs/reference/install-chain-walk.md": "4fc47604d068d3ca3530cb02e8659a259b09f4a3",
@@ -11389,5 +11390,5 @@
     "scripts/unstick_claude.py": "5458a0f699f1793ff9fd32295b9d0b33635f1c06"
   },
   "schema": 1,
-  "source_head": "5a658745f235af11396ff9e9a8df81ee44dee12b"
+  "source_head": "0317fe540d879d94f58b18819264a88e6bc0c8e7"
 }
