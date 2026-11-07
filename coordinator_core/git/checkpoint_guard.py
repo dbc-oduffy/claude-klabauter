@@ -45,6 +45,22 @@ def checkpoint_row_ids(subject: str) -> List[str]:
     return [r.strip() for r in m.group("ids").split(",") if r.strip()] if m else []
 
 
+_CHECKPOINT_PREFIX_RE = re.compile(r"^checkpoint\(wave [^)]*\):")
+_RUN_END_TRAILER_RE = re.compile(r"^(?:Lands-Chunks|Inline-Review|Halt-Plan):", re.M)
+
+
+def is_checkpoint_commit(message: str) -> bool:
+    """True for a wave checkpoint of any subject shape: a `checkpoint(wave N):` subject, or
+    `Checkpoint-Plan:` plus `Checkpoint-Base:` lines on a message that is not a run landing or halt.
+    Wider than `checkpoint_row_ids`, which needs the em-dash id list."""
+    message = message or ""
+    if _CHECKPOINT_PREFIX_RE.match(message.split("\n", 1)[0].strip()):
+        return True
+    return bool(
+        _PLAN_RE.search(message) and _BASE_RE.search(message) and not _RUN_END_TRAILER_RE.search(message)
+    )
+
+
 _LEADING_IDS_RE = re.compile(r"^([A-Za-z][\w.\-]*(?:\s*,\s*[A-Za-z][\w.\-]*)*)\s*:(?:\s|$)")
 
 

@@ -263,6 +263,46 @@ def test_over_bound_senior_holds_the_interior_hunk_the_lander_also_edited(world,
     assert split.unattributed == [_h(mid)]
 
 
+def _print_world(world, monkeypatch, prints, blobs_extra=None):
+    from coordinator_core.ops.dispatch_emit import run_write_prints
+
+    monkeypatch.setattr(run_write_prints, "read", lambda root, run: prints)
+    if blobs_extra:
+        orig = git_objects.read_object
+        monkeypatch.setattr(
+            git_objects, "read_object",
+            lambda cd, sha: ("blob", blobs_extra[sha]) if sha in blobs_extra else orig(cd, sha),
+        )
+
+
+def test_hunk_the_tree_changed_after_the_print_is_nonrun(world, monkeypatch):
+    world.tree({2: "run", 9: "peer"})
+    world.baseline(ME, {})
+    _print_world(world, monkeypatch, {PATH: "p" * 40}, {"p" * 40: _text({2: "run"}).encode()})
+    split = rhc.own_hunks(world.root, ME, PATH, [_h(2), _h(9)], {})
+    assert split.own == [_h(2)]
+    assert split.nonrun == [_h(9)]
+    assert split.unattributed == []
+
+
+def test_no_print_for_the_path_keeps_attribution(world, monkeypatch):
+    world.tree({2: "run", 9: "peer"})
+    world.baseline(ME, {})
+    _print_world(world, monkeypatch, {"other.py": "p" * 40})
+    split = rhc.own_hunks(world.root, ME, PATH, [_h(2), _h(9)], {})
+    assert split.own == [_h(2), _h(9)]
+    assert split.nonrun == []
+
+
+def test_unreadable_print_object_holds_every_run_hunk(world, monkeypatch):
+    world.tree({2: "run"})
+    world.baseline(ME, {})
+    _print_world(world, monkeypatch, {PATH: "f" * 40})
+    split = rhc.own_hunks(world.root, ME, PATH, [_h(2)], {})
+    assert split.own == []
+    assert split.unattributed == [_h(2)]
+
+
 def test_under_bound_single_claimant_owns_its_edits_but_not_the_pre_baseline_hunk(world, monkeypatch):
     n = 100
     hunks, mid = _pre_baseline_world(world, monkeypatch, n)

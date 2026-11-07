@@ -546,3 +546,44 @@ def test_handler_surfaces_a_pending_spool_notice_to_the_submitting_session_only(
 
     mine = asyncio.run(pad._handler({"session_id": "sess-spool", "tool_name": "Read"}, repo_root=tmp_path))
     assert "Your spooled ask sp1 minted run ask-run-1." in mine["hookSpecificOutput"]["additionalContext"]
+
+
+def _live_run(monkeypatch, run_id, session):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    monkeypatch.setattr(
+        run_token, "live_records", lambda root: iter([{"run_id": run_id, "session_id": session}])
+    )
+
+
+def test_handler_prints_a_subagent_write_for_its_live_run(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import kept_work, run_write_prints
+
+    _live_run(monkeypatch, "runW", SESSION)
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"run bytes\n")
+
+    asyncio.run(
+        pad._handler(
+            {"session_id": SESSION, "agent_id": "a" * 16, "tool_name": "Edit", "file_path": str(target)},
+            repo_root=tmp_path,
+        )
+    )
+
+    assert run_write_prints.read(tmp_path, "runW") == {"f.txt": kept_work.blob_sha(b"run bytes\n")}
+
+
+def test_handler_does_not_print_the_ems_own_write_or_a_non_write_tool(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_write_prints
+
+    _live_run(monkeypatch, "runW", SESSION)
+    target = tmp_path / "f.txt"
+    target.write_bytes(b"em bytes\n")
+
+    for params in (
+        {"session_id": SESSION, "tool_name": "Edit", "file_path": str(target)},
+        {"session_id": SESSION, "agent_id": "a" * 16, "tool_name": "Read", "file_path": str(target)},
+    ):
+        asyncio.run(pad._handler(params, repo_root=tmp_path))
+
+    assert run_write_prints.read(tmp_path, "runW") is None

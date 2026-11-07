@@ -62,30 +62,72 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
         return None
 
 
+NO_PRINT_REASON = "no write-time print of this run: the run's own write of this path was not recorded"
+
+
+def _hunk_label(hunk: object) -> str:
+    return f"@@ -{hunk.old_start},{hunk.old_len} @@"  # type: ignore[attr-defined]
+
+
+def _nonrun_reason(nonrun: Sequence[object]) -> str:
+    labels = [f"{_hunk_label(h)} (line {h.old_start})" for h in nonrun]  # type: ignore[attr-defined]
+    return "hunk a non-run edit wrote after this run's last recorded write: " + ", ".join(labels)
+
+
+def _withheld_reason(split: object, hunks: Sequence[object]) -> str:
+    overlapping = getattr(split, "overlapping", None) or {}
+    unattributed = getattr(split, "unattributed", None) or []
+    if overlapping:
+        held = [f"{h} of run {run}" for run, hs in overlapping.items() for h in map(_hunk_label, hs)]
+        return "hunk overlaps a peer run's: " + ", ".join(held)
+    if unattributed:
+        return "hunk no run baseline attributes to this run: " + ", ".join(map(_hunk_label, unattributed))
+    nonrun = getattr(split, "nonrun", None) or []
+    if nonrun:
+        return _nonrun_reason(nonrun)
+    return "no hunk is this run's: " + ", ".join(map(_hunk_label, hunks))
+
+
 def checkpoint_own_blobs(
     root: Path, run_id: Optional[str], paths: Sequence[str], message: str = "",
+    reasons: Optional[dict[str, str]] = None,
 ) -> tuple[dict[str, str], list[str]]:
     """`(supplied_blobs, withheld)`: `{path: blob sha}` for each tracked path whose worktree carries
     foreign hunks beside the run's own (the blob is HEAD plus the own hunks only), and the paths
     held whole off the commit. A path with no diff, absent from HEAD, or wholly the run's own
-    appears in neither. `message` supplies the `Checkpoint-Plan:` value that scopes the peer-hold
-    read. Never raises; unknown (no run, unreadable diff, unattributed or overlapping hunk) withholds."""
+    appears in neither. A diffed path the run has no write-time print for (`run_write_prints`) is
+    withheld whole and named: its hunks cannot be told from a peer's. `message` supplies the
+    `Checkpoint-Plan:` value that scopes the peer-hold read. A `reasons` dict, when given, receives
+    `{path: why}` for each withheld path, naming the foreign hunk where one is known. Never raises;
+    unknown (no run, unreadable diff, unattributed or overlapping hunk) withholds."""
     root = Path(root)
+    why = reasons if reasons is not None else {}
     wanted = [_norm(p) for p in paths]
     blobs: dict[str, str] = {}
     withheld: list[str] = []
     try:
-        from coordinator_core.ops.dispatch_emit import own_hunk_stage, peer_hunk_gate, run_hunk_claims
+        from coordinator_core.ops.dispatch_emit import (
+            own_hunk_stage, peer_hunk_gate, run_hunk_claims, run_write_prints,
+        )
 
         try:
             diffs = own_hunk_stage.read_diff(root, wanted)
         except own_hunk_stage.OwnHunkRefused:
+            why.update({p: "diff unreadable" for p in wanted})
             return {}, sorted(set(wanted))
         pending = [p for p in wanted if p in diffs and diffs[p].hunks]
         if not pending:
             return {}, []
         if not run_id:
+            why.update({p: "run unresolved: no live run of this session works the Checkpoint-Plan" for p in pending})
             return {}, sorted(set(pending))
+        prints = run_write_prints.read(root, run_id) or {}
+        for path in [p for p in dict.fromkeys(pending) if p not in prints]:
+            withheld.append(path)
+            why[path] = NO_PRINT_REASON
+        pending = [p for p in pending if p in prints]
+        if not pending:
+            return {}, sorted(set(withheld))
         pairs = peer_hunk_gate.co_declared_peer_holds(
             root, run_id, pending, pending, own_plan=_message_plan(message) or None,
         )
@@ -96,13 +138,12 @@ def checkpoint_own_blobs(
             diff = diffs[path]
             hunks = list(diff.hunks)
             split = run_hunk_claims.own_hunks(root, run_id, path, hunks, holders.get(path, {}))
-            if split.overlapping or split.unattributed:
+            if split.overlapping or split.unattributed or not split.own:
                 withheld.append(path)
-            elif len(split.own) == len(hunks):
-                continue
-            elif not split.own:
-                withheld.append(path)
-            else:
+                why[path] = _withheld_reason(split, hunks)
+            elif len(split.own) != len(hunks):
+                if split.nonrun:
+                    why[path] = _nonrun_reason(split.nonrun)
                 blobs[path] = own_hunk_stage.own_blob(root, path, diff.head_bytes, split.own)
     except Exception:  # noqa: BLE001 -- unknown holds
         return {}, sorted(set(wanted))

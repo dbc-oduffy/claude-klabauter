@@ -56,11 +56,14 @@ class Hunk:
 class HunkSplit:
     """`own`: hunks this run may land. `overlapping`: `{holder run_id: hunks}` a SENIOR holder's
     attributed hunk intersects, which hold the path. `unattributed`: hunks no holder's delta
-    explains, returned and never assigned (the caller holds on them)."""
+    explains, returned and never assigned (the caller holds on them). `nonrun`: run-attributed hunks
+    where the tree differs from the run's last recorded write print (`run_write_prints`): a non-run
+    edit, excluded from `own` and named by the caller."""
 
     own: list[Hunk] = field(default_factory=list)
     overlapping: dict[str, list[Hunk]] = field(default_factory=dict)
     unattributed: list[Hunk] = field(default_factory=list)
+    nonrun: list[Hunk] = field(default_factory=list)
 
 
 def parse_diff(text: str) -> dict[str, list[Hunk]]:
@@ -325,6 +328,25 @@ def _released_holders(root: Path, run_id: str, path: str, holders: Mapping[str, 
     return {h for h in others if not attributable(h, [path])}
 
 
+def _foreign_spans(root: Path, common_dir: Path, run_id: str, path: str, tree: list[bytes]) -> Optional[list[tuple[int, int]]]:
+    """Worktree slots where `tree` differs from the run's recorded write print of `path`: `[]` when no
+    print is recorded for the path (attribution unchanged), None when the print object is unreadable
+    (unknown holds)."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.ops.dispatch_emit import run_write_prints
+
+    prints = run_write_prints.read(root, run_id)
+    if not prints or path not in prints:
+        return []
+    sha = prints[path]
+    if sha is None:
+        return _delta_spans([], tree)
+    obj = git_objects.read_object(common_dir, sha)
+    if obj is None or obj[0] != "blob":
+        return None
+    return _delta_spans(obj[1].splitlines(keepends=True), tree)
+
+
 def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mapping[str, bool]) -> HunkSplit:
     from coordinator_core.git.git_dir import resolve_git_common_dir
 
@@ -354,6 +376,15 @@ def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mappi
             split.unattributed.append(hunk)
 
     own = attributed.get(run_id, [])
+    nonrun: list[Hunk] = []
+    if own:
+        foreign = _foreign_spans(root, common_dir, run_id, path, tree)
+        if foreign is None:
+            split.unattributed.extend(own)
+            own = []
+        elif foreign:
+            nonrun = [h for h in own if any(a <= _new_span(h)[1] and _new_span(h)[0] <= b for a, b in foreign)]
+            own = [h for h in own if h not in nonrun]
     overlapping: dict[str, list[Hunk]] = {}
     for holder, held in attributed.items():
         if holder == run_id or not holders.get(holder):
@@ -361,4 +392,4 @@ def _split(root: Path, run_id: str, path: str, hunks: list[Hunk], holders: Mappi
         clash = [h for h in held if any(h.overlaps(o) for o in own)]
         if clash:
             overlapping[holder] = clash
-    return HunkSplit(own=own, overlapping=overlapping, unattributed=split.unattributed)
+    return HunkSplit(own=own, overlapping=overlapping, unattributed=split.unattributed, nonrun=nonrun)

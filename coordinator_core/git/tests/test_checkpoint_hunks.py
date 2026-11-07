@@ -9,7 +9,7 @@ from pathlib import Path
 from coordinator_core.git import checkpoint_hunks as ch
 from coordinator_core.git import git_objects
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.ops.dispatch_emit import peer_hunk_gate, run_hunk_claims, run_token
+from coordinator_core.ops.dispatch_emit import peer_hunk_gate, run_hunk_claims, run_token, run_write_prints
 from coordinator_core.ops.dispatch_emit.run_hunk_claims import Hunk, HunkSplit
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -45,6 +45,7 @@ def _blob(root: Path, sha: str) -> bytes:
 def _stub(monkeypatch, split_fn, holds=()):
     monkeypatch.setattr(peer_hunk_gate, "co_declared_peer_holds", lambda *a, **k: list(holds))
     monkeypatch.setattr(run_hunk_claims, "own_hunks", split_fn)
+    monkeypatch.setattr(run_write_prints, "read", lambda root, run_id: {"f.txt": None})
 
 
 def test_own_and_foreign_hunk_blob_holds_own_only(tmp_path, monkeypatch):
@@ -82,6 +83,57 @@ def test_overlapping_hunk_withholds(tmp_path, monkeypatch):
         lambda r, run, path, hunks, holders: HunkSplit(own=hunks[:1], overlapping={"peer": hunks[:1]}),
     )
     assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG) == ({}, ["f.txt"])
+
+
+def test_withheld_reasons_name_the_foreign_hunk(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _stub(
+        monkeypatch,
+        lambda r, run, path, hunks, holders: HunkSplit(own=hunks[:1], unattributed=hunks[1:]),
+    )
+    reasons: dict = {}
+    ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG, reasons)
+    assert "@@ -9,1 @@" in reasons["f.txt"]
+
+
+def test_nonrun_hunk_is_named_while_the_own_hunk_lands(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _stub(
+        monkeypatch,
+        lambda r, run, path, hunks, holders: HunkSplit(
+            own=[h for h in hunks if h.old_start == 2], nonrun=[h for h in hunks if h.old_start == 9]
+        ),
+    )
+    reasons: dict = {}
+    blobs, withheld = ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG, reasons)
+    assert withheld == []
+    text = _blob(root, blobs["f.txt"]).decode()
+    assert "OWN" in text and "FOREIGN" not in text
+    assert "non-run edit" in reasons["f.txt"] and "@@ -9,1 @@" in reasons["f.txt"]
+
+
+def test_only_nonrun_hunks_withhold_the_path_and_name_them(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _stub(monkeypatch, lambda r, run, path, hunks, holders: HunkSplit(nonrun=list(hunks)))
+    reasons: dict = {}
+    assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG, reasons) == ({}, ["f.txt"])
+    assert reasons["f.txt"].startswith("hunk a non-run edit wrote after this run's last recorded write")
+
+
+def test_diffed_path_without_a_run_print_withholds_and_is_named(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _stub(monkeypatch, lambda r, run, path, hunks, holders: HunkSplit(own=list(hunks)))
+    monkeypatch.setattr(run_write_prints, "read", lambda root, run_id: None)
+    reasons: dict = {}
+    assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG, reasons) == ({}, ["f.txt"])
+    assert reasons["f.txt"] == ch.NO_PRINT_REASON
+
+
+def test_unresolved_run_reason_is_recorded(tmp_path):
+    root = _repo(tmp_path)
+    reasons: dict = {}
+    ch.checkpoint_own_blobs(root, None, ["f.txt"], MSG, reasons)
+    assert "run unresolved" in reasons["f.txt"]
 
 
 def test_unresolved_run_withholds_path_with_a_diff(tmp_path):

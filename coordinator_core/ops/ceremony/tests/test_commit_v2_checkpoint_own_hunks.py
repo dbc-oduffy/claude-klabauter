@@ -118,6 +118,61 @@ def test_checkpoint_with_every_path_withheld_commits_nothing(repo, monkeypatch):
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
+def _params_no_ids(repo: Path, paths: list, subject: str = "checkpoint(wave 0): 5 rows") -> dict:
+    base = _git(["rev-parse", "HEAD"], repo).strip()
+    return {
+        "paths": paths, "skip_missing": True, "gone_tracked_as_deleted": True,
+        "message": f"{subject}\n\nCheckpoint-Plan: {PLAN}\nCheckpoint-Base: {base}\n",
+    }
+
+
+@pytest.mark.parametrize("subject", ["checkpoint(wave 0): 5 rows", "wave 0 rows landed"])
+def test_checkpoint_without_the_id_list_still_lands_only_own_hunks(repo, monkeypatch, subject):
+    _edit_shared(repo)
+    monkeypatch.setattr(
+        run_hunk_claims, "own_hunks",
+        lambda r, run, path, hunks, holders: HunkSplit(own=[h for h in hunks if h.old_start == 2]),
+    )
+
+    result = _call(repo, _params_no_ids(repo, ["shared.txt"], subject))
+
+    assert result["committed"] is True, result
+    landed = _git(["show", "HEAD:shared.txt"], repo)
+    assert "OWN" in landed and "FOREIGN" not in landed
+    assert "FOREIGN" in (repo / "shared.txt").read_text()
+
+
+def test_checkpoint_without_the_id_list_and_unresolved_run_never_commits_whole(repo, monkeypatch):
+    _edit_shared(repo)
+    monkeypatch.setattr(checkpoint_hunks, "checkpoint_run_id", lambda root, message, sid: None)
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+
+    result = _call(repo, _params_no_ids(repo, ["shared.txt"]))
+
+    assert result.get("committed") is not True
+    assert result["checkpoint_withheld_paths"] == ["shared.txt"]
+    assert "run unresolved" in result["error"]
+    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+    assert "FOREIGN" in (repo / "shared.txt").read_text()
+
+
+def test_withheld_file_names_the_foreign_hunk(repo, monkeypatch):
+    _edit_shared(repo)
+    (repo / "mine.txt").write_text("mine\n")
+    monkeypatch.setattr(
+        run_hunk_claims, "own_hunks",
+        lambda r, run, path, hunks, holders: HunkSplit(
+            own=[h for h in hunks if h.old_start == 2], unattributed=[h for h in hunks if h.old_start == 9]
+        ),
+    )
+
+    result = _call(repo, _params_no_ids(repo, ["shared.txt", "mine.txt"]))
+
+    assert result["committed"] is True, result
+    assert result["checkpoint_withheld_paths"] == ["shared.txt"]
+    assert "@@ -9,1 @@" in result["checkpoint_withheld_reasons"]["shared.txt"]
+
+
 def test_non_checkpoint_commit_lands_the_file_whole(repo):
     _edit_shared(repo)
 

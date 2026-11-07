@@ -2214,6 +2214,17 @@ async def _record_write_touch(params: dict, touch_path: str, repo_root) -> None:
     await track_touched_files._handler({**params, "file_path": touch_path}, repo_root=repo_root)
 
 
+def _record_run_write_print_sync(
+    session_id: str, agent_id: str, touch_path: str, repo_root, tool_input: object = None
+) -> None:
+    """Print a subagent's write for its live run, so the first checkpoint attributes only its bytes."""
+    if repo_root is None:
+        return
+    from coordinator_core.ops.dispatch_emit import run_write_prints  # noqa: PLC0415 -- leg-local
+
+    run_write_prints.record_write(repo_root, session_id, agent_id, touch_path, tool_input)
+
+
 @register_op("hooks.postuse_advisory_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse advisory dispatcher: folds context-pressure + runtime-tripwire +
@@ -2419,6 +2430,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
             else _idle()
         ),
         asyncio.to_thread(_em_turn_budget_sync, params) if transcript_path else _idle(),
+        (
+            asyncio.to_thread(
+                _record_run_write_print_sync, session_id, agent_id, touch_path, repo_root,
+                params.get("tool_input") if tool_name == "Edit" else None,
+            )
+            if tool_name in _TOUCH_RECORDING_TOOLS and touch_path and agent_id
+            else _idle()
+        ),
         return_exceptions=True,
     )
     labels = (
@@ -2450,6 +2469,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
     stall_text = _text_or_breadcrumb("workflow_stall", results[9])
 
     turn_text = _text_or_breadcrumb("em_turn_budget", results[10])
+
+    if isinstance(results[11], BaseException):
+        _text_or_breadcrumb("run_write_print", results[11])
 
     # One stat when no notice is pending, so it runs inline rather than on a thread.
     try:

@@ -148,6 +148,21 @@ def test_plan_commit_row_ids(subject, ids):
     assert plan_commit_row_ids(subject) == ids
 
 
+@pytest.mark.parametrize("message,expected", [
+    ("checkpoint(wave 0): 5 rows", True),
+    ("checkpoint(wave 1): 1 rows — r1\n\nCheckpoint-Plan: p.md\nCheckpoint-Base: abc1234\n", True),
+    ("wave done\n\nCheckpoint-Plan: p.md\nCheckpoint-Base: abc1234\n", True),
+    ("wave done\n\nCheckpoint-Plan: p.md\n", False),
+    ("land\n\nCheckpoint-Plan: p.md\nCheckpoint-Base: abc1234\nLands-Chunks: C1\n", False),
+    ("C1: do it", False),
+    ("plain", False),
+])
+def test_is_checkpoint_commit(message, expected):
+    from coordinator_core.git.checkpoint_guard import is_checkpoint_commit
+
+    assert is_checkpoint_commit(message) is expected
+
+
 def test_a_leading_id_subject_is_not_a_checkpoint_refusal(repo):
     from coordinator_core.git.checkpoint_guard import checkpoint_refusal, checkpoint_row_ids
 

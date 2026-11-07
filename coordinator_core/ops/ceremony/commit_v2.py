@@ -1441,7 +1441,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
 
     # A wave checkpoint lands the run's own hunks only and never removes a symbol an outside caller uses.
     checkpoint_withheld: list = []
-    if checkpoint_guard.checkpoint_row_ids(message.split("\n", 1)[0]):
+    checkpoint_reasons: dict = {}
+    if checkpoint_guard.is_checkpoint_commit(message):
         from coordinator_core.git import checkpoint_hunks
 
         with ledger.phase("checkpoint_refusal"):
@@ -1455,7 +1456,7 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         with ledger.phase("checkpoint_own_hunks"):
             run_id = checkpoint_hunks.checkpoint_run_id(worktree_root, message, own_sid)
             own_blobs, checkpoint_withheld = checkpoint_hunks.checkpoint_own_blobs(
-                worktree_root, run_id, raw_paths, message
+                worktree_root, run_id, raw_paths, message, checkpoint_reasons
             )
             if checkpoint_withheld:
                 held = {p.replace("\\", "/") for p in checkpoint_withheld}
@@ -1485,11 +1486,15 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 if foreign_new:
                     raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in foreign_new]
                     checkpoint_withheld = sorted({*checkpoint_withheld, *foreign_new})
+                    for p in foreign_new:
+                        checkpoint_reasons.setdefault(p, "new file holds content no run baseline attributes to this run")
         if not (raw_paths or raw_deleted or raw_untracked):
             return _error(
-                "every checkpoint path holds hunks outside this run or the run is unresolved, nothing to commit.",
+                "every checkpoint path holds hunks outside this run or the run is unresolved, nothing to commit: "
+                + "; ".join(f"{p}: {checkpoint_reasons.get(p, 'withheld')}" for p in checkpoint_withheld),
                 nothing_to_commit=True,
                 checkpoint_withheld_paths=checkpoint_withheld,
+                checkpoint_withheld_reasons=checkpoint_reasons,
             )
         with ledger.phase("checkpoint_symbols"):
             symbol_refusal = _checkpoint_symbol_refusal(
@@ -1731,6 +1736,9 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
         result["checkpoint_stamp"] = checkpoint_stamp
     if checkpoint_withheld:
         result["checkpoint_withheld_paths"] = checkpoint_withheld
+        result["checkpoint_withheld_reasons"] = {
+            p.replace("\\", "/"): r for p, r in checkpoint_reasons.items()
+        }
     if process_sha is not None:
         result["process_sha"] = process_sha
     merge_parent = next((o.merge_parent for o in outcomes if o.merge_parent), None)
