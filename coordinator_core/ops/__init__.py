@@ -522,6 +522,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.workflow_bind", 'registers "workflow.bind_args"'),
     ("coordinator_core.ops.compute_layer_scaffold.op", 'registers "compute_layer.scaffold"'),
     ("coordinator_core.ops.dispatch_emit.op", 'registers "dispatch.emit"'),
+    ("coordinator_core.ops.engine_ask_submit", 'registers "engine_ask.submit"'),
     (
         "coordinator_core.ops.workflow_fire.op",
         'registers "workflow.fire", "workflow.fire_status"',

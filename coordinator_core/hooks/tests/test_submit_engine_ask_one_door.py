@@ -71,10 +71,11 @@ def _fire(root: Path, args) -> str:
     hso = mod.evaluate(_payload(root, args))["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow", hso
     script = Path(hso["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
-    literal = re.search(r"^const PARAMS = (.*);$", script, re.M)
+    literal = re.search(r"^const PARAMS_FILE = (.*);$", script, re.M)
     if literal is None:
         return script
-    emitted = mod._default_emit(json.loads(json.loads(literal.group(1))), root)
+    params_file = root / json.loads(literal.group(1))
+    emitted = mod._default_emit(json.loads(params_file.read_text(encoding="utf-8")), root)
     assert emitted.get("path"), emitted
     return Path(emitted["path"]).read_text(encoding="utf-8")
 
@@ -149,3 +150,34 @@ def test_an_em_size_outside_the_size_set_is_refused_by_the_hook(repo):
     hso = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm", "em_size": "HUGE"}))["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert "em_size" in hso["permissionDecisionReason"]
+
+
+def test_hook_and_op_reach_one_gate_function(repo, monkeypatch):
+    from coordinator_core.hooks import _engine_ask_gates as gates
+
+    seen = []
+    real = gates.submit_ask
+    monkeypatch.setattr(gates, "submit_ask", lambda **kw: seen.append(kw) or real(**kw))
+    out = mod._handler({"tool_name": "Workflow", **{k: v for k, v in _payload(repo, {"ask": "add the widget", "source": "pm"}).items() if k != "tool_name"}})
+    assert out["hookSpecificOutput"].get("updatedInput"), out
+    assert [(k["ask"], k["ask_source"], k["caller"]) for k in seen] == [("add the widget", "pm", "hook")]
+
+
+def test_hook_adapter_envelope_matches_direct_evaluate(repo):
+    payload = _payload(repo, {"ask": "add the widget", "source": "pm"})
+    via = mod._through_shared_gates(payload)["hookSpecificOutput"]
+    direct = mod.evaluate(payload)["hookSpecificOutput"]
+    assert via["permissionDecision"] == direct["permissionDecision"] == "allow"
+
+
+def test_hook_adapter_still_refuses_what_the_gates_refuse(repo):
+    out = mod._handler(_payload(repo, {"ask": "add the widget", "source": "pm", "em_size": "HUGE"}))
+    assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+    assert "em_size" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_adapter_runs_a_shape_the_op_refuses_through_evaluate(repo):
+    payload = _payload(repo, {"ask": "add the widget", "source": "pm", "sizing": REL})  # both: submit_ask refuses bad-request
+    out = mod._handler(payload)
+    direct = mod.evaluate(payload)
+    assert out["hookSpecificOutput"]["permissionDecision"] == direct["hookSpecificOutput"]["permissionDecision"]

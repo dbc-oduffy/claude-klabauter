@@ -50,6 +50,8 @@ Wire params -- workflow.fire:
     concurrency_cap (int, optional) -- live-fire refusal threshold;
                                       defaults to
                                       ``fire.DEFAULT_CONCURRENCY_CAP``.
+    notify_to (str, optional)     -- peer name notified when a subsequent
+                                      workflow.fire_status observes driver exit.
 
 Reply fields -- workflow.fire:
     the fire registry record (see ``fire.fire_workflow`` docstring): {
@@ -152,6 +154,9 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
         dispatch_emit.op.FiredDriftError -- if ``expected`` is supplied and
             differs from the on-disk bytes at ``script_path``.
     """
+    notify_to = params.get("notify_to")
+    if notify_to is not None and (not isinstance(notify_to, str) or not notify_to.strip()):
+        raise ValueError("notify_to must be a non-empty peer name")
     script_path = params.get("script_path")
     if not script_path:
         raise ValueError("workflow.fire requires param: script_path")
@@ -165,7 +170,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         guard_against_fired_drift(Path(script_path), expected)
 
-    return fire.fire_workflow(
+    record = fire.fire_workflow(
         script_path,
         cwd=str(repo_root) if repo_root is not None else None,
         claude_bin=params.get("claude_bin", "claude"),
@@ -173,6 +178,21 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
         max_turns=params.get("max_turns"),
         concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
     )
+    if notify_to is not None:
+        record = {**record, "notify_to": notify_to.strip()}
+        try:
+            _store_notification_record(record, repo_root)
+        except OSError as exc:
+            # The child exists: preserve its handle rather than inviting a second fire.
+            record["notify_error"] = f"Notification target not persisted: {exc}"
+    return record
+
+
+def _store_notification_record(record: dict, repo_root: Optional[Path]) -> None:
+    """Persist notification metadata beside the fire record in its selected repo."""
+    cwd = record.get("repo_root") or (str(repo_root) if repo_root is not None else None)
+    path = fire._record_path(fire._registry_dir(cwd), record["fire_id"])
+    fire._write_record(path, record)
 
 
 @register_op("workflow.fire_status")
@@ -190,4 +210,12 @@ def _workflow_fire_status(params: dict, repo_root: Optional[Path] = None) -> dic
     record = fire.fire_status(fire_id, cwd=str(repo_root) if repo_root is not None else None)
     if record is None:
         return {"fire_id": fire_id, "found": False}
+    if record.get("notify_to") and not record.get("notified_at") and record.get("state") == "exited":
+        from coordinator_core.ops.workflow_fire.notify import notify_terminal
+
+        record = notify_terminal(record)
+        try:
+            _store_notification_record(record, repo_root)
+        except OSError as exc:
+            record["notify_error"] = f"Notification result not persisted: {exc}"
     return record

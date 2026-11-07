@@ -672,7 +672,7 @@ def _answer_overran(call: dict) -> dict:
     deadline = time.monotonic() + _SCAN_GRACE_S
     roots = call["roots"]
     if minted:
-        return _minted_start_envelope(roots[0] if roots else None, minted, deadline)
+        return _minted_start_envelope(roots[0] if roots else None, minted, deadline, call)
     if minted is None:
         return _refuse(
             "The submission outran the hook budget and the disk is stalled, so whether a run was minted is unknown. "
@@ -681,7 +681,7 @@ def _answer_overran(call: dict) -> dict:
     if gate_state == "committed":
         ids = _token_run_ids_since(call, deadline) if roots else []
         if ids:
-            return _minted_start_envelope(roots[0], ids, deadline)
+            return _minted_start_envelope(roots[0], ids, deadline, call)
         return _refuse(f"The submission outran the hook budget as its run was minted. Do not re-submit. {_minted_remedy([])}")
     if gate_state == "writing":
         return _refuse(_STALLED_RECORD_WRITE)
@@ -829,36 +829,81 @@ def _direct_start(root: Path, run_id: str, deadline: float) -> Optional[dict]:
         {"scriptPath": str(script)},
         f"Submitted to the engine as run {run_id}: its emit outran the hook budget after minting it, so the run starts "
         f"from the script already on disk. It runs to its commit in the background; its completion notification is your "
-        f"one wake. Do not re-submit. End the turn: no polling, dispatch or verification meanwhile. {_revise_hint(run_id)}",
+        f"one wake. Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds. {_revise_hint(run_id)}",
         f"Engine submission: run {run_id} started after an emit overrun.",
     )
 
 
-def _minted_start_envelope(root: Optional[Path], run_ids: Sequence[str], deadline: float) -> dict:
+def _note_entries(call: Optional[dict], asks: Sequence[Mapping[str, Any]], ready: Sequence[Any]) -> None:
+    """Records on `call` which asks entry each ready fan-out run serves, so an overrun can name the entries
+    no run was minted for. Matched by the fan-out's own label rule; nothing is recorded for a label that matches no entry or more than one."""
+    if call is None:
+        return
+    labels = [(item.get("label") or "").strip() or f"slice-{k + 1}" for k, item in enumerate(asks)]
+    entries = []
+    for r in ready:
+        if labels.count(r.label) == 1:
+            index = labels.index(r.label)
+            entries.append({"index": index, "label": r.label, "run_id": r.run_id, "item": asks[index]})
+    call["entries"] = entries
+
+
+def _unminted_tail(call: Optional[dict], minted: Sequence[str]) -> str:
+    """The reply tail naming each asks entry of a partially minted fan-out with its re-submit args; "" unless
+    a strict, non-empty subset of the submission's ready entries was minted. Re-submit args are JSON. Entries
+    held on a predecessor are not named: the launcher starts them when the predecessor closes."""
+    import json
+
+    entries = (call or {}).get("entries") or []
+    have = set(minted)
+    missing = [e for e in entries if e["run_id"] not in have]
+    if not missing or len(missing) == len(entries):
+        return ""
+    lines = []
+    for e in missing:
+        lines.append(f"asks[{e['index']}] ({e['label']}) was NOT minted; re-submit args: {json.dumps({'asks': [e['item']]})}")
+    return (
+        f" The submission minted {len(entries) - len(missing)} of {len(entries)} entries; "
+        "re-submit only the unminted ones, never the minted. " + " ".join(lines)
+    )
+
+
+def _append_reason(envelope: dict, tail: str) -> dict:
+    hso = envelope.get("hookSpecificOutput")
+    if tail and isinstance(hso, dict):
+        hso["permissionDecisionReason"] = (hso.get("permissionDecisionReason") or "") + tail
+    return envelope
+
+
+def _minted_start_envelope(
+    root: Optional[Path], run_ids: Sequence[str], deadline: float, call: Optional[dict] = None
+) -> dict:
     """The allow for runs the submission minted before the hook answered, never a deny.
 
     A lone run whose script is on disk is started directly; any other rides a deferred script that starts
     each through `dispatch.minted_run`, whose failure names the op's start and abandon. The deny is the
-    last resort (no root, no run id, or a script that cannot be written) and names the op."""
+    last resort (no root, no run id, or a script that cannot be written) and names the op. When only some
+    entries of a multi-ask were minted, every reply also names the unminted entries and their re-submit args."""
     ids = sorted(run_ids)
+    tail = _unminted_tail(call if call is not None else _CALL.get(), ids)
     if root is None or not ids:
-        return _refuse(f"The submission outran the hook budget after minting a run. {_minted_remedy(ids)}")
+        return _refuse(f"The submission outran the hook budget after minting a run. {_minted_remedy(ids)}{tail}")
     import time
 
     if len(ids) == 1:
         direct = _direct_start(root, ids[0], min(deadline, time.monotonic() + _ENVELOPE_GRACE_S / 2))
         if direct is not None:
-            return direct
+            return _append_reason(direct, tail)
     script = _quick(lambda: _write_minted_start_script(root, ids), max(deadline, time.monotonic() + 0.05))
     if script is None:
-        return _refuse(f"The submission outran the hook budget after minting run {', '.join(ids)}. {_minted_remedy(ids)}")
-    return _allow_rewrite(
+        return _refuse(f"The submission outran the hook budget after minting run {', '.join(ids)}. {_minted_remedy(ids)}{tail}")
+    return _append_reason(_allow_rewrite(
         {"scriptPath": str(script)},
         f"Submitted to the engine as run {', '.join(ids)}: its emit outran the hook budget after minting it, so a script "
         f"starts it in the background through {_MINTED_OP}. Its completion notification is your one wake. "
-        "Do not re-submit. End the turn: no polling, dispatch or verification meanwhile.",
+        "Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds.",
         f"Engine submission: minted run {', '.join(ids)}, deferred start {script.name}.",
-    )
+    ), tail)
 
 
 def _runner_less_run(root: Path, sizing_rel: str, live: Optional[str]) -> Optional[str]:
@@ -1076,7 +1121,7 @@ def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional
     return _allow_rewrite(
         {"scriptPath": str(script)},
         f"The engine is unavailable ({reason}); the ask is spooled as {spool_id}. It mints exactly one run "
-        "once the engine is healthy and this session is notified. Do not re-submit. End the turn.",
+        "once the engine is healthy and this session is notified. Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds.",
         f"Engine submission: spooled as {spool_id}.",
     )
 
@@ -1214,8 +1259,8 @@ def _premint_deferred_envelope(root: Path, params: dict, run_id: str) -> dict:
         "PreToolUse",
         {"scriptPath": str(script)},
         f"Submitted to the engine as run {run_id}: its emit runs inside the background run, which then starts. "
-        "Its completion notification is your one wake. Do not re-submit. End the turn: no polling, dispatch or "
-        f"verification meanwhile. {_revise_hint(run_id)}",
+        "Its completion notification is your one wake. Do not re-submit. Do not poll or "
+        f"verify this run meanwhile; unrelated work proceeds. {_revise_hint(run_id)}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
@@ -1245,7 +1290,7 @@ def _taken_as_deferred(root: Path, params: dict) -> Optional[dict]:
         {"scriptPath": str(script)},
         f"The emit outran the hook budget before minting a run, so the submission is taken as deferred emit {defer_id}: "
         "its script emits the run and starts it in the background; the run id arrives with its completion notification, "
-        "your one wake. Do not re-submit. End the turn: no polling, dispatch or verification meanwhile.",
+        "your one wake. Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds.",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
@@ -1879,6 +1924,38 @@ def _staged_without_workflow(root: Path, run_id: str) -> bool:
     return not any(record.get("run_id") == run_id for record in warp_live._token_records(root))
 
 
+def _never_ran_without_workflow(root: Path, run_id: str) -> bool:
+    """True when `run_id`'s record dir exists but holds no `halted.json`, `run-stage.json` or
+    `sibling-status.json` (state or scratch) and no live token record names it and the dir was last
+    touched over `_DEAD_OWNER_IDLE_SECONDS` ago: the run never ran, so its index row holds no write claim
+    (`dispatch.record_halted_run_landed` refuses the same id as never ran). A younger dir may be mid-mint."""
+    import time
+    from coordinator_core import warp_live
+    from coordinator_core.ops._path_guard import safe_id
+    from coordinator_core.ops.dispatch_emit import ask_contract, halted_run
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import status_rel
+
+    if not safe_id(run_id):
+        return False
+    try:
+        record_dir = ask_contract.record_dir(root, run_id)
+        if not record_dir.is_dir():
+            return False
+        newest = max([record_dir.stat().st_mtime, *(e.stat().st_mtime for e in record_dir.iterdir())])
+        if time.time() - newest <= _DEAD_OWNER_IDLE_SECONDS:
+            return False
+        evidence = (
+            *(root / base / run_id / name for base in (ask_contract.RECORD_DIR_ROOT, "scratch/warp")
+              for name in (halted_run.HALTED_FILE, ask_contract.RUN_STAGE_FILE)),
+            root / status_rel(run_id),
+        )
+        if any(path.is_file() for path in evidence):
+            return False
+    except (OSError, ValueError):
+        return False
+    return not any(record.get("run_id") == run_id for record in warp_live._token_records(root))
+
+
 _STALE_STAGED_SECONDS = 6 * 3600
 # Must equal ops.dispatch_emit.abandoned_runs.TOKENLESS_QUIET_SECONDS (copied, not imported: hook import cost); a drift lets this gate clear a run the reaper still keeps.
 _DEAD_OWNER_IDLE_SECONDS = 3600
@@ -2036,7 +2113,7 @@ def _live_write_overlap_deny(
             return bool(
                 _halt_marker_ended(root, rid) or _stage_halted(root, rid) or _status_of(root, rid) in ("halted", "landed")
                 or _ended_on_evidence(root, rid) or _staged_without_workflow(root, rid)
-                or _stale_token_without_workflow(root, rid)
+                or _stale_token_without_workflow(root, rid) or _never_ran_without_workflow(root, rid)
                 or (isinstance(deliverable, str) and _sibling_record_run_stopped(root, rid, deliverable))
             )
 
@@ -2194,7 +2271,7 @@ def _fan_prefire_refusal(root: Path, payload: Mapping[str, Any], ready: Sequence
         for r in ready:
             live = warp_live.live_run_for_sizing(root, r.slice_sizing, session_id=session_id, transcript_path=transcript)
             if live and live != r.run_id:
-                return f"Run {live} is already working {r.slice_sizing}; its completion is your one wake. End the turn."
+                return f"Run {live} is already working {r.slice_sizing}; its completion is your one wake. Do not poll or verify it meanwhile; unrelated work proceeds."
     args = payload["tool_input"].get("args")
     asks = args.get("asks") if isinstance(args, dict) else None
     rows = []
@@ -2559,6 +2636,45 @@ def _spawn_recompose(root: Path, run_id: str) -> bool:
         return False
 
 
+_LOG_REL = "state/housekeeping-failures.log"
+
+
+def _prior_recompose_failure(root: Path) -> Optional[str]:
+    """The newest `halt_resume_build` line of the housekeeping-failures log (a `SPAWN FAILED` or `CHILD
+    FAILED` record), else None. A non-destructive read; the log is shared, so the line may name another run."""
+    from coordinator_core.ops.ceremony.detached_spawn import read_failures_log
+
+    try:
+        text = read_failures_log(str(root))
+    except Exception:
+        return None
+    for line in reversed(text.splitlines()):
+        if "halt_resume_build" in line and ("CHILD FAILED" in line or "SPAWN FAILED" in line):
+            return line.strip()[:300]
+    return None
+
+
+def _recompose_note(spawn: str, refusal: Optional[str], prior_failure: Optional[str]) -> str:
+    """The sentence of the refire envelope telling the EM what became of the halt-time record.
+
+    `spawn` is `started`, `failed` (the detached build could not start), `inflight` (an earlier
+    recompose still holds the claim) or `unused` (no recompose was called for)."""
+    head = {
+        "started": "the halt-time record is missing or stale, so a background recompose was started and the run starts now.",
+        "failed": "the halt-time record is missing or stale and the background recompose could NOT start, so "
+        "the run starts now without a rebuilt script.",
+        "inflight": "the halt-time record is missing or stale and an earlier background recompose is still "
+        "running, so none was started and the run starts now.",
+        "unused": "the stored script is not used (the call carries its own parameters, or the record holds "
+        "none) and no background recompose was started.",
+    }[spawn]
+    parts = [head]
+    if refusal is not None:
+        parts.append(f"The stored record holds a refusal: {refusal}")
+    if prior_failure is not None:
+        parts.append(f"A recompose failure is on record in {_LOG_REL}: {prior_failure}")
+    return " ".join(parts)
+
 #: Params every refire carries; any other key is the call's own (stop_after, brief, chatty, writes,
 #: cross-repo approval) and the halt-time script cannot honour it, so such a call goes through the launcher.
 _RESUME_NEUTRAL_PARAMS = frozenset({"session_id", "ask", "sizing_path", "reserved_run_id"})
@@ -2679,6 +2795,18 @@ def _ensure_launcher_run_token(root: Path, run_id: str, sizing_rel: str, session
         raise err
 
 
+def _record_refire(rd: Path, script, kind: str, composed_by: Optional[str]) -> None:
+    """Best-effort per-refire launch record in the run dir; a failed write never blocks the refire."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+
+    try:
+        hrr.write_refire_record(rd, script, kind, composed_by, time.time())
+    except OSError:
+        pass
+
+
 def _resume_route(
     root: Path,
     sizing_rel: str,
@@ -2724,7 +2852,7 @@ def _resume_route(
         except (OSError, ValueError):
             return None, None
         if halted_id is hrr.STALLED:
-            return _refuse("The emitted-run lookup stalled, so the submission would compose inline. Re-submit once."), None
+            return _taken_as_deferred(root, params), None
         if isinstance(halted_id, str) and session_id:
             _adopt_unmarked_run(root, halted_id, session_id)
     if not isinstance(halted_id, str):
@@ -2768,13 +2896,19 @@ def _resume_route(
         if on_disk is True:
             if refusal is not None:
                 return _refuse(refusal), None
+            _record_refire(rd, script, "stored", (stored.get("fingerprint") or {}).get("engine_sha"))
             return None, {"path": str(script), "run_id": halted_id, **_resume_fire_args(root, halted_id, sizing_rel, session_id)}
         script_missing = refusal is None and on_disk is False
 
-    if (stored is None or refusal is not None or script_missing) and hrr.claim_recompose(
-        rd, time.time(), hrr.RECOMPOSE_TTL_S
-    ):
-        _spawn_recompose(root, halted_id)
+    spawn = "unused"
+    if stored is None or refusal is not None or script_missing:
+        if not hrr.claim_recompose(rd, time.time(), hrr.RECOMPOSE_TTL_S):
+            spawn = "inflight"
+        elif _spawn_recompose(root, halted_id):
+            spawn = "started"
+        else:
+            hrr.release_recompose(rd)  # a claim with no builder behind it would block the next refire for the TTL
+            spawn = "failed"
     from coordinator_core.ops.dispatch_emit.fan_launcher import LaunchChild
 
     child = LaunchChild(run_id=halted_id, sizing_rel=sizing_rel, emit_params={**params, "target_root": str(root)})
@@ -2784,6 +2918,7 @@ def _resume_route(
     except Exception as exc:  # the launcher's refusal text is the whole message
         return _refuse(f"The engine wrote no launcher: {exc}"), None
     _ensure_launcher_run_token(root, halted_id, sizing_rel, session_id)
+    _record_refire(rd, script, "launcher", None)
     from coordinator_core import warp_live
 
     call_id = payload.get("tool_use_id")
@@ -2803,10 +2938,10 @@ def _resume_route(
     envelope = rewrite_input(
         "PreToolUse",
         {"scriptPath": str(script)},
-        f"Submitted to the engine as run {halted_id} under one launcher: the halt-time record is missing or stale, "
-        f"so a background recompose was started and the run starts now. "
+        f"Submitted to the engine as run {halted_id} under one launcher: "
+        f"{_recompose_note(spawn, refusal, _prior_recompose_failure(root))} "
         f"It runs to its commit in the background; its completion notification is your one wake. "
-        f"End the turn: no polling, dispatch or verification meanwhile. {_revise_hint(halted_id)}",
+        f"Do not poll or verify this run meanwhile; unrelated work proceeds. {_revise_hint(halted_id)}",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"
@@ -3141,6 +3276,7 @@ def _evaluate(
         unwritten = next((r.slice_sizing for r in ready if not (writer_root / r.slice_sizing).is_file()), None)
         if unwritten:
             return deny("PreToolUse", f"The fan-out reported {unwritten} written under {writer_root}, but it is not on disk there.")
+        _note_entries(_CALL.get(), asks, ready)
         if len(ready) >= 2:
             return _launch_all(root, payload, fan_reply, ready, call_stop, launch, approved, writer_root, memo_advisory)
         first = ready[0]
@@ -3200,7 +3336,7 @@ def _evaluate(
                 return deny(
                     "PreToolUse",
                     f"Run {live} is already working {sizing_rel}; its completion is your one wake. "
-                    "End the turn.",
+                    "Do not poll or verify it meanwhile; unrelated work proceeds.",
                 )
         if asks is None and reserved_run_id is None:
             clash = _live_write_overlap_deny(root, payload["tool_input"], sizing_doc, sizing_rel)
@@ -3363,7 +3499,7 @@ def _evaluate(
     else:
         tail = (
             "It runs to its commit in the background; its completion notification is your one wake. "
-            "End the turn: no polling, dispatch or verification meanwhile."
+            "Do not poll or verify this run meanwhile; unrelated work proceeds."
         )
     from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 
@@ -3441,14 +3577,51 @@ def _named_deny(envelope: dict) -> dict:
     return envelope
 
 
+def _through_shared_gates(payload: Mapping[str, Any]) -> dict:
+    """The hook's envelope for a submission, reached through `_engine_ask_gates.submit_ask`.
+
+    The payload's explicit fields (ask or sizing, source, session, cwd, agent) go in as submit_ask's
+    arguments; the gate runner it calls is `evaluate` on the ORIGINAL payload, so transcript_path,
+    tool_use_id, env and the multi-ask or resume args survive. A shape submit_ask refuses before running
+    a gate (no session, a relative cwd, `asks`, `resume_run_id`) runs the same `evaluate` directly."""
+    from coordinator_core.hooks._engine_ask_gates import submit_ask
+
+    args = payload["tool_input"].get("args")
+    args = args if isinstance(args, dict) else {}
+    seen: dict = {}
+
+    def relay(_rebuilt: Mapping[str, Any]) -> dict:
+        try:
+            seen["envelope"] = evaluate(payload)
+        except BaseException as exc:
+            seen["error"] = exc
+            raise
+        return seen["envelope"]
+
+    ask, sizing = args.get("ask"), args.get("sizing")
+    submit_ask(
+        ask=ask if isinstance(ask, str) else None,
+        sizing=sizing if isinstance(sizing, str) else None,
+        ask_source=args.get("source") if isinstance(args.get("source"), str) else None,
+        session_id=payload.get("session_id") if isinstance(payload.get("session_id"), str) else None,
+        caller="hook",
+        cwd=payload.get("cwd") if isinstance(payload.get("cwd"), str) else None,
+        agent_id=payload.get("agent_id") if isinstance(payload.get("agent_id"), str) else None,
+        evaluate=relay,
+    )
+    if "error" in seen:
+        raise seen["error"]
+    return seen["envelope"] if "envelope" in seen else evaluate(payload)
+
+
 @register_op("hooks.submit_engine_ask")
 def _handler(params: dict, repo_root=None) -> dict:
-    """PreToolUse(Workflow) door onto `evaluate`; a deny resolves at the guard-level policy point."""
+    """PreToolUse(Workflow) door onto the shared gates; a deny resolves at the guard-level policy point."""
     payload = payload_of(params)
     from coordinator_core.machine_profile import apply_guard_level
 
     try:
-        envelope = evaluate(payload)
+        envelope = _through_shared_gates(payload) if is_submission(payload) else evaluate(payload)
     except Exception as exc:
         envelope = deny("PreToolUse", f"The submit hook failed: {type(exc).__name__}: {exc}. Check for an existing run record before re-submitting.")
     submission = is_submission(payload)

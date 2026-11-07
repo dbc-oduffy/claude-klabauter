@@ -607,7 +607,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "Start one detached codex run.\n\nParams: mode (\"review\" | \"agy-review\" | \"execute\"), repo_root, and artifact (review,\nagy-review) or plan+chunk (execute); parent_session_id optional. `allow_api_key` is not\na wire param: the op never forwards it.\nReturns: {\"run_id\", \"run_dir\", \"pid\"} -- the pid is the worker's, not codex's.",
+      "description": "Start one detached codex run.\n\nParams: mode (\"review\" | \"agy-review\" | \"grok-review\" | \"execute\"), repo_root, and artifact (review,\nagy-review, grok-review) or plan+chunk (execute); parent_session_id optional. `allow_api_key` is not\na wire param: the op never forwards it.\nReturns: {\"run_id\", \"run_dir\", \"pid\"} -- the pid is the worker's, not codex's.",
       "module": "coordinator_core.ops.codex_runner",
       "name": "codex_runner.start",
       "op_class": "mutating",
@@ -1366,6 +1366,17 @@
       "timeout_s": 30.0
     },
     {
+      "description": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.\n\ncoordinator_core.ops.engine_ask_submit -- JSON-RPC \"engine_ask.submit\": the engine-ask door for a\ncaller with no Workflow tool (Codex).\n\nWire params: `ask` xor `sizing`; `ask_source` (\"pm\" | \"relayed\", required with `ask`); `session_id`,\n`caller` (identity string) and absolute `cwd`, all required and never read from the environment; optional\n`repo`, `agent_id`, the hook's optional args (`em_context`, `context`, `brief`, `route_preference`,\n`em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and\n`fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`).\n\nReply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when\n`fire` is true) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that\nfails after a successful submit keeps the run handle and adds `fire_error`.\n\nSpec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1",
+      "module": "coordinator_core.ops.engine_ask_submit",
+      "name": "engine_ask.submit",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "Params: manifest, sessions, session_details (optional), checkin_comments (optional).\n\ncoordinator_core.ops.fanout.ops — ops \"fanout.compose\", \"fanout.census\", \"fanout.reconcile\".\n\nPurpose: expose the pure fan-out functions (compose, census, reconcile) over JSON-RPC.\nEach handler maps params to one pure function; `repo_root` is ignored. Failures return\n{\"error\": <str>}.\n\nNegative spec: no file, process or network access beyond the cached schema load in `contract`.",
       "module": "coordinator_core.ops.fanout.ops",
       "name": "fanout.census",
@@ -1561,6 +1572,17 @@
         "type": "object"
       },
       "summary": "JSON-RPC \"fleet.handoffs_for_plan\" handler.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"fleet.klabauter_freshness\" handler.\n\nParams:\n    fetch (bool, optional): run `git fetch` first. Default True.\n\nReturns the `FreshnessResult` dict: action, reason, hostname, local_sha, origin_sha,\nmoved, changed_paths, installers_run, installer_errors, stale_installs, surfaced,\nfetch_error.",
+      "module": "coordinator_core.ops.fleet.klabauter_freshness",
+      "name": "fleet.klabauter_freshness",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"fleet.klabauter_freshness\" handler.",
       "timeout_s": 30.0
     },
     {
@@ -3203,7 +3225,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "coordinator_core.hooks.sessionstart_async_dispatch — SessionStart async\nfan-in op: composes every ASYNC (registered `async: true`) leg this row's\nown `writes:` footprint carries.\n\nArrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported\nfrom coordinator-content-repo `coordinator/hooks/scripts/sessionstart-async-dispatch.py` —\nfolded originally for the identical reason its sync sibling\n(`sessionstart_dispatch.py`) was: multiple `hooks.json` registrations sharing\none `python3` interpreter start. As with the sync dispatcher, the subprocess-\nlevel fold (per-guard `importlib.util` import, byte-capture stdout/stderr\nre-emission) has no analogue here — every composed leg is an already-\nregistered same-repo op, composed via direct handler import and CONCATENATE-\nALL aggregation. Async transport discards this op's returned context\nregardless, but the aggregation is kept uniform with the sync dispatcher's\nown shape (never a bare fire-and-forget loop) so a future transport change\nthat DOES surface async output needs no rewrite here.\n\nCOMPOSED HERE, in DoE's REGISTRY order, each paired with its pinned `sources`\nset (all five of `startup`, `resume`, `clear`, `compact`, `fork`, except where\nnoted):\n  - `session_start_repair_prepare_commit_msg_hook` (`startup` only)\n  - `session_start_register_published_engine`\n  - `sessionstart_ensure_http_forwarder`\n  - `session_start_write_plugin_root_breadcrumb`\n  - `prune_claude_temp` (`startup` only; stamp check, then a detached\n    `ops/prune_claude_temp.py` spawn)\n\nSOURCE-GATING lives here, because the caller is an http entry on the union\nmatcher. The handler reads `payload[\"source\"]`: a missing source runs no leg; a\nnon-empty source in no leg's set runs no leg and returns the unmatched-source\nbreadcrumb as context; otherwise each leg runs only when the source is in its\nown set.\n\nAGGREGATION CONTRACT: CONCATENATE-ALL, identical shape to the sync\ndispatcher. Every leg is fully side-effect-driven (registry writes, a\nforwarder ensure, a breadcrumb write) — none is expected to return\nmeaningful `additionalContext` under normal operation (async transport\ndiscards it anyway), but a leg that DOES return context (e.g. the http-\nforwarder-ensure disclosure path) is still folded in, never dropped.\n\nSpec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10",
+      "description": "coordinator_core.hooks.sessionstart_async_dispatch — SessionStart async\nfan-in op: composes every ASYNC (registered `async: true`) leg this row's\nown `writes:` footprint carries.\n\nArrival note (W4-C10, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported\nfrom coordinator-content-repo `coordinator/hooks/scripts/sessionstart-async-dispatch.py` —\nfolded originally for the identical reason its sync sibling\n(`sessionstart_dispatch.py`) was: multiple `hooks.json` registrations sharing\none `python3` interpreter start. As with the sync dispatcher, the subprocess-\nlevel fold (per-guard `importlib.util` import, byte-capture stdout/stderr\nre-emission) has no analogue here — every composed leg is an already-\nregistered same-repo op, composed via direct handler import and CONCATENATE-\nALL aggregation. Async transport discards this op's returned context\nregardless, but the aggregation is kept uniform with the sync dispatcher's\nown shape (never a bare fire-and-forget loop) so a future transport change\nthat DOES surface async output needs no rewrite here.\n\nCOMPOSED HERE, in DoE's REGISTRY order, each paired with its pinned `sources`\nset (all five of `startup`, `resume`, `clear`, `compact`, `fork`, except where\nnoted):\n  - `session_start_repair_prepare_commit_msg_hook` (`startup` only)\n  - `session_start_register_published_engine`\n  - `sessionstart_ensure_http_forwarder`\n  - `session_start_write_plugin_root_breadcrumb`\n  - `prune_claude_temp` (`startup` only; stamp check, then a detached\n    `ops/prune_claude_temp.py` spawn)\n  - `klabauter_freshness` (`startup` only; fetch, guarded fast-forward, installer re-run)\n\nSOURCE-GATING lives here, because the caller is an http entry on the union\nmatcher. The handler reads `payload[\"source\"]`: a missing source runs no leg; a\nnon-empty source in no leg's set runs no leg and returns the unmatched-source\nbreadcrumb as context; otherwise each leg runs only when the source is in its\nown set.\n\nAGGREGATION CONTRACT: CONCATENATE-ALL, identical shape to the sync\ndispatcher. Every leg is fully side-effect-driven (registry writes, a\nforwarder ensure, a breadcrumb write) — none is expected to return\nmeaningful `additionalContext` under normal operation (async transport\ndiscards it anyway), but a leg that DOES return context (e.g. the http-\nforwarder-ensure disclosure path) is still folded in, never dropped.\n\nSpec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C10",
       "module": "coordinator_core.hooks",
       "name": "hooks.sessionstart_async_dispatch",
       "op_class": "mutating",

@@ -6,7 +6,7 @@ import json
 import pytest
 
 from coordinator_core.agent_pipe import roster
-from coordinator_core.agent_pipe.contract import BridgeMessage, PipeMessage, roster_path, routes_path
+from coordinator_core.agent_pipe.contract import BridgeMessage, PipeMessage, peers_path, roster_path, routes_path
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +51,39 @@ def test_write_is_atomic_json_and_leaves_no_temp(tmp_path):
     roster.bind("a", "agy", "c1")
     assert json.loads(roster_path().read_text(encoding="utf-8"))["a"]["kind"] == "agy"
     assert [p.name for p in roster_path().parent.iterdir()] == ["roster.json"]
+
+
+def _write_peers(tmp_path, rows):
+    p = peers_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"peers": rows}), encoding="utf-8")
+
+
+def test_peers_path_is_the_router_default(tmp_path):
+    assert peers_path() == tmp_path / "unimatrix" / "peers.json"
+
+
+def test_hook_bound_codex_peer_resolves_to_codex_binding(tmp_path, monkeypatch):
+    from coordinator_core.agent_pipe.codex import CodexAdapter
+
+    monkeypatch.setattr(CodexAdapter, "proxy_argv", lambda self: ["codex", "app-server", "proxy"])
+    _write_peers(tmp_path, [{"name": "cx-1a", "vendor": "codex", "target": "thr-9"}])
+    b = roster.resolve("cx-1a")
+    assert b == {"kind": "codex", "id": "thr-9", "token": None, "argv": ["codex", "app-server", "proxy"]}
+    assert "cx-1a" in roster.list()
+
+
+def test_roster_entry_shadows_peers_row(tmp_path):
+    _write_peers(tmp_path, [{"name": "em", "vendor": "codex", "target": "thr-old"}])
+    roster.bind("em", "claude", "sess-1")
+    assert roster.resolve("em")["kind"] == "claude"
+
+
+def test_peers_rows_unknown_vendor_or_malformed_are_ignored(tmp_path):
+    _write_peers(tmp_path, [{"name": "a", "vendor": "slack", "target": "t"}, {"name": "b", "vendor": "codex"}, "junk"])
+    assert roster.resolve("a") is None and roster.resolve("b") is None
+    peers_path().write_text("{not json", encoding="utf-8")
+    assert roster.resolve("a") is None
 
 
 def test_bridge_message_line_labels_and_drops_none():

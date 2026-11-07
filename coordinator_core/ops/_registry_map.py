@@ -421,6 +421,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "workflow.revise":                        "coordinator_core.ops.dispatch_emit.requirements_ledger",
     "workflow.pending_revisions":             "coordinator_core.ops.dispatch_emit.revise_absorb",
     "plan.claim_register_rows":               "coordinator_core.ops.dispatch_emit.revise_absorb",
+    "engine_ask.submit":                      "coordinator_core.ops.engine_ask_submit",
     "workflow.fire":                          "coordinator_core.ops.workflow_fire.op",
     "workflow.fire_status":                   "coordinator_core.ops.workflow_fire.op",
     "review_stamp.mint":                      "coordinator_core.ops.review_stamp",

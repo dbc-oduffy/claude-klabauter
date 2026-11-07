@@ -9,7 +9,9 @@ import json
 import os
 from typing import Optional
 
-from coordinator_core.agent_pipe.contract import KINDS, _checked_id, roster_path
+from coordinator_core.agent_pipe.contract import KIND_CODEX, KINDS, _checked_id, peers_path, roster_path
+
+_LIST = list  # `list` is rebound below as the public roster verb
 
 
 def _load() -> dict:
@@ -45,12 +47,50 @@ def bind(name: str, kind: str, id: str, token: Optional[str] = None, argv: Optio
     return dict(binding)
 
 
+def _peer_bindings() -> dict:
+    """Bindings from peers.json rows `{name, vendor, target}` whose vendor is a known kind; {} when unreadable.
+
+    A codex row carries no argv; it gets the app-server proxy argv, or None when codex cannot be located.
+    """
+    try:
+        data = json.loads(peers_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    rows = data.get("peers") if isinstance(data, dict) else data
+    out: dict = {}
+    for row in rows if isinstance(rows, _LIST) else ():
+        if not isinstance(row, dict):
+            continue
+        name, vendor, target = row.get("name"), row.get("vendor"), row.get("target")
+        if not (isinstance(name, str) and name and isinstance(target, str) and target and vendor in KINDS):
+            continue
+        out[name] = {"kind": vendor, "id": target, "token": None, "argv": None}
+    return out
+
+
+def _with_codex_argv(binding: dict) -> dict:
+    if binding["kind"] == KIND_CODEX:
+        try:
+            from coordinator_core.agent_pipe.codex import CodexAdapter
+
+            binding["argv"] = CodexAdapter().proxy_argv()
+        except Exception:  # noqa: BLE001 - codex not installed: delivery reports the missing argv
+            pass
+    return binding
+
+
 def resolve(name: str) -> Optional[dict]:
-    """Current binding for `name`, or None when unbound."""
+    """Current binding for `name`, or None when unbound.
+
+    roster.json wins; a name only the SessionStart hook bound resolves from peers.json.
+    """
     binding = _load().get(name)
-    return dict(binding) if isinstance(binding, dict) else None
+    if isinstance(binding, dict):
+        return dict(binding)
+    peer = _peer_bindings().get(name)
+    return _with_codex_argv(peer) if peer else None
 
 
 def list() -> dict:  # noqa: A001 - public roster verb
-    """Every binding, name -> binding."""
-    return {k: dict(v) for k, v in _load().items() if isinstance(v, dict)}
+    """Every binding, name -> binding; roster.json entries shadow peers.json rows (peer codex argv left None)."""
+    return {**_peer_bindings(), **{k: dict(v) for k, v in _load().items() if isinstance(v, dict)}}

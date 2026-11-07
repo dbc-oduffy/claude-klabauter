@@ -227,6 +227,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.submit_engine_ask — MUTATING: emits a warp run through dispatch.emit (script,
     # receipt, run token, ask.md) and writes the run's submission record beside its briefs.
     "hooks.submit_engine_ask": OpClass.MUTATING,
+    # engine_ask.submit — MUTATING: the envelope-free submit for non-Claude callers; runs the
+    # same gates as hooks.submit_engine_ask and emits the run through dispatch.emit.
+    "engine_ask.submit": OpClass.MUTATING,
     # hooks.submit_bug_blitz — MUTATING: mints TF backlog rows, emits the bug grind through
     # dispatch.emit (script, receipt, run token) and writes the run's decisions.json.
     "hooks.submit_bug_blitz": OpClass.MUTATING,

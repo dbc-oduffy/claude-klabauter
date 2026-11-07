@@ -49,7 +49,35 @@ class PipeMessage:
 KIND_CLAUDE = "claude"
 KIND_CODEX = "codex"
 KIND_AGY = "agy"
-KINDS = (KIND_CLAUDE, KIND_CODEX, KIND_AGY)
+KIND_GROK = "grok"
+KINDS = (KIND_CLAUDE, KIND_CODEX, KIND_AGY, KIND_GROK)
+
+
+def provenance_envelope(
+    kind: str,
+    source: str,
+    *,
+    origin: Optional[str] = None,
+    ts: Optional[str] = None,
+    cli_version: Optional[str] = None,
+    session: Optional[str] = None,
+) -> dict:
+    """Provenance dict for a fact emitted by vendor `kind`: the bridge's from_kind/origin/ts shape plus vendor/source/cli_version.
+
+    `session` is the emitting vendor session id (carried as from_identity); None-valued keys are dropped.
+    """
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}, got {kind!r}")
+    env = {
+        "from_identity": session,
+        "from_kind": kind,
+        "origin": origin,
+        "ts": ts,
+        "vendor": kind,
+        "source": source,
+        "cli_version": cli_version,
+    }
+    return {k: v for k, v in env.items() if v is not None}
 
 
 @dataclass(frozen=True)
@@ -90,11 +118,13 @@ class Adapter(Protocol):
 CAUSE_QUOTA = "quota_exhausted"
 CAUSE_TURN_TIMEOUT = "turn_timeout"
 CAUSE_HANDSHAKE_TIMEOUT = "handshake_timeout"
+CAUSE_LOGIN_REQUIRED = "login_required"
 
 _QUOTA_RE = re.compile(
     r"usage[ _-]?limit|quota|rate[ _-]?limit|too many requests|resource[ _-]?exhausted|\b429\b|out of credits|insufficient[ _-]credit",
     re.IGNORECASE,
 )
+_LOGIN_RE = re.compile(r"not logged in|login required|unauthenticated|\b401\b", re.IGNORECASE)
 _HANDSHAKE_RE = re.compile(r"no upgrade reply|upgrade refused|handshake", re.IGNORECASE)
 _TURN_TIMEOUT_RE = re.compile(r"timed out|timeout", re.IGNORECASE)
 _ERROR_EVENTS = ("error", "turn.failed", "turn_failed", "failed")
@@ -116,7 +146,7 @@ def _event_error_text(ev: dict) -> Optional[str]:
 
 
 def classify_exit(line_or_status: str) -> Optional[str]:
-    """Cause of a failed agent leg: quota_exhausted | handshake_timeout | turn_timeout, or None.
+    """Cause of a failed agent leg: quota_exhausted | login_required | handshake_timeout | turn_timeout, or None.
 
     Takes a stream line (only error-typed JSON events count; a message body mentioning "rate limit" is
     not a cause) or a plain status/exception text.
@@ -135,6 +165,8 @@ def classify_exit(line_or_status: str) -> Optional[str]:
                 return None
     if _QUOTA_RE.search(text):
         return CAUSE_QUOTA
+    if _LOGIN_RE.search(text):
+        return CAUSE_LOGIN_REQUIRED
     if _HANDSHAKE_RE.search(text):
         return CAUSE_HANDSHAKE_TIMEOUT
     if _TURN_TIMEOUT_RE.search(text):
@@ -165,6 +197,11 @@ def mailbox_path(session_id: str) -> Path:
 def roster_path() -> Path:
     """Durable roster `<settings_home>/agent-pipe/roster.json`."""
     return _pipe_root() / "roster.json"
+
+
+def peers_path() -> Path:
+    """Peer file `<settings_home>/unimatrix/peers.json`, the one the Codex SessionStart hook writes."""
+    return settings_home() / "unimatrix" / "peers.json"
 
 
 def routes_path() -> Path:
