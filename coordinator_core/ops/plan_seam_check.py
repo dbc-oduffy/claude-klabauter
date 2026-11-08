@@ -76,6 +76,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.lifecycle_constants import PLAN_TERMINAL_STATUS
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import _write_paths_from_rows
+from coordinator_core.ops.dispatch_emit.run_artifacts import is_plan_dir as _is_plan_dir
 from coordinator_core.ops.dispatch_emit.spine_read import (
     UNDECLARED,
     SpineReadError,
@@ -322,8 +323,8 @@ def _parse_params(params: dict, root: Path, *, record: bool = False) -> dict:
             raise ValueError(f"plan escapes the resolved worktree: {raw!r}")
         if not (root / rel).is_file() or not rel.endswith(".md"):
             raise ValueError(f"no such plan: {raw!r}")
-        if record and posixpath.dirname(rel) != "docs/plans":
-            raise ValueError(f"plan.seam_record writes beside docs/plans/ plans only: {raw!r}")
+        if record and not _is_plan_dir(posixpath.dirname(rel)):
+            raise ValueError(f"plan.seam_record writes beside docs/plans/[YYYY-MM/] plans only: {raw!r}")
         if rel not in passed:
             plans.append(rel)
             passed[rel] = raw.strip()
@@ -799,12 +800,20 @@ def _open_outside_plans(ctx: dict, pset: Dict[str, _Plan]) -> Dict[str, _Plan]:
     file read and no YAML parse; a plan with no status counts as open."""
     root: Path = ctx["root"]
     found: Dict[str, _Plan] = {}
+    rels: List[str] = []
     try:
-        entries = sorted(e.name for e in os.scandir(root / "docs" / "plans") if e.name.endswith(".md"))
+        top = list(os.scandir(root / "docs" / "plans"))
     except OSError:
         return found
-    for name in entries:
-        rel = f"docs/plans/{name}"
+    for e in top:
+        if e.name.endswith(".md"):
+            rels.append(f"docs/plans/{e.name}")
+        elif e.is_dir() and _is_plan_dir(f"docs/plans/{e.name}"):
+            try:
+                rels.extend(f"docs/plans/{e.name}/{m.name}" for m in os.scandir(e.path) if m.name.endswith(".md"))
+            except OSError:
+                continue
+    for rel in sorted(rels):
         if rel in pset:
             continue
         try:

@@ -77,6 +77,17 @@ def test_fire_record_declares_exactly_the_reply_sidecars(tmp_path):
     assert got == reply["sidecars"]
 
 
+def test_month_folder_plan_records_beside_it_and_deeper_dirs_refuse(tmp_path):
+    a = _plan(tmp_path, "2026-11/a", "R1", "x.py")
+    reply, got = _record(tmp_path, {"plans": [a], "phase": "prep", "named_set": True})
+    assert reply["sidecars"] == ["docs/plans/2026-11/a.seam.yaml"]
+    assert got == reply["sidecars"]
+    for name in ("2026-11/deep/b", "notmonth/c"):
+        bad = _plan(tmp_path, name, "R1", "x.py")
+        with pytest.raises(ValueError, match="docs/plans"):
+            _record(tmp_path, {"plans": [bad], "phase": "prep", "named_set": True})
+
+
 def test_rewrite_of_existing_sidecar_is_declared_again(tmp_path):
     a = _plan(tmp_path, "a", "R1", "x.py")
     params = {"plans": [a], "phase": "prep", "named_set": True}

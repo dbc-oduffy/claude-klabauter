@@ -302,6 +302,7 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     _declared_paths,
 )
 from coordinator_core.ops.dispatch_emit import chatty as _chatty
+from coordinator_core.ops.dispatch_emit.run_artifacts import is_plan_dir as _is_plan_dir
 from coordinator_core.ops.dispatch_emit import baseline_reds as _baseline_reds
 from coordinator_core.ops.dispatch_emit.seam_repair import (
     REPAIRABLE_CLASSES as _SEAM_REPAIRABLE_CLASSES,
@@ -5320,7 +5321,7 @@ def seam_leg_for(
     # owner of a row carrying no Spec line) is not one, and naming it REFUSES every wave leg.
     plans = sorted({
         p for _, row in flat
-        if (p := _plan_of(row_plans.get(row.id), plan_path)) and posixpath.dirname(p) == "docs/plans"
+        if (p := _plan_of(row_plans.get(row.id), plan_path)) and _is_plan_dir(posixpath.dirname(p))
     })
     if not plans:
         return None

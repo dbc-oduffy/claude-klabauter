@@ -188,6 +188,24 @@ def test_params_validated(root):
         _fix(root, ["../outside.md"])
 
 
+def test_month_folder_plans_are_accepted_and_edged(root):
+    a = _plan(root, "2026-11/a", _row("R1", "[x.py]"))
+    b = _plan(root, "2026-11/b", _row("R1", "[x.py]"))
+    r = _fix(root, [a, b])
+    assert r["files"] == [b] and r["edges_added"][0]["depends_on"]["plan"] == a
+
+
+def test_non_plan_dirs_are_refused(root):
+    for name in ("drafts/a", "2026-11/sub/a", "2026-1x/a"):
+        rel = _plan(root, name, _row("R1", "[x.py]"))
+        with pytest.raises(ValueError, match="plans only"):
+            _fix(root, [rel])
+    (root / "docs/other").mkdir(parents=True)
+    (root / "docs/other/a.md").write_text("---\ntitle: t\n---\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="plans only"):
+        _fix(root, ["docs/other/a.md"])
+
+
 def test_fifty_plan_set_is_within_budget(root):
     names = [_plan(root, f"p{i:02d}", _row("R1", "[shared.py]") + _row("R2", f"[own{i}.py]")) for i in range(50)]
     t0 = time.process_time()

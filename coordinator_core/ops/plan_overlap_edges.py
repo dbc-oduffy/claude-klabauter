@@ -27,7 +27,7 @@ from typing import Callable, Dict, List, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
-from coordinator_core.ops.plan_seam_check import _contained_rel, _declared_append_hubs
+from coordinator_core.ops.plan_seam_check import _contained_rel, _declared_append_hubs, _is_plan_dir
 from coordinator_core.ops.plan_seam_fix import derive_edges
 from coordinator_core.ops.plan_writes_lean import LeanPlan, read_lean_plan
 
@@ -53,8 +53,8 @@ def _parse_params(params: dict, root: Path) -> List[str]:
             raise ValueError(f"plan escapes the resolved worktree: {raw!r}")
         if not rel.endswith(".md") or not (root / rel).is_file():
             raise ValueError(f"no such plan: {raw!r}")
-        if posixpath.dirname(rel) != "docs/plans":
-            raise ValueError(f"plan.overlap_edges reads docs/plans/ plans only: {raw!r}")
+        if not _is_plan_dir(posixpath.dirname(rel)):
+            raise ValueError(f"plan.overlap_edges reads docs/plans/[YYYY-MM/] plans only: {raw!r}")
         rels.add(rel)
     return sorted(rels)
 

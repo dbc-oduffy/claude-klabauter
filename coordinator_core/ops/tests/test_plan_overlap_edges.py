@@ -72,6 +72,19 @@ def test_paths_are_contained_and_under_docs_plans(root):
         op._overlap_edges({"plans": ["docs/other.md"]}, root)
 
 
+def test_month_folder_plan_is_accepted_and_deeper_dirs_refuse(root):
+    for rel in ("docs/plans/2026-11/m.md", "docs/plans/2026-11/deep/d.md", "docs/plans/notmonth/n.md"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("stub\n", encoding="utf-8")
+    plans = {"docs/plans/2026-11/m.md": LeanPlan.from_fields(
+        "docs/plans/2026-11/m.md", certified_sha="abc", rows=[_r("A", ["x.py"])], plan_edges=())}
+    reply = op._overlap_edges({"plans": ["docs/plans/2026-11/m.md"]}, root, read=_read(plans))
+    assert reply is not None
+    for bad in ("docs/plans/2026-11/deep/d.md", "docs/plans/notmonth/n.md"):
+        with pytest.raises(ValueError, match="docs/plans"):
+            op._overlap_edges({"plans": [bad]}, root)
+
+
 def test_pair_reply_shape_and_direction(root):
     plans = {}
     a = _lean(root, plans, "a", [_r("A1", ["x.py", "y.py"])])

@@ -76,6 +76,7 @@ from coordinator_core.ops.plan_seam_check import (
     _contained_rel,
     _declared_append_hubs,
     _covers,
+    _is_plan_dir,
     _paths_and_prefixes,
 )
 
@@ -111,8 +112,8 @@ def _parse_params(params: dict, root: Path) -> Tuple[List[str], bool]:
             raise ValueError(f"plan escapes the resolved worktree: {raw!r}")
         if not (root / rel).is_file() or not rel.endswith(".md"):
             raise ValueError(f"no such plan: {raw!r}")
-        if posixpath.dirname(rel) != "docs/plans":
-            raise ValueError(f"plan.seam_fix writes docs/plans/ plans only: {raw!r}")
+        if not _is_plan_dir(posixpath.dirname(rel)):
+            raise ValueError(f"plan.seam_fix writes docs/plans/[YYYY-MM/] plans only: {raw!r}")
         if rel not in plans:
             plans.append(rel)
     return plans, dry_run

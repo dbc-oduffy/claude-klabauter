@@ -546,6 +546,31 @@ def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing
     assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-10-16-x.seam.yaml") == sizing
 
 
+def test_a_month_folder_plan_reaches_the_seam_leg_and_a_deeper_dir_does_not():
+    m1, m2 = "docs/plans/2026-11/p1.md", "docs/plans/2026-11/p2.md"
+    waves = [[_row("P1-C1", ["a.py"], m1)], [_row("P2-C1", ["b.py"], m2, reads=["a.py"])]]
+    assert f'const _seamPlans = ["{m1}", "{m2}"];' in _compose(waves)
+    deep = "docs/plans/2026-11/sub/p1.md"
+    assert "plan.seam_record" not in _compose([[_row("D-C1", ["a.py"], deep)], [_row("D-C2", ["b.py"], deep, reads=["a.py"])]])
+
+
+def test_month_folder_sidecars_map_to_the_plan_sizing_read_from_its_month_folder(tmp_path):
+    sizing = "state/sizings/2026-11/x.yaml"
+    files = {
+        "docs/plans/2026-11/x.md": f"sizing_object: {sizing}\n",
+        "docs/plans/2026-11/x.wave-1.seam.yaml": "x\n",
+        "docs/plans/2026-11/sub/x.md": f"sizing_object: {sizing}\n",
+    }
+    for rel, text in files.items():
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    ra = run_artifacts
+    assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-11/x.md") == sizing
+    assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-11/x.wave-1.seam.yaml") == sizing
+    assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-11/sub/x.md") is None
+
+
 def test_archive_plans_treats_wave_sidecars_as_sidecars_of_their_plan(tmp_path):
     from pathlib import Path
 

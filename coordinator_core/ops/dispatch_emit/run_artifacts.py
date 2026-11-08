@@ -431,6 +431,14 @@ _SIDECAR_SUFFIXES = (".evidence.yaml", ".seam.yaml")
 _WAVE_SEAM_TAIL = re.compile(r"\.(?:wave-\d+|fire)$")
 
 
+def is_plan_dir(parent: str) -> bool:
+    """True for ``docs/plans`` and exactly one ``docs/plans/<YYYY-MM>`` level beneath it."""
+    if parent == "docs/plans":
+        return True
+    head, _, month = parent.rpartition("/")
+    return head == "docs/plans" and bool(_MONTH_DIR.match(month))
+
+
 def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
     """The sizing a dirty run artifact traces to, from the artifact's own frontmatter or its
     name. ``None`` for a path of no mapped class."""
@@ -442,14 +450,14 @@ def _sizing_of_artifact(root: Path, rel: str) -> Optional[str]:
         if sep and tail.isdigit() and head:
             return f"{_SIZINGS_REL}/{head}.yaml"
         return rel
-    if parent == "docs/plans":
+    if is_plan_dir(parent):
         plan_name = name
         for suffix in _SIDECAR_SUFFIXES:
             if name.endswith(suffix):
                 plan_name = _WAVE_SEAM_TAIL.sub("", name[: -len(suffix)]) + ".md"
                 break
         if plan_name.endswith(".md"):
-            return _norm_rel(_scalar(_read_text(root, f"docs/plans/{plan_name}"), "sizing_object"))
+            return _norm_rel(_scalar(_read_text(root, f"{parent}/{plan_name}"), "sizing_object"))
         return None
     if parent == _HANDOFFS_REL and name.endswith(".md"):
         own = _norm_rel(_scalar(_read_text(root, rel), "sizing_object"))
