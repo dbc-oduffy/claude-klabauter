@@ -17,6 +17,7 @@ from typing import Optional, Union
 from coordinator_core.atomic_replace import atomic_write_bytes
 
 RESUME_FILE = "resume.json"
+REFIRE_LOG_FILE = "refire-launches.jsonl"
 BUILDING_FILE = "resume.building"
 RECOMPOSE_TTL_S = 300.0
 SCHEMA = "halt-resume-record/1"
@@ -193,6 +194,21 @@ def inherited_stop_after(root: Union[str, Path], record_dir: Union[str, Path]) -
     return lineage_stop_after(Path(root), Path(record_dir).name)
 
 
+_ENGINE_SHA: list = []
+
+
+def engine_sha() -> Optional[str]:
+    """The running engine checkout's HEAD, read from the git dir (no spawn) once per process: an
+    engine swap starts a new process, so a process never sees two answers; None when unresolvable."""
+    if not _ENGINE_SHA:
+        from coordinator_core.git.git_state import head_sha
+        from coordinator_core.git.repo_root import _walk_for_repo
+
+        found = _walk_for_repo(Path(__file__).resolve().parent)
+        _ENGINE_SHA.append(head_sha(found[1], fresh=True) if found else None)
+    return _ENGINE_SHA[0]
+
+
 def fingerprint_for_run(
     root: Union[str, Path],
     record_dir: Union[str, Path],
@@ -307,6 +323,26 @@ def write(record_dir: Union[str, Path], record: dict) -> Path:
     target = record_dir / RESUME_FILE
     atomic_write_bytes(target, (json.dumps(record, indent=2) + "\n").encode("utf-8"))
     return target
+
+
+def write_refire_record(
+    record_dir: Union[str, Path], script_path: Union[str, Path], kind: str, composed_by: Optional[str], now: float
+) -> None:
+    """Append one line to `refire-launches.jsonl` in `record_dir`: the script a refire launched, its
+    sha256 (None when unreadable), `kind` ("stored" or "launcher"), `composed_by` (the engine sha that
+    composed it, None when unknown), the running `engine_sha` and `now`. Raises OSError on a failed write."""
+    record_dir = Path(record_dir)
+    record_dir.mkdir(parents=True, exist_ok=True)
+    line = {
+        "script_path": Path(script_path).as_posix(),
+        "script_sha256": _sha256_file(Path(script_path)),
+        "kind": kind,
+        "composed_by_engine_sha": composed_by,
+        "engine_sha": engine_sha(),
+        "launched_at": now,
+    }
+    with open(record_dir / REFIRE_LOG_FILE, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(json.dumps(line) + "\n")
 
 
 def read(record_dir: Union[str, Path], deadline_ms: float) -> Union[dict, _Sentinel]:

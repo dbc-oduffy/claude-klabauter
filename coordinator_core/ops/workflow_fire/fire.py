@@ -506,11 +506,19 @@ def build_fire_command(
     *,
     prompt: Optional[str] = None,
     session_id: Optional[str] = None,
+    add_dir: Optional[str] = None,
 ) -> list:
     """Build the argv for the detached firing child.
 
     ``prompt`` replaces the default fire prompt; ``session_id`` appends
     ``--session-id``. Both default to the unchanged argv.
+
+    ``add_dir`` grants the child's tools the target repo root. The child
+    inherits the firing process's cwd (the warm engine's root, not the
+    caller's repo), and its Workflow tool refuses a script outside its
+    readable dirs -- so without this every fire for a sibling repo is
+    dead on arrival. A grant, not a cwd: the negative-spec on
+    ``fire_workflow`` still holds.
 
     ``-p`` is never omitted -- pinned by test, since that flag is the
     entire reason the interactive direct-child invariant
@@ -525,6 +533,7 @@ def build_fire_command(
         *_SESSION_ALLOWED_TOOLS,
         "--plugin-dir",
         plugin_dir,
+        *(["--add-dir", add_dir] if add_dir else []),
         "--model",
         model,
         "--max-turns",
@@ -1188,7 +1197,7 @@ def fire_workflow(
 
     command = build_fire_command(
         str(script), plugin_dir, model=model, max_turns=max_turns, claude_bin=claude_bin,
-        prompt=prompt, session_id=session_id,
+        prompt=prompt, session_id=session_id, add_dir=resolved_cwd,
     )
 
     # The child is a new session; the token (its session id is unknowable before spawn) is what

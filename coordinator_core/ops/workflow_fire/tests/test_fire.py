@@ -117,6 +117,13 @@ def test_build_fire_command_never_omits_dash_p():
     assert command[0:2] == ["claude", "-p"]
 
 
+def test_build_fire_command_grants_the_target_repo_root():
+    """A child sitting in the engine root must still read a sibling repo's script."""
+    command = fire.build_fire_command("script.mjs", "/plugins/coordinator", add_dir="C:/dev/coordinator-content-repo")
+    assert command[command.index("--add-dir") + 1] == "C:/dev/coordinator-content-repo"
+    assert "--add-dir" not in fire.build_fire_command("script.mjs", "/plugins/coordinator")
+
+
 def test_build_fire_command_never_uses_bg():
     command = fire.build_fire_command("script.mjs", "/plugins/coordinator")
     assert "--bg" not in command
