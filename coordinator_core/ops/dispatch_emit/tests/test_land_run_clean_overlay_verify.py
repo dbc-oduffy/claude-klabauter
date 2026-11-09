@@ -206,14 +206,14 @@ def test_land_run_lands_on_an_inconclusive_verdict_with_an_advisory(halted, monk
     assert FIXTURE in result["reach_dirt_foreign"]
 
 
-def test_land_run_refuses_a_missing_verdict(halted, monkeypatch):  # noqa: F811
+def test_land_run_lands_a_missing_verdict_with_an_advisory(halted, monkeypatch):  # noqa: F811
     _no_spawn(monkeypatch)
 
     _, result = _dirty_land(halted, None)
 
-    assert result["committed"] is False
-    assert result["refused"] == "verify-overlay-unverified", result
-    assert "clean_overlay_verify --run-id" in result["error"]
+    assert result["committed"] is True, result
+    assert result.get("refused") is None, result
+    assert "missing" in result["clean_overlay_verify"]["advisory"], result
 
 
 @pytest.mark.parametrize("field", ["blobs", "base_sha"])

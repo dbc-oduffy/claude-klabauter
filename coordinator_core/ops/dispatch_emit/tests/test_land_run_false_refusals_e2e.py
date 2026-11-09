@@ -156,11 +156,24 @@ def test_peer_dirt_in_the_verified_reach_lands_on_a_green_overlay_verdict(halted
     _landed_over_dirt(halted, out)
 
 
+def test_peer_dirt_in_the_verified_reach_lands_without_a_verdict(halted):  # noqa: F811
+    """A verdict the engine never produced is no evidence of a red, so it is not a refusal."""
+    resume, token = _dirty_reach(halted, None)
+
+    out = _terminal_with(halted, token, resume, reach._VERDICT)
+
+    assert out["committed"] is True, out
+    assert out["clean_overlay_verify"]["verdict"] == "missing", out
+    assert "advisory" in out["clean_overlay_verify"], out
+    assert reach.FIXTURE not in reach._git(halted, "show", "--name-only", "--format=", out["sha"]).split()
+    assert reach.FIXTURE in reach._git(halted, "status", "--porcelain", "--", reach.FIXTURE)
+
+
 @pytest.mark.parametrize(
     "verdict,code",
-    [("red", land_run.VERIFY_OVERLAY_RED), (None, land_run.VERIFY_OVERLAY_UNVERIFIED)],
+    [("red", land_run.VERIFY_OVERLAY_RED)],
 )
-def test_peer_dirt_in_the_verified_reach_refuses_without_a_green_verdict(halted, verdict, code):  # noqa: F811
+def test_peer_dirt_in_the_verified_reach_refuses_on_a_red_verdict(halted, verdict, code):  # noqa: F811
     resume, token = _dirty_reach(halted, verdict)
     head = _rgit(halted, "rev-parse", "HEAD")
 

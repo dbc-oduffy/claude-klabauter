@@ -4241,8 +4241,9 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 else clean_overlay_verify.OverlayVerdict("missing", "the landing has no measured run id")
             )
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            if overlay.verdict == "inconclusive":
-                reach_dirt_overlay["advisory"] = f"clean-overlay verdict inconclusive: {overlay.detail}"
+            # A verdict the engine never produced is no evidence of a red: land with an advisory.
+            if overlay.verdict in ("inconclusive", "missing"):
+                reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
             elif overlay.verdict != "green":
                 _remove(root, receipt_paths)
                 _reap_measured_export(root, measured_run)
