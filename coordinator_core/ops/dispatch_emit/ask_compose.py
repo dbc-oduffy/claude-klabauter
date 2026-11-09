@@ -655,11 +655,14 @@ def _docs_check_gate_js(
 ) -> list[str]:
     """JS lines running one docs-check leg, its `dispatch.docs_check_rag_gate` relay, and the halt they decide.
 
-    A checker verdict `rag_down` (unless the gate verdict is `degraded`: timeout-only failures),
+    A checker verdict `rag_down` (unless the gate verdict is `degraded`, timeout-only failures, or
+    `not_applicable`, where the gate saw no UE/example-retrieval-repo surface to judge),
     a gate verdict `rag_corpus_down` or a gate reply carrying no verdict sets `_halted` to
     `rag_corpus_down` with the restore message; a gate verdict `citation_unbacked` sets it to
     `citation_unbacked` naming the unbacked citations; a gate verdict `degraded` halts nothing and
-    is pushed onto `_ragDegraded`, which the run's return carries as `rag_degraded`. Declares
+    is pushed onto `_ragDegraded`, which the run's return carries as `rag_degraded`; a checker verdict
+    `degraded` (example-retrieval-repo answered, some bands degraded) halts nothing either and is pushed with its
+    `degraded_bands` when the gate did not already record the leg as degraded. Declares
     `check_var` and `gate_var` in the caller's scope.
     """
     gate_prompt = _cat(
@@ -674,7 +677,8 @@ def _docs_check_gate_js(
         effort=_MECHANICAL_EFFORT, run_id=run_id,
     )
     down = (
-        f"({check_var}?.verdict === 'rag_down' && {gate_var}?.verdict !== {_lit(RAG_DEGRADED)}) || typeof {gate_var}?.verdict !== 'string' "
+        f"({check_var}?.verdict === 'rag_down' && {gate_var}?.verdict !== {_lit(RAG_DEGRADED)} && {gate_var}?.verdict !== 'not_applicable') "
+        f"|| typeof {gate_var}?.verdict !== 'string' "
         f"|| {gate_var}.verdict === {_lit(HALT_RAG_CORPUS_DOWN)}"
     )
     return [
@@ -690,6 +694,9 @@ def _docs_check_gate_js(
         f"rag_calls: {gate_var}.rag_calls ?? null, rag_failed: {gate_var}.rag_failed ?? null, "
         f"rag_timeouts: {gate_var}.rag_timeouts ?? null, rag_refused: {gate_var}.rag_refused ?? null, "
         f"reason: {gate_var}.reason ?? null }});",
+        f"{indent}else if ({gate_var}.verdict !== {_lit(RAG_DEGRADED)} && {check_var}?.verdict === {_lit(RAG_DEGRADED)}) "
+        f"_ragDegraded.push({{ leg: {_lit(label)}, source: 'checker', degraded_bands: Array.isArray({check_var}.degraded_bands) "
+        f"? {check_var}.degraded_bands.map(String) : [], reason: {check_var}.reason ?? null }});",
     ]
 
 
@@ -847,7 +854,10 @@ _SPINE_REVIEW_SCHEMA = _obj(
 )
 _DOCS_CHECK_SCHEMA = _obj(
     ["verdict"],
-    {"verdict": {"type": "string", "enum": ["ok", "corrected", "rag_down"]}, "plan_rel": _STR},
+    {
+        "verdict": {"type": "string", "enum": ["ok", "corrected", "rag_down", "degraded"]}, "plan_rel": _STR,
+        "degraded_bands": {"type": "array", "items": _STR}, "reason": _STR,
+    },
 )
 _DOCS_GATE_SCHEMA = _obj(
     ["verdict"],
@@ -4882,7 +4892,8 @@ def compose_ask_script(
                 ": verify every Unreal Engine API, class, module and behavior claim it makes against the "
                 "engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE with "
                 "Edit -- never scaffold a new plan, never change its path. Return its repo-relative path as "
-                "plan_rel and `verdict` ok or corrected.",
+                "plan_rel and `verdict` ok or corrected."
+                " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
             )
             docs_call = _agent(
                 docs_check_prompt, label="plan-docs-check", phase="plan", agent_type=_DOCS_CHECKER_AGENT_TYPE,
@@ -5596,7 +5607,8 @@ def compose_ask_script(
             f"the changes since {run_base_sha or 'the run base'} to ",
             "js:_reviewPaths.join(', ')",
             ", against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
-            "with Edit. Return `verdict` ok or corrected.",
+            "with Edit. Return `verdict` ok or corrected."
+            " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
         )
         diff_docs_call = _agent(
             diff_docs_prompt, label="diff-docs-check", phase="review", agent_type=_DOCS_CHECKER_AGENT_TYPE,
