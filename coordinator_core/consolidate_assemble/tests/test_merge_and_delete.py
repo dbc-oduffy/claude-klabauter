@@ -96,6 +96,23 @@ def test_merge_and_delete_refusal_keeps_the_branch(share_repo, monkeypatch):
     assert _git(share_repo, "rev-parse", "--verify", "work/sibling").returncode == 0
 
 
+def test_refused_delete_still_lands_the_merge(repo, tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    _git(repo, "worktree", "add", "-q", str(tmp_path / "wt"), "work/sibling")
+    with pytest.raises(RuntimeError, match="held by"):
+        apply_mod._dispatch_merge_and_delete(["work/sibling", "work/sibling"], repo)
+    assert (repo / "b.txt").exists()
+    assert _git(repo, "merge-base", "--is-ancestor", "work/sibling", "HEAD", check=False).returncode == 0
+    assert _git(repo, "rev-parse", "--verify", "work/sibling").returncode == 0
+
+
+def test_free_branch_merge_and_delete_needs_no_override(repo, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    result = apply_mod._dispatch_merge_and_delete(["work/sibling", "work/sibling"], repo)
+    assert result["local_deleted"] == "work/sibling"
+    assert _git(repo, "rev-parse", "--verify", "work/sibling", check=False).returncode != 0
+
+
 def test_merge_ours_records_the_ref_without_its_content(repo):
     sha = _git(repo, "rev-parse", "work/me").stdout.strip()
     result = apply_mod._dispatch_merge_ours(["work/sibling", "work/sibling", sha], repo)

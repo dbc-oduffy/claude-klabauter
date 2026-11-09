@@ -574,7 +574,7 @@ def test_sh_c_unparseable_shell_segment_still_denies_via_catchall():
     # unterminated-quote segment to reach `_evaluate_git_segment_legacy`
     # via genuine unparseability rather than the -c carve-out.
     payload = _payload(
-        "git frobnicate 'unterminated",
+        "git gc 'unterminated",
         agent_type="coordinator:executor",
     )
     result = _enveloped(guard.check)(payload)
@@ -583,12 +583,16 @@ def test_sh_c_unparseable_shell_segment_still_denies_via_catchall():
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_unparseable_unknown_local_verb_is_not_denied():
+    payload = _payload("git frobnicate 'unterminated", agent_type="coordinator:executor")
+    result = _enveloped(guard.check)(payload)
+    assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
+
+
 def test_evaluate_git_segment_legacy_default_deny_on_unmatched_true_denies_directly():
-    # Direct unit coverage: default (True) keeps the terminal catchall.
-    assert (
-        guard._evaluate_git_segment_legacy("some prose mentioning git only")
-        == "unrecognized git verb (default-deny)"
-    )
+    # Direct unit coverage: an irreversible verb keeps the terminal catchall.
+    assert guard._evaluate_git_segment_legacy("git gc --prune=now") == "unrecognized git verb (default-deny)"
+    assert guard._evaluate_git_segment_legacy("some prose mentioning git only") is None
 
 
 def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_allows_directly():
@@ -1466,11 +1470,9 @@ def test_git_global_option_c_path_merge_still_denies():
     assert "git merge (not --ff-only)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_unknown_verb_still_default_denies():
+def test_git_unknown_local_verb_is_not_denied():
     payload = _payload("git frobnicate", agent_type="coordinator:executor")
-    result = _enveloped(guard.check)(payload)
-    assert result is not None
-    assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
+    assert _enveloped(guard.check)(payload) is None
 
 
 def test_git_unparseable_segment_does_not_become_allowed():
@@ -3181,9 +3183,9 @@ def test_git_mv_malformed_falls_back_to_generic_template_not_a_guess():
     assert "Run it now, with your own paths already substituted in" not in reason
 
 
-def test_unrecognized_git_verb_still_default_denies_generically():
-    # The named `mv` branch must not weaken default-deny for anything else.
-    payload = _payload("git mvfoo x", agent_type="coordinator:executor")
+def test_irreversible_unrecognized_git_verb_still_default_denies_generically():
+    # The named `mv` branch must not weaken default-deny for the irreversible verbs.
+    payload = _payload("git gc --prune=now", agent_type="coordinator:executor")
     reason = _enveloped(guard.check)(payload)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "unrecognized git verb (default-deny)" in reason
 
@@ -4929,6 +4931,89 @@ def test_commit_agent_destructive_dash_c_verbs_still_deny(commit_target_repo, ta
     repo, cwd = commit_target_repo
     cmd = f'git -C "{repo.as_posix()}" {tail}'
     assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") == "deny"
+
+
+# ---- private-index plumbing (GIT_INDEX_FILE commit route) ----
+
+_PRIVATE_COMMIT_LINE = (
+    "export GIT_INDEX_FILE=scratch/idx-abc987 && git read-tree HEAD && "
+    "git apply --cached scratch/x.patch && git write-tree && "
+    "git commit-tree abc123 -p HEAD -m msg && "
+    "git update-ref refs/heads/work/x deadbeef cafef00d"
+)
+
+
+def _denied(cmd):
+    result = _enveloped(guard.check)(_payload(cmd, agent_type="coordinator:executor"))
+    return result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_private_index_commit_sequence_passes():
+    assert not _denied(_PRIVATE_COMMIT_LINE)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git read-tree HEAD",
+        "git write-tree",
+        "git commit-tree abc123 -p HEAD -m msg",
+        "git hash-object -w scratch/f.txt",
+        "git update-ref refs/heads/x new old",
+        "git update-ref -m why refs/heads/x new old",
+        "GIT_INDEX_FILE=scratch/i git update-index --add --cacheinfo 100644,abc,f.txt",
+        "export GIT_INDEX_FILE=scratch/i && git update-index --refresh",
+        "export GIT_INDEX_FILE=scratch/i && git apply --cached scratch/x.patch",
+    ],
+)
+def test_plumbing_verb_passes_for_subagent(cmd):
+    assert not _denied(cmd)
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "git update-ref refs/heads/x new",
+        "git update-ref -d refs/heads/x",
+        "git update-ref --stdin",
+        "git read-tree -u HEAD",
+        "git read-tree --reset HEAD",
+        "git read-tree -um HEAD",
+        "git update-ref -- refs/heads/x new",
+        "git send-email x.patch",
+        "git apply --cached scratch/x.patch",
+        "git update-index --add f.txt",
+        "export GIT_INDEX_FILE=.git/index && git apply --cached scratch/x.patch",
+        "export GIT_INDEX_FILE=$IDX && git apply --cached scratch/x.patch",
+        "git apply --cached scratch/x.patch && export GIT_INDEX_FILE=scratch/i",
+        "export GIT_INDEX_FILE=scratch/i && git apply --index scratch/x.patch",
+        "export GIT_INDEX_FILE=scratch/i && git push --force origin main",
+        "export GIT_INDEX_FILE=scratch/i && git reset --hard HEAD~1",
+    ],
+)
+def test_plumbing_unguarded_or_destructive_forms_still_deny(cmd):
+    assert _denied(cmd)
+
+
+@pytest.mark.parametrize(
+    "seg,allowed",
+    [
+        ("git read-tree HEAD", True),
+        ("git write-tree", True),
+        ("git commit-tree abc -p HEAD -m msg", True),
+        ("git hash-object -w f", True),
+        ("git update-ref refs/heads/x new old", True),
+        ("git update-ref refs/heads/x new", False),
+        ("git update-ref -d refs/heads/x", False),
+        ("git read-tree -u HEAD", False),
+        ("export GIT_INDEX_FILE=scratch/i && git apply --cached p", True),
+        ("git apply --cached p", False),
+        ("git gc --prune=now", False),
+        ("git frobnicate", True),
+    ],
+)
+def test_legacy_classifier_agrees_on_plumbing(seg, allowed):
+    assert (guard._evaluate_git_segment_legacy(seg) is None) is allowed
 
 
 def _rm_verdict(command):

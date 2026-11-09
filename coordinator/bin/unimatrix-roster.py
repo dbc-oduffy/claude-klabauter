@@ -21,6 +21,7 @@ import json
 import os
 import re
 import signal
+import secrets
 import socket
 import subprocess
 import sys
@@ -134,6 +135,20 @@ def _liveness():
     return _LIVENESS[0]
 
 
+_CONTRACT = []
+
+
+def _contract():
+    """The peer contract module (box_id, BOX_FIELD), loaded by path on first use."""
+    if not _CONTRACT:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("unimatrix_peer_contract", HERE / "unimatrix-peer-contract.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _CONTRACT.append(mod)
+    return _CONTRACT[0]
+
+
 def _ps_lstart(pid):
     # The harness compares this string byte for byte with ps's own output, which pads a
     # one-digit day ("Nov  4"); collapsing the whitespace hides the entry on days 1-9.
@@ -174,6 +189,108 @@ def key_name(pid, endpoint, platform=None):
     if _is_win(platform):
         endpoint = endpoint.lower()
     return f"{pid}.{hashlib.sha256(endpoint.encode()).hexdigest()}.key"
+
+
+def local_peer_key(raw, process_start, domain, platform=None):
+    """Build a native key for the local process, preserving only a valid peer token."""
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        parsed = raw
+    token = parsed.get("peerToken") if isinstance(parsed, dict) else parsed
+    if not isinstance(token, str) or not re.fullmatch(r"[0-9a-f]{32}", token):
+        token = secrets.token_hex(16)
+    field = "procStartFt" if (platform or sys.platform) == "win32" else "procStart"
+    return {"peerToken": token, field: process_start, "pidDomain": domain}
+
+
+def write_peer_key(path, data):
+    """Replace credentials atomically, with 0600 permissions from creation on POSIX."""
+    tmp = f"{path}.{os.getpid()}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, separators=(",", ":"))
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+
+
+def refresh_mirror_key(entry, fallback_raw):
+    """Repair legacy or far-process key envelopes without rotating a valid local token."""
+    if not isinstance(entry.get("procStart"), str) or not isinstance(entry.get("pidDomain"), str):
+        return
+    path = os.path.join(sessions_dir(), key_name(entry["pid"], entry["messagingSocketPath"]))
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+    except FileNotFoundError:
+        raw = fallback_raw
+    normalized = local_peer_key(raw, entry["procStart"], entry["pidDomain"])
+    try:
+        current = json.loads(raw)
+    except (ValueError, TypeError):
+        current = None
+    if current != normalized:
+        write_peer_key(path, normalized)
+
+
+def recipient_token(endpoint, directory=None):
+    """Read a live destination's peer key internally; credentials never cross argv or logs."""
+    directory = Path(directory or sessions_dir())
+    wanted = endpoint.lower() if sys.platform == "win32" else endpoint
+    for path in directory.glob("*.json"):
+        try:
+            entry = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(entry, dict):
+            continue
+        address, pid = entry.get("messagingSocketPath"), entry.get("pid")
+        if not isinstance(address, str) or not isinstance(pid, int):
+            continue
+        actual = address.lower() if sys.platform == "win32" else address
+        if actual != wanted or not pid_alive(pid):
+            continue
+        key = directory / key_name(pid, address)
+        try:
+            raw = key.read_text(encoding="utf-8").strip()
+        except FileNotFoundError:
+            if sys.platform == "win32":
+                raise
+            return None  # Unix receivers also support unauthenticated legacy sessions
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            token = raw  # legacy peers wrote the token without a JSON envelope
+        else:
+            token = parsed.get("peerToken") if isinstance(parsed, dict) else None
+        if not isinstance(token, str) or not token:
+            raise ValueError("recipient key has no peerToken")
+        return token
+    return None
+
+
+
+def authenticated_data(endpoint, data, directory=None):
+    """Authenticate for the local recipient, replacing a far endpoint's stale auth header."""
+    token = recipient_token(endpoint, directory)
+    if not token:
+        return data
+    lines = data.splitlines(keepends=True)
+    while lines:
+        try:
+            first = json.loads(lines[0])
+        except ValueError:
+            break
+        if not isinstance(first, dict) or first.get("type") != "auth":
+            break
+        lines.pop(0)
+    header = (json.dumps({"type": "auth", "token": token}) + "\n").encode("utf-8")
+    return header + b"".join(lines)
 
 
 def bridge_cmd(endpoint, log, remote, key, return_port=None, inbox=None, tunnel_remote=None):
@@ -311,8 +428,26 @@ def labelled(name, remote):
     return f"{bare_name(name)}{LABEL_SEP}{box_label(remote)}"
 
 
+def mirror_scan_key(remote, far_sock):
+    """A remote socket belongs to one box; legacy entries without a box retain their old key."""
+    return f"{remote}\0{far_sock}" if remote and far_sock else far_sock
+
+
+def same_scan_target(left, right):
+    """Compare box-qualified targets while still recognizing old unqualified self entries."""
+    if left == right:
+        return True
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    if "\0" in left and "\0" not in right:
+        return left.partition("\0")[2] == right
+    if "\0" in right and "\0" not in left:
+        return right.partition("\0")[2] == left
+    return False
+
+
 def live_sessions():
-    """(bare name, far socket or None) for each live session in the sessions dir, local and mirrored alike."""
+    """(bare name, box-qualified far socket or None) for every live local or mirrored session."""
     out = []
     sess = sessions_dir()
     try:
@@ -329,7 +464,7 @@ def live_sessions():
             continue
         if (isinstance(d, dict) and isinstance(d.get("name"), str) and isinstance(d.get("pid"), int)
                 and pid_alive(d["pid"])):
-            out.append((bare_name(d["name"]), d.get(FAR_SOCKET_FIELD)))
+            out.append((bare_name(d["name"]), mirror_scan_key(d.get("unimatrixRemote"), d.get(FAR_SOCKET_FIELD))))
     return out
 
 
@@ -340,7 +475,7 @@ def live_bare_names(except_far_sock=None, scan=None):
     named, not a competitor for its name."""
     if scan is None:
         scan = live_sessions()
-    return {n for n, sock in scan if not (except_far_sock and sock == except_far_sock)}
+    return {n for n, sock in scan if not (except_far_sock and same_scan_target(sock, except_far_sock))}
 
 
 def mirror_name(name, remote, far_sock=None, scan=None):
@@ -435,10 +570,65 @@ def engine_fields(row):
     return {k: row[k] for k in ENGINE_FIELDS if k in row}
 
 
+def session_identity(entry, box=None):
+    """Add display metadata without changing the address owned by the harness."""
+    vendor = entry.get("vendor")
+    if vendor not in ("codex", "agy", "claude", "transport"):
+        sid = entry.get("sessionId") or ""
+        if isinstance(sid, str) and sid.startswith("peer-codex-"):
+            vendor = "codex"
+        elif isinstance(sid, str) and sid.startswith("peer-agy-"):
+            vendor = "agy"
+        elif (isinstance(entry.get("version"), str)
+              and re.fullmatch(r"\d+\.\d+\.\d+(?:[-+].*)?", entry["version"])
+              and not str(sid).startswith("peer-")):
+            vendor = "claude"
+        else:
+            vendor = "unknown"
+    far = entry.get(FAR_SOCKET_FIELD) or entry.get("unimatrixMirror")
+    origin = entry.get("box") or box or ("unknown" if far else socket.gethostname().lower())
+    return {"vendor": vendor, "box": str(origin), "cwd": entry.get("cwd") or ""}
+
+
+def mirror_identity(entry, remote):
+    out = session_identity(entry, box_label(remote))
+    if entry.get("pidDomain"):
+        out["farPidDomain"] = entry["pidDomain"]
+    return out
+
+
+def remote_mirrors(entries, remote=None):
+    """Select one box's mirrors before resolving a socket that other boxes can also use."""
+    entries = list(entries)
+    if not remote:
+        return entries
+    want = box_label(remote)
+    matches = [entry for entry in entries
+               if box_label(entry.get("unimatrixRemote") or entry.get("box") or "") == want]
+    if matches:
+        return matches
+    # Truly legacy records lack both remote fields. Callers still refuse ambiguous results.
+    return [entry for entry in entries if not entry.get("unimatrixRemote") and not entry.get("box")]
+
+
+def mirror_entry_name(entry, remote, far_sock=None, scan=None):
+    """Give strict legacy UUID peers a readable local alias; retain explicit source names."""
+    name = entry.get("name")
+    legacy = re.fullmatch(r"(codex|agy)-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})", str(name), re.I)
+    if legacy and session_identity(entry)["vendor"] != "claude":
+        vendor, target = legacy.groups()
+        cwd = str(entry.get("cwd") or "").replace("\\", "/").rstrip("/")
+        repo = re.sub(r"[^A-Za-z0-9_-]+", "-", cwd.rsplit("/", 1)[-1]).strip("-") or "session"
+        box = re.sub(r"[^A-Za-z0-9_-]+", "-", str(entry.get("box") or box_label(remote))).strip("-").lower()
+        short = hashlib.sha256(target.lower().encode()).hexdigest()[:10]
+        name = f"{vendor.lower()}-{repo}-{short}-on-{box or 'unknown'}"
+    return mirror_name(name, remote, mirror_scan_key(remote, far_sock), scan)
+
+
 def mirror(row, cfg, say, scan=None):
     e = row["entry"]
     far_sock = e["messagingSocketPath"]
-    endpoint = local_endpoint(far_sock)
+    endpoint = local_endpoint(f"{cfg.remote}:{far_sock}")
     if not _is_win():
         os.makedirs(os.path.dirname(endpoint), mode=0o700, exist_ok=True)
     b = spawn(bridge_cmd(endpoint, os.path.join(os.path.dirname(os.path.abspath(cfg.log)),
@@ -447,33 +637,59 @@ def mirror(row, cfg, say, scan=None):
     time.sleep(1)
     d = {k: v for k, v in e.items() if k not in ("pid", "procStart", "pidDomain", "messagingSocketPath")}
     if "name" in d:
-        d["name"] = mirror_name(d["name"], cfg.remote, far_sock, scan)
+        d["name"] = mirror_entry_name(e, cfg.remote, far_sock, scan)
+        d["unimatrixFarName"] = e["name"]
+    d.update(mirror_identity(e, cfg.remote))
+    c = _contract()
+    d.setdefault(c.BOX_FIELD, c.box_id(cfg.remote))
     d.update(pid=b.pid, procStart=proc_start(b.pid), pidDomain=pid_domain(),
-             messagingSocketPath=endpoint, farPid=e["pid"], **{FAR_SOCKET_FIELD: far_sock}, **engine_fields(row))
+             messagingSocketPath=endpoint, farPid=e["pid"], unimatrixRemote=cfg.remote,
+             **{FAR_SOCKET_FIELD: far_sock}, **engine_fields(row))
     sess = sessions_dir()
     write_json_atomic(os.path.join(sess, f"{b.pid}.json"), d)
-    with open(os.path.join(sess, key_name(b.pid, endpoint)), "w", encoding="utf-8") as kf:
-        kf.write(row["key"])  # never logged
+    write_peer_key(os.path.join(sess, key_name(b.pid, endpoint)),
+                   local_peer_key(row["key"], d["procStart"], d["pidDomain"]))
     say(f"mirror {e.get('name')} {far_sock} -> bridge {b.pid} {endpoint}")
     return b
 
 
 def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
-    """Re-evaluate the name of the live mirror `pid` against the sessions now alive; rewrite it only on change."""
+    """Refresh a live bridge's far identity when its stable remote socket is reused.
+
+    The bridge's local pid/process identity stays its own. The relay destination must
+    follow the remote process, which may restart without changing its socket or name.
+    """
     name = row["entry"].get("name")
-    if not isinstance(name, str) or not name:
-        return
     path = os.path.join(sessions_dir(), f"{pid}.json")
     try:
         with open(path, encoding="utf-8") as fh:
             d = json.load(fh)
     except (OSError, ValueError):
         return
-    want = mirror_name(name, cfg.remote, sock, scan)
-    if isinstance(d, dict) and d.get("name") != want:
-        d["name"] = want
+    if not isinstance(d, dict):
+        return
+    refresh_mirror_key(d, row.get("key", ""))
+    updates = {}
+    if d.get("unimatrixRemote") != cfg.remote:
+        updates["unimatrixRemote"] = cfg.remote
+    for field, value in mirror_identity(row["entry"], cfg.remote).items():
+        if field == "cwd" and not value:
+            continue
+        if d.get(field) != value:
+            updates[field] = value
+    far_pid = row["entry"].get("pid")
+    if isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid:
+        updates["farPid"] = far_pid
+    if isinstance(name, str) and name:
+        want = mirror_entry_name(row["entry"], cfg.remote, sock, scan)
+        if d.get("unimatrixFarName") != name:
+            updates["unimatrixFarName"] = name
+        if d.get("name") != want:
+            updates["name"] = want
+    if updates:
+        d.update(updates)
         write_json_atomic(path, d)
-        say(f"rename mirror {sock} -> {want}")
+        say(f"refresh mirror {sock} -> {d.get('name')} far pid {d.get('farPid')}")
 
 
 def sync(bridges, rows, cfg, say):
@@ -486,11 +702,11 @@ def sync(bridges, rows, cfg, say):
             continue
         if b:
             unmirror(b.pid)
-            scan = [(n, s) for n, s in scan if s != sock]
+            scan = [(n, s) for n, s in scan if not same_scan_target(s, mirror_scan_key(cfg.remote, sock))]
         bridges[sock] = mirror(row, cfg, say, scan)
-        nm = mirror_name(row["entry"].get("name"), cfg.remote, sock, scan)
+        nm = mirror_entry_name(row["entry"], cfg.remote, sock, scan)
         if isinstance(nm, str) and nm:
-            scan.append((bare_name(nm), sock))
+            scan.append((bare_name(nm), mirror_scan_key(cfg.remote, sock)))
     for sock in [s for s in bridges if s not in rows]:
         unmirror(bridges.pop(sock).pid)
         say(f"unmirror {sock}")

@@ -1,6 +1,7 @@
 """Relay send failure: sender inbox notice and the delivery status record (ssh stubbed, tmp_path only)."""
 import importlib.util
 import json
+import os
 import subprocess
 import types
 from pathlib import Path
@@ -30,8 +31,8 @@ def bridge(tmp_path, monkeypatch):
     spec.loader.exec_module(mod)
     sessions = tmp_path / "sessions"
     sessions.mkdir()
-    (sessions / "1.json").write_text(json.dumps(
-        {"messagingSocketPath": MIRROR, "macSocketPath": "/far/4242.sock", "name": "far-session"}))
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps(
+        {"pid": os.getpid(), "messagingSocketPath": MIRROR, "macSocketPath": "/far/4242.sock", "name": "far-session"}))
     monkeypatch.setattr(mod, "SESSIONS", str(sessions))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     mod.cfg = types.SimpleNamespace(endpoint=MIRROR, key="k", remote="farbox", port=None)

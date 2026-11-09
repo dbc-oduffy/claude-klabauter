@@ -743,3 +743,26 @@ def test_stop_records_the_pids_it_set_out_to_end(monkeypatch, tmp_path):
     monkeypatch.setattr(pair_stop, "_pool_children", lambda *a, **k: [])
     result = pair_stop.stop_warm_pair(tmp_path, ask_server=lambda p: True, ask_front_door=lambda r: True)
     assert 11 in result.initial_pids
+
+
+def test_reap_pairs_outside_ends_only_the_unlisted_pair_processes(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    w.add(10, "python.exe", [sys.executable, _script(root, SRV)])
+    w.add(20, "python.exe", [sys.executable, _script(root, SRV)])
+    w.add(30, "python.exe", [sys.executable, _script(root, SUP)])
+    reaped = pair_stop.reap_pairs_outside(root, frozenset({10}), psutil_module=w)
+    assert sorted(reaped) == [20, 30]
+    assert {pid for kind, pid in w.log if kind == "terminate"} == {20, 30}
+    assert w.Process(10).alive
+
+
+def test_reap_pairs_outside_never_raises(tmp_path):
+    class _Broken:
+        NoSuchProcess = _NoSuchProcess
+        AccessDenied = _AccessDenied
+
+        def process_iter(self, attrs=None):
+            raise RuntimeError("boom")
+
+    assert pair_stop.reap_pairs_outside(tmp_path / "m", frozenset(), psutil_module=_Broken()) == ()

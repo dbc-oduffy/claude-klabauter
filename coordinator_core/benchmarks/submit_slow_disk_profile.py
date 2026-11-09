@@ -34,7 +34,7 @@ if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
 from coordinator_core import locked_write  # noqa: E402
-from coordinator_core.benchmarks import declare_benchmark_origin  # noqa: E402
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
 from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
@@ -174,7 +174,7 @@ def measure(delay_s: float = DEFAULT_DELAY_S) -> dict:
             return root / "scratch" / "bench-launcher.workflow.mjs"
 
         charger = Charger(root, delay_s)
-        with charger.active():
+        with fixture_settings_home(scratch), charger.active():
             t0 = time.process_time()
             out = hook.evaluate(default_payload(root), launch=stub_launch)
             process_ms = (time.process_time() - t0) * 1000.0

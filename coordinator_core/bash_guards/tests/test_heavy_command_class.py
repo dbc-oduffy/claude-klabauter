@@ -476,6 +476,16 @@ def test_admit_before_spawn_admits_when_peak_times_1_25_fits():
     assert v.admitted and v.peak_gib == 4.0
 
 
+def test_admit_before_spawn_refuses_if_reservation_cannot_be_written():
+    host, _ = _fake_host(avail_gib=10)
+    def failed_write(*args):
+        raise OSError("reservation store unavailable")
+    host.register_command = failed_write
+    verdict = _hcc.admit_before_spawn("codex-worker", 1, host=host, register_pid=123)
+    assert not verdict.admitted
+    assert verdict.reason == "memory reservation write failed"
+
+
 def test_admit_before_spawn_holds_when_headroom_is_short():
     host, _ = _fake_host(avail_gib=4.5)
     v = _hcc.admit_before_spawn("scip-rebuild", 4.0, host=host)

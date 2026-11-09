@@ -1119,6 +1119,15 @@ _dispatch_op_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar
 )
 
 
+#: A pool worker binds a dict here before dispatch; the chokepoint copies a
+#: `hooks.preuse_*` op's `slow_phase`/`spans` row fields into it so the worker
+#: can relay them to the accept process. Mutation (not rebinding) is what
+#: crosses the asyncio task's context copy.
+PREUSE_ROW_FIELDS_SINK: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "coordinator_core_ipc_preuse_row_fields_sink", default=None
+)
+
+
 def current_dispatch_op() -> Optional[str]:
     """The JSON-RPC method of the dispatch in flight; None outside one.
 
@@ -3175,6 +3184,14 @@ async def dispatch_message(
             _row_fields = _op_row_fields.drain(_row_fields_token) if _op_row_fields is not None else {}
         except Exception:
             _row_fields = {}
+        try:
+            _sink = PREUSE_ROW_FIELDS_SINK.get()
+            if _sink is not None and isinstance(method, str) and method.startswith("hooks.preuse_"):
+                for _k in ("slow_phase", "spans"):
+                    if _row_fields.get(_k) is not None:
+                        _sink[_k] = _row_fields[_k]
+        except Exception:
+            pass
         elapsed_ms = (_time.perf_counter() - perf_start) * 1000.0
         span_ms = (_time.process_time() - process_start) * 1000.0
         uncontaminated = _exit_dispatch(_record)

@@ -241,6 +241,34 @@ def test_a_path_outside_the_footprint_blocks_the_chunk_and_is_recorded(monkeypat
     assert rec["footprint"] == ["pkg/a.py", "tests/test_a.py"]
 
 
+_REPORTS = ".coordinator-local/subagent-share/dispatch-reports/plan-slug/"
+
+
+def test_a_fix_leg_reporting_its_own_dispatch_report_is_not_blocked(monkeypatch):
+    own = {"status": "DONE", "paths": ["pkg/a.py", _REPORTS + "C1.md"], "reason": "fixed"}
+    out = _run(
+        _script(monkeypatch), items=[_NAMED],
+        replies={"ledger-fix:C1": own, LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
+    )
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["status"] == "fixed"
+    assert rec["paths"] == []
+
+
+def test_a_fix_leg_reporting_a_peer_chunks_dispatch_report_is_still_blocked(monkeypatch):
+    peer = {"status": "DONE", "paths": ["pkg/a.py", _REPORTS + "C2.md"], "reason": "fixed"}
+    out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": peer})
+    rec = _record(out)["chunks"]["C1"]
+    assert rec["status"] == "blocked"
+    assert rec["paths"] == [_REPORTS + "C2.md"]
+
+
+def test_a_same_named_file_outside_the_reports_prefix_is_still_blocked(monkeypatch):
+    stray = {"status": "DONE", "paths": ["pkg/a.py", "elsewhere/C1.md"], "reason": "fixed"}
+    out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": stray})
+    assert _record(out)["chunks"]["C1"]["status"] == "blocked"
+
+
 def test_an_unattributed_item_still_halts_exactly_as_today(monkeypatch):
     out = _run(_script(monkeypatch), items=[_unmet(["something no chunk owns"])])
     assert out["result"]["halted_by"]["halted"] == "ledger-check"

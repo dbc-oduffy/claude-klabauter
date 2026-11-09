@@ -421,11 +421,11 @@ def _auto_looks_binary(data: bytes) -> bool:
 
 def _text_pin_checkin(root: Path, rel: str, data: bytes) -> Optional[bytes]:
     """git's checkin bytes for CR-bearing `data` at a path pinned by `text`, `text=auto` or
-    `eol=lf`, or None when this shape is not reproduced (`eol=crlf`, `-text`, a macro or an
+    `eol=lf` or `eol=crlf`, or None when this shape is not reproduced (`-text`, a macro or an
     unmodelled spelling, an unreadable index). Under `text=auto`, git skips conversion when
     the path's index blob already carries a CR; that blob is read here, never guessed."""
     pin = checkin_attrs.resolve_text_pin(root, rel)
-    if pin is None or pin.text == checkin_attrs.TEXT_UNSET or pin.eol == "crlf":
+    if pin is None or pin.text == checkin_attrs.TEXT_UNSET:
         return None
     if pin.text == checkin_attrs.TEXT_UNSPECIFIED and pin.eol is None:
         return None
@@ -1227,7 +1227,11 @@ def _in_object_batch(fn):
     return run
 
 
+from coordinator_core.ops.workflow_fire.finalizer import guarded_commit as _private_guarded_commit
+
+
 @_in_object_batch
+@_private_guarded_commit
 def commit_paths(
     repo: Union[str, Path] = _REQUIRED,  # type: ignore[assignment]
     paths: Sequence[str] = _REQUIRED,  # type: ignore[assignment]

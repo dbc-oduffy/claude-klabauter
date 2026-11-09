@@ -162,8 +162,140 @@ def test_stale_steer_falls_back_to_turn_start(monkeypatch):
     assert got == ["CROSS"]
 
 
+def test_proxy_child_env_carries_codex_vendor_and_no_inherited_model_or_session(monkeypatch):
+    seen = []
+    real = cas.subprocess.Popen
+
+    def spy(*a, **k):
+        seen.append(k["env"])
+        return real(*a, **k)
+
+    monkeypatch.setattr(cas.subprocess, "Popen", spy)
+    monkeypatch.setenv("COORDINATOR_AGENT_VENDOR", "grok")
+    monkeypatch.setenv("COORDINATOR_AGENT_MODEL", "stale")
+    monkeypatch.setenv("COORDINATOR_AGENT_SESSION", "stale")
+    gen = cas.deliver(_argv("owner"), OWNER_THREAD, "x")
+    next(gen)
+    gen.close()
+    assert seen[0]["COORDINATOR_AGENT_VENDOR"] == "codex"
+    assert "COORDINATOR_AGENT_MODEL" not in seen[0] and "COORDINATOR_AGENT_SESSION" not in seen[0]
+
+
 def test_module_is_marked_prototype_and_import_surface_is_plain():
     assert cas.__doc__.startswith("PROTOTYPE:")
     assert callable(cas.deliver) and callable(cas.loaded_threads)
     src = Path(cas.__file__).read_text(encoding="utf-8")
-    assert "coordinator_core.ops" not in src and "from coordinator_core" not in src
+    assert "coordinator_core.ops" not in src
+    assert {ln.split()[1] for ln in src.splitlines() if ln.startswith("from coordinator_core")} == {
+        "coordinator_core.agent_pipe.acp",
+        "coordinator_core.agent_pipe.contract",
+        "coordinator_core.agent_pipe.session_driver",
+    }
+
+
+class _ScriptConn:
+    """Stand-in for _Conn: `results` maps method -> result, `inbox` feeds next_message; records sends/requests."""
+
+    def __init__(self, results, inbox=()):
+        self.results = results
+        self.inbox = list(inbox)
+        self.requests: list[tuple[str, dict]] = []
+        self.sent: list[dict] = []
+
+    def request(self, method, params, deadline, unreachable=False):
+        self.requests.append((method, params))
+        return self.results[method]
+
+    def next_message(self, deadline, unreachable=False):
+        return self.inbox.pop(0)
+
+    def send(self, obj):
+        self.sent.append(obj)
+
+
+def _patch_conn(monkeypatch, conn):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def fake(argv):
+        yield conn
+
+    monkeypatch.setattr(cas, "_connect", fake)
+
+
+def test_driver_start_sends_thread_start_on_request_policy_and_returns_handle(monkeypatch):
+    sent = _wire(monkeypatch)
+    h = cas.CodexAppServerDriver(_argv("owner")).start("/work")
+    assert h.session_id == OWNER_THREAD and h.cwd == "/work"
+    start = next(m for m in sent if m.get("method") == "thread/start")
+    assert start["params"] == {"cwd": "/work", "approvalPolicy": "on-request"}
+
+
+def test_driver_prompt_streams_messages_then_done():
+    d = cas.CodexAppServerDriver(_argv("owner"))
+    ups = list(d.prompt(cas.SessionHandle(OWNER_THREAD, "/w"), "Reply with exactly: PONG."))
+    assert [(u.kind, u.text) for u in ups] == [("message", "PONG"), ("done", "")]
+    assert ups[-1].raw == {"stopReason": "end_turn"}
+
+
+def test_driver_resume_calls_thread_resume_and_takes_cwd_from_thread(monkeypatch):
+    conn = _ScriptConn({"thread/resume": {"thread": {"id": "T", "cwd": "/there"}}})
+    _patch_conn(monkeypatch, conn)
+    h = cas.CodexAppServerDriver(["x"]).resume("T")
+    assert (h.session_id, h.cwd) == ("T", "/there")
+    assert conn.requests[0][0] == "thread/resume" and conn.requests[0][1]["threadId"] == "T"
+
+
+def test_driver_cancel_interrupts_the_running_turn(monkeypatch):
+    conn = _ScriptConn({
+        "thread/turns/list": {"data": [{"id": "turn-9", "status": "inProgress"}]},
+        "turn/interrupt": {},
+    })
+    _patch_conn(monkeypatch, conn)
+    cas.CodexAppServerDriver(["x"]).cancel(cas.SessionHandle("T", "/w"))
+    assert conn.requests[-1] == ("turn/interrupt", {"threadId": "T", "turnId": "turn-9"})
+
+
+def test_driver_cancel_with_no_running_turn_sends_no_interrupt(monkeypatch):
+    conn = _ScriptConn({"thread/turns/list": {"data": [{"id": "t", "status": "completed"}]}})
+    _patch_conn(monkeypatch, conn)
+    cas.CodexAppServerDriver(["x"]).cancel(cas.SessionHandle("T", "/w"))
+    assert [m for m, _ in conn.requests] == ["thread/turns/list"]
+
+
+def _approval_run(monkeypatch, decide, drive=True):
+    approval = {"id": 77, "method": "item/commandExecution/requestApproval",
+                "params": {"threadId": "T", "turnId": "t1", "command": "rm -rf x"}}
+    done = {"method": "turn/completed", "params": {"threadId": "T", "turn": {
+        "id": "t1", "status": "completed", "items": [{"type": "agentMessage", "text": "ok"}]}}}
+    conn = _ScriptConn({"thread/turns/list": {"data": []}, "turn/start": {"turn": {"id": "t1"}}}, [approval, done])
+    _patch_conn(monkeypatch, conn)
+    if drive:
+        d = cas.CodexAppServerDriver(["x"], approve=decide)
+        assert [u.kind for u in d.prompt(cas.SessionHandle("T", "/w"), "go")] == ["message", "done"]
+    else:
+        assert list(cas.deliver(["x"], "T", "go")) == ["ok"]
+    return conn.sent
+
+
+def test_approval_defaults_to_decline(monkeypatch):
+    sent = _approval_run(monkeypatch, None)
+    assert sent == [{"jsonrpc": "2.0", "id": 77, "result": {"decision": "decline"}}]
+
+
+def test_approval_allow_once_accepts_and_allow_always_accepts_for_session(monkeypatch):
+    from coordinator_core.agent_pipe.session_driver import ALLOW_ALWAYS, ALLOW_ONCE, Decision
+
+    assert _approval_run(monkeypatch, lambda r: Decision(ALLOW_ONCE))[0]["result"] == {"decision": "accept"}
+    assert _approval_run(monkeypatch, lambda r: Decision(ALLOW_ALWAYS))[0]["result"] == {"decision": "acceptForSession"}
+
+
+def test_approval_callback_that_raises_declines(monkeypatch):
+    def boom(request):
+        raise RuntimeError("x")
+
+    assert _approval_run(monkeypatch, boom)[0]["result"] == {"decision": "decline"}
+
+
+def test_plain_deliver_without_on_approval_answers_nothing(monkeypatch):
+    assert _approval_run(monkeypatch, None, drive=False) == []

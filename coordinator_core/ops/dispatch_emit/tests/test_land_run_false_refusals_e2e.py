@@ -51,9 +51,9 @@ def _refused(root, head, out, code) -> None:
     assert reach.FIXTURE in reach._git(root, "status", "--porcelain", "--", reach.FIXTURE)
 
 
-def _landed_over_dirt(root, out) -> None:
+def _landed_over_dirt(root, out, verdict: str = "green") -> None:
     assert out["committed"] is True, out
-    assert out["clean_overlay_verify"]["verdict"] == "green"
+    assert out["clean_overlay_verify"]["verdict"] == verdict
     assert reach.FIXTURE not in reach._git(root, "show", "--name-only", "--format=", out["sha"]).split()
     assert reach.FIXTURE in reach._git(root, "status", "--porcelain", "--", reach.FIXTURE)
 
@@ -156,27 +156,20 @@ def test_peer_dirt_in_the_verified_reach_lands_on_a_green_overlay_verdict(halted
     _landed_over_dirt(halted, out)
 
 
-def test_peer_dirt_in_the_verified_reach_lands_without_a_verdict(halted):  # noqa: F811
-    """A verdict the engine never produced is no evidence of a red, so it is not a refusal."""
-    resume, token = _dirty_reach(halted, None)
-
-    out = _terminal_with(halted, token, resume, reach._VERDICT)
-
-    assert out["committed"] is True, out
-    assert out["clean_overlay_verify"]["verdict"] == "missing", out
-    assert "advisory" in out["clean_overlay_verify"], out
-    assert reach.FIXTURE not in reach._git(halted, "show", "--name-only", "--format=", out["sha"]).split()
-    assert reach.FIXTURE in reach._git(halted, "status", "--porcelain", "--", reach.FIXTURE)
-
-
-@pytest.mark.parametrize(
-    "verdict,code",
-    [("red", land_run.VERIFY_OVERLAY_RED)],
-)
-def test_peer_dirt_in_the_verified_reach_refuses_on_a_red_verdict(halted, verdict, code):  # noqa: F811
-    resume, token = _dirty_reach(halted, verdict)
+def test_peer_dirt_in_the_verified_reach_refuses_on_a_red_verdict(halted):  # noqa: F811
+    resume, token = _dirty_reach(halted, "red")
     head = _rgit(halted, "rev-parse", "HEAD")
 
     out = _terminal_with(halted, token, resume, reach._VERDICT)
 
-    _refused(halted, head, out, code)
+    _refused(halted, head, out, land_run.VERIFY_OVERLAY_RED)
+
+
+def test_peer_dirt_in_the_verified_reach_lands_with_an_advisory_when_no_verdict_was_written(halted):  # noqa: F811
+    """A missing verdict is not a red: the landing proceeds and records the advisory."""
+    resume, token = _dirty_reach(halted, None)
+
+    out = _terminal_with(halted, token, resume, reach._VERDICT)
+
+    _landed_over_dirt(halted, out, "missing")
+    assert out["clean_overlay_verify"]["advisory"]

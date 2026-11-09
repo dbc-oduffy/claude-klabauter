@@ -740,3 +740,206 @@ def test_ask_gate_backstop_refuses_a_stage_start_at_once_while_a_handover_is_pen
 
     after = ask_gate._handler(params, tmp_path)
     assert after.get("status") != "handover_pending"
+
+
+# ---------------------------------------------------------------------------
+# make-before-break: request-level successor probe + keep_pids stop
+# ---------------------------------------------------------------------------
+
+
+class _ReplyPipe:
+    def __init__(self, reply: bytes) -> None:
+        self.reply = reply
+        self.written: list = []
+
+    def write(self, data: bytes) -> None:
+        self.written.append(data)
+
+    def flush(self) -> None:
+        pass
+
+    def readline(self) -> bytes:
+        return self.reply
+
+    def close(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    "reply, answered",
+    [
+        (b'{"jsonrpc": "2.0", "id": "successor-probe", "result": "pong"}\n', True),
+        (b'{"jsonrpc": "2.0", "id": "successor-probe", "error": {"code": -32002}}\n', False),
+        (b"", False),
+        (b"not json\n", False),
+    ],
+)
+def test_endpoint_answers_request_needs_an_evaluated_result(monkeypatch, reply, answered) -> None:
+    from coordinator_core.warm import client
+
+    pipe = _ReplyPipe(reply)
+    monkeypatch.setattr(client, "_open_pipe", lambda endpoint: pipe)
+
+    assert breadcrumb.endpoint_answers_request("ep", "tok-new") is answered
+    assert json.loads(pipe.written[0])["_engine_token"] == "tok-new"
+
+
+def test_endpoint_answers_request_unreachable_endpoint_is_unanswered(monkeypatch) -> None:
+    from coordinator_core.warm import client
+
+    def _refuse(endpoint):
+        raise FileNotFoundError(2, "no endpoint")
+
+    monkeypatch.setattr(client, "_open_pipe", _refuse)
+    assert breadcrumb.endpoint_answers_request("ep", "tok") is False
+
+
+def test_wait_for_successor_answer_skips_the_superseded_pid_and_returns_the_answering_record(
+    monkeypatch, tmp_path: Path
+) -> None:
+    records = iter(
+        [
+            {"pid": 10, "pipe": "old", "stable_pid_start_epoch": 1},  # still the superseded pair
+            {"pid": 20, "pipe": "new", "stable_pid_start_epoch": 2},  # successor, not yet answering
+            {"pid": 20, "pipe": "new", "stable_pid_start_epoch": 2},  # successor answers
+        ]
+    )
+    monkeypatch.setattr(breadcrumb, "read_breadcrumb", lambda root=None: next(records))
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    probes: list = []
+
+    def _probe(endpoint: str, token: str) -> bool:
+        probes.append((endpoint, token))
+        return len(probes) > 1
+
+    found = breadcrumb.wait_for_successor_answer(
+        tmp_path, token="tok-new", superseded_pid=10, max_secs=5.0, request_probe=_probe, sleep=lambda _s: None
+    )
+
+    assert found is not None and found["pid"] == 20
+    assert probes == [("new", "tok-new"), ("new", "tok-new")]
+
+
+def test_wait_for_successor_answer_times_out_to_none_so_the_old_pair_stays(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        breadcrumb, "read_breadcrumb", lambda root=None: {"pid": 20, "pipe": "new", "stable_pid_start_epoch": 2}
+    )
+    monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    clock = [0.0]
+
+    def _sleep(secs: float) -> None:
+        clock[0] += secs
+
+    found = breadcrumb.wait_for_successor_answer(
+        tmp_path,
+        token="t",
+        superseded_pid=10,
+        max_secs=1.0,
+        request_probe=lambda e, t: False,
+        sleep=_sleep,
+        clock=lambda: clock[0],
+    )
+    assert found is None
+
+
+class _KeepWorld:
+    class NoSuchProcess(Exception):
+        pass
+
+    class AccessDenied(Exception):
+        pass
+
+    class _P:
+        def __init__(self, world, pid, argv):
+            self.world, self.pid, self.info, self._argv, self.alive = world, pid, {"pid": pid, "name": "python.exe"}, argv, True
+
+        def cmdline(self):
+            return list(self._argv)
+
+        def terminate(self):
+            self.world.log.append(("terminate", self.pid))
+            self.alive = False
+
+        def kill(self):
+            self.alive = False
+
+        def is_running(self):
+            return self.alive
+
+        def create_time(self):
+            return 1.0
+
+        def children(self, recursive=False):
+            return []
+
+        def wait(self, timeout=None):
+            return None
+
+    def __init__(self):
+        self.procs: list = []
+        self.log: list = []
+
+    def add(self, pid, argv):
+        proc = self._P(self, pid, argv)
+        self.procs.append(proc)
+        return proc
+
+    def process_iter(self, attrs=None):
+        return [p for p in self.procs if p.alive]
+
+    def Process(self, pid):
+        for p in self.procs:
+            if p.pid == pid and p.alive:
+                return p
+        raise self.NoSuchProcess(pid)
+
+
+def test_stop_with_keep_pids_ends_the_old_server_and_never_touches_the_successor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import sys
+
+    root = tmp_path / "mirror"
+    server_py = str(root / "coordinator_core" / "warm" / "server.py")
+    world = _KeepWorld()
+    old = world.add(10, [sys.executable, server_py])
+    new = world.add(20, [sys.executable, server_py])
+    unlinked: list = []
+    monkeypatch.setattr(
+        breadcrumb, "read_breadcrumb", lambda r=None: {"pid": 20, "pipe": "new-pipe", "stable_pid_start_epoch": 2}
+    )
+    monkeypatch.setattr(breadcrumb, "unlink_breadcrumb", lambda *a, **k: unlinked.append(1))
+    monkeypatch.setattr(stop_mod, "stable_pid_alive", lambda pid, stored_start_epoch="": True)
+    monkeypatch.setattr(stop_mod, "_TERMINATE_GRACE_SECS", 0.02)
+    monkeypatch.setattr(stop_mod, "_confirm_grace_secs", lambda: 0.05)
+    asked: list = []
+
+    def _ask(pipe):
+        asked.append(pipe)
+        old.alive = False
+        return True
+
+    result = stop_mod.stop_warm_pair(
+        root, psutil_module=world, ask_server=_ask, keep_pids=frozenset({20}), server_pipe="old-pipe"
+    )
+
+    assert asked == ["old-pipe"], "the superseded server is drained over its own pipe, never the successor's"
+    assert new.alive and ("terminate", 20) not in world.log
+    assert result.ok() and all(p.pid != 20 for p in result.stopped + result.survivors)
+    assert unlinked == [], "the successor owns the breadcrumb"
+
+
+def test_stop_without_keep_pids_still_takes_every_server(tmp_path: Path, monkeypatch) -> None:
+    import sys
+
+    root = tmp_path / "mirror"
+    server_py = str(root / "coordinator_core" / "warm" / "server.py")
+    world = _KeepWorld()
+    world.add(10, [sys.executable, server_py])
+    world.add(20, [sys.executable, server_py])
+    monkeypatch.setattr(breadcrumb, "read_breadcrumb", lambda r=None: None)
+    monkeypatch.setattr(stop_mod, "_TERMINATE_GRACE_SECS", 0.02)
+
+    result = stop_mod.stop_warm_pair(root, psutil_module=world, ask_server=lambda p: True)
+
+    assert result.ok() and sorted(pid for _a, pid in world.log) == [10, 20]

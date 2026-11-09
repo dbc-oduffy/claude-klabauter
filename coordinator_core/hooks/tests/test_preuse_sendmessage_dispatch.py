@@ -80,3 +80,35 @@ def test_two_match_noop(tmp_path):
     run = _run(tmp_path)
     _run(tmp_path, name="wf_2")
     assert m._handler(_p(run, "a1")) == {}
+
+
+def test_slow_phase_names_the_leg_that_spent_the_time(tmp_path, monkeypatch):
+    import time
+
+    from coordinator_core.telemetry import op_row_fields
+
+    run = _run(tmp_path)
+    real = m._is_member
+
+    def _slow(path, agent_id):
+        time.sleep(0.08)
+        return real(path, agent_id)
+
+    monkeypatch.setattr(m, "_is_member", _slow)
+    token = op_row_fields.begin()
+    assert "Summarise" in _ctx(m._handler(_p(run, "a1")))
+    fields = op_row_fields.drain(token)
+    assert fields["slow_phase"] == "roster_read"
+
+
+def test_hook_deadline_stops_before_the_first_leg(tmp_path, monkeypatch):
+    from coordinator_core.hooks import _preuse_phases
+    from coordinator_core.telemetry import op_row_fields
+
+    run = _run(tmp_path)
+    monkeypatch.setattr(_preuse_phases, "_door_deadline_s", lambda: 0.5)
+    token = op_row_fields.begin()
+    assert m._handler(_p(run, "a1")) == {}
+    fields = op_row_fields.drain(token)
+    assert fields["deadline_stop"] == "transcript_glob"
+    assert not (run / "advised").is_dir()

@@ -26,9 +26,13 @@ RESULT_FILENAME = "result.json"
 
 
 def _mode_run(mode: str) -> ModeRun:
-    """Resolve review.run / execute.run / agy.review_run lazily so importing this module needs none."""
+    """Resolve review.run / execute.run / agy.review_run / grok.review_run lazily so importing this module needs none."""
     if mode == "agy-review":
         return importlib.import_module("coordinator_core.codex_runner.agy").review_run
+    if mode == "grok-review":
+        return importlib.import_module("coordinator_core.codex_runner.grok").review_run
+    if mode == "named-review":
+        return importlib.import_module("coordinator_core.codex_runner.named_review").run
     return importlib.import_module(f"coordinator_core.codex_runner.{mode}").run
 
 
@@ -52,7 +56,11 @@ def run_worker(run_dir: Path) -> RunResult:
 
         def on_spawn(pid: int) -> None:
             codex_pids.append(pid)
-            roster.write_record(pid, run_id, request.mode, request.repo_root, request.parent_session_id)
+            kwargs = {"provider": request.serving_provider}
+            parent = request.parent_session_id
+            if parent is None and request.assignment:
+                parent = request.assignment.get("session_id")
+            roster.write_record(pid, run_id, request.mode, request.repo_root, parent, **kwargs)
 
         result = _mode_run(req.mode)(req, run_dir, on_spawn)
     except BaseException as exc:  # noqa: BLE001 -- the worker must always leave a result

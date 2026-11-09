@@ -82,3 +82,31 @@ def test_the_warm_flag_unwinds_so_a_later_cold_call_is_unaffected(
     assert session_core.in_warm_served_request() is False
     out = commit_trailers.apply_missing_trailers("after the warm block\n", tmp_path)
     assert _session_ids_in(out) == [ambient_is_the_server_owner]
+
+
+def test_native_provenance_replaces_message_claims(tmp_path, monkeypatch):
+    from coordinator_core.git import agent_provenance
+    monkeypatch.setattr(agent_provenance, "WRITER_READINESS_ACKS", {"project-rag": "test-ack", "example-cockpit-repo": "test-ack"})
+    monkeypatch.setenv("CODEX_THREAD_ID", _CALLER)
+    monkeypatch.setenv("COORDINATOR_AGENT_MODEL", "gpt-6-astra")
+    out = commit_trailers.apply_missing_trailers(
+        "native commit\n\nAgent-Vendor: claude\nAgent-Tier: standard\n", tmp_path)
+    assert "Agent-Vendor: codex" in out
+    assert "Agent-Model: gpt-6-astra" in out
+    assert "Agent-Tier: frontier" in out
+    assert f"Agent-Session-Id: {_CALLER}" in out
+    assert "Agent-Vendor: claude" not in out
+
+
+def test_warm_native_spawner_provenance_is_not_caller(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", _SERVER_OWNER)
+    with session_core.warm_served_request(), session_core.session_identity_override(_CALLER):
+        out = commit_trailers.apply_missing_trailers("caller commit\n", tmp_path)
+    assert "Agent-Vendor:" not in out
+
+
+def test_native_writer_hold_strips_forgery_and_preserves_session(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_THREAD_ID", _CALLER)
+    out = commit_trailers.apply_missing_trailers("held commit\n\nAgent-Vendor: claude\n", tmp_path)
+    assert "Agent-Vendor:" not in out
+    assert _session_ids_in(out) == [_CALLER]

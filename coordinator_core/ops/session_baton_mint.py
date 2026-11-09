@@ -3,10 +3,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.session_baton import store
+from coordinator_core.session import core
 
 
 def _err(msg: str) -> dict:
@@ -28,6 +30,8 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     Params:
         session_id (str, required) — the session whose baton is being
                     minted/updated.
+        initialize  (bool, optional) — explicitly create the session metadata
+                    before minting, for harnesses without a SessionStart hook.
         prompt      (str, optional) — the prompt to capture as
                     ``first_prompt``. Ignored (silently) when the record
                     already carries a non-``None`` ``first_prompt`` — see
@@ -68,6 +72,11 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     if not isinstance(session_id, str) or not session_id.strip():
         return _err("session_baton.mint requires a non-empty session_id")
     session_id = session_id.strip()
+    initialize = params.get("initialize", False)
+    if not isinstance(initialize, bool):
+        return _err("session_baton.mint: initialize must be a boolean")
+    if initialize and (session_id in (".", "..") or any(c in session_id for c in "/\\\0")):
+        return _err("session_baton.mint: session_id must be one path component")
 
     prompt = params.get("prompt")
     if prompt is not None and not isinstance(prompt, str):
@@ -84,6 +93,17 @@ def _handler(params: dict, repo_root: Optional[str] = None) -> dict:
     intent = params.get("intent")
     if intent is not None and not isinstance(intent, str):
         return _err("session_baton.mint: intent must be a string when supplied")
+
+    if initialize:
+        # External harnesses have no Claude SessionStart initializer. Reuse the sole
+        # session-directory constructor, with an explicit repo; never create raw dirs.
+        target = cwd or (str(repo_root) if repo_root is not None else None)
+        if not target:
+            return _err("session_baton.mint: initialize requires cwd or repo routing")
+        initialized = core.ensure_session(session_id, cwd=target)
+        if not initialized or not (Path(initialized) / "meta.json").is_file():
+            return _err("session_baton.mint: session initialization failed")
+        cwd = target
 
     existing = store.read_baton(session_id, cwd)
     created = existing.get("created_at") is None

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 
@@ -55,13 +56,19 @@ def _repo(tmp_path: Path, text: str | None = None, *, ignore_plan: bool = False,
     with plan.open("w", encoding="utf-8", newline=newline) as fh:
         fh.write(text if text is not None else _plan_text())
     (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    declared = sorted(set(re.findall(r"some/\w+\.py", text if text is not None else _plan_text())))
+    for rel in declared:
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text("v0\n", encoding="utf-8")
     if ignore_plan:
         (root / ".gitignore").write_text(PLAN + "\n", encoding="utf-8")
-        _git(root, "add", ".gitignore", "seed.txt")
+        _git(root, "add", ".gitignore", "seed.txt", *declared)
     else:
         _git(root, "add", ".")
     _git(root, "commit", "-q", "-m", "seed")
     (root / "seed.txt").write_text("checkpoint\n", encoding="utf-8")
+    for rel in declared:
+        (root / rel).write_text("v1\n", encoding="utf-8")
     _git(root, "commit", "-q", "-am", _message())
     return root, _git(root, "rev-parse", "HEAD")
 
@@ -318,6 +325,66 @@ def test_checkpoint_rows_landed_omits_stop_rule_row_until_a_bare_checkpoint(tmp_
     second = _git(root, "rev-parse", "HEAD")
     walk = checkpoint_stamp.checkpoint_rows_landed(root, PLAN, second, wanted)
     assert walk.landed == {second: frozenset({"L7"}), first: frozenset({"L6"})}
+
+
+def _writes_repo(tmp_path: Path) -> tuple:
+    """Plan rows: C1 writes in.py (in the checkpoint), C2 writes peer.py (changed after base by a
+    peer commit, not in the checkpoint), C3 writes keep.py (unchanged from base), C4 writes
+    in.py and peer.py (one landed, one not)."""
+    rows = {"C1": ("in.py",), "C2": ("peer.py",), "C3": ("keep.py",), "C4": ("in.py", "peer.py")}
+    body = "".join(
+        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n" + "".join(f"    - {w}\n" for w in ws)
+        for i, ws in rows.items()
+    )
+    text = f"---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"
+    root, _ = _repo(tmp_path, text)
+    (root / "keep.py").write_text("keep\n", encoding="utf-8")
+    _git(root, "add", "keep.py")
+    _git(root, "commit", "-q", "-m", "base")
+    base = _git(root, "rev-parse", "HEAD")
+    (root / "peer.py").write_text("peer\n", encoding="utf-8")
+    _git(root, "add", "peer.py")
+    _git(root, "commit", "-q", "-m", "peer work")
+    (root / "in.py").write_text("in\n", encoding="utf-8")
+    _git(root, "add", "in.py")
+    _git(root, "commit", "-q", "-m", "checkpoint work")
+    return root, _git(root, "rev-parse", "HEAD"), base
+
+
+def _writes_message(base: str) -> str:
+    return _message(subject="checkpoint(wave 0): 4 rows — C1, C2, C3, C4").replace("abc1234", base)
+
+
+def test_row_with_declared_path_not_in_commit_and_changed_since_base_stays_open(tmp_path):
+    root, sha, base = _writes_repo(tmp_path)
+
+    out = stamp_checkpoint(root, _writes_message(base), sha)
+
+    assert out["rows_coded"] == {PLAN: ["C1", "C3"]}
+    rows = _rows(root)
+    assert [rows[i]["disposition"] for i in ("C1", "C3")] == ["coded", "coded"]
+    assert [rows[i]["disposition"] for i in ("C2", "C4")] == ["open", "open"]
+
+
+def test_row_declaring_a_path_that_never_existed_stays_open(tmp_path):
+    rows = {"C1": ("in.py",), "C2": ("never.py",)}
+    body = "".join(
+        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n" + "".join(f"    - {w}\n" for w in ws)
+        for i, ws in rows.items()
+    )
+    text = f"---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"
+    root, _ = _repo(tmp_path, text)
+    (root / "in.py").write_text("in\n", encoding="utf-8")
+    _git(root, "add", "in.py")
+    _git(root, "commit", "-q", "-m", "checkpoint work")
+    sha = _git(root, "rev-parse", "HEAD")
+    base = _git(root, "rev-parse", "HEAD~1")
+
+    out = stamp_checkpoint(root, _message(subject="checkpoint(wave 0): 2 rows — C1, C2").replace("abc1234", base), sha)
+
+    assert out["rows_coded"] == {PLAN: ["C1"]}
+    stamped = _rows(root)
+    assert [stamped[i]["disposition"] for i in ("C1", "C2")] == ["coded", "open"]
 
 
 def test_module_top_imports_stdlib_only():

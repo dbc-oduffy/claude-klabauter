@@ -352,7 +352,9 @@ def spawn_in_capped_job(
         except OSError:
             # Parent already in a job that forbids nesting assignment: retry once, broken away.
             _kill_child(proc)
-            proc.wait()
+            # Never create a replacement while the suspended original might
+            # still exist. Timeout propagates through the job cleanup below.
+            proc.wait(timeout=2)
             proc = subprocess.Popen(
                 argv, creationflags=base_flags | CREATE_BREAKAWAY_FROM_JOB, **kwargs
             )

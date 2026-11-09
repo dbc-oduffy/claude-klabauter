@@ -90,15 +90,49 @@ def inbox_cmd(d, name, log_dir, remote, key, tunnel_remote=None):
     return cmd + ["--tunnel-remote", tunnel_remote] if tunnel_remote else cmd
 
 
+UNSUPPORTED_HOST_RC = 3  # the relay's inbox exit code for a Windows far box
+BACKOFF_BASE_SECONDS = 30
+BACKOFF_CAP_SECONDS = 600
+
+_now = time.monotonic
+# Per supervisor life: `unsupported` stops all dialing; `fails` and `retry_at` are per session name.
+_STATE = {"unsupported": False, "fails": {}, "retry_at": {}}
+
+
+def backoff_seconds(fails):
+    """Wait before respawning a client that has died `fails` times in a row without staying up."""
+    return min(BACKOFF_BASE_SECONDS * 2 ** fails, BACKOFF_CAP_SECONDS)
+
+
 def sync(clients, live, cfg, say):
     """One reconcile pass: `clients` is name -> (session pid, Popen)."""
     log_dir = os.path.dirname(os.path.abspath(cfg.log))
+    fails, retry_at = _STATE["fails"], _STATE["retry_at"]
     for name, d in live.items():
+        if _STATE["unsupported"]:
+            break
         c = clients.get(name)
-        if c and c[0] == d["pid"] and c[1].poll() is None:
-            continue
+        if c and c[0] == d["pid"]:
+            rc = c[1].poll()
+            if rc is None:
+                fails.pop(name, None)  # stayed up a poll: the next death starts the backoff over
+                continue
+            if rc == UNSUPPORTED_HOST_RC:
+                _STATE["unsupported"] = True
+                say(f"far box hosts no mirror inboxes (rc={rc}); no client is dialed again")
+                break
+            if name not in retry_at:
+                wait = backoff_seconds(fails.get(name, 0))
+                fails[name] = fails.get(name, 0) + 1
+                retry_at[name] = _now() + wait
+                say(f"client {c[1].pid} for {name} exited rc={rc}; retry in {wait}s")
+            if _now() < retry_at[name]:
+                continue
         if c:
             _roster().tree_kill(c[1].pid)
+        retry_at.pop(name, None)
+        if not (c and c[0] == d["pid"]):
+            fails.pop(name, None)
         p = _roster().spawn(inbox_cmd(d, name, log_dir, cfg.remote, cfg.key, cfg.tunnel_remote))
         clients[name] = (d["pid"], p)
         say(f"mirror {name} pid {d['pid']} -> client {p.pid}")
@@ -106,6 +140,63 @@ def sync(clients, live, cfg, say):
         # The client's ssh child holds the far inbox open; killing python alone orphans it.
         _roster().tree_kill(clients.pop(name)[1].pid)
         say(f"unmirror {name}")
+
+
+_ROUTER_MODULE = None
+
+
+def _router_module():
+    """Load the router module once: ensure_router probes every poll and every 0.2s while waiting."""
+    global _ROUTER_MODULE
+    if _ROUTER_MODULE is None:
+        spec = importlib.util.spec_from_file_location("unimatrix_peer_router", HERE / "unimatrix-peer-router.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _ROUTER_MODULE = mod
+    return _ROUTER_MODULE
+
+
+def router_answers(ctl):
+    """True when the router control endpoint answers {"op":"list"}."""
+    try:
+        return bool(_router_module().request_line(ctl, {"op": "list"}, timeout=2).get("ok"))
+    except (OSError, ValueError):
+        return False
+
+
+def ensure_router(say, wait=3.0):
+    """Spawn the peer router detached when its endpoint does not answer on either OS.
+
+    A nonblocking process lock held across probe, spawn and bind keeps two supervisors (one per far
+    alias) from both spawning. Returns True when this call spawned one.
+    """
+    if os.environ.get("UNIMATRIX_ROUTER_SUPERVISION") == "off":
+        return False
+    router = _router_module()
+    transport = router._transport()
+    ctl = router.endpoint_path(router.ROUTER_ENDPOINT_SEED)
+    lock_dir = _roster().settings_home() / "unimatrix" / "router"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    with open(lock_dir / "supervisor.lock", "a+b") as lock:
+        if not transport.lock_file(lock):
+            return False
+        try:
+            if router_answers(ctl):
+                return False
+            # A live router may be draining children with its listener already closed.
+            # Its lifetime lease prevents a replacement binding before that cleanup ends.
+            with open(lock_dir / "router.lock", "a+b") as lease:
+                if not transport.lock_file(lease):
+                    return False
+                transport.unlock_file(lease)
+            p = _roster().spawn([sys.executable, str(HERE / "unimatrix-peer-router.py")])
+            say(f"router not answering at {ctl}; spawned router pid {p.pid}")
+            deadline = time.time() + wait
+            while time.time() < deadline and not router_answers(ctl):
+                time.sleep(0.2)
+            return True
+        finally:
+            transport.unlock_file(lock)
 
 
 def main(argv=None):
@@ -125,6 +216,7 @@ def main(argv=None):
     clients = {}
     try:
         while True:
+            ensure_router(say)
             sync(clients, live_sessions(skip), cfg, say)
             time.sleep(POLL_SECONDS)
     finally:

@@ -379,3 +379,40 @@ def test_fire_refuses_when_a_peer_overwrites_the_script_before_firing(tmp_path, 
         cli_module.main(argv)
 
     assert out_path.read_bytes() == b"// a peer's different emission\n"
+
+
+def test_fire_passes_the_emitted_run_id_to_fire_workflow(tmp_path, monkeypatch):
+    """`--fire` hands the emit's run id to `fire_workflow`, which keys the not_landed
+    classification on it; a missing run id stays None."""
+    repo_root, queue_dir = _queue_fixture(tmp_path)
+    out_path = repo_root / "state" / "queue-grind" / "out.workflow.mjs"
+    monkeypatch.chdir(repo_root)
+
+    from coordinator_core.ops.dispatch_emit import op as op_module
+
+    real_dispatch_emit = op_module._dispatch_emit
+
+    def _emit_with_run_id(*args, **kwargs):
+        return {**real_dispatch_emit(*args, **kwargs), "run_id": "run-under-test"}
+
+    monkeypatch.setattr(cli_module, "_dispatch_emit", _emit_with_run_id)
+
+    seen: dict = {}
+
+    def _fake_fire(path, **kwargs):
+        seen.update(kwargs)
+        return {"fired": True}
+
+    import coordinator_core.ops.workflow_fire.fire as fire_module
+
+    monkeypatch.setattr(fire_module, "fire_workflow", _fake_fire)
+
+    argv = [
+        "--queue", str(queue_dir),
+        "--profile", "fixture",
+        "--profile-dir", str(_FIXTURE_PROFILE_DIR),
+        "--out", str(out_path),
+        "--fire",
+    ]
+    assert cli_module.main(argv) == 0
+    assert seen["run_id"] == "run-under-test"

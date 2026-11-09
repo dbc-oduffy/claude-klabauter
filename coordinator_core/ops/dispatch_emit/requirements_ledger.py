@@ -1300,6 +1300,47 @@ def _earlier_with(run: Mapping, rel: str, *, drop: str = "") -> list[str]:
     return kept if rel in kept else [*kept, rel]
 
 
+def _inherited_revisions(
+    root: Path, run: Mapping, rebound_from: Optional[str], target_rel: str,
+) -> list[tuple[str, str]]:
+    """`(text, anchor)` of each revision row still open or partial on a sizing other than `target_rel`
+    that this run inherits: `rebound_from` (the sizing it was bound to before), and the sizing each
+    run of its `resumed_from` chain was bound to. A met, deferred or waived row is not carried;
+    a sizing that cannot be read carries nothing."""
+    target = run_token.normalize_sizing_rel(root, target_rel)
+    sources: list[str] = []
+
+    def add(rel: object) -> None:
+        if isinstance(rel, str) and rel and rel not in sources and run_token.normalize_sizing_rel(root, rel) != target:
+            sources.append(rel)
+
+    add(rebound_from)
+    visited: set[str] = set()
+    cur: Mapping = run
+    for _ in range(CARRIED_HOP_CAP):
+        prev = cur.get(RESUMED_FROM_FIELD)
+        if not (isinstance(prev, str) and safe_id(prev)) or prev in visited:
+            break
+        visited.add(prev)
+        cur = read_run(run_dir(root, prev)) or {}
+        add(cur.get("sizing_rel"))
+    out: dict[str, str] = {}
+    for rel in sources:
+        try:
+            register = rr.read_register(_sizing_path(root, rel).read_text(encoding="utf-8"))
+        except (OSError, LedgerRefused):
+            continue
+        for row in register.rows if register is not None else ():
+            text = str(row.get(rr.ROW_TEXT) or "").strip()
+            anchor = row.get(rr.ROW_ANCHOR)
+            if (
+                text and isinstance(anchor, str) and _origin(anchor)[0] == ORIGIN_REVISION
+                and row.get(rr.ROW_STATUS) in (rr.STATUS_OPEN, rr.STATUS_PARTIAL)
+            ):
+                out.setdefault(text, anchor)
+    return [(text, anchor) for text, anchor in out.items()]
+
+
 def bind(
     repo_root: Path, run_id: str, sizing_rel: str, *, ask_text: Optional[str] = None,
     relayed_text: Optional[str] = None, plan_rows: Sequence[tuple[str, str]] = (),
@@ -1311,7 +1352,9 @@ def bind(
     sizing rebinds to `sizing_rel` when it is the newer (`run_token.sizing_stamp`, against the stamp
     taken when the bound sizing was bound) and lists the prior one under `EARLIER_SIZINGS_FIELD`
     for the sizing agent's validity check; an older `sizing_rel` is only listed there, the binding
-    and its register untouched; equal stamps rebind to `sizing_rel`. Raises LedgerRefused when a sizing is unreadable or the write is refused."""
+    and its register untouched; equal stamps rebind to `sizing_rel`. A first bind to `sizing_rel`
+    (a rebind, or a run resuming a predecessor bound to another sizing) carries each open or partial
+    revision row of those sizings onto its register, once (`_inherited_revisions`). Raises LedgerRefused when a sizing is unreadable or the write is refused."""
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
@@ -1358,6 +1401,9 @@ def bind(
     if entries or foreign or unbound or plan_rows:
         _append_rows(root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound, plan_rows=plan_rows)
     if not bound or rebinding:
+        inherited = _inherited_revisions(root, run, bound if rebinding else None, sizing_rel)
+        if inherited:
+            _append_rows(root, sizing_rel, inherited, reuse={})
         updated = {**run, "sizing_rel": sizing_rel, SIZING_STAMP_FIELD: stamp}
         if rebinding:
             updated[EARLIER_SIZINGS_FIELD] = _earlier_with(run, bound, drop=sizing_rel)
@@ -2264,13 +2310,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             f"{plan_rel} pinned register row(s) {', '.join(drifted)} that this register no longer matches: "
             "the plan will be pulled on register-pin-drift."
         )
-    unclaimed_result = _unclaimed_rows(root, ledger.sizing_rel)
-    unclaimed_plan, unclaimed = unclaimed_result
+    unclaimed_plan, unclaimed = _unclaimed_rows(root, ledger.sizing_rel, spine=True)
     if unclaimed:
         out["unclaimed_rows"] = unclaimed
         warnings.append(
-            f"{unclaimed_plan} omits register row(s) {', '.join(unclaimed)} in register_claims.rows"
-            + (": the refire's ledger re-plan leg adds rows serving them." if not live else ".")
+            f"{unclaimed_plan}: no plan row claims register row(s) {', '.join(unclaimed)}"
+            + (": the refire's ledger re-plan leg adds rows serving them." if not live else
+               ": add a row whose register_rows names them (next.call).")
         )
     refused: list[dict] = list(widen_refused)
     if params.get("build_only") and not outcome.get("research_dropped"):
@@ -2283,10 +2329,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     elif not live and _sizing_shipped(root, ledger.sizing_rel):
         out["note"] = "run closes: the sizing is shipped, every row is credited, and no refire is owed."
     elif not live:
-        out.update(_refire(ledger.sizing_rel, root, unclaimed_result, halted=halted))
+        out.update(_refire(ledger.sizing_rel, root, halted=halted))
     elif verify_staged(dir_):
         out["lands_on_refire"] = True
-        out.update(_refire(ledger.sizing_rel, root, unclaimed_result))
+        out.update(_refire(ledger.sizing_rel, root))
         out["note"] = (
             "run live, verify already staged: the run's late-row read has passed, so no leg of this run "
             "executes or reads this revision; " + out["note"].replace("run finished: ", "", 1) + " Fire next.call to land it."
@@ -2299,6 +2345,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             + "the pre-verify late-row leg re-plans it once and runs one bounded executor leg briefed with only "
             "that row, then verify and the ledger-fix leg judge it in this run, with no halt and no second fire."
         )
+    if unclaimed and live and "next" not in out:
+        out["next"] = _add_task_next(unclaimed_plan, unclaimed)
+    if params.get("note") and not outcome.get("note_refused") and _REQUIREMENT_MODAL.search(params["note"]):
+        out["note_mints_no_row"] = "note stored as context; it mints no register row: send it as verbatim to bind it"
     applied = [f"row {added}"] if added else []
     applied += [k for k in _APPLIED_KEYS if out.get(k)]
     if landed_sha:
@@ -2493,9 +2543,13 @@ def pinned_plan_drift(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[s
     return (edge, [d["id"] for d in drift]) if drift else (None, [])
 
 
-def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], list[str]]:
+def _unclaimed_rows(
+    root: Path, sizing_rel: Optional[str], spine: bool = False,
+) -> tuple[Optional[str], list[str]]:
     """`(plan_rel, register row ids the plan's register_claims omit)` for the sizing's `plan:` edge;
-    `(None, [])` when the sizing has no readable plan claiming it. File reads only."""
+    `(None, [])` when the sizing has no readable plan claiming it. `spine=True` also names the rows no
+    spine row claims through `register_rows` (workflow.revise's report; the gates and the refire's re-plan
+    leg keep the frontmatter answer). File reads only."""
     edge, plan, sizing_text = _sizing_plan(root, sizing_rel)
     if plan is None:
         return None, []
@@ -2509,9 +2563,48 @@ def _unclaimed_rows(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str
     if not isinstance(claims, dict) or claims.get("sizing") != sizing_rel or not isinstance(claims.get("rows"), list):
         return None, []
     register = rr.read_register(sizing_text)
+    if register is None:
+        return None, []
     claimed = {str(r) for r in claims["rows"]}
-    missing = rr.unclaimed_ids(register.rows, claimed, exclude=ruled_out_ids(register.rows)) if register else []
+    ruled_out = ruled_out_ids(register.rows)
+    omitted = set(rr.unclaimed_ids(register.rows, claimed, exclude=ruled_out))
+    spine_rows = _spine_rows(plan_text) if spine else None
+    if spine_rows is not None:
+        omitted |= set(rr.spine_unclaimed_ids(register.rows, spine_rows, exclude=ruled_out))
+    missing = [str(r[rr.ROW_ID]) for r in register.rows if str(r.get(rr.ROW_ID)) in omitted]
     return (edge, missing) if missing else (None, [])
+
+
+def _spine_rows(plan_text: str) -> Optional[list]:
+    """The plan's `plan-tasks` spine rows, or None when the plan has no readable spine (a plan not yet
+    written out claims through its frontmatter alone)."""
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+    try:
+        located = locate_fenced_block(plan_text)
+        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+    except yaml.YAMLError:
+        return None
+    return rows if isinstance(rows, list) else None
+
+
+def _add_task_next(plan_rel: str, rows: Sequence[str]) -> dict:
+    """`next` for register rows no plan row claims: the `plan.tasks.mutate` add-task call whose task
+    carries `register_rows`; its `<...>` fields are the caller's to fill (writes are not knowable from a
+    requirement text, so the engine never authors the row)."""
+    task = {
+        "id": "<next id>", "title": "...", "change_kind": "<kind>", "surface": "<path>",
+        "writes": ["<path>"], "register_rows": list(rows), "disposition": "open",
+    }
+    call = "coordinator-invoke plan.tasks.mutate '" + json.dumps(
+        {"verb": "add-task", "plan_path": plan_rel, "task": task}, separators=(",", ":")
+    ).replace("'", "'\\''") + "'"
+    return {"kind": "add-task", "call": call}
+
+
+_REQUIREMENT_MODAL = re.compile(r"\b(must|has to|needs? to|required|should|shall)\b", re.IGNORECASE)
 
 
 def _sizing_shipped(root: Path, sizing_rel: Optional[str]) -> bool:

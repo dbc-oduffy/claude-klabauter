@@ -72,6 +72,49 @@ def test_slow_claims_phase_is_named(tmp_path, monkeypatch):
     assert rows[0]["legs"][0]["name"] == "claims"
 
 
+def test_slow_guard_stops_later_guards_at_the_hook_deadline_and_is_named(tmp_path, monkeypatch):
+    from coordinator_core.hooks import _preuse_phases as pp
+
+    ran: list[str] = []
+
+    def slow():
+        ran.append("slow-guard")
+        time.sleep(0.2)
+
+    def later():
+        ran.append("later-guard")
+
+    band = list(chain.GuardBand)[0]
+    entries = [
+        chain.GuardEntry(name="slow-guard", fn=slow, fail_closed=False, band=band),
+        chain.GuardEntry(name="later-guard", fn=later, fail_closed=False, band=band),
+    ]
+    monkeypatch.setattr(chain, "_build_guard_chain", lambda *a, **k: entries)
+    monkeypatch.setattr(pp, "_door_deadline_s", lambda: 2.1)
+    rows = _call(tmp_path, monkeypatch)
+    assert ran == ["slow-guard"]
+    row = rows[0]
+    assert row["slow_phase"] == "slow-guard"
+    assert row["deadline_stop"] == "later-guard"
+    assert row["spans"][0]["wall_ms"] >= 150
+
+
+def test_guard_within_the_deadline_is_not_stopped(tmp_path, monkeypatch):
+    from coordinator_core.hooks import _preuse_phases as pp
+
+    ran: list[str] = []
+    band = list(chain.GuardBand)[0]
+    entries = [
+        chain.GuardEntry(name="first", fn=lambda: ran.append("first"), fail_closed=False, band=band),
+        chain.GuardEntry(name="second", fn=lambda: ran.append("second"), fail_closed=False, band=band),
+    ]
+    monkeypatch.setattr(chain, "_build_guard_chain", lambda *a, **k: entries)
+    monkeypatch.setattr(pp, "_door_deadline_s", lambda: 60.0)
+    rows = _call(tmp_path, monkeypatch)
+    assert ran == ["first", "second"]
+    assert "deadline_stop" not in rows[0]
+
+
 def test_other_ops_rows_carry_no_attribution_fields(tmp_path, monkeypatch):
     async def handler(params, repo_root=None):
         return {}

@@ -29,12 +29,18 @@ _CORPUS = {
 }
 
 _PINS = {
+    "text_auto_eol_crlf": ("* text=auto eol=crlf\n", "f.txt"),
+    "text_set_eol_crlf": ("* text eol=crlf\n", "f.txt"),
+    "eol_crlf_only": ("*.x eol=crlf\n", "f.x"),
     "text_auto_eol_lf": ("* text=auto eol=lf\n", "f.txt"),
     "text_auto": ("* text=auto\n", "f.txt"),
     "text_set": ("* text\n", "f.txt"),
     "text_set_eol_lf": ("* text eol=lf\n", "f.txt"),
     "eol_lf_only": ("*.x eol=lf\n", "f.x"),
     "auto_then_eol_override": ("* text=auto\n*.x eol=lf\n", "f.x"),
+    "cmd_text_eol_crlf": ("*.cmd text eol=crlf\n", "f.cmd"),
+    "cmd_eol_crlf_only": ("*.cmd eol=crlf\n", "f.cmd"),
+    "cmd_text_auto_eol_crlf": ("*.cmd text=auto eol=crlf\n", "f.cmd"),
 }
 
 
@@ -77,7 +83,31 @@ def test_returned_bytes_hash_like_real_git_or_refuse(tmp_path, pin, shape):
     assert _blob_sha(got) == _real(root, rel, data)
 
 
-@pytest.mark.parametrize("pin", ["text_auto_eol_lf", "text_set", "eol_lf_only"])
+@pytest.mark.parametrize("autocrlf", ["true", "false"])
+@pytest.mark.parametrize("pin", ["cmd_text_eol_crlf", "cmd_eol_crlf_only", "cmd_text_auto_eol_crlf"])
+@pytest.mark.parametrize("shape", sorted(_CORPUS))
+def test_eol_crlf_pin_hashes_like_real_git_under_autocrlf(tmp_path, pin, shape, autocrlf):
+    attrs, rel = _PINS[pin]
+    root = _repo(tmp_path, attrs)
+    _git(root, "config", "core.autocrlf", autocrlf)
+    data = _CORPUS[shape]
+    try:
+        got = _checkin_bytes(root, rel, data)
+    except FilterUnsupported:
+        return
+    assert _blob_sha(got) == _real(root, rel, data)
+
+
+@pytest.mark.parametrize("pin", ["cmd_text_eol_crlf", "cmd_eol_crlf_only"])
+@pytest.mark.parametrize("shape", ["crlf", "mixed", "lone_cr", "trailing_lone_cr"])
+def test_eol_crlf_explicit_pin_is_converted_in_process(tmp_path, pin, shape):
+    attrs, rel = _PINS[pin]
+    root = _repo(tmp_path, attrs)
+    data = _CORPUS[shape]
+    assert _checkin_bytes(root, rel, data) == data.replace(b"\r\n", b"\n")
+
+
+@pytest.mark.parametrize("pin", ["text_auto_eol_lf", "text_set", "eol_lf_only", "text_auto_eol_crlf", "text_set_eol_crlf", "eol_crlf_only"])
 def test_plain_crlf_is_converted_in_process(tmp_path, pin):
     attrs, rel = _PINS[pin]
     root = _repo(tmp_path, attrs)
@@ -109,9 +139,7 @@ def test_text_auto_binary_content_passes_through_raw(tmp_path):
 @pytest.mark.parametrize(
     "attrs,rel",
     [
-        ("* eol=crlf\n", "f.txt"),
-        ("* text eol=crlf\n", "f.txt"),
-        ("* text=auto eol=crlf\n", "f.txt"),
+        ("* -text eol=crlf\n", "f.txt"),
         ("* -text eol=lf\n", "f.txt"),
         ("[attr]mac text\n* mac\n", "f.txt"),
         ("* text=weird\n", "f.txt"),

@@ -10,7 +10,7 @@ import pytest
 from coordinator_core.ops.plan_chain import contract
 
 SCHEMA = Path(contract.__file__).resolve().parents[2] / "contract" / "doe-wake-digest.schema.json"
-SCHEMA_SHA256 = "8336c6f30d506c4a5234eaaa6c609b8e952521e9447e3d947e14dc2cc535dbe4"
+SCHEMA_SHA256 = "0006556853a999e16628b618f62c827ce3617b26c9043b89e21a33eee181da0d"
 
 
 def _schema() -> dict:
@@ -41,8 +41,8 @@ def test_halts_cover_c0_table():
 def test_vendored_schema_sha256_pinned():
     actual = hashlib.sha256(SCHEMA.read_bytes()).hexdigest()
     assert actual == SCHEMA_SHA256, (
-        "doe-wake-digest.schema.json drifted from coordinator-content-repo@0bb5828928 "
-        "(1.4.0); re-vendor, do not edit"
+        "doe-wake-digest.schema.json drifted from coordinator-content-repo@178e0baa9f "
+        "(1.5.0); re-vendor, do not edit"
     )
 
 

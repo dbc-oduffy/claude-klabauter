@@ -165,8 +165,9 @@ def build_landing_export(
     *,
     base_export: Optional[Path] = None,
     base_sha: Optional[str] = None,
+    target_sha: Optional[str] = None,
 ) -> LandingExport:
-    """Materialise HEAD plus `landing_paths` (worktree bytes) at `out_dir`.
+    """Materialise `target_sha` (default HEAD) plus `landing_paths` (worktree bytes) at `out_dir`.
 
     `base_export` must hold the tree of commit `base_sha`; it is consumed (moved to
     `out_dir`). Argument refusals raise LandingExportError before `base_export` is touched; a
@@ -186,7 +187,7 @@ def build_landing_export(
         raise LandingExportError(f"base export is not a directory: {base_export}")
     if out.exists() and out != base:
         raise LandingExportError("out_dir already exists")
-    head = head_sha(root, fresh=True)
+    head = target_sha or head_sha(root, fresh=True)
     if not head:
         raise LandingExportError("HEAD unresolved")
     common = resolve_git_common_dir(root)
@@ -280,9 +281,9 @@ def _seed_state_invariant_inputs(common_dir: Path, head_tree: str, dest: Path) -
 
 
 def build_head_export(
-    worktree_root: Path, out_dir: Path, landing_paths: Sequence[str]
+    worktree_root: Path, out_dir: Path, landing_paths: Sequence[str], sha: Optional[str] = None
 ) -> LandingExport:
-    """Extract HEAD (one git spawn) at `out_dir`, then overlay `landing_paths` worktree bytes.
+    """Extract `sha` (default HEAD; one git spawn) at `out_dir`, then overlay `landing_paths` worktree bytes.
 
     A prior export at `out_dir` is replaced. The extraction goes to the sibling `<out_dir>.base`,
     which `build_landing_export` consumes; on failure it is removed. DATA_DIRS stay unextracted;
@@ -296,7 +297,7 @@ def build_head_export(
         raise LandingExportError(f"out_dir must be under {scratch.name}/ of the repo")
     for p in landing_paths:
         _norm_landing(root, p)
-    head = head_sha(root, fresh=True)
+    head = sha or head_sha(root, fresh=True)
     if not head:
         raise LandingExportError("HEAD unresolved")
     warp = root / "scratch" / "warp"
@@ -313,7 +314,7 @@ def build_head_export(
         common = resolve_git_common_dir(root)
         _seed_state_invariant_inputs(common, _commit_tree(common, head), staging)
         return build_landing_export(
-            root, out, landing_paths, base_export=staging, base_sha=head
+            root, out, landing_paths, base_export=staging, base_sha=head, target_sha=head
         )
     except (baseline_export.ExportError, OSError, ValueError) as exc:
         raise LandingExportError(f"head export failed: {exc}") from None

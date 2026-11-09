@@ -443,6 +443,7 @@ rationale.
 | `COORDINATOR_OVERRIDE_BLANKET_ADD` | `blanket-git-add` (`check_blanket_git_add`) | `bash_guards/dispatch_checks.py` |
 | `COORDINATOR_OVERRIDE_VENV_CREATION` (launch-time key) | `block-venv-creation` | `bash_guards/block_venv_creation.py` |
 | `COORDINATOR_OVERRIDE_RAW_PID_LIVENESS` | `check-raw-pid-liveness` | `bash_guards/check_raw_pid_liveness.py` |
+| `COORDINATOR_OVERRIDE_PUSH_DELETE` | `block-empty-source-push` | `bash_guards/block_empty_source_push.py` |
 | `COORDINATOR_OVERRIDE_ILLEGAL_FILENAME` (Bash leg) | `block-illegal-filename` | `bash_guards/block_illegal_filename.py` |
 | `COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE` | `check_staged_pathspec_divergence` | `bash_guards/commit_tripwires.py` |
 | `COORDINATOR_ALLOW_CD_PREFIX` | `offer-git-c` (`check_offer_git_c`) | `bash_guards/guard_offer_git_c.py` |

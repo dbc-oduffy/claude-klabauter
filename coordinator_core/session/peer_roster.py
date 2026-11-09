@@ -137,14 +137,15 @@ def _worker_rows(
     rows: List[PeerRow] = []
     for rec in records:
         try:
+            provider = str(rec.get("provider") or "codex")
             cwd = rec.get("cwd")
             if not box_wide and not _cwd_within_repo(cwd, repo_root):
                 continue
             rows.append(
                 PeerRow(
-                    session_id=f"codex:{rec['run_id']}",
+                    session_id=f"{provider}:{rec['run_id']}",
                     address=None,
-                    name=f"codex-{rec.get('mode')}",
+                    name=f"{provider}-{rec.get('mode')}",
                     ref=None,
                     cwd=cwd,
                     status="running",
@@ -152,7 +153,7 @@ def _worker_rows(
                     is_self=False,
                     self_determination="resolved",
                     messaging_available=messaging_available,
-                    kind="codex",
+                    kind=provider,
                     pid=int(rec["pid"]),
                 )
             )
@@ -376,6 +377,8 @@ def build_roster(
                 is_self=(sid == self_sid),
                 self_determination=self_determination,
                 messaging_available=harness_messaging_available,
+                kind=getattr(record, "provider", "claude"),
+                pid=record.pid,
             )
         )
     rows.extend(_worker_rows(effective_root, box_wide, harness_messaging_available, now))

@@ -859,3 +859,26 @@ def test_write_launcher_refuses_children_emitted_without_the_parents_stop_after(
 def test_write_launcher_without_a_parked_lineage_is_unchanged(tmp_path):
     path, script = _write(tmp_path)
     assert path.exists() and "stop_after" not in script
+
+
+def test_emit_leg_reconciles_a_32004_before_any_reply_is_judged(tmp_path):
+    from coordinator_core.ops.dispatch_emit.fan_launcher import EMIT_RECONCILE_CLAUSE
+
+    _, script = _write(tmp_path)
+    leg = script[script.index("async function _emitLeg"):script.index("async function _abandonAll")]
+    assert "const EMIT_RECONCILE = " in script and json.dumps(EMIT_RECONCILE_CLAUSE) in script
+    assert "' + EMIT_RECONCILE" in leg
+    assert "-32004" in EMIT_RECONCILE_CLAUSE and "reconcile_command" in EMIT_RECONCILE_CLAUSE
+    assert "not_received" in EMIT_RECONCILE_CLAUSE and "never invent a path or run_id" in EMIT_RECONCILE_CLAUSE
+    assert "__EMIT_RECONCILE__" not in script
+
+
+@pytest.mark.spawns_process
+def test_unreconciled_32004_emit_reply_is_an_emit_failure_never_an_empty_run_id(tmp_path):
+    _, script = _write(tmp_path)
+    indeterminate = {"path": "", "run_id": "", "fire_args": {}, "error": "-32004 warm dispatch indeterminate"}
+    got = _chain_refusal(script, "ask-r1", indeterminate)
+    assert got == "emit failed: -32004 warm dispatch indeterminate"
+    assert "run id" not in got
+    silent = {"path": "", "run_id": "", "fire_args": {}}
+    assert _chain_refusal(script, "ask-r1", silent) == "emit reply path is not a non-empty string"

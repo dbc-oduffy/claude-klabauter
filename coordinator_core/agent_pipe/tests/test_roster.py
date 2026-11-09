@@ -73,6 +73,21 @@ def test_hook_bound_codex_peer_resolves_to_codex_binding(tmp_path, monkeypatch):
     assert "cx-1a" in roster.list()
 
 
+@pytest.mark.parametrize("vendor", ["agy", "grok"])
+def test_peer_row_for_agy_and_grok_resolves_to_its_kind(tmp_path, vendor):
+    _write_peers(tmp_path, [{"name": f"{vendor}-1", "vendor": vendor, "target": "conv-7"}])
+    assert roster.resolve(f"{vendor}-1") == {"kind": vendor, "id": "conv-7", "token": None, "argv": None}
+    assert roster.list()[f"{vendor}-1"]["kind"] == vendor
+
+
+def test_agy_and_grok_peers_coexist_in_one_peers_file(tmp_path):
+    _write_peers(
+        tmp_path,
+        [{"name": "a", "vendor": "agy", "target": "c1"}, {"name": "g", "vendor": "grok", "target": "c2"}],
+    )
+    assert roster.resolve("a")["kind"] == "agy" and roster.resolve("g")["kind"] == "grok"
+
+
 def test_roster_entry_shadows_peers_row(tmp_path):
     _write_peers(tmp_path, [{"name": "em", "vendor": "codex", "target": "thr-old"}])
     roster.bind("em", "claude", "sess-1")

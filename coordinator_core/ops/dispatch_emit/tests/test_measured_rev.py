@@ -203,10 +203,23 @@ def test_refuses_when_no_head(tmp_path):
 
 
 def test_refuses_unsupported_filter(repo):
-    (repo / ".gitattributes").write_text("*.pin text eol=crlf\n")
+    (repo / ".gitattributes").write_text("*.pin filter=unmodelled\n")
     (repo / "a.pin").write_bytes(b"x\r\n")
     with pytest.raises(mr.MeasuredRevRefused):
         mr.measured_rev("run-6", ["a.pin"], repo_root=repo)
+
+
+@pytest.mark.parametrize("autocrlf", ["true", "false"])
+def test_crlf_pinned_cmd_is_measured_to_the_blob_git_records(repo, autocrlf):
+    (repo / ".gitattributes").write_text("*.cmd text eol=crlf\n")
+    _git(repo, "add", ".gitattributes")
+    _git(repo, "commit", "-q", "-m", "pin")
+    _git(repo, "config", "core.autocrlf", autocrlf)
+    (repo / "claude-author.cmd").write_bytes(b"@echo off\r\nexit /b 0\r\n")
+    out = mr.measured_rev("run-cmd", ["claude-author.cmd"], repo_root=repo)
+    real = _git(repo, "hash-object", "--path=claude-author.cmd", "claude-author.cmd")
+    assert out["blobs"]["claude-author.cmd"] == real
+    assert _git(repo, "cat-file", "blob", real) == "@echo off\nexit /b 0"
 
 
 def test_unparseable_py_is_refused_and_parseable_py_is_accepted(repo):
@@ -288,6 +301,14 @@ def test_handler_measures_the_worktree_when_ipc_passes_the_git_dir(repo):
     assert out["base_sha"] == _git(repo, "rev-parse", "HEAD").strip()
 
 
+def test_crlf_cmd_pin_matches_git_checkin(repo):
+    (repo / ".gitattributes").write_text("*.cmd text eol=crlf\n")
+    (repo / "a.cmd").write_bytes(b"echo hello\r\n")
+    out = mr.measured_rev("run-crlf-cmd", ["a.cmd"], repo_root=repo)
+    expected = _git(repo, "hash-object", "--path=a.cmd", "a.cmd").strip()
+    assert out["blobs"]["a.cmd"] == expected
+
+
 def _cr_pinned_repo(repo):
     (repo / ".gitignore").write_text("build/\n")
     _git(repo, "add", "-A")
@@ -347,3 +368,9 @@ def test_withheld_path_is_removed_from_every_input(repo):
     out = mr.measured_rev("run-cr4", ["edit.txt", "loose.bin"], repo_root=repo)
     assert out["paths"] == ["edit.txt"]
     assert "loose.bin" not in out["removed"]
+def test_crlf_cmd_pin_matches_git_checkin(repo):
+    (repo / ".gitattributes").write_text("*.cmd text eol=crlf\n")
+    (repo / "a.cmd").write_bytes(b"echo hello\r\n")
+    out = mr.measured_rev("run-crlf-cmd", ["a.cmd"], repo_root=repo)
+    expected = _git(repo, "hash-object", "--path=a.cmd", "a.cmd").strip()
+    assert out["blobs"]["a.cmd"] == expected

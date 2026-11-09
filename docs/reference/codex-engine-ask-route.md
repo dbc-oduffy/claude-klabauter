@@ -58,19 +58,19 @@ coordinator-invoke workflow.fire '{"script_path": "<script_path>", "expected": "
 the script bytes changed since submit. Passing `"fire": true` in step 1 does both calls: the reply then
 carries `fire` (the registry record), or `fire_error` with the run handle kept when the fire failed
 after a good submit. With `fire: true`, `notify_to` defaults to `caller`; an explicit peer name overrides it.
-Poll using the `fire_id` from the fire reply (`result.fire_id`, or `result.fire.fire_id`
-when submitted with `fire: true`):
-
-```
-coordinator-invoke workflow.fire_status '{"fire_id":"<fire_id>"}' --repo <absolute checkout path>
-```
-
-`workflow.fire_status` refreshes and may write its registry record. It is not a read-only probe.
-`found: false` means the fire record was not found in the selected repo. A terminal driver state
-or `outcome: clean` does not establish phase success; inspect the recorded run's actual artifacts.
+The warm engine observes driver exit and delivers the completion notice. The caller
+waits for that notice without polling or relaying the live run. After a terminal notice,
+`workflow.fire_status` can reconcile the recorded handle and outcome; driver exit and
+`outcome: clean` do not establish phase success.
 
 For Windows or arbitrary free text, write a UTF-8 JSON file with Python and supply
 `--params-file <absolute JSON path>`; the heredoc example is for POSIX shells.
+
+A matching verified script already reserved or executed returns its existing fire handle and
+`already_fired`; it does not start another driver. A pending reservation whose owner disappeared
+can report `execution_started: null`: inspect the handle and run artifacts before taking action.
+An exited driver with a failing phase is still an executed run; use the revision route to repair
+the work rather than firing the same digest again.
 
 ## Revise
 
@@ -83,12 +83,22 @@ in `coordinator_core/ops/dispatch_emit/requirements_ledger.py :: revise`.
 
 ## Completion
 
-`workflow.fire` persists `notify_to` in the fire record. A subsequent `workflow.fire_status` call
-that observes driver exit attempts delivery through `agent_pipe` and persists `notify_status` and
-`notified_at`. Refused or unroutable attempts retain `notify_error` and can retry on a later poll.
-There is no additional watcher: keep polling to observe completion and trigger delivery.
-Notification persistence failure preserves the fire handle and returns `notify_error`; do not
-fire a second driver to repair a notification failure.
+`workflow.fire` persists `notify_to` in the fire record. The warm engine's idle watchdog
+observes these records, refreshes driver state, and delivers terminal notices through
+`agent_pipe`. Pending deliveries to live or unknown recipients keep the engine active; terminal notices for known-ended default UUID recipients remain on disk without holding the engine open. Resuming that thread allows retry. a successor discovers persisted
+records after restart. Refused or unroutable attempts retain `notify_error` and retry on
+later watchdog ticks. The caller never polls to trigger delivery.
+
+Notification attempts use the shared nonblocking kernel-backed per-record lock, also used by status reads and ordinary fire sweeps. Stable message IDs allow recipient deduplication.
+Delivery is at least once across a crash after bridge acceptance but before persistence;
+a persisted `notified_at` suppresses subsequent attempts. The kernel releases a crashed observer's lock automatically.
+Directory discovery advances 128 records in one repo per watchdog tick, rotating repos;
+one active delivery is refreshed per tick, rotating records (currently five seconds per tick). Registry unavailability does
+not block other repos. An installed warm engine must be running for observation; after
+an operator stops it, restart the engine through its supported launch path.
+
+Notification persistence failure preserves the fire handle; do not fire a second driver
+to repair a notification failure.
 
 `agent_pipe.roster.resolve` reads `roster.json` first, then the SessionStart hook's `peers.json`.
 A resolved Codex identity still requires a working delivery leg. A `handed-off` delivery status
@@ -113,3 +123,10 @@ unset to use model defaults; a fixed token count does not scale across different
 Existing sessions may require a resume or a new session to pick up configuration changes.
 Validate installed-version support with `codex app-server --strict-config --print-startup-config`.
 Reference: https://developers.openai.com/codex/config-reference/.
+
+## Native workers and named reviewers
+
+See [external-agent-workers.md](external-agent-workers.md) for POSIX worker launch, native
+Windows PowerShell launch, and asynchronous `codex_runner.start` / `codex_runner.result` named
+reviews. See [non-claude-session-identity.md](non-claude-session-identity.md) for native session
+bootstrap and engine attribution. These routes preserve the caller identity across the warm engine.

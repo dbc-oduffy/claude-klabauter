@@ -53,8 +53,28 @@ def resolve_codex(platform: Optional[str] = None, env: Optional[dict] = None) ->
         path = (os.environ if env is None else env).get("PATH", "")
         found = shutil.which("codex", path=path)
         if found:
+            if (platform or sys.platform).startswith("win") and Path(found).suffix.lower() in {".cmd", ".bat"}:
+                return [_native_npm_codex(Path(found))]
             return [found]
         raise CodexUnavailable(f"{fnm_miss}; codex not on PATH either") from fnm_miss
+
+
+def _native_npm_codex(shim: Path) -> str:
+    """Resolve npm's optional native package without executing its .cmd shim."""
+    import platform
+
+    arch = "arm64" if platform.machine().lower() in {"arm64", "aarch64"} else "x64"
+    triple = "aarch64-pc-windows-msvc" if arch == "arm64" else "x86_64-pc-windows-msvc"
+    package = shim.parent / "node_modules" / "@openai" / "codex"
+    candidates = (
+        package / "node_modules" / "@openai" / f"codex-win32-{arch}" / "vendor" / triple / "bin" / "codex.exe",
+        package / "vendor" / triple / "codex" / "codex.exe",
+        package / "vendor" / triple / "bin" / "codex.exe",
+    )
+    for candidate in candidates:
+        if candidate.is_file():
+            return str(candidate)
+    raise CodexUnavailable(f"native Codex binary absent beside {shim}; reinstall @openai/codex with optional dependencies")
 
 
 def _resolve_fnm(platform: Optional[str], env: Optional[dict]) -> list[str]:

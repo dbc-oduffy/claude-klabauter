@@ -242,6 +242,7 @@ import re
 import shlex
 import stat
 import sys
+import time
 import uuid
 from dataclasses import replace
 from datetime import datetime
@@ -1612,6 +1613,9 @@ def _research_route_setup(
     run_id = research_emit.run_id_for(
         root, RUN_DIR_ROOT, f"{RUN_ID_PREFIX}research-", digest, datetime.now().strftime("%Y%m%dT%H%M%S")
     )
+    websearch_warning = research_emit.websearch_budget_warning(
+        research_emit.live_research_runs(root, RUN_DIR_ROOT, f"{RUN_ID_PREFIX}research-", run_id, time.time())
+    )
     local_root = _local_only_root(params, research)
     if local_root is None:
         scratch_rel = _pipeline_scratch_rel(root, params.get("scratch_dir"), run_id)
@@ -1824,6 +1828,7 @@ def _research_route_setup(
             ],
         },
         "multi_repo": multi_repo,
+        "websearch_budget_warning": websearch_warning,
         "next_action": {"op": "research.close", "params": close_params},
         "legs": research_emit.halt_legs([m.pipeline for m, _, _ in segments]),
     }
@@ -3383,6 +3388,8 @@ def _dispatch_emit_body(
         reply["next_action"] = research_ctx["next_action"]
         if research_ctx["multi_repo"]:
             reply["multi_repo"] = research_ctx["multi_repo"]
+        if research_ctx["websearch_budget_warning"]:
+            reply["websearch_budget_warning"] = research_ctx["websearch_budget_warning"]
 
     if inventory_path:
         reply["landed_reconciled"] = landed_reconciled

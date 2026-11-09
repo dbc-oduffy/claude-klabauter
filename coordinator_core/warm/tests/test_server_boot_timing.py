@@ -1,7 +1,27 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
+import textwrap
+
 from coordinator_core.warm import server, telemetry
+
+
+def _called_names(fn) -> set:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    return {
+        node.func.id
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    }
+
+
+def test_the_serving_process_imports_no_op_registry_before_its_first_answer():
+    """The server process runs no op, so a registry import on its boot path puts 0.6-2.8s of CPU
+    ahead of the first answer (budget: 500ms). Only the pool worker's initializer preloads it."""
+    assert "_preload_op_registry" not in _called_names(server._run_guarded)
+    assert "_preload_op_registry" in _called_names(server._worker_process_init)
 
 
 def test_unstamped_spawn_reads_as_unmeasurable(monkeypatch):

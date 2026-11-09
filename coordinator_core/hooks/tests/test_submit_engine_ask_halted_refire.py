@@ -308,6 +308,28 @@ def test_a_stalled_lookup_whose_deferred_script_cannot_be_written_still_never_re
     assert len(seen) == 1
 
 
+def test_a_stalled_emitted_run_lookup_is_a_deferred_emit_not_a_refusal(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    halted = _halted_repo(tmp_path, "alpha")
+    monkeypatch.setattr(halted_run, "halted_run_to_resume", lambda *a, **k: None)
+    monkeypatch.setattr(hook, "_unmarked_emitted_run", lambda *a, **k: hrr.STALLED)
+    seen: list = []
+
+    def emit(params, root):
+        seen.append(params)
+        return {"path": str(root / "run.js"), "run_id": "r1", "fire_args": {}}
+
+    env = hook.evaluate(json.loads(_payload(halted)), emit=emit)
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", env
+    assert "Re-submit once" not in json.dumps(env)
+    assert seen == []
+    assert "deferred emit defer-" in hso["permissionDecisionReason"]
+
+
 def test_an_unbuilt_lookup_index_on_the_hook_path_answers_without_building_it(tmp_path):
     """The default hook entry (no `build`) is the emit's lookup; the hook's `build=False` never writes the index."""
     from coordinator_core.ops.dispatch_emit import halted_run
@@ -447,8 +469,11 @@ def test_real_launcher_script_carries_every_child_and_maps_each_result(tmp_path,
 
     monkeypatch.setattr(hook, "_default_emit", fake_emit)
     script = hook._default_launch(tmp_path, "ask-parent-20261028T000000-aaaaaa", children, _SESSION)
-    assert len(emitted_params) == len(ready)
-    assert all(p[LAUNCHER_CHILD_EMIT_PARAM] is True for p in emitted_params)
+    assert emitted_params == []  # the hook pays no per-child emit; the launcher child emits
+    deferred = sorted((tmp_path / "scratch" / "warp").glob("defer-*.workflow.mjs"))
+    assert len(deferred) == len(ready)
+    sent = [json.loads(f.read_text(encoding="utf-8")) for f in (tmp_path / "scratch" / "warp").glob("defer-params-*.json")]
+    assert len(sent) == len(ready) and all(p[LAUNCHER_CHILD_EMIT_PARAM] is True for p in sent)
     text = script.read_text(encoding="utf-8")
     assert all(r.run_id in text for r in ready)
     assert "CHILDREN.map((child, i)" in text and "child threw" in text
@@ -614,8 +639,159 @@ def test_recompose_spawns_only_when_the_stored_script_is_gone(tmp_path, monkeypa
         assert spawned == [halted_id] and launched == [[halted_id]]
 
 
+_RECOMPOSE_ID = "warp-2026-10-29-miss-20261029T010101-abc123"
+
+
+def _missing_script_refire(tmp_path, monkeypatch, *, spawn_result, refused=None, log_text=None):
+    """The reason text of a halted refire whose stored script is gone, with `_spawn_recompose` stubbed."""
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+
+    payload, _ = _stored_record_repo(tmp_path, _RECOMPOSE_ID, script_on_disk=False)
+    rd = tmp_path / RECORD_DIR_ROOT / _RECOMPOSE_ID
+    if refused is not None:
+        record = hrr.read(rd, 1000)
+        record["gate_verdict"] = {"refused": refused}
+        hrr.write(rd, record)
+    if log_text is not None:
+        log = tmp_path / "state" / "housekeeping-failures.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(log_text, encoding="utf-8")
+    monkeypatch.setattr(hook, "_spawn_recompose", lambda root, run_id: spawn_result)
+    launcher = tmp_path / "launcher.js"
+    launcher.write_text("//", encoding="utf-8")
+    env = hook.evaluate(payload, emit=lambda p, r: pytest.fail("plain emit"), launch=lambda *a: launcher)
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    return env["hookSpecificOutput"]["additionalContext"] if "additionalContext" in env["hookSpecificOutput"] else json.dumps(env)
+
+
+def test_a_started_recompose_is_reported_as_started(tmp_path, monkeypatch):
+    text = _missing_script_refire(tmp_path, monkeypatch, spawn_result=True)
+    assert "a background recompose was started" in text and "could NOT start" not in text
+
+
+def test_a_recompose_that_could_not_start_is_named_and_frees_its_claim(tmp_path, monkeypatch):
+    text = _missing_script_refire(tmp_path, monkeypatch, spawn_result=False)
+    assert "could NOT start" in text and "a background recompose was started" not in text
+    assert not (tmp_path / RECORD_DIR_ROOT / _RECOMPOSE_ID / "resume.building").exists()
+
+
+def test_a_recompose_already_in_flight_is_not_reported_as_started(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+
+    rd = tmp_path / RECORD_DIR_ROOT / _RECOMPOSE_ID
+    rd.mkdir(parents=True)
+    assert hrr.claim_recompose(rd, time.time(), hrr.RECOMPOSE_TTL_S)
+    text = _missing_script_refire(tmp_path, monkeypatch, spawn_result=True)
+    assert "still running" in text and "a background recompose was started" not in text
+
+
+def test_a_prior_child_failure_and_a_stored_refusal_are_named(tmp_path, monkeypatch):
+    line = "[2026-11-07T02:12:00Z] CHILD FAILED script=/x/halt_resume_build.py :: OSError: boom\n"
+    text = _missing_script_refire(
+        tmp_path, monkeypatch, spawn_result=True, refused="gate said no", log_text=line + "[t] CHILD FAILED script=/x/other.py :: no\n"
+    )
+    assert "OSError: boom" in text and "other.py" not in text
+    assert "gate said no" in text
+
+
+def test_no_failure_line_and_no_refusal_adds_nothing(tmp_path, monkeypatch):
+    text = _missing_script_refire(tmp_path, monkeypatch, spawn_result=True, log_text="[t] CHILD FAILED script=/x/other.py :: no\n")
+    assert "failure is on record" not in text and "refusal" not in text
+
+
+def test_the_recompose_spawn_takes_the_windows_creation_flags_and_an_absolute_script(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.ceremony import detached_spawn as ds
+
+    monkeypatch.delattr(os, "fork", raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, raising=False)
+    monkeypatch.setattr(subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
+    calls: list = []
+    monkeypatch.setattr(ds.subprocess, "Popen", lambda argv, **kw: calls.append((argv, kw)))
+    assert hook._spawn_recompose(tmp_path, _RECOMPOSE_ID) is True
+    argv, kw = calls[0]
+    assert Path(argv[1]).is_absolute() and Path(argv[1]).name == "halt_resume_build.py"
+    assert argv[2:] == [str(tmp_path), _RECOMPOSE_ID]
+    assert kw["creationflags"] == 0x200 | 0x08000000 and "start_new_session" not in kw
+    assert kw["cwd"] == str(tmp_path)
+
+
+def test_a_spawn_that_cannot_start_returns_false(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.ceremony import detached_spawn as ds
+
+    def boom(argv, **kw):
+        raise OSError("no exec")
+
+    monkeypatch.setattr(ds.subprocess, "Popen", boom)
+    assert hook._spawn_recompose(tmp_path, _RECOMPOSE_ID) is False
+    assert "SPAWN FAILED" in (tmp_path / "state" / "housekeeping-failures.log").read_text(encoding="utf-8")
+
+
 def test_unbound_run_takes_the_plain_emit(tmp_path, monkeypatch):
     halted, run_id = _unmarked_run(tmp_path)
     (halted.repo / RECORD_DIR_ROOT / run_id / "run.json").write_text(json.dumps({"sizing_rel": "other.yaml"}), encoding="utf-8")
     env, spawned, emitted, launched = _refire(halted, monkeypatch)
     assert len(emitted) == 1 and launched == []
+
+
+def _refire_repo(tmp_path, with_record: bool):
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    sizing, plan = "state/sizings/2026-10-29-rec.yaml", "docs/plans/2026-10-29-rec.md"
+    run_id = "warp-2026-10-29-rec-20261029T010101-abc123"
+    stored_rel = f"scratch/warp/{run_id}.workflow.mjs"
+    (tmp_path / ".git").mkdir()
+    for rel, text in ((sizing, "schema: sizing-object\n"), (plan, "# plan\n"), (stored_rel, "// stored\n")):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    rd = record_dir(tmp_path, run_id)
+    halted_run_marker = __import__("coordinator_core.ops.dispatch_emit.halted_run", fromlist=["x"]).write_halt_marker
+    halted_run_marker(rd, halted="ledger-check", sizing_rel=sizing, plan_rel=plan, run_base_sha="a" * 40)
+    if with_record:
+        fp = hrr.fingerprint_for_run(tmp_path, rd, sizing, plan)
+        hrr.write(rd, hrr.build_record(
+            composed_script_rel=stored_rel, hoisted_fragments=[], gate_verdict=None,
+            landed_state_sha=None, fingerprint=fp, resume_plan_rel=plan,
+        ))
+    return sizing, run_id, rd, tmp_path / stored_rel
+
+
+def _log(rd):
+    path = rd / "refire-launches.jsonl"
+    return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()] if path.exists() else []
+
+
+def test_a_stored_script_refire_records_the_script_it_launched(tmp_path, monkeypatch):
+    import hashlib
+
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+
+    sizing, run_id, rd, stored = _refire_repo(tmp_path, True)
+    monkeypatch.setattr(hook, "_spawn_recompose", lambda root, rid: True)
+    payload = {"tool_input": {"name": hook.SUBMIT_WORKFLOW_NAME, "args": {"sizing": sizing}}}
+    _, result = hook._resume_route(tmp_path, sizing, payload, {}, "s1", None)
+    assert result and result["path"] == str(stored)
+    (entry,) = _log(rd)
+    assert entry["kind"] == "stored"
+    assert entry["script_sha256"] == hashlib.sha256(stored.read_bytes()).hexdigest()
+    assert entry["composed_by_engine_sha"] == hrr.engine_sha()
+
+
+def test_a_launcher_refire_records_the_launcher_and_a_stale_record_names_no_composer(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    sizing, run_id, rd, _ = _refire_repo(tmp_path, False)
+    monkeypatch.setattr(hook, "_spawn_recompose", lambda root, rid: True)
+    launcher = tmp_path / "scratch" / "launcher.workflow.mjs"
+    launcher.parent.mkdir(parents=True, exist_ok=True)
+    launcher.write_text("// launcher\n", encoding="utf-8")
+    payload = {"tool_input": {"name": hook.SUBMIT_WORKFLOW_NAME, "args": {"sizing": sizing}}}
+    env, result = hook._resume_route(tmp_path, sizing, payload, {}, "s1", lambda r, pid, kids, sid: launcher)
+    assert result is None and env is not None
+    (entry,) = _log(rd)
+    assert entry["kind"] == "launcher" and entry["script_path"] == launcher.as_posix()
+    assert entry["composed_by_engine_sha"] is None and entry["script_sha256"]

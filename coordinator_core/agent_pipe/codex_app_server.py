@@ -19,7 +19,20 @@ import subprocess
 import threading
 import time
 from contextlib import contextmanager
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
+
+from coordinator_core.agent_pipe.acp import stamped_env
+from coordinator_core.agent_pipe.contract import KIND_CODEX
+from coordinator_core.agent_pipe.session_driver import (
+    ALLOW_ALWAYS,
+    ALLOW_ONCE,
+    REJECT_ONCE,
+    ApprovalCallback,
+    Decision,
+    PermissionRequest,
+    SessionHandle,
+    Update,
+)
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _CLIENT_INFO = {"name": "coordinator-agent-pipe", "version": "1"}
@@ -181,7 +194,7 @@ def _connect(argv: list[str], *, experimental: bool = False, timeout: float = _H
     try:
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            bufsize=0, creationflags=_NO_WINDOW,
+            bufsize=0, creationflags=_NO_WINDOW, env=stamped_env(KIND_CODEX),
         )
     except OSError as exc:
         raise AppServerUnreachable(-1, f"cannot spawn proxy: {exc}") from exc
@@ -272,10 +285,15 @@ def _in_progress_turn(conn: _Conn, thread_id: str, deadline: float) -> Optional[
     return None
 
 
-def deliver(argv: list[str], thread_id: str, text: str, timeout: float = _DEFAULT_TIMEOUT_S) -> Iterator[str]:
+def deliver(
+    argv: list[str], thread_id: str, text: str, timeout: float = _DEFAULT_TIMEOUT_S,
+    on_approval: Optional[Callable[[dict], str]] = None,
+) -> Iterator[str]:
     """`turn/start` `text` on a loaded thread; yield that turn's agent-message texts in order.
 
-    A thread already mid-turn is steered, not restarted.
+    A thread already mid-turn is steered, not restarted. `on_approval`, when given, answers each
+    `*/requestApproval` server request with the codex decision it returns; without it such requests
+    are ignored as before.
     Completion: `turn/completed` when this connection owns the thread's notifications, else the
     thread's `thread/status/changed` to idle followed by a `thread/turns/list` read-back.
     """
@@ -308,6 +326,10 @@ def deliver(argv: list[str], thread_id: str, text: str, timeout: float = _DEFAUL
             params = msg.get("params") or {}
             if not method or params.get("threadId") != thread_id:
                 continue
+            if "id" in msg:
+                if on_approval is not None and method.endswith("/requestApproval"):
+                    conn.send({"jsonrpc": "2.0", "id": msg["id"], "result": {"decision": on_approval(params)}})
+                continue
             if method == "thread/status/changed":
                 kind = (params.get("status") or {}).get("type")
                 saw_active = saw_active or kind == "active"
@@ -336,3 +358,76 @@ def deliver(argv: list[str], thread_id: str, text: str, timeout: float = _DEFAUL
                 yield from _agent_texts(turn.get("items"))
                 return
         raise AppServerError(-1, f"turn {turn_id} missing from thread/turns/list")
+
+
+def _codex_decision(approve: ApprovalCallback) -> Callable[[dict], str]:
+    """Adapt a session-driver ApprovalCallback to codex decisions; a raising callback or unknown option declines."""
+    def answer(params: dict) -> str:
+        request = PermissionRequest(
+            tool=str(params.get("command") or params.get("reason") or params.get("itemId") or ""),
+            options=(ALLOW_ONCE, ALLOW_ALWAYS, REJECT_ONCE),
+        )
+        try:
+            chosen = approve(request).option_id
+        except Exception:  # noqa: BLE001 -- a broken callback must decline, never accept
+            chosen = REJECT_ONCE
+        return {ALLOW_ONCE: "accept", ALLOW_ALWAYS: "acceptForSession"}.get(chosen, "decline")
+    return answer
+
+
+class CodexAppServerDriver:
+    """SessionDriver over the codex app-server: each call opens its own `_connect`; the thread lives in the daemon.
+
+    `approve` defaults to rejecting every approval request. Threads start with approvalPolicy
+    "on-request" so approvals reach the callback instead of being waived.
+    """
+
+    def __init__(
+        self, argv: list[str], approve: Optional[ApprovalCallback] = None, timeout: float = _DEFAULT_TIMEOUT_S,
+    ) -> None:
+        self._argv = list(argv)
+        self._on_approval = _codex_decision(approve or (lambda request: Decision(REJECT_ONCE)))
+        self._timeout = timeout
+        self._cwds: dict[str, str] = {}
+        self.start_updates: list[Update] = []
+
+    def _thread_call(self, method: str, params: dict) -> dict:
+        with _connect(self._argv) as conn:
+            result = conn.request(method, params, time.monotonic() + _HANDSHAKE_TIMEOUT_S) or {}
+        thread = result.get("thread") if isinstance(result.get("thread"), dict) else {}
+        if not thread.get("id"):
+            raise AppServerError(-1, f"{method} returned no thread id")
+        return thread
+
+    def start(self, cwd: str, prompt: Optional[str] = None) -> SessionHandle:
+        """`thread/start` in `cwd`; an initial `prompt` is run to its end and its updates kept in `start_updates`."""
+        thread = self._thread_call("thread/start", {"cwd": cwd, "approvalPolicy": "on-request"})
+        handle = SessionHandle(session_id=str(thread["id"]), cwd=cwd)
+        self._cwds[handle.session_id] = cwd
+        self.start_updates = list(self.prompt(handle, prompt)) if prompt else []
+        return handle
+
+    def resume(self, session_id: str) -> SessionHandle:
+        """`thread/resume` a thread that has a rollout; a loaded thread with no turn yet needs no resume."""
+        thread = self._thread_call("thread/resume", {"threadId": session_id, "approvalPolicy": "on-request"})
+        cwd = str(thread.get("cwd") or self._cwds.get(session_id) or os.getcwd())
+        self._cwds[session_id] = cwd
+        return SessionHandle(session_id=session_id, cwd=cwd)
+
+    def prompt(self, handle: SessionHandle, text: str) -> Iterator[Update]:
+        """`deliver` `text`; yield one message Update per agent reply, then Update('done') with stopReason end_turn."""
+        for reply in deliver(self._argv, handle.session_id, text, self._timeout, on_approval=self._on_approval):
+            yield Update(kind="message", text=reply)
+        yield Update(kind="done", raw={"stopReason": "end_turn"})
+
+    def cancel(self, handle: SessionHandle) -> None:
+        """`turn/interrupt` the thread's running turn; a thread with none running is left alone."""
+        with _connect(self._argv) as conn:
+            deadline = time.monotonic() + _HANDSHAKE_TIMEOUT_S
+            turn_id = _in_progress_turn(conn, handle.session_id, deadline)
+            if turn_id:
+                conn.request("turn/interrupt", {"threadId": handle.session_id, "turnId": turn_id}, deadline)
+
+    def close(self, handle: SessionHandle) -> None:
+        """Forget the session's cwd; the daemon owns the thread, so nothing is torn down."""
+        self._cwds.pop(handle.session_id, None)

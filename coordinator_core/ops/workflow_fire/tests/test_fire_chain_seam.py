@@ -18,13 +18,13 @@ _PINNED_ARGV = [
     "-p",
     fire.render_prompt("/s/wf.js"),
     "--allowedTools",
-    "Workflow", "Read", "Write", "Edit", "Bash", "Grep", "Glob", "ToolSearch",
+    "Workflow", "Read", "Write", "Edit", "Bash", "PowerShell", "Grep", "Glob", "ToolSearch",
     "--plugin-dir",
     "/plug",
     "--model",
     "haiku",
     "--max-turns",
-    "3",
+    "4",
     "--output-format",
     "json",
 ]
@@ -116,4 +116,4 @@ def test_prompt_never_inlines_json_and_forward_slashes_windows_paths():
     prompt = fire.render_prompt(r"E:\coordinator-content-repo\scratch\wf.js")
     assert "\\" not in prompt
     assert "'<json>'" not in prompt
-    assert "--params-file E:/coordinator-content-repo/scratch/wf.js.terminal-params.json" in prompt
+    assert "--params-file 'E:/coordinator-content-repo/scratch/wf.js.terminal-params.json'" in prompt

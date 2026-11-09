@@ -219,6 +219,12 @@ async def _warm_guard_evaluate(params: dict, repo_root: Optional[Path] = None) -
             "warm.hook_http.payload_from_event; got %r (%s)."
             % (payload, type(payload).__name__)
         )
+    if payload.get("host") == "codex":
+        from coordinator_core.host_hooks.tool_policy import evaluate as evaluate_codex
+        return await asyncio.to_thread(
+            evaluate_codex, payload, policy_file=_policy_file_for(payload),
+            resolution_class=_engine_resolution_class(),
+        )
     raw = json.dumps(payload)
     out = await asyncio.to_thread(
         evaluate_payload_json,

@@ -199,6 +199,17 @@ from coordinator_core.session.guard_unlock_sentinel import (
 )
 from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards.leg_attribution import leg as _leg
+
+
+def _check_deadline(phase: str) -> None:
+    """Raise `DeadlineStop(phase)` when a preuse dispatch is past its deadline. A no-op unless
+    `hooks._preuse_phases` is already loaded: importing it here would drag the hooks package
+    into the cold guard chain, and nothing could be bound without it."""
+    mod = sys.modules.get("coordinator_core.hooks._preuse_phases")
+    if mod is not None and mod._HOOK_DEADLINE.get() is not None:
+        mod.check_deadline(phase)
+
+
 from coordinator_core.guard_advisory_counter import (
     record_advisory_fire as _record_advisory_fire,
     record_deny_fire as _record_deny_fire,
@@ -385,7 +396,9 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-perforce-submit": ("p4", "submit", "shelve"),
     "block-external-workspace-vcs-write": ("git",),
     "block-push-pr-non-owned-remote": ("push", "pr"),
+    "block-empty-source-push": ("push",),
     "block-whole-filesystem-scan": ("find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind"),
+    "guard-uncapped-pytest-plugin": ("pytest", "py.test"),
     "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
     "guard-repo-setup-claude-home-refusal": ("repo-setup-args-and-register", "scaffold_structure"),
 }
@@ -1314,6 +1327,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_push_pr_non_owned_remote import (
             MATCHERS as _matchers_push_pr_non_owned_remote,
         )
+        from coordinator_core.bash_guards.block_empty_source_push import (
+            MATCHERS as _matchers_empty_source_push,
+        )
         from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
             MATCHERS as _matchers_deploy_dirty_tree,
         )
@@ -1356,6 +1372,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_perforce_submit,
             _matchers_external_workspace_vcs_write,
             _matchers_push_pr_non_owned_remote,
+            _matchers_empty_source_push,
             _matchers_deploy_dirty_tree,
             _matchers_editor_kill_by_name,
             _matchers_whole_filesystem_scan,
@@ -1882,7 +1899,8 @@ def _evaluate_payload_json_budgeted(
     # only, matching the same defensive posture every other call site in this
     # loop takes toward its own recorder.
     try:
-        _record_chain_arrival(session_id, bool(agent_id), cwd)
+        with _leg("chain_arrival"):
+            _record_chain_arrival(session_id, bool(agent_id), cwd)
     except Exception:  # noqa: BLE001 -- belt-and-braces; the callee already never raises
         pass
 
@@ -1903,7 +1921,8 @@ def _evaluate_payload_json_budgeted(
             resolved = None
 
 
-    guard_chain = _build_guard_chain(cmd, session_id, cwd, payload, policy_file, host_is_windows, resolved)
+    with _leg("chain_build"):
+        guard_chain = _build_guard_chain(cmd, session_id, cwd, payload, policy_file, host_is_windows, resolved)
 
     # Blanket-disarm marker (M-disarm-wiring, 2026-07-30): evaluated ONCE per
     # dispatch, never per guard -- `disarm_status` is itself per-process
@@ -1938,7 +1957,8 @@ def _evaluate_payload_json_budgeted(
     # module-level shim because tests reach it as `dispatch._apply_guard_level`.
     from coordinator_core.machine_profile import is_deny_envelope as _is_deny_envelope
 
-    _disarm = _disarm_status(payload)
+    with _leg("disarm_status"):
+        _disarm = _disarm_status(payload)
 
     # H4 (docs/plans/2026-07-30-os-aware-guard-advisory-defaults.md):
     # resolve the EFFECTIVE host ONCE per dispatch, exactly like `_disarm`
@@ -1982,6 +2002,7 @@ def _evaluate_payload_json_budgeted(
             )
             continue
         _demoted = False
+        _check_deadline(name)
         try:
             with _leg(name):
                 _raw_out = fn()
@@ -2399,6 +2420,10 @@ def _build_guard_chain(
         check as _check_push_pr_non_owned_remote,
         MATCHERS as _matchers_push_pr_non_owned_remote,
     )
+    from coordinator_core.bash_guards.block_empty_source_push import (
+        check as _check_empty_source_push,
+        MATCHERS as _matchers_empty_source_push,
+    )
     from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
         check as _check_deploy_dirty_tree,
         MATCHERS as _matchers_deploy_dirty_tree,
@@ -2734,6 +2759,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_push_pr_non_owned_remote),
+        ),
+        # A push with an empty refspec source deletes the remote branch.
+        GuardEntry(
+            "block-empty-source-push",
+            lambda: _check_empty_source_push(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_empty_source_push),
         ),
         # A deploy builds the working tree: uncommitted peer edits ship. Fail-open.
         GuardEntry(

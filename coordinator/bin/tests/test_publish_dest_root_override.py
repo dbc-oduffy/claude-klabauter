@@ -119,7 +119,7 @@ def test_load_rows_reroots_with_override_and_is_identity_without(tmp_path, monke
     got = publish._load_rows(tmp_path, target_filter="")
     real_clone = os.path.realpath(clone)
     assert got[0] == f"top|mirror|/src/a|{real_clone}"
-    assert got[1] == f"lib|mirror|/src/b|{real_clone}/coordinator_core|x"
+    assert got[1] == f"lib|mirror|/src/b|{os.path.join(real_clone, 'coordinator_core')}|x"
     assert got[2] == raw[2]
 
 

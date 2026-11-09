@@ -266,3 +266,34 @@ def test_structural_index_named_only_when_present(indexed_repo):
     sidx.mkdir()
     (sidx / "symbols.ndjson").write_text("{}\n", encoding="utf-8")
     assert ".structural-index/symbols.ndjson" in _ctx(m._handler(_payload(indexed_repo, pattern="def _gamma_delta")))
+
+
+def test_slow_phase_names_the_leg_that_spent_the_time(indexed_repo, monkeypatch):
+    import time
+
+    from coordinator_core.telemetry import op_row_fields
+
+    def _slow(_params):
+        time.sleep(0.08)
+        return ""
+
+    monkeypatch.setattr(m, "_turn_budget_text", _slow)
+    token = op_row_fields.begin()
+    m._handler(_payload(indexed_repo, pattern="some text"))
+    fields = op_row_fields.drain(token)
+    assert fields["slow_phase"] == "turn_budget"
+    assert fields["spans"][0]["wall_ms"] >= 60
+
+
+def test_hook_deadline_stops_before_the_first_leg(indexed_repo, monkeypatch):
+    from coordinator_core.hooks import _preuse_phases
+    from coordinator_core.telemetry import op_row_fields
+
+    monkeypatch.setattr(_preuse_phases, "_door_deadline_s", lambda: 0.5)
+    called = []
+    monkeypatch.setattr(m, "_prefire_deny", lambda p: called.append(1))
+    token = op_row_fields.begin()
+    assert m._handler(_payload(indexed_repo, pattern="some text")) == {}
+    fields = op_row_fields.drain(token)
+    assert fields["deadline_stop"] == "prefire_survey"
+    assert not called

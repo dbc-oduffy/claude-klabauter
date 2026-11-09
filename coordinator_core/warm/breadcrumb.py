@@ -133,6 +133,8 @@ __all__ = [
     "wait_for_publish_release",
     "wait_for_publish_swap",
     "wait_for_new_pair_ready",
+    "wait_for_successor_answer",
+    "endpoint_answers_request",
     "publish_marker_wedged",
     "publish_wedge_remedy",
 ]
@@ -1137,6 +1139,90 @@ def wait_for_new_pair_ready(
         if remaining <= 0:
             return False
         sleep(min(NEW_PAIR_POLL_SECS, remaining))
+
+
+#: Read deadline for the request-level successor probe; a booting server answers in well under this.
+SUCCESSOR_PROBE_DEADLINE_SECS = 2.0
+
+
+def endpoint_answers_request(endpoint: str, token: str, *, deadline_secs: float = SUCCESSOR_PROBE_DEADLINE_SECS) -> bool:
+    """True iff a real `ping` sent to `endpoint` under `token` comes back with a result.
+
+    Unlike `_breadcrumb_pair_answers` this proves the server can EVALUATE a request, not that its
+    listener accepts. TRAP: `token` must be the generation the endpoint was bound with; a wrong
+    token evicts the server it reaches. Never raises.
+    """
+    try:
+        from coordinator_core.warm import client
+
+        fh = client._open_pipe(endpoint)
+    except Exception:  # noqa: BLE001 -- an unreachable endpoint reads as unanswered
+        return False
+    result: dict = {}
+
+    def _exchange() -> None:
+        try:
+            request = {"jsonrpc": "2.0", "id": "successor-probe", "method": "ping", "params": {}, "_engine_token": token}
+            fh.write(json.dumps(request).encode("utf-8") + b"\n")
+            fh.flush()
+            result["line"] = fh.readline()
+        except Exception:  # noqa: BLE001
+            pass
+
+    worker = threading.Thread(target=_exchange, name="successor-probe", daemon=True)
+    worker.start()
+    worker.join(max(0.0, deadline_secs))
+    line = result.get("line")
+    try:
+        fh.close()
+    except Exception:  # noqa: BLE001
+        pass
+    if worker.is_alive():
+        return False
+    try:
+        reply = json.loads(line) if line else None
+    except ValueError:
+        return False
+    return isinstance(reply, dict) and "result" in reply and "error" not in reply
+
+
+def wait_for_successor_answer(
+    engine_root: Optional[Path],
+    *,
+    token: str,
+    superseded_pid: Optional[int],
+    max_secs: float,
+    request_probe: Callable[[str, str], bool] = endpoint_answers_request,
+    sleep: Callable[[float], None] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> Optional[dict]:
+    """Make-before-break gate: poll up to `max_secs` for a breadcrumb that names a live server
+    other than `superseded_pid` whose endpoint answers a real request under `token`. Returns that
+    breadcrumb record, or None when no successor answers by the deadline (the superseded pair
+    must then be left running).
+
+    TRAP: read the superseded pair's pid and pipe BEFORE the successor boots; its breadcrumb
+    overwrites the old one. Spawn-free, read-only, never raises.
+    """
+    found: dict = {}
+
+    def _probe() -> bool:
+        record = read_breadcrumb(engine_root)
+        if record is None:
+            return False
+        pid, pipe = record.get("pid"), record.get("pipe")
+        if not isinstance(pid, int) or pid == superseded_pid or not isinstance(pipe, str) or not pipe:
+            return False
+        stored = record.get("stable_pid_start_epoch")
+        if not stable_pid_alive(pid, stored_start_epoch=str(stored) if stored is not None else ""):
+            return False
+        if not request_probe(pipe, token):
+            return False
+        found.update(record)
+        return True
+
+    wait_for_new_pair_ready(engine_root, max_secs, ping=_probe, sleep=sleep, clock=clock)
+    return dict(found) or None
 
 
 def _is_ancestor_pid(pid: int) -> bool:

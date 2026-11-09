@@ -5,7 +5,9 @@ Wire params: `ask` xor `sizing`; `ask_source` ("pm" | "relayed", required with `
 `caller` (identity string) and absolute `cwd`, all required and never read from the environment; optional
 `repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,
 `em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and
-`fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`).
+`fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`),
+`executor` (headless by default, or claude), and `backend` (codex by default, or claude).
+Completion defaults to the submitting session UUID; notify_to explicitly overrides it.
 
 Reply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when
 `fire` is true) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that
@@ -26,7 +28,7 @@ _EXTRA_KEYS = (
     "stop_after", "chatty", "cross_repo_approved", "supersedes", "writes",
 )
 _KNOWN_KEYS = frozenset(
-    ("ask", "sizing", "ask_source", "session_id", "caller", "cwd", "repo", "agent_id", "fire", "notify_to", *_EXTRA_KEYS)
+    ("ask", "sizing", "ask_source", "session_id", "caller", "cwd", "repo", "agent_id", "fire", "notify_to", "executor", "backend", "private_engine", *_EXTRA_KEYS)
 )
 
 
@@ -43,9 +45,25 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
             "refused": "bad-request",
             "reason": f"Unknown param(s): {', '.join(unknown)}. Accepted: {', '.join(sorted(_KNOWN_KEYS))}.",
         }
-    target = params.get("notify_to", params.get("caller"))
+    # Session UUIDs resolve through the owned external-host binding. Display
+    # aliases may not yet be exported by the installed transport on this box.
+    target = params.get("notify_to", params.get("session_id"))
+    executor = params.get("executor", "headless")
+    backend = params.get("backend", "codex")
+    if executor not in ("headless", "claude") or backend not in ("codex", "claude"):
+        return {"refused": "bad-request", "reason": "executor must be headless or claude; backend must be codex or claude."}
     if target is not None and (not isinstance(target, str) or not target.strip()):
         return {"refused": "bad-request", "reason": "notify_to must be a non-empty peer name."}
+    private_spec = None
+    if params.get("private_engine") is not None:
+        from coordinator_core.ops.workflow_fire.headless import validate_private_engine_config
+
+        try:
+            if executor != "headless":
+                raise ValueError("a private native engine requires the headless executor")
+            private_spec = validate_private_engine_config(params["private_engine"], backend=backend)
+        except ValueError as exc:
+            return {"refused": "bad-request", "reason": str(exc)}
     reply = submit_ask(
         ask=params.get("ask"),
         sizing=params.get("sizing"),
@@ -55,14 +73,30 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
         cwd=params.get("cwd"),
         repo=params.get("repo"),
         agent_id=params.get("agent_id"),
+        require_em=True,
         extras={k: params.get(k) for k in _EXTRA_KEYS},
     )
+    if not isinstance(reply, dict) or (
+        "refused" not in reply and not (reply.get("script_path") and reply.get("sha256"))
+    ):
+        return {
+            "refused": "no-run",
+            "reason": "Submission returned no emitted script and hash. Check existing run records before resubmitting.",
+        }
     if params.get("fire") is True and "refused" not in reply:
         from coordinator_core.ops.workflow_fire.op import _workflow_fire
 
         try:
+            fire_params = {"script_path": reply["script_path"], "expected": reply["sha256"], "notify_to": target,
+                           "executor": executor, "backend": backend, "caller_session_id": params["session_id"]}
+            if private_spec is not None:
+                fire_params["private_engine"] = private_spec
+            if reply.get("fire_args"):
+                fire_params["args"] = reply["fire_args"]
+            if reply.get("run_id"):
+                fire_params["run_id"] = reply["run_id"]
             reply["fire"] = _workflow_fire(
-                {"script_path": reply["script_path"], "expected": reply["sha256"], "notify_to": target}, repo_root
+                fire_params, Path(params["cwd"])
             )
         except Exception as exc:  # the submit stands; the caller fires by hand with the handle
             reply["fire_error"] = f"{type(exc).__name__}: {exc}"

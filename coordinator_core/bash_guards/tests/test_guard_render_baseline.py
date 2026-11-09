@@ -40,7 +40,7 @@ pytestmark = pytest.mark.complete
 
 REGENERATE_ENV = "REGENERATE_GUARD_RENDER_BASELINE"
 
-FIXTURE_PATH =Path(__file__).with_name("fixtures") / "guard_render_baseline.json"
+FIXTURE_PATH = Path(__file__).with_name("fixtures") / "guard_render_baseline.json"
 
 _ROWS: List[CorpusRow] = CONFINEMENT_ROWS + ADVISORY_REWRITE_ROWS + PLATFORM_CONDITIONED_ROWS
 

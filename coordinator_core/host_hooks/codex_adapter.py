@@ -2,6 +2,12 @@
 
 Stdlib only (the shim imports it on a cold interpreter). Host shapes: coordinator-content-repo 856b1d1f46,
 `docs/research/2026-11-04-doe-doctrine-codex/install-mechanics.md` § Hook map.
+
+Enforcement boundary: Codex execpolicy `prefix_rule`s match the argv prefix only and do not unwrap
+`bash -c`, `env`, or `pwsh -Command` wrappers, so a rule that forbids `ln` returns no match for
+`bash -c 'ln ...'` or `env ln ...`. This PreToolUse hook is the wrapped-form enforcement. No
+execpolicy rules are projected from the deny registry; any `.rules` file is hand-written and covers
+bare commands only.
 """
 from __future__ import annotations
 
@@ -44,6 +50,8 @@ class CodexAdapter:
             tool_name=_TOOL_ALIASES.get(tool_name, tool_name),
             tool_input=dict(tool_input) if isinstance(tool_input, Mapping) else {},
             cwd=str(payload.get("cwd") or ""),
+            metadata={key: payload[key] for key in ("agent_id", "transcript_path", "agent_type")
+                      if isinstance(payload.get(key), str) and payload[key]},
         )
 
     def engine_event(self, host_event: HostEvent) -> Optional[Dict[str, Any]]:
@@ -51,6 +59,8 @@ class CodexAdapter:
         if host_event.event not in SERVED_EVENTS:
             return None
         return {
+            **dict(host_event.metadata),
+            "host": HOST_CODEX,
             "hook_event_name": host_event.event,
             "session_id": host_event.session_id or None,
             "cwd": host_event.cwd or None,
@@ -59,7 +69,7 @@ class CodexAdapter:
         }
 
     def render(self, host_event: HostEvent, verdict: Verdict) -> Dict[str, Any]:
-        """Codex response: a deny is `permissionDecision: deny`; everything else is `{}` (continue)."""
+        """Preserve real denials and context; never grant native permissions."""
         if host_event.event not in SERVED_EVENTS:
             return neutral_fallback(HOST_CODEX)
         decision, reason = verdict_parts(verdict)
@@ -71,4 +81,16 @@ class CodexAdapter:
                     "permissionDecisionReason": reason or "denied by coordinator guard",
                 }
             }
+        # Context is supported by Codex; explicit allow/ask and Claude input
+        # rewrites are deliberately not forwarded to native tools.
+        if isinstance(verdict, Mapping):
+            nested = verdict.get("hookSpecificOutput")
+            nested = nested if isinstance(nested, Mapping) else {}
+            context = nested.get("additionalContext") or verdict.get("additionalContext")
+            message = verdict.get("systemMessage")
+            if isinstance(context, str) or isinstance(message, str):
+                text = "\n".join(x for x in (context, message) if isinstance(x, str) and x)
+                if text:
+                    return {"hookSpecificOutput": {"hookEventName": host_event.event,
+                                                   "additionalContext": text}}
         return neutral_fallback(HOST_CODEX)

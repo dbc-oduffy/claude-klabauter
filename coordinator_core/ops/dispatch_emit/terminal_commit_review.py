@@ -117,6 +117,7 @@ def _recorded_fingerprints(
     reviewed: Optional[dict] = None, reviewed_at: Optional[float] = None,
     fixes_integrated_at: Optional[float] = None, wave_paths: frozenset = frozenset(),
     review_events: Optional[dict] = None, run_started_at: Optional[float] = None,
+    run_agent_events: Optional[dict] = None,
 ) -> dict:
     """``{path: sha256}`` the run's expectation for the commit's candidate paths; one batched sink
     read. A session event older than ``run_started_at`` is another run's touch and is no expectation
@@ -136,6 +137,10 @@ def _recorded_fingerprints(
     agent's own newest write; it supplies the hash for a path whose session event is older or absent,
     so the run's own fix-pass write is the expectation and a later foreign edit still refuses. An
     event older than ``run_started_at`` is a pre-refire review's write and is no expectation.
+    ``run_agent_events`` (``_run_agent_write_events``) is the run's own newest hashed agent write of
+    any type, a revise-leg executor's included: for a path that already carries an expectation it
+    replaces it when strictly newer than the session event, the review and the review fix-pass write,
+    so a later write by the run's own legs is the expectation and a foreign one still refuses.
     A hashless newest session event, or an unrecorded path outside the review, carries no entry."""
     from coordinator_core.session import touch_record
 
@@ -184,6 +189,11 @@ def _recorded_fingerprints(
         agent_event = (review_events or {}).get(p)
         if agent_event is not None and agent_event[0] and (event is None or agent_event[1] > event[1]):
             out[p] = agent_event[0]
+        run_event = (run_agent_events or {}).get(p)
+        if run_event is not None and p in out:
+            older = (event[1] if event else None, reviewed_at, agent_event[1] if agent_event else None)
+            if run_event[1] > max((t for t in older if t is not None), default=float("-inf")):
+                out[p] = run_event[0]
     return out
 
 
@@ -252,22 +262,60 @@ def _review_write_events(
         if agent_id != REVIEW_RECORD_AGENT:
             by_agent.setdefault(agent_id, set()).add(path)
     for agent_id, paths in by_agent.items():
-        newest: dict = {}
-        try:
-            for member in touch_record.discover_family(touch_record.sink_path(Path(hub) / ".agents" / agent_id)):
-                for line in touch_record.iter_complete_lines(member.read_bytes()):
-                    try:
-                        ev = touch_record.decode_line(line)
-                    except touch_record.MalformedRecordLine:
-                        continue
-                    if (
-                        ev.verb == touch_record.VERB_TOUCH and ev.kind != touch_record.KIND_READ
-                        and ev.path in paths and ev.timestamp >= newest.get(ev.path, (None, float("-inf")))[1]
-                    ):
-                        newest[ev.path] = (ev.content_hash, ev.timestamp)
-        except OSError:
+        out.update(_agent_newest_hashed_writes(hub, agent_id, paths))
+    return out
+
+
+def _agent_newest_hashed_writes(hub: str, agent_id: str, paths: set) -> dict:
+    """``{path: (sha256, epoch)}`` of one agent sink's newest write per path of ``paths``; a path
+    whose newest write is hashless, or an unreadable sink, has no entry."""
+    from coordinator_core.session import touch_record
+
+    newest: dict = {}
+    try:
+        for member in touch_record.discover_family(touch_record.sink_path(Path(hub) / ".agents" / agent_id)):
+            for line in touch_record.iter_complete_lines(member.read_bytes()):
+                try:
+                    ev = touch_record.decode_line(line)
+                except touch_record.MalformedRecordLine:
+                    continue
+                if (
+                    ev.verb == touch_record.VERB_TOUCH and ev.kind != touch_record.KIND_READ
+                    and ev.path in paths and ev.timestamp >= newest.get(ev.path, (None, float("-inf")))[1]
+                ):
+                    newest[ev.path] = (ev.content_hash, ev.timestamp)
+    except OSError:
+        return {}
+    return {p: v for p, v in newest.items() if v[0]}
+
+
+def _run_agent_write_events(
+    worktree_root: Path, session_id: Optional[str], since: Optional[float], paths: Sequence[str]
+) -> dict:
+    """``{path: (sha256, epoch)}`` of the newest hashed write to ``paths`` since ``since`` by any
+    agent the session dispatched (a revise-leg executor included, which ``_review_write_events``
+    never sees), judged on the agent's own touch record. Agents whose owner is not ``session_id``
+    are skipped. Empty when the session, ``since``, the hub or the dispatch ledger is unreadable."""
+    wanted = set(paths)
+    if not session_id or since is None or not wanted:
+        return {}
+    from coordinator_core.session import core, touch_record
+
+    hub = core.sessions_dir(str(worktree_root))
+    if not hub:
+        return {}
+    try:
+        ledger = (Path(hub) / session_id / "dispatched-agents.txt").read_text(encoding="utf-8")
+    except OSError:
+        return {}
+    out: dict = {}
+    for agent_id in dict.fromkeys(row.split("\t", 1)[0] for row in ledger.splitlines() if row.strip()):
+        owner, conclusive = touch_record.agent_owner_sid(str(Path(hub) / ".agents" / agent_id))
+        if not conclusive or owner != session_id:
             continue
-        out.update({p: v for p, v in newest.items() if v[0]})
+        for p, v in _agent_newest_hashed_writes(hub, agent_id, wanted).items():
+            if v[1] >= since and v[1] >= out.get(p, (None, float("-inf")))[1]:
+                out[p] = v
     return out
 
 

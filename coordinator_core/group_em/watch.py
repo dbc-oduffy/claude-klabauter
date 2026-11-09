@@ -446,6 +446,15 @@ def _canonical_keys(prior: Optional[Mapping[str, Any]], local_id: str) -> dict[s
     return out
 
 
+#: Session-id prefix `unimatrix-peer-router` gives a Codex subprocess peer.
+_TRANSIENT_CODEX_PREFIX = "peer-codex-"
+
+
+def _is_transient_codex_peer(key: str, local_id: str) -> bool:
+    """True for a router-minted Codex subprocess peer: never addressable, so its departure is not a GONE event."""
+    return remote_identity.parse_key(key, local_id)[1].startswith(_TRANSIENT_CODEX_PREFIX)
+
+
 def _box_of(key: str, local_id: str) -> str:
     return remote_identity.parse_key(key, local_id)[0]
 
@@ -1088,6 +1097,8 @@ def poll_once(
     )
     for session_id in gone(prev_parked, cur_parked, held, local_id):
         if session_id in (caller_session_id, group_em_session_id):
+            continue
+        if _is_transient_codex_peer(session_id, local_id):
             continue
         prior = (prev_names or {}).get(session_id) or {}
         if prior.get("gone_reported"):

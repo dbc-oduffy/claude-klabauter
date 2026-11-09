@@ -115,22 +115,66 @@ def checkpoint_withheld(message: str) -> frozenset:
     return frozenset(_forward(m.group("v")) for m in _CHECKPOINT_WITHHELD_LINE.finditer(message or ""))
 
 
-def _rows_declaring(plan_text: str, row_ids: set, paths: frozenset) -> set:
-    """The ``row_ids`` of the plan spine whose declared ``writes`` include any of ``paths``."""
+def _spine_rows(plan_text: str, row_ids: set) -> dict:
+    """``{row id: declared writes (forward-slash)}`` for the ``row_ids`` found in the plan spine."""
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
     from coordinator_core.ops.dispatch_emit.plan_row_coding import yaml_load
 
     located = locate_fenced_block(plan_text)
     if located.status != LocateStatus.LOCATED:
-        return set()
+        return {}
     rows = yaml_load(located.body) or []
     if not isinstance(rows, list):
-        return set()
+        return {}
     return {
-        str(r["id"]) for r in rows
-        if isinstance(r, dict) and str(r.get("id")) in row_ids
-        and any(isinstance(w, str) and _forward(w) in paths for w in r.get("writes") or ())
+        str(r["id"]): tuple(_forward(w) for w in r.get("writes") or () if isinstance(w, str) and w)
+        for r in rows if isinstance(r, dict) and str(r.get("id")) in row_ids
     }
+
+
+def _rows_declaring(plan_text: str, row_ids: set, paths: frozenset) -> set:
+    """The ``row_ids`` of the plan spine whose declared ``writes`` include any of ``paths``."""
+    return {rid for rid, ws in _spine_rows(plan_text, row_ids).items() if any(w in paths for w in ws)}
+
+
+def _rows_with_unlanded_writes(
+    worktree_root: Path, plan_text: str, row_ids: set, sha: str, base: Optional[str]
+) -> set:
+    """The ``row_ids`` declaring a ``writes`` path that neither ``sha`` changed against its first
+    parent nor equals its blob at ``base``. One in-process tree pass for every row. An unreadable
+    ``sha`` or path value counts as unlanded (the row stays open); an unreadable ``base`` falls
+    back to the first parent."""
+    rows = {rid: ws for rid, ws in _spine_rows(plan_text, row_ids).items() if ws}
+    if not rows:
+        return set()
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import ABSENT, _values_along
+
+    common_dir = resolve_git_common_dir(worktree_root)
+    meta = _walk_commit_meta(common_dir, sha)
+    if meta is None:
+        return set(rows)
+    parents = meta.get("parents") or []
+    ancestors = [(1, sha)]
+    if parents:
+        ancestors.append((2, parents[0]))
+    if base and _FULL_SHA.fullmatch(base):
+        ancestors.append((3, base))
+    paths = list(dict.fromkeys(p for ws in rows.values() for p in ws))
+    series = _values_along(common_dir, ancestors, paths)
+
+    def _landed(path: str) -> bool:
+        vals = [v for _s, v in series[path]]
+        at_sha = vals[0]
+        if at_sha is None:
+            return False
+        at_parent = vals[1] if parents else ABSENT
+        if at_sha is ABSENT:
+            return at_parent is not ABSENT and at_parent is not None
+        at_base = vals[2] if len(vals) > 2 and vals[2] is not None else at_parent
+        return at_sha != at_parent or at_sha == at_base
+
+    return {rid for rid, ws in rows.items() if not all(_landed(p) for p in ws)}
 
 
 def is_landing_message(message: str) -> bool:
@@ -563,6 +607,8 @@ def stamp_checkpoint(
             wanted = set(by_plan[plan_rel])
             if withheld:
                 wanted -= _rows_declaring(original, wanted, withheld)
+            if wanted:
+                wanted -= _rows_with_unlanded_writes(worktree_root, original, wanted, sha, cp.base)
             updated, flipped = flip_rows_coded(original, wanted, sha)
             if not flipped:
                 continue

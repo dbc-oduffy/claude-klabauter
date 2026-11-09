@@ -138,6 +138,11 @@ def _relay(run_dir: Path, req: dict, adapter: Adapter) -> dict:
 
     conversation = req.get("conversation") or ""
     messages = 0
+    child_env = dict(os.environ)
+    if not req.get("conversation"):
+        from coordinator_core.codex_runner.identity_env import independent_child_env
+        child_env = independent_child_env(child_env, provider={"antigravity": "agy"}.get(agent, agent),
+                                           role="worker", parent=req.get("caller_session_id"))
     with open(run_dir / AGENT_LOG_FILENAME, "wb") as err:
         child = subprocess.Popen(
             argv,
@@ -146,6 +151,7 @@ def _relay(run_dir: Path, req: dict, adapter: Adapter) -> dict:
             stderr=err,
             encoding="utf-8",
             errors="replace",
+            env=child_env,
             **no_console_creationflags(),
         )
         try:

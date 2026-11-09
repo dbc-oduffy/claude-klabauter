@@ -21,7 +21,7 @@ def _plan(rows: dict) -> str:
         f"  disposition: open\n  deferred: false\n"
         for i, w in rows.items()
     )
-    return f"---\ntitle: p\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"
+    return f"---\ntitle: p\ndeliverable_id: dlv-t-111111\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"
 
 
 def _git(root: Path, *args: str) -> str:
@@ -49,7 +49,7 @@ def _repo(root: Path, rows: dict) -> Path:
 
 def test_row_with_every_write_committed_after_the_plan_resolves(tmp_path):
     repo = _repo(tmp_path, {"C1": ("c1.py",), "C5": ("c5.py",)})
-    landed = _commit(repo, {"c1.py": "1"}, "hand edit")
+    landed = _commit(repo, {"c1.py": "1"}, "hand edit" + "\n\nDeliverable-Id: dlv-t-111111")
     _commit(repo, {"later": "1"}, "later")
     plan = (repo / _REL).read_text(encoding="utf-8")
     got = resumable_plan({"plan": _REL}, "state/sizings/p.yaml", repo)
@@ -74,7 +74,7 @@ def test_partially_landed_row_stays_incomplete(tmp_path):
 
 def test_the_walk_spawns_no_process(tmp_path, monkeypatch):
     repo = _repo(tmp_path, {"C1": ("c1.py",)})
-    landed = _commit(repo, {"c1.py": "1"}, "hand edit")
+    landed = _commit(repo, {"c1.py": "1"}, "hand edit" + "\n\nDeliverable-Id: dlv-t-111111")
 
     def _boom(*a, **k):
         raise AssertionError("spawned")

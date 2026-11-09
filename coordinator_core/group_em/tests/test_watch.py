@@ -1270,6 +1270,25 @@ def test_a_different_real_peer_leaving_still_fires_one_gone():
     assert len(emitted) == 1 and "peer-2" in emitted[0]
 
 
+@pytest.mark.parametrize("key", ["peer-codex-codex-01a1b601-38da-71791", "box-b:peer-codex-codex-01a1b601-38da-71791"])
+def test_transient_codex_peer_departure_emits_no_gone(key):
+    (_p, _d, _n, _io), emitted = _gone_poll(
+        prev_parked={key: False},
+        agents=[],
+        prev_names={key: {"name": "codex-01a1b601-38da", "last_seen": 1.0}},
+    )
+    assert emitted == []
+
+
+def test_named_session_departure_still_emits_gone_beside_a_transient_codex_peer():
+    (_p, _d, _n, _io), emitted = _gone_poll(
+        prev_parked={"peer-codex-codex-x-1": False, "peer-gone": False},
+        agents=[],
+        prev_names={"peer-gone": {"name": "claude-klabauter-3e", "last_seen": 1.0}},
+    )
+    assert len(emitted) == 1 and "[peer-gone]" in emitted[0]
+
+
 def test_poll_once_still_reports_a_departure_it_cannot_name():
     """An unnameable departure is still worth a line -- silence was the defect,
     and the uuid at least tells a reader which roster row to drop."""

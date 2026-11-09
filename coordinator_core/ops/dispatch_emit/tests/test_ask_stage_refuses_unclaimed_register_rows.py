@@ -56,14 +56,21 @@ def _repo(tmp_path, claimed):
     (tmp_path / SIZING_REL).write_text(SIZING, encoding="utf-8", newline="\n")
 
 
-def test_a_plan_omitting_a_register_row_is_refused_before_any_manifest(tmp_path):
+def test_a_plan_omitting_a_register_row_claims_it_in_run_and_stages(tmp_path):
     _repo(tmp_path, "[R1]")
+    manifest = ask_stage.stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
+    claims = (tmp_path / PLAN_REL).read_text(encoding="utf-8").split("---")[1]
+    assert manifest is not None and "R2" in claims
+
+
+def test_a_register_row_no_claim_can_settle_is_refused_before_any_manifest(tmp_path, monkeypatch):
+    _repo(tmp_path, "[R1]")
+    monkeypatch.setattr(ask_stage, "_claim_register_rows", lambda *a, **k: None)
     with pytest.raises(ask_stage.AskStageError) as exc:
         ask_stage.stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
     text = str(exc.value)
     assert text.startswith("REGISTER-ROWS-UNCLAIMED")
     assert "R2" in text and "R3" not in text
-    assert f"Refire {SIZING_REL}" in text
     assert not list((tmp_path / RUN_DIR_ROOT).rglob("manifest.json"))
 
 

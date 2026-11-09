@@ -157,6 +157,20 @@ def test_dangling_edge_refuses_and_names_the_path(repo):
     assert "state/handoffs/gone.md" in str(exc.value)
 
 
+def test_edge_naming_archived_handoff_resolves_without_refusal(repo):
+    _put(repo, _sizing_text())
+    first = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+    live = repo / first["path"]
+    sizing_before = (repo / _SIZING_REL).read_text(encoding="utf-8")
+    archive = repo / "archive" / "handoffs" / "2026-11"
+    archive.mkdir(parents=True)
+    live.rename(archive / live.name)
+    result = _cli.mint_baton_from_sizing(_SIZING_REL, str(repo))
+    assert result["created"] is False and result["path"] == first["path"]
+    assert not live.exists()
+    assert (repo / _SIZING_REL).read_text(encoding="utf-8") == sizing_before
+
+
 def test_baton_write_failure_leaves_sizing_byte_identical(repo, monkeypatch):
     sizing = _put(repo, _sizing_text())
     before = sizing.read_bytes()

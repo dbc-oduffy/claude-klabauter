@@ -132,7 +132,7 @@ def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path, monkeypatch)
     watch(dr, "fetch_dest_upstream", "fetch")
     watch(env.publish_mod, "process_target", "stage")
     watch(env.publish_mod, _q.GATES[3], "gate")
-    watch(pair_stop, "stop_warm_pair", "stop")
+    watch(pair_stop, "probe_pair_terminable", "stop")
     watch(diff_commit, "land_diff", "land")
 
     rc, err = _q._run(env)
@@ -142,8 +142,8 @@ def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path, monkeypatch)
     assert held_at["stage"] == [False]
     assert held_at["gate"] == [False]
     assert held_at["land"] == [True]
-    # The first stop is the unmarked pre-stop and the second runs under the marker; both sit inside
-    # `_quiesced_engine_roots`, so both read the breadcrumb held.
+    # The old pair is not stopped before the copy; the terminability probe under the marker sits
+    # inside `_quiesced_engine_roots`, so it reads the breadcrumb held.
     assert held_at["stop"] and all(held_at["stop"])
     # Every live-run read sits inside `_quiesced_engine_roots`, so the breadcrumb is held for each.
     assert held_at["probe"] and all(held_at["probe"])

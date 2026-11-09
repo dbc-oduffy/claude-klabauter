@@ -17,6 +17,11 @@ def pytest_configure(config):
     )
     config.addinivalue_line(
         "markers",
+        "absent_run_script_live: opt out of this directory's run-script write for staged manifests "
+        "(tests that pin the absent-run-script refusal)",
+    )
+    config.addinivalue_line(
+        "markers",
         "twin_needs_script: opt out of this directory's run-script stub (the staged-twin refusal of an absent script runs live)",
     )
 
@@ -109,9 +114,9 @@ def _stage_finds_its_run_script(request):
     """Cluster B: staging a run manifest leaves a twin beside the run's script and refuses when the
     script is absent. A fixture that stages `run_id` without emitting the script gets the same
     `write_run_scripts` stub the explicit callers use, written only when the file is missing.
-    A test marked `twin_needs_script`, or in a module of `_LIVE_TWIN_REFUSAL_MODULES` (they pin the
+    A test marked `twin_needs_script` or `absent_run_script_live`, or in a module of `_LIVE_TWIN_REFUSAL_MODULES` (they pin the
     refusal itself), keeps it live."""
-    if request.node.get_closest_marker("twin_needs_script") or request.module.__name__.rpartition(".")[2] in _LIVE_TWIN_REFUSAL_MODULES:
+    if request.node.get_closest_marker("twin_needs_script") or request.node.get_closest_marker("absent_run_script_live") or request.module.__name__.rpartition(".")[2] in _LIVE_TWIN_REFUSAL_MODULES:
         yield
         return
     from coordinator_core.ops.dispatch_emit import launcher_staged_twin as twin

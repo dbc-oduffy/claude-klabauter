@@ -116,7 +116,7 @@ def start(req, roster, state):
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          **detach_kwargs())
     write_record(record, {"pid": p.pid, "conversation": conv, "endpoint": ep, "ls_address": ls,
-                          "agy_pid": req.get("agyPid"), "mode": "live" if live else "pending"})
+                          "cwd": req.get("cwd") or os.getcwd(), "agy_pid": req.get("agyPid"), "mode": "live" if live else "pending"})
 
 
 def main(argv=None):

@@ -79,7 +79,7 @@ def _asks_payload(root: Path) -> dict:
 
 
 def _leftovers(root: Path) -> list:
-    return sorted(p.name for p in (root / "state" / "sizings").glob("*.yaml")) + sorted(
+    return sorted(p.name for p in (root / "state" / "sizings").rglob("*.yaml")) + sorted(
         p.name for p in (root / "scratch" / "warp").glob("ask-parent-*") if p.is_dir()
     )
 
@@ -140,7 +140,7 @@ def test_fanout_still_running_past_the_tail_grace_is_denied(repo, monkeypatch):
 def test_fanout_within_the_hook_budget_still_writes_every_sizing(repo, monkeypatch):
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "12")
     mod.evaluate(_asks_payload(repo))
-    assert len(list((repo / "state" / "sizings").glob("*.yaml"))) == 3
+    assert len(list((repo / "state" / "sizings").rglob("*.yaml"))) == 3
     assert len([p for p in (repo / "scratch" / "warp").glob("ask-parent-*") if p.is_dir()]) == 1
 
 

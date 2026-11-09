@@ -25,15 +25,24 @@ if TYPE_CHECKING:
 _MappingProxyType = type(type.__dict__)
 
 _OP_KEY_SCOPE: Dict[str, str] = {
+    "codex_status.snapshot": "none",
     "goal.append":                           "common_dir",
     "session.landing_hold":                  "common_dir",
     "handoff.human_gate_clear":              "common_dir",
     # Acts on the klabauter checkout and settings home, never the caller's worktree.
     "fleet.klabauter_freshness":             "none",
     "orientation.regenerate_cache":          "common_dir",
+    "ceremony.pickup": "show_top",
+    "ceremony.handoff": "show_top",
+    "ceremony.workday_start": "show_top",
+    "ceremony.workday_complete": "show_top",
+    "ceremony.workstream_start": "show_top",
+    "ceremony.quick_wrap": "show_top",
+    "ceremony.result": "show_top",
     "workflow.fire":                         "common_dir",
     "engine_ask.submit":                     "common_dir",
     "workflow.fire_status":                  "common_dir",
+    "engine_ask.submit":                     "common_dir",
     "handoff.blocked_by_dependents":         "common_dir",
     "hooks.nudge_foreground_agent_dispatch": "common_dir",
     "hooks.nudge_em_code_dispatch":          "common_dir",
@@ -1011,6 +1020,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "merge_assemble.apply":                      "show_top",
     "baton_assemble.brief":                      "show_top",
     "baton_assemble.apply":                      "show_top",
+    "consolidate_assemble.brief":                "show_top",
     "learn_lessons_pipeline.brief":               "show_top",
     "learn_lessons_pipeline.apply":                "show_top",
     "lessons.extract":                            "show_top",

@@ -117,6 +117,16 @@ class CallerContext:
     `entry_seam._environ_identity_borrow`, never here. `None` until
     `merge_env_axis` runs, which is every production `CallerContext`."""
 
+    verified_native_actor: "VerifiedCodexExecActor | None" = None
+
+
+def with_verified_native_actor(caller, actor):
+    """Trusted server attachment only; never parsed from wire/env claims."""
+    from coordinator_core.session.native_actor import VerifiedCodexExecActor
+    if type(actor) is not VerifiedCodexExecActor:
+        raise TypeError("typed server-owned actor required")
+    return replace(caller, verified_native_actor=actor)
+
 
 def resolve_caller_context(payload: Optional[Mapping[str, Any]] = None) -> CallerContext:
     """Resolve plugin_root/cwd/session_id/agent_id FROM THE PER-CALL PAYLOAD.
@@ -244,11 +254,13 @@ def merge_env_axis(caller: CallerContext, env_payload: Any) -> CallerContext:
     else:
         env_map = {}
 
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE, canonical_session_env_value
+
     session_id = caller.session_id
-    for name in override_names:
+    for name in SESSION_ENV_PRECEDENCE:
         value = env_map.get(name)
         if value:
-            session_id = value
+            session_id = canonical_session_env_value(name, value, vendor=env_map.get("COORDINATOR_AGENT_VENDOR", "external"))
             break
 
     settings_home = caller.settings_home

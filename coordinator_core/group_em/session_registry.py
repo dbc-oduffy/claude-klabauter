@@ -90,6 +90,7 @@ def parse_row(path: Path) -> Optional[RegistryRow]:
 
 
 def read_rows(directory: Optional[Path] = None) -> list[RegistryRow]:
+    include_external = directory is None
     directory = directory or registry_dir()
     rows: list[RegistryRow] = []
     try:
@@ -100,6 +101,12 @@ def read_rows(directory: Optional[Path] = None) -> list[RegistryRow]:
         row = parse_row(path)
         if row is not None:
             rows.append(row)
+    if include_external:
+        from coordinator_core.session import external_registry
+        known = {row.session_id for row in rows}
+        for sid, record in external_registry.snapshot().items():
+            if sid not in known:
+                rows.append(RegistryRow(sid, str(record.get("name") or ""), record["pid"], record["cwd"], ""))
     return rows
 
 

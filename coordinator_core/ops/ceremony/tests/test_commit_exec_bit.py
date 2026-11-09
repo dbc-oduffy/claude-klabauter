@@ -226,3 +226,43 @@ def test_missing_path_param_is_structured_error(tmp_path):
     result = _call(repo, {})
     assert "error" in result
     assert "params.path" in result["error"]
+
+
+def _filemode_false_repo_with_exec_script(tmp_path: Path) -> Path:
+    repo = _init_repo(tmp_path)
+    _git(["config", "core.filemode", "false"], repo)
+    _seed_tracked_file(repo, "bin/tool.py", "#!/usr/bin/env python3\nprint(1)\n")
+    _git(["update-index", "--chmod=+x", "--", "bin/tool.py"], repo)
+    _git(["commit", "-q", "-m", "make tool executable"], repo)
+    assert _head_mode(repo, "bin/tool.py") == "100755"
+    return repo
+
+
+def _commit_scoped(tmp_path: Path, repo: Path, path: str):
+    from coordinator_core.ops.ceremony import git_native
+
+    msg = tmp_path / "msg.txt"
+    msg.write_text("scoped commit\n", encoding="utf-8")
+    return git_native.commit_scoped([path], msg, repo)
+
+
+def test_default_commit_path_keeps_staged_100755_on_content_edit_under_filemode_false(tmp_path):
+    repo = _filemode_false_repo_with_exec_script(tmp_path)
+    (repo / "bin" / "tool.py").write_text("#!/usr/bin/env python3\nprint(2)\n", encoding="utf-8")
+    assert _index_mode(repo, "bin/tool.py") == "100755"
+
+    result = _commit_scoped(tmp_path, repo, "bin/tool.py")
+
+    assert result.ok, result.stderr
+    assert _head_mode(repo, "bin/tool.py") == "100755"
+    assert "print(2)" in _git(["show", "HEAD:bin/tool.py"], repo)
+
+
+def test_default_commit_path_still_commits_a_staged_demotion_under_filemode_false(tmp_path):
+    repo = _filemode_false_repo_with_exec_script(tmp_path)
+    _git(["update-index", "--chmod=-x", "--", "bin/tool.py"], repo)
+
+    result = _commit_scoped(tmp_path, repo, "bin/tool.py")
+
+    assert result.ok, result.stderr
+    assert _head_mode(repo, "bin/tool.py") == "100644"

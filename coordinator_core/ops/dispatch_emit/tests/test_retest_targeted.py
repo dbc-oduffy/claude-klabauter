@@ -1100,7 +1100,7 @@ def test_run_uncaused_invariant_red_in_a_file_with_a_run_new_id_lands_pre_existi
     new_id = "test_a.py::test_new_in_this_run"
     export_log.write_text(f"FAILED {INVARIANT} - boom\n", encoding="utf-8")
 
-    def build(worktree, out_dir, paths):
+    def build(worktree, out_dir, paths, sha=None):
         Path(out_dir).mkdir(parents=True)
         (Path(out_dir) / "test_a.py").write_text("", encoding="utf-8")
         return le.LandingExport(Path(out_dir).as_posix(), "h" * 40, (), ())

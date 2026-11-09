@@ -221,6 +221,66 @@ def test_malformed_inbox_line_is_skipped():
     assert json.loads(bridge.log_path().read_text().splitlines()[-1])["event"] == "malformed"
 
 
+FAKE_ACP = [sys.executable, str(__import__("pathlib").Path(__file__).parent / "fixtures" / "fake_acp_agent.py")]
+
+
+def _grok_wire(tmp_path, monkeypatch) -> "list[dict]":
+    wire = tmp_path / "acp-wire.jsonl"
+    monkeypatch.setenv("FAKE_ACP_LOG", str(wire))
+    return wire
+
+
+def _wire_rows(wire) -> "list[dict]":
+    return [json.loads(x) for x in wire.read_text(encoding="utf-8").splitlines()]
+
+
+def test_grok_binding_is_delivered_not_refused_via_resume_then_prompt(tmp_path, monkeypatch):
+    wire = _grok_wire(tmp_path, monkeypatch)
+    roster.bind("a", "claude", "sess-a")
+    roster.bind("gk", "grok", "gsess-1", argv=FAKE_ACP)
+    res = bridge.route(bridge.make_message("a", "gk", "ping"))
+    res.wait(20)
+    assert res.status == "handed-off"
+    rows = _wire_rows(wire)
+    methods = [r["method"] for r in rows if "method" in r]
+    assert methods.index("session/resume") < methods.index("session/prompt")
+    assert "session/new" not in methods
+    resume = next(r for r in rows if r.get("method") == "session/resume")
+    assert resume["params"]["sessionId"] == "gsess-1"
+    prompt = next(r for r in rows if r.get("method") == "session/prompt")
+    assert prompt["params"] == {"sessionId": "gsess-1", "prompt": [{"type": "text", "text": f"{LABEL}\nping"}]}
+
+
+def test_grok_leg_rejects_permission_requests_by_default(tmp_path, monkeypatch):
+    wire = _grok_wire(tmp_path, monkeypatch)
+    roster.bind("a", "claude", "sess-a")
+    roster.bind("gk", "grok", "gsess-1", argv=FAKE_ACP)
+    bridge.route(bridge.make_message("a", "gk", "permission")).wait(20)
+    answer = next(r for r in _wire_rows(wire) if r.get("id") == "perm-1" and "result" in r)
+    assert answer["result"]["outcome"] == {"outcome": "selected", "optionId": "reject-once"}
+
+
+def test_grok_quota_error_is_logged_with_cause(tmp_path, monkeypatch):
+    _grok_wire(tmp_path, monkeypatch)
+    roster.bind("a", "claude", "sess-a")
+    roster.bind("gk", "grok", "gsess-1", argv=FAKE_ACP)
+    bridge.route(bridge.make_message("a", "gk", "quota")).wait(20)
+    row = _last_log()
+    assert row["event"] == "leg-failed" and row["cause"] == "quota_exhausted"
+
+
+def test_grok_binding_with_missing_binary_logs_failure_not_raise(monkeypatch):
+    roster.bind("a", "claude", "sess-a")
+    roster.bind("gk", "grok", "gsess-1", argv=["/nonexistent/grok-binary"])
+    res = bridge.route(bridge.make_message("a", "gk", "x"))
+    res.wait(20)
+    assert res.status == "handed-off" and _last_log()["event"] == "leg-failed"
+
+
+def test_grok_kind_has_a_leg():
+    assert "grok" in bridge._LEGS
+
+
 def test_no_token_check_on_any_delivery_path():
     roster.bind("a", "claude", "sess-a", token="tok-a")
     roster.bind("b", "claude", "sess-b", token="tok-b")

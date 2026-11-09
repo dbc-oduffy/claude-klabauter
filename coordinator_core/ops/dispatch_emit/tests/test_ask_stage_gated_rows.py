@@ -151,10 +151,10 @@ title: fixture
 - id: C3
   title: merge
   change_kind: code-edit
-  surface: pkg/m.py
+  surface: pkg/m.md
   performer: em
   writes:
-    - pkg/m.py
+    - pkg/m.md
 - id: C4
   title: memo
   change_kind: doc-edit

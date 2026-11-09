@@ -15,6 +15,7 @@ page when it next moves.
 from __future__ import annotations
 
 from typing import Mapping
+import re
 
 TOKEN_FIELDS = (
     "input_tokens",
@@ -40,6 +41,28 @@ PRICES: dict[str, dict[str, float]] = {
     },
 }
 
+# First-party model pages checked 2026-11-07. These are API-equivalent list
+# prices, not a claim about a subscription invoice. Cache writes use 30m retention.
+RATE_PROVENANCE: dict[str, dict[str, str | None]] = {}
+for _model, _input, _output, _cache_mult in (
+    ("gpt-6.1-sol", 2.0, 10.0, 0.05),
+    ("gpt-6.1-terra", 1.0, 5.0, 0.05),
+    ("gpt-6-astra", 10.0, 50.0, 0.1),
+    ("gpt-6-luna", 0.1, 0.5, 0.1),
+):
+    PRICES[_model] = {
+        "input": _input, "output": _output, "cache_read_mult": _cache_mult,
+        "tier_prompt_tokens": 272_000, "tier_input": _input * 2, "tier_output": _output * 1.5,
+        "fast_multiplier": 2.0, "flex_multiplier": 0.5, "batch_multiplier": 0.5,
+    }
+    if _model in {"gpt-6.1-sol", "gpt-6-astra"}:
+        PRICES[_model]["ultrafast_multiplier"] = 6.0
+    RATE_PROVENANCE[_model] = {
+        "source": f"https://developers.openai.com/api/docs/models/{_model}",
+        "verified_at": "2026-11-07", "basis": "API list prices; 30m cache writes",
+        "effective_from": None,  # The source states current rates, not their start date.
+    }
+
 
 def model_family(model: str | None) -> str | None:
     """Return the PRICES key `model` starts with (dated suffixes drop), else None."""
@@ -47,6 +70,8 @@ def model_family(model: str | None) -> str | None:
         return None
     for key in PRICES:
         if model.startswith(key):
+            if key.startswith("gpt-") and model != key and not re.fullmatch(r"-\d{4}-?\d{2}-?\d{2}", model[len(key):]):
+                continue
             return key
     return None
 
@@ -72,12 +97,17 @@ def estimate_usd(model: str, usage: Mapping, speed: str | None = None) -> float 
     prompt = _n(usage, "input_tokens") + cache_read + cache_write
     if "tier_prompt_tokens" in p and prompt > p["tier_prompt_tokens"]:
         inp, out = p["tier_input"], p["tier_output"]
-    if speed == "fast":
-        mult = p.get("fast_multiplier", 1.0)
+    selected_speed = "fast" if speed == "priority" else speed
+    if family.startswith("gpt-") and selected_speed not in {None, "standard", "default", "fast", "ultrafast", "flex", "batch"}:
+        return None
+    if selected_speed in {"fast", "ultrafast", "flex", "batch"}:
+        if family.startswith("gpt-") and f"{selected_speed}_multiplier" not in p:
+            return None
+        mult = p.get(f"{selected_speed}_multiplier", 1.0)
         inp, out = inp * mult, out * mult
     return (
         _n(usage, "input_tokens") * inp
         + _n(usage, "output_tokens") * out
-        + cache_read * inp * CACHE_READ_MULT
+        + cache_read * inp * p.get("cache_read_mult", CACHE_READ_MULT)
         + cache_write * inp * CACHE_WRITE_MULT
     ) / 1_000_000

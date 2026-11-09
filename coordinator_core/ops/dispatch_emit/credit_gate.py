@@ -99,6 +99,27 @@ def remnant_supersedes_blocked(files: AbstractSet[str], remnant: object) -> bool
     )
 
 
+def recovery_blocks_superseded(
+    ids: Iterable[str], chunks: Mapping[str, object], files: Mapping[str, AbstractSet[str]], remnant: object
+) -> list[str]:
+    """Ids, in input order, whose ``recovery.json`` entry is ``blocked`` and whose files a later ``fixed`` remnant pass covers.
+
+    ``chunks`` is the record's ``chunks`` map and ``files`` each chunk's declared paths. An
+    ``exhausted`` or ``held`` entry is never superseded: only a ``blocked`` one, which the remnant
+    pass that followed it repaired.
+    """
+    out: list[str] = []
+    for cid in ids:
+        entry = chunks.get(cid)
+        if (
+            isinstance(entry, Mapping)
+            and entry.get("status") == "blocked"
+            and remnant_supersedes_blocked(set(files.get(cid, ())), remnant)
+        ):
+            out.append(cid)
+    return out
+
+
 def credit_regradable(
     candidates: Iterable[str], credits: Mapping[str, str], held: AbstractSet[str]
 ) -> dict[str, str]:

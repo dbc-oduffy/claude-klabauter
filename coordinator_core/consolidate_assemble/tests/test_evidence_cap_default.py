@@ -18,7 +18,7 @@ _ROWS = [
 
 
 def _fake_git(shown: list[str]):
-    def run_git(args: list[str], cwd: Path) -> SimpleNamespace:
+    def run_git(args: list[str], cwd: Path, input: str | None = None) -> SimpleNamespace:
         if args[:2] == ["config", "user.email"]:
             return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
         if args[:2] == ["rev-parse", "--abbrev-ref"]:
@@ -32,9 +32,10 @@ def _fake_git(shown: list[str]):
             return SimpleNamespace(returncode=0, stdout=out, stderr="")
         if args[0] == "log" and args[1].startswith("--format="):
             return SimpleNamespace(returncode=0, stdout=_LOG, stderr="")
-        if args[0] == "show":
-            shown.extend(a for a in args if len(a) == 40 and not a.startswith("-"))
-            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        if args[0] == "log" and "--stdin" in args:
+            wanted = (input or "").split()
+            shown.extend(wanted)
+            return SimpleNamespace(returncode=0, stdout="".join(f"commit {s}\n\n    m\n\n" for s in wanted), stderr="")
         if args[0] == "worktree":
             return SimpleNamespace(
                 returncode=0, stdout="worktree /repo\nHEAD abc\nbranch refs/heads/current\n", stderr=""

@@ -431,6 +431,55 @@
       "timeout_s": 30.0
     },
     {
+      "description": "Launch a native handoff phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
+      "module": "coordinator_core.ops.session_ceremonies",
+      "name": "ceremony.handoff",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "decisions": {
+            "description": "Native judgment ID to disposition object or shorthand value.",
+            "type": "object"
+          },
+          "fire": {
+            "default": true,
+            "description": "Fire native emitted workflows through workflow.fire.",
+            "type": "boolean"
+          },
+          "notify_to": {
+            "description": "Bridge recipient identity; defaults to caller UUID.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "phase": {
+            "default": "brief",
+            "enum": [
+              "brief",
+              "apply"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Caller UUID; defaults to carried session identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "title": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "Launch a native handoff phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"ceremony.init_anchor_injection_state\" handler.\n\nParams: none (params: {} per manifest contract; the argument is accepted\n    for handler-signature parity with every other registered op but its\n    contents are ignored).\n\nReturns:\n    {\n        \"content_root\": <str — resolved coordinator-content-repo / coordinator-claude root>,\n        \"today\": <str — today's date, ISO 8601 \"YYYY-MM-DD\">,\n        \"injected_dates\": [],\n        \"content_gap_dates\": [],\n    }\n\nRaises:\n    RuntimeError — read_content_root() could not resolve the coordinator-content-repo\n    root. Fails loud rather than degrading to an empty/placeholder\n    content_root: the manifest contract types content_root as `str`, and a\n    ceremony phase silently anchoring against \"\" would misbehave far\n    downstream of this op rather than at the point of failure.",
       "module": "coordinator_core.ops.init_anchor_injection_state",
       "name": "ceremony.init_anchor_injection_state",
@@ -442,6 +491,151 @@
       "timeout_s": 30.0
     },
     {
+      "description": "Launch a native pickup phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
+      "module": "coordinator_core.ops.session_ceremonies",
+      "name": "ceremony.pickup",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_path": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "decisions": {
+            "description": "Native judgment ID to disposition object or shorthand value.",
+            "type": "object"
+          },
+          "fire": {
+            "default": true,
+            "description": "Fire native emitted workflows through workflow.fire.",
+            "type": "boolean"
+          },
+          "notify_to": {
+            "description": "Bridge recipient identity; defaults to caller UUID.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "phase": {
+            "default": "brief",
+            "enum": [
+              "brief",
+              "apply",
+              "drop",
+              "stamp-check"
+            ],
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Caller UUID; defaults to carried session identity.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "artifact_path"
+        ],
+        "type": "object"
+      },
+      "summary": "Launch a native pickup phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Launch a native quick_wrap phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
+      "module": "coordinator_core.ops.session_ceremonies",
+      "name": "ceremony.quick_wrap",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "advance"
+                }
+              },
+              "required": [
+                "phase"
+              ]
+            },
+            "then": {
+              "required": [
+                "prior_run_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "decisions": {
+            "description": "Native judgment ID to disposition object or shorthand value.",
+            "type": "object"
+          },
+          "directive_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "fire": {
+            "default": true,
+            "description": "Fire native emitted workflows through workflow.fire.",
+            "type": "boolean"
+          },
+          "notify_to": {
+            "description": "Bridge recipient identity; defaults to caller UUID.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "phase": {
+            "default": "brief",
+            "enum": [
+              "brief",
+              "advance"
+            ],
+            "type": "string"
+          },
+          "prior_run_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Caller UUID; defaults to carried session identity.",
+            "format": "uuid",
+            "type": "string"
+          },
+          "work_finished": {
+            "description": "EM judgment discharging quick-wrap condition 4.",
+            "type": "boolean"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "Launch a native quick_wrap phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Read a persisted ceremony phase result after its notice; distinguish running, failed, and completed native obligations.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
+      "module": "coordinator_core.ops.session_ceremonies",
+      "name": "ceremony.result",
+      "op_class": "compute_only",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "run_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
+        "type": "object"
+      },
+      "summary": "Read a persisted ceremony phase result after its notice; distinguish running, failed, and completed native obligations.",
+      "timeout_s": 30.0
+    },
+    {
       "description": "JSON-RPC \"ceremony.update_docs_scan\" handler (C17; AC8).\n\nParams: none required/consumed today — reserved for future scoping (e.g.\na narrower plans_dir override) without a signature break.\n\nrepo_root (injected by ipc.dispatch_message): git_common_dir of the\noriginating worktree; the handler derives the main-worktree root via\nmain_worktree_root (same seam distill_curation_status.py uses).\n\nReturns a schema_version-pinned dict: {schema_version, generated_at,\nphase1, phase8_lineage_backstop, phase8b_prune}. Performs NO writes.",
       "module": "coordinator_core.ops.ceremony.update_docs_scan",
       "name": "ceremony.update_docs_scan",
@@ -450,6 +644,212 @@
         "type": "object"
       },
       "summary": "JSON-RPC \"ceremony.update_docs_scan\" handler (C17; AC8).",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Launch a native workday_complete phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
+      "module": "coordinator_core.ops.session_ceremonies",
+      "name": "ceremony.workday_complete",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "finish"
+                }
+              },
+              "required": [
+                "phase"
+              ]
+            },
+            "then": {
+              "required": [
+                "run_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "agent_results": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "fire": {
+            "default": true,
+            "description": "Fire native emitted workflows through workflow.fire.",
+            "type": "boolean"
+          },
+          "flags": {
+            "description": "Native launch flag names, including -- prefix, to string or boolean values.",
+            "type": "object"
+          },
+          "notify_to": {
+            "description": "Bridge recipient identity; defaults to caller UUID.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "phase": {
+            "default": "launch",
+            "enum": [
+              "launch",
+              "finish"
+            ],
+            "type": "string"
+          },
+          "run_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Caller UUID; defaults to carried session identity.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "Launch a native workday_complete phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Launch a native workday_start phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
+      "module": "coordinator_core.ops.session_ceremonies",
+      "name": "ceremony.workday_start",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "finish"
+                }
+              },
+              "required": [
+                "phase"
+              ]
+            },
+            "then": {
+              "required": [
+                "run_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "agent_results": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "fire": {
+            "default": true,
+            "description": "Fire native emitted workflows through workflow.fire.",
+            "type": "boolean"
+          },
+          "flags": {
+            "description": "Native launch flag names, including -- prefix, to string or boolean values.",
+            "type": "object"
+          },
+          "notify_to": {
+            "description": "Bridge recipient identity; defaults to caller UUID.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "phase": {
+            "default": "launch",
+            "enum": [
+              "launch",
+              "finish"
+            ],
+            "type": "string"
+          },
+          "run_id": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Caller UUID; defaults to carried session identity.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "Launch a native workday_start phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Launch a native workstream_start phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.\n\nBounded, provider-neutral doors to the six existing session ceremonies.\n\nThe op writes one request and detaches one composition worker. The worker uses\nthe native ceremony implementation; its duration is never charged to a warm op.\nAn accepted phase is not a completed ceremony. Its persisted result and pushed\nnotice name pending decisions, native directives, and emitted workflow fires.",
+      "module": "coordinator_core.ops.session_ceremonies",
+      "name": "ceremony.workstream_start",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "phase": {
+                  "const": "advance"
+                }
+              },
+              "required": [
+                "phase"
+              ]
+            },
+            "then": {
+              "required": [
+                "prior_run_id"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "decisions": {
+            "description": "Native judgment ID to disposition object or shorthand value.",
+            "type": "object"
+          },
+          "directive_ids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "fire": {
+            "default": true,
+            "description": "Fire native emitted workflows through workflow.fire.",
+            "type": "boolean"
+          },
+          "notify_to": {
+            "description": "Bridge recipient identity; defaults to caller UUID.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "phase": {
+            "default": "brief",
+            "enum": [
+              "brief",
+              "advance"
+            ],
+            "type": "string"
+          },
+          "prior_run_id": {
+            "pattern": "^[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "session_id": {
+            "description": "Caller UUID; defaults to carried session identity.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "Launch a native workstream_start phase asynchronously; read ceremony.result after its completion notice. Accepted is not ceremony-completed.",
       "timeout_s": 30.0
     },
     {
@@ -596,25 +996,499 @@
       "timeout_s": 30.0
     },
     {
-      "description": "Read one run's outcome.\n\nParams: run_id.\nReturns: the worker's RunResult dict, or {\"run_id\", \"status\": \"running\"} while the worker\nlives; a worker that died without a result reports status \"failed\".",
+      "description": "Read a persisted runner outcome, or report its current process state without waiting.\n\nParams: run_id.\nReturns: the worker's RunResult dict, or {\"run_id\", \"status\": \"running\"} while the worker\nlives; a worker that died without a result reports status \"failed\".\nWorker and persona results include output when the mode produced it. This operation\nnever waits on inference and never launches or restarts a worker.",
       "module": "coordinator_core.ops.codex_runner",
       "name": "codex_runner.result",
       "op_class": "compute_only",
       "params_schema": {
+        "properties": {
+          "run_id": {
+            "description": "Opaque run_id returned by codex_runner.start; no slash, backslash or NUL.",
+            "minLength": 1,
+            "not": {
+              "enum": [
+                ".",
+                ".."
+              ]
+            },
+            "pattern": "^[^/\\\\\\u0000]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run_id"
+        ],
         "type": "object"
       },
-      "summary": "Read one run's outcome.",
+      "summary": "Read a persisted runner outcome, or report its current process state without waiting.",
       "timeout_s": 30.0
     },
     {
-      "description": "Start one detached codex run.\n\nParams: mode (\"review\" | \"agy-review\" | \"grok-review\" | \"execute\"), repo_root, and artifact (review,\nagy-review, grok-review) or plan+chunk (execute); parent_session_id optional. `allow_api_key` is not\na wire param: the op never forwards it.\nReturns: {\"run_id\", \"run_dir\", \"pid\"} -- the pid is the worker's, not codex's.",
+      "description": "Start one detached artifact review, plan-chunk execution, persona review, or Codex worker.\n\nParams: mode (\"review\" | \"agy-review\" | \"grok-review\" | \"named-review\" | \"execute\" | \"persona\" | \"worker\"), repo_root,\nand artifact (review, agy-review), plan+chunk (execute), persona+task_file+tier_map+\nprovider+assignment (persona), or task_file+assignment (worker).\nparent_session_id optional. `allow_api_key` is not\na wire param: the op never forwards it.\nReturns: {\"run_id\", \"run_dir\", \"pid\"} -- the pid is the worker's, not codex's.\n\nWorker mode requires the PM-assigned branch/quiet-box evidence and a live Group EM\nsession/run memory grant; it inherits installed Codex model/effort defaults.\nPersona mode requires the shared opus-tier role file and explicit reviewed provider\ntier map; it receives no worker gate delegation. Their terminal result contains up to\n1 MiB of UTF-8 stdout in output; usage.output_truncated records whether more\noutput remains in the run's stdout artifact. Acceptance is not completion; read the persisted result\nafter completion rather than spinning on codex_runner.result while inference runs.",
       "module": "coordinator_core.ops.codex_runner",
       "name": "codex_runner.start",
       "op_class": "mutating",
       "params_schema": {
+        "oneOf": [
+          {
+            "properties": {
+              "artifact": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "chunk": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "mode": {
+                "enum": [
+                  "review",
+                  "agy-review",
+                  "grok-review"
+                ]
+              },
+              "plan": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              }
+            },
+            "required": [
+              "artifact"
+            ]
+          },
+          {
+            "properties": {
+              "artifact": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "chunk": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "mode": {
+                "const": "execute"
+              },
+              "plan": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "plan",
+              "chunk"
+            ]
+          },
+          {
+            "properties": {
+              "artifact": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "assignment": {
+                "description": "An existing live Group EM grant must cover this session/run and declared or larger recorded peak.",
+                "properties": {
+                  "declared_peak_mb": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1048576,
+                    "type": "number"
+                  },
+                  "run": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "session_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "run",
+                  "declared_peak_mb"
+                ],
+                "type": "object"
+              },
+              "chunk": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "mode": {
+                "const": "persona"
+              },
+              "persona": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "plan": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "provider": {
+                "enum": [
+                  "anthropic",
+                  "deepseek",
+                  "google",
+                  "mistral",
+                  "openai",
+                  "xai"
+                ]
+              },
+              "task_file": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "tier_map": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "persona",
+              "task_file",
+              "tier_map",
+              "provider",
+              "assignment"
+            ]
+          },
+          {
+            "properties": {
+              "artifact": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "assignment": {
+                "description": "An existing live Group EM grant must cover this session/run and declared or larger recorded peak.",
+                "properties": {
+                  "branch": {
+                    "description": "Assigned independent checkout branch; main/master and detached HEAD are refused.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "declared_peak_mb": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1048576,
+                    "type": "number"
+                  },
+                  "evidence": {
+                    "description": "PM assignment reference; this text does not issue a Group EM slot.",
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "quiet_box": {
+                    "const": true
+                  },
+                  "quiet_max_sessions": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "run": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "session_id": {
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "source": {
+                    "const": "pm"
+                  }
+                },
+                "required": [
+                  "session_id",
+                  "run",
+                  "declared_peak_mb",
+                  "source",
+                  "branch",
+                  "quiet_box",
+                  "quiet_max_sessions",
+                  "evidence"
+                ],
+                "type": "object"
+              },
+              "chunk": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "mode": {
+                "const": "worker"
+              },
+              "persona": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "plan": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "provider": {
+                "enum": [
+                  null,
+                  "codex"
+                ]
+              },
+              "task_file": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "tier_map": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              }
+            },
+            "required": [
+              "task_file",
+              "assignment"
+            ]
+          },
+          {
+            "properties": {
+              "agent_type": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "artifact": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "brief": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "chunk": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "mode": {
+                "const": "named-review"
+              },
+              "model": {
+                "minLength": 1,
+                "type": "string"
+              },
+              "plan": {
+                "enum": [
+                  null,
+                  ""
+                ]
+              },
+              "provider": {
+                "enum": [
+                  "codex",
+                  "agy",
+                  "grok"
+                ]
+              }
+            },
+            "required": [
+              "agent_type",
+              "provider",
+              "model",
+              "brief"
+            ]
+          }
+        ],
+        "properties": {
+          "agent_type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "artifact": {
+            "description": "Artifact path to stage for review or agy-review.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "assignment": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "brief": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "chunk": {
+            "description": "Declared open chunk identifier within plan.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "mode": {
+            "enum": [
+              "review",
+              "execute",
+              "agy-review",
+              "grok-review",
+              "named-review",
+              "persona",
+              "worker"
+            ],
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_session_id": {
+            "description": "Parent session identifier for roster association; worker/persona default to assignment.session_id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "persona": {
+            "description": "The same shared role definition used by Claude, declaring model: opus.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "plan": {
+            "description": "Plan path containing the open execution chunk.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "description": "Serving provider namespace for persona mode; worker mode is Codex only.",
+            "enum": [
+              null,
+              "codex",
+              "agy",
+              "grok",
+              "anthropic",
+              "deepseek",
+              "google",
+              "mistral",
+              "openai",
+              "xai"
+            ],
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "repo_root": {
+            "description": "Existing working checkout directory, used verbatim as the child's cwd.",
+            "minLength": 1,
+            "type": "string"
+          },
+          "task_file": {
+            "description": "UTF-8 file containing the assigned worker task or persona review request.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "tier_map": {
+            "description": "Trusted reviewed JSON provider/tier map; no model-equivalence defaults are guessed.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdicts": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "mode",
+          "repo_root"
+        ],
         "type": "object"
       },
-      "summary": "Start one detached codex run.",
+      "summary": "Start one detached artifact review, plan-chunk execution, persona review, or Codex worker.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Render exact registered routing alias, observed model/effort/context, and tree API-cost estimate.\n\nReads bounded appended JSONL usage from explicit or registered transcript paths.\nFork history is deduplicated, subagents join only by explicit parent identity,\nand unavailable prices or child/workflow coverage remain visible as incomplete.\nWrites only a derived per-session cache; never changes Codex UI, routing, or services.",
+      "module": "coordinator_core.ops.codex_status",
+      "name": "codex_status.snapshot",
+      "op_class": "mutating",
+      "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "byte_budget": {
+            "default": 4194304,
+            "maximum": 4194304,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "coverage_manifest": {
+            "description": "Producer-owned coverage receipt with matching session_id and subagents/workflows booleans.",
+            "type": "string"
+          },
+          "discover_dirs": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "event_journals": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "rollouts": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "session_id": {
+            "description": "Genuine root thread UUID; defaults to carried CODEX_THREAD_ID.",
+            "format": "uuid",
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "summary": "Render exact registered routing alias, observed model/effort/context, and tree API-cost estimate.",
       "timeout_s": 30.0
     },
     {
@@ -659,6 +1533,17 @@
         "type": "object"
       },
       "summary": "JSON-RPC \"compute_layer.scaffold\" handler.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "Return the `/consolidate-git` decision object (COMPUTE_ONLY; spawns read-only git, writes nothing).\n\nparams:\n    superseded: optional dict mapping branch name to the superseding sha, the\n                CLI's `--superseded <branch>=<sha>` map.",
+      "module": "coordinator_core.consolidate_assemble.ops",
+      "name": "consolidate_assemble.brief",
+      "op_class": "compute_only",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "Return the `/consolidate-git` decision object (COMPUTE_ONLY; spawns read-only git, writes nothing).",
       "timeout_s": 30.0
     },
     {
@@ -1366,7 +2251,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.\n\ncoordinator_core.ops.engine_ask_submit -- JSON-RPC \"engine_ask.submit\": the engine-ask door for a\ncaller with no Workflow tool (Codex).\n\nWire params: `ask` xor `sizing`; `ask_source` (\"pm\" | \"relayed\", required with `ask`); `session_id`,\n`caller` (identity string) and absolute `cwd`, all required and never read from the environment; optional\n`repo`, `agent_id`, the hook's optional args (`em_context`, `context`, `brief`, `route_preference`,\n`em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and\n`fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`).\n\nReply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when\n`fire` is true) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that\nfails after a successful submit keeps the run handle and adds `fire_error`.\n\nSpec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1",
+      "description": "Submit one ask or sizing through the shared gates; see the module docstring for the wire contract.\n\ncoordinator_core.ops.engine_ask_submit -- JSON-RPC \"engine_ask.submit\": the engine-ask door for a\ncaller with no Workflow tool (Codex).\n\nWire params: `ask` xor `sizing`; `ask_source` (\"pm\" | \"relayed\", required with `ask`); `session_id`,\n`caller` (identity string) and absolute `cwd`, all required and never read from the environment; optional\n`repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,\n`em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and\n`fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`),\n`executor` (headless by default, or claude), and `backend` (codex by default, or claude).\nCompletion defaults to the submitting session UUID; notify_to explicitly overrides it.\n\nReply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when\n`fire` is true) or `{refused, reason}` with `refused` in `_engine_ask_gates.REFUSAL_CODES`. A fire that\nfails after a successful submit keeps the run handle and adds `fire_error`.\n\nSpec backlink: docs/plans/2026-11/2026-11-07-7402bb-2-engine-ask-op-side-submit.md § C1",
       "module": "coordinator_core.ops.engine_ask_submit",
       "name": "engine_ask.submit",
       "op_class": "mutating",
@@ -3005,14 +3890,14 @@
       "timeout_s": 30.0
     },
     {
-      "description": "Run `_run_chain` under leg attribution and attach `legs` / `handler_thread_ms`\nto this call's process_time row (`op_row_fields`; a no-op when no row is bound).",
+      "description": "Run `_run_chain` under `run_phased` (`slow_phase` / `spans`, deadline stop) and attach\n`legs` / `handler_thread_ms` to this call's process_time row (`op_row_fields`; a no-op\nwhen no row is bound).",
       "module": "coordinator_core.hooks",
       "name": "hooks.preuse_bash_dispatch",
       "op_class": "mutating",
       "params_schema": {
         "type": "object"
       },
-      "summary": "Run `_run_chain` under leg attribution and attach `legs` / `handler_thread_ms`",
+      "summary": "Run `_run_chain` under `run_phased` (`slow_phase` / `spans`, deadline stop) and attach",
       "timeout_s": 30.0
     },
     {
@@ -3049,14 +3934,14 @@
       "timeout_s": 30.0
     },
     {
-      "description": "coordinator_core.hooks.preuse_write_dispatch — PreToolUse(Write|Edit|\nMultiEdit|NotebookEdit) write-guard op.\n\nArrival note (W4-C7, docs/plans/2026-09-18-doe-holds-no-scripts.md): ported\nfrom coordinator-content-repo `coordinator/hooks/scripts/preuse-write-dispatch.py`. That\nscript's whole job was PLUMBING: resolve a SIBLING claude-klabauter checkout from a\ndoctrine-plane repo (`_engine_root.resolve_claude_klabauter_root`), place it on\n`sys.path`, import `coordinator_core.write_guards.engine` across that\nboundary, and fold a SECOND, doctrine-plane-resident guard registry\n(`_guard_runner.REAL_GUARD_REGISTRY`) into the engine's own verdict via\n`_run_guards`/`_verdict_to_envelope`, because DoE used to host a handful of\nguards the claude-klabauter engine did not know about. None of that plumbing applies\nhere: this module IS inside the engine boundary, `coordinator_core.\nwrite_guards.engine` is a same-repo sibling import, and there is no second\nguard registry to fold in — `evaluate()`'s own discovery already enumerates\nevery registered guard (`write_guards/engine.py :: discover_guard_names`).\nSo this op reduces to the part of the DoE script that was never plumbing:\ncall `evaluate()` with the payload the hook was already handed, and return\nits verdict.\n\nOp contract (matches the other landed `hooks.*` ops in this package): params\nis the flat PreToolUse payload dict (`tool_name`, `tool_input`, `session_id`,\n`cwd`, `agent_id`, …) — the SAME shape `write_guards.engine.evaluate()`\nalready accepts positionally, so no reshaping happens at this seam. Returns\none `hookSpecificOutput` envelope dict (deny, allow_advisory-shaped, or\n`no_advisory()`) — never a list.\n\nAGGREGATION IS DELIBERATELY NOT ENABLED HERE (deviation from the DoE\nscript, which turned `aggregate=True` on for its own dispatch). `evaluate(\naggregate=True)` returns `List[Dict]` when the advisory phase runs, which\nwould violate the singular \"one hookSpecificOutput dict out\" contract this\nrow's own body states for every op in this package, and no consumer of this\nnew op exists yet to define a list-of-envelopes wire shape (the entrypoint\nthat will actually dial this op, `hook-run`, lands in W4-C16). The DoE\nscript's `aggregate=True` reasoning (masking of a lower-priority advisory by\na higher-priority one that also fires) is a real behaviour and stays\navailable — a future caller that wants it passes `aggregate=True` itself\nonce a multi-envelope wire shape is defined for this door; this handler does\nnot invent one unasked. Default (first-fired-advisory-wins, hard-deny\nshort-circuits ahead of it) matches every other write-guard call site today.\n\nGraceful degradation: any failure inside `evaluate()` fails OPEN (returns\n`no_advisory()`, i.e. ALLOW) rather than raising — an edit must never be\nbricked by a guard-engine defect, mirroring the DoE dispatcher's own\nfail-open philosophy for engine-resolution failure (which cannot occur here,\nsince there is no cross-repo resolution step left to fail).\n\nNegative-spec:\n    Does NOT resolve a sibling engine checkout, place anything on `sys.path`,\n    or import a `_engine_root`/`_guard_runner` analogue — there is nothing on\n    the other side of a boundary to resolve; deleting that plumbing is the\n    point of this port, not an omission.\n    Does NOT read `subagent-sandbox-policy.yaml` or forward a `policy_path` —\n    `write_guards/engine.py`'s own module docstring already records that the\n    subagent-sandbox confinement was removed and `policy_path` is accepted-\n    but-unused; forwarding a resolved path here would be dead plumbing for a\n    parameter nothing reads.\n    Does NOT accept raw JSON text — callers on this door already hand a parsed\n    params dict (the JSON-RPC contract), so this calls `evaluate()` directly\n    rather than the raw-text `evaluate_payload_json()` wrapper DoE's\n    stdin-based script needed.\n\nSpec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C7",
+      "description": "Run `_run_chain` under `run_phased`: phases and guards are named on the request row and\na dispatch past the hook deadline answers `no_advisory()`.",
       "module": "coordinator_core.hooks",
       "name": "hooks.preuse_write_dispatch",
       "op_class": "mutating",
       "params_schema": {
         "type": "object"
       },
-      "summary": "coordinator_core.hooks.preuse_write_dispatch — PreToolUse(Write|Edit|",
+      "summary": "Run `_run_chain` under `run_phased`: phases and guards are named on the request row and",
       "timeout_s": 30.0
     },
     {
@@ -3401,14 +4286,14 @@
       "timeout_s": 30.0
     },
     {
-      "description": "PreToolUse(Workflow) door onto `evaluate`; a deny resolves at the guard-level policy point.\n\ncoordinator_core.hooks.submit_engine_ask — PreToolUse(Workflow): the EM's submission of an\nengineering ask IS the running Workflow.\n\nThe EM's one act on an ask is `Workflow({name: \"coordinator:engine-ask\", args: {ask: \"<PM's words,\nverbatim>\"}})` (or `args: {sizing: \"<state/sizings/x.yaml>\"}` for a routed sizing). The harness\nresolves `name` to the plugin's `workflows/engine-ask.js` stub before any PreToolUse hook runs,\nso the stub must exist; this hook then emits the warp run through `dispatch.emit` (the ask route\n`emit-dispatch-workflow --ask/--sizing` takes: run token, receipt, `ask.md` with the verbatim words\nwritten by the engine) and answers allow + `updatedInput` = `{scriptPath: <emitted>, args:\n<fire args>}`. `updatedInput` replaces the whole tool input, so the call the EM made launches\nthe emitted run, in the background, under `claude -p` as interactively; its completion\nnotification is the EM's one wake. The stub only ever runs when this hook did not: it returns a\nhalt that names the gap, never a run.\n\n`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, stop_after?, chatty?}` (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params[\"em_size\"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params[\"chatty\"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, repo?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `\"plan\"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an entry's `repo` (else the top-level `repo`) is the checkout its run starts in and writes to: entries are partitioned by resolved repo, each repo is cross-repo-checked and fanned out once, and the runs start under one launcher per repo; an `after` edge or a `join` across repos is refused; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: \"pm\"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op\nor the fan-out, and either beside `{sizing}` is refused) (each ask a\nseparate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one\nlauncher (`fan_launcher.write_launcher`, given each run's pre-emitted reply) that starts each, with one ready run it fires\nthat run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a\nslice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload\ncwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, the venue is remote, or an explicit absolute `repo` names a registered checkout), optional `source: \"pm\" | \"relayed\"` (a chosen source is forwarded to the engine verbatim as `ask_source`, and ignored on a `sizing` submission; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: \"pm\"` makes it the PM's\nwords, which the engine verifies against the session's recorded turns (refused when contradicted, flagged\nwhen no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected\nroot passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm\n(`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit\nop's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the\nPM's local cross-repo assent; implied on a remote venue), optional `supersedes: \"<held run id>\"` (on `ask` / `sizing`\nonly: the new run replaces that held slice, which is marked superseded after the emit and never starts; refused\nfor a landed or running run). A bare string `args` is the ask.\nA sizing carrying a non-empty `research` block is emitted on the research route (`from_sizing`,\nwith `context` paths as the route's `context`; `brief`/`brief_file` are refused there); any other\nsizing takes the plan chain (`ask` + `sizing_path`); only the plan chain echoes inherited revisions.\nRefusals deny with the engine's own reason; a submission for a sizing a live run is already\nworking denies naming that run (`coordinator_core.warp_live`).\n\nAlso here, `sizing_scout_deny`: the main loop's `Agent(sizing-scout)` is the hand route into the\nsizing agent the submission replaces, so it is always denied: naming the live run when this\nsession has one, else the Workflow ask submission that carries sizing through to bookkeeping.\nCalled from `hooks.block_unenumerated_agent_type.check` (the engine leg DoE's PreToolUse(Agent)\nfan-in already runs). A Workflow's own `agent()` spawns raise no\nPreToolUse(Agent), so a workflow that dispatches the sizing scout (plan-blitz) is untouched.\n\nA refire of a halted sizing reads the halt-time record (`resume.json`, `halt_resume_record`),\nchecks its fingerprint (file bytes and the halt marker; no git) and emits from the stored\nscript. A missing, stale or stalled record spawns `halt_resume_build` detached and starts the run\nthrough a one-child launcher; the hook never composes. The overlap check reads the live-run index\n(`live_run_index`), never the warp dirs. Every such read is deadline-bound (`_bounded_call`): a\nstalled disk degrades to the background path and never blocks the run start.\n\nNegative spec: never launches a process except the detached recompose — the harness runs the\nrewritten call. Never edits the emitted script. Never denies a Workflow call that does not name\nthe stub.",
+      "description": "PreToolUse(Workflow) door onto the shared gates; a deny resolves at the guard-level policy point.\n\ncoordinator_core.hooks.submit_engine_ask — PreToolUse(Workflow): the EM's submission of an\nengineering ask IS the running Workflow.\n\nThe EM's one act on an ask is `Workflow({name: \"coordinator:engine-ask\", args: {ask: \"<PM's words,\nverbatim>\"}})` (or `args: {sizing: \"<state/sizings/x.yaml>\"}` for a routed sizing). The harness\nresolves `name` to the plugin's `workflows/engine-ask.js` stub before any PreToolUse hook runs,\nso the stub must exist; this hook then emits the warp run through `dispatch.emit` (the ask route\n`emit-dispatch-workflow --ask/--sizing` takes: run token, receipt, `ask.md` with the verbatim words\nwritten by the engine) and answers allow + `updatedInput` = `{scriptPath: <emitted>, args:\n<fire args>}`. `updatedInput` replaces the whole tool input, so the call the EM made launches\nthe emitted run, in the background, under `claude -p` as interactively; its completion\nnotification is the EM's one wake. The stub only ever runs when this hook did not: it returns a\nhalt that names the gap, never a run.\n\n`args` shape: `{ask: str, em_context?, route_preference?, em_rationale?, em_size?, stop_after?, chatty?}` (`em_size` is the EM's own size, XS|S|M|L|XL|XXL, forwarded to the emit op as params[\"em_size\"]; the gate halts only when it is M or below against an engine XL/XXL; a value outside the set, or one beside a multi-item `asks`, is refused) (`chatty` is a boolean, forwarded to the emit op as params[\"chatty\"]; a non-boolean is refused) | `{sizing: str, stop_after?}` | `{asks: [{ask, source?, sender?, relayed_text?, em_context?, context?, route_preference?, em_rationale?, label?, repo?, writes?, after?, stop_after?}], sender?, confirm_split?, stop_after?}` (`stop_after` is `\"plan\"` only: the run parks after planning for `/mise-prep`; a top-level value beside `asks` applies to every entry naming none; an entry's `repo` (else the top-level `repo`) is the checkout its run starts in and writes to: entries are partitioned by resolved repo, each repo is cross-repo-checked and fanned out once, and the runs start under one launcher per repo; an `after` edge or a `join` across repos is refused; an `args` key outside the accepted set, or an `asks` entry key outside `ASKS_ITEM_KEYS`, is refused naming it and the accepted keys; `em_context` is a string of the EM's own context, carried in the emit op's `ask_brief` under an EM marker, never merged into the ask text, so `source: \"pm\"` stays true for the verbatim `ask`; an entry's `context` (a string or list of path / prose strings) and `em_context` ride the fan-out items on a multi-item `asks`, and a one-element `asks` carries them as a top-level `context` does; a top-level `context` beside a multi-item `asks` is refused; `route_preference` is goal|roadmap|plan, `em_rationale` at most 2000 chars; both forward to the emit op\nor the fan-out, and either beside `{sizing}` is refused) (each ask a\nseparate sibling run via `dispatch.ask_fanout`; with two or more ready runs the call is rewritten to one\nlauncher (`fan_launcher.write_launcher`, given each run's pre-emitted reply) that starts each, with one ready run it fires\nthat run directly; the allow reason carries `{parent_id, runs}` and the runs waiting; a one-element array is an `ask`; a\nslice `{sizing}` is denied until its `after` predecessors land), optional `repo` (absolute path; else the payload\ncwd's repo, or for an ask whose absolute `context` lies in another registered repo, that repo; a run root foreign to the session's repo is refused unless the sizing takes the research route, `cross_repo_approved: true` is set, the venue is remote, or an explicit absolute `repo` names a registered checkout), optional `source: \"pm\" | \"relayed\"` (a chosen source is forwarded to the engine verbatim as `ask_source`, and ignored on a `sizing` submission; an unmarked single `ask` defaults to `pm` on the session's first human turn and to `relayed` with one warning in the allow reason on any later turn; only `source: \"pm\"` makes it the PM's\nwords, which the engine verifies against the session's recorded turns (refused when contradicted, flagged\nwhen no log resolves); on `asks` it is the default for items naming no `source` of their own; a redirected\nroot passes `session_root`, the submitting session's repo, so the log is found for that verification), optional EM brief beside either arm\n(`brief` inline text, `brief_file` repo path, `context` path or list of paths; carried to the emit\nop's `ask_brief` / `ask_brief_file` / `ask_context`, whose refusal is the deny reason), optional `cross_repo_approved: true` (the\nPM's local cross-repo assent; implied on a remote venue), optional `supersedes: \"<held run id>\"` (on `ask` / `sizing`\nonly: the new run replaces that held slice, which is marked superseded after the emit and never starts; refused\nfor a landed or running run). A bare string `args` is the ask.\nA sizing carrying a non-empty `research` block is emitted on the research route (`from_sizing`,\nwith `context` paths as the route's `context`; `brief`/`brief_file` are refused there); any other\nsizing takes the plan chain (`ask` + `sizing_path`); only the plan chain echoes inherited revisions.\nRefusals deny with the engine's own reason; a submission for a sizing a live run is already\nworking denies naming that run (`coordinator_core.warp_live`).\n\nAlso here, `sizing_scout_deny`: the main loop's `Agent(sizing-scout)` is the hand route into the\nsizing agent the submission replaces, so it is always denied: naming the live run when this\nsession has one, else the Workflow ask submission that carries sizing through to bookkeeping.\nCalled from `hooks.block_unenumerated_agent_type.check` (the engine leg DoE's PreToolUse(Agent)\nfan-in already runs). A Workflow's own `agent()` spawns raise no\nPreToolUse(Agent), so a workflow that dispatches the sizing scout (plan-blitz) is untouched.\n\nA refire of a halted sizing reads the halt-time record (`resume.json`, `halt_resume_record`),\nchecks its fingerprint (file bytes and the halt marker; no git) and emits from the stored\nscript. A missing, stale or stalled record spawns `halt_resume_build` detached and starts the run\nthrough a one-child launcher; the hook never composes. The overlap check reads the live-run index\n(`live_run_index`), never the warp dirs. Every such read is deadline-bound (`_bounded_call`): a\nstalled disk degrades to the background path and never blocks the run start.\n\nNegative spec: never launches a process except the detached recompose — the harness runs the\nrewritten call. Never edits the emitted script. Never denies a Workflow call that does not name\nthe stub.",
       "module": "coordinator_core.hooks",
       "name": "hooks.submit_engine_ask",
       "op_class": "mutating",
       "params_schema": {
         "type": "object"
       },
-      "summary": "PreToolUse(Workflow) door onto `evaluate`; a deny resolves at the guard-level policy point.",
+      "summary": "PreToolUse(Workflow) door onto the shared gates; a deny resolves at the guard-level policy point.",
       "timeout_s": 30.0
     },
     {
@@ -5282,7 +6167,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"session_baton.mint\" handler — see module docstring for the\nfull contract.\n\nParams:\n    session_id (str, required) — the session whose baton is being\n                minted/updated.\n    prompt      (str, optional) — the prompt to capture as\n                ``first_prompt``. Ignored (silently) when the record\n                already carries a non-``None`` ``first_prompt`` — see\n                module docstring, \"Idempotent\": the field is captured\n                once, permanently.\n    cwd         (str, optional) — working directory to resolve the\n                session hub from; threaded verbatim into store's own\n                ``cwd`` kwarg. Defaults to the current process cwd\n                (store's own default) when omitted.\n    title       (str, optional) — EM-supplied session title. Threaded\n                into ``merge_baton`` only when supplied; an omitted\n                ``title`` leaves any existing stored value untouched.\n                Unlike ``prompt``/``first_prompt``, overwritable on every\n                call — no capture-once guard. NOTE: JSON-RPC cannot\n                distinguish an omitted ``title`` from an explicit\n                ``title: null`` on the wire — both decode to Python\n                ``None`` and both no-op here. There is no way to clear a\n                stored title through this op; that capability, if ever\n                needed, would require a distinct sentinel param.\n    intent      (str, optional) — EM-supplied session intent. Same\n                omitted-means-untouched, always-overwritable contract as\n                ``title`` — including the same JSON ``null``-vs-omitted\n                caveat above.\n\nReturns:\n    exit_code    int        0=ok, 1=setup-error (bad params /\n                             unresolvable session hub)\n    error        str|None\n    session_id   str|None\n    baton_path   str|None   absolute path to the written baton.json\n    created      bool       True iff this call minted the record for the\n                             first time (no prior created_at on disk) —\n                             unaffected by whether this call also carried\n                             a title/intent\n    first_prompt str|None   the record's first_prompt AFTER this call\n\nJSON-RPC `session_baton.mint` handler: creates or updates a session's baton record, capturing `first_prompt` once while letting `title`/`intent` be overwritten on every call.",
+      "description": "JSON-RPC \"session_baton.mint\" handler — see module docstring for the\nfull contract.\n\nParams:\n    session_id (str, required) — the session whose baton is being\n                minted/updated.\n    initialize  (bool, optional) — explicitly create the session metadata\n                before minting, for harnesses without a SessionStart hook.\n    prompt      (str, optional) — the prompt to capture as\n                ``first_prompt``. Ignored (silently) when the record\n                already carries a non-``None`` ``first_prompt`` — see\n                module docstring, \"Idempotent\": the field is captured\n                once, permanently.\n    cwd         (str, optional) — working directory to resolve the\n                session hub from; threaded verbatim into store's own\n                ``cwd`` kwarg. Defaults to the current process cwd\n                (store's own default) when omitted.\n    title       (str, optional) — EM-supplied session title. Threaded\n                into ``merge_baton`` only when supplied; an omitted\n                ``title`` leaves any existing stored value untouched.\n                Unlike ``prompt``/``first_prompt``, overwritable on every\n                call — no capture-once guard. NOTE: JSON-RPC cannot\n                distinguish an omitted ``title`` from an explicit\n                ``title: null`` on the wire — both decode to Python\n                ``None`` and both no-op here. There is no way to clear a\n                stored title through this op; that capability, if ever\n                needed, would require a distinct sentinel param.\n    intent      (str, optional) — EM-supplied session intent. Same\n                omitted-means-untouched, always-overwritable contract as\n                ``title`` — including the same JSON ``null``-vs-omitted\n                caveat above.\n\nReturns:\n    exit_code    int        0=ok, 1=setup-error (bad params /\n                             unresolvable session hub)\n    error        str|None\n    session_id   str|None\n    baton_path   str|None   absolute path to the written baton.json\n    created      bool       True iff this call minted the record for the\n                             first time (no prior created_at on disk) —\n                             unaffected by whether this call also carried\n                             a title/intent\n    first_prompt str|None   the record's first_prompt AFTER this call\n\nJSON-RPC `session_baton.mint` handler: creates or updates a session's baton record, capturing `first_prompt` once while letting `title`/`intent` be overwritten on every call.",
       "module": "coordinator_core.ops.session_baton_mint",
       "name": "session_baton.mint",
       "op_class": "mutating",
@@ -5733,7 +6618,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"workflow.fire\" handler -- see module docstring for the\nwire contract.\n\nRaises:\n    ValueError -- if ``script_path`` is missing.\n    fire.ScriptNotFoundError -- if ``script_path`` does not exist.\n    fire.RepoRootUnresolvableError -- if no ``repo_root`` was resolved\n        AND ``script_path`` does not itself resolve to a git tree\n        (fail-loud; never silently proceeds against the firing\n        process's own ambient cwd, see klabauter#37).\n    fire.ScriptOutsideRepoRootError -- if ``script_path`` does not live\n        under the resolved repo root (klabauter#41 -- a fire aimed at\n        the wrong tree used to spawn a child that could not read its\n        own script and still reported success).\n    fire.PluginDirResolutionError -- if ``--print-plugin-dir`` cannot\n        be resolved (fail-loud; never silently omits the flag).\n    fire.ConcurrencyCapExceededError -- if the live-fire count is at\n        or above the cap.\n    fire.ChildSpawnFailedError -- if the child cannot be confirmed\n        live (immediate non-zero exit, spawn OSError).\n    dispatch_emit.op.FiredDriftError -- if ``expected`` is supplied and\n        differs from the on-disk bytes at ``script_path``.\n\ncoordinator_core.ops.workflow_fire.op — JSON-RPC \"workflow.fire\" and\n\"workflow.fire_status\" operations.\n\nPurpose: thin RPC wrapper registering the two-op surface this package\nexists for -- ``workflow.fire`` spawns exactly one detached ``claude -p``\nchild per emitted workflow script and returns the fire registry record as\nthe run handle; ``workflow.fire_status`` re-reads and refreshes that record\nby ``fire_id``. All spawning, plugin-dir resolution, and registry I/O lives\nin ``fire.py`` -- this module's only original code is param validation and\nmapping library exceptions to the JSON-RPC error contract other ops in\nthis family use (``ValueError`` for a missing/invalid param, matching\n``dispatch_emit.op``'s convention).\n\nSpec backlink: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md\n§ C4\n\nWire params -- workflow.fire:\n    script_path (str, required)   -- path to the emitted workflow ``.mjs``\n                                      script to fire. Must exist on disk.\n    expected (str, optional)      -- the hex sha256 digest of the script the\n                                      caller itself emitted -- ``dispatch.\n                                      emit``'s own reply ``\"sha256\"`` key,\n                                      threaded straight through, NEVER the\n                                      script text. When supplied, checked\n                                      against the on-disk bytes' digest via\n                                      ``dispatch_emit.op.\n                                      guard_against_fired_drift`` BEFORE the\n                                      spawn -- refuses\n                                      (``dispatch_emit.op.FiredDriftError``)\n                                      a fire whose script changed on disk\n                                      between emit and this call (a peer\n                                      overwrote the deterministic emission\n                                      path). Omitted, the fire is unverified\n                                      -- the same behavior as before this\n                                      param existed.\n    model (str, optional)         -- driver model; defaults to\n                                      ``fire.DEFAULT_MODEL`` (cheap tier --\n                                      the driver calls one tool once).\n    max_turns (int, optional)     -- child turn cap; when omitted, scales\n                                      with the emitted script's own declared\n                                      phase count (``fire._scaled_max_turns``,\n                                      floor ``fire.DEFAULT_MAX_TURNS``) rather\n                                      than a bare constant that never grew\n                                      with the workflow it bounds\n                                      (klabauter#41).\n    claude_bin (str, optional)    -- the ``claude`` binary to invoke;\n                                      defaults to ``\"claude\"`` (resolved via\n                                      PATH, same as the interactive shim).\n    concurrency_cap (int, optional) -- live-fire refusal threshold;\n                                      defaults to\n                                      ``fire.DEFAULT_CONCURRENCY_CAP``.\n\nReply fields -- workflow.fire:\n    the fire registry record (see ``fire.fire_workflow`` docstring): {\n      \"fire_id\", \"pid\", \"script_path\", \"repo_root\", \"plugin_dir\",\n      \"claude_bin\", \"model\", \"max_turns\", \"command\", \"started_at\",\n      \"log_path\", \"state\", \"exit_code\", \"exit_code_note\", \"outcome\",\n      \"outcome_basis\", \"failure_subtype\", \"driver_session_id\",\n      \"status_checked_at\", \"status_checked_at_iso\", \"log_size_bytes\",\n      \"publish_lag_message\", \"_readme\" }\n      ``repo_root`` (claude-klabauter#41) is the resolved worktree ``cwd``\n      this fire's ``script_path`` was checked against (``None`` when no\n      ``repo_root`` was resolvable for this call) -- see fire-time\n      refusal, below.\n      ``failure_subtype`` (claude-klabauter#37) is the driver's own\n      terminal ``subtype`` (e.g. ``\"error_max_turns\"``) whenever\n      ``outcome`` is ``\"failed\"``; absent otherwise.\n      ``publish_lag_message`` (DR-335) is non-``None`` only when the\n      published engine mirror is more than 30 minutes AND more than zero\n      engine-touching commits behind this fire's source tree -- see\n      ``coordinator_core.warm.skew.publish_lag``/``publish_lag_message``.\n      ``None`` covers both \"current\" and \"cannot tell\"; this run always\n      executes the published mirror regardless of this field's value.\n      ``state``, ``exit_code`` and ``outcome`` are valid only as of\n      ``status_checked_at`` -- the record is NOT written when the child\n      exits, so a raw file read can report a dead run as running.\n      ``_readme`` carries that fact for a reader who has only the file;\n      ``workflow.fire_status`` is the refreshing read.\n      ``exit_code`` is permanently ``None`` for a reaped child (detached\n      spawn, no surviving parent -- ``exit_code_note`` says so in-band);\n      ``outcome`` (``clean`` / ``truncated`` / ``unknown``, with\n      ``outcome_basis`` naming the evidence) is what separates a clean\n      finish from a truncation, classified from the child's own log.\n      ``outcome: \"clean\"`` means the DRIVER finished, NOT that any phase\n      did work -- for that, open the harness's workflow journal under\n      ``driver_session_id`` (absent when no result envelope was recovered).\n      See ``fire.fire_status``'s docstring for the reader move.\n      ``log_size_bytes`` is a cheap, non-authoritative signal only -- see\n      ``fire.fire_status`` docstring: a ``0`` flags \"nothing captured yet\",\n      a non-zero value is NOT proof any phase succeeded.\n\nWire params -- workflow.fire_status:\n    fire_id (str, required)       -- the ``fire_id`` from a prior\n                                      ``workflow.fire`` reply.\n\nReply fields -- workflow.fire_status:\n    the refreshed registry record, or ``{\"fire_id\": ..., \"found\": False}``\n    if no record exists for ``fire_id``.\n\nNegative-spec:\n  - Does NOT spawn a child per phase -- one child per fired workflow (see\n    ``fire.py`` module docstring). Not this module's own decision to\n    re-litigate; it only forwards the caller's one ``script_path``.\n  - Does NOT wait on the fired child or poll it to completion -- returns\n    as soon as ``fire.fire_workflow`` confirms liveness (bounded window,\n    see that function's docstring).\n  - Does NOT add any repo_root-resolution logic of its own -- this module\n    only forwards the envelope's ``repo_root`` straight through as\n    ``fire.fire_workflow(..., cwd=str(repo_root) if repo_root is not None\n    else None)``. Registry placement DOES therefore depend on the\n    envelope's ``repo_root`` whenever a caller supplies one: it becomes the\n    ``cwd`` that ``fire.py``'s ``_registry_dir`` -> ``sessions_dir`` walks\n    from. When ``repo_root`` is absent, ``fire.fire_workflow`` no longer\n    falls back to the firing process's own ambient cwd -- it resolves the\n    target tree from ``script_path`` itself instead, or refuses via\n    ``fire.RepoRootUnresolvableError`` when even that is not a git tree\n    (klabauter#37; see ``fire._resolve_target_repo``).",
+      "description": "JSON-RPC \"workflow.fire\" handler -- see module docstring for the\nwire contract.\n\nRaises:\n    ValueError -- if ``script_path`` is missing.\n    fire.ScriptNotFoundError -- if ``script_path`` does not exist.\n    fire.RepoRootUnresolvableError -- if no ``repo_root`` was resolved\n        AND ``script_path`` does not itself resolve to a git tree\n        (fail-loud; never silently proceeds against the firing\n        process's own ambient cwd, see klabauter#37).\n    fire.ScriptOutsideRepoRootError -- if ``script_path`` does not live\n        under the resolved repo root (klabauter#41 -- a fire aimed at\n        the wrong tree used to spawn a child that could not read its\n        own script and still reported success).\n    fire.PluginDirResolutionError -- if ``--print-plugin-dir`` cannot\n        be resolved (fail-loud; never silently omits the flag).\n    fire.ConcurrencyCapExceededError -- if the live-fire count is at\n        or above the cap.\n    fire.ChildSpawnFailedError -- if no child could be spawned (OSError).\n        Fast child exits return their terminal handle, never invite a duplicate fire.\n    dispatch_emit.op.FiredDriftError -- if ``expected`` is supplied and\n        differs from the on-disk bytes at ``script_path``.\n\ncoordinator_core.ops.workflow_fire.op — JSON-RPC \"workflow.fire\" and\n\"workflow.fire_status\" operations.\n\nPurpose: thin RPC wrapper registering the two-op surface this package\nexists for -- ``workflow.fire`` spawns exactly one detached ``claude -p``\nchild per emitted workflow script and returns the fire registry record as\nthe run handle; ``workflow.fire_status`` re-reads and refreshes that record\nby ``fire_id``. All spawning, plugin-dir resolution, and registry I/O lives\nin ``fire.py`` -- this module's only original code is param validation and\nmapping library exceptions to the JSON-RPC error contract other ops in\nthis family use (``ValueError`` for a missing/invalid param, matching\n``dispatch_emit.op``'s convention).\n\nSpec backlink: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md\n§ C4\n\nWire params -- workflow.fire:\n    script_path (str, required)   -- path to the emitted workflow ``.mjs``\n                                      script to fire. Must exist on disk.\n    backend (str, optional)       -- ``codex`` selects the native Workflow\n                                      executor and Codex workers; ``claude``\n                                      keeps the existing Claude driver.\n                                      Omitted preserves the legacy Claude\n                                      default. ``engine_ask.submit`` selects\n                                      Codex by default when firing.\n    expected (str, optional)      -- the hex sha256 digest of the script the\n                                      caller itself emitted -- ``dispatch.\n                                      emit``'s own reply ``\"sha256\"`` key,\n                                      threaded straight through, NEVER the\n                                      script text. When supplied, checked\n                                      against the on-disk bytes' digest via\n                                      ``dispatch_emit.op.\n                                      guard_against_fired_drift`` BEFORE the\n                                      spawn -- refuses\n                                      (``dispatch_emit.op.FiredDriftError``)\n                                      a fire whose script changed on disk\n                                      between emit and this call (a peer\n                                      overwrote the deterministic emission\n                                      path). Omitted, the fire is unverified\n                                      -- the same behavior as before this\n                                      param existed.\n    model (str, optional)         -- Claude driver model; defaults to\n                                      ``fire.DEFAULT_MODEL`` (cheap tier --\n                                      the driver calls one tool once).\n    max_turns (int, optional)     -- child turn cap; when omitted, scales\n                                      with the emitted script's own declared\n                                      phase count (``fire._scaled_max_turns``,\n                                      floor ``fire.DEFAULT_MAX_TURNS``) rather\n                                      than a bare constant that never grew\n                                      with the workflow it bounds\n                                      (klabauter#41).\n    claude_bin (str, optional)    -- the ``claude`` binary to invoke;\n                                      defaults to ``\"claude\"`` (resolved via\n                                      PATH, same as the interactive shim).\n    concurrency_cap (int, optional) -- live-fire refusal threshold;\n                                      defaults to\n                                      ``fire.DEFAULT_CONCURRENCY_CAP``.\n    run_id (str, optional)        -- the run this fire drives; stored on the\n                                      record so ``workflow.fire_status``\n                                      reports ``outcome: not_landed`` for a\n                                      clean exit whose run-stage is not\n                                      ``landed``.\n    notify_to (str, optional)     -- peer name notified by the warm engine\n                                      when it observes driver exit.\n                                      Native runs checkpoint and queue their\n                                      notice on completion without polling.\n    timeout_s (int, optional)     -- total native execution budget, including\n                                      admission, agents and terminal action;\n                                      defaults to 7200, bounded to 1..86400.\n\nReply fields -- workflow.fire:\n    the fire registry record (see ``fire.fire_workflow`` docstring): {\n      \"fire_id\", \"pid\", \"script_path\", \"repo_root\", \"plugin_dir\",\n      \"claude_bin\", \"model\", \"max_turns\", \"command\", \"started_at\",\n      \"log_path\", \"state\", \"exit_code\", \"exit_code_note\", \"outcome\",\n      \"outcome_basis\", \"failure_subtype\", \"driver_session_id\",\n      \"status_checked_at\", \"status_checked_at_iso\", \"log_size_bytes\",\n      \"publish_lag_message\", \"_readme\" }\n      ``repo_root`` (claude-klabauter#41) is the resolved worktree ``cwd``\n      this fire's ``script_path`` was checked against (``None`` when no\n      ``repo_root`` was resolvable for this call) -- see fire-time\n      refusal, below.\n      ``failure_subtype`` (claude-klabauter#37) is the driver's own\n      terminal ``subtype`` (e.g. ``\"error_max_turns\"``) whenever\n      ``outcome`` is ``\"failed\"``; absent otherwise.\n      ``publish_lag_message`` (DR-335) is non-``None`` only when the\n      published engine mirror is more than 30 minutes AND more than zero\n      engine-touching commits behind this fire's source tree -- see\n      ``coordinator_core.warm.skew.publish_lag``/``publish_lag_message``.\n      ``None`` covers both \"current\" and \"cannot tell\"; this run always\n      executes the published mirror regardless of this field's value.\n      ``state``, ``exit_code`` and ``outcome`` are valid only as of\n      ``status_checked_at`` -- the record is NOT written when the child\n      exits, so a raw file read can report a dead run as running.\n      ``_readme`` carries that fact for a reader who has only the file;\n      ``workflow.fire_status`` is the refreshing read.\n      ``exit_code`` is permanently ``None`` for a reaped child (detached\n      spawn, no surviving parent -- ``exit_code_note`` says so in-band);\n      ``outcome`` (``clean`` / ``truncated`` / ``unknown``, with\n      ``outcome_basis`` naming the evidence) is what separates a clean\n      finish from a truncation, classified from the child's own log.\n      ``outcome: \"clean\"`` means the DRIVER finished, NOT that any phase\n      did work -- for that, open the harness's workflow journal under\n      ``driver_session_id`` (absent when no result envelope was recovered).\n      See ``fire.fire_status``'s docstring for the reader move.\n      ``log_size_bytes`` is a cheap, non-authoritative signal only -- see\n      ``fire.fire_status`` docstring: a ``0`` flags \"nothing captured yet\",\n      a non-zero value is NOT proof any phase succeeded.\n\nWire params -- workflow.fire_status:\n    fire_id (str, required)       -- the ``fire_id`` from a prior\n                                      ``workflow.fire`` reply.\n\nReply fields -- workflow.fire_status:\n    the refreshed registry record, or ``{\"fire_id\": ..., \"found\": False}``\n    if no record exists for ``fire_id``.\n\nNegative-spec:\n  - Does NOT spawn a child per phase -- one child per fired workflow (see\n    ``fire.py`` module docstring). Not this module's own decision to\n    re-litigate; it only forwards the caller's one ``script_path``.\n  - Does NOT wait on the fired child or poll it to completion -- returns\n    as soon as ``fire.fire_workflow`` confirms liveness (bounded window,\n    see that function's docstring).\n  - Does NOT add any repo_root-resolution logic of its own -- this module\n    only forwards the envelope's ``repo_root`` straight through as\n    ``fire.fire_workflow(..., cwd=str(repo_root) if repo_root is not None\n    else None)``. Registry placement DOES therefore depend on the\n    envelope's ``repo_root`` whenever a caller supplies one: it becomes the\n    ``cwd`` that ``fire.py``'s ``_registry_dir`` -> ``sessions_dir`` walks\n    from. When ``repo_root`` is absent, ``fire.fire_workflow`` no longer\n    falls back to the firing process's own ambient cwd -- it resolves the\n    target tree from ``script_path`` itself instead, or refuses via\n    ``fire.RepoRootUnresolvableError`` when even that is not a git tree\n    (klabauter#37; see ``fire._resolve_target_repo``).",
       "module": "coordinator_core.ops.workflow_fire.op",
       "name": "workflow.fire",
       "op_class": "mutating",
@@ -5744,7 +6629,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"workflow.fire_status\" handler -- see module docstring for\nthe wire contract.\n\nRaises:\n    ValueError -- if ``fire_id`` is missing.\n\ncoordinator_core.ops.workflow_fire.op — JSON-RPC \"workflow.fire\" and\n\"workflow.fire_status\" operations.\n\nPurpose: thin RPC wrapper registering the two-op surface this package\nexists for -- ``workflow.fire`` spawns exactly one detached ``claude -p``\nchild per emitted workflow script and returns the fire registry record as\nthe run handle; ``workflow.fire_status`` re-reads and refreshes that record\nby ``fire_id``. All spawning, plugin-dir resolution, and registry I/O lives\nin ``fire.py`` -- this module's only original code is param validation and\nmapping library exceptions to the JSON-RPC error contract other ops in\nthis family use (``ValueError`` for a missing/invalid param, matching\n``dispatch_emit.op``'s convention).\n\nSpec backlink: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md\n§ C4\n\nWire params -- workflow.fire:\n    script_path (str, required)   -- path to the emitted workflow ``.mjs``\n                                      script to fire. Must exist on disk.\n    expected (str, optional)      -- the hex sha256 digest of the script the\n                                      caller itself emitted -- ``dispatch.\n                                      emit``'s own reply ``\"sha256\"`` key,\n                                      threaded straight through, NEVER the\n                                      script text. When supplied, checked\n                                      against the on-disk bytes' digest via\n                                      ``dispatch_emit.op.\n                                      guard_against_fired_drift`` BEFORE the\n                                      spawn -- refuses\n                                      (``dispatch_emit.op.FiredDriftError``)\n                                      a fire whose script changed on disk\n                                      between emit and this call (a peer\n                                      overwrote the deterministic emission\n                                      path). Omitted, the fire is unverified\n                                      -- the same behavior as before this\n                                      param existed.\n    model (str, optional)         -- driver model; defaults to\n                                      ``fire.DEFAULT_MODEL`` (cheap tier --\n                                      the driver calls one tool once).\n    max_turns (int, optional)     -- child turn cap; when omitted, scales\n                                      with the emitted script's own declared\n                                      phase count (``fire._scaled_max_turns``,\n                                      floor ``fire.DEFAULT_MAX_TURNS``) rather\n                                      than a bare constant that never grew\n                                      with the workflow it bounds\n                                      (klabauter#41).\n    claude_bin (str, optional)    -- the ``claude`` binary to invoke;\n                                      defaults to ``\"claude\"`` (resolved via\n                                      PATH, same as the interactive shim).\n    concurrency_cap (int, optional) -- live-fire refusal threshold;\n                                      defaults to\n                                      ``fire.DEFAULT_CONCURRENCY_CAP``.\n\nReply fields -- workflow.fire:\n    the fire registry record (see ``fire.fire_workflow`` docstring): {\n      \"fire_id\", \"pid\", \"script_path\", \"repo_root\", \"plugin_dir\",\n      \"claude_bin\", \"model\", \"max_turns\", \"command\", \"started_at\",\n      \"log_path\", \"state\", \"exit_code\", \"exit_code_note\", \"outcome\",\n      \"outcome_basis\", \"failure_subtype\", \"driver_session_id\",\n      \"status_checked_at\", \"status_checked_at_iso\", \"log_size_bytes\",\n      \"publish_lag_message\", \"_readme\" }\n      ``repo_root`` (claude-klabauter#41) is the resolved worktree ``cwd``\n      this fire's ``script_path`` was checked against (``None`` when no\n      ``repo_root`` was resolvable for this call) -- see fire-time\n      refusal, below.\n      ``failure_subtype`` (claude-klabauter#37) is the driver's own\n      terminal ``subtype`` (e.g. ``\"error_max_turns\"``) whenever\n      ``outcome`` is ``\"failed\"``; absent otherwise.\n      ``publish_lag_message`` (DR-335) is non-``None`` only when the\n      published engine mirror is more than 30 minutes AND more than zero\n      engine-touching commits behind this fire's source tree -- see\n      ``coordinator_core.warm.skew.publish_lag``/``publish_lag_message``.\n      ``None`` covers both \"current\" and \"cannot tell\"; this run always\n      executes the published mirror regardless of this field's value.\n      ``state``, ``exit_code`` and ``outcome`` are valid only as of\n      ``status_checked_at`` -- the record is NOT written when the child\n      exits, so a raw file read can report a dead run as running.\n      ``_readme`` carries that fact for a reader who has only the file;\n      ``workflow.fire_status`` is the refreshing read.\n      ``exit_code`` is permanently ``None`` for a reaped child (detached\n      spawn, no surviving parent -- ``exit_code_note`` says so in-band);\n      ``outcome`` (``clean`` / ``truncated`` / ``unknown``, with\n      ``outcome_basis`` naming the evidence) is what separates a clean\n      finish from a truncation, classified from the child's own log.\n      ``outcome: \"clean\"`` means the DRIVER finished, NOT that any phase\n      did work -- for that, open the harness's workflow journal under\n      ``driver_session_id`` (absent when no result envelope was recovered).\n      See ``fire.fire_status``'s docstring for the reader move.\n      ``log_size_bytes`` is a cheap, non-authoritative signal only -- see\n      ``fire.fire_status`` docstring: a ``0`` flags \"nothing captured yet\",\n      a non-zero value is NOT proof any phase succeeded.\n\nWire params -- workflow.fire_status:\n    fire_id (str, required)       -- the ``fire_id`` from a prior\n                                      ``workflow.fire`` reply.\n\nReply fields -- workflow.fire_status:\n    the refreshed registry record, or ``{\"fire_id\": ..., \"found\": False}``\n    if no record exists for ``fire_id``.\n\nNegative-spec:\n  - Does NOT spawn a child per phase -- one child per fired workflow (see\n    ``fire.py`` module docstring). Not this module's own decision to\n    re-litigate; it only forwards the caller's one ``script_path``.\n  - Does NOT wait on the fired child or poll it to completion -- returns\n    as soon as ``fire.fire_workflow`` confirms liveness (bounded window,\n    see that function's docstring).\n  - Does NOT add any repo_root-resolution logic of its own -- this module\n    only forwards the envelope's ``repo_root`` straight through as\n    ``fire.fire_workflow(..., cwd=str(repo_root) if repo_root is not None\n    else None)``. Registry placement DOES therefore depend on the\n    envelope's ``repo_root`` whenever a caller supplies one: it becomes the\n    ``cwd`` that ``fire.py``'s ``_registry_dir`` -> ``sessions_dir`` walks\n    from. When ``repo_root`` is absent, ``fire.fire_workflow`` no longer\n    falls back to the firing process's own ambient cwd -- it resolves the\n    target tree from ``script_path`` itself instead, or refuses via\n    ``fire.RepoRootUnresolvableError`` when even that is not a git tree\n    (klabauter#37; see ``fire._resolve_target_repo``).",
+      "description": "JSON-RPC \"workflow.fire_status\" handler -- see module docstring for\nthe wire contract.\n\nRaises:\n    ValueError -- if ``fire_id`` is missing.\n\ncoordinator_core.ops.workflow_fire.op — JSON-RPC \"workflow.fire\" and\n\"workflow.fire_status\" operations.\n\nPurpose: thin RPC wrapper registering the two-op surface this package\nexists for -- ``workflow.fire`` spawns exactly one detached ``claude -p``\nchild per emitted workflow script and returns the fire registry record as\nthe run handle; ``workflow.fire_status`` re-reads and refreshes that record\nby ``fire_id``. All spawning, plugin-dir resolution, and registry I/O lives\nin ``fire.py`` -- this module's only original code is param validation and\nmapping library exceptions to the JSON-RPC error contract other ops in\nthis family use (``ValueError`` for a missing/invalid param, matching\n``dispatch_emit.op``'s convention).\n\nSpec backlink: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md\n§ C4\n\nWire params -- workflow.fire:\n    script_path (str, required)   -- path to the emitted workflow ``.mjs``\n                                      script to fire. Must exist on disk.\n    backend (str, optional)       -- ``codex`` selects the native Workflow\n                                      executor and Codex workers; ``claude``\n                                      keeps the existing Claude driver.\n                                      Omitted preserves the legacy Claude\n                                      default. ``engine_ask.submit`` selects\n                                      Codex by default when firing.\n    expected (str, optional)      -- the hex sha256 digest of the script the\n                                      caller itself emitted -- ``dispatch.\n                                      emit``'s own reply ``\"sha256\"`` key,\n                                      threaded straight through, NEVER the\n                                      script text. When supplied, checked\n                                      against the on-disk bytes' digest via\n                                      ``dispatch_emit.op.\n                                      guard_against_fired_drift`` BEFORE the\n                                      spawn -- refuses\n                                      (``dispatch_emit.op.FiredDriftError``)\n                                      a fire whose script changed on disk\n                                      between emit and this call (a peer\n                                      overwrote the deterministic emission\n                                      path). Omitted, the fire is unverified\n                                      -- the same behavior as before this\n                                      param existed.\n    model (str, optional)         -- Claude driver model; defaults to\n                                      ``fire.DEFAULT_MODEL`` (cheap tier --\n                                      the driver calls one tool once).\n    max_turns (int, optional)     -- child turn cap; when omitted, scales\n                                      with the emitted script's own declared\n                                      phase count (``fire._scaled_max_turns``,\n                                      floor ``fire.DEFAULT_MAX_TURNS``) rather\n                                      than a bare constant that never grew\n                                      with the workflow it bounds\n                                      (klabauter#41).\n    claude_bin (str, optional)    -- the ``claude`` binary to invoke;\n                                      defaults to ``\"claude\"`` (resolved via\n                                      PATH, same as the interactive shim).\n    concurrency_cap (int, optional) -- live-fire refusal threshold;\n                                      defaults to\n                                      ``fire.DEFAULT_CONCURRENCY_CAP``.\n    run_id (str, optional)        -- the run this fire drives; stored on the\n                                      record so ``workflow.fire_status``\n                                      reports ``outcome: not_landed`` for a\n                                      clean exit whose run-stage is not\n                                      ``landed``.\n    notify_to (str, optional)     -- peer name notified by the warm engine\n                                      when it observes driver exit.\n                                      Native runs checkpoint and queue their\n                                      notice on completion without polling.\n    timeout_s (int, optional)     -- total native execution budget, including\n                                      admission, agents and terminal action;\n                                      defaults to 7200, bounded to 1..86400.\n\nReply fields -- workflow.fire:\n    the fire registry record (see ``fire.fire_workflow`` docstring): {\n      \"fire_id\", \"pid\", \"script_path\", \"repo_root\", \"plugin_dir\",\n      \"claude_bin\", \"model\", \"max_turns\", \"command\", \"started_at\",\n      \"log_path\", \"state\", \"exit_code\", \"exit_code_note\", \"outcome\",\n      \"outcome_basis\", \"failure_subtype\", \"driver_session_id\",\n      \"status_checked_at\", \"status_checked_at_iso\", \"log_size_bytes\",\n      \"publish_lag_message\", \"_readme\" }\n      ``repo_root`` (claude-klabauter#41) is the resolved worktree ``cwd``\n      this fire's ``script_path`` was checked against (``None`` when no\n      ``repo_root`` was resolvable for this call) -- see fire-time\n      refusal, below.\n      ``failure_subtype`` (claude-klabauter#37) is the driver's own\n      terminal ``subtype`` (e.g. ``\"error_max_turns\"``) whenever\n      ``outcome`` is ``\"failed\"``; absent otherwise.\n      ``publish_lag_message`` (DR-335) is non-``None`` only when the\n      published engine mirror is more than 30 minutes AND more than zero\n      engine-touching commits behind this fire's source tree -- see\n      ``coordinator_core.warm.skew.publish_lag``/``publish_lag_message``.\n      ``None`` covers both \"current\" and \"cannot tell\"; this run always\n      executes the published mirror regardless of this field's value.\n      ``state``, ``exit_code`` and ``outcome`` are valid only as of\n      ``status_checked_at`` -- the record is NOT written when the child\n      exits, so a raw file read can report a dead run as running.\n      ``_readme`` carries that fact for a reader who has only the file;\n      ``workflow.fire_status`` is the refreshing read.\n      ``exit_code`` is permanently ``None`` for a reaped child (detached\n      spawn, no surviving parent -- ``exit_code_note`` says so in-band);\n      ``outcome`` (``clean`` / ``truncated`` / ``unknown``, with\n      ``outcome_basis`` naming the evidence) is what separates a clean\n      finish from a truncation, classified from the child's own log.\n      ``outcome: \"clean\"`` means the DRIVER finished, NOT that any phase\n      did work -- for that, open the harness's workflow journal under\n      ``driver_session_id`` (absent when no result envelope was recovered).\n      See ``fire.fire_status``'s docstring for the reader move.\n      ``log_size_bytes`` is a cheap, non-authoritative signal only -- see\n      ``fire.fire_status`` docstring: a ``0`` flags \"nothing captured yet\",\n      a non-zero value is NOT proof any phase succeeded.\n\nWire params -- workflow.fire_status:\n    fire_id (str, required)       -- the ``fire_id`` from a prior\n                                      ``workflow.fire`` reply.\n\nReply fields -- workflow.fire_status:\n    the refreshed registry record, or ``{\"fire_id\": ..., \"found\": False}``\n    if no record exists for ``fire_id``.\n\nNegative-spec:\n  - Does NOT spawn a child per phase -- one child per fired workflow (see\n    ``fire.py`` module docstring). Not this module's own decision to\n    re-litigate; it only forwards the caller's one ``script_path``.\n  - Does NOT wait on the fired child or poll it to completion -- returns\n    as soon as ``fire.fire_workflow`` confirms liveness (bounded window,\n    see that function's docstring).\n  - Does NOT add any repo_root-resolution logic of its own -- this module\n    only forwards the envelope's ``repo_root`` straight through as\n    ``fire.fire_workflow(..., cwd=str(repo_root) if repo_root is not None\n    else None)``. Registry placement DOES therefore depend on the\n    envelope's ``repo_root`` whenever a caller supplies one: it becomes the\n    ``cwd`` that ``fire.py``'s ``_registry_dir`` -> ``sessions_dir`` walks\n    from. When ``repo_root`` is absent, ``fire.fire_workflow`` no longer\n    falls back to the firing process's own ambient cwd -- it resolves the\n    target tree from ``script_path`` itself instead, or refuses via\n    ``fire.RepoRootUnresolvableError`` when even that is not a git tree\n    (klabauter#37; see ``fire._resolve_target_repo``).",
       "module": "coordinator_core.ops.workflow_fire.op",
       "name": "workflow.fire_status",
       "op_class": "mutating",

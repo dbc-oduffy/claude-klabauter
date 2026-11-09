@@ -140,7 +140,7 @@ from coordinator_core.ops.ceremony.push_ceiling import (
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_registry_repos
 from coordinator_core.ops.push_outstanding import push_outstanding, resolve_push_remote
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
-from coordinator_core.warm import telemetry
+from coordinator_core.warm import engine_converge, telemetry
 from coordinator_core.warm.push_sweep_order import (
     is_ahead,
     no_upstream_and_no_new_commits,
@@ -771,6 +771,10 @@ def on_idle_tick(
     Returns True iff a sweep ran this tick, so a caller/test can observe
     cadence timing without depending on `sweep_fn`'s own side effects.
     """
+    try:
+        engine_converge.schedule_convergence()
+    except Exception:  # noqa: BLE001 -- convergence scheduling must never break the tick
+        pass
     if not _sweep_due(clock=clock, interval_secs=interval_secs):
         return False
     sweep_fn(

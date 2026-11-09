@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
+
+import pytest
 
 _BIN = Path(__file__).resolve().parent.parent
 _ENGINE = _BIN.parent.parent
@@ -91,6 +94,35 @@ def test_doe_shaped_tree_with_unresolved_engine_exits_2(tmp_path, monkeypatch, c
     )
     assert rc == 2
     assert "unresolvable" in capsys.readouterr().err
+
+
+def _publish_rewritten(text):
+    """The publish stem rewrite (claude-klabauter -> claude_klabauter): exact-substitute, then glued-stem pass."""
+    from coordinator_core.percolate.rewrite_stem import rewrite_stems
+
+    text = re.sub(r"\bclaude-klabauter\b", "claude_klabauter", text)
+    return rewrite_stems(text, {"claude-klabauter": "claude_klabauter"})
+
+
+def test_stem_rewritten_script_still_resolves_against_the_doe_seam(tmp_path, monkeypatch):
+    bin_dir = _doe_shaped_mirror(tmp_path)
+    rewritten = _publish_rewritten(_SCRIPT.read_text(encoding="utf-8"))
+    assert "engine_root.resolve_claude_klabauter_root" not in rewritten
+    (bin_dir / "gem-triage-turn-intent.py").write_text(rewritten, encoding="utf-8")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.setenv("GTTI_TEST_ENGINE", str(_ENGINE))
+    mod = _load(bin_dir / "gem-triage-turn-intent.py", "gtti_doe_rewritten")
+    assert mod._place_engine_on_path() == str(_ENGINE)
+
+
+def test_a_seam_without_the_resolver_fails_loudly(tmp_path, monkeypatch):
+    bin_dir = _doe_shaped_mirror(tmp_path)
+    seam = tmp_path / "coordinator" / "hooks" / "scripts" / "_engine_root.py"
+    seam.write_text(_SEAM_STUB.replace("resolve_claude_klabauter_root", "resolve_other_root"), encoding="utf-8")
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    mod = _load(bin_dir / "gem-triage-turn-intent.py", "gtti_doe_no_resolver")
+    with pytest.raises(AttributeError):
+        mod._place_engine_on_path()
 
 
 def test_engine_tree_without_seam_places_through_colocated_resolver(monkeypatch):

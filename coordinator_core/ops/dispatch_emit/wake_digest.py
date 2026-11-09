@@ -895,6 +895,13 @@ def completion_return_js(
 
     lines = [CAP_HELPER_JS, TERMINAL_COMMIT_CLI_HELPER_JS, ""]
     lines.append("return {")
+    # First properties: the harness truncates a large return from the tail, and the driver's
+    # one relay step reads `next_action`.
+    lines.append(
+        "  next_action: { kind: %s, op: %s, params: %s },"
+        % (table["next_action.kind"], table["next_action.op"], table["next_action.params"])
+    )
+    lines.append(f"  {TERMINAL_COMMIT_CLI_PROPERTY_JS}")
     lines.append(f"  schema: {table['schema']},")
     lines.append(f"  version: {table['version']},")
     lines.append("  plan: { path: %s, deliverable_id: %s }," % (table["plan.path"], table["plan.deliverable_id"]))
@@ -1004,11 +1011,6 @@ def completion_return_js(
             )
         )
     lines.append(f"  decision_required: {table['decision_required']},")
-    lines.append(
-        "  next_action: { kind: %s, op: %s, params: %s },"
-        % (table["next_action.kind"], table["next_action.op"], table["next_action.params"])
-    )
-    lines.append(f"  {TERMINAL_COMMIT_CLI_PROPERTY_JS}")
     lines.append("};")
     return "\n".join(lines)
 

@@ -381,6 +381,7 @@ ASKS_ITEM_KEYS: tuple[str, ...] = (
     "context",
     "label",
     "after",
+    "repo",
     "writes",
     "stop_after",
 )

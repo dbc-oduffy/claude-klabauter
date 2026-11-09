@@ -53,6 +53,11 @@ from pathlib import Path
 
 repo, root, stop_token, token = sys.argv[1], Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 sys.path.insert(0, repo)
+time.sleep(float(os.environ.get("CUT_BOOT_DELAY", "0")))
+if token == "-":
+    from coordinator_core.warm import skew
+
+    token = skew.compute_client_token(root)
 from coordinator_core.warm import breadcrumb, server
 
 
@@ -177,15 +182,23 @@ def state(engine_root: Path, monkeypatch: pytest.MonkeyPatch) -> _State:
     return st
 
 
-def _boot_server(engine_root: Path, spawned: list, *, not_pid: "int | None" = None) -> dict:
+def _boot_server(
+    engine_root: Path,
+    spawned: list,
+    *,
+    not_pid: "int | None" = None,
+    token: str = TOKEN,
+    env_extra: "dict | None" = None,
+) -> dict:
     script = engine_root / "coordinator_core" / "warm" / "server.py"
     script.write_text(_SERVER_CHILD, encoding="utf-8")
     log = open(engine_root / "server.log", "ab")
     proc = subprocess.Popen(
-        [sys.executable, str(script), _repo_dir(), str(engine_root), pair_stop._STOP_REQUEST_TOKEN, TOKEN],
+        [sys.executable, str(script), _repo_dir(), str(engine_root), pair_stop._STOP_REQUEST_TOKEN, token],
         stdout=log,
         stderr=subprocess.STDOUT,
         creationflags=_NO_WINDOW,
+        env={**os.environ, **(env_extra or {})},
     )
     spawned.append(proc)
     deadline = time.monotonic() + _BOOT_DEADLINE_SECS
@@ -208,6 +221,9 @@ class _RunLoop:
         self._halt = threading.Event()
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._seq = 0
+        self.hook_path = False
+        self.paused = threading.Event()
+        self.idle = threading.Event()
 
     def start(self) -> None:
         self._thread.start()
@@ -219,6 +235,11 @@ class _RunLoop:
 
     def _loop(self) -> None:
         while not self._halt.is_set():
+            if self.paused.is_set():
+                self.idle.set()
+                time.sleep(0.005)
+                continue
+            self.idle.clear()
             self.one_op("tick", 0)
             time.sleep(LOOP_GAP_SECS)
 
@@ -227,7 +248,7 @@ class _RunLoop:
         self._seq += 1
         seq = self._seq
         msg = {"jsonrpc": "2.0", "id": seq, "method": "ping", "params": {"sleep": sleep_secs}}
-        response = client.try_warm_dispatch(msg)
+        response = client.try_warm_dispatch(msg, hook_path=self.hook_path)
         if response is None:
             outcome = "cold"
         elif response.get("result") == "served":
@@ -315,6 +336,126 @@ def test_handover_contract_no_op_fails_or_runs_cold_over_a_partly_copied_tree(
     assert cls["a_inflight_cut"] == []
     assert cls["errors"] == []
     assert cls["b_cold_under_swap"] == []
+
+
+# Longer than the hook path's bounded wait, so a gap is not bridged by the client's own wait.
+SLOW_BOOT_SECS = 1.2
+OLD_STAMP = b"sha:cut-mechanism" + bytes([10])
+NEW_STAMP = b"sha:cut-mechanism-successor" + bytes([10])
+
+
+def _served_since(st: _State, mark: int, phase: "str | None" = None) -> int:
+    return sum(1 for o in st.ops[mark:] if o.outcome == "served" and (phase is None or o.phase_end == phase))
+
+
+def _run_handover(engine_root, spawned, state, monkeypatch, *, old_stamp, expect_served=True) -> dict:
+    """The production handover, driven through `round.start_successor_pair_in_hold`, with clients
+    deriving their token from the stamp file exactly as production does. The copy lands NEW_STAMP
+    first; `old_stamp` is what the holder captured before the copy (None: no make-before-break flip)."""
+    from coordinator_core.percolate import round as _round
+    from coordinator_core.warm import skew, supervisor
+
+    monkeypatch.setattr(client, "engine_token", lambda: skew.compute_client_token(engine_root))
+    monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0")
+    monkeypatch.setattr(supervisor, "ensure_listener", lambda *_a, **_k: None)
+    successor_boot: dict = {}
+
+    def _spawn(_root, _script, args=None, env_extra=None):
+        successor_boot.update(
+            _boot_server(
+                engine_root,
+                spawned,
+                not_pid=first["pid"],
+                token="-",
+                env_extra={**(env_extra or {}), "CUT_BOOT_DELAY": str(SLOW_BOOT_SECS)},
+            )
+        )
+        return True
+
+    monkeypatch.setattr(client, "spawn_detached", _spawn)
+    first = _boot_server(engine_root, spawned, token="-")
+    run = _RunLoop(state, engine_root)
+    run.hook_path = True
+    run.start()
+    try:
+        _wait(lambda: _served_since(state, 0) >= 2, "served guards on the old pair", detail=lambda: census(state))
+        with breadcrumb.hold_publish_marker(engine_root, holder="make-before-break-test"):
+            state.phase = "copy"
+            _swap(engine_root, state)
+            # The stamp is the copy's last write, taken with the loop quiet until the holder has
+            # re-pinned it: the instant between those two is not what this test measures.
+            run.paused.set()
+            _wait(run.idle.is_set, "run loop quiet")
+            skew.replace_engine_stamp_bytes(engine_root, NEW_STAMP)
+            if old_stamp is None:
+                run.paused.clear()
+            real_replace = skew.replace_engine_stamp_bytes
+
+            def _replace_then_resume(*a, **k):
+                real_replace(*a, **k)
+                run.paused.clear()
+
+            monkeypatch.setattr(skew, "replace_engine_stamp_bytes", _replace_then_resume)
+            state.phase = "handover"
+            mark = len(state.ops)
+            ok = _round.start_successor_pair_in_hold(engine_root, old_stamp=old_stamp)
+            run.paused.clear()
+            assert ok
+            state.phase = "post-handover"
+            mark = len(state.ops)
+            if expect_served:
+                _wait(lambda: _served_since(state, mark, "post-handover") >= 2, "guards answered by the successor", detail=lambda: census(state))
+        state.phase = "post"
+        mark = len(state.ops)
+        if expect_served:
+            _wait(lambda: _served_since(state, mark, "post") >= 2, "guards answered after the release")
+    finally:
+        run.stop()
+    return {"first": first, "successor": successor_boot}
+
+
+def test_swap_keeps_the_old_pair_answering_until_the_successor_answers_with_zero_fail_open(
+    engine_root, spawned, state, monkeypatch
+) -> None:
+    """R2: across copy, successor boot, flip and old-pair stop, every guard request gets an evaluated
+    answer: no cold (fail-open) verdict, no error. The stamp reads NEW only after the successor answers."""
+    from coordinator_core.warm import skew
+
+    (engine_root / "coordinator_core" / "_engine_stamp").write_bytes(OLD_STAMP)
+    pids = _run_handover(engine_root, spawned, state, monkeypatch, old_stamp=OLD_STAMP)
+
+    cls = classify(state.ops)
+    assert cls["c_other_cold"] == [] and cls["b_cold_under_swap"] == [] and cls["errors"] == [], census(state) + repr([o for o in state.ops if o.outcome != "served"])
+    assert all(o.outcome == "served" for o in state.ops), census(state)
+    assert skew.read_engine_stamp_bytes(engine_root) == NEW_STAMP
+    assert pids["first"]["pid"] not in {p.pid for p in pair_stop.find_pair_processes(engine_root)}
+    assert breadcrumb.endpoint_answers_request(pids["successor"]["pipe"], skew.compute_client_token(engine_root))
+
+
+def test_the_stamp_flip_before_the_successor_answers_does_fail_open(
+    engine_root, spawned, state, monkeypatch
+) -> None:
+    """Control: without the pre-copy stamp the holder cannot keep clients on the old token, so guards
+    fall open between the copy's stamp write and the successor's first answer."""
+    (engine_root / "coordinator_core" / "_engine_stamp").write_bytes(OLD_STAMP)
+    _run_handover(engine_root, spawned, state, monkeypatch, old_stamp=None, expect_served=False)
+
+    assert any(o.outcome == "cold" for o in state.ops), census(state)
+
+
+def test_stopping_the_old_pair_before_a_successor_answers_does_fail_open(
+    engine_root, spawned, state
+) -> None:
+    """Control: the break-before-make order leaves guards unevaluated."""
+    _boot_server(engine_root, spawned)
+    run = _RunLoop(state, engine_root)
+    run.start()
+    try:
+        _wait(lambda: _served_since(state, 0) >= 2, "served guards on the old pair", detail=lambda: census(state))
+        assert pair_stop.stop_warm_pair(engine_root).ok()
+        _wait(lambda: any(o.outcome == "cold" for o in state.ops), "a fail-open verdict with no pair")
+    finally:
+        run.stop()
 
 
 @pytest.mark.parametrize("dispatch_timeout", ["2", "30", "120"])

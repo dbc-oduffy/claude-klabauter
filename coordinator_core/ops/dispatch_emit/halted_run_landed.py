@@ -121,7 +121,23 @@ def _review_record(root: Path, run_id: str, session_id: Optional[str]) -> Option
     """
     from coordinator_core.ops.dispatch_emit import ask_contract
 
+    return _review_record_in(root, session_id, ask_contract.read_run_outcome(root, run_id))
+
+
+def _landed_without_verdict(root: Path, run_id: str, session_id: Optional[str]) -> bool:
+    """True when no review record resolves and the run outcome carries no ``delivery.verdict``; one outcome read."""
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
     outcome = ask_contract.read_run_outcome(root, run_id)
+    if _review_record_in(root, session_id, outcome) is not None:
+        return False
+    inline_review = outcome.get("inline_review") if outcome else None
+    delivery = inline_review.get("delivery") if isinstance(inline_review, dict) else None
+    return not (isinstance(delivery, dict) and delivery.get("verdict"))
+
+
+def _review_record_in(root: Path, session_id: Optional[str], outcome: Optional[dict]) -> Optional[str]:
+    """``_review_record`` over an already-read run *outcome*."""
     inline_review = outcome.get("inline_review") if outcome else None
     if not isinstance(inline_review, dict):
         return None
@@ -234,14 +250,15 @@ def _close_landed(root: Path, run_id: str, sha: str, session_id: Optional[str]) 
     """Flip a still-``halted`` or ``resumed`` marker to landed and commit its records, then queue the close unless a job record exists."""
     from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, run_close
 
-    out: dict = {}
+    without_verdict = _landed_without_verdict(root, run_id, session_id)
+    out: dict = {"landed_without_verdict": without_verdict}
     try:
         record_dir = ask_contract.record_dir(root, run_id)
     except ValueError:
-        return {"close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
+        return {**out, "close": {"status": "not-applicable", "detail": "no halt record"}, "blocking_rows": []}
     marker = halted_run._read(record_dir)
     if marker is not None and marker.get("status") in (halted_run.STATUS_HALTED, halted_run.STATUS_RESUMED):
-        if halted_run.mark_landed(record_dir, sha):
+        if halted_run.mark_landed(record_dir, sha, without_verdict=without_verdict):
             out["recorded"] = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
             out.update(_commit_records(root, run_id, record_dir, sha))
     if marker is None:
@@ -1056,11 +1073,13 @@ def _record_solo(
         return _refuse(problem)
     if met_by:
         _stamp_met_by(root, run_id, echo[MET_BY_FIELD])
-    if not halted_run.mark_landed(record_dir, sha):
+    without_verdict = _landed_without_verdict(root, run_id, session_id)
+    if not halted_run.mark_landed(record_dir, sha, without_verdict=without_verdict):
         return _refuse(f"{run_id} halt marker changed under the write; retry")
     recorded = (record_dir / halted_run.HALTED_FILE).relative_to(root).as_posix()
     return {
         "ok": True, "run_id": run_id, "sha": sha, "written": True, **echo, "recorded": recorded,
+        "landed_without_verdict": without_verdict,
         **_commit_records(root, run_id, record_dir, sha),
         **_queue_close(root, run_id, sha, marker, session_id),
     }

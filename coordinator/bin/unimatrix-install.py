@@ -17,6 +17,8 @@ import shutil
 import subprocess
 import sys
 import threading
+import tomllib
+import tempfile
 from pathlib import Path
 
 INSTALL_CLASS = True  # copies vendored scripts into the settings home; see door_install.declared_install_class
@@ -31,6 +33,7 @@ VENDORED_SCRIPTS = (
     "unimatrix-inbox.py",
     "unimatrix-roster.py",
     "unimatrix-peer-contract.py",
+    "unimatrix-local-transport.py",
     "unimatrix-peer-codex.py",
     "unimatrix-peer-agy.py",
     "unimatrix-agy-leg.py",
@@ -40,6 +43,7 @@ VENDORED_SCRIPTS = (
     "unimatrix-agy-hook-sessionstart.py",
     "unimatrix-codex-hook-sessionstart.py",
     "unimatrix-host-guard.py",
+    "coordinator-external-session.py",
     "unimatrix-doctrine-seed.py",
     "unimatrix-autolink.py",
     "unimatrix-liveness.py",
@@ -58,10 +62,11 @@ AGY_HOOK_SCRIPT = "unimatrix-agy-hook-pretool.py"
 AGY_SESSIONSTART_SCRIPT = "unimatrix-agy-hook-sessionstart.py"
 CODEX_SESSIONSTART_SCRIPT = "unimatrix-codex-hook-sessionstart.py"
 GUARD_SCRIPT = "unimatrix-host-guard.py"
+EXTERNAL_SESSION_SCRIPT = "coordinator-external-session.py"
 DOCTRINE_SEED_SCRIPT = "unimatrix-doctrine-seed.py"
 PLUGIN_GEN_SCRIPT = "unimatrix-plugin-gen.py"
 AGY_PLUGIN_TREE_DIR = "agy-plugin"
-CODEX_SHELL_MATCHER = "Bash"
+CODEX_SHELL_MATCHER = ".*"
 HOST_NAMES = ("claude", "codex", "agy")
 
 _BIN_DIR = Path(__file__).resolve().parent
@@ -363,13 +368,49 @@ def agy_hook_entry(dest_dir, engine_root=None):
     }
 
 
+def external_session_capability(engine_root):
+    """Check the published lifecycle surface without importing ambient engine code."""
+    if not engine_root:
+        return False, "published engine root unresolved"
+    root = Path(engine_root)
+    try:
+        if not (root / "coordinator_core" / "_engine_stamp").read_bytes():
+            return False, "published engine stamp is empty"
+        module = root / "coordinator_core" / "session" / "external_registry.py"
+        if not module.is_file():
+            return False, "published engine lacks session.external_registry; update the engine"
+    except OSError as exc:
+        return False, f"published engine unavailable: {exc}"
+    if not (root / "coordinator_core" / "host_hooks" / "session_context.py").is_file():
+        return False, "published engine lacks Codex session context; update the engine"
+    if not (root / "coordinator_core" / "host_hooks" / "codex_lifecycle.py").is_file():
+        return False, "published engine lacks Codex advisory lifecycle; update the engine"
+    if not (root / "coordinator_core" / "codex_status" / "hook.py").is_file():
+        return False, "published engine lacks Codex usage lifecycle; update the engine"
+    return True, "published registration, context, advisory and usage lifecycle present"
+
+
 def codex_hook_events(dest_dir, engine_root=None):
-    """The Codex groups we own, by event: SessionStart, and a shell-only PreToolUse guard."""
-    return {
-        "SessionStart": _hook_group(dest_dir, CODEX_SESSIONSTART_SCRIPT),
+    """Transport discovery plus engine lifecycle registration and shell guard."""
+    start = _hook_group(dest_dir, CODEX_SESSIONSTART_SCRIPT)
+    start["hooks"].append({**_hook_handler(
+        dest_dir, EXTERNAL_SESSION_SCRIPT, "--event", "SessionStart", *_engine_args(engine_root)), "timeout": 3})
+    end = _hook_group(dest_dir, EXTERNAL_SESSION_SCRIPT,
+                      args=("--event", "SessionEnd", *_engine_args(engine_root)))
+    end["hooks"][0]["timeout"] = 3
+    events = {
+        "SessionStart": start,
+        "SessionEnd": end,
+        "SubagentStart": {"hooks": [{**_hook_handler(
+            dest_dir, EXTERNAL_SESSION_SCRIPT, "--event", "SubagentStart", *_engine_args(engine_root)), "timeout": 3}]},
         "PreToolUse": _hook_group(
             dest_dir, GUARD_SCRIPT, CODEX_SHELL_MATCHER, ("--host", "codex", *_engine_args(engine_root))),
     }
+    for event in ("UserPromptSubmit", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "PostCompact"):
+        events[event] = {"hooks":[{**_hook_handler(dest_dir, EXTERNAL_SESSION_SCRIPT,
+            "--event", event, *_engine_args(engine_root)), "timeout":3}]}
+    return events
+
 
 
 def _load_hooks(path):
@@ -422,7 +463,7 @@ def unseed_agy_hook(hooks_path):
     return "removed"
 
 
-_CODEX_OWNED_SCRIPTS = (CODEX_SESSIONSTART_SCRIPT, GUARD_SCRIPT)
+_CODEX_OWNED_SCRIPTS = (CODEX_SESSIONSTART_SCRIPT, GUARD_SCRIPT, EXTERNAL_SESSION_SCRIPT)
 
 
 def _codex_ours(group):
@@ -443,48 +484,65 @@ def _codex_events(data, path, event="SessionStart"):
     return events
 
 
-def seed_codex_hook(hooks_path, dest_dir, engine_root=None):
-    """Add our SessionStart and PreToolUse guard handlers to Codex's hooks.json.
+def _codex_owned_handler(handler):
+    return isinstance(handler, dict) and any(
+        name in str(handler.get("command", "")) for name in _CODEX_OWNED_SCRIPTS)
 
-    Returns "created", "added", "updated" (a stale group of ours was rewritten) or "present".
-    Foreign groups are never touched.
-    """
+
+def _without_codex_handlers(group):
+    if not _codex_ours(group):
+        return group
+    foreign = [handler for handler in group.get("hooks") or [] if not _codex_owned_handler(handler)]
+    return {**group, "hooks": foreign} if foreign else None
+
+
+def seed_codex_hook(hooks_path, dest_dir, engine_root=None):
+    """Install owned handlers idempotently, retaining every foreign handler/group."""
     path = Path(hooks_path)
     existed = path.exists()
     data = _load_hooks(path)
-    states = []
+    changed = False
+    added = False
     for event, want in codex_hook_events(dest_dir, engine_root).items():
         events = _codex_events(data, path, event)
-        idx = next((i for i, g in enumerate(events) if _codex_ours(g)), None)
-        if idx is None:
-            events.append(want)
-            states.append("added")
-        elif events[idx] != want:
-            events[idx] = want
-            states.append("updated")
-    if not states:
+        found = False
+        had_owned = any(_codex_ours(group) for group in events)
+        updated = []
+        for group in events:
+            if group == want and not found:
+                updated.append(group)
+                found = True
+            else:
+                cleaned = _without_codex_handlers(group)
+                if cleaned is not None:
+                    updated.append(cleaned)
+        if not found:
+            updated.append(want)
+            added = added or not had_owned
+        if events != updated:
+            events[:] = updated
+            changed = True
+    if not changed:
         return "present"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    if not existed:
-        return "created"
-    return "added" if "added" in states else "updated"
+    return "created" if not existed else "added" if added else "updated"
 
 
 def unseed_codex_hook(hooks_path):
-    """Remove only our SessionStart and guard handlers (pruning emptied containers); return "removed" or "absent"."""
+    """Remove owned handlers individually; mixed foreign groups retain their data."""
     path = Path(hooks_path)
     data = _load_hooks(path)
     hooks = data.get("hooks")
     if not isinstance(hooks, dict):
         return "absent"
     removed = False
-    for event in ("SessionStart", "PreToolUse"):
-        events = hooks.get(event)
-        if not isinstance(events, list) or not any(_codex_ours(g) for g in events):
+    for event in tuple(hooks):
+        events = hooks[event]
+        if not isinstance(events, list) or not any(_codex_ours(group) for group in events):
             continue
         removed = True
-        events[:] = [g for g in events if not _codex_ours(g)]
+        events[:] = [cleaned for group in events if (cleaned := _without_codex_handlers(group)) is not None]
         if not events:
             del hooks[event]
     if not removed:
@@ -501,23 +559,183 @@ def _event_id(name):
 
 
 def _codex_expected_handlers(hooks_path):
-    """The exact {event id: command} pair of our handlers in Codex's hooks.json.
-
-    Raises ValueError unless exactly one SessionStart handler (the SessionStart script) and exactly
-    one PreToolUse handler (the guard) of ours are present: trust is verified against this set,
-    never against whatever rows discovery happens to return.
-    """
+    """Exact (event, command) identities; multiple owned handlers may share an event."""
     hooks = _load_hooks(hooks_path).get("hooks")
     expected = {}
-    for event, script in (("SessionStart", CODEX_SESSIONSTART_SCRIPT), ("PreToolUse", GUARD_SCRIPT)):
-        cmds = []
-        for group in (hooks.get(event) if isinstance(hooks, dict) else None) or []:
-            if _codex_ours(group):
-                cmds.extend(str(h.get("command", "")) for h in group.get("hooks") or [] if isinstance(h, dict))
-        if len(cmds) != 1 or script not in cmds[0]:
-            raise ValueError(f"hooks.json must hold exactly one {event} handler of ours running {script}; found {len(cmds)}")
-        expected[_event_id(event)] = cmds[0]
+    required = {
+        ("SessionStart", CODEX_SESSIONSTART_SCRIPT): 1,
+        ("SessionStart", EXTERNAL_SESSION_SCRIPT): 1,
+        ("SessionEnd", EXTERNAL_SESSION_SCRIPT): 1,
+        ("SubagentStart", EXTERNAL_SESSION_SCRIPT): 1,
+        ("PreToolUse", GUARD_SCRIPT): 1,
+    }
+    required.update({(event, EXTERNAL_SESSION_SCRIPT):1 for event in ("UserPromptSubmit", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "PostCompact")})
+    found = dict.fromkeys(required, 0)
+    for event, groups in (hooks.items() if isinstance(hooks, dict) else ()):
+        for group in groups if isinstance(groups, list) else ():
+            for handler in (group.get("hooks") or []) if isinstance(group, dict) else ():
+                if not _codex_owned_handler(handler):
+                    continue
+                command = str(handler.get("command", ""))
+                script = next(name for name in _CODEX_OWNED_SCRIPTS if name in command)
+                identity = (event, script)
+                if identity not in required:
+                    raise ValueError(f"{script} is on the wrong event {event}")
+                found[identity] += 1
+                expected[(_event_id(event), command)] = command
+    if found != required:
+        raise ValueError("hooks.json must hold exactly one owned transport, guard, SessionStart registration and SessionEnd unregister handler")
     return expected
+
+
+_STATUS_DEFAULT = ["thread-name", "model-with-reasoning", "context-remaining"]
+_STATUS_PATHS = {"current-dir", "project-root", "project", "project-name"}
+
+
+def _status_profile(current):
+    if current is None or current == []:
+        return list(_STATUS_DEFAULT)
+    if not isinstance(current, list) or not all(isinstance(item, str) for item in current):
+        raise ValueError("tui.status_line must be a string array")
+    result = []
+    for item in current:
+        item = "thread-name" if item in _STATUS_PATHS else item
+        if item != "thread-name" or item not in result:
+            result.append(item)
+    if "thread-name" not in result:
+        result.insert(0, "thread-name")
+    if "model-with-reasoning" not in result and not ("reasoning" in result and any(item in result for item in ("model", "model-name"))):
+        result.append("model-with-reasoning")
+    if "context-remaining" not in result:
+        result.append("context-remaining")
+    return result
+
+
+def _toml_chunks(text):
+    """Complete TOML statements, so fake headers inside multiline strings are data."""
+    pending = ""
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        pending += line
+        try:
+            parsed = tomllib.loads(pending)
+        except tomllib.TOMLDecodeError:
+            continue
+        yield offset, offset + len(pending), pending, parsed
+        offset += len(pending)
+        pending = ""
+    if pending:
+        raise ValueError("unsupported or incomplete TOML statement")
+
+
+def _toml_inline(value):
+    if isinstance(value, dict):
+        return "{ " + ", ".join(json.dumps(key) + " = " + _toml_inline(item) for key,item in value.items()) + " }"
+    if isinstance(value, list):
+        return "[" + ", ".join(_toml_inline(item) for item in value) + "]"
+    if isinstance(value, (str, bool, int, float)):
+        return json.dumps(value, ensure_ascii=False, allow_nan=False)
+    raise ValueError("unsupported inline TUI value; configuration unchanged")
+
+
+def _status_edit(text, value):
+    scope = ()
+    tui_header = None
+    for start,end,chunk,parsed in _toml_chunks(text):
+        stripped = chunk.lstrip()
+        if stripped.startswith("["):
+            scope = ()
+            branch = parsed
+            while isinstance(branch, dict) and len(branch) == 1:
+                key,branch = next(iter(branch.items()))
+                scope += (key,)
+            if scope == ("tui",):
+                tui_header = end
+            continue
+        if scope == ("tui",) and "status_line" in parsed:
+            replacement = "" if value is None else "status_line = " + _toml_inline(value) + "\n"
+            return text[:start] + replacement + text[end:]
+        if not scope and isinstance(parsed.get("tui"), dict):
+            # Root dotted keys have only the managed field; root inline tables
+            # are rewritten as one inline statement with all other values intact.
+            fields = dict(parsed["tui"])
+            inline = chunk.split("=", 1)[0].strip() in ("tui", '"tui"', "'tui'")
+            if "status_line" in fields or inline:
+                if value is None:
+                    fields.pop("status_line", None)
+                else:
+                    fields["status_line"] = value
+                prefix = "tui = " if inline else "tui.status_line = "
+                replacement = (prefix + _toml_inline(fields if prefix == "tui = " else value) + "\n") if fields else ""
+                return text[:start] + replacement + text[end:]
+    if value is None:
+        return text
+    assignment = "status_line = " + _toml_inline(value) + "\n"
+    return text[:tui_header] + assignment + text[tui_header:] if tui_header is not None else "tui." + assignment + text
+
+
+def _footer_write(path, text):
+    """Atomic replacement keeps existing config permissions and unrelated bytes."""
+    descriptor, temporary = tempfile.mkstemp(prefix=".coordinator-footer-", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            stream.write(text)
+        if path.exists():
+            os.chmod(temporary, path.stat().st_mode & 0o777)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _footer_state(path):
+    state = json.loads(path.read_text(encoding="utf-8"))
+    valid_array = lambda value: isinstance(value, list) and all(isinstance(item, str) for item in value)
+    if (not isinstance(state, dict) or state.get("version") != 1 or
+            type(state.get("present")) is not bool or not valid_array(state.get("managed")) or
+            (state["present"] and not valid_array(state.get("original")))):
+        raise ValueError("invalid footer ownership record")
+    return state
+
+
+def seed_codex_status_line(config_path, *, uninstall=False):
+    """Own only the footer value; restore only while it remains our exact value."""
+    path = Path(config_path)
+    state_path = path.with_name(".coordinator-status-line.json")
+    text = path.read_text(encoding="utf-8") if path.exists() else ""
+    parsed = tomllib.loads(text)
+    tui = parsed.get("tui", {})
+    if not isinstance(tui, dict):
+        raise ValueError("tui must be a table")
+    present = "status_line" in tui
+    current = tui.get("status_line")
+    if uninstall:
+        if not state_path.exists():
+            return "absent"
+        state = _footer_state(state_path)
+        if current != state["managed"]:
+            return "retained-customized"
+        replacement = _status_edit(text, state["original"] if state["present"] else None)
+        tomllib.loads(replacement)
+        _footer_write(path, replacement)
+        state_path.unlink()
+        return "restored"
+    wanted = _status_profile(current)
+    if wanted == current:
+        return "present"
+    replacement = _status_edit(text, wanted)
+    check = tomllib.loads(replacement)
+    if check.get("tui", {}).get("status_line") != wanted:
+        raise ValueError("footer edit did not address global tui.status_line")
+    # Preserve the first pre-install value across subsequent managed updates.
+    state = _footer_state(state_path) if state_path.exists() else None
+    if not isinstance(state, dict) or state.get("version") != 1 or current != state.get("managed"):
+        state = {"version":1, "present":present, "original":current}
+    state["managed"] = wanted
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _footer_write(state_path, json.dumps(state, ensure_ascii=False) + "\n")
+    _footer_write(path, replacement)
+    return "updated"
 
 
 def codex_rules_path():
@@ -864,13 +1082,13 @@ def trust_codex_hook(hooks_path, timeout=30):
             ]
             found = {}
             for h in mine:
-                ident = _event_id(h.get("eventName", ""))
+                ident = (_event_id(h.get("eventName", "")), str(h.get("command", "")))
                 if expected.get(ident) != h.get("command") or ident in found:
                     raise ValueError(f"{h.get('eventName', 'hook')} handler is duplicated or on the wrong event")
                 found[ident] = h
             missing = sorted(set(expected) - set(found))
             if missing:
-                raise ValueError(f"codex did not discover the {', '.join(missing)} handler (features.hooks disabled?)")
+                raise ValueError(f"codex did not discover the {', '.join(event for event, _command in missing)} handler (features.hooks disabled?)")
             if len({h.get("key") for h in found.values()}) != len(found):
                 raise ValueError("discovered handlers share a trust key")
             return found
@@ -881,7 +1099,7 @@ def trust_codex_hook(hooks_path, timeout=30):
                     and isinstance(hook.get("currentHash"), str) and hook["currentHash"]):
                 raise ValueError(f"{hook.get('eventName', 'hook')} reports no key or content hash")
             rpc(3, "config/value/write", {
-                "keyPath": f'hooks.state."{hook["key"]}".trusted_hash',
+                "keyPath": f'hooks.state.{json.dumps(hook["key"], ensure_ascii=False)}.trusted_hash',
                 "value": hook["currentHash"],
                 "mergeStrategy": "upsert",
             })
@@ -1013,6 +1231,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
                 agy_rp, _seed().DOCTRINE_BEGIN, _seed().DOCTRINE_END)))
             steps.append(("agy peer doctrine", agy_rp, lambda: unseed_peer_doctrine(agy_rp)))
         if want_codex:
+            steps.append(("codex status footer", codex_hp.with_name("config.toml"), lambda: seed_codex_status_line(codex_hp.with_name("config.toml"), uninstall=True)))
             steps.append(("codex hook", codex_hp, lambda: unseed_codex_hook(codex_hp)))
             steps.append(("codex skills", codex_sd, lambda: ",".join(_seed().unseed_codex_skills(codex_sd)) or "absent"))
             steps.append(("codex coordinator doctrine", codex_rp, lambda: _seed().unseed_block(
@@ -1084,6 +1303,10 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             return 4
         print(f"codex hook {res} in {codex_hp}", file=out)
     rc = 0
+    lifecycle_ready, lifecycle_note = external_session_capability(engine_root)
+    if want_codex and not lifecycle_ready:
+        print(f"session lifecycle DEGRADED: {lifecycle_note}; transport hooks remain installed", file=out)
+        rc = 7
     verified = None
     if want_codex and codex_trust is not None:
         ok, note = codex_trust(codex_hp)
@@ -1094,6 +1317,13 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             print(f"governance verification FAILED: {note}", file=out)
             verified, rc = False, 5
     missing = []
+    if want_codex:
+        try:
+            config = codex_hp.with_name("config.toml")
+            print(f"codex status footer {seed_codex_status_line(config)} in {config}", file=out)
+        except (OSError, ValueError) as exc:
+            missing.append("codex status footer")
+            print(f"WARN: codex status footer not installed: {exc}", file=out)
     if want_agy:
         _seed_agy_config(hp.with_name("config.json"), out)
         if not _write_agy_plugin_tree(args, out, dest):
@@ -1132,16 +1362,18 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         print(f"WARN: login agent not registered: {exc}", file=out)
     if engine_root:
         print(f"governance engine root: {engine_root} ({provenance})", file=out)
-        if verified:
-            print("hook wiring/trust verified: Codex SessionStart and PreToolUse handlers discovered, "
+        if verified and lifecycle_ready:
+            print("hook wiring/trust verified: Codex SessionStart, SubagentStart, SessionEnd and PreToolUse handlers discovered, "
                   "enabled and trusted", file=out)
+        elif verified and want_codex:
+            print("transport hook wiring/trust verified; session lifecycle capability UNVERIFIED", file=out)
         elif want_codex:
             print("hook wiring/trust UNVERIFIED: Codex handler trust was not confirmed", file=out)
         print("governance enforcement UNVERIFIED until the C6 live matrix", file=out)
     else:
         print(f"governance DEGRADED: engine root unresolved ({provenance}); guards answer the neutral "
               "fallback (ask on agy, {} on Codex), never allow", file=out)
-    print("governance scope: shell-command PreToolUse only (Codex Bash, agy run_command)", file=out)
+    print("governance scope: Codex local-tool PreToolUse (shell, projected edits, MCP, spawn briefs; native coverage limits apply); agy run_command", file=out)
     return rc
 
 

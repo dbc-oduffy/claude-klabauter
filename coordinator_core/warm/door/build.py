@@ -92,6 +92,26 @@ def _c_string_body(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
+def portable_python_bin(python_bin: Path) -> str:
+    """Provenance form of an interpreter path: `~/<rest>` (posix separators)
+    when it lies under the home directory, so a published sidecar never
+    carries the operator's username; the resolved absolute path otherwise."""
+    resolved = Path(python_bin).resolve()
+    try:
+        return "~/" + resolved.relative_to(Path.home().resolve()).as_posix()
+    except ValueError:
+        return str(resolved)
+
+
+def expand_python_bin(recorded: str) -> Path:
+    """Inverse of `portable_python_bin`: expands a leading `~/` against the
+    current home directory. Any other value is returned as-is, so a relative
+    path stays relative for the caller to refuse."""
+    if recorded.startswith(("~/", "~\\")):
+        return Path.home() / recorded[2:]
+    return Path(recorded)
+
+
 def _render(source: str, python_bin: Path, engine_root: Path) -> str:
     """`engine_root` is baked as `BUILD_ENGINE_ROOT_W` -- see that macro's
     own comment in door.c: a LAST-RESORT fallback script-path source, used
@@ -223,15 +243,17 @@ def _compiler_version(kind: str, compiler_path: str) -> str:
 
 def build_attribution(module: str = "coordinator_core.warm.door.build") -> dict[str, object]:
     """Who built this binary and with what command, recorded in provenance so
-    attribution never rests on a commit message. `builder` is the Claude
-    session id when one is set, else None: an unattributed build stays visibly
+    attribution never rests on a commit message. `builder` is the calling
+    coordinator session id when one is set, else None: an unattributed build stays visibly
     unattributed rather than guessed. `command` is the build's own canonical
     invocation with `engine_root` as a placeholder (the field of that name
     carries it), never `sys.argv`: an in-process caller (publish's mirror
     rebuild) would otherwise record ITS argv -- operator paths and the source
     checkout -- into a published file."""
+    from coordinator_core.session.core import attributable_session_id
+
     return {
-        "builder": os.environ.get("CLAUDE_CODE_SESSION_ID") or None,
+        "builder": attributable_session_id() or None,
         "command": [Path(sys.executable).name, "-m", module, "<engine_root>"],
     }
 
@@ -252,6 +274,8 @@ def _resolve_engine_stamp(engine_root: Path, override: str | None) -> str | None
 def write_provenance(
     output_exe: Path, kind: str, compiler_path: str, engine_root: Path,
     *, image_sha256: str | None = None, engine_stamp: str | None = None,
+    require_warm: bool = False, rendered_source_sha256: str | None = None,
+    compile_flags: list[str] | None = None, python_bin: Path | None = None,
 ) -> Path:
     """Records, next to `output_exe`, the SHA-256 of the `door.c` this
     binary was built from plus the compiler and its version -- so a
@@ -317,6 +341,10 @@ def write_provenance(
     for a scratch publish carries the publish commit's provenance."""
     provenance = {
         "engine_stamp": _resolve_engine_stamp(engine_root, engine_stamp),
+        "require_warm": require_warm,
+        "python_bin": portable_python_bin(Path(python_bin or sys.executable)),
+        "rendered_source_sha256": rendered_source_sha256,
+        "compile_flags": list(compile_flags or []),
         "door_c_sha256": source_sha256(_SOURCE),
         "sources": {path.name: source_sha256(path) for path in SOURCES},
         "image_sha256": image_sha256 if image_sha256 is not None else _sha256_file(output_exe),
@@ -449,6 +477,7 @@ def build(
     compiler: str | None = None,
     output: Path | None = None,
     engine_stamp: str | None = None,
+    require_warm: bool = False,
 ) -> Path:
     """Compiles `door.exe` and writes its sidecar for `engine_root`, so a
     local build stays one command. To ship the SAME compiled `door.exe`
@@ -468,6 +497,8 @@ def build(
     missing or unreadable, in which case falling back to the ORIGINAL
     build-time engine is still a correct, correctly-resolving choice --
     never the ambient live-tree pin a bare `-m` would silently pick up."""
+    if require_warm and sys.platform != "win32":
+        raise SystemExit("door build: REQUIRED warm mode is supported only on Windows")
     engine_root = Path(engine_root)
     if not (engine_root / "coordinator_core" / "_engine_stamp").exists():
         raise SystemExit(
@@ -482,6 +513,8 @@ def build(
     kind, compiler_path = _find_compiler(compiler)
     source_text = _SOURCE.read_text(encoding="utf-8")
     rendered = _render(source_text, python_bin, engine_root)
+    if require_warm:
+        rendered = "#define DOOR_PRIVATE_REQUIRED 1\n" + rendered
 
     with tempfile.TemporaryDirectory() as tmp:
         generated = Path(tmp) / "door_generated.c"
@@ -493,6 +526,9 @@ def build(
     write_provenance(
         output, kind, compiler_path, engine_root,
         image_sha256=image_sha256, engine_stamp=engine_stamp,
+        require_warm=require_warm, python_bin=python_bin,
+        rendered_source_sha256=hashlib.sha256(rendered.encode("utf-8")).hexdigest(),
+        compile_flags=(["-O2", "-Wall", "-Wextra", "-I", str(_SOURCE.parent), "-ladvapi32", "-lshell32", "-Xlinker", "/Brepro"] if kind == "clang" else ["/nologo", "/O2", "/W3", "/I" + str(_SOURCE.parent), "/link", "Advapi32.lib", "Shell32.lib", "/Brepro"]),
     )
 
     return output
@@ -536,7 +572,10 @@ def main(argv: list[str] | None = None) -> int:
             "nonzero on MISMATCH."
         ),
     )
+    parser.add_argument("--require-warm", action="store_true", help="Bake private REQUIRED warm-only mode (Windows only; no bootstrap or cold replay).")
     args = parser.parse_args(argv)
+    if args.verify and args.require_warm:
+        parser.error("--verify does not verify private REQUIRED artifacts")
 
     if args.verify:
         ok = verify_reproducible(
@@ -551,6 +590,7 @@ def main(argv: list[str] | None = None) -> int:
         python_bin=args.python,
         compiler=args.compiler,
         output=args.output,
+        require_warm=args.require_warm,
     )
     print(f"door build: wrote {output}")
     return 0

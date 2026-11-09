@@ -27,6 +27,15 @@ def test_agy_review_request_requires_artifact_only():
         contract.RunRequest(mode="agy-review", repo_root="/r", artifact="a", plan="p", chunk="C0")
 
 
+def test_grok_review_request_requires_artifact_only():
+    assert "grok-review" in contract.MODES and "grok-review" in contract.ARTIFACT_MODES
+    contract.RunRequest(mode="grok-review", repo_root="/r", artifact="a.md")
+    with pytest.raises(ValueError):
+        contract.RunRequest(mode="grok-review", repo_root="/r")
+    with pytest.raises(ValueError):
+        contract.RunRequest(mode="grok-review", repo_root="/r", artifact="a", plan="p", chunk="C0")
+
+
 def test_execute_request_requires_plan_and_chunk_only():
     contract.RunRequest(mode="execute", repo_root="/r", plan="p.md", chunk="C0")
     with pytest.raises(ValueError):
@@ -64,7 +73,10 @@ def test_allow_api_key_defaults_off_and_roundtrips():
 
 
 def test_status_set_is_closed():
-    assert contract.STATUS == {"ok", "limit_exhausted", "confinement_breach", "scope_breach", "failed"}
+    assert contract.STATUS == {
+        "ok", "limit_exhausted", "login_required", "confinement_breach", "scope_breach", "failed",
+    }
+    assert contract.RunResult(run_id="r", status="login_required").status == "login_required"
     with pytest.raises(ValueError):
         contract.RunResult(run_id="r", status="done")
     assert contract.FALLBACK_REVIEWER == "claude-reviewer"

@@ -131,7 +131,7 @@ def test_child_env_has_no_api_key_and_keeps_path(env):
 
 def test_env_allowlist():
     src = {"PATH": "/p", "HOME": "/h", "GEMINI_API_KEY": "k", "SECRET": "x", "SYSTEMROOT": "S"}
-    assert agy._build_env(src, windows=False) == {"PATH": "/p", "HOME": "/h"}
+    assert {k:v for k,v in agy._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "HOME": "/h"}
     assert agy._build_env(src, windows=True)["SYSTEMROOT"] == "S"
     assert "GEMINI_API_KEY" not in agy._build_env(src, windows=True)
 

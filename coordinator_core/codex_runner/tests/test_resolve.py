@@ -102,7 +102,7 @@ def _path_codex(tmp_path, name):
 def test_path_fallback_when_alias_absent(tmp_path):
     bindir, exe = _path_codex(tmp_path, "codex")
     env = {"FNM_DIR": str(tmp_path / "nofnm"), "PATH": str(bindir)}
-    assert resolve.resolve_codex("linux", env) == [str(exe)]
+    assert [os.path.normcase(p) for p in resolve.resolve_codex("linux", env)] == [os.path.normcase(str(exe))]
 
 
 def test_path_fallback_when_node_or_package_absent(tmp_path):
@@ -111,7 +111,7 @@ def test_path_fallback_when_node_or_package_absent(tmp_path):
     (inst / "bin" / "node").unlink()
     _alias(tmp_path, inst)
     env = {"FNM_DIR": str(tmp_path), "PATH": str(bindir)}
-    assert resolve.resolve_codex("linux", env) == [str(exe)]
+    assert [os.path.normcase(p) for p in resolve.resolve_codex("linux", env)] == [os.path.normcase(str(exe))]
 
 
 def test_fnm_wins_over_path(tmp_path):
@@ -127,7 +127,7 @@ def test_both_miss_raises_naming_both(tmp_path):
         resolve.resolve_codex("linux", {"FNM_DIR": str(tmp_path), "PATH": str(tmp_path)})
 
 
-def test_windows_path_fallback_names_cmd_and_never_shell(tmp_path, monkeypatch):
+def test_windows_path_fallback_resolves_native_and_never_shell(tmp_path, monkeypatch):
     seen = {}
 
     def fake_which(cmd, path=None):
@@ -135,8 +135,9 @@ def test_windows_path_fallback_names_cmd_and_never_shell(tmp_path, monkeypatch):
         return "npmbin/codex.cmd"
 
     monkeypatch.setattr(resolve.shutil, "which", fake_which)
+    monkeypatch.setattr(resolve, "_native_npm_codex", lambda shim: "npmbin/native/codex.exe")
     argv = resolve.resolve_codex("win32", {"FNM_DIR": str(tmp_path / "nofnm"), "PATH": "P"})
-    assert argv == ["npmbin/codex.cmd"] and seen["args"] == ("codex", "P")
+    assert argv == ["npmbin/native/codex.exe"] and seen["args"] == ("codex", "P")
     import inspect
     assert "shell=True" not in inspect.getsource(resolve)
 

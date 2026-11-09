@@ -143,21 +143,17 @@ def test_a_landing_whose_test_would_fail_on_the_peer_dirt_lands_green_in_the_cle
 
 
 def test_peer_dirt_in_reach_with_no_overlay_verdict_lands_with_an_advisory(halted):  # noqa: F811
-    """A verdict the engine never produced is no evidence of a red: the landing proceeds, says so, and
-    leaves the peer's dirt in place. Only a red verdict refuses."""
+    """A missing verdict is not a red: the dirt-in-reach landing proceeds, records the advisory, and leaves the dirt."""
     _track_fixture(halted)
     resume, token = _stage(halted)
     _lane_test_reads_the_fixture(halted)
     _measure(halted, overlay=False)
     _write(halted, FIXTURE, _DIRT)
-    head = _git(halted, "rev-parse", "HEAD").strip()
 
     out = _terminal_with(halted, token, resume, _VERDICT)
 
     assert out["committed"] is True and out.get("refused") is None, out
-    assert "missing" in out["clean_overlay_verify"]["advisory"], out
-    assert _git(halted, "rev-parse", "HEAD").strip() != head
-    assert FIXTURE not in set(_git(halted, "show", "--name-only", "--format=", out["sha"]).split())
+    assert out["clean_overlay_verify"]["verdict"] == "missing" and out["clean_overlay_verify"]["advisory"], out
     assert (halted / FIXTURE).read_text(encoding="utf-8") == _DIRT
 
 

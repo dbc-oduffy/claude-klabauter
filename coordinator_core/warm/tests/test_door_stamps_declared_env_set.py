@@ -32,6 +32,11 @@ _ENV_FIELD = "_env"
 #: leg's own table.
 _DECLARED_NAMES = (
     "COORDINATOR_SETTINGS_HOME",
+    "COORDINATOR_AGENT_PROVIDER",
+    "COORDINATOR_AGENT_ROLE",
+    "COORDINATOR_PARENT_SESSION_ID",
+    "COORDINATOR_WORKFLOW_AGENT_TYPE",
+    "COORDINATOR_WORKFLOW_AGENT_LABEL",
     "COORDINATOR_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CLAUDE_CODE_SESSION_ID",
@@ -43,11 +48,38 @@ _DECLARED_NAMES = (
     "COORDINATOR_ROOT",
     "COORDINATOR_CONTENT_ROOT",
     "CLAUDE_PROJECT_DIR",
+    "CLAUDE_CODE_REMOTE",
+    "COORDINATOR_JOB_MODE",
+    "COORDINATOR_AGENT_TYPE_HOST",
+    "CODEX_THREAD_ID",
+    "ANTIGRAVITY_CONVERSATION_ID",
+    "CLAUDECODE",
+    "COORDINATOR_AGENT_VENDOR",
+    "COORDINATOR_AGENT_MODEL",
+    "COORDINATOR_AGENT_SESSION",
 )
 
 _OK_REPLY = (
     '{"jsonrpc":"2.0","id":1,"result":{"stdout":"pong\\n","stderr":"","exit_code":0}}\n'
 ).encode("utf-8")
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _current_native_door(tmp_path_factory):
+    """Capture the current generated env table, never a stale tracked prebuilt."""
+    from coordinator_core.warm.door import build
+    from coordinator_core.warm.tests import door_test_support
+
+    root = make_stub_engine_root(tmp_path_factory.mktemp("native-env-build"))
+    try:
+        compiler = build._find_compiler(None)
+    except RuntimeError as exc:
+        pytest.skip(str(exc))
+    output = root / "compiled-door.exe"
+    build.build(root, compiler=compiler[1], output=output)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(door_test_support, "DOOR_EXE", output)
+        yield output
 
 
 def _exchange(root: Path, env_overrides: "dict[str, str] | None"):
@@ -99,6 +131,8 @@ def test_every_resolved_declared_name_gets_its_own_key(tmp_path: Path) -> None:
         root,
         {
             "COORDINATOR_SESSION_ID": "a",
+            "COORDINATOR_AGENT_PROVIDER": "codex",
+            "CODEX_THREAD_ID": "codex-thread",
             "CLAUDE_SESSION_ID": "b",
             "CLAUDE_CODE_SESSION_ID": "c",
             "MACHINE_LOCAL_REGISTRY_DIR": str(tmp_path / "registry"),
@@ -107,6 +141,8 @@ def test_every_resolved_declared_name_gets_its_own_key(tmp_path: Path) -> None:
 
     env_obj = request[_ENV_FIELD]
     assert env_obj["COORDINATOR_SESSION_ID"] == "a"
+    assert env_obj["COORDINATOR_AGENT_PROVIDER"] == "codex"
+    assert env_obj["CODEX_THREAD_ID"] == "codex-thread"
     assert env_obj["CLAUDE_SESSION_ID"] == "b"
     assert env_obj["CLAUDE_CODE_SESSION_ID"] == "c"
     assert env_obj["MACHINE_LOCAL_REGISTRY_DIR"] == str(tmp_path / "registry")
@@ -180,3 +216,17 @@ def test_a_value_too_long_for_its_probed_buffer_is_omitted(tmp_path: Path) -> No
     request, _ = _exchange(root, {"COORDINATOR_SETTINGS_HOME": named_home})
 
     assert request[_ENV_FIELD]["COORDINATOR_SETTINGS_HOME"] == named_home
+
+
+def test_workflow_caller_context_crosses_real_native_door(tmp_path: Path) -> None:
+    root = make_stub_engine_root(tmp_path)
+    carried = {
+        "COORDINATOR_AGENT_ROLE": "workflow-agent",
+        "COORDINATOR_PARENT_SESSION_ID": "00000000-0000-4000-8000-000000000001",
+        "COORDINATOR_WORKFLOW_AGENT_TYPE": "code-reviewer",
+        "COORDINATOR_WORKFLOW_AGENT_LABEL": "review-1",
+        "COORDINATOR_AGENT_VENDOR": "codex",
+        "COORDINATOR_AGENT_MODEL": "actual-model",
+    }
+    request, _ = _exchange(root, carried)
+    assert all(request[_ENV_FIELD].get(key) == value for key, value in carried.items())

@@ -313,6 +313,7 @@
   "block-perforce-submit": "bash_guards/block_perforce_submit.py",
   "block-external-workspace-vcs-write": "bash_guards/block_external_workspace_vcs_write.py",
   "block-push-pr-non-owned-remote": "bash_guards/block_push_pr_non_owned_remote.py",
+  "block-empty-source-push": "bash_guards/block_empty_source_push.py",
   "deploy-dirty-tree": "bash_guards/guard_deploy_dirty_tree.py",
   "block-editor-kill-by-name": "bash_guards/block_editor_kill_by_name.py",
   "block-whole-filesystem-scan": "bash_guards/block_whole_filesystem_scan.py",

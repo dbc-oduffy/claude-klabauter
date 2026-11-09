@@ -124,7 +124,7 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "25f9f6b3212ad918a97a3df411fc7d1fcc10c66fe68e77a0ea990d7874ffe691"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "a19eef05ead20fa30ba7654d1520b6e88cd0b6cf49b9686490521a2962612167"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
@@ -1327,8 +1327,39 @@ def test_no_session_gate_refuses_inside_claude_code_and_passes_a_human_commit():
     )
     gate = next(ln for ln in body.splitlines() if ln.startswith('[ -z "'))
     assert '[ -n "$CLAUDECODE" ] && {' in gate
-    assert "Session-Id" in gate and "1>&2; exit 1; }" in gate
-    assert gate.endswith("exit 0; }")
+    assert "Session-Id" in gate and "1>&2; exit 1;; esac; }" in gate
+    assert gate.endswith('[ -z "$COORDINATOR_AGENT_PROVIDER$COORDINATOR_AGENT_VENDOR" ] && exit 0; }')
+
+
+def test_generated_prepare_gate_executes_native_and_provider_only_identities(tmp_path):
+    """Execute the actual emitted gate with sh, without installing any hook."""
+    import shutil
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+    shell = shutil.which('sh')
+    if not shell:
+        pytest.skip('sh unavailable')
+    body = _shim_body('/fake/coord/bin', 'coordinator-prepare-commit-msg',
+                      'exec "$_PY" "$SCRIPT" "$@"', skip_if_all_unset=SESSION_ENV_PRECEDENCE)
+    gate = next(line for line in body.splitlines() if line.startswith('[ -z "'))
+    script = tmp_path / 'gate.sh'
+    script.write_text(gate + '\nprintf "attribution-reached\\n"\n', encoding='utf-8')
+    clean = {key:value for key,value in os.environ.items()
+             if key not in {*SESSION_ENV_PRECEDENCE, 'COORDINATOR_AGENT_PROVIDER',
+                            'COORDINATOR_AGENT_VENDOR', 'CLAUDECODE'}}
+    for identity in ({'CODEX_THREAD_ID':'native-thread'}, {'COORDINATOR_AGENT_PROVIDER':'codex'},
+                     {'COORDINATOR_AGENT_VENDOR':'grok'}, {'COORDINATOR_AGENT_PROVIDER':'claude'},
+                     {'CLAUDECODE':'1', 'COORDINATOR_AGENT_PROVIDER':'CoDeX'},
+                     {'CLAUDECODE':'1', 'COORDINATOR_AGENT_VENDOR':'deepseek'},
+                     {'CLAUDECODE':'1', 'CODEX_THREAD_ID':'native-thread'}):
+        result = subprocess.run([shell, str(script)], env={**clean, **identity}, capture_output=True, text=True)
+        assert result.returncode == 0 and result.stdout == 'attribution-reached\n', (identity, result.stderr)
+    human = subprocess.run([shell, str(script)], env=clean, capture_output=True, text=True)
+    assert human.returncode == 0 and not human.stdout and not human.stderr
+    claude = subprocess.run([shell, str(script)], env={**clean, 'CLAUDECODE':'1'}, capture_output=True, text=True)
+    assert claude.returncode == 1 and not claude.stdout and 'Session-Id' in claude.stderr
+    invalid = subprocess.run([shell, str(script)], env={**clean, 'CLAUDECODE':'1',
+                             'COORDINATOR_AGENT_PROVIDER':'unregistered'}, capture_output=True, text=True)
+    assert invalid.returncode == 1 and 'Session-Id' in invalid.stderr
 def test_fleet_check_only_header_says_found_stale_not_repaired(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ghi, "_registry_repo_roots", lambda bin_dir: [("repos.clone", str(tmp_path))])
     monkeypatch.setattr(ghi, "_classify_target", lambda r: "mirror")

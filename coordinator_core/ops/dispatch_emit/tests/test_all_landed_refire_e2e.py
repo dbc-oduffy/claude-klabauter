@@ -95,7 +95,7 @@ def _example_game_repo_shape(root):
     ids = ("A1", "A2", *_EM_ROWS)
     _landed_repo(root, tuple((i, "open") for i in ids), landed=["A1", "A2"])
     body = "".join(
-        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - some/{i}.py\n"
+        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - some/{i}.{'md' if i in _EM_ROWS else 'py'}\n"
         + ("  performer: em\n" if i in _EM_ROWS else "")
         for i in ids
     )

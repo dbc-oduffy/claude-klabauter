@@ -12,6 +12,7 @@ import re
 import shlex
 from typing import Dict, List, NamedTuple, Optional
 
+from coordinator_core.bash_guards._command_tokenizer import exceeds_tokenizable_ceiling
 from coordinator_core.bash_guards.write_claim_record import (
     _is_bare_heredoc_opener,
     _is_claimable_target,
@@ -74,6 +75,8 @@ def _body_targets(head: str) -> Dict[str, bool]:
     segs = _SEGMENT_SPLIT_RE.split(head)
     if not segs or any(s.strip().split(None, 1)[:1] != ["cd"] for s in segs[:-1] if s.strip()):
         return {}
+    if exceeds_tokenizable_ceiling(segs[-1]):
+        return {}
     try:
         toks = shlex.split(segs[-1])
     except ValueError:
@@ -108,6 +111,8 @@ _PATCH_READ_CAP = 1 << 20
 
 def _git_segments(cmd: str) -> List[List[str]]:
     """Token lists of each simple command; redirections dropped. Empty on a parse failure."""
+    if exceeds_tokenizable_ceiling(cmd):
+        return []
     try:
         lex = shlex.shlex(cmd, posix=True, punctuation_chars=True)
         lex.whitespace_split = True

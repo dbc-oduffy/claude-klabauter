@@ -130,7 +130,7 @@ DEFAULT_MODEL = "haiku"
 #: caller does not pass ``max_turns`` explicitly -- a fixed cap that never
 #: grew with the workflow it bounds silently truncated a many-phase run at
 #: the same 3 turns as a one-phase one (klabauter#41).
-DEFAULT_MAX_TURNS = 3
+DEFAULT_MAX_TURNS = 4
 
 #: Extra turn budget granted per declared ``phase(...)`` call found in the
 #: emitted script, on top of ``DEFAULT_MAX_TURNS`` -- a background Workflow
@@ -154,7 +154,7 @@ DEFAULT_CONCURRENCY_CAP = 3
 #: per-workflow -- least privilege is enforced one level down, by each
 #: phase's own ``agentType`` and by coordinator's own guard layer (loaded
 #: because ``--plugin-dir`` is passed), never re-derived here.
-_SESSION_ALLOWED_TOOLS = ("Workflow", "Read", "Write", "Edit", "Bash", "Grep", "Glob", "ToolSearch")
+_SESSION_ALLOWED_TOOLS = ("Workflow", "Read", "Write", "Edit", "Bash", "PowerShell", "Grep", "Glob", "ToolSearch")
 
 #: The driver's whole job, in one prompt: call Workflow once, and relay its
 #: returned wake digest's ``next_action`` into ONE terminal-commit call when
@@ -167,16 +167,21 @@ _SESSION_ALLOWED_TOOLS = ("Workflow", "Read", "Write", "Edit", "Bash", "Grep", "
 #: ``ceremony.commit_v2``). The digest's ``next_action.params`` is relayed
 #: VERBATIM plus ``script_path`` -- the driver never re-derives or edits it.
 _PROMPT_TEMPLATE = (
-    "Call the Workflow tool exactly once, with scriptPath set to {script_path!r}. "
+    "First, Read tool: read {script_path!r} once (the Workflow tool rejects a script this "
+    "session has not read). Then call the Workflow tool exactly once, with scriptPath set "
+    "to {script_path!r}. "
     "The tool's return value is the workflow's wake digest. "
+    "If that return is truncated and names an overflow file, Read that file once, and only "
+    "that file, before the Write. "
     "If the digest's next_action.op equals \"{op_name}\", run exactly "
     "two steps. (1) Write tool: create the file {params_path!r} whose content is the "
     "digest's next_action.params object, verbatim, with a \"script_path\" key added set to "
     "{script_path!r}, as JSON with no extra keys; keep every path string exactly as given "
-    "(never retype backslashes in a shell). (2) one Bash command: coordinator-invoke "
-    "{op_name} --params-file {params_path} "
-    "Otherwise call no other tool. Never call more than these two tools, and never call "
-    "either one more than once. Your final answer is that command's JSON reply, led by a "
+    "(never retype backslashes in a shell). (2) one shell command (PowerShell on Windows): coordinator-invoke "
+    "{op_name} --params-file {quoted_params_path} "
+    "Otherwise call no other tool beyond the script Read, the Workflow call and the one "
+    "overflow Read. Never call Workflow more than once, nor Read any one file more than once. "
+    "Your final answer is that command's JSON reply, led by a "
     "line of its top-level criterion_status, plan_status and plan_status_reason values "
     "(whichever are present)."
 )
@@ -254,6 +259,7 @@ def build_fire_env(base: Optional[dict] = None) -> dict:
     """
     env = dict(os.environ if base is None else base)
     env.setdefault(_BG_WAIT_CEILING_ENV, "0")
+    env["GIT_TERMINAL_PROMPT"] = "0"  # Fired drivers have no interactive credential input.
 
     from coordinator_core._settings_home import settings_home
 
@@ -293,8 +299,7 @@ class ConcurrencyCapExceededError(RuntimeError):
 
 
 class ChildSpawnFailedError(RuntimeError):
-    """Raised when the spawned child cannot be confirmed live (immediate
-    non-zero exit, or the binary/flag was refused at spawn)."""
+    """Raised when no child could be spawned (for example a missing binary)."""
 
 
 class RepoRootUnresolvableError(RuntimeError):
@@ -435,6 +440,7 @@ def _shim_plugin_dir(shim_bin: str = "claude-author") -> Optional[str]:
     try:
         result = subprocess.run(
             [shim_bin, "--print-plugin-dir"],
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             encoding="utf-8",
             errors="replace",
@@ -490,10 +496,18 @@ def render_prompt(script_path: str) -> str:
     """Driver prompt with every path forward-slashed: a Windows backslash in a
     quoted/inline shell argument is halved before the op parses it."""
     posix = str(script_path).replace("\\", "/")
+    params = posix + ".terminal-params.json"
+    if sys.platform == "win32":
+        quoted_params = "'" + params.replace("'", "''") + "'"
+    else:
+        import shlex
+
+        quoted_params = shlex.quote(params)
     return _PROMPT_TEMPLATE.format(
         op_name=land_run_contract.OP_NAME,
         script_path=posix,
-        params_path=posix + ".terminal-params.json",
+        params_path=params,
+        quoted_params_path=quoted_params,
     )
 
 
@@ -513,12 +527,10 @@ def build_fire_command(
     ``prompt`` replaces the default fire prompt; ``session_id`` appends
     ``--session-id``. Both default to the unchanged argv.
 
-    ``add_dir`` grants the child's tools the target repo root. The child
-    inherits the firing process's cwd (the warm engine's root, not the
-    caller's repo), and its Workflow tool refuses a script outside its
-    readable dirs -- so without this every fire for a sibling repo is
-    dead on arrival. A grant, not a cwd: the negative-spec on
-    ``fire_workflow`` still holds.
+    ``add_dir`` grants the child's tools the target repo root: its Workflow
+    tool refuses a script outside its readable dirs. It is a grant, not a
+    working directory; ``fire_workflow`` also spawns the child with
+    ``cwd`` set to that same validated root.
 
     ``-p`` is never omitted -- pinned by test, since that flag is the
     entire reason the interactive direct-child invariant
@@ -582,7 +594,7 @@ def _write_record(path: Path, record: dict) -> dict:
     the file holds (Review: coordinator:code-reviewer, double-annotate)."""
     record = _annotate_record(record)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}")
+    tmp = path.with_suffix(path.suffix + f".tmp{os.getpid()}-{uuid.uuid4().hex}")
     tmp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, path)
     return record
@@ -685,29 +697,26 @@ def _discard_reservation(record_path: Path) -> None:
 
 
 def _pid_alive(pid: int) -> bool:
-    """Best-effort liveness probe -- see module docstring's negative-spec:
-    a cold-spawned engine can only ask "does this pid currently exist",
-    never recover the real exit code of an already-reaped child."""
-    if sys.platform == "win32":
-        try:
-            result = subprocess.run(
-                ["tasklist", "/FI", f"PID eq {pid}", "/FO", "CSV", "/NH"],
-                capture_output=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=10,
-                creationflags=_CREATE_NO_WINDOW,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            return False
-        return str(pid) in result.stdout
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
+    """Spawn-free driver liveness; an unreaped POSIX zombie has already exited.
+
+    Unknown access remains alive rather than announcing a false completion.
+    This probe never reaps another owner's child or invents an exit code.
+    """
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
-    except PermissionError:
+    if sys.platform == "win32":
+        from coordinator_core.ask_spool.record import win_pid_state
+
+        return win_pid_state(pid) is not False
+    import psutil
+
+    try:
+        process = psutil.Process(pid)
+        return process.is_running() and process.status() != psutil.STATUS_ZOMBIE
+    except (psutil.NoSuchProcess, psutil.ZombieProcess):
+        return False
+    except psutil.AccessDenied:
         return True
-    return True
 
 
 def _log_size_bytes(log_path: str) -> Optional[int]:
@@ -767,7 +776,7 @@ _LOG_SCAN_WINDOW_BYTES = 64 * 1024
 #: and re-stamped -- which is how a record settled by an earlier version
 #: picks up a field that version never wrote, without a migration pass and
 #: without re-reading its log on every subsequent sweep.
-_ANNOTATION_VERSION = 5
+_ANNOTATION_VERSION = 6
 
 _STALENESS_NOTE = (
     "`state`, `exit_code` and `outcome` are only valid as of `status_checked_at` -- "
@@ -875,9 +884,29 @@ def _denial_reason(envelope: Optional[dict]) -> Optional[str]:
     return "; ".join(parts) or None
 
 
+def _not_landed_basis(record: dict) -> Optional[str]:
+    """Why a clean-exiting fire with a ``run_id`` did not land, or ``None``
+    when it landed or carries no ``run_id``. One ``read_run_stage`` read; it
+    returns ``None`` rather than raising, so an absent or malformed stage
+    file reads as "never staged"."""
+    run_id = record.get("run_id")
+    repo_root = record.get("repo_root")
+    if not run_id or not repo_root:
+        return None
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+    stage = read_run_stage(Path(repo_root), run_id)
+    if stage is None:
+        return f"the driver exited cleanly but run {run_id} has no readable run-stage: it never staged"
+    stage_name = stage.get("stage")
+    if stage_name != "landed":
+        return f"the driver exited cleanly but run {run_id} stopped at run-stage {stage_name!r}, not 'landed'"
+    return None
+
+
 def _classify_outcome(record: dict) -> tuple:
-    """Classify a fire as ``clean`` / ``failed`` / ``denied`` / ``truncated`` / ``unknown``
-    from the child's own log, returning ``(outcome, basis, driver_session_id,
+    """Classify a fire as ``clean`` / ``not_landed`` / ``failed`` / ``denied`` /
+    ``truncated`` / ``unknown`` from the child's own log, returning ``(outcome, basis, driver_session_id,
     failure_subtype)``.
 
     This answers the question the exit code cannot answer here: the spawn is
@@ -897,7 +926,8 @@ def _classify_outcome(record: dict) -> tuple:
     means the DRIVER finished without a recorded error, never that the
     workflow's phases did work -- a fully-refused run can still exit 0 with
     a clean envelope (see ``fire_status``'s docstring for that separate,
-    still-live hazard).
+    still-live hazard). ``not_landed`` is a would-be ``clean`` whose record
+    carries a ``run_id`` and whose run-stage is absent or not ``landed``.
 
     The session id and failure subtype are ``None`` whenever no envelope was
     recovered (or, for the subtype, when the envelope reported no error).
@@ -927,6 +957,9 @@ def _classify_outcome(record: dict) -> tuple:
             if errors:
                 basis += f", errors={errors!r}"
             return "failed", basis, session_id, subtype
+        landed_basis = _not_landed_basis(record)
+        if landed_basis:
+            return "not_landed", landed_basis, session_id, None
         return "clean", "the driver wrote its own terminal result envelope", session_id, None
     return (
         "failed",
@@ -967,7 +1000,7 @@ def _annotate_record(record: dict) -> dict:
     outcome_now = annotated.get("outcome")
     # An ``unknown`` computed while the run was live is NOT settled once the record reads
     # ``exited``: the transition must classify from the log, else it stays unknown forever.
-    settled = outcome_now in ("clean", "failed", "truncated", "denied") or (
+    settled = outcome_now in ("clean", "not_landed", "failed", "truncated", "denied") or (
         outcome_now == "unknown"
         and annotated.get("state") == "exited"
         and annotated.get("outcome_basis") != _NOT_ENDED_BASIS
@@ -1007,6 +1040,8 @@ def _refresh_record_state(record: dict) -> dict:
         if time.time() - reserved_at > _PENDING_RECLAIM_TIMEOUT_S:
             record = dict(record)
             record["state"] = "exited"
+            record["execution_started"] = None
+            record["execution_note"] = "Reservation expired; child execution cannot be determined. Inspect before refiring."
             record["status_checked_at"] = time.time()
         annotated = _annotate_record(record)
         return annotated if annotated != record else record
@@ -1024,16 +1059,19 @@ def _refresh_record_state(record: dict) -> dict:
     return annotated if annotated != record else record
 
 
-def count_live_fires(cwd: Optional[str] = None) -> int:
+def count_live_fires(cwd: Optional[str] = None, *, notify: bool = True) -> int:
     """Refresh and count registry entries currently "running" or
     "pending" (a reserved-but-not-yet-spawned slot, see ``fire_workflow``)
     -- both occupy a concurrency-cap slot."""
     registry_dir = _registry_dir(cwd)
     live = 0
+    from coordinator_core.ops.workflow_fire.notify import refresh_record
+
     for record in _list_records(registry_dir):
-        refreshed = _refresh_record_state(record)
-        if refreshed is not record:
-            _write_record(_record_path(registry_dir, refreshed["fire_id"]), refreshed)
+        path = _record_path(registry_dir, record["fire_id"])
+        # The cap needs only a conservative live count, not persistence or delivery.
+        # Avoid one lock/write per historical terminal record in the arbitration path.
+        refreshed = refresh_record(path, record) if notify else _refresh_record_state(record)
         if refreshed.get("state") in ("running", "pending"):
             live += 1
     return live
@@ -1051,7 +1089,7 @@ _STARTUP_LOG_TAIL_BYTES = 2000
 
 
 def _startup_log_tail(log_path) -> str:
-    """Last ``_STARTUP_LOG_TAIL_BYTES`` of a child's log, for a refusal message."""
+    """Last ``_STARTUP_LOG_TAIL_BYTES`` of a child's log, for a startup-exit diagnostic."""
     try:
         with open(log_path, "rb") as handle:
             handle.seek(0, os.SEEK_END)
@@ -1070,6 +1108,54 @@ _HEADLESS_WARNING = (
 )
 
 
+def reserve_fire(
+    script: Path,
+    resolved_cwd: str,
+    script_sha256: str,
+    *,
+    expected: Optional[str] = None,
+    concurrency_cap: int = DEFAULT_CONCURRENCY_CAP,
+    notify_to: Optional[str] = None,
+) -> tuple[Path, str, Path, dict]:
+    """Arbitrate both executor kinds through one digest reservation registry.
+
+    Return registry, fire id, record path and the saved reservation. An existing
+    matching digest carries ``already_fired``; only a terminal record explicitly
+    known not to have executed is retryable. No transport runs under the cap lock.
+    """
+    registry_dir = _registry_dir(resolved_cwd)
+    fire_id = uuid.uuid4().hex
+    record_path = _record_path(registry_dir, fire_id)
+    lock_path = _acquire_cap_lock(registry_dir)
+    try:
+        if expected is not None:
+            for previous in _list_records(registry_dir):
+                if (previous.get("sha256") == expected and previous.get("script_path") == str(script)
+                        and not (previous.get("state") == "exited" and previous.get("execution_started") is False)):
+                    from coordinator_core.ops.workflow_fire.notify import refresh_record
+
+                    previous_path = _record_path(registry_dir, previous["fire_id"])
+                    refreshed = refresh_record(previous_path, previous, notify=False)
+                    return registry_dir, previous["fire_id"], previous_path, {**refreshed, "already_fired": True}
+        live = count_live_fires(resolved_cwd, notify=False)
+        if live >= concurrency_cap:
+            raise ConcurrencyCapExceededError(
+                f"workflow.fire: {live} fire(s) already in flight, at or above cap {concurrency_cap}"
+            )
+        saved = _write_record(record_path, {
+            "fire_id": fire_id,
+            "state": "pending",
+            "reserved_at": time.time(),
+            "script_path": str(script),
+            "sha256": script_sha256,
+            "repo_root": resolved_cwd,
+            **({"notify_to": notify_to} if notify_to else {}),
+        })
+        return registry_dir, fire_id, record_path, saved
+    finally:
+        _release_cap_lock(lock_path)
+
+
 def fire_workflow(
     script_path: str,
     cwd: Optional[str] = None,
@@ -1081,6 +1167,9 @@ def fire_workflow(
     prompt: Optional[str] = None,
     session_id: Optional[str] = None,
     wait: bool = False,
+    run_id: Optional[str] = None,
+    expected: Optional[str] = None,
+    notify_to: Optional[str] = None,
 ) -> dict:
     """Fire one detached ``claude -p`` child for ``script_path``.
 
@@ -1090,13 +1179,9 @@ def fire_workflow(
     confirmation and returns the record with ``state: exited`` and the real
     ``exit_code``, outcome-classified; it never polls pid liveness.
 
-    ``cwd`` DOES NOT SET THE CHILD'S WORKING DIRECTORY. It selects which
-    repo's bookkeeping this fire is recorded against, and nothing else:
-    ``_registry_dir``, ``count_live_fires``, and ``_publish_lag_message``
-    are its only three readers. It is deliberately NOT in ``popen_kwargs``
-    -- the spawned child inherits the FIRING process's cwd, so firing with
-    ``cwd=<sibling repo>`` still starts a child sitting in the caller's own
-    repo.
+    ``cwd`` selects the target repo: bookkeeping (``_registry_dir``,
+    ``count_live_fires``, ``_publish_lag_message``) and, once resolved and
+    validated, the child's working directory (``popen_kwargs["cwd"]``).
 
     When ``cwd`` is omitted (no ``--repo``), this does NOT quietly resolve
     bookkeeping against whatever the firing process's own ambient cwd
@@ -1115,25 +1200,27 @@ def fire_workflow(
     same turn budget as a one-phase one. An explicit ``max_turns`` from the
     caller is always honored as-is.
 
-    Negative-spec: do not "fix" this by threading ``cwd`` into
-    ``subprocess.Popen``. A tool the child runs would then resolve its repo
-    from a directory the firing session never chose, which is the ambiguity
-    the repo-identity gate exists to refuse. Anything the child must target
-    outside the firing repo is passed to it EXPLICITLY -- see
-    ``coordinator/bin/coordinator-tasks-mirror.py``'s ``--repo-root``, which
-    exists precisely because there is no correct root to infer from a cwd
-    that is the wrong repo by construction.
+    The child's cwd is ``resolved_cwd``: chosen explicitly (``--repo`` or
+    the script's own tree) and validated by ``_resolve_target_repo`` and
+    ``_assert_script_under_repo_root`` before spawn. The inherited cwd is
+    the firing process's -- the warm engine root -- wrong by construction,
+    so a relative path or a repo-less op in the child would resolve against
+    the wrong tree. ``--add-dir`` stays as the tool-access grant.
 
-    The parameter name has now misled two readers into assuming it is the
-    child's working directory (2026-08-30, claude-klabauter-em and
-    coordinator-content-repo-e8, independently). It is documented rather than renamed
-    because it is a published engine seam; a rename is a breaking change to
-    every caller and belongs in its own plan.
+    ``run_id``, when given, is stored on the record; ``_classify_outcome``
+    uses it to report a clean exit that never reached ``landed`` as
+    ``not_landed``.
+
+    With ``expected``, a matching script path/digest already reserved or executed returns
+    its existing fire_id with ``already_fired`` and does not spawn again. A known failure
+    explicitly marked ``execution_started: false`` can be retried.
+
     Raises ``ScriptNotFoundError``, ``RepoRootUnresolvableError``,
     ``ScriptOutsideRepoRootError`` (klabauter#41 -- ``script_path`` does not
     live under the resolved repo root), ``PluginDirResolutionError``,
     ``ConcurrencyCapExceededError``, or ``ChildSpawnFailedError`` before
-    ever returning a handle for a child that cannot be confirmed live.
+    returning a handle when no child could be spawned. A child that exits during
+    startup returns a terminal handle, because it may already have executed work.
 
     Concurrency-cap guarantee: the live-count read and the slot reservation
     (a "pending" registry record) happen while ``_acquire_cap_lock`` holds
@@ -1154,12 +1241,19 @@ def fire_workflow(
     ``_CAP_LOCK_STALE_AGE_S`` before the lockfile is reclaimed.
     """
     warnings.warn(_HEADLESS_WARNING, UserWarning, stacklevel=2)
-    script = Path(script_path)
+    script = Path(script_path).expanduser().resolve()
     if not script.is_file():
         raise ScriptNotFoundError(f"workflow.fire: script_path does not exist: {script_path!r}")
 
     resolved_cwd = _resolve_target_repo(script, cwd)
     _assert_script_under_repo_root(script, resolved_cwd)
+    import hashlib
+
+    script_sha256 = hashlib.sha256(script.read_bytes()).hexdigest()
+    if expected is not None and expected != script_sha256:
+        from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
+
+        guard_against_fired_drift(script, expected)
 
     if max_turns is None:
         try:
@@ -1167,24 +1261,12 @@ def fire_workflow(
         except OSError:
             max_turns = DEFAULT_MAX_TURNS
 
-    registry_dir = _registry_dir(resolved_cwd)
-    fire_id = uuid.uuid4().hex
-    record_path = _record_path(registry_dir, fire_id)
-
-    lock_path = _acquire_cap_lock(registry_dir)
-    try:
-        live = count_live_fires(resolved_cwd)
-        if live >= concurrency_cap:
-            raise ConcurrencyCapExceededError(
-                f"workflow.fire: {live} fire(s) already in flight, at or above cap {concurrency_cap}"
-            )
-        _write_record(record_path, {
-            "fire_id": fire_id,
-            "state": "pending",
-            "reserved_at": time.time(),
-        })
-    finally:
-        _release_cap_lock(lock_path)
+    registry_dir, fire_id, record_path, reservation = reserve_fire(
+        script, resolved_cwd, script_sha256, expected=expected,
+        concurrency_cap=concurrency_cap, notify_to=notify_to,
+    )
+    if reservation.get("already_fired"):
+        return reservation
 
     try:
         plugin_dir = resolve_plugin_dir()
@@ -1212,6 +1294,7 @@ def fire_workflow(
         "stdin": subprocess.DEVNULL,
         "close_fds": True,
         "env": child_env,
+        "cwd": resolved_cwd,
     }
     if sys.platform == "win32":
         popen_kwargs["creationflags"] = _CREATE_NO_WINDOW | _CREATE_NEW_PROCESS_GROUP
@@ -1240,21 +1323,16 @@ def fire_workflow(
         time.sleep(_LIVENESS_POLL_INTERVAL_S)
 
     started_at = time.time()
-    if exit_code is not None:
-        _discard_reservation(record_path)
-        raise ChildSpawnFailedError(
-            f"workflow.fire: child pid {process.pid} exited within the startup "
-            f"window with code {exit_code} (bad plugin dir, missing binary, or a "
-            f"refused flag); log: {log_path}\n--- log tail ---\n"
-            f"{_startup_log_tail(log_path)}"
-        )
-
-    state = "running"
+    # A fast exit is not proof that no work ran. Keep the handle and digest even
+    # for failures, so retry cannot silently launch the same workflow twice.
+    state = "exited" if exit_code is not None else "running"
     publish_lag_message = _publish_lag_message(resolved_cwd)
     record = {
         "fire_id": fire_id,
         "pid": process.pid,
         "script_path": str(script),
+        "sha256": script_sha256,
+        "execution_started": True,
         "repo_root": resolved_cwd,
         "plugin_dir": plugin_dir,
         "claude_bin": claude_bin,
@@ -1268,13 +1346,24 @@ def fire_workflow(
         "status_checked_at": started_at,
         "log_size_bytes": _log_size_bytes(str(log_path)),
         "publish_lag_message": publish_lag_message,
+        **({"notify_to": notify_to} if notify_to else {}),
     }
-    if wait:
+    if run_id:
+        record["run_id"] = run_id
+    if exit_code is not None:
+        record["startup_exit"] = True
+        record["startup_log_tail"] = _startup_log_tail(log_path)
+    if wait and exit_code is None:
         record["exit_code"] = process.wait()
         record["state"] = "exited"
         record["status_checked_at"] = time.time()
         record["log_size_bytes"] = _log_size_bytes(str(log_path))
-    return _write_record(record_path, record)
+    saved = _write_record(record_path, record)
+    if record["state"] == "exited" and notify_to:
+        from coordinator_core.ops.workflow_fire.notify import refresh_record
+
+        return refresh_record(record_path, saved)
+    return saved
 
 
 def fire_status(fire_id: str, cwd: Optional[str] = None) -> Optional[dict]:
@@ -1324,7 +1413,6 @@ def fire_status(fire_id: str, cwd: Optional[str] = None) -> Optional[dict]:
     record = _read_record(path)
     if record is None:
         return None
-    refreshed = _refresh_record_state(record)
-    if refreshed is not record:
-        _write_record(path, refreshed)
-    return refreshed
+    from coordinator_core.ops.workflow_fire.notify import refresh_record
+
+    return refresh_record(path, record)

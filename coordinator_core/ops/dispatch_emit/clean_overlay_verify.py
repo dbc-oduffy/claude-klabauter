@@ -51,9 +51,10 @@ class OverlayVerdict:
 
 
 def overlay_root(root: Path, run_id: str) -> Path:
-    """Where this run's overlay lives: `<bulk_scratch_dir>/clean-overlay/<run>` when the repo's
-    coordinator.local.md declares an absolute `bulk_scratch_dir:`, else `<root>/scratch/clean-overlay/<run>`.
-    One config read, no spawn."""
+    """The run's holder dir: `<bulk_scratch_dir>/clean-overlay/<run>` when the repo's coordinator.local.md
+    declares an absolute `bulk_scratch_dir:`, else `<root>/scratch/clean-overlay/<run>`. One config read, no spawn.
+    The clone lives one level down, named as `root`'s own directory: tests derive the repo identity (and its
+    per-repo exemptions) from the clone's basename, so a run-id name would drop them."""
     bulk = read_local_md_key(str(root), BULK_DIR_KEY).strip().strip("\"'")
     if bulk and Path(bulk).is_absolute():
         return Path(bulk).joinpath(*OVERLAY_DIR[1:], run_id)
@@ -81,10 +82,11 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
     seeds = tuple(seeds)
     if not seeds:
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
-    dest = overlay_root(root, run_id)
+    holder = overlay_root(root, run_id)
+    dest = holder / root.resolve().name
     try:
-        shutil.rmtree(dest, ignore_errors=True)
-        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.rmtree(holder, ignore_errors=True)
+        holder.mkdir(parents=True, exist_ok=True)
         clone = run_git(["clone", "--shared", "--no-checkout", "-q", str(root), str(dest)], cwd=str(root))
         if clone.returncode:
             return OverlayVerdict("inconclusive", f"overlay clone failed: {clone.stderr.strip()[-_OUTPUT_TAIL:]}", seeds)
@@ -95,7 +97,7 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
     except (OSError, subprocess.SubprocessError) as exc:
         return OverlayVerdict("inconclusive", f"overlay verify did not complete: {type(exc).__name__}: {exc}", seeds)
     finally:
-        shutil.rmtree(dest, ignore_errors=True)
+        shutil.rmtree(holder, ignore_errors=True)
     tail = (ran.stdout + ran.stderr).strip()[-_OUTPUT_TAIL:]
     if ran.returncode == 0:
         return OverlayVerdict("green", tail, seeds)
@@ -160,7 +162,7 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
 
 
 def remedy_call(run_id: Optional[str]) -> str:
-    return f"{Path(sys.executable).name} -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id {run_id or '<run_id>'}"
+    return f"{Path(sys.executable).name} -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id {run_id or '<run_id>'} --repo-root <repo_root>"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

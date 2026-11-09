@@ -26,7 +26,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.testing.suite_run_record import read_head_sha
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit import ask_stage_receipt, design_route, reply_sidecar
+from coordinator_core.ops.dispatch_emit import ask_stage_receipt, design_route, reply_sidecar, stage_family
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     HALT_PARKED,
@@ -827,6 +827,18 @@ def _refuse_unapproved_design(sizing: Mapping, sizing_rel: str) -> None:
         raise AskStageError(refusal)
 
 
+def _sizing_plan_edge(root: Path, sizing_rel: str) -> Optional[str]:
+    """The sizing's `plan:` edge when it names an existing plan file under the repo, else None.
+
+    Trap: an unloadable sizing or a dangling edge returns None, leaving the refusal to the sizing_path arm."""
+    sizing = _run_sizing(root, sizing_rel)
+    edge = sizing.get("plan") if sizing else None
+    if not isinstance(edge, str) or not edge.strip():
+        return None
+    plan_path = contained_path(root / edge.strip(), [root])
+    return edge.strip() if plan_path is not None and plan_path.is_file() else None
+
+
 def _refuse_misrouted_xs_mint(sizing: Mapping, sizing_rel: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `XS-MINT-MISROUTED` for a sizing the XS mint must not take: one with a
     `plan:` edge or a non-XS `estimate.tshirt`; `XS-MINT-NO-WRITES` for an empty `writes`.
@@ -1088,6 +1100,10 @@ def stage(
         raise AskStageError(f"run_id {run_id!r} is not a single safe path segment")
     if bool(plan_rel) == bool(sizing_rel):
         raise AskStageError("name exactly one of plan_rel and sizing_rel")
+    if sizing_rel:
+        planned = _sizing_plan_edge(root, sizing_rel)
+        if planned:
+            plan_rel, commit_sizing_rel, sizing_rel = planned, sizing_rel, None
 
     run_dir = contained_path(root / RUN_DIR_ROOT / run_id, [root / RUN_DIR_ROOT])
     if run_dir is None:
@@ -1279,10 +1295,17 @@ def stage(
     declared: list[str] = []
     brief_sizes: dict[str, int] = {}
     kept_ids: set[str] = set()
+    try:
+        sizing_family = stage_family.resolve((run_sizing or {}).get("family"))
+    except ValueError as exc:
+        raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
     with leg("briefs"):
         for wave_no, wave in enumerate(waves):
             for row in wave:
                 agent_type = _row_agent_type(row)
+                row_family = "claude"
+                if sizing_family != "claude" and not row.agent_type and agent_type == _EXECUTOR_AGENT_TYPE:
+                    agent_type, row_family = stage_family.RUNNER_AGENT, sizing_family
                 if row.agent_model and agent_type in _AGENT_MODELS:
                     row = row._replace(agent_model=None)  # a pinned type takes its pin; the override is dropped
                 _model_opt(agent_type, row.agent_model)  # raises on bad model grammar of an unpinned override
@@ -1303,6 +1326,12 @@ def stage(
                     text = _reviewer_brief(root, run_dir, row.id, raw_by_id.get(row.id) or {})
                 else:
                     text = _row_prompt(row, plan_posix, context)
+                    if row_family != "claude":
+                        paths = [w for w in row.writes if isinstance(w, str)] if isinstance(row.writes, list) else []
+                        text = stage_family.runner_brief(
+                            row_family, "write" if paths else "other", _rel(root, brief),
+                            f"scratch/family-stage/{row.id}", paths,
+                        ) + "\n" + text
                     if intent:
                         text = intent + "\n" + text
                     if row.id in clauses:

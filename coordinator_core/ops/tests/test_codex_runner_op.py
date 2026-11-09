@@ -75,6 +75,51 @@ def test_start_rejects_missing_repo_root_dir(home, popen, tmp_path):
     assert popen == []
 
 
+@pytest.mark.parametrize('mode,assignment', [
+    ('worker', {}),
+    ('worker', {'session_id':'s', 'run':'r', 'declared_peak_mb':128}),
+    ('persona', {}),
+    ('persona', {'session_id':' ', 'run':'r', 'declared_peak_mb':128}),
+    ('persona', {'session_id':'s', 'run':'r', 'declared_peak_mb':True}),
+])
+def test_malformed_assignment_rejected_before_wrapper_spawn(home, popen, tmp_path, mode, assignment):
+    params = {'mode':mode, 'repo_root':str(tmp_path), 'task_file':'task.txt', 'assignment':assignment}
+    if mode == 'persona':
+        params.update(persona='role.md', tier_map='map.json', provider='openai')
+    with pytest.raises(CallerFacingValidationError, match='assignment'):
+        op._codex_runner_start(params)
+    assert not popen
+    assert not (home / 'codex-runs').exists()
+
+
+@pytest.mark.parametrize('mode,provider,expected', [
+    ('review', 'grok', 'codex'), ('agy-review', 'codex', 'agy'), ('grok-review', 'codex', 'grok'),
+])
+def test_fixed_mode_roster_provider_comes_from_actual_backend(tmp_path, monkeypatch, mode, provider, expected):
+    from coordinator_core.codex_runner import __main__ as worker, contract, roster
+    request = contract.RunRequest(mode=mode, repo_root=str(tmp_path), artifact='a.md', provider=provider)
+    (tmp_path / 'request.json').write_text(json.dumps(request.to_dict()), encoding='utf-8')
+    registrations = []
+    monkeypatch.setattr(roster, 'write_record', lambda *args, **kwargs: registrations.append(kwargs))
+    monkeypatch.setattr(roster, 'remove_record', lambda pid: None)
+    def backend(req, run_dir, on_spawn):
+        on_spawn(123)
+        return contract.RunResult(run_id=run_dir.name, status='ok')
+    monkeypatch.setattr(worker, '_mode_run', lambda mode: backend)
+    worker.run_worker(tmp_path)
+    assert registrations == [{'provider':expected}]
+
+
+def test_worker_persona_output_cap_counts_utf8_bytes_and_reports_truncation(tmp_path, monkeypatch):
+    from coordinator_core.codex_runner import output
+    monkeypatch.setattr(output, 'OUTPUT_LIMIT_BYTES', 4)
+    path = tmp_path / 'stdout'
+    path.write_bytes('€€'.encode('utf-8'))
+    text, usage = output.read_output(path)
+    assert text == '€' and len(text.encode('utf-8')) <= 4
+    assert usage == {'output_truncated':True, 'output_limit_bytes':4, 'output_bytes':3}
+
+
 def test_start_process_time_under_500ms_with_child_stubbed(home, popen, tmp_path):
     t0 = time.process_time()
     op._codex_runner_start(_review(tmp_path))
@@ -131,3 +176,21 @@ def test_ops_registered_and_classified():
     assert OP_MODULE_MAP["codex_runner.result"] == "coordinator_core.ops.codex_runner"
     assert OP_CLASSIFICATION["codex_runner.start"] is OpClass.MUTATING
     assert OP_CLASSIFICATION["codex_runner.result"] is OpClass.COMPUTE_ONLY
+
+
+def test_named_review_roundtrips_through_detached_worker_and_result(home, popen, tmp_path, monkeypatch):
+    from coordinator_core.codex_runner import __main__ as worker, named_review
+    params = dict(mode="named-review", repo_root=str(tmp_path), agent_type="coordinator:staff-eng",
+                  provider="codex", model="gpt-6-astra", brief="Review the request contract", verdicts=["READY"])
+    out = op._codex_runner_start(params)
+    assert out["run_id"].startswith("named-review-") and len(popen) == 1
+    def fake_reviewer(agent_type, brief, choice, **kwargs):
+        assert (agent_type, brief, choice.model) == (params["agent_type"], params["brief"], params["model"])
+        assert kwargs["verdicts"] == ("READY",) and kwargs["cwd"] == str(tmp_path)
+        kwargs["on_spawn"](31338)
+        return {"verdict": "READY", "findings": [{"finding": "contract accepted"}]}
+    monkeypatch.setattr(named_review, "run_reviewer", fake_reviewer)
+    worker.run_worker(home / "codex-runs" / out["run_id"])
+    result = op._codex_runner_result({"run_id": out["run_id"]})
+    assert result["status"] == "ok" and result["verdict"] == "READY"
+    assert result["findings"] == [{"finding": "contract accepted"}]

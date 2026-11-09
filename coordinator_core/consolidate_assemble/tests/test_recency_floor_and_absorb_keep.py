@@ -27,7 +27,7 @@ def _fake_git(tip_time: int, commits: str):
         f"refs/heads/work/stale\twork/stale\tme@x\t\t{tip_time}\n"
     )
 
-    def run_git(args: list[str], cwd: Path) -> SimpleNamespace:
+    def run_git(args: list[str], cwd: Path, input: str | None = None) -> SimpleNamespace:  # noqa: A002
         while args and args[0].startswith("-"):
             args = args[1:]
         out = ""

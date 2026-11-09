@@ -53,6 +53,7 @@ CONFINEMENT_DENY_NAMES = [
     "block-perforce-submit",
     "block-external-workspace-vcs-write",
     "block-push-pr-non-owned-remote",
+    "block-empty-source-push",
     "deploy-dirty-tree",
     "block-editor-kill-by-name",
     "block-whole-filesystem-scan",

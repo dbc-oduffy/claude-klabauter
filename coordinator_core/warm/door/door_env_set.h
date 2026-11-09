@@ -17,6 +17,11 @@
  * those files for the actual expansion each leg uses. */
 #define DOOR_ENV_SET(X) \
     X(COORDINATOR_SETTINGS_HOME) \
+    X(COORDINATOR_AGENT_PROVIDER) \
+    X(COORDINATOR_AGENT_ROLE) \
+    X(COORDINATOR_PARENT_SESSION_ID) \
+    X(COORDINATOR_WORKFLOW_AGENT_TYPE) \
+    X(COORDINATOR_WORKFLOW_AGENT_LABEL) \
     X(COORDINATOR_SESSION_ID) \
     X(CLAUDE_SESSION_ID) \
     X(CLAUDE_CODE_SESSION_ID) \
@@ -30,7 +35,13 @@
     X(CLAUDE_PROJECT_DIR) \
     X(CLAUDE_CODE_REMOTE) \
     X(COORDINATOR_JOB_MODE) \
-    X(COORDINATOR_AGENT_TYPE_HOST)
+    X(COORDINATOR_AGENT_TYPE_HOST) \
+    X(CODEX_THREAD_ID) \
+    X(ANTIGRAVITY_CONVERSATION_ID) \
+    X(CLAUDECODE) \
+    X(COORDINATOR_AGENT_VENDOR) \
+    X(COORDINATOR_AGENT_MODEL) \
+    X(COORDINATOR_AGENT_SESSION)
 
 /* Name PREFIXES forwarded from the caller's whole environment: every
  * variable whose name starts with one of these, non-empty, rides `_env`

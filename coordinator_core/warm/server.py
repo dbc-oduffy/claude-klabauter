@@ -800,6 +800,7 @@ def _run_dispatch(
             session_id=session_id,
             settings_home=caller.settings_home if caller is not None else None,
             caller_pid=caller_pid,
+            verified_native_actor=caller.verified_native_actor if caller is not None else None,
             diagnostics=diagnostics,
             warm_served=True,
             isolated=isolated,
@@ -1591,6 +1592,7 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
     _process_start = _time.process_time()
     _spawn_start = _spawn_count_or_none()
     _caller_route = "coordinator_core.warm.server._pool_dispatch_worker"
+    _preuse_fields: dict = {}
     _corr_id = new_correlation_id()
     session_id = caller.session_id if caller is not None else None
     caller_pid = caller.pid if caller is not None else None
@@ -1602,6 +1604,7 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
             session_id=session_id,
             settings_home=caller.settings_home if caller is not None else None,
             caller_pid=caller_pid,
+            verified_native_actor=caller.verified_native_actor if caller is not None else None,
             diagnostics=diagnostics,
             warm_served=True,
             isolated=True,
@@ -1609,11 +1612,13 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
             with contextlib.redirect_stdout(_handler_stdout), contextlib.redirect_stderr(_handler_stderr):
                 _late = LateCompletion()
                 _late_token = LATE_COMPLETION.set(_late)
+                _sink_token = _ipc.PREUSE_ROW_FIELDS_SINK.set(_preuse_fields)
                 try:
                     response = _run_joining_handler(
                         dispatch_message(msg, caller=_caller_route, corr_id=_corr_id)
                     )
                 finally:
+                    _ipc.PREUSE_ROW_FIELDS_SINK.reset(_sink_token)
                     LATE_COMPLETION.reset(_late_token)
                 _late_envelope = _late.late_envelope()
                 if _late_envelope is not None:
@@ -1644,7 +1649,15 @@ def _pool_dispatch_worker_body(msg: dict, caller: Optional[CallerContext]) -> di
         _stderr_lines.append(_captured_stderr)
     if _stderr_lines and isinstance(response, dict):
         response = {**response, "_stderr": "\n".join(_stderr_lines)}
+    if _preuse_fields and isinstance(response, dict):
+        response = {**response, _ROW_FIELDS_KEY: dict(_preuse_fields)}
     return response
+
+
+#: Reserved response key a pool worker uses to hand a `hooks.preuse_*` op's
+#: `slow_phase`/`spans` to the accept process; `_pool_dispatch` pops it before
+#: the reply, so no caller ever sees it.
+_ROW_FIELDS_KEY = "_row_fields"
 
 
 #: Ceiling on how long `_pool_dispatch` blocks its connection thread waiting for
@@ -2830,6 +2843,7 @@ def _serve_line(
     record_exit: Callable[..., None] = lambda reason, detail=None: None,
     record_served_repo: Callable[[Any], None] = lambda repo_root: None,
     engine_root: Optional[Path] = None,
+    transport_stream: Any = None,
 ) -> None:
     """Process one request frame for one connection: write exactly one
     response frame (or delegate that write to `warm.skew.evict_on_skew`'s
@@ -2931,6 +2945,14 @@ def _serve_line(
         return
 
     request_id = msg.get("id")
+    # A private Workflow engine authenticates the accepted kernel pipe peer,
+    # before caller resolution, skew side effects or operation dispatch.
+    from coordinator_core.warm import workflow_peer
+    try:
+        verified_peer = workflow_peer.authorize(transport_stream, msg, engine_root=engine_root)
+    except workflow_peer.PrivatePeerRefused:
+        _write_and_release(_untrusted_caller_response(request_id))
+        return
     client_token = msg.pop("_engine_token", None)
     caller_payload = msg.pop("_caller", None)
     caller = caller_context.resolve_caller_context(
@@ -2987,6 +3009,10 @@ def _serve_line(
     # never sees transport metadata leak into an op's params.
     env_payload = msg.pop("_env", None)
     caller = caller_context.merge_env_axis(caller, env_payload)
+    if verified_peer is not None and verified_peer.get('kind') == 'worker':
+        caller = caller_context.with_verified_native_actor(
+            caller, verified_peer['verified_native_actor'],
+        )
 
     # THE DISPATCH-ACK KEY (contract § 1, § 9). Popped the same way
     # `_engine_token`/`_caller`/`_settings_home`/`_env` are popped above --
@@ -3222,6 +3248,7 @@ def _handle_connection(
             record_exit=record_exit,
             record_served_repo=record_served_repo,
             engine_root=engine_root,
+            transport_stream=io,
         )
     finally:
         _exit_once()
@@ -3708,8 +3735,13 @@ class _ServerContext:
         start_ts = stamp[1] if stamp is not None else time.time()
         pending = getattr(_REQUEST_ROW, "value", None)
         response: Optional[dict] = None
+        row_fields: dict = {}
         try:
             response = self._pool_dispatch_untimed(msg, caller=caller, dispatch_key=dispatch_key)
+            if isinstance(response, dict):
+                _fwd = response.pop(_ROW_FIELDS_KEY, None)
+                if isinstance(_fwd, dict):
+                    row_fields = _fwd
             return response
         finally:
             try:
@@ -3723,6 +3755,8 @@ class _ServerContext:
                         session=session,
                         outcome=outcome,
                         dispatch_key=dispatch_key,
+                        slow_phase=row_fields.get("slow_phase"),
+                        spans=row_fields.get("spans"),
                     )
                 else:
                     telemetry.record_request(
@@ -3735,6 +3769,8 @@ class _ServerContext:
                         outcome=outcome,
                         pid=os.getpid(),
                         dispatch_key=dispatch_key,
+                        slow_phase=row_fields.get("slow_phase"),
+                        spans=row_fields.get("spans"),
                     )
             except Exception:  # noqa: BLE001 -- telemetry never fails a caller
                 pass
@@ -4078,6 +4114,16 @@ class _ServerContext:
         retires nothing here; the next request does, and idle demotion
         retires the server otherwise.
         """
+        from coordinator_core.ops.workflow_fire import completion
+
+        if completion.on_idle_tick(push_cadence.registry_sweep_repos(self.served_repos())):
+            # Completion delivery is engine work, even when no caller invokes an op.
+            # Supersession and vanished-ladder retirement remain independent arms.
+            idle.mark_invocation()
+        from coordinator_core.session_ceremonies import retry_pending_notifications
+
+        if retry_pending_notifications():
+            idle.mark_invocation()
         stale = self._token_is_stale()
         gone = self._ladder_gone is not None and self._ladder_gone()
         if gone:
@@ -4442,6 +4488,8 @@ class _ServerContext:
                 pid=os.getpid(),
                 lane=lane,
                 dispatch_key=row.get("dispatch_key"),
+                slow_phase=row.get("slow_phase"),
+                spans=row.get("spans"),
             )
             if row.get("wrapper"):
                 _tag_wrapper(row["wrapper"], row.get("op"), start_ts, end_ts)
@@ -4755,6 +4803,11 @@ def _run_guarded() -> int:
 
     _suppress_pool_worker_consoles()
 
+    # No op registry import here: this process runs no op. Dispatch happens in
+    # pool workers, whose initializer calls `_preload_op_registry()`; the one
+    # in-process fallback (`_run_dispatch` after a broken pool) imports lazily.
+    # Preloading here put ~0.6-2.8s of CPU ahead of the first answer.
+
     not_ready = (
         _NotReadyAnswerer(elected.listen_socket, server_sha=version_state.server_sha)
         if elected.listen_socket is not None
@@ -4763,13 +4816,9 @@ def _run_guarded() -> int:
     if not_ready is not None:
         not_ready.start()
 
-    _preload_op_registry()
-
-    # ...and this is the first instant a connection gets a PROMPT answer:
-    # `_preload_op_registry` above is the ~703ms of imports that would
-    # otherwise land on whichever caller arrived first. Both instants are
-    # recorded because a client that reaches the first still waits for the
-    # second.
+    # ...and this is the first instant a connection gets a PROMPT answer, so
+    # `ready_secs` is stamped here. Both instants are recorded because a client
+    # that reaches the first still waits for the second.
     #
     # RECORDED BEFORE `ensure_listener`, MOVED 2026-08-26. This call used to sit
     # below that block, so every `ready_secs` on disk silently included up to

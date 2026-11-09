@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """judge-coverage-backfill.py -- record a not_met judge verdict on historical concluded runs.
 
 Walks `<root>/state/warp/*`, classifies each run with run-outcome-audit.py `_terminal` (loaded by file

@@ -1126,6 +1126,47 @@ def _resolve_sidecar_leg(
     )
 
 
+DOCS_CHECKER_AGENT_TYPE = "coordinator:docs-checker"
+DOCS_CHECKER_RAG_CLAUSE = (
+    "example-retrieval-repo is installed: use it for every claim you check. If its tools are absent or "
+    "fail, reply verdict rag_down with ABORT: example-retrieval-repo cannot answer"
+)
+
+
+def _compose_docs_checker_rag_leg(
+    payload: Dict[str, Any], cwd: Optional[str], agent_type: str, subagent_type: str
+) -> str:
+    """The heavy-use / abort clause for a UE docs-checker with example-retrieval-repo installed, else "".
+
+    Also persists the child's `{run_id, stage}` beside its Workflow run when the payload
+    resolves to one. Spawns nothing; a lookup miss never suppresses the clause.
+    """
+    if DOCS_CHECKER_AGENT_TYPE not in (agent_type, subagent_type, payload.get("agent_type")):
+        return ""
+    root = cwd or payload.get("cwd")
+    if not isinstance(root, str) or not root:
+        return ""
+    from coordinator_core.ops.dispatch_emit import rag_use
+
+    if not (rag_use.rag_installed(root) and rag_use.is_ue_repo(root)):
+        return ""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_stage_lookup
+
+        found = run_stage_lookup.resolve(payload)
+        if found:
+            run_dir, hit = found
+            run_stage_lookup.record(
+                run_dir,
+                str(payload.get("agent_id") or payload.get("session_id")),
+                hit["run_id"],
+                hit["stage"],
+            )
+    except Exception:
+        pass
+    return "\n\n" + DOCS_CHECKER_RAG_CLAUSE
+
+
 def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> str:
     """Compose the SubagentStart `hookSpecificOutput.additionalContext`
     catering string for `payload`, or `""` when there is nothing to cater.
@@ -1192,6 +1233,14 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
 
     blocks_leg_text = ("\n\n" + injected_blocks) if injected_blocks else ""
 
+    docs_checker_text = ""
+    try:
+        docs_checker_text = _compose_docs_checker_rag_leg(
+            payload, cwd, agent_type, subagent_type
+        )
+    except Exception:
+        docs_checker_text = ""
+
     parts: list[str] = []
     blocks_idx = -1
     if sidecar_text:
@@ -1199,6 +1248,8 @@ def compose_catering(payload: Dict[str, Any], *, cwd: Optional[str] = None) -> s
     if blocks_leg_text:
         blocks_idx = len(parts)
         parts.append(blocks_leg_text)
+    if docs_checker_text:
+        parts.append(docs_checker_text)
     if role_append:
         parts.append("\n\n" + role_append)
 

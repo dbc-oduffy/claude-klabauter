@@ -16,7 +16,7 @@ const EMIT_OP = __EMIT_OP__;
 const EMIT_SCHEMA = {
   type: 'object',
   required: ['path', 'run_id', 'fire_args'],
-  properties: { path: { type: 'string' }, run_id: { type: 'string' }, fire_args: { type: 'object' }, error: { type: 'string' } },
+  properties: { path: { type: 'string' }, run_id: { type: 'string' }, fire_args: { type: 'object' }, error: { type: 'string' }, status: { type: 'string' }, retry_after: { type: 'number' } },
 };
 // Trap: the relay can answer a quoted-empty path (`""` or `''`), which is not the empty string.
 function _blankPath(p) {
@@ -29,17 +29,34 @@ _DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', descr
 const REPO_ROOT = __REPO_ROOT__;
 const PARAMS_FILE = __PARAMS_FILE__;
 """ + _EMIT_RELAY_JS + r"""// Trap: ask text carries quotes and `$(`; the command names a params file and never inlines the payload. Trap: a subagent relay is denied recursive or forced removal, so the prompt carries no removal and the file is left in scratch/warp.
-const reply = await agent(
-  __AUTHORITY__
+const EMIT_PROMPT = __AUTHORITY__
   + ' Run `' + INVOKE + ' ' + EMIT_OP + ' --params-file "' + PARAMS_FILE + '"` once, with the command word exactly as written. '
   + 'Do not delete or modify any file. Then '
-  + 'return path, run_id and fire_args from its JSON reply verbatim. When the command is denied or fails, '
+  + 'return path, run_id and fire_args from its JSON reply verbatim; when the reply carries status or retry_after, return those verbatim too. When the command is denied or fails, '
   + "return the command's error text verbatim in the error field, with path as an empty string and fire_args as {}; on success omit error. "
-  + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
-  { label: 'deferred-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
-);
+  + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.';
+// Trap: handover_pending is a reply with no path and no error, taken only across stop-and-copy; wait it out, bounded.
+const HANDOVER_MAX_ATTEMPTS = 3;
+const HANDOVER_WAIT_FALLBACK_S = 5;
+const HANDOVER_WAIT_CAP_S = 30;
+function _isHandover(r) {
+  return !!r && _blankPath(r.path) && (r.status === 'handover_pending' || (typeof r.error === 'string' && r.error.indexOf('handover_pending') !== -1));
+}
+let reply;
+for (let attempt = 1; attempt <= HANDOVER_MAX_ATTEMPTS; attempt++) {
+  // Trap: a headless runner supplies engineOp and calls the op in-process; the agent relay is the harness path.
+  reply = typeof engineOp === 'function'
+    ? await engineOp(EMIT_OP, { paramsFile: PARAMS_FILE })
+    : await agent(
+      EMIT_PROMPT,
+      { label: 'deferred-emit', phase: 'emit', agentType: 'coordinator:op-relay', model: 'haiku', effort: 'low', schema: EMIT_SCHEMA },
+    );
+  if (!_isHandover(reply) || attempt === HANDOVER_MAX_ATTEMPTS) break;
+  const waitS = (typeof reply.retry_after === 'number' && reply.retry_after > 0) ? Math.min(reply.retry_after, HANDOVER_WAIT_CAP_S) : HANDOVER_WAIT_FALLBACK_S;
+  await new Promise((res) => setTimeout(res, waitS * 1000));
+}
 if (!reply || _blankPath(reply.path)) {
-  return { status: 'emit_refused', error: (reply && reply.error) || 'the deferred emit returned no script path' };
+  return { status: 'emit_refused', error: (reply && reply.error) || (_isHandover(reply) ? 'handover_pending persisted across ' + HANDOVER_MAX_ATTEMPTS + ' emit attempts' : 'the deferred emit returned no script path') };
 }
 // Trap: the relay re-serializes the reply path, so a Windows path can arrive with doubled backslashes or repo-relative.
 const norm = reply.path.replace(/\\/g, '/').replace(/\/{2,}/g, '/');

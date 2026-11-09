@@ -8,6 +8,7 @@ import os
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit import launcher_staged_twin as twin
 from coordinator_core.ops.dispatch_emit import nested_run_contract as nrc
 
@@ -98,9 +99,24 @@ def test_absent_scratch_script_stages_from_the_run_dirs_kept_composed_script(tmp
     kept = tmp_path / "state" / "warp" / "run1" / hrb.COMPOSED_SCRIPT_FILE
     kept.parent.mkdir(parents=True)
     kept.write_text(SCRIPT, encoding="utf-8")
+    hrr.write(kept.parent, {"schema": hrr.SCHEMA, "fingerprint": {"engine_sha": hrr.engine_sha()}})
     rel = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", RAW, HANDLE, max_bytes=CAP, refuse=ValueError)
     assert rel == nrc.staged_twin_rel("run1", SHA)
     assert "const _STAGED_INLINE = " in _twin_path(tmp_path).read_text(encoding="utf-8")
+
+
+@pytest.mark.twin_needs_script
+def test_kept_script_composed_by_another_engine_is_rebuilt(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halt_resume_build as hrb
+
+    kept = tmp_path / "state" / "warp" / "run1" / hrb.COMPOSED_SCRIPT_FILE
+    kept.parent.mkdir(parents=True)
+    kept.write_text(SCRIPT, encoding="utf-8")
+    hrr.write(kept.parent, {"schema": hrr.SCHEMA, "fingerprint": {"engine_sha": "0" * 40}})
+    built = []
+    monkeypatch.setattr(hrb, "build", lambda root, run_id: built.append(run_id))
+    hrb.recompose_script(tmp_path, "run1")
+    assert built == ["run1"]
 
 
 @pytest.mark.twin_needs_script

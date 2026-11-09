@@ -919,7 +919,14 @@ def _record_ledger(worktree_root: Path, paths: list, sha: str, message: str) -> 
     # Line-anchored read of the raw message that became the commit object, so a demoted
     # `Closes:` still records (C1's contract).
     closes, reverts_sha = extract_closure_facts_from_text(message)
-    record_ledger_entry(worktree_root, paths, sha, closes=closes, reverts_sha=reverts_sha)
+    # The message is the committed fact. An explicit session_id supplied to commit_v2
+    # has already been applied here, even when no ambient session environment exists.
+    from coordinator_core.git.commit_trailers import _extract_trailer_block
+
+    committer = next((line.partition(":")[2].strip() for line in _extract_trailer_block(message)
+                      if line.partition(":")[0].lower() == "session-id"), "")
+    record_ledger_entry(worktree_root, paths, sha, committer_id_override=committer or None,
+                        closes=closes, reverts_sha=reverts_sha)
 
 
 REPLY_LIST_CAP = 20
@@ -951,6 +958,10 @@ def cap_reply(result: dict) -> dict:
 
 @register_op("ceremony.commit_v2")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    from coordinator_core.ops.workflow_fire.finalizer import require_session
+    finalizer_sid = require_session(params)
+    if finalizer_sid is not None:
+        params = {**params, 'session_id': finalizer_sid}
     from coordinator_core import ipc
 
     ledger = PhaseLedger(corr_id=ipc.current_corr_id())
@@ -1488,6 +1499,20 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                     checkpoint_withheld = sorted({*checkpoint_withheld, *foreign_new})
                     for p in foreign_new:
                         checkpoint_reasons.setdefault(p, "new file holds content no run baseline attributes to this run")
+            # A row's tests never land without the row's withheld code.
+            paired = set(checkpoint_hunks.tests_of_withheld_code(
+                worktree_root, message, [*raw_paths, *raw_deleted, *raw_untracked], checkpoint_withheld,
+            ))
+            if paired:
+                raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in paired]
+                raw_deleted = [p for p in raw_deleted if p.replace("\\", "/") not in paired]
+                raw_untracked = [p for p in raw_untracked if p.replace("\\", "/") not in paired]
+                for p in list(expectations["supplied_blobs"]):
+                    if p.replace("\\", "/") in paired:
+                        del expectations["supplied_blobs"][p]
+                checkpoint_withheld = sorted({*checkpoint_withheld, *paired})
+                for p in paired:
+                    checkpoint_reasons.setdefault(p, "test of a row whose code is withheld: the row lands whole or waits")
         if not (raw_paths or raw_deleted or raw_untracked):
             return _error(
                 "every checkpoint path holds hunks outside this run or the run is unresolved, nothing to commit: "
@@ -1627,6 +1652,12 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
 
     # A FIELD IS NOT A SIGNAL: a commit that sets one side aside still owes the operator a warning.
     warnings = []
+    from coordinator_core.git.agent_provenance import admission_advisory, detect_caller_agent_provenance
+    import os
+
+    agent_advisory = admission_advisory(worktree_root, detect_caller_agent_provenance(os.environ))
+    if agent_advisory:
+        warnings.append(agent_advisory)
     if dropped_ignored:
         shown = ", ".join(dropped_ignored[:5]) + (", ..." if len(dropped_ignored) > 5 else "")
         warnings.append(

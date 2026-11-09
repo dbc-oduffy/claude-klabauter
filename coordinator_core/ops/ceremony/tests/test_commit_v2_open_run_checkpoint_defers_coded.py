@@ -26,7 +26,7 @@ def _git(repo, *args):
 
 def _plan_text() -> str:
     body = "".join(
-        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - some/{i}.py\n"
+        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - {_PRODUCT}\n"
         for i in ("C1", "C2")
     )
     return f"---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"

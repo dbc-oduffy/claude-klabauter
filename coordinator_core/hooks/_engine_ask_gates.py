@@ -91,6 +91,7 @@ def submit_ask(
     cwd: Optional[str] = None,
     repo: Optional[str] = None,
     agent_id: Optional[str] = None,
+    require_em: bool = False,
     extras: Optional[Mapping[str, Any]] = None,
     evaluate: Optional[EvaluateFn] = None,
 ) -> dict:
@@ -117,6 +118,13 @@ def submit_ask(
         return _refused("bad-request", "caller is required.")
     if where is None or not Path(where).is_absolute() or not Path(where).is_dir():
         return _refused("bad-request", f"cwd must be an absolute existing directory; got {cwd!r}.")
+
+    if require_em:
+        from coordinator_core.ops.workflow_fire.authority import require_submission_em
+
+        reason = require_submission_em(session, where)
+        if agent_id or reason:
+            return _refused("gate-refused", reason or "A subagent cannot submit a new root workflow.")
 
     payload: dict = {
         "tool_name": "Workflow",

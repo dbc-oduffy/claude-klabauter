@@ -175,3 +175,9 @@ def test_all_three_call_sites_route_through_harness_process_comm():
         assert "_harness_process_comm(" in source, (
             f"{name} does not route through _harness_process_comm"
         )
+
+
+def test_codex_exact_harness_name():
+    assert core._is_harness_process("codex") is True
+    assert core._is_harness_process("codex-helper") is False
+    assert core._is_harness_process("Codex") is False

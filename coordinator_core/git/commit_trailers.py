@@ -111,8 +111,8 @@ def _resolve_git_dir(cwd: Union[str, Path]) -> str:
 
 def _resolve_session_id(git_dir: str) -> str:
     """Delegates to ``coordinator_core.session.core.resolve_session_id``
-    (KS-6, 2026-08-07): the full 3-tier ``SESSION_ENV_PRECEDENCE`` ladder
-    (``COORDINATOR_SESSION_ID``, ``CLAUDE_SESSION_ID``,
+    (KS-6, 2026-08-07): the ``SESSION_ENV_PRECEDENCE`` ladder
+    (``COORDINATOR_SESSION_ID``, ``CODEX_THREAD_ID``, ``CLAUDE_SESSION_ID``,
     ``CLAUDE_CODE_SESSION_ID``), widened from the prior 2-tier (legacy env
     -> platform env) chain to match the canonical reference -- see
     ``SESSION_ENV_PRECEDENCE``'s own docstring for the prior break-class
@@ -175,27 +175,20 @@ def _resolve_content_root() -> str:
     return read_pointer_files(os.path.expanduser("~"))
 
 
-#: The one attribution line the engine stamps. Deliberately model-free: a
-#: model name is what a dispatched commit agent got wrong (klabauter#67), and
-#: some repos forbid model identifiers in commit messages outright.
+#: Legacy Claude default retained for consumers importing this compatibility
+#: constant. Runtime commits resolve their own caller via provider_attribution.
 ATTRIBUTION_TRAILER_VALUE = "Claude <noreply@anthropic.com>"
 
 _CO_AUTHORED_BY_ADDRESS_RE = re.compile(r"<([^<>]+)>\s*$")
 
 
-def _reconcile_anthropic_co_authored_by(commit_msg_file: Union[str, Path]) -> bool:
-    """Make `ATTRIBUTION_TRAILER_VALUE` the only `noreply@anthropic.com`
-    `Co-Authored-By:` line in `commit_msg_file`'s trailer block (see
-    `_extract_trailer_block`). Returns True iff it is already there, so the
-    caller must not append another.
+def _reconcile_provider_co_authored_by(commit_msg_file: Union[str, Path], value: str) -> bool:
+    """Keep one model-free attribution for the selected provider address.
 
-    Any other Anthropic-addressed line -- a model-named one written by a
-    caller or a dispatched agent -- is removed from the file in place, with
-    its continuation lines, so the engine's line replaces it. Lines for other
-    addresses are never touched.
-
-    Any read or write failure -> True: never risk a duplicate, never block a
-    commit."""
+    Replace model-specific or duplicate lines for this provider only;
+    preserve other contributors and their continuation lines. A read/write
+    failure returns True so attribution can never block or duplicate a commit.
+    """
     try:
         with open(commit_msg_file, encoding="utf-8") as fh:
             text = fh.read()
@@ -223,9 +216,9 @@ def _reconcile_anthropic_co_authored_by(commit_msg_file: Union[str, Path]) -> bo
         if (
             line.lower().startswith("co-authored-by:")
             and match
-            and match.group(1).strip().casefold() == "noreply@anthropic.com"
+            and match.group(1).strip().casefold() == value.rsplit("<", 1)[-1].rstrip(">")
         ):
-            if line.split(":", 1)[1].strip() == ATTRIBUTION_TRAILER_VALUE and not present:
+            if line.split(":", 1)[1].strip() == value and not present:
                 present = True
             else:
                 dropping = True
@@ -1401,13 +1394,13 @@ def compute_missing_trailer_args(
             if deliverable_id:
                 trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
 
-    # Co-Authored-By is NOT gated on the UUID check above: it is constant and
-    # owed on every commit. PM ruling (state/cross-repo/inbox/2026-09-23-
-    # example-game-repo-em-commit-trailers-owned-by-engine.md): every trailer is the
-    # engine's to attach, never a caller's boilerplate to remember. May
-    # mutate `commit_msg_file` -- see `_reconcile_anthropic_co_authored_by`.
-    if not _reconcile_anthropic_co_authored_by(commit_msg_file):
-        trailer_args += ["--trailer", f"Co-Authored-By: {ATTRIBUTION_TRAILER_VALUE}"]
+    # Attribution is caller-owned and independent of Session-Id resolution.
+    # Missing warm identity omits attribution instead of naming the daemon.
+    from coordinator_core.git.provider_attribution import attribution_value
+
+    attribution = attribution_value()
+    if attribution and not _reconcile_provider_co_authored_by(commit_msg_file, attribution):
+        trailer_args += ["--trailer", f"Co-Authored-By: {attribution}"]
 
     return trailer_args
 
@@ -1803,6 +1796,14 @@ def apply_missing_trailers(
     import tempfile
 
     from coordinator_core.temp_layout import managed_tempdir
+    from coordinator_core.git.agent_provenance import (
+        TRAILER_KEYS, detect_caller_agent_provenance, emitted_provenance_trailers, strip_agent_trailers,
+    )
+
+    # Both supported commit routes share this applier. Agent attribution is computed
+    # by the engine, never accepted from message text (including on Claude's path).
+    message = strip_agent_trailers(message)
+    provenance = detect_caller_agent_provenance(os.environ)
 
     fd, msg_path = tempfile.mkstemp(prefix="commit-trailers-stage-", dir=managed_tempdir())
     try:
@@ -1831,10 +1832,14 @@ def apply_missing_trailers(
         except OSError:
             pass
 
-    if not trailer_args:
-        return message
-
     values = trailer_values_from_argv(trailer_args)
+    agent_keys = {key.lower() for key in TRAILER_KEYS}
+    values = [value for value in values if value.partition(":")[0].lower() not in agent_keys]
+    if provenance is not None:
+        values.extend(emitted_provenance_trailers(provenance))
+    if not values:
+        return message
+    trailer_args = [arg for value in values for arg in ("--trailer", value)]
     raw = message.encode("utf-8", errors="surrogateescape")
 
     if can_format_trailers_in_process(raw):

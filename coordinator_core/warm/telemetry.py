@@ -539,12 +539,15 @@ def record_request(
     worker_pid: Optional[int] = None,
     lane: Optional[str] = None,
     dispatch_key: Optional[str] = None,
+    slow_phase: Optional[str] = None,
+    spans: Optional[list] = None,
 ) -> None:
     """Append one request row to the bounded in-memory ring. No I/O, never
     raises; the oldest row is evicted past `REQUEST_TELEMETRY_KEEP`. Keys
     whose value is None are omitted. `worker_pid` is the pool worker that
     ran the request, `lane` the pool lane, `dispatch_key` the pool's
-    in-flight claim key."""
+    in-flight claim key, `slow_phase` the guard or phase that spent the
+    most time and `spans` its per-phase timings (preuse dispatches)."""
     try:
         fields = {
             "op": op,
@@ -558,6 +561,8 @@ def record_request(
             "worker_pid": worker_pid,
             "lane": lane,
             "dispatch_key": dispatch_key,
+            "slow_phase": slow_phase,
+            "spans": spans,
         }
         row = {k: v for k, v in fields.items() if v is not None}
         if enqueue_ts is not None and start_ts is not None:

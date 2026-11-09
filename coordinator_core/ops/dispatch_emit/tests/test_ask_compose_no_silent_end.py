@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 
@@ -24,6 +25,8 @@ _TAIL_PREFIXES = (
 _HARNESS = """
 let _halted = null, _commit = null, _runId = 'r', _sizingRel = 's.yaml';
 let _manifest = {}, _planRel = null, _reviewWave = [], _falsifierResult = %s, _deliveryVerdict = %s;
+let _roadmapFan = false, _nextAction = null, _incompleteChunks = [], _blockedChunks = [];
+%s
 %s
 console.log(JSON.stringify(_halted));
 """
@@ -52,8 +55,13 @@ def _tail(script: str) -> str:
     return "\n".join(kept)
 
 
+def _pf_consts(script: str) -> str:
+    # The sliced tail reads the composed script's single-line `const _PF<n> = ...;` string constants.
+    return "\n".join(ln.strip() for ln in script.split("\n") if re.match(r"\s*const _PF\d+ = ", ln))
+
+
 def _drive(script: str, falsifier: dict | None, delivery: dict | None) -> object:
-    program = _HARNESS % (json.dumps(falsifier), json.dumps(delivery), _tail(script))
+    program = _HARNESS % (json.dumps(falsifier), json.dumps(delivery), _pf_consts(script), _tail(script))
     out = subprocess.run(
         ["node", "-"], input=program, capture_output=True, text=True, check=True, **no_console_creationflags()
     ).stdout

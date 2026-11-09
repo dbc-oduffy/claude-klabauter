@@ -62,6 +62,17 @@ def test_publish_leg_stamps_a_twelve_hex_source_sha():
     assert _STAMP.fullmatch(suffix).group(1) == _PIN[:12]
 
 
+def test_publish_leg_stamps_from_the_source_ref_override(monkeypatch):
+    monkeypatch.setattr(publish, "_source_ref_override", _PIN)
+    suffix = publish._source_sha_suffix()
+    assert _STAMP.fullmatch(suffix).group(1) == _PIN[:12]
+
+
+def test_round_leg_stamps_the_same_shape_as_the_override_leg(monkeypatch):
+    monkeypatch.setattr(publish, "_source_ref_override", _PIN)
+    assert round_mod._source_sha_suffix(_PIN) == publish._source_sha_suffix()
+
+
 def test_publish_leg_without_a_pin_does_not_resolve_a_fresh_head():
     assert publish._source_sha_suffix() == ""
 

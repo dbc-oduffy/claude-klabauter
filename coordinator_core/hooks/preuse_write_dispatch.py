@@ -69,7 +69,9 @@ import sys
 
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.bash_guards._advisory_dedupe import gate_once_per_session
+from coordinator_core.bash_guards.leg_attribution import leg
 from coordinator_core.hooks._envelope import no_advisory
+from coordinator_core.hooks._preuse_phases import DeadlineStop, run_phased
 from coordinator_core.ipc import register_op
 from coordinator_core.write_guards.engine import evaluate
 
@@ -83,10 +85,19 @@ def _compose_skipped_guard_breadcrumb(skipped: "list[str]") -> str:
 
 @register_op("hooks.preuse_write_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
-    params = payload_of(params)
+    """Run `_run_chain` under `run_phased`: phases and guards are named on the request row and
+    a dispatch past the hook deadline answers `no_advisory()`."""
+    return run_phased("hooks.preuse_write_dispatch", params, _run_chain)
+
+
+def _run_chain(params: dict) -> dict:
+    with leg("payload_of"):
+        params = payload_of(params)
     skipped: list[str] = []
     try:
         out = evaluate(params, skipped_out=skipped)
+    except DeadlineStop:
+        raise
     except Exception:
         return no_advisory()
 
@@ -101,5 +112,6 @@ def _handler(params: dict, repo_root=None) -> dict:
     # evaluate() (non-aggregate) returns the single first-matching envelope, so gating it whole
     # silences no other guard's advisory; keyed by dispatcher name + envelope text shape.
     if isinstance(out, dict):
-        return gate_once_per_session("preuse_write_dispatch", out, params)
+        with leg("dedupe"):
+            return gate_once_per_session("preuse_write_dispatch", out, params)
     return out

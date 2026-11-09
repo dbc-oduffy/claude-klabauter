@@ -704,15 +704,17 @@ def mark_superseded(record_dir: Path, expected: dict, evidence: dict, dispositio
     return True
 
 
-def mark_landed(record_dir: Path, sha: str) -> bool:
+def mark_landed(record_dir: Path, sha: str, *, without_verdict: bool = False) -> bool:
     """Rewrite a `halted` or `resumed` marker as `landed` at `sha`; False and no write for any other status.
 
     A `landed` marker is skipped by `halted_run_for` / `halted_ask_run_for`, so a refire no longer resumes it.
+    `without_verdict` stamps `landed_without_verdict: true`; the default writes no such key.
     """
     marker = _read(Path(record_dir))
     if marker is None or marker.get("status") not in (STATUS_HALTED, STATUS_RESUMED):
         return False
-    _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha})
+    extra = {"landed_without_verdict": True} if without_verdict else {}
+    _write(Path(record_dir), {**marker, "status": STATUS_LANDED, "sha": sha, **extra})
     _index_call("remove_run", record_dir)
     _live_index_drop(record_dir)
     stamp_run_stage_at(Path(record_dir), "landed")

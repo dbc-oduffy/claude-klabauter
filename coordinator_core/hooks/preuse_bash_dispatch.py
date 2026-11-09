@@ -83,6 +83,7 @@ import time
 from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.bash_guards.leg_attribution import leg
 from coordinator_core.hooks._envelope import allow_advisory, context_only, deny, no_advisory, payload_of
+from coordinator_core.hooks._preuse_phases import DeadlineStop, check_deadline, run_phased
 from coordinator_core.ipc import register_op
 from coordinator_core.telemetry import op_row_fields
 
@@ -162,22 +163,24 @@ def _prefire_deny(params: dict) -> dict | None:
 
 @register_op("hooks.preuse_bash_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
-    """Run `_run_chain` under leg attribution and attach `legs` / `handler_thread_ms`
-    to this call's process_time row (`op_row_fields`; a no-op when no row is bound)."""
-    params = payload_of(params)
-    token = leg_attribution.begin()
+    """Run `_run_chain` under `run_phased` (`slow_phase` / `spans`, deadline stop) and attach
+    `legs` / `handler_thread_ms` to this call's process_time row (`op_row_fields`; a no-op
+    when no row is bound)."""
+    return run_phased("hooks.preuse_bash_dispatch", params, _timed_chain)
+
+
+def _timed_chain(params: dict) -> dict:
     t0 = time.thread_time()
     try:
+        with leg("payload_of"):
+            params = payload_of(params)
         return _run_chain(params)
     finally:
-        try:
-            fields = {"handler_thread_ms": round((time.thread_time() - t0) * 1000.0, 1)}
-            legs = leg_attribution.summary()
-            if legs:
-                fields["legs"] = legs
-            op_row_fields.attach(**fields)
-        finally:
-            leg_attribution.end(token)
+        fields = {"handler_thread_ms": round((time.thread_time() - t0) * 1000.0, 1)}
+        legs = leg_attribution.summary()
+        if legs:
+            fields["legs"] = legs
+        op_row_fields.attach(**fields)
 
 
 def _run_chain(params: dict) -> dict:
@@ -213,17 +216,22 @@ def _run_chain(params: dict) -> dict:
         return _cannot_evaluate(params, exc, "import")
 
     try:
-        with leg("prelude"):
+        with leg("serialize"):
             raw = json.dumps(params)
+        with leg("policy_file"):
             policy_file = _policy_file_for(params)
+        with leg("engine_resolution"):
             resolution_class = _engine_resolution_class()
         out = evaluate_payload_json(raw, policy_file=policy_file, resolution_class=resolution_class)
+    except DeadlineStop:
+        raise
     except Exception as exc:
         return _cannot_evaluate(params, exc, "evaluate")
 
     with leg("render"):
         if _is_deny(out):
             return out
+        check_deadline("prefire_survey")
         guard_deny = _prefire_deny(params)
         if guard_deny:
             return guard_deny

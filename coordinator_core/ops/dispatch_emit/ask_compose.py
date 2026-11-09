@@ -192,6 +192,7 @@ from coordinator_core.ops.dispatch_emit.requirements_ledger import (
 from coordinator_core.ops.dispatch_emit.sizing_fire import (
     ARM_M_PLUS,
     ARM_ROADMAP,
+    ARM_ROUTE,
     ARM_S,
     ARM_XS,
     SizingFireRefused,
@@ -1450,9 +1451,6 @@ def _test_instruction_js(review_edits_base: str, repo_root: Optional[str] = None
         f"]; it returns a candidate commit sha. Run every scoped test target in the working tree with "
         f"{MEASURED_REV_ENV} set to that sha in the test process environment. "
         "If the op refuses, report the refusal as a red verify result; never fall back to the working tree. "
-        "Then run `python -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id ",
-        "js:_runId",
-        "` once: it writes the clean-overlay verdict the landing reads; report its exit code (1 is a red). ",
         "Run the scoped test targets: [",
         "js:(_manifest.test_targets ?? []).join(', ')",
         "]. "
@@ -2090,6 +2088,46 @@ def _verify_call(
     )
 
 
+OVERLAY_VERIFY_LABEL = "overlay-verify"
+_OVERLAY_VERIFY_MODULE = "coordinator_core.ops.dispatch_emit.clean_overlay_verify"
+_OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail": {"type": ["string", "null"]}})
+
+
+def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
+    """The verify stage's deterministic overlay step: one mechanical leg that runs the producer, which
+    writes `overlay-verdict.json` beside the run's `measured-rev.json` for `dispatch.land_run` to read.
+
+    Runs after the verify leg's measured-rev call has written its record. Exit 0 is green, 1 red (the
+    stage folds it into the test result as a failure), 2 inconclusive or no measured-rev record (evidence,
+    never a stage failure)."""
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nRun exactly this one command as its own Bash call, "
+        "no wrapper, no edit to it, and do not retry it:\n\n"
+        f"python -m {_OVERLAY_VERIFY_MODULE} --run-id {run_id} --repo-root {Path(repo_root).as_posix()}"
+        "\n\nReturn its exit code as `exit_code` and the last output line as `detail`. Run nothing else.",
+    )
+    return _agent(
+        prompt, label=OVERLAY_VERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
+        schema=_OVERLAY_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+    )
+
+
+_OVERLAY_FOLD_JS = (
+    "    if (!_halted && _testWanted && _verify && _verify.test) {\n"
+    "      let _ov = null;\n"
+    "      try { _ov = await __OVERLAY__; } catch (e) { const _m = String((e && e.message) ?? e); "
+    "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('overlay-verify leg threw: ' + _m); } }\n"
+    "      if (_ov && _ov.exit_code === 1) {\n"
+    "        const _t = _verify.test;\n"
+    "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
+    "summary: String('clean-overlay verdict red: ' + (_ov.detail ?? '') + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
+    "      } else if (_ov && _ov.exit_code !== 0) {\n"
+    "        log('overlay verdict inconclusive (exit ' + _ov.exit_code + '): ' + String(_ov.detail ?? ''));\n"
+    "      }\n"
+    "    }"
+)
+
+
 _JUDGE_SCHEMA_VAR = "_JUDGE_SCHEMA"
 
 
@@ -2127,6 +2165,7 @@ _LEDGER_RECOVER_JS = r"""
     const _recoveryCap = __CAP__;
     const _fpPosix = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
     const _fpOwns = (r, p) => (r.writes ?? []).map(_fpPosix).includes(p) || (r.writes_under ?? []).some((d) => p.startsWith(_fpPosix(d).replace(/\/+$/, '') + '/'));
+    const _ownReport = (cid, p) => p.startsWith('.coordinator-local/subagent-share/dispatch-reports/') && p.split('/').pop() === String(cid) + '.md';
     const _fpOf = (row, failed) => {
       const out = [];
       const own = failed.map((t) => _fpPosix(String(t).split('::')[0])).filter((f) => _fpOwns(row, f));
@@ -2196,7 +2235,7 @@ _LEDGER_RECOVER_JS = r"""
           const st = rec[cid]; const r = fixed[k]; st.attempts = attempt;
           if (!r || typeof r !== 'object') { st.last_reason = 'fix leg returned no result'; return; }
           const row = rowOf(cid);
-          const outside = (Array.isArray(r.paths) ? r.paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p));
+          const outside = (Array.isArray(r.paths) ? r.paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p) && !_ownReport(cid, p));
           const blockedNeeds = r.status === 'BLOCKED' ? (Array.isArray(r.needs_paths) ? r.needs_paths : []).map(_fpPosix).filter((p) => !st.footprint.includes(p) && !_fpOwns(row, p)) : [];
           if (outside.length || blockedNeeds.length) st.paths = [...new Set([...st.paths, ...outside, ...blockedNeeds])];
           st.last_reason = String(r.reason ?? '');
@@ -2371,6 +2410,8 @@ _REMNANT_COMPLETE_JS = r"""
         ...(_manifest.doc_writes ?? []).map(_fpP),
       ])];
       const inFootprint = (p) => footprint.some((f) => (f.endsWith('/') ? p.startsWith(f) : f === p));
+      const _ownRows = (_manifest.rows ?? []).filter((r) => rmItems.some((i) => (i.paths ?? []).some((q) => (r?.writes ?? []).map(_fpP).includes(_fpP(q)))));
+      const _ownReport = (p) => p.startsWith('.coordinator-local/subagent-share/dispatch-reports/') && _ownRows.some((r) => p.split('/').pop() === String(r.id) + '.md');
       const itemsText = JSON.stringify(rmItems);
       const fpText = JSON.stringify(footprint);
       const rec = { field: 'remnant', loop_owner: 'engine', cap: __CAP__, items: rmItems.map((i) => ({ kind: i.kind, id: i.id })), footprint, status: 'open', paths: [], last_reason: '' };
@@ -2383,7 +2424,7 @@ _REMNANT_COMPLETE_JS = r"""
       if (_halted) return;
       if (!leg || typeof leg !== 'object') { rec.status = 'blocked'; rec.last_reason = 'remnant leg returned no result'; }
       else {
-        const outside = (Array.isArray(leg.paths) ? leg.paths : []).map(_fpP).filter((p) => !inFootprint(p));
+        const outside = (Array.isArray(leg.paths) ? leg.paths : []).map(_fpP).filter((p) => !inFootprint(p) && !_ownReport(p));
         rec.last_reason = String(leg.reason ?? '');
         if (outside.length) { rec.paths = outside; rec.status = 'blocked'; rec.last_reason = 'remnant wrote outside the footprint: ' + outside.join(', '); }
         else if (leg.status === 'BLOCKED') rec.status = 'blocked';
@@ -4369,6 +4410,10 @@ def compose_ask_script(
             b.append("  }")
 
     b.append("  phase('gate');")
+    _arms_js = (
+        f"(_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
+        f"|| _gate.resume_ready || _gate.{RESUME_LEDGER_KEY})"
+    )
     if sized_in_run:
         # The scout's closing acts ran the gate; a failed assemble leaves nothing to carry.
         b.append(
@@ -4382,6 +4427,37 @@ def compose_ask_script(
             f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null, "
             f"{_ROUTE_VERDICT_KEY}: _scouted.{_ROUTE_VERDICT_KEY} ?? null, chain_emit: _scouted.chain_emit ?? null }}"
             + (")" if launcher_child else "") + ";"
+        )
+        # A clean assemble whose scout left the gate unanswered: a known (route, tshirt) yields its arm
+        # from values in hand (XS also needs the footprint the gate would otherwise refuse on); only an
+        # unmapped pair runs the gate agent, once. A derived arm skips the agent's stage fold, so the
+        # stage runs as its own leg (`_fold_decline_js`), and its baton falls back to the static one.
+        _derive_table = {ARM_ROUTE[a]: {"tshirt": t, "arm": a} for a, t in ((ARM_XS, "XS"), (ARM_S, "S"))}
+        b.append(
+            "  // no-arm-recovery:begin\n"
+            f"  if (!_halted && {_NO_RESUME} && _scouted?.exit_code === 0 && !_gate.arm && !_gate.halt) {{\n"
+            f"    const _derive = {json.dumps(_derive_table, sort_keys=True)}[_gate.route];\n"
+            f"    if (_derive && _derive.tshirt === _gate.tshirt && (_derive.arm !== {_lit(ARM_XS)} || _writes.length)) "
+            "{ _gate = { ..._gate, arm: _derive.arm, derived: true }; }\n"
+            "  }\n"
+            f"  if (!_halted && {_NO_RESUME} && _scouted?.exit_code === 0 && !_gate.arm && !_gate.halt) {{\n"
+            f"    const _recoveredGate = await {_gate_agent_call('gate', 'gate', stage_act=True)};\n"
+            "    const _rArm = typeof _recoveredGate?.arm === 'string' ? _recoveredGate.arm.trim().toLowerCase() : null;\n"
+            "    _gate = { ..._gate, recovered: true, arm: _rArm, halt: _recoveredGate?.halt ?? null, "
+            "baton: _recoveredGate?.baton ?? null, tshirt: _recoveredGate?.tshirt ?? _gate.tshirt, "
+            "route: _recoveredGate?.route ?? _gate.route, resume_plan: _recoveredGate?.resume_plan ?? null, "
+            "resume_rows: _recoveredGate?.resume_rows ?? null, resume_ledger: _recoveredGate?.resume_ledger ?? null, "
+            "pending_rulings: _recoveredGate?.pending_rulings ?? null, resume_ready: _recoveredGate?.resume_ready ?? null, "
+            "resume_phases: _recoveredGate?.resume_phases ?? null, spine_plan: _recoveredGate?.spine_plan ?? null, "
+            f"{DESIGN_BRIEF_KEY}: _recoveredGate?.{DESIGN_BRIEF_KEY} ?? null, "
+            f"{DESIGN_ROUTE_KEY}: _recoveredGate?.{DESIGN_ROUTE_KEY} ?? _gate.{DESIGN_ROUTE_KEY} ?? null, "
+            f"{_ROUTE_VERDICT_KEY}: _recoveredGate?.{_ROUTE_VERDICT_KEY} ?? null, chain_emit: _recoveredGate?.chain_emit ?? null }};\n"
+            + (
+                f"    if (!_gate.halt && {_arms_js}) {{ await _adoptStageReply(_recoveredGate?.stage_reply); }}\n"
+                if fold_stage
+                else ""
+            )
+            + "  }\n  // no-arm-recovery:end"
         )
         if fold_falsifier:
             b.append("  let _scoutFalsifier = null;")
@@ -4411,10 +4487,7 @@ def compose_ask_script(
     if fold_stage:
         # Adopted only under the plan folds' guard (rows array, no error), for the arms the act covers.
         clean_js = "(_scoutClean || _rewordStaged)" if sized_in_run else "!_gate.halt"
-        arms_js = (
-            f"(_gate.arm === {_lit(ARM_XS)} || (_gate.arm === {_lit(ARM_S)} && _gate.resume_plan) "
-            f"|| _gate.resume_ready || _gate.{RESUME_LEDGER_KEY})"
-        )
+        arms_js = _arms_js
         if sized_in_run:
             b.append(
                 "  _legacyStageReply(_scouted);\n"
@@ -4576,7 +4649,14 @@ def compose_ask_script(
     # always carries a non-empty reason, and a no-arm reply with no halt says so.
     _gate_reason_js = (
         "reason: String((_gate.halt && _gate.halt.reason) || (_gate.halt ? 'the gate halted ('"
-        " + _gate.halt.kind + ') without a reason' : 'the gate returned no arm and no halt'"
+        " + _gate.halt.kind + ') without a reason' : "
+        + (
+            "(_gate.recovered ? 'the gate agent also returned no arm and no halt for the written sizing ' + _sizingRel + "
+            f"'; a refire would not change that: run `{OP_ASK_GATE}` on it directly and report the reply as a gate defect' : "
+            if sized_in_run
+            else "("
+        )
+        + "'the gate returned no arm and no halt; refire to re-run the gate: ' + " + _refire_js(sizing_rel) + ")"
         + (
             " + (_scouted && String(_scouted.stdout ?? '').trim() ? ' (scout stdout: ' + "
             "String(_scouted.stdout).trim().slice(0, 200) + ')' : '')"
@@ -5772,6 +5852,9 @@ def compose_ask_script(
         "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : _joinReverify()]);",
         "    _reverifyJoined = true;",
         "    if (!_halted && !_reviewReused && _reviewReverify && ((Array.isArray(_reviewReverify.unapplied) && _reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }",
+        _OVERLAY_FOLD_JS.replace(
+            "__OVERLAY__", _overlay_verify_call(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id)
+        ),
         f"    if (_testWanted && _verify && _verify.test) {{ {_emit._TEST_RESULT_VAR} = _verify.test; }}",
         *(
             [

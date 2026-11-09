@@ -425,6 +425,29 @@ def _replay_op_name(msg: dict) -> Any:
     return method
 
 
+def _classified_op_name(msg: dict) -> Any:
+    """The name `_op_may_mutate` classifies for a frame: the op it runs, not its wrapper.
+
+    A door-form frame answers `_replay_op_name(msg)`. An entrypoint frame answers
+    `<entrypoint with - as _>.<argv[0]>`, the subcommand slot the entrypoint's `main` reads;
+    an empty or non-str `argv[0]` answers the wrapper method. Any other frame answers its method.
+    """
+    method = msg.get("method")
+    if method != "invoke.from_argv":
+        return method
+    params = msg.get("params")
+    if not isinstance(params, dict):
+        return method
+    entrypoint = params.get("entrypoint")
+    if not entrypoint:
+        return _replay_op_name(msg)
+    argv = params.get("argv")
+    sub = argv[0] if isinstance(argv, list) and argv else None
+    if not isinstance(entrypoint, str) or not isinstance(sub, str) or not sub:
+        return method
+    return entrypoint.replace("-", "_") + "." + sub
+
+
 _STAGE_LEG_OPS = frozenset({"dispatch.ask_stage", "dispatch.ask_gate"})
 
 
@@ -1692,7 +1715,7 @@ def _try_warm_dispatch_inner(
                 # mutation it asks the wrong question: the server is not wedged,
                 # it is WORKING. Keep waiting on the SAME read (never a second
                 # request) up to the mutation's own deadline.
-                if not _op_may_mutate(msg.get("method")):
+                if not _op_may_mutate(_classified_op_name(msg)):
                     _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
                     return None
                 mutation_deadline = _mutation_deadline_for(msg.get("method"))
@@ -1728,7 +1751,7 @@ def _try_warm_dispatch_inner(
                         waited_secs=time.monotonic() - delivered_at,
                     )
         except BrokenPipeError:
-            if delivered and _op_may_mutate(msg.get("method")):
+            if delivered and _op_may_mutate(_classified_op_name(msg)):
                 return _indeterminate_envelope(
                     msg,
                     "pipe broke after delivery",
@@ -1753,7 +1776,7 @@ def _try_warm_dispatch_inner(
         # branch below for the evidence that separates them.
         def _cold_or_indeterminate(detail: str):
             global _last_cold_bucket
-            if _op_may_mutate(msg.get("method")):
+            if _op_may_mutate(_classified_op_name(msg)):
                 return _indeterminate_envelope(msg, detail, dispatch_key)
             _last_cold_bucket = COLD_BUCKET_DRAIN_WINDOW_ZERO_BYTE_CLOSE
             return None

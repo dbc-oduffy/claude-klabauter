@@ -82,6 +82,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     reverify_record,
     reverify_red_findings,
     reverify_verdict,
+    sidecar_base_red,
     targeted_set,
     targeted_test_verdict,
 )
@@ -631,7 +632,7 @@ def _landing_test_gate(
             return findings, check
         if check != "failed" or verdict.get("baseline"):
             return findings, check
-        if nodes and set(nodes) <= base_red_ids(params):
+        if nodes and set(nodes) <= (base_red_ids(params) | sidecar_base_red(worktree_root, params)):
             attributed = GateFindings()
             attributed.foreign_evidence = {n: [FAILING_AT_BASE] for n in nodes}
             return attributed, "pre-existing-only"
@@ -648,11 +649,36 @@ def _landing_test_gate(
                     f"re-run: {retest_remedy(params, [f])}")
             for f in files
         ], "failed"
+    sidecar_red = sidecar_base_red(worktree_root, params)
+    sidecar_red = sidecar_red | _base_measured_foreign(worktree_root, params, run_id, fresh)
     findings, check = failed_targeted_tests(
-        fresh, retest_remedy(params), cleared=base_red_cleared(worktree_root, params, fresh))
+        fresh, retest_remedy(params), cleared=base_red_cleared(worktree_root, params, fresh) | sidecar_red)
     if check == "pass" and fresh.get("status") == "pass" and _ran_zero_int(fresh.get("tests_run")):
         return [_ran_zero_finding(params)], "failed"
+    if check == "pre-existing-only" and sidecar_red:
+        base = fresh.get("baseline") if isinstance(fresh.get("baseline"), Mapping) else {}
+        named = {
+            str(i.get("id") if isinstance(i, Mapping) else i)
+            for key in ("pre_existing", "foreign", "unverified") for i in (base.get(key) or [])
+        } & sidecar_red
+        if named:
+            attributed = GateFindings(findings)
+            attributed.foreign_evidence = {n: [FAILING_AT_BASE] for n in sorted(named)}
+            return attributed, check
     return findings, "pass-on-retest" if check == "pass" else check
+
+
+def _base_measured_foreign(
+    worktree_root: Path, params: Mapping, run_id: Optional[str], fresh: Mapping
+) -> set[str]:
+    """``baseline.foreign`` ids of an engine-written record whose ``baseline.base_sha`` is the run base:
+    red when measured at the run base. Empty for a record without ``base_sha`` or measured elsewhere.
+    Never spawns."""
+    base = fresh.get("baseline")
+    sha = base.get("base_sha") if isinstance(base, Mapping) else None
+    if not (isinstance(sha, str) and sha and sha == run_base_for(worktree_root, run_id, params)):
+        return set()
+    return {str(i.get("id") if isinstance(i, Mapping) else i) for i in (base.get("foreign") or [])}
 
 
 def _not_run_with_cause(note: str) -> GateFindings:

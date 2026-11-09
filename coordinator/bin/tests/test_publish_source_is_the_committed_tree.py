@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -46,6 +47,10 @@ def _git(root: Path, *args: str) -> str:
         text=True,
         creationflags=_NO_WINDOW,
     ).stdout.strip()
+
+
+def _toplevel_key(root: Path) -> str:
+    return str(Path(_git(root, "rev-parse", "--show-toplevel")))
 
 
 @pytest.fixture
@@ -112,6 +117,7 @@ def test_source_ref_override_pins_the_named_commit(repo, monkeypatch):
     _dirty(root)
     pins: dict = {}
 
+    monkeypatch.setattr(publish, "_engine_toplevel_key", lambda: _toplevel_key(root))
     monkeypatch.setattr(publish, "_source_ref_override", "")
     assert publish._round_pin_source_sha(root, pins, out=open(os.devnull, "w", encoding="utf-8")) == second
 
@@ -125,8 +131,34 @@ def test_source_ref_override_pins_the_named_commit(repo, monkeypatch):
     publish._cleanup_shadow_roots((shadow,))
 
 
+def test_root_deleted_from_working_tree_is_present_in_the_committed_tree(repo):
+    root, _first, second = repo
+    shutil.rmtree(root / "pkg")
+    pins: dict = {}
+
+    assert not (root / "pkg").exists()
+    assert publish._root_present_in_commit(root / "pkg", pins)
+    assert pins[str(root)] == second
+
+    shadow = publish._git_materialize_ref(root / "pkg", ref=second)
+    assert (shadow / "mod.py").read_bytes() == b"VALUE = 2\n"
+    publish._cleanup_shadow_roots((shadow.parent,))
+
+
+def test_root_never_committed_is_absent_even_when_the_working_tree_has_it(repo):
+    root, _first, _second = repo
+    (root / "newdir").mkdir()
+    (root / "newdir" / "file.txt").write_bytes(b"untracked\n")
+
+    assert (root / "newdir").is_dir()
+    assert not publish._root_present_in_commit(root / "newdir", {})
+    assert not publish._root_present_in_commit(root / "absent" / "deeper", {})
+
+
 def test_unresolvable_source_ref_refuses_rather_than_falling_back(repo, monkeypatch):
     root, _first, _second = repo
+    monkeypatch.setattr(publish, "_engine_toplevel_key", lambda: _toplevel_key(root))
     monkeypatch.setattr(publish, "_source_ref_override", "no-such-ref")
+    pinned = publish._round_pin_source_sha(root, {}, out=open(os.devnull, "w", encoding="utf-8"))
     with pytest.raises(publish.GitMaterializeError):
-        publish._round_pin_source_sha(root, {}, out=open(os.devnull, "w", encoding="utf-8"))
+        publish._git_materialize_ref(root, ref=pinned)

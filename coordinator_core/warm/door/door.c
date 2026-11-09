@@ -221,6 +221,13 @@
 #endif
 
 
+#ifndef DOOR_PRIVATE_REQUIRED
+#define DOOR_PRIVATE_REQUIRED 0
+#endif
+#if DOOR_PRIVATE_REQUIRED
+static int private_not_delivered(const char *reason);
+#endif
+
 #define ENGINE_ROOT_SIDECAR_FILENAME L"door.engine-root.txt"
 
 /* Debug/advanced override, checked before the sidecar. Documented in
@@ -1045,6 +1052,10 @@ static int emit_precheck_if_matched(void) {
 }
 
 static int emit_hook_deny(const char *reason) {
+#if DOOR_PRIVATE_REQUIRED
+    (void)reason;
+    return private_not_delivered("required hook input rejected before delivery");
+#endif
     buf_t out;
     if (!buf_init(&out, 512) || !build_hook_deny_envelope(&out, reason)) {
         fwprintf(stderr, L"door: hook-mode deny (could not build the envelope)\n");
@@ -1362,6 +1373,10 @@ static long g_fall_code = 0;
 static const wchar_t *g_fall_reason = L"pre-delivery doubt (engine root, pipe, stamp, or escape hatch)";
 
 static int fall_through(int argc, wchar_t **wargv, const wchar_t *engine_root_w) {
+#if DOOR_PRIVATE_REQUIRED
+    (void)argc; (void)wargv; (void)engine_root_w;
+    return private_not_delivered("required warm route unavailable; no cold replay");
+#endif
     if (g_door_hook_mode) {
         return hook_fall_through(argc, wargv, engine_root_w);
     }
@@ -1964,8 +1979,132 @@ static void door_maybe_spawn_server(const wchar_t *engine_root_w, const char *cl
     CloseHandle(pi.hThread);
 }
 
+
+#if DOOR_PRIVATE_REQUIRED
+static door_private_binding_t g_private;
+static int private_not_delivered(const char *reason) {
+    fprintf(stderr, "{\"state\":\"not-delivered\",\"reason\":\"%s\"}\n", reason);
+    return 78;
+}
+/* Required mode accepts only ordinary canonical local-drive paths. Every
+ * ancestor is checked, including .git and the binding/private-bin chain. */
+static int private_path(const char *text, int directory) {
+    int count = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, NULL, 0);
+    if (count <= 3 || count >= DOOR_PRIVATE_PATH_CAP) return 0;
+    wchar_t w[DOOR_PRIVATE_PATH_CAP], full[DOOR_PRIVATE_PATH_CAP], final[DOOR_PRIVATE_PATH_CAP];
+    if (!MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, text, -1, w, count)) return 0;
+    size_t len = wcslen(w);
+    if (!((w[0] >= L'A' && w[0] <= L'Z') || (w[0] >= L'a' && w[0] <= L'z')) ||
+        w[1] != L':' || w[2] != L'\\' || wcschr(w, L'/') || (len > 3 && w[len-1] == L'\\')) return 0;
+    DWORD n = GetFullPathNameW(w, DOOR_PRIVATE_PATH_CAP, full, NULL);
+    if (!n || n >= DOOR_PRIVATE_PATH_CAP || _wcsicmp(w, full)) return 0;
+    wchar_t drive[4] = {w[0], L':', L'\\', 0};
+    DWORD drive_attributes = GetFileAttributesW(drive);
+    if (drive_attributes == INVALID_FILE_ATTRIBUTES ||
+        !(drive_attributes & FILE_ATTRIBUTE_DIRECTORY) || (drive_attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return 0;
+    for (size_t i = 3; i <= len; i++) {
+        if (i != len && w[i] != L'\\') continue;
+        wchar_t saved = w[i]; w[i] = 0;
+        DWORD attributes = GetFileAttributesW(w);
+        w[i] = saved;
+        if (attributes == INVALID_FILE_ATTRIBUTES || (attributes & FILE_ATTRIBUTE_REPARSE_POINT)) return 0;
+        if (i < len && !(attributes & FILE_ATTRIBUTE_DIRECTORY)) return 0;
+        if (i == len && (!!(attributes & FILE_ATTRIBUTE_DIRECTORY) != !!directory)) return 0;
+    }
+    HANDLE h = CreateFileW(w, FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    n = GetFinalPathNameByHandleW(h, final, DOOR_PRIVATE_PATH_CAP, FILE_NAME_NORMALIZED);
+    CloseHandle(h);
+    if (!n || n >= DOOR_PRIVATE_PATH_CAP) return 0;
+    const wchar_t *canonical = wcsncmp(final, L"\\\\?\\", 4) == 0 ? final + 4 : final;
+    return _wcsicmp(w, canonical) == 0;
+}
+static int private_file(const wchar_t *path, char **data, size_t *length) {
+    HANDLE h = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (h == INVALID_HANDLE_VALUE) return 0;
+    LARGE_INTEGER size;
+    if (!GetFileSizeEx(h, &size) || size.QuadPart <= 0 || size.QuadPart > 65536) { CloseHandle(h); return 0; }
+    *length = (size_t)size.QuadPart;
+    *data = (char *)malloc(*length + 1);
+    DWORD got = 0;
+    int ok = *data && ReadFile(h, *data, (DWORD)*length, &got, NULL) && got == *length;
+    CloseHandle(h);
+    if (!ok) { free(*data); *data = NULL; return 0; }
+    (*data)[*length] = 0;
+    return 1;
+}
+static int private_load(void) {
+    wchar_t own[MAX_PATH * 2], path[MAX_PATH * 2];
+    if (!get_own_directory(own, MAX_PATH * 2)) return 0;
+    if (swprintf(path, MAX_PATH * 2, L"%sdoor.private.json", own) < 0) return 0;
+    char *data = NULL; size_t length = 0;
+    if (!private_file(path, &data, &length)) return 0;
+    int ok = door_parse_private_binding(data, length, &g_private);
+    free(data);
+    if (!ok || !private_path(g_private.engine_root, 1) || !private_path(g_private.settings_home, 1) ||
+        !private_path(g_private.repo_root, 1) || !private_path(g_private.bindings_path, 0)) return 0;
+    wchar_t cwd[DOOR_PRIVATE_PATH_CAP];
+    DWORD cwd_n = GetCurrentDirectoryW(DOOR_PRIVATE_PATH_CAP, cwd);
+    int cwd_bytes = 0;
+    char *cwd_u8 = cwd_n && cwd_n < DOOR_PRIVATE_PATH_CAP ? wide_to_utf8(cwd, &cwd_bytes) : NULL;
+    size_t repo_n = strlen(g_private.repo_root);
+    int cwd_ok = cwd_u8 && private_path(cwd_u8, 1) &&
+        _strnicmp(cwd_u8, g_private.repo_root, repo_n) == 0 &&
+        (cwd_u8[repo_n] == 0 || cwd_u8[repo_n] == '\\');
+    free(cwd_u8);
+    if (!cwd_ok) return 0;
+    int count; char *own_json = wide_to_utf8(path, &count);
+    ok = own_json && private_path(own_json, 0); free(own_json);
+    if (!ok) return 0;
+    char expected[DOOR_PRIVATE_PATH_CAP];
+    int n = snprintf(expected, sizeof expected, "%s\\.git\\coordinator-sessions\\workflow-fires\\headless\\%s\\worker-bindings.json",
+                     g_private.repo_root, g_private.fire_id);
+    if (n < 0 || (size_t)n >= sizeof expected || strcmp(expected, g_private.bindings_path)) return 0;
+    n = snprintf(expected, sizeof expected, "%s\\.git\\coordinator-sessions\\workflow-fires\\headless\\%s\\private-bin",
+                 g_private.repo_root, g_private.fire_id);
+    if (n < 0 || (size_t)n >= sizeof expected || !private_path(expected, 1)) return 0;
+    wchar_t *expected_w = utf8_to_wide(expected);
+    size_t own_len = wcslen(own);
+    if (own_len && own[own_len-1] == L'\\') own[--own_len] = 0;
+    ok = expected_w && _wcsicmp(expected_w, own) == 0; free(expected_w);
+    if (!ok) return 0;
+    /* The adjacent root is mandatory. Env overrides and registry ladders are
+     * never candidates for a REQUIRED binary. */
+    if (swprintf(path, MAX_PATH * 2, L"%s\\door.engine-root.txt", own) < 0 || !private_file(path, &data, &length)) return 0;
+    if (memchr(data, 0, length)) { free(data); return 0; }
+    length = trim_sidecar_trailing(data, length); data[length] = 0;
+    ok = length == strlen(g_private.engine_root) && strcmp(data, g_private.engine_root) == 0; free(data);
+    char *sidecar_u8 = wide_to_utf8(path, &count);
+    ok = ok && sidecar_u8 && private_path(sidecar_u8, 0); free(sidecar_u8);
+    wchar_t *engine = utf8_to_wide(g_private.engine_root);
+    ok = ok && engine && is_valid_engine_root_w(engine); free(engine);
+    return ok;
+}
+static int private_server(HANDLE pipe) {
+    ULONG pid = 0;
+    if (!GetNamedPipeServerProcessId(pipe, &pid) || pid != g_private.server_pid) return 0;
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE, FALSE, pid);
+    if (!process) return 0;
+    FILETIME created = {0}, exited, kernel, user;
+    int ok = GetProcessTimes(process, &created, &exited, &kernel, &user) &&
+             WaitForSingleObject(process, 0) == WAIT_TIMEOUT;
+    uint64_t raw = ((uint64_t)created.dwHighDateTime << 32) | created.dwLowDateTime;
+    CloseHandle(process);
+    return ok && raw == g_private.server_creation_time_ft;
+}
+#endif
+
 int main(void) {
     
+#if DOOR_PRIVATE_REQUIRED
+    if (!private_load()) return private_not_delivered("invalid required private binding or protected path");
+    wchar_t *private_settings = utf8_to_wide(g_private.settings_home);
+    if (!private_settings || !SetEnvironmentVariableW(L"COORDINATOR_SETTINGS_HOME", private_settings)) {
+        free(private_settings); return private_not_delivered("required settings profile unavailable");
+    }
+    free(private_settings);
+#endif
     int argc = 0;
     wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
 
@@ -2014,7 +2153,7 @@ int main(void) {
         }
         g_hook_op[n] = '\0';
     }
-    if (g_door_hook_mode && argc >= 2 && wcscmp(wargv[1], DOOR_PRECHECK_ENTRYPOINT_W) == 0) {
+    if (!DOOR_PRIVATE_REQUIRED && g_door_hook_mode && argc >= 2 && wcscmp(wargv[1], DOOR_PRECHECK_ENTRYPOINT_W) == 0) {
         g_precheck_armed = 1;
         hook_precheck_prepare();
     }
@@ -2056,7 +2195,7 @@ int main(void) {
      * root, matching every other pre-resolution fall-through in this file --
      * this gate fires before `resolve_engine_root` has run, so there is no
      * resolved root yet to hand it. */
-    if (!g_door_hook_mode && door_env_warm_is_falsy()) {
+    if (!DOOR_PRIVATE_REQUIRED && !g_door_hook_mode && door_env_warm_is_falsy()) {
         return fall_through_and_free(argc, wargv, NULL);
     }
 
@@ -2075,9 +2214,17 @@ int main(void) {
     wchar_t *engine_root_w = NULL;
     char *engine_root_u8 = NULL;
     size_t engine_root_u8_len = 0;
+#if DOOR_PRIVATE_REQUIRED
+    engine_root_w = utf8_to_wide(g_private.engine_root);
+    engine_root_u8_len = strlen(g_private.engine_root);
+    engine_root_u8 = (char *)malloc(engine_root_u8_len + 1);
+    if (!engine_root_w || !engine_root_u8) return private_not_delivered("required root allocation failed");
+    memcpy(engine_root_u8, g_private.engine_root, engine_root_u8_len + 1);
+#else
     if (!resolve_engine_root(&engine_root_w, &engine_root_u8, &engine_root_u8_len)) {
         return fall_through_and_free(argc, wargv, NULL);
     }
+#endif
 
     /* ---- 0a. THE STDIN-BOUND PARAMS ROUTE IS DECIDED HERE, PRE-DELIVERY
      * (door_core.h :: door_argv_declares_params_stdin). Placed after the
@@ -2164,8 +2311,10 @@ int main(void) {
     char engine_token[17];
     sha1_hex16((const unsigned char *)token_input.data, token_input.len, engine_token);
     free(token_input.data);
+#if DOOR_PRIVATE_REQUIRED
+    if (strcmp(engine_token, g_private.engine_token)) return private_not_delivered("required engine token changed");
+#endif
 
-    
     char clone_hash[17];
     sha1_hex16((const unsigned char *)engine_root_u8, engine_root_u8_len, clone_hash);
     free(engine_root_u8);
@@ -2189,12 +2338,15 @@ int main(void) {
     HANDLE pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                                OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
     DWORD pipe_err = (pipe == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
-    if (pipe_err == ERROR_FILE_NOT_FOUND && door_drain_publish_hold(clone_hash)) {
+    if (!DOOR_PRIVATE_REQUIRED && pipe_err == ERROR_FILE_NOT_FOUND && door_drain_publish_hold(clone_hash)) {
         pipe = CreateFileW(pipe_name, GENERIC_READ | GENERIC_WRITE, 0, NULL,
                            OPEN_EXISTING, FILE_FLAG_OVERLAPPED, NULL);
         pipe_err = (pipe == INVALID_HANDLE_VALUE) ? GetLastError() : 0;
     }
     if (pipe == INVALID_HANDLE_VALUE) {
+#if DOOR_PRIVATE_REQUIRED
+        return private_not_delivered("required warm server absent or busy; no bootstrap");
+#endif
         /* RESPAWN ON MISS -- the no-server branch only. ERROR_FILE_NOT_FOUND
          * is the exact Windows counterpart of `warm/client.py`'s
          * FileNotFoundError spawn trigger (module docstring's "THE ANTI-
@@ -2219,6 +2371,10 @@ int main(void) {
     }
 
     
+#if DOOR_PRIVATE_REQUIRED
+    /* Kernel server identity is checked before any request byte can be written. */
+    if (!private_server(pipe)) { CloseHandle(pipe); return private_not_delivered("required server PID or raw birth mismatch"); }
+#endif
     HANDLE pipe_event = CreateEventW(NULL, TRUE, FALSE, NULL);
     if (pipe_event == NULL) {
         CloseHandle(pipe);

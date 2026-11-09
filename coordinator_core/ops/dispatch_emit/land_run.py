@@ -191,7 +191,11 @@ def _read_rel(root: Path, rel: Optional[str]) -> Optional[str]:
 # ---- the handler ------------------------------------------------------------------------------
 
 
+from coordinator_core.ops.workflow_fire.finalizer import terminal_action as _private_terminal_action
+
+
 @register_op("dispatch.land_run")
+@_private_terminal_action('dispatch.land_run')
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Land a run's product and record in one scoped commit; reply keys are ``REPLY_KEYS``.
 
@@ -3166,6 +3170,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     recovery_reasons: dict = {}
     if recovery_ids:
         recovery_chunks = _recovery_chunks(root, ask_run_dir)
+        from coordinator_core.ops.dispatch_emit import credit_gate as _cg
+
+        mended = set(_cg.recovery_blocks_superseded(
+            recovery_ids, recovery_chunks, {c.id: set(c.paths) for c in request.chunks},
+            _remnant_record(root, ask_run_dir),
+        ))
+        recovery_ids = [i for i in recovery_ids if i not in mended]
+    if recovery_ids:
         recovery_reasons, unbacked = _recovery_backing(recovery_chunks, recovery_ids)
         if unbacked:
             return _error(
@@ -3184,7 +3196,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         else ask_run_dir.name if ask_run_dir is not None
         else PurePosixPath(script_path.replace("\\", "/")).stem
     )
-    reviewed_bytes, reviewed_at, prep_from_disk = _reconcile_prep(root, session_id, sibling_run_id, request, inline_review)
+    from coordinator_core.ops.workflow_fire.finalizer import review_owner as _review_owner
+    reviewed_bytes, reviewed_at, prep_from_disk = _reconcile_prep(root, _review_owner(session_id), sibling_run_id, request, inline_review)
     product_only = ask_run_dir is not None
     record_dir_rel: Optional[str] = None
     if ask_run_dir is not None:
@@ -4241,7 +4254,6 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 else clean_overlay_verify.OverlayVerdict("missing", "the landing has no measured run id")
             )
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
-            # A verdict the engine never produced is no evidence of a red: land with an advisory.
             if overlay.verdict in ("inconclusive", "missing"):
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
             elif overlay.verdict != "green":
@@ -4266,6 +4278,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         # Trap: checked once before the commit; an adopter arriving after it is not stopped here.
         if token_state.get("claim") and _claim_adopted(token_state.get("identity"), token_state["claim"]):
             raise _ClaimAdopted()
+        from coordinator_core.ops.workflow_fire.finalizer import authorize_product
+        authorize_product(root, commit_set, commit_deleted, reviewed_bytes,
+                          host_metadata={'owned-landable-artifacts': art_present,
+                                         'terminal-receipts': receipt_paths,
+                                         'bookkeeping-record': [bookkeeping_path]},
+                          supplied_blobs=settled_blobs, merging=merge_plan is not None)
         try:
             return commit_paths(
                 root, commit_set, message, deleted_paths=commit_deleted,

@@ -52,6 +52,37 @@ def test_drivers_satisfy_the_session_driver_surface_and_grok_argv():
     assert GrokAcpDriver()._argv == GROK_ACP_ARGV and "--always-approve" not in GROK_ACP_ARGV
 
 
+def _spawn_env(monkeypatch, driver_factory):
+    seen = []
+    real = acp.subprocess.Popen
+
+    def spy(*a, **k):
+        seen.append(k["env"])
+        return real(*a, **k)
+
+    monkeypatch.setattr(acp.subprocess, "Popen", spy)
+    with driver_factory() as d:
+        d.start("/w")
+    return seen[0]
+
+
+def test_spawn_env_stamps_the_driver_kind_not_argv(log, monkeypatch):
+    from coordinator_core.agent_pipe.agy import AgyAcpDriver
+
+    monkeypatch.delenv("COORDINATOR_AGENT_MODEL", raising=False)
+    monkeypatch.setenv("COORDINATOR_AGENT_SESSION", "stale")
+    assert _spawn_env(monkeypatch, lambda: GrokAcpDriver(argv=FAKE))["COORDINATOR_AGENT_VENDOR"] == "grok"
+    env = _spawn_env(monkeypatch, lambda: AgyAcpDriver(argv=FAKE))
+    assert env["COORDINATOR_AGENT_VENDOR"] == "agy"
+    assert "COORDINATOR_AGENT_MODEL" not in env and "COORDINATOR_AGENT_SESSION" not in env
+
+
+def test_spawn_env_carries_model_and_session_when_given(log, monkeypatch):
+    env = _spawn_env(monkeypatch, lambda: AcpDriver(FAKE, kind="agy", model="gemini-4-x", session="s1"))
+    assert (env["COORDINATOR_AGENT_VENDOR"], env["COORDINATOR_AGENT_MODEL"], env["COORDINATOR_AGENT_SESSION"]) == (
+        "agy", "gemini-4-x", "s1")
+
+
 def test_prompt_streams_updates_then_done(log):
     with AcpDriver(FAKE) as d:
         h = d.start("/w")

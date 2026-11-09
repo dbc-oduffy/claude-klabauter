@@ -1,4 +1,4 @@
-"""An XS-arm sizing with a plan edge stages by plan_path in the gate agent's stage act; the XS mint still refuses it by sizing_path."""
+"""An XS-arm sizing with a plan edge stages by plan_path in the gate agent's stage act; a direct sizing_path stage redirects to that plan."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL, _plan
@@ -72,8 +73,15 @@ def test_stop_after_script_composes_no_plan_stage_act(monkeypatch):
     assert _STAGE_LEG not in script and _EDGE_CLAUSE not in script
 
 
-def test_direct_sizing_path_stage_of_a_plan_edge_xs_sizing_is_still_refused(repo):  # noqa: F811
+def test_direct_sizing_path_stage_of_a_plan_edge_xs_sizing_stages_the_plan(repo):  # noqa: F811
     _put(repo, tshirt="XS", route="dispatch", plan=PLAN_REL)
     _plan(repo)
+    write_run_scripts(repo, "r1")
+    m = stage(repo, run_id="r1", sizing_rel=REL, writes=["pkg/a.py"])
+    assert [r.id for r in m.rows] == ["A1"]
+
+
+def test_direct_sizing_path_stage_of_a_plan_edge_xs_sizing_with_a_missing_plan_is_refused(repo):  # noqa: F811
+    _put(repo, tshirt="XS", route="dispatch", plan=PLAN_REL)
     with pytest.raises(AskStageError, match="^XS-MINT-MISROUTED: "):
         stage(repo, run_id="r1", sizing_rel=REL, writes=["pkg/a.py"])

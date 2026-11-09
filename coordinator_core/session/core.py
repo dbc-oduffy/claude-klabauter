@@ -553,6 +553,16 @@ def ensure_session(
     """
     if not sid:
         raise ValueError("session_id required")
+    from .native_actor import current_verified_native_actor, validate_actor
+    actor = current_verified_native_actor()
+    if actor is not None:
+        validate_actor(actor, sid, git_root(cwd) if cwd else None)
+        initialized = init(sid, goal, cwd=cwd, sessions_base=sessions_base, root=root)
+        base = sessions_base if sessions_base else sessions_dir(cwd)
+        from .native_actor import NativeActorMismatch
+        if initialized is not True or not base or not (Path(base) / sid / "meta.json").is_file():
+            raise NativeActorMismatch("native actor session initialization did not produce metadata")
+        return str(Path(base) / sid)
     base = sessions_base if sessions_base else sessions_dir(cwd)
     if not base:
         return ""
@@ -759,6 +769,12 @@ def stable_pid_alive(pid, stored_lstart: str = "", stored_start_epoch: str = "")
         return False  # non-numeric/absent pid -> not alive
     if pid_int <= 0:
         return False
+
+    # Native actor witnesses are decimal births; historical integer witnesses retain
+    # their original tolerance and ambiguous-process policy below.
+    from .native_actor import precise_pid_alive
+    if isinstance(stored_start_epoch, str) and ("." in stored_start_epoch or "e" in stored_start_epoch.lower()):
+        return precise_pid_alive(pid_int, stored_start_epoch)
 
     try:
         now_epoch_val = _win_create_time_epoch(pid_int)
@@ -1112,7 +1128,7 @@ def is_confined_findings_agent(effective_type: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Session-id resolution (3-tier chain)
+# Session-id resolution (caller override plus provider environment ladder)
 # ---------------------------------------------------------------------------
 
 #: Canonical env-var precedence for tiers 1-3 of ``resolve_session_id`` —
@@ -1126,11 +1142,36 @@ def is_confined_findings_agent(effective_type: str) -> bool:
 #: chain, so a real session with only ``CLAUDE_CODE_SESSION_ID`` set was
 #: told "Not your claim." A guard and the op it routes to MUST agree on this
 #: chain; centralize it here rather than re-inlining a fourth copy.
-SESSION_ENV_PRECEDENCE = (
+CLAUDE_SESSION_ENV_PRECEDENCE = (
     "COORDINATOR_SESSION_ID",
     "CLAUDE_SESSION_ID",
     "CLAUDE_CODE_SESSION_ID",
 )
+NATIVE_SESSION_ENV_PRECEDENCE = (
+    "CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "COORDINATOR_AGENT_SESSION",
+)
+# An explicit coordinator identity wins; a native session wins over inherited Claude
+# launcher variables. Keep native read slots separate from the legacy write slots below:
+# manufacturing CODEX_THREAD_ID for a Claude child would forge its vendor provenance.
+SESSION_ENV_PRECEDENCE = (
+    CLAUDE_SESSION_ENV_PRECEDENCE[0], *NATIVE_SESSION_ENV_PRECEDENCE,
+    *CLAUDE_SESSION_ENV_PRECEDENCE[1:],
+)
+
+
+def canonical_session_env_value(name: str, value: str, *, vendor: Optional[str] = None) -> str:
+    """Engine identity for a native session: UUIDs stay unchanged; opaque ids are namespaced.
+
+    The raw native id remains in its environment slot and Agent-Session-Id provenance.
+    Deterministic UUID identity lets existing baton/claim contracts serve ACP sessions too.
+    """
+    if name not in NATIVE_SESSION_ENV_PRECEDENCE or not value or _UUID_RE.fullmatch(value):
+        return value
+    import uuid
+
+    kind = {"CODEX_THREAD_ID": "codex", "ANTIGRAVITY_CONVERSATION_ID": "agy"}.get(name)
+    kind = kind or vendor or os.environ.get("COORDINATOR_AGENT_VENDOR", "external")
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"klabauter:session:{kind}:{value}"))
 
 
 def session_env_candidates() -> frozenset:
@@ -1140,7 +1181,7 @@ def session_env_candidates() -> frozenset:
 
     Exists for an identity CHECK (``is this claim mine?``) that must not be
     fooled by the ladder's own precedence order: a cloud harness does not
-    always populate the same subset of the three session-id env vars on
+    always populate the same subset of the session-id env vars on
     every subprocess spawn of a claim tool, so a claim recorded under a
     LOWER-precedence var's value can legitimately disagree with a LATER
     call's top-precedence ``resolve_session_id()`` result while still being
@@ -1155,7 +1196,8 @@ def session_env_candidates() -> frozenset:
     RECOGNITION check on the read side.
     """
     return frozenset(
-        v for var in SESSION_ENV_PRECEDENCE if (v := os.environ.get(var, ""))
+        canonical_session_env_value(var, v)
+        for var in SESSION_ENV_PRECEDENCE if (v := os.environ.get(var, ""))
     )
 
 
@@ -1358,7 +1400,7 @@ def subprocess_identity_env(
 
     Two outcomes, and the second is the load-bearing one:
 
-      * identity resolvable — every member of `SESSION_ENV_PRECEDENCE` is set
+      * identity resolvable — every legacy Claude compatibility slot is set
         to it, so the child's own env walk lands on the caller's id whichever
         tier it happens to read.
       * identity UNresolvable — every member is REMOVED. The child then
@@ -1385,10 +1427,37 @@ def subprocess_identity_env(
     """
     env: Dict[str, str] = dict(os.environ if base is None else base)
     sid = attributable_session_id(cwd)
-    for var in SESSION_ENV_PRECEDENCE:
+    from coordinator_core.session.caller_env import effective_caller_env
+    from coordinator_core.warm.env_forwarding import FORWARDING_SET, CALLER, is_caller_prefixed
+    caller = effective_caller_env()
+    # Caller-owned fields must never leak from the resident daemon into a child.
+    names = {entry.name for entry in FORWARDING_SET if entry.mode == CALLER}
+    names.update(key for key in env if is_caller_prefixed(key))
+    names.update(key for key in caller if is_caller_prefixed(key))
+    for key in names:
+        if key in caller:
+            env[key] = caller[key]
+        else:
+            env.pop(key, None)
+    from coordinator_core.git.provider_attribution import ATTRIBUTIONS, attribution_value
+
+    attribution = attribution_value()
+    provider = next((key for key, value in ATTRIBUTIONS.items() if value == attribution), "")
+    if provider:
+        env["COORDINATOR_AGENT_PROVIDER"] = provider
+        env["COORDINATOR_AGENT_VENDOR"] = provider
+    else:
+        env["COORDINATOR_AGENT_PROVIDER"] = "unknown"
+        env.pop("COORDINATOR_AGENT_VENDOR", None)
+    for var in CLAUDE_SESSION_ENV_PRECEDENCE:
         if sid:
             env[var] = sid
         else:
+            env.pop(var, None)
+    for var in NATIVE_SESSION_ENV_PRECEDENCE:
+        if not sid or canonical_session_env_value(
+            var, env.get(var, ""), vendor=env.get("COORDINATOR_AGENT_VENDOR", "external")
+        ) != sid:
             env.pop(var, None)
     return env
 
@@ -1539,7 +1608,7 @@ def attributable_session_id_with_source(
     if _SESSION_ID_OVERRIDE.get() == sid:
         return SessionIdResolution(sid, SOURCE_CARRIED, False, pid)
     for var in SESSION_ENV_PRECEDENCE:
-        if os.environ.get(var, "") == sid:
+        if canonical_session_env_value(var, os.environ.get(var, "")) == sid:
             return SessionIdResolution(sid, var, False, pid)
     return SessionIdResolution(sid, SOURCE_UNACCOUNTED, False, pid)
 
@@ -1547,15 +1616,15 @@ def attributable_session_id_with_source(
 def resolve_session_id(cwd: Optional[str] = None) -> str:
     """Port of ``_cs_resolve_session_id`` / public alias ``cs_resolve_session_id``.
 
-    Resolution order, current (2026-08-19):
+    Resolution order:
       0. `session_identity_override`'s bound ContextVar, when a request has
          one bound (warm-server per-request identity carried from the
          caller — see that context manager's docstring). Never set outside
          an explicitly opened scope, so this is a no-op for every
          cold-path/unbound caller.
       1. ``COORDINATOR_SESSION_ID``  (explicit test override)
-      2. ``CLAUDE_SESSION_ID``       (explicit override slot)
-      3. ``CLAUDE_CODE_SESSION_ID``  (platform-injected, Claude Code >= ~2.1.150)
+      2. Native Codex/agy/launcher session identity (before inherited Claude slots)
+      3. ``CLAUDE_SESSION_ID`` / ``CLAUDE_CODE_SESSION_ID`` (legacy Claude slots)
 
     The former tier 4 (``.git/coordinator-sessions/.current-session-id``
     sentinel, plus its concurrency-ambiguity guard) was REMOVED (KS-4,
@@ -1566,9 +1635,9 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
     sole writer (session-init.py, the coordinator-content-repo SessionStart hook) was
     deleted by PM directive 2026-07-15 — no production writer survives, so
     it could never be refreshed. ``cwd`` is retained for API compatibility
-    with existing callers even though tiers 0-3 do not use it.
+    with existing callers even though the current tiers do not use it.
 
-    Tiers 1-3 (env vars) are byte-for-byte unchanged. Always returns
+    Always returns
     successfully (empty string signals "unresolvable", never an
     exception) — callers gate on empty.
 
@@ -1584,7 +1653,7 @@ def resolve_session_id(cwd: Optional[str] = None) -> str:
     for var in SESSION_ENV_PRECEDENCE:
         sid = os.environ.get(var, "")
         if sid:
-            return sid
+            return canonical_session_env_value(var, sid)
     return ""
 
 
@@ -1648,7 +1717,7 @@ def _harness_process_comm(proc) -> str:
 
 def _is_harness_process(name: str) -> bool:
     """Decide whether an already-normalized process name is the harness's
-    own ``claude`` process.
+    own ``claude`` or ``codex`` process.
 
     Takes the name AFTER whatever normalization the caller applies —
     ordinarily the result of ``_harness_process_comm(proc)`` (argv0-basename
@@ -1662,7 +1731,7 @@ def _is_harness_process(name: str) -> bool:
     ``_resolve_claude_pid_from_env``, POSIX parent check). See
     ``docs/plans/2026-08-13-session-identity-earns-its-keep.md`` § C2, § C3.
     """
-    return name == "claude"
+    return name in ("claude", "codex")
 
 
 def _find_windows_claude_ancestor(
@@ -1931,6 +2000,10 @@ def init(
             "init requires cwd or sessions_base; the process cwd is never a hub"
         )
 
+    from .native_actor import current_verified_native_actor, validate_actor
+    actor = current_verified_native_actor()
+    if actor is not None:
+        validate_actor(actor, session_id, git_root(cwd) if cwd else None)
     base = sessions_base if sessions_base else sessions_dir(cwd)
     if not base:
         return False
@@ -2006,7 +2079,12 @@ def init(
     stable_pid_capture = "psutil-absent"
     ppid = os.getppid()
 
-    if _IS_WINDOWS:
+    if actor is not None:
+        stable_pid = str(actor.pid)
+        stable_pid_start_epoch = repr(float(actor.start_epoch))
+        stable_pid_lstart = stable_pid_start_epoch
+        stable_pid_capture = "verified-codex-exec-actor"
+    elif _IS_WINDOWS:
         # Windows Guard-1 (CLAUDE_PID-preferred, 2026-08-08 fix): the harness
         # exports CLAUDE_PID — the session's own claude.exe PID — into every
         # command-hook environment (see _resolve_claude_pid_from_env's

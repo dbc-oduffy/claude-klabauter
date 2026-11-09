@@ -23,6 +23,12 @@ from coordinator_core.ops.dispatch_emit.op import FiredDriftError
 from coordinator_core.ops.workflow_fire.op import _workflow_fire
 
 
+@pytest.fixture(autouse=True)
+def verified_caller(monkeypatch):
+    from coordinator_core.ops.workflow_fire import authority
+    monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal('verified-test-em', 'em', {}))
+
+
 def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 

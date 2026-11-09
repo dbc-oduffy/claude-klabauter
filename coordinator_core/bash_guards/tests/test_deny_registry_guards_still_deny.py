@@ -32,6 +32,7 @@ _THEIRS = "https://github.com/theirs/repo.git"
 #: guard -> (command, dispatched-subagent caller). ``{repo}`` and ``{other}`` are tmp paths.
 _BASH_CASES = {
     "block-push-pr-non-owned-remote": ("git push upstream main", False),
+    "block-empty-source-push": ("git push origin :refs/heads/x", False),
     "block-perforce-submit": ("p4 submit -d x", False),
     "p4-verb-fence": ("p4 reconcile", False),
     "destructive-git-orphan": ("git reset --hard $(git rev-parse HEAD~1)", False),

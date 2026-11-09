@@ -23,6 +23,7 @@ _ROW_RE = re.compile(r'\{\s*"(?P<name>[^"]+)",\s*"(?P<tool>[^"]*)",\s*"(?P<verb>
 #: fails the coverage test until it is mapped here and given a table row.
 _GUARD_TO_NAMES = {
     "block-push-pr-non-owned-remote": {"git push", "gh pr merge", "gh release create"},
+    "block-empty-source-push": {"git push"},
     "block-perforce-submit": {"p4 submit"},
     "p4-verb-fence": {"p4 shelve"},
 }

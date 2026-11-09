@@ -58,3 +58,28 @@ def test_fixture_only_is_reported_not_met():
 
 def test_composed_script_carries_the_clause():
     _assert_clauses(_compose())
+
+
+_OVERLAY_CMD = "python -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id run-1"
+
+
+def test_default_workflow_runs_the_overlay_producer_as_its_own_leg():
+    text = _compose()
+    assert _OVERLAY_CMD in text
+    assert f"label: '{ask_compose.OVERLAY_VERIFY_LABEL}'" in text or f'label: "{ask_compose.OVERLAY_VERIFY_LABEL}"' in text
+
+
+def test_overlay_producer_is_not_in_the_verify_agent_prompt():
+    call = ask_compose._verify_call(
+        head="h", anchor="a", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), docs_parts=(),
+        verdict_parts=("v",), judged=False, schema={}, run_id="run-1",
+    )
+    assert "clean_overlay_verify" not in call
+
+
+def test_overlay_exit_one_folds_into_a_red_test_and_other_exits_do_not():
+    fold = ask_compose._OVERLAY_FOLD_JS
+    assert "_ov.exit_code === 1" in fold and "status: 'fail'" in fold
+    assert "else if (_ov && _ov.exit_code !== 0)" in fold and "log(" in fold
+    text = _compose()
+    assert text.index("overlay-verify") < text.index("_testResult = _verify.test")

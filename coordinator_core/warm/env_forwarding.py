@@ -70,7 +70,7 @@ from __future__ import annotations
 
 from typing import NamedTuple, Tuple
 
-from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+from coordinator_core.session.core import CLAUDE_SESSION_ENV_PRECEDENCE
 from coordinator_core.session.job_mode_env import COORDINATOR_JOB_MODE
 
 __all__ = ["Mode", "EnvEntry", "FORWARDING_SET", "CALLER_PREFIXES", "is_caller_prefixed", "generate_header"]
@@ -96,7 +96,12 @@ def _entry(name: str, mode: Mode) -> EnvEntry:
 
 FORWARDING_SET: Tuple[EnvEntry, ...] = (
     _entry("COORDINATOR_SETTINGS_HOME", REFUSE),
-    *(_entry(name, OVERRIDE) for name in SESSION_ENV_PRECEDENCE),
+    _entry("COORDINATOR_AGENT_PROVIDER", CALLER),
+    _entry("COORDINATOR_AGENT_ROLE", CALLER),
+    _entry("COORDINATOR_PARENT_SESSION_ID", CALLER),
+    _entry("COORDINATOR_WORKFLOW_AGENT_TYPE", CALLER),
+    _entry("COORDINATOR_WORKFLOW_AGENT_LABEL", CALLER),
+    *(_entry(name, OVERRIDE) for name in CLAUDE_SESSION_ENV_PRECEDENCE),
     _entry("MACHINE_LOCAL_REGISTRY_DIR", BORROW),
     _entry("CLAUDE_HOME", BORROW),
     _entry("CLAUDE_PLUGIN_ROOT", BORROW),
@@ -118,6 +123,15 @@ FORWARDING_SET: Tuple[EnvEntry, ...] = (
     # the session that dispatched the op -- same reasoning as
     # CLAUDE_CODE_REMOTE and COORDINATOR_JOB_MODE above.
     _entry("COORDINATOR_AGENT_TYPE_HOST", CALLER),
+    # Commit provenance (`git.agent_provenance.detect_agent_provenance`): the
+    # committing session's vendor identity is a per-caller fact; inheriting the
+    # server spawner's would stamp a stranger's vendor on the caller's commit.
+    _entry("CODEX_THREAD_ID", CALLER),
+    _entry("ANTIGRAVITY_CONVERSATION_ID", CALLER),
+    _entry("CLAUDECODE", CALLER),
+    _entry("COORDINATOR_AGENT_VENDOR", CALLER),
+    _entry("COORDINATOR_AGENT_MODEL", CALLER),
+    _entry("COORDINATOR_AGENT_SESSION", CALLER),
 )
 
 

@@ -61,7 +61,39 @@ def test_unreachable_tip_is_refused(repo, monkeypatch):
     assert "unmerged" in _branches(repo)
 
 
-def test_unknown_holder_is_refused(repo):
+def test_no_holder_reachable_branch_is_deleted_without_override(repo):
+    apply_mod._delete_branch("merged", False, repo)
+    assert "merged" not in _branches(repo)
+
+
+def test_unreachable_tip_is_refused_without_override(repo):
+    with pytest.raises(RuntimeError, match="not an ancestor of HEAD"):
+        apply_mod._delete_branch("unmerged", False, repo)
+    assert "unmerged" in _branches(repo)
+
+
+def test_recently_pushed_remote_ref_is_refused(tmp_path, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_OVERRIDE_BRANCH", raising=False)
+    bare = tmp_path / "origin.git"
+    _git(tmp_path, "init", "-q", "--bare", str(bare))
+    root = tmp_path / "repo2"
+    root.mkdir()
+    _git(root, "init", "-q", "-b", "main")
+    _git(root, "config", "user.email", "t@local")
+    _git(root, "config", "user.name", "t")
+    (root / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
+    _git(root, "add", "-A")
+    _git(root, "commit", "-q", "-m", "seed")
+    _git(root, "remote", "add", "origin", str(bare))
+    _git(root, "branch", "feat")
+    _git(root, "push", "-q", "origin", "feat")
+    with pytest.raises(RuntimeError, match="held by recent push"):
+        apply_mod._delete_branch("feat", True, root)
+    assert "feat" in _branches(root)
+
+
+def test_failed_local_holder_probe_is_refused_unknown(repo, monkeypatch):
+    monkeypatch.setattr(lh, "_local_holders", lambda run_git, root: None)
     with pytest.raises(RuntimeError, match="refused-unknown"):
         apply_mod._delete_branch("merged", False, repo)
     assert "merged" in _branches(repo)

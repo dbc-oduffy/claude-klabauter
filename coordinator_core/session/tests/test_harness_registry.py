@@ -573,7 +573,8 @@ class TestSingleScanInvariant:
         call_count = {"n": 0}
 
         def counting_glob(self, pattern):
-            call_count["n"] += 1
+            if self == sessions_dir:
+                call_count["n"] += 1
             return real_glob(self, pattern)
 
         monkeypatch.setattr(Path, "glob", counting_glob)

@@ -23,6 +23,12 @@ def _allow(script, context="Submitted to the engine as run run-abc123. It runs."
     return envelope
 
 
+@pytest.fixture(autouse=True)
+def verified_caller(monkeypatch):
+    from coordinator_core.ops.workflow_fire import authority
+    monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal('sess-1', 'em', {}))
+
+
 @pytest.fixture
 def script(tmp_path):
     path = tmp_path / "run.mjs"
@@ -113,7 +119,8 @@ def test_unknown_param_is_refused_by_name(params, seen):
 
 def test_subagent_caller_reaches_the_hook_refusal(params):
     result = _dispatch({**params, "agent_id": "sub-1"})
-    assert result["refused"] == "gate-refused" and "Only the EM submits" in result["reason"]
+    assert result["refused"] == "gate-refused"
+    assert "subagent" in result["reason"].lower() and "cannot submit" in result["reason"].lower()
 
 
 @pytest.mark.parametrize(
@@ -142,7 +149,7 @@ def test_fire_hands_the_sha256_to_workflow_fire(params, script, seen, monkeypatc
         lambda p, repo_root=None: calls.append(p) or {"fire_id": "f1"},
     )
     result = _dispatch({**params, "fire": True})
-    assert calls == [{"script_path": str(script), "expected": result["sha256"], "notify_to": "codex-em"}]
+    assert calls == [{"script_path": str(script), "expected": result["sha256"], "notify_to": "sess-1", "executor": "headless", "backend": "codex", "caller_session_id": "sess-1", "run_id": "run-abc123"}]
     assert result["fire"] == {"fire_id": "f1"}
 
 
@@ -186,3 +193,13 @@ def test_op_runs_the_gates_through_the_shared_function(params, monkeypatch):
     monkeypatch.setattr(gates, "submit_ask", lambda **kw: seen.append(kw) or {"refused": "no-run", "reason": "x"})
     assert op._engine_ask_submit(params)["refused"] == "no-run"
     assert seen[0]["caller"] == "codex-em" and seen[0]["ask_source"] == "pm"
+
+
+@pytest.mark.parametrize("answer", [None, {}, {"run_id": "r1"}, {"script_path": "x"}])
+def test_incomplete_submit_result_is_not_success(params, monkeypatch, answer):
+    monkeypatch.setattr(gates, "submit_ask", lambda **kw: answer)
+    monkeypatch.setattr(
+        "coordinator_core.ops.workflow_fire.op._workflow_fire",
+        lambda *a, **k: pytest.fail("fired an incomplete submission"),
+    )
+    assert op._engine_ask_submit({**params, "fire": True})["refused"] == "no-run"

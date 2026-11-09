@@ -1338,7 +1338,9 @@ def test_a_goal_gate_refusal_keeps_its_cause_in_the_reported_text(repo):
             f"    status: met\n    observation: a.py exists\n    authored_by: {JUDGE_AGENT}\n"
             "    falsifier: {verdict: pass, output: a.py}\n---\n\n# Plan", 1),
         encoding="utf-8")
-    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", "a" * 40)
+    judged = {"criterion": {"status": "met", "observation": "a.py exists", **_JUDGED},
+              "tests": {"status": "pass", "run": 1, "failed": 0, "sidecar": "t.md"}}
+    out = terminal_commit._stamp_plan_implemented(repo, "docs/plan.md", "a" * 40, inline_review=judged)
     assert out["plan_status"] == "refused", out
     assert "refusing to stamp implemented" in out["plan_status_refusal"], out
     assert "baseline_ref" in out["plan_status_refusal"], out

@@ -456,6 +456,12 @@ class RegistryRecord:
     stable_pid_capture: str | None = None
 
 
+@dataclass(frozen=True)
+class ExternalRegistryRecord(RegistryRecord):
+    """An engine-owned external binding; preserves the harness record contract."""
+    provider: str = "codex"
+
+
 def _in_sanity_band(epoch: float) -> bool:
     now = time.time()
     return now - _SANITY_BAND_PAST_SEC <= epoch <= now + _SANITY_BAND_FUTURE_SEC
@@ -657,11 +663,16 @@ def snapshot() -> dict[str, RegistryRecord]:
     self-pruning. Review: coordinator:code-reviewer.
     """
     try:
+        from coordinator_core.session import external_registry
+        result: dict[str, RegistryRecord] = {
+            sid: ExternalRegistryRecord(pid=row["pid"], start_epoch=row["start_epoch"], cwd=row["cwd"],
+                                name=row.get("name"), provider="codex")
+            for sid, row in external_registry.snapshot().items()
+        }
         directory = registry_dir()
         if directory is None or not directory.is_dir():
-            return {}
+            return result
 
-        result: dict[str, RegistryRecord] = {}
         for entry in directory.glob("*.json"):
             parsed = _parse_one(entry)
             if parsed is None:

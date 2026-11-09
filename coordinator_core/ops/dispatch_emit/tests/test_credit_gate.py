@@ -146,6 +146,27 @@ def test_withheld_path_still_excused_from_uncommitted_gate():
     assert cg.uncommitted_credited({"C1": []}, set(), set(), set(), {"a.py"}) == {}
 
 
+_FIXED_PASS = {"status": "fixed", "paths": [], "still_open": [], "footprint": ["a.py", "b.py"]}
+_BLOCKED = {"C1": {"status": "blocked"}}
+
+
+def test_recovery_blocked_chunk_a_fixed_remnant_covers_is_superseded():
+    assert cg.recovery_blocks_superseded(["C1"], _BLOCKED, {"C1": {"a.py"}}, _FIXED_PASS) == ["C1"]
+
+
+def test_recovery_block_stays_when_the_remnant_does_not_cover_or_is_not_fixed():
+    assert cg.recovery_blocks_superseded(["C1"], _BLOCKED, {"C1": {"a.py", "c.py"}}, _FIXED_PASS) == []
+    assert cg.recovery_blocks_superseded(["C1"], _BLOCKED, {"C1": {"a.py"}}, {**_FIXED_PASS, "status": "open"}) == []
+    assert cg.recovery_blocks_superseded(["C1"], _BLOCKED, {"C1": {"a.py"}}, {**_FIXED_PASS, "paths": ["x"]}) == []
+    assert cg.recovery_blocks_superseded(["C1"], _BLOCKED, {"C1": {"a.py"}}, None) == []
+
+
+def test_exhausted_and_held_recovery_entries_are_never_superseded():
+    for status in ("exhausted", "held"):
+        chunks = {"C1": {"status": status}}
+        assert cg.recovery_blocks_superseded(["C1"], chunks, {"C1": {"a.py"}}, _FIXED_PASS) == []
+
+
 def test_module_is_stdlib_pure():
     tree = ast.parse(Path(cg.__file__).read_text(encoding="utf-8"))
     mods = set()

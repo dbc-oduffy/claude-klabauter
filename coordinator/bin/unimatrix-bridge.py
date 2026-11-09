@@ -57,7 +57,7 @@ def default_key():
     return str(next((c for c in cands if c.is_file()), cands[0]))
 
 
-def pick_remote(lan, tunnel):
+def _roster():
     """LAN alias when it answers, else the tunnel alias; see unimatrix-roster.py (vendored beside this script)."""
     mod = sys.modules.get("unimatrix_roster")
     if mod is None:
@@ -66,7 +66,12 @@ def pick_remote(lan, tunnel):
         mod = importlib.util.module_from_spec(spec)
         sys.modules["unimatrix_roster"] = mod
         spec.loader.exec_module(mod)
-    return mod.pick_remote(lan, tunnel)
+    return mod
+
+
+
+def pick_remote(lan, tunnel):
+    return _roster().pick_remote(lan, tunnel)
 
 
 def parse_args(argv):
@@ -181,6 +186,7 @@ def accept_loop(endpoint):
 
 def write_local(endpoint, data):
     """Deliver `data` to a local endpoint (named pipe on Windows, unix socket elsewhere)."""
+    data = _roster().authenticated_data(endpoint, data, os.path.expanduser(SESSIONS))
     if IS_WIN:
         _, win32file, _ = _win()
         h = win32file.CreateFile(endpoint, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
@@ -288,8 +294,8 @@ def ssh_mux_options():
 
 
 def relay_send(conn):
-    # The relay forwards ONE stdin line, and the far receiver accepts tokenless
-    # frames, so the sender's auth line is dropped rather than forwarded.
+    # The relay forwards one message line and authenticates for its local recipient;
+    # the near recipient's auth header must not cross the box boundary.
     buf = b""
     while chunk := conn.read():
         buf += chunk
@@ -298,9 +304,12 @@ def relay_send(conn):
     # reaches the sender, as notify_sender's delivery-failure notice in its inbox.
     conn.close()
     lines = frames_to_send(buf)
-    mine = next((d for d in map(_load, os.listdir(os.path.expanduser(SESSIONS))) if d and d.get("messagingSocketPath") == cfg.endpoint), None)
+    mine = _load(f"{os.getpid()}.json")
+    if mine and (mine.get("pid") != os.getpid() or mine.get("messagingSocketPath") != cfg.endpoint
+                 or mine.get("unimatrixRemote", cfg.remote) != cfg.remote):
+        mine = None
     if not mine or not lines:
-        log.write(f"relay: nothing to send (mirror={bool(mine)}) raw={buf!r}\n")
+        log.write(f"relay: nothing to send (mirror={bool(mine)}, bytes={len(buf)})\n")
         return
     # A win32 peer's socket is a named pipe with no pid in its name; the roster records `farPid`.
     far_pid = str(mine.get("farPid") or os.path.basename(mine[FAR_SOCKET_FIELD]).removesuffix(".sock"))
@@ -366,11 +375,10 @@ def serve_one(conn):
 
 
 def mirror_for(src):
-    for f in os.listdir(os.path.expanduser(SESSIONS)):
-        d = _load(f)
-        if d and d.get(FAR_SOCKET_FIELD) == src:
-            return d
-    return None
+    entries = [d for d in map(_load, os.listdir(os.path.expanduser(SESSIONS))) if d]
+    candidates = [d for d in _roster().remote_mirrors(entries, getattr(cfg, "remote", None))
+                  if d.get(FAR_SOCKET_FIELD) == src]
+    return candidates[0] if len(candidates) == 1 else None
 
 
 def localize_from(data):

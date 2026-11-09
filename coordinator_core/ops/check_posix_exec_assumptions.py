@@ -1825,26 +1825,89 @@ _UNCLASSIFIED_CALL_TARGETS = {
 _UNCLASSIFIED_SIGNAL_NAMES = {"SIGHUP", "SIGUSR1", "SIGUSR2", "SIGCHLD"}
 
 
-def _docstring_const_ids(tree: ast.AST) -> Set[int]:
-    """id() set of Constant nodes that are docstrings (first Expr(Constant)
-    statement of a module/class/function body) -- excluded from literal
-    content matching so a documented example path is never mistaken for a
-    hardcoded runtime assumption."""
-    ids: Set[int] = set()
-    candidates: List[ast.AST] = [tree]
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            candidates.append(node)
-    for c in candidates:
-        body = getattr(c, "body", None)
-        if (
-            body
-            and isinstance(body[0], ast.Expr)
-            and isinstance(body[0].value, ast.Constant)
-            and isinstance(body[0].value.value, str)
-        ):
-            ids.add(id(body[0].value))
-    return ids
+_DOCSTRING_OWNERS = (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+#: Node types with no detector-relevant descendants: pruned from the cheap
+#: detection walk (`Name`'s only child is its `ctx`; `Constant` has none).
+_LEAF_TYPES = frozenset({ast.Name, ast.Constant, ast.Load, ast.Store, ast.Del})
+
+
+def _detected_nodes(tree: ast.AST) -> List[ast.AST]:
+    """The nodes `_scan_python_file`'s detectors can fire on, in one cheap
+    traversal: every `Call` and `Compare`, `BitAnd` `BinOp`s, `Attribute`s
+    naming an unclassified signal, and `str` `Constant`s. Anything a
+    detector would reject on type alone is never collected."""
+    out: List[ast.AST] = []
+    ast_type = ast.AST
+    stack: List[ast.AST] = [tree]
+    pop = stack.pop
+    push = stack.append
+    call, compare, attribute, binop, constant = (
+        ast.Call, ast.Compare, ast.Attribute, ast.BinOp, ast.Constant,
+    )
+    while stack:
+        node = pop()
+        t = type(node)
+        if t is call or t is compare:
+            out.append(node)
+        elif t is attribute:
+            if node.attr in _UNCLASSIFIED_SIGNAL_NAMES:
+                out.append(node)
+        elif t is binop:
+            if type(node.op) is ast.BitAnd:
+                out.append(node)
+        elif t is constant:
+            if type(node.value) is str:
+                out.append(node)
+            continue
+        elif t in _LEAF_TYPES:
+            continue
+        for name in node._fields:
+            value = getattr(node, name, None)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast_type):
+                        push(item)
+            elif isinstance(value, ast_type):
+                push(value)
+    return out
+
+
+def _index_tree(tree: ast.AST) -> "Tuple[Dict[int, ast.AST], Set[int]]":
+    """`id(child) -> immediate syntactic parent` for every node in `tree`
+    (list fields such as `If.body`/`If.orelse` map a statement straight to
+    the enclosing `If`, exactly the lookup `_is_windows_guarded` needs), and
+    the `id()` set of docstring Constants (first `Expr(Constant(str))` of a
+    module/class/function body) so a documented example path is never
+    mistaken for a hardcoded runtime assumption. Built lazily by
+    `_scan_python_file`, only for a file with a candidate hit."""
+    parents: Dict[int, ast.AST] = {}
+    doc_ids: Set[int] = set()
+    ast_type = ast.AST
+    stack: List[ast.AST] = [tree]
+    pop = stack.pop
+    push = stack.append
+    while stack:
+        node = pop()
+        if isinstance(node, _DOCSTRING_OWNERS):
+            body = node.body
+            if (
+                body
+                and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)
+            ):
+                doc_ids.add(id(body[0].value))
+        for name in node._fields:
+            value = getattr(node, name, None)
+            if isinstance(value, list):
+                for item in value:
+                    if isinstance(item, ast_type):
+                        parents[id(item)] = node
+                        push(item)
+            elif isinstance(value, ast_type):
+                parents[id(value)] = node
+                push(value)
+    return parents, doc_ids
 
 
 def _is_stat_exec_ref(node: ast.AST) -> bool:
@@ -1888,18 +1951,6 @@ def _mode_arg_is_exec(node: ast.AST) -> bool:
 # ---------------------------------------------------------------------------
 
 _WINDOWS_TOKENS = {"nt", "win32", "windows", "cygwin"}
-
-
-def _build_parent_map(tree: ast.AST) -> Dict[int, ast.AST]:
-    """id(child) -> immediate syntactic parent, for every node in `tree`.
-    `ast.iter_child_nodes` flattens list fields (e.g. `If.body`,
-    `If.orelse`), so a statement living inside a branch list maps directly
-    to the enclosing `If` -- exactly the lookup `_is_windows_guarded` needs."""
-    parents: Dict[int, ast.AST] = {}
-    for node in ast.walk(tree):
-        for child in ast.iter_child_nodes(node):
-            parents[id(child)] = node
-    return parents
 
 
 def _is_owner_attr(node: ast.AST, owner: str, attr: str) -> bool:
@@ -2167,8 +2218,14 @@ def _scan_python_file(
     except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
         return
 
-    docstring_ids = _docstring_const_ids(tree)
-    parent_map = _build_parent_map(tree)
+    detected_nodes = _detected_nodes(tree)
+    indexed: List[Tuple[Dict[int, ast.AST], Set[int]]] = []
+
+    def _index() -> Tuple[Dict[int, ast.AST], Set[int]]:
+        if not indexed:
+            indexed.append(_index_tree(tree))
+        return indexed[0]
+
     current_home = _current_machine_home()
 
     marker_lines = _fixture_marker_lines(src) if _is_test_path(relpath) else set()
@@ -2181,7 +2238,7 @@ def _scan_python_file(
             return
         hits[cls].add(relpath)
 
-    for node in ast.walk(tree):
+    for node in detected_nodes:
         # -- posix_mode_bits: os.access(path, os.X_OK) --------------------
         if (
             isinstance(node, ast.Call)
@@ -2192,7 +2249,7 @@ def _scan_python_file(
                 if (
                     (isinstance(arg, ast.Attribute) and arg.attr == "X_OK")
                     or (isinstance(arg, ast.Name) and arg.id == "X_OK")
-                ) and not _is_windows_guarded(node, parent_map):
+                ) and not _is_windows_guarded(node, _index()[0]):
                     _record("posix_mode_bits", node)
 
         # -- posix_mode_bits: os.chmod(path, <mode with exec bit>) -------
@@ -2205,7 +2262,7 @@ def _scan_python_file(
                 kw.value for kw in node.keywords if kw.arg == "mode"
             ]
             for m in mode_args:
-                if _mode_arg_is_exec(m) and not _is_windows_guarded(node, parent_map):
+                if _mode_arg_is_exec(m) and not _is_windows_guarded(node, _index()[0]):
                     _record("posix_mode_bits", node)
 
         # -- posix_mode_bits: <stat_result>.st_mode & <exec-bit-mask> -----
@@ -2216,7 +2273,7 @@ def _scan_python_file(
             )
             if has_st_mode:
                 for o in operands:
-                    if _mode_arg_is_exec(o) and not _is_windows_guarded(node, parent_map):
+                    if _mode_arg_is_exec(o) and not _is_windows_guarded(node, _index()[0]):
                         _record("posix_mode_bits", node)
 
         # -- posix_path_assumption: os.sep used in a comparison against a --
@@ -2224,7 +2281,7 @@ def _scan_python_file(
         if isinstance(node, ast.Compare):
             operands = [node.left, *node.comparators]
             if any(_is_os_sep(o) for o in operands) and not _is_windows_guarded(
-                node, parent_map
+                node, _index()[0]
             ):
                 _record("posix_path_assumption", node)
 
@@ -2235,25 +2292,23 @@ def _scan_python_file(
             and node.func.attr == "split"
             and node.args
             and _is_os_sep(node.args[0])
-            and not _is_windows_guarded(node, parent_map)
+            and not _is_windows_guarded(node, _index()[0])
         ):
             _record("posix_path_assumption", node)
 
         # -- unresolved_cross_path / unclassified: literal string content -
-        if (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and id(node) not in docstring_ids
-        ):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
             s = node.value
-            if (
-                any(p.search(s) for p in _CROSS_PATH_PATTERNS)
-                and current_home
+            cross = (
+                current_home
                 and s.startswith(current_home)
-            ):
-                _record("unresolved_cross_path", node)
-            if s.startswith("/tmp/"):
-                _record("unclassified", node)
+                and any(p.search(s) for p in _CROSS_PATH_PATTERNS)
+            )
+            if (cross or s.startswith("/tmp/")) and id(node) not in _index()[1]:
+                if cross:
+                    _record("unresolved_cross_path", node)
+                if s.startswith("/tmp/"):
+                    _record("unclassified", node)
 
         # -- unclassified: os.fork / pwd.getpwnam / grp.getgrnam / etc. --
         if (
@@ -2313,6 +2368,20 @@ def scan(root, apply_exemptions: bool = True) -> Dict[str, List[str]]:
     file still produce a hit for its class once its own grant is set
     aside?"), not a general-purpose toggle for other callers to reach for.
     """
+    return _subtract(_scan_raw(root), root, apply_exemptions)
+
+
+def scan_both(root) -> "Tuple[Dict[str, List[str]], Dict[str, List[str]]]":
+    """`(scan(root), scan(root, apply_exemptions=False))` from ONE walk of
+    the tree -- the two differ only in the final subtraction, so a caller
+    needing both (`main()`, the real-tree tests) never pays for two."""
+    raw = _scan_raw(root)
+    return _subtract(raw, root, True), _subtract(raw, root, False)
+
+
+def _scan_raw(root) -> Dict[str, List[str]]:
+    """Every class's hits before any EXEMPTIONS / prefix subtraction (Tier A
+    already carries its own EXEMPTIONS subtraction, see `_scan_tier_a`)."""
     root = Path(root)
     files = _tracked_files(root)
 
@@ -2363,12 +2432,20 @@ def scan(root, apply_exemptions: bool = True) -> Dict[str, List[str]]:
         "posix_path_assumption": sorted(ast_hits["posix_path_assumption"]),
         **tier_a,
     }
+    return raw
+
+
+def _subtract(
+    raw: Dict[str, List[str]], root, apply_exemptions: bool
+) -> Dict[str, List[str]]:
+    root = Path(root)
     repo_key = repo_key_for_root(root)
     exempt_relpaths = (
         (lambda cls, key: _exempt_relpaths(cls, key))
         if apply_exemptions
         else (lambda cls, key: {})
     )
+    prefixes = tuple(_exempt_prefixes(repo_key, root))
     return {
         cls: sorted(
             p
@@ -2376,7 +2453,8 @@ def scan(root, apply_exemptions: bool = True) -> Dict[str, List[str]]:
             if p not in exempt_relpaths(cls, repo_key)
             and not (
                 cls in PREFIX_EXCLUDABLE_CLASSES
-                and is_prefix_excluded(p, repo_key, root)
+                and prefixes
+                and p.startswith(prefixes)
             )
         )
         for cls in ALL_CLASSES
@@ -3050,7 +3128,7 @@ def main(argv: List[str]) -> int:
     # independently re-derive _tracked_files() and re-scan every file from
     # scratch, three full passes over the same tree for output `scan()`
     # already computes once.
-    current_scan = scan(root)
+    current_scan, raw_scan = scan_both(root)
 
     ok, msg = check_against_baseline(root, baseline_path, precomputed=current_scan)
 
@@ -3082,7 +3160,7 @@ def main(argv: List[str]) -> int:
     # ok/stale_markers_ok two lines above -- same precomputed-raw-scan
     # sharing shape as every other check() call in this function.
     stale_exemptions_ok, stale_exemptions_msg = check_no_stale_exemptions(
-        root, precomputed_raw=scan(root, apply_exemptions=False)
+        root, precomputed_raw=raw_scan
     )
 
     overall_ok = (

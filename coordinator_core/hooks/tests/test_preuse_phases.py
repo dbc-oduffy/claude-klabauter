@@ -125,3 +125,36 @@ def test_door_deadline_is_the_hook_constant():
 
     pp._door_deadline_s.cache_clear()
     assert pp._door_deadline_s() == _DOOR_HOOK_READ_DEADLINE_S
+
+
+def test_blocked_phase_returns_by_deadline_and_chain_stops_after(monkeypatch):
+    release = threading.Event()
+    after = []
+
+    def chain(_params):
+        release.wait(3.0)
+        try:
+            pp.check_deadline("next_guard")
+        except pp.DeadlineStop:
+            after.append("stopped")
+            raise
+        after.append("ran-on")
+        return {"ok": 1}
+
+    t0 = time.monotonic()
+    out, fields = _run(chain, door_s=0.4, monkeypatch=monkeypatch)
+    elapsed = time.monotonic() - t0
+    release.set()
+    assert elapsed < 1.0
+    assert out == no_advisory()
+    assert fields["deadline_stop"] == "in_flight"
+    deadline = time.monotonic() + 2.0
+    while not after and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert after == ["stopped"]
+
+
+def test_chain_finishing_inside_deadline_is_returned_whole(monkeypatch):
+    out, fields = _run(lambda _p: {"ok": 1}, door_s=0.4, monkeypatch=monkeypatch)
+    assert out == {"ok": 1}
+    assert "deadline_stop" not in fields

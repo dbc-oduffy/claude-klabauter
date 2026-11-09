@@ -62,6 +62,45 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
         return None
 
 
+def _is_test_path(path: str) -> bool:
+    parts = _norm(path).split("/")
+    name = parts[-1]
+    return (
+        any(p in ("tests", "test", "__tests__") for p in parts[:-1])
+        or name.startswith("test_")
+        or name.endswith(("_test.py", ".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.js"))
+    )
+
+
+def tests_of_withheld_code(
+    root: Path, message: str, paths: Sequence[str], withheld: Sequence[str],
+) -> list[str]:
+    """The `paths` that are test files of a checkpoint row whose non-test write is in `withheld`:
+    a row lands whole or its tests wait with its withheld code. Rows come from the message subject,
+    their `writes` from the `Checkpoint-Plan:` spine. Zero git spawns; an unreadable plan returns
+    `[]`. Never raises."""
+    try:
+        from coordinator_core.git.checkpoint_guard import checkpoint_row_ids
+        from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
+
+        plan, ids = _message_plan(message), set(checkpoint_row_ids((message or "").split("\n", 1)[0]))
+        if not plan or not ids or not withheld:
+            return []
+        rows = getattr(load_rows_memo((Path(root) / plan).read_text(encoding="utf-8")), "rows", None) or []
+        held, present = {_norm(p) for p in withheld}, {_norm(p) for p in paths}
+        extra: set[str] = set()
+        for row in rows:
+            writes = row.get("writes") if isinstance(row, dict) else None
+            if str(row.get("id") if isinstance(row, dict) else "") not in ids or not isinstance(writes, list):
+                continue
+            norm = [_norm(w) for w in writes if isinstance(w, str)]
+            if any(w in held and not _is_test_path(w) for w in norm):
+                extra.update(w for w in norm if _is_test_path(w) and w in present and w not in held)
+        return sorted(extra)
+    except Exception:  # noqa: BLE001 -- unreadable plan: nothing extra is withheld
+        return []
+
+
 NO_PRINT_REASON = "no write-time print of this run: the run's own write of this path was not recorded"
 
 

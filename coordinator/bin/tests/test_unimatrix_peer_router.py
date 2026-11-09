@@ -320,7 +320,7 @@ def test_leg_records_become_peers_and_peers_json_wins(tmp_path):
     write_leg(legs, "conv-dead", pid=2 ** 22 + 12345)
     (legs / "junk.json").write_text("{")
     got = pr.load_leg_peers(legs, {p["name"] for p in PEERS}, {p["target"] for p in PEERS})
-    assert got == [{"name": "agy-conv-new", "vendor": "agy", "target": "conv-new"}]
+    assert got == [{"name": pr.readable_peer_name("agy", "conv-new"), "vendor": "agy", "target": "conv-new"}]
     assert pr.load_leg_peers(tmp_path / "missing") == []
 
 
@@ -336,12 +336,12 @@ def test_router_registers_a_leg_that_appears_after_start_without_peers_json(box)
             assert r.peers == {}
             write_leg(legs, "conv-9")
             await r.refresh_discovered()
-            assert "agy-conv-9" in r.peers
-            post_frame(r.endpoint_of("agy-conv-9"), frame_to(box, s.path, "em", "hello"))
+            assert pr.readable_peer_name("agy", "conv-9") in r.peers
+            post_frame(r.endpoint_of(pr.readable_peer_name("agy", "conv-9")), frame_to(box, s.path, "em", "hello"))
             await until(lambda: len(s.frames) == 1)
-            assert log and log[0][0] == "agy-conv-9"
+            assert log and log[0][0] == pr.readable_peer_name("agy", "conv-9")
             await r.refresh_discovered()  # idempotent
-            assert list(r.peers) == ["agy-conv-9"]
+            assert list(r.peers) == [pr.readable_peer_name("agy", "conv-9")]
         finally:
             s.close()
             await r.stop()
@@ -364,7 +364,7 @@ def test_lock_peers_need_a_held_lock_and_peers_json_wins(tmp_path):
     (d / "notes.txt").write_text("")
     try:
         got = pr.load_lock_peers(d, "codex", {p["name"] for p in PEERS}, {p["target"] for p in PEERS})
-        assert got == [{"name": "codex-thr-live", "vendor": "codex", "target": "thr-live"}]
+        assert got == [{"name": pr.readable_peer_name("codex", "thr-live"), "vendor": "codex", "target": "thr-live"}]
         assert pr.load_lock_peers(tmp_path / "missing", "codex") == []
     finally:
         for fd in fds:
@@ -408,18 +408,18 @@ def test_router_with_no_peers_json_registers_locks_and_retires_them_when_release
             fds["codex"] = hold(cx / "thr-7.lock")
             fds["agy"] = hold(ag / "conv-7.lock")
             await r.refresh_discovered()
-            assert sorted(r.peers) == ["agy-conv-7", "codex-thr-7"]
+            assert sorted(r.peers) == sorted([pr.readable_peer_name("agy", "conv-7"), pr.readable_peer_name("codex", "thr-7")])
             await r.refresh_discovered()  # idempotent
-            assert sorted(r.faces) == ["agy-conv-7", "codex-thr-7"]
-            post_frame(r.endpoint_of("codex-thr-7"), frame_to(box, s.path, "em", "hello"))
+            assert sorted(r.faces) == [pr.readable_peer_name("agy", "conv-7"), pr.readable_peer_name("codex", "thr-7")]
+            post_frame(r.endpoint_of(pr.readable_peer_name("codex", "thr-7")), frame_to(box, s.path, "em", "hello"))
             await until(lambda: len(s.frames) == 1)
-            assert log[0][0] == "codex-thr-7"
-            assert r.peers["codex-thr-7"]["tui"] is True and "tui" not in r.peers["agy-conv-7"]
-            ep, pid = r.endpoint_of("codex-thr-7"), r.faces["codex-thr-7"].pid
+            assert log[0][0] == pr.readable_peer_name("codex", "thr-7")
+            assert r.peers[pr.readable_peer_name("codex", "thr-7")]["tui"] is True and "tui" not in r.peers[pr.readable_peer_name("agy", "conv-7")]
+            ep, pid = r.endpoint_of(pr.readable_peer_name("codex", "thr-7")), r.faces[pr.readable_peer_name("codex", "thr-7")].pid
             os.close(fds.pop("codex"))
             await r.refresh_discovered()
-            assert sorted(r.peers) == ["agy-conv-7"]
-            assert "codex-thr-7" not in r.faces and "codex-thr-7" not in r.locks
+            assert sorted(r.peers) == [pr.readable_peer_name("agy", "conv-7")]
+            assert pr.readable_peer_name("codex", "thr-7") not in r.faces and pr.readable_peer_name("codex", "thr-7") not in r.locks
             assert not os.path.exists(ep) and not os.path.exists(box / "sessions" / f"{pid}.json")
         finally:
             for fd in fds.values():
@@ -623,14 +623,201 @@ def test_list_op_names_peers_and_live_sessions_but_not_the_router_faces(box):
     async def go():
         r = make_router(box, echo_adapters())
         await r.start()
+        s = FakeSender(str(box / "s.sock"))
         try:
-            register_session(box, "em", str(box / "s.sock"))
+            register_session(box, "em", s.path)
             resp = await r._dispatch({"op": "list"})
             assert resp["ok"] is True
             assert resp["peers"] == ["agy-a", "codex-a"] and resp["sessions"] == ["em"]
         finally:
+            s.close()
             await r.stop()
     run(go())
+
+
+def test_face_entries_carry_their_peers_vendor(box):
+    async def go():
+        r = make_router(box, echo_adapters())
+        await r.start()
+        try:
+            stamped = {}
+            for f in (box / "sessions").glob("*.json"):
+                e = json.loads(f.read_text())
+                stamped[e["name"]] = e.get("unimatrixVendor")
+            assert stamped == {"codex-a": "codex", "agy-a": "agy"}
+        finally:
+            await r.stop()
+    run(go())
+
+
+def test_registration_without_a_vendor_writes_no_vendor_field(box):
+    reg = pr.Registration("x", str(box / "eps" / "x.sock"), str(box / "sessions"))
+    assert "unimatrixVendor" not in reg.data
+    assert pr.Registration("x", "e", str(box / "sessions"), vendor="codex").data["unimatrixVendor"] == "codex"
+
+
+def test_list_agents_has_one_row_per_reachable_name_with_box_and_vendor(box):
+    async def go():
+        r = make_router(box, echo_adapters())
+        await r.start()
+        s = FakeSender(str(box / "s.sock"))
+        try:
+            register_session(box, "em", s.path)
+            (box / "sessions" / "far.json").write_text(json.dumps(
+                {"name": "far-codex", "pid": os.getpid(), "messagingSocketPath": s.path,
+                 "unimatrixBox": "machine-b", "unimatrixVendor": "codex"}))
+            resp = await r._dispatch({"op": "list", "as": "cli"})
+            rows = {a["name"]: a for a in resp["agents"]}
+            assert sorted(rows) == resp["reachable"] == ["codex-a", "em", "far-codex"]
+            here = r.roster_rows("cli")[1][0]["box"]
+            assert rows["codex-a"] == {"name": "codex-a", "box": here, "vendor": "codex"}
+            assert rows["em"] == {"name": "em", "box": here, "vendor": "claude"}
+            assert rows["far-codex"] == {"name": "far-codex", "box": "machine-b", "vendor": "codex"}
+            assert resp["peers"] and resp["sessions"] == ["em", "far-codex"] and "ready" in resp
+        finally:
+            s.close()
+            await r.stop()
+    run(go())
+
+
+class ReplyServer:
+    """A session-socket stand-in that reads one frame, then writes `reply` (or nothing)."""
+
+    def __init__(self, path, reply=b""):
+        self.frames = []
+        self.reply = reply
+        self.srv = socket.socket(socket.AF_UNIX)
+        self.srv.bind(path)
+        self.srv.listen(4)
+        threading.Thread(target=self.run, daemon=True).start()
+
+    def run(self):
+        while True:
+            try:
+                c, _ = self.srv.accept()
+            except OSError:
+                return
+            buf = b""
+            while not buf.endswith(b"\n"):
+                chunk = c.recv(65536)
+                if not chunk:
+                    break
+                buf += chunk
+            if buf:
+                self.frames.append(json.loads(buf.splitlines()[0]))
+            if self.reply:
+                c.sendall(self.reply)
+            c.close()
+
+    def close(self):
+        self.srv.close()
+
+
+def test_reachable_is_ready_peers_plus_sessions_with_an_existing_endpoint(box):
+    async def go():
+        r = make_router(box, echo_adapters())
+        s = FakeSender(str(box / "s.sock"))
+        try:
+            register_session(box, "em", s.path)
+            register_session(box, "stale", str(box / "gone.sock"))
+            assert r.reachable("cli") == ["codex-a", "em"]  # agy-a has no leg; stale has no socket
+            assert r.reachable("em") == ["codex-a"]
+            resp = await r._dispatch({"op": "list", "as": "cli"})
+            assert resp["reachable"] == ["codex-a", "em"] and "stale" not in resp["sessions"]
+        finally:
+            s.close()
+    run(go())
+
+
+def test_cli_send_to_a_session_name_writes_the_frame_and_reports_written(box):
+    async def go():
+        s = ReplyServer(str(box / "s.sock"))
+        register_session(box, "em", str(box / "s.sock"))
+        r = make_router(box, echo_adapters())
+        try:
+            resp = await r._dispatch({"op": "send", "as": "cli", "to": "em", "text": "hello"})
+            assert resp["ok"] is True and resp["written"] is True and resp["msg_id"]
+            await until(lambda: len(s.frames) == 1)
+            f = s.frames[0]
+            assert 'from-name="cli"' in f["message"]["content"] and "hello" in f["message"]["content"]
+            assert "provenance" not in f
+        finally:
+            s.close()
+    run(go())
+
+
+def test_send_to_a_session_that_refuses_or_resets_or_is_gone_fails_naming_the_reason(box):
+    async def go():
+        register_session(box, "em", str(box / "s.sock"))
+        r = make_router(box, echo_adapters())
+        send = {"op": "send", "as": "cli", "to": "em", "text": "hello"}
+        s = ReplyServer(str(box / "s.sock"), reply=b"ENOINBOX: no-key\n")
+        try:
+            bad = await r._dispatch(send)
+            assert bad["ok"] is False and "em did not accept" in bad["error"] and "ENOINBOX" in bad["error"]
+            assert "written" not in bad
+        finally:
+            s.close()
+        os.unlink(str(box / "s.sock"))
+        gone = await r._dispatch(send)
+        assert gone["ok"] is False and "em did not accept" in gone["error"]
+        unknown = await r._dispatch({**send, "to": "nobody"})
+        assert unknown["ok"] is False and "no session named nobody" in unknown["error"]
+    run(go())
+
+
+def test_deliver_raises_when_the_peer_resets_before_close(monkeypatch):
+    """macOS unix streams never surface a reset on a real socket, so the reset is injected."""
+    class Resetting:
+        def __init__(self, *a):
+            pass
+
+        def settimeout(self, t):
+            pass
+
+        def connect(self, ep):
+            pass
+
+        def sendall(self, d):
+            pass
+
+        def shutdown(self, how):
+            pass
+
+        def recv(self, n):
+            raise ConnectionResetError(54, "Connection reset by peer")
+
+        def close(self):
+            pass
+    monkeypatch.setattr(pr.socket, "socket", Resetting)
+    with pytest.raises(ConnectionResetError):
+        pr.deliver("/nowhere", b"x\n")
+
+    class ClosedFirst(Resetting):
+        def shutdown(self, how):
+            raise OSError(pr.errno.ENOTCONN, "Transport endpoint is not connected")
+
+        def recv(self, n):
+            return b""
+    monkeypatch.setattr(pr.socket, "socket", ClosedFirst)
+    pr.deliver("/nowhere", b"x\n")  # the peer read the whole frame and closed before the half-close
+
+
+def test_deliver_accepts_silence_and_ok_reply_and_raises_on_a_refusal_line(box):
+    path = str(box / "d.sock")
+    data = b'{"x":1}\n'
+    for reply, accepted in ((b"", True), (b'{"ok":true}\n', True), (b'{"ok":false,"error":"no"}\n', False),
+                            (b"ENOINBOX: no-key\n", False)):
+        s = ReplyServer(path, reply=reply)
+        try:
+            if accepted:
+                pr.deliver(path, data)
+            else:
+                with pytest.raises(RuntimeError, match="refused"):
+                    pr.deliver(path, data)
+        finally:
+            s.close()
+            os.unlink(path)
 
 
 def test_peer_send_identifies_itself_by_thread_id_not_name(box):
@@ -725,4 +912,5 @@ def test_list_shows_per_peer_readiness_leg_present_or_not(box, capsys, monkeypat
             await r.stop()
     assert run(go()) == 0
     lines = capsys.readouterr().out.splitlines()
-    assert "agy-a\tnot-ready (no leg)" in lines and "codex-a\tready" in lines
+    assert any(line.startswith("agy-a\tnot-ready (no leg)\t") for line in lines)
+    assert any(line.startswith("codex-a\tready\t") for line in lines)

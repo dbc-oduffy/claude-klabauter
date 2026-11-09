@@ -181,6 +181,15 @@ def test_head_export_overlays_write_set_over_head_bytes(repo):
     assert not (root / "scratch" / "hout.base").exists()
 
 
+def test_head_export_at_a_given_sha_extracts_that_tree_and_records_it(repo):
+    root, base_sha, _ = repo
+    res = le.build_head_export(root, root / "scratch" / "bout", [], base_sha)
+    out = Path(res.path)
+    assert res.head_sha == base_sha != _git(root, "rev-parse", "HEAD")
+    assert (out / "pkg" / "peer.py").read_bytes() == b"peer v1\n"
+    assert (out / "old.txt").exists() and not (out / "new.txt").exists()
+
+
 def test_head_export_seeds_head_allowlist_and_tracked_state_segments_only(repo):
     root, _, _ = repo
     for rel, body in (

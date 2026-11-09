@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import importlib.util
 import subprocess
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -40,6 +42,18 @@ def pytest_configure(config) -> None:
     )
 
 
+def _published_module_absent(name):
+    parts = name.split(".")
+    if any(sys.modules.get(".".join(parts[:i]), False) is None for i in range(1, len(parts) + 1)):
+        return True
+    try:
+        return importlib.util.find_spec(name) is None
+    except ModuleNotFoundError as exc:
+        if exc.name == name or name.startswith((exc.name or "") + "."):
+            return True
+        raise
+
+
 _DESKTOP_NOTIFIERS = frozenset({"osascript", "notify-send"})
 
 
@@ -52,6 +66,16 @@ def _no_desktop_notifier(monkeypatch):
 
     real_which = shutil.which
     monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None if os.path.basename(str(cmd)) in _DESKTOP_NOTIFIERS else real_which(cmd, *a, **k))
+def _published_module_absent(name):
+    parts = name.split(".")
+    if any(sys.modules.get(".".join(parts[:i]), False) is None for i in range(1, len(parts) + 1)):
+        return True
+    try:
+        return importlib.util.find_spec(name) is None
+    except ModuleNotFoundError as exc:
+        if exc.name == name or name.startswith((exc.name or "") + "."):
+            return True
+        raise
 
 
 @pytest.fixture(autouse=True)
@@ -60,12 +84,14 @@ def _stub_fold_bar_verdict(request, monkeypatch):
     REAL_FOLD_BAR = True, or a test carries the fold_bar_real marker, to exercise the real fold bar."""
     if getattr(request.module, "REAL_FOLD_BAR", False) or request.node.get_closest_marker("fold_bar_real"):
         return
+    if _published_module_absent("coordinator_core.ops.fold_bar"):
+        return
     try:
         from coordinator_core.ops import fold_bar
-    except ModuleNotFoundError as exc:
-        if not (exc.name or "").startswith("coordinator_core"):
-            raise
-        return
+    except ImportError:
+        if _published_module_absent("coordinator_core.ops.fold_bar"):
+            return
+        raise
 
     monkeypatch.setattr(fold_bar, "verdict", lambda sha, repo_root: fold_bar.FoldBarResult(True, sha))
 
@@ -92,12 +118,14 @@ def _stub_source_preflight(request, monkeypatch):
     to exercise the real gate."""
     if getattr(request.module, "REAL_SOURCE_PREFLIGHT", False):
         return
+    if _published_module_absent("coordinator_core.percolate.source_preflight"):
+        return
     try:
         from coordinator_core.percolate import source_preflight
-    except ModuleNotFoundError as exc:
-        if not (exc.name or "").startswith("coordinator_core"):
-            raise
-        return
+    except ImportError:
+        if _published_module_absent("coordinator_core.percolate.source_preflight"):
+            return
+        raise
 
     monkeypatch.setattr(source_preflight, "check_source_published", lambda _source_dir, *_a, **_k: None)
 

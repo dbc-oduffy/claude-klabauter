@@ -106,6 +106,9 @@ def test_the_terminal_return_validates_as_a_wake_digest_for_a_plain_run():
     assert obj["tests"]["status"] == "not_run"
     assert obj["review"]["status"] == "not_run"
     assert obj["next_action"]["kind"] == "terminal_commit"
+    returned = script[script.rindex("return {\n") :]
+    order = [returned.index(k) for k in ("  next_action:", "  get terminal_commit_cli()", "  schema:")]
+    assert order == sorted(order)
 
 
 def test_a_resolved_scope_runs_before_the_falsifier_judge():
@@ -549,7 +552,8 @@ def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_te
         waves, name="wf", description="judge", plan_path="docs/plans/p.md",
         review_roster_fragment=_V5_FRAGMENT_WITH_JUDGE, review_stage_schemas=_STAGE_SCHEMAS_WITH_JUDGE,
     )
-    assert "_falsifierResult = await (async () => { try { return ((r, g) => {" in script
+    assert "_falsifierResult = await (async () => { try { return ((o) => (o && typeof o === 'object' ? { ...o, authored_by: " in script
+    assert "((r, g, p) => {" in script
     assert "agentType: 'coordinator:criterion-judge'" in script
     assert "test:terminal-falsifier'" not in script
     assert "criterion: (_falsifierResult ?" in script

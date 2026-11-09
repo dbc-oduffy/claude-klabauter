@@ -791,6 +791,42 @@ def test_landing_invariant_nodes_is_the_set_invariant_findings_owes(tmp_path, mo
     assert [f.path for f in li.invariant_findings(tmp_path, ["mod.py"], "r1", {})] == [_INV.split("::")[0]]
 
 
+_RED = "t.py::test_red"
+_RUN_BASE = "b" * 40
+
+
+def _gate_with_baseline(tmp_path, baseline):
+    root = _repo(tmp_path)
+    _write_record(root, {"status": "fail", "tests": ["t.py"], "baseline": baseline})
+    return li.landing_test_gate(root, {"run_base_sha": _RUN_BASE}, "r1")
+
+
+def test_red_measured_at_the_run_base_lands_as_failing_at_base_advisory(tmp_path):
+    findings, check = _gate_with_baseline(
+        tmp_path, {"base_sha": _RUN_BASE, "caused": [], "foreign": [_RED], "evidence": []})
+    assert check == "pre-existing-only" and list(findings) == []
+    assert findings.foreign_evidence == {_RED: [li.FAILING_AT_BASE]}
+
+
+def test_red_measured_at_the_run_base_but_caused_still_refuses(tmp_path):
+    findings, check = _gate_with_baseline(
+        tmp_path, {"base_sha": _RUN_BASE, "caused": [_RED], "foreign": [], "evidence": []})
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+
+
+def test_foreign_red_measured_at_another_sha_and_unevidenced_still_refuses(tmp_path):
+    findings, check = _gate_with_baseline(
+        tmp_path, {"base_sha": "c" * 40, "caused": [], "foreign": [_RED], "evidence": []})
+    assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+    assert "base check owed" in findings[0].detail
+
+
+def test_pre_base_sha_record_with_matching_evidence_still_lands(tmp_path):
+    findings, check = _gate_with_baseline(
+        tmp_path, {"caused": [], "foreign": [_RED], "evidence": [_RED]})
+    assert check == "pre-existing-only" and list(findings) == []
+
+
 def test_run_landing_paths_drops_deleted_and_the_record(tmp_path):
     rec = tmp_path / "state" / "rec.md"
     got = li.run_landing_paths(tmp_path, ["a.py", "gone.py", "state/rec.md"], ["gone.py"], rec)

@@ -94,6 +94,10 @@ __all__ = [
     "ENGINE_STAMP_FILENAME",
     "UnstampedEngineRootError",
     "compute_client_token",
+    "stamp_token",
+    "HANDOVER_TOKEN_ENV",
+    "read_engine_stamp_bytes",
+    "replace_engine_stamp_bytes",
     "write_engine_stamp",
     "read_engine_stamp_sha",
     "ENGINE_PUBLISHED_AT_FILENAME",
@@ -338,7 +342,49 @@ def compute_client_token(repo_root: Optional[Path] = None) -> str:
         raise UnstampedEngineRootError(
             _no_stamp_message(root), root=root, root_exists=root.is_dir()
         )
+    live = stamp_token(stamp_bytes)
+    handover = os.environ.get(HANDOVER_TOKEN_ENV)
+    if handover:
+        successor_token, _, superseded_token = handover.partition(":")
+        if successor_token and live == superseded_token:
+            return successor_token
+    return live
+
+
+def stamp_token(stamp_bytes: bytes) -> str:
+    """The client token a stamp with these bytes yields."""
     return _sha1(b"engine-stamp:" + stamp_bytes).hexdigest()[:16]
+
+
+#: Set only on a handover successor's spawn, `"<successor token>:<superseded token>"`. While the
+#: live stamp still yields the superseded token, `compute_client_token` returns the successor's
+#: token in that process, so the successor binds and serves its own generation before the stamp
+#: flips. Any other stamp reads as itself: the override expires on the first flip.
+HANDOVER_TOKEN_ENV = "COORDINATOR_WARM_HANDOVER_TOKEN"
+
+
+def read_engine_stamp_bytes(repo_root: Path) -> Optional[bytes]:
+    """The stamp's raw bytes, or None when absent or unreadable."""
+    try:
+        return _engine_stamp_path(Path(repo_root)).read_bytes() or None
+    except OSError:
+        return None
+
+
+def replace_engine_stamp_bytes(repo_root: Path, stamp_bytes: bytes) -> None:
+    """Atomically replace the stamp with `stamp_bytes` (no reader sees a partial or empty file)."""
+    stamp = _engine_stamp_path(Path(repo_root))
+    fd, tmp_name = tempfile.mkstemp(prefix=ENGINE_STAMP_FILENAME + ".", dir=str(stamp.parent))
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(stamp_bytes)
+        os.replace(tmp_name, stamp)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def write_engine_stamp(repo_root: Path, identity: str) -> Path:

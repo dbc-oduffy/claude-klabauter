@@ -148,14 +148,27 @@ _MODE_ADAPTATION = {
 _NUDGE_MODES = {"plan", "acceptEdits", "default"}
 
 
+def doctrine_root() -> Path | None:
+    """The plugin root a provisioned DoE box records in `<claude_dir>/.coordinator-plugin-root`,
+    or None when the breadcrumb is absent, empty or names a missing directory."""
+    try:
+        text = (claude_dir() / ".coordinator-plugin-root").read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return Path(text) if text and Path(text).is_dir() else None
+
+
 def plugin_root_source() -> tuple[Path, str]:
     """(root, where it came from). With `CLAUDE_PLUGIN_ROOT` unset the root is this script's own
     `coordinator/` when it carries the install manifest, else the `coordinator/` of the DoE checkout
-    the machine registry names; a script copy hosted elsewhere (klabauter) never supplies the
-    manifest. Neither found: the script's `coordinator/`, flagged as manifest-less."""
+    the machine registry names; a DoE box's `.coordinator-plugin-root` breadcrumb wins over both. A
+    script copy hosted elsewhere (klabauter) never supplies the manifest. Neither found: the script's `coordinator/`, flagged as manifest-less."""
     env = os.environ.get("CLAUDE_PLUGIN_ROOT")
     if env:
         return Path(env), "CLAUDE_PLUGIN_ROOT"
+    doctrine = doctrine_root()
+    if doctrine:
+        return doctrine, "doctrine breadcrumb (CLAUDE_PLUGIN_ROOT unset)"
     own = Path(__file__).resolve().parents[2]
     if manifest_path(own).is_file():
         return own, "script clone (CLAUDE_PLUGIN_ROOT unset)"
@@ -389,6 +402,12 @@ def build_decisions(permission_mode: str | None = None) -> list[Decision]:
             "Write docs/coordinator-currency.yaml into the current repo?",
             "Records which coordinator version this repo was set up against; an untracked file in the current directory. Commit it in a project repo, skip it inside the plugin clone.",
             ("write", "skip"), "skip", "optional",
+        ),
+        Decision(
+            "agy_runtime",
+            "Use the Antigravity (agy) CLI as a runtime for agent-pipe delivery on this machine?",
+            "Recorded as an answer for the agent to carry; installs nothing. The default follows whether `agy` is on PATH.",
+            ("use", "skip"), "use" if shutil.which("agy") else "skip", "optional",
         ),
         Decision(
             "open_claude_home",
@@ -1035,6 +1054,10 @@ def manifest_entry_ids(manifest: dict) -> set[str]:
     return ids
 
 
+# A step ref whose manifest entry was renamed upstream: the renamed entry satisfies the old ref.
+_MANIFEST_RENAMES = {"required_mcp_surfaces:notebooklm-mcp": "required_mcp_surfaces:gemini-notebook-mcp"}
+
+
 def check_manifest_drift(manifest: dict | None = None, steps: tuple[Step, ...] = STEPS) -> list[str]:
     """Problems joining the manifest to the steps; empty means one source of truth holds."""
     manifest = _read_json(manifest_path()) if manifest is None else manifest
@@ -1050,6 +1073,10 @@ def check_manifest_drift(manifest: dict | None = None, steps: tuple[Step, ...] =
                 if not matched:
                     problems.append(f"step {step.id} claims {ref} but the manifest has no such entries")
                 claimed |= matched
+            elif ref in entries:
+                claimed.add(ref)
+            elif _MANIFEST_RENAMES.get(ref) in entries:
+                claimed.add(_MANIFEST_RENAMES[ref])
             elif any(alt in entries for alt in ref.split("|")):
                 # Trap: `a|b` names one surface under a renamed key (upstream renamed the NotebookLM
                 # MCP key); the claim holds whichever spelling this manifest carries.
@@ -1199,7 +1226,9 @@ def _plugin_drift(market: str | None) -> tuple[list[str], list[str]]:
 def detect_track() -> dict:
     """Which path the install takes: fresh | update | repair.
 
-    fresh  : no coordinator plugin installed.
+    fresh  : no coordinator plugin installed and no DoE doctrine provisioned. A DoE box (the
+             `.coordinator-plugin-root` breadcrumb names a live directory) with no plugin registry
+             entry is update (engine healthy) or repair, never fresh, and takes no plugin step.
     update : installed and the published (marketplace plugin.json) version is newer, or the
              install record lags the clone it points at (plugin version drift); versions
              that cannot be read never count as newer.
@@ -1215,8 +1244,15 @@ def detect_track() -> dict:
     present, have, market = _installed_coordinator()
     drift: list[str] = []
     stale: list[str] = []
+    doctrine = doctrine_root()
     doe_box = doe_tree_from_evidence() is not None
-    if not present:
+    if not present and doctrine is not None:
+        ok, detail = _engine_check()
+        track = "update" if ok else "repair"
+        reason = (f"DoE box: doctrine provisioned at {doctrine} (no plugin registry entry); "
+                  + ("already current" if ok else detail))
+        steps = ["engine_setup", "engine_check", *configure]
+    elif not present:
         track, reason, steps = "fresh", "no coordinator plugin installed", ["plugin_install", *configure]
         if doe_box:
             reason += "; DoE box: coordinator is delivered by the DoE checkout, so no plugin is registered by design"
@@ -1622,10 +1658,6 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps({"error": "manifest/step drift", "plugin_root": str(root),
                           "plugin_root_source": source, "problems": drift}, indent=2), file=sys.stderr)
         return 3
-
-    if args.plan or (args.i_am_agent and not args.answers):
-        print(json.dumps(build_plan(args.permission_mode), indent=2))
-        return 0
     if args.express and args.custom:
         ap.error("--express and --custom are alternatives")
     if not (args.answers or args.non_interactive or args.express or args.custom):

@@ -42,11 +42,24 @@ def _trail(root: Path) -> dict:
     (slot / "b-1.sizing.yaml").write_text("a: 1\n", encoding="utf-8")
     (run / "wave-0.gate-report.json").write_text("{}\n", encoding="utf-8")
     (run / "fire-0-1.mjs").write_text("// ignored\n", encoding="utf-8")
+    (run / "RUN-NOTES.md").write_text("notes\n", encoding="utf-8")
+    other = run / "wave-1-x"
+    other.mkdir()
+    (other / "b-2.sizing.yaml").write_text("a: 2\n", encoding="utf-8")
+    (run / "wave-1.gate-report.json").write_text("{}\n", encoding="utf-8")
     return {"waveIndex": 0, "trailSlotDir": str(slot)}
 
 
-def _status(root: Path) -> list[str]:
-    return [l for l in _git(root, "status", "--porcelain", "--", "state/plan-blitz").splitlines() if l]
+_FOREIGN = (
+    "state/plan-blitz/20261015T000000Z/RUN-NOTES.md",
+    "state/plan-blitz/20261015T000000Z/wave-1-x/b-2.sizing.yaml",
+    "state/plan-blitz/20261015T000000Z/wave-1.gate-report.json",
+)
+
+
+def _status(root: Path, *pathspec: str) -> list[str]:
+    spec = pathspec or ("state/plan-blitz",)
+    return [l for l in _git(root, "status", "--porcelain", "-uall", "--", *spec).splitlines() if l]
 
 
 def test_land_trail_leaves_the_waves_trail_clean_in_one_commit(repo):
@@ -57,9 +70,47 @@ def test_land_trail_leaves_the_waves_trail_clean_in_one_commit(repo):
 
     assert out["error"] is None and out["committed"], out
     assert int(_git(repo, "rev-list", "--count", "HEAD")) == before + 1
-    assert _status(repo) == []
+    assert sorted(l[3:] for l in _status(repo)) == sorted(_FOREIGN)
     assert "fire-0-1.mjs" not in _git(repo, "ls-files", "state/plan-blitz")
-    assert len(_git(repo, "ls-files", "state/plan-blitz").split()) == 3
+    tracked = _git(repo, "ls-files", "state/plan-blitz").split()
+    assert len(tracked) == 3
+    assert not set(tracked) & set(_FOREIGN)
+
+
+def test_land_trail_names_only_the_waves_slot_and_wave_n_files(repo, monkeypatch):
+    wave = _trail(repo)
+    seen = {}
+
+    def fake_handler(params, repo_root=None):
+        seen.update(params)
+        return {"committed": True, "sha": "abc"}
+
+    monkeypatch.setattr(commit_v2, "_handler", fake_handler)
+
+    bl.land_trail(repo, wave)
+
+    run = "state/plan-blitz/20261015T000000Z/"
+    assert sorted(seen["paths"]) == [
+        run + "wave-0-abc/b-1.planning-report.md",
+        run + "wave-0-abc/b-1.sizing.yaml",
+        run + "wave-0.gate-report.json",
+    ]
+
+
+def test_a_slot_that_is_the_run_dir_does_not_sweep_the_run(repo, monkeypatch):
+    wave = _trail(repo)
+    wave["trailSlotDir"] = str(repo / "state" / "plan-blitz" / "20261015T000000Z")
+    seen = {}
+
+    def fake_handler(params, repo_root=None):
+        seen.update(params)
+        return {"committed": True, "sha": "abc"}
+
+    monkeypatch.setattr(commit_v2, "_handler", fake_handler)
+
+    bl.land_trail(repo, wave)
+
+    assert seen["paths"] == ["state/plan-blitz/20261015T000000Z/wave-0.gate-report.json"]
 
 
 def test_a_peer_held_trail_path_is_skipped_and_stays_dirty(repo, monkeypatch):
@@ -77,7 +128,7 @@ def test_a_peer_held_trail_path_is_skipped_and_stays_dirty(repo, monkeypatch):
     assert out["committed"], out
     assert out["skipped_peer_held"] == [held]
     assert held not in out["paths"]
-    assert [l[3:] for l in _status(repo)] == [held]
+    assert sorted(l[3:] for l in _status(repo)) == sorted([held, *_FOREIGN])
 
 
 def test_commit_receives_explicit_file_paths_never_a_directory(repo, monkeypatch):

@@ -270,16 +270,16 @@ def test_fast_local_md_preserves_interior_single_quoted_marker_expression(tmp_pa
     split by a naive "strip every quote character" pass."""
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: \"python3 -m pytest -m 'not cadence and not "
-        "pending_fix and not designed_red'\"\n---\n"
+        "complete and not pending_fix and not designed_red'\"\n---\n"
     )
     result = cs_resolve_fast_test_cmd(str(tmp_path))
     assert result.exit_code == 0
     assert (
         result.cmd
-        == "python3 -m pytest -m 'not cadence and not pending_fix and not designed_red'"
+        == "python3 -m pytest -m 'not cadence and not complete and not pending_fix and not designed_red'"
     )
     argv = shlex.split(result.cmd)
-    assert argv[:5] == ["python3", "-m", "pytest", "-m", "not cadence and not pending_fix and not designed_red"]
+    assert argv[:5] == ["python3", "-m", "pytest", "-m", "not cadence and not complete and not pending_fix and not designed_red"]
 
 
 def test_full_local_md_preserves_interior_single_quoted_marker_expression(tmp_path):
@@ -300,7 +300,7 @@ def test_full_local_md_preserves_interior_single_quoted_marker_expression(tmp_pa
 def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path):
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: \"python3 -m pytest -m 'not cadence and not "
-        "pending_fix and not designed_red'\"\n---\n"
+        "complete and not pending_fix and not designed_red'\"\n---\n"
     )
     result = cs_resolve_fast_test_cmd(str(tmp_path))
     assert result.exit_code == 0
@@ -317,7 +317,7 @@ def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path):
     argv = json.loads(proc.stdout)
     marker_idx = argv.index("-m")
     assert argv[marker_idx + 1] == (
-        "not cadence and not pending_fix and not designed_red"
+        "not cadence and not complete and not pending_fix and not designed_red"
     )
 
 

@@ -479,6 +479,37 @@ def test_sessionstart_internal_exception_still_emits_json(monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out) == {}
 
 
+def _worker_env():
+    return load("unimatrix-codex-hook-sessionstart").worker_env_name()
+
+
+def test_sessionstart_worker_marker_adds_pointer_step_even_unregistered(home, monkeypatch, capsys):
+    monkeypatch.setenv(_worker_env(), "1")
+    monkeypatch.setattr(sess, "register", lambda *a: False)
+    monkeypatch.setattr(sess.json, "load", lambda f: {})
+    assert sess.main() == 0
+    steps = json.loads(capsys.readouterr().out)["injectSteps"]
+    assert len(steps) == 1 and "worker-mode.md" in steps[0]["systemMessage"]["systemMessage"]
+
+
+def test_sessionstart_worker_marker_keeps_registration_note(home, monkeypatch, capsys):
+    monkeypatch.setenv(_worker_env(), "1")
+    monkeypatch.setattr(sess, "register", lambda *a: True)
+    monkeypatch.setattr(sess.json, "load", lambda f: {})
+    sess.main()
+    texts = [s["systemMessage"]["systemMessage"] for s in json.loads(capsys.readouterr().out)["injectSteps"]]
+    assert texts[0] == sess.NOTE and len(texts) == 2
+
+
+def test_sessionstart_without_worker_marker_adds_no_pointer(home, monkeypatch, capsys):
+    monkeypatch.delenv(_worker_env(), raising=False)
+    monkeypatch.setattr(sess, "register", lambda *a: True)
+    monkeypatch.setattr(sess.json, "load", lambda f: {})
+    sess.main()
+    steps = json.loads(capsys.readouterr().out)["injectSteps"]
+    assert [s["systemMessage"]["systemMessage"] for s in steps] == [sess.NOTE]
+
+
 def test_sessionstart_script_hardcodes_no_home_path():
     text = (BIN / "unimatrix-agy-hook-sessionstart.py").read_text()
     assert "/Users/" not in text

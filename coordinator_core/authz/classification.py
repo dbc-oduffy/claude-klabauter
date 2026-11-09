@@ -76,6 +76,7 @@ class OpClass(enum.Enum):
 # rather than silently corrupting the classification surface (test-pollution and runtime-
 # privilege-escalation risk). Any caller doing OP_CLASSIFICATION["x"] = ... now fails loud.
 OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType({
+    "codex_status.snapshot": OpClass.MUTATING,  # Derived status cache only; no routing/UI writes.
     "ping": OpClass.COMPUTE_ONLY,
     # invoke.from_argv — MUTATING (fail-closed default, DR-208 § Classification
     # correctness discipline): a generic CLI-argv-to-op dispatcher
@@ -2767,6 +2768,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # (ops/fleet/archive_sizings.py, dest-collision handling + git-mv + commit).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "fleet.archive_terminal_sizings": OpClass.MUTATING,
+    "fleet.klabauter_freshness": OpClass.MUTATING,
     # fleet.backfill_dispositionless_memos (C5,
     # docs/plans/2026-07-26-memo-disposition-flip-op-and-hand-edit-hole.md) — MUTATING:
     # writes realized_by/actioned_note frontmatter fields onto memos already resident
@@ -4437,6 +4439,13 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Classified MUTATING per DR-208 § "Default: MUTATING until affirmed otherwise";
     # no COMPUTE_ONLY affirmation is possible for a handler that spawns and writes.
     # Spec: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emits.md § C4
+    "ceremony.pickup": OpClass.MUTATING,
+    "ceremony.handoff": OpClass.MUTATING,
+    "ceremony.workday_start": OpClass.MUTATING,
+    "ceremony.workday_complete": OpClass.MUTATING,
+    "ceremony.workstream_start": OpClass.MUTATING,
+    "ceremony.quick_wrap": OpClass.MUTATING,
+    "ceremony.result": OpClass.COMPUTE_ONLY,
     "workflow.fire": OpClass.MUTATING,
     # workflow.fire_status — MUTATING: the REFRESHING read. It re-reads a record by
     # fire_id and, whenever the refreshed state differs, writes it back
@@ -4743,6 +4752,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "findings.self_persist_fallback": OpClass.MUTATING,
     "fleet.archive_paper_trail": OpClass.MUTATING,
     "fleet.archive_queue_entry": OpClass.MUTATING,
+    # fleet.klabauter_freshness — fast-forwards the klabauter checkout and re-runs installers.
+    "fleet.klabauter_freshness": OpClass.MUTATING,
     "fleet.archive_release_accumulator": OpClass.MUTATING,
     "fleet.migrate_handoff_vocabulary": OpClass.MUTATING,
     # fleet.migrate_prose_queue — ops/fleet/migrate_prose_queue.py: writes
@@ -5097,6 +5108,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "baton_assemble.apply": OpClass.MUTATING,
     "baton_assemble.brief": OpClass.COMPUTE_ONLY,
 
+    # consolidate_assemble.brief — read-only: `coordinator_core.
+    # consolidate_assemble.ops::_consolidate_assemble_brief` is a thin adapter
+    # over `consolidate_assemble.brief()`, the `/consolidate-git` decision-object
+    # computation. COMPUTE_ONLY is not non-spawning: it spawns read-only git
+    # (`log`, `rev-parse`, `--no-optional-locks status`, the inspect_commits
+    # gather) and writes nothing.
+    # DR-208 five-question affirmation:
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?   No.
+    #   2. Writes into rag's relational store?                                  No.
+    #   3. Opens any file for write (including sentinel creation)?              No.
+    #   4. Mutates shared mutable state outside its own module?                 No.
+    #   5. Persistent state changes observable across process boundaries?       No.
+    "consolidate_assemble.brief": OpClass.COMPUTE_ONLY,
+
     # learn_lessons_pipeline.apply — MUTATING: `coordinator_core.
     # learn_lessons_pipeline.ops::_learn_lessons_pipeline_apply` is a thin
     # adapter over `learn_lessons_pipeline.apply.apply()`, which recomputes
@@ -5227,12 +5252,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # NOT spawn."
     "roadmap.plan_gate": OpClass.COMPUTE_ONLY,
 
-    # RECORD authz-unclassified-ops-at-head — six registered ops missing
-    # from this registry, leaving the registration-quad and drift-guard
     # roadmap.wiring_seams — COMPUTE_ONLY: ops/roadmap_wiring_seams.py reads batons
     # and plan frontmatter and returns findings. Negative-spec: reads files only.
     "roadmap.wiring_seams": OpClass.COMPUTE_ONLY,
 
+    # RECORD authz-unclassified-ops-at-head — six registered ops missing
+    # from this registry, leaving the registration-quad and drift-guard
     # tests RED at HEAD.
     #
     # roadmap.blitz_land — MUTATING: ops/roadmap_blitz_land.py wraps

@@ -30,6 +30,8 @@ import os
 import re
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
+from coordinator_core.bash_guards.leg_attribution import leg
+from coordinator_core.hooks._preuse_phases import DeadlineStop, check_deadline, run_phased
 from coordinator_core.ipc import register_op
 
 _KILL_SWITCH = "COORDINATOR_HOOK_PREUSE_SENDMESSAGE_DISPATCH_DISABLED"
@@ -68,6 +70,10 @@ def _claim_once(run_dir: str, agent_id: str) -> bool:
 
 @register_op("hooks.preuse_sendmessage_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    return run_phased("hooks.preuse_sendmessage_dispatch", params, _chain)
+
+
+def _chain(params: dict) -> dict:
     params = payload_of(params)
     try:
         if os.environ.get(_KILL_SWITCH) == "1":
@@ -83,20 +89,30 @@ def _handler(params: dict, repo_root=None) -> dict:
         if not transcript.endswith(".jsonl"):
             return no_advisory()
         safe_id = glob.escape(agent_id)
-        matches = glob.glob(
-            os.path.join(
-                glob.escape(transcript[: -len(".jsonl")]),
-                "subagents", "workflows", "*", f"agent-{safe_id}.jsonl",
+        check_deadline("transcript_glob")
+        with leg("transcript_glob"):
+            matches = glob.glob(
+                os.path.join(
+                    glob.escape(transcript[: -len(".jsonl")]),
+                    "subagents", "workflows", "*", f"agent-{safe_id}.jsonl",
+                )
             )
-        )
         if len(matches) != 1:
             return no_advisory()
         run_dir = os.path.dirname(matches[0])
         roster_path = os.path.join(run_dir, _ROSTER)
-        if not os.path.isfile(roster_path) or not _is_member(roster_path, agent_id):
+        check_deadline("roster_read")
+        with leg("roster_read"):
+            member = os.path.isfile(roster_path) and _is_member(roster_path, agent_id)
+        if not member:
             return no_advisory()
-        if not _claim_once(run_dir, agent_id):
+        check_deadline("claim_once")
+        with leg("claim_once"):
+            claimed = _claim_once(run_dir, agent_id)
+        if not claimed:
             return no_advisory()
         return context_only("PreToolUse", _ADVICE)
+    except DeadlineStop:
+        raise
     except Exception:
         return no_advisory()

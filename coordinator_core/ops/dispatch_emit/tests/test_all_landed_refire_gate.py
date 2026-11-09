@@ -101,7 +101,7 @@ def _example_game_repo_shape(repo, discharged):  # noqa: F811
     )
     _landed_repo(repo, (("A1", "open"), ("A2", "open"), ("E1", "open"), ("E2", "open")), landed=["A1", "A2"])
     body = "".join(
-        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - some/{i}.py\n"
+        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - some/{i}.{'md' if i.startswith('E') else 'py'}\n"
         + ("  performer: em\n" if i.startswith("E") else "")
         for i in ("A1", "A2", "E1", "E2")
     )

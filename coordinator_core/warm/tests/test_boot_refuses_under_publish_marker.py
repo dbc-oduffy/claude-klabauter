@@ -131,6 +131,23 @@ def test_the_holder_proceeds_only_inside_its_successor_spawn_scope(arm, root, mo
     assert reached == [1]
 
 
+def test_holder_successor_may_spawn_beside_a_live_old_pair_and_nobody_else_may(root):
+    """Make-before-break: the old pair's breadcrumb is live while the successor boots."""
+    breadcrumb.write_breadcrumb(
+        pipe="old-pipe",
+        pid=os.getpid(),
+        stable_pid_start_epoch=0,
+        engine_sha="old",
+        engine_root=root,
+        started_at="2000-01-01T00:00:00Z",
+    )
+    with breadcrumb.hold_publish_marker(root, holder="t"):
+        assert breadcrumb.should_spawn(root) is False
+        with breadcrumb.holder_successor_spawn():
+            assert breadcrumb.should_spawn(root) is True
+        assert breadcrumb.should_spawn(root) is False
+
+
 def test_holder_env_is_empty_for_a_non_holder_and_carries_the_token_for_the_holder(root):
     assert breadcrumb.publish_holder_env(root) == {}
     _foreign_marker(root)

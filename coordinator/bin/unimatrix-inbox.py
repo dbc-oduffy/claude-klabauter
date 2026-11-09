@@ -9,6 +9,12 @@ Usage:
 --remote does not answer. A dropped ssh ends this client; its supervisor restarts it and the
 choice is made again.
 
+Ordinary inbox registrations stay local to the receiving box. Explicit --reply-inbox
+uses the relay's reply-inbox mode to advertise a temporary transport return endpoint
+to its directly connected boxes. It lasts only while this client's SSH stays open;
+downstream mirrors are never re-exported. Raw remote socket paths are not portable
+reply addresses; use an advertised endpoint or an already reachable owner session.
+
 With <deliver-endpoint> (a named pipe on Windows, a unix socket elsewhere; a session
 other than the bridges' own inbox), this process rewrites `from` itself and writes
 each frame straight into that endpoint. Otherwise each delivered frame is handed to
@@ -52,13 +58,18 @@ def default_key():
     return str(next((c for c in cands if c.is_file()), cands[0]))
 
 
-def pick_remote(lan, tunnel):
+def _roster():
     """LAN alias when it answers, else the tunnel alias; see unimatrix-roster.py (vendored beside this script)."""
     path = Path(__file__).resolve().parent / "unimatrix-roster.py"
     spec = importlib.util.spec_from_file_location("unimatrix_roster", path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.pick_remote(lan, tunnel)
+    return mod
+
+
+
+def pick_remote(lan, tunnel):
+    return _roster().pick_remote(lan, tunnel)
 
 
 def parse_args(argv):
@@ -70,6 +81,8 @@ def parse_args(argv):
     p.add_argument("--remote", required=True, help="ssh alias of the far box on the LAN, tried first")
     p.add_argument("--tunnel-remote", default=None, help="ssh alias over the tunnel, used only when --remote does not answer")
     p.add_argument("--key", default=None)
+    p.add_argument("--reply-inbox", action="store_true",
+                   help="explicitly advertise this temporary return endpoint on the receiving box")
     a = p.parse_args(argv)
     a.key = a.key or default_key()
     a.tunnel_remote = a.tunnel_remote or os.environ.get("UNIMATRIX_TUNNEL_REMOTE") or None
@@ -77,6 +90,7 @@ def parse_args(argv):
 
 
 def write_local(endpoint, data):
+    data = _roster().authenticated_data(endpoint, data, os.path.expanduser(SESSIONS))
     if IS_WIN:
         import win32file
         h = win32file.CreateFile(endpoint, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
@@ -99,12 +113,11 @@ def _mirrors():
             continue
 
 
-def inject_port(frame):
+def inject_port(frame, box=None):
     src = str(frame.get("from", "")).removeprefix("uds:")
-    for d in _mirrors():
-        if d.get(FAR_SOCKET_FIELD) == src and d.get("injectPort"):
-            return d["injectPort"]
-    return DEFAULT_PORT
+    candidates = [d for d in _roster().remote_mirrors(_mirrors(), box)
+                  if d.get(FAR_SOCKET_FIELD) == src and d.get("injectPort")]
+    return candidates[0]["injectPort"] if len(candidates) == 1 else DEFAULT_PORT
 
 
 def _readdress(frame, src, new):
@@ -131,17 +144,18 @@ def localize(frame, line, box=None):
     and not proven replyable by the receiver. A frame with no from-name or no box is left as is.
     """
     src = str(frame.get("from", "")).removeprefix("uds:")
-    mirrors = list(_mirrors())
-    for d in mirrors:
-        if d.get(FAR_SOCKET_FIELD) == src:
-            return _readdress(frame, src, "uds:" + d["messagingSocketPath"])
+    mirrors = _roster().remote_mirrors(_mirrors(), box)
+    candidates = [d for d in mirrors if d.get(FAR_SOCKET_FIELD) == src]
+    if len(candidates) == 1:
+        return _readdress(frame, src, "uds:" + candidates[0]["messagingSocketPath"])
     name = _from_name(frame)
     if not name:
         return line
     want = f"{name}.{box}" if box else name
-    for d in mirrors:
-        if d.get(FAR_SOCKET_FIELD) and d.get("name") == want and d.get("messagingSocketPath"):
-            return _readdress(frame, src, "uds:" + d["messagingSocketPath"])
+    candidates = [d for d in mirrors if d.get(FAR_SOCKET_FIELD) and d.get("messagingSocketPath")
+                  and (d.get("name") == want or d.get("unimatrixFarName") == name)]
+    if len(candidates) == 1:
+        return _readdress(frame, src, "uds:" + candidates[0]["messagingSocketPath"])
     return _readdress(frame, src, want) if box else line
 
 
@@ -173,7 +187,7 @@ def main(argv=None):
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WIN else 0
     remote = pick_remote(a.remote, a.tunnel_remote)
     p = subprocess.Popen(["ssh", "-i", a.key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30",
-                          remote, f"inbox {a.name}"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                          remote, f"{'reply-inbox' if a.reply_inbox else 'inbox'} {a.name}"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE, creationflags=flags)
     far_err = threading.Thread(target=log_far_stderr, args=(p.stderr,), daemon=True)
     far_err.start()
@@ -203,7 +217,7 @@ def main(argv=None):
                 log.write(f"deliver failed: {e}\n")
             auth = b""
             continue
-        port = inject_port(frame)
+        port = inject_port(frame, str(a.remote).rpartition("@")[2])
         log.write(f"<< :{port} {line!r}\n")
         try:
             with socket.create_connection((LOOPBACK, port)) as s:
@@ -214,6 +228,7 @@ def main(argv=None):
     rc = p.wait()
     far_err.join(timeout=2)
     log.write(f"inbox ended rc={rc}\n")
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

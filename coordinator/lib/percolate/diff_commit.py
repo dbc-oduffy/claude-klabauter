@@ -225,6 +225,52 @@ def _restore(root: Path, common: Path, touched: Sequence[str], head: Dict[str, T
             print(f"diff_commit: restore failed for {rel}: {exc}", file=sys.stderr)
 
 
+@dataclass(frozen=True)
+class StampOutcome:
+    """`sha` is the stamp commit, or None with `reason` naming why none was written."""
+
+    sha: Optional[str]
+    reason: str
+
+
+def land_stamp_only(dest_repo_root: Path, source_head: str, signature: str, message: str) -> StampOutcome:
+    """Commit `message` with no tree change unless HEAD already carries `source_head` and `signature`.
+
+    The commit names one HEAD-tracked file at HEAD's own blob, so the worktree is never read and
+    a dirty destination file is never swept in. Returns `sha=None` when HEAD already carries
+    `source_head`, HEAD is unborn, or the commit is refused."""
+    from coordinator_core.git.git_state import head_sha, parse_publish_trailers, read_commit
+    from coordinator_core.git.run import run_git
+
+    root = Path(dest_repo_root)
+    sha = head_sha(root)
+    info = read_commit(root, sha) if sha else None
+    if sha is None or info is None:
+        return StampOutcome(None, "destination has no readable HEAD")
+    held = parse_publish_trailers(info.message)
+    if held.source_head == source_head and held.signature == signature:
+        return StampOutcome(None, f"HEAD {sha[:12]} already carries Percolate-Source-Head {source_head[:12]}")
+    ls = run_git(["ls-tree", "-r", "-z", "HEAD"], cwd=str(root))
+    entries = []
+    for row in (ls.stdout.split("\0") if ls.ok else ()):
+        meta, _, rel = row.partition("\t")
+        fields = meta.split()
+        if rel and len(fields) == 3 and fields[0] in ("100644", "100755"):
+            entries.append((rel, int(fields[0], 8), fields[2]))
+    if not entries:
+        return StampOutcome(None, "destination HEAD tracks no regular file to anchor the stamp commit")
+    last: Optional[Exception] = None
+    for rel, mode, blob in entries[:3]:
+        try:
+            out = _gcommit.commit_paths(
+                root, [rel], message, allow_empty=True, supplied_blobs={rel: blob}, modes={rel: mode}
+            )
+            return StampOutcome(out.sha, "")
+        except _gcommit.CommitRefused as exc:
+            last = exc
+    return StampOutcome(None, f"stamp commit refused: {last}")
+
+
 def land_diff(
     dest_repo_root: Path,
     writes: Sequence[DestWrite],
@@ -285,6 +331,7 @@ def land_diff(
                 touched.append(rel)
                 (root / rel).unlink(missing_ok=True)
                 _prune_empty_parents(root, root / rel)
+            remoded = _converge_unchanged(root, by_rel, unchanged, head)
             if _STAMP in todo:
                 touched.append(_STAMP)
                 _swap(staged[_STAMP], root / _STAMP)
@@ -294,7 +341,6 @@ def land_diff(
         finally:
             if raised:
                 _landing.end_swap(root)
-        remoded = _converge_unchanged(root, by_rel, unchanged, head)
         if commit:
             try:
                 sha = _gcommit.commit_paths(

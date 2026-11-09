@@ -128,6 +128,39 @@ def test_server_boot_samples_absent_file_reads_empty(tmp_path):
     assert telemetry.server_boot_samples(tmp_path / "nothing-here") == []
 
 
+def test_request_row_carries_worker_lane_and_dispatch_key_and_omits_unset(tmp_path):
+    telemetry.flush_requests(tmp_path)
+    telemetry.record_request(op="guard.check", session="s1", outcome="ok", worker_pid=77, lane="guard", dispatch_key="k1")
+    telemetry.record_request(op="x")
+    rows = telemetry.request_samples()
+    assert rows[-2]["worker_pid"] == 77
+    assert rows[-2]["lane"] == "guard"
+    assert rows[-2]["dispatch_key"] == "k1"
+    assert rows[-1] == {"op": "x"}
+    telemetry.flush_requests(tmp_path)
+    lines = telemetry.request_telemetry_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    assert json.loads(lines[0])["dispatch_key"] == "k1"
+    assert telemetry.request_samples() == []
+
+
+def test_record_process_start_appends_a_row_with_parent_and_reason(tmp_path):
+    telemetry.record_process_start(pid=4242, role="pool-worker", parent_pid=1, reason="replaced-wedged", engine_root=tmp_path)
+    telemetry.record_process_start(pid=4243, role="server", engine_root=tmp_path)
+    lines = telemetry.process_starts_path(tmp_path).read_text(encoding="utf-8").splitlines()
+    first, second = json.loads(lines[0]), json.loads(lines[1])
+    assert (first["pid"], first["role"], first["parent_pid"], first["reason"]) == (4242, "pool-worker", 1, "replaced-wedged")
+    assert second["parent_pid"] == os.getppid()
+    assert "reason" not in second
+
+
+def test_record_process_start_never_raises_on_write_failure(tmp_path, monkeypatch):
+    def boom(*a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(telemetry.locked_write, "held_lock", boom)
+    telemetry.record_process_start(pid=1, role="server", engine_root=tmp_path)
+
+
 def test_cold_row_carries_op_and_pid_when_supplied(tmp_path):
     """A BURST HAS TO BE ATTRIBUTABLE. 1600 rows in 13 seconds (2026-08-25)
     could name no process and no op, so the defect they reported could not be

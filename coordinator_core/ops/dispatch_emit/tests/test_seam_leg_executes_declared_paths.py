@@ -52,7 +52,10 @@ def test_landed_python_test_files_ride_into_the_leg_behind_a_non_empty_guard():
     assert "const tests = [...new Set(_seamCommitted.flatMap((i) => (_seamOwnTests[i] || [])))].filter(" in leg
     assert "flatMap((i) => _landed[i].declared))].filter(" not in leg
     assert "const tests = _paths.filter(" not in leg
-    assert "python -m pytest <tests> -q" in leg
+    step = leg.split("Step 2, only when tests are listed", 1)[1].split("Run no other command", 1)[0]
+    assert "python -m pytest" not in step
+    assert "Run Python as `python3`" in step
+    assert "same interpreter clause" in step
     assert "tests.length ?" in leg
 
 

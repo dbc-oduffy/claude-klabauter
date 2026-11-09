@@ -710,7 +710,8 @@ def admit_before_spawn(
             )
             verdict = host.admit(int(peak_gib * host.GIB), status)
             if verdict.admit and register_pid is not None:
-                register_spawn(key, peak_gib, register_pid, host)
+                if not register_spawn(key, peak_gib, register_pid, host):
+                    return SpawnAdmission(False, "memory reservation write failed", key, peak_gib)
     except Exception as exc:
         return SpawnAdmission(False, "memory unreadable (%s)" % type(exc).__name__, key, peak_gib)
     gib = lambda n: round(n / host.GIB, 1)
@@ -722,18 +723,20 @@ def admit_before_spawn(
             reason = hold if not granted else "%s; slot wait: %s" % (hold, granted.get("reason"))
             return SpawnAdmission(False, reason, key, peak_gib)
         if register_pid is not None:
-            register_spawn(key, peak_gib, register_pid, host)
+            if not register_spawn(key, peak_gib, register_pid, host):
+                return SpawnAdmission(False, "memory reservation write failed", key, peak_gib)
         return SpawnAdmission(True, "ADMIT %s: slot %s" % (key, granted.get("reason")), key, peak_gib)
     return SpawnAdmission(True, "ADMIT %s: peak %sGiB" % (key, round(peak_gib, 1)), key, peak_gib)
 
 
-def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> None:
-    """Reserve an admitted child's headroom until it exits; never raises."""
+def register_spawn(key: str, peak_gib: float, pid: int, host: Any = None) -> bool:
+    """Reserve headroom until exit; report write failure without raising."""
     try:
         host = host or _load_box_memory_host()
         host.register_command(host.admission_file(), key, pid, peak_gib)
+        return True
     except Exception:
-        pass
+        return False
 
 
 def release_spawn(key: str, pid: int, host: Any = None) -> None:

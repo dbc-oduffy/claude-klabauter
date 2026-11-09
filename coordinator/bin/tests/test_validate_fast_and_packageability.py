@@ -233,7 +233,7 @@ class FastSubcommandTest(unittest.TestCase):
         assert spec.loader is not None
         spec.loader.exec_module(mod)
 
-        marker_expr = "-m 'not cadence and not pending_fix and not designed_red'"
+        marker_expr = "-m 'not cadence and not complete and not pending_fix and not designed_red'"
         resolved_cmd = f"true {marker_expr}"
 
         class _FakeResolveResult:
@@ -275,7 +275,7 @@ class FastSubcommandTest(unittest.TestCase):
         assert spec.loader is not None
         spec.loader.exec_module(mod)
 
-        marker_expr = "-m 'not cadence and not pending_fix and not designed_red'"
+        marker_expr = "-m 'not cadence and not complete and not pending_fix and not designed_red'"
         resolved_cmd = f"true {marker_expr}"
 
         class _FakeResolveResult:
@@ -321,7 +321,7 @@ class FastSubcommandTest(unittest.TestCase):
         assert spec.loader is not None
         spec.loader.exec_module(mod)
 
-        marker_expr = "-m 'not cadence and not pending_fix and not designed_red'"
+        marker_expr = "-m 'not cadence and not complete and not pending_fix and not designed_red'"
         resolved_cmd = f"true {marker_expr}"
 
         class _FakeResolveResult:

@@ -33,7 +33,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_contract import (
     FAN_OUT_OVER, FanOut, HaltCount, Manifest, PipelineEmitRefused, PipelineInputs,
 )
 
-__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "bind_context", "bind_output_paths", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask", "research_block"]
+__all__ = ["bind_seed_briefs", "REPO_PIPELINE", "REPO_COMPARE_PIPELINE", "bind_repo_targets", "compare_output", "ASK_FILE", "BRIEF_FILE", "CORPUS_DEFAULT_LISTS", "LIST_KEY_SHAPES", "corpus_default_lists", "list_key_refusals", "MAX_SLUG_LEN", "multi_ask_preamble", "normalize_scout_questions", "probe_allowlist", "ask_digest", "run_id_for", "WEBSEARCH_BUDGET", "live_research_runs", "websearch_budget_warning", "bind_context", "bind_output_paths", "claims_output", "gate_notebooklm", "halt_legs", "scout_slugs", "segments_for", "write_ask", "research_block"]
 
 ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
@@ -43,6 +43,11 @@ MAX_SLUG_LEN = 48
 DIGEST_LEN = 6
 SCRIPT_SUFFIX = ".workflow.mjs"
 SUBMISSION_FILE = "submission.json"
+HALTED_FILE = "halted.json"
+#: WebSearch calls the research pipeline agents draw from, shared by every research run going at once.
+WEBSEARCH_BUDGET = 200
+#: A launched run whose submission record is older than this is taken to have ended.
+LIVE_RUN_WINDOW_SECONDS = 6 * 60 * 60
 _NON_SLUG_RE = re.compile(r"[^a-z0-9]+")
 _TOPIC_FALLBACK = "question"
 _ROSTER_LIST = "roster"
@@ -115,6 +120,38 @@ def run_id_for(root: Path, run_dir_root: str, prefix: str, digest: str, now: str
         bump += 1
         fresh = f"{prefix}{now}{bump}-{digest}"
     return fresh
+
+
+def live_research_runs(root: Path, run_dir_root: str, prefix: str, own_id: str, now: float) -> list[str]:
+    """Run ids of other research runs still working: launched (`submission.json`), not halted, recent.
+
+    One directory listing plus a stat per `prefix` run dir; no spawn.
+    """
+    base = root / run_dir_root
+    live: list[tuple[float, str]] = []
+    try:
+        entries = [e for e in base.iterdir() if e.name.startswith(prefix) and e.name != own_id]
+        for entry in entries:
+            try:
+                age = now - (entry / SUBMISSION_FILE).stat().st_mtime
+            except OSError:
+                continue
+            if age <= LIVE_RUN_WINDOW_SECONDS and not (entry / HALTED_FILE).exists():
+                live.append((age, entry.name))
+    except OSError:
+        return []
+    return [name for _, name in sorted(live)]
+
+
+def websearch_budget_warning(live_runs: Sequence[str]) -> str:
+    """The advisory naming the shared WebSearch budget and the live run ids; empty when none are live."""
+    if not live_runs:
+        return ""
+    return (
+        f"WebSearch budget is shared: research agents draw on one pool of about {WEBSEARCH_BUDGET} calls, "
+        f"and {len(live_runs)} other research run(s) are live ({', '.join(live_runs)}); "
+        "this run and they may exhaust it before their search work finishes."
+    )
 
 
 def _slug(text: str) -> str:

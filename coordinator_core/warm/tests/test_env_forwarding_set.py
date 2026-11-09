@@ -88,15 +88,20 @@ def test_settings_home_is_the_sole_refuse_entry():
 
 
 def test_override_entries_are_exactly_the_session_env_precedence_triple():
-    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+    from coordinator_core.session.core import CLAUDE_SESSION_ENV_PRECEDENCE
 
     override_entries = [e.name for e in FORWARDING_SET if e.mode == OVERRIDE]
-    assert override_entries == list(SESSION_ENV_PRECEDENCE)
+    assert override_entries == list(CLAUDE_SESSION_ENV_PRECEDENCE)
 
 
 def test_forwarding_set_is_exactly_the_named_entries():
     assert [e.name for e in FORWARDING_SET] == [
         "COORDINATOR_SETTINGS_HOME",
+        "COORDINATOR_AGENT_PROVIDER",
+        "COORDINATOR_AGENT_ROLE",
+        "COORDINATOR_PARENT_SESSION_ID",
+        "COORDINATOR_WORKFLOW_AGENT_TYPE",
+        "COORDINATOR_WORKFLOW_AGENT_LABEL",
         "COORDINATOR_SESSION_ID",
         "CLAUDE_SESSION_ID",
         "CLAUDE_CODE_SESSION_ID",
@@ -116,7 +121,45 @@ def test_forwarding_set_is_exactly_the_named_entries():
         # Agent-type host ladder: same per-caller-fact reasoning as
         # CLAUDE_CODE_REMOTE and COORDINATOR_JOB_MODE.
         "COORDINATOR_AGENT_TYPE_HOST",
+        # Commit provenance detection names: per-caller facts.
+        "CODEX_THREAD_ID",
+        "ANTIGRAVITY_CONVERSATION_ID",
+        "CLAUDECODE",
+        "COORDINATOR_AGENT_VENDOR",
+        "COORDINATOR_AGENT_MODEL",
+        "COORDINATOR_AGENT_SESSION",
     ]
+
+
+def test_provenance_detection_names_are_caller_mode_and_match_the_detector():
+    from coordinator_core.git import agent_provenance as ap
+
+    modes = {e.name: e.mode for e in FORWARDING_SET}
+    for name in (
+        ap.CODEX_SESSION_ENV,
+        ap.AGY_SESSION_ENV,
+        ap.CLAUDE_ENV,
+        ap.VENDOR_ENV,
+        ap.MODEL_ENV,
+        ap.SESSION_ENV,
+    ):
+        assert modes.get(name) == CALLER, name
+
+
+def test_warm_server_spawned_with_codex_env_does_not_stamp_a_caller_lacking_it(monkeypatch):
+    """The server's own os.environ belongs to its spawner: a caller whose wire omits
+    CODEX_THREAD_ID must read no provenance; a caller that carries it reads its own."""
+    from coordinator_core.git.agent_provenance import detect_agent_provenance
+    from coordinator_core.warm.entry_seam import _environ_identity_borrow
+    import os
+
+    monkeypatch.setenv("CODEX_THREAD_ID", "spawner-thread")
+    with _environ_identity_borrow({}, True, None):
+        assert detect_agent_provenance(os.environ) is None
+    with _environ_identity_borrow({"CODEX_THREAD_ID": "caller-thread"}, True, None):
+        p = detect_agent_provenance(os.environ)
+        assert p is not None and p.vendor == "codex" and p.session == "caller-thread"
+    assert os.environ["CODEX_THREAD_ID"] == "spawner-thread"
 
 
 def test_c7_widened_machine_constant_names_are_borrow_mode():
@@ -140,10 +183,21 @@ def test_per_caller_facts_are_exactly_the_caller_mode_entries():
     per-caller name cannot land as BORROW by habit."""
     caller_entries = [e.name for e in FORWARDING_SET if e.mode == CALLER]
     assert caller_entries == [
+        "COORDINATOR_AGENT_PROVIDER",
+        "COORDINATOR_AGENT_ROLE",
+        "COORDINATOR_PARENT_SESSION_ID",
+        "COORDINATOR_WORKFLOW_AGENT_TYPE",
+        "COORDINATOR_WORKFLOW_AGENT_LABEL",
         "CLAUDE_PROJECT_DIR",
         "CLAUDE_CODE_REMOTE",
         "COORDINATOR_JOB_MODE",
         "COORDINATOR_AGENT_TYPE_HOST",
+        "CODEX_THREAD_ID",
+        "ANTIGRAVITY_CONVERSATION_ID",
+        "CLAUDECODE",
+        "COORDINATOR_AGENT_VENDOR",
+        "COORDINATOR_AGENT_MODEL",
+        "COORDINATOR_AGENT_SESSION",
     ]
 
 

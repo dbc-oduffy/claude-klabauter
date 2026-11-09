@@ -227,6 +227,37 @@ def test_recompose_script_runs_the_real_build_and_ensure_twin_stages_from_it(rep
     assert (record_dir(repo, RUN) / hrb.COMPOSED_SCRIPT_FILE).is_file()
 
 
+def _kept_script_run(repo, monkeypatch, engine):
+    monkeypatch.setattr(hrr, "engine_sha", lambda: engine)
+    _halt(repo, monkeypatch)
+    hrb.build(repo, RUN)
+    return record_dir(repo, RUN) / hrb.COMPOSED_SCRIPT_FILE
+
+
+def test_recompose_script_serves_a_kept_script_composed_by_the_running_engine(repo, monkeypatch):
+    kept = _kept_script_run(repo, monkeypatch, "e" * 40)
+    kept.write_text("// kept", encoding="utf-8")
+    monkeypatch.setattr(hrb, "build", lambda *a: pytest.fail("rebuilt a current script"))
+    assert hrb.recompose_script(repo, RUN) == ("// kept", "")
+
+
+def test_recompose_script_rebuilds_a_kept_script_composed_by_another_engine(repo, monkeypatch):
+    kept = _kept_script_run(repo, monkeypatch, "e" * 40)
+    kept.write_text("// old engine", encoding="utf-8")
+    monkeypatch.setattr(hrr, "engine_sha", lambda: "f" * 40)
+    text, why = hrb.recompose_script(repo, RUN)
+    assert why == "" and text != "// old engine" and kept.read_text(encoding="utf-8") == text
+    assert hrr.read(record_dir(repo, RUN), 1000)["fingerprint"]["engine_sha"] == "f" * 40
+
+
+def test_recompose_script_rebuilds_a_kept_script_with_no_record(repo, monkeypatch):
+    kept = _kept_script_run(repo, monkeypatch, "e" * 40)
+    kept.write_text("// orphan", encoding="utf-8")
+    (record_dir(repo, RUN) / hrr.RESUME_FILE).unlink()
+    text, why = hrb.recompose_script(repo, RUN)
+    assert why == "" and text != "// orphan"
+
+
 def test_recompose_script_names_a_run_with_no_halt_marker(repo):
     text, why = hrb.recompose_script(repo, RUN)
     assert text is None and why

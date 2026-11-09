@@ -27,6 +27,9 @@ THREE states (do not collapse to two):
                       install with no .git dir). The indeterminate notice names WHY
                       freshness is unverifiable and how to make it resolvable.
 
+Mirror with no registered source tree adds two more states, decided from the clone's refs
+files (no spawn): "current" (HEAD == origin/candidate) and "unverifiable_here" (HEAD differs).
+
 Decision provenance: chunk C3 of the claude-klabauter-engine-version-surface-drift-probe plan.
 Spec backlink: pln-claude-klabauter-engine-version-surface--c130a8
 
@@ -56,6 +59,7 @@ CAUSE_SHALLOW = "shallow"
 CAUSE_GIT_ERROR = "git_error"
 CAUSE_MIRROR_UNSTAMPED = "mirror_unstamped"
 CAUSE_SOURCE_HISTORY_UNAVAILABLE = "source_history_unavailable"
+CAUSE_REFS_UNREADABLE = "refs_unreadable"
 
 
 def classify_drift(
@@ -220,6 +224,73 @@ def _diagnose_indeterminate(floor_sha: str, engine_dir: Path) -> str:
     return CAUSE_FLOOR_ABSENT if shallow.ok else CAUSE_GIT_ERROR
 
 
+_ORIGIN_CANDIDATE_REF = "refs/remotes/origin/candidate"
+
+
+def _read_origin_candidate(engine_dir: Path) -> Optional[str]:
+    """The sha of origin/candidate from the clone's refs files (loose ref, then
+    packed-refs); None when the clone is not a plain `.git` directory or neither holds it."""
+    git_dir = engine_dir / ".git"
+    try:
+        loose = git_dir / _ORIGIN_CANDIDATE_REF
+        if loose.is_file():
+            value = loose.read_text(encoding="utf-8").strip()
+            return value or None
+        packed = git_dir / "packed-refs"
+        if packed.is_file():
+            for line in packed.read_text(encoding="utf-8").splitlines():
+                sha, _, name = line.partition(" ")
+                if name.strip() == _ORIGIN_CANDIDATE_REF and sha and not sha.startswith(("#", "^")):
+                    return sha
+    except (OSError, UnicodeDecodeError):
+        return None
+    return None
+
+
+def _mirror_only_verdict(head, floor: str, engine_dir: Path) -> dict:
+    """Verdict for a mirror with no registered source tree, from the clone's own refs.
+
+    Floor ancestry needs claude-klabauter history this box lacks, so a stamped HEAD that is the
+    last-fetched published head is `current` (floor unchecked, said so) and any other
+    stamped HEAD is `unverifiable_here`. Unreadable refs return an
+    `indeterminate` result with cause `refs_unreadable`.
+    """
+    candidate = _read_origin_candidate(engine_dir)
+    if candidate is None or head.engine_head is None:
+        return {
+            "state": "indeterminate",
+            "cause": CAUSE_REFS_UNREADABLE,
+            "running_sha": head.sha,
+            "floor_sha": floor,
+            "reason": "origin/candidate could not be read from the engine clone's refs",
+            "notice": (
+                "engine version indeterminate — cannot verify freshness. "
+                f"The engine's source-head ({head.sha[:12]}) is known, but origin/candidate "
+                "is unreadable in the engine clone. Fetch origin in the engine checkout."
+            ),
+        }
+    if _same_commit(head.engine_head, candidate):
+        return {
+            "state": "current",
+            "running_sha": head.sha,
+            "floor_sha": floor,
+            "floor_checked": False,
+            "reason": "engine clone HEAD is the last-fetched origin/candidate; floor ancestry needs claude-klabauter history, absent on this box",
+        }
+    return {
+        "state": "unverifiable_here",
+        "cause": CAUSE_SOURCE_HISTORY_UNAVAILABLE,
+        "running_sha": head.sha,
+        "floor_sha": floor,
+        "reason": "engine clone HEAD differs from origin/candidate and no claude-klabauter source tree is registered",
+        "notice": (
+            f"engine freshness unverifiable here — the engine clone HEAD ({head.engine_head[:12]}) "
+            f"is not origin/candidate ({candidate[:12]}) and floor ancestry needs the claude-klabauter "
+            "source history. Pull the engine checkout to origin/candidate."
+        ),
+    }
+
+
 def probe_engine_drift(engine_dir: Optional[Path] = None) -> dict:
     """Probe the engine at `engine_dir` (default: the running engine's own checkout).
 
@@ -254,10 +325,14 @@ def probe_engine_drift(engine_dir: Optional[Path] = None) -> dict:
             return CAUSE_SOURCE_HISTORY_UNAVAILABLE
         return _diagnose_indeterminate(floor_sha, repo)
 
-    result = classify_drift(
-        head.sha, floor, is_behind, diagnose,
-        unresolved_cause=CAUSE_MIRROR_UNSTAMPED if mirror else None,
-    )
+    result = None
+    if mirror and repo is None and head.sha is not None and not _same_commit(head.sha, floor):
+        result = _mirror_only_verdict(head, floor, engine_dir)
+    if result is None:
+        result = classify_drift(
+            head.sha, floor, is_behind, diagnose,
+            unresolved_cause=CAUSE_MIRROR_UNSTAMPED if mirror else None,
+        )
     result["basis"] = head.basis
     result["engine_head"] = head.engine_head
     return result

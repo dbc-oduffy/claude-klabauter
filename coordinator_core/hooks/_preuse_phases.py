@@ -5,14 +5,17 @@
 A guard loop calls `check_deadline(phase)` between guards; it raises `DeadlineStop`, which
 `run_phased` turns into `no_advisory()` plus `deadline_stop=<phase>`.
 
-Invariant: cooperative only. A phase already running is never interrupted; the worker is not
-killed. Stdlib-only at import; the door's deadline constant is read lazily.
+Invariant: a phase already running is never interrupted and its thread is not killed, but the
+reply does not wait for it: the chain runs in a daemon thread and `run_phased` answers
+`no_advisory()` with `deadline_stop=in_flight` once the hook deadline's reply allowance is spent.
+The abandoned chain stops at its next `check_deadline`. Stdlib-only at import; the door's deadline constant is read lazily.
 """
 
 from __future__ import annotations
 
 import contextvars
 import functools
+import threading
 import time
 from typing import Any, Callable, Optional
 
@@ -24,6 +27,15 @@ from coordinator_core.telemetry import op_row_fields
 # time.monotonic() instant at which the door gives up on this hook; bound by run_phased only.
 _HOOK_DEADLINE: contextvars.ContextVar[Optional[float]] = contextvars.ContextVar(
     "preuse_hook_deadline", default=None
+)
+
+
+# Seconds left on the hook deadline at which `run_phased` stops waiting for the chain thread.
+_REPLY_ALLOWANCE_S = 0.1
+
+# Set when `run_phased` has stopped waiting; the abandoned chain sees it in `past_deadline`.
+_ABANDONED: contextvars.ContextVar[Optional[threading.Event]] = contextvars.ContextVar(
+    "preuse_chain_abandoned", default=None
 )
 
 
@@ -47,6 +59,9 @@ def past_deadline() -> bool:
     door's hook deadline is within `REPLY_MARGIN_SECS`; False when neither is bound."""
     if dispatch_abandon.is_abandoned():
         return True
+    gone = _ABANDONED.get()
+    if gone is not None and gone.is_set():
+        return True
     left = dispatch_abandon.remaining()
     hook = _HOOK_DEADLINE.get()
     if hook is not None:
@@ -61,13 +76,47 @@ def check_deadline(phase: str) -> None:
         raise DeadlineStop(phase)
 
 
+def _wait_budget_s() -> float:
+    """Seconds `run_phased` may wait for the chain: the earlier of the dispatcher's and the hook's
+    deadline, less the reply allowance."""
+    left = dispatch_abandon.remaining()
+    hook = _HOOK_DEADLINE.get()
+    if hook is not None:
+        hook_left = hook - time.monotonic()
+        left = hook_left if left is None else min(left, hook_left)
+    return max(0.0, (left if left is not None else _door_deadline_s()) - _REPLY_ALLOWANCE_S)
+
+
 def run_phased(op_name: str, params: dict, chain: Callable[[dict], Any]) -> Any:
     """Run `chain(params)` under leg attribution and the hook deadline; attach `slow_phase` and
-    `spans` to the bound request row, and answer `no_advisory()` if the chain raises `DeadlineStop`."""
+    `spans` to the bound request row, and answer `no_advisory()` if the chain raises `DeadlineStop`
+    or is still running when the hook deadline's reply allowance is spent."""
     attr_token = leg_attribution.begin()
     deadline_token = _HOOK_DEADLINE.set(time.monotonic() + _door_deadline_s())
     try:
-        return chain(params)
+        abandoned = threading.Event()
+        box: dict[str, Any] = {}
+        done = threading.Event()
+        ctx = contextvars.copy_context()
+
+        def work() -> None:
+            _ABANDONED.set(abandoned)
+            try:
+                box["value"] = chain(params)
+            except BaseException as exc:  # noqa: BLE001 - relayed to the caller thread
+                box["error"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=ctx.run, args=(work,), daemon=True).start()
+        if not done.wait(_wait_budget_s()):
+            abandoned.set()
+            op_row_fields.attach(deadline_stop="in_flight")
+            return no_advisory()
+        err = box.get("error")
+        if err is not None:
+            raise err
+        return box["value"]
     except DeadlineStop as stop:
         op_row_fields.attach(deadline_stop=stop.phase or op_name)
         return no_advisory()

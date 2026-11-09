@@ -279,29 +279,18 @@ def test_fan_overrun_children_are_deferred_into_the_launcher_not_refused(tmp_pat
 
 
 def test_fan_overrun_after_a_run_was_minted_still_names_the_error_for_that_child(repo, monkeypatch):
-    import threading
+    # The launcher child emits and starts each run: the hook never consults the emit, so no run is minted
+    # on its thread and each child is named by its own reserved id with the deferral note.
+    import json
 
-    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_STAGE_FILE
-
-    release = threading.Event()
-
-    def emit(params, root):
-        run_token.mint(root, "ask-20261029T200000-e3414a", "scratch/warp/ask-20261029T200000-e3414a.workflow.mjs",
-                       session_id=params.get("session_id") or None)
-        d = root / RECORD_DIR_ROOT / "ask-20261029T200000-e3414a"
-        d.mkdir(parents=True)
-        (d / RUN_STAGE_FILE).write_text("{}", encoding="utf-8")
-        release.wait(5)
-        return {}
-
-    monkeypatch.setattr(mod, "_default_emit", emit)
+    called = []
+    monkeypatch.setattr(mod, "_default_emit", lambda params, root: called.append(params) or {})
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "0.25")
-    try:
-        launcher = mod._default_launch(repo, "ask-parent", _fan_children(), "sess-fan")
-    finally:
-        release.set()
-    emitted = launcher.read_text(encoding="utf-8").split("const EMITTED = ", 1)[1].split(";\n", 1)[0]
-    assert "ask-20261029T200000-e3414a" in emitted and emitted.count("defer-") == 1  # the second child, never emitted, is deferred
+    launcher = mod._default_launch(repo, "ask-parent", _fan_children(), "sess-fan")
+    emitted = json.loads(launcher.read_text(encoding="utf-8").split("const EMITTED = ", 1)[1].split(";\n", 1)[0])
+    assert called == []
+    assert [e["run_id"] for e in emitted] == ["ask-r1", "ask-r2"]
+    assert all(e["path"].startswith("scratch/warp/defer-") and "Not emitted in the hook" in e["deferred"] for e in emitted)
 
 
 def test_sizing_submission_emit_process_time_is_under_the_bar(repo):

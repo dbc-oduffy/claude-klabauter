@@ -28,7 +28,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
@@ -230,7 +230,8 @@ def measure(commits: int = DEFAULT_COMMITS, top: int = 20) -> dict:
             return real_meta(*a, **k)
 
         mp.setattr(commit_walk, "commit_meta", counted)
-        result = replay(root, SIZING_REL, top, reset=lambda: reset_resume_fixture(root))
+        with fixture_settings_home(scratch):
+            result = replay(root, SIZING_REL, top, reset=lambda: reset_resume_fixture(root))
         mp.setattr(commit_walk, "commit_meta", real_meta)
         return {"commits": commits, "commit_meta_calls": meta_calls[0], **result}
     finally:
@@ -500,11 +501,13 @@ def main() -> int:
         ap.error("--cold, --stall-ms and --seed-fixture need --repo")
     if args.repo:
         reset = None
-        if args.seed_fixture:
-            repo = Path(args.repo).resolve()
-            args.sizing = seed_resume_fixture(repo)
-            reset = lambda: reset_resume_fixture(repo)  # noqa: E731
-        result = replay(Path(args.repo), args.sizing, args.top, args.cold, args.stall_ms, reset)
+        # Replay runs against the real tree: a temp settings home keeps its run tokens and live-run index off the real store.
+        with tempfile.TemporaryDirectory(prefix="resume-emit-home-", dir=_scratch_parent()) as home, fixture_settings_home(home):
+            if args.seed_fixture:
+                repo = Path(args.repo).resolve()
+                args.sizing = seed_resume_fixture(repo)
+                reset = lambda: reset_resume_fixture(repo)  # noqa: E731
+            result = replay(Path(args.repo), args.sizing, args.top, args.cold, args.stall_ms, reset)
     else:
         result = measure(args.commits, args.top)
     top = result.pop("top")

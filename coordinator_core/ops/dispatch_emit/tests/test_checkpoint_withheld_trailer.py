@@ -58,6 +58,11 @@ def repo(tmp_path):
     (r / _PLAN).write_text(_plan_text(), encoding="utf-8", newline="\n")
     _git(r, "add", "-A")
     _git(r, "commit", "-q", "-m", "seed")
+    for i in ("C1", "C2"):
+        (r / f"some/{i}.py").parent.mkdir(exist_ok=True)
+        (r / f"some/{i}.py").write_text("v1\n", encoding="utf-8")
+    _git(r, "add", "-A")
+    _git(r, "commit", "-q", "-m", "row work")
     return r
 
 

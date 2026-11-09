@@ -22,7 +22,7 @@ pytestmark = [
 ]
 
 _MARKER_CMD = (
-    "python3 -m pytest -m 'not cadence and not pending_fix and not designed_red' "
+    "python3 -m pytest -m 'not cadence and not complete and not pending_fix and not designed_red' "
     "-n auto --maxprocesses=12"
 )
 
@@ -124,7 +124,7 @@ def test_append_test_paths_empty_list_returns_unchanged():
 def test_append_test_paths_appends_and_preserves_marker_expression():
     result = append_test_paths(_MARKER_CMD, ["pkg/test_existing.py"])
     assert result.startswith(_MARKER_CMD + " ")
-    assert "-m 'not cadence and not pending_fix and not designed_red'" in result
+    assert "-m 'not cadence and not complete and not pending_fix and not designed_red'" in result
     assert result.endswith("pkg/test_existing.py")
 
 

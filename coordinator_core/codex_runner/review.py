@@ -7,6 +7,8 @@ command events and the result carries `confinement: {breached, paths, basis}`.
 """
 from __future__ import annotations
 
+from coordinator_core.codex_runner.identity_env import provider_identity_env
+
 import json
 import os
 import re
@@ -64,7 +66,7 @@ _HARMLESS = frozenset({"/dev/null"})
 
 
 def _build_env(
-    environ: Optional[dict] = None, windows: Optional[bool] = None, requested: bool = False
+    environ: Optional[dict] = None, windows: Optional[bool] = None, requested: bool = False, role: str = "reviewer"
 ) -> dict[str, str]:
     """Allowlisted child env; API-key vars pass only under the allow_api_key flag (env or `requested`)."""
     environ = os.environ if environ is None else environ
@@ -72,7 +74,9 @@ def _build_env(
     keys = _ENV_ALLOW + (_ENV_ALLOW_WINDOWS if windows else ())
     if allow_api_key(environ, requested):
         keys = keys + API_KEY_ENV
-    return {k: environ[k] for k in keys if environ.get(k)}
+    child = provider_identity_env({k: environ[k] for k in keys if environ.get(k)}, environ, provider="codex", role=role)
+    child["GIT_TERMINAL_PROMPT"] = "0"  # Unattended agent shells must fail instead of prompting.
+    return child
 
 
 def _stage_artifact(artifact: str, run_dir: Path) -> Path:

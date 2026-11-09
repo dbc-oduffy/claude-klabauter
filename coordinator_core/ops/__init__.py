@@ -99,6 +99,7 @@ from typing import Dict, List, Tuple
 _logger = _logging.getLogger(__name__)
 
 _EAGER_OP_MODULES: List[Tuple[str, str]] = [
+    ("coordinator_core.ops.codex_status", 'registers "codex_status.snapshot"'),
     ("coordinator_core.ops.ping", 'registers "ping"'),
     ("coordinator_core.ops.remote_engine_handle", 'registers "remote_engine.handle"'),
     ("coordinator_core.ops.invoke_from_argv", 'registers "invoke.from_argv"'),
@@ -155,6 +156,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.memo_migrate_group_em_inbox", 'registers "memo.migrate_group_em_inbox"'),
     ("coordinator_core.ops.fleet.mode_control", 'registers "fleet.mode_set", "fleet.mode_show"'),
     ("coordinator_core.ops.commit_anchors", 'registers "commit.anchors"'),
+    ("coordinator_core.ops.session_ceremonies", "six provider-neutral session ceremony doors"),
     ("coordinator_core.ops.ceremony.commit_exec_bit", 'registers "commit.exec_bit_change"'),
     ("coordinator_core.ops.ceremony.commit_v2", 'registers "ceremony.commit_v2"'),
     ("coordinator_core.ops.memo_transition", 'registers "memo.transition"'),
@@ -555,6 +557,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.fleet.migrate_handoff_vocabulary", 'registers "fleet.migrate_handoff_vocabulary"'),
     ("coordinator_core.ops.fleet.migrate_prose_queue", 'registers "fleet.migrate_prose_queue"'),
     ("coordinator_core.ops.fleet.archive_sizings", 'registers "fleet.archive_terminal_sizings"'),
+    ("coordinator_core.ops.fleet.klabauter_freshness", 'registers "fleet.klabauter_freshness"'),
     (
         "coordinator_core.ops.orphan_branch_sweep",
         'registers "git_branch.compute_descendant_tip", "git_branch.detect_unpushed_commits", '
@@ -817,6 +820,12 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "baton_assemble.brief", "baton_assemble.apply" — making '
         "baton_assemble reachable through the warm engine (previously served "
         'only via the COLD entry_point_shim "baton-assemble" forwarder).',
+    ),
+    (
+        "coordinator_core.consolidate_assemble.ops",
+        'registers "consolidate_assemble.brief" — the read-only '
+        "/consolidate-git decision object, classified COMPUTE_ONLY so a warm "
+        "timeout on `consolidate-assemble brief` is retry-safe.",
     ),
     (
         "coordinator_core.learn_lessons_pipeline.ops",

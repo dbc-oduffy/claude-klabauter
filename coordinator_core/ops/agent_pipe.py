@@ -69,6 +69,15 @@ def _spawn(op: str, p: dict, request: dict) -> dict:
     if cwd is not None and not os.path.isdir(cwd):
         raise CallerFacingValidationError(f"{op}: cwd is not a directory: {cwd}")
 
+    from coordinator_core.session.core import attributable_session_id, subprocess_identity_env
+    from coordinator_core.codex_runner.identity_env import independent_child_env
+    env = settings_home_child_env(subprocess_identity_env(base=os.environ))
+    if not request.get("conversation"):
+        parent = attributable_session_id()
+        request = {**request, "caller_session_id": parent}
+        env = independent_child_env(env, provider={"antigravity": "agy"}.get(agent, agent),
+                                    role="worker", parent=parent)
+
     run_id = f"{agent}-{uuid.uuid4().hex[:12]}"
     run_dir = contract.run_dir(run_id)
     run_dir.mkdir(parents=True, exist_ok=False)
@@ -76,7 +85,6 @@ def _spawn(op: str, p: dict, request: dict) -> dict:
         json.dumps({"agent": agent, "reply_to": reply_to, **request}), encoding="utf-8"
     )
 
-    env = settings_home_child_env(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(filter(None, [_PACKAGE_ROOT, env.get("PYTHONPATH")]))
     with open(run_dir / _LOG, "wb") as log:
         proc = subprocess.Popen(

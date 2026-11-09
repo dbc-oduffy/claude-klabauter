@@ -79,6 +79,15 @@ def _with_codex_argv(binding: dict) -> dict:
     return binding
 
 
+def _external_binding(name: str) -> Optional[dict]:
+    """Project a live owned thread UUID binding; no second mutable identity store."""
+    from coordinator_core.session import external_registry
+    row = external_registry.lookup(name)
+    if row is None:
+        return None
+    return {"kind": KIND_CODEX, "id": row["session_id"], "token": None, "argv": None}
+
+
 def resolve(name: str) -> Optional[dict]:
     """Current binding for `name`, or None when unbound.
 
@@ -88,9 +97,13 @@ def resolve(name: str) -> Optional[dict]:
     if isinstance(binding, dict):
         return dict(binding)
     peer = _peer_bindings().get(name)
-    return _with_codex_argv(peer) if peer else None
+    binding = peer or _external_binding(name)
+    return _with_codex_argv(binding) if binding else None
 
 
 def list() -> dict:  # noqa: A001 - public roster verb
     """Every binding, name -> binding; roster.json entries shadow peers.json rows (peer codex argv left None)."""
-    return {**_peer_bindings(), **{k: dict(v) for k, v in _load().items() if isinstance(v, dict)}}
+    from coordinator_core.session import external_registry
+    owned = {sid: {"kind": KIND_CODEX, "id": sid, "token": None, "argv": None}
+             for sid in external_registry.snapshot()}
+    return {**owned, **_peer_bindings(), **{k: dict(v) for k, v in _load().items() if isinstance(v, dict)}}

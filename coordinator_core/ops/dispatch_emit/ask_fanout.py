@@ -7,11 +7,11 @@ slice and the write-once parent record, and returns the frozen reply plus the re
 calls. Contract: docs/reference/multi-ask-submission-contract.md.
 
 Three arms:
-  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, writes?, after?, stop_after?}],
+  - asks:   {asks: [{ask, source?, sender?, relayed_text?, route_preference?, em_rationale?, em_context?, context?, label?, repo?, writes?, after?, stop_after?}],
             sender?, confirm_split?} -- the parent register is one row
             (R1..Rn) per ask, each slice claims its own. An entry's `after` (earlier sibling labels or
             0-based indices) makes those siblings its predecessors; one naming none is refused. An entry key outside ASKS_ITEM_KEYS is
-            refused by name. An entry's `em_context` and prose `context` land on its slice sizing as
+            refused by name. An entry's `repo` must be an absolute path resolving to this fan-out's root (never forwarded). An entry's `em_context` and prose `context` land on its slice sizing as
             `em_analysis.em_brief`, its path-shaped `context` as `em_analysis.em_context_paths`
             (one string, one path per line); the ask, intent and pm_verbatims are never touched.
             An entry's `stop_after` ("plan" only; else refused naming asks[i].stop_after) lands as
@@ -124,7 +124,9 @@ def _writes(value: Any, where: str) -> Optional[tuple[str, ...]]:
     return tuple(w.strip() for w in value)
 
 
-def _read_slices(params: Mapping, fan_out: bool = False) -> tuple[list[contract.AskSlice], Optional[str]]:
+def _read_slices(
+    params: Mapping, fan_out: bool = False, root: Optional[Path] = None
+) -> tuple[list[contract.AskSlice], Optional[str]]:
     """The submitted slices and, on the slices arm, the parent sizing path.
 
     With `fan_out`, each slice but the one labelled SEAM_PASS_LABEL (which only carries the seam's
@@ -144,6 +146,12 @@ def _read_slices(params: Mapping, fan_out: bool = False) -> tuple[list[contract.
             unknown = contract.unknown_keys_refusal(where, item, contract.ASKS_ITEM_KEYS)
             if unknown:
                 raise _Refused(unknown)
+            repo = item.get("repo")
+            if repo is not None:
+                if not isinstance(repo, str) or not Path(repo).is_absolute():
+                    raise _Refused(f"{where}: repo {repo} is not this fan-out's root {root}")
+                if root is not None and Path(repo).resolve() != Path(root).resolve():
+                    raise _Refused(f"{where}: repo {repo} is not this fan-out's root {root}")
         ask = item.get("ask")
         if not isinstance(ask, str) or not ask.strip():
             raise _Refused(f"{where}: ask must be a non-empty string")
@@ -748,7 +756,7 @@ def _fanout(
     if params.get(contract.JOIN_PARAM) is not None:
         join_item, join_pending = _read_join(params, worktree)
         params = {**params, "asks": [*params["asks"], join_item]}
-    slices, parent_rel = _read_slices(params, fan_out)
+    slices, parent_rel = _read_slices(params, fan_out, root)
     cwd = str(root)
 
     parent_doc: Optional[dict] = None

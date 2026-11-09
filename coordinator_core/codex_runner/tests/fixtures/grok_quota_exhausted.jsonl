@@ -1,0 +1,2 @@
+{"type":"system","session_id":"synth-grok-2"}
+{"type":"error","error":{"status":429,"code":"free-usage-exhausted","message":"429 free-usage-exhausted: free usage for grok-4.7 is exhausted (24h rolling window)"}}

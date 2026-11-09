@@ -1230,7 +1230,7 @@ def test_wrapper_remedy_never_doubles_the_wrapper(grant_repo, free_mutex, cmd):
         assert "with-suite-mutex -- %s\n" % cmd in reason
 
 
-_BROAD_M = "-m 'not cadence and not pending_fix and not designed_red'"
+_BROAD_M = "-m 'not cadence and not complete and not pending_fix and not designed_red'"
 
 
 def test_granted_broad_run_wrapper_deny_carries_no_selection_note(grant_repo, free_mutex):
@@ -1911,7 +1911,7 @@ class TestGrantLeg:
 
 
 _CLAUDE_KLABAUTER_FAST_TEST_CMD = (
-    "python3 -m pytest -m 'not cadence and not pending_fix and not designed_red' -n auto"
+    "python3 -m pytest -m 'not cadence and not complete and not pending_fix and not designed_red' -n auto"
 )
 
 
@@ -1950,7 +1950,7 @@ class TestR6DeclaredUnscopedFastTier:
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
         double_quoted = (
-            'python3 -m pytest -m "not cadence and not pending_fix and not designed_red" -n auto'
+            'python3 -m pytest -m "not cadence and not complete and not pending_fix and not designed_red" -n auto'
         )
         assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + double_quoted, grant_repo)
@@ -1973,7 +1973,7 @@ class TestR6DeclaredUnscopedFastTier:
             lambda root: "marker-based fast/full split; no path subset is meaningful",
         )
         extra_ws = (
-            "python3 -m pytest  -m 'not cadence  and not pending_fix and  not designed_red'   -n auto"
+            "python3 -m pytest  -m 'not cadence  and not complete and not pending_fix and  not designed_red'   -n auto"
         )
         assert _enveloped(guard.check)(
             _payload("with-suite-mutex -- " + extra_ws, grant_repo)

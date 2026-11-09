@@ -36,6 +36,7 @@ GUARD_CLASSES = frozenset({BOX_DEGRADING, IRREVERSIBLE_EXTERNAL, DISRUPTIVE})
 #: registered here denies only its degrading shape; narrowing a shape is the guard's own fix.
 GUARD_DENY_CLASS: Dict[str, str] = {
     "block-push-pr-non-owned-remote": IRREVERSIBLE_EXTERNAL,
+    "block-empty-source-push": IRREVERSIBLE_EXTERNAL,
     "block-perforce-submit": IRREVERSIBLE_EXTERNAL,
     "p4-verb-fence": IRREVERSIBLE_EXTERNAL,
     "destructive-git-orphan": BOX_DEGRADING,
@@ -262,6 +263,7 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
     _OPS + "queue_promote:_OssMirrorWriteRefused": _pending("C8"),
     _OPS + "review_stamp:MintRefusal": _pending("C8"),
     _OPS + "daily_summary_gap:GapRefusal": _pending("822520"),
+    _OPS + "ceremony.commit_v2:CommitRefused": _pending("fcb310"),
 }
 
 #: Landing refusal reasons (``landing_integrity`` finding kinds) allowed to withhold or refuse a

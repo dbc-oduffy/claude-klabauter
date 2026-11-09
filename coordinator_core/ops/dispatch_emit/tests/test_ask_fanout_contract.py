@@ -373,8 +373,26 @@ def test_asks_item_keys_pinned():
     assert c.ASKS_ITEM_KEYS == (
         "ask", "source", "sender", "relayed_text", "route_preference",
         "em_rationale", "em_context", "context", "label", "after",
-        "writes", "stop_after",
+        "repo", "writes", "stop_after",
     )
+
+
+def test_read_slices_repo_must_resolve_to_root(tmp_path):
+    from coordinator_core.ops.dispatch_emit import ask_fanout as mod
+
+    other = tmp_path / "other"
+    other.mkdir()
+    root = tmp_path / "root"
+    root.mkdir()
+
+    def params(repo):
+        return {"asks": [{"ask": "a", "repo": repo}, {"ask": "b"}]}
+
+    slices, _ = mod._read_slices(params(str(root)), False, root)
+    assert [s.ask for s in slices] == ["a", "b"]
+    for bad in (str(other), "relative/path"):
+        with pytest.raises(mod._Refused, match="is not this fan-out's root"):
+            mod._read_slices(params(bad), False, root)
 
 
 def test_unknown_keys_refusal_names_key_and_every_accepted_key():

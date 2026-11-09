@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -24,6 +25,15 @@ _REAL_RESOLVE = ui.resolve_engine_root
 def _engine(monkeypatch, tmp_path):
     root = tmp_path / "engine"
     root.mkdir()
+    package = root / "coordinator_core" / "session"
+    package.mkdir(parents=True)
+    (root / "coordinator_core" / "_engine_stamp").write_text("test-stamp", encoding="utf-8")
+    (package / "external_registry.py").write_text("# capability fixture", encoding="utf-8")
+    (package.parent / "host_hooks").mkdir(exist_ok=True)
+    (package.parent / "host_hooks" / "session_context.py").write_text("# capability fixture", encoding="utf-8")
+    (package.parent / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
+    (package.parent / "codex_status").mkdir(exist_ok=True)
+    (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(root), "published-target"))
     return root
 
@@ -68,6 +78,7 @@ def test_range_constant_and_scripts():
         "unimatrix-inbox.py",
         "unimatrix-roster.py",
         "unimatrix-peer-contract.py",
+        "unimatrix-local-transport.py",
         "unimatrix-peer-codex.py",
         "unimatrix-peer-agy.py",
         "unimatrix-agy-leg.py",
@@ -77,6 +88,7 @@ def test_range_constant_and_scripts():
         "unimatrix-agy-hook-sessionstart.py",
         "unimatrix-codex-hook-sessionstart.py",
         "unimatrix-host-guard.py",
+        "coordinator-external-session.py",
         "unimatrix-doctrine-seed.py",
         "unimatrix-autolink.py",
         "unimatrix-liveness.py",
@@ -488,13 +500,22 @@ def test_trust_codex_hook_without_codex_reports_not_raises(monkeypatch, tmp_path
 
 
 @pytest.mark.skipif(not ui.shutil.which("codex"), reason="codex CLI not installed")
-def test_trust_codex_hook_marks_hook_trusted_in_real_codex(tmp_path):
+@pytest.mark.parametrize("home_name", ["plain", "space and \U0001f680"])
+def test_trust_codex_hook_marks_hook_trusted_in_real_codex(tmp_path, home_name):
+    tmp_path = tmp_path / home_name
+    tmp_path.mkdir()
     hp = tmp_path / "hooks.json"
     ui.seed_codex_hook(hp, tmp_path)
     ok, note = ui.trust_codex_hook(hp)
     assert ok, note
     cfg = (tmp_path / "config.toml").read_text(encoding="utf-8")
     assert "trusted_hash" in cfg and "session_start" in cfg
+    states = tomllib.loads(cfg)["hooks"]["state"]
+    assert set(states) == {
+        f"{hp}:pre_tool_use:0:0", f"{hp}:session_start:0:0",
+        f"{hp}:session_start:0:1", f"{hp}:session_end:0:0",
+    }
+    assert all(row["trusted_hash"].startswith("sha256:") for row in states.values())
 
 
 def _home(monkeypatch, tmp_path):
@@ -591,7 +612,7 @@ def test_agy_seed_repoints_a_stale_script_path(tmp_path):
 def test_codex_send_rule_allows_only_the_send_script_and_uninstalls(tmp_path):
     rule = ui.render_codex_exec_rule(tmp_path)
     assert "prefix_rule(pattern=" in rule and 'decision="allow"' in rule
-    assert str(tmp_path / ui.SEND_SCRIPT) in rule and rule.count("prefix_rule") == 1
+    assert json.dumps(str(tmp_path / ui.SEND_SCRIPT)) in rule and rule.count("prefix_rule") == 1
     p = tmp_path / "rules" / "unimatrix.rules"
     assert ui.seed_file(p, rule) == "created" and ui.seed_file(p, rule) == "present"
     assert ui.unseed_file(p) == "removed" and not p.exists() and ui.unseed_file(p) == "absent"
@@ -622,7 +643,7 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 0 and "governance DEGRADED" not in out
     guard = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]
-    assert guard["matcher"] == "Bash"
+    assert guard["matcher"] == ".*"
     handler = guard["hooks"][0]
     assert "unimatrix-host-guard.py" in handler["command"] and "--host codex" in handler["command"]
     assert str(_engine) in handler["command"] and isinstance(handler["timeout"], int)
@@ -635,13 +656,13 @@ def test_default_install_registers_guards_doctrine_and_skills(monkeypatch, tmp_p
     skills = _hooks_file(home / ".gemini" / "config" / "skills.json")
     assert skills["entries"] == [{"path": str(ui.SKILLS_ROOT)}]
     assert any((home / ".agents" / "skills").glob("*.coordinator-managed"))
-    assert "governance scope: shell-command" in out
+    assert "governance scope: Codex local-tool PreToolUse" in out
 
 
 def test_unresolved_engine_root_is_degraded_without_engine_flag(monkeypatch, tmp_path):
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (None, "unresolved"))
     home, rc, out = _default_install(monkeypatch, tmp_path)
-    assert rc == 0 and "governance DEGRADED: engine root unresolved" in out
+    assert rc == 7 and "governance DEGRADED: engine root unresolved" in out
     assert "governance verified" not in out
     cmd = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert "--engine-root" not in cmd
@@ -670,6 +691,15 @@ def test_reinstall_with_changed_engine_root_updates_guard(monkeypatch, tmp_path)
     home, _, _ = _default_install(monkeypatch, tmp_path)
     other = tmp_path / "engine2"
     other.mkdir()
+    package = other / "coordinator_core" / "session"
+    package.mkdir(parents=True)
+    (other / "coordinator_core" / "_engine_stamp").write_text("test-stamp", encoding="utf-8")
+    (package / "external_registry.py").write_text("# capability fixture", encoding="utf-8")
+    (package.parent / "host_hooks").mkdir(exist_ok=True)
+    (package.parent / "host_hooks" / "session_context.py").write_text("# capability fixture", encoding="utf-8")
+    (package.parent / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
+    (package.parent / "codex_status").mkdir(exist_ok=True)
+    (package.parent / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", lambda: (str(other), "published-target"))
     buf = io.StringIO()
     assert ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
@@ -753,9 +783,9 @@ def _trust_with(monkeypatch, tmp_path, **kw):
     data = _hooks_file(chp)
     data["hooks"]["PreToolUse"].append({"matcher": "Bash", "hooks": [{"type": "command", "command": "theirs"}]})
     chp.write_text(json.dumps(data), encoding="utf-8")
-    cmds = [("sessionStart", data["hooks"]["SessionStart"][0]["hooks"][0]["command"]),
-            ("preToolUse", data["hooks"]["PreToolUse"][0]["hooks"][0]["command"]),
-            ("preToolUse", "theirs")]
+    cmds = [(event[0].lower() + event[1:], handler["command"])
+            for event, groups in data["hooks"].items()
+            for group in groups for handler in group.get("hooks", [])]
     fake = _FakeCodex(chp, cmds, **kw)
     monkeypatch.setattr(ui.shutil, "which", lambda n: "/bin/codex")
     monkeypatch.setattr(ui.subprocess, "Popen", lambda *a, **k: fake)
@@ -765,7 +795,9 @@ def _trust_with(monkeypatch, tmp_path, **kw):
 def test_trust_covers_guard_and_skips_foreign(monkeypatch, tmp_path):
     (ok, note), fake = _trust_with(monkeypatch, tmp_path)
     assert ok, note
-    assert [r.get("trustedHash") for r in fake.rows] == ["h0", "h1", None]
+    assert len([r for r in fake.rows if r.get("trustedHash")]) == 11
+    assert all(r.get("trustedHash") == r["currentHash"] for r in fake.rows if r["command"] != "theirs")
+    assert next(r for r in fake.rows if r["command"] == "theirs").get("trustedHash") is None
 
 
 def _drop(event):
@@ -898,6 +930,13 @@ def test_default_install_resolves_engine_root_through_settings_home_door(monkeyp
     root = tmp_path / "door-root"
     (root / "coordinator_core").mkdir(parents=True)
     (root / "coordinator_core" / "_engine_stamp").write_text("stamped\n", encoding="utf-8")
+    (root / "coordinator_core" / "session").mkdir()
+    (root / "coordinator_core" / "session" / "external_registry.py").write_text("# capability fixture", encoding="utf-8")
+    (root / "coordinator_core" / "host_hooks").mkdir(exist_ok=True)
+    (root / "coordinator_core" / "host_hooks" / "session_context.py").write_text("# capability fixture", encoding="utf-8")
+    (root / "coordinator_core" / "host_hooks" / "codex_lifecycle.py").write_text("# capability fixture", encoding="utf-8")
+    (root / "coordinator_core" / "codex_status").mkdir(exist_ok=True)
+    (root / "coordinator_core" / "codex_status" / "hook.py").write_text("# capability fixture", encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(root))
@@ -919,7 +958,7 @@ def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
     monkeypatch.setattr(ui, "_BIN_DIR", bin_dir)
     home, rc, out = _default_install(monkeypatch, tmp_path)
-    assert rc == 0 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out
+    assert rc == 7 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out
     cmd = _hooks_file(home / ".codex" / "hooks.json")["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
     assert "--engine-root" not in cmd
 
@@ -1450,3 +1489,203 @@ def test_hosts_writes_only_named_host_paths(monkeypatch, tmp_path):
     rc = ui.main(["--install", "--hosts", "agy"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=io.StringIO())
     assert rc == 0 and (home2 / ".gemini").exists()
     assert not (home2 / ".codex").exists() and not (home2 / ".agents").exists()
+
+
+def test_codex_lifecycle_hooks_have_short_timeout_and_keep_transport(tmp_path):
+    events = ui.codex_hook_events(tmp_path, tmp_path / "published engine")
+    start = events["SessionStart"]["hooks"]
+    assert len(start) == 2
+    assert ui.CODEX_SESSIONSTART_SCRIPT in start[0]["command"]
+    assert ui.EXTERNAL_SESSION_SCRIPT in start[1]["command"]
+    assert "--event SessionStart" in start[1]["command"]
+    end = events["SessionEnd"]["hooks"][0]
+    assert "--event SessionEnd" in end["command"]
+    assert end["timeout"] <= 3 and start[1]["timeout"] <= 3
+    assert str(tmp_path / "published engine") in end["command"]
+
+
+def test_codex_install_and_remove_preserve_foreign_handlers_inside_owned_group(tmp_path):
+    hp = tmp_path / "hooks.json"
+    foreign = {"type":"command", "command":"foreign-inside-group"}
+    old = ui.codex_hook_events(tmp_path)["SessionStart"]
+    old["hooks"].append(foreign)
+    hp.write_text(json.dumps({"hooks":{"SessionStart":[old]}}), encoding="utf-8")
+    ui.seed_codex_hook(hp, tmp_path)
+    data = _hooks_file(hp)
+    assert data["hooks"]["SessionStart"][0]["hooks"] == [foreign]
+    assert len(ui._codex_expected_handlers(hp)) == 11
+    assert ui.seed_codex_hook(hp, tmp_path) == "present"
+    ui.unseed_codex_hook(hp)
+    assert _hooks_file(hp) == {"hooks":{"SessionStart":[{"hooks":[foreign]}]}}
+
+
+def test_duplicate_owned_lifecycle_discovery_is_refused(monkeypatch, tmp_path):
+    def duplicate(rows):
+        return rows + [dict(row, key="duplicate") for row in rows
+                       if "coordinator-external-session.py" in row["command"] and row["eventName"] == "sessionStart"]
+    (ok, note), _ = _trust_with(monkeypatch, tmp_path, relist=duplicate)
+    assert not ok and "duplicated" in note
+
+
+def test_missing_session_end_discovery_is_refused(monkeypatch, tmp_path):
+    (ok, note), _ = _trust_with(monkeypatch, tmp_path, relist=_drop("sessionEnd"))
+    assert not ok and "sessionend" in note
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("event", ["SessionStart", "SessionEnd", "SubagentStart", "UserPromptSubmit", "PostToolUse", "Stop", "SubagentStop", "PreCompact", "PostCompact"])
+def test_external_lifecycle_launcher_calls_published_engine_in_process(tmp_path, event):
+    engine = tmp_path / "published engine"
+    package = engine / "coordinator_core" / "session"
+    package.mkdir(parents=True)
+    core = package.parent
+    (core / "_engine_stamp").write_text("test-stamp", encoding="utf-8")
+    (core / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "external_registry.py").write_text(
+        'import pathlib\ndef register_current(payload):\n pathlib.Path(__file__).with_name("registered").write_text(payload["session_id"])\ndef unregister(sid):\n pathlib.Path(__file__).with_name("ended").write_text(sid)\n', encoding="utf-8")
+    hooks = core / "host_hooks"
+    hooks.mkdir()
+    (hooks / "__init__.py").write_text("", encoding="utf-8")
+    (hooks / "session_context.py").write_text('def context(payload, env):\n return {"event":payload["hook_event_name"]}\n', encoding="utf-8")
+    (hooks / "codex_lifecycle.py").write_text('def handle(payload, env):\n return {"event":payload["hook_event_name"]}\n', encoding="utf-8")
+    script = Path(ui.__file__).with_name(ui.EXTERNAL_SESSION_SCRIPT)
+    proc = subprocess.run([sys.executable, str(script), "--engine-root", str(engine), "--event", event],
+                          input=json.dumps({"session_id":"parent-session", **({"agent_id":"child"} if event == "SubagentStart" else {})}), text=True, capture_output=True,
+                          timeout=3, creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+    assert proc.returncode == 0, proc.stderr
+    assert json.loads(proc.stdout) == ({} if event == "SessionEnd" else {"event":event})
+    assert (package / "registered").exists() is (event == "SessionStart")
+    assert (package / "ended").exists() is (event == "SessionEnd")
+
+
+def test_stale_published_engine_keeps_transport_but_reports_partial_lifecycle(monkeypatch, tmp_path, _engine):
+    (_engine / "coordinator_core" / "session" / "external_registry.py").unlink()
+    home, rc, output = _default_install(monkeypatch, tmp_path)
+    assert rc == 7
+    assert "session lifecycle DEGRADED" in output and "lacks session.external_registry" in output
+    assert "transport hooks remain installed" in output
+    assert "hook wiring/trust verified: Codex SessionStart, SessionEnd" not in output
+    hooks = _hooks_file(home / ".codex" / "hooks.json")
+    assert ui.CODEX_SESSIONSTART_SCRIPT in hooks["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+
+
+@pytest.mark.parametrize("stamp", [None, ""])
+def test_external_session_capability_rejects_unstamped_engine(tmp_path, stamp):
+    package = tmp_path / "coordinator_core" / "session"
+    package.mkdir(parents=True)
+    (package / "external_registry.py").write_text("# present", encoding="utf-8")
+    if stamp is not None:
+        (package.parent / "_engine_stamp").write_text(stamp, encoding="utf-8")
+    assert ui.external_session_capability(tmp_path)[0] is False
+
+
+@pytest.mark.spawns_process
+def test_lifecycle_launcher_never_imports_ambient_module_for_stale_engine(tmp_path):
+    engine = tmp_path / "stale engine"
+    (engine / "coordinator_core").mkdir(parents=True)
+    (engine / "coordinator_core" / "_engine_stamp").write_text("stamped", encoding="utf-8")
+    ambient = tmp_path / "ambient"
+    package = ambient / "coordinator_core" / "session"
+    package.mkdir(parents=True)
+    for directory in (package, package.parent):
+        (directory / "__init__.py").write_text("", encoding="utf-8")
+    (package / "external_registry.py").write_text("raise RuntimeError('AMBIENT MODULE LOADED')", encoding="utf-8")
+    script = Path(ui.__file__).with_name(ui.EXTERNAL_SESSION_SCRIPT)
+    proc = subprocess.run([sys.executable, str(script), "--engine-root", str(engine), "--event", "SessionEnd"],
+                          input="{}", text=True, capture_output=True, timeout=3,
+                          env=dict(os.environ, PYTHONPATH=str(ambient)),
+                          creationflags=getattr(subprocess,"CREATE_NO_WINDOW",0))
+    assert proc.returncode == 0 and json.loads(proc.stdout) == {}
+    assert "lacks session.external_registry" in proc.stderr
+    assert "AMBIENT MODULE LOADED" not in proc.stderr
+
+
+def test_codex_advisory_events_use_one_bounded_owned_handler(tmp_path):
+    events = ui.codex_hook_events(tmp_path, tmp_path / 'engine')
+    for event in ('UserPromptSubmit','PostToolUse','Stop','SubagentStop','PreCompact','PostCompact'):
+        group = events[event]
+        assert len(group['hooks']) == 1
+        hook = group['hooks'][0]
+        assert hook['timeout'] <= 3
+        assert '--event '+event in hook['command']
+    assert events['PreToolUse']['matcher'] == '.*'
+
+
+@pytest.mark.parametrize('before', ['', 'model = "gpt-test"\n[tui]\ntheme = "custom"\n', 'tui = { theme = "custom" }\n'])
+def test_codex_footer_default_is_idempotent_and_uninstall_owned(tmp_path,before):
+    cfg=tmp_path/'config.toml';cfg.write_text(before,encoding='utf-8')
+    original=tomllib.loads(before)
+    assert ui.seed_codex_status_line(cfg)=='updated'
+    parsed=tomllib.loads(cfg.read_text())
+    assert parsed['tui']['status_line']==['thread-name','model-with-reasoning','context-remaining']
+    assert parsed.get('model')==original.get('model')
+    assert parsed['tui'].get('theme')==original.get('tui',{}).get('theme')
+    once=cfg.read_bytes()
+    assert ui.seed_codex_status_line(cfg)=='present' and cfg.read_bytes()==once
+    assert ui.seed_codex_status_line(cfg,uninstall=True)=='restored'
+    restored=tomllib.loads(cfg.read_text()); restored_tui=restored.pop('tui',{})
+    original_tui=original.pop('tui',{})
+    assert restored==original and restored_tui==original_tui
+
+
+def test_codex_footer_preserves_custom_widgets_and_foreign_toml(tmp_path):
+    cfg=tmp_path/'config.toml'
+    before='# keep me\nmodel="m"\n[tui]\ntheme="custom" # keep exact\nstatus_line = [\n "git-branch", "current-dir", "five-hour-limit", "model", "reasoning"\n]\n[mcp_servers.foreign]\nurl="http://example"\n'
+    cfg.write_text(before)
+    assert ui.seed_codex_status_line(cfg)=='updated'
+    text=cfg.read_text(); parsed=tomllib.loads(text)
+    assert parsed['tui']['status_line']==['git-branch','thread-name','five-hour-limit','model','reasoning','context-remaining']
+    assert '# keep me\nmodel="m"' in text and 'theme="custom" # keep exact' in text
+    assert '[mcp_servers.foreign]\nurl="http://example"' in text
+    cfg.write_text(text.replace('"git-branch"','"weekly-limit"'))
+    changed=cfg.read_bytes()
+    assert ui.seed_codex_status_line(cfg,uninstall=True)=='retained-customized'
+    assert cfg.read_bytes()==changed
+
+
+def test_codex_footer_does_not_read_fake_tui_header_inside_string(tmp_path):
+    cfg=tmp_path/'config.toml'
+    cfg.write_text('notice = """\n[tui]\nstatus_line = ["current-dir"]\n"""\n[tui]\nstatus_line=["project-root", "weekly-limit"]\n')
+    assert ui.seed_codex_status_line(cfg)=='updated'
+    parsed=tomllib.loads(cfg.read_text())
+    assert '["current-dir"]' in parsed['notice']
+    assert parsed['tui']['status_line']==['thread-name','weekly-limit','model-with-reasoning','context-remaining']
+
+
+def test_codex_footer_invalid_toml_never_overwritten(tmp_path):
+    cfg=tmp_path/'config.toml';cfg.write_text('[tui\n')
+    with pytest.raises(ValueError):ui.seed_codex_status_line(cfg)
+    assert cfg.read_text()=='[tui\n'
+
+
+def test_codex_footer_is_automatic_in_install_and_owned_uninstall(monkeypatch,tmp_path):
+    _stub_src(monkeypatch,tmp_path)
+    home=_home(monkeypatch,tmp_path)
+    cfg=home/'.codex'/'config.toml';cfg.parent.mkdir(parents=True)
+    before='model="keep"\n[tui]\nstatus_line=["current-dir","git-branch"]\n'
+    cfg.write_text(before)
+    output=io.StringIO()
+    assert ui.main(['--install','--hosts','codex'], version_text='2.1.316',dest_dir=tmp_path/'dest',out=output)==0
+    assert 'codex status footer updated' in output.getvalue()
+    assert tomllib.loads(cfg.read_text())['tui']['status_line']==['thread-name','git-branch','model-with-reasoning','context-remaining']
+    output=io.StringIO()
+    assert ui.main(['--uninstall','--hosts','codex'],dest_dir=tmp_path/'dest',out=output)==0
+    assert 'codex status footer restored' in output.getvalue()
+    assert tomllib.loads(cfg.read_text())==tomllib.loads(before)
+
+
+@pytest.mark.parametrize('state',[None, {'version':1,'managed':[]}])
+def test_codex_footer_malformed_ownership_never_changes_config(tmp_path,state):
+    cfg=tmp_path/'config.toml';cfg.write_text('tui.status_line=["current-dir"]\n')
+    cfg.with_name('.coordinator-status-line.json').write_text(json.dumps(state))
+    before=cfg.read_bytes()
+    with pytest.raises(ValueError):ui.seed_codex_status_line(cfg,uninstall=True)
+    assert cfg.read_bytes()==before
+
+
+def test_codex_install_scope_reports_local_tools_with_native_limits(monkeypatch,tmp_path):
+    home,rc,output=_default_install(monkeypatch,tmp_path,('--install','--hosts','codex'))
+    assert rc==0
+    assert 'Codex local-tool PreToolUse (shell, projected edits, MCP, spawn briefs; native coverage limits apply)' in output
+    assert 'shell-command PreToolUse only' not in output

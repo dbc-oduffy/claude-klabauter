@@ -1,6 +1,7 @@
 """Falsifier: the landing set's scoped tests run in a shared clone of the candidate commit (verify stage), so
-peer dirt in the worktree neither fails nor greens them; land_run only reads the keyed verdict, landing on green
-and refusing on red, missing or mismatched, and never runs a test itself."""
+peer dirt in the worktree neither fails nor greens them; land_run only reads the keyed verdict, landing on green,
+inconclusive or missing (the last two with an advisory) and refusing on red or a mismatched key, and never runs a
+test itself."""
 
 from __future__ import annotations
 
@@ -64,6 +65,23 @@ def test_a_red_in_the_candidate_is_red_even_when_the_worktree_is_clean(tmp_path)
     assert not cov.overlay_root(root, "run1").exists()
 
 
+def test_overlay_clone_keeps_the_live_repo_directory_name(tmp_path):
+    root, head = _repo(tmp_path)
+    _write(
+        root, "t/test_name.py",
+        "import pathlib\n\n\ndef test_name():\n"
+        "    assert pathlib.Path(__file__).resolve().parents[1].name == 'repo'\n",
+    )
+    _git(root, "add", "-A")
+    _git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "name")
+    head = _git(root, "rev-parse", "HEAD").strip()
+
+    out = cov.verify(root, "run-id-not-repo", head, ["t/test_name.py"])
+
+    assert out.verdict == "green", out
+    assert not cov.overlay_root(root, "run-id-not-repo").exists()
+
+
 def _pytest_argv_head(monkeypatch, root, head, pin):
     if pin is not None:
         (root / "coordinator.local.md").write_text(f'---\ntargeted_test_python: "{pin}"\n---\n', encoding="utf-8")
@@ -117,14 +135,14 @@ def test_a_configured_bulk_location_receives_the_overlay_clone_and_is_reaped(tmp
     out = cov.verify(root, "run1", head, [READER])
 
     assert out.verdict == "green", out
-    assert dests == [str(bulk / "clean-overlay" / "run1")]
+    assert dests == [str(bulk / "clean-overlay" / "run1" / root.resolve().name)]
     assert not (root / "scratch").exists()
     assert not (bulk / "clean-overlay" / "run1").exists()
 
 
 def test_unconfigured_or_relative_bulk_falls_back_to_repo_scratch(tmp_path, monkeypatch):
     root, head = _repo(tmp_path)
-    expected = str(root / "scratch" / "clean-overlay" / "run1")
+    expected = str(root / "scratch" / "clean-overlay" / "run1" / root.resolve().name)
     dests = _clone_dests(monkeypatch)
 
     assert cov.verify(root, "run1", head, [READER]).verdict == "green"
@@ -212,8 +230,10 @@ def test_land_run_lands_a_missing_verdict_with_an_advisory(halted, monkeypatch):
     _, result = _dirty_land(halted, None)
 
     assert result["committed"] is True, result
-    assert result.get("refused") is None, result
-    assert "missing" in result["clean_overlay_verify"]["advisory"], result
+    assert not result.get("refused")
+    assert result["clean_overlay_verify"]["verdict"] == "missing"
+    assert "missing" in result["clean_overlay_verify"]["advisory"]
+    assert FIXTURE in result["reach_dirt_foreign"]
 
 
 @pytest.mark.parametrize("field", ["blobs", "base_sha"])
@@ -228,6 +248,17 @@ def test_land_run_refuses_a_verdict_keyed_to_another_landing_set_or_head(halted,
     out = cov.check_verdict(halted, RUN2, measured)
 
     assert out.verdict == "mismatch", out
+
+
+@pytest.mark.parametrize("field", ["blobs", "base_sha"])
+def test_land_run_refuses_a_mismatched_verdict_at_land(halted, monkeypatch, field):  # noqa: F811
+    _no_spawn(monkeypatch)
+    other = {"blobs": {"x": "0" * 40}} if field == "blobs" else {"base_sha": "1" * 40}
+
+    _, result = _dirty_land(halted, "green", mutate=other)
+
+    assert result["committed"] is False
+    assert result["refused"] == "verify-overlay-unverified", result
 
 
 def test_no_foreign_dirt_needs_no_verdict_and_runs_no_overlay(halted, monkeypatch):  # noqa: F811

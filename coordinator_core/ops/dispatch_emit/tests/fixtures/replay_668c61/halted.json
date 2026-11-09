@@ -1,0 +1,16 @@
+{
+  "status": "halted",
+  "halted": "commit",
+  "sizing_rel": "state/sizings/2026-11/2026-11-09-clone-inputs-preflight-wiring-668c61.yaml",
+  "reason": "no-credited-chunk-landed",
+  "run_artifacts": {
+    "withheld": {
+      "tools/likeness-prototype/likeness/pipeline/driver.py": "halt-record-only",
+      "tools/likeness-prototype/likeness/pipeline/registry_env.py": "halt-record-only",
+      "tools/likeness-prototype/likeness/pipeline/snapshot.py": "halt-record-only",
+      "tools/likeness-prototype/tests/test_likeness_pipeline_driver.py": "halt-record-only",
+      "tools/likeness-prototype/tests/test_likeness_pipeline_snapshot.py": "halt-record-only",
+      "tools/likeness-prototype/tests/test_likeness_registry_env.py": "halt-record-only"
+    }
+  }
+}

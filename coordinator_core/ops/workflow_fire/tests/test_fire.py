@@ -153,6 +153,18 @@ def test_build_fire_command_allowed_tools_grant_is_widened_beyond_workflow():
     assert {"Workflow", "Read", "Write", "Edit", "Bash", "Grep", "Glob", "ToolSearch"} <= granted
 
 
+def test_prompt_reads_script_before_calling_workflow():
+    prompt = fire.render_prompt("/s/wf.js")
+    read_at = prompt.index("Read tool: read '/s/wf.js'")
+    assert read_at < prompt.index("Workflow tool")
+
+
+def test_turn_floor_covers_read_plus_workflow_plus_relay():
+    assert fire.DEFAULT_MAX_TURNS == 4
+    assert fire._scaled_max_turns("// no phases\n") == 4
+    assert "Read" in fire._SESSION_ALLOWED_TOOLS
+
+
 def test_build_fire_command_never_uses_dangerously_skip_permissions():
     command = fire.build_fire_command("script.mjs", "/resolved/plugin/dir")
     assert "--dangerously-skip-permissions" not in command
@@ -350,9 +362,8 @@ def test_fire_workflow_plugin_dir_resolution_failure_propagates(repo, script, mo
         fire.fire_workflow(str(script), cwd=str(repo))
 
 
-def test_fire_workflow_immediate_nonzero_exit_raises_not_returns_handle(repo, script, monkeypatch):
-    """A child that dies at spawn must not look identical to one still
-    running -- it must raise, never return a record claiming "running"."""
+def test_fire_workflow_immediate_nonzero_exit_returns_terminal_handle(repo, script, monkeypatch):
+    """A fast failed child is terminal, and retains its execution handle."""
     _patch_plugin_dir(monkeypatch)
 
     def make_popen(*a, **k):
@@ -361,8 +372,9 @@ def test_fire_workflow_immediate_nonzero_exit_raises_not_returns_handle(repo, sc
     monkeypatch.setattr(fire.subprocess, "Popen", make_popen)
     monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
 
-    with pytest.raises(fire.ChildSpawnFailedError):
-        fire.fire_workflow(str(script), cwd=str(repo))
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+    assert record["state"] == "exited" and record["exit_code"] == 7
+    assert record["execution_started"] is True
 
 
 def test_fire_workflow_spawn_oserror_raises_child_spawn_failed(repo, script, monkeypatch):
@@ -896,7 +908,7 @@ def test_native_plugin_dir_still_rejects_a_bare_directory(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("code", [0, 7])
-def test_child_that_exits_inside_the_startup_window_is_refused_with_code_and_log(
+def test_child_that_exits_inside_the_startup_window_keeps_handle_code_and_log(
     repo, script, monkeypatch, code
 ):
     _patch_plugin_dir(monkeypatch)
@@ -909,14 +921,12 @@ def test_child_that_exits_inside_the_startup_window_is_refused_with_code_and_log
     monkeypatch.setattr(fire.subprocess, "Popen", make_popen)
     monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
 
-    with pytest.raises(fire.ChildSpawnFailedError) as excinfo:
-        fire.fire_workflow(str(script), cwd=str(repo))
-
-    message = str(excinfo.value)
-    assert f"code {code}" in message
-    assert "pid 999" in message
-    assert ".log" in message
-    assert "boom: refused flag" in message
+    record = fire.fire_workflow(str(script), cwd=str(repo))
+    assert record["state"] == "exited"
+    assert record["exit_code"] == code and record["pid"] == 999
+    assert record["startup_exit"] and record["execution_started"] is True
+    assert record["log_path"].endswith(".log")
+    assert "boom: refused flag" in record["startup_log_tail"]
 
 
 def test_child_that_stays_alive_reports_pid_and_log_path(repo, script, monkeypatch):
@@ -987,3 +997,71 @@ def test_unknown_computed_while_running_is_reclassified_once_exited(repo):
         outcome_basis=fire._NOT_ENDED_BASIS, _annotation_version=fire._ANNOTATION_VERSION,
     )
     assert fire._refresh_record_state(live)["outcome"] == "denied"
+
+
+def _stage_run(repo, run_id, stage):
+    run_dir = Path(repo) / "state" / "warp" / run_id
+    run_dir.mkdir(parents=True)
+    (run_dir / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
+
+
+def test_prompt_permits_one_overflow_read_and_still_relays_only_land_run():
+    prompt = fire.render_prompt("plans/script.mjs")
+    assert "Read that file once" in prompt
+    assert "dispatch.land_run" in prompt
+    assert "dispatch.terminal_commit" not in prompt
+
+
+def test_fire_status_op_reports_not_landed_for_clean_exit_before_land(repo):
+    from coordinator_core.ops.workflow_fire import op
+
+    _stage_run(repo, "run-a", "staged")
+    record = _exited_record(repo, log_text=_CLEAN_ENVELOPE, run_id="run-a", repo_root=str(repo))
+    fire._write_record(fire._record_path(fire._registry_dir(str(repo)), record["fire_id"]), record)
+
+    reply = op._workflow_fire_status({"fire_id": record["fire_id"]}, repo_root=Path(repo))
+
+    assert reply["outcome"] == "not_landed"
+    assert "'staged'" in reply["outcome_basis"]
+
+
+def test_clean_exit_with_no_run_stage_is_not_landed(repo):
+    record = _exited_record(repo, log_text=_CLEAN_ENVELOPE, run_id="run-b", repo_root=str(repo))
+    refreshed = fire._refresh_record_state(record)
+    assert refreshed["outcome"] == "not_landed"
+    assert "never staged" in refreshed["outcome_basis"]
+
+
+def test_clean_exit_after_land_stays_clean(repo):
+    _stage_run(repo, "run-c", "landed")
+    record = _exited_record(repo, log_text=_CLEAN_ENVELOPE, run_id="run-c", repo_root=str(repo))
+    assert fire._refresh_record_state(record)["outcome"] == "clean"
+
+
+def test_clean_exit_without_run_id_stays_clean(repo):
+    record = _exited_record(repo, log_text=_CLEAN_ENVELOPE, repo_root=str(repo))
+    assert fire._refresh_record_state(record)["outcome"] == "clean"
+
+
+def test_not_landed_does_not_mask_a_failed_envelope(repo):
+    failed = json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True}) + "\n"
+    record = _exited_record(repo, log_text=failed, run_id="run-d", repo_root=str(repo))
+    assert fire._refresh_record_state(record)["outcome"] == "failed"
+
+
+def test_not_landed_is_settled_and_not_reread(repo, monkeypatch):
+    record = _exited_record(repo, log_text=_CLEAN_ENVELOPE, run_id="run-e", repo_root=str(repo))
+    settled = fire._refresh_record_state(record)
+    assert settled["outcome"] == "not_landed"
+    monkeypatch.setattr(
+        fire, "_classify_outcome", lambda r: pytest.fail("a settled not_landed was re-classified")
+    )
+    assert fire._refresh_record_state(settled)["outcome"] == "not_landed"
+
+
+def test_fire_workflow_stores_run_id_on_the_record(repo, script, monkeypatch):
+    _patch_plugin_dir(monkeypatch)
+    monkeypatch.setattr(fire.subprocess, "Popen", lambda *a, **k: _FakePopen(*a, **k))
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+    record = fire.fire_workflow(str(script), cwd=str(repo), run_id="run-f")
+    assert record["run_id"] == "run-f"

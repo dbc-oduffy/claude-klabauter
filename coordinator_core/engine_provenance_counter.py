@@ -90,6 +90,10 @@ from typing import Optional
 
 _COUNTS_FILENAME = "engine-provenance-counts.jsonl"
 
+# Explicit full-file output override for read-only source executions. This
+# changes the sink only: the originating repo's standing and all caps remain.
+ENGINE_PROVENANCE_SINK_ENV = "COORDINATOR_ENGINE_PROVENANCE_SINK"
+
 _OWN_REPO_ROOT = Path(__file__).resolve().parents[1]
 
 #: `match` is the expected state and is counted only while the sink is small;
@@ -98,6 +102,25 @@ _MATCH_CAP_BYTES = 64 * 1024
 _HARD_CAP_BYTES = 1024 * 1024
 
 MUTATES = ["state/engine-provenance-counts.jsonl"]
+
+
+def resolve_engine_provenance_sink(git_root: str) -> Path:
+    """Return the actual sink, retaining the legacy path when the env is unset.
+
+    COORDINATOR_ENGINE_PROVENANCE_SINK is an absolute full JSONL file path,
+    never a directory. Invalid explicit overrides raise without falling back
+    into the source. The existing reporting caller swallows sink exceptions.
+    """
+    override = os.environ.get(ENGINE_PROVENANCE_SINK_ENV)
+    if override is None:
+        return Path(git_root) / "state" / _COUNTS_FILENAME
+    path = Path(override)
+    if not override or override.strip() != override or not path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"{ENGINE_PROVENANCE_SINK_ENV} must be an absolute file path without parent traversal")
+    path = path.resolve()
+    if path.exists() and not path.is_file():
+        raise ValueError(f"{ENGINE_PROVENANCE_SINK_ENV} must name a file, not a directory")
+    return path
 
 
 def resolve_git_root_cheap(cwd: Optional[str] = None) -> Optional[str]:
@@ -181,11 +204,12 @@ def record_engine_provenance(
     git_root = resolve_git_root_cheap(cwd)
     if not git_root:
         return
-    if os.environ.get("PYTEST_CURRENT_TEST") and Path(git_root).resolve() == _OWN_REPO_ROOT:
+    path = resolve_engine_provenance_sink(git_root)
+    own_sink = _OWN_REPO_ROOT / "state" / _COUNTS_FILENAME
+    if os.environ.get("PYTEST_CURRENT_TEST") and path.resolve() == own_sink.resolve():
         return
     if not _may_write(git_root):
         return
-    path = Path(git_root) / "state" / _COUNTS_FILENAME
     try:
         size = path.stat().st_size
     except OSError:

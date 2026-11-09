@@ -24,6 +24,7 @@ _ROWS = [
     ("L2", "open", ["some/l2.py"], None),
 ]
 RUN = inc.REFIRE_RUN
+DELIVERABLE = "dlv-t-111111"
 
 
 def _build(repo) -> str:
@@ -34,6 +35,7 @@ def _build(repo) -> str:
         spine = inc._spine()
     finally:
         inc._ROWS = saved
+    spine = spine.replace("run_id: fixture\n", f"run_id: fixture\ndeliverable_id: {DELIVERABLE}\n", 1)
     _git(repo, "init", "-q")
     _git(repo, "config", "user.email", "t@t.example")
     _git(repo, "config", "user.name", "t")
@@ -54,7 +56,7 @@ def _build(repo) -> str:
     (repo / "some/l1.py").write_text("v = 1\n", encoding="utf-8")
     inc._commit_all(repo, "checkpoint(wave 2): 1 rows — L1", "-m", f"Checkpoint-Plan: {PLAN_REL}\nCheckpoint-Base: abc1234")
     (repo / "some/l2.py").write_text("v = 1\n", encoding="utf-8")
-    inc._commit_all(repo, "hand edit of l2")
+    inc._commit_all(repo, "hand edit of l2", "-m", f"Deliverable-Id: {DELIVERABLE}")
     return spine
 
 

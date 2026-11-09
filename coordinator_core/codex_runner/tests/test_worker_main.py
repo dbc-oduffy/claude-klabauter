@@ -74,11 +74,12 @@ def test_mode_dispatch_by_request(run_dir, monkeypatch):
 
 
 def test_mode_run_resolves_each_mode_to_its_function():
-    from coordinator_core.codex_runner import agy, execute, review
+    from coordinator_core.codex_runner import agy, execute, grok, review
 
     assert worker._mode_run("review") is review.run
     assert worker._mode_run("execute") is execute.run
     assert worker._mode_run("agy-review") is agy.review_run
+    assert worker._mode_run("grok-review") is grok.review_run
 
 
 def test_agy_review_roster_record_carries_mode(run_dir, monkeypatch):

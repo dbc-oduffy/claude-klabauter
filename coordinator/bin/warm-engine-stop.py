@@ -22,8 +22,10 @@ ask, then a direct signal), and a final exact-argv command-line sweep under
 the engine root decides success.
 
 EXIT CODES: 0 when neither process survives ("stopped", or "nothing to stop"
-when no process was found); `_EXIT_COULD_NOT_STOP` (4) otherwise, with every
-survivor's pid and role on stderr.
+when no process was found, or psutil is not importable and warmth is disabled
+by configuration); `_EXIT_COULD_NOT_STOP` (4) otherwise, with every
+survivor's pid and role on stderr; `_EXIT_PSUTIL_MISSING` (5) when warmth is
+on and psutil is not importable (one-line stderr message, no traceback).
 
 Negative-spec:
   - Never signals a pid that a verified record or the exact command-line match
@@ -87,6 +89,7 @@ def __getattr__(name: str):
 
 _EXIT_OK = 0
 _EXIT_COULD_NOT_STOP = 4
+_EXIT_PSUTIL_MISSING = 5
 
 
 def main(argv=None) -> int:
@@ -98,6 +101,20 @@ def main(argv=None) -> int:
         )
     )
     parser.parse_args(argv)
+
+    from coordinator_core.warm import settings
+
+    try:
+        import psutil  # noqa: F401
+    except ImportError:
+        if not settings.is_warm_enabled():
+            print("nothing to stop", file=sys.stderr)
+            return _EXIT_OK
+        print(
+            f"warm-engine-stop: psutil is not importable under {sys.executable}",
+            file=sys.stderr,
+        )
+        return _EXIT_PSUTIL_MISSING
 
     result = pair_stop.stop_warm_pair(_REPO_ROOT)
     if result.ok():

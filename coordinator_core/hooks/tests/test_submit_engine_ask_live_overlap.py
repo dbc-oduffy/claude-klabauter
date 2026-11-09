@@ -4,6 +4,7 @@ The overlap check reads the live-run index; a missing or stalled index denies no
 
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
@@ -30,9 +31,13 @@ def _emit_recorder(tmp_path: Path, seen: list):
 
 def _live(root: Path, footprints: dict) -> None:
     """Write the index: a None footprint is a minted run that has not staged. Each run gets its record dir
-    (a row whose dir is gone is a ghost, released by the guard)."""
+    (a row whose dir is gone is a ghost, released by the guard) holding a `minted` stage record (a dir with
+    no record at all is a never-ran run, released too)."""
     for run_id, footprint in footprints.items():
-        (root / "state" / "warp" / run_id).mkdir(parents=True, exist_ok=True)
+        rd = root / "state" / "warp" / run_id
+        rd.mkdir(parents=True, exist_ok=True)
+        if not (rd / "run-stage.json").exists():
+            (rd / "run-stage.json").write_text('{"stage": "minted"}', encoding="utf-8")
         if footprint is None:
             live_run_index.add(root, run_id, 1.0)
         else:
@@ -589,3 +594,63 @@ def test_the_dead_owner_idle_bound_equals_the_reapers_quiet_bound():
     from coordinator_core.ops.dispatch_emit import abandoned_runs
 
     assert mod._DEAD_OWNER_IDLE_SECONDS == abandoned_runs.TOKENLESS_QUIET_SECONDS
+
+
+GHOST_ASK = "ask-20261107T105424-28ed7e"
+
+
+def _never_ran_parent(root: Path, aged: bool = True) -> Path:
+    """The memo's shape: an indexed parent ask whose record dir holds ask inputs only (no halt, stage or status record)."""
+    (root / ".git").mkdir(exist_ok=True)
+    rd = root / "state" / "warp" / GHOST_ASK
+    rd.mkdir(parents=True)
+    (rd / "relayed-ask.md").write_text("ask", encoding="utf-8")
+    (rd / "run.json").write_text("{}", encoding="utf-8")
+    live_run_index.stage(root, GHOST_ASK, {"pkg/mod.py"}, minted_at=1.0)
+    if aged:
+        old = time.time() - 2 * mod._DEAD_OWNER_IDLE_SECONDS
+        for path in (*rd.iterdir(), rd):
+            os.utime(path, (old, old))
+    return rd
+
+
+def _submit(root: Path):
+    """Run the hook's default entry point; return its permission decision and the emit calls."""
+    seen: list = []
+    env = mod.evaluate(
+        _payload(root, {"ask": "fix it", "source": "pm", "writes": ["pkg/mod.py"]}), emit=_emit_recorder(root, seen)
+    )
+    return env["hookSpecificOutput"]["permissionDecision"], seen
+
+
+def test_a_never_ran_parent_ask_with_no_workflow_does_not_block_the_refire(tmp_path):
+    _never_ran_parent(tmp_path)
+    decision, seen = _submit(tmp_path)
+    assert decision == "allow" and len(seen) == 1
+
+
+def test_a_young_never_ran_parent_ask_still_denies(tmp_path):
+    _never_ran_parent(tmp_path, aged=False)
+    decision, seen = _submit(tmp_path)
+    assert decision == "deny" and seen == []
+
+
+def test_a_parent_ask_with_a_live_token_record_still_denies(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    _never_ran_parent(tmp_path)
+    monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([{"run_id": GHOST_ASK, "minted_at": 1.0}]))
+    monkeypatch.setattr(warp_live, "run_ended_on_evidence", lambda root, rec: False)
+    decision, seen = _submit(tmp_path)
+    assert decision == "deny" and seen == []
+
+
+def test_a_parent_ask_with_a_stage_or_status_record_still_denies(tmp_path):
+    rd = _never_ran_parent(tmp_path)
+    (rd / "run-stage.json").write_text('{"stage": "minted"}', encoding="utf-8")
+    assert _submit(tmp_path)[0] == "deny"
+    (rd / "run-stage.json").unlink()
+    scratch = tmp_path / "scratch" / "warp" / GHOST_ASK
+    scratch.mkdir(parents=True)
+    (scratch / "sibling-status.json").write_text('{"status": "held"}', encoding="utf-8")
+    assert _submit(tmp_path)[0] == "deny"

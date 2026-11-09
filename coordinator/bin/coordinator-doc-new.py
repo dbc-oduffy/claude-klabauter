@@ -5155,6 +5155,19 @@ def _sizing_remit_and_steps(
     return "\n".join([covers[0], "", *covers[1:]]), steps
 
 
+def _archived_baton_abs(edge: str, repo_root: str) -> str | None:
+    """Absolute path of the swept archive copy of a `state/handoffs/` edge, or None."""
+    try:
+        from pathlib import Path as _ArchPath  # noqa: PLC0415
+
+        from coordinator_core.ops.resolve_swept_baton import _find_first_match  # noqa: PLC0415
+
+        _hit = _find_first_match(_ArchPath(repo_root), os.path.basename(edge))
+    except Exception:  # noqa: BLE001 -- unresolved stays the caller's refusal
+        return None
+    return str(_hit) if _hit else None
+
+
 def mint_baton_from_sizing(
     sizing_rel: str, repo_root: str, *, baton: str | None = None, deliverable_id: str | None = None,
 ) -> dict:
@@ -5241,8 +5254,10 @@ def mint_baton_from_sizing(
     if existing_abs is None and isinstance(existing, str) and existing and "baton" not in fields:
         existing_abs = os.path.join(repo_root, existing)
         if not os.path.isfile(existing_abs):
-            fields.append("baton")
-            reasons.append(f"baton edge {existing} resolves to no file")
+            existing_abs = _archived_baton_abs(existing, repo_root)
+            if existing_abs is None:
+                fields.append("baton")
+                reasons.append(f"baton edge {existing} resolves to no file")
     _sizing_dlv = meta.get("deliverable_id") or None
     if deliverable_id and _sizing_dlv and deliverable_id != _sizing_dlv:
         fields.append("deliverable_id")

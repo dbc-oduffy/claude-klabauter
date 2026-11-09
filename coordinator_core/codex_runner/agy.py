@@ -12,6 +12,8 @@ Google calls wrapping agy on consumer plans unsupported (DoE W5.8); the PM accep
 """
 from __future__ import annotations
 
+from coordinator_core.codex_runner.identity_env import provider_identity_env
+
 import json
 import os
 import queue
@@ -92,7 +94,7 @@ def _build_env(
     env = {k: environ[k] for k in keys if environ.get(k)}
     if api_key:
         env[API_KEY_ENV] = api_key
-    return env
+    return provider_identity_env(env, environ, provider="agy", role="reviewer")
 
 
 def read_api_key(platform: Optional[str] = None, environ: Optional[dict] = None, run=subprocess.run) -> Optional[str]:

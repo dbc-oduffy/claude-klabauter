@@ -142,3 +142,18 @@ def test_a_gitignored_untracked_path_still_refuses_and_a_cached_removal_still_la
     assert landed["committed"] is True, landed
     assert "README.md" not in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).split()
     assert (repo / "README.md").exists()
+
+
+def test_native_commit_object_has_engine_provenance(repo, monkeypatch):
+    from coordinator_core.git import agent_provenance
+    monkeypatch.setattr(agent_provenance, "WRITER_READINESS_ACKS", {"project-rag": "test-ack", "example-cockpit-repo": "test-ack"})
+    monkeypatch.setenv("CODEX_THREAD_ID", SID)
+    monkeypatch.setenv("COORDINATOR_AGENT_MODEL", "gpt-6-astra")
+    result = _call(repo, message="native land\n\nAgent-Vendor: claude\nAgent-Tier: standard\n")
+    assert result["committed"] is True, result
+    message = _git(["log", "-1", "--format=%B"], repo)
+    assert "Agent-Vendor: codex" in message
+    assert "Agent-Model: gpt-6-astra" in message
+    assert "Agent-Tier: frontier" in message
+    assert f"Agent-Session-Id: {SID}" in message
+    assert "Agent-Vendor: claude" not in message

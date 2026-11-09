@@ -51,8 +51,22 @@ import importlib
 import json
 import os
 import pkgutil
+import sys
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from coordinator_core.bash_guards.leg_attribution import leg as _leg
+
+_PHASES_MODULE = "coordinator_core.hooks._preuse_phases"
+
+
+def _check_deadline(phase: str) -> None:
+    """Raise `DeadlineStop(phase)` when a preuse dispatch is past its deadline. A no-op unless
+    `hooks._preuse_phases` is already loaded: importing it here would drag the hooks package
+    into the cold guard chain, and nothing could be bound without it."""
+    mod = sys.modules.get(_PHASES_MODULE)
+    if mod is not None and mod._HOOK_DEADLINE.get() is not None:
+        mod.check_deadline(phase)
 
 
 # The deny/advisory bookkeeping dependencies pull tempfile, subprocess and threading
@@ -379,8 +393,10 @@ def discover_guard_names() -> Tuple[List[str], List[str]]:
 
 
 def _run_check(guard: _Guard, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    _check_deadline(guard.name)
     try:
-        return guard.check(payload)
+        with _leg(guard.name):
+            return guard.check(payload)
     except Exception:
         # Advisory crash → no-op. A hard guard that wants fail-closed encodes
         # that inside check() by returning a deny; the engine does not invent one.
@@ -402,13 +418,15 @@ def _apply_level(
         try:
             from coordinator_core.write_guards._repo_root import resolve_repo_root
 
-            root = resolve_repo_root(cwd)
-            gitdir = Path(root) / ".git" if root else None
-            if gitdir is not None and gitdir.is_dir():
-                once = (gitdir, session_id)
+            with _leg("apply_level.gitdir"):
+                root = resolve_repo_root(cwd)
+                gitdir = Path(root) / ".git" if root else None
+                if gitdir is not None and gitdir.is_dir():
+                    once = (gitdir, session_id)
         except Exception:
             once = None
-    return apply_guard_level(name, out, once=once)
+    with _leg("apply_level.policy"):
+        return apply_guard_level(name, out, once=once)
 
 
 def evaluate(
@@ -486,7 +504,8 @@ def evaluate(
     if tool_name not in _VALID_MATCHERS:
         return [] if aggregate else None
 
-    guards, import_failed = _discover_guards()
+    with _leg("guard_discovery"):
+        guards, import_failed = _discover_guards()
     if skipped_out is not None:
         skipped_out[:] = import_failed
     applicable = [g for g in guards if tool_name in g.matchers]

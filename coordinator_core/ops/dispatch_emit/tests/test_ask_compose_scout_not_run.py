@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.warp_fire import fire_command
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -43,7 +44,8 @@ def _run(lines: list[str], setup: str, tmp_path, sizing_present: bool = False) -
         pytest.skip("node not installed")
     stub = (
         f"const agent = async () => ({{ present: {json.dumps(sizing_present)} }}); "
-        "const _PFC1 = ''; const _sizingPath = 'REPO/state/sizings/x.yaml';"
+        "const _PFC1 = ''; const _sizingPath = 'REPO/state/sizings/x.yaml'; "
+        "const _refireCmd = () => 'Workflow({name: \"coordinator:engine-ask\", args: {\"sizing\": \"s.yaml\"}})';"
     )
     prog = (
         stub + "\n(async () => {\n" + setup + "\n" + "\n".join(lines)
@@ -94,7 +96,7 @@ def test_a_paraphrased_stdout_with_the_sizing_on_disk_does_not_halt(tmp_path):
     script = _compose()
     setup = (
         "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
-        "const _scouted = { exit_code: 0, stdout: 'sizing-assemble exit 0: route=plan, tshirt=M', stderr: '' };"
+        "const _scouted = { exit_code: 0, stdout: 'sizing-assemble exit 0: route=plan, tshirt=M', stderr: '', sizing_present: true };"
     )
     assert _run(_decision_lines(script), setup, tmp_path, sizing_present=True) is None
 
@@ -139,7 +141,7 @@ def test_an_abridged_stdout_with_a_gate_reply_does_not_halt(gate, tmp_path):
 @pytest.mark.parametrize(
     "gate, expect",
     [
-        ({"arm": None, "halt": None}, "the gate returned no arm and no halt"),
+        ({"arm": None, "halt": None}, "no arm and no halt; refire to re-run the gate: "),
         ({"arm": None, "halt": {"kind": "room"}}, "the gate halted (room) without a reason"),
         ({"arm": None, "halt": {"kind": "room", "reason": "no room"}}, "no room"),
     ],
@@ -180,6 +182,7 @@ def test_an_empty_gate_reply_after_the_rerun_still_halts_as_a_refusal(tmp_path):
     )
     halted = _run([_line(script, _GATE_MARK)], setup, tmp_path)
     assert halted["halted"] == "refusal" and "the gate returned no arm and no halt" in halted["reason"]
+    assert fire_command("s.yaml") in halted["reason"]
 
 
 def test_no_arm_reason_cites_the_scout_stdout_when_sized_in_run():

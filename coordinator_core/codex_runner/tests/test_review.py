@@ -163,7 +163,7 @@ def test_absolute_path_inside_run_dir_is_allowed(tmp_path):
 def test_env_allowlist_drops_api_key():
     src = {"PATH": "/p", "HOME": "/h", "OPENAI_API_KEY": "sk", "CODEX_HOME": "/c", "LANG": "C",
            "SYSTEMROOT": "S", "SECRET": "x"}
-    assert review._build_env(src, windows=False) == {"PATH": "/p", "HOME": "/h", "CODEX_HOME": "/c", "LANG": "C"}
+    assert {k:v for k,v in review._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "HOME": "/h", "CODEX_HOME": "/c", "LANG": "C"}
     assert review._build_env(src, windows=True)["SYSTEMROOT"] == "S"
     assert "OPENAI_API_KEY" not in review._build_env(src, windows=True)
 
@@ -251,6 +251,6 @@ def test_request_flag_allows_api_key_login_and_env(env):
 
 def test_env_allowlist_flag_unset_drops_and_set_keeps_keys():
     src = {"PATH": "/p", "OPENAI_API_KEY": "sk", "CODEX_API_KEY": "ck"}
-    assert review._build_env(src, windows=False) == {"PATH": "/p"}
+    assert {k:v for k,v in review._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p"}
     on = dict(src, CODEX_RUNNER_ALLOW_API_KEY="true")
-    assert review._build_env(on, windows=False) == {"PATH": "/p", "OPENAI_API_KEY": "sk", "CODEX_API_KEY": "ck"}
+    assert {k:v for k,v in review._build_env(on, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "OPENAI_API_KEY": "sk", "CODEX_API_KEY": "ck"}

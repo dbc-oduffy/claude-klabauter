@@ -1373,7 +1373,9 @@ def _report_close_route_emit(result: dict, args: argparse.Namespace) -> int:
     from coordinator_core.ops.workflow_fire.fire import fire_workflow
 
     try:
-        fire_record = fire_workflow(result["path"], cwd=args.repo_root or None)
+        fire_record = fire_workflow(
+            result["path"], cwd=args.repo_root or None, run_id=result.get("run_id")
+        )
     except Exception:
         print(json.dumps(result, indent=2, sort_keys=True))
         raise
@@ -2336,7 +2338,9 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         try:
             guard_against_fired_drift(Path(result["path"]), result["sha256"])
             fire_record = fire_workflow(
-                result["path"], cwd=str(repo_root) if repo_root else None
+                result["path"],
+                cwd=str(repo_root) if repo_root else None,
+                run_id=result.get("run_id"),
             )
         except Exception:
             print(json.dumps(pending_doc, indent=2, sort_keys=True))

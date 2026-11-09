@@ -74,6 +74,9 @@ def run(monkeypatch):
 
         monkeypatch.setattr(publish, "_fold_bar_refusal", _gate)
 
+        # The shipped commit is read from the hand-written root, never from the checkout under test.
+        monkeypatch.setattr(publish, "_resolve_round_commit", lambda repo, value: "")
+
         def _stub(**_kw):
             raise _PastTheBar
 

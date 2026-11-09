@@ -63,6 +63,7 @@ in its history, keeps the refusal.
 from __future__ import annotations
 
 import re
+import io
 
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -95,6 +96,7 @@ class RefreshResult:
     landing_tip: Optional[str] = None
     pending_abort: bool = False
     subsumed: tuple = ()
+    refresh_head: Optional[str] = None
 
 
 def _git(repo_root: Path, args: List[str], *, remote: bool = False) -> GitResult:
@@ -494,8 +496,9 @@ def fetch_dest_upstream(
         )
 
     tip_ref = upstream if (behind and not ahead) else "HEAD"
+    refresh_head = _resolve_commit(repo_root, "HEAD")
     landing_tip = _resolve_commit(repo_root, tip_ref)
-    if landing_tip is None:
+    if landing_tip is None or refresh_head is None:
         return RefreshResult(
             repo_root,
             ok=False,
@@ -516,7 +519,88 @@ def fetch_dest_upstream(
         landing_tip=landing_tip,
         pending_abort=pending_abort,
         subsumed=tuple(subsumed or ()),
+        refresh_head=refresh_head,
     )
+
+
+def dest_dirty_tracked(repo_root: Path) -> List[str]:
+    """Tracked paths with uncommitted changes in `repo_root` (read-only; untracked files ignored)."""
+    status = _git(Path(repo_root), ["status", "--porcelain", "--untracked-files=no"])
+    return [line[3:] for line in status.stdout.splitlines() if line.strip()]
+
+
+def dry_run_refusal(result: RefreshResult) -> Optional[str]:
+    """Why a `--dry-run` preview over this fetched destination is untrustworthy, else None.
+
+    A dry-run never fast-forwards, so it previews against the worktree as it sits: a clone
+    behind its upstream (or needing the real run's merge) previews a stale base, and tracked
+    edits would be previewed as if committed. Writes nothing.
+    """
+    if not result.ok:
+        return result.reason
+    repo_root, upstream = result.repo_root, result.upstream
+    if (result.pending_abort or result.subsumed) and not result.behind:
+        return (
+            "{0}'s {1} needs the real run's merge step against {2} (interrupted or subsumed "
+            "peer merge); a dry-run previews a stale base.\n"
+            "  Fix: run the real refresh (no --dry-run) or resolve the merge in {0}, then re-run".format(
+                repo_root, result.branch, upstream
+            )
+        )
+    if result.behind:
+        return (
+            "{0}'s {1} is {2} commit(s) behind {3} (its Percolate-Source-Head tip); a dry-run "
+            "previews the stale base and a publish from it rolls back newer publishes.\n"
+            "  Fix: git -C {0} merge --ff-only {3}, then re-run".format(
+                repo_root, result.branch, result.behind, upstream
+            )
+        )
+    dirty = dest_dirty_tracked(repo_root)
+    if dirty:
+        shown = ", ".join(dirty[:5]) + (" ..." if len(dirty) > 5 else "")
+        return (
+            "{0} has {1} uncommitted tracked change(s) ({2}); the dry-run refuses a dirty "
+            "destination clone and never alters it.\n"
+            "  Fix: commit or move the edits aside, then re-run".format(repo_root, len(dirty), shown)
+        )
+    return None
+def preflight_dest_refresh(result: RefreshResult) -> RefreshResult:
+    """Check ordinary fast-forward feasibility before taking a warm handover hold.
+
+    The caller holds the existing destination lock. Git's dry-run preserves the
+    index and worktree, but may take its normal transient index lock. This is
+    advisory: the actual merge still guards against noncooperating writers.
+    Own interrupted merges and source-subsumed merges retain their existing
+    recovery semantics; a two-tree dry-run cannot simulate those operations.
+    """
+    if not result.ok or not result.behind or result.pending_abort or result.subsumed:
+        return result
+    root = result.repo_root
+    branch, current_upstream, name_error = _branch_and_upstream(root)
+    if name_error is not None or current_upstream is None:
+        if branch == "HEAD":
+            return replace(result, ok=False, reason="destination became detached before fast-forward")
+        current_upstream, refusal = _no_upstream_base(root, branch, out=io.StringIO())
+        if refusal is not None:
+            return replace(result, ok=False, reason=refusal)
+    head = _resolve_commit(root, "HEAD")
+    upstream = _resolve_commit(root, result.upstream) if result.upstream else None
+    if (
+        branch != result.branch
+        or current_upstream != result.upstream
+        or head is None
+        or upstream is None
+        or (result.refresh_head is not None and head != result.refresh_head)
+        or (result.landing_tip is not None and upstream != result.landing_tip)
+    ):
+        return replace(result, ok=False, reason="destination branch or refresh commit changed before fast-forward")
+    ancestor = _git(root, ["merge-base", "--is-ancestor", head, upstream])
+    if ancestor.returncode != 0:
+        return replace(result, ok=False, reason="destination is no longer an ordinary fast-forward")
+    probe = _git(root, ["read-tree", "--dry-run", "-m", "-u", head, upstream])
+    if probe.returncode != 0:
+        return replace(result, ok=False, reason="destination fast-forward precondition refused: " + _last_line(probe.stderr or probe.stdout, "read-tree dry-run failed"))
+    return replace(result, refresh_head=head, landing_tip=upstream)
 
 
 def fast_forward_dest(result: RefreshResult, *, out: TextIO, err: TextIO) -> RefreshResult:
@@ -526,6 +610,9 @@ def fast_forward_dest(result: RefreshResult, *, out: TextIO, err: TextIO) -> Ref
     or the `merge --ff-only`, then local `main`. Never raises; a refused step
     returns ok=False with a reason, a refused input result is returned as is.
     """
+    if not result.ok:
+        return result
+    result = preflight_dest_refresh(result)
     if not result.ok:
         return result
     repo_root, branch, upstream = result.repo_root, result.branch, result.upstream

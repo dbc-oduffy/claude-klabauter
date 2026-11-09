@@ -126,10 +126,13 @@ def test_unreachable_origin_stays_unpushed(tmp_path):
 def _clone_verdict(cwd):
     from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 
+    occupied = cwd / "occupied"
+    occupied.mkdir()
+    (occupied / "keep.txt").write_text("x", encoding="utf-8")
     result = guard.check(
         {
             "tool_name": "Bash",
-            "tool_input": {"command": "git clone https://example.invalid/x.git /elsewhere/x"},
+            "tool_input": {"command": f"git clone https://example.invalid/x.git {occupied.as_posix()}"},
             "session_id": "sess1",
             "cwd": str(cwd),
             "agent_id": "deadbeef0123",
@@ -139,16 +142,16 @@ def _clone_verdict(cwd):
     return None if result is None else result.summary
 
 
-def test_clone_denial_outside_any_repo_names_no_placeholder(tmp_path):
+def test_clone_denial_into_occupied_dir_outside_repo_names_no_placeholder(tmp_path):
     verdict = _clone_verdict(tmp_path)
     assert verdict is not None
     assert "<repo>" not in verdict
-    assert "scratchpad" in verdict
+    assert "empty or absent" in verdict
 
 
-def test_clone_denial_inside_repo_names_resolved_scratch(tmp_path):
+def test_clone_denial_into_occupied_dir_inside_repo_names_no_placeholder(tmp_path):
     (tmp_path / ".git").mkdir()
     verdict = _clone_verdict(tmp_path)
     assert verdict is not None
     assert "<repo>" not in verdict
-    assert (tmp_path.resolve() / "scratch").as_posix() in verdict
+    assert "empty or absent" in verdict

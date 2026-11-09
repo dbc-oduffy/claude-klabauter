@@ -228,6 +228,42 @@ def test_subagent_destructive_action_denies_a_subagent_only(monkeypatch):
         assert not _denies(mp.apply_guard_level("block-subagent-destructive-action", env)), level
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git frobnicate",
+        "export GIT_INDEX_FILE=scratch/idx-abc987 && git read-tree HEAD && git write-tree",
+        "git update-ref refs/heads/x new old",
+    ],
+)
+def test_subagent_destructive_action_never_denies_local_recoverable_git(command):
+    from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+    from coordinator_core.guard_messages.testing import envelope_of
+
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "session_id": "s1",
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:executor",
+    }
+    assert not _denies(envelope_of(guard.check(payload)))
+
+
+def test_subagent_destructive_action_still_denies_unguarded_ref_move():
+    from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+    from coordinator_core.guard_messages.testing import envelope_of
+
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "git update-ref refs/heads/x new"},
+        "session_id": "s1",
+        "agent_id": "deadbeef0123",
+        "agent_type": "coordinator:executor",
+    }
+    assert _denies(envelope_of(guard.check(payload)))
+
+
 def test_malformed_request_is_op_only():
     assert dr.MALFORMED_REQUEST not in dr.GUARD_CLASSES
     assert [p[0] for p in dr.registry_problems(guard_classes={"g": dr.MALFORMED_REQUEST})] == ["g"]

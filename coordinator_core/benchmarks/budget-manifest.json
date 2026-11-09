@@ -465,6 +465,18 @@
       "spawn_count_budget": {},
       "_rationale": "Reads one parent record and the status files of that parent's siblings, bounded by fan-out size, in process; no git, no file written, no process started."
     },
+    "workflow.fire": {
+      "target_ms": 20,
+      "tolerance": {
+        "kind": "relative",
+        "value": 0.2
+      },
+      "spawn_count_budget": {
+        "plugin_dir_resolved": 1,
+        "plugin_dir_shim_fallback": 2
+      },
+      "_rationale": "The wait=false path of fire.fire_workflow: in-process plugin-dir resolution (_native_plugin_dir, no spawn) then one detached `claude -p` child Popen; the claude-author --print-plugin-dir shim is a fallback that adds one spawn ahead of the child. Op process time with the child spawn stubbed measured 1.0 to 1.5 ms over five warm runs (time.process_time), so target_ms 20 leaves headroom for load noise and sits far under the 500ms brightline. The detached child and the startup liveness poll are background work outside this row: the row governs the op's own process time and spawn count, never the child's session or wall clock. Counted by coordinator_core/ops/workflow_fire/tests/test_fire_spawn_count.py with exact equality."
+    },
     "dispatch.emit": {
       "target_ms": 300,
       "tolerance": {

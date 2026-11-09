@@ -157,6 +157,7 @@ from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced
 from coordinator_core.frontmatter.primitives import split_frontmatter
 from coordinator_core.frontmatter.schema_validate import check_plan_tasks_source
 from coordinator_core.frontmatter.yaml_load import SAFE_LOADER
+from coordinator_core.ops.dispatch_emit import stage_family
 from coordinator_core.ops.dispatch_emit.em_only_act import em_only_capability, forbidden_sole_act, row_is_em_performed
 from coordinator_core.ops.plan_tasks_render import RowsResult
 
@@ -220,7 +221,7 @@ KNOWN_ROW_KEYS = frozenset({
     "memo_kind", "delivered_via", "case_against", "kind", "pm_approved", "pm_approved_by",
     "pm_disposition", "receipt", "blocked_on", "host", "appends", "falsifier_review_of",
     "satisfies", "verification_runs", "done_when", "disjoint_parallel", "premise_close",
-    "em_run",
+    "em_run", "family",
 })
 
 def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bool) -> Optional[dict]:
@@ -906,6 +907,33 @@ class ContradictoryReadDeclarationError(InvalidFieldTypeError):
     """
 
 
+def _row_family_dispatch(raw: dict, row_id: str, writes, plan_path) -> tuple:
+    """Return ``(agent_type, body_prefix)`` for a row naming a non-claude ``family``, else ``(None, "")``.
+
+    An unknown family, or one beside an explicit ``agent_type``, is refused.
+    """
+    try:
+        family = stage_family.resolve(raw.get("family"))
+    except ValueError as exc:
+        raise InvalidFieldTypeError(f"row {row_id!r}: {exc}") from exc
+    if family == "claude":
+        return None, ""
+    if raw.get("agent_type"):
+        raise InvalidFieldTypeError(
+            f"row {row_id!r} declares family {family!r} and agent_type {raw['agent_type']!r}; "
+            "the family names the runner, so keep one"
+        )
+    paths = [w for w in writes if isinstance(w, str)] if isinstance(writes, list) else []
+    brief = stage_family.runner_brief(
+        family,
+        "write" if paths else "other",
+        Path(plan_path).as_posix(),
+        f"scratch/family-stage/{row_id}",
+        paths,
+    )
+    return stage_family.RUNNER_AGENT, brief + "\n"
+
+
 class EmitterRow(NamedTuple):
     """One normalized task-spine row for the dispatch-emit pipeline.
 
@@ -921,6 +949,10 @@ class EmitterRow(NamedTuple):
     ``pattern``. Both default to ``None``, and a spine declaring neither key
     carries both as ``None`` here exactly as before this field existed.
     ``effort`` is read the same tolerant way and carried unjudged to ``WaveRow``.
+
+    A non-claude ``family`` row rides to ``WaveRow`` as ``agent_type`` =
+    ``stage_family.RUNNER_AGENT`` with the runner's brief fields prefixed to
+    ``body``; ``WaveRow`` carries no family field of its own.
 
     ``body`` is carried for exactly one reader: ``emit.py``'s
     ``_row_agent_type`` asks whether a row's verification has to RUN
@@ -1476,6 +1508,7 @@ def read_spine(
                     f"row {row_id!r} depends_on unresolvable chunk {chunk!r}"
                 )
 
+        family_agent, family_brief = _row_family_dispatch(raw, row_id, writes, plan_path)
         rows.append(
             EmitterRow(
                 id=row_id,
@@ -1484,10 +1517,10 @@ def read_spine(
                 writes=writes,
                 reads=reads,
                 depends_on=depends_on,
-                agent_type=raw.get("agent_type"),
+                agent_type=family_agent or raw.get("agent_type"),
                 agent_model=_row_agent_model(raw, row_id),
                 effort=raw.get("effort"),
-                body=raw.get("body") or "",
+                body=family_brief + (raw.get("body") or ""),
                 writes_under=writes_under,
                 verification_runs=(
                     raw["verification_runs"]

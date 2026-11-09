@@ -9,6 +9,7 @@ from coordinator_core.ops.engine_drift import (
     CAUSE_FLOOR_ABSENT,
     CAUSE_GIT_ERROR,
     CAUSE_MIRROR_UNSTAMPED,
+    CAUSE_REFS_UNREADABLE,
     CAUSE_SHALLOW,
     CAUSE_SOURCE_HISTORY_UNAVAILABLE,
     _diagnose_indeterminate,
@@ -304,12 +305,58 @@ class TestProbeMirrorStamp:
         assert result["state"] == "behind"
         assert "offer" in result
 
-    def test_unregistered_source_is_named_indeterminate(self, tmp_path, monkeypatch):
+    def test_unregistered_source_without_refs_is_named_indeterminate(self, tmp_path, monkeypatch):
         shas, mirror = self._setup(tmp_path, monkeypatch, lambda s: s[2], 0, register=False)
         result = probe_engine_drift(mirror)
         assert result["state"] == "indeterminate"
-        assert result["cause"] == CAUSE_SOURCE_HISTORY_UNAVAILABLE
+        assert result["cause"] == CAUSE_REFS_UNREADABLE
         assert shas[0][:12] in result["notice"]
+
+    def _mirror_only(self, tmp_path, monkeypatch, candidate, packed=False):
+        shas, mirror = self._setup(tmp_path, monkeypatch, lambda s: s[2], 0, register=False)
+        head = _git(mirror, "rev-parse", "HEAD")
+        sha = head if candidate == "head" else candidate
+        if packed:
+            (mirror / ".git" / "packed-refs").write_text(
+                f"# pack-refs with: peeled\n{sha} refs/remotes/origin/candidate\n"
+            )
+        else:
+            ref = mirror / ".git" / "refs" / "remotes" / "origin" / "candidate"
+            ref.parent.mkdir(parents=True)
+            ref.write_text(sha + "\n")
+        return mirror
+
+    @pytest.mark.parametrize("packed", [False, True])
+    def test_mirror_only_head_is_origin_candidate_is_current(self, tmp_path, monkeypatch, packed):
+        mirror = self._mirror_only(tmp_path, monkeypatch, "head", packed)
+        result = probe_engine_drift(mirror)
+        assert result["state"] == "current"
+        assert result["floor_checked"] is False
+        assert "notice" not in result and "offer" not in result
+
+    def test_mirror_only_head_differs_from_origin_candidate_is_unverifiable_here(
+        self, tmp_path, monkeypatch
+    ):
+        mirror = self._mirror_only(tmp_path, monkeypatch, "c" * 40)
+        result = probe_engine_drift(mirror)
+        assert result["state"] == "unverifiable_here"
+        assert result["cause"] == CAUSE_SOURCE_HISTORY_UNAVAILABLE
+
+    def test_mirror_only_verdict_spawns_no_git_of_its_own(self, tmp_path, monkeypatch):
+        mirror = self._mirror_only(tmp_path, monkeypatch, "head")
+        with patch("coordinator_core.ops.engine_drift.git_predicate") as gp, patch(
+            "coordinator_core.ops.engine_drift.run_git"
+        ) as rg:
+            assert probe_engine_drift(mirror)["state"] == "current"
+        gp.assert_not_called()
+        rg.assert_not_called()
+
+    def test_registered_source_ignores_origin_candidate(self, tmp_path, monkeypatch):
+        shas, mirror = self._setup(tmp_path, monkeypatch, lambda s: s[2], 0)
+        ref = mirror / ".git" / "refs" / "remotes" / "origin" / "candidate"
+        ref.parent.mkdir(parents=True)
+        ref.write_text(_git(mirror, "rev-parse", "HEAD") + "\n")
+        assert probe_engine_drift(mirror)["state"] == "behind"
 
     def test_unstamped_mirror_head_is_named_indeterminate(self, tmp_path, monkeypatch):
         mirror = tmp_path / "mirror"

@@ -24,6 +24,7 @@ noted):
   - `session_start_write_plugin_root_breadcrumb`
   - `prune_claude_temp` (`startup` only; stamp check, then a detached
     `ops/prune_claude_temp.py` spawn)
+  - `klabauter_freshness` (`startup` only; fetch, guarded fast-forward, installer re-run)
 
 SOURCE-GATING lives here, because the caller is an http entry on the union
 matcher. The handler reads `payload["source"]`: a missing source runs no leg; a
@@ -94,6 +95,8 @@ _LEGS: "tuple[tuple[str, frozenset, Callable[[dict], object]], ...]" = (
      lambda p: _prune_claude_temp_leg(p)),
     ("retention_run", _STARTUP_ONLY,
      lambda p: _retention_run_leg(p)),
+    ("klabauter_freshness", _STARTUP_ONLY,
+     lambda p: _klabauter_freshness_leg(p)),
 )
 
 
@@ -125,6 +128,19 @@ def _retention_run_leg(payload_params: dict) -> None:
     except Exception:
         pass
     return None
+
+
+def _klabauter_freshness_leg(payload_params: dict) -> "Optional[dict]":
+    """Fetch, guarded fast-forward and installer re-run for the klabauter checkout (the
+    async transport carries the remote round trip). Returns a SessionStart advisory only
+    when a dirty or diverged tree newly surfaces. Never raises."""
+    try:
+        from coordinator_core.ops.fleet import klabauter_freshness
+
+        text = klabauter_freshness.surfaced_advisory(klabauter_freshness.run_freshness())
+        return context_only("SessionStart", text) if text else None
+    except Exception:
+        return None
 
 
 def _unmatched_source_breadcrumb(source: object) -> str:

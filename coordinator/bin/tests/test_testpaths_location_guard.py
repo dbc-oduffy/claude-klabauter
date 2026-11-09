@@ -10,7 +10,7 @@ names its own limit honestly: a module parked OUTSIDE `testpaths` is
 invisible to pytest and therefore invisible to that oracle. Both claude-klabauter
 tiers are pure pytest over this config —
 
-    fast_test_cmd: python3 -m pytest -m 'not cadence and not pending_fix and not designed_red' -n auto
+    fast_test_cmd: python3 -m pytest -m 'not cadence and not complete and not pending_fix and not designed_red' -n auto
     full_test_cmd: python3 -m pytest -m 'not pending_fix and not designed_red'
 
 — and neither names a path, so `testpaths` IS the entire gate surface.

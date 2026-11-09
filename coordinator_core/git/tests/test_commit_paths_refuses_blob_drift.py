@@ -119,6 +119,7 @@ def test_content_match_and_mismatch(tmp_path):
 
 def test_a_crlf_only_difference_from_the_expectation_is_not_drift(tmp_path):
     repo = _repo(tmp_path)
+    _git(repo, "config", "core.autocrlf", "true")
     (repo / "seed.txt").write_bytes(b"A\r\nB\r\n")
     out = gcommit.commit_paths(
         repo, ["seed.txt"], "m", expected_content_sha256={"seed.txt": _sha256(b"A\nB\n")}
@@ -211,7 +212,7 @@ def test_supplied_blob_with_content_expectation_is_unverifiable(tmp_path):
 
 def test_crlf_pinned_fallback_path_with_blob_expectation(tmp_path):
     repo = _repo(tmp_path)
-    _write(repo, ".gitattributes", "*.cmd text eol=crlf\n")
+    _write(repo, ".gitattributes", "[attr]crlf text eol=crlf\n*.cmd crlf\n")
     _git(repo, "add", ".gitattributes")
     _git(repo, "commit", "-q", "-m", "attrs")
     (repo / "a.cmd").write_bytes(b"one\r\ntwo\r\n")

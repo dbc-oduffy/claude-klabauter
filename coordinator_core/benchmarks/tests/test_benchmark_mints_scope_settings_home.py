@@ -17,7 +17,7 @@ from pathlib import Path
 _BENCHMARKS = Path(__file__).resolve().parents[1]
 
 # Names a module reaches the engine-record store through (directly, or via a land/commit handler).
-_STORE_REACH = re.compile(r"\b(run_token|land_run|commit_v2|warp_live|engine_record_home)\b")
+_STORE_REACH = re.compile(r"\b(run_token|land_run|commit_v2|warp_live|engine_record_home|submit_engine_ask|live_run_index|live_run_writes|minted_parent|engine_record_dir)\b")
 _SCOPED = re.compile(r"fixture_settings_home\(|COORDINATOR_SETTINGS_HOME")
 
 _UNSCOPED_PENDING: frozenset[str] = frozenset()

@@ -34,6 +34,11 @@ _SID = "56565656-5656-4565-8565-565656565656"
 _LINE = f"Co-Authored-By: {ATTRIBUTION_TRAILER_VALUE}"
 
 
+@pytest.fixture(autouse=True)
+def claude_caller(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "claude")
+
+
 @pytest.fixture
 def repo(tmp_path) -> Path:
     r = tmp_path / "repo"

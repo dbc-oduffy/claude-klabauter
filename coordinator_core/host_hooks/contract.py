@@ -25,6 +25,7 @@ class HostEvent:
     tool_name: str = ""
     tool_input: Mapping[str, Any] = field(default_factory=dict)
     cwd: str = ""
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
 
 def neutral_fallback(host: str) -> Dict[str, Any]:

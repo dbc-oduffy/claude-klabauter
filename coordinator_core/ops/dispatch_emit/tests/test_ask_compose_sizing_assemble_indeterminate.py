@@ -127,6 +127,15 @@ def test_the_marker_regex_matches_both_reply_shapes():
     assert "-32004" in SIZING_ASSEMBLE_INDETERMINATE_RE and "warm dispatch indeterminate" in SIZING_ASSEMBLE_INDETERMINATE_RE
 
 
+def test_the_door_indeterminate_text_names_the_landed_check():
+    from pathlib import Path
+
+    src = (Path(__file__).resolve().parents[3] / "warm" / "door" / "door_core.c").read_text(encoding="utf-8")
+    body = src[src.index("int build_indeterminate_envelope"):]
+    body = body[: body.index("\n}\n")]
+    assert "git log -1 -- <path>" in body and "warm.request_status" in body
+
+
 def test_every_refusal_halt_site_on_a_sizing_submission_names_the_sizing_refire():
     script = _compose(prompt=None, sizing_rel=_SIZING)
     assert _refire_js(_SIZING) == _lit(fire_command(_SIZING))

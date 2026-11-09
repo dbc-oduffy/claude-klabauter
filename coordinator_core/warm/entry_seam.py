@@ -398,6 +398,7 @@ def per_request_state(
     diagnostics: Optional[List[str]] = None,
     warm_served: Optional[bool] = None,
     caller_pid: Optional[str] = None,
+    verified_native_actor=None,
     session_id: Optional[str] = None,
     settings_home: Optional[str] = None,
     isolated: bool,
@@ -551,7 +552,18 @@ def per_request_state(
     else:
         diagnostics_scope = collecting_diagnostics(diagnostics)
 
-    with warm_scope, session_identity_override(_session_id_from_env(merged_env)):
+    from coordinator_core.git.provider_attribution import caller_attribution
+
+    # Re-entry opens no new caller envelope and must inherit the outer identity.
+    # A genuinely new warm request binds even a missing provider to empty.
+    new_caller = warm_served is True or env is not None
+    attribution_scope = caller_attribution(merged_env) if new_caller else contextlib.nullcontext()
+    from coordinator_core.session.caller_env import bind_caller_env
+
+    envelope_scope = bind_caller_env(merged_env) if new_caller else contextlib.nullcontext()
+    from coordinator_core.session.native_actor import bind_verified_native_actor
+    actor_scope = bind_verified_native_actor(verified_native_actor) if new_caller or verified_native_actor is not None else contextlib.nullcontext()
+    with actor_scope, warm_scope, session_identity_override(_session_id_from_env(merged_env)), attribution_scope, envelope_scope:
         with diagnostics_scope:
             with _environ_identity_borrow(merged_env, isolated, caller_pid):
                 with collecting(into) as declared:

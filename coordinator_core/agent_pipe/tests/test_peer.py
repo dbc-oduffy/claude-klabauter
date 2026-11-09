@@ -141,5 +141,30 @@ def test_real_adapters_build_native_argv_without_bypass_flags(home):
         assert not [a for a in argv if "dangerously" in a or "bypass" in a]
 
 
+def test_grok_participant_is_resume_mode_with_plan_mode_argv_and_no_bypass(home, monkeypatch):
+    monkeypatch.setattr("coordinator_core.codex_runner.grok.shutil.which", lambda name: "/bin/grok")
+    g = peer.grok_participant("grok1", conversation="sid-1")
+    assert g.mode == peer.RESUME and g.conversation == "sid-1"
+    argv = g.adapter.resume_argv("sid-1", "hi")
+    assert argv[:3] == ["/bin/grok", "-p", "hi"] and argv[argv.index("-s") + 1] == "sid-1"
+    assert argv[argv.index("--permission-mode") + 1] == "plan"
+    assert not [a for a in argv if "always-approve" in a or "bypass" in a or "yolo" in a]
+    fresh = g.adapter.spawn_argv("hello")
+    assert fresh[fresh.index("-s") + 1] == g.adapter.session
+
+
+def test_grok_adapter_reads_text_events_and_result_only_as_fallback(home):
+    a = peer.GrokAdapter()
+    assert a.parse_line('{"type":"text","text":"x"}') is None  # no session yet
+    a.session = "s"
+    assert a.parse_line("not json") is None
+    assert a.parse_line('{"type":"system","text":"boot"}') is None
+    assert a.parse_line('{"type":"assistant","text":" hi "}') == ("s", "hi")
+    assert a.parse_line('{"type":"result","result":"hi"}') is None
+    b = peer.GrokAdapter()
+    b.session = "s"
+    assert b.parse_line('{"type":"result","result":"only"}') == ("s", "only")
+
+
 def test_json_turn_is_the_agy_user_event_schema():
     assert json.loads(peer.json_turn("hi\nthere")) == {"event": "user", "message": {"content": "hi\nthere"}}

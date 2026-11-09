@@ -406,6 +406,20 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
     },
+    "workflow.fire": {
+        "plugin_dir_resolved": {
+            "ceiling": 1,
+            "reason": (
+                "First recorded 2026-11-07 at the value it entered with: in-process plugin-dir resolution leaves the detached child Popen as the op's only spawn."
+            ),
+        },
+        "plugin_dir_shim_fallback": {
+            "ceiling": 2,
+            "reason": (
+                "First recorded 2026-11-07 at the value it entered with: the claude-author --print-plugin-dir fallback adds one spawn ahead of the child Popen."
+            ),
+        },
+    },
     "dispatch.emit": {
         "plan_route_gitignore_filter": {
             "ceiling": 1,

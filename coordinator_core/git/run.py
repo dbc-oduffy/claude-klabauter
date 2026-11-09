@@ -611,13 +611,10 @@ def run_git(
     # open, not on anything here.
     # -> state/bug-backlog/2026-08-31-subprocess-run-s-timeout-does-not-bound-466bceff0ba5.yaml
     #
-    # The pipe-leak hazard the old comment raised is real and is answered
-    # HERE rather than by delegating: `Popen` is used as a context manager,
-    # so `__exit__` closes stdin/stdout/stderr on every path including the
-    # timeout one, and the kill leg never re-reads. A timed-out git call
-    # discards whatever the dead child wrote -- the caller gets
-    # `timed_out=True` and no bytes, which is what every branch reading this
-    # result already does with a timeout.
+    # Windows now uses owned regular files below: closing a buffered PIPE in
+    # Popen.__exit__ can itself wait on the blocked reader thread. POSIX keeps
+    # the existing context-managed communicate path. Both discard output on
+    # timeout and return timed_out=True, rather than re-draining after a kill.
     # `mode_kwargs` was built for `subprocess.run`, whose `input=` has no
     # `Popen` equivalent: fed stdin becomes `stdin=PIPE` at construction plus
     # the bytes at `communicate`. Split here rather than reshaping the block
@@ -630,6 +627,65 @@ def run_git(
     spawn_flags = _console_flags(args)
     if job is not None:
         spawn_flags = {"creationflags": spawn_flags.get("creationflags", 0) | _CREATE_SUSPENDED}
+    if sys.platform == "win32":
+        # A Windows PIPE reader can remain blocked behind an inherited writer,
+        # including while Popen.__exit__ tries to close its buffered reader.
+        # Regular files have no reader thread or EOF dependency. This is not
+        # process-tree containment: the optional job below only charges CPU.
+        import tempfile
+
+        try:
+            with contextlib.ExitStack() as owned_files:
+                try:
+                    stdout_file = owned_files.enter_context(tempfile.TemporaryFile(mode="w+b"))
+                    stderr_file = owned_files.enter_context(tempfile.TemporaryFile(mode="w+b"))
+                    stdin_file = subprocess.DEVNULL
+                    if fed_input is not None:
+                        stdin_file = owned_files.enter_context(tempfile.TemporaryFile(mode="w+b"))
+                        stdin_file.write(fed_input)
+                        stdin_file.seek(0)
+                    proc = subprocess.Popen(
+                        [_git_exe(), *args], cwd=cwd, stdin=stdin_file,
+                        stdout=stdout_file, stderr=stderr_file,
+                        env=_remote_env(env) if remote else (dict(env) if env is not None else None),
+                        **spawn_flags,
+                    )
+                    if job is not None and not _assign_and_resume(job, proc):
+                        proc.kill()
+                        try:
+                            proc.wait(timeout=_SPAWN_SCHEDULING_HEADROOM_SECS)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        return GitResult(returncode=127, stdout="", stderr="", timed_out=False)
+                    try:
+                        proc.wait(timeout=wall)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            proc.kill()
+                        except OSError:
+                            pass
+                        try:
+                            proc.wait(timeout=_SPAWN_SCHEDULING_HEADROOM_SECS)
+                        except subprocess.TimeoutExpired:
+                            pass
+                        return GitResult(returncode=-1, stdout="", stderr="", timed_out=True)
+                    stdout_file.seek(0)
+                    stderr_file.seek(0)
+                    raw_stdout, raw_stderr = stdout_file.read(), stderr_file.read()
+                    stdout, stderr = _as_text(raw_stdout), _as_text(raw_stderr)
+                    if input is None and not binary:
+                        # Preserve Popen text mode's universal-newline contract.
+                        stdout = stdout.replace("\r\n", "\n").replace("\r", "\n")
+                        stderr = stderr.replace("\r\n", "\n").replace("\r", "\n")
+                    return GitResult(proc.returncode, stdout, stderr, False,
+                                     raw_stdout if input is not None or binary else b"")
+                finally:
+                    # Account/close before releasing any inherited I/O handles.
+                    # Closing this accounting job does NOT kill descendants.
+                    if job is not None:
+                        _charge_and_close_job(job)
+        except OSError:
+            return GitResult(returncode=127, stdout="", stderr="", timed_out=False)
     try:
         try:
             with subprocess.Popen(

@@ -325,7 +325,11 @@ def test_roster_mirror_writes_entry_and_key_the_harness_accepts(sessions, monkey
     assert entry["procStart"] == "132000000000000000" and isinstance(entry["procStart"], str)
     assert entry["messagingSocketPath"] == ep and entry["macSocketPath"] == FAR_SOCK
     key_file = sessions / roster.key_name(31337, ep, platform="win32")
-    assert key_file.read_text() == "SECRETKEY"
+    credentials = json.loads(key_file.read_text())
+    assert re.fullmatch(r"[0-9a-f]{32}", credentials["peerToken"])
+    field = "procStartFt" if sys.platform == "win32" else "procStart"
+    assert credentials[field] == entry["procStart"]
+    assert credentials["pidDomain"] == entry["pidDomain"]
     assert all("SECRETKEY" not in line for line in lines)
 
 
@@ -375,6 +379,46 @@ def test_inbound_names_counts_only_live_unimatrix_mirror_entries(sessions, monke
     assert roster.inbound_names() == {"n1"}
 
 
+def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid=31339):
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "spawn", lambda cmd: FakeProc(pid))
+    monkeypatch.setattr(roster, "proc_start", lambda p, platform=None: "1")
+    monkeypatch.setattr(roster.time, "sleep", lambda s: None)
+    cfg = roster.parse_args(["bridge.log", "--remote", remote, "--key", "k"])
+    entry = {"pid": 7, "name": "far-c", "procStart": "x", "pidDomain": "darwin",
+             "messagingSocketPath": FAR_SOCK, **(entry_extra or {})}
+    roster.mirror({"entry": entry, "key": "K"}, cfg, lambda m: None)
+    return cfg, json.loads((sessions / f"{pid}.json").read_text())
+
+
+@pytest.mark.parametrize("remote", ["example-operator@Machine-b-LAN.local", "machine-b", "Machine-b.local", "u@machine-b-lan"])
+def test_mirror_stamps_the_normalised_far_box_from_any_alias(sessions, monkeypatch, remote):
+    _, entry = _mirror_one(load("roster"), sessions, monkeypatch, remote)
+    assert entry["unimatrixBox"] == "machine-b"
+
+
+def test_mirror_keeps_a_far_vendor_and_a_far_box_stamp(sessions, monkeypatch):
+    _, entry = _mirror_one(load("roster"), sessions, monkeypatch, "machine-b",
+                           {"unimatrixVendor": "codex", "unimatrixBox": "elsewhere"})
+    assert entry["unimatrixVendor"] == "codex" and entry["unimatrixBox"] == "elsewhere"
+
+
+def test_rename_live_mirror_preserves_box_and_vendor(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, entry = _mirror_one(roster, sessions, monkeypatch, "u@Machine-b-LAN", {"unimatrixVendor": "codex"})
+    row = {"entry": {"pid": 7, "name": "far-c", "messagingSocketPath": FAR_SOCK}}
+    scan = [("far-c", "/other.sock")]
+    roster.rename_live_mirror(31339, FAR_SOCK, row, cfg, lambda m: None, scan)
+    after = json.loads((sessions / "31339.json").read_text())
+    assert after["name"] != entry["name"]
+    assert after["unimatrixBox"] == "machine-b" and after["unimatrixVendor"] == "codex"
+
+
+def test_roster_loads_the_contract_lazily_not_at_import():
+    roster = load("roster")
+    assert roster._CONTRACT == []
+
+
 def test_mirror_records_the_far_pid_for_a_win32_pipe_far_socket(sessions, monkeypatch):
     roster = load("roster")
     pipe = "\\\\.\\pipe\\LOCAL\\cc-msg-" + "c" * 32
@@ -401,10 +445,10 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
     spec.loader.exec_module(bridge)
     d = tmp_path / "sessions"
     d.mkdir()
-    entry = {"messagingSocketPath": "/m.sock", "macSocketPath": far_socket}
+    entry = {"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": far_socket}
     if stored:
         entry["farPid"] = stored
-    (d / "1.json").write_text(json.dumps(entry))
+    (d / f"{os.getpid()}.json").write_text(json.dumps(entry))
     monkeypatch.setattr(bridge, "SESSIONS", str(d))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote=None, port=None)
@@ -525,7 +569,10 @@ def test_reshape_repoints_entry_key_and_stops_the_old_bridge(sessions, monkeypat
     assert cmds[0][2:5] == [ep, "relay", "b.log"] and cmds[0][5:7] == ["18991", "inbox-ep"]
     entry = json.loads((sessions / "8080.json").read_text())
     assert entry["pid"] == 8080 and entry["procStart"] == "132111" and entry["messagingSocketPath"] == ep
-    assert (sessions / "8080.newhash.key").read_text() == "KEY"
+    credentials = json.loads((sessions / "8080.newhash.key").read_text())
+    assert re.fullmatch(r"[0-9a-f]{32}", credentials["peerToken"])
+    assert credentials["procStartFt"] == entry["procStart"]
+    assert credentials["pidDomain"] == entry["pidDomain"]
     assert sorted(p.name for p in sessions.iterdir()) == ["8080.json", "8080.newhash.key"]
 
 
@@ -598,7 +645,8 @@ def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path, name):
     log = tmp_path / "sup.log"
     p = subprocess.Popen([sys.executable, str(BIN / f"unimatrix-{name}.py"), str(log),
                           "--remote", "unreachable.invalid", "--key", str(tmp_path / "k")],
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
+                         env={**os.environ, "UNIMATRIX_ROUTER_SUPERVISION": "off"})
     try:
         deadline = time.time() + 10
         while time.time() < deadline and not log.exists():
@@ -635,3 +683,140 @@ def test_fetch_roster_retries_one_transient_stall_but_not_a_persistent_failure(m
     with pytest.raises(OSError, match="rc=255"):
         roster.fetch_roster("lan", "k", None)
     assert len(calls) == 2
+
+
+def _router_harness(tmp_path, monkeypatch, answers):
+    mirror_all = load("mirror-all")
+    started = []
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    monkeypatch.delenv("UNIMATRIX_ROUTER_SUPERVISION", raising=False)
+    monkeypatch.setattr(mirror_all, "router_answers", lambda ctl: answers())
+    monkeypatch.setattr(mirror_all.R, "spawn", lambda cmd: started.append(cmd) or FakeProc(555))
+    return mirror_all, started
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="router supervision is POSIX-only")
+def test_ensure_router_spawns_a_silent_router_detached_and_leaves_an_answering_one(tmp_path, monkeypatch):
+    seen = iter([False, True])
+    mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: next(seen))
+    assert mirror_all.ensure_router(lambda m: None) is True
+    assert len(started) == 1 and started[0][1].endswith("unimatrix-peer-router.py")
+    mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: True)
+    assert mirror_all.ensure_router(lambda m: None) is False and started == []
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="router supervision is POSIX-only")
+def test_ensure_router_defers_to_a_supervisor_holding_the_lock(tmp_path, monkeypatch):
+    import fcntl
+    mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: False)
+    lock_dir = tmp_path / "unimatrix" / "router"
+    lock_dir.mkdir(parents=True)
+    with open(lock_dir / "supervisor.lock", "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        assert mirror_all.ensure_router(lambda m: None) is False
+    assert started == []
+
+
+def test_ensure_router_is_supervised_on_win32(tmp_path, monkeypatch):
+    seen = iter([False, True])
+    mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: next(seen))
+    transport = mirror_all._router_module()._transport()
+    monkeypatch.setattr(transport, "lock_file", lambda file: True)
+    monkeypatch.setattr(transport, "unlock_file", lambda file: None)
+    monkeypatch.setattr(mirror_all.sys, "platform", "win32")
+    assert mirror_all.ensure_router(lambda m: None) is True and len(started) == 1
+
+
+def test_ensure_router_waits_for_a_draining_routers_lifetime_lock(tmp_path, monkeypatch):
+    mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: False)
+    lock_dir = tmp_path / "unimatrix" / "router"
+    lock_dir.mkdir(parents=True)
+    transport = mirror_all._router_module()._transport()
+    with (lock_dir / "router.lock").open("a+b") as held:
+        assert transport.lock_file(held)
+        try:
+            assert mirror_all.ensure_router(lambda m: None) is False
+        finally:
+            transport.unlock_file(held)
+    assert started == []
+
+
+class ExitedProc:
+    def __init__(self, pid, rc):
+        self.pid = pid
+        self.rc = rc
+
+    def poll(self):
+        return self.rc
+
+
+def _sync_rig(tmp_path, monkeypatch, rcs):
+    mirror_all = load("mirror-all")
+    started, clock = [], [1000.0]
+
+    def fake_spawn(cmd):
+        started.append(cmd)
+        return ExitedProc(800 + len(started), rcs[min(len(started) - 1, len(rcs) - 1)])
+
+    monkeypatch.setattr(mirror_all.R, "spawn", fake_spawn)
+    monkeypatch.setattr(mirror_all.R, "tree_kill", lambda pid: None)
+    monkeypatch.setattr(mirror_all, "_now", lambda: clock[0])
+    cfg = mirror_all.parse_args([str(tmp_path / "m.log"), "--remote", "farbox", "--key", "k"])
+    return mirror_all, started, clock, cfg
+
+
+def test_unsupported_host_exit_marks_the_remote_and_is_never_redialed(tmp_path, monkeypatch):
+    mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [3])
+    live = {"a": {"pid": 1, "messagingSocketPath": "e"}, "b": {"pid": 2, "messagingSocketPath": "e"}}
+    clients = {}
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    first = len(started)
+    for _ in range(3):
+        clock[0] += 10000
+        mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert first == 2 and len(started) == 2 and mirror_all._STATE["unsupported"]
+
+
+def test_other_exit_waits_a_doubling_capped_backoff_before_respawn(tmp_path, monkeypatch):
+    mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [255])
+    live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
+    clients = {}
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert len(started) == 1
+    mirror_all.sync(clients, live, cfg, lambda m: None)  # death seen, 30s wait starts
+    clock[0] += 29
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert len(started) == 1
+    clock[0] += 2
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert len(started) == 2 and not mirror_all._STATE["unsupported"]
+    mirror_all.sync(clients, live, cfg, lambda m: None)  # second death: 60s
+    clock[0] += 59
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert len(started) == 2
+    clock[0] += 2
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert len(started) == 3
+    assert [mirror_all.backoff_seconds(n) for n in (0, 1, 4, 5, 9)] == [30, 60, 480, 600, 600]
+
+
+def test_a_client_that_stayed_up_a_poll_resets_the_backoff(tmp_path, monkeypatch):
+    mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [255])
+    live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
+    clients = {}
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert mirror_all._STATE["fails"] == {"a": 1}
+    clients["a"] = (1, FakeProc(5))
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert mirror_all._STATE["fails"] == {}
+
+
+def test_relay_inbox_exits_3_on_a_pipe_host_and_the_code_matches_the_supervisor():
+    relay = importlib.util.module_from_spec(importlib.util.spec_from_file_location("unimatrix_relay_c4", BIN / "unimatrix-relay.py"))
+    relay.__spec__.loader.exec_module(relay)
+    assert relay.UNSUPPORTED_HOST_RC == 3 == load("mirror-all").UNSUPPORTED_HOST_RC
+    relay.endpoint_kind = lambda: "pipe"
+    with pytest.raises(SystemExit) as e:
+        relay.inbox("x")
+    assert e.value.code == 3

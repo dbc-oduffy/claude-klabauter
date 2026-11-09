@@ -505,6 +505,13 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     if request.node.get_closest_marker("real_home"):
         return None
 
+    # Native sessions are real operator identity, just like the real home. Unit
+    # fixtures must supply their own values rather than inherit the Codex/agy/grok
+    # session running pytest (which can otherwise claim test writes as live work).
+    for name in ("CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID",
+                 "COORDINATOR_AGENT_VENDOR", "COORDINATOR_AGENT_MODEL", "COORDINATOR_AGENT_SESSION"):
+        monkeypatch.delenv(name, raising=False)
+
     if _REAL_SETTINGS_HOME:
         from coordinator_core import _settings_home as _settings_home_mod
 
@@ -722,6 +729,29 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
         )
         routes_index_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(routes_index_src, routes_index_dst)
+
+    # Trap: a test body's `monkeypatch.undo()` reverts every patch above and hands back the
+    # real home (route 3: `test_submit_engine_ask` minted run ids into the real engine-records).
+    # Re-pin the home vars after any body-time undo; teardown's own undo must not re-pin.
+    _home_pins = {
+        k: os.environ.get(k)
+        for k in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "COORDINATOR_SETTINGS_HOME",
+                  "_COORDINATOR_TEST_FORBID_REAL_SETTINGS_HOME")
+    }
+    _undo_live = [True]
+    _plain_undo = monkeypatch.undo
+
+    def _undo_keeping_home() -> None:
+        _plain_undo()
+        if _undo_live[0]:
+            for key, value in _home_pins.items():
+                if value is None:
+                    monkeypatch.delenv(key, raising=False)
+                else:
+                    monkeypatch.setenv(key, value)
+
+    monkeypatch.undo = _undo_keeping_home
+    request.addfinalizer(lambda: _undo_live.__setitem__(0, False))
 
     return quarantine
 
@@ -1858,3 +1888,92 @@ def _write_set_reads_clean(request, monkeypatch):
     from coordinator_core.ops.dispatch_emit import dirty_write_set
 
     monkeypatch.setattr(dirty_write_set, "guard_against_dirty_write_set", lambda *a, **k: None)
+
+
+# ---------------------------------------------------------------------------
+# Real engine-records tripwire
+# ---------------------------------------------------------------------------
+#
+# A pytest session must not add fixture run ids to the operator's REAL
+# `machine-local/engine-records/*/coordinator-warp-live-run-index.json`.
+# Fixture additions fail the session; other additions (live peers share these
+# indexes) only warn. Skipped on xdist workers and when the real dir is absent.
+
+import re as _re
+
+# Trap: detection is by id shape. A fixture minting a new id shape only warns; extend this
+# pattern with the new shape when a fixture is added.
+_FIXTURE_RUN_ID_RE = _re.compile(
+    r"^(?:ask-20261013T000000-abcdef|run[0-9]+|ask-2099.*|plan-20261104T.*|.*submit-budget-bench.*|ask-.*-(?:fresh|ghost)[0-9]+)$"
+)
+_LIVE_RUN_INDEX_FILE = "coordinator-warp-live-run-index.json"
+
+
+def is_fixture_run_id(run_id: str) -> bool:
+    """True for a run id only a test or benchmark fixture mints."""
+    return bool(_FIXTURE_RUN_ID_RE.match(run_id))
+
+
+def snapshot_engine_records(settings_home: str) -> dict[str, frozenset]:
+    """`{key dir name: run-id set}` under `<settings_home>/machine-local/engine-records`; `{}` when absent."""
+    root = Path(settings_home) / "machine-local" / "engine-records"
+    try:
+        names = os.listdir(root)
+    except OSError:
+        return {}
+    snap: dict[str, frozenset] = {}
+    for name in names:
+        runs: frozenset = frozenset()
+        try:
+            data = json.loads((root / name / _LIVE_RUN_INDEX_FILE).read_text(encoding="utf-8"))
+            runs = frozenset(data.get("runs") or {})
+        except (OSError, ValueError, AttributeError):
+            pass
+        snap[name] = runs
+    return snap
+
+
+def diff_engine_records(before: dict[str, frozenset], after: dict[str, frozenset]):
+    """`(added_dirs, fixture_additions, other_additions)`; removals are ignored.
+
+    The addition lists hold `(dir, run_id)` pairs.
+    """
+    added_dirs = sorted(set(after) - set(before))
+    fixture: list = []
+    other: list = []
+    for name, runs in sorted(after.items()):
+        for run_id in sorted(runs - before.get(name, frozenset())):
+            (fixture if is_fixture_run_id(run_id) else other).append((name, run_id))
+    return added_dirs, fixture, other
+
+
+_ENGINE_RECORDS_BEFORE: dict | None = None
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    global _ENGINE_RECORDS_BEFORE
+    _ENGINE_RECORDS_BEFORE = None
+    if hasattr(session.config, "workerinput") or not _REAL_SETTINGS_HOME:
+        return
+    if not (Path(_REAL_SETTINGS_HOME) / "machine-local" / "engine-records").is_dir():
+        return
+    _ENGINE_RECORDS_BEFORE = snapshot_engine_records(_REAL_SETTINGS_HOME)
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
+    if _ENGINE_RECORDS_BEFORE is None:
+        return
+    added_dirs, fixture, other = diff_engine_records(
+        _ENGINE_RECORDS_BEFORE, snapshot_engine_records(_REAL_SETTINGS_HOME)
+    )
+    out = sys.stderr
+    if other:
+        print(f"engine-records tripwire (warning): non-fixture run ids added: {other}", file=out)
+    if fixture:
+        print(
+            "engine-records tripwire FAILED: the suite added fixture run ids to the REAL "
+            f"engine-records. added dirs: {added_dirs}; fixture run ids: {fixture}",
+            file=out,
+        )
+        if int(session.exitstatus) == 0:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED

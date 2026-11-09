@@ -84,10 +84,14 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § W4-C8
 from __future__ import annotations
 
 import sys
+import time
 from dataclasses import dataclass
 from typing import FrozenSet, List, Optional, Tuple
 
+from coordinator_core.bash_guards import leg_attribution
+from coordinator_core.hooks import _preuse_phases
 from coordinator_core.hooks._envelope import context_only, no_advisory, payload_of
+from coordinator_core.telemetry import op_row_fields
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
 
@@ -156,6 +160,27 @@ async def _run_leg(leg: SkillLeg, params: dict) -> Optional[str]:
 
 @register_op("hooks.preuse_skill_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
+    # Async twin of `_preuse_phases.run_phased`: legs may await, so the wrapper must too.
+    attr_token = leg_attribution.begin()
+    deadline_token = _preuse_phases._HOOK_DEADLINE.set(
+        time.monotonic() + _preuse_phases._door_deadline_s()
+    )
+    try:
+        return await _chain(params)
+    except _preuse_phases.DeadlineStop as stop:
+        op_row_fields.attach(deadline_stop=stop.phase or "hooks.preuse_skill_dispatch")
+        return no_advisory()
+    finally:
+        try:
+            spans = leg_attribution.summary(top=3)
+            if spans:
+                op_row_fields.attach(slow_phase=spans[0]["name"], spans=spans)
+        finally:
+            _preuse_phases._HOOK_DEADLINE.reset(deadline_token)
+            leg_attribution.end(attr_token)
+
+
+async def _chain(params: dict) -> dict:
     params = payload_of(params)
 
     inv = read_invocation(params)
@@ -168,8 +193,10 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     parts: List[str] = []
     for leg in matched:
+        _preuse_phases.check_deadline(leg.leg_id)
         try:
-            text = await _run_leg(leg, params)
+            with leg_attribution.leg(leg.leg_id):
+                text = await _run_leg(leg, params)
         except BaseException as exc:
             try:
                 print(

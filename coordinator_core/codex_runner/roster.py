@@ -40,6 +40,7 @@ def write_record(
     mode: str,
     cwd: str,
     parent_session_id: Optional[str] = None,
+    provider: str = "codex",
 ) -> Path:
     """Atomically write the roster record for codex process `pid`; returns its path."""
     path = _record_path(pid)
@@ -50,6 +51,7 @@ def write_record(
         "mode": mode,
         "cwd": cwd,
         "parent_session_id": parent_session_id,
+        "provider": provider,
         "start_epoch": time.time(),
     }
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")

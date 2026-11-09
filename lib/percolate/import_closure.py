@@ -755,14 +755,25 @@ def find_commit_from_import_name_violations(
     `__init__.py`) and a module defining `__getattr__` or star-importing never
     flag. Raises `CommitReadError` on a failed git read: callers fail closed."""
     sources, dirs = _read_commit_py_blobs(repo, commit, roots)
+    # A module may be both an importer and another importer's target. The
+    # namespace cache alone used to parse that same committed source again.
+    # All readers below are read-only, so share its AST for this one immutable
+    # commit snapshot; do not retain it across calls/commits or read worktree data.
+    parsed_cache: dict[str, ast.Module | None] = {}
     namespace_cache: dict[str, tuple[set[str], bool]] = {}
+
+    def parsed(path: str) -> ast.Module | None:
+        if path not in parsed_cache:
+            try:
+                parsed_cache[path] = ast.parse(sources[path], filename=path)
+            except SyntaxError:
+                parsed_cache[path] = None
+        return parsed_cache[path]
 
     def namespace_of(path: str) -> tuple[set[str], bool]:
         if path not in namespace_cache:
-            try:
-                namespace_cache[path] = _module_defined_names(ast.parse(sources[path], filename=path))
-            except SyntaxError:
-                namespace_cache[path] = (set(), True)
+            tree = parsed(path)
+            namespace_cache[path] = _module_defined_names(tree) if tree is not None else (set(), True)
         return namespace_cache[path]
 
     violations: list[tuple[str, str]] = []
@@ -773,9 +784,8 @@ def find_commit_from_import_name_violations(
         source = sources[importer]
         if not _COMMIT_FROM_IMPORT_RE.search(source):
             continue
-        try:
-            tree = ast.parse(source, filename=importer)
-        except SyntaxError:
+        tree = parsed(importer)
+        if tree is None:
             continue
         examined += 1
         for node in _unguarded_import_nodes(tree):

@@ -105,11 +105,26 @@ class RealSettingsHomeLeakError(RuntimeError):
     pass
 
 
+def _normalised(p: Path) -> Path:
+    try:
+        p = p.resolve()
+    except OSError:
+        pass
+    return Path(os.path.normcase(str(p)))
+
+
+def _is_within_forbidden(resolved: Path, forbidden: str) -> bool:
+    """True when *resolved* is the forbidden real home or any path beneath it."""
+    home = _normalised(resolved)
+    bad = _normalised(Path(forbidden))
+    return home == bad or home.is_relative_to(bad)
+
+
 def _check_not_the_forbidden_real_home(resolved: Path) -> None:
     forbidden = os.environ.get(FORBID_REAL_SETTINGS_HOME_ENV)
     if not forbidden:
         return
-    if str(resolved) != forbidden:
+    if not _is_within_forbidden(resolved, forbidden):
         return
     raise RealSettingsHomeLeakError(
         f"settings_home() resolved to this operator's REAL settings home "

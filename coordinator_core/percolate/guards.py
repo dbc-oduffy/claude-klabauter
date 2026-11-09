@@ -982,12 +982,12 @@ def check_registration_liveness(target_root: str | Path, params: dict) -> GuardR
 _COORDINATOR_CORE_IMPORT_PREFIX = 'coordinator_core.'
 
 
-def _module_level_import_targets(tree: ast.Module):
+def _module_level_import_targets(tree: ast.Module, *, test_surface: bool = False):
     """Yield `(stmt, guarded)` for every `Import`/`ImportFrom` node reachable at
     MODULE IMPORT TIME -- top-level statements, and statements nested inside
     `If`/`Try`/`ClassDef`/`With` bodies (all of which execute the moment the
-    module is imported) -- but NEVER inside a `FunctionDef`/`AsyncFunctionDef`
-    body, since this repo uses deferred/lazy op imports deliberately (the
+    module is imported) -- but only inside a `FunctionDef`/`AsyncFunctionDef`
+    body when `test_surface` is True, since runtime code uses deferred/lazy op imports deliberately (the
     lazy-ops backlog concern) and a lazy import cannot break at import time.
 
     `guarded` is True when the import sits inside a `try:` body whose
@@ -995,6 +995,11 @@ def _module_level_import_targets(tree: ast.Module):
     `except ImportError` (any `ast.Name`/`ast.Attribute`/`ast.Tuple` naming
     `ImportError` or `Exception`) -- an import the source itself already
     anticipates may fail is not a publish-time breakage.
+
+    `deferred=True` (a published test surface, whose fixtures run these imports at setup) also
+    descends function bodies and stops counting a `ModuleNotFoundError`-only handler as a guard:
+    `from pkg import missing_submodule` with `pkg` present raises a plain `ImportError`, which
+    that handler does not catch.
     """
     results: list[tuple['ast.Import | ast.ImportFrom', bool]] = []
 
@@ -1004,7 +1009,9 @@ def _module_level_import_targets(tree: ast.Module):
         candidates = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
         for node in candidates:
             name = node.id if isinstance(node, ast.Name) else getattr(node, 'attr', None)
-            if name in ('ImportError', 'ModuleNotFoundError', 'Exception', 'BaseException'):
+            if name in ('ImportError', 'Exception', 'BaseException') or (
+                name == 'ModuleNotFoundError' and not test_surface
+            ):
                 return True
         return False
 
@@ -1026,6 +1033,14 @@ def _module_level_import_targets(tree: ast.Module):
                 walk(stmt.body, guarded)
             elif isinstance(stmt, (ast.With, ast.AsyncWith)):
                 walk(stmt.body, guarded)
+            elif test_surface and isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                walk(stmt.body, guarded)
+            elif test_surface and isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+                walk(stmt.body, guarded)
+                walk(stmt.orelse, guarded)
+            elif test_surface and isinstance(stmt, ast.Match):
+                for case in stmt.cases:
+                    walk(case.body, guarded)
             # `FunctionDef`/`AsyncFunctionDef` bodies deliberately not descended
             # into -- a lazy/deferred import does not break at module import time.
 
@@ -1036,6 +1051,43 @@ def _module_level_import_targets(tree: ast.Module):
 def _import_target_present(lookup_path: str, root: Path) -> bool:
     """A module file, a regular package, or an `__init__`-less namespace directory."""
     return resolve_module_file(lookup_path, root) is not None or root.joinpath(*lookup_path.split('.')).is_dir()
+
+
+def _absent_from_import_names(
+    stmt: ast.ImportFrom, lookup_path: str, root: Path,
+    exports: dict[Path, set[str] | None],
+) -> list[str]:
+    """A package import can fail even when the package itself was published."""
+    package = root.joinpath(*lookup_path.split('.'))
+    if not package.is_dir():
+        return []  # Ordinary module attributes are outside this package-closure check.
+    exported: set[str] = exports.get(package) or set()
+    init = package / '__init__.py'
+    if package in exports and exports[package] is None:
+        return []
+    if package not in exports and init.is_file():
+        try:
+            tree = ast.parse(init.read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, SyntaxError):
+            exports[package] = None
+            return []  # The syntax/readability guard owns this failure.
+
+        def bindings(node: ast.AST) -> None:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                exported.add(node.name)
+                return
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                exported.add(node.id)
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                exported.update(alias.asname or alias.name.split('.')[0] for alias in node.names)
+            for child in ast.iter_child_nodes(node):
+                bindings(child)
+
+        bindings(tree)
+    exports[package] = exported
+    return [alias.name for alias in stmt.names if alias.name != '*'
+            and alias.name not in exported
+            and not _import_target_present(f'{lookup_path}.{alias.name}', root)]
 
 
 def check_published_import_resolves(target_root: str | Path, params: dict) -> GuardResult:
@@ -1058,7 +1110,10 @@ def check_published_import_resolves(target_root: str | Path, params: dict) -> Gu
     already owns reporting that failure, and a file this check cannot parse has no imports
     this check can inspect either way.
 
-    Scope is MODULE-IMPORT-TIME only (§ `_module_level_import_targets`): a lazy import
+    Published tests and conftest fixtures also execute function bodies, so those
+    surfaces check deferred imports and package member names. A ModuleNotFoundError
+    handler alone does not cover a missing member's plain ImportError.
+    Other files retain MODULE-IMPORT-TIME scope: a lazy import
     inside a function body is out of scope by design (this repo's lazy-ops backlog
     concern), and a `try`/`except ImportError`-guarded import is exempted (the source
     already anticipates the failure, so it is not a publish-time breakage). A relative
@@ -1078,6 +1133,7 @@ def check_published_import_resolves(target_root: str | Path, params: dict) -> Gu
     _, shape = resolve_ops_registry(target_root)
 
     failures: list[str] = []
+    package_exports: dict[Path, set[str] | None] = {}
     for path in _walk_for_guard(root, params):
         if path.suffix != '.py':
             continue
@@ -1091,7 +1147,8 @@ def check_published_import_resolves(target_root: str | Path, params: dict) -> Gu
             continue
 
         rel = rel_id(path, root)
-        for stmt, guarded in _module_level_import_targets(tree):
+        test_surface = 'tests' in Path(rel).parts or path.name == 'conftest.py'
+        for stmt, guarded in _module_level_import_targets(tree, test_surface=test_surface):
             if guarded:
                 continue
             if isinstance(stmt, ast.ImportFrom):
@@ -1114,6 +1171,9 @@ def check_published_import_resolves(target_root: str | Path, params: dict) -> Gu
             lookup_path = strip_payload_prefix(module_path, shape)
             if not _import_target_present(lookup_path, root):
                 failures.append(f'{rel}: imports {module_path!r}, unresolvable under {target_root}')
+            elif test_surface and isinstance(stmt, ast.ImportFrom):
+                for name in _absent_from_import_names(stmt, lookup_path, root, package_exports):
+                    failures.append(f'{rel}: imports {module_path + "." + name!r}, unresolvable under {target_root}')
 
     if failures:
         failures.sort()

@@ -5,7 +5,12 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
 from coordinator_core.git import commit_trailers
+
+@pytest.fixture(autouse=True)
+def claude_caller(monkeypatch):
+    monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "claude")
 
 _HOOK = Path(__file__).resolve().parents[1] / "coordinator-prepare-commit-msg.py"
 
@@ -41,3 +46,19 @@ def test_fallback_route_attaches_attribution(tmp_path, monkeypatch):
     monkeypatch.setattr(hook, "_resolve_deliverable_id", lambda *_a: "")
     args = hook._mirrored_trailer_args(str(msg), str(tmp_path / ".git"), "12121212-1212-4121-8121-121212121212")
     assert f"Co-Authored-By: {commit_trailers.ATTRIBUTION_TRAILER_VALUE}" in args
+
+
+@pytest.mark.parametrize("provider_key", ["COORDINATOR_AGENT_PROVIDER", "COORDINATOR_AGENT_VENDOR"])
+def test_fallback_codex_preserves_human_and_reconciles_provider(tmp_path, monkeypatch, provider_key):
+    monkeypatch.delenv("COORDINATOR_AGENT_PROVIDER", raising=False)
+    monkeypatch.setenv(provider_key, "codex")
+    hook = _load_hook()
+    msg = tmp_path / "MSG"
+    msg.write_text("fix: x\n\nCo-Authored-By: Human <human@example.com>\nCo-Authored-By: GPT model <noreply@openai.com>\n", encoding="utf-8")
+    monkeypatch.setattr(hook, "_resolve_staged_paths", lambda: [])
+    monkeypatch.setattr(hook, "_resolve_operator", lambda _g: "")
+    monkeypatch.setattr(hook, "_resolve_deliverable_id", lambda *_a: "")
+    args = hook._mirrored_trailer_args(str(msg), "", "")
+    assert "Co-Authored-By: Codex <noreply@openai.com>" in args
+    assert "Human <human@example.com>" in msg.read_text(encoding="utf-8")
+    assert "GPT model" not in msg.read_text(encoding="utf-8")

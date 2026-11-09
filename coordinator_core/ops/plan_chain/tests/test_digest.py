@@ -104,3 +104,25 @@ def test_write_final_digest(tmp_path):
     p = D.write_final_digest(d, tmp_path / "trail", "c1")
     assert p.name == "chain-c1.final-digest.json"
     assert json.loads(p.read_text(encoding="utf-8")) == d
+
+
+@pytest.mark.parametrize("operation", ["dispatch.terminal_commit", "dispatch.land_run"])
+def test_terminal_resume_accepts_both_authored_commit_operations(operation):
+    state = ChainState(halt=halt("terminal-commit-refused", "resume required"), plan_path="p.md")
+    doc = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)
+    doc["next_action"] = {
+        "kind": "terminal_commit", "op": operation,
+        "params": {"script_path": "workflow.mjs", "task_output_path": "execute.json"},
+    }
+    D.validate_final_digest(doc)
+
+
+def test_terminal_resume_rejects_unrelated_operation():
+    state = ChainState(halt=halt("terminal-commit-refused", "resume required"), plan_path="p.md")
+    doc = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)
+    doc["next_action"] = {
+        "kind": "terminal_commit", "op": "unrelated.run",
+        "params": {"script_path": "workflow.mjs", "task_output_path": "execute.json"},
+    }
+    with pytest.raises(ValueError):
+        D.validate_final_digest(doc)

@@ -455,16 +455,14 @@ def _grant_holdings(grants_dir, covered: set, now: float) -> list[dict]:
             continue
         out.append({
             "session_id": key[0], "run": key[1], "pid": None, "image": None,
+            "grant_issuer_session_id": file.parent.name,
             "bytes": int(peak * 1024 * 1024),
         })
     return out
 
 
-def _holdings(path, rss_fn, alive_fn, create_time_fn, image_fn, now_fn) -> list[dict]:
-    """One entry per holding (START, pid): session, run, pid, image, bytes. Reads the last 1 MiB.
-
-    Plus one pid-less entry per live slot grant not covered by a START or END (see ``_grant_holdings``).
-    """
+def _ledger_starts(path) -> tuple[dict, set]:
+    """Last START per (session, run), closed by END; read only the bounded ledger tail."""
     import json
 
     try:
@@ -491,8 +489,50 @@ def _holdings(path, rss_fn, alive_fn, create_time_fn, image_fn, now_fn) -> list[
         elif line.get("phase") == "START":
             starts[key] = line
             covered.add(key)
+    return starts, covered
+
+
+def _verified_pool_line(line, alive_fn, create_time_fn, image_fn, now_fn) -> bool:
+    """Selected pools need an explicit reliable birth stamp, not only a surviving PID."""
+    import math
+
+    stamp = _num(line.get("create_time"))
+    pids = line.get("pids")
+    return (stamp is not None and math.isfinite(stamp) and stamp > 0 and isinstance(pids, list)
+            and len(pids) == 1 and _safe_holds(line, pids[0], alive_fn, create_time_fn, image_fn, now_fn))
+
+
+def _holdings(path, rss_fn, alive_fn, create_time_fn, image_fn, now_fn) -> list[dict]:
+    """Live process/grant holdings; valid linked allocations share their active parent's pool."""
+    starts, covered = _ledger_starts(path)
+    # Pool links are allocation accounting within one registered budget. Without
+    # a live birth-verified parent or with malformed/oversized allocations, keep
+    # the old additive reservation instead (strict failure direction).
+    pooled = set()
+    by_pool = {}
+    for key, line in starts.items():
+        pool = (line.get("pool_session_id"), line.get("pool_run"))
+        if all(isinstance(value, str) and value for value in pool):
+            by_pool.setdefault(pool, []).append((key, line))
+    for parent_key, parent in starts.items():
+        if parent_key not in by_pool:
+            continue
+        if parent.get("pool_session_id") or parent.get("pool_run"):
+            continue  # Nested/cyclic pool declarations remain additively reserved.
+        if not _verified_pool_line(parent, alive_fn, create_time_fn, image_fn, now_fn):
+            continue
+        peak = _num(parent.get("declared_peak_mb"))
+        if peak is None or not 0 < peak <= 1048576:
+            continue
+        children = [(key, line) for key, line in by_pool.get(parent_key, []) if key != parent_key
+                    and _verified_pool_line(line, alive_fn, create_time_fn, image_fn, now_fn)]
+        allocations = [_num(line.get("declared_peak_mb")) for _, line in children]
+        if all(value is not None and 0 < value <= peak for value in allocations) and sum(allocations) <= peak:
+            pooled.update(key for key, _ in children)
     out = _grant_holdings(slot_grants_dir(path), covered, now_fn())
-    for line in starts.values():
+    for key, line in starts.items():
+        if key in pooled:
+            continue
         peak = line.get("declared_peak_mb")
         if isinstance(peak, bool) or not isinstance(peak, (int, float)) or peak <= 0:
             continue
@@ -645,7 +685,8 @@ def record_peak(admission_path, key: str, peak_gib: float) -> float:
 
 
 def register_command(
-    admission_path, key: str, pid: int, peak_gib: float, create_time_fn=pid_create_time
+    admission_path, key: str, pid: int, peak_gib: float, create_time_fn=pid_create_time,
+    *, reservation_session_id=None, reservation_run=None, pool_session_id=None, pool_run=None,
 ) -> None:
     """Append a START line stamped with ``ts`` and the pid's ``create_time`` (omitted when unreadable).
 
@@ -660,14 +701,19 @@ def register_command(
     created = create_time_fn(pid)
     if created is not None:
         line["create_time"] = created
+    if reservation_session_id is not None and reservation_run is not None:
+        line.update(session_id=reservation_session_id, run=reservation_run, command_key=key)
+    if pool_session_id is not None and pool_run is not None:
+        line.update(pool_session_id=pool_session_id, pool_run=pool_run)
     _append_admission(admission_path, line)
 
 
-def release_command(admission_path, key: str, pid: int) -> None:
+def release_command(admission_path, key: str, pid: int, *, reservation_session_id=None, reservation_run=None) -> None:
     """Append the END line that frees a registered command's reservation (under ``admission_lock``, so a concurrent compaction cannot drop it)."""
     with admission_lock(admission_path):
         _append_admission(admission_path, {
-            "phase": "END", "session_id": "box-memory-snapshot", "run": f"{key}:{pid}", "pids": [],
+            "phase": "END", "session_id": reservation_session_id if reservation_session_id is not None else "box-memory-snapshot",
+            "run": reservation_run if reservation_run is not None else f"{key}:{pid}", "pids": [],
         })
 
 
@@ -751,6 +797,119 @@ def admit_and_register(
         if verdict.admit:
             register_command(admission_path, key, pid, peak_gib, **{k: v for k, v in liveness.items() if k == "create_time_fn"})
     return verdict, reserved
+
+
+def _parent_pool_credit(admission_path, rows, selection, peak_mb, pid, reserved_kwargs):
+    """Check active linked allocations independently of RSS reads, under admission_lock."""
+    import math
+    import time
+
+    starts, _ = _ledger_starts(admission_path)
+    parent_key = (selection.get("pool_session_id"), selection.get("pool_run"))
+    own_key = (selection.get("session_id"), selection.get("run"))
+    if not all(isinstance(value, str) and value for value in (*parent_key, *own_key)) or parent_key == own_key:
+        raise ValueError("invalid parent pool identity")
+    alive = reserved_kwargs.get("alive_fn", pid_alive)
+    birth = reserved_kwargs.get("create_time_fn", pid_create_time)
+    image = reserved_kwargs.get("image_fn", pid_image)
+    now = reserved_kwargs.get("now_fn", time.time)
+    parent = starts.get(parent_key)
+    if not isinstance(parent, dict) or not _verified_pool_line(parent, alive, birth, image, now):
+        raise ValueError("parent pool has no active START with reliable PID birth evidence")
+    if parent.get("pool_session_id") or parent.get("pool_run"):
+        raise ValueError("nested parent pools are not supported")
+    capacity = _num(parent.get("declared_peak_mb"))
+    if capacity is None or not math.isfinite(capacity) or not 0 < capacity <= 1048576:
+        raise ValueError("parent pool registered peak is invalid")
+    validator = selection.get("validate_parent_peak")
+    if not callable(validator):
+        raise ValueError("parent pool grant validator is missing")
+    validator(capacity)
+    allocated = 0
+    for key, line in starts.items():
+        linked = (line.get("pool_session_id"), line.get("pool_run")) == parent_key
+        if key == own_key and not linked:
+            raise ValueError("child run is already registered outside this selected parent pool")
+        if not linked:
+            continue
+        pids = line.get("pids") or []
+        if not any(alive(value) for value in pids):
+            continue
+        if not _verified_pool_line(line, alive, birth, image, now):
+            raise ValueError("active child pool allocation has unreadable or mismatched PID birth evidence")
+        size = _num(line.get("declared_peak_mb"))
+        if size is None or not math.isfinite(size) or size <= 0:
+            raise ValueError("active child pool allocation has an invalid peak")
+        if key == own_key:
+            if peak_mb < size:
+                raise ValueError("existing child allocation cannot shrink without explicit release")
+            if pid is not None and line["pids"] != [pid]:
+                raise ValueError("child run is already allocated to a different active PID")
+            continue  # Rechecking one run replaces its allocation; it never adds it twice.
+        allocated += size
+    if peak_mb > capacity or allocated + peak_mb > capacity:
+        raise ValueError("requested child allocations exceed the parent's registered pool peak")
+    parent_rows = [row for row in rows if (row["session_id"], row["run"]) == parent_key and row["pid"] is not None]
+    if len(parent_rows) != 1:
+        raise ValueError("parent pool reservation/RSS evidence is missing or ambiguous")
+    return min(parent_rows[0]["bytes"], int(peak_mb * 1024**2)), {
+        "pool_session_id": parent_key[0], "pool_run": parent_key[1],
+        "pool_peak_mb": capacity, "allocated_peak_mb": allocated + peak_mb,
+        "remaining_peak_mb": capacity - allocated - peak_mb,
+    }
+
+
+def admit_selected_reservation(
+    admission_path, peak_gib: float, status: MemoryStatus, selector,
+    *, key: str | None = None, pid: int | None = None, cushion_pct: float = 25.0,
+    commit_limit: int | None = None, **reserved_kwargs,
+) -> tuple[AdmitVerdict, int, dict]:
+    """Credit one validated caller grant or parent pool during atomic check-and-register.
+
+    ``selector`` is an engine callback, not wire data: it verifies the actual
+    caller's grant or native parent lineage in the real settings store while
+    this lock is held. Only the explicit selection receives credit; linked child
+    peaks remain bounded by the parent's active registered budget. Default
+    admission never calls this opt-in path.
+    """
+    import dataclasses
+    import time
+
+    if (key is None) != (pid is None):
+        raise ValueError("selected reservation registration requires both key and pid")
+    with admission_lock(admission_path):
+        selection = selector()
+        if not isinstance(selection, dict) or selection.get("kind") not in ("own-grant", "parent-pool"):
+            raise ValueError("invalid reservation selector")
+        sid, run = selection.get("session_id"), selection.get("run")
+        rows = _holdings(admission_path, reserved_kwargs.get("rss_fn", tree_rss_mb),
+            reserved_kwargs.get("alive_fn", pid_alive), reserved_kwargs.get("create_time_fn", pid_create_time),
+            reserved_kwargs.get("image_fn", pid_image), reserved_kwargs.get("now_fn", time.time))
+        extra = {}
+        if selection["kind"] == "own-grant":
+            grant = selection.get("grant")
+            if not isinstance(grant, dict):
+                raise ValueError("validated reservation grant is missing")
+            if not sid or not run or grant.get("grantee_session_id") != sid or grant.get("run") != run:
+                raise ValueError("reservation selector does not match its grant")
+            credit_rows = [row for row in rows if row["pid"] is None and row["session_id"] == sid and row["run"] == run
+                           and row.get("grant_issuer_session_id") == grant.get("issuer_session_id")]
+            credit = min(sum(row["bytes"] for row in credit_rows), int(grant["declared_peak_mb"] * 1024**2))
+        else:
+            credit, extra = _parent_pool_credit(admission_path, rows, selection, peak_gib * 1024, pid, reserved_kwargs)
+        reserved = sum(row["bytes"] for row in rows) - credit
+        adjusted = dataclasses.replace(status, avail_phys=max(0, status.avail_phys - reserved),
+                                       commit_used=status.commit_used + reserved)
+        verdict = admit(int(peak_gib * GIB), adjusted, cushion_pct=cushion_pct, commit_limit=commit_limit)
+        if verdict.admit and pid is not None:
+            birth = reserved_kwargs.get("create_time_fn", pid_create_time)(pid)
+            import math
+            if not isinstance(birth, (float, int)) or isinstance(birth, bool) or not math.isfinite(birth) or birth <= 0:
+                raise ValueError("selected reservation requires reliable PID birth evidence")
+            register_command(admission_path, key, pid, peak_gib,
+                create_time_fn=lambda value: birth, reservation_session_id=sid, reservation_run=run,
+                **{k: extra[k] for k in ("pool_session_id", "pool_run") if k in extra})
+    return verdict, reserved, {"kind": selection["kind"], "session_id": sid, "run": run, "credited_bytes": credit, **extra}
 
 
 def admit(

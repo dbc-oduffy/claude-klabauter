@@ -597,6 +597,20 @@ time 359ms at 20 pairs, 149ms at 1 pair
 (`docs/research/2026-10-22-comment-only-verifier-spike.md`). Contract:
 `docs/reference/comment-only-verifier-contract.md`.
 
+## Recorded — provider-neutral ceremony composition worker
+
+`coordinator_core/ops/session_ceremonies.py::_launch_admitted` starts exactly one
+`sys.executable -m coordinator_core.session_ceremonies <request-directory>` child
+with closed argv, `shell=False`, detached lifetime, and hidden Windows flags.
+This is naked Python, outside shell classes (a)-(h), not a shell exemption.
+The PM's all-Codex-fleet-integration assignment requires the six ceremony doors.
+
+Admission uses `admit_before_spawn` and transfers a measured-headroom reservation
+from the admitting process to the child before its native composition starts.
+The worker releases the reservation on completion. Its native driver retains
+per-step admission, timeout, and suite-grant checks; the bounded launch is held
+to the 500ms op bar. No arbitrary executable or caller environment is accepted.
+
 ## Related, not a carve-out
 
 The polyglot trampoline blessing ("~1-line polyglot trampoline inside an otherwise-Python CLI")

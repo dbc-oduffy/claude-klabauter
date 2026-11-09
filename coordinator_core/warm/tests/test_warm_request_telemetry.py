@@ -107,3 +107,56 @@ def test_server_boot_reason_omitted_when_unnamed(tmp_path):
     row = telemetry.server_boot_samples(tmp_path)[0]
     assert row["parent_pid"] == 99
     assert "boot_reason" not in row
+
+
+def test_record_request_carries_slow_phase_and_spans_and_omits_none():
+    telemetry.record_request(op="a", slow_phase="git_read", spans=[{"name": "git_read", "wall_ms": 1200.0}])
+    telemetry.record_request(op="b")
+    first, second = telemetry.request_samples()
+    assert first["slow_phase"] == "git_read" and first["spans"] == [{"name": "git_read", "wall_ms": 1200.0}]
+    assert "slow_phase" not in second and "spans" not in second
+
+
+def test_chokepoint_forwards_slow_phase_for_preuse_ops_only(monkeypatch):
+    import asyncio
+
+    from coordinator_core import ipc
+    from coordinator_core.telemetry import op_row_fields
+
+    async def _handler(params, repo_root=None):
+        op_row_fields.attach(slow_phase="x", spans=[["x", 9.0]])
+        return {"ok": True}
+
+    monkeypatch.setitem(ipc._REGISTRY, "hooks.preuse_c2_probe", _handler)
+    monkeypatch.setitem(ipc._REGISTRY, "other.c2_probe", _handler)
+
+    def _run(method):
+        sink: dict = {}
+        token = ipc.PREUSE_ROW_FIELDS_SINK.set(sink)
+        try:
+            asyncio.run(ipc.dispatch_message({"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}))
+        finally:
+            ipc.PREUSE_ROW_FIELDS_SINK.reset(token)
+        return sink
+
+    assert _run("hooks.preuse_c2_probe") == {"slow_phase": "x", "spans": [["x", 9.0]]}
+    assert _run("other.c2_probe") == {}
+
+
+def test_pool_dispatch_moves_worker_fields_to_row_and_strips_reply():
+    from coordinator_core.warm import server
+
+    class _Fake:
+        def _pool_dispatch_untimed(self, msg, *, caller=None, dispatch_key=None):
+            return {"jsonrpc": "2.0", "id": 1, "result": {}, server._ROW_FIELDS_KEY: {"slow_phase": "x", "spans": [["x", 5.0]]}}
+
+    server._REQUEST_ROW.value = pending = {}
+    try:
+        reply = server._ServerContext._pool_dispatch(_Fake(), {"method": "hooks.preuse_bash_dispatch", "id": 1})
+    finally:
+        server._REQUEST_ROW.value = None
+    assert server._ROW_FIELDS_KEY not in reply
+    assert pending["slow_phase"] == "x" and pending["spans"] == [["x", 5.0]]
+    server._ServerContext._record_served_row(_Fake(), pending, "pool", 1.0, 2.0, 0)
+    row = telemetry.request_samples()[-1]
+    assert row["slow_phase"] == "x" and row["spans"] == [["x", 5.0]]

@@ -29,6 +29,96 @@
         "cache_read": 0.05,
         "cache_creation": 0.625
       }
+    },
+    "gpt-6.1-sol": {
+      "input": 2.0,
+      "output": 10.0,
+      "cache_read": 0.1,
+      "cache_creation": 2.5,
+      "fast_multiplier": 2.0,
+      "ultrafast_multiplier": 6.0,
+      "flex_multiplier": 0.5,
+      "batch_multiplier": 0.5,
+      "long_prompt_tier": {
+        "prompt_tokens_over": 272000,
+        "input": 4.0,
+        "output": 15.0,
+        "cache_read": 0.2,
+        "cache_creation": 5.0
+      },
+      "provenance": {
+        "source": "https://developers.openai.com/api/docs/models/gpt-6.1-sol",
+        "verified_at": "2026-11-07",
+        "basis": "API list prices; 30m cache writes",
+        "effective_from": null
+      }
+    },
+    "gpt-6.1-terra": {
+      "input": 1.0,
+      "output": 5.0,
+      "cache_read": 0.05,
+      "cache_creation": 1.25,
+      "fast_multiplier": 2.0,
+      "flex_multiplier": 0.5,
+      "batch_multiplier": 0.5,
+      "long_prompt_tier": {
+        "prompt_tokens_over": 272000,
+        "input": 2.0,
+        "output": 7.5,
+        "cache_read": 0.1,
+        "cache_creation": 2.5
+      },
+      "provenance": {
+        "source": "https://developers.openai.com/api/docs/models/gpt-6.1-terra",
+        "verified_at": "2026-11-07",
+        "basis": "API list prices; 30m cache writes",
+        "effective_from": null
+      }
+    },
+    "gpt-6-astra": {
+      "input": 10.0,
+      "output": 50.0,
+      "cache_read": 1.0,
+      "cache_creation": 12.5,
+      "fast_multiplier": 2.0,
+      "ultrafast_multiplier": 6.0,
+      "flex_multiplier": 0.5,
+      "batch_multiplier": 0.5,
+      "long_prompt_tier": {
+        "prompt_tokens_over": 272000,
+        "input": 20.0,
+        "output": 75.0,
+        "cache_read": 2.0,
+        "cache_creation": 25.0
+      },
+      "provenance": {
+        "source": "https://developers.openai.com/api/docs/models/gpt-6-astra",
+        "verified_at": "2026-11-07",
+        "basis": "API list prices; 30m cache writes",
+        "effective_from": null
+      }
+    },
+    "gpt-6-luna": {
+      "input": 0.1,
+      "output": 0.5,
+      "cache_read": 0.010000000000000002,
+      "cache_creation": 0.125,
+      "fast_multiplier": 2.0,
+      "flex_multiplier": 0.5,
+      "batch_multiplier": 0.5,
+      "long_prompt_tier": {
+        "prompt_tokens_over": 272000,
+        "input": 0.2,
+        "output": 0.75,
+        "cache_read": 0.020000000000000004,
+        "cache_creation": 0.25
+      },
+      "provenance": {
+        "source": "https://developers.openai.com/api/docs/models/gpt-6-luna",
+        "verified_at": "2026-11-07",
+        "basis": "API list prices; 30m cache writes",
+        "effective_from": null
+      }
     }
   }
 }

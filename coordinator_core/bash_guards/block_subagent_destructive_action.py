@@ -1847,6 +1847,83 @@ def _apply_worktree_refusal(seg: str, remaining: List[str]) -> Optional[str]:
         if not names:
             return "patch has no recognizable file headers"
     return None
+
+
+#: A `GIT_INDEX_FILE=<literal path>` assignment (`export` or command prefix). A variable-held,
+#: empty or `.git/index` value is the shared index, so only a literal other path counts.
+_PRIVATE_INDEX_RE = re.compile(
+    r"""(?:^|[\s;&|(])(?:export\s+)?GIT_INDEX_FILE=(["']?)([^\s"';&|$`()]+)\1"""
+)
+
+
+def _private_index_in_play(raw: str, before_word: str) -> bool:
+    """True when the command assigns a private `GIT_INDEX_FILE` ahead of ``before_word``."""
+    cut = raw.find(before_word)
+    for m in _PRIVATE_INDEX_RE.finditer(raw):
+        if cut != -1 and m.start() > cut:
+            continue
+        path = m.group(2).replace("\\", "/")
+        if path.rstrip("/").rsplit("/", 1)[-1] == "index" and ".git" in path.split("/"):
+            continue
+        return True
+    return False
+
+
+#: Plumbing verbs that only add objects or touch the index; `read-tree -u/--reset` writes the worktree.
+_OBJECT_PLUMBING_SUBCOMMANDS = frozenset({"write-tree", "commit-tree", "hash-object", "mktree", "mktag"})
+_READ_TREE_WORKTREE_FLAGS = frozenset({"-u", "--reset"})
+#: `update-ref` options that take a separate argument.
+_UPDATE_REF_OPTS_WITH_ARG = frozenset({"-m"})
+
+
+def _update_ref_verdict(args: List[str]) -> Optional[str]:
+    """None when `update-ref` moves one ref with an old-value guard, else the deny kind."""
+    positional: List[str] = []
+    skip = False
+    for tok in args:
+        if skip:
+            skip = False
+        elif tok in _UPDATE_REF_OPTS_WITH_ARG:
+            skip = True
+        elif tok in ("-d", "--delete", "--stdin"):
+            return f"git update-ref {tok} (deletes refs or batches unguarded moves)"
+        elif tok.startswith("-"):
+            continue
+        else:
+            positional.append(tok)
+    if len(positional) < 3:
+        return "git update-ref (needs <ref> <new> <old>; an old value guards the move)"
+    return None
+
+
+def _plumbing_verdict(subcmd: str, args: List[str]) -> Optional[str]:
+    """Verdict for a verb in `_PLUMBING_SUBCOMMANDS`: None allows, a string is the deny kind."""
+    if subcmd in _OBJECT_PLUMBING_SUBCOMMANDS:
+        return None
+    if subcmd == "read-tree":
+        bad = next(
+            (t for t in args if t in _READ_TREE_WORKTREE_FLAGS or (t[:1] == "-" and t[1:2] != "-" and "u" in t)),
+            None,
+        )
+        return None if bad is None else f"git read-tree {bad} (rewrites the working tree)"
+    return _update_ref_verdict(args)
+
+
+_PLUMBING_SUBCOMMANDS = _OBJECT_PLUMBING_SUBCOMMANDS | {"read-tree", "update-ref"}
+
+#: Verbs that stay denied when unrecognized: each can lose work another session has not committed
+#: or published, or move a ref off-box.
+_IRREVERSIBLE_UNRECOGNIZED_VERBS = frozenset(
+    {
+        "gc", "prune", "prune-packed", "repack", "replace", "symbolic-ref", "clone", "init",
+        "mv", "rm", "archive", "merge-file", "apply", "send-pack", "receive-pack", "fast-import",
+        "am", "revert", "checkout-index", "bisect", "submodule", "sparse-checkout", "maintenance",
+        "update-index", "send-email", "imap-send", "http-push", "svn", "p4",
+    }
+)
+_IRREVERSIBLE_UNRECOGNIZED_RE = re.compile(
+    r"\bgit\b.*?(?<![\w-])(?:" + "|".join(sorted(_IRREVERSIBLE_UNRECOGNIZED_VERBS, key=len, reverse=True)) + r")(?![\w-])"
+)
 _SAFE_VERB_RE = re.compile(
     r"\b(?:add|commit|status|log|diff|show|fetch|cherry-pick|cherry(?![-\w])|rev-parse|rev-list|"
     r"ls-files|describe)\b"
@@ -2819,6 +2896,8 @@ def _git_rm_verdict(seg: str, remaining: Optional[List[str]]) -> Optional[str]:
     from coordinator_core.bash_guards import _declared_delete_license as lic
 
     remaining = list(remaining or ())
+    if _exceeds_tokenizable_ceiling(seg):
+        return _GIT_RM_DENY_PREFIX + "(unparseable segment)"
     try:
         tokens = shlex.split(seg)
     except ValueError:
@@ -2949,6 +3028,8 @@ def _own_pathspec_revert(seg: str, subcmd: str, remaining: Optional[List[str]]) 
         operands = remaining[1:] if remaining[:1] == ["--"] else remaining
     if not operands or any(o.startswith("-") for o in operands):
         return False
+    if _exceeds_tokenizable_ceiling(seg):
+        return False
     try:
         tokens = shlex.split(seg)
     except ValueError:
@@ -3055,7 +3136,17 @@ def _evaluate_git_segment_anchored(
     remaining = remaining or []
     remaining_text = " ".join(remaining)
 
+    if subcmd in _PLUMBING_SUBCOMMANDS:
+        return _plumbing_verdict(subcmd, remaining)
+
     if subcmd == "apply":
+        # `--cached` against a private index writes no worktree file and no shared index.
+        if (
+            "--cached" in remaining
+            and not any(t in ("--index", "--3way", "-3", "--unsafe-paths") for t in remaining)
+            and _private_index_in_play(_RAW_CMD.get(), "apply")
+        ):
+            return None
         # Report-only forms write nothing.
         if any(t in _APPLY_REPORT_FLAGS for t in remaining) and not any(
             t in _APPLY_WRITE_FLAGS or t.startswith("--directory") for t in remaining
@@ -3285,6 +3376,8 @@ def _evaluate_git_segment_anchored(
                 return f"git archive option {tok!r} writes a file or runs a remote; pipe to stdout"
         return None
     if subcmd == "update-index":
+        if _private_index_in_play(_RAW_CMD.get(), "update-index"):
+            return None
         # Only the mode-bit form the POSIX-exec ratchet asks for: index mode
         # of named paths, no content staged, no other flag.
         paths = [t for t in remaining if t != "--"]
@@ -3311,7 +3404,9 @@ def _evaluate_git_segment_anchored(
         # without ever naming the alternative.
         return "git mv (index-mutating rename)"
 
-    return "unrecognized git verb (default-deny)"
+    if subcmd in _IRREVERSIBLE_UNRECOGNIZED_VERBS:
+        return "unrecognized git verb (default-deny)"
+    return None
 
 
 #: Action-only counterparts of `_STASH_POP_APPLY_RE`/`_STASH_DROP_CLEAR_RE`
@@ -3835,10 +3930,17 @@ def _evaluate_git_segment_legacy(
             return None
         return "git config (not --get)"
 
-    if not default_deny_on_unmatched:
+    words = seg.split()
+    for verb in sorted(_PLUMBING_SUBCOMMANDS):
+        if verb in words:
+            return _plumbing_verdict(verb, words[words.index(verb) + 1:])
+    private = _private_index_in_play(_RAW_CMD.get() or seg, "apply" if "apply" in words else "update-index")
+    if private and ("update-index" in words or ("apply" in words and "--cached" in words)):
         return None
 
-    return "unrecognized git verb (default-deny)"
+    if default_deny_on_unmatched and _IRREVERSIBLE_UNRECOGNIZED_RE.search(seg):
+        return "unrecognized git verb (default-deny)"
+    return None
 
 
 def _evaluate_git_surface(cmd_norm: str, strict: bool = True) -> Optional[str]:
@@ -4005,6 +4107,8 @@ def _indirection_advisory_summary(wrapper_shape: str) -> str:
 def _rm_operand_under_repo_scratch(cmd: str) -> bool:
     """True when an rm operand has a ``scratch`` segment directly under a repo root
     (relative ``scratch/...`` or an absolute path whose parent holds ``.git``)."""
+    if _exceeds_tokenizable_ceiling(cmd):
+        return False
     try:
         # Separators are normalised BEFORE the POSIX split: POSIX mode drops a Windows
         # operand's backslashes (the `.git` probe then misses), while posix=False ends a
@@ -4066,6 +4170,8 @@ def _operand_is_regenerable(operand: str) -> bool:
 def _rm_only_regenerable(cmd: str) -> bool:
     """True when every `rm` in `cmd` is a plain segment whose operands are all regenerable
     build/cache dirs, and no other segment hides an `rm` (xargs, a `-c` payload)."""
+    if _exceeds_tokenizable_ceiling(cmd):
+        return False
     try:
         lex = shlex.shlex(cmd, posix=True, punctuation_chars=";&|")
         lex.whitespace_split = True

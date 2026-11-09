@@ -17,6 +17,7 @@ from coordinator_core.guard_census import BLOCK, DELETED, GUIDE, Row, enumerate_
 
 _REDIRECT = {
     "block-push-pr-non-owned-remote": "push to an owned remote, or route the publish to the G-EM",
+    "block-empty-source-push": "push an explicit 40-char sha source",
     "block-perforce-submit": "the p4 review flow; the PM submits",
     "p4-verb-fence": "the read-only p4 verbs",
     "destructive-git-orphan": "a non-destructive ref operation",

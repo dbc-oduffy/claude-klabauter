@@ -921,6 +921,7 @@ def _isolated_body(
     if status == "fail" and export_log_used and 1 in codes and _failed_node_ids(export_log, export_root):
         baseline = _head_baseline(
             root, run, tests, export_root, export_log, path.with_suffix(".head.log"), deadline,
+            landing_retest.run_base_for(root, run_id, params) or None,
         )
     return _write_dual(
         root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
@@ -931,10 +932,11 @@ def _isolated_body(
 
 def _head_baseline(
     root: Path, run, tests: list[str], export_root: Path, export_log: Path, head_log: Path,
-    deadline: float,
+    deadline: float, base_sha: Optional[str] = None,
 ) -> dict:
-    """``{"baseline": {method, caused, foreign, evidence}}``: ``caused`` is the export pass's failed ids
-    absent from a HEAD-only export run (classify's ``union - base``), per node id; ``foreign`` those
+    """``{"baseline": {method, base_sha, caused, foreign, evidence}}``: ``base_sha`` is the sha measured
+    (the run base when given, else HEAD); the "HEAD" below reads as that sha. ``caused`` is the export
+    pass's failed ids absent from a HEAD-only export run (classify's ``union - base``), per node id; ``foreign`` those
     also red there; ``evidence`` the sorted HEAD-red ids. An id new at HEAD is never HEAD-red, so it is caused when
     red in the export; an id removed since HEAD is ignored. Fail closed with ``{"baseline_skipped":
     {reason, files}}`` (the gate stays fail-closed) when the HEAD export cannot be built, no targeted file
@@ -962,7 +964,7 @@ def _head_baseline(
         return {"baseline_skipped": {"reason": reason, "files": files}}
 
     try:
-        le.build_head_export(root, head_root, [])
+        measured_sha = le.build_head_export(root, head_root, [], base_sha).head_sha
         head_tests = list(dict.fromkeys(f for f in (t.split("::")[0] for t in tests) if (head_root / f).exists()))
         if not head_tests:
             return _skip("no targeted test file exists at HEAD")
@@ -995,6 +997,7 @@ def _head_baseline(
     export_reds = _failed_node_ids(export_log, export_root)
     return {"baseline": {
         "method": "isolated-export",
+        "base_sha": measured_sha,
         "caused": [n for n in export_reds if n not in red_at_head],
         "foreign": [n for n in export_reds if n in red_at_head],
         "evidence": sorted(red_at_head),

@@ -191,3 +191,39 @@ def check_slot_grant(
         return bool(ok), record
     except Exception:
         return False, None
+
+
+def own_admission_selector(session_id: str, run: str, peak_mb: float) -> dict:
+    """Validate the exact caller/run credit against the real local Group EM store.
+
+    Called inside the admission ledger lock. A copied admission channel must not
+    redirect holder or grant verification into a copied settings tree.
+    """
+    peak = valid_peak_mb(peak_mb)
+    if peak is None or peak <= 0:
+        raise ValueError("admission peak must be positive and finite")
+    granted, record = check_slot_grant(session_id, run, peak_mb=peak)
+    if not granted or record is None:
+        raise ValueError("own reservation credit requires a live matching Group EM slot grant covering the peak")
+    return {"kind": "own-grant", "session_id": session_id, "run": run, "grant": record}
+
+
+def parent_pool_admission_selector(session_id: str, run: str, parent_run: str, peak_mb: float) -> dict:
+    """Explicit selection uses native lineage and the parent's registered pool, never ambient parent env."""
+    peak = valid_peak_mb(peak_mb)
+    if not _safe_sid(run) or not _safe_sid(parent_run) or peak is None or peak <= 0:
+        raise ValueError("parent pool selection requires safe run names and a positive finite peak")
+    parent = box_registry.admission_parent(session_id)
+    parent_sid = parent["session_id"]
+
+    def validate_parent_peak(registered_peak_mb):
+        from coordinator_core.group_em.slot_wait import SLOT_THRESHOLD_MB
+
+        if registered_peak_mb > SLOT_THRESHOLD_MB and not check_slot_grant(
+            parent_sid, parent_run, peak_mb=registered_peak_mb
+        )[0]:
+            raise ValueError("parent pool requires a current live Group EM grant covering its registered peak")
+
+    return {"kind": "parent-pool", "session_id": session_id, "run": run,
+            "pool_session_id": parent_sid, "pool_run": parent_run,
+            "validate_parent_peak": validate_parent_peak}

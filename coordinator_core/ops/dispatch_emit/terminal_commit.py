@@ -114,7 +114,8 @@ Negative-spec:
   - Declares ``expected_content_sha256`` per committed path from the newer of the run session's
     last recorded write and the run's newest ``review.prep`` reply (``reviewed_sha256`` at
     ``recorded_at``; a tie goes to the session write; a refire's newest review supplies it; a path
-    the run session wrote after that review is declared at its current bytes), never the receipts, allowlist or
+    the run session wrote after that review is declared at its current bytes; a later hashed write by any
+    agent the session dispatched, revise-leg executors included, moves it to that write), never the receipts, allowlist or
     bookkeeping record this call writes. The delivery note is declared at the sha256 of the bytes
     this call just left after its ``## Verdicts`` append. A drift refuses the run's commit with
     ``blob_drift``, never drops paths; a drifted ``.py`` path whose bytes are AST-equal (docstrings
@@ -309,6 +310,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_review import (  # noqa:
     _review_only_coding,
     _recorded_fingerprints,
     _review_write_events,
+    _run_agent_write_events,
     _fixes_integrated_at,
     _VERIFIED_AT_RE,
     _LEDGER_BLOCK_RE,
@@ -1339,7 +1341,11 @@ def _release_own_index_lock(repo_root: Optional[Path]) -> None:
         return
 
 
+from coordinator_core.ops.workflow_fire.finalizer import terminal_action as _private_terminal_action
+
+
 @register_op("dispatch.terminal_commit")
+@_private_terminal_action('dispatch.terminal_commit')
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.terminal_commit" handler -- mutating, sync.
 
@@ -2074,8 +2080,9 @@ def _terminal_commit_inner(
             for c in request.chunks
         ))
     anchor_only = not request.chunks
+    from coordinator_core.ops.workflow_fire.finalizer import review_owner as _review_owner
     reviewed_bytes, reviewed_at, prep_from_disk = _reconcile_prep(
-        worktree_root, session_id, _run_id_of(params, ask_run_dir, script_path_raw), request, inline_review
+        worktree_root, _review_owner(session_id), _run_id_of(params, ask_run_dir, script_path_raw), request, inline_review
     )
     # An ask run's product commit carries product, its delivery note and its record directory;
     # a stageable plan gets the second, stamp commit.
@@ -2175,6 +2182,14 @@ def _terminal_commit_inner(
     open_rows: list = []
     if ask_run_dir is not None:
         recovery_withheld = _recovery_withheld_param(params)
+        if recovery_withheld:
+            from coordinator_core.ops.dispatch_emit.land_run import _recovery_chunks, _remnant_record
+
+            mended = set(credit_gate.recovery_blocks_superseded(
+                recovery_withheld, _recovery_chunks(worktree_root, ask_run_dir),
+                {c.id: set(c.paths) for c in request.chunks}, _remnant_record(worktree_root, ask_run_dir),
+            ))
+            recovery_withheld = [i for i in recovery_withheld if i not in mended]
         unmet, ledger, open_rows = _ledger_gate(
             worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated],
@@ -3533,6 +3548,10 @@ def _terminal_commit_inner(
             fixes_integrated_at=fixes_at, wave_paths=wave_paths,
             review_events=_review_write_events(worktree_root, review_writes, inline_review),
             run_started_at=_run_started_at(worktree_root, art_run_id),
+            run_agent_events=_run_agent_write_events(
+                worktree_root, read_session, _review_since(worktree_root, read_run_id, inline_review),
+                [p for p in all_paths if p not in deleted_paths],
+            ) if review_checked else None,
         )
         if note_committed and note_committed not in deleted_paths:
             from coordinator_core.session import touch_record
@@ -3804,6 +3823,16 @@ def _terminal_commit_inner(
         )
 
     def _attempt():
+        from coordinator_core.ops.workflow_fire.finalizer import authorize_product
+        authorize_product(
+            worktree_root, all_paths, deleted_paths, reviewed_bytes,
+            host_metadata={'terminal-receipts': receipt_paths,
+                           'regenerated-allowlist': [allowlist_path],
+                           'bookkeeping-record': [bookkeeping_record_path],
+                           'delivery-note': [note_committed], 'run-owned-artifacts': run_owned},
+            supplied_blobs=commit_params.get('supplied_blobs'),
+            merging=bool(commit_params.get('finish_merge')),
+        )
         return commit_v2(commit_params, repo_root)
 
     def _cas_lost(r) -> bool:

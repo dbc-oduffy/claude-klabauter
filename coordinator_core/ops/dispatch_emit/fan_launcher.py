@@ -7,6 +7,7 @@ a run: the harness runs the script the caller's rewritten tool input points at.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -51,9 +52,26 @@ EMIT_RELAY_AUTHORITY = (
     "firing a submitted sizing is never a repeat start of another run."
 )
 
+# A -32004 from dispatch.emit is indeterminate, never a failure: the relay reconciles it, and a landed emit whose reply is not retained comes back as an error with an empty path, never a guessed one.
+EMIT_RECONCILE_CLAUSE = (
+    "If the command replies with error code -32004 and its error.data carries reconcile_command, do not report failure yet: "
+    "run reconcile_command once. A status whose state is finished with a retained result is the emit's reply: return its path, run_id and fire_args. "
+    "A state of not_received: run the original command exactly once more and return its reply. "
+    "Any other state (finished without a retained result, executing): return the status text verbatim in the error field, "
+    "with path as an empty string and fire_args as {}; never invent a path or run_id."
+)
+
 _PARENT_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _EMIT_OP = "dispatch.emit"
-_INVOKE = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+def _invoke_command(platform: str | None = None) -> str:
+    if (platform or os.name) == "nt":
+        from coordinator_core._settings_home import settings_home
+
+        return '"' + (settings_home() / "bin" / "coordinator-invoke.exe").as_posix() + '"'
+    return '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-invoke"'
+
+
+_INVOKE = _invoke_command()
 
 
 @dataclass(frozen=True)
@@ -93,6 +111,7 @@ const MAX_STAGE_ROUNDS = __MAX_ROUNDS__;
 const WARP_PREFIX = REPO_ROOT + '/scratch/warp/';
 const INVOKE = __INVOKE__;
 const EMIT_OP = __EMIT_OP__;
+const EMIT_RECONCILE = __EMIT_RECONCILE__;
 const EMIT_SCHEMA = {
   type: 'object',
   required: ['path', 'run_id', 'fire_args'],
@@ -195,7 +214,8 @@ async function _emitLeg(child, emitParams, label) {
   const reply = await agent(
     __RELAY_AUTHORITY__
     + ' Run `' + INVOKE + ' ' + EMIT_OP + " '" + params + "'` once, with the command word exactly as written, and "
-    + 'return path, run_id and fire_args from its JSON reply verbatim, plus __REDIRECT_KEY__ when the reply carries it. When the command is denied or fails, '
+    + 'return path, run_id and fire_args from its JSON reply verbatim, plus __REDIRECT_KEY__ when the reply carries it. ' + EMIT_RECONCILE
+    + ' When the command is denied or fails, '
     + "return the command's error text verbatim (its stderr or the denial message) in the error field, "
     + 'with path as an empty string and fire_args as {}; on success omit error. '
     + 'If you do not run the command for any reason, put that reason verbatim in the error field the same way.',
@@ -401,6 +421,7 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild], emitted
         "__MAX_ROUNDS__": str(MAX_STAGE_ROUNDS),
         "__INVOKE__": lit(_INVOKE),
         "__EMIT_OP__": lit(_EMIT_OP),
+        "__EMIT_RECONCILE__": lit(EMIT_RECONCILE_CLAUSE),
         "__RELAY_AUTHORITY__": lit(EMIT_RELAY_AUTHORITY),
         "__PENDING_KEY__": STAGE_PENDING_KEY,
         "__REDIRECT_KEY__": OUTPUT_PATH_REDIRECT_KEY,

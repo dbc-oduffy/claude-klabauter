@@ -534,6 +534,7 @@ the floor (cap 6), within budget with headroom under the 720s target. Read the l
 | `coordinator_core/tests/test_cloud_em_run_in_mounted_repo.py` | 1.8 | complete |
 | `coordinator_core/ops/test_detect_guardless_sessions.py` | 1.8 | complete |
 | `coordinator_core/ops/dispatch_emit/tests/test_cli_admission.py` | 1.8 | complete |
+| `coordinator_core/codex_runner/tests/test_grok.py` | 1.8 | complete |
 | `coordinator/bin/tests/test_unimatrix_autolink.py` | 1.8 | complete |
 | `coordinator/bin/tests/test_unimatrix_doctor.py` | 1.8 | complete |
 | `coordinator_core/ops/fleet/tests/test_terminal_sizing_drain.py` | 1.8 | complete |

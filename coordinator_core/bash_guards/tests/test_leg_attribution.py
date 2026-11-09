@@ -30,7 +30,22 @@ def test_active_names_legs_over_floor_sorted_and_capped():
     finally:
         la.end(token)
     assert [r["name"] for r in s] == ["slower", "slow"]
-    assert all(set(r) == {"name", "ms"} for r in s)
+    assert all(set(r) == {"name", "ms", "cpu_ms", "wall_ms"} for r in s)
+    assert all(r["ms"] == r["cpu_ms"] and r["wall_ms"] >= r["cpu_ms"] for r in s)
+
+
+def test_blocked_leg_ranks_by_wall_with_near_zero_cpu():
+    token = la.begin()
+    try:
+        with la.leg("busy"):
+            _burn(60)
+        with la.leg("blocked"):
+            time.sleep(0.2)
+        s = la.summary(top=3, floor_ms=50.0)
+    finally:
+        la.end(token)
+    assert [r["name"] for r in s] == ["blocked", "busy"]
+    assert s[0]["wall_ms"] >= 190 and s[0]["cpu_ms"] < 30
 
 
 def test_same_name_accumulates():

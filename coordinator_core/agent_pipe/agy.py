@@ -10,7 +10,9 @@ import json
 import shutil
 from typing import Optional
 
-from coordinator_core.agent_pipe.contract import classify_exit
+from coordinator_core.agent_pipe.acp import AcpDriver
+from coordinator_core.agent_pipe.contract import KIND_AGY, classify_exit
+from coordinator_core.agent_pipe.session_driver import ApprovalCallback
 
 _OUTPUT_FLAGS = ["--output-format", "stream-json"]
 
@@ -57,3 +59,10 @@ class AgyAdapter:
         if not isinstance(text, str) or not text.strip() or not isinstance(conversation, str) or not conversation:
             return None
         return conversation, text.strip()
+
+
+class AgyAcpDriver(AcpDriver):
+    """SessionDriver for agy: the generic ACP client over `agy acp`; `argv` is overridable so tests drive a fake agent."""
+
+    def __init__(self, approve: Optional[ApprovalCallback] = None, argv: Optional[list[str]] = None, **kw) -> None:
+        super().__init__(list(argv) if argv is not None else [_agy(), "acp"], approve, kind=KIND_AGY, **kw)

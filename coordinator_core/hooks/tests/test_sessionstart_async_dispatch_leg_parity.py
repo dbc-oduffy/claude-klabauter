@@ -18,6 +18,7 @@ PINNED_LEGS = [
     ("session_start_write_plugin_root_breadcrumb", ALL_FIVE),
     ("prune_claude_temp", {"startup"}),
     ("retention_run", {"startup"}),
+    ("klabauter_freshness", {"startup"}),
 ]
 
 _LEG_ATTRS = {
@@ -27,6 +28,7 @@ _LEG_ATTRS = {
     "session_start_write_plugin_root_breadcrumb": "_session_start_write_plugin_root_breadcrumb_handler",
     "prune_claude_temp": "_prune_claude_temp_leg",
     "retention_run": "_retention_run_leg",
+    "klabauter_freshness": "_klabauter_freshness_leg",
 }
 
 
@@ -94,5 +96,43 @@ def test_raising_leg_does_not_drop_others(calls, monkeypatch, tmp_path):
     monkeypatch.setattr(mod, "_session_start_register_published_engine_handler", boom)
     _run({"source": "startup", "cwd": str(tmp_path)})
     assert "session_start_register_published_engine" not in calls
-    assert calls[-1] == "retention_run"
-    assert len(calls) == 5
+    assert calls[-1] == "klabauter_freshness"
+    assert len(calls) == 6
+
+
+def _fresh_mod():
+    from coordinator_core.ops.fleet import klabauter_freshness
+
+    return klabauter_freshness
+
+
+def test_freshness_leg_surfaces_only_a_newly_surfaced_tree(monkeypatch):
+    fresh = _fresh_mod()
+    monkeypatch.setattr(fresh, "run_freshness", lambda: {
+        "surfaced": True, "action": "surface_dirty", "hostname": "box",
+        "local_sha": "a" * 40, "origin_sha": "b" * 40,
+    })
+    ctx = mod._klabauter_freshness_leg({})["hookSpecificOutput"]["additionalContext"]
+    assert "box" in ctx and "a" * 10 in ctx and "b" * 10 in ctx and "dirty" in ctx
+
+    monkeypatch.setattr(fresh, "run_freshness", lambda: {"surfaced": False, "action": "surface_dirty"})
+    assert mod._klabauter_freshness_leg({}) is None
+
+
+def test_freshness_leg_swallows_failure(monkeypatch):
+    def boom():
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(_fresh_mod(), "run_freshness", boom)
+    assert mod._klabauter_freshness_leg({}) is None
+
+
+def test_freshness_op_passes_fetch_flag(monkeypatch):
+    fresh = _fresh_mod()
+    seen = []
+    monkeypatch.setattr(fresh, "run_freshness", lambda do_fetch=True: seen.append(do_fetch) or {"action": "current"})
+    assert fresh._handler({"fetch": False}) == {"action": "current"}
+    assert fresh._handler({}) == {"action": "current"}
+    assert seen == [False, True]
+    with pytest.raises(ValueError):
+        fresh._handler({"fetch": "no"})

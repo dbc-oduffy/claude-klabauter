@@ -35,7 +35,11 @@ def _is_plain_rm(cmd: str) -> bool:
     directory flag."""
     import shlex
 
+    from coordinator_core.bash_guards._command_tokenizer import exceeds_tokenizable_ceiling
+
     if any(m in cmd for m in _COMPOUND_MARKERS):
+        return False
+    if exceeds_tokenizable_ceiling(cmd):
         return False
     try:
         tokens = shlex.split(cmd)
@@ -70,7 +74,11 @@ def _plain_pathspec_revert_paths(cmd: str) -> list:
     substitution, a flag other than `--`, a tree-ish or `--source`."""
     import shlex
 
+    from coordinator_core.bash_guards._command_tokenizer import exceeds_tokenizable_ceiling
+
     if any(m in cmd for m in _COMPOUND_MARKERS):
+        return []
+    if exceeds_tokenizable_ceiling(cmd):
         return []
     try:
         tokens = shlex.split(cmd.replace("\\", "/"))

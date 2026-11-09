@@ -554,6 +554,7 @@ _AGENT_MODELS = {
     "coordinator:docs-checker": "haiku",
     "coordinator:exit-criterion-judge": "sonnet",
     "coordinator:research-scout": "haiku",
+    "coordinator:family-stage-runner": "sonnet",
 }
 
 
@@ -1881,11 +1882,19 @@ _HEAVY_LAUNCH_FLOOR_CLAUSE = (
     "else and name what must run under `Slot leg:`."
 )
 
+#: A prompt clause, never a guard (PM ruling: no deny of agent python): an ad-hoc heavy
+#: probe is a declared step awaiting the EM's GO, else the executor stops and reports.
+_HEAVY_PROBE_DECLARED_CLAUSE = (
+    "Never run an ad-hoc heavy probe or read unannounced (a large index load, a corpus-wide "
+    "scan, anything with multi-GiB potential): declare it as a step with its expected peak "
+    "memory and wait for the EM's GO, or stop and report."
+)
+
 #: The per-row head ``_row_prompt`` opens with and ``_row_agent_call_expr``
 #: hoists into one ``_shared`` const, so neither clause is repeated per row.
 _ROW_PROMPT_HEAD = (
     f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
-    f"{_WRITE_TOOL_ONLY_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
+    f"{_WRITE_TOOL_ONLY_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}\n\n{_HEAVY_PROBE_DECLARED_CLAUSE}"
 )
 
 
@@ -1898,7 +1907,7 @@ _VERIFICATION_ROW_CLAUSE = (
 )
 _VERIFICATION_ROW_PROMPT_HEAD = (
     f"{_BRIEF_PRECEDENCE_CLAUSE}\n\n{_LIVE_PM_DIRECTION_CLAUSE}\n\n"
-    f"{_VERIFICATION_ROW_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}"
+    f"{_VERIFICATION_ROW_CLAUSE}\n\n{_HEAVY_LAUNCH_FLOOR_CLAUSE}\n\n{_HEAVY_PROBE_DECLARED_CLAUSE}"
 )
 _VERIFICATION_CHANGE_KINDS = frozenset({"verify", "verification"})
 
@@ -5379,6 +5388,7 @@ def _seam_leg_js(
     head: str,
     repo_flag: str,
     sidecar_js: str,
+    repo_root: Optional[str] = None,
 ) -> list:
     """Script-scope seam machinery: per-wave gates the held rows await, and
     ``_seamLeg``, one ``plan.seam_record`` agent dispatch per landed wave commit."""
@@ -5401,21 +5411,28 @@ def _seam_leg_js(
         + _INDETERMINATE_RECONCILE_CLAUSE
     )
     tests_step = (
-        " Step 2, only when tests are listed: run `python -m pytest <tests> -q` once with exactly "
-        "those paths. A non-zero exit is one finding `{class: 'execution-failed', path: <first "
+        " Step 2, only when tests are listed: run those test paths once, with exactly "
+        "those paths. "
+        + _test_runner_clause(repo_root)
+        + " A non-zero exit is one finding `{class: 'execution-failed', path: <first "
         "failing file, or the first test path>, blocking: true}` and makes the `verdict` DRIFT; give "
         "that finding `failing_ids` (every failing pytest node id), `errors` (the distinct error "
         "names or lines the failures raised) and `red_at_base` (see below). Then export the run "
         "base with the same recipe as the baseline context (`python -m "
         f"{_LANDING_EXPORT_MODULE} scratch/seam/base-export <the failing test files> "
         f"--base-export <your run-base export> --base-sha {run_base_sha}`), "
-        "re-run only the `failing_ids` there with `python -m pytest "
-        "<failing_ids> -q`, and put in `red_at_base` each id and each error line that is also red "
+        "re-run only the `failing_ids` there the same way (the same interpreter clause), "
+        "and put in `red_at_base` each id and each error line that is also red "
         "there. A failed export or re-run leaves `red_at_base` empty. "
         "Run no other command."
     )
     fix_tail = (
-        json.dumps(_seam_fix_prompt("@F@", "@P@"))
+        json.dumps(
+            _seam_fix_prompt("@F@", "@P@").replace(
+                "Reproduce first with `python -m pytest <failing> -q`. ",
+                "Reproduce first by running the failing test paths once. " + _test_runner_clause(repo_root) + " ",
+            )
+        )
         .replace("${@F@}", '" + _seamText(JSON.stringify(found)) + "')
         .replace("${@P@}", '" + JSON.stringify(footprint) + "')
     )
@@ -5881,6 +5898,7 @@ def _checkpoint_commit_js(
             head=head,
             repo_flag=repo_flag,
             sidecar_js=_emit_sidecar_clause_js(plan_path, _SEAM_LABEL_JS, **sidecar_key),
+            repo_root=repo_root,
         )
     return "\n".join(lines)
 
@@ -5921,6 +5939,103 @@ def _verdict_cache_instruction(spec: AgentSpec, repo_root: Optional[Path]) -> Op
     )
 
 
+#: Named reviewer types a provider route (`COORDINATOR_REVIEWER_PROVIDER`) may move off Claude.
+#: The resolver's `*` entry matches any type, so this set is what keeps an executor or committer
+#: from being routed.
+_EXTERNALIZABLE_REVIEWER_TYPES = frozenset({
+    "coordinator:staff-eng",
+    "coordinator:senior-front-end",
+    "coordinator:eng-director",
+    "coordinator:staff-ux",
+    "coordinator:staff-data-sci",
+    "coordinator:vp-product",
+    "coordinator:code-reviewer",
+    "coordinator:overengineering-reviewer",
+    "coordinator:falsifier-integrity-reviewer",
+})
+_REVIEWER_RUN_MODULE = "coordinator_core.agent_pipe.reviewer_run"
+_RELAY_AGENT_TYPE = "coordinator:op-relay"
+_RELAY_HEREDOC_DELIM = "REVIEWER_BRIEF_EOF_7f3a91"
+#: Reply of `reviewer_run`; a provider failure is verdict FAILED, never a schema refusal.
+_EXTERNAL_REVIEWER_SCHEMA = json.dumps(
+    {
+        "type": "object",
+        "properties": {
+            "verdict": {"type": "string"},
+            "findings": {"type": "array"},
+            "provider": {"type": "string"},
+            "model": {"type": "string"},
+            "error": {"type": "string"},
+        },
+        "required": ["verdict"],
+    },
+    sort_keys=True,
+)
+
+
+def _schema_verdict_enum(schema_name: str) -> list[str]:
+    """The verdict enum of the named wake-digest schema, or [] when it declares none."""
+    try:
+        schema = json.loads(stage_schema_literal(schema_name))
+    except KeyError:
+        return []
+    enum = schema.get("properties", {}).get("verdict", {}).get("enum", [])
+    return [v for v in enum if isinstance(v, str) and v.isidentifier()]
+
+
+def _external_reviewer_thunk_js(
+    spec: AgentSpec,
+    choice,
+    agent_type_host: Optional[str],
+    repo_root: Optional[Path],
+) -> str:
+    """Use the async runner's engine ops; op-relay never executes an arbitrary Python CLI.
+
+    Start returns at spawn. Each result call is a refreshing read, and provider execution stays
+    in the detached worker. JSON stdin is shell-quoted for the host, never interpolated as code.
+    """
+    root = (repo_root or _REPO_ROOT).as_posix()
+    windows = os.name == "nt" or bool(re.match(r"^[A-Za-z]:[/\\]", root))
+    params = (
+        "{ mode: 'named-review', repo_root: " + _js_string_literal(root)
+        + ", agent_type: " + _js_string_literal(spec.agent_type)
+        + ", provider: " + _js_string_literal(choice.provider)
+        + ", model: " + _js_string_literal(choice.model)
+        + ", brief: " + _resolve_markers_plus(spec.prompt)
+        + ", verdicts: " + json.dumps(_schema_verdict_enum(spec.schema)) + " }"
+    )
+    relay = _js_string_literal(_degrade_agent_type(_RELAY_AGENT_TYPE, agent_type_host))
+    common = f"phase: {_js_string_literal(spec.phase)}, agentType: {relay}, {_model_opt(_RELAY_AGENT_TYPE)}, effort: 'low'"
+    start_schema = '{ type: "object", properties: { run_id: { type: "string" } }, required: ["run_id"] }'
+    result_schema = '{ type: "object", properties: { status: { type: "string" }, verdict: { type: ["string", "null"] }, findings: { type: "array" }, error: { type: ["string", "null"] } }, required: ["status"] }'
+    instruction = "Run this one engine command exactly and return its bare JSON reply. Run nothing else.\n"
+    if windows:
+        head = instruction + "@'\n"
+        tail = "\n'@ | coordinator-invoke codex_runner.start --params-file - --bare"
+    else:
+        head = instruction + f"coordinator-invoke codex_runner.start --params-file - --bare <<'{_RELAY_HEREDOC_DELIM}'\n"
+        tail = f"\n{_RELAY_HEREDOC_DELIM}"
+    return (
+        "async () => { try { "
+        f"const _request = {params}; "
+        # ASCII-only JSON also works through Windows PowerShell's native-command pipeline.
+        r"const _json = JSON.stringify(_request).replace(/[\u007f-\uffff]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); "
+        f"const _started = await agent({_js_string_literal(head)} + _json + {_js_string_literal(tail)}, "
+        f"{{ label: {_js_string_literal(spec.label + ':start')}, {common}, schema: {start_schema} }}); "
+        "if (!_started || !/^named-review-[a-f0-9]{12}$/.test(_started.run_id || '')) "
+        "return { verdict: 'FAILED', findings: [], error: 'reviewer worker did not return a run handle' }; "
+        "let _poll = 0; for (;;) { "
+        "const _command = 'coordinator-invoke codex_runner.result ' + String.fromCharCode(39) + JSON.stringify({ run_id: _started.run_id }) + String.fromCharCode(39) + ' --bare'; "
+        f"const _result = await agent({_js_string_literal(instruction)} + _command, "
+        f"{{ label: {_js_string_literal(spec.label + ':result-')} + (++_poll), {common}, schema: {result_schema} }}); "
+        "if (!_result || !_result.status) return { verdict: 'FAILED', findings: [], error: 'reviewer result read failed' }; "
+        "if (_result.status === 'running') continue; "
+        "return { verdict: _result.verdict || 'FAILED', findings: _result.findings || [], "
+        f"provider: {_js_string_literal(choice.provider)}, model: {_js_string_literal(choice.model)}, error: _result.error || null }}; "
+        "} } catch (e) { return { verdict: 'FAILED', findings: [], error: String(e) }; } }"
+    )
+
+
 def _spec_thunk_js(
     spec: AgentSpec,
     agent_type_host: Optional[str],
@@ -5929,6 +6044,12 @@ def _spec_thunk_js(
 ) -> str:
     if spec.schema == CACHED_SCHEMA:
         return f"async () => ({spec.prompt})"
+    if spec.agent_type in _EXTERNALIZABLE_REVIEWER_TYPES:
+        from coordinator_core.agent_pipe.reviewer_provider import resolve_reviewer_provider
+
+        choice = resolve_reviewer_provider(spec.agent_type)
+        if choice is not None:
+            return _external_reviewer_thunk_js(spec, choice, agent_type_host, repo_root)
     opts = [
         f"label: {_js_string_literal(spec.label)}",
         f"phase: {_js_string_literal(spec.phase)}",

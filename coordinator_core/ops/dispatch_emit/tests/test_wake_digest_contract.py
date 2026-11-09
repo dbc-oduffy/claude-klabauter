@@ -226,6 +226,46 @@ def _find_node():
     return shutil.which("node")
 
 
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_large_digest_carries_next_action_first_within_its_first_2kb(tmp_path):
+    js = wd.completion_return_js(**_kwargs(script_path="plans/s.mjs", session_id="sess-1"))
+    harness = tmp_path / "harness_big.js"
+    harness.write_text(
+        "let _halted = null, _incompleteChunks = [], _stoppedBy = [], _unansweredBriefs = "
+        "Array.from({length: 300}, (_, i) => 'ROW-' + i), _notStarted = [], _planHeld = {}, "
+        "_chunkReason = Object.fromEntries(Array.from({length: 300}, (_, i) => ['ROW-' + i, 'r'.repeat(300)])), "
+        "_blockedChunks = [], _gateOwed = {};\n"
+        "let _testResult = {status:'pass', tests_run:5, tests_failed:0, build_clean:true, "
+        "summary:'x'.repeat(500), sidecar_path:'s.md'};\n"
+        "let _verifications = [{chunk:'C1', status:'pass'}];\n"
+        "let _falsifier = {status:'met', observation:'o'.repeat(100), sidecar_path:'f.md'};\n"
+        "let _reviewPrep = {slices:[1,2]};\n"
+        "let _reviewWave = {};\n"
+        "let _deliveryVerdict = {verdict:'PASS', product_files:1, claims_unbacked:[]};\n"
+        "let _reviewIntegration = {fixes_applied:2, em_may_think_differently:[], "
+        "unresolved:[], overflow:30, brief_conformance:{items:1,met:1,unmet:0}, "
+        "rebuild_decision:null, sidecar_path:'i.md'};\n"
+        "console.log(JSON.stringify((function(){\n" + js + "\n})()));\n",
+        encoding="utf-8",
+    )
+    node = _find_node()
+    if node is None:
+        pytest.skip("node unavailable to execute the generated script")
+    result = subprocess.run([node, str(harness)], capture_output=True, text=True, timeout=30, **no_console_creationflags())
+    assert result.returncode == 0, result.stderr
+    assert len(result.stdout) > 20_000
+    digest = json.loads(result.stdout)
+    assert wd.validate_digest(digest) == []
+    assert list(digest)[0] == "next_action"
+    assert digest["next_action"]["op"] == "dispatch.terminal_commit"
+    head = result.stdout[:2048]
+    prefix = '{"next_action":'
+    assert head.startswith(prefix)
+    decoded, end = json.JSONDecoder().raw_decode(head[len(prefix):])
+    assert decoded == digest["next_action"]
+
+
 def _run_digest(
     tmp_path, *, falsifier_js, incomplete=(), blocked=(), not_started=(), reasons=None,
     plan_held=None, **overrides,

@@ -113,3 +113,11 @@ def test_trailing_cr_is_stripped_from_every_path_list(monkeypatch, tmp_path):
             {"paths": ["a.md\r", "b.md\r"], "deleted_paths": ["c.md\r"], "message": "m"},
         )
     assert seen["paths"] == ["a.md", "b.md"]
+
+
+def test_ledger_uses_committed_explicit_session_without_ambient_identity(monkeypatch, tmp_path):
+    from coordinator_core.contract import apply_base
+    seen = {}
+    monkeypatch.setattr(apply_base, "record_ledger_entry", lambda *args, **kwargs: seen.update(kwargs))
+    commit_v2._record_ledger(tmp_path, ["a.md"], "abc", f"subject\n\nSession-Id: {VALID_UUID}\n")
+    assert seen["committer_id_override"] == VALID_UUID

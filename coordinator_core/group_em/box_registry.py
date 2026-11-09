@@ -24,6 +24,34 @@ KIND = "group-em-box"
 LOCAL_BOX_ID = "local"
 
 
+def admission_session_id(requested: str | None = None) -> str:
+    """The actual invoking identity; a CLI selector can confirm it, never replace it."""
+    from coordinator_core.session import core
+
+    sid = core.attributable_session_id()
+    if not isinstance(sid, str) or not sid:
+        raise ValueError("resource admission requires the actual invoking session identity")
+    if requested is not None and requested != sid:
+        raise ValueError("--session-id must match the actual invoking session identity")
+    return sid
+
+
+def admission_parent(session_id: str) -> dict:
+    """A selected parent must come from the actual child's birth-verified host binding."""
+    from coordinator_core.session import external_registry
+
+    child = external_registry.lookup(session_id)
+    if not isinstance(child, dict) or child.get("session_id") != session_id:
+        raise ValueError("parent pool requires the actual child's live native registry binding")
+    parent_id = child.get("parent_session_id")
+    if not isinstance(parent_id, str) or parent_id == session_id:
+        raise ValueError("parent pool requires recorded native child-to-parent lineage")
+    parent = external_registry.lookup(parent_id)
+    if not isinstance(parent, dict) or parent.get("session_id") != parent_id:
+        raise ValueError("parent pool requires a live birth-verified parent binding")
+    return parent
+
+
 def _group_em_dir(home: Optional[Path] = None) -> Path:
     base = Path(home) if home is not None else settings_home()
     return base / "state" / "group-em"

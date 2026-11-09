@@ -312,6 +312,7 @@ def test_write_reply_for_a_non_run_sidecar_needs_no_script(tmp_path):
     assert path.is_file() and handle["path"] == "scratch/other/x.json"
 
 
+@pytest.mark.absent_run_script_live
 def test_write_reply_and_handle_for_without_a_run_script_refuse_by_name(tmp_path):
     path = tmp_path / "state" / "warp" / "runx" / "manifest.json"
     with pytest.raises(rs.ReplySidecarError, match="staged twin write failed: run script 'runx.workflow.mjs' is absent"):

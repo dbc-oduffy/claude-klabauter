@@ -26,12 +26,14 @@ def _show_stdout(shas):
     return "\n".join(blocks)
 
 
-def _batched_unique(args, commits_for):
+def _batched_unique(args, commits_for, input=None):
     """Fake the batched union `git log` / tip `rev-parse`; None when `args` is neither.
 
     `commits_for(ref)` -> that ref's `<sha> <subject>` lines, newest first, as a linear chain.
     """
     sep = "\x1f"
+    if args == ["log", "--no-walk=unsorted", "--stdin"]:
+        return SimpleNamespace(returncode=0, stdout=_show_stdout((input or "").split()), stderr="")
     if args[0] == "log" and len(args) > 1 and args[1].startswith("--format="):
         rows: dict[str, str] = {}
         for ref in args[2:-1]:
@@ -52,8 +54,8 @@ def _batched_unique(args, commits_for):
 
 def _dispatch(rules, unique=()):
 
-    def _run(args, cwd):
-        batched = _batched_unique(args, lambda ref: list(unique))
+    def _run(args, cwd, input=None):
+        batched = _batched_unique(args, lambda ref: list(unique), input)
         if batched is not None:
             return batched
         for prefix, result in rules.items():
@@ -130,8 +132,8 @@ class TestBrief:
     ):
         unique_commits = unique_commits or []
 
-        def run_git(args, cwd):
-            batched = _batched_unique(args, lambda ref: unique_commits)
+        def run_git(args, cwd, input=None):
+            batched = _batched_unique(args, lambda ref: unique_commits, input)
             if batched is not None:
                 return batched
             if args[:2] == ["config", "user.email"]:
@@ -155,9 +157,6 @@ class TestBrief:
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
                 return SimpleNamespace(returncode=0, stdout=f"{tip_author}\n", stderr="")
-            if args[0] == "show":
-                shas = [a for a in args[2:]]
-                return SimpleNamespace(returncode=0, stdout=_show_stdout(shas), stderr="")
             if args[0] == "worktree" and args[1] == "list":
                 return SimpleNamespace(returncode=0, stdout=worktree_stdout, stderr="")
             if args[0] == "merge-base":
@@ -261,14 +260,16 @@ class TestBrief:
         single value cannot satisfy both branches' ref assertions below by
         coincidence."""
         calls = []
+        stdin_by_call: list[str] = []
 
-        def run_git(args, cwd):
+        def run_git(args, cwd, input=None):
             batched = _batched_unique(
                 args,
                 lambda ref: {
                     "stale-a": ["aaa111 first"],
                     "origin/stale-b": ["bbb222 second", "ccc333 third"],
                 }[ref],
+                input,
             )
             if batched is not None:
                 return batched
@@ -292,8 +293,6 @@ class TestBrief:
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             if args[0] == "log" and args[1] == "-1":
                 return SimpleNamespace(returncode=0, stdout="me@x\n", stderr="")
-            if args[0] == "show":
-                return SimpleNamespace(returncode=0, stdout=_show_stdout(args[2:]), stderr="")
             if args[0] == "worktree" and args[1] == "list":
                 return SimpleNamespace(
                     returncode=0, stdout=f"worktree {tmp_path}\nHEAD abc\nbranch refs/heads/current\n", stderr=""
@@ -304,17 +303,19 @@ class TestBrief:
                 return SimpleNamespace(returncode=0, stdout="", stderr="")
             raise AssertionError(f"unexpected git call: {args}")
 
-        def recording(args, cwd):
+        def recording(args, cwd, input=None):
             calls.append(args)
-            return run_git(args, cwd)
+            if input is not None:
+                stdin_by_call.append(input)
+            return run_git(args, cwd, input)
 
         do = consolidate_assemble.brief(repo_root=tmp_path, run_git=recording)
         stale = [b for b in do["gates"]["branches"] if b["category"] == "mine-stale"]
         assert len(stale) == 2
 
-        show_calls = [args for args in calls if args[0] == "show"]
-        assert len(show_calls) == 1
-        assert show_calls[0] == ["show", "--stat", "aaa111", "bbb222", "ccc333"]
+        inspect_calls = [args for args in calls if args == ["log", "--no-walk=unsorted", "--stdin"]]
+        assert len(inspect_calls) == 1
+        assert stdin_by_call == ["aaa111\nbbb222\nccc333\n"]
 
         jp_a = next(jp for jp in do["judgment_points"] if jp["id"] == "j-absorb-stale-a")
         jp_b = next(jp for jp in do["judgment_points"] if jp["id"] == "j-absorb-stale-b")

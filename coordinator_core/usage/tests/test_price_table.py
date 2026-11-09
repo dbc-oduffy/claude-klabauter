@@ -109,7 +109,7 @@ def test_json_matches_python_table(pt):
         m = data["models"][key]
         assert m["input"] == approx(p["input"])
         assert m["output"] == approx(p["output"])
-        assert m["cache_read"] == approx(p["input"] * pt.CACHE_READ_MULT)
+        assert m["cache_read"] == approx(p["input"] * p.get("cache_read_mult", pt.CACHE_READ_MULT))
         assert m["cache_creation"] == approx(p["input"] * pt.CACHE_WRITE_MULT)
         assert m.get("fast_multiplier") == p.get("fast_multiplier")
         tier = m.get("long_prompt_tier")
@@ -117,7 +117,7 @@ def test_json_matches_python_table(pt):
             assert tier["prompt_tokens_over"] == p["tier_prompt_tokens"]
             assert tier["input"] == approx(p["tier_input"])
             assert tier["output"] == approx(p["tier_output"])
-            assert tier["cache_read"] == approx(p["tier_input"] * pt.CACHE_READ_MULT)
+            assert tier["cache_read"] == approx(p["tier_input"] * p.get("cache_read_mult", pt.CACHE_READ_MULT))
             assert tier["cache_creation"] == approx(p["tier_input"] * pt.CACHE_WRITE_MULT)
         else:
             assert tier is None

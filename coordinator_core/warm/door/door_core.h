@@ -32,6 +32,19 @@
 #include <stddef.h>
 
 
+#include <stdint.h>
+#define DOOR_PRIVATE_PATH_CAP 4096
+/* Exact schema1 of adjacent door.private.json; memory-only strict parser. */
+typedef struct {
+    char fire_id[33], engine_root[DOOR_PRIVATE_PATH_CAP], engine_token[17];
+    char settings_home[DOOR_PRIVATE_PATH_CAP], repo_root[DOOR_PRIVATE_PATH_CAP];
+    char bindings_path[DOOR_PRIVATE_PATH_CAP], source_sha[41], script_sha256[65];
+    uint32_t server_pid;
+    uint64_t server_creation_time_ft;
+} door_private_binding_t;
+int door_parse_private_binding(const char *json, size_t len, door_private_binding_t *out);
+
+
 void sha1_hex16(const unsigned char *data, size_t len, char out[17]);
 
 

@@ -92,6 +92,13 @@ def test_every_row_head_carries_the_heavy_launch_floor():
     assert emit._HEAVY_LAUNCH_FLOOR_CLAUSE in emit._prompt_head(None, verification=True)
 
 
+def test_every_row_head_carries_the_heavy_probe_declared_clause():
+    clause = emit._HEAVY_PROBE_DECLARED_CLAUSE
+    assert "peak" in clause and "GO" in clause and "stop and report" in clause
+    assert clause in emit._prompt_head(None)
+    assert clause in emit._prompt_head(None, verification=True)
+
+
 def _js_re(rx: str):
     import re
 

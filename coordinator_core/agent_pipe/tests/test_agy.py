@@ -3,7 +3,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coordinator_core.agent_pipe.agy import AgyAdapter
+import sys
+
+from coordinator_core.agent_pipe import agy as agy_mod
+from coordinator_core.agent_pipe.agy import AgyAcpDriver, AgyAdapter
+from coordinator_core.agent_pipe.session_driver import SessionHandle
 
 FIXTURE = Path(__file__).parent / "fixtures" / "agy_stream.ndjson"
 CONV = "894074b8-1367-4122-8a8f-ef1f745ba338"
@@ -54,3 +58,29 @@ def test_argv_shapes_and_no_bypass(monkeypatch):
 def test_agy_missing_from_path_falls_back_to_bare_name(monkeypatch):
     monkeypatch.setattr("coordinator_core.agent_pipe.agy.shutil.which", lambda name: None)
     assert AgyAdapter().spawn_argv("p")[0] == "agy"
+
+
+FAKE_ACP = [sys.executable, str(Path(__file__).parent / "fixtures" / "fake_acp_agent.py")]
+
+
+def test_agy_acp_driver_argv_is_agy_acp_with_no_bypass(monkeypatch):
+    monkeypatch.setattr(agy_mod.shutil, "which", lambda name: None)
+    assert AgyAcpDriver()._argv == ["agy", "acp"]
+    monkeypatch.setattr(agy_mod.shutil, "which", lambda name: "/opt/agy")
+    assert AgyAcpDriver()._argv == ["/opt/agy", "acp"]
+    assert AgyAcpDriver(argv=FAKE_ACP)._argv == FAKE_ACP
+
+
+def test_agy_acp_driver_starts_prompts_and_resumes_over_acp(monkeypatch):
+    monkeypatch.delenv("FAKE_ACP_LOG", raising=False)
+    with AgyAcpDriver(argv=FAKE_ACP) as d:
+        h = d.start("/w")
+        assert isinstance(h, SessionHandle) and h.cwd == "/w"
+        ups = list(d.prompt(h, "hi"))
+        assert ups[-1].kind == "done"
+        assert d.resume(h.session_id).session_id == h.session_id
+
+
+def test_agy_adapter_headless_argv_unchanged_by_acp_driver(monkeypatch):
+    monkeypatch.setattr(agy_mod.shutil, "which", lambda name: None)
+    assert AgyAdapter().spawn_argv("p") == ["agy", "-p", "p", "--output-format", "stream-json"]

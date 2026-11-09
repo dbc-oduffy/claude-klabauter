@@ -40,6 +40,11 @@ def _incident_repo(repo, *, foreign_edit: bool, c2: str = "open") -> None:
     _git(repo, "config", "user.email", "t@t.example")
     _git(repo, "config", "user.name", "t")
     _plan(repo, rows=[("C1", "open"), ("C2", c2), ("C3", "open")])
+    plan_file = repo / PLAN_REL
+    plan_file.write_text(
+        plan_file.read_text(encoding="utf-8").replace("run_id: fixture\n", "run_id: fixture\ndeliverable_id: dlv-t-111111\n", 1),
+        encoding="utf-8", newline="\n",
+    )
     # The sizing schema refuses a zero-row register, so the empty register is the absent one.
     _put(repo, tshirt="M", route="plan", accepted=ACCEPTED, plan=PLAN_REL)
     (repo / "some").mkdir(parents=True, exist_ok=True)
@@ -57,7 +62,7 @@ def _incident_repo(repo, *, foreign_edit: bool, c2: str = "open") -> None:
     )
     if foreign_edit:
         (repo / "some" / "C2.py").write_text("x = 3\n", encoding="utf-8")
-        _commit_all(repo, "another plan's commit touching C2's write")
+        _commit_all(repo, "commit touching C2's write\n\nDeliverable-Id: dlv-t-111111")
     record = repo / RECORD_DIR_ROOT / HALTED_RUN
     write_halt_marker(record, halted="ledger-check", sizing_rel=REL, plan_rel=PLAN_REL, blocking=())
     (record / "manifest.json").write_text(

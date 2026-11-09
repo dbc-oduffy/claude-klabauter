@@ -6,9 +6,10 @@ hand-walks — current-identity resolution, branch enumeration + ownership
 categorization (`git config user.email`, `git branch -a`,
 `git log -1 --format=%ae`), worktree enumeration + reachability
 categorization (`git worktree list --porcelain`, dirty check), unique-commit
-computation (`git log cur..stale`), and inspection data-gather (one batched
-`git show --stat <sha>...` across every stale branch's shas GLOBALLY, never
-one spawn per branch and never one per commit — see `inspect_commits`) —
+computation (`git log cur..stale`), and inspection data-gather (one
+header block per unique commit read from the same one `git log` that computes
+the unique commits GLOBALLY, never one spawn per branch and never one per commit —
+see `unique_commits_by_ref`) —
 computed ONCE here rather than re-derived by the EM
 reading raw git output on every invocation. Returns the eight-key decision
 object (`artifact`/`preflight`/`gates`/`directives`/`judgment_points`/
@@ -43,7 +44,7 @@ Negative-spec:
     - Do NOT emit a verdict ("superseded", "safe to skip") for a branch
       carrying unique commits — that call is Step 4 evidence-gated judgment
       (`consolidate-git/SKILL.md` § Step 3 self-check); this module only
-      ever emits the EVIDENCE (the commit list + `git show --stat` output)
+      ever emits the EVIDENCE (the commit list + `git log` header blocks)
       on the judgment point. The `superseded` disposition resolves a
       `merge-ours` directive only when the operator supplied the superseding
       sha (`brief(superseded=...)`) and it is an ancestor of HEAD.
@@ -87,7 +88,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
 )
 
-RunGit = Callable[[list[str], Path], "subprocess.CompletedProcess[str]"]
+RunGit = Callable[..., "subprocess.CompletedProcess[str]"]  # (args, cwd, input=None)
 
 EXIT_OK = 0
 EXIT_BUSINESS_FAILURE = 1
@@ -98,6 +99,10 @@ EXIT_TRANSPORT_FAIL = 3
 #: directives: a delete cannot be declined at apply, so the floor lives where the
 #: directive is emitted. Absorbing such a branch keeps it (`*-only` verbs).
 RECENCY_FLOOR_SECONDS = 24 * 3600
+
+#: Newest unique commits per branch that get a header block in `evidence.inspections`;
+#: header cost is per commit, and a branch's full subject list is always in `evidence.commits`.
+INSPECTED_COMMITS_PER_BRANCH = 10
 
 
 def default_run_git(
@@ -169,7 +174,7 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
         [
             "for-each-ref",
             "--format=%(refname)\t%(refname:short)\t%(authoremail:trim)"
-            "\t%(trailers:key=Operator,valueonly,separator=%x2C)\t%(committerdate:unix)",
+            "\t%(trailers:key=Operator,valueonly,separator=%x2C)\t%(committerdate:unix)\t%(objectname)",
             "refs/heads",
             "refs/remotes",
         ],
@@ -189,7 +194,8 @@ def ref_rows(run_git: RunGit, repo_root: Path) -> list[tuple[str, ...]]:
         email = parts[2] if len(parts) > 2 else ""
         operator = parts[3].split(",", 1)[0].strip() if len(parts) > 3 else ""
         tip_time = parts[4].strip() if len(parts) > 4 else ""
-        rows.append((refname, short, email, operator, tip_time))
+        tip_sha = parts[5].strip() if len(parts) > 5 else ""
+        rows.append((refname, short, email, operator, tip_time, tip_sha))
     return rows
 
 
@@ -217,6 +223,11 @@ def tip_times_from(rows: list[tuple[str, ...]]) -> dict[str, int]:
         if len(row) > 4 and row[4].isdigit():
             times[row[1]] = int(row[4])
     return times
+
+
+def tip_shas_from(rows: list[tuple[str, ...]]) -> dict[str, str]:
+    """`{ref: tip object sha}` over already-fetched `ref_rows`; a ref without one is omitted."""
+    return {row[1]: row[5] for row in rows if len(row) > 5 and row[5]}
 
 
 _BACKUP_BRANCH_SEGMENT_PREFIXES = ("backup", "pre-")
@@ -277,7 +288,16 @@ def list_worktrees(run_git: RunGit, repo_root: Path) -> list[dict[str, Any]]:
 
 
 def worktree_is_dirty(run_git: RunGit, worktree_path: str) -> dict[str, Any]:
-    proc = run_git(["--no-optional-locks", "status", "--porcelain"], Path(worktree_path))
+    try:
+        proc = run_git(["--no-optional-locks", "status", "--porcelain"], Path(worktree_path))
+    except (FileNotFoundError, NotADirectoryError):
+        if Path(worktree_path).is_dir():
+            raise
+        return {
+            "degraded": True,
+            "prunable": True,
+            "evidence": f"{worktree_path} registered but missing on disk (prunable/stale worktree)",
+        }
     if proc.returncode != 0:
         return {
             "degraded": True,
@@ -349,13 +369,18 @@ class _RefWalk(NamedTuple):
 
 
 def _walk_refs(
-    run_git: RunGit, repo_root: Path, base: str, refs: list[str]
+    run_git: RunGit,
+    repo_root: Path,
+    base: str,
+    refs: list[str],
+    tip_shas: Optional[dict[str, str]] = None,
 ) -> dict[str, _RefWalk]:
     """One `git log` over all `refs` excluding `base`, walked per ref by parent links.
 
     The union is closed under "reachable from a tip and not from base", so each ref's
     walk equals `base..ref`. A ref with no unique commit carries an empty walk.
-    Rows without a `%T` field (3-field) leave the tree "".
+    Rows without a `%T` field (3-field) leave the tree "". `tip_shas` (ref -> commit sha, from
+    `ref_rows`) replaces the tip `rev-parse` spawn when it covers every ref.
     """
     if not refs:
         return {}
@@ -375,8 +400,11 @@ def _walk_refs(
         rows[sha] = (parents.split(), subject, tree)
         order.append(sha)
 
-    tips_proc = run_git(["rev-parse", *[f"{r}^{{commit}}" for r in refs]], repo_root)
-    tips = tips_proc.stdout.split()
+    if tip_shas is not None and all(r in tip_shas for r in refs):
+        tips = [tip_shas[r] for r in refs]
+    else:
+        tips_proc = run_git(["rev-parse", *[f"{r}^{{commit}}" for r in refs]], repo_root)
+        tips = tips_proc.stdout.split()
     out: dict[str, _RefWalk] = {}
     for ref, tip in zip(refs, tips):
         seen: set[str] = set()
@@ -430,12 +458,14 @@ def branch_relations(walks: dict[str, _RefWalk]) -> list[dict[str, str]]:
 
 
 def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[str, str]:
+    """`{sha: git log header block}` from one stdin-fed `git log --no-walk=unsorted --stdin`."""
     if not shas:
         return {}
-    stdout = "".join(
-        run_git(["show", "--stat", *batch], repo_root).stdout
-        for batch in _argv_batches(shas)
-    )
+    stdout = run_git(
+        ["log", "--no-walk=unsorted", "--stdin"],
+        repo_root,
+        input="".join(f"{s}\n" for s in shas),
+    ).stdout
 
     blocks: dict[str, str] = {}
     pending: Optional[str] = None
@@ -453,23 +483,6 @@ def inspect_commits(run_git: RunGit, repo_root: Path, shas: list[str]) -> dict[s
     if pending is not None:
         blocks[pending] = "".join(lines)
     return blocks
-
-
-_ARGV_CHAR_BUDGET = 16000  # CreateProcess caps the command line at 32767 chars
-
-
-def _argv_batches(items: list[str]) -> list[list[str]]:
-    """Split `items` into order-preserving chunks whose joined length stays under the argv budget."""
-    batches: list[list[str]] = [[]]
-    used = 0
-    for item in items:
-        cost = len(item) + 1
-        if batches[-1] and used + cost > _ARGV_CHAR_BUDGET:
-            batches.append([])
-            used = 0
-        batches[-1].append(item)
-        used += cost
-    return batches
 
 
 def _drop_batch_separator(block: str) -> str:
@@ -561,7 +574,6 @@ def brief(
     judgment_points: list[dict[str, Any]] = []
 
     stale_branches: list[dict[str, Any]] = []
-    all_shas: list[str] = []
 
     for entry in branch_entries:
         name, ref = entry["name"], entry["ref"]
@@ -592,7 +604,8 @@ def brief(
     # Counted against main, not the checked-out branch: a `current` behind main would
     # report every main-only commit as unique to each stale branch.
     walks = _walk_refs(
-        run_git, repo_root, main_branch or current, [s["entry"]["ref"] for s in stale_branches]
+        run_git, repo_root, main_branch or current, [s["entry"]["ref"] for s in stale_branches],
+        tip_shas_from(ref_listing),
     )
     commits_by_ref = {ref: w.lines for ref, w in walks.items()}
     ref_to_name = {s["entry"]["ref"]: s["name"] for s in stale_branches}
@@ -613,9 +626,11 @@ def brief(
         stale["shown"] = shown
         stale["shas"] = [line.split(" ", 1)[0] for line in shown]
         stale["report_row"]["unique_commit_count"] = len(commits)
-        all_shas.extend(stale["shas"])
+        stale["inspected_shas"] = stale["shas"] if full_evidence else stale["shas"][:INSPECTED_COMMITS_PER_BRANCH]
 
-    global_stats = inspect_commits(run_git, repo_root, list(dict.fromkeys(all_shas)))
+    global_stats = inspect_commits(
+        run_git, repo_root, list(dict.fromkeys(sha for s in stale_branches for sha in s["inspected_shas"]))
+    )
     if not full_evidence:
         global_stats = {sha: _cap_stat(block) for sha, block in global_stats.items()}
 
@@ -660,7 +675,7 @@ def brief(
                 )
             continue
 
-        inspections = [{"sha": sha, "stat": global_stats.get(sha, "")} for sha in shas]
+        inspections = [{"sha": sha, "stat": global_stats.get(sha, "")} for sha in stale["inspected_shas"]]
         jp_id = f"j-absorb-{name}"
         covered = list(dict.fromkeys(covered_by.get(name, [])))
         absorb_directive_id = f"d-absorb-{name}"
@@ -742,8 +757,17 @@ def brief(
             else tip_author(run_git, repo_root, branch_name if branch_name in branch_names_set else wt_path)
         )
         reachable = branch_name in merged_into_target
-        dirty_probe = worktree_is_dirty(run_git, wt_path)
-        dirty = dirty_probe["degraded"] or dirty_probe["value"]
+        if reachable:
+            dirty_probe = worktree_is_dirty(run_git, wt_path)
+        elif Path(wt_path).is_dir():
+            dirty_probe = {"degraded": False, "unprobed": True}  # unique work is never removed
+        else:
+            dirty_probe = {"degraded": True, "prunable": True, "unprobed": True}
+        prunable = dirty_probe.get("prunable", False)
+        if dirty_probe.get("unprobed") and not prunable:
+            dirty = None
+        else:
+            dirty = (dirty_probe["degraded"] and not prunable) or dirty_probe.get("value", False)
         category = "stale-absorbed" if reachable else "stale-unique-work"
         worktrees_report.append(
             {
@@ -752,6 +776,7 @@ def brief(
                 "category": category,
                 "dirty": dirty,
                 "dirty_probe_degraded": dirty_probe["degraded"],
+                "prunable": prunable,
             }
         )
 

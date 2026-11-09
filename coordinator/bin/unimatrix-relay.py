@@ -14,7 +14,12 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     stdin, two lines), listen on /tmp/cc-socks/unimatrix-<name>.sock, and
                     write each message delivered there to stdout as one line, so the
                     far box can hand it to the real session. Runs until ssh drops
-                    (stdin EOF), then removes only the socket it bound.
+                    (stdin EOF), then removes only the socket it bound. Local-only:
+                    ordinary inbox mirrors are never advertised through roster.
+  reply-inbox <name>
+                    same lifetime and wire format as inbox, but explicitly advertise
+                    this temporary transport endpoint to directly connected boxes.
+                    Downstream mirrors are never re-exported.
   source            print this file, so far boxes can vendor the current relay.
   grant <grantee> <note> <ttl> <repo>
                     read the issuer's signed grant envelope (one JSON line on stdin) and hand
@@ -48,7 +53,12 @@ from pathlib import Path
 
 SESS = "~/.claude/sessions"
 SOCKS = "/tmp/cc-socks"
-NAME_RE = re.compile(r"[a-z0-9-]{1,40}")
+INBOX_NAME_RE = re.compile(r"[A-Za-z0-9_-](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?")
+
+
+def valid_inbox_name(name):
+    """1-64 ASCII routing characters, no edge dots or consecutive dots/path traversal."""
+    return isinstance(name, str) and ".." not in name and INBOX_NAME_RE.fullmatch(name) is not None
 # Remote-supplied registry fields a mirror entry passes through; pid, socket path and
 # procStart are set locally so the far box cannot point a mirror at a local socket.
 MIRROR_FIELDS = {"cwd", "entrypoint", "kind", "nameSince", "nameSource", "peerFeatures",
@@ -65,8 +75,9 @@ def parse_mode(original_command):
         return "source", None
     if len(cmd) == 2 and cmd[0] == "send" and cmd[1].isdigit():
         return "send", int(cmd[1])
-    if len(cmd) == 2 and cmd[0] == "inbox" and NAME_RE.fullmatch(cmd[1]):
-        return "inbox", cmd[1]
+    if (len(cmd) == 2 and cmd[0] in ("inbox", "reply-inbox") and valid_inbox_name(cmd[1])
+            and original_command == f"{cmd[0]} {cmd[1]}"):
+        return cmd[0], cmd[1]
     if cmd == ["membership", "get"] or cmd == ["membership", "put"]:
         return "membership", cmd[1]
     if cmd and cmd[0] == "grant":
@@ -194,12 +205,21 @@ def engine_fields():
 
 def roster():
     fields = engine_fields()
+    helpers = load_roster()
     for pid, d, key in entries():
-        if d.get("unimatrixMirror") or d.get("macSocketPath"):
+        reply_inbox = d.get("unimatrixMirror") is True and d.get("unimatrixReplyInbox") is True
+        if d.get("macSocketPath") or (d.get("unimatrixMirror") and not reply_inbox):
             continue  # never re-export a far session we are only mirroring, whichever OS made the entry
         with open(os.path.join(os.path.expanduser(SESS), key), encoding="utf-8") as fh:
             body = fh.read()
-        print(json.dumps({"entry": d, "key_name": key, "key": body, **fields}))
+        exported = {**d, **helpers.session_identity(d)}
+        if reply_inbox:
+            # Advertise the hosted endpoint, not a remotely supplied mirror. Leaving
+            # mirror markers would suppress its downstream mirror on the next poll.
+            for field in ("unimatrixMirror", "unimatrixRemoteSocket", "unimatrixClient"):
+                exported.pop(field, None)
+            exported.update(vendor="transport", box=socket.gethostname().lower())
+        print(json.dumps({"entry": exported, "key_name": key, "key": body, **fields}))
 
 
 def local_reply_address(line):
@@ -217,15 +237,32 @@ def local_reply_address(line):
         return line
     addr = frame["from"]
     scheme = "uds:" if addr.startswith("uds:") else ""
-    for _, d, _ in entries():
-        if d.get("unimatrixMirror") and d.get("unimatrixRemoteSocket") == addr[len(scheme):]:
-            frame["from"] = scheme + d["messagingSocketPath"]
-            msg = frame.get("message")
-            if isinstance(msg, dict) and isinstance(msg.get("content"), str):
-                msg["content"] = msg["content"].replace(
-                    f'from="{addr}"', f'from="{frame["from"]}"', 1)
-            return json.dumps(frame).encode() + b"\n"
+    candidates = [d for _, d, _ in entries()
+                  if d.get("unimatrixMirror") and d.get("unimatrixRemoteSocket") == addr[len(scheme):]]
+    client = client_address()
+    if client:
+        qualified = [d for d in candidates if d.get("unimatrixClient") == client]
+        candidates = qualified or [d for d in candidates if not d.get("unimatrixClient")]
+    if len(candidates) == 1:
+        d = candidates[0]
+        frame["from"] = scheme + d["messagingSocketPath"]
+        msg = frame.get("message")
+        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+            msg["content"] = msg["content"].replace(
+                f'from="{addr}"', f'from="{frame["from"]}"', 1)
+        return json.dumps(frame).encode() + b"\n"
+
     return line
+
+
+def load_roster():
+    """The sibling registry/auth helpers, imported only for local delivery."""
+    import importlib.util
+    path = Path(__file__).resolve().parent / "unimatrix-roster.py"
+    spec = importlib.util.spec_from_file_location("unimatrix_roster", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def send(pid):
@@ -238,10 +275,13 @@ def send(pid):
             sys.exit(f"refusing non-session pipe {path}")
         import win32file
         line = local_reply_address(sys.stdin.buffer.readline())
+        line = load_roster().authenticated_data(path, line, os.path.expanduser(SESS))
         h = win32file.CreateFile(path, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
                                  0, None, win32file.OPEN_EXISTING, 0, None)
-        win32file.WriteFile(h, line)
-        win32file.CloseHandle(h)
+        try:
+            win32file.WriteFile(h, line)
+        finally:
+            win32file.CloseHandle(h)
         return
     if os.path.dirname(path) != SOCKS or not stat.S_ISSOCK(os.stat(path).st_mode):
         sys.exit(f"refusing non-session socket {path}")
@@ -381,9 +421,15 @@ def serve(srv, stdin_fd, out):
             out.flush()
 
 
-def inbox(name):
+UNSUPPORTED_HOST_RC = 3  # unimatrix-inbox.py and unimatrix-mirror-all.py match this exit code
+
+
+def inbox(name, export_reply=False):
+    if not valid_inbox_name(name):
+        sys.exit("inbox: name must use 1-64 ASCII letters, digits, '_', '-', or interior single dots")
     if endpoint_kind() == "pipe":
-        sys.exit("inbox: mirror sessions are hosted on macOS/Linux boxes only")
+        print("inbox: mirror sessions are hosted on macOS/Linux boxes only", file=sys.stderr)
+        sys.exit(UNSUPPORTED_HOST_RC)
     client = client_address()
     drop_stale(check_name_free(name, client))
     entry = mirror_entry(json.loads(sys.stdin.readline()), name)
@@ -403,13 +449,17 @@ def inbox(name):
                         capture_output=True, text=True, check=True).stdout.strip()
     entry.update(pid=pid, procStart=ps, pidDomain=pid_domain(),
                  messagingSocketPath=path, unimatrixMirror=True, unimatrixClient=client)
+    if export_reply:
+        # This field is intentionally absent from MIRROR_FIELDS: only explicit mode
+        # selection can opt in, never an untrusted registration payload.
+        entry["unimatrixReplyInbox"] = True
     entry_path = os.path.join(os.path.expanduser(SESS), f"{pid}.json")
     key_path = os.path.join(os.path.expanduser(SESS), key_file_name(pid, path))
     with open(entry_path, "w", encoding="utf-8") as fh:
         json.dump(entry, fh)
-    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as kf:
-        kf.write(key_body)
+    helpers = load_roster()
+    helpers.write_peer_key(key_path, helpers.local_peer_key(
+        key_body, entry["procStart"], entry["pidDomain"]))
     try:
         serve(srv, sys.stdin.fileno(), sys.stdout.buffer)
     finally:
@@ -611,7 +661,7 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
 def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
-        sys.exit("usage: roster | send <pid> | inbox <name> | source | "
+        sys.exit("usage: roster | send <pid> | inbox <name> | reply-inbox <name> | source | "
                  "grant <grantee> <note> <ttl> <repo> | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
@@ -642,7 +692,7 @@ def main():
         # Far boxes vendor this relay; serving our own text keeps syncs off the full-shell key.
         sys.stdout.buffer.write(Path(__file__).read_bytes())
     else:
-        inbox(arg)
+        inbox(arg, export_reply=mode == "reply-inbox")
 
 
 if __name__ == "__main__":

@@ -1773,6 +1773,20 @@ def test_exemption_granted_for_one_repo_does_not_exempt_that_relpath_in_another(
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER in result["mode_100755"]
 
 
+def test_scan_both_matches_two_independent_scans_on_both_sides_of_the_exemption(tmp_path):
+    """`scan_both` shares one walk between the exempted and un-exempted
+    views: the exempted view hides the grant, the raw view shows it, and each
+    equals the standalone `scan` call."""
+    claude_klabauter_like = _repo_named(tmp_path, "claude-klabauter")
+
+    exempted, raw = check_posix_exec_assumptions.scan_both(claude_klabauter_like)
+
+    assert exempted == scan(claude_klabauter_like)
+    assert raw == scan(claude_klabauter_like, apply_exemptions=False)
+    assert _EXEMPTED_IN_CLAUDE_KLABAUTER not in exempted["env_shebang"]
+    assert _EXEMPTED_IN_CLAUDE_KLABAUTER in raw["env_shebang"]
+
+
 def test_exemption_granted_for_one_repo_still_applies_in_that_repo(tmp_path):
     """The other half of the pair: repo-scoping must not silently revoke the
     grant in the repo it was actually granted for. The control file at a
@@ -1828,14 +1842,21 @@ def test_module_docstring_states_the_third_admission_test():
     assert "standing reduction target" in doc
 
 
-def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted():
+@pytest.fixture(scope="session")
+def real_tree_scans():
+    """`(exempted, raw)` scans of THIS repo from one walk, shared by every
+    `test_real_tree_*` test in the session."""
+    return check_posix_exec_assumptions.scan_both(_REPO_ROOT)
+
+
+def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted(real_tree_scans):
     """Repo-scoping must leave claude-klabauter's OWN scan result unchanged:
     every relpath exempted under the claude_klabauter key is still invisible in
     a real-tree scan of this repo. Guards the ratchet from the other side to
     `test_real_tree_ratchets_clean_against_committed_baseline` -- that test
     would also catch a lost exemption, but only as an opaque 'new violation'
     count, never naming repo-scoping as the cause."""
-    result = scan(_REPO_ROOT)
+    result, _raw = real_tree_scans
 
     for cls, per_repo in EXEMPTIONS.items():
         for relpath in per_repo.get(REPO_PROJECT_MAKIMA, {}):
@@ -1849,7 +1870,7 @@ def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted():
 # Real-tree wiring: this repo's own committed baseline must ratchet clean.
 # ---------------------------------------------------------------------------
 
-def test_real_tree_ratchets_clean_against_committed_baseline():
+def test_real_tree_ratchets_clean_against_committed_baseline(real_tree_scans):
     """Wiring proof for claude-klabauter's own test tier: scanning THIS repo
     against its own committed state/posix-exec-baseline.json must currently
     pass (no new violations beyond what the baseline enumerates) and the
@@ -1866,7 +1887,9 @@ def test_real_tree_ratchets_clean_against_committed_baseline():
             "against; regenerate it via check_posix_exec_assumptions.scan()."
         )
 
-    ok, msg = check_against_baseline(_REPO_ROOT, baseline_path)
+    ok, msg = check_against_baseline(
+        _REPO_ROOT, baseline_path, precomputed=real_tree_scans[0]
+    )
     assert ok, msg
 
     grown_ok, grown_msg = assert_baseline_not_grown(
@@ -2088,7 +2111,7 @@ def test_every_exempt_prefix_repo_key_is_a_canonical_fleet_repo_key():
         )
 
 
-def test_real_tree_mirror_native_files_are_prefix_excluded():
+def test_real_tree_mirror_native_files_are_prefix_excluded(real_tree_scans):
     """Real-tree wiring for the case that motivated this mechanism: the
     klabauter CI harness homed under dist/mirror-native/ by 720d56204, whose 8
     `#!/usr/bin/env python3` scripts (also 100755, deliberately — the mirror's
@@ -2120,7 +2143,7 @@ def test_real_tree_mirror_native_files_are_prefix_excluded():
         f"expected the 8 preserved klabauter CI scripts, got {shebanged}"
     )
 
-    result = scan(_REPO_ROOT)
+    result, _raw = real_tree_scans
     for relpath in tracked:
         assert is_prefix_excluded(relpath, REPO_PROJECT_MAKIMA)
         for cls in PREFIX_EXCLUDABLE_CLASSES:
@@ -2416,13 +2439,15 @@ def test_real_tree_has_no_stale_exempt_prefix():
     assert ok, msg
 
 
-def test_real_tree_passes_tier_a_zero_tolerance():
-    ok, msg = check_tier_a_zero_tolerance(_REPO_ROOT)
+def test_real_tree_passes_tier_a_zero_tolerance(real_tree_scans):
+    ok, msg = check_tier_a_zero_tolerance(_REPO_ROOT, precomputed=real_tree_scans[0])
     assert ok, msg
 
 
-def test_real_tree_passes_implicit_encoding_zero_tolerance():
-    ok, msg = check_implicit_encoding_zero_tolerance(_REPO_ROOT)
+def test_real_tree_passes_implicit_encoding_zero_tolerance(real_tree_scans):
+    ok, msg = check_implicit_encoding_zero_tolerance(
+        _REPO_ROOT, precomputed=real_tree_scans[0]
+    )
     assert ok, msg
 
 
@@ -2901,7 +2926,50 @@ def test_scan_apply_exemptions_false_ignores_exemptions_but_keeps_prefix_exclusi
     assert "coordinator/exempt-tool.py" in without_exemptions["env_shebang"]
 
 
-def test_real_tree_no_stale_exemptions():
+_SCRIPT_DIRS = ("coordinator/bin/", "coordinator_core/benchmarks/")
+
+
+def _tracked_script_modes() -> dict[str, str]:
+    out = subprocess.run(
+        ["git", "-C", str(_REPO_ROOT), "ls-files", "-s", "--", *_SCRIPT_DIRS],
+        capture_output=True, text=True, encoding="utf-8", check=True,
+        creationflags=_NO_WINDOW,
+    ).stdout
+    modes: dict[str, str] = {}
+    for line in out.splitlines():
+        meta, _, path = line.partition("\t")
+        if path.endswith(".py") and path.count("/") == 2:
+            modes[path] = meta.split()[0]
+    return modes
+
+
+def _has_shebang(relpath: str) -> bool:
+    with (_REPO_ROOT / relpath).open("rb") as fh:
+        return fh.read(2) == b"#!"
+
+
+def test_tracked_bin_scripts_agree_with_exec_bit_policy():
+    """Policy: coordinator/bin and benchmarks `.py` scripts are
+    run as `python <path>`, so a shebang is vestigial and the exec bit stays
+    off. A shebang survives only as a named env_shebang EXEMPTION (e.g. the
+    byte-copied claude-author.py); a 100755 entry without any shebang is
+    meaningless."""
+    exempt = EXEMPTIONS["env_shebang"][REPO_PROJECT_MAKIMA]
+    stray, bitten = [], []
+    for path, mode in sorted(_tracked_script_modes().items()):
+        shebang = _has_shebang(path)
+        if shebang and path not in exempt:
+            stray.append(path)
+        if mode == "100755" and not shebang:
+            bitten.append(path)
+    assert not stray, (
+        "shebanged script outside the exec-bit policy (strip the shebang line; "
+        f"never restore +x or widen the baseline): {stray}"
+    )
+    assert not bitten, f"100755 script with no shebang: {bitten}"
+
+
+def test_real_tree_no_stale_exemptions(real_tree_scans):
     """AC13's real-tree wiring proof, mirroring
     test_real_tree_ratchets_clean_against_committed_baseline and
     test_check_no_stale_exempt_prefixes_flags_stale_file_based_prefix's
@@ -2912,5 +2980,5 @@ def test_real_tree_no_stale_exemptions():
     coordinator/bin/tests/test-bin-sh-polyglot-direct-invocation.sh grants
     during this chunk's own execution (2026-08-14) -- both files had lost
     their exec bit/shebang with no corresponding EXEMPTIONS prune."""
-    ok, msg = check_no_stale_exemptions(_REPO_ROOT)
+    ok, msg = check_no_stale_exemptions(_REPO_ROOT, precomputed_raw=real_tree_scans[1])
     assert ok, msg

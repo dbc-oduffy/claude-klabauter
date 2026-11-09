@@ -12,6 +12,13 @@ END in admission.jsonl of max(0, declared_peak_mb - tree RSS). Need is peak + mi
 `--register-pid P` on ADMIT reserves P's headroom, `--release-pid P` frees it. `--reservation` prints
 each registered running job's headroom and the total in GiB (an exited job is absent: it adds 0). `--json` emits the same
 fields. Other hosts: exit 6.
+
+With ``--run R``, only the actual invoking session's live grant for R can receive
+credit. ``--session-id`` confirms that identity; it cannot replace it. The explicit
+``--parent-pool-run P`` selector instead uses native registry lineage and an active,
+birth-stamped parent START. Child allocations share its registered peak atomically.
+Selected ``--register-pid`` and ``--release-pid`` use the actual session/run pair;
+release does not require a still-current grant. Without selectors accounting is unchanged.
 """
 
 from __future__ import annotations
@@ -219,23 +226,44 @@ def main(
     parser.add_argument("--admission-file", help="admission.jsonl path (default: settings-home channel)")
     parser.add_argument("--json", action="store_true", help="emit JSON")
     parser.add_argument("--command-key", help="name of the command; keys its recorded peak")
+    parser.add_argument("--run", help="credit only this invoking session's live Group EM slot for this run")
+    parser.add_argument("--session-id", help="confirm the invoking identity for --run; cannot select a different session")
+    parser.add_argument("--parent-pool-run", help="explicitly draw from the native parent session's active registered pool for this run")
     parser.add_argument("--record-peak", type=float, metavar="GIB", help="record this command's seen peak (max kept)")
     parser.add_argument("--register-pid", type=int, help="on ADMIT, reserve this pid's headroom until release or exit")
     parser.add_argument("--release-pid", type=int, help="free the reservation registered for this pid")
     parser.add_argument("--reservation", action="store_true", help="print each GO-admitted running job's "
                         "max(0, declared peak - tree RSS) and their total in GiB; exited jobs add 0")
     args = parser.parse_args(argv)
+    if args.session_id is not None and not args.run:
+        parser.error("--session-id requires --run")
+    if args.parent_pool_run and not args.run:
+        parser.error("--parent-pool-run requires the child's --run")
+    if args.run and args.admit_peak is None and not args.command_key:
+        parser.error("--run requires --admit-peak or a recorded --command-key peak")
     if args.fleet:  # a fleet's width formula already took its reserve S out; a cushion pads it twice
         args.cushion_pct = 0.0
 
     host = _load("box_memory_host")
     adm_path = args.admission_file or host.admission_file()
     if args.command_key and args.release_pid is not None:
-        host.release_command(adm_path, args.command_key, args.release_pid)
+        if args.run:
+            from coordinator_core.group_em import box_registry
+            try:
+                sid = box_registry.admission_session_id(args.session_id)
+            except ValueError as exc:
+                print(f"{PROG}: reservation selection refused: {exc}", file=sys.stderr)
+                return 4
+            host.release_command(adm_path, args.command_key, args.release_pid,
+                                 reservation_session_id=sid, reservation_run=args.run)
+        else:
+            host.release_command(adm_path, args.command_key, args.release_pid)
     if args.command_key and args.record_peak is not None:
         host.record_peak(adm_path, args.command_key, args.record_peak)
     if args.admit_peak is None and args.command_key and args.record_peak is None and args.release_pid is None:
         args.admit_peak = host.read_recorded_peak(adm_path, args.command_key)
+    if args.run and args.admit_peak is None and args.release_pid is None:
+        parser.error("--run requires a known recorded peak or explicit --admit-peak")
     plat = platform if platform is not None else sys.platform
     if plat not in ("win32", "darwin"):
         return host.unsupported(PROG, plat, "reads Windows or macOS memory counters")
@@ -287,7 +315,23 @@ def main(
             return 1
         peak = int(args.admit_peak * host.GIB)
         limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit
-        if args.command_key and args.register_pid is not None:
+        if args.run:
+            from coordinator_core.group_em import box_registry, slot_grant
+            try:
+                sid = box_registry.admission_session_id(args.session_id)
+                selector = (lambda: slot_grant.parent_pool_admission_selector(
+                    sid, args.run, args.parent_pool_run, args.admit_peak * 1024
+                )) if args.parent_pool_run else (lambda: slot_grant.own_admission_selector(sid, args.run, args.admit_peak * 1024))
+                verdict, reserved, selection = host.admit_selected_reservation(
+                    adm_path, args.admit_peak, status, selector,
+                    key=args.command_key if args.register_pid is not None else None, pid=args.register_pid,
+                    cushion_pct=args.cushion_pct, commit_limit=limit, **reserved_kw,
+                )
+            except (OSError, ValueError) as exc:
+                print(f"{PROG}: reservation selection refused: {exc}", file=sys.stderr)
+                return 4
+            snap["reservation_selection"] = {**selection, "credited_gib": _gib(selection["credited_bytes"])}
+        elif args.command_key and args.register_pid is not None:
             verdict, reserved = host.admit_and_register(
                 adm_path, args.command_key, args.register_pid, args.admit_peak, status,
                 cushion_pct=args.cushion_pct, commit_limit=limit, **reserved_kw,

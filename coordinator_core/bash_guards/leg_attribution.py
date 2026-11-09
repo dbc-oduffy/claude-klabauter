@@ -1,8 +1,12 @@
-"""Per-call leg attribution: which legs of one hook call cost CPU over a floor.
+"""Per-call leg attribution: which legs of one hook call cost time over a floor.
 
 `begin()` activates a collector in the calling context; `with leg(name):` adds the
-`time.thread_time` delta of its body to `name`; `summary()` names the top legs over a
-floor. Inactive, `leg()` returns a shared no-op and allocates nothing.
+`time.thread_time` delta (cpu) and the `time.perf_counter` delta (wall) of its body to
+`name`; `summary()` names the top legs over a floor, ranked by wall. Inactive, `leg()`
+returns a shared no-op and allocates nothing.
+
+Wall minus cpu is the stall shape: a leg blocked on disk, a lock or a child reads ~0 cpu.
+A row's `ms` is its cpu time, kept for callers that predate wall time.
 
 Trap: the collector lives in a contextvar, so `begin()` and `leg()`/`summary()` must run
 in the same thread context (a hop through `asyncio.to_thread` copies the context).
@@ -14,7 +18,8 @@ import contextvars
 import time
 from typing import Any
 
-_collector: contextvars.ContextVar[dict[str, float] | None] = contextvars.ContextVar(
+# name -> [cpu_secs, wall_secs]
+_collector: contextvars.ContextVar[dict[str, list[float]] | None] = contextvars.ContextVar(
     "leg_attribution_collector", default=None
 )
 
@@ -33,20 +38,28 @@ _NOOP = _NoopLeg()
 
 
 class _Leg:
-    __slots__ = ("_acc", "_name", "_t0")
+    __slots__ = ("_acc", "_name", "_c0", "_w0")
 
-    def __init__(self, acc: dict[str, float], name: str) -> None:
+    def __init__(self, acc: dict[str, list[float]], name: str) -> None:
         self._acc = acc
         self._name = name
-        self._t0 = 0.0
+        self._c0 = 0.0
+        self._w0 = 0.0
 
     def __enter__(self) -> None:
-        self._t0 = time.thread_time()
+        self._c0 = time.thread_time()
+        self._w0 = time.perf_counter()
         return None
 
     def __exit__(self, *exc: object) -> None:
-        delta = time.thread_time() - self._t0
-        self._acc[self._name] = self._acc.get(self._name, 0.0) + delta
+        cpu = time.thread_time() - self._c0
+        wall = time.perf_counter() - self._w0
+        slot = self._acc.get(self._name)
+        if slot is None:
+            self._acc[self._name] = [cpu, wall]
+        else:
+            slot[0] += cpu
+            slot[1] += wall
         return None
 
 
@@ -65,7 +78,7 @@ def active() -> bool:
 
 
 def leg(name: str) -> Any:
-    """Context manager accumulating this body's thread CPU time under `name`."""
+    """Context manager accumulating this body's thread CPU and wall time under `name`."""
     acc = _collector.get()
     if acc is None:
         return _NOOP
@@ -73,16 +86,18 @@ def leg(name: str) -> Any:
 
 
 def summary(top: int = 3, floor_ms: float = 50.0) -> list[dict[str, Any]] | None:
-    """Top `top` legs at or above `floor_ms`, descending; None when inactive or none qualify."""
+    """Top `top` legs whose wall time is at or above `floor_ms`, descending by wall;
+    rows are `{name, ms, cpu_ms, wall_ms}` with `ms == cpu_ms`. None when inactive or none qualify."""
     acc = _collector.get()
     if not acc:
         return None
-    rows = [
-        {"name": name, "ms": round(secs * 1000.0, 1)}
-        for name, secs in acc.items()
-        if secs * 1000.0 >= floor_ms
-    ]
+    rows = []
+    for name, (cpu, wall) in acc.items():
+        wall_ms = wall * 1000.0
+        if wall_ms >= floor_ms:
+            cpu_ms = round(cpu * 1000.0, 1)
+            rows.append({"name": name, "ms": cpu_ms, "cpu_ms": cpu_ms, "wall_ms": round(wall_ms, 1)})
     if not rows:
         return None
-    rows.sort(key=lambda r: r["ms"], reverse=True)
+    rows.sort(key=lambda r: r["wall_ms"], reverse=True)
     return rows[:top]

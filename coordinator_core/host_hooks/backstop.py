@@ -14,6 +14,7 @@ from coordinator_core.host_hooks.contract import HostEvent
 # Pinned against deny_registry.GUARD_DENY_CLASS by tests/test_backstop.py.
 GUARD_MODULES = {
     "block-push-pr-non-owned-remote": "coordinator_core.bash_guards.block_push_pr_non_owned_remote",
+    "block-empty-source-push": "coordinator_core.bash_guards.block_empty_source_push",
     "block-perforce-submit": "coordinator_core.bash_guards.block_perforce_submit",
     "p4-verb-fence": "coordinator_core.bash_guards.p4_verb_fence",
 }
@@ -33,6 +34,10 @@ def _command(host_event: HostEvent) -> str:
 def _payload(host_event: HostEvent) -> Optional[Dict[str, Any]]:
     from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
+    # Native patches and MCP arguments may also contain a `command` string. They
+    # are data for another tool, never evidence that a shell will execute it.
+    if host_event.tool_name not in (*COMMAND_TOOL_NAMES, "exec_command", "shell", "run_command"):
+        return None
     command = _command(host_event)
     if not command:
         return None
@@ -56,6 +61,16 @@ def _reason(record: Any, guard: str) -> str:
 
 def match(host_event: HostEvent) -> Optional[Dict[str, str]]:
     """The deny verdict `{"decision": "deny", "reason": ...}` for an irreversible command, else None."""
+    if host_event.tool_name.startswith("mcp__"):
+        try:
+            module = importlib.import_module(GUARD_MODULES["block-perforce-submit"])
+            record = module.check_mcp({"tool_name": host_event.tool_name,
+                                       "tool_input": dict(host_event.tool_input or {})})
+            if record:
+                return {"decision": "deny", "reason": _reason(record, "block-perforce-submit")}
+        except Exception:  # noqa: BLE001 -- same fail-open hook boundary as shell checks
+            pass
+        return None
     try:
         payload = _payload(host_event)
     except Exception:  # noqa: BLE001 -- the backstop never breaks the hook

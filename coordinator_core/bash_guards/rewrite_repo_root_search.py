@@ -20,7 +20,10 @@ import re
 import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
-from coordinator_core.bash_guards._command_tokenizer import token_matches_binary
+from coordinator_core.bash_guards._command_tokenizer import (
+    exceeds_tokenizable_ceiling,
+    token_matches_binary,
+)
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards.block_whole_filesystem_scan import (
     HEAVY_TREE_NAMES,
@@ -159,6 +162,8 @@ def _plan_segment(body: str, eff: Optional[str]) -> Optional[Tuple[str, Optional
     """(kind, replacement body) for one segment: kind `rewrite` carries the new text, `advise` may
     carry an `--exclude-dir` text edit; None when the segment is not a repo-root search."""
     if not _PRE_FILTER_RE.search(body):
+        return None
+    if exceeds_tokenizable_ceiling(body):
         return None
     try:
         toks = shlex.split(body)

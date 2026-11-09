@@ -80,8 +80,11 @@ import sys
 from typing import List
 
 from coordinator_core.bash_guards._advisory_dedupe import gate_once_per_session
+from coordinator_core.bash_guards.leg_attribution import leg
 from coordinator_core.hooks._envelope import no_advisory, payload_of
+from coordinator_core.hooks._preuse_phases import check_deadline, run_phased
 from coordinator_core.ipc import register_op
+
 
 def _is_deny(envelope) -> bool:
     if not isinstance(envelope, dict):
@@ -113,6 +116,10 @@ def _call_enforce_dispatch_mode_leg(params: dict) -> dict:
 
 @register_op("hooks.preuse_agent_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    return run_phased("hooks.preuse_agent_dispatch", params, _chain)
+
+
+def _chain(params: dict) -> dict:
     params = payload_of(params)
 
     skipped: List[str] = []
@@ -122,8 +129,10 @@ def _handler(params: dict, repo_root=None) -> dict:
         ("block_dispatch_suite_invocation", _call_suite_invocation_leg),
         ("block_unenumerated_agent_type", _call_unenumerated_agent_type_leg),
     ):
+        check_deadline(leg_name)
         try:
-            out = leg_fn(params)
+            with leg(leg_name):
+                out = leg_fn(params)
         except BaseException:
             skipped.append(leg_name)
             continue
@@ -139,7 +148,8 @@ def _handler(params: dict, repo_root=None) -> dict:
                     pass
             return out
         if leg_advisory is None and isinstance(out, dict) and out.get("hookSpecificOutput"):
-            leg_advisory = gate_once_per_session(leg_name, out, params)
+            with leg("advisory_dedupe"):
+                leg_advisory = gate_once_per_session(leg_name, out, params)
 
     if skipped:
         try:
@@ -151,7 +161,9 @@ def _handler(params: dict, repo_root=None) -> dict:
         except Exception:
             pass
 
-    out = _call_enforce_dispatch_mode_leg(params)
+    check_deadline("enforce_agent_dispatch_mode")
+    with leg("enforce_agent_dispatch_mode"):
+        out = _call_enforce_dispatch_mode_leg(params)
     if not isinstance(out, dict):
         return leg_advisory or no_advisory()
     return out or leg_advisory or out

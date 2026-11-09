@@ -1,9 +1,10 @@
 """publish.py quiesces the destination's warm pair only across the windows that change engine files.
 
-One window, a marker hold plus a warm stop: the land into the engine root, entered only after every
-pre-sync and end-of-run gate passed and no row was refused. A refusal takes no marker and stops
-nothing. The destination refresh is a second window only when the fetch shows the root must move
-(`env.moving`); a level root is never stopped before the gates. Live runs are read with the marker
+One window, a marker hold with the old pair left answering: the land into the engine root, entered
+only after every pre-sync and end-of-run gate passed and no row was refused; the old pair is stopped
+only after the successor answers, after the body. A refusal takes no marker and stops nothing. The
+destination refresh is a second window only when the fetch shows the root must move
+(`env.moving`); a level root is never held before the gates. Live runs are read with the marker
 held and logged; they never refuse the publish. Every test drives `publish_mod.main(["row-a"])` at
 default arguments through the real `_run_round` and the real `land_diff`.
 
@@ -87,10 +88,6 @@ class _Env:
     def ok(self):
         return self.ps.PairStopResult(stopped=(), survivors=())
 
-    def survivor_result(self):
-        surv = self.ps.PairProcess(pid=4242, role=self.ps.ROLE_SERVER, cmdline="python server.py")
-        return self.ps.PairStopResult(stopped=(), survivors=(surv,))
-
     def names(self, *kinds: str) -> list:
         return [e for e in self.events if e[0] in kinds]
 
@@ -134,13 +131,20 @@ def _setup(tmp_path, monkeypatch, engine_root: bool, rows: tuple = ("row-a",)) -
     monkeypatch.setattr(live_runs, "engine_legs_in_flight", legs)
 
     def stop(root, **k):
-        if not env.held():
-            env.events.append(("prestop", False))
-            return env.pre_results.pop(0) if env.pre_results else env.ok()
-        env.events.append(("stop", True))
-        return env.stop_results.pop(0) if env.stop_results else env.ok()
+        env.events.append(("stop", env.held()))
+        return env.ok()
 
     monkeypatch.setattr(pair_stop, "stop_warm_pair", stop)
+
+    from coordinator_core.percolate import round as round_mod
+
+    env.real_start = round_mod.start_successor_pair_in_hold
+
+    def start(root, **k):
+        env.events.append(("successor", env.held()))
+        return True
+
+    monkeypatch.setattr(round_mod, "start_successor_pair_in_hold", start)
 
     import percolate.dest_refresh as dr
     from percolate import diff_commit
@@ -208,26 +212,26 @@ def _run(env: _Env, *names: str):
 
 
 def _window_shape(env: _Env) -> list:
-    return env.names("stop", "refresh", "land_diff")
+    return env.names("refresh", "land_diff", "successor")
 
 
 def _nothing_quiesced(env: _Env) -> None:
-    assert env.names("prestop", "stop", "land_diff", "successor") == []
+    assert env.names("stop", "land_diff", "successor") == []
     assert all(held is False for _, held in env.names("refresh"))
     assert env.hold_calls == []
     assert not env.held()
 
 
-def test_gates_run_unquiesced_and_only_the_land_is_stopped(tmp_path, monkeypatch):
+def test_gates_run_unquiesced_and_the_old_pair_is_not_stopped_across_the_land(tmp_path, monkeypatch):
     env = _setup(tmp_path, monkeypatch, True)
     rc, err = _run(env)
     assert rc == 0, err
-    assert _window_shape(env) == [("refresh", False), ("stop", True), ("land_diff", True)]
+    assert _window_shape(env) == [("refresh", False), ("land_diff", True), ("successor", True)]
+    assert env.names("stop") == []
     gates = env.gate_events()
     assert {e[0] for _, e in gates} == set(GATES)
     assert all(held is False for _, (_, held) in gates), gates
-    stop_idx = env.events.index(("stop", True))
-    assert max(i for i, _ in gates) < stop_idx < env.events.index(("land_diff", True))
+    assert max(i for i, _ in gates) < env.events.index(("land_diff", True))
     assert env.hold_calls == [1]
     assert not env.held()
 
@@ -237,7 +241,8 @@ def test_moving_root_fast_forwards_in_its_own_window_before_the_gates(tmp_path, 
     env.moving = True
     rc, err = _run(env)
     assert rc == 0, err
-    assert _window_shape(env) == [("stop", True), ("refresh", True), ("stop", True), ("land_diff", True)]
+    assert _window_shape(env) == [("refresh", True), ("successor", True), ("land_diff", True), ("successor", True)]
+    assert env.names("stop") == []
     gates = env.gate_events()
     assert env.events.index(("refresh", True)) < min(i for i, _ in gates)
     assert all(held is False for _, (_, held) in gates), gates
@@ -250,7 +255,8 @@ def test_a_worktree_write_without_behind_still_opens_the_refresh_window(tmp_path
     env.moving = trigger
     rc, err = _run(env)
     assert rc == 0, err
-    assert _window_shape(env) == [("stop", True), ("refresh", True), ("stop", True), ("land_diff", True)]
+    assert _window_shape(env) == [("refresh", True), ("successor", True), ("land_diff", True), ("successor", True)]
+    assert env.names("stop") == []
 
 
 def test_pre_sync_refusal_takes_no_marker_and_stops_nothing(tmp_path, monkeypatch):
@@ -293,67 +299,6 @@ def test_end_of_run_gate_failure_takes_no_marker(tmp_path, monkeypatch):
     _nothing_quiesced(env)
 
 
-def test_survivor_at_land_stop_refuses_before_any_land_and_releases_marker(tmp_path, monkeypatch):
-    env = _setup(tmp_path, monkeypatch, True)
-    env.stop_results[:] = [env.survivor_result()]
-    rc, err = _run(env)
-    assert rc == 1
-    assert "pid=4242" in err and "role=server" in err
-    assert env.names("land_diff") == []
-    assert len(env.gate_events()) == len(GATES)
-    assert env.names("stop") == [("stop", True)]
-    assert not env.held()
-
-
-def test_pair_that_cannot_be_stopped_never_takes_the_marker(tmp_path, monkeypatch):
-    env = _setup(tmp_path, monkeypatch, True)
-    env.pre_results[:] = [env.survivor_result()]
-    rc, err = _run(env)
-    assert rc == 1 and "pid=4242" in err
-    assert env.hold_calls == []
-    assert env.names("prestop", "stop", "land_diff") == [("prestop", False)]
-    assert not env.held()
-
-
-def test_a_respawn_after_the_unmarked_stop_is_left_to_the_marked_stop(tmp_path, monkeypatch):
-    env = _setup(tmp_path, monkeypatch, True)
-    respawn = env.ps.PairProcess(pid=43708, role=env.ps.ROLE_SERVER, cmdline="python server.py")
-    env.pre_results[:] = [
-        env.ps.PairStopResult(stopped=(), survivors=(respawn,), initial_pids=frozenset({6468})),
-    ]
-    rc, err = _run(env)
-    assert rc == 0, err
-    assert env.names("land_diff") == [("land_diff", True)]
-
-
-def test_an_original_pid_surviving_the_unmarked_stop_still_refuses(tmp_path, monkeypatch):
-    env = _setup(tmp_path, monkeypatch, True)
-    orig = env.ps.PairProcess(pid=6468, role=env.ps.ROLE_SERVER, cmdline="python server.py")
-    env.pre_results[:] = [
-        env.ps.PairStopResult(stopped=(), survivors=(orig,), initial_pids=frozenset({6468})),
-    ]
-    rc, err = _run(env)
-    assert rc == 1 and "pid=6468" in err
-    assert env.names("prestop", "stop", "land_diff") == [("prestop", False)]
-
-
-def test_marker_is_taken_only_after_the_unmarked_stop_confirms_the_pair_gone(tmp_path, monkeypatch):
-    env = _setup(tmp_path, monkeypatch, True)
-    rc, err = _run(env)
-    assert rc == 0, err
-    assert env.names("prestop", "stop") == [("prestop", False), ("stop", True)]
-
-
-def test_survivor_at_refresh_stop_refuses_before_refresh_and_gates(tmp_path, monkeypatch):
-    env = _setup(tmp_path, monkeypatch, True)
-    env.moving = True
-    env.stop_results[:] = [env.survivor_result()]
-    rc, err = _run(env)
-    assert rc == 1 and "pid=4242" in err
-    assert env.names("refresh", "land_diff") == [] and env.gate_events() == []
-    assert not env.held()
-
-
 def test_live_midstage_runs_refuse_the_handover_naming_each_run(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
@@ -381,26 +326,27 @@ def test_staged_idle_run_does_not_hold_the_handover(tmp_path, monkeypatch):
     env.leg_in_flight = False
     rc, err = _run(env)
     assert rc == 0, err
-    assert env.names("stop") != []
+    assert env.names("successor") != []
     assert not env.bc.handover_pending_held(env.repo)
 
 
-def test_handover_pending_is_held_across_the_drain_and_the_stop(tmp_path, monkeypatch):
+def test_handover_pending_is_held_across_the_drain_and_the_successor(tmp_path, monkeypatch):
     from coordinator_core.warm import live_runs
 
     env = _setup(tmp_path, monkeypatch, True)
     env.live_runs[:] = [live_runs.LiveRun("claude-klabauter", "ask-aaaaaa", "staged", "2026-10-31T22:47:00Z")]
-    real_stop = env.ps.stop_warm_pair
-    stop_pending: list = []
+    successor_pending: list = []
 
-    def stop(root, **k):
-        stop_pending.append(env.bc.handover_pending_held(root))
-        return real_stop(root, **k)
+    from coordinator_core.percolate import round as round_mod
 
-    monkeypatch.setattr(env.ps, "stop_warm_pair", stop)
+    def start(root, **k):
+        successor_pending.append(env.bc.handover_pending_held(root))
+        return True
+
+    monkeypatch.setattr(round_mod, "start_successor_pair_in_hold", start)
     rc, err = _run(env)
     assert rc == 0, err
-    assert stop_pending and all(stop_pending)
+    assert successor_pending and all(successor_pending)
     drains = env.names("engine_legs_in_flight")
     assert drains and all(held for _, held in drains)
 
@@ -452,13 +398,6 @@ def test_a_non_engine_root_takes_no_handover_breadcrumb_and_no_probe(tmp_path, m
     assert env.names("stage") == [("stage", False)]
 
 
-def test_live_midstage_run_does_not_bypass_survivor_refusal(tmp_path, monkeypatch):
-    env = _setup(tmp_path, monkeypatch, True)
-    env.stop_results[:] = [env.survivor_result()]
-    rc, err = _run(env)
-    assert rc == 1 and env.names("land_diff") == [] and "pid=4242" in err
-
-
 def test_override_flags_are_retired(tmp_path, monkeypatch):
     env = _setup(tmp_path, monkeypatch, True)
     err = io.StringIO()
@@ -488,24 +427,22 @@ _WINDOW_IDS = ["refresh-window", "land-window-after-refresh", "land-window"]
 
 
 @pytest.mark.parametrize("moving,window", _WINDOWS, ids=_WINDOW_IDS)
-@pytest.mark.parametrize("where", ["hold", "stop"])
+@pytest.mark.parametrize("where", ["hold", "probe"])
 @pytest.mark.parametrize("exc_index", [0, 1, 2])
-def test_marker_or_stop_exception_is_fatal_exit_1_and_releases_locks(
+def test_marker_or_probe_exception_is_fatal_exit_1_and_releases_locks(
     tmp_path, monkeypatch, where, exc_index, moving, window
 ):
     exc_type = _exc_cases()[exc_index]
     env = _setup(tmp_path, monkeypatch, True)
     env.moving = moving
     bc, ps = env.bc, env.ps
-    target_attr = (bc, "hold_publish_marker") if where == "hold" else (ps, "stop_warm_pair")
+    target_attr = (bc, "hold_publish_marker") if where == "hold" else (ps, "probe_pair_terminable")
     real = getattr(*target_attr)
     calls = []
 
     def maybe_boom(*a, **k):
         calls.append(1)
-        # Each window calls stop_warm_pair twice (unmarked pre-stop, then under the marker);
-        # the induced fault lands on the marker-held call.
-        if len(calls) == (window if where == "hold" else 2 * window):
+        if len(calls) == window:
             raise exc_type("induced")
         return real(*a, **k)
 
@@ -569,7 +506,7 @@ def test_non_engine_root_dest_neither_marks_nor_stops(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("moving,window", _WINDOWS, ids=_WINDOW_IDS)
-def test_unsignalable_pair_pid_refuses_before_that_windows_stop(tmp_path, monkeypatch, moving, window):
+def test_unsignalable_pair_pid_refuses_before_that_windows_copy(tmp_path, monkeypatch, moving, window):
     env = _setup(tmp_path, monkeypatch, True)
     env.moving = moving
     probes = []
@@ -581,29 +518,18 @@ def test_unsignalable_pair_pid_refuses_before_that_windows_stop(tmp_path, monkey
     monkeypatch.setattr(env.ps, "probe_pair_terminable", probe)
     rc, err = _run(env)
     assert rc == 1 and env.names("land_diff") == []
-    assert len(env.names("stop")) == window - 1
+    assert len(env.names("successor")) == window - 1
+    assert env.names("stop") == []
     assert "pid=777" in err and "access denied" in err
     assert not env.held()
 
 
-def _record_successor(env: _Env, monkeypatch) -> None:
-    from coordinator_core.percolate import round as round_mod
-
-    def start(root, **k):
-        env.events.append(("successor", env.held()))
-        return True
-
-    monkeypatch.setattr(round_mod, "start_successor_pair_in_hold", start)
-
-
 def test_successor_starts_inside_the_window_after_the_body_and_before_release(tmp_path, monkeypatch):
     env = _setup(tmp_path, monkeypatch, True)
-    _record_successor(env, monkeypatch)
     rc, err = _run(env)
     assert rc == 0, err
-    assert env.names("stop", "refresh", "successor", "land_diff") == [
+    assert env.names("refresh", "successor", "land_diff") == [
         ("refresh", False),
-        ("stop", True),
         ("land_diff", True),
         ("successor", True),
     ]
@@ -613,25 +539,36 @@ def test_successor_starts_inside_the_window_after_the_body_and_before_release(tm
 def test_successor_starts_inside_each_window_of_a_moving_root(tmp_path, monkeypatch):
     env = _setup(tmp_path, monkeypatch, True)
     env.moving = True
-    _record_successor(env, monkeypatch)
     rc, err = _run(env)
     assert rc == 0, err
-    assert env.names("stop", "refresh", "successor", "land_diff") == [
-        ("stop", True),
+    assert env.names("refresh", "successor", "land_diff") == [
         ("refresh", True),
         ("successor", True),
-        ("stop", True),
         ("land_diff", True),
         ("successor", True),
     ]
     assert not env.held()
 
 
-def test_survivor_at_stop_starts_no_successor(tmp_path, monkeypatch):
+def test_successor_timeout_leaves_the_old_pair_running_and_publish_lands(tmp_path, monkeypatch):
+    """Real `start_successor_pair_in_hold` with a successor that never answers: the old pair is never
+    stopped, the remedy is logged, the marker is released, and the land stands."""
+    from coordinator_core.percolate import round as round_mod
+    from coordinator_core.warm import breadcrumb, client, skew
+
     env = _setup(tmp_path, monkeypatch, True)
-    _record_successor(env, monkeypatch)
-    env.stop_results[:] = [env.survivor_result()]
-    rc, _ = _run(env)
-    assert rc == 1
-    assert env.names("successor") == []
+    spawned = []
+    monkeypatch.setattr(client, "spawn_detached", lambda *a, **k: spawned.append(1))
+    monkeypatch.setattr(skew, "compute_client_token", lambda root=None: "tok")
+    monkeypatch.setattr(breadcrumb, "should_spawn", lambda root=None: True)
+    monkeypatch.setattr(breadcrumb, "wait_for_successor_answer", lambda *a, **k: None)
+    entry = env.repo / client.SERVER_ENTRY_SCRIPT
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    entry.write_text("", encoding="utf-8")
+    monkeypatch.setattr(round_mod, "start_successor_pair_in_hold", env.real_start)
+    rc, err = _run(env)
+    assert rc == 0, err
+    assert spawned == [1]
+    assert env.names("stop") == []
+    assert "old pair was not stopped" in err
     assert not env.held()

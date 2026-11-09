@@ -346,7 +346,8 @@ def compose_roadmap_script(
         "  if (_gate.halt || !_gate.arm) { _halted = { halted: (_gate.halt && _gate.halt.kind) || "
         f"{lit(HALT_REFUSAL)}, ..._gate.halt, reason: String((_gate.halt && _gate.halt.reason) || "
         "(_gate.halt ? 'the gate halted (' + _gate.halt.kind + ') without a reason' : "
-        "'the gate returned no arm and no halt')), sizing: _sizingRel, run_id: _runId }; }",
+        "'the gate returned no arm and no halt; refire to re-run the gate: ' + "
+        f"{ac._refire_js(None)})), sizing: _sizingRel, run_id: _runId }}; }}",
         f"  if (!_halted && _gate.arm !== {lit('roadmap')}) {{ {halt(lit('sizing resolved to a non-roadmap arm in the roadmap script'))} }}",
         *roadmap_stage_lines(
             repo_root=repo_root, run_id=run_id, interaction_mode=interaction_mode,

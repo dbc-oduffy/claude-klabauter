@@ -1,22 +1,36 @@
 {
   "builder": "7a24cc98-d88c-4c5b-872c-5642b52b9ed7",
-  "built_at": "2026-11-08T23:42:58+00:00",
+  "built_at": "2026-11-09T08:13:04+00:00",
   "command": [
     "python.exe",
     "-m",
     "coordinator_core.warm.door.build",
     "<engine_root>"
   ],
+  "compile_flags": [
+    "-O2",
+    "-Wall",
+    "-Wextra",
+    "-I",
+    "C:\\dev\\.claude-klabauter.publish-staging-9ae7ubja\\coordinator_core\\warm\\door",
+    "-ladvapi32",
+    "-lshell32",
+    "-Xlinker",
+    "/Brepro"
+  ],
   "compiler": "clang",
   "compiler_version": "clang version 22.1.2 (https://github.com/llvm/llvm-project 1ab49a973e210e97d61e5db6557180dcb92c3e98)",
-  "door_c_sha256": "4be301c1aff09dc6461f9b04e1fd2f981b5a7c8133cc0727ee0141854fa03447",
+  "door_c_sha256": "7ba408335d7aa6abfff4f3697210baeb6644c61df5a22c030dc7abfdbc56b8d3",
   "engine_root": "C:\\dev\\claude-klabauter",
-  "engine_stamp": "sha:997349f76d800ec2a3e70b327ddf6bc0730d6139",
-  "image_sha256": "c69721247dc5fb406c6d3b2c4112927d3bd27c662cab05534fc9102c1db5bef2",
+  "engine_stamp": "sha:97791f68fce855efb0ac188f0fe569d0faa7d252",
+  "image_sha256": "3fe4bb77b20b5b4bf739d162b3a8eb93f79e4a4ece74deb1d2c7979ec6f4b0bf",
+  "python_bin": "~/AppData/Local/Programs/Python/Python313/python.exe",
+  "rendered_source_sha256": "b5acdb1167486c7dfe57b23bff9fd46f538779e26b31445e6e69eb4879980c22",
+  "require_warm": false,
   "sources": {
-    "door.c": "4be301c1aff09dc6461f9b04e1fd2f981b5a7c8133cc0727ee0141854fa03447",
-    "door_core.c": "ecfc04f81fe0d36dbcf968ee72fbe3f3c03db6e5abcf73d1623151127f9b19f1",
-    "door_core.h": "a8cfb9f2170dc2d08fefdf4c6087e8e9ced91ec5f86801a23626620faaa5c4df",
-    "door_env_set.h": "d96010dbe02144b44eceea1ddf4513c8c079b27fbacd3952b067246e543480d8"
+    "door.c": "7ba408335d7aa6abfff4f3697210baeb6644c61df5a22c030dc7abfdbc56b8d3",
+    "door_core.c": "c8db547129fbbf758208ee11beeea6e1c9ac15928e8d8947a8940c7adcd646b8",
+    "door_core.h": "72c5e1fc0d79b553346115ce40828d2b4d1aef651d52405261e367bd0849ff23",
+    "door_env_set.h": "accf51bb1b0dc7547c4da02dba9a5e9f5b20333cb9acfd0875832f2dcea3fcee"
   }
 }

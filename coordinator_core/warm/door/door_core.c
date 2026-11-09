@@ -289,6 +289,127 @@ static int parse_json_string(cursor_t *c, buf_t *out) {
 }
 
 
+static int private_decimal(const char *p, size_t n, uint64_t *out) {
+    uint64_t value = 0;
+    if (!n || (n > 1 && p[0] == '0')) return 0;
+    for (size_t i = 0; i < n; i++) {
+        if (p[i] < '0' || p[i] > '9') return 0;
+        unsigned digit = (unsigned)(p[i] - '0');
+        if (value > (UINT64_MAX - digit) / 10) return 0;
+        value = value * 10 + digit;
+    }
+    *out = value;
+    return 1;
+}
+static int private_hex(const char *p, size_t n) {
+    if (strlen(p) != n) return 0;
+    for (size_t i = 0; i < n; i++)
+        if (!((p[i] >= '0' && p[i] <= '9') || (p[i] >= 'a' && p[i] <= 'f'))) return 0;
+    return 1;
+}
+/* Private schema alone requires strict escapes; legacy parser behavior stays unchanged. */
+static int private_u16(const char *p, unsigned *out) {
+    unsigned n = 0;
+    for (int i = 0; i < 4; i++) {
+        unsigned char ch = (unsigned char)p[i];
+        unsigned v;
+        if (ch >= '0' && ch <= '9') v = ch - '0';
+        else if (ch >= 'a' && ch <= 'f') v = ch - 'a' + 10;
+        else if (ch >= 'A' && ch <= 'F') v = ch - 'A' + 10;
+        else return 0;
+        n = (n << 4) | v;
+    }
+    *out = n; return 1;
+}
+static int private_escapes(const char *p, size_t n) {
+    int quoted = 0;
+    for (size_t i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)p[i];
+        if (ch == '"') { quoted = !quoted; continue; }
+        if (!quoted) continue;
+        if (ch < 32) return 0;
+        if (ch != '\\') continue;
+        if (++i >= n) return 0;
+        if (p[i] != 'u') { if (!strchr("\"\\/bfnrt", p[i])) return 0; continue; }
+        unsigned cp;
+        if (n - i <= 4 || !private_u16(p+i+1, &cp)) return 0;
+        i += 4;
+        if (cp >= 0xdc00 && cp <= 0xdfff) return 0;
+        if (cp >= 0xd800 && cp <= 0xdbff) {
+            unsigned low;
+            if (n - i <= 6 || p[i+1] != '\\' || p[i+2] != 'u' ||
+                !private_u16(p+i+3, &low) || low < 0xdc00 || low > 0xdfff) return 0;
+            i += 6;
+        }
+    }
+    return !quoted;
+}
+int door_parse_private_binding(const char *json, size_t len, door_private_binding_t *out) {
+    static const char *keys[] = {"schema_version", "fire_id", "engine_root", "engine_token",
+        "settings_home", "repo_root", "bindings_path", "server_pid", "server_creation_time_ft",
+        "source_sha", "script_sha256"};
+    if (!json || !out || !len || len > 65536 || !private_escapes(json, len)) return 0;
+    memset(out, 0, sizeof(*out));
+    cursor_t c = {json, json + len};
+    skip_ws(&c);
+    if (c.p == c.end || *c.p++ != '{') return 0;
+    unsigned seen = 0;
+    for (;;) {
+        skip_ws(&c);
+        buf_t key;
+        if (!buf_init(&key, 64)) return 0;
+        int valid = parse_json_string(&c, &key) && key.len < 64 &&
+                    !memchr(key.data, 0, key.len) && buf_append(&key, "", 1);
+        int field = -1;
+        if (valid) for (int i = 0; i < 11; i++) if (strcmp(key.data, keys[i]) == 0) field = i;
+        free(key.data);
+        if (field < 0 || (seen & (1u << field))) return 0;
+        seen |= 1u << field;
+        skip_ws(&c);
+        if (c.p == c.end || *c.p++ != ':') return 0;
+        skip_ws(&c);
+        if (field == 0 || field == 7) {
+            const char *start = c.p;
+            while (c.p < c.end && *c.p >= '0' && *c.p <= '9') c.p++;
+            uint64_t number;
+            if (!private_decimal(start, (size_t)(c.p - start), &number)) return 0;
+            if (field == 0) { if (number != 1) return 0; }
+            else { if (!number || number > UINT32_MAX) return 0; out->server_pid = (uint32_t)number; }
+        } else {
+            buf_t value;
+            if (!buf_init(&value, 128)) return 0;
+            valid = parse_json_string(&c, &value) && value.len > 0;
+            for (size_t i = 0; valid && i < value.len; i++) if ((unsigned char)value.data[i] < 32) valid = 0;
+            size_t n = value.len;
+            if (valid) valid = buf_append(&value, "", 1);
+            char *dest = NULL; size_t cap = 0;
+            switch (field) {
+                case 1: dest = out->fire_id; cap = sizeof out->fire_id; break;
+                case 2: dest = out->engine_root; cap = sizeof out->engine_root; break;
+                case 3: dest = out->engine_token; cap = sizeof out->engine_token; break;
+                case 4: dest = out->settings_home; cap = sizeof out->settings_home; break;
+                case 5: dest = out->repo_root; cap = sizeof out->repo_root; break;
+                case 6: dest = out->bindings_path; cap = sizeof out->bindings_path; break;
+                case 9: dest = out->source_sha; cap = sizeof out->source_sha; break;
+                case 10: dest = out->script_sha256; cap = sizeof out->script_sha256; break;
+                case 8: valid = valid && private_decimal(value.data, n, &out->server_creation_time_ft) && out->server_creation_time_ft != 0; break;
+            }
+            if (dest) { valid = valid && n < cap; if (valid) memcpy(dest, value.data, n + 1); }
+            free(value.data);
+            if (!valid) return 0;
+        }
+        skip_ws(&c);
+        if (c.p == c.end) return 0;
+        char next = *c.p++;
+        if (next == '}') break;
+        if (next != ',') return 0;
+    }
+    skip_ws(&c);
+    return c.p == c.end && seen == 2047 && private_hex(out->fire_id, 32) &&
+        private_hex(out->engine_token, 16) && private_hex(out->source_sha, 40) && private_hex(out->script_sha256, 64);
+}
+
+
 static int skip_json_value(cursor_t *c) {
     skip_ws(c);
     if (c->p >= c->end) return 0;

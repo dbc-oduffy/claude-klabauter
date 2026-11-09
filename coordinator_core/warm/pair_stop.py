@@ -436,6 +436,33 @@ def _live_descendants(pid: int, *, psutil_module=None) -> list[int]:
         return []
 
 
+def reap_pairs_outside(
+    engine_root: Path, known_pids: frozenset, *, psutil_module=None
+) -> tuple[int, ...]:
+    """Terminate every pair process of `engine_root` whose pid is not in `known_pids`, with its
+    live descendants; return the pids confirmed gone. Never raises.
+
+    Trap: `known_pids` must be snapshotted BEFORE the successor is spawned; it is the only
+    thing telling the old pair from the orphan, since both share this root's entry scripts."""
+    try:
+        fresh = [
+            p
+            for p in find_pair_processes(engine_root, psutil_module=psutil_module)
+            if p.pid not in known_pids
+        ]
+        pids: dict[int, None] = {p.pid: None for p in fresh}
+        for p in fresh:
+            for cpid in _live_descendants(p.pid, psutil_module=psutil_module):
+                pids.setdefault(cpid, None)
+        return tuple(
+            pid
+            for pid in sorted(pids, reverse=True)
+            if _terminate_pid(pid, psutil_module=psutil_module)
+        )
+    except Exception:  # noqa: BLE001 -- reaping is best-effort and never fails the swap
+        return ()
+
+
 def _record_pid(record: Optional[dict]) -> Optional[tuple[int, str]]:
     """(pid, stored_epoch_str) of a record whose pid is still the same process, else None."""
     if not isinstance(record, dict):
@@ -456,6 +483,8 @@ def stop_warm_pair(
     psutil_module=None,
     ask_server: Optional[Callable[[str], bool]] = None,
     ask_front_door: Optional[Callable[[Optional[dict]], bool]] = None,
+    keep_pids: frozenset = frozenset(),
+    server_pipe: Optional[str] = None,
 ) -> PairStopResult:
     """Stop the supervisor, then the server (asked, drained), then the front door (asked,
     drained), of `engine_root`; return who stopped and who survived. A pid is signalled only
@@ -464,13 +493,21 @@ def stop_warm_pair(
     Trap: a pid is signalled only when a verified record (pid plus birth instant) or the exact
     cmdline match identified it; the cmdline match is the identification the old breadcrumb-only
     rule lacked, and it is still exact-path, never "anything python-ish".
+
+    `keep_pids` is the successor's server pid: it is never matched, asked, signalled, counted a
+    survivor, or allowed to lose its breadcrumb. The successor shares this root's server.py, so
+    only a pid exclusion tells the generations apart. `server_pipe` is the superseded server's
+    own endpoint (the breadcrumb now names the successor), so it still gets a graceful drain ask.
     """
     from coordinator_core.warm import front_door, supervisor
 
     ask = ask_server if ask_server is not None else _ask_server_with_wedge_signal
     ask_door = ask_front_door if ask_front_door is not None else front_door.ask_front_door_to_stop
     engine_root = Path(engine_root)
-    before = find_pair_processes(engine_root, psutil_module=psutil_module)
+    keep = frozenset(keep_pids)
+    before = [
+        p for p in find_pair_processes(engine_root, psutil_module=psutil_module) if p.pid not in keep
+    ]
     seen: dict[int, PairProcess] = {p.pid: p for p in before}
 
     sup_pids: dict[int, str] = {p.pid: p.cmdline for p in before if p.role == ROLE_SUPERVISOR}
@@ -482,6 +519,8 @@ def stop_warm_pair(
 
     crumb = breadcrumb.read_breadcrumb(engine_root)
     verified = _record_pid(crumb)
+    if verified is not None and verified[0] in keep:
+        verified = None
     server_pids: set[int] = {p.pid for p in before if p.role == ROLE_SERVER}
     child_pids: set[int] = set()
     children_seen: set[int] = set()
@@ -509,6 +548,16 @@ def stop_warm_pair(
                 gone = _wait_for_pid_gone(pid, epoch_str, deadline_secs=_confirm_grace_secs())
         if not gone:
             _terminate_pid(pid, psutil_module=psutil_module)
+    elif server_pipe is not None and server_pids:
+        outcome = ask(server_pipe)
+        if outcome is not _ASK_WEDGED and not outcome:
+            outcome = ask(server_pipe)
+        if outcome is not _ASK_WEDGED:
+            grace = time.monotonic() + _confirm_grace_secs()
+            while time.monotonic() < grace and not all(
+                _pid_gone(p, psutil_module=psutil_module) for p in server_pids
+            ):
+                time.sleep(_TERMINATE_POLL_INTERVAL_SECS)
 
     fd_pids: dict[int, str] = {p.pid: p.cmdline for p in before if p.role == ROLE_FRONT_DOOR}
     fd_record = front_door.read_discovery(engine_root)
@@ -530,7 +579,9 @@ def stop_warm_pair(
     order = {ROLE_SUPERVISOR: 0, ROLE_FRONT_DOOR: 1, ROLE_SERVER: 2, ROLE_POOL_CHILD: 3}
     deadline = time.monotonic() + _RESWEEP_DEADLINE_SECS
     while True:
-        swept = find_pair_processes(engine_root, psutil_module=psutil_module)
+        swept = [
+            p for p in find_pair_processes(engine_root, psutil_module=psutil_module) if p.pid not in keep
+        ]
         server_pids.update(p.pid for p in swept if p.role == ROLE_SERVER)
         swept += _pool_children(server_pids, psutil_module=psutil_module)
         for p in swept:
@@ -564,9 +615,9 @@ def stop_warm_pair(
     hard_until = settle_start + _SETTLE_MAX_SECS
     last_count: Optional[int] = None
     while True:
-        found = find_pair_processes(engine_root, psutil_module=psutil_module) + _pool_children(
-            server_pids, psutil_module=psutil_module
-        )
+        found = [
+            p for p in find_pair_processes(engine_root, psutil_module=psutil_module) if p.pid not in keep
+        ] + _pool_children(server_pids, psutil_module=psutil_module)
         known = {p.pid for p in found}
         found += [
             PairProcess(pid=cpid, role=ROLE_POOL_CHILD, cmdline="")
@@ -601,7 +652,8 @@ def stop_warm_pair(
         initial_pids=initial,
     )
     if result.ok():
-        breadcrumb.unlink_breadcrumb(engine_root)
+        if not keep:
+            breadcrumb.unlink_breadcrumb(engine_root)
         supervisor.unlink_discovery(engine_root)
         front_door.unlink_discovery(engine_root)
     return result

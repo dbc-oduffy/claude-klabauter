@@ -46,7 +46,9 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple
 
 from coordinator_core._hook_envelope import context_only, no_advisory, payload_of
+from coordinator_core.bash_guards.leg_attribution import leg
 from coordinator_core.hooks import guard_em_prefire_survey, nudge_em_turn_budget
+from coordinator_core.hooks._preuse_phases import check_deadline, run_phased
 from coordinator_core.hooks.example_retrieval_repo_detect import find_example_retrieval_repo_dir
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.session_hub import (
@@ -250,6 +252,10 @@ def _prefire_deny(params: dict) -> Optional[dict]:
 
 @register_op("hooks.preuse_search_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    return run_phased("hooks.preuse_search_dispatch", params, _chain)
+
+
+def _chain(params: dict) -> dict:
     params = payload_of(params)
     if os.environ.get(_KILL_SWITCH) == "1":
         return no_advisory()
@@ -262,11 +268,15 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not isinstance(session_id, str) or not session_id_is_real(session_id):
         return no_advisory()
 
-    denied = _prefire_deny(params)
+    check_deadline("prefire_survey")
+    with leg("prefire_survey"):
+        denied = _prefire_deny(params)
     if denied:
         return denied
 
-    turn_text = _turn_budget_text(params)
+    check_deadline("turn_budget")
+    with leg("turn_budget"):
+        turn_text = _turn_budget_text(params)
 
     def _only_turn_text() -> dict:
         return context_only("PreToolUse", turn_text) if turn_text else no_advisory()
@@ -275,10 +285,14 @@ def _handler(params: dict, repo_root=None) -> dict:
         return _only_turn_text()
 
     search_root = _search_root(params, tool_input)
-    indexed_root = _indexed_repo_root(search_root) if search_root else None
+    check_deadline("index_detect")
+    with leg("index_detect"):
+        indexed_root = _indexed_repo_root(search_root) if search_root else None
     if not indexed_root:
         return _only_turn_text()
-    common_dir = resolve_git_common_dir(indexed_root)
+    check_deadline("git_common_dir")
+    with leg("git_common_dir"):
+        common_dir = resolve_git_common_dir(indexed_root)
     if not common_dir:
         return _only_turn_text()
     session_dir = Path(common_dir) / "coordinator-sessions" / session_id
@@ -289,7 +303,10 @@ def _handler(params: dict, repo_root=None) -> dict:
         suffix = "." + _AGENT_ID_SAFE_RE.sub("_", agent_id)
 
     parts: List[str] = []
-    if _claim_once(session_dir, session_id, _GENERAL_SENTINEL + suffix):
+    check_deadline("sentinel_claim")
+    with leg("sentinel_claim"):
+        general_claimed = _claim_once(session_dir, session_id, _GENERAL_SENTINEL + suffix)
+    if general_claimed:
         parts.append(_GENERAL_ADVICE)
 
     pattern = tool_input.get("pattern")
@@ -299,7 +316,11 @@ def _handler(params: dict, repo_root=None) -> dict:
             symbol = shape.match(pattern)
             if symbol is None:
                 continue
-            if _claim_once(session_dir, session_id, f"example-retrieval-repo-shape-{shape.shape_id}{suffix}"):
+            check_deadline("sentinel_claim")
+            with leg("sentinel_claim"):
+                shape_claimed = _claim_once(
+                    session_dir, session_id, f"example-retrieval-repo-shape-{shape.shape_id}{suffix}")
+            if shape_claimed:
                 parts.append(shape.advice.format(
                     symbol=symbol, sidx=_structural_index_hint(indexed_root)))
             break

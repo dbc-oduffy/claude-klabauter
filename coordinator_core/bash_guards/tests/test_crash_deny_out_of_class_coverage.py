@@ -31,6 +31,8 @@ from coordinator_core.bash_guards import (
     block_perforce_submit,
     block_external_workspace_vcs_write,
     block_push_pr_non_owned_remote,
+    block_empty_source_push,
+    guard_uncapped_pytest_plugin,
     block_editor_kill_by_name,
     block_whole_filesystem_scan,
     block_worktree_creation,
@@ -281,6 +283,16 @@ _DENIED: List[Tuple[str, str, Runner]] = [
         "block-push-pr-non-owned-remote",
         "git push https://github.com/x/r.git main",
         _non_owned_remote_armed,
+    ),
+    (
+        "block-empty-source-push",
+        "git push origin :refs/heads/x",
+        _check_module(block_empty_source_push, _bash),
+    ),
+    (
+        "guard-uncapped-pytest-plugin",
+        "python -m pytest -p myplugin tests/",
+        _check_module(guard_uncapped_pytest_plugin, _bash),
     ),
     (
         "block-editor-kill-by-name",

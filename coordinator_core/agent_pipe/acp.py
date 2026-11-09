@@ -21,8 +21,10 @@ from typing import Any, Iterator, Optional
 from coordinator_core.agent_pipe.contract import (
     CAUSE_HANDSHAKE_TIMEOUT,
     CAUSE_TURN_TIMEOUT,
+    KIND_GROK,
     classify_exit,
 )
+from coordinator_core.git.agent_provenance import MODEL_ENV, SESSION_ENV, VENDOR_ENV
 from coordinator_core.agent_pipe.session_driver import (
     REJECT_ONCE,
     ApprovalCallback,
@@ -82,11 +84,24 @@ def _option_id(options: list, decision: str) -> Optional[str]:
     return None
 
 
+def stamped_env(kind: str, model: Optional[str] = None, session: Optional[str] = None) -> dict[str, str]:
+    """os.environ plus the launcher provenance stamp; an unknown model or session is removed, never inherited."""
+    env = dict(os.environ)
+    env[VENDOR_ENV] = kind
+    for name, value in ((MODEL_ENV, model), (SESSION_ENV, session)):
+        if value:
+            env[name] = value
+        else:
+            env.pop(name, None)
+    return env
+
+
 class AcpDriver:
     """SessionDriver over one ACP agent child process, spawned lazily on first use.
 
     `approve` answers each PermissionRequest; a callback that raises, or names an option the agent did
-    not offer, rejects. One prompt per session is in flight at a time.
+    not offer, rejects. One prompt per session is in flight at a time. `kind` is the vendor stamped
+    into the child's environment; it is never inferred from argv.
     """
 
     def __init__(
@@ -96,7 +111,13 @@ class AcpDriver:
         handshake_timeout_s: float = HANDSHAKE_TIMEOUT_S,
         request_timeout_s: float = REQUEST_TIMEOUT_S,
         prompt_timeout_s: float = PROMPT_TIMEOUT_S,
+        kind: str = KIND_GROK,
+        model: Optional[str] = None,
+        session: Optional[str] = None,
     ) -> None:
+        self._kind = kind
+        self._model = model
+        self._session = session
         self._argv = list(argv)
         self._approve = approve or reject_once
         self._handshake_timeout_s = handshake_timeout_s
@@ -120,6 +141,7 @@ class AcpDriver:
             self._proc = subprocess.Popen(
                 self._argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                 creationflags=_NO_WINDOW, shell=False,
+                env=stamped_env(self._kind, self._model, self._session),
             )
         except OSError as exc:
             raise AcpError(-1, f"cannot spawn {self._argv[0]}: {exc}") from exc

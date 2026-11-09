@@ -190,6 +190,14 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         setup=_non_owned_remote_armed_setup,
     ),
     CorpusRow(
+        "block-empty-source-push",
+        "block-empty-source-push-fire",
+        "git push origin :refs/heads/shape-probe",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+    ),
+    CorpusRow(
         "block-editor-kill-by-name",
         "block-editor-kill-by-name-fire",
         "taskkill /F /IM UnrealEditor.exe",

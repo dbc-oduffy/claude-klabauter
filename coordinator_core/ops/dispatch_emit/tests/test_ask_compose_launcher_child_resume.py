@@ -15,7 +15,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle impo
 
 pytestmark = pytest.mark.complete
 
-_GUARD_OPEN = "  if (!_STAGED_RESUME) {\n  phase('size');"
+_GUARD_OPEN ="  if (!_STAGED_RESUME) {\n  phase('size');"
 
 
 def _script(monkeypatch, *, launcher_child: bool, raw: bool, arm: str = "s") -> str:

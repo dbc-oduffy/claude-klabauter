@@ -29,7 +29,8 @@ from coordinator_core.ops.plan_chain.contract import (
 TerminalCommit = Callable[[dict], Mapping[str, Any]]
 
 _WORKFLOW_ONLY_PROMPT = (
-    "Call the Workflow tool exactly once with scriptPath {path}. "
+    "First, Read tool: read {path} once (the Workflow tool rejects a script this session has not read). "
+    "Then call the Workflow tool exactly once with scriptPath {path}. "
     "Your final answer is its return value as compact JSON, verbatim. Call no other tool."
 )
 _USAGE_LIMIT = re.compile(r"usage[ _]limit", re.IGNORECASE)

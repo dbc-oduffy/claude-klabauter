@@ -452,3 +452,50 @@ def test_since_halt_exemptions_owe_no_diff(repo):
     landed = land_run._unchanged_since_halt(repo, _resume(halt, unlanded=[]), _verdict(), manifest, None, {})
 
     assert verified == [] and landed == []
+
+
+_FIXED_REMNANT = {
+    "status": "fixed", "paths": [], "still_open": [], "footprint": ["src/a.py", "src/b.py"],
+}
+
+
+def _recovery_blocked_run(root: Path, remnant: dict | None) -> None:
+    """One DONE chunk C1 (two declared files) that recovery.json marks blocked, beside an optional remnant."""
+    report = ".coordinator-local/subagent-share/dispatch-reports/x/C1.md"
+    _write(root, report, "status: DONE\n\nledger-fix landed.\n")
+    marker = f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt"
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t1", paths=("src/a.py", "src/b.py"), report=report),), plan_path=PLAN,
+    )
+    _write(root, marker, render_marker(request) + "\n")
+    manifest = StageManifest(run_dir=f"{RUN_DIR_ROOT}/{RUN}", rows=(), review_declared_paths=(), marker_path=marker)
+    _write(root, f"{RECORD_DIR_ROOT}/{RUN}/manifest.json", json.dumps(manifest.to_json()))
+    _write(root, SCRIPT, f"{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/{RUN}/manifest.json\n")
+    chunk = {"rows": ["R1"], "attempts": 1, "status": "blocked", "last_reason": "fix wrote outside the footprint"}
+    record = {"cap": 2, "chunks": {"C1": chunk}, **({"remnant": remnant} if remnant is not None else {})}
+    _write(root, f"{RECORD_DIR_ROOT}/{RUN}/recovery.json", json.dumps(record))
+
+
+def test_a_recovery_blocked_chunk_a_fixed_remnant_covers_is_credited_and_lands(repo, monkeypatch):
+    _author(repo, "src/a.py", "a = 1\n")
+    _author(repo, "src/b.py", "b = 1\n")
+    _recovery_blocked_run(repo, _FIXED_REMNANT)
+    monkeypatch.setattr(land_run, "_ledger_gate", lambda *a, **k: (None, None, []))
+
+    out = _land(repo, recovery_withheld=["C1"])
+
+    assert out.get("refused") != "no-credited-chunk-landed", out
+    assert out["committed"] is True, out
+    assert {"src/a.py", "src/b.py"} <= set(_tree(repo))
+
+
+def test_a_recovery_blocked_chunk_with_no_fixed_remnant_stays_stranded_and_refuses(repo, monkeypatch):
+    _author(repo, "src/a.py", "a = 1\n")
+    _author(repo, "src/b.py", "b = 1\n")
+    _recovery_blocked_run(repo, None)
+    monkeypatch.setattr(land_run, "_ledger_gate", lambda *a, **k: (None, None, []))
+
+    out = _land(repo, recovery_withheld=["C1"])
+
+    assert out["committed"] is False and out["refused"] == "no-credited-chunk-landed", out
+    assert "src/a.py" in _dirty(repo)

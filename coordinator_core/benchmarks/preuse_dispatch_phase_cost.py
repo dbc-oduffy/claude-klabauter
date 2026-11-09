@@ -2,11 +2,11 @@
 
 Drives the registered `hooks.preuse_bash_dispatch` / `hooks.preuse_write_dispatch`
 handlers at default arguments, in-process, under tmp dirs (a throwaway git repo is the
-payload cwd; nothing touches the live checkout). Process ms is `thread_time` of the
-calling thread, which is where the sync handlers run; spawns count `subprocess.Popen`
+payload cwd; nothing touches the live checkout). Process ms is `process_time` (the
+chain runs in a worker thread); spawns count `subprocess.Popen`
 constructions during the call.
 
-Trap: `thread_time` reads ~0 for a phase blocked on disk, a lock or a child, so wall ms
+Trap: `process_time` reads ~0 for a phase blocked on disk, a lock or a child, so wall ms
 sits beside it and a shape whose wall dwarfs its process ms is a stall, not work.
 
 Forced-slow case: one phase is slept `FORCED_SLOW_SLEEP_S` while `dispatch_abandon.DEADLINE`
@@ -140,14 +140,14 @@ def _call(op: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     token = op_row_fields.begin()
     spawns = _SpawnCounter()
     w0 = time.perf_counter()
-    c0 = time.thread_time()
+    c0 = time.process_time()
     error = None
     try:
         with spawns:
             handler(payload, None)
     except Exception as exc:  # noqa: BLE001 -- a raise is a measured outcome
         error = f"{type(exc).__name__}: {exc}"
-    process_ms = (time.thread_time() - c0) * 1000.0
+    process_ms = (time.process_time() - c0) * 1000.0
     wall_ms = (time.perf_counter() - w0) * 1000.0
     fields = op_row_fields.drain(token)
     return {
@@ -277,7 +277,7 @@ def _head() -> str:
 
 def format_report(result: Dict[str, Any]) -> str:
     lines = [
-        f"head={result['head']} n={result['n']} bar={result['bar_ms']:.0f}ms (process time, thread_time)",
+        f"head={result['head']} n={result['n']} bar={result['bar_ms']:.0f}ms (process time, process_time)",
         "%-32s %9s %9s %9s %9s %7s %-14s %s"
         % ("shape", "cold_proc", "proc_ms", "cold_wall", "wall_ms", "spawns", "slow_phase", "under_bar"),
     ]

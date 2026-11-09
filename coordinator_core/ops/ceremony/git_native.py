@@ -51,12 +51,14 @@ commit. See state/kill-ledger.md.
 from __future__ import annotations
 
 import functools
+import inspect
 import ntpath
 import logging
 import os
 import posixpath
 import shutil
 import subprocess
+import sys
 import threading
 from coordinator_core.temp_layout import managed_tempdir
 import time
@@ -66,6 +68,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from coordinator_core.git.push_stall import PUSH_STALL_MARKER  # re-exported: auto_push reads it from the leaf
+from coordinator_core.git.agent_provenance import (
+    admission_advisory,
+    detect_caller_agent_provenance as detect_agent_provenance,
+    emitted_provenance_trailers as provenance_trailers,
+    strip_agent_trailers,
+)
 from coordinator_core.git.content_hash import (
     _attributes_pattern_matches,
     _autocrlf_checkin_normalize,
@@ -1794,6 +1802,49 @@ def _apply_trailers(msg_file, trailer_args: Sequence[str], root) -> Optional["Gi
     return None if result.ok else result
 
 
+def _with_agent_provenance(msg_file, trailer_args: Sequence[str]) -> List[str]:
+    """Return `trailer_args` plus the engine's `Agent-*` trailers for the calling session.
+
+    Any `Agent-*` line already in `msg_file` is stripped first (rewriting the file only when one
+    was present), so the message can neither forge nor omit provenance. A Claude or unrecognised
+    session appends nothing, leaving the Claude path byte-identical. Reads `os.environ` only:
+    the warm door forwards the detection names in `caller` mode.
+    """
+    raw = Path(msg_file).read_bytes()
+    text = raw.decode("utf-8", errors="surrogateescape")
+    stripped = strip_agent_trailers(text)
+    if stripped != text:
+        Path(msg_file).write_bytes(stripped.encode("utf-8", errors="surrogateescape"))
+    provenance = detect_agent_provenance(os.environ)
+    if provenance is None:
+        return list(trailer_args)
+    extra: List[str] = []
+    for line in provenance_trailers(provenance):
+        extra += ["--trailer", line]
+    return [*trailer_args, *extra]
+
+
+def _emit_admission_advisory(func):
+    """After a successful commit, write the admission advisory to stderr when the calling
+    session is non-Claude and the repo marker closes it. Never alters the result."""
+    _sig = inspect.signature(func)
+
+    @functools.wraps(func)
+    def _wrapper(*args, **kwargs):
+        result = func(*args, **kwargs)
+        try:
+            if getattr(result, "ok", False):
+                cwd = _sig.bind_partial(*args, **kwargs).arguments.get("cwd")
+                text = admission_advisory(cwd, detect_agent_provenance(os.environ)) if cwd else None
+                if text:
+                    print(text, file=sys.stderr)
+        except Exception:  # noqa: BLE001 - an advisory never changes a commit outcome
+            pass
+        return result
+
+    return _wrapper
+
+
 class DeliverableIdAssertionConflictError(RuntimeError):
     """Raised when a caller-supplied `deliverable_id` disagrees with a
     `Deliverable-Id:` trailer already present in the commit message
@@ -3316,6 +3367,7 @@ def _commit_scoped_private_index(
         if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
             trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
             trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
+    trailer_args = _with_agent_provenance(msg_file, trailer_args)
     interpret_result = _apply_trailers(msg_file, trailer_args, root)
     if interpret_result is not None:
         return interpret_result
@@ -3886,6 +3938,7 @@ def _within_one_index_read(func):
     return _wrapper
 
 
+@_emit_admission_advisory
 @_within_one_index_read
 def commit_scoped(
     paths: Sequence[str],
@@ -4374,6 +4427,7 @@ def commit_scoped(
             if _check_deliverable_id_precedence(msg_text_before, deliverable_id):
                 trailer_args = _drop_trailer_arg(trailer_args, "Deliverable-Id")
                 trailer_args = trailer_args + ["--trailer", f"Deliverable-Id: {deliverable_id}"]
+        trailer_args = _with_agent_provenance(msg_file, trailer_args)
         interpret_result = _apply_trailers(msg_file, trailer_args, root)
         if interpret_result is not None:
             return interpret_result
@@ -5023,6 +5077,7 @@ def _head_entry_for(root: Path, normalized: str) -> Optional[Tuple[int, str]]:
     return raw  # type: ignore[return-value]
 
 
+@_emit_admission_advisory
 def commit_authored_content(
     path: str,
     content: str,
@@ -5219,6 +5274,7 @@ def commit_authored_content(
         if not message_already_has_deliverable_trailer:
             trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
 
+    trailer_args = _with_agent_provenance(msg_file, trailer_args)
     interpret_result = _apply_trailers(msg_file, trailer_args, root)
     if interpret_result is not None:
         return interpret_result
@@ -5357,6 +5413,7 @@ def commit_authored_content(
     )
 
 
+@_emit_admission_advisory
 def commit_authored_new_file(
     path: str,
     content: str,

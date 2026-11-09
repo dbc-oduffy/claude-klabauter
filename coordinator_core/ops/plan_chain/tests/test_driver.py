@@ -220,6 +220,11 @@ def test_default_runner_prompt_never_names_the_commit():
     assert "terminal_commit" not in prompt
 
 
+def test_default_runner_prompt_reads_script_before_workflow():
+    prompt = driver._workflow_only_prompt(Path("x/chain.execute.mjs"))
+    assert prompt.index("Read tool") < prompt.index("Workflow tool")
+
+
 def test_default_runner_parses_envelope_result(tmp_path, monkeypatch):
     from coordinator_core.ops.workflow_fire import fire
 

@@ -163,3 +163,64 @@ def test_publish_preflight_gate_passes_clean_commit(tmp_path):
     out, err = io.StringIO(), io.StringIO()
     assert publish._commit_import_name_gate(target, _head(repo), out=out, err=err) is True
     assert err.getvalue() == ""
+
+
+def test_commit_ast_is_shared_read_only_by_importer_and_namespace_checks(tmp_path, monkeypatch):
+    import ast
+    from collections import Counter
+    import percolate.import_closure as ic
+
+    sources = {
+        'coordinator_core/__init__.py': '',
+        'coordinator_core/a.py': (
+            'from coordinator_core.shared import present as one, absent as missing_one\n'
+            'from coordinator_core.shared import present as two, absent as missing_two\n'
+        ),
+        'coordinator_core/b.py': 'from coordinator_core.shared import present, another_missing\n',
+        'coordinator_core/shared.py': 'from coordinator_core.leaf import value as present\n',
+        'coordinator_core/leaf.py': 'value = 7\n',
+    }
+    monkeypatch.setattr(ic, '_read_commit_py_blobs', lambda *a: (sources, {'coordinator_core'}))
+    parse_calls, snapshots = Counter(), {}
+    original_parse = ast.parse
+    def counted(source, filename='<unknown>', **kwargs):
+        parse_calls[filename] += 1
+        tree = original_parse(source, filename=filename, **kwargs)
+        snapshots[filename] = (tree, ast.dump(tree, include_attributes=True))
+        return tree
+    monkeypatch.setattr(ic.ast, 'parse', counted)
+    examined, violations = ic.find_commit_from_import_name_violations(tmp_path, 'immutable-commit')
+    assert examined == 3
+    assert violations == [
+        ('coordinator_core/a.py', 'coordinator_core.shared.absent'),
+        ('coordinator_core/a.py', 'coordinator_core.shared.absent'),
+        ('coordinator_core/b.py', 'coordinator_core.shared.another_missing'),
+    ]
+    assert parse_calls == Counter({
+        'coordinator_core/a.py': 1, 'coordinator_core/b.py': 1,
+        'coordinator_core/shared.py': 1, 'coordinator_core/leaf.py': 1,
+    })
+    assert all(ast.dump(tree, include_attributes=True) == before for tree, before in snapshots.values())
+    # Caches belong to this read, not a mutable ref string or prior invocation.
+    sources['coordinator_core/shared.py'] += 'absent = another_missing = 1\n'
+    _, later_violations = ic.find_commit_from_import_name_violations(tmp_path, 'different-commit')
+    assert later_violations == []
+    assert all(count == 2 for count in parse_calls.values())
+
+
+def test_unparseable_committed_module_is_cached_without_changing_gate_semantics(tmp_path, monkeypatch):
+    from collections import Counter
+    import percolate.import_closure as ic
+    sources = {
+        'coordinator_core/a.py': 'from coordinator_core.b import x, y\n',
+        'coordinator_core/b.py': 'from coordinator_core.a import x\ndef (:\n',
+    }
+    monkeypatch.setattr(ic, '_read_commit_py_blobs', lambda *a: (sources, {'coordinator_core'}))
+    calls = Counter()
+    real = ic.ast.parse
+    def counted(source, filename='<unknown>', **kwargs):
+        calls[filename] += 1
+        return real(source, filename=filename, **kwargs)
+    monkeypatch.setattr(ic.ast, 'parse', counted)
+    assert ic.find_commit_from_import_name_violations(tmp_path, 'sealed') == (1, [])
+    assert calls == Counter({'coordinator_core/a.py': 1, 'coordinator_core/b.py': 1})

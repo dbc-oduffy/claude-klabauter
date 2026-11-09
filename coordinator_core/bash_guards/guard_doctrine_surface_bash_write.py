@@ -446,6 +446,8 @@ def _segment_writes_outside_store(segment: str) -> bool:
         return True
     if _has_write_marker(_strip_quoted_spans(blanked)):
         return False
+    if exceeds_tokenizable_ceiling(blanked):
+        return False
     try:
         words = shlex.split(blanked)
     except ValueError:
@@ -547,6 +549,8 @@ def _names_store(text: str) -> bool:
 
 def _segment_words(segment: str) -> "list[str]":
     try:
+        if exceeds_tokenizable_ceiling(segment):
+            raise ValueError("over the tokenizable ceiling")
         words = shlex.split(segment)
     except ValueError:
         words = segment.split()
@@ -689,6 +693,8 @@ def _is_committed_blob_checkout(cmd: str) -> bool:
     bytes that already passed the sizing gate at their own commit. Any other
     flag, glob, substitution, chaining or redirect is not this shape."""
     if any(ch in _CP_MV_UNJUDGED_CHARS for ch in cmd):
+        return False
+    if exceeds_tokenizable_ceiling(cmd):
         return False
     try:
         words = shlex.split(cmd)

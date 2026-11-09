@@ -220,13 +220,15 @@ def fingerprint_for_run(
     derives it, the record stores it as `resume_plan_rel`, the reader passes the resolution it
     wants served) and the halt HEAD is `halted_run_base(record_dir)`, stable across peer commits.
     `landed_state_sha` joins the key only when given (the reader never computes it: that costs a
-    git spawn). Spawns nothing."""
+    git spawn). `engine_sha` names the engine that composes or reads, so a record composed by another
+    engine reads stale. Spawns nothing."""
     from coordinator_core.ops.dispatch_emit.halted_run import halted_run_base, revised_halt
 
     fp = fingerprint_of(root, plan_rel, sizing_rel, halted_run_base(Path(record_dir)))
     fp["resume_plan_rel"] = plan_rel
     fp["revised_at"] = revised_halt(Path(record_dir))
     fp["stop_after"] = inherited_stop_after(root, record_dir)
+    fp["engine_sha"] = engine_sha()
     if landed_state_sha is not MISSING:
         fp["landed_state_sha"] = landed_state_sha
     return fp
@@ -362,14 +364,15 @@ def read(record_dir: Union[str, Path], deadline_ms: float) -> Union[dict, _Senti
 def matches(record: dict, fingerprint: dict) -> bool:
     """True when the record's fingerprint equals `fingerprint` on plan sha, sizing sha, halt HEAD and
     `revised_at` (a revise after the record was built leaves it stale), and also on
-    `resume_plan_rel` and `landed_state_sha` when `fingerprint` carries them. A None
+    `resume_plan_rel`, `landed_state_sha`, `stop_after` and `engine_sha` when `fingerprint` carries
+    them (a record with no stored `engine_sha` is stale against any engine). A None
     halt HEAD never matches (nothing pins the record to a halt), and the record's own plan and
     landed-state fields must agree with its stored fingerprint."""
     stored = record.get("fingerprint") or {}
     if stored.get("halt_head") is None or fingerprint.get("halt_head") is None:
         return False
     keys = ["plan_sha256", "sizing_sha256", "halt_head", "revised_at"]
-    keys += [k for k in ("resume_plan_rel", "landed_state_sha", "stop_after") if k in fingerprint]
+    keys += [k for k in ("resume_plan_rel", "landed_state_sha", "stop_after", "engine_sha") if k in fingerprint]
     if not all(stored.get(k) == fingerprint.get(k) for k in keys):
         return False
     if "resume_plan_rel" in stored and stored["resume_plan_rel"] != record.get("resume_plan_rel"):

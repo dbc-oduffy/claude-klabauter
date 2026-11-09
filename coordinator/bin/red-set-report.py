@@ -30,10 +30,10 @@ WHAT IT EMITS
 MARKER EXPRESSION / TESTPATHS
     Read live from pyproject.toml's [tool.pytest.ini_options] (`markers`,
     `testpaths`) -- never hardcoded here, because both drift (see WHY above).
-    The fast-tier expression itself, `not cadence and not pending_fix and not
-    designed_red`, is the one figure this script's caller may pass via
-    --marker-expr; the default matches the tri-marker set actually declared
-    in pyproject.toml today.
+    The fast-tier expression itself, `not cadence and not complete and not
+    pending_fix and not designed_red`, is the one figure this script's caller
+    may pass via --marker-expr; the default matches the gate-marker set
+    actually declared in pyproject.toml today.
 
 WORKER CAP
     HARD CONSTRAINT: never bare `-n auto` -- unbounded parallel pytest-xdist
@@ -92,7 +92,7 @@ from typing import Optional
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 
-DEFAULT_MARKER_EXPR = "not cadence and not pending_fix and not designed_red"
+DEFAULT_MARKER_EXPR = "not cadence and not complete and not pending_fix and not designed_red"
 
 GENERATES = []  # every write (plugin source, report.json) lands under tempfile.TemporaryDirectory() per run_pytest_collect/run_pytest_json — no tracked artifact
 
@@ -130,7 +130,7 @@ def declared_markers(pytest_config: dict) -> list[str]:
 # the suite into "runs per-commit" vs "excluded from the fast tier". Only the
 # NAMES are pinned here; whether pyproject.toml still declares each one (and
 # what it means) is read live by `default_marker_expr()` below, never assumed.
-FAST_TIER_GATE_MARKERS = ("cadence", "pending_fix", "designed_red")
+FAST_TIER_GATE_MARKERS = ("cadence", "complete", "pending_fix", "designed_red")
 
 
 def default_marker_expr(pyproject_path: Path = PYPROJECT_PATH) -> str:

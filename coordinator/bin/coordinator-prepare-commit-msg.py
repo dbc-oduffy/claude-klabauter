@@ -330,7 +330,7 @@ def _resolve_session_id(git_dir: str) -> str:
     cheaply import ``coordinator_core`` there. A change to the precedence
     order or tier set in ``core.py`` MUST be mirrored here by hand.
 
-    Full 3-tier ladder: ``COORDINATOR_SESSION_ID`` -> ``CLAUDE_SESSION_ID``
+    Caller ladder: ``COORDINATOR_SESSION_ID`` -> ``CODEX_THREAD_ID`` -> ``CLAUDE_SESSION_ID``
     -> ``CLAUDE_CODE_SESSION_ID`` — widened from the prior 2-tier (legacy
     env -> platform env) chain this function used to implement, to match
     the canonical reference (see ``SESSION_ENV_PRECEDENCE``'s own docstring
@@ -355,6 +355,9 @@ def _resolve_session_id(git_dir: str) -> str:
     for the Deliverable-Id lookups below, which still need it. Do not
     restore this tier without a new writer for the sentinel file."""
     sid = os.environ.get("COORDINATOR_SESSION_ID", "").strip()
+    if sid:
+        return sid
+    sid = os.environ.get("CODEX_THREAD_ID", "").strip()
     if sid:
         return sid
     sid = os.environ.get("CLAUDE_SESSION_ID", "").strip()
@@ -982,11 +985,9 @@ def main(argv: list) -> int:
 
     git_dir = _resolve_git_dir()
     session_id = _resolve_session_id(git_dir)
-    if not session_id:
-        return 0
-
-    if not _UUID_RE.fullmatch(session_id):
-        return 0
+    # Provider attribution is independent of session-id availability.
+    if not _UUID_RE.fullmatch(session_id or ""):
+        session_id = ""
 
     trailer_args = _engine_trailer_args(commit_msg_file, git_dir)
     if trailer_args is None:
@@ -1039,12 +1040,11 @@ def _mirrored_trailer_args(commit_msg_file: str, git_dir: str, session_id: str) 
     try:
         need_session_id = not _has_trailer_line(commit_msg_file, "Session-Id:")
         need_deliverable_id_check = not _has_trailer_line(commit_msg_file, "Deliverable-Id:")
-        need_attribution = not _has_trailer_line(commit_msg_file, "Co-Authored-By:")
     except Exception:
         return []
 
     trailer_args: list = []
-    if need_session_id:
+    if need_session_id and session_id:
         trailer_args += ["--trailer", f"Session-Id: {session_id}"]
     trailer_args += _operator_trailer_args(commit_msg_file, git_dir)
     if need_deliverable_id_check:
@@ -1052,9 +1052,54 @@ def _mirrored_trailer_args(commit_msg_file: str, git_dir: str, session_id: str) 
         deliverable_id = _resolve_deliverable_id(git_dir, session_id, staged_paths)
         if deliverable_id:
             trailer_args += ["--trailer", f"Deliverable-Id: {deliverable_id}"]
-    if need_attribution:
-        trailer_args += ["--trailer", f"Co-Authored-By: {ATTRIBUTION_TRAILER_VALUE}"]
+    provider = (os.environ.get("COORDINATOR_AGENT_PROVIDER") or os.environ.get("COORDINATOR_AGENT_VENDOR") or "").strip().lower()
+    if not provider:
+        provider = "codex" if os.environ.get("CODEX_THREAD_ID") else "claude"
+    attribution = {
+        "claude": ATTRIBUTION_TRAILER_VALUE,
+        "codex": "Codex <noreply@openai.com>",
+        "agy": "agy <noreply@google.com>",
+        "grok": "Grok <noreply@x.ai>",
+        "mistral": "Mistral <noreply@mistral.ai>",
+        "deepseek": "DeepSeek <noreply@deepseek.com>",
+    }.get(provider)
+    if attribution and not _fallback_provider_attribution_present(commit_msg_file, attribution):
+        trailer_args += ["--trailer", f"Co-Authored-By: {attribution}"]
     return trailer_args
+
+
+def _fallback_provider_attribution_present(path: str, value: str) -> bool:
+    """Mirror provider reconciliation when the engine cannot be imported."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+        block = _extract_trailer_block(text)
+        if not block:
+            return False
+        lines = text.splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        head, tail = lines[:-len(block)], lines[-len(block):]
+        kept, present, dropping = [], False, False
+        address = value.rsplit("<", 1)[-1].rstrip(">")
+        for line in tail:
+            if _TRAILER_CONT_RE.match(line):
+                if not dropping:
+                    kept.append(line)
+                continue
+            dropping = False
+            match = re.search(r"<([^<>]+)>\s*$", line)
+            if line.lower().startswith("co-authored-by:") and match and match.group(1).strip().casefold() == address:
+                if line.split(":", 1)[1].strip() == value and not present:
+                    present = True
+                else:
+                    dropping = True
+                    continue
+            kept.append(line)
+        if kept != tail:
+            Path(path).write_text("\n".join(head + kept).rstrip() + "\n", encoding="utf-8", newline="\n")
+        return present
+    except (OSError, UnicodeError):
+        return True
 
 
 #: Must equal `coordinator_core.git.commit_trailers.ATTRIBUTION_TRAILER_VALUE`;

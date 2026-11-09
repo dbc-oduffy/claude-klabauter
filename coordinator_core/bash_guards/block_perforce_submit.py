@@ -4,7 +4,8 @@ box under the no-submit policy.
 
 Box policy (PM, 2026-10-05): FIFA code may be read, synced, built, run and
 edited locally; it is never submitted. A shelve is server-visible, so it is
-denied with the submit. The MCP route is DoE's guard; this is the shell route.
+denied with the submit. ``check_mcp`` also exposes the same floor for named
+Example-Game-Repo source-control operations; arbitrary MCP argument text is never shell code.
 
 Armed by either (a) any registered external workspace with vcs = p4
 (`external_workspaces.<name>.vcs`), which holds even when the policy key is
@@ -159,3 +160,21 @@ def check(payload: Dict[str, Any]) -> Any:
     if offence is None or not _armed():
         return None
     return _deny_record(offence)
+
+
+def check_mcp(payload: Dict[str, Any]) -> Any:
+    """Recognize explicit Example-Game-Repo submit/shelve tools, sharing box policy.
+
+    Domain dispatchers and Python indirection need their own native contracts;
+    this deliberately does not scan descriptions or changelist text for verbs.
+    """
+    name = payload.get("tool_name")
+    if not isinstance(name, str) or not name.startswith("mcp__"):
+        return None
+    parts = name.split("__", 2)
+    if len(parts) != 3 or "example-game-repo" not in parts[1].lower():
+        return None
+    operation = parts[2].lower()
+    if not re.fullmatch(r"source_control_(?:submit|shelve|check_?in)\w*|(?:submit|shelve)_changelist", operation):
+        return None
+    return _deny_record(f"MCP {operation}") if _armed() else None

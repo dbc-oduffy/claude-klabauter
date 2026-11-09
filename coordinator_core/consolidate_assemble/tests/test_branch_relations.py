@@ -24,7 +24,7 @@ def _fake_git(branches: dict[str, int], commits: dict[int, tuple[list[int], str]
     )
     calls: list[list[str]] = []
 
-    def run_git(args: list[str], cwd: Path) -> SimpleNamespace:
+    def run_git(args: list[str], cwd: Path, input: str | None = None) -> SimpleNamespace:
         calls.append(list(args))
         while args and args[0].startswith("-"):
             args = args[1:]

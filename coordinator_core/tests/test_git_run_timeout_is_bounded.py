@@ -33,14 +33,16 @@ That is still a genuine red, and it is fast. The re-entry assertion covers the
 other regression: a future edit that keeps `Popen` but re-adds a drain after
 the kill.
 
-Non-spawning by construction: no real `git` process is created, so this
-neither costs the shared box a spawn nor lands on
-`test_no_new_spawning_tests.py`'s ratchet.
+The doubles remain non-spawning. Windows now performs no communicate call or
+Popen context exit at all: its first bounded wait expires instead. One explicit
+Windows regression below uses a harmless Python tree under the test launcher's
+owned containment job; no real Git command or repository is involved.
 """
 
 from __future__ import annotations
 
 import subprocess
+import sys
 
 from coordinator_core.git import run as git_run
 
@@ -54,11 +56,13 @@ class _NeverDrainingProc:
         self.wait_calls = []
         self.communicate_calls = 0
         self.closed = False
+        self.files = []
 
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
+        assert sys.platform != 'win32', 'Windows must never enter Popen.__exit__'
         self.closed = True
         return False
 
@@ -77,12 +81,17 @@ class _NeverDrainingProc:
 
     def wait(self, timeout=None):
         self.wait_calls.append(timeout)
+        if sys.platform == 'win32' and len(self.wait_calls) == 1:
+            raise subprocess.TimeoutExpired(cmd=['git'], timeout=timeout)
         return self.returncode
 
 
 def _install(monkeypatch) -> _NeverDrainingProc:
     proc = _NeverDrainingProc()
-    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: proc)
+    def spawn(*args, **kwargs):
+        proc.files = [kwargs[key] for key in ('stdout', 'stderr') if kwargs.get(key) != subprocess.PIPE]
+        return proc
+    monkeypatch.setattr(subprocess, "Popen", spawn)
     return proc
 
 
@@ -93,7 +102,7 @@ def test_a_timed_out_git_call_returns_instead_of_re_draining(monkeypatch) -> Non
 
     assert result.timed_out is True
     assert result.returncode == -1
-    assert proc.communicate_calls == 1, "exactly one drain attempt, never a second"
+    assert proc.communicate_calls == (0 if sys.platform == 'win32' else 1)
 
 
 def test_the_timed_out_child_is_killed_and_reaped_under_a_bound(monkeypatch) -> None:
@@ -111,7 +120,11 @@ def test_the_pipes_are_closed_on_the_timeout_path(monkeypatch) -> None:
 
     git_run.run_git(["rev-parse", "HEAD"], cwd=".")
 
-    assert proc.closed is True
+    if sys.platform == 'win32':
+        assert not proc.closed and len(proc.files) == 2
+        assert all(stream.closed for stream in proc.files)
+    else:
+        assert proc.closed is True
 
 
 def test_a_timed_out_call_yields_no_bytes(monkeypatch) -> None:
@@ -136,3 +149,84 @@ def test_a_reaping_wait_that_itself_times_out_still_returns(monkeypatch) -> None
 
     assert result.timed_out is True
     assert result.returncode == -1
+
+
+def test_windows_file_capture_preserves_binary_and_text_contract(monkeypatch):
+    import pytest
+    if sys.platform != 'win32':pytest.skip('Windows file-backed capture')
+    recorded=[]
+    class Proc:
+        returncode=3
+        def __init__(self,kwargs):self.kwargs=kwargs
+        def wait(self,timeout=None):
+            assert timeout is not None
+            self.kwargs['stdout'].write(b'a\r\nb\rc\xff\0')
+            self.kwargs['stderr'].write(b'err\r\n')
+            return self.returncode
+        def communicate(self,*args,**kwargs):raise AssertionError('PIPE drain forbidden')
+        def __enter__(self):raise AssertionError('Popen context forbidden')
+    def spawn(*args,**kwargs):recorded.append(kwargs);return Proc(kwargs)
+    monkeypatch.setattr(subprocess,'Popen',spawn)
+    text=git_run.run_git(['status'])
+    binary=git_run.run_git(['status','-z'],binary=True)
+    assert (text.returncode,text.stdout,text.stderr,text.stdout_bytes)==(3,'a\nb\nc\ufffd\0','err\n',b'')
+    assert (binary.stdout,binary.stderr,binary.stdout_bytes)==('a\r\nb\rc\ufffd\0','err\r\n',b'a\r\nb\rc\xff\0')
+    assert all(item['stdout'].closed and item['stderr'].closed for item in recorded)
+
+
+def test_windows_job_accounting_closes_before_owned_capture_files(monkeypatch):
+    import pytest
+    if sys.platform != 'win32':pytest.skip('Windows file-backed cleanup')
+    recorded={};charged=[]
+    class Proc:
+        returncode=0
+        def wait(self,timeout=None):return 0
+    def spawn(*args,**kwargs):recorded.update(kwargs);return Proc()
+    monkeypatch.setattr(subprocess,'Popen',spawn)
+    monkeypatch.setattr(git_run,'_open_charging_job',lambda:object())
+    monkeypatch.setattr(git_run,'_assign_and_resume',lambda *_:True)
+    def charge(job):
+        assert not recorded['stdout'].closed and not recorded['stderr'].closed
+        charged.append(job)
+    monkeypatch.setattr(git_run,'_charge_and_close_job',charge)
+    assert git_run.run_git(['status']).ok
+    assert len(charged)==1 and recorded['stdout'].closed and recorded['stderr'].closed
+
+
+def test_windows_missing_spawn_closes_files_and_charges_once(monkeypatch):
+    import pytest
+    if sys.platform != 'win32':pytest.skip('Windows file-backed cleanup')
+    files=[];charged=[]
+    def missing(*args,**kwargs):
+        files.extend([kwargs['stdin'],kwargs['stdout'],kwargs['stderr']]);raise FileNotFoundError('fake missing git')
+    monkeypatch.setattr(subprocess,'Popen',missing)
+    monkeypatch.setattr(git_run,'_open_charging_job',lambda:object())
+    monkeypatch.setattr(git_run,'_charge_and_close_job',charged.append)
+    result=git_run.run_git(['hash-object','--stdin'],input=b'x\n\0')
+    assert result.returncode==127 and not result.timed_out
+    assert len(charged)==1 and all(stream.closed for stream in files)
+
+
+def test_windows_inherited_writer_returns_before_grandchild_eof(tmp_path,monkeypatch):
+    """One harmless Python tree; the outer canonical test Job owns cleanup.
+
+    run_git itself does not promise descendant containment. A surviving writer
+    is deliberate evidence that this return no longer waits for pipe EOF.
+    """
+    import pytest,time,json,psutil
+    if sys.platform != 'win32':pytest.skip('Windows inherited-handle regression')
+    pid_file=tmp_path/'own-grandchild.json'
+    program=('import subprocess,sys,time,json,pathlib; '
+        'p=subprocess.Popen([sys.executable,"-I","-S","-c","import time;time.sleep(5)"]); '
+        f'pathlib.Path({str(pid_file)!r}).write_text(json.dumps({{"pid":p.pid}})); '
+        'time.sleep(30)')
+    monkeypatch.setattr(git_run,'_git_exe',lambda:sys.executable)
+    monkeypatch.setattr(git_run,'_wall_bound',lambda *_:.7)
+    started=time.monotonic()
+    result=git_run.run_git(['-I','-S','-c',program],cwd=str(tmp_path))
+    elapsed=time.monotonic()-started
+    assert result.timed_out and result.returncode==-1
+    assert result.stdout=='' and result.stderr=='' and result.stdout_bytes==b''
+    pid=json.loads(pid_file.read_text())['pid']
+    assert psutil.pid_exists(pid), 'writer must still be alive to prove no EOF dependency'
+    assert elapsed<4, 'return must precede the five-second inherited writer EOF'

@@ -6,6 +6,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, _handler, stage
+from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 
 SIZING_REL = "state/sizings/2026-10-16-fixture.yaml"
 
@@ -21,6 +22,12 @@ def _sizing(repo, **extra):
     doc = {k: v for k, v in doc.items() if v is not None}
     (repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
     (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
+
+
+def test_s_arm_sizing_without_a_plan_edge_is_refused_by_name(tmp_path):
+    _sizing(tmp_path, plan=None)
+    with pytest.raises(AskStageError, match="^XS-MINT-MISROUTED: "):
+        stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
 
 
 def test_s_arm_plan_edge_sizing_with_empty_writes_is_refused_by_name(tmp_path):
@@ -50,5 +57,6 @@ def test_handler_replies_error_not_traceback_for_the_multi_ask_shape(tmp_path):
 
 def test_xs_sizing_with_writes_still_mints(tmp_path):
     _sizing(tmp_path, plan=None, estimate={"tshirt": "XS"})
+    write_run_scripts(tmp_path, "r1")
     m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
     assert [r.id for r in m.rows] == ["X1"]

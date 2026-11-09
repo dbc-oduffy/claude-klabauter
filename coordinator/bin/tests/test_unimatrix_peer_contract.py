@@ -117,3 +117,33 @@ def test_import_runs_no_compile_io_or_subprocess(script, monkeypatch):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     assert callable(mod.main)
+
+
+def test_agent_row_plain_claude_entry_is_claude_on_local_box():
+    row = pc.agent_row({"name": "em-1", "sessionId": "abc"}, "mac")
+    assert row == {"name": "em-1", "box": "mac", "vendor": "claude"}
+
+
+def test_agent_row_face_stamp_gives_vendor():
+    row = pc.agent_row({"name": "cx", "sessionId": "peer-cx", pc.VENDOR_FIELD: "codex"}, "mac")
+    assert row["vendor"] == "codex"
+
+
+def test_agent_row_mirrored_entry_keeps_its_box():
+    row = pc.agent_row({"name": "cx", pc.BOX_FIELD: "machine-b"}, "mac")
+    assert row["box"] == "machine-b"
+
+
+def test_agent_row_unstamped_peer_face_is_peer():
+    assert pc.agent_row({"name": "x", "sessionId": "peer-x"}, "mac")["vendor"] == "peer"
+
+
+@pytest.mark.parametrize("raw,want", [("example-operator@Machine-b.local", "machine-b"), ("Mac-mini-lan", "mac-mini"),
+                                      ("machine-a", "machine-a"), ("10.0.0.5", "10")])
+def test_box_id_normalises(raw, want):
+    assert pc.box_id(raw) == want
+
+
+def test_local_box_is_box_id_of_hostname(monkeypatch):
+    monkeypatch.setattr(pc.socket, "gethostname", lambda: "Mac-Mini-lan.local")
+    assert pc.local_box() == "mac-mini"

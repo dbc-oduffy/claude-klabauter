@@ -1,0 +1,12 @@
+{
+  "base_sha": "6464e9d992500294ccee954eaf1d868abeca1e79",
+  "detail": ".................s.......s.............................................. [100%]\n70 passed, 2 skipped in 49.18s",
+  "key": "470e8bc9511f2f2215bc61d81f0c43e9324eb1fbd88550d1880f94ab17b2f6d5",
+  "seeds": [
+    "tools/likeness-prototype/tests/test_likeness_pipeline_driver.py",
+    "tools/likeness-prototype/tests/test_likeness_pipeline_snapshot.py",
+    "tools/likeness-prototype/tests/test_likeness_registry_env.py"
+  ],
+  "sha": "c90b01af2ceb5937d29826f8aa357914d951a03a",
+  "verdict": "green"
+}

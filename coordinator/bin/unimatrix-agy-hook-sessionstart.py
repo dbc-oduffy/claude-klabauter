@@ -42,18 +42,26 @@ def register(payload, agy_pid):
     return isinstance(conv, str) and bool(launch.CONV_RE.match(conv)) and (state / f"{conv}.json").is_file()
 
 
-def reply(registered):
-    if not registered:
-        return {}
+def reply(registered, worker_pointer=None):
     # Trap: agy (observed 2026-11-04) panics "cannot convert string to message" on a SessionStart
-    # systemMessage carrying metadata.user_markdown, despite its own docs; the note goes as plain text.
-    return {"injectSteps": [{"systemMessage": {"systemMessage": NOTE}}]}
+    # systemMessage carrying metadata.user_markdown, despite its own docs; notes go as plain text.
+    notes = ([NOTE] if registered else []) + ([worker_pointer] if worker_pointer else [])
+    return {"injectSteps": [{"systemMessage": {"systemMessage": n}} for n in notes]} if notes else {}
 
 
 def main():
     out = {}
     try:
-        out = reply(register(json.load(sys.stdin), os.getppid()))
+        payload = json.load(sys.stdin)
+        try:
+            pointer = load_sibling("unimatrix-codex-hook-sessionstart").worker_pointer()
+        except Exception:
+            pointer = None
+        try:
+            registered = register(payload, os.getppid())
+        except Exception:
+            registered = False
+        out = reply(registered, pointer)
     except Exception:
         out = {}
     print(json.dumps(out))

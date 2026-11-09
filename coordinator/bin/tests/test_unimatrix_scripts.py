@@ -48,8 +48,8 @@ def test_relay_accepts_the_three_modes(cmd, expected):
 
 
 @pytest.mark.parametrize("cmd", [
-    "", None, "roster extra", "send", "send abc", "send 1 2", "inbox", "inbox Bad_Name",
-    "inbox " + "a" * 41, "bash -c id", "send 12; id",
+    "", None, "roster extra", "send", "send abc", "send 1 2", "inbox", "inbox Bad/Name",
+    "inbox " + "a" * 65, "bash -c id", "send 12; id",
 ])
 def test_relay_refuses_everything_else(cmd):
     assert load("relay").parse_mode(cmd) is None
@@ -90,7 +90,7 @@ def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
     bridge = load("bridge")
     sessions = tmp_path / "sessions"
     sessions.mkdir()
-    (sessions / "1.json").write_text(json.dumps({"messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock"}))
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock"}))
     monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote="wg", port=None)
@@ -275,8 +275,10 @@ def test_inbox_client_logs_the_far_refusal_reason(monkeypatch, tmp_path):
     monkeypatch.setattr(inbox, "SESSIONS", str(sessions))
     monkeypatch.setattr(inbox, "pick_remote", lambda lan, tunnel: lan)
     logfile = tmp_path / "inbox.log"
-    inbox.main(["5", "n", str(logfile), "--remote", "far", "--key", "k"])
+    with pytest.raises(SystemExit) as exited:
+        inbox.main(["5", "n", str(logfile), "--remote", "far", "--key", "k"])
     inbox.log.close()
+    assert exited.value.code == 1
     text = logfile.read_text(encoding="utf-8")
     assert "far: name n already mirrored by live relay pid 9" in text
     assert "inbox ended rc=1" in text

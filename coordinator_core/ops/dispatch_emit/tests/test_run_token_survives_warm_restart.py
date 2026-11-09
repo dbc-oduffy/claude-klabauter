@@ -51,13 +51,13 @@ def _publish_quiesce(tmp_path, monkeypatch):
     )
     monkeypatch.setattr(dr, "fast_forward_dest", lambda result, **k: result)
     stops: list = []
-    real_stop = pair_stop.stop_warm_pair
+    real_probe = pair_stop.probe_pair_terminable
 
     def stop(root, **k):
         stops.append(root)
-        return real_stop(root, ask_server=lambda pipe: True, ask_front_door=lambda crumb: True)
+        return real_probe(root, **k)
 
-    monkeypatch.setattr(pair_stop, "stop_warm_pair", stop)
+    monkeypatch.setattr(pair_stop, "probe_pair_terminable", stop)
     monkeypatch.setattr(
         publish_mod, "_run_round", lambda *a, **k: (_ for _ in ()).throw(_Stop())
     )

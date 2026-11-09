@@ -85,6 +85,54 @@ def codex_participant(name: str, prompt: str = "", conversation: str = "") -> Pa
     return Participant(name, CodexAdapter(), prompt, RESUME, None, conversation)
 
 
+_GROK_TEXT_EVENTS = frozenset({"assistant", "message", "text", "agent_message", "agent_message_chunk", "content"})
+
+
+class GrokAdapter:
+    """Headless grok (`grok -p ... --output-format streaming-json`, plan mode, write/exec denied) as a resume-mode adapter.
+
+    The session id is ours (`-s`), so every message is attributed to it. Text events are messages;
+    a `result` event counts only when no text event came first. Trap: the streaming-json event
+    schema is read off codex_runner.grok, not a captured grok run.
+    """
+
+    def __init__(self) -> None:
+        self.session = ""
+        self._texted = False
+
+    def spawn_argv(self, prompt: str, conversation: Optional[str] = None) -> List[str]:
+        from coordinator_core.codex_runner.grok import build_argv, resolve_grok
+
+        self.session = conversation or str(uuid.uuid4())
+        return build_argv(resolve_grok(), prompt, self.session)
+
+    def resume_argv(self, conversation: str, text: str) -> List[str]:
+        return self.spawn_argv(text, conversation)
+
+    def parse_line(self, line: str):
+        try:
+            ev = json.loads(line)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(ev, dict) or not self.session:
+            return None
+        kind = ev.get("type") or ev.get("event")
+        if kind in _GROK_TEXT_EVENTS:
+            self._texted = True
+        elif not (kind == "result" and not self._texted):
+            return None
+        for key in ("text", "content", "result", "message"):
+            v = ev.get(key)
+            if isinstance(v, str) and v.strip():
+                return self.session, v.strip()
+        return None
+
+
+def grok_participant(name: str, prompt: str = "", conversation: str = "") -> Participant:
+    """grok as a resume-mode participant: first run is `grok -p <prompt>`, each delivery a fresh run on the same `-s` session."""
+    return Participant(name, GrokAdapter(), prompt, RESUME, None, conversation)
+
+
 class _Relay:
     def __init__(self, participants, observers, log_session, idle, deadline, max_hops):
         names = [p.name for p in participants]

@@ -476,7 +476,7 @@ def test_run_json_sizing_lands_when_dirty_and_is_skipped_otherwise(repo):
         _name_sizing(repo, named)
         again = _call(repo)
         # The outcome already landed; a record-only rerun has nothing new to commit.
-        assert again["committed"] is True or again["nothing_to_commit"] is True, again
+        assert again["committed"] is True or again.get("nothing_to_commit") is True, again
         if again["committed"]:
             assert set(_landed(repo, again, "--name-only")) <= record, named
 

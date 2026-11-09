@@ -18,6 +18,12 @@ Spec backlink: docs/plans/2026-08-18-claude-klabauter-fires-the-workflows-it-emi
 Wire params -- workflow.fire:
     script_path (str, required)   -- path to the emitted workflow ``.mjs``
                                       script to fire. Must exist on disk.
+    backend (str, optional)       -- ``codex`` selects the native Workflow
+                                      executor and Codex workers; ``claude``
+                                      keeps the existing Claude driver.
+                                      Omitted preserves the legacy Claude
+                                      default. ``engine_ask.submit`` selects
+                                      Codex by default when firing.
     expected (str, optional)      -- the hex sha256 digest of the script the
                                       caller itself emitted -- ``dispatch.
                                       emit``'s own reply ``"sha256"`` key,
@@ -34,7 +40,7 @@ Wire params -- workflow.fire:
                                       path). Omitted, the fire is unverified
                                       -- the same behavior as before this
                                       param existed.
-    model (str, optional)         -- driver model; defaults to
+    model (str, optional)         -- Claude driver model; defaults to
                                       ``fire.DEFAULT_MODEL`` (cheap tier --
                                       the driver calls one tool once).
     max_turns (int, optional)     -- child turn cap; when omitted, scales
@@ -50,8 +56,18 @@ Wire params -- workflow.fire:
     concurrency_cap (int, optional) -- live-fire refusal threshold;
                                       defaults to
                                       ``fire.DEFAULT_CONCURRENCY_CAP``.
-    notify_to (str, optional)     -- peer name notified when a subsequent
-                                      workflow.fire_status observes driver exit.
+    run_id (str, optional)        -- the run this fire drives; stored on the
+                                      record so ``workflow.fire_status``
+                                      reports ``outcome: not_landed`` for a
+                                      clean exit whose run-stage is not
+                                      ``landed``.
+    notify_to (str, optional)     -- peer name notified by the warm engine
+                                      when it observes driver exit.
+                                      Native runs checkpoint and queue their
+                                      notice on completion without polling.
+    timeout_s (int, optional)     -- total native execution budget, including
+                                      admission, agents and terminal action;
+                                      defaults to 7200, bounded to 1..86400.
 
 Reply fields -- workflow.fire:
     the fire registry record (see ``fire.fire_workflow`` docstring): {
@@ -149,8 +165,8 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             be resolved (fail-loud; never silently omits the flag).
         fire.ConcurrencyCapExceededError -- if the live-fire count is at
             or above the cap.
-        fire.ChildSpawnFailedError -- if the child cannot be confirmed
-            live (immediate non-zero exit, spawn OSError).
+        fire.ChildSpawnFailedError -- if no child could be spawned (OSError).
+            Fast child exits return their terminal handle, never invite a duplicate fire.
         dispatch_emit.op.FiredDriftError -- if ``expected`` is supplied and
             differs from the on-disk bytes at ``script_path``.
     """
@@ -170,29 +186,78 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
 
         guard_against_fired_drift(Path(script_path), expected)
 
-    record = fire.fire_workflow(
-        script_path,
-        cwd=str(repo_root) if repo_root is not None else None,
-        claude_bin=params.get("claude_bin", "claude"),
-        model=params.get("model", fire.DEFAULT_MODEL),
-        max_turns=params.get("max_turns"),
-        concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
+    backend = params.get("backend")
+    if backend not in (None, "codex", "claude"):
+        raise ValueError("backend must be codex or claude")
+    executor = params.get("executor", "headless" if backend == "codex" else "claude")
+    if executor == "claude" and backend == "codex":
+        raise ValueError("a Codex backend cannot use the Claude executor")
+    if params.get("private_engine") is not None and (backend != "codex" or executor != "headless"):
+        raise ValueError("a private native engine requires an explicit Codex headless executor")
+    from coordinator_core.ops.workflow_fire.authority import require_fire_authority
+
+    principal = require_fire_authority(
+        script_path, expected, cwd=str(repo_root) if repo_root is not None else None,
+        native=executor == "headless", backend=backend or ("codex" if executor == "headless" else "claude"),
     )
-    if notify_to is not None:
+    if executor == "headless":
+        from coordinator_core.ops.workflow_fire.headless import start, validate_private_engine_config
+
+        private_spec = validate_private_engine_config(params.get("private_engine"), backend=backend or "codex")
+        if private_spec is not None and principal.role != "em":
+            raise PermissionError("only the EM may select a private native engine build")
+        private_args = {'private_engine': private_spec} if private_spec is not None else {}
+
+        record = start(
+            script_path, cwd=str(repo_root) if repo_root is not None else None,
+            notify_to=notify_to, backend=params.get("backend", "codex"),
+            concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
+            timeout_s=params.get("timeout_s", 7200),
+            args=params.get("args"), run_id=params.get("run_id"),
+            caller_session_id=(principal.session_id if principal.role == "em"
+                               else principal.env.get("COORDINATOR_PARENT_SESSION_ID")),
+            expected=expected,
+            **private_args,
+        )
+    elif executor == "claude":
+        record = fire.fire_workflow(
+            script_path,
+            cwd=str(repo_root) if repo_root is not None else None,
+            claude_bin=params.get("claude_bin", "claude"),
+            model=params.get("model", fire.DEFAULT_MODEL),
+            max_turns=params.get("max_turns"),
+            concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
+            expected=expected,
+            notify_to=notify_to.strip() if notify_to else None,
+            run_id=params.get("run_id"),
+        )
+    else:
+        raise ValueError("executor must be headless or claude")
+    if notify_to is not None and not record.get("notify_to"):
+        already_fired = record.get("already_fired")
         record = {**record, "notify_to": notify_to.strip()}
         try:
-            _store_notification_record(record, repo_root)
+            record = _store_notification_record(record, repo_root)
         except OSError as exc:
             # The child exists: preserve its handle rather than inviting a second fire.
             record["notify_error"] = f"Notification target not persisted: {exc}"
+        if already_fired:
+            record = {**record, "already_fired": True}
     return record
 
 
-def _store_notification_record(record: dict, repo_root: Optional[Path]) -> None:
+def _store_notification_record(record: dict, repo_root: Optional[Path]) -> dict:
     """Persist notification metadata beside the fire record in its selected repo."""
     cwd = record.get("repo_root") or (str(repo_root) if repo_root is not None else None)
     path = fire._record_path(fire._registry_dir(cwd), record["fire_id"])
-    fire._write_record(path, record)
+    from coordinator_core.locked_write import LockTimeout, held_lock
+
+    try:
+        with held_lock(path.resolve(), timeout=0, holder_label="workflow.fire notification target"):
+            current = fire._read_record(path) or record
+            return fire._write_record(path, {**current, "notify_to": current.get("notify_to") or record["notify_to"]})
+    except LockTimeout:
+        return {**record, "notify_error": "Notification target not persisted: record busy; repeat the same expected-digest fire to register target"}
 
 
 @register_op("workflow.fire_status")
@@ -210,12 +275,4 @@ def _workflow_fire_status(params: dict, repo_root: Optional[Path] = None) -> dic
     record = fire.fire_status(fire_id, cwd=str(repo_root) if repo_root is not None else None)
     if record is None:
         return {"fire_id": fire_id, "found": False}
-    if record.get("notify_to") and not record.get("notified_at") and record.get("state") == "exited":
-        from coordinator_core.ops.workflow_fire.notify import notify_terminal
-
-        record = notify_terminal(record)
-        try:
-            _store_notification_record(record, repo_root)
-        except OSError as exc:
-            record["notify_error"] = f"Notification result not persisted: {exc}"
     return record

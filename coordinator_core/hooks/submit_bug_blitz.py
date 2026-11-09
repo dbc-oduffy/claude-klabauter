@@ -360,8 +360,8 @@ def _evaluate(
         "PreToolUse",
         new_input,
         f"Submitted to the engine as run {stamp}. It runs to one terminal commit in the background; its "
-        "completion notification is your one wake. End the turn: no polling, dispatch or "
-        "verification meanwhile.",
+        "completion notification is your one wake. Do not poll or "
+        "verify this run meanwhile; unrelated work proceeds.",
     )
     hso = envelope["hookSpecificOutput"]
     hso["permissionDecision"] = "allow"

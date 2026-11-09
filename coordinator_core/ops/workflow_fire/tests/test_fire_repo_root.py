@@ -109,6 +109,37 @@ def test_fire_workflow_dotgit_of_unrelated_repo_still_refused(monkeypatch, scrip
         fire.fire_workflow(str(script), cwd=str(wrong_repo))
 
 
+def test_fired_child_cwd_is_the_resolved_repo_root_and_relative_paths_resolve_under_it(
+    monkeypatch, script, target_repo, tmp_path
+):
+    import os
+
+    monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
+    seen = {}
+
+    class _CapturePopen:
+        def __init__(self, command, **kwargs):
+            seen.update(kwargs)
+            self.pid = 4242
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(fire.subprocess, "Popen", _CapturePopen)
+    monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    record = fire.fire_workflow(str(script), cwd=str(target_repo))
+
+    assert os.path.realpath(seen["cwd"]) == os.path.realpath(str(target_repo))
+    assert seen["cwd"] == record["repo_root"]
+    assert os.path.realpath(os.path.join(seen["cwd"], "state/sizings")) == os.path.realpath(
+        str(target_repo / "state" / "sizings")
+    )
+
+
 def test_fire_workflow_records_resolved_repo_root_on_success(monkeypatch, script, target_repo):
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
 

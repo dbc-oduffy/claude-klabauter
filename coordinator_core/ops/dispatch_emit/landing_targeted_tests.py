@@ -381,7 +381,8 @@ def failed_targeted_tests(
             )], "failed"
         return [
             tests_failed_finding(path,
-                    "; ".join(nodes[:3]) + "; no baseline evidence of red pre-change, counted caused")
+                    "; ".join(nodes[:3])
+                    + "; no baseline evidence of red pre-change, counted caused; base check owed")
             for path, nodes in _group_by_file(unevidenced).items()
         ], "failed"
     by_file: dict[str, list[str]] = {}
@@ -469,6 +470,24 @@ def _record_base_red(record: Optional[Mapping]) -> set[str]:
     if not isinstance(record, Mapping):
         return set()
     return {str(n) for key in BASE_RED_KEYS for n in (record.get(key) or []) if n}
+
+
+def sidecar_base_red(worktree_root: Path, params: Mapping) -> set[str]:
+    """Node ids the run's recorded ``review.reverify`` sidecar (``reverify.json``, reached through
+    ``params.inline_review.reverify.record``) names red at the run base (``BASE_RED_KEYS``). Empty when
+    no record is named, it resolves outside ``worktree_root``, or it is unreadable. One file read."""
+    block = reverify_record(params)
+    rel = block.get("record") if isinstance(block, Mapping) else None
+    if not isinstance(rel, str) or not rel.strip():
+        return set()
+    try:
+        root = Path(worktree_root).resolve()
+        path = (root / rel).resolve()
+        path.relative_to(root)
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return set()
+    return _record_base_red(data)
 
 
 def base_red_ids(params: Mapping) -> set[str]:

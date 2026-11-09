@@ -13,8 +13,30 @@ from __future__ import annotations
 import hashlib
 import json
 
+import pytest
+
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.door import build_posix as door_build_posix
+
+
+@pytest.fixture(autouse=True)
+def clean_builder_identity(monkeypatch):
+    from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
+
+    for key in SESSION_ENV_PRECEDENCE:
+        monkeypatch.delenv(key, raising=False)
+
+
+def test_codex_builder_and_warm_caller_provenance(monkeypatch):
+    from coordinator_core.warm.entry_seam import per_request_state
+
+    monkeypatch.setenv('CODEX_THREAD_ID', 'codex-builder')
+    assert door_build.build_attribution()['builder'] == 'codex-builder'
+    sid = '00000000-0000-4000-8000-000000000001'
+    with per_request_state(warm_served=True, isolated=False, env={'CODEX_THREAD_ID': sid}):
+        assert door_build.build_attribution()['builder'] == sid
+    with per_request_state(warm_served=True, isolated=False, env={}):
+        assert door_build.build_attribution()['builder'] is None
 
 
 def test_write_provenance_records_image_sha256_matching_the_output_exe(tmp_path):

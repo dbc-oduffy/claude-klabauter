@@ -155,16 +155,30 @@ def build(root, run_id: str) -> Optional[dict]:
     return record
 
 
+def _composed_by_running_engine(rd: Path) -> bool:
+    """True when `rd`'s resume record stamps the running engine's sha; no record, a stalled read or
+    another engine's stamp is False (the kept script is then stale)."""
+    record = hrr.read(rd, hrr.JSON_READ_DEADLINE_MS)
+    if not isinstance(record, dict):
+        return False
+    stored = record.get("fingerprint")
+    if not isinstance(stored, dict) or not stored.get("engine_sha"):
+        return False
+    return stored["engine_sha"] == hrr.engine_sha()
+
+
 def recompose_script(root, run_id: str) -> tuple[Optional[str], str]:
     """The run script for a run that lost its scratch script, as ``(text, "")``; ``(None, reason)`` when
     it cannot be had (no halted marker, a gate refusal, an unreadable result). A readable
-    ``COMPOSED_SCRIPT_FILE`` already under the run dir is returned as is; only without one does it run
-    `build` inline, which persists the resume record, the receipt and that file (overwriting them).
-    Call it only on a path that already lost its script."""
+    ``COMPOSED_SCRIPT_FILE`` already under the run dir is returned as is only when the run's resume
+    record names the running engine's sha; a kept script composed by another engine, or with no
+    record, runs `build` inline, which persists the resume record, the receipt and that file
+    (overwriting them). Call it only on a path that already lost its script."""
     root = Path(root)
     try:
-        kept = record_dir(root, run_id) / COMPOSED_SCRIPT_FILE
-        if kept.is_file():
+        rd = record_dir(root, run_id)
+        kept = rd / COMPOSED_SCRIPT_FILE
+        if kept.is_file() and _composed_by_running_engine(rd):
             return kept.read_text(encoding="utf-8"), ""
     except (OSError, UnicodeDecodeError):
         pass  # an unreadable kept script falls through to a fresh build

@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -218,6 +219,24 @@ def test_a_record_built_before_the_lineage_gained_a_park_is_not_served_after_it(
     assert after["stop_after"] == "plan" and not hrr.matches(record, after)
 
 
+def test_a_record_composed_by_another_engine_is_not_served(tmp_path, monkeypatch):
+    import json
+
+    (tmp_path / "plan.md").write_bytes(b"plan v1")
+    (tmp_path / "sizing.yaml").write_bytes(b"sizing v1")
+    rd = tmp_path / "rd"
+    rd.mkdir()
+    (rd / "halted.json").write_text(json.dumps({"status": "halted", "run_base_sha": "a" * 40, "plan": None}))
+    monkeypatch.setattr(hrr, "engine_sha", lambda: "e" * 40)
+    old = hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md")
+    record = {**_record(old), "resume_plan_rel": "plan.md"}
+    assert old["engine_sha"] == "e" * 40 and hrr.matches(record, hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))
+    monkeypatch.setattr(hrr, "engine_sha", lambda: "f" * 40)
+    assert not hrr.matches(record, hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))
+    legacy = {k: v for k, v in old.items() if k != "engine_sha"}
+    assert not hrr.matches({**_record(legacy), "resume_plan_rel": "plan.md"}, hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))
+
+
 def test_hint_round_trips_per_sizing_and_refuses_an_unsafe_id(tmp_path):
     from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 
@@ -226,3 +245,21 @@ def test_hint_round_trips_per_sizing_and_refuses_an_unsafe_id(tmp_path):
     assert hrr.read_hint(tmp_path, "state/b.yaml") is None
     hrr.write_hint(tmp_path, "state/c.yaml", "../escape")
     assert hrr.read_hint(tmp_path, "state/c.yaml") is None
+
+
+def test_refire_record_names_script_sha_engine_and_time(tmp_path):
+    import hashlib
+
+    script = tmp_path / "s.mjs"
+    script.write_bytes(b"// body")
+    rd = tmp_path / "run"
+    hrr.write_refire_record(rd, script, "stored", "c" * 40, 123.5)
+    hrr.write_refire_record(rd, script, "launcher", None, 124.5)
+    lines = [json.loads(x) for x in (rd / hrr.REFIRE_LOG_FILE).read_text(encoding="utf-8").splitlines()]
+    assert len(lines) == 2
+    assert lines[0]["script_path"] == script.as_posix()
+    assert lines[0]["script_sha256"] == hashlib.sha256(b"// body").hexdigest()
+    assert lines[0]["composed_by_engine_sha"] == "c" * 40
+    assert lines[0]["engine_sha"] == hrr.engine_sha()
+    assert lines[0]["launched_at"] == 123.5
+    assert lines[1]["kind"] == "launcher" and lines[1]["composed_by_engine_sha"] is None

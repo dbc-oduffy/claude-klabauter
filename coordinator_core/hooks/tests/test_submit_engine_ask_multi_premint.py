@@ -48,7 +48,7 @@ def test_fifteen_asks_are_taken_with_one_script_write_and_a_minted_parent_id(rep
     launcher = _script(env)
     assert launcher.name == f"{parent_id}.launcher.workflow.mjs" and launcher.is_file()
     assert launcher.name in hso["permissionDecisionReason"]
-    assert len(list((repo / "state" / "sizings").glob("*.yaml"))) == ASKS
+    assert len(list((repo / "state" / "sizings").rglob("*.yaml"))) == ASKS
     assert len(list((repo / "scratch" / "warp").glob("*.launcher.workflow.mjs"))) == 1
 
 
@@ -58,7 +58,7 @@ def test_the_script_embeds_every_ask_and_names_the_fanout_op_and_the_launcher_bo
     children = _children(text)
     assert len(children) == ASKS
     assert sorted(c["sizing_rel"] for c in children) == sorted(
-        p.relative_to(repo).as_posix() for p in (repo / "state" / "sizings").glob("*.yaml")
+        p.relative_to(repo).as_posix() for p in (repo / "state" / "sizings").rglob("*.yaml")
     )
     assert "parallel(" in text  # the engine's launcher body starts the children
     assert not re.findall(r"(?<![A-Za-z0-9_])__[A-Z][A-Z_]*__(?![A-Za-z0-9_])", text)
@@ -79,7 +79,7 @@ def test_the_launcher_names_every_child_with_a_deferred_emit_script_and_the_hook
         assert not (repo / "scratch" / "warp" / f"{child['run_id']}.workflow.mjs").exists()
 
 
-def test_an_oversize_submission_params_file_holds_the_payload_and_the_relay_deletes_it(repo):
+def test_an_oversize_submission_params_file_holds_the_payload_and_the_relay_leaves_it(repo):
     asks = _asks(ASKS, pad=2000)
     env = mod.evaluate(_payload(repo, asks))
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
@@ -93,16 +93,13 @@ def test_an_oversize_submission_params_file_holds_the_payload_and_the_relay_dele
         text = deferred.read_text(encoding="utf-8")
         (named,) = re.findall(r'^const PARAMS_FILE = "([^"]+)";$', text, re.MULTILINE)
         assert Path(named) in files
-        assert "rm -f" in text and text.index("--params-file") < text.index("rm -f")
-    # The relay agent is the consumer: run one script against the node harness and perform the delete its prompt orders.
+        assert "--params-file" in text
+    # The relay agent is the consumer: its prompt reads the params file and orders no removal (a relay is denied one).
     one = next(iter(repo.joinpath("scratch", "warp").glob("defer-*.workflow.mjs")))
     got = _node(one, repo, [{"path": "", "run_id": "", "error": "stop here"}], [])
     (prompt,) = [c["agent"] for c in got["calls"] if "agent" in c]
     (read_path,) = re.findall(r'--params-file "([^"]+)"', prompt)
-    (rm_path,) = re.findall(r'rm -f "([^"]+)"', prompt)
-    assert rm_path == read_path and Path(read_path).is_file()
-    Path(rm_path).unlink()
-    assert not Path(read_path).exists()
+    assert "rm -f" not in prompt and "Do not delete" in prompt and Path(read_path).is_file()
 
 
 def test_an_injected_fanout_still_runs_inline(repo):

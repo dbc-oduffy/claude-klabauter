@@ -1508,8 +1508,8 @@ def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeyp
     # Double repointed to `Popen` (see the sibling test below for why). The
     # asserted properties are unchanged -- stdin bytes reach git unaltered and
     # feeding stdin selects binary mode -- but the kwarg they travel in moved:
-    # `Popen` takes `stdin=PIPE` at construction and the bytes at
-    # `communicate`, where `run()` took a single `input=`.
+    # POSIX takes stdin=PIPE plus communicate bytes. Windows uses a rewound
+    # owned regular file, avoiding a blocking stdin write and reader threads.
     class _Proc:
         returncode = 0
 
@@ -1522,6 +1522,11 @@ def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeyp
         def communicate(self, input=None, timeout=None):
             recorded["input"] = input
             return (b"a/b\0c/d\0", b"")
+
+        def wait(self, timeout=None):
+            recorded['input'] = recorded['kwargs']['stdin'].read()
+            recorded['kwargs']['stdout'].write(b"a/b\0c/d\0")
+            return self.returncode
 
     def _record(argv, **kwargs):
         recorded["argv"] = argv
@@ -1536,7 +1541,10 @@ def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeyp
     assert recorded["input"] == payload, "stdin bytes must reach git unaltered"
     assert "encoding" not in recorded["kwargs"], "feeding stdin must not select text mode"
     assert "errors" not in recorded["kwargs"], "feeding stdin must not select text mode"
-    assert recorded["kwargs"]["stdin"] == subprocess.PIPE, "fed stdin is a pipe"
+    if git_run.sys.platform == 'win32':
+        assert recorded['kwargs']['stdin'].closed, 'caller-owned fed input file is closed'
+    else:
+        assert recorded["kwargs"]["stdin"] == subprocess.PIPE
     assert recorded["argv"][0] == git_run._git_exe()
     # Binary mode returns bytes; the seam decodes so callers still see str.
     assert result.stdout == "a/b\0c/d\0"
@@ -1570,15 +1578,25 @@ def test_a_call_without_stdin_keeps_text_mode_and_a_closed_stdin(monkeypatch):
             recorded["input"] = input
             return ("ok\n", "")
 
+        def wait(self, timeout=None):
+            recorded['input'] = None
+            recorded['kwargs']['stdout'].write(b'ok\r\n')
+            return self.returncode
+
     def _record(argv, **kwargs):
         recorded["kwargs"] = kwargs
         return _Proc()
 
     monkeypatch.setattr(subprocess, "Popen", _record)
-    git_run.run_git(["rev-parse", "HEAD"])
+    result = git_run.run_git(["rev-parse", "HEAD"])
 
-    assert recorded["kwargs"]["encoding"] == "utf-8"
-    assert recorded["kwargs"]["errors"] == "replace"
+    if git_run.sys.platform == 'win32':
+        assert 'encoding' not in recorded['kwargs'] and 'errors' not in recorded['kwargs']
+        assert result.stdout == 'ok\n'
+        assert result.stdout_bytes == b''
+    else:
+        assert recorded["kwargs"]["encoding"] == "utf-8"
+        assert recorded["kwargs"]["errors"] == "replace"
     assert recorded["kwargs"]["stdin"] == subprocess.DEVNULL
     assert recorded["input"] is None
 

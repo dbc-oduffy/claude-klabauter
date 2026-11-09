@@ -8,6 +8,7 @@ before replying; `drop` answers the handshake then closes the connection.
 from __future__ import annotations
 
 import json
+import os
 import struct
 import sys
 from pathlib import Path
@@ -68,7 +69,7 @@ def main(argv: list[str]) -> int:
     scenario = argv[1]
     if scenario == "dead":
         return 3
-    replies = _replies("owner" if scenario == "drop" else "non_owner" if scenario.startswith("busy") else scenario)
+    replies = _replies("owner" if scenario in ("drop", "queue") else "non_owner" if scenario.startswith("busy") else scenario)
     turns_calls = 0
     head = b""
     while not head.endswith(b"\r\n\r\n"):
@@ -80,6 +81,14 @@ def main(argv: list[str]) -> int:
     try:
         while True:
             req = json.loads(_read_frame())
+            if scenario == "queue":
+                wire = os.environ.get("FAKE_CODEX_QUEUE_LOG")
+                if wire:
+                    with open(wire, "a", encoding="utf-8") as log:
+                        log.write(json.dumps(req) + "\n")
+                if req.get("method") == "thread/queue/add":
+                    _send({"id": req["id"], "result": {"queuedSubmission": {"id": "queued-real-wire"}}})
+                    continue
             if "id" not in req:
                 continue
             if scenario.startswith("busy") and req["method"] in ("thread/turns/list", "turn/steer"):

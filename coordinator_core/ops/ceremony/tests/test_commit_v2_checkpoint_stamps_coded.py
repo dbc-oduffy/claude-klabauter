@@ -29,8 +29,8 @@ def _w(path, text):
 
 def _plan_text() -> str:
     body = "".join(
-        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - some/{i}.py\n"
-        for i in ("C1", "C2")
+        f"- id: {i}\n  title: T{i}\n  disposition: open\n  writes:\n    - {w}\n"
+        for i, w in (("C1", _ROW_FILE), ("C2", "some/C2.py"))
     )
     return f"---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}```\n"
 

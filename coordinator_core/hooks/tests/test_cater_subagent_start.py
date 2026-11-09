@@ -1695,3 +1695,73 @@ def test_payload_type_key_still_wins_over_report_type_map(
     rel_path = marker_line[len(SIDECAR_PATH_MARKER_PREFIX):]
     doc_text = (git_repo / rel_path).read_text(encoding="utf-8")
     assert "## Questions" in doc_text  # assessment shape, not review-findings
+
+
+# ---------------------------------------------------------------------------
+# UE docs-checker example-retrieval-repo leg
+# ---------------------------------------------------------------------------
+
+_DOCS_CHECKER = "coordinator:docs-checker"
+_RAG_ABORT_LINE = "ABORT: example-retrieval-repo cannot answer"
+
+
+def _ue_repo(tmp_path: Path, *, rag: bool, uproject: bool = True) -> Path:
+    repo = tmp_path / "ue_repo"
+    repo.mkdir(parents=True)
+    if uproject:
+        (repo / "Game.uproject").write_text("{}", encoding="utf-8")
+    if rag:
+        (repo / ".project-rag").mkdir()
+        (repo / ".project-rag" / "state.json").write_text("{}", encoding="utf-8")
+    return repo
+
+
+def test_docs_checker_in_ue_repo_with_rag_gets_abort_clause_and_lookup_record(
+    tmp_path, monkeypatch
+):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_stage_lookup
+
+    repo = _ue_repo(tmp_path, rag=True)
+    projects = tmp_path / "projects"
+    wf = projects / "slug" / "sess-ue" / "subagents" / "workflows" / "wf_run1"
+    wf.mkdir(parents=True)
+    (wf / "journal.jsonl").write_text(
+        json.dumps(
+            {"type": "started", "key": "k", "agentId": "agdocs", "label": "plan-docs-check"}
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    payload = {
+        "agent_type": _DOCS_CHECKER,
+        "agent_id": "agdocs",
+        "session_id": "sess-ue",
+        "cwd": str(repo),
+    }
+    result = compose_catering(payload, cwd=str(repo))
+
+    assert _RAG_ABORT_LINE in result
+    assert run_stage_lookup.read(payload, projects_root=projects) == {
+        "run_id": "wf_run1",
+        "stage": "plan-docs-check",
+    }
+    assert (wf / run_stage_lookup.LOOKUP_FILENAME).is_file()
+
+
+def test_docs_checker_clause_absent_without_rag_or_without_uproject_or_other_agent(
+    tmp_path,
+):
+    no_rag = _ue_repo(tmp_path / "a", rag=False)
+    no_uproject = _ue_repo(tmp_path / "b", rag=True, uproject=False)
+    ue_rag = _ue_repo(tmp_path / "c", rag=True)
+
+    for repo, agent in (
+        (no_rag, _DOCS_CHECKER),
+        (no_uproject, _DOCS_CHECKER),
+        (ue_rag, "coordinator:executor"),
+    ):
+        payload = {"agent_type": agent, "cwd": str(repo), "session_id": "s"}
+        assert _RAG_ABORT_LINE not in compose_catering(payload, cwd=str(repo))

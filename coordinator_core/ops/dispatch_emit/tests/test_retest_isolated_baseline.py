@@ -17,7 +17,7 @@ CAUSED = "test_a.py::test_new"
 def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list[str], head_broken=False,
            head_counts=None, export_counts=None, extra_files=(), collect_rc=0, head_files=("test_a.py",),
            head_collect_error=False, head_ran_short=0, land=("src/own.py",), dirty_files=(),
-           foreign_reds_export=()):
+           foreign_reds_export=(), run_base_sha=None):
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     root = tmp_path / "repo"
     root.mkdir()
@@ -33,12 +33,16 @@ def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list
         (root / f).parent.mkdir(parents=True, exist_ok=True)
         (root / f).write_text("x", encoding="utf-8")
     params = {"run_id": RUN_ID, "targeted_test_paths": ["test_a.py", *extra_files]}
+    if run_base_sha:
+        params["run_base_sha"] = run_base_sha
     out = tmp_path / "task.output"
     out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
     built: list[Path] = []
     exported: list[list[str]] = []
+    shas: list[tuple[str, str | None]] = []
 
-    def _build(worktree, out_dir, paths):
+    def _build(worktree, out_dir, paths, sha=None):
+        shas.append((Path(out_dir).name, sha))
         Path(out_dir).mkdir(parents=True)
         for f in head_files if Path(out_dir).name == "export-head" else ("test_a.py", *extra_files):
             (Path(out_dir) / f).write_text("", encoding="utf-8")
@@ -47,7 +51,7 @@ def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list
         for f in paths:
             (Path(out_dir) / f).parent.mkdir(parents=True, exist_ok=True)
             (Path(out_dir) / f).write_text("x", encoding="utf-8")
-        return le.LandingExport(Path(out_dir).as_posix(), "h" * 40, (), ())
+        return le.LandingExport(Path(out_dir).as_posix(), sha or "h" * 40, (), ())
 
     monkeypatch.setattr(le, "build_head_export", _build)
 
@@ -82,17 +86,32 @@ def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list
     )
     record = json.loads(landing_retest.fresh_verdict_path(root, RUN_ID).read_text(encoding="utf-8"))
     _setup.exported = exported
+    _setup.shas = shas
     return rc, record, built
 
 
 def test_pre_existing_red_folds_to_pre_existing_only(tmp_path, monkeypatch):
     rc, record, built = _setup(tmp_path, monkeypatch, export_red=[PARAM, PRE], head_red=[PARAM, PRE])
     assert rc == 1 and record["baseline"] == {
-        "method": "isolated-export", "caused": [], "foreign": [PARAM, PRE], "evidence": sorted([PARAM, PRE]),
+        "method": "isolated-export", "base_sha": "h" * 40, "caused": [], "foreign": [PARAM, PRE], "evidence": sorted([PARAM, PRE]),
     }
     assert record["export"]["failed_tests"] == [PARAM, PRE]
     assert landing_targeted_tests.failed_targeted_tests(record) == ([], "pre-existing-only")
     assert not built[-1].exists()
+
+
+def test_baseline_measures_the_run_base_and_records_its_sha(tmp_path, monkeypatch):
+    base = "b" * 40
+    _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE], head_red=[PRE], run_base_sha=base)
+    assert record["baseline"]["base_sha"] == base
+    assert dict(_setup.shas)["export-head"] == base
+    assert dict(_setup.shas)["export"] is None
+
+
+def test_baseline_without_a_recorded_run_base_measures_head(tmp_path, monkeypatch):
+    _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE], head_red=[PRE])
+    assert dict(_setup.shas)["export-head"] is None
+    assert record["baseline"]["base_sha"] == "h" * 40
 
 
 def test_landing_caused_red_yields_targeted_tests_failed(tmp_path, monkeypatch):
@@ -114,7 +133,7 @@ def test_file_new_at_head_counts_as_caused_and_baseline_is_written(tmp_path, mon
     new_red = "test_new.py::test_n"
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, new_red], head_red=[PRE], extra_files=("test_new.py",))
     assert record["baseline"] == {
-        "method": "isolated-export", "caused": [new_red], "foreign": [PRE], "evidence": [PRE],
+        "method": "isolated-export", "base_sha": "h" * 40, "caused": [new_red], "foreign": [PRE], "evidence": [PRE],
     }
     assert "baseline_skipped" not in record
 
@@ -142,7 +161,7 @@ def test_new_id_in_existing_file_is_caused_when_red_and_baseline_is_written(tmp_
         export_counts={"test_a.py": 3},
     )
     assert record["baseline"] == {
-        "method": "isolated-export", "caused": [new], "foreign": [PRE], "evidence": [PRE],
+        "method": "isolated-export", "base_sha": "h" * 40, "caused": [new], "foreign": [PRE], "evidence": [PRE],
     }
     assert "baseline_skipped" not in record
 
@@ -153,7 +172,7 @@ def test_removed_id_is_ignored_and_baseline_is_written(tmp_path, monkeypatch):
         export_counts={"test_a.py": 2},
     )
     assert record["baseline"] == {
-        "method": "isolated-export", "caused": [CAUSED], "foreign": [PRE], "evidence": [PRE],
+        "method": "isolated-export", "base_sha": "h" * 40, "caused": [CAUSED], "foreign": [PRE], "evidence": [PRE],
     }
 
 
@@ -286,7 +305,7 @@ def test_dirty_non_land_file_is_absent_from_export_and_cannot_cause_a_red(tmp_pa
     )
     assert _setup.exported[0] == ["src/own.py"]
     assert record["baseline"] == {
-        "method": "isolated-export", "caused": [], "foreign": [PRE], "evidence": [PRE],
+        "method": "isolated-export", "base_sha": "h" * 40, "caused": [], "foreign": [PRE], "evidence": [PRE],
     }
 
 

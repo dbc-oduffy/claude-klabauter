@@ -454,8 +454,21 @@ def test_pid_alive_posix_unaffected_by_missing_psutil(monkeypatch):
     alive or dead."""
     monkeypatch.setattr(core, "_IS_WINDOWS", False)
     monkeypatch.setattr(core, "psutil", None)
+    calls = []
+    if os.name == "nt":
+        # Windows os.kill(pid, 0) terminates a process: simulate the POSIX
+        # primitive while exercising the real posix_pid_state implementation.
+        from coordinator_core.ask_spool import record as probe
+        current_pid = os.getpid()
+        def posix_kill(pid, signal):
+            calls.append((pid, signal))
+            if pid != current_pid:
+                raise ProcessLookupError(pid)
+        monkeypatch.setattr(probe.os, "kill", posix_kill)
     assert core.pid_alive(os.getpid()) is True
     assert core.pid_alive(2**31 - 1) is False
+    if os.name == "nt":
+        assert calls == [(os.getpid(), 0), (2**31 - 1, 0)]
 
 
 def _fake_kernel32(monkeypatch, *, handle, last_error=0, exit_code=259):
@@ -2445,9 +2458,11 @@ def test_normalize_cwd_never_mangles_a_genuine_posix_path_off_windows(monkeypatc
     """The module must not become Windows-only. On a POSIX host `/x/repo` is
     a real directory, never an MSYS spelling to decode, so normalization is
     the identity for every input."""
-    monkeypatch.setattr(core.os, "name", "posix")
-    for candidate in ("/x/claude-klabauter", "/x", "/usr/local/src/repo", "/tmp/t", None):
-        assert core._normalize_cwd(candidate) == candidate
+    with monkeypatch.context() as context:
+        from types import SimpleNamespace
+        context.setattr(core, "os", SimpleNamespace(**{**vars(core.os), "name": "posix"}))
+        for candidate in ("/x/claude-klabauter", "/x", "/usr/local/src/repo", "/tmp/t", None):
+            assert core._normalize_cwd(candidate) == candidate
 
 
 @pytest.mark.skipif(os.name != "nt", reason="MSYS drive-mount spelling is a Windows-host concern")

@@ -623,6 +623,11 @@ def _decide_session_live(
     """
     if not sid:
         return (False, "unknown", None)
+    from coordinator_core.session import external_registry
+    if external_registry.is_ended(sid):
+        # The explicit host binding is superseded by SessionEnd; a shared
+        # surviving PID does not revive that closed thread.
+        return (False, "harness-registry-superseded", None)
 
     # Source 0: harness session registry (preferred, never depended on) --
     # consulted BEFORE the local sdir existence check below (2026-08-14 fix,
@@ -1361,6 +1366,9 @@ def _verdict_for_sdir(
     3ef3bc90e012.yaml) because that asymmetry let the claim layer and this
     verdict surface disagree in the wrongful-takeover direction. This
     function's stable-pid check was never gated by it and is unchanged."""
+    from coordinator_core.session import external_registry
+    if external_registry.is_ended(sid):
+        return (False, "harness-registry-superseded", None)
     if record is not None:
         try:
             if core.stable_pid_alive(
@@ -1613,6 +1621,9 @@ def session_verdict(
         return None
     if not _SID_ALLOWED_CHARS.issuperset(sid):
         return None
+    from coordinator_core.session import external_registry
+    if external_registry.is_ended(sid):
+        return (False, "harness-registry-superseded", None)
     sdir = core.session_dir(sid, cwd)
     if not sdir or not Path(sdir).is_dir():
         # No-verdict arm (C1, docs/plans/2026-08-13-liveness-stops-

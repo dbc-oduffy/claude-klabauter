@@ -1,6 +1,7 @@
 """emit's scoped-test and row-verify prompts carry the target repo's pinned interpreter."""
 from __future__ import annotations
 
+import json
 import sys
 
 from coordinator_core.ops.dispatch_emit import emit
@@ -48,6 +49,28 @@ def test_row_verify_literal_carries_the_pin(tmp_path):
     helper = emit._run_row_helper_js(repo_root=repo)
     assert sys.executable.replace("\\", "\\\\") in helper or sys.executable in helper
     assert "falling back" not in helper
+
+
+def _seam_js(repo_root):
+    seam = emit.SeamLeg((), {}, (), {}, ())
+    js = "\n".join(emit._seam_leg_js(
+        seam, None, plan_path=None, run_base_sha="a" * 40, js=emit._js_string_literal,
+        head="", repo_flag="", sidecar_js="''", repo_root=repo_root,
+    ))
+    return js.split("Step 2, only when tests are listed", 1)[1].split("Run no other command", 1)[0]
+
+
+def test_seam_leg_test_step_carries_the_pin(tmp_path):
+    repo = _repo(tmp_path, targeted_test_python=sys.executable)
+    js = _seam_js(repo)
+    assert json.dumps(sys.executable)[1:-1] in js
+    assert "python -m pytest" not in js
+
+
+def test_seam_leg_test_step_without_root_is_portable():
+    js = _seam_js(None)
+    assert ti.PORTABLE_CLAUSE in js
+    assert "python -m pytest" not in js
 
 
 def test_row_verify_literal_without_root_is_portable():

@@ -30,6 +30,7 @@ from coordinator_core.agent_pipe.contract import (
     KIND_AGY,
     KIND_CLAUDE,
     KIND_CODEX,
+    KIND_GROK,
     BridgeMessage,
     CAUSE_HANDSHAKE_TIMEOUT,
     CAUSE_TURN_TIMEOUT,
@@ -213,7 +214,7 @@ def _deliver_codex(binding: dict, msg: BridgeMessage) -> Delivery:
         return Delivery("unroutable", "codex binding has no app-server argv", msg)
     text = _body(msg)
 
-    if msg.from_identity == "workflow.fire":
+    if msg.from_identity in ("workflow.fire", "ceremony.run"):
         try:
             codex_app_server.enqueue(argv, binding["id"], text, msg.id)
         except Exception as exc:  # queue acceptance must survive a short-lived caller
@@ -262,7 +263,29 @@ def _deliver_agy(binding: dict, msg: BridgeMessage) -> Delivery:
     return Delivery("handed-off", None, msg, thread)
 
 
-_LEGS = {KIND_CLAUDE: _deliver_claude, KIND_CODEX: _deliver_codex, KIND_AGY: _deliver_agy}
+def _deliver_grok(binding: dict, msg: BridgeMessage) -> Delivery:
+    """Resume the bound Grok ACP session; remote work never blocks the router.
+
+    ACP's existing default permission callback rejects tool approvals. The
+    notice conveys terminal state, never permission to perform arbitrary work.
+    """
+    from coordinator_core.agent_pipe.grok import GrokAcpDriver
+
+    def run() -> None:
+        try:
+            with GrokAcpDriver(argv=binding.get("argv")) as driver:
+                handle = driver.resume(binding["id"])
+                for _ in driver.prompt(handle, _body(msg)):
+                    pass
+        except Exception as exc:  # a remote leg cannot kill the warm watchdog
+            _log("leg-failed", msg, f"grok: {exc}", classify_exit(str(exc)))
+
+    thread = threading.Thread(target=run, daemon=True, name=f"bridge-grok-{msg.id[:8]}")
+    thread.start()
+    return Delivery("handed-off", None, msg, thread)
+
+
+_LEGS = {KIND_CLAUDE: _deliver_claude, KIND_CODEX: _deliver_codex, KIND_AGY: _deliver_agy, KIND_GROK: _deliver_grok}
 
 
 def route(msg: BridgeMessage) -> Delivery:
