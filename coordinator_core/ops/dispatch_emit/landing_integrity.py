@@ -191,7 +191,42 @@ def _read_verdict(path: Path) -> Optional[tuple]:
     return None
 
 
+_WRITE_QUEUE_MAX = 256
+_write_queue = None
+_force_async = False
+
+
 def _write_verdict(path: Path, found: Optional[Finding]) -> None:
+    """Hand the record to one per-process writer thread; never blocks the caller, never raises.
+
+    A file create under the git common dir can block in the kernel for minutes (a storage-optimizer
+    pass on the drive); the cache is best-effort, so a stalled create delays only the writer and a
+    full queue drops the record (the next reader re-parses).
+    """
+    import queue
+    import sys
+    import threading
+
+    global _write_queue
+    if "pytest" in sys.modules and not _force_async:
+        _store_verdict(path, found)
+        return
+    try:
+        if _write_queue is None:
+            _write_queue = queue.Queue(maxsize=_WRITE_QUEUE_MAX)
+
+            def _drain(q) -> None:
+                while True:
+                    item = q.get()
+                    _store_verdict(*item)
+
+            threading.Thread(target=_drain, args=(_write_queue,), name="parse-verdict-writer", daemon=True).start()
+        _write_queue.put_nowait((path, found))
+    except Exception:
+        pass
+
+
+def _store_verdict(path: Path, found: Optional[Finding]) -> None:
     """Atomic best-effort record; evicts the oldest entries past ``_VERDICT_MAX``. Never raises."""
     import os
 
