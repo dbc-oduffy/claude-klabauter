@@ -137,6 +137,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.lifecycle import find_repo_root, git_common_dir
+from coordinator_core.ops.session.abs_path_carve_outs import load_carve_outs
 from coordinator_core.ops.session.guard_concrete_path_citations import (
     Finding,
     new_violations,
@@ -444,9 +445,11 @@ def _fix_hint(target: str, *, committable: bool) -> str:
         else "wrong on other hosts if this file is ever kept or copied."
     )
     return (
-        f"{consequence} Use instead: `machine-local get repos.<key>`, run "
+        "Resolve through the settings-home key: `machine-local get <key>` "
+        "(`docs/reference/settings-home-key-resolution.md`), run "
         f"`{_FIX_COMMAND} --apply {target}`, or mark the line "
-        "`abs-path-ok: <reason>`."
+        "`abs-path-ok: key=<k>` / `abs-path-ok: carve-out=<id>` "
+        f"(listed in `.abs-path-carve-outs.toml`). {consequence[0].upper()}{consequence[1:]}"
     )
 
 
@@ -554,7 +557,8 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if rel_path is not None and rel_path.startswith(_TRANSCRIPT_WRITE_PREFIXES):
             return None
 
-        new = new_violations(before, after, rel_path or "")
+        carve_outs = load_carve_outs(repo_root) if repo_root is not None else None
+        new = new_violations(before, after, rel_path or "", carve_outs)
         if not new:
             return None
         new = _drop_box_wide(new, after, target, payload)

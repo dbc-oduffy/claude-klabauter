@@ -13,6 +13,27 @@ router = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(router)
 
 
+TEST_THREAD = "01a1b63b-acfb-78d1-86f2-a74ad6ca4572"
+
+
+@pytest.fixture(autouse=True)
+def codex_roots(tmp_path, monkeypatch):
+    """The face thread and `thread` are CLI roots with a rollout; the classifier itself stays real."""
+    row = {"cwd": str(tmp_path), "source": "cli", "thread_source": "user", "agent_path": None}
+    monkeypatch.setattr(router, "codex_thread_metadata",
+                        lambda home: {ident: {"id": ident, **row} for ident in (TEST_THREAD, "thread")})
+    monkeypatch.setattr(router, "codex_rollout_addressable", lambda home, ident, index: True)
+
+
+@pytest.fixture(autouse=True)
+def engine_addresses(monkeypatch):
+    """Discovery admits only Codex threads with an engine address; each fixture id gets one."""
+    def read(directory, ident, box):
+        return {"schema_version": 1, "provider": "codex", "session_id": ident,
+                "address_version": 1, "name": f"claude-klabauter-codex-test-{ident}", "box": box}
+    monkeypatch.setattr(router._contract(), "read_codex_address", read)
+
+
 def test_names_distinguish_sessions_and_normalize_foreign_paths():
     name = router.readable_peer_name("codex", "thread-one", r"E:\work\claude-klabauter")
     assert name.startswith("codex-claude-klabauter-")
@@ -28,7 +49,8 @@ def test_pipe_router_faces_and_private_acl(tmp_path):
         async def answer(peer, text):
             calls.append(text)
             return "received " + text.splitlines()[0]
-        r = router.Router([{"name": "codex-test", "vendor": "codex", "target": "test"}],
+        r = router.Router([{"name": "codex-test", "vendor": "codex", "target": TEST_THREAD,
+                           "codexPid": os.getpid()}],
                           sessions_dir=tmp_path / "sessions", state_dir=tmp_path / "state",
                           adapters={"codex": answer}, endpoint_dir=tmp_path / "endpoints")
         try:
@@ -147,7 +169,8 @@ def test_outbound_frame_is_written_by_its_registered_face(tmp_path):
         async def answer(peer, text):
             return "reply from adapter"
 
-        r = router.Router([{"name": "codex-test", "vendor": "codex", "target": "test"}],
+        r = router.Router([{"name": "codex-test", "vendor": "codex", "target": TEST_THREAD,
+                           "codexPid": os.getpid()}],
                           sessions_dir=tmp_path / "sessions", state_dir=tmp_path / "state",
                           adapters={"codex": answer}, endpoint_dir=tmp_path / "endpoints")
         destination = router.endpoint_path("receiver", tmp_path / "endpoints")

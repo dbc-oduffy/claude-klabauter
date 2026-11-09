@@ -126,6 +126,35 @@ def _last_line(text: str, fallback: str) -> str:
     return stripped.splitlines()[-1] if stripped else fallback
 
 
+_FETCH_FAILURE_MODULE = None
+
+
+def _fetch_failure_module():
+    """`coordinator/bin/lib/git_fetch_failure.py`, loaded by path: lib/ has no import route to bin/lib."""
+    global _FETCH_FAILURE_MODULE
+    if _FETCH_FAILURE_MODULE is None:
+        import importlib.util
+
+        path = Path(__file__).resolve().parents[2] / "bin" / "lib" / "git_fetch_failure.py"
+        spec = importlib.util.spec_from_file_location("git_fetch_failure", path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _FETCH_FAILURE_MODULE = module
+    return _FETCH_FAILURE_MODULE
+
+
+def _fetch_failure_text(repo_root: Path, stderr: str, *, remote: str = "origin") -> str:
+    """git's last stderr line, the remote's URL and (ssh agent failure) the remediation.
+
+    Failure path only. `remote="."` names the local-ref fetch, which has no URL to look up.
+    """
+    shared = _fetch_failure_module()
+    url = remote if remote == "." else _git(repo_root, ["remote", "get-url", remote]).stdout.strip()
+    text = shared.fetch_failure_detail(stderr, url)
+    remediation = shared.ssh_remediation(stderr)
+    return "{0}; {1}".format(text, remediation) if remediation else text
+
+
 def _branch_and_upstream(repo_root: Path) -> "tuple[Optional[str], Optional[str], Optional[str]]":
     proc = _git(
         repo_root,
@@ -267,7 +296,7 @@ def _refresh_local_main(repo_root: Path, checked_out: Optional[str]) -> Optional
         return (
             "local `main` in {0} could not be fast-forwarded to origin/main ({1}); "
             "the round lands on the checked-out branch and proceeds".format(
-                repo_root, _last_line(proc.stderr, "git fetch failed")
+                repo_root, _fetch_failure_text(repo_root, proc.stderr, remote=".")
             )
         )
     return None
@@ -440,7 +469,7 @@ def fetch_dest_upstream(
             reason=(
                 "could not fetch origin for {0} ({1}); publishing from a clone that could "
                 "not be brought level would overwrite whatever another box has already "
-                "landed".format(repo_root, _last_line(fetch.stderr, "git fetch failed"))
+                "landed".format(repo_root, _fetch_failure_text(repo_root, fetch.stderr))
             ),
             branch=branch,
             upstream=upstream,
@@ -722,7 +751,7 @@ def fast_forward_consumer(repo_root: Path) -> RefreshResult:
         fetch_err = (
             None
             if fetch.returncode == 0
-            else "could not fetch origin ({0})".format(_last_line(fetch.stderr, "git fetch failed"))
+            else "could not fetch origin ({0})".format(_fetch_failure_text(repo_root, fetch.stderr))
         )
 
         ahead, behind, count_err = _ahead_behind(repo_root, upstream)
@@ -780,7 +809,7 @@ def reconcile_dest_before_push(repo_root: Path, *, out: TextIO, err: TextIO) -> 
             repo_root,
             ok=False,
             reason="could not fetch origin for {0} before pushing ({1})".format(
-                repo_root, _last_line(fetch.stderr, "git fetch failed")
+                repo_root, _fetch_failure_text(repo_root, fetch.stderr)
             ),
             branch=branch,
             upstream=upstream,

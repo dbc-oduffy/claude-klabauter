@@ -202,6 +202,54 @@ def _op_is_compute_only(msg: dict) -> bool:
         return False
 
 
+def _settle_indeterminate_write(msg: dict, response: dict, poll_dispatch) -> Optional[dict]:
+    """Settle a -32004 on a write op with ONE `warm.request_status` poll.
+
+    Returns the completed reply, `None` (the poll proved the op never ran: the
+    caller re-drives it cold once; the poll tombstones the key, so a late
+    arrival of the original is refused), or `response` unchanged (unknown, a
+    failed poll, a compute-only op, or a completion whose result was not kept:
+    the reconcile hint prints and nothing is re-run).
+    """
+    try:
+        error = response.get("error") if isinstance(response, dict) else None
+        if not isinstance(error, dict) or error.get("code") != -32004 or _op_is_compute_only(msg):
+            return response
+        data = error.get("data")
+        if not isinstance(data, dict) or data.get("reconcile") != "warm.request_status":
+            return response
+        key = data.get("dispatch_key")
+        if not isinstance(key, str) or not key:
+            return response
+        params: dict = {"key": key}
+        engine = {
+            name: data[field]
+            for name, field in (("pid", "engine_pid"), ("boot_ns", "engine_boot_ns"))
+            if isinstance(data.get(field), int) and not isinstance(data.get(field), bool)
+        }
+        if engine:
+            params["expect_engine"] = engine
+        poll = poll_dispatch(
+            {"jsonrpc": "2.0", "id": 2, "method": "warm.request_status", "params": params}
+        )
+        status = poll.get("result") if isinstance(poll, dict) else None
+        if not isinstance(status, dict):
+            return response
+        state = status.get("state")
+        if state == "finished" and status.get("outcome") == "result" and "result" in status:
+            return {"jsonrpc": "2.0", "id": msg.get("id"), "result": status["result"]}
+        if state == "not_received" and status.get("outcome") == "not-dispatched":
+            print(
+                f"[warm-client] {msg.get('method')} never reached the engine (key {key}); "
+                "re-driving it cold once.",
+                file=sys.stderr,
+            )
+            return None
+    except Exception:  # noqa: BLE001 -- a failed reconcile leaves the hint path, never a re-run
+        pass
+    return response
+
+
 def _local_engine_unhealthy() -> bool:
     """True when the health probe failed for a permanent reason other than cold-by-design."""
     try:
@@ -1194,6 +1242,11 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
                                 response = failover
                             else:
                                 remote_handle = failover.get("remote_handle")
+            else:
+                # An indeterminate write op is settled by its own reconcile poll,
+                # once: completed -> that result is the reply; proven never-ran
+                # -> `response` is cleared so step 7 re-drives it cold exactly once.
+                response = _settle_indeterminate_write(msg, response, try_warm_dispatch)
 
     # 7. Dispatch in-process via dispatch_message (async, no socket, no auth gate).
     #    Manual loop instead of asyncio.run() to avoid executor drain on the timeout

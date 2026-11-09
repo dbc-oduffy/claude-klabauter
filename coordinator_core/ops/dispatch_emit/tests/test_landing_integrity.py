@@ -643,6 +643,9 @@ def test_caused_ids_still_refuse_even_with_status_before_fail():
 def test_nonzero_fail_with_no_baseline_still_refuses():
     findings, check = li.failed_targeted_tests({"status": "fail", "tests_failed": 2, "status_before": "fail"})
     assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
+    named, named_check = li.failed_targeted_tests(
+        {"status": "fail", "tests_failed": 2, "status_before": "fail", "failed_tests": ["t/test_x.py::test_a"]})
+    assert named_check == "failed" and named[0].reason == li.TARGETED_TESTS_FAILED
 
 
 def _write_record(root, record):
@@ -901,3 +904,35 @@ def test_provenance_entries_name_the_importer_and_module_for_import_closure(deta
     assert got_closure == {"path": "src/user.py", "reason": li.IMPORT_CLOSURE_UNTRACKED, "detail": detail,
                            "importer": "src/user.py", "module": module}
     assert "importer" not in got_other and "module" not in got_other
+
+
+def _packed_repo(tmp_path):
+    def git(*args):
+        subprocess.run(["git", *args], cwd=tmp_path, check=True, capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    git("init", "-q")
+    _w(tmp_path, "a.txt", "one\n")
+    git("add", "a.txt")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "c1")
+    git("repack", "-adq")
+    git("prune-packed")
+    return tmp_path
+
+
+def test_since_base_findings_names_an_unreadable_pack_index(tmp_path):
+    root = _packed_repo(tmp_path)
+    idx = next((root / ".git" / "objects" / "pack").glob("*.idx"))
+    idx.chmod(0o666)
+    idx.write_bytes(b"not an index")
+
+    got = li.since_base_findings(root, ["a.txt"], "0" * 40, run_id=None)
+
+    assert [(f.path, f.reason) for f in got] == [("a.txt", li.UNREADABLE_PACK_INDEX)]
+    assert idx.name in got[0].detail
+
+
+def test_since_base_findings_readable_pack_index_has_no_such_finding(tmp_path):
+    root = _packed_repo(tmp_path)
+
+    assert li.since_base_findings(root, ["a.txt"], "0" * 40, run_id=None) == []

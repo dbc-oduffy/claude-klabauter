@@ -1469,6 +1469,10 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             own_blobs, checkpoint_withheld = checkpoint_hunks.checkpoint_own_blobs(
                 worktree_root, run_id, raw_paths, message, checkpoint_reasons
             )
+            own_blobs, reduced = checkpoint_hunks.withhold_head_equal(
+                worktree_root, own_blobs, checkpoint_reasons
+            )
+            checkpoint_withheld = sorted({*checkpoint_withheld, *reduced})
             if checkpoint_withheld:
                 held = {p.replace("\\", "/") for p in checkpoint_withheld}
                 raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in held]

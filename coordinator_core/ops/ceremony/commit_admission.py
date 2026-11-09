@@ -68,7 +68,7 @@ from typing import Dict, Iterable, List, Mapping, Optional, Tuple
 from coordinator_core.git.commit import checkin_sizes, hash_worktree_blobs_via_spawn
 from coordinator_core.git import published_tree_classification
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.git.git_objects import read_object
+from coordinator_core.git.git_objects import read_object, read_object_header
 from coordinator_core.git.git_state import _parse_tree_entries, head_blobs, read_tree_spine
 from coordinator_core.hooks.claude_md_ledger import (
     GOVERNED_AUTHORING_SURFACES,
@@ -227,10 +227,10 @@ def _tree_blob_sizes(common_dir: Path, tree_sha: str, prefix: str, out: Dict[str
         if mode == 0o40000:
             _tree_blob_sizes(common_dir, sha, f"{prefix}{name}/", out)
         elif mode != 0o160000:
-            blob = read_object(common_dir, sha)
+            blob = read_object_header(common_dir, sha)
             if blob is None or blob[0] != "blob":
                 raise ValueError(f"blob {sha} unreadable")
-            out[f"{prefix}{name}"] = len(blob[1])
+            out[f"{prefix}{name}"] = blob[1]
 
 
 def _head_skill_sizes(root: Path, common_dir: Path) -> Dict[str, int]:
@@ -263,10 +263,10 @@ def skill_weight_check(
             if not path.startswith(_SKILLS_PREFIX):
                 continue
             if isinstance(entry, tuple) and len(entry) == 2 and entry[0] != 0o160000:
-                blob = read_object(common_dir, entry[1])
+                blob = read_object_header(common_dir, entry[1])
                 if blob is None or blob[0] != "blob":
                     raise ValueError(f"blob for {path} unreadable")
-                out[path] = len(blob[1])
+                out[path] = blob[1]
             else:
                 out[path] = None
         return out

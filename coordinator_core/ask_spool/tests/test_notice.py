@@ -74,6 +74,20 @@ def test_server_triggers_drain_once_per_repo(tmp_path, monkeypatch):
     assert calls == [tmp_path]
 
 
+def test_coalesced_and_withdrawn_notices_render_their_lines(tmp_path):
+    import json
+
+    path = notice.notice_path(str(tmp_path), "s1")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"spool_id": "a", "status": "coalesced", "run_id": "r1"}) + "\n")
+        fh.write(json.dumps({"spool_id": "b", "status": "withdrawn", "reason": "stale: sizing x is gone"}) + "\n")
+    assert notice.advisory_text(str(tmp_path), "s1").splitlines() == [
+        "Your spooled ask a coalesced into run r1.",
+        "Your spooled ask b was withdrawn: stale: sizing x is gone",
+    ]
+
+
 def test_failed_notice_is_surfaced_not_dropped(tmp_path):
     import json
 

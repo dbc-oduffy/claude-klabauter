@@ -79,7 +79,7 @@ def unreachable_kept(common_dir: Path, run_id: str, blobs: Iterable[str]) -> lis
     pinning existed) is not unreachable; it is pinned here, best effort.
     """
     wanted = {b.lower() for b in blobs}
-    missing = sorted(b for b in wanted if git_objects.read_object(common_dir, b) is None)
+    missing = sorted(b for b in wanted if git_objects.read_object_header(common_dir, b) is None)
     present = wanted - set(missing)
     if present:
         prior = git_objects.read_ref_loose_or_packed(common_dir, KEPT_REF_PREFIX + run_id)

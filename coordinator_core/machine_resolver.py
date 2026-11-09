@@ -270,6 +270,9 @@ def registry_get(key: str) -> Optional[str]:
     return found
 
 
+REGISTRY_LAYER_FILES = ("registry.toml", "registry.local.toml")
+
+
 def _registry_get_exact(key: str) -> Optional[str]:
     env_override = os.environ.get(_env_override_key(key))
     if env_override:

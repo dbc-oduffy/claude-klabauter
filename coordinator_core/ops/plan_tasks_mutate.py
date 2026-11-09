@@ -1455,6 +1455,15 @@ def _clearance_fields(evidence: str) -> dict:
     return {"cleared": True, "closure_evidence": evidence}
 
 
+_CLEAR_GATE_KEYS = frozenset(
+    {"verb", "plan_path", "id", "owner_repo", "evidence", "condition", "gate_index"}
+)
+
+
+def _gate_condition(entry: object) -> str:
+    return str(entry.get("condition") or "").strip() if isinstance(entry, dict) else ""
+
+
 def _clear_gate(
     plan_path: str,
     task_id: str,
@@ -1462,13 +1471,19 @@ def _clear_gate(
     evidence: str,
     worktree: Path,
     repo_root: Path,
+    condition: str = "",
+    gate_index: Optional[int] = None,
 ) -> dict:
     """Apply the clear-gate verb: set ``cleared: true`` + ``closure_evidence``
     on the one ``external_gate`` entry of row ``task_id`` whose ``owner_repo``
     matches — a row-level entry, or a frontmatter entry carrying ``row: <id>``.
 
-    Refuses empty evidence, an unknown row, no matching gate, and more than
-    one matching gate. An already-cleared gate is a no-op (applied False).
+    When several entries share the owner_repo, ``condition`` (exact, else
+    unique prefix) or ``gate_index`` (1-based over row-level then frontmatter
+    entries, as the refusal lists them) selects one.
+
+    Refuses empty evidence, an unknown row, no matching gate, and an
+    unresolved selection. An already-cleared gate is a no-op (applied False).
     """
     try:
         path = _resolve_path(plan_path, worktree)
@@ -1541,13 +1556,59 @@ def _clear_gate(
         if total == 0:
             raise MutateAbort(f"clear-gate: no external_gate matches {gate_label}")
         if total > 1:
-            named = [f"row-level #{i + 1}" for i in range(len(row_hits))] + [
-                f"frontmatter {g[3].get('id', 'entry')!r}" for g in fm_hits
+            named = [
+                f"gate_index={i + 1} (row-level #{i + 1}: {_gate_condition(g)!r})"
+                for i, g in enumerate(row_hits)
+            ] + [
+                f"gate_index={len(row_hits) + j + 1} (frontmatter {g[3].get('id', 'entry')!r}: "
+                f"{_gate_condition(g[3])!r})"
+                for j, g in enumerate(fm_hits)
             ]
+            if gate_index is not None:
+                if not 1 <= gate_index <= total:
+                    raise MutateAbort(
+                        f"clear-gate: gate_index={gate_index} out of range for {gate_label}; "
+                        f"candidates: {'; '.join(named)}"
+                    )
+                pick = gate_index - 1
+            elif condition:
+                wanted = condition.strip()
+                conds = [_gate_condition(g) for g in row_hits] + [
+                    _gate_condition(g[3]) for g in fm_hits
+                ]
+                hits = [i for i, c in enumerate(conds) if c == wanted]
+                if not hits:
+                    hits = [i for i, c in enumerate(conds) if c.startswith(wanted)]
+                if len(hits) != 1:
+                    raise MutateAbort(
+                        f"clear-gate: condition {wanted!r} matches {len(hits)} of {total} "
+                        f"external_gate entries for {gate_label}; pass gate_index: "
+                        f"{'; '.join(named)}"
+                    )
+                pick = hits[0]
+            else:
+                raise MutateAbort(
+                    f"clear-gate: {total} external_gate entries match {gate_label}: "
+                    f"{'; '.join(named)} — pass condition (exact or unique prefix) or gate_index"
+                )
+            if pick < len(row_hits):
+                row_hits = [row_hits[pick]]
+                fm_hits = []
+            else:
+                fm_hits = [fm_hits[pick - len(row_hits)]]
+                row_hits = []
+        elif gate_index not in (None, 1):
             raise MutateAbort(
-                f"clear-gate: {total} external_gate entries match {gate_label}: "
-                f"{', '.join(named)} — make owner_repo distinct before clearing"
+                f"clear-gate: gate_index={gate_index} out of range for {gate_label}; "
+                "1 candidate"
             )
+        elif condition:
+            only = _gate_condition(row_hits[0] if row_hits else fm_hits[0][3])
+            if not only.startswith(condition.strip()):
+                raise MutateAbort(
+                    f"clear-gate: condition {condition.strip()!r} does not match the one "
+                    f"external_gate entry for {gate_label}: {only!r}"
+                )
 
         entry = row_hits[0] if row_hits else fm_hits[0][3]
         if entry.get("cleared") is True:
@@ -2733,9 +2794,13 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                    default | epistemic-premise), note (optional) — adds or
                    removes one depends_on edge; refuses unknown row/target,
                    self-edge, duplicate, absent edge and cycles.
-        clear-gate : id (str), owner_repo (str), evidence (str, non-empty) —
-                   sets cleared: true + closure_evidence on the one matching
-                   external_gate entry (row-level, or frontmatter with row: id).
+        clear-gate : id (str), owner_repo (str), evidence (str, non-empty),
+                   condition (str, optional) | gate_index (int, optional,
+                   1-based) — sets cleared: true + closure_evidence on the
+                   one matching external_gate entry (row-level, or
+                   frontmatter with row: id); condition (exact or unique
+                   prefix) or gate_index picks among same-owner_repo gates.
+                   Unknown parameters are refused by name.
         em-discharge : id (str), text (str, non-empty) — records that the EM
                    performed `performer: em` row `id` under `em_discharged` in
                    the evidence sidecar; read back with `read_em_discharges`.
@@ -2904,6 +2969,24 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         )
 
     if verb == "clear-gate":
+        unknown = sorted(
+            k for k in params if k not in _CLEAR_GATE_KEYS and not str(k).startswith("_")
+        )
+        if unknown:
+            return _err(
+                f"clear-gate: unknown parameter(s) {', '.join(map(repr, unknown))} — "
+                f"accepted: {', '.join(sorted(_CLEAR_GATE_KEYS))}"
+            )
+        raw_index = params.get("gate_index")
+        gate_index = None
+        if raw_index is not None:
+            if isinstance(raw_index, bool) or not isinstance(raw_index, (int, str)) or (
+                isinstance(raw_index, str) and not raw_index.strip().isdigit()
+            ):
+                return _err(f"clear-gate: gate_index must be a 1-based integer, got {raw_index!r}")
+            gate_index = int(raw_index)
+            if (params.get("condition") or "").strip():
+                return _err("clear-gate: pass condition or gate_index, not both")
         return await asyncio.to_thread(
             _clear_gate,
             plan_path,
@@ -2912,6 +2995,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             (params.get("evidence") or "").strip(),
             worktree,
             repo_root,
+            (params.get("condition") or "").strip(),
+            gate_index,
         )
 
     return _err(

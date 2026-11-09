@@ -8,6 +8,7 @@ maps to ``refused='peer-hunks-co-declared'`` naming the path and its release.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Iterable, Mapping
 
 OWN = "own"
@@ -46,8 +47,37 @@ def _covers(entry: str, path: str) -> bool:
     return bool(e) and (path == e or path.startswith(e + "/"))
 
 
+@lru_cache(maxsize=512)
+def _index(entries: frozenset) -> frozenset:
+    """The normalised, slash-stripped, non-empty entries of one set, built once per distinct set."""
+    return frozenset(e for e in (_norm(x).rstrip("/") for x in entries) if e)
+
+
+def _indexed(entries: Iterable[str]) -> frozenset:
+    return _index(entries if isinstance(entries, frozenset) else frozenset(entries))
+
+
+def _in_index(index: frozenset, path: str) -> bool:
+    """`_covers` against every entry at once: `path` or one of its directory prefixes is an entry."""
+    if path in index:
+        return True
+    i = path.rfind("/")
+    while i > 0:
+        if path[:i] in index:
+            return True
+        i = path.rfind("/", 0, i)
+    return False
+
+
 def _hit(entries: Iterable[str], path: str) -> bool:
-    return any(_covers(e, path) for e in entries)
+    return _in_index(_indexed(entries), path)
+
+
+def covers_any(entries: Iterable[str], paths: Iterable[str]) -> bool:
+    """True when some entry equals, or is a directory over, some path (`_covers` over the cross product,
+    one prefix lookup per path)."""
+    index = _indexed(entries)
+    return bool(index) and any(_in_index(index, c) for c in paths)
 
 
 def _releases(run_id: str, run_plan: str, other: LiveRun) -> bool:
@@ -87,6 +117,25 @@ def owns_path(run_id: str, path: str, live_runs: Mapping[str, LiveRun], run_plan
     if released_hit:
         return RELEASED_CLAIM
     return OWN
+
+
+def foreign_withheld_holders(
+    run_id: str, paths: Iterable[str], live_runs: Mapping[str, LiveRun], run_plan: str = "",
+) -> dict[str, list[str]]:
+    """`{path: [run ids]}` (sorted) of every unreleased other run whose withheld set covers the path: what
+    `owns_path(run_id, path, {rid: live_runs[rid]})` answers `FOREIGN_WITHHELD` for, one prefix index per run
+    instead of a call per (path, run). Paths no run holds are absent."""
+    held = [
+        (rid, _indexed(other.withheld)) for rid, other in sorted(live_runs.items())
+        if rid != run_id and not _releases(run_id, run_plan, other)
+    ]
+    out: dict[str, list[str]] = {}
+    for path in paths:
+        p = _norm(path)
+        owners = [rid for rid, index in held if index and _in_index(index, p)]
+        if owners:
+            out[path] = owners
+    return out
 
 
 def holders_from_held(held: Mapping[str, str]) -> dict[str, LiveRun]:

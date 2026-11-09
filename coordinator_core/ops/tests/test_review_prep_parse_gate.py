@@ -98,6 +98,29 @@ def test_range_mode_passes_a_clean_head_blob_over_a_broken_worktree(repo):
     assert not (reply["error"] or "").startswith("review.prep refused: py-unparseable")
 
 
+def test_peer_held_unparseable_path_is_not_refused_but_own_path_still_is(repo):
+    (repo / "peer.py").write_text(BROKEN, encoding="utf-8")
+    (repo / "mine.py").write_text("v = 1\n", encoding="utf-8")
+    reply = _call(repo, ["peer.py", "mine.py"], peer_held=["peer.py"])
+    assert not (reply["error"] or "").startswith("review.prep refused: py-unparseable")
+    assert "peer.py" in reply["peer_held"]
+
+    (repo / "mine.py").write_text(BROKEN, encoding="utf-8")
+    refused = _call(repo, ["peer.py", "mine.py"], peer_held=["peer.py"])
+    assert refused["error"].startswith("review.prep refused: py-unparseable:")
+    assert "mine.py" in refused["error"] and "peer.py" not in refused["error"]
+
+
+def test_range_mode_peer_held_broken_head_blob_is_not_refused(repo):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    head = _commit_file(repo, "m.py", BROKEN)
+    reply = rp.review_prep(
+        repo, base=base, paths=["m.py"], slice_prefix="prep-t", plan_path="docs/plans/p.md",
+        session_id=SESSION, head=head, peer_held=["m.py"],
+    )
+    assert not (reply["error"] or "").startswith("review.prep refused: py-unparseable")
+
+
 def test_clean_py_md_and_deleted_paths_pass(repo):
     (repo / "ok.py").write_text("v = 1\n", encoding="utf-8")
     (repo / "notes.md").write_text("rung = 1 if (\n", encoding="utf-8")

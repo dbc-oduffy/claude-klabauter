@@ -67,6 +67,49 @@ def test_free_slot_still_runs_child_and_passes_exit_code(tmp_path):
     assert sentinel.read_text() == "ran"
 
 
+def _suite_lock(tmp_path, monkeypatch, *, child_alive: bool):
+    """Take the suite mutex under ``tmp_path`` recorded against a child pid."""
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    from coordinator_core.testing import suite_mutex
+
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)" if child_alive else "pass"],
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    if not child_alive:
+        child.wait()
+    assert suite_mutex.acquire("foreign-suite-owner", "run-fast-marker", 0.0, pid=child.pid)
+    return child
+
+
+def test_stale_suite_mutex_lock_does_not_empty_the_pool(tmp_path, monkeypatch):
+    child = _suite_lock(tmp_path, monkeypatch, child_alive=False)
+    sentinel = tmp_path / "sentinel.txt"
+    result = _run(tmp_path, [], sentinel)
+    assert result.returncode == 0, result.stderr
+    assert sentinel.read_text() == "ran"
+    assert child.returncode is not None
+
+
+def test_live_foreign_suite_holder_refuses_fast_and_is_named(tmp_path, monkeypatch):
+    child = _suite_lock(tmp_path, monkeypatch, child_alive=True)
+    try:
+        sentinel = tmp_path / "sentinel.txt"
+        started = time.monotonic()
+        result = _run(tmp_path, [], sentinel)
+        elapsed = time.monotonic() - started
+    finally:
+        child.kill()
+        child.wait()
+    assert result.returncode == 75, result.stderr
+    assert elapsed < 30
+    assert "foreign-suite-owner" in result.stderr
+    assert f"pid={child.pid}" in result.stderr
+    assert "run-fast-marker" in result.stderr
+    assert "no live holder visible" not in result.stderr
+    assert not sentinel.exists()
+
+
 @pytest.mark.parametrize("flag", ["--force", "--unserialized", "--no-wait"])
 def test_no_bypass_flag_exists(tmp_path, flag):
     sentinel = tmp_path / "sentinel.txt"

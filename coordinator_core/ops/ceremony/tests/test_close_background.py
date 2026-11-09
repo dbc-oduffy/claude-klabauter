@@ -346,8 +346,8 @@ def test_op_is_registered_mutating_fire_and_forget_common_dir():
 
 
 def test_background_ledger_ends_in_the_legacy_legs_then_symbol_knowledge_without_review():
-    assert cb.BACKGROUND_LEGS[-5:] == (
-        "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close", "symbol-knowledge",
+    assert cb.BACKGROUND_LEGS[-6:] == (
+        "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close", "symbol-knowledge", "scratch-reap",
     )
     assert "review" not in cb.DEFAULT_RUNNERS
 

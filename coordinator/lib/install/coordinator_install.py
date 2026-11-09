@@ -158,6 +158,18 @@ def doctrine_root() -> Path | None:
     return Path(text) if text and Path(text).is_dir() else None
 
 
+def plugin_root_resolution() -> tuple[Path, str]:
+    """(root, source) from the three manifest-independent origins: CLAUDE_PLUGIN_ROOT, the DoE
+    doctrine breadcrumb, else the clone this script sits in (`engine-clone`)."""
+    env = os.environ.get("CLAUDE_PLUGIN_ROOT")
+    if env:
+        return Path(env), "CLAUDE_PLUGIN_ROOT"
+    doctrine = doctrine_root()
+    if doctrine:
+        return doctrine, "doctrine-breadcrumb"
+    return Path(__file__).resolve().parents[2], "engine-clone"
+
+
 def plugin_root_source() -> tuple[Path, str]:
     """(root, where it came from). With `CLAUDE_PLUGIN_ROOT` unset the root is this script's own
     `coordinator/` when it carries the install manifest, else the `coordinator/` of the DoE checkout
@@ -729,10 +741,18 @@ def _registry_flat() -> dict:
                 out[f"{prefix}{k}"] = v
         return out
 
+    def read_registry(path: Path) -> str:
+        # The installer can run before an engine is importable; only then does the plain read stand.
+        try:
+            from coordinator_core.shared_read import read_bytes_shared
+        except ImportError:
+            return path.read_text(encoding="utf-8")
+        return read_bytes_shared(path).decode("utf-8")
+
     merged: dict = {}
     for name in ("registry.toml", "registry.local.toml"):
         try:
-            merged.update(flatten(tomllib.loads((reg_dir / name).read_text(encoding="utf-8"))))
+            merged.update(flatten(tomllib.loads(read_registry(reg_dir / name))))
         except (OSError, ValueError):
             continue
     return merged
@@ -1422,6 +1442,8 @@ def answers_shape() -> dict:
 def build_plan(permission_mode: str | None) -> dict:
     problems = check_manifest_drift() if manifest_found() else []
     root, source = plugin_root_source()
+    if source.startswith("doctrine breadcrumb"):
+        source = plugin_root_resolution()[1]
     return {
         "backup": backup_block(_fresh_plan_id()),
         "schema": SCHEMA,
@@ -1652,6 +1674,10 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if problems else 0
 
     planning = args.plan or (args.i_am_agent and not args.answers)
+    if planning:
+        plan = build_plan(args.permission_mode)
+        print(json.dumps(plan, indent=2))
+        return 0
     drift = check_manifest_drift() if manifest_found() and not planning else []
     if drift:
         root, source = plugin_root_source()

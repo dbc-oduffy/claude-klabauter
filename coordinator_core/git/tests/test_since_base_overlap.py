@@ -182,6 +182,35 @@ def test_removing_the_blank_line_the_foreign_commit_added_is_refused(tmp_path: P
     assert len(findings) == 1 and foreign[:10] in findings[0].detail
 
 
+def test_foreign_line_moved_elsewhere_in_the_file_is_not_a_drop(tmp_path: Path) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "if healthy and not moved: return\n")
+    foreign_lines.insert(41, "foreign_second = 1\n")
+    repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    landed = list(foreign_lines)
+    del landed[40:42]
+    landed[10:10] = ["supervise_router()\n", "if healthy and not moved: return\n", "foreign_second = 1\n"]
+    repo.land(_join(landed))
+
+    assert since_base_overlap.check(tmp_path, [PATH], base, run_id=None) == ([], [])
+
+
+def test_foreign_line_removed_while_another_line_is_inserted_is_still_a_drop(tmp_path: Path) -> None:
+    repo, base, base_lines = _setup(tmp_path)
+    foreign_lines = list(base_lines)
+    foreign_lines.insert(40, "if healthy and not moved: return\n")
+    foreign = repo.commit({PATH: _join(foreign_lines)}, "foreign")
+    landed = list(foreign_lines)
+    del landed[40]
+    landed[10:10] = ["supervise_router()\n"]
+    repo.land(_join(landed))
+
+    findings = since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None)
+
+    assert len(findings) == 1 and foreign[:10] in findings[0].detail
+
+
 def test_own_checkpoint_commit_lines_do_not_count(tmp_path: Path) -> None:
     repo, base, base_lines = _setup(tmp_path)
     own_lines = list(base_lines)

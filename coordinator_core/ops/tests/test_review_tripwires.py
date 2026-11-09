@@ -109,6 +109,50 @@ def test_maps_to_sorted_named_paths(tmp_path):
     }
 
 
+def _names_reference(data: bytes, named) -> list:
+    """The unprobed definition: every occurrence of every basename, judged by its literal."""
+    from coordinator_core.ops import review_tripwires as rt
+
+    hits = set()
+    for base, paths in rt._by_basename(named).items():
+        at = data.find(base)
+        while at >= 0:
+            raw = rt._literal_around(data, at, len(base))
+            if raw is not None:
+                lit = rt._norm(raw)
+                if lit and not ("/" not in lit and lit in rt._GENERIC_BASENAMES):
+                    hits.update(o for o, p in paths if p == lit or p.endswith("/" + lit))
+            at = data.find(base, at + 1)
+    return sorted(hits)
+
+
+_PROBE_BODIES = [
+    b"x = 'run_pass.py'",
+    b'x = "run_pass.py"',
+    b"x = 'run_pass.py\"",
+    b"x = \"a'run_pass.py\"",
+    b"x = 'xrun_pass.py'",
+    b"x = 'q/run_pass.py' + \"z\\\\run_pass.py\"",
+    b"x = './run_pass.py'",
+    b"x = 'ops/coverage-oracles/run_pass.py'\ny = 'oracles/run_pass.py'",
+    b"run_pass.py'",
+    b"'run_pass.py",
+    b"x = 'a_b.py' 'b.py'",
+    b"x = 'a_b.py'\n'b.py'\n\"__init__.py\" 'z/__init__.py'",
+    b"x = '" + b"d/" * 200 + b"run_pass.py'",
+]
+
+
+@pytest.mark.parametrize("named", [
+    [EDITED, "q/other.py", "z/b.py", "m/a_b.py", "x/__init__.py", "y/z/__init__.py"],
+    [EDITED, "fixtures/data.json"],
+    ["ops/run_pass.py", "run_pass.py"],
+])
+@pytest.mark.parametrize("data", _PROBE_BODIES)
+def test_probed_scan_equals_every_occurrence_definition(data, named):
+    assert names_in(data, named) == _names_reference(data, named)
+
+
 def test_names_in_single_file():
     assert names_in(b"x = 'run_pass.py'", [EDITED, "q/other.py"]) == [EDITED]
     assert names_in(b"x = 1", [EDITED]) == []

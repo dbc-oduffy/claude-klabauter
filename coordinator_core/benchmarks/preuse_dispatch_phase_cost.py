@@ -47,12 +47,11 @@ _WRITE = "hooks.preuse_write_dispatch"
 
 
 def _git_init(root: Path) -> None:
-    subprocess.run(
-        ["git", "init", "-q", str(root)],
-        check=True,
-        capture_output=True,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
+    from coordinator_core.git.run import run_git
+
+    done = run_git(["init", "-q", str(root)])
+    if not done.ok:
+        raise subprocess.CalledProcessError(done.returncode, ["git", "init"], done.stdout, done.stderr)
 
 
 def _build_fixture(root: Path) -> Dict[str, Any]:
@@ -264,15 +263,9 @@ def run(n: int = 5) -> Dict[str, Any]:
 
 
 def _head() -> str:
-    try:
-        out = subprocess.run(
-            ["git", "-C", str(_REPO_ROOT), "rev-parse", "--short=10", "HEAD"],
-            capture_output=True, text=True, check=False,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        return out.stdout.strip()
-    except OSError:
-        return ""
+    from coordinator_core.git.run import run_git
+
+    return run_git(["-C", str(_REPO_ROOT), "rev-parse", "--short=10", "HEAD"]).stdout.strip()
 
 
 def format_report(result: Dict[str, Any]) -> str:

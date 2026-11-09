@@ -33,8 +33,9 @@ hook subprocess. It never issues a ``Write``/``Edit``/``MultiEdit``/
 write at all — a hard deny here cannot cause the self-inflicted outage a
 deny-the-deriver guard would risk.
 
-Exact target set (do NOT widen): the ONE derived surface,
-``<home>/.claude/CLAUDE.md``, for every plausible home root this host's
+Exact target set (do NOT widen): the derived surfaces
+``<home>/.claude/CLAUDE.md`` and direct ``*.md`` children of
+``<home>/.claude/rules/`` (authored at ``global-doctrine/rules/<file>``), for every plausible home root this host's
 ``Path.home()``/``~`` could resolve to (``HOME``, ``USERPROFILE``,
 ``os.path.expanduser("~")``), plus ``<claude_config_dir()>/CLAUDE.md``
 (``CLAUDE_CONFIG_DIR``, else ``home_dir() / ".claude"``; ``CLAUDE_HOME`` names
@@ -203,9 +204,25 @@ def _derived_live_target_suffixes() -> List[str]:
     return out
 
 
-def _is_derived_live_copy(file_path: str) -> bool:
+def _derived_rules_dirs() -> List[str]:
+    """Normalized ``rules/`` directory prefixes (trailing slash) of the derived
+    live copy: ``<home>/.claude/rules/`` per home root, plus
+    ``<claude_config_dir()>/rules/``."""
+    dirs: List[str] = []
+    for home in _home_candidates():
+        dirs.append(_normalize(home.rstrip("/\\") + "/.claude/rules/"))
+    try:
+        dirs.append(_normalize(str(claude_config_dir()).rstrip("/\\") + "/rules/"))
+    except Exception:
+        pass
+    return list(dict.fromkeys(dirs))
+
+
+def _derived_surface(file_path: str) -> Optional[str]:
+    """Authoring-relative name of the derived surface ``file_path`` is, else
+    ``None``: ``CLAUDE.md`` or ``rules/<file>.md`` (direct children only)."""
     if not file_path:
-        return False
+        return None
 
     expanded = file_path
     if file_path.startswith("~"):
@@ -214,7 +231,22 @@ def _is_derived_live_copy(file_path: str) -> bool:
             expanded = _expand_tilde(file_path, homes[0])
 
     normalized = _normalize(expanded)
-    return normalized in _derived_live_target_suffixes()
+    if normalized in _derived_live_target_suffixes():
+        return "CLAUDE.md"
+    for prefix in _derived_rules_dirs():
+        if normalized.startswith(prefix):
+            name = normalized[len(prefix):]
+            if name.endswith(".md") and "/" not in name and name != ".md":
+                original = expanded.replace("\\", "/").rsplit("/", 1)[-1]
+                return "rules/" + original
+    return None
+
+
+def _is_derived_live_copy(file_path: str) -> bool:
+    """The derived ``CLAUDE.md`` only; ``edit_admitted`` in
+    ``guard_doctrine_surface_edits`` relies on live ``rules/`` files being
+    admitted for its own gate."""
+    return _derived_surface(file_path) == "CLAUDE.md"
 
 
 def _authoring_path() -> Optional[str]:
@@ -245,11 +277,16 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not file_path:
         return None
 
-    if not _is_derived_live_copy(file_path):
+    surface = _derived_surface(file_path)
+    if surface is None:
         return None
 
     if _authoring_path() is None:
         return None
+
+    what = "The derived global-doctrine copy is re-derived from its authoring copy, so this edit may be overwritten."
+    if surface != "CLAUDE.md":
+        what += f" Author it at global-doctrine/{surface}."
 
     denial = {
         "hookSpecificOutput": {
@@ -261,7 +298,5 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     return apply_guard_level(
         "block-derived-global-doctrine-write",
         denial,
-        risk=doctrine_surface_risk(
-            "The derived global-doctrine copy is re-derived from its authoring copy, so this edit may be overwritten."
-        ),
+        risk=doctrine_surface_risk(what),
     )

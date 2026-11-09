@@ -122,6 +122,121 @@ def supervisor_live(rec):
         return False
 
 
+def entry_live(d):
+    """True when the entry's pid is alive and, if it records a procStart, is still that process.
+
+    No recorded procStart, or an unreadable start, never proves staleness: pid liveness decides."""
+    pid = d.get("pid") if isinstance(d, dict) else None
+    if not isinstance(pid, int) or isinstance(pid, bool) or not pid_alive(pid):
+        return False
+    recorded = d.get("procStart")
+    if not isinstance(recorded, str) or not recorded:
+        return True
+    try:
+        return proc_start(pid) == recorded
+    except OSError:
+        return True
+
+
+def codex_holder_live(row):
+    """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`.
+
+    True: holder alive and still that process. False: holder dead or its pid reused.
+    None: the row records no holder, so liveness is unknown. An unreadable start is not staleness."""
+    pid = row.get("codexPid") if isinstance(row, dict) else None
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return None
+    return entry_live({"pid": pid, "procStart": row.get("codexProcStart")})
+
+
+def codex_thread_holder(codex_home, thread_id):
+    """The `codexPid`/`codexProcStart` of the Codex process that last logged `thread_id`; {} when unknown.
+
+    Reads the newest `process_uuid` ("pid:<n>:<uuid>") for the thread across `logs_*.sqlite`, read-only."""
+    import re
+    import sqlite3
+    from contextlib import closing
+    best = None
+    for db in sorted(Path(codex_home).glob("logs_*.sqlite")):
+        try:
+            with closing(sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True, timeout=0.1)) as conn:
+                row = conn.execute("SELECT ts, ts_nanos, process_uuid FROM logs WHERE thread_id = ? "
+                                   "AND process_uuid IS NOT NULL ORDER BY ts DESC, ts_nanos DESC LIMIT 1",
+                                   (thread_id,)).fetchone()
+        except (sqlite3.Error, ValueError, OSError):
+            continue
+        if row and (best is None or row[:2] > best[:2]):
+            best = row
+    match = re.match(r"pid:(\d+):", best[2]) if best else None
+    if not match or int(match.group(1)) <= 0:
+        return {}
+    pid = int(match.group(1))
+    holder = {"codexPid": pid}
+    try:
+        holder["codexProcStart"] = proc_start(pid)
+    except OSError:
+        pass
+    return holder
+
+
+def codex_locks_dir():
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "thread-writer-locks"
+
+
+def _peer_rows(peers_file):
+    try:
+        with open(peers_file, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return []
+    rows = data.get("peers") if isinstance(data, dict) else data
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def codex_probe_lines(peers_file, locks_dir):
+    """One `name target holder-pid cwd live|stale` line per Codex peer row, then per lock-only thread.
+
+    Lock-only threads have no peers-file row, hence no recorded holder: they print stale."""
+    lines, seen = [], set()
+    for row in _peer_rows(peers_file):
+        if row.get("vendor") != "codex":
+            continue
+        target = str(row.get("target", ""))
+        seen.add(target)
+        pid = row.get("codexPid")
+        shown = pid if isinstance(pid, int) and not isinstance(pid, bool) else "-"
+        verdict = "live" if codex_holder_live(row) is True else "stale"
+        lines.append(f"{row.get('name', '-')} {target or '-'} {shown} {row.get('cwd') or '-'} {verdict}")
+    try:
+        names = sorted(os.listdir(locks_dir))
+    except OSError:
+        names = []
+    for f in names:
+        ident = f[:-len(".lock")]
+        if f.startswith(".") or not f.endswith(".lock") or not ident or ident in seen:
+            continue
+        lines.append(f"codex-{ident} {ident} - - stale")
+    return lines
+
+
+def main(argv=None):
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args or args[0] != "codex-probe":
+        print("usage: unimatrix-liveness.py codex-probe [--peers FILE] [--locks-dir DIR]", file=sys.stderr)
+        return 2
+    opts = {"--peers": state_dir() / "peers.json", "--locks-dir": codex_locks_dir()}
+    rest = args[1:]
+    while rest:
+        if rest[0] not in opts or len(rest) < 2:
+            print(f"unimatrix-liveness.py codex-probe: bad argument {rest[0]!r}", file=sys.stderr)
+            return 2
+        opts[rest[0]] = Path(rest[1])
+        rest = rest[2:]
+    for line in codex_probe_lines(opts["--peers"], opts["--locks-dir"]):
+        print(line)
+    return 0
+
+
 def read_record(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -184,3 +299,7 @@ def note_probe(state_dir, alias, ok, now=None):
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps({"failures": failures, "until": now + delay}), encoding="utf-8")
     os.replace(tmp, path)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

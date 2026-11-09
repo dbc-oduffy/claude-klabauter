@@ -371,13 +371,13 @@ class _RefWalk(NamedTuple):
 def _walk_refs(
     run_git: RunGit,
     repo_root: Path,
-    base: str,
+    base: str | list[str],
     refs: list[str],
     tip_shas: Optional[dict[str, str]] = None,
 ) -> dict[str, _RefWalk]:
-    """One `git log` over all `refs` excluding `base`, walked per ref by parent links.
+    """One `git log` over all `refs` excluding every `base`, walked per ref by parent links.
 
-    The union is closed under "reachable from a tip and not from base", so each ref's
+    The union is closed under "reachable from a tip and not from any base", so each ref's
     walk equals `base..ref`. A ref with no unique commit carries an empty walk.
     Rows without a `%T` field (3-field) leave the tree "". `tip_shas` (ref -> commit sha, from
     `ref_rows`) replaces the tip `rev-parse` spawn when it covers every ref.
@@ -385,7 +385,10 @@ def _walk_refs(
     if not refs:
         return {}
     sep = "\x1f"
-    proc = run_git(["log", f"--format=%H{sep}%P{sep}%T{sep}%h %s", *refs, f"^{base}"], repo_root)
+    bases = [base] if isinstance(base, str) else base
+    proc = run_git(
+        ["log", f"--format=%H{sep}%P{sep}%T{sep}%h %s", *refs, *[f"^{b}" for b in bases]], repo_root
+    )
     rows: dict[str, tuple[list[str], str, str]] = {}
     order: list[str] = []
     for line in proc.stdout.splitlines():
@@ -601,10 +604,11 @@ def brief(
             {"entry": entry, "name": name, "category": category, "recent": recent, "report_row": report_row}
         )
 
-    # Counted against main, not the checked-out branch: a `current` behind main would
-    # report every main-only commit as unique to each stale branch.
+    # Excludes both: HEAD so an already-absorbed tip counts zero, main so a `current`
+    # behind main does not report main-only commits as unique.
     walks = _walk_refs(
-        run_git, repo_root, main_branch or current, [s["entry"]["ref"] for s in stale_branches],
+        run_git, repo_root, list(dict.fromkeys([current, *([main_branch] if main_branch else [])])),
+        [s["entry"]["ref"] for s in stale_branches],
         tip_shas_from(ref_listing),
     )
     commits_by_ref = {ref: w.lines for ref, w in walks.items()}

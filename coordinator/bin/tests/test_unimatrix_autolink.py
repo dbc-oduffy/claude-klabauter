@@ -42,6 +42,7 @@ def env(tmp_path, monkeypatch):
     (home / "bin").mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
     monkeypatch.delenv("UNIMATRIX_TUNNEL_REMOTE", raising=False)
+    monkeypatch.setenv("UNIMATRIX_AUTOLINK_NO_ROUTER", "1")
     al = load("unimatrix-autolink")
     real_ssh = al.ssh_identity_file
     monkeypatch.setattr(al, "ssh_identity_file", lambda roster, alias, run=None: None)
@@ -435,9 +436,95 @@ def test_cli_entrypoint_unconfigured_is_silent_exit_zero_and_logs_reason(tmp_pat
     home = tmp_path / "s"
     home.mkdir()
     r = subprocess.run([sys.executable, str(BIN / "unimatrix-autolink.py")], capture_output=True, text=True,
-                       env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(home)})
+                       env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(home),
+                            "UNIMATRIX_AUTOLINK_NO_ROUTER": "1"})
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
     assert "no supervisors started" in (home / "unimatrix" / "autolink.log").read_text()
+
+
+def router_cmds(sp):
+    return [c for c in sp.cmds if Path(c[1]).name == "unimatrix-peer-router.py"]
+
+
+@pytest.fixture
+def router_on(env, monkeypatch):
+    monkeypatch.delenv("UNIMATRIX_AUTOLINK_NO_ROUTER")
+    monkeypatch.setattr(env.al, "router_lock_held", lambda sdir: False)
+    return env
+
+
+def test_dead_router_record_spawns_exactly_one_router_with_no_aliases_configured(router_on):
+    e, sp = router_on, Spawner()
+    e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
+    assert len(sp.cmds) == 1 and len(router_cmds(sp)) == 1 and sp.cmds[0][0] == sys.executable
+    rec = json.loads((e.sdir / "autolink-router.json").read_text())
+    assert rec == {"pid": 1001, "procStart": "start-1001"}
+
+
+def test_live_router_record_spawns_nothing(router_on):
+    e, sp = router_on, Spawner()
+    e.sdir.mkdir(parents=True)
+    e.live.add(3001)
+    (e.sdir / "autolink-router.json").write_text(json.dumps({"pid": 3001, "procStart": "start-3001"}))
+    e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
+    assert sp.cmds == []
+
+
+def test_killed_router_is_respawned_on_the_next_run_even_when_the_far_cache_is_healthy(router_on):
+    e, sp = router_on, Spawner()
+    e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
+    e.live.add(1001)
+    e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
+    assert len(router_cmds(sp)) == 1
+    e.live.discard(1001)
+    e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
+    assert len(router_cmds(sp)) == 2
+
+
+def test_hand_started_router_holding_its_lease_is_not_double_spawned(router_on, monkeypatch):
+    e, sp = router_on, Spawner()
+    monkeypatch.setattr(e.al, "router_lock_held", lambda sdir: True)
+    e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
+    assert sp.cmds == [] and not (e.sdir / "autolink-router.json").exists()
+
+
+def test_router_lease_probe_reads_a_really_held_lock(env):
+    transport = load("unimatrix-local-transport")
+    lock = env.sdir / "router" / "router.lock"
+    lock.parent.mkdir(parents=True)
+    assert env.al.router_lock_held(env.sdir) is False
+    with open(lock, "a+b") as held:
+        assert transport.lock_file(held)
+        assert env.al.router_lock_held(env.sdir) is True
+        transport.unlock_file(held)
+    assert env.al.router_lock_held(env.sdir) is False
+
+
+def test_router_is_not_a_per_alias_supervisor(env):
+    assert all(script != "unimatrix-peer-router.py" for _, script in env.al.SUPERVISORS)
+
+
+def test_held_router_spawn_lock_blocks_a_concurrent_router_spawn(router_on):
+    e, sp = router_on, Spawner()
+    e.sdir.mkdir(parents=True)
+    (e.sdir / "autolink-router.lock").write_text("")
+    e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
+    assert sp.cmds == []
+
+
+def test_router_spawn_failure_is_logged_and_far_links_still_run(router_on):
+    e = router_on
+    add_key(e)
+    sp = Spawner()
+
+    def spawn(cmd):
+        if Path(cmd[1]).name == "unimatrix-peer-router.py":
+            raise OSError("no exec")
+        return sp(cmd)
+
+    e.al.run(roster=e.roster, boxes=["machine-a"], spawn=spawn, probe_fn=ok)
+    assert len(sp.cmds) == 2
+    assert any("peer router supervision failed: OSError" in line for line in log_lines(e))
 
 
 def seed_live_pair(e, alias, pids=(2001, 2002)):
@@ -717,3 +804,72 @@ def test_missing_membership_library_means_transition_fallback(env, monkeypatch):
 
     monkeypatch.setattr(env.al, "_membership", gone)
     assert env.al.member_targets(env.roster)[0] == "none"
+
+
+def test_locked_1password_waits_by_name_without_probe_or_backoff(env):
+    add_key(env)
+    calls = []
+
+    def probe_fn(r, a, k, remote=None):
+        calls.append(a)
+        return None
+
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=probe_fn, agent_fn=lambda key: "locked",
+               now=1000.0)
+    assert calls == [] and sp.cmds == []
+    lines = log_lines(env)
+    assert lines == [lines[0]] and lines[0].endswith("far box machine-a: waiting: 1Password locked")
+    assert "unreachable" not in lines[0]
+    assert env.al._liveness().backoff_until(env.sdir, "machine-a") <= 1000.0
+
+
+def test_missing_op_names_the_passphrase_source_and_does_not_probe(env):
+    add_key(env)
+    calls = []
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=Spawner(), agent_fn=lambda key: "missing",
+               probe_fn=lambda r, a, k, remote=None: calls.append(a))
+    assert calls == [] and "passphrase_source_missing" in log_lines(env)[-1]
+
+
+def test_loaded_key_links_as_before(env):
+    add_key(env)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok, agent_fn=lambda key: "loaded")
+    assert len(sp.cmds) == 2
+
+
+def test_default_agent_state_skips_an_unencrypted_key_without_a_spawn(env):
+    add_key(env)
+
+    def boom(*a, **k):
+        raise AssertionError("no subprocess for an unencrypted key")
+
+    assert env.al.agent_state(str(env.key), run=boom) == "unencrypted"
+
+
+def _stub_passphrase(tmp_path, verdict_file):
+    (tmp_path / "unimatrix-passphrase.py").write_text(
+        "from pathlib import Path\n"
+        f"V = Path({str(verdict_file)!r})\n"
+        "def ensure_agent(key):\n"
+        "    with open(str(V) + '.calls', 'a') as f:\n"
+        "        f.write('x')\n"
+        "    return V.read_text()\n", encoding="utf-8")
+
+
+def test_roster_waits_on_a_locked_key_and_caches_a_loaded_verdict(env, tmp_path, monkeypatch):
+    verdict = tmp_path / "verdict"
+    _stub_passphrase(tmp_path, verdict)
+    monkeypatch.setattr(env.roster, "HERE", tmp_path)
+    monkeypatch.setattr(env.roster, "_AGENT_OK", {})
+    verdict.write_text("locked")
+    with pytest.raises(OSError, match="waiting: 1Password locked"):
+        env.roster.ensure_key_loaded("k", now=1000.0)
+    verdict.write_text("missing")
+    with pytest.raises(OSError, match="passphrase_source_missing"):
+        env.roster.ensure_key_loaded("k", now=1001.0)
+    verdict.write_text("loaded")
+    env.roster.ensure_key_loaded("k", now=1002.0)
+    env.roster.ensure_key_loaded("k", now=1003.0)
+    assert Path(str(verdict) + ".calls").read_text() == "xxx"

@@ -156,10 +156,12 @@ def _record_path(
     halted: bool = False,
     escrow: bool = False,
     retired: bool = False,
+    home: Optional[Path] = None,
 ) -> Optional[Path]:
+    """The record path for `run_id`; a caller looping over many ids passes `home` (from `_record_home`) to resolve it once."""
     if not _RUN_ID_RE.match(run_id or ""):
         return None
-    home = _record_home(repo_root)
+    home = home if home is not None else _record_home(repo_root)
     if home is None:
         return None
     return _under(home / _DIR, run_id, claimed, spent, halted, escrow, retired)
@@ -377,7 +379,9 @@ def _read_batch(keys: list) -> dict:
             for key in keys:
                 try:
                     with open(key, "rb") as fh:
-                        got.append((key, fh.read(JSON_READ_MAX_BYTES + 1)))
+                        # Sized from fstat: `read(JSON_READ_MAX_BYTES + 1)` allocates the whole cap per file.
+                        size = os.fstat(fh.fileno()).st_size
+                        got.append((key, fh.read(min(size, JSON_READ_MAX_BYTES) + 1)))
                 except OSError:
                     continue
         finally:

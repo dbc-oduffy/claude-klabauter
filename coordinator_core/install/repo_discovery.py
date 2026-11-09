@@ -31,10 +31,10 @@ def declared_repo_keys() -> list[str]:
 
     from coordinator_core import _settings_home
     from coordinator_core._fleet_names import _flatten
+    from coordinator_core.shared_read import read_bytes_shared
 
     try:
-        with open(_settings_home.machine_local_dir() / "registry.toml", "rb") as fh:
-            data = tomllib.load(fh)
+        data = tomllib.loads(read_bytes_shared(_settings_home.machine_local_dir() / "registry.toml").decode("utf-8"))
     except (OSError, ValueError):
         return []
     return [k for k, _ in _flatten(data) if k.startswith(_REPOS_PREFIX)]

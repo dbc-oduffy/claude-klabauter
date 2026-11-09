@@ -3,14 +3,13 @@ threads it onto the marker; any other dirty path still refuses."""
 
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops.dispatch_emit import cli, dirty_write_set
 from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.ops.dispatch_emit.tests._git_fixture import _git as _shared_git
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -41,11 +40,7 @@ def _plan(rows: str) -> str:
 
 
 def _git(repo: Path, *args: str) -> str:
-    done = subprocess.run(
-        ["git", *args], cwd=str(repo), check=True, capture_output=True, text=True,
-        **no_console_creationflags(),
-    )
-    return done.stdout.strip()
+    return _shared_git(list(args), repo).strip()
 
 
 def _make_repo(tmp_path, monkeypatch, rows: str) -> tuple[Path, str]:
@@ -135,6 +130,89 @@ def test_emit_script_refuses_carried_paths_without_review_only_rows(tmp_path, mo
 
     with pytest.raises(ValueError, match="review_carried_paths"):
         emit_script(repo / _PLAN, repo_root=repo, review_carried_paths=["a.py"])
+
+
+def _task_output(repo: Path, incomplete: list, landed: list) -> Path:
+    import json
+
+    out = repo / "task-output.json"
+    params = {"incomplete_chunks": incomplete, "landed_chunks": landed}
+    out.write_text(json.dumps({"next_action": {"kind": "land_run", "params": params}}), encoding="utf-8")
+    return out
+
+
+def _dirty_all(repo: Path, names: list) -> None:
+    for n in names:
+        (repo / "docs" / "x" / f"{n}.md").write_text("drift\n", encoding="utf-8")
+
+
+_C3 = _row("C3", ["docs/x/C3.md"])
+
+
+def test_review_only_carries_every_row_the_task_output_names(tmp_path, monkeypatch, capsys):
+    repo, base = _make_repo(tmp_path, monkeypatch, _C1 + _C2 + _C3)
+    (repo / "docs" / "x" / "C3.md").write_text("v1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "c3")
+    _dirty_all(repo, ["C1", "C2", "C3"])
+    run = _task_output(repo, ["C2", "C3"], ["C1"])
+
+    code = _emit(repo, "--review-only", str(run), "--rows", "C1", "--run-base", base)
+
+    err = capsys.readouterr().err
+    assert code == cli.EXIT_OK, err
+    marker = parse_marker((repo / "p.workflow.mjs").read_text(encoding="utf-8"))
+    assert marker is not None and marker.review_only
+    assert marker.review_carried == ("docs/x/C1.md", "docs/x/C2.md", "docs/x/C3.md")
+
+
+def test_review_only_still_refuses_dirt_of_a_row_the_task_output_does_not_name(
+    tmp_path, monkeypatch, capsys
+):
+    repo, base = _make_repo(tmp_path, monkeypatch, _C1 + _C2 + _C3)
+    (repo / "docs" / "x" / "C3.md").write_text("v1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "c3")
+    _dirty_all(repo, ["C1", "C2", "C3"])
+    run = _task_output(repo, ["C2"], ["C1"])
+
+    code = _emit(repo, "--review-only", str(run), "--rows", "C1", "--run-base", base)
+
+    assert code == cli.EXIT_DATA_ERROR
+    assert "docs/x/C3.md" in capsys.readouterr().err
+
+
+def test_review_only_task_output_does_not_excuse_a_path_a_foreign_row_also_declares(
+    tmp_path, monkeypatch, capsys
+):
+    repo, base = _make_repo(tmp_path, monkeypatch, _C1 + _C2 + _row("C3", ["docs/x/C2.md"]))
+    _dirty_all(repo, ["C2"])
+    run = _task_output(repo, ["C2"], ["C1"])
+
+    code = _emit(repo, "--review-only", str(run), "--rows", "C1", "--run-base", base)
+
+    assert code == cli.EXIT_DATA_ERROR
+    assert "docs/x/C2.md" in capsys.readouterr().err
+
+
+def test_review_only_carries_fourteen_dirty_run_owned_paths(tmp_path, monkeypatch, capsys):
+    names = [f"R{i:02d}" for i in range(14)]
+    rows = "".join(_row(n, [f"docs/x/{n}.md"]) for n in names)
+    repo, base = _make_repo(tmp_path, monkeypatch, rows)
+    for n in names:
+        (repo / "docs" / "x" / f"{n}.md").write_text("v1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "rows")
+    _dirty_all(repo, names)
+    run = _task_output(repo, names[1:], names[:1])
+
+    code = _emit(repo, "--review-only", str(run), "--rows", names[0], "--run-base", base)
+
+    err = capsys.readouterr().err
+    assert code == cli.EXIT_OK, err
+    marker = parse_marker((repo / "p.workflow.mjs").read_text(encoding="utf-8"))
+    assert marker is not None and marker.review_only
+    assert len(marker.review_carried) == 14
 
 
 def test_coded_review_row_with_its_file_dirty_is_accepted(tmp_path, monkeypatch, capsys):

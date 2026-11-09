@@ -91,6 +91,20 @@ def test_sizing_plan_spine_writes_are_declared_writes(tmp_path, monkeypatch):
     assert why and "run-a" in why
 
 
+def test_undeclared_writes_fall_back_to_the_shared_inferred_footprint_and_explicit_writes_win(tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    calls: list = []
+    monkeypatch.setattr(
+        "coordinator_core.ops.dispatch_emit.sibling_footprint.inferred_writes",
+        lambda root, sizing: calls.append(sizing) or ("a/b.py",),
+    )
+    sizing = {"plan": "docs/plans/p.md"}
+    assert mod._declared_writes(tmp_path, {"args": {}}, sizing) == ["a/b.py"]
+    assert len(calls) == 1
+    assert mod._declared_writes(tmp_path, {"args": {"writes": ["x.py"]}}, sizing) == ["x.py"]
+    assert len(calls) == 1
+
+
 def test_plan_edge_outside_docs_plans_declares_nothing(tmp_path):
     (tmp_path / ".git").mkdir()
     (tmp_path / "elsewhere.md").write_text("x", encoding="utf-8")

@@ -4797,6 +4797,19 @@ def _accepted_seed(
     return run_accept_partial.read([Path(run_dir)])
 
 
+def _planned_partial_seed(plan_text: Optional[str]) -> dict:
+    """``{row id: reason}`` for each spine row declaring ``expect_partial: true``; empty without plan text."""
+    if not plan_text:
+        return {}
+    from coordinator_core.ops.plan_tasks_render import load_rows
+
+    return {
+        r["id"]: "plan-declared expect_partial"
+        for r in load_rows(plan_text).rows
+        if isinstance(r, dict) and r.get("expect_partial") is True and isinstance(r.get("id"), str)
+    }
+
+
 def _held_halt_record_js() -> str:
     """JS lifting a bare held-dependents `_halted` into the typed halt whose `next_action` detail names the accept_partial revise form."""
     from coordinator_core.ops.dispatch_emit.ask_contract import ACCEPT_PARTIAL_FORM, HALT_DEPENDENTS_UNSTARTED
@@ -5049,6 +5062,7 @@ def _run_row_helper_js(
         "      return 'BLOCKED: held, dependency ' + _blocker + ' did not finish DONE';\n"
         "    }\n"
         "    let result;\n"
+        "    let _rowError = null;\n"
         "    try {\n"
         "      result = await run();\n"
         "      let _ckpts = 0;\n"
@@ -5073,6 +5087,7 @@ def _run_row_helper_js(
         "      }\n"
         "    } catch (e) {\n"
         "      result = null;\n"
+        "      _rowError = String((e && e.message) || e);\n"
         "    }\n"
         "    let _text = JSON.stringify(result ?? null);\n"
         f"    if ({_ROW_LOCAL_BLOCK_JS_RE}.test(_text) && !_widenOf[id]) {{\n"
@@ -5085,11 +5100,22 @@ def _run_row_helper_js(
         "        _widenOf[id] = _cls.widen;\n"
         "        _widened.push({ row: id, path: _cls.widen });\n"
         "        log(id + ': ROW-LOCAL-BLOCK names in-ask path ' + _cls.widen + '; widening and re-dispatching once');\n"
-        "        try { result = await run(); } catch (e) { result = null; }\n"
+        "        try { result = await run(); _rowError = null; } catch (e) { result = null; _rowError = String((e && e.message) || e); }\n"
         "        _text = JSON.stringify(result ?? null);\n"
         "      } else {\n"
         "        log(id + ': ROW-LOCAL-BLOCK stays row-local: ' + _cls.halt);\n"
         "      }\n"
+        "    }\n"
+        # A row whose executor threw or answered nothing never ran to a verdict: it halts the run
+        # naming the row and the error, ahead of review prep's anonymous empty-slices halt.
+        "    let _rowFailed = false;\n"
+        "    let _rowFailReason = '';\n"
+        "    if (result == null) {\n"
+        "      _rowFailed = true;\n"
+        "      _rowFailReason = 'executor ' + (_rowError ? 'error' : 'returned no result') + ' on row ' + id + "
+        "(_rowError ? ': ' + _rowError.replace(/\\s+/g, ' ').slice(0, 400) : '');\n"
+        "      result = 'BLOCKED: ' + _rowFailReason;\n"
+        "      _text = JSON.stringify(result);\n"
         "    }\n"
         "    let incomplete = false;\n"
         f"    if ({_NON_DONE_STATUS_JS_RE}.test(_text)) {{\n"
@@ -5116,13 +5142,14 @@ def _run_row_helper_js(
         "        incomplete = true;\n"
         "      }\n"
         "    }\n"
-        f"    if ({_STOP_RULE_JS_RE}.test(_text) && !{_ROW_LOCAL_BLOCK_JS_RE}.test(_text)) {{\n"
+        f"    if (_rowFailed || ({_STOP_RULE_JS_RE}.test(_text) && !{_ROW_LOCAL_BLOCK_JS_RE}.test(_text))) {{\n"
         "      _stoppedBy.push(id);\n"
+        "      const _haltWhy = _rowFailed ? _rowFailReason : id;\n"
         "      if (plan) {\n"
         "        _haltedPlans.add(plan);\n"
-        "        if (!_haltedPlanReasons.has(plan)) _haltedPlanReasons.set(plan, id);\n"
+        "        if (!_haltedPlanReasons.has(plan)) _haltedPlanReasons.set(plan, _haltWhy);\n"
         "      } else {\n"
-        "        _halted = id;\n"
+        "        _halted = _haltWhy;\n"
         "      }\n"
         "    }\n"
         + verify_push
@@ -6755,7 +6782,10 @@ def compose_script(
                 sidecar_run_key=_sidecar_run_key(plan_path),
                 repo_root=repo_root,
                 widened_seed=_widened_seed(widen_run_dir, repo_root, absorb_run_id),
-                accepted_seed=_accepted_seed(widen_run_dir, repo_root, absorb_run_id),
+                accepted_seed={
+                    **_planned_partial_seed(plan_text),
+                    **_accepted_seed(widen_run_dir, repo_root, absorb_run_id),
+                },
             )
         )
 

@@ -375,7 +375,7 @@ def _object_store_holds(monkeypatch, sha, kind="commit"):
     from coordinator_core.git import git_objects
 
     monkeypatch.setattr(
-        git_objects, "_read_object", lambda common, s: (kind, b"") if s == sha else None
+        git_objects, "read_object_header", lambda common, s: (kind, 0) if s == sha else None
     )
 
 

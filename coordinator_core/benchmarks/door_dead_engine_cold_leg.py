@@ -192,11 +192,12 @@ def export_door_sources(repo_root: Path, ref: str, door: str, dest: Path) -> Pat
         if ref == WORKTREE:
             shutil.copyfile(repo_root / DOOR_DIR_REL / name, target)
             continue
-        proc = subprocess.run(
-            ["git", "-C", str(repo_root), "show", f"{ref}:{DOOR_DIR_REL}/{name}"],
-            capture_output=True, check=True, **no_console_creationflags(),
-        )
-        target.write_bytes(proc.stdout)
+        from coordinator_core.git.run import run_git
+
+        shown = run_git(["-C", str(repo_root), "show", f"{ref}:{DOOR_DIR_REL}/{name}"], binary=True)
+        if not shown.ok:
+            raise subprocess.CalledProcessError(shown.returncode, ["git", "show", ref], b"", shown.stderr)
+        target.write_bytes(shown.stdout_bytes)
     return dest
 
 

@@ -1083,6 +1083,12 @@ def _unavailable(exc: BaseException) -> Optional[str]:
     return "dispatch-timeout" if code == _UNAVAILABLE_CODE else None
 
 
+_WITHDRAW_HINT = (
+    "To withdraw it: coordinator-invoke ask_spool.withdraw "
+    "'{{\"spool_id\":\"{spool_id}\",\"reason\":\"...\"}}'."
+)
+
+
 def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional[dict]:
     """Allow envelope for an ask written to the ask spool ("spooled as <id>"), or None when it cannot be
     spooled (no payload or root, or an unwritable disk), so the caller keeps its own answer. No engine call."""
@@ -1116,12 +1122,13 @@ def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional
     except OSError:
         return _refuse(
             f"The engine is unavailable ({reason}); the ask is spooled as {spool_id} and mints once the "
-            "engine is healthy. Do not re-submit."
+            "engine is healthy. Do not re-submit. " + _WITHDRAW_HINT.format(spool_id=spool_id)
         )
     return _allow_rewrite(
         {"scriptPath": str(script)},
         f"The engine is unavailable ({reason}); the ask is spooled as {spool_id}. It mints exactly one run "
-        "once the engine is healthy and this session is notified. Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds.",
+        "once the engine is healthy and this session is notified. Do not re-submit. Do not poll or verify this run meanwhile; unrelated work proceeds. "
+        + _WITHDRAW_HINT.format(spool_id=spool_id),
         f"Engine submission: spooled as {spool_id}.",
     )
 
@@ -1803,17 +1810,10 @@ def _declared_writes(root: Path, tool_input: Mapping[str, Any], sizing_doc: Mapp
     plan_rel = sizing_doc.get("plan")
     if not isinstance(plan_rel, str) or not plan_rel.strip():
         return []
-    from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import _declared_write_paths
-
-    def read_spine() -> list[str]:
-        plans = (root / "docs" / "plans").resolve()
-        plan = (root / plan_rel.strip()).resolve()
-        if plans not in plan.parents or not plan.is_file():
-            return []
-        return sorted(_declared_write_paths(plan))
+    from coordinator_core.ops.dispatch_emit.sibling_footprint import inferred_writes
 
     try:
-        spine = _bounded_call(("spine", str(root), plan_rel.strip()), read_spine)
+        spine = _bounded_call(("spine", str(root), plan_rel.strip()), lambda: list(inferred_writes(root, sizing_doc)))
     except OSError:
         return []
     return spine if isinstance(spine, list) else []

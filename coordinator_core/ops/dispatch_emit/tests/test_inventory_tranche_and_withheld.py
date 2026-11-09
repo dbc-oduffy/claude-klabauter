@@ -212,7 +212,7 @@ def test_all_blocked_refusal_names_each_group_size_and_blocker():
         assert re.search(rf"{item}\W[^;\n]*\b{n} rows?\b[^;\n]*prerequisite {blocker}", msg), msg
 
 
-def test_bound_shared_path_group_still_defers_whole():
+def test_bound_shared_path_group_splits_and_defers_only_the_blocked_member():
     groups = [["a", "b"], ["z"]]
     size = {"a": 1, "b": 1, "z": 5}
     prereqs = {"a": set(), "b": {"z"}, "z": set()}
@@ -220,4 +220,41 @@ def test_bound_shared_path_group_still_defers_whole():
     taken, deferred = im._pick_groups(
         groups, size, prereqs, shared, 3, {"a": "b (depends_on_plan of a)"}
     )
-    assert taken == [] and {"a", "b"} <= set(deferred)
+    assert taken == ["a"] and "b" in deferred and "a" not in deferred
+
+
+def _held_rows(item: str) -> dict:
+    return {f"{item}.{item}{k}": "operator hold" for k in range(2)}
+
+
+def test_held_item_leaves_the_budget_and_its_dependent_defers_naming_the_hold():
+    rows = _rows("aa", 2) + _rows("bb", 2, edge_to="aa.aa0") + _rows("cc", 2)
+    selected, report = im.select_tranche(rows, ["aa", "bb", "cc"], 100, held=_held_rows("aa"))
+    assert report["plans"] == ["cc"] and "stall" not in report
+    reason = next(d["reason"] for d in report["deferred"] if d["plan"] == "bb")
+    assert "waits on held aa (operator hold)" in reason
+
+
+def test_pass_taking_only_held_items_stalls_without_selecting_or_raising():
+    rows = _rows("aa", 2) + _rows("bb", 2, edge_to="aa.aa0")
+    selected, report = im.select_tranche(rows, ["aa", "bb"], 100, held=_held_rows("aa"))
+    assert selected == []
+    assert report["stall"] == {"rows": ["aa.aa0", "aa.aa1"], "held_by": _held_rows("aa")}
+    assert report["remaining"]["passes_remaining"] == 0
+
+
+def test_partly_held_item_is_not_held():
+    rows = _rows("aa", 2)
+    selected, report = im.select_tranche(rows, ["aa"], 100, held={"aa.aa0": "x"})
+    assert report["plans"] == ["aa"] and "stall" not in report
+
+
+def test_family_hold_reads_the_newest_tranche_receipt(tmp_path):
+    inv = tmp_path / "20261008T000000-tr.md"
+    inv.write_text("---\nrun_id: 20261008T000000-tr\n---\n", encoding="utf-8")
+    assert im.family_hold(inv) == {}
+    for n, rows in ((1, ["stale"]), (2, ["fresh"])):
+        (tmp_path / f"20261008T000000-tr-t{n}.workflow.mjs.emitted.json").write_text(
+            '{"hold": {"rows": %s, "reason": "why"}}' % str(rows).replace("'", '"'), encoding="utf-8"
+        )
+    assert im.family_hold(inv) == {"fresh": "why"}

@@ -147,8 +147,8 @@ def _last_message(stdout: str, adapter: Any) -> Optional[str]:
 def _provider_env(provider: str) -> Optional[dict[str, str]]:
     """Use the runner's authenticated-local-account policy, not ambient paid API keys."""
     if provider == "codex":
-        from coordinator_core.codex_runner.review import _build_env
-        return _build_env()
+        from coordinator_core.codex_runner.review import _unattended_env
+        return _unattended_env()
     if provider == "agy":
         from coordinator_core.codex_runner.agy import _build_env
         return _build_env()

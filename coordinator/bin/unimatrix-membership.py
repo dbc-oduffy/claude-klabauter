@@ -29,6 +29,7 @@ HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z
 USER_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9._-]{0,63}")
 KEY_BODY_RE = re.compile(r"[A-Za-z0-9+/]{16,}={0,2}")
 MEMBER_FIELDS = ("box", "host", "user", "relay_pub", "from_cidrs")
+OPTIONAL_MEMBER_FIELDS = ("file_pub",)  # the member's own file-transfer key; absent = no file leg to that box
 SNAPSHOT_FIELDS = ("collective", "epoch", "prev_digest", "members")
 RUN_TIMEOUT_SECONDS = 30
 
@@ -66,8 +67,8 @@ def is_ip_literal(host):
 
 
 def _validate_member(m):
-    if not isinstance(m, dict) or set(m) != set(MEMBER_FIELDS):
-        raise MembershipError(f"member must have exactly {list(MEMBER_FIELDS)}")
+    if not isinstance(m, dict) or not set(MEMBER_FIELDS) <= set(m) <= set(MEMBER_FIELDS) | set(OPTIONAL_MEMBER_FIELDS):
+        raise MembershipError(f"member must have {list(MEMBER_FIELDS)} and at most {list(OPTIONAL_MEMBER_FIELDS)}")
     box, host, user, pub, cidrs = (m[k] for k in MEMBER_FIELDS)
     if not isinstance(box, str) or not BOX_RE.fullmatch(box):
         raise MembershipError(f"invalid box name {box!r}")
@@ -78,6 +79,12 @@ def _validate_member(m):
     parts = pub.split() if isinstance(pub, str) else []
     if len(parts) < 2 or parts[0] != "ssh-ed25519" or not KEY_BODY_RE.fullmatch(parts[1]):
         raise MembershipError(f"member {box}: relay_pub must be an ssh-ed25519 public key")
+    if "file_pub" in m:
+        fparts = m["file_pub"].split() if isinstance(m["file_pub"], str) else []
+        if len(fparts) < 2 or fparts[0] != "ssh-ed25519" or not KEY_BODY_RE.fullmatch(fparts[1]):
+            raise MembershipError(f"member {box}: file_pub must be an ssh-ed25519 public key")
+        if fparts[1] == parts[1]:
+            raise MembershipError(f"member {box}: file_pub must differ from relay_pub")
     if not isinstance(cidrs, list):
         raise MembershipError(f"member {box}: from_cidrs must be a list")
     for c in cidrs:
@@ -414,13 +421,24 @@ def adopt(home, snap, sig, notifier=notify, run=subprocess.run):
 
 # ---- authorized_keys ----------------------------------------------------------------------------
 
-def authorized_keys_lines(members, relay_line_fn):
-    """One authorized_keys line per member: `relay_line_fn(key_body)` with `from="<cidrs>",` prefixed.
-
-    A member with no from_cidrs gets the relay line unprefixed."""
+def member_lines(members, relay_line_fn, file_line_fn=None):
+    """(key body, authorized_keys line) per member key: the relay line, then the file line when the member
+    carries `file_pub` and `file_line_fn` is given. Each gets `from="<cidrs>",` prefixed when the member has cidrs."""
     out = []
     for m in members:
         _validate_member(m)
-        line = relay_line_fn(m["relay_pub"].split()[1])
-        out.append(f'from="{",".join(m["from_cidrs"])}",{line}' if m["from_cidrs"] else line)
+        keys = [(m["relay_pub"].split()[1], relay_line_fn)]
+        if file_line_fn is not None and "file_pub" in m:
+            keys.append((m["file_pub"].split()[1], file_line_fn))
+        for body, fn in keys:
+            line = fn(body, m["box"])
+            out.append((body, f'from="{",".join(m["from_cidrs"])}",{line}' if m["from_cidrs"] else line))
     return out
+
+
+def authorized_keys_lines(members, relay_line_fn, file_line_fn=None):
+    """One authorized_keys line per member key: `relay_line_fn(key_body, box)` for the relay key and
+    `file_line_fn(key_body, box)` for a `file_pub` key, `from="<cidrs>",` prefixed.
+
+    A member with no from_cidrs gets the line unprefixed."""
+    return [line for _, line in member_lines(members, relay_line_fn, file_line_fn)]

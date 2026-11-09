@@ -339,8 +339,10 @@ def test_dead_registry_rung_not_flagged_inside_backticks() -> None:
 
 def test_dead_registry_rung_exempted_by_marker() -> None:
     text = "source ~/.claude/machine-local/env.sh  # abs-path-ok: incident writeup quoting the real path\n"
-    hits = detect_in_text(text, filename="setup.sh")
-    assert "dead-registry-rung" not in _rules(hits)
+    assert "dead-registry-rung" in _rules(detect_in_text(text, filename="setup.sh"))
+    keyed = text.replace("incident writeup quoting the real path", "key=legacy.rung")
+    co = _carve(keys=frozenset({"legacy.rung"}))
+    assert "dead-registry-rung" not in _rules(detect_in_text(keyed, "setup.sh", co))
 
 
 def test_dead_registry_rung_skipped_on_unparseable_python() -> None:
@@ -1030,3 +1032,101 @@ def test_remaining_evidence_prefixes_stay_exempt() -> None:
 
 def test_audits_capture_data_json_stays_exempt() -> None:
     assert detect_in_text(_DRIVE_LINE, filename="state/audits/data/x.json") == []
+
+
+# --- code-surface markers need a discharge ---------------------------------
+
+_ROOT = "D:" + "\\cache\\runs"  # assembled so this file carries no literal root
+
+
+def _carve(**kw):
+    from coordinator_core.ops.session.abs_path_carve_outs import CarveOuts
+
+    return CarveOuts(**kw)
+
+
+def test_bare_reason_marker_flagged_on_code_surface_exempt_on_prose() -> None:
+    line = f'DATA = "{_ROOT}"  # abs-path-ok: synthetic'
+    assert _rules(detect_in_text(line, "pkg/mod.py")) == {"drive-letter"}
+    assert detect_in_text(line, "docs/note.md") == []
+    assert detect_in_text(line) == []
+
+
+def test_bare_reason_finding_carries_hint_and_str_renders_it() -> None:
+    from coordinator_core.ops.session.guard_concrete_path_citations import Finding
+
+    line = f'DATA = "{_ROOT}"  # abs-path-ok: synthetic'
+    (f,) = detect_in_text(line, "pkg/mod.py")
+    assert ".abs-path-carve-outs.toml" in f.hint
+    assert str(f).startswith(f"pkg/mod.py:1 drive-letter {_ROOT}")
+    assert f.hint in str(f)
+    # hint never affects equality or set membership
+    assert f == Finding("pkg/mod.py", 1, "drive-letter", _ROOT)
+    assert f in {Finding("pkg/mod.py", 1, "drive-letter", _ROOT)}
+
+
+def test_no_hint_without_a_rejected_marker() -> None:
+    (plain,) = detect_in_text(f'DATA = "{_ROOT}"', "pkg/mod.py")
+    assert plain.hint == ""
+    assert str(plain) == f"pkg/mod.py:1 drive-letter {_ROOT}"
+    line = f'DATA = "{_ROOT}"  # abs-path-ok: key=paths.cache_root'
+    (listed_miss,) = detect_in_text(line, "pkg/mod.py")
+    assert listed_miss.hint != ""
+
+
+def test_key_marker_discharges_only_when_listed() -> None:
+    line = f'DATA = "{_ROOT}"  # abs-path-ok: key=paths.cache_root'
+    assert detect_in_text(line, "pkg/mod.py", _carve(keys=frozenset({"paths.cache_root"}))) == []
+    assert detect_in_text(line, "pkg/mod.py", _carve(keys=frozenset({"other"}))) != []
+    assert detect_in_text(line, "pkg/mod.py") != []
+
+
+def test_carve_out_marker_needs_the_exact_path() -> None:
+    line = f'DATA = "{_ROOT}"  # abs-path-ok: carve-out=fixture-x'
+    listed = _carve(by_id={"fixture-x": frozenset({"pkg/mod.py"})})
+    assert detect_in_text(line, "pkg/mod.py", listed) == []
+    assert detect_in_text(line, "pkg/other.py", listed) != []
+
+
+def test_listed_site_discharges_only_that_line() -> None:
+    line = f'DATA = "{_ROOT}"  # abs-path-ok: legacy'
+    co = _carve(sites=frozenset({("pkg/mod.py", line)}))
+    assert detect_in_text(line, "pkg/mod.py", co) == []
+    new_line = f'OTHER = "{_ROOT}x"  # abs-path-ok: legacy'
+    assert detect_in_text(new_line, "pkg/mod.py", co) != []
+
+
+def test_new_violations_threads_carve_outs() -> None:
+    line = f'DATA = "{_ROOT}"  # abs-path-ok: key=paths.cache_root\n'
+    assert new_violations("", line, "pkg/mod.py") != []
+    co = _carve(keys=frozenset({"paths.cache_root"}))
+    assert new_violations("", line, "pkg/mod.py", co) == []
+
+
+def _git_repo(tmp_path, files):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    for rel, text in files.items():
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+
+def test_scan_repo_enforces_registry_end_to_end(tmp_path) -> None:
+    from coordinator_core.ops.session.guard_concrete_path_citations import scan_repo
+
+    marked = f'DATA = "{_ROOT}"  # abs-path-ok: carve-out=fx\n'
+    _git_repo(tmp_path, {"m.py": marked, "n.md": f"see {_ROOT}  abs-path-ok: quoted\n"})
+    assert [f.file for f in scan_repo(tmp_path)] == ["m.py"]
+
+    toml = '[[carve_out]]\nid = "fx"\nreason = "fixture"\npaths = ["m.py"]\n'
+    _git_repo(tmp_path, {".abs-path-carve-outs.toml": toml})
+    assert scan_repo(tmp_path) == []
+
+
+def test_scan_repo_malformed_registry_is_one_finding(tmp_path) -> None:
+    from coordinator_core.ops.session.guard_concrete_path_citations import scan_repo
+
+    _git_repo(tmp_path, {".abs-path-carve-outs.toml": "this = [not toml"})
+    found = scan_repo(tmp_path)
+    assert [f.file for f in found] == [".abs-path-carve-outs.toml"]

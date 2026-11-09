@@ -37,6 +37,7 @@ Spec backlink: docs/plans/2026-08-22-a-commit-is-one-spawn-not-eleven.md, chunk 
 from __future__ import annotations
 
 import binascii
+import contextvars
 import hashlib
 import itertools
 import mmap
@@ -467,15 +468,21 @@ class _GitReadModelError(Exception):
 
 
 class PackReadDeadline(_GitReadModelError):
-    """A pack read ran past `PACK_READ_DEADLINE_SECS` on both the first attempt and its
-    retry against a freshly opened map. Never means "object missing"."""
+    """An object read ran past `PACK_READ_DEADLINE_SECS`: the one cumulative wall of the outermost
+    read (loose, packs, retry, alternates, delta bases), or a cooperative window check. Never
+    means "object missing"."""
 
 
-# Per attempt; two attempts must stay below the warm server's STALL_DUMP_SECS (10s), and
-# git must not import coordinator_core.warm, so the figure is pinned by a test instead.
+# One cumulative wall per outermost object read; it must stay below the warm server's
+# STALL_DUMP_SECS (10s), and git must not import coordinator_core.warm, so a test pins it.
 PACK_READ_DEADLINE_SECS = 4.0
 _pack_clock = time.monotonic
 _PACK_DEADLINE = threading.local()
+_PACK_WORKER = threading.local()
+_PACK_STALLED = object()
+PACK_READ_STALLED_ADVISORY = "pack_read_stalled"
+PACK_STALL_COOLDOWN_SECS = 15.0
+_PACK_STALL_UNTIL: "dict[str, float]" = {}
 
 
 _PACK_TYPE_NAMES = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
@@ -995,7 +1002,10 @@ class _LookupSource:
         if packed is None:
             return None
         i = self._sid_pos[packed >> self._ENTRY_BITS]
-        return i, self.indexes[i][2].offsets[packed & ((1 << self._ENTRY_BITS) - 1)]
+        pidx = self.indexes[i][2]
+        if pidx is None:
+            return None
+        return i, pidx.offsets[packed & ((1 << self._ENTRY_BITS) - 1)]
 
 
 _LOOKUP_SOURCES: "dict[str, _LookupSource]" = {}
@@ -1209,8 +1219,12 @@ def _read_pack_object_at(
 
 
 def packed_contains(common_dir: Path, sha: str) -> bool:
-    """Index-only membership: no pack bytes are read or inflated."""
-    return _locate_packed(Path(common_dir), sha, revalidate=False) is not None
+    """Index-only membership: no pack bytes are read or inflated. Runs under the read wall; an
+    overrun raises `PackReadDeadline`, never False."""
+    common = Path(common_dir)
+    return _under_read_wall(
+        "pack-listing", common, sha, lambda: _locate_packed(common, sha, revalidate=False) is not None
+    )
 
 
 def _drop_scoped_pack_map(pack_path: Path) -> None:
@@ -1248,9 +1262,54 @@ def _read_pack_object_deadlined(
         _PACK_DEADLINE.at = None
 
 
+def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
+    """Run `fn()` under the one hard wall: a kernel-blocked open, listing or page fault cannot
+    reach the cooperative `_PACK_DEADLINE` check, so the caller leaves a stalled drive's worker
+    behind and gets `PackReadDeadline`. The outermost caller owns the wall; any read nested in
+    the worker (`_PACK_WORKER.inside`) runs inline against the same deadline, never a fresh one."""
+    if getattr(_PACK_WORKER, "inside", False):
+        return fn()
+    ckey = str(common_dir)
+    if _pack_clock() < _PACK_STALL_UNTIL.get(ckey, 0.0):
+        raise PackReadDeadline(
+            f"{PACK_READ_STALLED_ADVISORY}: pack reads under {common_dir} are failing fast after a stall"
+        )
+    ctx = contextvars.copy_context()
+
+    def _work():
+        _PACK_WORKER.inside = True
+        try:
+            return ctx.run(fn)
+        finally:
+            _PACK_WORKER.inside = False
+
+    # Keyed per sha: run_bounded serialises callers sharing a key, and pool workers read one
+    # repo's packs concurrently. The per-repo cooldown above is what stops a stalled drive
+    # costing every distinct sha its own full wait.
+    out = run_bounded(f"{kind}:{ckey}:{sha}", _work, deadline=PACK_READ_DEADLINE_SECS, default=_PACK_STALLED)
+    if out is _PACK_STALLED:
+        _PACK_STALL_UNTIL[ckey] = _pack_clock() + PACK_STALL_COOLDOWN_SECS
+        raise PackReadDeadline(
+            f"{PACK_READ_STALLED_ADVISORY}: pack read under {common_dir} exceeded "
+            f"{PACK_READ_DEADLINE_SECS}s (storage stalled)"
+        )
+    return out
+
+
 def _search_packs_for_sha(
     common_dir: Path, sha: str, *, revalidate: bool
 ) -> Optional[tuple[Optional[tuple[str, bytes]]]]:
+    """Pack lookup under `_under_read_wall`; inline when `_read_object` already owns the wall."""
+    return _under_read_wall(
+        "pack-read",
+        common_dir,
+        sha,
+        lambda: _search_packs_for_sha_unbounded(common_dir, sha, revalidate=revalidate),
+    )
+
+
+def _open_packed(common_dir: Path, sha: str, *, revalidate: bool) -> Optional[tuple[Path, bytes, int]]:
+    """(pack path, pack bytes, entry offset) for `sha`, or None when no pack holds it."""
     for attempt in (0, 1):
         located = _locate_packed(common_dir, sha, revalidate=revalidate)
         if located is None:
@@ -1258,8 +1317,7 @@ def _search_packs_for_sha(
         indexes, pos, offset = located
         pack_path = indexes.pack_path(pos) if isinstance(indexes, _LazyPackIndexes) else indexes[pos][1]
         try:
-            pack_bytes = _pack_bytes_for_read(pack_path)
-            break
+            return pack_path, _pack_bytes_for_read(pack_path), offset
         except OSError:
             # A fold deleted the pack this listing names; its objects live in the pack that
             # replaced it, so re-list once and look again.
@@ -1267,6 +1325,16 @@ def _search_packs_for_sha(
                 return None
             _PACK_LISTING_CACHE.pop(str(common_dir), None)
             revalidate = True
+    return None
+
+
+def _search_packs_for_sha_unbounded(
+    common_dir: Path, sha: str, *, revalidate: bool
+) -> Optional[tuple[Optional[tuple[str, bytes]]]]:
+    opened = _open_packed(common_dir, sha, revalidate=revalidate)
+    if opened is None:
+        return None
+    pack_path, pack_bytes, offset = opened
     type_num, content = _read_pack_object_deadlined(common_dir, pack_path, pack_bytes, offset)
     type_name = _PACK_TYPE_NAMES.get(type_num)
     if type_name is None:
@@ -1302,6 +1370,13 @@ def _object_cache_put(key: tuple[str, str], value: Optional[tuple[str, bytes]]) 
         _OBJECT_CACHE.popitem(last=False)
 
 
+def unreadable_pack_indexes(common_dir: Path) -> list[str]:
+    """`.idx` file names under `common_dir` that do not parse. Parses every index: a degraded-path
+    diagnostic, never a lookup."""
+    indexes = _pack_indexes(common_dir)
+    return [indexes[i][0].name for i in range(len(indexes)) if indexes[i][2] is None]
+
+
 def read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
     return _read_object(common_dir, sha)
 
@@ -1319,13 +1394,19 @@ def _read_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
     cached = _object_cache_get(key)
     if cached is not _CACHE_MISS:
         return cached
+    result = _under_read_wall("object-read", common_dir, sha, lambda: _read_uncached(common_dir, sha))
+    _object_cache_put(key, result)
+    return result
+
+
+def _read_uncached(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]]:
+    """Loose, packs (both revalidate passes), then every alternate: the span one wall covers."""
     result = _read_local_object(common_dir, sha)
     if result is None:
         for alt_common in _alternate_common_dirs(common_dir):
             result = _read_local_object(alt_common, sha)
             if result is not None:
                 break
-    _object_cache_put(key, result)
     return result
 
 
@@ -1341,6 +1422,141 @@ def _read_local_object(common_dir: Path, sha: str) -> Optional[tuple[str, bytes]
         raise
     except (_GitReadModelError, zlib.error, struct.error):
         return None
+
+
+_HEADER_WINDOWS = (64, 256, 1024)
+
+
+def _loose_object_header(common_dir: Path, sha: str) -> Optional[tuple[str, int]]:
+    path = common_dir / "objects" / sha[:2] / sha[2:]
+    if not path.is_file():
+        return None
+    try:
+        with open(path, "rb") as fh:
+            raw = fh.read(512)
+        head = zlib.decompressobj().decompress(raw, 64)
+        header, nul, _ = head.partition(b"\x00")
+        otype, _, size = header.partition(b" ")
+        if not nul:
+            return None
+        return otype.decode("ascii", errors="replace"), int(size)
+    except (OSError, zlib.error, ValueError):
+        return None
+
+
+def _delta_result_size(pack_bytes: bytes, pos: int) -> int:
+    """Result size from the first inflate window of a delta stream: its two leading varints."""
+    mv = memoryview(pack_bytes)
+    for window in _HEADER_WINDOWS:
+        end = min(pos + window, len(pack_bytes))
+        if end <= pos:
+            break
+        head = zlib.decompressobj().decompress(mv[pos:end], 64)
+        try:
+            _base_size, p = _delta_read_size(head, 0)
+            size, _ = _delta_read_size(head, p)
+            return size
+        except IndexError:
+            continue
+    raise _GitReadModelError(f"unreadable delta header in pack object at offset {pos}")
+
+
+def _pack_entry_header_at(
+    common_dir: Path, pack_bytes: bytes, offset: int, _depth: int = 0
+) -> tuple[str, int]:
+    """Type and size of the pack entry at `offset` without inflating its payload; a delta takes
+    its size from the delta stream's header and its type from the base chain."""
+    if _depth > _MAX_DELTA_DEPTH:
+        raise _GitReadModelError(f"delta chain exceeds max depth {_MAX_DELTA_DEPTH} (cyclic/corrupt pack?)")
+    pos = offset
+    first = pack_bytes[pos]
+    pos += 1
+    type_num = (first >> 4) & 0x7
+    usize = first & 0x0F
+    shift = 4
+    byte = first
+    while byte & 0x80:
+        byte = pack_bytes[pos]
+        pos += 1
+        usize |= (byte & 0x7F) << shift
+        shift += 7
+
+    if type_num == 6:  # OFS_DELTA
+        byte = pack_bytes[pos]
+        pos += 1
+        base_rel_offset = byte & 0x7F
+        while byte & 0x80:
+            byte = pack_bytes[pos]
+            pos += 1
+            base_rel_offset += 1
+            base_rel_offset = (base_rel_offset << 7) | (byte & 0x7F)
+        base_offset = offset - base_rel_offset
+        if base_offset < 0:
+            raise _GitReadModelError(f"OFS_DELTA base offset underflow: {base_offset}")
+        base_type, _ = _pack_entry_header_at(common_dir, pack_bytes, base_offset, _depth + 1)
+        return base_type, _delta_result_size(pack_bytes, pos)
+
+    if type_num == 7:  # REF_DELTA
+        base_sha = pack_bytes[pos : pos + 20].hex()
+        pos += 20
+        base = read_object_header(common_dir, base_sha)
+        if base is None:
+            raise _GitReadModelError(f"REF_DELTA base object missing: {base_sha}")
+        return base[0], _delta_result_size(pack_bytes, pos)
+
+    type_name = _PACK_TYPE_NAMES.get(type_num)
+    if type_name is None:
+        raise _GitReadModelError(f"unsupported pack entry type {type_num}")
+    return type_name, usize
+
+
+def _pack_object_header(common_dir: Path, sha: str) -> Optional[tuple[str, int]]:
+    for revalidate in (False, True):
+        opened = _open_packed(common_dir, sha, revalidate=revalidate)
+        if opened is not None:
+            _, pack_bytes, offset = opened
+            return _pack_entry_header_at(common_dir, pack_bytes, offset)
+    return None
+
+
+def _header_local(common_dir: Path, sha: str) -> Optional[tuple[str, int]]:
+    result = _loose_object_header(common_dir, sha)
+    if result is not None:
+        return result
+    try:
+        return _pack_object_header(common_dir, sha)
+    except PackReadDeadline:
+        raise
+    except (_GitReadModelError, zlib.error, struct.error, IndexError, RecursionError):
+        # RecursionError: a cyclic REF_DELTA chain recurses through read_object_header, which
+        # carries no depth counter.
+        return None
+
+
+def _header_uncached(common_dir: Path, sha: str) -> Optional[tuple[str, int]]:
+    result = _header_local(common_dir, sha)
+    if result is None:
+        for alt_common in _alternate_common_dirs(common_dir):
+            result = _header_local(alt_common, sha)
+            if result is not None:
+                break
+    return result
+
+
+def read_object_header(common_dir: Path, sha: str) -> Optional[tuple[str, int]]:
+    """`(type, size)` of a git object by full 40-hex sha, or None when absent. Reads the loose
+    header or pack entry header only (at most one inflate window; a delta's size comes from its
+    stream header), never the payload. Runs under the one read wall: an overrun raises
+    `PackReadDeadline`, never None. For callers that discard the payload."""
+    sha = sha.lower()
+    state = getattr(_BATCH, "state", None)
+    if state is not None and sha in state[1]:
+        kind, payload = state[1][sha]
+        return kind.decode("ascii"), len(payload)
+    cached = _object_cache_get((str(common_dir), sha))
+    if cached is not _CACHE_MISS:
+        return None if cached is None else (cached[0], len(cached[1]))
+    return _under_read_wall("object-header", common_dir, sha, lambda: _header_uncached(common_dir, sha))
 
 
 def _alternate_common_dirs(common_dir: Path) -> list[Path]:

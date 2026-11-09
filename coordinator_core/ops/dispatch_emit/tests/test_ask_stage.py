@@ -313,3 +313,54 @@ def test_plugin_agent_row_without_agent_model_stages_with_frontmatter_model(repo
     row = next(r for r in m.rows if r.id == "C1")
     assert (row.agent_type, row.model) == ("game-dev:staff-game-dev", "opus")
     assert row.brief_path
+
+
+_NO_EDGE_PLAN = PLAN.replace(
+    "  depends_on:\n    - chunk: C1\n      gate_kind: output-consumption-runtime\n", ""
+)
+_BAD_EDGE_PLAN = PLAN.replace("      gate_kind: output-consumption-runtime\n", "")
+
+
+def test_plan_without_depends_on_stages_to_a_manifest_at_default_arguments(repo):
+    (repo / PLAN_REL).write_text(_NO_EDGE_PLAN, encoding="utf-8", newline="\n")
+    assert "depends_on" not in _NO_EDGE_PLAN
+    m = stage(repo, run_id="r1", plan_rel=PLAN_REL)
+    assert {r.id: r.deps for r in m.rows} == {"C1": (), "C2": (), "C3": ()}
+
+
+def test_plan_rewritten_on_disk_mid_stage_refuses_and_stages_from_the_text_stage_read(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import ask_stage as mod
+
+    real = mod.scaffold_markers
+
+    def rewrite_then_check(text):
+        (repo / PLAN_REL).write_text(_BAD_EDGE_PLAN, encoding="utf-8", newline="\n")
+        return real(text)
+
+    # The text stage read is clean; the disk copy turns malformed afterwards.
+    (repo / PLAN_REL).write_text(_NO_EDGE_PLAN, encoding="utf-8", newline="\n")
+    monkeypatch.setattr(mod, "scaffold_markers", rewrite_then_check)
+    m = stage(repo, run_id="r1", plan_rel=PLAN_REL)
+    assert {r.id for r in m.rows} == {"C1", "C2", "C3"}
+
+    # Reverse: the text stage read is malformed; the disk copy is clean afterwards. Still refused.
+    def rewrite_clean(text):
+        (repo / PLAN_REL).write_text(_NO_EDGE_PLAN, encoding="utf-8", newline="\n")
+        return real(text)
+
+    (repo / PLAN_REL).write_text(_BAD_EDGE_PLAN, encoding="utf-8", newline="\n")
+    monkeypatch.setattr(mod, "scaffold_markers", rewrite_clean)
+    with pytest.raises(AskStageError, match="gate_kind"):
+        stage(repo, run_id="r2", plan_rel=PLAN_REL)
+
+
+def test_spine_refusal_names_the_plan_and_the_text_it_parsed(repo):
+    import hashlib
+
+    (repo / PLAN_REL).write_text(_BAD_EDGE_PLAN, encoding="utf-8", newline="\n")
+    digest = hashlib.sha256(_BAD_EDGE_PLAN.encode("utf-8")).hexdigest()[:12]
+    with pytest.raises(AskStageError) as ei:
+        stage(repo, run_id="r1", plan_rel=PLAN_REL)
+    msg = str(ei.value)
+    assert msg.startswith(f"SPINE-REFUSED: {PLAN_REL}:") and "gate_kind" in msg
+    assert f"sha256 {digest}" in msg

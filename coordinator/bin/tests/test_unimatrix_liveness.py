@@ -78,6 +78,97 @@ def test_supervisor_live_true_false_cases():
     assert not lv.pid_alive(0) and not lv.pid_alive(-1)
 
 
+def test_entry_live_matching_procstart_is_live():
+    assert lv.entry_live(_rec())
+
+
+def test_entry_live_different_procstart_is_not_live():
+    assert not lv.entry_live({"pid": os.getpid(), "procStart": "Mon Jan  1 00:00:00 2001"})
+
+
+def test_entry_live_without_procstart_falls_back_to_pid_alive():
+    assert lv.entry_live({"pid": os.getpid()})
+    assert lv.entry_live({"pid": os.getpid(), "procStart": ""})
+    assert lv.entry_live({"pid": os.getpid(), "procStart": 5})
+
+
+def test_entry_live_dead_or_malformed_pid_is_not_live():
+    assert not lv.entry_live({"pid": 0, "procStart": "x"})
+    assert not lv.entry_live({"pid": True})
+    assert not lv.entry_live({"pid": "x"})
+    assert not lv.entry_live({})
+    assert not lv.entry_live(None)
+
+
+def test_entry_live_proc_start_oserror_is_not_staleness(monkeypatch):
+    def boom(pid, platform=None):
+        raise OSError("unreadable")
+    monkeypatch.setattr(lv, "proc_start", boom)
+    assert lv.entry_live({"pid": os.getpid(), "procStart": "anything"})
+    monkeypatch.setattr(lv, "pid_alive", lambda pid: False)
+    assert not lv.entry_live({"pid": os.getpid(), "procStart": "anything"})
+
+
+def test_codex_holder_live_matching_start_is_live():
+    me = _rec()
+    assert lv.codex_holder_live({"codexPid": me["pid"], "codexProcStart": me["procStart"]}) is True
+
+
+def test_codex_holder_live_dead_pid_is_false(monkeypatch):
+    monkeypatch.setattr(lv, "pid_alive", lambda pid: False)
+    assert lv.codex_holder_live({"codexPid": 4242, "codexProcStart": "x"}) is False
+
+
+def test_codex_holder_live_differing_start_is_false():
+    row = {"codexPid": os.getpid(), "codexProcStart": "Mon Jan  1 00:00:00 2001"}
+    assert lv.codex_holder_live(row) is False
+
+
+def test_codex_holder_live_no_holder_is_none():
+    assert lv.codex_holder_live({}) is None
+    assert lv.codex_holder_live({"codexPid": True}) is None
+    assert lv.codex_holder_live({"codexPid": "7"}) is None
+    assert lv.codex_holder_live(None) is None
+
+
+def test_codex_holder_live_unreadable_start_is_not_staleness(monkeypatch):
+    def boom(pid, platform=None):
+        raise OSError("unreadable")
+    monkeypatch.setattr(lv, "proc_start", boom)
+    assert lv.codex_holder_live({"codexPid": os.getpid(), "codexProcStart": "x"}) is True
+
+
+def test_codex_probe_cli_prints_one_line_per_codex_peer(tmp_path):
+    me = _rec()
+    locks = tmp_path / "locks"
+    locks.mkdir()
+    (locks / "thr-live.lock").write_text("")
+    (locks / "thr-orphan.lock").write_text("")
+    (locks / ".hidden.lock").write_text("")
+    peers = tmp_path / "peers.json"
+    peers.write_text(json.dumps({"peers": [
+        {"name": "codex-a", "vendor": "codex", "target": "thr-live", "cwd": "/w/a",
+         "codexPid": me["pid"], "codexProcStart": me["procStart"]},
+        {"name": "codex-b", "vendor": "codex", "target": "thr-dead", "cwd": "/w/b",
+         "codexPid": me["pid"], "codexProcStart": "Mon Jan  1 00:00:00 2001"},
+        {"name": "codex-c", "vendor": "codex", "target": "thr-none"},
+        {"name": "claude-x", "vendor": "claude", "target": "t"},
+    ]}))
+    out = subprocess.run([sys.executable, str(SRC), "codex-probe", "--peers", str(peers),
+                          "--locks-dir", str(locks)], capture_output=True, text=True, check=True).stdout
+    assert out.splitlines() == [
+        f"codex-a thr-live {me['pid']} /w/a live",
+        f"codex-b thr-dead {me['pid']} /w/b stale",
+        "codex-c thr-none - - stale",
+        "codex-thr-orphan thr-orphan - - stale",
+    ]
+
+
+def test_codex_probe_cli_rejects_unknown_command():
+    r = subprocess.run([sys.executable, str(SRC), "bogus"], capture_output=True, text=True)
+    assert r.returncode == 2
+
+
 def _setup(tmp_path, aliases, live=True, age=0):
     sdir = tmp_path / "unimatrix"
     sdir.mkdir()
@@ -157,3 +248,37 @@ def test_backoff_is_per_alias_and_slugged(tmp_path):
 def test_state_dir_derives_from_settings_home(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     assert lv.state_dir() == tmp_path / "unimatrix"
+
+
+def _logs_db(home, name, rows):
+    import sqlite3
+    from contextlib import closing
+    with closing(sqlite3.connect(home / name)) as conn:
+        conn.execute("CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, "
+                     "ts_nanos INTEGER NOT NULL, thread_id TEXT, process_uuid TEXT)")
+        conn.executemany("INSERT INTO logs (ts, ts_nanos, thread_id, process_uuid) VALUES (?,?,?,?)", rows)
+        conn.commit()
+
+
+def test_codex_thread_holder_takes_newest_process_across_dbs(tmp_path):
+    me = os.getpid()
+    _logs_db(tmp_path, "logs_1.sqlite", [(10, 0, "t1", "pid:999999:old"), (5, 0, "t2", "pid:7:x")])
+    _logs_db(tmp_path, "logs_2.sqlite", [(20, 0, "t1", f"pid:{me}:new"), (30, 0, "t1", None)])
+    got = lv.codex_thread_holder(tmp_path, "t1")
+    assert got["codexPid"] == me
+    assert got["codexProcStart"] == lv.proc_start(me)
+    assert lv.codex_holder_live(got) is True
+
+
+def test_codex_thread_holder_unknown_thread_or_no_db_is_empty(tmp_path):
+    assert lv.codex_thread_holder(tmp_path, "t1") == {}
+    _logs_db(tmp_path, "logs_1.sqlite", [(10, 0, "other", "pid:5:x"), (11, 0, "t1", "garbage")])
+    assert lv.codex_thread_holder(tmp_path, "t1") == {}
+    assert lv.codex_thread_holder(tmp_path, "missing") == {}
+
+
+def test_codex_thread_holder_dead_pid_reads_dead(tmp_path):
+    _logs_db(tmp_path, "logs_1.sqlite", [(10, 0, "t1", "pid:2147480000:x")])
+    got = lv.codex_thread_holder(tmp_path, "t1")
+    assert got == {"codexPid": 2147480000}
+    assert lv.codex_holder_live(got) is False

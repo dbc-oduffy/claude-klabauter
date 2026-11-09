@@ -142,6 +142,30 @@ def test_acquire_takes_no_slot_while_a_foreign_session_holds_the_suite_mutex(for
     assert tier_t_slots.free_slots() == tier_t_slots.slot_cap()
 
 
+def test_blocker_names_the_live_foreign_suite_holder(foreign_suite_holder):
+    blocker = tier_t_slots.suite_mutex_blocker()
+    assert blocker is not None
+    assert blocker["owner"] == "other-session"
+    assert blocker["pid"] == foreign_suite_holder.pid
+
+
+def test_blocker_is_none_for_a_dead_suite_holder():
+    import subprocess
+    import sys
+
+    from coordinator_core.testing import suite_mutex
+    from coordinator_core.win_portability import no_console_creationflags
+
+    child = subprocess.Popen([sys.executable, "-c", "pass"], **no_console_creationflags())
+    child.wait()
+    assert suite_mutex.acquire("ghost", "pytest", 0.0, pid=child.pid)
+    try:
+        assert tier_t_slots.suite_mutex_blocker() is None
+        assert tier_t_slots.acquire_slot("late", "pytest a.py", 0.0) is not None
+    finally:
+        suite_mutex.release("ghost")
+
+
 def test_acquire_waits_then_succeeds_when_the_suite_mutex_is_released(foreign_suite_holder):
     import threading
 

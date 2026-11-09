@@ -127,6 +127,28 @@ def _withheld_reason(split: object, hunks: Sequence[object]) -> str:
     return "no hunk is this run's: " + ", ".join(map(_hunk_label, hunks))
 
 
+HEAD_EQUAL_REASON = "the run's own hunks reduce this path to HEAD's bytes while the worktree differs: its other hunks are not this run's"
+
+
+def withhold_head_equal(
+    root: Path, blobs: dict[str, str], reasons: Optional[dict[str, str]] = None,
+) -> tuple[dict[str, str], list[str]]:
+    """`(blobs, withheld)`: `blobs` without each path whose supplied blob is HEAD's own blob (it
+    would reach the per-path delta pass as "already match HEAD" while the worktree differs), and
+    those paths, each named in `reasons`. Never raises; an unreadable HEAD tree withholds nothing."""
+    try:
+        from coordinator_core.git.git_state import head_blobs
+
+        head = head_blobs(Path(root), list(blobs))
+        same = sorted(p for p, sha in blobs.items() if p in head and head[p][1] == sha)
+    except Exception:  # noqa: BLE001 -- unreadable HEAD: the delta pass judges
+        return dict(blobs), []
+    for path in same:
+        if reasons is not None:
+            reasons[path] = HEAD_EQUAL_REASON
+    return {p: s for p, s in blobs.items() if p not in same}, same
+
+
 def checkpoint_own_blobs(
     root: Path, run_id: Optional[str], paths: Sequence[str], message: str = "",
     reasons: Optional[dict[str, str]] = None,

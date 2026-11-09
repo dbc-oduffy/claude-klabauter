@@ -137,24 +137,26 @@ def test_ac4_regenerated_field7_in_pathspec_commits_and_denied_name_commits(repo
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac5_dirty_worktree_portable_outside_pathspec_is_refused_not_overwritten(repo):
-    (repo / "coordinator_core" / "new_module.py").write_text(
+def test_ac5_dirty_worktree_portable_outside_pathspec_lands_regenerated_head_bytes(repo):
+    (repo / "coordinator" / "bin").mkdir(parents=True)
+    (repo / "coordinator" / "bin" / "unimatrix-file.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
     peer = _PORTABLE + "# peer edit\n"
-    (repo / "setup" / "publish-targets.portable").write_text(
-        peer, encoding="utf-8", newline="\n"
-    )
+    (repo / "setup" / "publish-targets.portable").write_bytes(peer.encode("utf-8"))
     before = _head(repo)
 
-    with pytest.raises(CommitRefused) as excinfo:
-        gcommit.commit_paths(
-            repo, ["coordinator_core/new_module.py"], "carried new file, dirty portable"
-        )
+    out = gcommit.commit_paths(
+        repo, ["coordinator/bin/unimatrix-file.py"], "carried new bin file, dirty portable"
+    )
 
-    assert "--pending coordinator_core/new_module.py" in str(excinfo.value)
-    assert _head(repo) == before
-    assert (repo / "setup" / "publish-targets.portable").read_text(encoding="utf-8") == peer
+    assert out.sha and _head(repo) != before
+    landed = _field7(repo)
+    assert "coordinator/bin||existing_cli.py,unimatrix-file.py\n" in landed
+    assert "# peer edit" not in landed
+    assert (repo / "setup" / "publish-targets.portable").read_bytes() == peer.encode("utf-8")
+    committed = _git(repo, "show", "--name-only", "--format=", "HEAD").stdout.split()
+    assert "setup/publish-targets.portable" in committed
 
 
 @pytest.mark.spawns_process

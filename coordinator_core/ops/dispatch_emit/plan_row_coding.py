@@ -99,7 +99,8 @@ def source_rows_by_plan(
     bare ``<item>`` is a single-row reference only when it (or its
     prefix-stripped form) names a row of that plan -- a whole-plan item names
     no row, so nothing flips for it. Unresolvable pieces are skipped: the
-    commit itself never fails over plan bookkeeping.
+    commit itself never fails over plan bookkeeping. A shaper-merged chunk id
+    (``merged_pieces``) maps to every constituent's row.
     """
     if not plan_path or not chunk_ids:
         return {}
@@ -113,7 +114,12 @@ def source_rows_by_plan(
     split = split_frontmatter(marker_text)
     origin = read_fm_field_unquoted(split.fm_text, "derived_from") if split else None
     if origin != MINTED_SPINE_ORIGIN:
-        return {plan_path: set(chunk_ids)}
+        spine_ids = spine_row_ids(marker_text)
+        ids: set = set()
+        for chunk_id in chunk_ids:
+            pieces = None if spine_ids is None or chunk_id in spine_ids else merged_pieces(chunk_id, spine_ids.__contains__)
+            ids.update(pieces or [chunk_id])
+        return {plan_path: ids}
 
     from coordinator_core.ops.dispatch_emit.inventory_mint import (
         InventoryMintError,
@@ -137,27 +143,59 @@ def source_rows_by_plan(
 
     out: dict = {}
     row_ids_cache: dict = {}
-    for chunk_id in chunk_ids:
-        item, _, row = chunk_id.partition(".")
+
+    def resolve(piece: str) -> Optional[tuple]:
+        item, _, row = piece.partition(".")
         spec = spec_by_item.get(item)
         if not spec:
-            continue
+            return None
         abs_plan = _resolve_spec_plan_path(worktree_root / inventory_rel, spec)
         guarded = contained_path(abs_plan, [worktree_root])
         if guarded is None:
-            continue
+            return None
         rel = guarded.relative_to(worktree_root.resolve()).as_posix()
         if rel not in row_ids_cache:
             text = read_rel(worktree_root, rel)
             row_ids_cache[rel] = spine_row_ids(text.replace("\r\n", "\n")) if text is not None else None
         spine_ids = row_ids_cache[rel]
         if not spine_ids:
-            continue
+            return None
         if not row:
             row = item if item in spine_ids else _bare_plan_row_id(item)
-        if row in spine_ids:
+        return (rel, row) if row in spine_ids else None
+
+    for chunk_id in chunk_ids:
+        hit = resolve(chunk_id)
+        hits = [hit] if hit else [h for h in map(resolve, merged_pieces(chunk_id, lambda p: resolve(p) is not None) or ()) if h]
+        for rel, row in hits:
             out.setdefault(rel, set()).add(row)
     return out
+
+
+def merged_pieces(chunk_id: str, is_row) -> Optional[list]:
+    """The constituent ids of a shaper-merged chunk id (``a+b`` renamed ``a-b`` at emit), else None.
+
+    The merged id is the only trace the commit path holds, so the split is recovered from it:
+    the first grouping of its ``-`` segments in which every group satisfies ``is_row``. A
+    constituent id may itself carry ``-``, hence a search rather than a plain split.
+    """
+    parts = chunk_id.split("-")
+    if len(parts) < 2:
+        return None
+
+    def walk(start: int) -> Optional[list]:
+        if start == len(parts):
+            return []
+        for end in range(len(parts), start, -1):
+            piece = "-".join(parts[start:end])
+            if is_row(piece):
+                rest = walk(end)
+                if rest is not None:
+                    return [piece, *rest]
+        return None
+
+    found = walk(0)
+    return found if found and len(found) > 1 else None
 
 
 def outside_landing_detail(shas: list) -> str:

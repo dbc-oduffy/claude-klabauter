@@ -228,6 +228,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.seam_baton_mint", 'registers "seam.mint_batons"'),
     ("coordinator_core.ops.plan_prep_gate", 'registers "plan.prep_gate"'),
     ("coordinator_core.ops.plan_readiness_verdict", 'registers "plan.readiness_verdict"'),
+    ("coordinator_core.ops.plan_set_code_done", 'registers "plan.set_code_done"'),
+    ("coordinator_core.ops.repo_setup", 'registers "repo.setup"'),
     ("coordinator_core.ops.plan_premise_carry", 'registers "plan.premise_scope", "plan.premise_record"'),
     ("coordinator_core.ops.plan_backfill_warp_executing", 'registers "plan.backfill_warp_executing"'),
     (
@@ -240,6 +242,10 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "plan.apply_mechanical_repairs"',
     ),
     ("coordinator_core.ops.plan_stamp_prepped", 'registers "plan.stamp_prepped"'),
+    (
+        "coordinator_core.ops.plan_reapprove_mechanical_tags",
+        'registers "plan.reapprove_mechanical_tags"',
+    ),
     (
         "coordinator_core.ops.plan_record_residue_rulings",
         'registers "plan.record_residue_rulings"',
@@ -680,6 +686,8 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ),
     ("coordinator_core.ops.scratchpad_sweep", 'registers "scratchpad.sweep"'),
     ("coordinator_core.ops.scratch_delete", 'registers "scratch.delete"'),
+    ("coordinator_core.ops.ask_spool_withdraw", 'registers "ask_spool.withdraw"'),
+    ("coordinator_core.ops.scratch_record", 'registers "scratch.record_run_path", "scratch.keep"'),
     ("coordinator_core.ops.run_paths_trash", 'registers "run.paths_trash"'),
     ("coordinator_core.ops.memo_fate_partition", 'registers "memo.fate_partition"'),
     ("coordinator_core.ops.memo_fate_backfill", 'registers "memo.fate_backfill"'),

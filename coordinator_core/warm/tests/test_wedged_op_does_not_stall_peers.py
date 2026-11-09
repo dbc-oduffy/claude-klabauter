@@ -99,3 +99,78 @@ def test_timed_out_running_op_error_data_names_its_dump(tmp_path, monkeypatch):
     assert data.get("stall_dump") or data.get("stall_dump_absent_reason")
     if "stall_dump" in data:
         assert data["stall_dump"] in out["error"]["message"]
+
+
+def test_thread_stacks_render_without_faulthandler_file_writes(monkeypatch):
+    import faulthandler
+
+    monkeypatch.setattr(faulthandler, "dump_traceback", lambda **kw: (_ for _ in ()).throw(AssertionError("GIL-held fd write")))
+    text = server._render_all_thread_stacks()
+    assert "Current thread 0x" in text and "most recent call first" in text
+    assert "_render_all_thread_stacks" in text
+
+
+def test_stall_record_survives_a_blocking_temp_dir(tmp_path, monkeypatch):
+    import tempfile
+
+    monkeypatch.setattr(tempfile, "TemporaryFile", lambda *a, **k: (_ for _ in ()).throw(AssertionError("temp file used")))
+    record = server._write_stall_record(tmp_path / "stall", None, key="k")
+    assert record is not None and "--- threads ---" in record.read_text(encoding="utf-8")
+
+
+def _isolated_ctx(tmp_path):
+    ctx = _ctx(tmp_path, 1)
+    ctx._guard_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+    ctx._guard_pool_lock = threading.Lock()
+    return ctx
+
+
+def test_hook_class_op_runs_in_the_guard_pool_and_heavy_op_in_the_main_pool(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_pool_dispatch_worker_body", lambda msg, caller: {"jsonrpc": "2.0", "id": 1, "result": {"pool": threading.current_thread().name}})
+    ctx = _isolated_ctx(tmp_path)
+    try:
+        ctx._dispatch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix="heavy")
+        ctx._guard_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="guard")
+        assert ctx._pool_dispatch(_msg("hooks.preuse_write_dispatch"))["result"]["pool"].startswith("guard")
+        assert ctx._pool_dispatch(_msg("memo.send"))["result"]["pool"].startswith("guard")
+        assert ctx._pool_dispatch(_msg("review.prep"))["result"]["pool"].startswith("heavy")
+    finally:
+        ctx._dispatch_pool.shutdown(wait=False, cancel_futures=True)
+        ctx._guard_pool.shutdown(wait=False, cancel_futures=True)
+
+
+def test_recycling_the_stalled_heavy_pool_leaves_an_in_flight_guard_op_alone(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "STALL_DUMP_SECS", 0.01)
+    monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)
+    ctx = _isolated_ctx(tmp_path)
+    ctx._stall_dir = tmp_path / "stall"
+    heavy = concurrent.futures.Future()
+    guard = concurrent.futures.Future()
+    ctx._track_pool_task(heavy, "dispatch.ask_stage", None)
+    ctx._track_pool_task(guard, "hooks.preuse_write_dispatch", None, guard=True)
+    time.sleep(0.05)
+    assert ctx._stalled_holders() == ["dispatch.ask_stage"]
+    old_guard = ctx._guard_pool
+    stuck = ctx._dispatch_pool
+    ctx._recycle_stalled_pool(stuck, ["dispatch.ask_stage"])
+    try:
+        assert ctx._dispatch_pool is None
+        assert ctx._guard_pool is old_guard
+        assert guard in ctx._pool_tasks and heavy not in ctx._pool_tasks
+        assert ctx._drop_pool(old_guard) and ctx._guard_pool is None and ctx._dispatch_pool is None
+    finally:
+        old_guard.shutdown(wait=False, cancel_futures=True)
+
+
+def test_a_context_without_a_guard_pool_keeps_one_shared_pool(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_pool_dispatch_worker_body", lambda msg, caller: {"jsonrpc": "2.0", "id": 1, "result": {"pool": threading.current_thread().name}})
+    ctx = _ctx(tmp_path, 2)
+    ctx._dispatch_pool.shutdown(wait=False)
+    ctx._dispatch_pool = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="shared")
+    try:
+        ctx._guard_pool_lock = threading.Lock()
+        ctx._guard_pool = None
+        assert not server._guard_pool_applies(ctx.__dict__)
+        assert ctx._pool_dispatch(_msg("hooks.preuse_write_dispatch"))["result"]["pool"].startswith("shared")
+    finally:
+        ctx._dispatch_pool.shutdown(wait=False, cancel_futures=True)

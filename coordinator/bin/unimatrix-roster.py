@@ -70,27 +70,57 @@ def spawn(cmd):
     return subprocess.Popen(cmd, start_new_session=True)
 
 
-def tree_kill(pid):
-    """Stop `pid` and every descendant: taskkill /T on Windows, the process group elsewhere."""
+TASKKILL_ARGV_BUDGET = 8000
+
+
+def argv_chunks(items, budget=TASKKILL_ARGV_BUDGET):
+    """Split string `items` into lists whose joined length stays under `budget` characters."""
+    chunk, size = [], 0
+    for item in items:
+        if chunk and size + len(item) + 1 > budget:
+            yield chunk
+            chunk, size = [], 0
+        chunk.append(item)
+        size += len(item) + 1
+    if chunk:
+        yield chunk
+
+
+def tree_kill_many(pids):
+    """Stop every pid and its descendants: one taskkill /T per argv chunk on Windows, process groups elsewhere."""
+    pids = list(pids)
+    if not pids:
+        return
     if sys.platform == "win32":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(pid)],
-                       capture_output=True, creationflags=no_window())
+        for chunk in argv_chunks(str(p) for p in pids):
+            subprocess.run(["taskkill", "/T", "/F", *[a for p in chunk for a in ("/PID", p)]],
+                           capture_output=True, creationflags=no_window())
         return
-    try:
-        pgid = os.getpgid(pid)
-    except ProcessLookupError:
-        return
-    # A pid that shares our own group would take this process down with it.
-    if pgid == os.getpgrp():
-        _signal_pid(pid, signal.SIGKILL)
-        return
-    for sig in (signal.SIGTERM, signal.SIGKILL):
+    live = {}
+    for pid in pids:
         try:
-            os.killpg(pgid, sig)
-        except (ProcessLookupError, PermissionError):
-            # Darwin answers EPERM, not ESRCH, once only zombies remain in the group; these are our own children.
+            pgid = os.getpgid(pid)
+        except ProcessLookupError:
+            continue
+        # A pid that shares our own group would take this process down with it.
+        if pgid == os.getpgrp():
+            _signal_pid(pid, signal.SIGKILL)
+            continue
+        live[pid] = pgid
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        for pid in list(live):
+            try:
+                os.killpg(live[pid], sig)
+            except (ProcessLookupError, PermissionError):
+                # Darwin answers EPERM, not ESRCH, once only zombies remain in the group; these are our own children.
+                del live[pid]
+        if not live:
             return
         time.sleep(0.2)
+
+
+def tree_kill(pid):
+    tree_kill_many([pid])
 
 
 def _signal_pid(pid, sig):
@@ -133,6 +163,31 @@ def _liveness():
         spec.loader.exec_module(mod)
         _LIVENESS.append(mod)
     return _LIVENESS[0]
+
+
+def entry_live(d):
+    """The entry's pid is alive and, when it records a procStart, is still that process."""
+    return _liveness().entry_live(d)
+
+
+def mirror_orphaned(d):
+    """True for a roster-made mirror (it carries the far-socket field) whose recorded roster
+    supervisor is not live; an entry that records no supervisor counts as orphaned."""
+    if not isinstance(d, dict) or not d.get(FAR_SOCKET_FIELD):
+        return False
+    return not _liveness().supervisor_live(
+        {"pid": d.get("unimatrixRosterPid"), "procStart": d.get("unimatrixRosterProcStart")})
+
+
+def entry_listed(d):
+    """A session entry worth listing: its pid is still its process and no dead roster owns it."""
+    return entry_live(d) and not mirror_orphaned(d)
+
+
+def supervisor_fields():
+    """Registry fields naming this process as the roster supervisor of the mirrors it writes."""
+    pid = os.getpid()
+    return {"unimatrixRosterPid": pid, "unimatrixRosterProcStart": proc_start(pid)}
 
 
 _CONTRACT = []
@@ -293,12 +348,17 @@ def authenticated_data(endpoint, data, directory=None):
     return header + b"".join(lines)
 
 
-def bridge_cmd(endpoint, log, remote, key, return_port=None, inbox=None, tunnel_remote=None):
+def bridge_cmd(endpoint, log, remote, key, return_port=None, inbox=None, tunnel_remote=None, supervisor=None):
+    """Bridge argv; `supervisor` is the roster pid the bridge exits with (its start stamp is read from the mirror entry)."""
     cmd = [sys.executable, str(HERE / "unimatrix-bridge.py"), endpoint, "relay", log]
     if return_port is not None and inbox:
         cmd += [str(return_port), inbox]
     cmd += ["--remote", remote, "--key", key]
-    return cmd + ["--tunnel-remote", tunnel_remote] if tunnel_remote else cmd
+    if tunnel_remote:
+        cmd += ["--tunnel-remote", tunnel_remote]
+    if supervisor is not None:
+        cmd += ["--supervisor", str(supervisor)]
+    return cmd
 
 
 def default_tunnel():
@@ -462,8 +522,7 @@ def live_sessions():
                 d = json.load(fh)
         except (OSError, ValueError):
             continue
-        if (isinstance(d, dict) and isinstance(d.get("name"), str) and isinstance(d.get("pid"), int)
-                and pid_alive(d["pid"])):
+        if isinstance(d, dict) and isinstance(d.get("name"), str) and entry_listed(d):
             out.append((bare_name(d["name"]), mirror_scan_key(d.get("unimatrixRemote"), d.get(FAR_SOCKET_FIELD))))
     return out
 
@@ -508,7 +567,7 @@ def inbound_names():
                 d = json.load(fh)
         except (OSError, ValueError):
             continue
-        if isinstance(d, dict) and d.get("unimatrixMirror") and isinstance(d.get("pid"), int) and pid_alive(d["pid"]):
+        if isinstance(d, dict) and d.get("unimatrixMirror") and entry_listed(d):
             names.add(bare_name(d.get("name")))
     return names
 
@@ -525,7 +584,33 @@ def mirrorable(rows, skip, inbound):
             and bare_name(r["entry"].get("name")) not in inbound}
 
 
+_AGENT_OK = {}
+AGENT_RECHECK_SECONDS = 60
+
+
+def ensure_key_loaded(key, now=None):
+    """OSError naming the wait when the encrypted `key` cannot be loaded into the agent; a loaded or
+    unencrypted verdict is cached so a poll loop does not respawn ssh-add -l."""
+    clock = time.time() if now is None else now
+    if clock - _AGENT_OK.get(key, -AGENT_RECHECK_SECONDS) < AGENT_RECHECK_SECONDS:
+        return
+    import importlib.util
+    try:
+        spec = importlib.util.spec_from_file_location("unimatrix_passphrase_roster", HERE / "unimatrix-passphrase.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        verdict = mod.ensure_agent(key)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return
+    if verdict == "locked":
+        raise OSError("waiting: 1Password locked")
+    if verdict == "missing":
+        raise OSError("passphrase_source_missing: op CLI or unimatrix.passphrase_vault unavailable")
+    _AGENT_OK[key] = clock
+
+
 def _roster_once(remote, key, tunnel_remote):
+    ensure_key_loaded(key)
     remote = pick_remote(remote, tunnel_remote)
     r = subprocess.run(["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
                         "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
@@ -546,12 +631,47 @@ def fetch_roster(remote, key, tunnel_remote=None):
         return _roster_once(remote, key, tunnel_remote)
 
 
-def unmirror(pid):
-    tree_kill(pid)
+def drop_session_files(pid):
     sess = sessions_dir()
     for f in os.listdir(sess):
         if f.startswith(f"{pid}."):
             os.remove(os.path.join(sess, f))
+
+
+def unmirror(pid):
+    tree_kill(pid)
+    drop_session_files(pid)
+
+
+def reap_orphaned_mirrors(remote, say):
+    """Remove this far box's mirrors whose roster supervisor is gone, stopping a bridge that is still its process.
+
+    A bridge is killed only when its entry records a procStart it still matches: a recycled pid is never signalled."""
+    try:
+        files = os.listdir(sessions_dir())
+    except OSError:
+        return
+    reaped, to_kill = [], []
+    for f in files:
+        m = re.fullmatch(r"(\d+)\.json", f)
+        if not m:
+            continue
+        try:
+            with open(os.path.join(sessions_dir(), f), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        pid = int(m.group(1))
+        if (not isinstance(d, dict) or d.get("pid") != pid or not mirror_orphaned(d)
+                or box_label(d.get("unimatrixRemote") or "") != box_label(remote)):
+            continue
+        if isinstance(d.get("procStart"), str) and d["procStart"] and entry_live(d):
+            to_kill.append(pid)
+        reaped.append((pid, d.get("name")))
+    tree_kill_many(to_kill)
+    for pid, name in reaped:
+        drop_session_files(pid)
+        say(f"reaped orphaned mirror {name} bridge {pid}")
 
 
 def log_label(entry):
@@ -573,7 +693,7 @@ def engine_fields(row):
 def session_identity(entry, box=None):
     """Add display metadata without changing the address owned by the harness."""
     vendor = entry.get("vendor")
-    if vendor not in ("codex", "agy", "claude", "transport"):
+    if vendor not in ("codex", "agy", "grok", "claude", "transport"):
         sid = entry.get("sessionId") or ""
         if isinstance(sid, str) and sid.startswith("peer-codex-"):
             vendor = "codex"
@@ -633,7 +753,7 @@ def mirror(row, cfg, say, scan=None):
         os.makedirs(os.path.dirname(endpoint), mode=0o700, exist_ok=True)
     b = spawn(bridge_cmd(endpoint, os.path.join(os.path.dirname(os.path.abspath(cfg.log)),
                                                 f"unimatrix-bridge-{log_label(e)}.log"),
-                         cfg.remote, cfg.key, tunnel_remote=cfg.tunnel_remote))
+                         cfg.remote, cfg.key, tunnel_remote=cfg.tunnel_remote, supervisor=os.getpid()))
     time.sleep(1)
     d = {k: v for k, v in e.items() if k not in ("pid", "procStart", "pidDomain", "messagingSocketPath")}
     if "name" in d:
@@ -644,7 +764,7 @@ def mirror(row, cfg, say, scan=None):
     d.setdefault(c.BOX_FIELD, c.box_id(cfg.remote))
     d.update(pid=b.pid, procStart=proc_start(b.pid), pidDomain=pid_domain(),
              messagingSocketPath=endpoint, farPid=e["pid"], unimatrixRemote=cfg.remote,
-             **{FAR_SOCKET_FIELD: far_sock}, **engine_fields(row))
+             **{FAR_SOCKET_FIELD: far_sock}, **supervisor_fields(), **engine_fields(row))
     sess = sessions_dir()
     write_json_atomic(os.path.join(sess, f"{b.pid}.json"), d)
     write_peer_key(os.path.join(sess, key_name(b.pid, endpoint)),
@@ -680,6 +800,9 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
     far_pid = row["entry"].get("pid")
     if isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid:
         updates["farPid"] = far_pid
+    for field, value in supervisor_fields().items():
+        if d.get(field) != value:
+            updates[field] = value
     if isinstance(name, str) and name:
         want = mirror_entry_name(row["entry"], cfg.remote, sock, scan)
         if d.get("unimatrixFarName") != name:
@@ -765,6 +888,7 @@ def main(argv=None):
     link_path = link_state_path(cfg.remote)
     link = read_link_state(link_path)
     try:
+        reap_orphaned_mirrors(cfg.remote, say)
         while True:
             try:
                 rows = mirrorable(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), skip, inbound_names())
@@ -777,8 +901,7 @@ def main(argv=None):
             sync(bridges, rows, cfg, say)
             time.sleep(POLL_SECONDS)
     finally:
-        for b in bridges.values():
-            tree_kill(b.pid)
+        tree_kill_many([b.pid for b in bridges.values()])
 
 
 if __name__ == "__main__":

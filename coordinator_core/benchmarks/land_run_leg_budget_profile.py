@@ -4,7 +4,9 @@ One `dispatch.land_run` of a clean landing at default params, over a fixture who
 carries N fresh sibling runs, each with a minted token, a sizing and a plan spine and no manifest.
 Process time is this process plus descendants (`commit_leg_profile._ChildMeter`'s tree figure read
 at each leg boundary); wall clock is never recorded. One JSON row per axis:
-`{axis, process_time_ms, spawns, spine_parses, attribution}`.
+`{axis, process_time_ms, spawns, spine_parses, attribution, reads}`. `reads` is the count of file
+opens (`sys.addaudithook` `open` events) inside the measured span, counted only while the measured
+land loop has armed the counter.
 
 Axes:
   dispatch.land_run                          the whole op; over `BAR_MS` it is the DR-344 kill gate
@@ -26,7 +28,7 @@ their own runs (own session, run, plan, path, checkpoint commit) in the same fix
 same moment (a go-file barrier), so index locks, record-dir scans and HEAD moves are live. The
 measured process is a sibling of the others, never their parent: its figures hold its own tree only.
 Rows then add one `leg:<name>` row per `land_deadline.check` leg name in the source census
-(`census_legs`) or reached: `process_time_ms` and `spawns` run from that leg's check to the next
+(`census_legs`) or reached: `process_time_ms`, `spawns` and `reads` run from that leg's check to the next
 check (summed over repeat calls); an unreached census leg is `attribution.not_reached`. `--attribute`
 then profiles per leg (cProfile top-20 in each leg row), not per `read_to_integrity` span.
 
@@ -107,6 +109,35 @@ EXCEPTED_LEGS = frozenset({"land_run._integrity.landing_test_gate"})  # the bulk
 _CHECK_RE = re.compile(r"land_deadline\.check\(\s*[\"']([a-z_.]+)[\"']\s*\)")
 
 
+class _ReadCounter:
+    """File opens seen by the audit hook while armed. `sys.addaudithook` cannot be removed, so the
+    hook is installed once per process and counts nothing unless `armed`."""
+
+    armed = False
+    count = 0
+    installed = False
+
+
+def _audit_open(event: str, _args: tuple) -> None:
+    if _ReadCounter.armed and event == "open":
+        _ReadCounter.count += 1
+
+
+def arm_read_counter() -> None:
+    """Zero the counter and start counting `open` audit events (installs the hook on first use)."""
+    if not _ReadCounter.installed:
+        sys.addaudithook(_audit_open)
+        _ReadCounter.installed = True
+    _ReadCounter.count = 0
+    _ReadCounter.armed = True
+
+
+def disarm_read_counter() -> int:
+    """Stop counting; returns the opens seen since `arm_read_counter`."""
+    _ReadCounter.armed = False
+    return _ReadCounter.count
+
+
 class StopBeforeCommit(BaseException):
     """Raised at the `land_run.commit` leg boundary so a replay never reaches the commit leg
     (BaseException, like `LandDeadlineExceeded`: no `except Exception` in the op swallows it)."""
@@ -121,6 +152,7 @@ class AxisRow:
     spawns: int = 0
     spine_parses: int = 0
     attribution: dict = field(default_factory=dict)
+    reads: int = 0
 
 
 def sibling_run_id(i: int) -> str:
@@ -222,7 +254,7 @@ class Profiler:
             self._active = None
 
     def mark(self, leg: str) -> None:
-        self.marks.append((leg, self.tree_ms(), self.spawns))
+        self.marks.append((leg, self.tree_ms(), self.spawns, _ReadCounter.count))
         if self.per_leg:
             self._profile_off()
             self._profile_on(LEG_AXIS_PREFIX + leg)
@@ -238,28 +270,29 @@ class Profiler:
     def legs(self) -> list:
         """Process ms and spawns between consecutive marks, each labelled by the mark that opens it
         (`start` covers the op start to the first mark; `<leg>` runs to the next mark)."""
-        out, prev = [], (None, self.start_ms, 0)
-        for leg, ms, spawns in self.marks:
+        out, prev = [], (None, self.start_ms, 0, 0)
+        for leg, ms, spawns, reads in self.marks:
             out.append({"leg": prev[0] or "start", "to": leg, "process_time_ms": round(ms - prev[1], 3),
-                        "spawns": spawns - prev[2]})
-            prev = (leg, ms, spawns)
+                        "spawns": spawns - prev[2], "reads": reads - prev[3]})
+            prev = (leg, ms, spawns, reads)
         return out
 
-    def leg_costs(self, end_ms: float, end_spawns: int) -> dict:
-        """Per leg name, in first-reached order: process ms and spawns from each of its checks to the
-        next check (the last to `end_*`), summed over repeat calls, and the call count."""
+    def leg_costs(self, end_ms: float, end_spawns: int, end_reads: int = 0) -> dict:
+        """Per leg name, in first-reached order: process ms, spawns and file opens from each of its
+        checks to the next check (the last to `end_*`), summed over repeat calls, and the call count."""
         costs: dict = {}
-        following = self.marks[1:] + [("", end_ms, end_spawns)]
-        for (leg, ms, spawns), (_, ms2, spawns2) in zip(self.marks, following):
-            c = costs.setdefault(leg, {"process_time_ms": 0.0, "spawns": 0, "calls": 0})
+        following = self.marks[1:] + [("", end_ms, end_spawns, end_reads)]
+        for (leg, ms, spawns, reads), (_, ms2, spawns2, reads2) in zip(self.marks, following):
+            c = costs.setdefault(leg, {"process_time_ms": 0.0, "spawns": 0, "reads": 0, "calls": 0})
             c["process_time_ms"] = round(c["process_time_ms"] + ms2 - ms, 3)
             c["spawns"] += spawns2 - spawns
+            c["reads"] += reads2 - reads
             c["calls"] += 1
         return costs
 
     def timed(self, axis: str, fn):
         def wrapper(*a, **k):
-            t0, s0 = self.tree_ms(), self.spawns
+            t0, s0, r0 = self.tree_ms(), self.spawns, _ReadCounter.count
             p0 = self.parses.total
             nested = self._active is not None
             if not nested:
@@ -271,17 +304,17 @@ class Profiler:
                     self._profile_off()
                 self.calls[axis].append(
                     {"process_time_ms": round(self.tree_ms() - t0, 3), "spawns": self.spawns - s0,
-                     "spine_parses": self.parses.total - p0}
+                     "spine_parses": self.parses.total - p0, "reads": _ReadCounter.count - r0}
                 )
 
         return wrapper
 
     def span(self, start: str, end: str) -> tuple:
         """`(process_ms, spawns)` from the first mark of `start` to the next mark of `end`, or None."""
-        for i, (leg, ms, spawns) in enumerate(self.marks):
+        for i, (leg, ms, spawns, _reads) in enumerate(self.marks):
             if leg != start:
                 continue
-            for leg2, ms2, spawns2 in self.marks[i + 1:]:
+            for leg2, ms2, spawns2, _reads2 in self.marks[i + 1:]:
                 if leg2 == end:
                     return round(ms2 - ms, 3), spawns2 - spawns
             return None
@@ -365,17 +398,17 @@ def census_legs() -> list:
     return sorted(names)
 
 
-def leg_rows(prof: Profiler, end_ms: float, end_spawns: int) -> list:
+def leg_rows(prof: Profiler, end_ms: float, end_spawns: int, end_reads: int = 0) -> list:
     """One `leg:<name>` row per census leg and per reached leg outside it; a census leg the op never
-    started is `not_reached` (0 ms, 0 spawns)."""
-    costs = prof.leg_costs(end_ms, end_spawns)
+    started is `not_reached` (0 ms, 0 spawns, 0 reads)."""
+    costs = prof.leg_costs(end_ms, end_spawns, end_reads)
     census = census_legs()
     rows = []
     for leg in census + [leg for leg in costs if leg not in census]:
         c = costs.get(leg)
         attribution = {"leg": leg, "in_census": leg in census, "excepted": leg in EXCEPTED_LEGS, "measured": c is not None, "not_reached": c is None,
                        "calls": c["calls"] if c else 0, "top_functions": prof.top_functions(LEG_AXIS_PREFIX + leg)}
-        rows.append(AxisRow(LEG_AXIS_PREFIX + leg, c["process_time_ms"] if c else 0.0, c["spawns"] if c else 0, 0, attribution))
+        rows.append(AxisRow(LEG_AXIS_PREFIX + leg, c["process_time_ms"] if c else 0.0, c["spawns"] if c else 0, 0, attribution, c["reads"] if c else 0))
     return rows
 
 
@@ -390,7 +423,8 @@ def profile_land(root: Path, base: str, *, attribute: bool, call=None, stop_befo
     prof.meter.start()
     prof.start_ms = prof.tree_ms()
     cpu0 = time.process_time()
-    end = (prof.start_ms, 0)
+    end = (prof.start_ms, 0, 0)
+    arm_read_counter()
     try:
         result = (call or _call_land)(root, base)
     except StopBeforeCommit:
@@ -398,7 +432,7 @@ def profile_land(root: Path, base: str, *, attribute: bool, call=None, stop_befo
     except BaseException as exc:  # noqa: BLE001 -- a raised op is a row, not a crash of the harness
         error = type(exc).__name__
     finally:
-        end = (prof.tree_ms(), prof.spawns)
+        end = (prof.tree_ms(), prof.spawns, disarm_read_counter())
         whole_ms = round((time.process_time() - cpu0) * 1000.0 + prof.meter.stop_ms(), 3)
         undo()
         prof._profile_off()
@@ -409,6 +443,7 @@ def profile_land(root: Path, base: str, *, attribute: bool, call=None, stop_befo
          "commit_leg_reached": prof.commit_leg_reached,
          "land_deadline_halt": isinstance(result, dict) and result.get("refused") == "land-deadline",
          "legs": prof.legs(), "error": (result or {}).get("error", "") if isinstance(result, dict) else ""},
+        end[2],
     )]
     span = prof.span(LEG_SCRIPT_READ, LEG_INTEGRITY)
     rows.append(AxisRow(
@@ -421,6 +456,7 @@ def profile_land(root: Path, base: str, *, attribute: bool, call=None, stop_befo
             axis, round(sum(c["process_time_ms"] for c in calls), 3), sum(c["spawns"] for c in calls),
             sum(c["spine_parses"] for c in calls),
             {"measured": bool(calls), "calls": calls, "top_functions": prof.top_functions(axis)},
+            sum(c["reads"] for c in calls),
         ))
     if legs:
         rows.extend(leg_rows(prof, *end))
@@ -808,7 +844,7 @@ def run_real_record(run_id: str, source_root: Path, attribute: bool, halted_scal
 
 
 def render(rows: list) -> str:
-    out = [f"{'axis':42} {'proc_ms':>9} {'spawns':>6} {'parses':>6}  note"]
+    out = [f"{'axis':42} {'proc_ms':>9} {'spawns':>6} {'reads':>6} {'parses':>6}  note"]
     for r in rows:
         bar = LEG_BAR_MS if r.axis != WHOLE_OP else BAR_MS
         if r.attribution.get("excepted"):
@@ -817,10 +853,10 @@ def render(rows: list) -> str:
         note = r.attribution.get("outcome") or (
             "not_reached" if r.attribution.get("not_reached") else f"calls={calls if isinstance(calls, int) else len(calls)}" if "calls" in r.attribution else ""
         )
-        out.append(f"{r.axis:42} {r.process_time_ms:9.1f} {r.spawns:6d} {r.spine_parses:6d}  {'OVER ' if r.process_time_ms > bar else 'ok '}{note}")
+        out.append(f"{r.axis:42} {r.process_time_ms:9.1f} {r.spawns:6d} {r.reads:6d} {r.spine_parses:6d}  {'OVER ' if r.process_time_ms > bar else 'ok '}{note}")
     for r in rows:
         for leg in r.attribution.get("legs", []):
-            out.append(f"  leg {leg['leg']:42} -> {leg['to']:40} {leg['process_time_ms']:9.1f}ms {leg['spawns']:4d} spawns")
+            out.append(f"  leg {leg['leg']:42} -> {leg['to']:40} {leg['process_time_ms']:9.1f}ms {leg['spawns']:4d} spawns {leg['reads']:5d} reads")
     for r in rows:
         for f in r.attribution.get("top_functions", []):
             out.append(f"  [{r.axis}] {f['cum_ms']:8.1f} cum {f['self_ms']:8.1f} self {f['calls']:6d}x {f['fn']}")

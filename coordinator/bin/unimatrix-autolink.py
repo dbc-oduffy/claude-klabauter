@@ -14,6 +14,10 @@ that alias's relay key (`-o IdentitiesOnly=yes` is applied by the supervisors' s
 The key per alias is the machine-local `unimatrix.keys.<alias>`, else the IdentityFile `ssh -G` gives
 the alias (an existing non-default file), else the shared key (settings home, else the group-em home).
 
+Independently of any alias, a dead per-box `unimatrix-peer-router.py` is started once (record
+`autolink-router.json`; a router holding its own lease, e.g. started by hand, counts as live).
+`UNIMATRIX_AUTOLINK_NO_ROUTER=1` turns that step off.
+
 When no alias is listed (or the registry is unreadable) it appends one reason line to the log and exits 0:
 a receive-only box reads "no unimatrix.far_boxes configured; no supervisors started". An alias with no
 existing key appends one line to the log and is skipped; other aliases still link. A held per-peer lock
@@ -40,6 +44,8 @@ LOCK_STALE_SECONDS = 60
 KEYS_PREFIX = "unimatrix.keys."
 SSH_DEFAULT_IDENTITIES = {"id_rsa", "id_dsa", "id_ecdsa", "id_ecdsa_sk", "id_ed25519", "id_ed25519_sk", "id_xmss"}
 SUPERVISORS = (("bridge", "unimatrix-roster.py"), ("inbox", "unimatrix-mirror-all.py"))
+ROUTER_SCRIPT = "unimatrix-peer-router.py"
+NO_ROUTER_ENV = "UNIMATRIX_AUTOLINK_NO_ROUTER"
 
 
 def _roster():
@@ -47,6 +53,27 @@ def _roster():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+_PASSPHRASE = []
+
+
+def _passphrase():
+    if not _PASSPHRASE:
+        spec = importlib.util.spec_from_file_location("unimatrix_passphrase", HERE / "unimatrix-passphrase.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _PASSPHRASE.append(mod)
+    return _PASSPHRASE[0]
+
+
+def agent_state(key, run=subprocess.run):
+    """ensure_agent's verdict for `key`: 'unencrypted', 'loaded', 'locked' or 'missing'. Library absent or a
+    failed load reads as 'loaded' (the dial then reports its own failure)."""
+    try:
+        return _passphrase().ensure_agent(key, run=run)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return "loaded"
 
 
 _LIVENESS = []
@@ -332,6 +359,53 @@ def resolve_key(roster, alias, local_fn=None, ssh_fn=None):
     return local_fn(roster, alias) or ssh_fn(roster, alias) or roster.default_key()
 
 
+def router_lock_held(sdir):
+    """True while a router process holds `<state>/router/router.lock` (its lifetime lease), however it was started."""
+    path = sdir / "router" / "router.lock"
+    try:
+        spec = importlib.util.spec_from_file_location("unimatrix_local_transport", HERE / "unimatrix-local-transport.py")
+        transport = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(transport)
+        with open(path, "r+b" if sys.platform == "win32" else "rb") as fh:
+            if not transport.lock_file(fh):
+                return True
+            transport.unlock_file(fh)
+    except (OSError, ImportError):
+        pass
+    return False
+
+
+def supervise_router(roster, sdir, say, spawn=detached, lock_held_fn=None):
+    """Start the box's one peer router when it is down. Independent of any far-box alias.
+
+    Live means the recorded pid is the same process, else the router's own lease is held (a router
+    started by hand). A dead router is respawned under a per-box lock so two session starts never both spawn."""
+    if os.environ.get(NO_ROUTER_ENV):
+        return
+    rec_path = sdir / "autolink-router.json"
+    if supervisor_live(roster, read_record(rec_path)):
+        return
+    lock = sdir / "autolink-router.lock"
+    if not acquire_lock(lock):
+        return
+    try:
+        rec = read_record(rec_path)
+        if supervisor_live(roster, rec) or (lock_held_fn or router_lock_held)(sdir):
+            return
+        p = spawn([sys.executable, str(HERE / ROUTER_SCRIPT)])
+        try:
+            stamp = roster.proc_start(p.pid)
+        except (OSError, subprocess.SubprocessError):
+            stamp = None
+        roster.write_json_atomic(str(rec_path), {"pid": p.pid, "procStart": stamp})
+        say(f"peer router was down; started pid {p.pid}")
+    finally:
+        try:
+            os.remove(lock)
+        except OSError:
+            pass
+
+
 def _epoch_moved(sdir, liveness):
     """True when a stored snapshot's epoch differs from the one the boxes cache was written at."""
     try:
@@ -342,7 +416,7 @@ def _epoch_moved(sdir, liveness):
 
 
 def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, stable_fn=None, now=None,
-        membership=None, pull_fn=None, self_names=None):
+        membership=None, pull_fn=None, self_names=None, agent_fn=None):
     """Link every far box whose supervisors are down. A healthy box returns after reading records only.
 
     Explicit `boxes` are ssh aliases and bypass the snapshot. Otherwise the verified membership snapshot
@@ -351,16 +425,22 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
     backoff is skipped. The boxes cache short-circuits `healthy` for up to 24h unless the snapshot epoch
     moved since it was written."""
     key_fn = key_fn or resolve_key
+    agent_fn = agent_fn or agent_state
     roster = roster or _roster()
     liveness = _liveness()
     sdir = state_dir(roster)
-    if liveness.healthy(sdir, now) and not _epoch_moved(sdir, liveness):
-        return
     sdir.mkdir(parents=True, exist_ok=True)
 
     def say(msg):
         with open(sdir / "autolink.log", "a", encoding="utf-8") as fh:
             fh.write(f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {msg}\n")
+
+    try:  # the router is one per box: checked before, and regardless of, the far-box healthy short-circuit
+        supervise_router(roster, sdir, say, spawn=spawn)
+    except Exception as ex:  # a router failure must not stop the far links or fail the session
+        say(f"peer router supervision failed: {type(ex).__name__}: {str(ex)[:120]}")
+    if liveness.healthy(sdir, now) and not _epoch_moved(sdir, liveness):
+        return
 
     reason = NO_ALIAS_REASON
     names, epoch, snapshot_mode = {}, None, False
@@ -409,6 +489,14 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
                 if not Path(key).is_file():
                     # A configured alias with no key is a misconfiguration worth one line, not silence.
                     say(f"far box {alias}: no Unimatrix-Zero key (looked for {key}); not linked")
+                    continue
+                verdict = agent_fn(key)
+                if verdict == "locked":  # a named wait: no probe, no backoff charge
+                    say(f"far box {alias}: waiting: 1Password locked")
+                    continue
+                if verdict == "missing":
+                    say(f"far box {alias}: passphrase_source_missing: op CLI or unimatrix.passphrase_vault "
+                        f"unavailable; encrypted key {key} not loaded")
                     continue
                 link_peer(roster, alias, key, say, spawn=spawn, probe_fn=probe_fn, stable_fn=stable_fn,
                           now=now, liveness=liveness, pull_fn=pull_fn)

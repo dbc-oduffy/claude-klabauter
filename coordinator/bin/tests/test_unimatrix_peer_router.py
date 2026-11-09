@@ -3,6 +3,7 @@ import asyncio
 import importlib.util
 import json
 import os
+import re
 import shlex
 import shutil
 import socket
@@ -19,7 +20,27 @@ _spec = importlib.util.spec_from_file_location("unimatrix_peer_router", BIN / "u
 pr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(pr)
 
-pytestmark = [pytest.mark.complete, pytest.mark.skipif(os.name == "nt", reason="unix sockets")]
+pytestmark = [pytest.mark.complete]
+
+
+def portable(fn):
+    """Marks a socket-free pin that also runs on Windows."""
+    fn._portable = True
+    return fn
+
+
+@pytest.fixture(autouse=True)
+def _unix_sockets_only(request):
+    """Every pin but the socket-free v2 routing ones needs unix sockets."""
+    if os.name == "nt" and not getattr(request.function, "_portable", False):
+        pytest.skip("unix sockets")
+
+
+@pytest.fixture
+def dirs(tmp_path):
+    for sub in ("sessions", "eps", "state"):
+        (tmp_path / sub).mkdir()
+    return tmp_path
 
 
 @pytest.fixture
@@ -357,19 +378,77 @@ def hold(path):
     return fd
 
 
-def test_lock_peers_need_a_held_lock_and_peers_json_wins(tmp_path):
+THR_LIVE = "01a1b600-0000-7000-8000-00000000000a"
+THR_SUB = "01a1b62c-0000-7000-8000-00000000000b"
+THR_NOROLL = "01a1b65b-0000-7000-8000-00000000000c"
+ROOT_ROW = {"cwd": "/w", "source": "cli", "thread_source": "user", "agent_path": None}
+
+
+def write_rollout(home, thread_id, source):
+    day = home / "sessions" / "2026" / "11" / "08"
+    day.mkdir(parents=True, exist_ok=True)
+    meta = {"type": "session_meta", "payload": {"id": thread_id, "source": source}}
+    (day / f"rollout-2026-11-08T00-00-00-{thread_id}.jsonl").write_text(
+        json.dumps(meta) + "\n" + json.dumps({"type": "event_msg", "payload": {}}) + "\n")
+
+
+def test_lock_peers_need_a_held_lock_and_peers_json_wins(tmp_path, monkeypatch):
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: {
+        t: ROOT_ROW for t in (THR_LIVE, "thr-1", "thr-stale")})
+    write_rollout(tmp_path, THR_LIVE, "cli")
     d = tmp_path / "locks"
-    fds = [hold(d / "thr-live.lock"), hold(d / "thr-1.lock"), hold(d / ".coordination.lock")]
+    fds = [hold(d / f"{THR_LIVE}.lock"), hold(d / "thr-1.lock"), hold(d / ".coordination.lock")]
     (d / "thr-stale.lock").write_text("")
     (d / "notes.txt").write_text("")
     try:
         got = pr.load_lock_peers(d, "codex", {p["name"] for p in PEERS}, {p["target"] for p in PEERS})
-        assert got == [{"name": pr.readable_peer_name("codex", "thr-live"), "vendor": "codex", "target": "thr-live"}]
+        assert got == [{"name": pr.readable_peer_name("codex", THR_LIVE, "/w"), "vendor": "codex",
+                        "target": THR_LIVE, "cwd": "/w"}]
         assert pr.load_lock_peers(tmp_path / "missing", "codex") == []
     finally:
         for fd in fds:
             os.close(fd)
     assert pr.load_lock_peers(d, "codex") == []  # released locks are stale
+
+
+def test_lock_peers_skip_rollout_subagents_and_threads_without_a_rollout(tmp_path, monkeypatch):
+    pr._ROLLOUT_VERDICTS.clear()
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: {
+        t: ROOT_ROW for t in (THR_LIVE, THR_SUB, THR_NOROLL)})  # state DB reads root for all three
+    write_rollout(tmp_path, THR_LIVE, "cli")
+    write_rollout(tmp_path, THR_SUB, {"subagent": {"thread_spawn": {"parent_thread_id": THR_LIVE}}})
+    d = tmp_path / "locks"
+    fds = [hold(d / f"{t}.lock") for t in (THR_LIVE, THR_SUB, THR_NOROLL)]
+    try:
+        got = pr.load_lock_peers(d, "codex")
+        assert [p["target"] for p in got] == [THR_LIVE]
+        write_rollout(tmp_path, THR_NOROLL, "cli")  # a rollout that appears later admits the thread
+        assert sorted(p["target"] for p in pr.load_lock_peers(d, "codex")) == sorted([THR_LIVE, THR_NOROLL])
+    finally:
+        for fd in fds:
+            os.close(fd)
+
+
+def test_rollout_gate_walks_the_sessions_tree_once_per_scan(tmp_path, monkeypatch):
+    pr._ROLLOUT_VERDICTS.clear()
+    ids = [f"01a1b600-0000-7000-8000-0000000000{n:02x}" for n in range(5)]
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: {t: ROOT_ROW for t in ids})
+    for t in ids:
+        write_rollout(tmp_path, t, "cli")
+    walks = []
+    codex = pr._sibling("unimatrix-peer-codex.py", "unimatrix_peer_codex")
+    real = codex.rollout_index
+    monkeypatch.setattr(codex, "rollout_index", lambda home=None: walks.append(1) or real(home))
+    d = tmp_path / "locks"
+    fds = [hold(d / f"{t}.lock") for t in ids]
+    try:
+        assert len(pr.load_lock_peers(d, "codex")) == 5
+        assert len(walks) == 1
+        pr.load_lock_peers(d, "codex")
+        assert len(walks) == 1  # verdicts are cached
+    finally:
+        for fd in fds:
+            os.close(fd)
 
 
 def test_shared_mode_holder_reads_as_held_and_no_fcntl_reads_as_free(tmp_path, monkeypatch):
@@ -427,6 +506,74 @@ def test_router_with_no_peers_json_registers_locks_and_retires_them_when_release
             s.close()
             await r.stop()
     run(go())
+
+
+def _dead_pid():
+    import subprocess
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+def test_grok_registry_lists_live_entry_as_peer_and_none_for_dead_pid(box):
+    async def go():
+        home = box / "grok"
+        home.mkdir()
+        repo = box / "myrepo"
+        (repo / ".git").mkdir(parents=True)
+        sid = "0123abcd-1111-2222-3333-444455556666"
+        rows = [{"session_id": sid, "cwd": str(repo), "pid": os.getpid()},
+                {"session_id": "dead0000-1111", "cwd": str(repo), "pid": _dead_pid()}]
+        (home / "active_sessions.json").write_text(json.dumps(rows), encoding="utf-8")
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters(), grok_home=home)
+        await r.start()
+        try:
+            want = f"grok-myrepo-0123abcd-on-{socket.gethostname().lower()}"
+            assert list(r.peers) == [want]
+            assert r.peers[want]["vendor"] == "grok" and r.peers[want]["target"] == sid
+            assert r.peers[want]["cwd"] == str(repo) and want in r.faces
+            (home / "active_sessions.json").write_text("[]", encoding="utf-8")
+            await r.refresh_discovered()
+            assert r.peers == {}
+        finally:
+            await r.stop()
+    run(go())
+
+
+def test_live_discovered_scans_grok_registry(tmp_path):
+    home = tmp_path / "grok"
+    home.mkdir()
+    sid = "feedbeef-1111-2222-3333-444455556666"
+    rows = [{"session_id": sid, "cwd": str(tmp_path / "proj"), "pid": os.getpid()},
+            {"session_id": "dead0000-1111", "cwd": str(tmp_path / "proj"), "pid": _dead_pid()}]
+    (home / "active_sessions.json").write_text(json.dumps(rows), encoding="utf-8")
+
+    async def go():
+        return pr.Router([], sessions_dir=tmp_path / "s", state_dir=tmp_path / "st",
+                         endpoint_dir=tmp_path / "e", grok_home=home)._live_discovered()
+
+    live = run(go())
+    assert list(live) == [f"grok-proj-feedbeef-on-{socket.gethostname().lower()}"]
+    peer = next(iter(live.values()))
+    assert peer["vendor"] == "grok" and peer["target"] == sid and peer["cwd"] == str(tmp_path / "proj")
+
+
+def test_default_adapters_grok_delivers_by_cwd_pinned_resume(monkeypatch):
+    assert "grok" in pr.default_adapters()
+
+    class Proc:
+        returncode = 0
+        stdout = json.dumps({"text": "grok said hi"})
+
+    argvs = []
+    real = pr._load("unimatrix-peer-grok.py", "unimatrix_peer_grok_probe")
+    monkeypatch.setattr(real.subprocess, "run", lambda argv, **kw: argvs.append((argv, kw)) or Proc())
+    monkeypatch.setattr(pr, "_load", lambda filename, modname: real)
+    reply = run(pr.default_adapters()["grok"]({"target": "sid-1", "cwd": "/w/repo"}, "ping"))
+    assert reply == "grok said hi"
+    argv, kw = argvs[0]
+    assert argv[argv.index("--cwd") + 1] == "/w/repo" and "--add-dir" not in argv and kw["cwd"] == "/w/repo"
 
 
 def test_peers_json_entry_survives_its_lock_going_and_beats_a_discovered_clash(box):
@@ -914,3 +1061,264 @@ def test_list_shows_per_peer_readiness_leg_present_or_not(box, capsys, monkeypat
     lines = capsys.readouterr().out.splitlines()
     assert any(line.startswith("agy-a\tnot-ready (no leg)\t") for line in lines)
     assert any(line.startswith("codex-a\tready\t") for line in lines)
+
+
+def test_scanner_repair_respawns_missing_face_and_restarts_exited_face_only(box):
+    class Proc:
+        def __init__(self, rc):
+            self.rc = rc
+
+        def poll(self):
+            return self.rc
+
+    async def go():
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state", endpoint_dir=box / "eps")
+        r.peers = {"alive": {}, "dead": {}, "missing": {}}
+        r.faces = {"alive": Proc(None), "dead": Proc(1)}
+        calls = []
+
+        async def spawn(name):
+            calls.append(("spawn", name))
+
+        async def restart(name):
+            calls.append(("restart", name))
+
+        r._spawn_face, r.restart_face = spawn, restart
+        await r._repair_faces()
+        assert sorted(calls) == [("restart", "dead"), ("spawn", "missing")]
+
+    asyncio.run(go())
+
+
+def test_pipe_delivery_peeks_for_a_refusal_within_the_hot_path_budget(monkeypatch):
+    seen = []
+    monkeypatch.setattr(pr._transport(), "pipe_exchange", lambda *a: seen.append(a) or b"")
+    pr.deliver("\\\\.\\pipe\\LOCAL\\cc-msg-" + "a" * 32, b"{}\n")
+    assert seen and seen[0][3] <= 0.1
+
+
+THR_HELD = "01a1b600-0000-7000-8000-0000000000a1"
+THR_OTHER = "01a1b600-0000-7000-8000-0000000000a2"
+
+
+def holder_router(box, monkeypatch, peers, locks=None):
+    """A router whose Codex threads read as sendable roots with an addressable rollout."""
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: {
+        t: ROOT_ROW for t in (THR_HELD, THR_OTHER)})
+    monkeypatch.setattr(pr, "codex_rollout_addressable", lambda *a: True)
+    return pr.Router(peers, sessions_dir=box / "sessions", state_dir=box / "state", endpoint_dir=box / "eps",
+                     adapters=echo_adapters(), codex_locks_dir=locks)
+
+
+def face_reply(endpoint, frame):
+    s = socket.socket(socket.AF_UNIX)
+    s.settimeout(10)
+    s.connect(endpoint)
+    s.sendall((json.dumps(frame) + "\n").encode())
+    s.shutdown(socket.SHUT_WR)
+    buf = b""
+    while chunk := s.recv(65536):
+        buf += chunk
+    s.close()
+    return buf
+
+
+def test_dead_holder_row_gets_no_face_even_with_its_lock_held_and_is_not_listed(box, monkeypatch):
+    async def go():
+        cx = box / "cx"
+        peers = [{"name": "codex-dead", "vendor": "codex", "target": THR_HELD, "codexPid": _dead_pid()},
+                 {"name": "codex-live", "vendor": "codex", "target": THR_OTHER, "codexPid": os.getpid()}]
+        fd = hold(cx / f"{THR_HELD}.lock")
+        r = holder_router(box, monkeypatch, peers, cx)
+        await r.start()
+        try:
+            await r.refresh_discovered()
+            assert sorted(r.faces) == ["codex-live"] and r.discovered == set()
+            resp = await r._dispatch({"op": "list"})
+            assert resp["peers"] == ["codex-live"] and "codex-dead" not in resp["ready"]
+            assert [a["name"] for a in resp["agents"]] == ["codex-live"] and "stale" not in resp["agents"][0]
+            bad = await r._dispatch({"op": "send", "to": "codex-dead", "text": "hello there"})
+            assert bad["ok"] is False
+            good = await r._dispatch({"op": "send", "to": "codex-live", "text": "hello there"})
+            assert good["ok"] is True
+        finally:
+            os.close(fd)
+            await r.stop()
+    run(go())
+
+
+def test_holder_dying_after_start_stops_the_face_on_the_next_refresh(box, monkeypatch):
+    import subprocess
+
+    async def go():
+        cx = box / "cx"
+        holder = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+        peers = [{"name": "codex-a", "vendor": "codex", "target": THR_HELD, "codexPid": holder.pid}]
+        fd = hold(cx / f"{THR_HELD}.lock")
+        r = holder_router(box, monkeypatch, peers, cx)
+        await r.start()
+        try:
+            assert "codex-a" in r.faces
+            ep, pid = r.endpoint_of("codex-a"), r.faces["codex-a"].pid
+            holder.kill()
+            holder.wait()
+            await r.refresh_discovered()
+            assert "codex-a" not in r.faces and r.discovered == set()
+            assert not os.path.exists(ep) and not os.path.exists(box / "sessions" / f"{pid}.json")
+            await r._repair_faces()
+            assert "codex-a" not in r.faces
+            assert (await r._dispatch({"op": "list"}))["peers"] == []
+        finally:
+            holder.kill()
+            os.close(fd)
+            await r.stop()
+    run(go())
+
+
+def test_lock_only_codex_thread_is_listed_stale_and_refuses_sends_and_frames(box, monkeypatch):
+    async def go():
+        cx = box / "cx"
+        fd = hold(cx / f"{THR_HELD}.lock")
+        r = holder_router(box, monkeypatch, [], cx)
+        await r.start()
+        try:
+            await r.refresh_discovered()
+            name = pr.readable_peer_name("codex", THR_HELD, "/w")
+            assert list(r.peers) == [name] and name in r.faces
+            resp = await r._dispatch({"op": "list"})
+            assert resp["agents"] == [{"name": name, "box": pr._contract().local_box(), "vendor": "codex",
+                                       "stale": True}]
+            bad = await r._dispatch({"op": "send", "to": name, "text": "hello there"})
+            assert bad["ok"] is False and "stale" in bad["error"]
+            raw = await asyncio.to_thread(face_reply, r.endpoint_of(name),
+                                          frame_to(box, str(box / "s.sock"), "em", "hello there"))
+            assert json.loads(raw.splitlines()[0])["ok"] is False
+        finally:
+            os.close(fd)
+            await r.stop()
+    run(go())
+
+
+def test_peers_file_codex_row_without_a_holder_keeps_its_face_but_is_stale(box, monkeypatch):
+    async def go():
+        peers = [{"name": "codex-a", "vendor": "codex", "target": THR_HELD}]
+        r = holder_router(box, monkeypatch, peers)
+        await r.start()
+        try:
+            assert "codex-a" in r.faces
+            resp = await r._dispatch({"op": "list"})
+            assert resp["peers"] == ["codex-a"] and resp["agents"][0]["stale"] is True
+            assert (await r._dispatch({"op": "send", "to": "codex-a", "text": "hello there"}))["ok"] is False
+        finally:
+            await r.stop()
+    run(go())
+
+
+def test_user_frame_to_a_live_holder_face_gets_no_reply_line(box, monkeypatch):
+    async def go():
+        log = []
+        peers = [{"name": "codex-a", "vendor": "codex", "target": THR_HELD, "codexPid": os.getpid()}]
+        r = holder_router(box, monkeypatch, peers)
+        r.adapters = echo_adapters(log)
+        s = FakeSender(str(box / "s.sock"))
+        await r.start()
+        try:
+            raw = await asyncio.to_thread(face_reply, r.endpoint_of("codex-a"),
+                                          frame_to(box, s.path, "em", "hello there"))
+            assert raw == b""
+            await until(lambda: log)
+        finally:
+            s.close()
+            await r.stop()
+    run(go())
+
+
+THR_ROOT = "01a1b629-0934-71f1-aba9-95987bbc9c6b"
+THR_V2 = "01a1b62b-c998-7eb1-90fe-a2d18963d8d7"
+THR_V2_ORPHAN = "01a1b62b-0000-7000-8000-0000000000ff"
+REPLY_TO_ROOT = r"--to '?codex-root'? '<your reply>'$"
+
+
+def v2_router(dirs, monkeypatch, log):
+    spawn = lambda parent: {"cwd": "/w", "source": json.dumps({"subagent": {"thread_spawn": {"parent_thread_id": parent}}}),
+                            "thread_source": "subagent", "agent_path": "/root/worker"}
+    rows = {THR_ROOT: ROOT_ROW, THR_V2: spawn(THR_ROOT),
+            THR_V2_ORPHAN: {"cwd": "/w", "source": "subagent", "thread_source": "subagent", "agent_path": "/root/x"}}
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: rows)
+    return make_router(dirs, echo_adapters(log), [{"name": "codex-root", "vendor": "codex", "target": THR_ROOT},
+                                                 {"name": "agy-a", "vendor": "agy", "target": "conv-1"}])
+
+
+@portable
+def test_v2_subagent_sender_trailer_replies_to_its_root_parent(dirs, monkeypatch):
+    async def go():
+        log = []
+        r = v2_router(dirs, monkeypatch, log)
+        resp = await r._dispatch({"op": "send", "as_target": THR_V2, "as": "cli", "to": "agy-a", "text": "status?"})
+        assert resp["ok"] is True
+        trailer = log[0][1].split("\n\n")[1]
+        assert re.search(REPLY_TO_ROOT, trailer)
+        assert THR_V2 not in trailer.split("Reply to them with:")[1]
+        assert log[0][1].startswith(f"[codex-{THR_V2}] status?")
+        plain = await r._dispatch({"op": "send", "as_target": THR_ROOT, "to": "agy-a", "text": "root asks"})
+        assert plain["ok"] is True and re.search(REPLY_TO_ROOT, log[1][1])
+    run(go())
+
+
+@portable
+def test_send_to_a_v2_subagent_id_is_delivered_to_its_root_parent(dirs, monkeypatch):
+    async def go():
+        log = []
+        r = v2_router(dirs, monkeypatch, log)
+        r.peer_stale = lambda name: False
+        for address in (THR_V2, f"codex-{THR_V2}"):
+            resp = await r._dispatch({"op": "send", "as": "agy-a", "to": address, "text": "please look"})
+            assert resp["ok"] is True
+        assert [name for name, _ in log] == ["codex-root", "codex-root"]
+    run(go())
+
+
+@portable
+def test_v2_subagent_without_a_resolvable_parent_is_refused_both_ways(dirs, monkeypatch):
+    async def go():
+        log = []
+        r = v2_router(dirs, monkeypatch, log)
+        as_sender = await r._dispatch({"op": "send", "as_target": THR_V2_ORPHAN, "to": "agy-a", "text": "hi there"})
+        to_sub = await r._dispatch({"op": "send", "as": "agy-a", "to": THR_V2_ORPHAN, "text": "hi there"})
+        unknown = await r._dispatch({"op": "send", "as": "agy-a", "to": "codex-unknown", "text": "hi there"})
+        assert as_sender["ok"] is False and "no resolvable sendable root parent" in as_sender["error"]
+        assert to_sub["ok"] is False and "no resolvable sendable root parent" in to_sub["error"]
+        assert unknown["ok"] is False and "no resolvable" not in unknown["error"]
+        assert log == []
+    run(go())
+
+
+@portable
+def test_codex_root_parent_walks_chain_and_stops_on_cycles():
+    sub = lambda parent: {"source": {"subagent": {"thread_spawn": {"parent_thread_id": parent}}}}
+    rows = {"a": sub("b"), "b": sub("c"), "c": ROOT_ROW, "x": sub("y"), "y": sub("x")}
+    assert pr.codex_root_parent("a", rows.get) == "c"
+    assert pr.codex_root_parent("x", rows.get) is None
+    assert pr.codex_root_parent("c", rows.get) is None
+
+
+def test_lock_peer_records_the_logging_codex_process_as_holder(tmp_path, monkeypatch):
+    import sqlite3
+    pr._ROLLOUT_VERDICTS.clear()
+    monkeypatch.setattr(pr, "codex_thread_metadata", lambda home: {THR_LIVE: ROOT_ROW})
+    write_rollout(tmp_path, THR_LIVE, "cli")
+    conn = sqlite3.connect(tmp_path / "logs_1.sqlite")
+    conn.execute("CREATE TABLE logs (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER NOT NULL, "
+                 "ts_nanos INTEGER NOT NULL, thread_id TEXT, process_uuid TEXT)")
+    conn.execute("INSERT INTO logs (ts, ts_nanos, thread_id, process_uuid) VALUES (1, 0, ?, ?)",
+                 (THR_LIVE, f"pid:{os.getpid()}:u"))
+    conn.commit()
+    conn.close()
+    d = tmp_path / "locks"
+    fd = hold(d / f"{THR_LIVE}.lock")
+    try:
+        (peer,) = pr.load_lock_peers(d, "codex")
+    finally:
+        os.close(fd)
+    assert peer["codexPid"] == os.getpid()
+    assert pr._liveness().codex_holder_live(peer) is True

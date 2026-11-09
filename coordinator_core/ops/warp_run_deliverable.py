@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
@@ -600,6 +601,66 @@ def _own_lineage(root: Path, run_id: Optional[str]) -> tuple:
     return sizing, frozenset(chain)
 
 
+_SCOPE_PEERS: ContextVar[Optional[tuple]] = ContextVar("warp_run_deliverable_scope_peers", default=None)
+
+
+def _scoped_peer_views() -> Optional[dict]:
+    """The per-land_run-scope `{view key: peer view}` memo; None outside a `land_deadline.scope`. Keyed by
+    the scope's deadline value, so a new scope starts empty and nothing is held across scopes."""
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    deadline = land_deadline._DEADLINE.get()
+    if deadline is None:
+        return None
+    held = _SCOPE_PEERS.get()
+    if held is None or held[0] != deadline:
+        held = (deadline, {})
+        _SCOPE_PEERS.set(held)
+    return held[1]
+
+
+def _peer_view(
+    root: Path, exclude_session: str, cwd: Optional[str], minted_before: Optional[tuple], exclude_run: Optional[str],
+) -> Optional[list]:
+    """`[(minted_at, run_id, session_id, declared_set, prefixes, withheld)]` per live peer run, in
+    `held_records` order; None when a live peer's declaration is unreadable (contest unknown).
+    Inside a `land_deadline.scope` it is built once per argument tuple, so the land_run's several claim
+    readers share one `held_records` pass and one verdict, manifest and withheld read per run."""
+    views = _scoped_peer_views()
+    key = (str(root), exclude_session, cwd, None if minted_before is None else tuple(minted_before), exclude_run)
+    if views is not None and key in views:
+        return views[key]
+    view = _build_peer_view(root, exclude_session, cwd, minted_before, exclude_run)
+    if views is not None:
+        views[key] = view
+    return view
+
+
+def _build_peer_view(
+    root: Path, exclude_session: str, cwd: Optional[str], minted_before: Optional[tuple], exclude_run: Optional[str],
+) -> Optional[list]:
+    own_sizing, predecessors = _own_lineage(root, exclude_run)
+    view: list = []
+    for record in run_token.held_records(root):
+        run_id = record["run_id"]
+        if exclude_run is not None and run_id == exclude_run:
+            continue
+        if not _live_peer_run(root, record, exclude_session, cwd, minted_before):
+            continue
+        if run_id in predecessors and _lineage_sizing(root, run_id) == own_sizing:
+            continue
+        if resumed_run_released(root, run_id, exclude_run):
+            continue
+        declared, prefixes, unreadable = _manifest_declared(run_id, root)
+        if unreadable and not declared and not prefixes:
+            logging.getLogger(__name__).warning("live run %s: unreadable write declaration", run_id)
+            return None
+        view.append(
+            (record["minted_at"], run_id, record.get("session_id"), frozenset(declared), prefixes, _withheld_paths(root, run_id))
+        )
+    return view
+
+
 def _live_claim_scan(
     repo_root: Path,
     paths: Iterable[str],
@@ -616,33 +677,19 @@ def _live_claim_scan(
     claims: dict = {}
     if not wanted:
         return claims
-    own_sizing, predecessors = _own_lineage(root, exclude_run)
+    view = _peer_view(root, exclude_session, cwd, minted_before, exclude_run)
+    if view is None:
+        return None
     # A peer's bare prefix (`writes_under`, as wide as `coordinator_core/`) never holds a path the
     # asking run names exactly: it would strand that run's own written files at checkpoint and empty
     # its review prep, for the peer token's whole TTL. An exact peer declaration still holds.
     own_exact = set(_manifest_declared(exclude_run, root)[0]) if exclude_run else set()
-    for record in run_token.held_records(root):
-        sid = record.get("session_id")
-        run_id = record["run_id"]
-        if exclude_run is not None and run_id == exclude_run:
-            continue
-        if not _live_peer_run(root, record, exclude_session, cwd, minted_before):
-            continue
-        if run_id in predecessors and _lineage_sizing(root, run_id) == own_sizing:
-            continue
-        if resumed_run_released(root, run_id, exclude_run):
-            continue
-        declared, prefixes, unreadable = _manifest_declared(run_id, root)
-        if unreadable and not declared and not prefixes:
-            logging.getLogger(__name__).warning("live run %s: unreadable write declaration", run_id)
-            return None
-        declared_set = set(declared)
-        withheld = _withheld_paths(root, run_id)
+    for minted_at, run_id, sid, declared_set, prefixes, withheld in view:
         for path in wanted - withheld:
             if path in declared_set or (
                 path not in own_exact and any(path.startswith(pre + "/") or path == pre for pre in prefixes)
             ):
-                claims.setdefault(path, []).append((record["minted_at"], run_id, sid))
+                claims.setdefault(path, []).append((minted_at, run_id, sid))
     for entries in claims.values():
         entries.sort()
     return claims

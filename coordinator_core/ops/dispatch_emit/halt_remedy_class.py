@@ -74,6 +74,9 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "dry-refire-no-refireable-run": (MECHANICAL, "replay-built-in-sample"),
     # A halt kind with no constant of its own (orphan_adopt.ORPHAN_PENDING); the census classes it recoverable.
     "orphan_pending": (MECHANICAL, "adopt-orphan-pending-run"),
+    # DECISION: a refire alone re-halts; the answer is outside the engine (restore example-retrieval-repo, back the citations).
+    "rag_corpus_down": (DECISION, None),
+    "citation_unbacked": (DECISION, None),
 }
 
 #: Class label of a kind whose continuing would do irreversible harm or commit an unasked direction.
@@ -103,6 +106,9 @@ IRREVERSIBLE_KINDS: dict[str, str] = {
     "deleted": "restores or removes a deleted path: data loss",
     "out-of-worktree": "writes outside the worktree",
     "halt-on-run-owned-merge": "resolves a merge over run-owned history unasked: history rewrite",
+    # Unverifiable claims: continuing ships docs whose citations were never checked against the corpus.
+    "rag_corpus_down": "example-retrieval-repo corpus down: the docs-check cannot back citations; continuing ships them unchecked",
+    "citation_unbacked": "docs-check found citations the corpus does not back: continuing ships unbacked claims",
 }
 
 #: kind -> the PM ruling that keeps it a refusal. Never a recoverable debt; the stop_after refusal is the only one.

@@ -25,7 +25,28 @@ def _blocked_text(outcome: str, legacy: str, target: str) -> str:
 
 
 def _place_engine_on_path() -> str:
-    """Resolve the engine root through the claude-klabauter bin resolver and put it on `sys.path`."""
+    """Put the engine root on `sys.path` and return it.
+
+    Mirror-portable: a tree shipping the `_engine_root.py` hook seam (the DoE mirror, whose bin/lib
+    carries no bootstrap or invoke helper) places through that seam, loaded by file path
+    so no hooks dir joins `sys.path`; an engine or klabauter tree resolves through bin/lib's
+    engine_bootstrap.
+    """
+    seam = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "hooks", "scripts", "_engine_root.py"
+    )
+    if os.path.isfile(seam):
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("_engine_root", seam)
+        engine_root = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(engine_root)
+        # Trap: the publish stem rewrite renames the engine stem in identifiers AND string literals,
+        # but the mirror's seam keeps the unrewritten name; the split literal is rewrite-stable.
+        root = getattr(engine_root, "resolve_" + "mak" + "ima" + "_root")()
+        if not root:
+            raise RuntimeError("engine root unresolved")
+        return engine_root.place_engine_root_on_path(root)
     lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
     if lib not in sys.path:
         sys.path.insert(0, lib)

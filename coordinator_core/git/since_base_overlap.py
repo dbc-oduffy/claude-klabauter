@@ -7,6 +7,10 @@ through ``git_objects``. The landing commits the worktree bytes verbatim, so a l
 lines over the run base still drops a sibling's since-base line and is a finding. A run's own commits are those whose message carries ``Checkpoint-Base:`` (or ``Checkpoint-Review-Base:``) equal to the run base; when the plan is known, those carrying
 ``Checkpoint-Plan:`` equal to it and either no stamped base, one on the walked chain, one among the run
 base's first-parent ancestors, or one the run's own record names (``landing_integrity.closing_bases``).
+A dropped line a non-own commit added is still the run's own when it matches a line the run recorded for that
+path at an earlier pass (``kept.json``, ``withheld-prints.json``, ``measured-rev.json``) that the base lacked: a
+peer hand-land swept the run's in-flight hunk, and the run removing it is its own edit. A standing finding
+names the foreign commit and the dropped lines' range in it.
 ``Session-Id`` cannot discriminate (concurrent runs share it), nor can plan text alone (a prior run of the
 same plan stamps it).
 """
@@ -15,6 +19,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -32,6 +37,7 @@ ANCESTOR_CAP = 256
 NOTE_WALK_CAPPED = "walk-capped"
 NOTE_UNREADABLE = "unreadable"
 
+_WORD_RE = re.compile(rb"\w")
 _PLAN_RE = re.compile(r"^Checkpoint-Plan: (\S.*?)\s*$", re.M)
 _BASE_RE = re.compile(r"^Checkpoint-(?:Review-)?Base: ([0-9a-f]{7,40})\s*$", re.M)
 
@@ -172,6 +178,58 @@ def _opcodes(a: List[bytes], b: List[bytes]) -> List[Tuple[str, int, int, int, i
     return ops
 
 
+_BLOB_ID_RE = re.compile(r"[0-9a-f]{40}")
+_RECORD_FILES = ("kept.json", "withheld-prints.json", "measured-rev.json")
+
+
+def _recorded_blob_ids(node: object, path: str, out: set) -> None:
+    """Blob ids a run record maps to ``path``: a ``{path: blob}`` map at any depth under the record
+    (kept.json nests it as ``chunks.<id>.paths``; measured-rev.json as ``blobs``)."""
+    if isinstance(node, dict):
+        hit = node.get(path)
+        if isinstance(hit, str) and _BLOB_ID_RE.fullmatch(hit):
+            out.add(hit)
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                _recorded_blob_ids(value, path, out)
+    elif isinstance(node, list):
+        for value in node:
+            if isinstance(value, (dict, list)):
+                _recorded_blob_ids(value, path, out)
+
+
+def _own_recorded_lines(
+    root: Path, common_dir: Path, run_id: Optional[str], path: str, base_blob: object
+) -> Counter:
+    """Lines this run itself recorded for ``path`` at an earlier pass (kept.json, withheld-prints.json,
+    measured-rev.json blobs), minus the lines the base already held, as a multiset keyed on the
+    newline-stripped text. A peer commit that swept the run's in-flight hunks adds lines in this set;
+    removing them is the run's own edit, not a foreign drop. Empty without a safe run id or record.
+    In-process reads only."""
+    if not run_id:
+        return Counter()
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        directory = record_dir(root, run_id)
+    except ValueError:
+        return Counter()
+    ids: set = set()
+    for name in _RECORD_FILES:
+        try:
+            _recorded_blob_ids(json.loads((directory / name).read_text(encoding="utf-8")), path, ids)
+        except (OSError, ValueError):
+            continue
+    own: Counter = Counter()
+    for blob in sorted(ids):
+        lines = _lines(common_dir, blob)
+        if lines:
+            own |= Counter(l.rstrip(b"\r\n") for l in lines)
+    base_lines = _lines(common_dir, base_blob) or []
+    own.subtract(Counter(l.rstrip(b"\r\n") for l in base_lines))
+    return +own
+
+
 def check(
     worktree_root: Path,
     paths: Sequence[str],
@@ -268,12 +326,22 @@ def check(
             continue
         # A replace that is no shorter than the span it overwrites rewrites or extends those lines in
         # place (a modification); only a pure delete or a replace's surplus head lines are dropped.
-        tracked = [
-            i
-            for tag, i1, i2, j1, j2 in _opcodes(head_lines, new_lines)
-            if tag in ("delete", "replace")
-            for i in range(i1 + (j2 - j1 if tag == "replace" else 0), i2)
-        ]
+        head_ops = _opcodes(head_lines, new_lines)
+        # A removed head line the landing re-inserts elsewhere (a move) is not a drop: each
+        # inserted line with a word character cancels one removed line of equal text.
+        inserted = Counter(
+            l.rstrip(b"\r\n") for tag, _i1, _i2, j1, j2 in head_ops if tag in ("insert", "replace") for l in new_lines[j1:j2]
+        )
+        tracked = []
+        for tag, i1, i2, j1, j2 in head_ops:
+            if tag not in ("delete", "replace"):
+                continue
+            for i in range(i1 + (j2 - j1 if tag == "replace" else 0), i2):
+                text = head_lines[i].rstrip(b"\r\n")
+                if inserted[text] > 0 and _WORD_RE.search(text):
+                    inserted[text] -= 1
+                else:
+                    tracked.append(i)
         if not tracked:
             continue
         if not chain_walked:
@@ -298,6 +366,8 @@ def check(
             continue
         own = own_commits()
         removed_by: Dict[str, int] = {}
+        origin: Dict[str, Tuple[int, int]] = {}
+        own_lines: Optional[Counter] = None
         cur = head_lines
         unreadable = False
         for k, (sha, _blob) in enumerate(versions):
@@ -307,6 +377,7 @@ def check(
                 unreadable = True
                 break
             still: List[int] = []
+            hits: List[int] = []
             ops = _opcodes(older, cur)
             for i in tracked:
                 for tag, i1, _i2, j1, j2 in ops:
@@ -314,16 +385,35 @@ def check(
                         if tag == "equal":
                             still.append(i1 + (i - j1))
                         elif sha not in own:
-                            removed_by[sha] = removed_by.get(sha, 0) + 1
+                            hits.append(i)
                         break
+            if hits:
+                if own_lines is None:
+                    own_lines = _own_recorded_lines(root, common_dir, run_id, path, base_blob)
+                foreign = []
+                for i in hits:
+                    text = cur[i].rstrip(b"\r\n")
+                    if own_lines[text] > 0 and _WORD_RE.search(text):
+                        own_lines[text] -= 1
+                    else:
+                        foreign.append(i)
+                if foreign:
+                    removed_by[sha] = len(foreign)
+                    origin[sha] = (min(foreign) + 1, max(foreign) + 1)
             tracked, cur = still, older
             if not tracked or removed_by:
                 break
         if unreadable:
             notes.append(f"{NOTE_UNREADABLE}:{path}")
         for sha, n in removed_by.items():
+            lo, hi = origin[sha]
             findings.append(
-                Finding(path, SINCE_BASE_OVERLAP, f"drops {n} line(s) added by {sha[:10]} since base {base_sha[:10]}")
+                Finding(
+                    path,
+                    SINCE_BASE_OVERLAP,
+                    f"drops {n} line(s) added by {sha[:10]} since base {base_sha[:10]} "
+                    f"(origin: {path} lines {lo}-{hi} of {sha[:10]}, not in this run's recorded hunks)",
+                )
             )
     return findings, notes
 

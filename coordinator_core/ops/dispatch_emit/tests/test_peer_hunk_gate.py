@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -175,6 +176,31 @@ def test_siblings_sharing_one_plan_parse_it_once_and_hold_as_before(repo, monkey
     assert parses == ["docs/plans/b.md"]
 
 
+def test_read_batch_returns_small_objects_and_drops_oversize_and_non_object_files(tmp_path):
+    from coordinator_core.ops.dispatch_emit.halt_resume_record import JSON_READ_MAX_BYTES
+
+    small, big, listy = tmp_path / "s.json", tmp_path / "b.json", tmp_path / "l.json"
+    small.write_text('{"a": 1}', encoding="utf-8")
+    big.write_text('{"a": "' + "x" * (JSON_READ_MAX_BYTES + 10) + '"}', encoding="utf-8")
+    listy.write_text("[1]", encoding="utf-8")
+    got = run_token._read_batch([str(small), str(big), str(listy), str(tmp_path / "absent.json")])
+    assert got == {str(small): {"a": 1}}
+
+
+def test_one_co_declared_call_resolves_the_record_home_once_not_per_sibling(repo, monkeypatch):
+    run_ids = [_stamped(f"7cc7{n:02d}") for n in range(6)]
+    for run_id in run_ids:
+        _declare(repo, run_id, PATH)
+        run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
+    homes: list = []
+    real = run_token._record_home
+    monkeypatch.setattr(run_token, "_record_home", lambda root: homes.append(sys._getframe(1).f_code.co_name) or real(root))
+    holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH])
+    assert holds == [(PATH, run_id) for run_id in sorted(run_ids)]
+    assert homes.count("_unlanded_run_ids") == 1
+    assert "_record_path" not in homes
+
+
 def test_sibling_spines_returns_the_exception_for_an_unparseable_plan_and_sets_otherwise(repo):
     bad, good = _stamped("7cc6aa"), _stamped("7cc6bb")
     _spine_sibling(repo, bad)
@@ -330,6 +356,35 @@ def test_marked_row_naming_another_file_is_not_held(repo):
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", "x", None)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, ["pkg/other.py"]) == []
+
+
+def _conformance_sidecar(repo: Path, stem: str, row: dict, prose: str = "") -> None:
+    fm = "brief_conformance:\n  - " + json.dumps(row) + "\n"
+    (repo / ".coordinator-local" / "subagent-share" / SELF / f"{stem}.md").write_text(
+        f"---\nagent_type: reviewer\n{fm}---\n\n## Findings\n\n{prose}\n", encoding="utf-8"
+    )
+
+
+def test_unmet_brief_conformance_row_naming_the_path_is_held(repo):
+    _record(repo, OWN, "rev-1")
+    _conformance_sidecar(repo, "rev-1", {"item": "stay inside the ask", "status": "partial", "evidence": f"{PATH}: hunks"})
+    assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH, "pkg/other.py"]) == [
+        (PATH, "rev-1", "stay inside the ask")
+    ]
+
+
+def test_unmet_reviewer_schema_row_naming_the_path_in_file_line_is_held(repo):
+    _record(repo, OWN, "rev-1")
+    _conformance_sidecar(repo, "rev-1", {"brief_item": "stay inside the ask", "status": "unmet", "file_line": f"{PATH}:12"})
+    assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == [(PATH, "rev-1", "stay inside the ask")]
+
+
+def test_met_or_unnamed_brief_conformance_row_is_not_held(repo):
+    _record(repo, OWN, "rev-1")
+    _conformance_sidecar(repo, "rev-1", {"item": "i", "status": "met", "evidence": f"{PATH}: ok"})
+    assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
+    _conformance_sidecar(repo, "rev-1", {"item": "i", "status": "partial", "evidence": "see pkg/execute_review.py"}, PATH)
+    assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
 
 
 def test_a_claim_read_that_raises_holds_every_declared_wanted_path(repo, monkeypatch):

@@ -47,7 +47,7 @@ def stub_wm(monkeypatch):
 def _run(repo, stub_wm, agent="codex", extra=(), which=lambda n: f"/bin/{n}", **kw):
     calls, env = [], {}
     rc = awl.launch(agent, list(extra), cwd=repo, wm=stub_wm, which=which, execv=lambda p, c: calls.append((p, c)),
-                    host="Mac-Mini", today="2026-11-07", environ=env, **kw)
+                    host="Mac-Mini", today="2026-11-07", environ=env, **{"platform": "linux", **kw})
     return rc, calls, env
 
 
@@ -114,7 +114,7 @@ def test_session_and_run_reach_preflight(repo, stub_wm):
 def test_main_parses_agent_session_and_passthrough(repo, stub_wm):
     calls = []
     rc = awl.main(["codex", "--session-id", "s", "--run", "r", "--", "-m", "x"], cwd=repo, wm=stub_wm,
-                  which=lambda n: "/bin/codex", execv=lambda p, c: calls.append(c), host="h", today="d", environ={})
+                  which=lambda n: "/bin/codex", execv=lambda p, c: calls.append(c), host="h", today="d", environ={}, platform="linux")
     assert rc == 0 and calls[0][-2:] == ["-m", "x"]
 
 

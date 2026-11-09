@@ -120,7 +120,7 @@ def test_cli_explicit_as_overrides_inherited_codex_target(monkeypatch):
     requests = []
     fake = SimpleNamespace(
         ROUTER_ENDPOINT_SEED="seed", endpoint_path=lambda *a: "ctl",
-        request_line=lambda endpoint, request: requests.append(request) or {"ok": True})
+        request_line=lambda endpoint, request: requests.append(request) or {"ok": True, "written": True})
     monkeypatch.setattr(send, "_router", lambda: fake)
     monkeypatch.setenv("CODEX_THREAD_ID", "inherited-thread")
     monkeypatch.delenv("UNIMATRIX_PEER_NAME", raising=False)

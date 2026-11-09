@@ -61,6 +61,18 @@ def overlay_root(root: Path, run_id: str) -> Path:
     return root.joinpath(*OVERLAY_DIR, run_id)
 
 
+def _ledger_holder(root: Path, run_id: str, holder: Path) -> None:
+    """Record an in-repo holder dir in the run's scratch ledger so a crash leftover is reaped at run end.
+    The absolute `bulk_scratch_dir` holder is outside the repo and not ledgered. Never raises."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_scratch
+
+        if holder == root.joinpath(*OVERLAY_DIR, run_id):
+            run_scratch.record_paths(root, run_id, ["/".join((*OVERLAY_DIR, run_id))])
+    except (OSError, ValueError):
+        pass
+
+
 def _run(argv: list, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
     return subprocess.run(
         argv, cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=timeout,
@@ -84,6 +96,7 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
         return OverlayVerdict("inconclusive", "the landing set has no test seeds", seeds)
     holder = overlay_root(root, run_id)
     dest = holder / root.resolve().name
+    _ledger_holder(root, run_id, holder)
     try:
         shutil.rmtree(holder, ignore_errors=True)
         holder.mkdir(parents=True, exist_ok=True)

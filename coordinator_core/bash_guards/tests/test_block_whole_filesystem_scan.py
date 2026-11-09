@@ -139,7 +139,6 @@ HUGE_DENY = [
     "grep -rln relb example-retrieval-repo-ue-addon/scratch",
     "grep -rl 45ac1e scratch --include=*.log",
     "rg foo scratch",
-    "du -sh scratch",
     "find scratch -name x -exec cat {} +",
 ]
 
@@ -147,6 +146,11 @@ HUGE_ALLOW = [
     "grep -rn foo scratch/run-1",
     "rg foo scratch/warp/ask-1/briefs",
     "du -sh scratch/run-1",
+    "du -sh scratch",
+    "du -s --block-size=1M scratch/*",
+    "du -s --block-size=1M scratch",
+    "du -sm scratch-hold",
+    "du -d1 scratch",
     "find scratch -name x",
     "grep -n foo scratch",
     f"grep -rn foo {UE}/Engine/Content",
@@ -206,7 +210,8 @@ def test_scratch_cwd_with_bare_recursive_target_denies(tmp_path):
     d = tmp_path / "scratch"
     d.mkdir()
     assert _run_cwd("grep -rn foo .", d)
-    assert _run_cwd("du -sh", d)
+    assert _run_cwd("rg foo", d)
+    assert _run_cwd("du -sh", d) is None
 
 
 @pytest.mark.parametrize(

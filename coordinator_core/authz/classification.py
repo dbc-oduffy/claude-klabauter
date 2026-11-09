@@ -1098,6 +1098,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § "New ops default to
     # MUTATING until a reviewer affirms COMPUTE_ONLY."
     "handoff.repoint_origin": OpClass.MUTATING,
+    # handoff.human_gate_clear — MUTATING: stamps gate_cleared_by and commits one handoff file
+    # (ops/handoff_human_gate_clear.py).
+    "handoff.human_gate_clear": OpClass.MUTATING,
+    # session.landing_hold — MUTATING: sets/clears a hold record and replays deferred landings
+    # (ops/session_landing_hold.py).
+    "session.landing_hold": OpClass.MUTATING,
     # baton.supersede — MUTATING: DR-208-default classification. Stamps superseded_by
     # onto one live state/handoffs/*.md baton under locked_rmw (ops/baton_supersede.py).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § "New ops default to
@@ -1347,6 +1353,17 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Returns {"plan", "verdict", "withheld_rows", "classes", "message", "stamp"}.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-authoring-bar.md
     "plan.prep_gate": OpClass.COMPUTE_ONLY,
+    # plan.set_code_done — COMPUTE_ONLY: reads the named plans' task spines and RETURNS
+    # {"code_complete", "plans"}. Writes nothing, spawns nothing, invokes no git.
+    #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
+    #   3. Opens any file for write? No.  4. Shared mutable state? No.
+    #   5. Persistent state changes observable across processes? No.
+    "plan.set_code_done": OpClass.COMPUTE_ONLY,
+    # repo.setup — MUTATING: creates files/dirs, edits .gitignore and installs the
+    # prepare-commit-msg hook and git config inside the caller-supplied root.
+    #   1. Writes, deletes, or reorders any state? Yes (target repo files).
+    #   3. Opens any file for write? Yes.  5. Observable across processes? Yes.
+    "repo.setup": OpClass.MUTATING,
     # plan.readiness_verdict — COMPUTE_ONLY: runs the plan.prep_gate read over ONE plan and
     # combines it with caller-supplied coverage and reviewer values into a verdict.
     #   1. Writes, deletes, or reorders any state? No.  2. rag store? No.
@@ -1458,6 +1475,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   D2(v) (no git commit): this op does not commit; the EM retains that.
     # Spec backlink: coordinator-content-repo coordinator/docs/wiki/mise-prepped-attest.md
     "plan.stamp_prepped": OpClass.MUTATING,
+    # plan.reapprove_mechanical_tags — MUTATING: rewrites approved_body_sha of one
+    # caller-named, worktree-contained plan (locked_rmw); never commits, never touches
+    # status or body, refuses on any non-tag difference from the approved revision.
+    "plan.reapprove_mechanical_tags": OpClass.MUTATING,
     # plan.mise_prep_probe — COMPUTE_ONLY: ONE plan's gate verdict, census revalidation and
     # upgrade derivation (upgrade_plan check=True), returned in one reply. Writes nothing; the
     # census commands run as read-only shell children whose outcome it reports.
@@ -4389,6 +4410,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "scratchpad.sweep": OpClass.MUTATING,
     # scratch.delete — MUTATING: renames a chunk's declared gitignored scratch/ path into scratch/.deleted/.
     "scratch.delete": OpClass.MUTATING,
+    # ask_spool.withdraw — MUTATING: renames one pending spool entry to .withdrawn and rewrites its header.
+    "ask_spool.withdraw": OpClass.MUTATING,
+    # scratch.record_run_path, scratch.keep — MUTATING: write the run's scratch-ledger.json and
+    # scratch/.kept-index.json (ops/scratch_record.py); neither deletes a path.
+    "scratch.record_run_path": OpClass.MUTATING,
+    "scratch.keep": OpClass.MUTATING,
     # run.paths_trash — MUTATING: renames a chunk's declared repo paths into scratch/.deleted/ (ops/run_paths_trash.py).
     "run.paths_trash": OpClass.MUTATING,
     # dispatch.emit — MUTATING: writes the composed Workflow .mjs script text

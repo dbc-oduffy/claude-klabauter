@@ -471,6 +471,7 @@ _CLOSE_JOB_WINDOW_MINUTES = 5
 
 _BACKGROUND_LEGS = (
     "review", "clean-clone-proof", "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close", "symbol-knowledge",
+    "scratch-reap",
 )
 
 _NOT_LANDED = "coded-stamp commit did not land"

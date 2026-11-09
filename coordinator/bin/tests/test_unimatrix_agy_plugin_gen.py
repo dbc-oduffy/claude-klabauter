@@ -86,7 +86,7 @@ def test_tiers_translated_and_unknown_model_dropped_and_reported(plugin, tmp_pat
     assert b"model: flash_lite\n" in t["agents/a-haiku.md"]
     assert b"model:" not in t["agents/a-odd.md"]
     assert ("agent-model", "agents/a-odd.md") in _unmapped(report)
-    assert b"${PLUGIN_DIR}/x" in t["agents/a-opus.md"] and b"CLAUDE_PLUGIN_ROOT" not in t["agents/a-opus.md"]
+    assert b"${PLUGIN_ROOT}/x" in t["agents/a-opus.md"] and b"CLAUDE_PLUGIN_ROOT" not in t["agents/a-opus.md"]
 
 
 def test_null_tier_drops_model_and_reports(plugin, tmp_path, monkeypatch):
@@ -108,7 +108,7 @@ def test_hooks_at_root_schema_matchers_and_plugin_root(plugin, tmp_path):
     pre = data["pre-tool-use"]["PreToolUse"]
     assert [g["matcher"] for g in pre] == ["run_command", "edit_file|write_file", "Weird"]
     assert "description" not in pre[0]["hooks"][0]
-    assert pre[0]["hooks"][0]["command"] == "python ${PLUGIN_DIR}/hooks/scripts/run.py"
+    assert pre[0]["hooks"][0]["command"] == "python ${PLUGIN_ROOT}/hooks/scripts/run.py"
     assert not any("UserPromptSubmit" in v for v in data.values())
     assert {("matcher", "hooks/hooks.json"), ("hook-event", "hooks/hooks.json")} <= _unmapped(report)
 
@@ -197,10 +197,13 @@ def test_agy_plugin_validate_accepts_generated_tree(plugin, tmp_path):
     agy = shutil.which("agy")
     if not agy:
         pytest.skip("agy not on PATH (validate proves the tree loads, not that a hook fires: "
-                    "${PLUGIN_DIR} expansion and a guard running need a live agy session, covered by nothing here)")
+                    "${PLUGIN_ROOT} expansion and a guard running need a live agy session, covered by nothing here)")
     (plugin / ".claude-plugin").mkdir()
     (plugin / ".claude-plugin" / "plugin.json").write_text(
-        json.dumps({"name": "coord", "version": "1.0.0", "description": "D"}), encoding="utf-8")
+        json.dumps({"name": "coord", "version": "1.0.0", "description": "D", "logo": "assets/logo.png"}),
+        encoding="utf-8")
+    (plugin / "assets").mkdir()
+    (plugin / "assets" / "logo.png").write_bytes(b"\x89PNG\x00")
     hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     hooks["hooks"]["SessionStart"] = [{"hooks": [{"type": "command", "command": "s"}]}]
     hooks["hooks"]["PreToolUse"] = [
@@ -216,7 +219,9 @@ def test_agy_plugin_validate_accepts_generated_tree(plugin, tmp_path):
     assert re.search(r'"hooks"\s*:\s*2\b', proc.stdout), proc.stdout
     assert not re.search(r'"warnings"\s*:\s*(\[\s*[^\]\s]|[1-9])', proc.stdout), proc.stdout
     assert not re.search(r"never match", proc.stdout), proc.stdout
-    assert "coordinator-doctrine" in proc.stdout and "no valid trigger" not in proc.stdout, proc.stdout
+    assert (out / "rules" / "coordinator-doctrine.md").is_file()
+    assert re.search(r'"rules"\s*:\s*1\b', proc.stdout) and "no valid trigger" not in proc.stdout, proc.stdout
+    assert re.search(r'"findings"\s*:\s*\[\s*\]', proc.stdout), proc.stdout
 
 
 def test_commands_become_skills_and_skill_folder_matches_frontmatter_name(plugin, tmp_path):
@@ -225,7 +230,7 @@ def test_commands_become_skills_and_skill_folder_matches_frontmatter_name(plugin
     t = _tree(out)
     assert not (out / "commands").exists()
     assert t["skills/foo/SKILL.md"].startswith(b"---\nname: foo\ndescription: Foo\n---\n")
-    assert t["skills/sub-bar/SKILL.md"].startswith(b"---\nname: sub-bar\n---\n")
+    assert t["skills/sub-bar/SKILL.md"].startswith(b'---\nname: sub-bar\ndescription: "no frontmatter, no trailing newline"\n---\n')
     assert "skills/real-name/SKILL.md" in t and t["skills/real-name/ref.txt"] == b"ref\n"
     assert "skills/real-dir/SKILL.md" not in t
     assert ("skill", "skills/flat.md") in _unmapped(report)

@@ -1225,6 +1225,36 @@ def em_owned_rows(exclusions: Optional[list]) -> list[str]:
     ]
 
 
+def _drop_mirror_only_gates(raw: dict) -> dict:
+    """`raw` with each publish-target `external_gate` entry dropped, and its writes rewritten to the
+    claude-klabauter source path, when every declared write lies under a publish-row destination of that
+    owner (the files are claude-klabauter's published mirror). Any other write keeps the gate."""
+    gates = raw.get("external_gate")
+    writes = raw.get("writes")
+    under = raw.get("writes_under")
+    if not isinstance(gates, list) or not isinstance(writes, list):
+        return raw
+    if under is not None and not isinstance(under, list):
+        return raw
+    paths = [*writes, *(under or [])]
+    if not paths or not all(isinstance(p, str) for p in paths):
+        return raw
+    from coordinator_core.git.published_tree_classification import mirror_source_path
+
+    for owner in {g.get("owner_repo") for g in gates if isinstance(g, dict)}:
+        if not isinstance(owner, str):
+            continue
+        mapped = [mirror_source_path(p, owner) for p in paths]
+        if None in mapped:
+            continue
+        kept = [g for g in gates if not (isinstance(g, dict) and g.get("owner_repo") == owner)]
+        out = {**raw, "external_gate": kept or None, "writes": mapped[: len(writes)]}
+        if under is not None:
+            out["writes_under"] = mapped[len(writes):]
+        return out
+    return raw
+
+
 def read_spine(
     plan_path,
     exclusions: Optional[list] = None,
@@ -1235,8 +1265,12 @@ def read_spine(
     in_run_plan_chunks: frozenset = frozenset(),
     landed_plan_chunks: Optional[Mapping[tuple, str]] = None,
     plan_edge_cache: Optional[dict] = None,
+    plan_text: Optional[str] = None,
 ) -> list[EmitterRow]:
     """Read `plan_path`'s task-spine and return normalized ``EmitterRow`` objects.
+
+    ``plan_text``, when given, is the plan's text the caller already holds: it is parsed in
+    place of a disk read of ``plan_path`` (which then only names the plan in messages).
 
     ``plan_edge_cache`` is a caller-owned dict used in place of the per-call one. Every
     slot ``resolve_plan_edge`` and ``_checkpoint_landed`` store is keyed by the target
@@ -1335,8 +1369,11 @@ def read_spine(
     satisfied row's own dependents — its work has demonstrably already run,
     so a stale upstream gate is not their blocker either.
     """
-    with open(plan_path, encoding="utf-8") as handle:
-        source = handle.read()
+    if plan_text is not None:
+        source = plan_text
+    else:
+        with open(plan_path, encoding="utf-8") as handle:
+            source = handle.read()
 
     result = load_rows_memo(source)
     if result.status is not LocateStatus.LOCATED:
@@ -1404,6 +1441,8 @@ def read_spine(
             for raw in raw_rows
         ]
         frontmatter_gates = {k: tuple(g for g in v if keep(g)) for k, v in frontmatter_gates.items()}
+
+    raw_rows = [_drop_mirror_only_gates(raw) for raw in raw_rows]
 
     rows: list[EmitterRow] = []
     rows_using_reads: list[str] = []

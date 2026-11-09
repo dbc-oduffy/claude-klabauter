@@ -26,6 +26,22 @@ def test_load_peers_accepts_wrapped_and_bare_forms(tmp_path):
     assert pc.load_peers(write(tmp_path, rows)) == rows
 
 
+def test_load_peers_round_trips_codex_holder_and_drops_malformed(tmp_path):
+    rows = [{"name": "a", "vendor": "codex", "target": "t1", "codexPid": 5, "codexProcStart": "s"},
+            {"name": "b", "vendor": "codex", "target": "t2", "codexPid": True, "codexProcStart": "s"},
+            {"name": "c", "vendor": "codex", "target": "t3", "codexPid": "5"}]
+    got = pc.load_peers(write(tmp_path, rows))
+    assert got[0] == rows[0]
+    assert "codexPid" not in got[1] and "codexProcStart" not in got[1]
+    assert "codexPid" not in got[2]
+
+
+def test_load_peers_accepts_grok_vendor(tmp_path):
+    rows = [{"name": "grok-a", "vendor": "grok", "target": "sess-1"}]
+    assert "grok" in pc.VENDORS
+    assert pc.load_peers(write(tmp_path, rows)) == rows
+
+
 def test_load_peers_refuses_duplicate_name(tmp_path):
     row = {"name": "x", "vendor": "codex", "target": "t"}
     with pytest.raises(pc.PeerConfigError, match="duplicate"):

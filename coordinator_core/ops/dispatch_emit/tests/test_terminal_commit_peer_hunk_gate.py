@@ -206,3 +206,51 @@ def test_an_unresolved_out_of_ask_finding_on_the_path_lands_and_is_provenance(re
     (entry,) = _provenance(out, peer_hunk_gate.OUT_OF_ASK_HUNKS)
     assert "rev-1" in entry["detail"]
 
+
+def _seed_many_lines(repo: Path) -> list:
+    rows = [f"x_{i} = {i}\n" for i in range(1, 41)]
+    (repo / PATH).write_text("".join(rows), encoding="utf-8")
+    _git(["commit", "-q", "-am", "many lines"], repo)
+    return rows
+
+
+def _holder_kept_blob(repo: Path, halted: str, rows: list) -> None:
+    theirs = list(rows)
+    theirs[2] = "x_3 = 'HOLDER'\n"
+    blob = subprocess.run(
+        ["git", "hash-object", "-w", "--stdin"], cwd=str(repo), input="".join(theirs).encode("utf-8"),
+        capture_output=True, check=True, **no_console_creationflags(),
+    ).stdout.decode().strip()
+    (repo / "state" / "warp" / halted / "kept.json").write_text(
+        json.dumps({"chunks": {"C1": {"paths": {PATH: blob}}}, "plan_gate": None}), encoding="utf-8"
+    )
+
+
+def test_a_declared_path_holding_a_halted_peers_hunk_that_cannot_be_split_is_withheld_naming_it(repo):
+    rows = _seed_many_lines(repo)
+    halted = _halted_sibling(repo, "open")
+    _holder_kept_blob(repo, halted, rows)
+    seed = _git(["rev-parse", "HEAD"], repo)
+    mixed = list(rows)
+    mixed[2] = "x_3 = 'HOLDER'\n"
+    mixed[37] = "x_38 = 'OWN'\n"
+
+    out = _fire(repo, body="".join(mixed))
+
+    assert out["committed"] is False, out
+    assert out["sibling_withheld"] == {PATH: halted}
+    assert _git(["rev-parse", "HEAD"], repo) == seed
+    assert "HOLDER" in (repo / PATH).read_text(encoding="utf-8")
+
+
+def test_a_declared_path_a_halted_peer_holds_but_whose_hunks_are_absent_still_lands(repo):
+    rows = _seed_many_lines(repo)
+    halted = _halted_sibling(repo, "open")
+    _holder_kept_blob(repo, halted, rows)
+    own = list(rows)
+    own[37] = "x_38 = 'OWN'\n"
+
+    out = _fire(repo, body="".join(own))
+
+    assert out["committed"] is True, out
+    assert "x_38 = 'OWN'" in _git(["show", f"HEAD:{PATH}"], repo)

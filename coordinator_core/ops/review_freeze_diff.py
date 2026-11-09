@@ -133,6 +133,8 @@ from __future__ import annotations
 MUTATES = ["state/review-trail/diffs/*.diff", "state/review-trail/diffs/*.head.sha"]  # slice_id-keyed, data-dependent set
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -153,6 +155,34 @@ from coordinator_core.ops.ceremony.git_native import _git
 from coordinator_core.ops.review_findings_ledger import LedgerError, targets_add
 from coordinator_core.session.core import resolve_session_id
 from coordinator_core.session.declared_writes import declare_write
+
+
+_INDEX_SNAPSHOT: ContextVar[Optional[Tuple[tuple, Dict[str, object]]]] = ContextVar(
+    "review_freeze_diff_index_snapshot", default=None
+)
+
+
+def _index_stat_snapshot(repo_root: Path) -> Dict[str, object]:
+    """`parse_index_stat(repo_root)` memoised on the index file's
+    (path, st_ino, st_size, st_mtime_ns): git replaces `.git/index` by rename,
+    so any rewrite changes the key. `IndexParseError` reads as `{}`. An
+    unstattable index (gitfile worktree, missing) bypasses the memo.
+    """
+    try:
+        st = (repo_root / ".git" / "index").stat()
+        key: Optional[tuple] = (str(repo_root), st.st_ino, st.st_size, st.st_mtime_ns)
+    except OSError:
+        key = None
+    held = _INDEX_SNAPSHOT.get()
+    if key is not None and held is not None and held[0] == key:
+        return held[1]
+    try:
+        snap: Dict[str, object] = parse_index_stat(repo_root)  # type: ignore[assignment]
+    except IndexParseError:
+        snap = {}
+    if key is not None:
+        _INDEX_SNAPSHOT.set((key, snap))
+    return snap
 
 
 def _validate_slice_id(slice_id: str) -> Optional[str]:
@@ -591,10 +621,7 @@ def _freeze_diff_worktree(
     diff_text = dr.stdout
 
     tracked_covered = _covered_paths_from_diff(diff_text)
-    try:
-        index_stat = parse_index_stat(repo_root)
-    except IndexParseError:
-        index_stat = {}
+    index_stat = _index_stat_snapshot(repo_root)
 
     synthesized: List[str] = []
     for p in paths:
@@ -658,11 +685,22 @@ def _freeze_diff_worktree(
     }
 
 
+_TARGET_BATCH: ContextVar[Optional[Tuple[Path, List[List[str]]]]] = ContextVar(
+    "review_freeze_diff_target_batch", default=None
+)
+
+
 def register_diff_targets(repo_root: Path, diff_text: str) -> None:
     """Register every file the frozen diff touches as the calling session's
     review targets, so a confined reviewer may Edit exactly the reviewed files
     (declared directory/glob pathspecs and widened test files included) and no
-    others. No session id or an unregistrable path registers nothing."""
+    others. No session id or an unregistrable path registers nothing. Inside
+    `diff_targets_batch` for the same root the registration is queued and
+    written once, in call order, when the scope exits."""
+    held = _TARGET_BATCH.get()
+    if held is not None and held[0] == repo_root:
+        held[1].append(sorted(_covered_paths_from_diff(diff_text) - {"/dev/null"}))
+        return
     session_id = resolve_session_id()
     if not session_id:
         return
@@ -670,6 +708,33 @@ def register_diff_targets(repo_root: Path, diff_text: str) -> None:
         targets_add(repo_root, session_id, sorted(_covered_paths_from_diff(diff_text) - {"/dev/null"}))
     except (LedgerError, OSError):
         pass
+
+
+@contextmanager
+def diff_targets_batch(repo_root: Path):
+    """Queue every `register_diff_targets(repo_root, ...)` made in the body and write them in one
+    `targets_add` on exit (also on an exception): one targets-file rewrite per call, not per slice.
+    A nested scope joins the outer one."""
+    if _TARGET_BATCH.get() is not None:
+        yield
+        return
+    queued: List[List[str]] = []
+    token = _TARGET_BATCH.set((repo_root, queued))
+    try:
+        yield
+    finally:
+        _TARGET_BATCH.reset(token)
+        merged = [p for paths in queued for p in paths]
+        session_id = resolve_session_id() if merged else ""
+        if session_id:
+            try:
+                targets_add(repo_root, session_id, merged)
+            except (LedgerError, OSError):
+                for paths in queued:  # one unregistrable path costs only its own slice, as unbatched
+                    try:
+                        targets_add(repo_root, session_id, paths)
+                    except (LedgerError, OSError):
+                        pass
 
 
 def _read_worktree_path_bytes(repo_root: Path, path: str) -> Optional[bytes]:
@@ -877,23 +942,10 @@ def freeze_diffs_batch(
 
     written_pairs: Dict[int, Tuple[Path, Path]] = {}
 
-    # Lazy, at-most-once-per-batch index read (module negative-spec's
-    # re-freeze rule) -- only paid when some request actually hits the
-    # byte-identical branch below. `IndexParseError` (including the v4
-    # subclass `IndexV4Unsupported`) reads as "treat every pair as
-    # untracked", the same posture the pre-commit-leg code always had.
-    _index_stat_cache: Dict[str, object] = {}
-    _index_stat_loaded = False
-
+    # Lazy index read, paid only when some request hits the byte-identical
+    # branch below; `_index_stat_snapshot` memoises it across calls.
     def _lazy_index_stat() -> Dict[str, object]:
-        nonlocal _index_stat_cache, _index_stat_loaded
-        if not _index_stat_loaded:
-            try:
-                _index_stat_cache = parse_index_stat(repo_root)
-            except IndexParseError:
-                _index_stat_cache = {}
-            _index_stat_loaded = True
-        return _index_stat_cache
+        return _index_stat_snapshot(repo_root)
 
     for i in pending_idx:
         slice_id = normalized[i]["slice_id"]

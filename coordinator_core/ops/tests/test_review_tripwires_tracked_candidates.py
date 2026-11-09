@@ -60,3 +60,38 @@ def test_tracked_hidden_and_pycache_dirs_still_skipped(tmp_path):
         },
     )
     assert list(rt.literal_namers(repo, [EDITED])) == ["tests/test_a.py"]
+
+
+def _opens(monkeypatch):
+    opened = []
+    real_open = os.open
+
+    def counting_open(path, *a, **kw):
+        if os.path.basename(str(path)).startswith("test_"):
+            opened.append(str(path))
+        return real_open(path, *a, **kw)
+
+    monkeypatch.setattr(rt.os, "open", counting_open)
+    return opened
+
+
+def test_scan_tracked_is_the_union_of_both_scanners_from_one_read(tmp_path, monkeypatch):
+    files = {
+        "tests/test_names.py": BODY,
+        "tests/test_walks.py": 'import pathlib\nlist(pathlib.Path(".").rglob("*"))\nD = "pkg/sub"\n',
+        "tests/test_neither.py": "X = 1\n",
+    }
+    repo = _repo(tmp_path, files)
+    created = ["pkg/sub/new.py"]
+    want = sorted(set(rt.literal_namers(repo, [EDITED] + created)) | set(rt.tree_scanners(repo, created)))
+    assert want == ["tests/test_names.py", "tests/test_walks.py"]
+    opened = _opens(monkeypatch)
+    assert rt.scan_tracked(repo, [EDITED] + created, created) == want
+    assert len(opened) == len(files)
+
+
+def test_scan_tracked_with_nothing_to_look_for_reads_nothing(tmp_path, monkeypatch):
+    repo = _repo(tmp_path, {"tests/test_a.py": BODY})
+    opened = _opens(monkeypatch)
+    assert rt.scan_tracked(repo, [], []) == []
+    assert opened == []

@@ -1850,9 +1850,10 @@ def _apply_worktree_refusal(seg: str, remaining: List[str]) -> Optional[str]:
 
 
 #: A `GIT_INDEX_FILE=<literal path>` assignment (`export` or command prefix). A variable-held,
-#: empty or `.git/index` value is the shared index, so only a literal other path counts.
+#: empty or `.git/index` value is the shared index, so only a literal other path counts; a leading
+#: `$PWD/` or `${PWD}/` is the one variable admitted.
 _PRIVATE_INDEX_RE = re.compile(
-    r"""(?:^|[\s;&|(])(?:export\s+)?GIT_INDEX_FILE=(["']?)([^\s"';&|$`()]+)\1"""
+    r"""(?:^|[\s;&|(])(?:export\s+)?GIT_INDEX_FILE=(["']?)((?:\$PWD/|\$\{PWD\}/)?[^\s"';&|$`()]+)\1"""
 )
 
 
@@ -2482,7 +2483,7 @@ _REMOTE_MUTATING_SUBCOMMANDS = frozenset(
 _SCRATCH_CTX: "contextvars.ContextVar[Optional[tuple]]" = contextvars.ContextVar(
     "_subagent_scratch_clone_ctx", default=None
 )
-_SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge|init)\b")
+_SCRATCH_VERB_RE = re.compile(r"\b(?:clone|merge|init|checkout-index)\b")
 _REPOINTS_GIT_RE = re.compile(r"(?:^|[\s;&|(])cd\s|\s-C\s|--git-dir|--work-tree")
 #: A single leading `cd <absolute dir> &&`, the one re-point whose landing directory is knowable.
 _LEADING_CD_RE = re.compile(r"""\s*cd\s+["']?([^\s"';&|]+)["']?\s*&&\s*""")
@@ -2567,6 +2568,11 @@ def _dest_in_scratch(dest_name: str) -> bool:
 #: The payload's unmodified command text for the running `check()`: segments reach the verdict
 #: functions with unquoted backslashes already dropped by shlex.
 _RAW_CMD: "contextvars.ContextVar[str]" = contextvars.ContextVar("_subagent_raw_cmd", default="")
+#: Git verbs the anchored classifier allowed without recognizing them; `check` turns a non-empty
+#: list into an advisory, never a deny.
+_UNRECOGNIZED_VERBS: "contextvars.ContextVar[Optional[List[str]]]" = contextvars.ContextVar(
+    "_subagent_unrecognized_verbs", default=None
+)
 _RAW_SEGMENT_SPLIT_RE = re.compile(r"[;&|\n]+")
 
 
@@ -2637,6 +2643,20 @@ def _clone_into_scratch(remaining: List[str]) -> bool:
 
 
 _DRIVE_ABS_RE = re.compile(r"^[A-Za-z]:[/\\]")
+
+
+def _checkout_index_into_scratch(remaining: List[str]) -> bool:
+    """`git checkout-index ... --prefix=<dir>/` where `<dir>/` lies strictly under `<repo>/scratch/`:
+    the export writes only scratch files. Without a prefix it rewrites the working tree."""
+    prefix = None
+    for i, tok in enumerate(remaining):
+        if tok.startswith("--prefix="):
+            prefix = tok[len("--prefix="):]
+        elif tok == "--prefix" and i + 1 < len(remaining):
+            prefix = remaining[i + 1]
+    if not prefix or any(c in prefix for c in "$`~"):
+        return False
+    return _dest_in_scratch(prefix)
 
 
 def _clone_dest_empty_or_absent(dest_name: str) -> bool:
@@ -3385,6 +3405,10 @@ def _evaluate_git_segment_anchored(
         if flags and all(f in ("--chmod=+x", "--chmod=-x") for f in flags) and len(flags) < len(paths):
             return None
         return "git update-index (only --chmod=+x/-x <path>... is allowed)"
+    if subcmd == "checkout-index":
+        if _checkout_index_into_scratch(list(remaining or ())):
+            return None
+        return "git checkout-index (only with --prefix=<dir>/ under <repo>/scratch/)"
     if subcmd == "mv":
         # Classified explicitly rather than falling through to the
         # default-deny below, SOLELY to earn a named forward path in
@@ -3406,6 +3430,9 @@ def _evaluate_git_segment_anchored(
 
     if subcmd in _IRREVERSIBLE_UNRECOGNIZED_VERBS:
         return "unrecognized git verb (default-deny)"
+    note = _UNRECOGNIZED_VERBS.get()
+    if note is not None and subcmd and subcmd not in note:
+        note.append(subcmd)
     return None
 
 
@@ -4167,9 +4194,57 @@ def _operand_is_regenerable(operand: str) -> bool:
     return False
 
 
+_CHECKOUT_INDEX_PREFIX_RE = re.compile(r"\bcheckout-index\b[^;&|\n]*?--prefix(?:=|\s+)(\"[^\"]*\"|'[^']*'|[^\s;&|]+)")
+
+
+def _operand_is_landing_export(operand: str) -> bool:
+    """`operand` is a scratch/ path that is, or contains, the `--prefix` target of a
+    `git checkout-index` in the same command: cleanup of the export that command made."""
+    if any(c in operand for c in "*?[]$`~") or operand.startswith("-"):
+        return False
+    ctx = _SCRATCH_CTX.get()
+    if ctx is None or not _dest_in_scratch(operand):
+        return False
+    here = ctx[0]
+
+    def _resolve(p: str) -> Path:
+        p = p.replace("\\", "/")
+        return (Path(p) if os.path.isabs(p) else here / p).resolve()
+
+    target = _resolve(operand)
+    for m in _CHECKOUT_INDEX_PREFIX_RE.finditer(_RAW_CMD.get()):
+        prefix = m.group(1).strip("\"'")
+        if _dest_in_scratch(prefix) and (target == _resolve(prefix) or target in _resolve(prefix).parents):
+            return True
+    return False
+
+
+_PRIVATE_TEMP_INDEX_RE = re.compile(r"idx-[A-Za-z0-9][A-Za-z0-9._-]*")
+
+
+def _operand_is_private_temp_index(operand: str) -> bool:
+    """`operand` names a single `.git/idx-<id>` private temp index file (the hand-land route's
+    GIT_INDEX_FILE scratch). `.git/index` and every other `.git` path are not matched."""
+    if any(c in operand for c in "*?[]$`~") or operand.startswith("-"):
+        return False
+    parts = [p for p in operand.replace("\\", "/").split("/") if p not in ("", ".")]
+    if len(parts) < 2 or ".." in parts or parts[-2] != ".git":
+        return False
+    return _PRIVATE_TEMP_INDEX_RE.fullmatch(parts[-1]) is not None
+
+
 def _rm_only_regenerable(cmd: str) -> bool:
     """True when every `rm` in `cmd` is a plain segment whose operands are all regenerable
-    build/cache dirs, and no other segment hides an `rm` (xargs, a `-c` payload)."""
+    build/cache dirs, private temp indexes, or the scratch export of a same-command
+    `git checkout-index --prefix`, and no other segment hides an `rm` (xargs, a `-c` payload)."""
+    return (
+        _rm_operands_all(cmd, _operand_is_regenerable)
+        or _rm_operands_all(cmd, _operand_is_landing_export)
+        or _rm_operands_all(cmd, _operand_is_private_temp_index)
+    )
+
+
+def _rm_operands_all(cmd: str, operand_ok) -> bool:
     if _exceeds_tokenizable_ceiling(cmd):
         return False
     try:
@@ -4194,7 +4269,7 @@ def _rm_only_regenerable(cmd: str) -> bool:
             continue
         seen_rm = True
         operands = [t for t in seg[1:] if t != "--" and not t.startswith("-")]
-        if not operands or not all(_operand_is_regenerable(o) for o in operands):
+        if not operands or not all(operand_ok(o) for o in operands):
             return False
     return seen_rm
 
@@ -5138,6 +5213,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         (payload.get("agent_type") or payload.get("subagent_type") or "") == "coordinator:git-commit-agent"
     )
     raw_token = _RAW_CMD.set(flat)
+    unrec_token = _UNRECOGNIZED_VERBS.set([])
     decl_token = _DECL_CTX.set(
         {"cmd": flat, "cwd": cwd, "session_id": payload.get("session_id") or "", "license": {}}
         if _DECLARED_DELETE_CHANNEL_LIVE
@@ -5150,6 +5226,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return _check_unscoped(payload)
     finally:
         _DECL_CTX.reset(decl_token)
+        _UNRECOGNIZED_VERBS.reset(unrec_token)
         _RAW_CMD.reset(raw_token)
         _COMMIT_AGENT.reset(commit_agent_token)
         _SP_MEMO.reset(memo_token)
@@ -5373,6 +5450,15 @@ def _check_unscoped(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if kind_unresolved:
             emit_kind_resolution_failure_signal(
                 "block_subagent_destructive_action", agent_id, git_root, None
+            )
+        unrecognized = _UNRECOGNIZED_VERBS.get()
+        if unrecognized:
+            return build_record(
+                _GUARD_NAME,
+                "advisory",
+                "unrecognized git verb(s) allowed: " + ", ".join(unrecognized),
+                "it to the EM if the verb loses uncommitted work",
+                "the git command",
             )
         return None
 

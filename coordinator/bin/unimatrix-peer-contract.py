@@ -11,7 +11,7 @@ import sys
 import uuid
 from pathlib import Path
 
-VENDORS = ("codex", "agy")
+VENDORS = ("codex", "agy", "grok")
 VENDOR_FIELD = "unimatrixVendor"
 BOX_FIELD = "unimatrixBox"
 PROVENANCE_FIELDS = ("peer", "vendor", "target", "router_pid", "msg_id")
@@ -102,7 +102,7 @@ def projected_addresses(row):
 
 
 def load_peers(path):
-    """Read peers.json into [{name, vendor, target}].
+    """Read peers.json into [{name, vendor, target}], keeping a valid codexPid/codexProcStart.
 
     Accepts a top-level list or {"peers": [...]}. Refuses a missing field, an unknown
     vendor, a blank name, or a duplicate name.
@@ -133,6 +133,11 @@ def load_peers(path):
             if not isinstance(aliases, list) or not all(safe_alias(alias) for alias in aliases):
                 raise PeerConfigError(f'{path}: invalid peer aliases')
             peer['aliases'] = list(dict.fromkeys(aliases))
+        pid, started = row.get('codexPid'), row.get('codexProcStart')
+        if type(pid) is int and pid > 0:
+            peer['codexPid'] = pid
+            if isinstance(started, str) and started:
+                peer['codexProcStart'] = started
         if peer["name"] in seen:
             raise PeerConfigError(f"{path}: duplicate peer name {peer['name']!r}")
         seen.add(peer["name"])

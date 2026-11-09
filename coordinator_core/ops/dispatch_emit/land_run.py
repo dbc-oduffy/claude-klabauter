@@ -248,6 +248,7 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
                     root, params.get("run_id"), outcome=land_leg_record.OUTCOME_LANDED,
                     leg=None, bound_by=None, legs=land_deadline.leg_costs(),
                 )
+                _chain_landed_tranche(root, params, reply)
             return reply
     except land_deadline.LandDeadlineExceeded as exc:
         reply = land_deadline.halt_reply(exc)
@@ -258,6 +259,25 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
         if rel:
             reply["leg_record"] = rel
         return reply
+
+
+def _chain_landed_tranche(root: Path, params: dict, reply: dict) -> None:
+    """Hand a fully landed run to ``tranche_chain.chain_after_land`` (one detached spawn when its
+    inventory family owes a tranche). Never on a repeat call, a partial land (incomplete rows or
+    stranded paths) or a refusal; never raises into the land."""
+    try:
+        run_id, script = params.get("run_id"), params.get("script_path")
+        if (
+            reply.get(ALREADY_LANDED_KEY) or reply.get("refused") or params.get("incomplete_chunks")
+            or any((reply.get("stranded") or {}).values())
+            or not isinstance(run_id, str) or not run_id or not isinstance(script, str) or not script
+        ):
+            return
+        from coordinator_core.ops.dispatch_emit import tranche_chain
+
+        tranche_chain.chain_after_land(root, run_id, root / script)
+    except Exception:  # noqa: BLE001 -- the chain never fails the land
+        return
 
 
 def _dispatch_mode(mode: str, root: Path, repo_root: Path, params: dict) -> dict:
@@ -1189,34 +1209,16 @@ def _read_markers_strict(root: Path, exclude_run: Optional[str], skip: frozenset
     """Read every in-TTL sibling record dir's `halted.json` strictly, bar the run ids in `skip` (runs whose
     index entry already shows they withhold none of the landing); ValueError on a corrupt or
     unreadable one (absent is fine). `_unlanded_run_ids` cannot list such a run, so it is scanned here.
-    Cost: one scandir plus one read per in-TTL record dir outside `skip`, per call."""
-    import os
+    Cost: one read per in-TTL record dir outside `skip`; the record-dir listing and stamps come from
+    `halted_hold_release.record_stamps`, read once per `release_scope`."""
     import time
 
-    from calendar import timegm
-
-    from coordinator_core.ops.dispatch_emit import halted_run, run_token
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, run_token
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
-
-    def _stamp_epoch(run_id: str) -> Optional[float]:
-        match = re.search(r"(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})-[0-9a-f]{6}$", run_id)
-        if match is None:
-            return None
-        try:
-            y, mo, d, h, mi, s = (int(g) for g in match.groups())
-            return float(timegm((y, mo, d, h, mi, s, 0, 0, 0)))
-        except (ValueError, OverflowError):
-            return None
 
     now = time.time()
     base = Path(root) / RECORD_DIR_ROOT
-    try:
-        with os.scandir(base) as entries:
-            names = sorted(e.name for e in entries if e.is_dir())
-    except FileNotFoundError:
-        return
-    for name in names:
-        stamp = _stamp_epoch(name)
+    for name, stamp in halted_hold_release.record_stamps(root):
         if name == exclude_run or name in skip or (stamp is not None and now - stamp > run_token.TTL_SECONDS):
             continue
         halted_run.read_strict(base / name)
@@ -1263,13 +1265,8 @@ def foreign_halted_withheld(
             }
         if not any(r.withheld for r in live.values()):
             return {}
-        out: dict = {}
-        every: dict = {}
-        for p in wanted:
-            for rid in sorted(live):
-                if run_ownership.owns_path(run_id or "", p, {rid: live[rid]}) == run_ownership.FOREIGN_WITHHELD:
-                    every.setdefault(p, []).append(rid)
-                    out.setdefault(p, rid)
+        every = run_ownership.foreign_withheld_holders(run_id or "", wanted, live)
+        out = {p: owners[0] for p, owners in every.items()}
         if out:
             # A phantom or criterion-met holder is released here, before its withhold is applied.
             from coordinator_core.ops.dispatch_emit import peer_hunk_gate
@@ -2136,6 +2133,35 @@ def _firing_sessions(root: Path, run_id: object, session_id: Optional[str]) -> s
     return own
 
 
+def _prior_pass_sessions(root: Path, run_id: object) -> set:
+    """Sessions the run's own records name as having acted for it in an earlier pass: the stage-record
+    session (and its ``adopted_from``), token session and recorded emitter of the run and of each
+    ``resumed_from`` predecessor. One small read per hop, capped by the ledger hop cap; no spawn."""
+    out: set = set()
+    if not isinstance(run_id, str):
+        return out
+    try:
+        from coordinator_core.ops.dispatch_emit import run_token
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+        from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
+        from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+        for rid in (run_id, *_resumed_chain(root, run_id)):
+            stage = read_run_stage(root, rid) or {}
+            out.update(s for s in (stage.get("session_id"), *(stage.get("adopted_from") or ())) if isinstance(s, str) and s)
+            emitter = recorded_emitter(root, rid)
+            if emitter:
+                out.add(emitter)
+            for claimed in (True, False):
+                record = run_token._read(run_token._record_path(root, rid, claimed=claimed))
+                sid = record.get("session_id") if isinstance(record, dict) else None
+                if isinstance(sid, str) and sid:
+                    out.add(sid)
+    except Exception:  # noqa: BLE001 -- an unreadable record names no extra self session
+        pass
+    return out
+
+
 def _peer_held_left(peer_held: dict) -> dict:
     """``{"peer_held_left": [{path, sessions}]}`` for every peer-held path, sorted; empty when none."""
     if not peer_held:
@@ -2959,6 +2985,45 @@ def _mismatch_detail(
     return f"{rel}: measured {measured}, landing {landing}{first}; remedy: {remedy}"
 
 
+def _live_peer_holders(
+    root: Path, paths: Sequence[str], own_sid: Optional[str], run_id: object, script_path: object,
+    plan_rel: Optional[str], run_base: Optional[str], minted_before: Optional[tuple], self_sessions: Collection,
+) -> dict:
+    """``{path: "live peer run <id>[, ...]" or "live peer session <sid>[, ...]"}`` for each of *paths* a
+    live peer holds (``_peer_held``); empty when none. Run ids come from the one held-token pass."""
+    held = _peer_held(
+        root, paths, own_sid, run_id, script_path, plan_rel=plan_rel, run_base=run_base,
+        minted_before=minted_before, self_sessions=self_sessions,
+    )
+    if not held:
+        return {}
+    try:
+        from coordinator_core.ops import warp_run_deliverable
+
+        scan = warp_run_deliverable._live_claim_scan(
+            root, list(held), "", str(root), minted_before, run_id if isinstance(run_id, str) else None,
+        ) or {}
+    except Exception:  # noqa: BLE001 -- attribution is advisory; the hold itself is already known
+        scan = {}
+    out: dict = {}
+    for path, sids in held.items():
+        runs = sorted({rid for _at, rid, _sid in scan.get(path, ())})
+        out[path] = (
+            "live peer run " + ", ".join(runs) if runs else "live peer session " + ", ".join(sorted(sids))
+        )
+    return out
+
+
+def _worktree_blob(root: Path, rel: str) -> Optional[str]:
+    """The check-in blob id of the worktree file, None when unreadable."""
+    from coordinator_core.git.commit import checkin_blob_sha
+
+    try:
+        return checkin_blob_sha(root, rel)
+    except Exception:  # noqa: BLE001 -- unreadable bytes never satisfy the record
+        return None
+
+
 def _measured_mismatch(
     root: Path, record: dict, product: Sequence[str], deleted: Sequence[str], settled: dict, own=None,
     baseline: Optional[Mapping] = None, owned_now=None,
@@ -2979,6 +3044,7 @@ def _measured_mismatch(
     differing |= {
         p for p, blob in blobs.items()
         if p not in landing and p not in gone and (head.get(p) or (None, None))[1] != blob
+        and _worktree_blob(root, p) != blob
     }
     differing |= {p for p in removed if p not in gone and p in head}
     if own is not None:
@@ -3241,13 +3307,15 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         if gap_reason is not None:
             floor_notes.append(gap_reason)
 
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
     ledger = None
     open_rows: list = []
     fence: dict = {}
     if ask_run_dir is not None:
         unmet, ledger, open_rows = _ledger_gate(
             root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
-            [g.id for g in manifest.gated], {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
+            [g.id for g in manifest.gated], requirements_ledger.owed_rows(manifest.owed),
             plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path, fence,
             recovery_reasons, code_paths=floor_code,
         )
@@ -3753,6 +3821,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     if credit_gate.no_credited_landing(set(gate_stranded), {c.id for c in contributing}, landed_ids):
         shown = "; ".join(f"{cid}: {', '.join(ps)}" for cid, ps in sorted(gate_stranded.items()))
         why = "".join(f" {cid} blocker: {text}." for cid, text in sorted(blockers.items()) if cid in stranded)
+        held_now = _live_peer_holders(
+            root, sorted({p for ps in gate_stranded.values() for p in ps if p in peer_held}), session_id, rid,
+            script_path, request.plan_path, run_base if isinstance(run_base, str) else None, own_seniority,
+            _firing_sessions(root, rid, session_id),
+        )
+        if held_now:
+            why += " Held: " + "; ".join(f"{p} by {who}" for p, who in sorted(held_now.items())) + "."
         return _error(
             f"no product chunk lands in this commit; stranded work stays uncommitted: {shown}.{why} "
             f"Credit one: workflow.revise run_id={sibling_run_id} credit_chunks=[{{chunk, evidence}}], "
@@ -4133,6 +4208,29 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     else:
         merge_plan = None
 
+    excluded_unmeasured: list = []
+    if (
+        measured is not None and merge_plan is None and not measured.get("unreadable")
+        and not (anchor_only or request.review_only)
+    ):
+        recorded = {
+            *(measured.get("blobs") if isinstance(measured.get("blobs"), dict) else ()),
+            *_measured_strs(measured, "removed"),
+        }
+        carried = {*art_present, *receipt_paths, bookkeeping_path}
+        excluded_unmeasured = [p for p in commit_set if p not in carried and p not in recorded]
+        if excluded_unmeasured:
+            row_writes = {w for row in (manifest.rows if manifest is not None else ()) for w in row.writes}
+            excluded_unmeasured = [p for p in excluded_unmeasured if p not in row_writes]
+        if excluded_unmeasured:
+            own_covers = _run_owned(root, art_run_id).covers
+            excluded_unmeasured = [p for p in excluded_unmeasured if not own_covers(p)]
+        if excluded_unmeasured:
+            own_now = set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(excluded_unmeasured))
+            excluded_unmeasured = sorted(p for p in excluded_unmeasured if p not in own_now)
+        if excluded_unmeasured:
+            commit_set = [p for p in commit_set if p not in excluded_unmeasured]
+
     settled_blobs: dict = {}
     if settled_stage and merge_plan is not None:
         _remove(root, receipt_paths)
@@ -4201,6 +4299,12 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 refused="own-hunk-stage-refused",
             )
         settled_blobs = {**settled_blobs, **own_blobs}
+    if settled_blobs and measured is not None and merge_plan is None and not measured.get("unreadable"):
+        verified = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+        settled_blobs = {
+            p: b for p, b in settled_blobs.items()
+            if not (isinstance(verified.get(p), str) and _worktree_blob(root, p) == verified[p])
+        }
 
     # An "inconclusive" overlay (no seeds, timeout, collection error) lands with an advisory; only red,
     # missing and mismatch refuse.
@@ -4221,11 +4325,20 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             _remove(root, receipt_paths)
             _reap_measured_export(root, measured_run)
             mblobs = measured.get("blobs") if isinstance(measured.get("blobs"), dict) else {}
+            peers = {} if measured.get("unreadable") else _live_peer_holders(
+                root, list(differing), session_id, rid, script_path, request.plan_path,
+                run_base if isinstance(run_base, str) else None, own_seniority,
+                _firing_sessions(root, rid, session_id),
+            )
             return _error(
                 "landing refused: the product changes this commit would introduce differ from the measured-rev "
                 "record: " + " | ".join(
-                    d if measured.get("unreadable") else _mismatch_detail(
-                        root, d, mblobs, settled_blobs, measured_run, omitted=d not in commit_set,
+                    d if measured.get("unreadable") else (
+                        f"{d}: measured {mblobs.get(d)}, held by {peers[d]}: land after it; "
+                        "the measured blob may carry its unfinished hunks, so commit nothing of this path by hand"
+                        if d in peers else _mismatch_detail(
+                            root, d, mblobs, settled_blobs, measured_run, omitted=d not in commit_set,
+                        )
                     )
                     for d in differing
                 ),
@@ -4305,6 +4418,7 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     own_receipts = set(receipt_paths)
     overlap_paths = [p for p in [*commit_set, *commit_deleted] if p not in own_receipts]
     drift_moved = False
+    own_moved = False
     while True:
         try:
             outcome, overlap = retry_ref_moved(
@@ -4327,6 +4441,20 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 {"path": d.path, "basis": d.basis, "expected": d.expected, "actual": d.actual} for d in exc.drift
             ]
             real_drift = [d["path"] for d in drift]
+            if not own_moved and session_id is not None and expected:
+                # An executor's Write/Edit reaches no session ledger: the newest session event is its
+                # pre-run read. Paths whose bytes are the run's reviewed, ledgered or recorded blobs
+                # are the run's own; the expectation moves to them once, foreign bytes keep refusing.
+                from coordinator_core.ops.dispatch_emit.own_drift import _own_drift_actuals, _own_record_dir
+
+                own_moved = True
+                own_now = _own_drift_actuals(
+                    root, ask_run_dir, drift, declared, session_id, None, reviewed_bytes,
+                    _own_record_dir(root, art_run_id, ask_run_dir), sibling_run_id,
+                )
+                if own_now:
+                    expected = {**expected, **own_now}
+                    continue
             if not drift_moved:
                 from coordinator_core.ops.dispatch_emit.comment_only_drift import tolerated_drift
 
@@ -4512,6 +4640,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["criterion_status"] = "not_met" if unlanded_rows or review_gap else criterion["status"]
     if ledger_partial:
         reply["ledger_partial"] = ledger_partial
+    if excluded_unmeasured:
+        reply["excluded_unmeasured"] = excluded_unmeasured
     if objective_gate is not None:
         reply["objective_gate"] = {k: objective_gate[k] for k in ("outcome", "exit_reason", "unmet_axes", "summary")}
     reasons = _incomplete_reasons(

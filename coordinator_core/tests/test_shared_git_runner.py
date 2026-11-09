@@ -1121,6 +1121,13 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "add"),
         ("coordinator_core/contract/apply_base.py", "scoped_commit", "commit"),
         ("coordinator_core/git/commit.py", "_reset_index_paths", "reset"),
+        # G-EM home (a private, git-tracked memo-inbox repo, not a work tree): the attach, sync-rebase
+        # and push legs are the feature itself; each already spawns through run_git.
+        ("coordinator_core/group_em/gem_home.py", "_attach_remote", "checkout"),
+        ("coordinator_core/group_em/gem_home_sync.py", "_rebase", "rebase"),
+        ("coordinator_core/group_em/gem_home_sync.py", "push_leg", "add"),
+        ("coordinator_core/group_em/gem_home_sync.py", "push_leg", "commit"),
+        ("coordinator_core/group_em/gem_home_sync.py", "push_leg", "push"),
         ("coordinator_core/merge_assemble/__init__.py", "compute_version_bump_proposal", "tag"),
         ("coordinator_core/ops/ceremony/detached_render_commit.py", "commit_own_artifact", "add"),
         ("coordinator_core/ops/dispatch_emit/clean_overlay_verify.py", "verify", "checkout"),
@@ -1145,7 +1152,7 @@ _FROZEN_DESTRUCTIVE_VERB_SITES: frozenset = frozenset(
 #: reason `_PINNED_RUNNER_CEILING` is (see that constant's comment) --
 #: importing the value under test would make this file agree with any
 #: register whatsoever and assert nothing.
-_PINNED_VERB_CEILING = 39
+_PINNED_VERB_CEILING = 44
 
 
 def _runner_message(sites: list) -> str:

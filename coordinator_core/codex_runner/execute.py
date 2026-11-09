@@ -103,7 +103,9 @@ def audit_scope(events: list[dict], writes: list[str], repo_root: str) -> dict[s
 
 def _child_env(requested: bool) -> dict[str, str]:
     """Scrubbed child env; the per-request allow_api_key flag admits the API-key vars."""
-    return _build_env(requested=requested, role="worker")
+    env = _build_env(requested=requested, role="worker")
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
 
 
 def _parse_events(lines: list[str]) -> list[dict]:

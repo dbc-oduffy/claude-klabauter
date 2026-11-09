@@ -97,6 +97,7 @@ from coordinator_core.git.git_objects import (
     cas_ref,
     packed_contains,
     read_object,
+    read_object_header,
     flush_object_batch,
     object_batch,
     write_object,
@@ -397,10 +398,10 @@ def checkin_sizes(
         resolved = blob_fallback(refused)
         common = resolve_git_common_dir(root)
         for p in refused:
-            obj = read_object(common, resolved[p])
+            obj = read_object_header(common, resolved[p])
             if obj is None:
                 raise CommitRefused(f"{p}: blob {resolved[p]} written by the fallback is unreadable")
-            sizes[p] = len(obj[1])
+            sizes[p] = obj[1]
     return sizes
 
 
@@ -1460,24 +1461,27 @@ def commit_paths(
 
         refused = published_tree_classification.unclassified(touched, _read_landing)
         if refused:
-            # Regenerate field 7 into this commit. Only when the portable file
-            # is the pathspec's own, or the worktree copy is byte-identical to
-            # HEAD's -- a peer's uncommitted edit to it is never overwritten.
+            # Regenerate field 7 into this commit. The portable file is the
+            # pathspec's own, or the worktree copy is byte-identical to HEAD's:
+            # write the worktree. Otherwise a peer's uncommitted edit sits
+            # there and is never overwritten: the HEAD-based bytes land as a
+            # supplied blob (index-only) and the worktree copy is left alone.
             portable_rel = published_tree_classification.PORTABLE_PATH
             base = _read_landing(portable_rel)
             on_disk = root / portable_rel
-            if base is not None and (
-                portable_rel in path_list
-                or (on_disk.is_file() and on_disk.read_text(encoding="utf-8") == base)
-            ):
+            if base is not None:
                 additions: Dict[str, List[str]] = {}
                 for row, name in refused:
                     additions.setdefault(row, []).append(name)
-                on_disk.write_text(
-                    published_tree_classification.with_inclusions(base, additions),
-                    encoding="utf-8",
-                    newline="",
-                )
+                regenerated = published_tree_classification.with_inclusions(base, additions)
+                if portable_rel in path_list or (
+                    on_disk.is_file() and on_disk.read_text(encoding="utf-8") == base
+                ):
+                    on_disk.write_text(regenerated, encoding="utf-8", newline="")
+                else:
+                    supplied[portable_rel] = write_object(
+                        gitdir, b"blob", regenerated.encode("utf-8")
+                    )
                 if portable_rel not in path_list:
                     path_list.append(portable_rel)
                 refused = []

@@ -6,8 +6,10 @@ Denied when the search root is `/`, a drive root (`C:`, `C:/`, `C:` plus a backs
   - `find <root> ...` (any start path before the first expression);
   - `rg`, `fd` with a positional path that is a root;
   - `grep -r` / `-R` / `--recursive` with a root operand.
-  - recursive `grep`/`rg`, `find -exec` or `du` over a UE install root (`UE_5.x`), its
-    Engine/Plugins or Engine/Source subtree, or a `scratch/` root; one run dir under scratch allows.
+  - recursive `grep`/`rg`, `find -exec` or `du` over a UE install root (`UE_5.x`) or its
+    Engine/Plugins or Engine/Source subtree; recursive `grep`/`rg` or `find -exec` over a
+    `scratch/` root; one run dir under scratch allows. `du` over scratch is a size inventory
+    that reads no file content, so it allows.
     A target that stats as a regular file (resolved against the command's `cd` cwd) is a
     read, not a walk, and allows.
 A root that appears only inside a pattern or option value (`-path /x/y`,
@@ -241,6 +243,8 @@ def _huge_tree_reason(toks: List[str], cwd: Optional[str], cmd_text: str) -> Any
             path = resolve_relative(eff, target) or target
         kind = _huge_tree_kind(path)
         if kind and os.path.isfile(path):
+            continue
+        if kind == "scratch" and token_matches_binary(toks[0], "du"):
             continue
         if kind == "engine":
             return _record(

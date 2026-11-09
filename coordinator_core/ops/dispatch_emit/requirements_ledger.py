@@ -1261,13 +1261,15 @@ def _lettered_entries(text: object) -> list[tuple[str, str]]:
 
 _METHOD_LEAD_RE = re.compile(r"\b(?:method|steps?)\b", re.IGNORECASE)
 _LEAD_WORDS = 6
+_LAST_SENTENCE_RE = re.compile(r"(?<=[.!?])\s+|\n")
 
 
 def _method_slug(text: str) -> str:
-    """The slug of the lead-in before the first `(a)` when it names a method or steps, else ''
-    (a plain lettered list is not a method and mints unmarked rows)."""
+    """The slug of the sentence introducing the first `(a)` when it names a method or steps, else ''
+    (a plain lettered list is not a method and mints unmarked rows; "method" or "step" earlier in
+    a longer relayed text, e.g. a quoted error, does not make its lettered clauses method steps)."""
     m = re.search(r"(?<![\w(])\(a\)", text, re.IGNORECASE)
-    lead = text[: m.start()] if m else ""
+    lead = _LAST_SENTENCE_RE.split(text[: m.start()].rstrip() if m else "")[-1]
     if not _METHOD_LEAD_RE.search(lead):
         return ""
     words = re.findall(r"[a-z0-9]+", lead.lower())
@@ -1879,6 +1881,24 @@ def _misrouted(row: Mapping, owed: str) -> Optional[str]:
     return f"judged at {', '.join(read) or 'no root named'}, owed the engine root {owed or '(unresolved)'}"
 
 
+class AfterPublishCommand(str):
+    """An owed em-performed row's detail: `judge` lists the row it withholds open as
+    `owed-after-publish <id>` where a plain operator command reads `awaiting_operator <id>`."""
+
+
+def owed_rows(owed: Iterable) -> dict[str, str]:
+    """`judge`'s `operator` map from a manifest's owed rows: an `operator` row maps to its command, an
+    `em-performed` row (a post-publish verification) to an `AfterPublishCommand`. Other reasons
+    (memo-send) are left out."""
+    out: dict[str, str] = {}
+    for o in owed:
+        if o.reason == "operator":
+            out[o.id] = o.detail
+        elif o.reason == "em-performed":
+            out[o.id] = AfterPublishCommand(o.detail)
+    return out
+
+
 def judge(
     ledger: Ledger, verdict: object, routed: Optional[Mapping[str, str]] = None,
     gated: Optional[Iterable[str]] = None, operator: Optional[Mapping[str, str]] = None,
@@ -1895,7 +1915,8 @@ def judge(
     `operator` maps the manifest's `execution_mode: operator` plan-row ids to the command a person
     runs. A `not_met` row whose `withheld_by` is one of them classifies `awaiting_operator`: it
     passes, is listed open as `awaiting_operator <id>` with `row` and `command` keys.
-    A verdict id naming an operator plan row is ignored, like a gated one.
+    A verdict id naming an operator plan row is ignored, like a gated one. An `AfterPublishCommand`
+    value (an owed em-performed row, see `owed_rows`) lists the row `owed-after-publish <id>` instead.
 
     `gated` is the stage manifest's gated chunk ids (`manifest.gated[].id`); None or empty withholds
     nothing. A verdict id naming a gated chunk is a plan row, not a requirement: it is ignored,
@@ -2025,8 +2046,9 @@ def judge(
                 if withheld in gated_ids:
                     open_rows.append({"id": item.id, "reason": f"withheld_by {withheld}"})
                 elif withheld in operator:
+                    label = "owed-after-publish" if isinstance(operator[withheld], AfterPublishCommand) else "awaiting_operator"
                     open_rows.append({
-                        "id": item.id, "reason": f"awaiting_operator {withheld}",
+                        "id": item.id, "reason": f"{label} {withheld}",
                         "row": withheld, "command": operator[withheld],
                     })
                 else:

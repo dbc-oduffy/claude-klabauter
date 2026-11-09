@@ -109,6 +109,21 @@ def test_list_prints_agents_rows_with_box_and_vendor(monkeypatch, capsys):
     assert fake.reqs[0]["as"] == "me"
 
 
+def test_list_marks_a_router_stale_agent_row_stale(monkeypatch, capsys):
+    resp = {"ok": True, "peers": ["p", "q"], "reachable": ["p", "q"],
+            "agents": [{"name": "p", "box": "mac", "vendor": "codex", "stale": True},
+                       {"name": "q", "box": "mac", "vendor": "codex", "stale": False}]}
+    rc, _ = _run(monkeypatch, resp, ["--list"])
+    out = capsys.readouterr().out.split("\n")
+    assert rc == 0 and out[1:3] == ["p\tmac\tcodex\tstale", "q\tmac\tcodex\tready"]
+
+
+def test_send_the_router_refuses_exits_nonzero_with_nothing_sent(monkeypatch, capsys):
+    rc, _ = _run(monkeypatch, {"ok": False, "error": "p has no live Codex process"}, ["--to", "p", "hi"])
+    cap = capsys.readouterr()
+    assert rc == 1 and "no live Codex process" in cap.err and "sent to" not in cap.out
+
+
 def test_list_from_older_router_renders_dashes(monkeypatch, capsys):
     resp = {"ok": True, "peers": ["p"], "reachable": ["p", "sess"]}
     rc, _ = _run(monkeypatch, resp, ["--list"])

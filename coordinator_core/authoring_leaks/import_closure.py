@@ -22,6 +22,7 @@ from __future__ import annotations
 import ast
 import functools
 import re
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -63,14 +64,36 @@ def prefixes(rel: str) -> Tuple[str, ...]:
     return tuple(out)
 
 
+_SCOPE_READS: ContextVar[Optional[Tuple[float, Dict[Path, Optional[str]]]]] = ContextVar("import_closure_scope_reads", default=None)
+
+
 def _read_text(path: Path) -> Optional[str]:
+    """Text of `path`, None when unreadable. Under an active land_run deadline each path is read once per scope
+    (the memo is keyed by the deadline value, so a new scope starts empty); with no deadline it reads straight through.
+    Invariant: no caller rewrites a closure file inside a land_run scope and then reads it again; a memo hit would serve
+    the pre-write text. Staleness is bounded to one scope (the memo is dropped when the deadline value changes). Memo
+    hits still pass `land_deadline.check`."""
     from coordinator_core.ops.dispatch_emit import land_deadline
 
+    deadline = land_deadline._DEADLINE.get()
+    memo: Optional[Dict[Path, Optional[str]]] = None
+    if deadline is not None:
+        held = _SCOPE_READS.get()
+        if held is None or held[0] != deadline:
+            held = (deadline, {})
+            _SCOPE_READS.set(held)
+        memo = held[1]
+        if path in memo:
+            land_deadline.check("authoring_leaks.import_closure._read_text")
+            return memo[path]
     land_deadline.check("authoring_leaks.import_closure._read_text")
     try:
-        return path.read_text(encoding="utf-8")
+        text: Optional[str] = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return None
+        text = None
+    if memo is not None:
+        memo[path] = text
+    return text
 
 
 def read_text(path: Path) -> Optional[str]:

@@ -99,3 +99,46 @@ def test_directory_entry_covers_children_not_siblings():
 def test_path_separators_normalised():
     runs = {"b": LiveRun(claims=frozenset({"d/f.py"}))}
     assert owns_path("a", ".\\d\\f.py", runs) == FOREIGN_CLAIM
+
+
+def test_covers_any_matches_the_pairwise_cover_on_both_sides():
+    from coordinator_core.ops.dispatch_emit import run_ownership as ro
+
+    entries = ["a/b/", ".\\c\\d.py", "e", "", "/", "g//h"]
+    paths = ["a/b", "a/b/x/y.py", "a/bb/x", "a", "c/d.py", "c/d.py/z", "c/d", "e/f", "ee", "g//h/i", "g/h", "", "x/"]
+    for path in paths:
+        assert ro.covers_any(entries, [path]) == any(ro._covers(e, path) for e in entries), path
+        assert ro.covers_any(frozenset(entries), [path]) == any(ro._covers(e, path) for e in entries), path
+    assert ro.covers_any(entries, paths) is True
+    assert ro.covers_any(entries, ["zz", "a/bb"]) is False
+    assert ro.covers_any([], paths) is False
+    assert ro.covers_any(["", "/"], paths) is False
+
+
+def test_owns_path_over_many_entries_and_paths_agrees_with_pairwise_cover():
+    from coordinator_core.ops.dispatch_emit import run_ownership as ro
+
+    withheld = frozenset(f"d{i}/f{j}.py" for i in range(20) for j in range(4)) | {"dir/"}
+    runs = {"b": LiveRun(withheld=withheld)}
+    for path in ("d3/f2.py", "d3/f9.py", "dir/x/y.py", "dirx/y.py", "d3"):
+        want = FOREIGN_WITHHELD if any(ro._covers(w, path) for w in withheld) else OWN
+        assert owns_path("a", path, runs) == want, path
+
+
+def test_foreign_withheld_holders_matches_owns_path_per_run():
+    from coordinator_core.ops.dispatch_emit import run_ownership as ro
+
+    live = {
+        "a": LiveRun(withheld=frozenset({"x/own.py"})),
+        "b": LiveRun(withheld=frozenset({"x/", "y/f.py"})),
+        "c": LiveRun(withheld=frozenset({"y/f.py"}), successor_landed=True),
+        "d": LiveRun(withheld=frozenset({"x/q.py"}), superseded_by="a"),
+        "e": LiveRun(withheld=frozenset({"x/q.py", "z"}), claims=frozenset({"w.py"})),
+        "f": LiveRun(),
+    }
+    paths = ["x/own.py", "x/q.py", "y/f.py", ".\\y\\f.py", "z/k", "w.py", "none.py", ""]
+    got = ro.foreign_withheld_holders("a", paths, live)
+    for path in paths:
+        want = sorted(rid for rid in live if owns_path("a", path, {rid: live[rid]}) == FOREIGN_WITHHELD)
+        assert got.get(path, []) == want, path
+    assert got["x/q.py"] == ["b", "e"] and "w.py" not in got

@@ -133,6 +133,7 @@ Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md § S1-C4
 
 from __future__ import annotations
 
+import json
 import re
 import warnings
 from pathlib import Path
@@ -149,6 +150,7 @@ from coordinator_core.ops.dispatch_emit.inventory_accounting import IN_ANOTHER_P
 from coordinator_core.ops.dispatch_emit.run_id_occupancy import family_spent_reason, next_tranche_number
 from coordinator_core.ops.dispatch_emit.wave_map import transitive_dependents
 from coordinator_core.ops.dispatch_emit.spine_read import (
+    EM_OWNED_REASONS,
     NON_DISPATCHABLE_DISPOSITIONS,
     SpineReadError,
     _has_uncleared_execution_gate,
@@ -631,6 +633,38 @@ def _fire_context_line(fire_context: str) -> str:
     return f"Fire context: {fire_context}\n" if fire_context else ""
 
 
+class _DeclaredOrder:
+    """Reachability over a growing `minted` list's lowered `depends_on` edges.
+
+    A write-overlap edge `target -> start` would close a cycle when `start`'s declared
+    edges already reach `target`, so the declared order outranks it. Minted entries are
+    only appended and point backward, so a node's reachable set is fixed once computed.
+    """
+
+    def __init__(self, minted: List[dict]) -> None:
+        self._minted = minted
+        self._deps: Dict[str, List[str]] = {}
+        self._reach: Dict[str, set] = {}
+
+    def orders_after(self, start_id: str, target_id: str) -> bool:
+        """True when `start_id`'s `depends_on` edges already reach `target_id`."""
+        for entry in self._minted[len(self._deps):]:
+            self._deps[entry["id"]] = [d["chunk"] for d in entry.get("depends_on") or ()]
+        reach = self._reach.get(start_id)
+        if reach is None:
+            reach = set()
+            stack = [start_id]
+            while stack:
+                node = stack.pop()
+                if node in reach:
+                    continue
+                reach.add(node)
+                stack.extend(self._deps.get(node, ()))
+            if start_id in self._deps:
+                self._reach[start_id] = reach
+        return target_id in reach
+
+
 def _row_body(
     row_id: str,
     spec_path: str,
@@ -948,12 +982,97 @@ def _plan_chunk_repairs(
     return out_rows, repairs
 
 
+_WITHHELD_HEADING_RE = re.compile(r"^## Withheld / routed out\s*$", re.MULTILINE)
+_WITHHELD_CHUNK_RE = re.compile(r"`?([\w./-]+):([A-Za-z][A-Za-z0-9_]*)`?")
+
+
+def _withheld_plan_chunks(inventory_path: Optional[Path]) -> List[Tuple[str, str]]:
+    """`(plan ref, chunk id)` for each `plan:chunk` token in the inventory's
+    `## Withheld / routed out` section. A plan ref is a Chunk-table row id or
+    the stem of a row's spec path; `mint_rows` matches it against each row."""
+    if inventory_path is None:
+        return []
+    try:
+        text = inventory_path.read_text(encoding="utf-8")
+    except OSError:
+        return []
+    heading = _WITHHELD_HEADING_RE.search(text)
+    if heading is None:
+        return []
+    rest = text[heading.end():]
+    nxt = _NEXT_HEADING_RE.search(rest)
+    block = rest[: nxt.start()] if nxt else rest
+    return [(m.group(1), m.group(2)) for m in _WITHHELD_CHUNK_RE.finditer(block)]
+
+
+def _single_row_withheld(row_id: str, spec_path: str, withheld: List[Tuple[str, str]]) -> bool:
+    """True when a Chunk-table row that is one plan chunk (`P144-C6`, not a whole-plan
+    expansion) is listed in the `## Withheld / routed out` section as `plan:chunk`."""
+    bare = _bare_plan_row_id(row_id)
+    refs = {row_id, row_id.split("-", 1)[0]}
+    if spec_path:
+        refs |= {Path(spec_path).stem, Path(spec_path).as_posix()}
+    return any(
+        ref.replace("\\", "/") in refs and chunk in (row_id, bare) for ref, chunk in withheld
+    )
+
+
+def _chunks_naming_member(id_map: Dict[str, str], member: str) -> List[str]:
+    """Chunk ids of `id_map` that are `member` or a `-`-joined merged id (`C3-C4`,
+    `a.C3-b.C4`) with `member` as one whole part, bare or after its `<item>.` prefix."""
+    out = []
+    for chunk_id in id_map:
+        parts = chunk_id.split("-")
+        if chunk_id == member or member in parts or member in (p.rsplit(".", 1)[-1] for p in parts):
+            out.append(chunk_id)
+    return out
+
+
 class _WithheldSpine(NamedTuple):
     """A plan whose spine has live rows, every one withheld (uncleared
     `depends_on_plan`, gate, deferral). Not "no spine": flattening it into
     one whole-plan executor unions every row's edges and manufactures cycles."""
 
     detail: str
+    #: `(row id, reason)` of each held row the EM or an operator owes (`_EM_OWED_REASONS`).
+    owed: Tuple[Tuple[str, str], ...] = ()
+
+
+#: Hold reasons the EM must act on: the `spine_read` owned vocabulary plus an uncleared gate.
+_EM_OWED_REASONS = EM_OWNED_REASONS | {"external_gate"}
+
+
+def em_owed_report(
+    holds: Dict[str, List[Tuple[str, str]]],
+    stalled_by: Dict[str, str],
+    item_order: List[str],
+) -> List[dict]:
+    """The EM-owed list: one `{"plan", "holds": [{"row", "reason"}], "stalls": [plan, ...]}`
+    per fully-withheld plan with an EM-owed hold. `stalls` is every withheld plan reached through
+    `stalled_by` (`{dependent: the withheld item it waits on}`) from that plan, transitively, in
+    `item_order`. A plan waiting only on an ordinary predecessor is never listed."""
+    children: Dict[str, List[str]] = {}
+    for dependent, parent in stalled_by.items():
+        children.setdefault(parent, []).append(dependent)
+    out: List[dict] = []
+    for plan in item_order:
+        if plan not in holds:
+            continue
+        reached: set = set()
+        frontier = [plan]
+        while frontier:
+            for child in children.get(frontier.pop(), ()):
+                if child not in reached:
+                    reached.add(child)
+                    frontier.append(child)
+        out.append(
+            {
+                "plan": plan,
+                "holds": [{"row": r, "reason": why} for r, why in holds[plan]],
+                "stalls": [i for i in item_order if i in reached],
+            }
+        )
+    return out
 
 
 class _LandedSpine:
@@ -1047,7 +1166,10 @@ def _plan_sub_rows(
         elif rows == [] and held:
             shown = "; ".join(f"{e.get('id')}: {e.get('reason')}" for e in held[:3])
             more = f" (+{len(held) - 3} more)" if len(held) > 3 else ""
-            spine_cache[plan_path] = _WithheldSpine(shown + more)
+            owed = tuple(
+                (str(e.get("id")), str(e.get("reason"))) for e in held if e.get("reason") in _EM_OWED_REASONS
+            )
+            spine_cache[plan_path] = _WithheldSpine(shown + more, owed)
         else:
             spine_cache[plan_path] = rows or None
     return spine_cache[plan_path]
@@ -1227,6 +1349,8 @@ def mint_rows(
     landed_chunks_out: Optional[Dict[str, str]] = None,
     done_unlanded_out: Optional[Dict[str, dict]] = None,
     review_rows: frozenset = frozenset(),
+    em_owed_out: Optional[Dict[str, List[Tuple[str, str]]]] = None,
+    stalled_by_out: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """`## Chunk table` rows (as `parse_chunk_table` returns) -> a list of
     schema-valid plan-tasks row dicts, LIVE rows only. See module docstring's
@@ -1277,6 +1401,10 @@ def mint_rows(
     that mints no row: routed out (its own disposition text, or `dependency X
     routed out`), closed-satisfied (its disposition text), coded under
     `skip_landed`, landed, or withheld. An item absent from it owns a minted row.
+
+    `em_owed_out` is filled `{item id: [(row id, reason)]}` for each fully-withheld plan holding
+    an EM-owed row; `stalled_by_out` `{item id: the withheld item it waits on}` for each item
+    withheld behind another. Reporting only: neither changes what mints.
     """
     plan_cache: Dict[Path, Dict[str, dict]] = {}
     repairs: Dict[str, dict] = {}
@@ -1362,8 +1490,10 @@ def mint_rows(
         )
     else:
         in_run_map = _in_run_plan_chunks(live, inventory_path, plan_cache, family_landed)
+    withheld_plan_chunks = _withheld_plan_chunks(inventory_path)
     withheld_items: Dict[str, str] = {}
     minted: List[dict] = []
+    declared_order = _DeclaredOrder(minted)
     preceding_ids: set = set()
     #: Item id -> every minted id it expanded into (one entry for a
     #: non-plan-sourced item, N for a plan-sourced expansion) -- what an
@@ -1376,7 +1506,7 @@ def mint_rows(
     item_chunks: Dict[str, Dict[str, str]] = {}
     #: Expanded item id -> chunk ids whose plan row carries `depends_on_plan`.
     item_blocked: Dict[str, List[str]] = {}
-    #: Minted id -> `_DONE_NOOP` | `_DONE_LAND` for a chunk (or one held behind it) that mints no row.
+    #: Minted id -> `_DONE_NOOP` | `_DONE_LAND` for a chunk (or one held behind it, or withheld by the inventory) that mints no row. `_DONE_LAND` makes a dotted dependent withheld.
     item_dropped: Dict[str, str] = {}
 
     for row_id, row, writes in live:
@@ -1436,6 +1566,9 @@ def mint_rows(
                     )
         if withheld_dep is not None:
             withheld_items[row_id] = f"depends on withheld item {withheld_dep}"
+            if stalled_by_out is not None:
+                dotted_parent = _dotted_dep_parent(withheld_dep, dep_kinds)
+                stalled_by_out[row_id] = dotted_parent[0] if dotted_parent else withheld_dep
             if withheld_rows_out is not None:
                 withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
             if accounting_out is not None:
@@ -1499,6 +1632,8 @@ def mint_rows(
                 sub_rows = None  # a single-chunk reference mints as before
             else:
                 withheld_items[row_id] = f"plan spine fully withheld ({sub_rows.detail})"
+                if em_owed_out is not None and sub_rows.owed:
+                    em_owed_out[row_id] = list(sub_rows.owed)
                 if withheld_rows_out is not None:
                     withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
                 if accounting_out is not None:
@@ -1545,7 +1680,18 @@ def mint_rows(
             if done_unlanded_out is not None:
                 done_unlanded_out.update(done_here)
             review_minted = {mid for mid in id_map.values() if mid in review_rows}
-            unminted = (set(done_here) | held_ids) - review_minted
+            plan_refs = {row_id, Path(spec_path).stem, Path(spec_path).as_posix()}
+            withheld_chunk_ids: set = set()
+            for ref, withheld_chunk in withheld_plan_chunks:
+                if ref.replace("\\", "/") not in plan_refs:
+                    continue
+                for chunk_id in _chunks_naming_member(id_map, withheld_chunk):
+                    withheld_chunk_ids.add(id_map[chunk_id])
+                    withheld_chunk_ids.update(
+                        id_map[c] for c in transitive_dependents(sub_rows, {chunk_id})
+                    )
+            held_ids.update(withheld_chunk_ids - set(done_here))
+            unminted = (set(done_here) | held_ids) - (review_minted - withheld_chunk_ids)
             for r in sub_rows:
                 minted_id = id_map[r.id]
                 if minted_id in unminted:
@@ -1604,7 +1750,9 @@ def mint_rows(
                         continue
                     if any(edge["chunk"] == earlier_id for edge in depends_on):
                         continue
-                    if writes_set & earlier_writes:
+                    if writes_set & earlier_writes and not declared_order.orders_after(
+                        earlier_id, minted_id
+                    ):
                         depends_on.append(
                             {"chunk": earlier_id, "gate_kind": "output-consumption-runtime"}
                         )
@@ -1653,6 +1801,8 @@ def mint_rows(
                     row_id, list(done_here.values()), inventory_path, spec_path, plan_cache,
                     withheld_items, withheld_rows_out, accounting_out, landed_out,
                 )
+            if not entry_ids and withheld_chunk_ids and accounting_out is not None:
+                accounting_out.setdefault(row_id, "every plan chunk withheld by the inventory")
             item_all_ids[row_id] = entry_ids
             item_chunks[row_id] = dict(id_map)
             item_dropped.update({mid: e["class"] for mid, e in done_here.items()})
@@ -1663,6 +1813,15 @@ def mint_rows(
                 for chunk in id_map
                 if (plan_raw.get(chunk) or {}).get("depends_on_plan")
             ]
+            continue
+
+        if _single_row_withheld(row_id, spec_path, withheld_plan_chunks):
+            withheld_items[row_id] = "withheld by the inventory"
+            if withheld_rows_out is not None:
+                withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)
+            if accounting_out is not None:
+                accounting_out[row_id] = withheld_items[row_id]
+            item_all_ids[row_id] = []
             continue
 
         done_entry = done_classes.get(row_id)
@@ -1695,7 +1854,9 @@ def mint_rows(
                 continue
             if any(edge["chunk"] == earlier_id for edge in depends_on):
                 continue
-            if set(writes) & earlier_writes:
+            if set(writes) & earlier_writes and not declared_order.orders_after(
+                earlier_id, row_id
+            ):
                 depends_on.append(
                     {"chunk": earlier_id, "gate_kind": "output-consumption-runtime"}
                 )
@@ -1847,40 +2008,88 @@ def earlier_outputs(inventory_path: Path) -> Tuple[List[Path], List[Path]]:
     return derived, records
 
 
-def select_part(rows: List[dict], item_ids: List[str], index: int, count: int) -> List[dict]:
-    """The rows of part `index` (1-based) of `count`: whole plan items in table
-    order, balanced by row count. An edge onto a row in an EARLIER part is
-    dropped (parts are fired in order, so it is discharged); an edge onto a
-    later part raises `InventoryPartError`."""
+def _order_part_items(
+    rows: List[dict], owners: List[str], items: List[str], item_ids: List[str]
+) -> Tuple[List[str], Dict[str, str]]:
+    """`(order, excluded)` for the whole-set cut: `order` is the cuttable plan items with every
+    in-set predecessor ahead of its dependent (stable on table order); `excluded` is
+    `{item: reason}` for an item waiting on a chunk no row emits, and on the transitive
+    dependents of one. A cycle between items raises `InventoryPartError`."""
+    owner_of = {row["id"]: o for row, o in zip(rows, owners)}
+    prereqs: Dict[str, set] = {item: set() for item in items}
+    excluded: Dict[str, str] = {}
+    for row, owner in zip(rows, owners):
+        for edge in row.get("depends_on", []):
+            chunk = edge["chunk"]
+            target = owner_of.get(chunk)
+            if target is None:
+                waits_on = _unemitted_chunk_item(chunk, item_ids)
+                if waits_on is not None and waits_on != owner:
+                    excluded.setdefault(owner, f"waits on {chunk}, which no row emits")
+            elif target != owner:
+                prereqs[owner].add(target)
+    grew = True
+    while grew:
+        grew = False
+        for item in items:
+            blocker = next((p for p in sorted(prereqs[item]) if p in excluded), None)
+            if item not in excluded and blocker is not None:
+                excluded[item] = f"depends on withheld item {blocker}"
+                grew = True
+    order: List[str] = []
+    placed: set = set()
+    pending = [i for i in items if i not in excluded]
+    while pending:
+        ready = next((i for i in pending if prereqs[i] <= placed), None)
+        if ready is None:
+            raise InventoryPartError(
+                "plan items depend on each other in a cycle: " + ", ".join(pending)
+            )
+        pending.remove(ready)
+        order.append(ready)
+        placed.add(ready)
+    return order, excluded
+
+
+def select_part(
+    rows: List[dict],
+    item_ids: List[str],
+    index: int,
+    count: int,
+    excluded_out: Optional[Dict[str, str]] = None,
+) -> List[dict]:
+    """The rows of part `index` (1-based) of `count`: whole plan items ordered so
+    every in-set predecessor sits in the same or an EARLIER part, balanced by row
+    count. An edge onto a row in an earlier part is dropped (the part's wave
+    commit discharges it before this part runs). Items waiting on a chunk no row
+    emits, and their dependents, are in no part and land in `excluded_out`. Only
+    a cycle between plan items raises `InventoryPartError`."""
     owners = _row_item_ids(rows, item_ids)
     items: List[str] = list(dict.fromkeys(owners))
-    if count > len(items):
+    order, excluded = _order_part_items(rows, owners, items, item_ids)
+    if excluded_out is not None:
+        excluded_out.update(excluded)
+    if count > len(order):
         raise InventoryPartError(
-            f"cannot cut {len(items)} plan item(s) into {count} parts"
+            f"cannot cut {len(order)} plan item(s) into {count} parts"
         )
-    total = len(rows)
+    size = {item: owners.count(item) for item in order}
+    total = sum(size.values())
     part_of_item: Dict[str, int] = {}
     seen = 0
-    for item in items:
-        n = owners.count(item)
-        part_of_item[item] = min(count, int((seen + n / 2) / total * count) + 1)
-        seen += n
-    part_of_row = {row["id"]: part_of_item[o] for row, o in zip(rows, owners)}
+    for item in order:
+        part_of_item[item] = min(count, int((seen + size[item] / 2) / total * count) + 1)
+        seen += size[item]
+    part_of_row = {row["id"]: part_of_item[o] for row, o in zip(rows, owners) if o in part_of_item}
     selected: List[dict] = []
     for row in rows:
-        if part_of_row[row["id"]] != index:
+        if part_of_row.get(row["id"]) != index:
             continue
         kept = []
         for edge in row.get("depends_on", []):
             target_part = part_of_row.get(edge["chunk"])
             if target_part is None or target_part == index:
                 kept.append(edge)
-            elif target_part > index:
-                raise InventoryPartError(
-                    f"row {row['id']!r} depends on {edge['chunk']!r}, which falls in "
-                    f"part {target_part} of {count}; reorder the Chunk table so "
-                    "dependencies precede their dependents"
-                )
         entry = dict(row)
         entry.pop("depends_on", None)
         if kept:
@@ -2058,9 +2267,11 @@ def _pick_groups(
     and only if all of it fits; passes repeat so a group whose prerequisite
     sits later in the table still lands.
 
-    A shared-path group (no depends_on_plan binding) with a member whose own
-    outside prerequisite is untaken, while another member is unblocked, splits
-    into single plans: the blocked member defers and the rest are taken.
+    A multi-plan group (shared-path, depends_on_plan-bound, or both) with a
+    member whose own outside prerequisite is untaken, while another member is
+    unblocked, splits into single plans: the blocked member defers and the
+    rest are taken. A bound member's in-group predecessor is already one of
+    its `prereqs`, so a split member lands only after that predecessor.
 
     A shared-path group over the budget is exploded into single-plan units,
     packed plan-by-plan in dependency order across sequential tranches. That is
@@ -2079,10 +2290,9 @@ def _pick_groups(
                 label = f"plans {', '.join(group)} write the same path {shared[group[0]]}; "
                 if note:
                     label += f"bound by depends_on_plan {note}; "
-                else:
-                    splittable.add(id(group))
             else:
                 label = f"plans {', '.join(group)} are bound by depends_on_plan {note}".rstrip() + "; "
+            splittable.add(id(group))
         if len(group) > 1 and total > row_budget:
             units.extend(
                 ([i], f"{label}{total} rows exceed row_budget {row_budget}, split across tranches; ")
@@ -2107,7 +2317,7 @@ def _pick_groups(
             if blocking and id(group) in splittable and any(
                 not (prereqs[i] - members) - set(taken) for i in group
             ):
-                # Pure shared-path group: the blocked members defer alone.
+                # The blocked members defer alone; unblocked ones are taken.
                 at = undecided.index(unit)
                 undecided[at : at + 1] = [
                     ([i], f"{label}split so blocked members defer alone; ") for i in group
@@ -2233,6 +2443,8 @@ def select_tranche(
     withheld_rows: Optional[Dict[str, int]] = None,
     reasons: Optional[Dict[str, str]] = None,
     bound: Optional[Dict[str, set]] = None,
+    em_owed: Optional[List[dict]] = None,
+    held: Optional[Dict[str, str]] = None,
 ) -> Tuple[List[dict], dict]:
     """The next tranche of `rows`: whole plan items, in table order, whose
     rows sum to <= `row_budget`, plus a report `{"row_budget", "rows",
@@ -2256,7 +2468,12 @@ def select_tranche(
     simulates further tranches at the same budget over the deferred set,
     assuming each lands; withheld plans cannot be simulated (they unblock only
     when a predecessor lands) and are counted in `withheld_not_counted`.
-    Raises `InventoryTooLargeError` when nothing fits.
+    `held` (`{row id: reason}`, the family's last tranche hold) takes every item
+    whose rows are all held out of the budget as an untaken prerequisite: its
+    dependents defer naming the hold. When the pass would take only held items,
+    the report carries `stall: {"rows", "held_by"}`, no rows are selected and
+    `passes_remaining` is 0.
+    Raises `InventoryTooLargeError` when nothing fits and nothing is held.
     """
     owners = _row_item_ids(rows, item_ids)
     items: List[str] = list(dict.fromkeys(owners))
@@ -2288,15 +2505,51 @@ def select_tranche(
         }
         groups, shared, binding = _bind_groups(groups, shared, bound)
     unmerged = {i: unemitted_edge[i] - emitted_edge[i] for i in items}
+    held_by_item: Dict[str, str] = {}
+    if held:
+        held_ids = set(held)
+        for item in items:
+            ids = [r["id"] for r, o in zip(rows, owners) if o == item]
+            if ids and all(i in held_ids for i in ids):
+                held_by_item[item] = held[ids[0]]
+    if held_by_item:
+        for dep, preds in (bound or {}).items():
+            if dep in prereqs:
+                prereqs[dep] |= preds & set(held_by_item)
+        held_groups, shared_full, binding_full = groups, shared, binding
+        groups, shared, binding = [], {}, {}
+        for old in held_groups:
+            kept = [i for i in old if i not in held_by_item]
+            if not kept:
+                continue
+            groups.append(kept)
+            if old[0] in shared_full:
+                shared[kept[0]] = shared_full[old[0]]
+            if old[0] in binding_full:
+                binding[kept[0]] = binding_full[old[0]]
     taken, deferred = _pick_groups(groups, size, prereqs, shared, row_budget, binding, unmerged)
+    stall: Optional[dict] = None
     if not taken:
-        raise InventoryTooLargeError(
-            _nothing_taken_message(groups, size, prereqs, deferred, row_budget, reasons or {})
-        )
+        if held_by_item:
+            would_take, _ = _pick_groups(held_groups, size, prereqs, shared_full, row_budget, binding_full, unmerged)
+            stalled = {i for i in would_take if i in held_by_item}
+            if stalled:
+                stall_rows = [r["id"] for r, o in zip(rows, owners) if o in stalled]
+                stall = {"rows": stall_rows, "held_by": {r: held[r] for r in stall_rows}}
+        if stall is None:
+            raise InventoryTooLargeError(
+                _nothing_taken_message(groups, size, prereqs, deferred, row_budget, reasons or {})
+            )
+    for item, reason in held_by_item.items():
+        deferred[item] = f"held by the family's last tranche: {reason}"
+    for item in items:
+        on_hold = sorted(p for p in prereqs[item] if p in held_by_item)
+        if on_hold and item in deferred:
+            deferred[item] += "; waits on held " + ", ".join(f"{p} ({held_by_item[p]})" for p in on_hold)
     taken_set = set(taken)
     left = [i for i in items if i not in taken_set]
     passes = 0
-    pending = set(left)
+    pending = set() if stall else set(left)
     while pending:
         sub_groups = [[i for i in g if i in pending] for g in groups]
         sub_groups = [g for g in sub_groups if g]
@@ -2343,7 +2596,44 @@ def select_tranche(
         "skipped": skipped,
         "remaining": remaining,
     }
+    if em_owed:
+        report["em_owed"] = em_owed
+    if stall:
+        report["stall"] = stall
     return selected, report
+
+
+_HOLD_RECEIPT_RE = r"^{base}(?:-t(\d+))?(?:-p\d+)?\.workflow\.mjs\.emitted\.json$"
+
+
+def family_hold(inventory_path: Path) -> Dict[str, str]:
+    """`{row id: reason}` the newest tranche receipt of this inventory's family holds
+    (`hold.rows` / `hold.reason`), else `{}`. One directory listing and one file read."""
+    pattern = re.compile(_HOLD_RECEIPT_RE.format(base=re.escape(inventory_family_base(inventory_path))))
+    newest: Optional[Tuple[Tuple[int, float], Path]] = None
+    try:
+        for child in inventory_path.parent.iterdir():
+            match = pattern.match(child.name)
+            if match:
+                try:
+                    key = (int(match.group(1) or 0), child.stat().st_mtime)
+                except OSError:
+                    continue
+                if newest is None or key > newest[0]:
+                    newest = (key, child)
+    except OSError:
+        return {}
+    if newest is None:
+        return {}
+    try:
+        hold = json.loads(newest[1].read_text(encoding="utf-8")).get("hold")
+    except (OSError, ValueError, AttributeError):
+        return {}
+    if not isinstance(hold, dict):
+        return {}
+    rows = hold.get("rows")
+    reason = str(hold.get("reason") or "held")
+    return {str(r): reason for r in rows} if isinstance(rows, list) else {}
 
 
 _TRANCHE_SUFFIX_RE = re.compile(r"-t\d+$")
@@ -2456,6 +2746,8 @@ def mint_spine(
     withheld_rows: Dict[str, int] = {}
     ledger: Dict[str, str] = {}
     bound: Dict[str, set] = {}
+    owed_holds: Dict[str, List[Tuple[str, str]]] = {}
+    stalled_by: Dict[str, str] = {}
     rows = mint_rows(
         chunk_rows,
         inventory_path=path,
@@ -2468,6 +2760,8 @@ def mint_spine(
         bound_out=bound,
         done_unlanded_out=done_unlanded_out,
         review_rows=review_rows,
+        em_owed_out=owed_holds,
+        stalled_by_out=stalled_by,
     )
     if accounting_out is not None:
         accounting_out.update(ledger)
@@ -2486,6 +2780,8 @@ def mint_spine(
             withheld_rows=withheld_rows,
             reasons=ledger,
             bound=bound,
+            em_owed=em_owed_report(owed_holds, stalled_by, [_strip_backtick(r["id"]) for r in chunk_rows]),
+            held=family_hold(path),
         )
         if accounting_out is not None:
             for entry in report["deferred"]:
@@ -2501,7 +2797,10 @@ def mint_spine(
             and part is None
             and family_spent_reason(path.parent, run_id) is not None
         )
-        if spent_tranche:
+        if "stall" in report:
+            # Nothing is emitted: no tranche record is spent on a held-only pass.
+            tranche_text = None
+        elif spent_tranche:
             # The record's own run id (base or tranche) has run or landed: continue the family at the next N.
             tranche_path, tranche_text, run_id = _tranche_inventory(
                 path, text, chunk_rows, set(report["plans"]), run_id
@@ -2528,14 +2827,15 @@ def mint_spine(
         index, count = part
         all_ids = [_strip_backtick(r["id"]) for r in chunk_rows]
         before = set(_row_item_ids(rows, all_ids))
-        rows = select_part(rows, all_ids, index, count)
+        held_back: Dict[str, str] = {}
+        rows = select_part(rows, all_ids, index, count, excluded_out=held_back)
         run_id = part_run_id(run_id, index)
         in_part = list(dict.fromkeys(_row_item_ids(rows, all_ids)))
         if part_items_out is not None:
             part_items_out.extend(in_part)
         if accounting_out is not None:
             for item in before.difference(in_part):
-                accounting_out[item] = IN_ANOTHER_PART
+                accounting_out[item] = held_back.get(item) or IN_ANOTHER_PART
     if row_budget is None and max_rows is not None and len(rows) > max_rows:
         raise InventoryTooLargeError(
             f"inventory {path.name} mints {len(rows)} live rows, over max_rows "
@@ -2546,6 +2846,8 @@ def mint_spine(
     frontmatter_lines = [f"run_id: {run_id}", "derived_from: mise inventory record"]
     if deliverable_id:
         frontmatter_lines.append(f"deliverable_id: {deliverable_id}")
+    if part is not None:
+        frontmatter_lines += [f"part_index: {part[0]}", f"part_count: {part[1]}"]
 
     spine_text = (
         "---\n"
@@ -2565,3 +2867,22 @@ def mint_spine(
     _LAST_MINTED_SPINE.append(spine_path)
     del _LAST_MINTED_SPINE[:-1]
     return spine_text, spine_path
+
+
+def whole_set_part_count(
+    inventory_path: str, max_rows: int, row_budget: int, skip_landed: bool = False
+) -> Optional[int]:
+    """How many `-pN` parts cut the whole live set into runs of about `row_budget` rows,
+    or None when the set fits `max_rows` or cannot be cut into two parts. Counts only the
+    items `select_part` would place, so a held-back item never inflates the count."""
+    path = Path(inventory_path)
+    chunk_rows = parse_chunk_table(path.read_text(encoding="utf-8"))
+    rows = mint_rows(chunk_rows, inventory_path=path, skip_landed=skip_landed)
+    if len(rows) <= max_rows:
+        return None
+    all_ids = [_strip_backtick(r["id"]) for r in chunk_rows]
+    owners = _row_item_ids(rows, all_ids)
+    order, excluded = _order_part_items(rows, owners, list(dict.fromkeys(owners)), all_ids)
+    placed_rows = sum(1 for o in owners if o not in excluded)
+    count = min(-(-placed_rows // max(1, row_budget)), len(order))
+    return count if count >= 2 else None

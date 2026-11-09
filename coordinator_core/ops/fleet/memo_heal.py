@@ -67,7 +67,7 @@ from coordinator_core.git.content_hash import (
     _text_attribute_pinned,
 )
 from coordinator_core.git.git_dir import resolve_git_common_dir
-from coordinator_core.git.git_objects import _read_object
+from coordinator_core.git.git_objects import read_object_header
 from coordinator_core.git.git_state import head_sha as _git_state_head_sha
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.ceremony import git_native
@@ -157,7 +157,7 @@ def _commit_object_present(common_dir: Path, sha: str) -> bool:
     `common_dir` — object EXISTENCE, zero spawns (mirrors `memo_send.
     _delivery_commit_is_object`, applied here against the receiver's own
     store rather than a sender's read of a peer's)."""
-    found = _read_object(common_dir, sha)
+    found = read_object_header(common_dir, sha)
     return found is not None and found[0] == "commit"
 
 

@@ -105,6 +105,49 @@ class TestFiresOnDerivedLiveCopy:
         _allow("/Users/alice/.claude/CLAUDE.md", tool_name="Read")
 
 
+class TestDerivedRulesDir:
+    def test_home_rules_file_advised_naming_authoring_surface(self):
+        ctx = _advised("/Users/alice/.claude/rules/rules.md")["hookSpecificOutput"]["additionalContext"]
+        assert "global-doctrine/rules/rules.md" in ctx
+
+    def test_edit_and_multiedit_advised(self):
+        _advised("/Users/alice/.claude/rules/rules.md", tool_name="Edit")
+        _advised("/Users/alice/.claude/rules/rules.md", tool_name="MultiEdit")
+
+    def test_windows_separator_form_names_file(self):
+        ctx = _advised(r"C:\alice\.claude\rules\Other.md")["hookSpecificOutput"]["additionalContext"]
+        assert "global-doctrine/rules/Other.md" in ctx
+
+    def test_tilde_form_advised(self):
+        _advised("~/.claude/rules/rules.md")
+
+    def test_claude_config_dir_rules_advised(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/opt/cfg")
+        ctx = _advised("/opt/cfg/rules/rules.md")["hookSpecificOutput"]["additionalContext"]
+        assert "global-doctrine/rules/rules.md" in ctx
+
+    def test_claude_md_advisory_does_not_name_rules_path(self):
+        ctx = guard.check(_payload("/Users/alice/.claude/CLAUDE.md"))["hookSpecificOutput"]["additionalContext"]
+        assert "global-doctrine/rules" not in ctx
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/Users/alice/.claude/rules/sub/x.md",
+            "/Users/alice/.claude/rules/notes.txt",
+            "/Users/alice/.claude/rules/",
+            "/Users/alice/repos/coordinator-content-repo/global-doctrine/rules/rules.md",
+            "/Users/alice/repos/proj/.claude/rules/rules.md",
+        ],
+    )
+    def test_non_derived_rules_paths_allowed(self, path):
+        _allow(path)
+
+    def test_override_env_allows_rules(self, monkeypatch):
+        monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
+        _allow("/Users/alice/.claude/rules/rules.md")
+
+
 class TestSilentOnEverythingElse:
     def test_authoring_surface_allowed(self):
         _allow("/Users/alice/repos/coordinator-content-repo/global-doctrine/CLAUDE.md")

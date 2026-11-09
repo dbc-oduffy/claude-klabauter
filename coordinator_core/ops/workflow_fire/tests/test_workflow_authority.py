@@ -6,9 +6,35 @@ from coordinator_core.session.caller_env import bind_caller_env
 
 
 @pytest.mark.parametrize('role', ['worker', 'reviewer', 'workflow-agent', 'unknown'])
-def test_non_em_cannot_submit_root_ask(monkeypatch, role):
+def test_non_em_submit_is_recorded_not_refused(monkeypatch, role):
+    from coordinator_core import guard_advisory_counter
+    fired = []
+    monkeypatch.setattr(guard_advisory_counter, 'record_advisory_fire', lambda *a: fired.append(a))
     monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal('actual', role, {}))
-    assert authority.require_submission_em('actual', '.') is not None
+    assert authority.require_submission_em('actual', '.') is None
+    assert fired == [('submit-engine-ask-non-em', 'actual', '.')]
+    assert authority.require_submission_em('other', '.') is not None
+
+
+def test_em_submit_records_no_advisory(monkeypatch):
+    from coordinator_core import guard_advisory_counter
+    fired = []
+    monkeypatch.setattr(guard_advisory_counter, 'record_advisory_fire', lambda *a: fired.append(a))
+    monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal('actual', 'em', {}))
+    assert authority.require_submission_em('actual', '.') is None
+    assert fired == []
+
+
+def test_root_codex_exec_registered_em_is_admitted(monkeypatch):
+    from coordinator_core.session import external_registry
+    sid = '00000000-0000-4000-8000-000000000002'
+    payload = {'hook_event_name': 'SessionStart', 'session_id': sid, 'source': 'startup'}
+    role = agent_role.classify(payload, {'CODEX_THREAD_ID': sid}, **agent_role.observed_cli_launch(['codex', 'exec', '-']))
+    monkeypatch.setattr(external_registry, 'lookup', lambda s: {'session_id': sid, 'role': role})
+    monkeypatch.setattr(authority, 'caller_principal',
+                        lambda *a: authority.Principal(sid, agent_role.role_for_caller({}, sid), {}))
+    assert role == 'em'
+    assert authority.require_submission_em(sid, '.') is None
 
 
 def test_verified_em_cannot_impersonate_another_submission_session(monkeypatch):
@@ -36,7 +62,7 @@ def test_actual_carried_context_beats_daemon_em_marker(monkeypatch):
     monkeypatch.setattr(agent_role, 'role_for_caller',
                         lambda env, sid: observed.append((dict(env), sid)) or env.get('COORDINATOR_AGENT_ROLE', 'unknown'))
     with core.warm_served_request(), bind_caller_env({'COORDINATOR_AGENT_ROLE': 'worker'}):
-        assert authority.require_submission_em('actual-worker', '.') is not None
+        assert authority.caller_principal().role == 'worker'
     assert observed == [({'COORDINATOR_AGENT_ROLE': 'worker'}, 'actual-worker')]
 
 

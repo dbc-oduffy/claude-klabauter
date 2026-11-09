@@ -137,3 +137,24 @@ def test_with_inclusions_admits_names_sorted_and_keeps_exclusions_and_other_rows
 
 def test_with_inclusions_no_additions_is_identity():
     assert ptc.with_inclusions(_PORTABLE_TWO_ROWS, {}) == _PORTABLE_TWO_ROWS
+
+
+def test_mirror_source_path_maps_every_spelling_to_the_claude_klabauter_path():
+    for spelling in (
+        "C:/dev/claude-klabauter/coordinator/bin/x.py",
+        r"C:\dev\claude-klabauter\coordinator\bin\x.py",
+        "/home/u/claude-klabauter/coordinator/bin/x.py",
+        "../claude-klabauter/coordinator/bin/x.py",
+        "coordinator/bin/x.py",
+    ):
+        assert ptc.mirror_source_path(spelling, "claude-klabauter") == "coordinator/bin/x.py"
+    assert ptc.mirror_source_path("D:/k/claude-klabauter/coordinator_core/a/b.py", "claude-klabauter") == (
+        "coordinator_core/a/b.py"
+    )
+
+
+def test_mirror_source_path_refuses_klabauter_only_and_foreign_owner():
+    assert ptc.mirror_source_path("C:/dev/claude-klabauter/README.md", "claude-klabauter") is None
+    assert ptc.mirror_source_path("C:/dev/claude-klabauter/coordinator/other/x.py", "claude-klabauter") is None
+    assert ptc.mirror_source_path("C:/dev/elsewhere/coordinator/bin/x.py", "claude-klabauter") is None
+    assert ptc.mirror_source_path("coordinator/bin/x.py", "some-other-repo") is None

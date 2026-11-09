@@ -313,6 +313,7 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
 from coordinator_core.ops.dispatch_emit.inventory_mint import (
     _DEP_KIND_LIVE,
     DEFAULT_MAX_INVENTORY_ROWS,
+    InventoryTooLargeError,
     _resolve_dep_kinds,
     _row_body,
     _split_footprint,
@@ -322,6 +323,11 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     parse_chunk_table,
 )
 from coordinator_core.ops.dispatch_emit.landed_reconcile import reconcile_done_noop, reconcile_landed_detail
+from coordinator_core.ops.dispatch_emit.tranche_chain import (
+    inventory_record_for,
+    recorded_tranche_state,
+    stamp_tranche_state,
+)
 from coordinator_core.ops.dispatch_emit.queue_emit import QueuePathEscapeError, emit_queue_script
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
@@ -552,7 +558,9 @@ def _refuse_spent_overwrite(
 
 
 _UNBOUNDED_ROW_BUDGET = 10**6
-_SPINE_SOURCE_RE = re.compile(r"^Derived from `([^`\n]+)` by `dispatch\.emit --inventory`", re.MULTILINE)
+# Rows per run when an inventory over the max_rows cap is emitted without a row_budget: under
+# DEFAULT_MAX_INVENTORY_ROWS, so every defaulted tranche is itself a legal run.
+DEFAULT_TRANCHE_ROW_BUDGET = 40
 
 
 def _spent_spine_tranche_params(params: dict, plan_path: str) -> Optional[dict]:
@@ -573,18 +581,16 @@ def _spent_spine_tranche_params(params: dict, plan_path: str) -> Optional[dict]:
         return None
     if str(read_frontmatter_field(str(spine), "derived_from") or "").strip() != "mise inventory record":
         return None
-    named = _SPINE_SOURCE_RE.search(spine.read_text(encoding="utf-8", errors="replace"))
-    record = spine.with_name(re.split(r"[\\/]", named.group(1))[-1]) if named else spine.with_name(
-        spine.name.removesuffix(".spine.md") + ".md"
-    )
-    if not record.is_file():
+    recorded_budget, _ = recorded_tranche_state(spine)
+    record = inventory_record_for(spine, family_base=recorded_budget is not None)
+    if record is None:
         return None
     if spent_run_reason(script) is None:
         return None
     kept = {
         k: v for k, v in params.items() if k not in ("plan_path", "plan", "auto_split", "output_path", "out_path")
     }
-    return {**kept, "inventory_path": str(record), "row_budget": _UNBOUNDED_ROW_BUDGET}
+    return {**kept, "inventory_path": str(record), "row_budget": recorded_budget or _UNBOUNDED_ROW_BUDGET}
 
 
 _FOREIGN_REMEDY_DEFAULT = "Coordinate with that session, name a different output_path, or pass force=true deliberately."
@@ -663,6 +669,18 @@ def _is_halt_resume_hint(root: Path, reserved: object, sizing_doc: Optional[dict
     if parse_ask_parent((sizing_doc.get("em_analysis") or {}).get("ask_parent")) is not None:
         return False
     return reserved == halted_run_for(root, sizing_rel)
+
+
+def _reserved_run_landed(root: Path, run_id: str) -> bool:
+    """True when the reserved run's sibling status is `landed`: its refire is a residue run under a
+    fresh id (the landed result's `revise_and_refire` names this refire), never a rebind."""
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_LANDED, status_rel
+
+    try:
+        prior = json.loads((root / status_rel(run_id)).read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return False
+    return isinstance(prior, dict) and prior.get("status") == STATUS_LANDED
 
 
 def _reserved_run(root: Path, reserved: object, sizing_doc: Optional[dict], sizing_rel: Optional[str]) -> tuple:
@@ -1227,7 +1245,7 @@ _UNTYPED_PARAM_KEYS = frozenset({
     "scout_mode", "scout_questions", "lanes", "lane_count", "hot_files", "resume_missing",
     "cloud_spawn", "cross_repo_approved", "reserved_run_id", "chatty", "max_rows", "skip_landed",
     "landed_rows", "auto_split", "sibling", "local_only", "out_path", "session_id", "repo_root",
-    "_caller_cwd", "preminted_run_id", "chain_parent",
+    "_caller_cwd", "preminted_run_id", "chain_parent", "whole_set_probe",
 })
 
 
@@ -2610,7 +2628,10 @@ def _dispatch_emit_body(
         retired_reserved = (
             params["reserved_run_id"]
             if params.get("reserved_run_id") is not None and isinstance(params["reserved_run_id"], str)
-            and sizing_rel and _token_spent(ask_root, params["reserved_run_id"])
+            and sizing_rel and (
+                _token_spent(ask_root, params["reserved_run_id"])
+                or _reserved_run_landed(ask_root, params["reserved_run_id"])
+            )
             else None
         )
         if retired_reserved is None and params.get("reserved_run_id") is not None and not _is_halt_resume_hint(
@@ -2821,21 +2842,42 @@ def _dispatch_emit_body(
                 _strip_backtick(r["id"])
                 for r in parse_chunk_table(Path(inventory_path).read_text(encoding="utf-8"))
             ]
-            spine_text, spine_path = mint_spine(
-                inventory_path,
-                max_rows=None if params.get("review_only_rows") else (params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS),
-                part=(int(part[0]), int(part[1])) if part else None,
-                skip_landed=bool(params.get("skip_landed")),
-                skipped_out=resume_skipped,
-                row_budget=params.get("row_budget"),
-                tranche_out=tranche_report,
-                withheld_out=withheld_plans,
-                tranche_inventory_out=tranche_inventory,
-                part_items_out=part_items,
-                accounting_out=accounting_ledger,
-                done_unlanded_out=done_unlanded,
-                review_rows=frozenset(params.get("review_only_rows") or ()),
-            )
+            mint_budget = params.get("row_budget")
+            while True:
+                try:
+                    spine_text, spine_path = mint_spine(
+                        inventory_path,
+                        max_rows=None if params.get("review_only_rows") else (params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS),
+                        part=(int(part[0]), int(part[1])) if part else None,
+                        skip_landed=bool(params.get("skip_landed")),
+                        skipped_out=resume_skipped,
+                        row_budget=mint_budget,
+                        tranche_out=tranche_report,
+                        withheld_out=withheld_plans,
+                        tranche_inventory_out=tranche_inventory,
+                        part_items_out=part_items,
+                        accounting_out=accounting_ledger,
+                        done_unlanded_out=done_unlanded,
+                        review_rows=frozenset(params.get("review_only_rows") or ()),
+                    )
+                    break
+                except InventoryTooLargeError:
+                    if mint_budget is not None or part or params.get("whole_set_probe"):
+                        raise
+                    mint_budget = DEFAULT_TRANCHE_ROW_BUDGET
+                    for out in (resume_skipped, part_items):
+                        out.clear()
+                    for out in (tranche_report, withheld_plans, accounting_ledger, done_unlanded):
+                        out.clear()
+            if tranche_report:
+                if params.get("row_budget") is None:
+                    tranche_report["row_budget_defaulted"] = True
+                spine_text = stamp_tranche_state(
+                    spine_text,
+                    tranche_report["row_budget"],
+                    tranche_report["remaining"]["passes_remaining"],
+                    tranche_report.get("stall"),
+                )
             if part:
                 # A part is cut from the inventory's rows, not its record, so
                 # the record still lists every plan: scope the review to the

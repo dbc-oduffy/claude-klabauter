@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose, land_run, landing_retest
 from coordinator_core.ops.dispatch_emit import invariant_measured_paths as imp
+from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_landing_remedies import (  # noqa: F401
     RUN,
@@ -92,13 +93,32 @@ def test_a_failed_retest_past_the_attempt_budget_refuses_naming_the_invariant(ow
     assert _git(["rev-parse", "HEAD"], owed).strip() == head
 
 
-def test_no_retest_verdict_past_the_budget_names_the_missing_verdict_not_a_failure(owed):
+def test_no_retest_verdict_past_the_budget_lands_when_the_owed_nodes_pass_when_measured(owed, monkeypatch):
+    asked: list = []
+
+    def measure(root, params, run_id, ids):
+        asked.append(list(ids))
+        return set(ids)
+
+    monkeypatch.setattr(ltt, "owed_check_cleared", measure)
+
+    out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
+
+    assert out["committed"] is True, out
+    assert asked == [[INV]]
+    assert "a.py" in _git(["show", "--name-only", "--format=", "HEAD"], owed).split()
+
+
+def test_no_retest_verdict_past_the_budget_still_refuses_when_the_measured_node_does_not_pass(owed, monkeypatch):
+    monkeypatch.setattr(ltt, "owed_check_cleared", lambda root, params, run_id, ids: set())
+    head = _git(["rev-parse", "HEAD"], owed).strip()
+
     out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
 
     assert out["committed"] is False and out["refused"] == "targeted-tests-failed", out
     details = [f["detail"] for f in out["integrity"] if INV in f["detail"]]
-    assert details and all("no fresh retest verdict exists" in d for d in details), details
-    assert not any("failed its in-run retest" in d for d in details)
+    assert details and all("did not pass" in d for d in details), details
+    assert _git(["rev-parse", "HEAD"], owed).strip() == head
 
 
 def test_an_errored_retest_past_the_budget_names_its_status_not_a_failure(owed):

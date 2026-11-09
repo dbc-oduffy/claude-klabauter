@@ -52,6 +52,28 @@ def touched_published_names(paths: Sequence[str]) -> Dict[str, FrozenSet[str]]:
     return {k: v for k, v in result.items()}
 
 
+def mirror_source_path(path: str, owner_repo: str) -> Optional[str]:
+    """The claude-klabauter repo-relative source of `path` when it names a file under a publish-row
+    destination of `owner_repo`'s checkout, else None.
+
+    `path` is repo-relative, or absolute / `..`-relative with a component equal to `owner_repo`
+    (any separator, any drive); the destination subdir must follow that component. Pure: reads
+    only `_ROWS`, no filesystem."""
+    if owner_repo not in {row for row, _ in _ROWS}:
+        return None
+    posix = path.replace("\\", "/")
+    parts = [p for p in posix.split("/") if p not in ("", ".")]
+    if posix.startswith("/") or (len(posix) > 1 and posix[1] == ":") or ".." in parts:
+        if owner_repo not in parts:
+            return None
+        parts = parts[parts.index(owner_repo) + 1:]
+    for _row, subdir in _ROWS:
+        prefix = PurePosixPath(subdir).parts
+        if len(parts) >= len(prefix) and tuple(parts[: len(prefix)]) == prefix:
+            return "/".join(parts) + ("/" if posix.endswith("/") else "")
+    return None
+
+
 def field7_inclusions(portable_text: str, row_name: str) -> FrozenSet[str]:
     for line in portable_text.splitlines():
         if not line.startswith(f"{row_name}|"):

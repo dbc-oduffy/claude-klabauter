@@ -109,6 +109,7 @@ from coordinator_core.ops.dispatch_emit.pipeline_inputs import (
 from coordinator_core.ops.dispatch_emit.emit import ScriptOverCapError
 from coordinator_core.ops.dispatch_emit.sibling_split import WidthOverCapError
 from coordinator_core.ops.dispatch_emit.inventory_mint import (
+    InventoryTooLargeError,
     NothingUnlandedError,
     earlier_outputs,
     last_minted_spine,
@@ -117,6 +118,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
     spine_path_for,
 )
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_SOURCES, STOP_AFTER_PLAN
+from coordinator_core.ops.dispatch_emit.tranche_chain import stall_summary
 from coordinator_core.ops.dispatch_emit.emission_receipt import receipt_unlanded
 from coordinator_core.ops.dispatch_emit.run_id_occupancy import spent_run_reason
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, SizingHandBack
@@ -1016,17 +1018,62 @@ def _clear_earlier_outputs(inventory_path: str, live: "list[Path]") -> None:
         )
 
 
+def _whole_set_eligible(params: dict, args) -> bool:
+    """A default `--inventory` emit: no explicit `--tranche`, no review-only, no lanes."""
+    return bool(args.inventory) and not (
+        params.get("row_budget") is not None or params.get("review_only_rows") or args.lanes
+    )
+
+
+def _whole_set_part_count(params: dict, args) -> "Optional[int]":
+    """Part count for cutting the WHOLE live set of a default `--inventory` emit that exceeds
+    the run row cap; None keeps the single-run / tranche path. Called only after the op reports
+    the set over the cap, so a set that fits mints once. An unreadable or malformed record is
+    left to that path to refuse."""
+    from coordinator_core.ops.dispatch_emit import op as _op
+    from coordinator_core.ops.dispatch_emit.inventory_mint import (
+        DEFAULT_MAX_INVENTORY_ROWS,
+        InventoryMintError,
+        whole_set_part_count,
+    )
+
+    if not _whole_set_eligible(params, args):
+        return None
+    try:
+        return whole_set_part_count(
+            params["inventory_path"],
+            params.get("max_rows") or DEFAULT_MAX_INVENTORY_ROWS,
+            _op.DEFAULT_TRANCHE_ROW_BUDGET,
+            skip_landed=bool(params.get("skip_landed")),
+        )
+    except (InventoryMintError, OSError):
+        return None
+
+
 def _emit_inventory_parts(
     params: dict,
     repo_root: "Optional[Path]",
-    over: ScriptOverCapError,
+    over: "Optional[ScriptOverCapError]",
     fire: bool,
     admission_record: dict,
+    whole_set_count: "Optional[int]" = None,
 ) -> int:
-    """Cut an over-cap inventory into whole-plan parts, each its own
-    `<run_id>-pN` spine and `-pN.workflow.mjs` script. The part count grows
-    until every part composes under the cap; parts are fired in order."""
-    count = max(2, -(-over.script_size * 11 // (_emit._WORKFLOW_SCRIPT_BYTE_CAP * 10)))
+    """Cut an inventory into whole-plan parts, each its own `<run_id>-pN` spine and
+    `-pN.workflow.mjs` script. `over` (the script exceeded the byte cap) sets the first
+    count; `whole_set_count` cuts a set over the row cap in one pass instead of tranches.
+    The count grows until every part composes under both caps; each part's terminal commit
+    fires the next."""
+    from coordinator_core.ops.dispatch_emit import op as _op
+    from coordinator_core.ops.dispatch_emit.inventory_mint import InventoryTooLargeError
+
+    if over is not None:
+        count = max(2, -(-over.script_size * 11 // (_emit._WORKFLOW_SCRIPT_BYTE_CAP * 10)))
+        row_count = over.row_count
+    else:
+        count = whole_set_count
+        row_count = None
+        # A part is cut to the tranche budget, so it is a legal run whatever --max-rows said.
+        params = {**params, "max_rows": max(_op.DEFAULT_TRANCHE_ROW_BUDGET, int(params.get("max_rows") or 0))}
     # Every part, and every retry at a higher count, cuts the ONE tranche record the
     # over-cap emit minted; re-minting per part numbered sibling parts t8/t9.
     tranche_record = getattr(over, "tranche_inventory", None)
@@ -1055,6 +1102,10 @@ def _emit_inventory_parts(
             break
         except ScriptOverCapError:
             count += 1
+        except InventoryTooLargeError:
+            if over is not None or count >= 2 * whole_set_count:
+                raise
+            count += 1
     part_accountings = [r["inventory_accounting"] for r in results if r.get("inventory_accounting")]
     merged_accounting = None
     if part_accountings:
@@ -1062,12 +1113,19 @@ def _emit_inventory_parts(
 
         merged_accounting = inventory_accounting.merge_parts(part_accountings)
     total = f" from {merged_accounting['inventory_rows']} inventory rows" if merged_accounting else ""
-    print(
-        f"emit-dispatch-workflow: inventory over the {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte "
-        f"Workflow script cap ({over.row_count} minted rows{total}); emitted {count} parts. "
-        "Fire them in order, each only after the previous run has landed.",
-        file=sys.stderr,
-    )
+    if over is not None:
+        print(
+            f"emit-dispatch-workflow: inventory over the {_emit._WORKFLOW_SCRIPT_BYTE_CAP}-byte "
+            f"Workflow script cap ({row_count} minted rows{total}); emitted {count} parts. "
+            "Fire part 1; each part's terminal commit fires the next.",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"emit-dispatch-workflow: inventory{total} cut into {count} parts, predecessors first. "
+            "Fire part 1; each part's terminal commit fires the next.",
+            file=sys.stderr,
+        )
     document = {"parts": results, "admission": admission_record}
     if requested_out:
         document["out_ignored"] = {"requested": requested_out, "parts": [r["path"] for r in results]}
@@ -1086,12 +1144,18 @@ def _emit_inventory_parts(
     for part_result in results:
         _print_workflow_invocation(part_result, is_queue_route=False, repo_root=repo_root)
     if fire:
-        print(
-            "emit-dispatch-workflow: ERROR — --fire fires one script; the inventory was "
-            f"emitted as {count} parts, none fired",
-            file=sys.stderr,
+        if not all(r["ok"] for r in results):
+            return EXIT_DATA_ERROR
+        from coordinator_core.ops.dispatch_emit.op import guard_against_fired_drift
+        from coordinator_core.ops.workflow_fire.fire import fire_workflow
+
+        first = results[0]
+        guard_against_fired_drift(Path(first["path"]), first["sha256"])
+        fire_record = fire_workflow(
+            first["path"], cwd=str(repo_root) if repo_root else None, run_id=first.get("run_id"),
         )
-        return EXIT_DATA_ERROR
+        print(json.dumps({"fire": fire_record, "fired_part": first["part"]}, indent=2, sort_keys=True))
+        return EXIT_OK
     return EXIT_OK if all(r["ok"] for r in results) else EXIT_DATA_ERROR
 
 
@@ -1273,6 +1337,44 @@ def _incomplete_chunks_of(run_path: str) -> "Optional[frozenset]":
         if isinstance(listed, list):
             return frozenset(str(x) for x in listed)
     return None
+
+
+def _spine_rows_done_per_task_output(plan_path: str, run_path: str) -> frozenset:
+    """Spine rows the task output's `incomplete_chunks` does not list; empty for a git-log dump or
+    when the list names no row of this spine (coded stamps land on source plans, not the spine)."""
+    from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError, read_spine
+
+    incomplete = _incomplete_chunks_of(run_path)
+    if incomplete is None:
+        return frozenset()
+    try:
+        ids = frozenset(r.id for r in read_spine(Path(plan_path)))
+    except (OSError, SpineReadError):
+        return frozenset()
+    if not ids & incomplete:
+        return frozenset()
+    return ids - incomplete
+
+
+def _task_output_row_ids(run_path: str) -> frozenset:
+    """Every row id the task output's run outcome names (`incomplete_chunks` and
+    `landed_chunks`, at `params` or `params.run_outcome`); empty when `run_path` is not a task
+    output. These are the run's own rows: an unlanded strand of theirs is its own dirt."""
+    from coordinator_core.ops.dispatch_emit.land_run import params_from_task_output
+
+    try:
+        params = params_from_task_output(run_path)
+    except (OSError, ValueError):
+        return frozenset()
+    ids: set = set()
+    for home in (params, params.get("run_outcome")):
+        if not isinstance(home, dict):
+            continue
+        for key in ("incomplete_chunks", "landed_chunks"):
+            listed = home.get(key)
+            if isinstance(listed, list):
+                ids.update(str(x) for x in listed)
+    return frozenset(ids)
 
 
 def _only_subset_holds(args, params: dict, repo_root) -> "Optional[str]":
@@ -2031,7 +2133,10 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                     file=sys.stderr,
                 )
                 return EXIT_USAGE
-            params["landed_rows"] = sorted(landed_rows_from_text(run_text))
+            landed_from_run = set(landed_rows_from_text(run_text))
+            if args.plan and not args.inventory:
+                landed_from_run |= _spine_rows_done_per_task_output(args.plan, args.only_incomplete)
+            params["landed_rows"] = sorted(landed_from_run)
         if args.only is not None:
             refusal = _only_subset_holds(args, params, repo_root)
             if refusal:
@@ -2176,6 +2281,7 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                     held = set(hold_set)
                     if hold_set:
                         held.update(transitive_dependents(spine, set(hold_set)))
+                    landed_set -= _spine_rows_done_per_task_output(args.plan, args.only_incomplete)
                     own_rows = frozenset(r.id for r in spine) - landed_set - held
                     incomplete = _incomplete_chunks_of(args.only_incomplete)
                     if incomplete is not None:
@@ -2183,6 +2289,8 @@ def main(argv: "Optional[list[str]]" = None) -> int:
                         own_rows &= incomplete
                 if args.review_only is not None:
                     own_rows = frozenset(params.get("review_only_rows") or ())
+                    if args.review_only:
+                        own_rows |= _task_output_row_ids(args.review_only)
                 regenerable_dirty = guard_against_dirty_write_set(
                     Path(args.plan), guard_root,
                     hold=hold_set, landed=landed_set, own=own_rows, done=done_rows,
@@ -2214,7 +2322,18 @@ def main(argv: "Optional[list[str]]" = None) -> int:
         if params.get("plan_path") and not args.inventory and args.review_only is None:
             params["auto_split"] = True
         try:
-            result = _dispatch_emit(params, repo_root=repo_root)
+            if _whole_set_eligible(params, args):
+                try:
+                    result = _dispatch_emit({**params, "whole_set_probe": True}, repo_root=repo_root)
+                except InventoryTooLargeError:
+                    whole_set = _whole_set_part_count(params, args)
+                    if whole_set is not None:
+                        return _emit_inventory_parts(
+                            params, repo_root, None, args.fire, admission_record, whole_set
+                        )
+                    result = _dispatch_emit(params, repo_root=repo_root)
+            else:
+                result = _dispatch_emit(params, repo_root=repo_root)
         except WidthOverCapError as wide:
             return _emit_sibling_workflows(
                 {k: v for k, v in params.items() if k != "auto_split"},
@@ -2295,6 +2414,14 @@ def main(argv: "Optional[list[str]]" = None) -> int:
             f"emit-dispatch-workflow: held {', '.join(hold['rows'])} ({hold['reason']}); "
             f"dependents also held: {json.dumps(hold['dependents'], sort_keys=True)}; "
             "re-emit with --only-incomplete once the hold clears",
+            file=sys.stderr,
+        )
+
+    stall = (result.get("tranche") or {}).get("stall")
+    if stall:
+        print(
+            f"emit-dispatch-workflow: tranche stalled, every row it would emit is held "
+            f"({stall_summary(stall)}); the chain stops until the hold clears",
             file=sys.stderr,
         )
 

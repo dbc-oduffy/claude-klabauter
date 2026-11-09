@@ -366,3 +366,122 @@ def test_holder_file_is_0600(tmp_path):
     mode = stat.S_IMODE(os.stat(record.entry_path(str(tmp_path), sid, record.HOLDER_SUFFIX)).st_mode)
     if sys.platform != "win32":
         assert mode == 0o600
+
+
+def test_withdraw_pending_records_reason_and_keeps_payload(tmp_path):
+    root = str(tmp_path)
+    sid, _ = _spool(tmp_path, payload=b'{"p":1}')
+    out = record.withdraw(root, sid, "hand-done")
+    assert out == {"spool_id": sid, "state": "withdrawn", "withdrawn": True}
+    assert not os.path.exists(record.entry_path(root, sid))
+    header, payload = record.read_entry(record.entry_path(root, sid, record.WITHDRAWN_SUFFIX))
+    assert header["withdraw_reason"] == "hand-done"
+    assert header["withdrawn_by"] == "em"
+    assert "withdrawn_at" in header
+    assert payload == b'{"p":1}'
+    assert record.list_pending(root) == []
+
+
+def test_withdraw_refuses_claimed_and_minted_by_em(tmp_path):
+    root = str(tmp_path)
+    sid, _ = _spool(tmp_path)
+    record.claim(root, sid)
+    out = record.withdraw(root, sid, "r")
+    assert (out["state"], out["withdrawn"]) == ("claimed", False)
+    assert os.path.exists(record.entry_path(root, sid, record.CLAIMED_SUFFIX))
+    record.mark_minted(root, sid)
+    out = record.withdraw(root, sid, "r")
+    assert (out["state"], out["withdrawn"]) == ("minted", False)
+    assert os.path.exists(record.entry_path(root, sid, record.MINTED_SUFFIX))
+    assert not os.path.exists(record.entry_path(root, sid, record.WITHDRAWN_SUFFIX))
+
+
+def test_withdraw_by_drain_retires_the_claim_and_drops_holder(tmp_path):
+    root = str(tmp_path)
+    sid, _ = _spool(tmp_path)
+    record.claim(root, sid)
+    out = record.withdraw(root, sid, "stale: sizing absent", by="drain")
+    assert out["withdrawn"] is True
+    assert not os.path.exists(record.entry_path(root, sid, record.CLAIMED_SUFFIX))
+    assert not os.path.exists(record.entry_path(root, sid, record.HOLDER_SUFFIX))
+    header, _ = record.read_entry(record.entry_path(root, sid, record.WITHDRAWN_SUFFIX))
+    assert header["withdrawn_by"] == "drain"
+
+
+def test_withdraw_absent_and_reason_validation(tmp_path):
+    root = str(tmp_path)
+    assert record.withdraw(root, "0" * 16, "r") == {
+        "spool_id": "0" * 16, "state": "absent", "withdrawn": False,
+    }
+    sid, _ = _spool(tmp_path)
+    for bad in ("", "   "):
+        with pytest.raises(ValueError):
+            record.withdraw(root, sid, bad)
+    assert os.path.exists(record.entry_path(root, sid))
+    record.withdraw(root, sid, "x" * 900)
+    header, _ = record.read_entry(record.entry_path(root, sid, record.WITHDRAWN_SUFFIX))
+    assert len(header["withdraw_reason"]) == record.WITHDRAW_REASON_MAX
+
+
+def test_withdraw_rejects_unknown_by(tmp_path):
+    sid, _ = _spool(tmp_path)
+    with pytest.raises(ValueError):
+        record.withdraw(str(tmp_path), sid, "r", by="peer")
+    assert os.path.exists(record.entry_path(str(tmp_path), sid))
+
+
+def test_withdraw_header_rewrite_failure_propagates_after_the_rename(tmp_path, monkeypatch):
+    root = str(tmp_path)
+    sid, _ = _spool(tmp_path)
+
+    def boom(src, dst):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(record.os, "replace", boom)
+    with pytest.raises(OSError):
+        record.withdraw(root, sid, "r")
+    assert os.path.exists(record.entry_path(root, sid, record.WITHDRAWN_SUFFIX))
+    assert not os.path.exists(record.entry_path(root, sid))
+    assert [n for n in os.listdir(record.spool_dir(root)) if n.endswith(record.TMP_SUFFIX)] == []
+
+
+def test_respool_of_withdrawn_id_is_noop(tmp_path):
+    root = str(tmp_path)
+    sid, _ = _spool(tmp_path)
+    record.withdraw(root, sid, "r")
+    again, created = _spool(tmp_path)
+    assert (again, created) == (sid, False)
+    assert record.list_pending(root) == []
+
+
+def test_respool_of_legacy_withdrawn_id_is_noop(tmp_path):
+    root = str(tmp_path)
+    sid = record.spool_id_for("s1", "tu1", b"x")
+    os.makedirs(record.spool_dir(root))
+    legacy = record.entry_path(root, sid, record.LEGACY_WITHDRAWN_SUFFIX)
+    with open(legacy, "wb") as fh:
+        fh.write(b"{}\n")
+    assert _spool(tmp_path, payload=b"x") == (sid, False)
+    assert os.path.exists(legacy)
+    assert record.list_pending(root) == []
+
+
+def _payload(args):
+    return {"tool_input": {"args": args}}
+
+
+def test_coalesce_key_sizing_normalises_path():
+    rel = "state/sizings/2026-11/a.yaml"
+    assert record.coalesce_key(_payload({"sizing": rel})) == "sizing:" + rel
+    assert record.coalesce_key(_payload({"sizing": "./state\\sizings\\2026-11\\a.yaml"})) == "sizing:" + rel
+
+
+def test_coalesce_key_run_and_bare_ask():
+    from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_RUN_ID_ARG
+
+    assert record.coalesce_key(_payload({RESUME_RUN_ID_ARG: "run-1"})) == "run:run-1"
+    assert record.coalesce_key(_payload({"sizing": "s.yaml", RESUME_RUN_ID_ARG: "r"})) == "sizing:s.yaml"
+    assert record.coalesce_key(_payload("free text ask")) is None
+    assert record.coalesce_key(_payload({})) is None
+    assert record.coalesce_key({"tool_input": "x"}) is None
+    assert record.coalesce_key({}) is None

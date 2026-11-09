@@ -26,6 +26,7 @@ def load(name):
 pre = load("unimatrix-agy-hook-pretool")
 launch = load("unimatrix-agy-hook-launch")
 CONV = "0cf351a3-6538-4a9b-814c-52b1b75a596c"
+posix_rewrite = pytest.mark.skipif(os.name == "nt", reason="the leg-start rewrite is POSIX only; nt passes through")
 
 
 @pytest.fixture
@@ -54,6 +55,7 @@ def write_leg(home, *, pid, agy_pid, ls, conv=CONV):
         {"pid": pid, "conversation": conv, "endpoint": "x.sock", "ls_address": ls, "agy_pid": agy_pid}))
 
 
+@posix_rewrite
 def test_no_leg_rewrites_with_detached_launch_and_asks(home):
     out = pre.decide(run_payload(), 4242)
     assert out["decision"] == "ask"
@@ -68,11 +70,13 @@ def test_current_leg_leaves_command_alone(home, ls_server):
     assert pre.decide(run_payload(), 4242) == {"decision": "ask"}
 
 
+@posix_rewrite
 def test_stale_leg_by_agy_pid_is_rewritten(home, ls_server):
     write_leg(home, pid=os.getpid(), agy_pid=1111, ls=ls_server)
     assert "overwrite" in pre.decide(run_payload(), 4242)
 
 
+@posix_rewrite
 def test_stale_leg_with_unreachable_ls_is_rewritten(home):
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
@@ -82,6 +86,7 @@ def test_stale_leg_with_unreachable_ls_is_rewritten(home):
     assert "overwrite" in pre.decide(run_payload(), 4242)
 
 
+@posix_rewrite
 def test_dead_leg_pid_is_rewritten(home, ls_server, monkeypatch):
     write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
     monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
@@ -114,6 +119,7 @@ def test_guard_deny_returned_unchanged_without_overwrite(home, monkeypatch):
     assert seen[0][1] == "/engine" and CONV in seen[0][0]
 
 
+@posix_rewrite
 def test_guard_ask_with_reason_and_stale_leg_is_one_ask_with_reason_and_overwrite(home, monkeypatch):
     stub_guard(monkeypatch, {"decision": "ask", "reason": "guard says look"})
     out = pre.decide(run_payload(), 4242)
@@ -132,6 +138,7 @@ def test_guard_down_current_leg_is_bare_ask(home, ls_server):
     assert pre.decide(run_payload(), 4242, str(home / "no-engine")) == {"decision": "ask"}
 
 
+@posix_rewrite
 def test_guard_down_stale_leg_asks_with_overwrite(home):
     out = pre.decide(run_payload(), 4242, str(home / "no-engine"))
     assert out["decision"] == "ask" and "overwrite" in out
@@ -206,6 +213,7 @@ def test_engine_root_argument_reaches_the_guard(home, monkeypatch, capsys):
     assert seen[0][1] == "/eng" and json.loads(capsys.readouterr().out)["decision"] == "ask"
 
 
+@posix_rewrite
 def test_entry_point_with_missing_engine_root_still_asks(home):
     r = subprocess.run([sys.executable, str(PRETOOL), "--engine-root", str(home / "none")],
                        input=json.dumps(run_payload()), capture_output=True, text=True,
@@ -225,6 +233,7 @@ def test_entry_point_always_emits_one_decision_and_exits_zero(home, stdin):
     assert json.loads(r.stdout)["decision"] == "ask"
 
 
+@posix_rewrite
 def test_entry_point_rewrites_a_real_run_command(home):
     r = hook(json.dumps(run_payload()), home)
     assert r.returncode == 0
@@ -238,10 +247,79 @@ def test_internal_exception_still_emits_decision(home, monkeypatch, capsys):
     assert json.loads(capsys.readouterr().out)["decision"] == "ask"
 
 
-def test_windows_prefix_uses_start_and_cmd_separator(monkeypatch):
+def test_windows_adds_no_cmd_prefix_and_passes_command_through(home, monkeypatch):
     monkeypatch.setattr(pre.os, "name", "nt")
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: None)
+    assert pre.launch_prefix(CONV, 7) is None
+    stub_guard(monkeypatch, {"decision": "ask"})
+    assert pre.decide(run_payload(cmd="Get-ChildItem | Select-Object -First 1"), 4242) == {"decision": "ask"}
+
+
+def test_windows_spawns_launcher_detached_when_leg_not_current(home, monkeypatch):
+    monkeypatch.setattr(pre.os, "name", "nt")
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    calls = []
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append((cmd, kw)))
+    stub_guard(monkeypatch, {"decision": "ask"})
+    payload = run_payload(cmd="Get-ChildItem | Select-Object -First 1")
+    assert pre.decide(payload, 4242) == {"decision": "ask"}
+    assert payload["toolCall"]["args"]["CommandLine"] == "Get-ChildItem | Select-Object -First 1"
+    (cmd, kw), = calls
+    assert cmd == [sys.executable, str(pre.LAUNCH), "--conversation", CONV, "--agy-pid", "4242"]
+    assert kw["stdout"] is subprocess.DEVNULL and kw["stdin"] is subprocess.DEVNULL
+    detached = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    assert kw["creationflags"] & detached == detached
+
+
+def test_windows_second_run_command_within_debounce_window_spawns_nothing(home, monkeypatch):
+    monkeypatch.setattr(pre.os, "name", "nt")
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: False)
+    calls = []
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
+    stub_guard(monkeypatch, {"decision": "ask"})
+    pre.decide(run_payload(), 4242)
+    pre.decide(run_payload(cmd="dir"), 4242)
+    assert len(calls) == 1
+    stamp = home / "unimatrix" / "agy-legs" / f"{CONV}.spawned"
+    old = stamp.stat().st_mtime - pre.SPAWN_DEBOUNCE_S - 1
+    os.utime(stamp, (old, old))
+    pre.decide(run_payload(cmd="dir"), 4242)
+    assert len(calls) == 2
+
+
+def test_windows_does_not_spawn_when_leg_current(home, ls_server, monkeypatch):
+    monkeypatch.setattr(pre.os, "name", "nt")
+    write_leg(home, pid=os.getpid(), agy_pid=4242, ls=ls_server)
+    monkeypatch.setattr(pre, "pid_alive", lambda pid: True)
+    calls = []
+    monkeypatch.setattr(pre.subprocess, "Popen", lambda cmd, **kw: calls.append(cmd))
+    stub_guard(monkeypatch, {"decision": "ask"})
+    assert pre.decide(run_payload(), 4242) == {"decision": "ask"}
+    assert calls == []
+
+
+def test_posix_prefix_still_rewrites(monkeypatch):
+    monkeypatch.setattr(pre.os, "name", "posix")
     start, sep = pre.launch_prefix(CONV, 7)
-    assert start.startswith('start "" /B ') and sep == " & " and ">nul" in start
+    assert start.startswith("(nohup ") and sep == "; "
+
+
+@pytest.mark.parametrize("tmpl,expected", [
+    ('"{PY}" "{SEND}" --to a "Reviewed: two issues (a), (b); 100% done"', False),
+    ('"{PY}" "{SEND}" --to a "Reviewed: two issues (a), (b); done"', True),
+    ("{PY} {SEND} --to a 'x (y) ; z'", True),
+    ("{PY} {SEND} --to a hi; id", False),
+    ("{PY} {SEND} --to a (id)", False),
+    ("{PY} {SEND} --to a hi | cat", False),
+    ("{PY} {SEND} --to a 'unterminated", False),
+    ("{PY} /elsewhere/unimatrix-send.py --to a hi", False),
+    ("{PY} {SEND}", True),
+])
+def test_windows_peer_reply_is_quote_aware(monkeypatch, tmpl, expected):
+    monkeypatch.setattr(pre.os, "name", "nt")
+    cmd = tmpl.format(PY=PY, SEND=SEND)
+    assert pre.is_peer_reply(run_payload(cmd=cmd)) is expected
 
 
 def test_scripts_hardcode_no_home_path():
@@ -271,7 +349,10 @@ def test_launcher_starts_leg_detached_and_writes_record(home, agy_env, monkeypat
     assert launch.main(["--conversation", CONV, "--agy-pid", "99"]) == 0
     cmd, kw = calls[0]
     assert cmd[1] == str(BIN / "unimatrix-agy-leg.py")
-    assert kw["start_new_session"] is True
+    if os.name == "nt":
+        assert kw["creationflags"] & getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        assert kw["start_new_session"] is True
     assert kw["env"]["ANTIGRAVITY_CONVERSATION_ID"] == CONV
     rec = json.loads(record_path(home).read_text())
     assert (rec["pid"], rec["agy_pid"], rec["ls_address"], rec["conversation"]) == (31337, 99, "localhost:5555", CONV)
@@ -362,7 +443,10 @@ def _lsof(monkeypatch, stdout=None, exc=None):
 
 
 def test_discover_ls_address_parses_loopback_listeners(monkeypatch):
-    _lsof(monkeypatch, "p42\nf10\nn127.0.0.1:50321\nf11\nn127.0.0.1:50100\nf12\nn*:8080\nf13\nn[::1]:9\n")
+    if os.name == "nt":
+        monkeypatch.setattr(launch, "nt_loopback_listener_ports", lambda pid: [50321, 50100])
+    else:
+        _lsof(monkeypatch, "p42\nf10\nn127.0.0.1:50321\nf11\nn127.0.0.1:50100\nf12\nn*:8080\nf13\nn[::1]:9\n")
     assert launch.discover_ls_address(42) == "127.0.0.1:50100"
 
 
@@ -441,9 +525,20 @@ def test_sessionstart_with_only_conversation_id_registers_a_pending_leg(home, mo
     monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: FakeProc())
     monkeypatch.setattr(subprocess, "run", lambda cmd, **kw: subprocess.CompletedProcess(
         cmd, 0, stdout="p1\nn127.0.0.1:6001\n", stderr=""))
-    out = sess.reply(sess.register({"conversationId": CONV}, 1))
+    listener = None
+    agy_pid, port = 1, 6001
+    if os.name == "nt":  # the Windows leg reads the pid's real listener table
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        agy_pid, port = os.getpid(), listener.getsockname()[1]
+    try:
+        out = sess.reply(sess.register({"conversationId": CONV}, agy_pid))
+    finally:
+        if listener:
+            listener.close()
     rec = json.loads(record_path(home).read_text())
-    assert (rec["mode"], rec["pid"], rec["ls_address"]) == ("pending", 31337, "127.0.0.1:6001")
+    assert (rec["mode"], rec["pid"], rec["ls_address"]) == ("pending", 31337, f"127.0.0.1:{port}")
     assert out["injectSteps"][0]["systemMessage"] == {"systemMessage": sess.NOTE}
 
 

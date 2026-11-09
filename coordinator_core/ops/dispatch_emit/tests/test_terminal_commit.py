@@ -9,6 +9,7 @@ real commit_v2 call).
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -642,9 +643,19 @@ def _forty_path_request(repo, gated: bool):
 
     _subprocess.Popen.__init__ = _counting_init
     try:
-        start = time.process_time()
+        # The op runs on this thread: thread_time excludes the CPU other tests' threads burn in
+        # the same process, which process_time sums. Reaped git children are added from os.times,
+        # which reports zero children on Windows: there the 200ms bar covers the op's thread only
+        # and the spawn-count pins carry the child cost.
+        child0 = os.times()
+        start = time.thread_time()
         out = _call(repo, {"script_path": script, "incomplete_chunks": []})
-        elapsed_ms = (time.process_time() - start) * 1000
+        child1 = os.times()
+        elapsed_ms = (
+            (time.thread_time() - start)
+            + (child1.children_user - child0.children_user)
+            + (child1.children_system - child0.children_system)
+        ) * 1000
     finally:
         _subprocess.Popen.__init__ = real_init
 

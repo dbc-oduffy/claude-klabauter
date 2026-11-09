@@ -119,6 +119,7 @@ from coordinator_core.git.git_objects import (
     _parse_pack_index,
     _read_loose_object,
     _read_object,
+    read_object_header,
     _read_pack_bytes,
     _read_pack_object_at,
     _read_pack_object_by_sha,
@@ -615,7 +616,7 @@ def _resolve_revision_raw(dirs: _GitDirs, value: str) -> Optional[str]:
         # type filter: a full sha naming a tree/blob/tag is still a real
         # object in the store, so it is trusted here exactly as it always
         # was — only a sha naming nothing at all now falls through.
-        if _read_object(dirs.common_dir, value.lower()) is not None:
+        if read_object_header(dirs.common_dir, value.lower()) is not None:
             return value.lower()
     if _HEX_ABBREV_RE.fullmatch(value):
         found = _find_object_by_prefix(dirs.common_dir, value.lower())
@@ -1247,7 +1248,7 @@ def _dispatch_git_readmodel(sub: str, rest: list[str], dirs: _GitDirs, root: Pat
     if sub == "cat-file":
         if len(rest) == 2 and rest[0] == "-e":
             sha = _resolve_revision(dirs, rest[1])
-            exists = sha is not None and _read_object(dirs.common_dir, sha) is not None
+            exists = sha is not None and read_object_header(dirs.common_dir, sha) is not None
             return "" if exists else None
         raise _GitReadModelError(f"unsupported cat-file args: {rest!r}")
 

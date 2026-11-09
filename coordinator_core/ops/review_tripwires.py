@@ -25,6 +25,7 @@ trailing component-suffix of it, and `lit` is not a bare generic basename
 from __future__ import annotations
 
 import fnmatch
+import functools
 import os
 import re
 import tomllib
@@ -70,30 +71,71 @@ def _literal_around(data: bytes, hit: int, width: int) -> str | None:
     return data[open_at + 1 : close_at].decode("utf-8", "replace")
 
 
+_SEPARATORS = b"\"'\\/\n"
+_SEP_TABLE = bytes.maketrans(_SEPARATORS, b"/" * len(_SEPARATORS))
+
+
+class _Bases(Dict[bytes, List[Tuple[str, str]]]):
+    """`basename -> [(orig, normalised)]` plus, when every basename is separator-free, the
+    probe `_names` uses to visit only the quote-closed occurrences of the basenames."""
+
+    needles: Tuple[Tuple[bytes, int], ...] = ()
+    max_len = 0
+
+    def arm(self) -> "_Bases":
+        """Needles are each basename's own extension plus a quote, so a named `.md` or `.json`
+        beside the `.py` files does not disable the probe."""
+        keys = list(self)
+        if not keys or any(not k or b"." not in k or any(c in k for c in _SEPARATORS) for k in keys):
+            return self
+        exts = sorted({k[k.rfind(b".") :] for k in keys})
+        self.needles = tuple((e + q, len(e)) for e in exts for q in _QUOTES)
+        self.max_len = max(len(k) for k in keys)
+        return self
+
+
 def _names(data: bytes, by_base: Dict[bytes, List[Tuple[str, str]]]) -> List[str]:
+    """A match needs a literal whose final component is the basename, so the only
+    occurrences that can match are those closed by a quote right after the basename."""
+    needles = getattr(by_base, "needles", ())
+    if needles:
+        window = by_base.max_len + 1
+        spots = []
+        for needle, sl in needles:
+            at = data.find(needle)
+            while at >= 0:
+                end = at + sl
+                token = data[max(0, end - window) : end].translate(_SEP_TABLE).rpartition(b"/")[2]
+                if token in by_base:
+                    spots.append((end - len(token), token))
+                at = data.find(needle, at + 1)
+    else:
+        spots = []
+        for base in by_base:
+            at = data.find(base)
+            while at >= 0:
+                spots.append((at, base))
+                at = data.find(base, at + 1)
     hits = set()
-    for base, paths in by_base.items():
-        at = data.find(base)
-        while at >= 0:
-            raw = _literal_around(data, at, len(base))
-            if raw is not None:
-                lit = _norm(raw)
-                if lit and not ("/" not in lit and lit in _GENERIC_BASENAMES):
-                    for orig, p in paths:
-                        if p == lit or p.endswith("/" + lit):
-                            hits.add(orig)
-            at = data.find(base, at + 1)
+    for at, base in spots:
+        raw = _literal_around(data, at, len(base))
+        if raw is not None:
+            lit = _norm(raw)
+            if lit and not ("/" not in lit and lit in _GENERIC_BASENAMES):
+                for orig, p in by_base[base]:
+                    if p == lit or p.endswith("/" + lit):
+                        hits.add(orig)
     return sorted(hits)
 
 
 def _by_basename(named: Sequence[str]) -> Dict[bytes, List[Tuple[str, str]]]:
-    by_base: Dict[bytes, List[Tuple[str, str]]] = {}
+    by_base = _Bases()
     for orig in named:
         if not orig:
             continue
         p = _norm(orig)
         by_base.setdefault(p.rsplit("/", 1)[-1].encode("utf-8"), []).append((orig, p))
-    return by_base
+    return by_base.arm()
 
 
 def names_in(data: bytes, named: Sequence[str]) -> List[str]:
@@ -160,18 +202,22 @@ def _tracked_test_bytes(repo_root: Path, exclude: Collection[str]):
     except (git_state.IndexParseError, OSError, ValueError) as exc:
         raise TripwireScanUnavailable(str(exc)) from exc
     roots = _walk_roots(testpaths)
+    dir_ok: Dict[str, bool] = {}
+
+    def dir_admitted(parent: str) -> bool:
+        ok = dir_ok.get(parent)
+        if ok is None:
+            ok = dir_ok[parent] = any(not r or parent == r or parent.startswith(r + "/") for r in roots) and not any(
+                d.startswith(".")
+                or d in _ALWAYS_SKIPPED_DIRS
+                or any(fnmatch.fnmatch(d, pat) for pat in norecurse)
+                for d in (parent.split("/") if parent else ())
+            )
+        return ok
+
     for rel in sorted(tracked):
-        parts = rel.split("/")
-        if not _is_test_name(parts[-1]) or rel in skip:
-            continue
-        if not any(not r or rel.startswith(r + "/") for r in roots):
-            continue
-        if any(
-            d.startswith(".")
-            or d in _ALWAYS_SKIPPED_DIRS
-            or any(fnmatch.fnmatch(d, pat) for pat in norecurse)
-            for d in parts[:-1]
-        ):
+        parent, _, name = rel.rpartition("/")
+        if not _is_test_name(name) or rel in skip or not dir_admitted(parent):
             continue
         data = _read(f"{root}/{rel}", flags)
         if data is not None:
@@ -202,12 +248,28 @@ _WALK_PRIMITIVES = (b"rglob(", b"os.walk(", b".glob(", b"iterdir(", b"ls-files")
 _LITERAL_RE = re.compile(rb"""(["'])([^"'\n]{1,%d})\1""" % _MAX_LITERAL)
 
 
+@functools.lru_cache(maxsize=8)
+def _walk_probe(created: Tuple[str, ...]):
+    """One regex per own directory of `created`, matching that directory's components
+    joined by separators anywhere in a module; a literal equal to the directory always
+    matches it, so a module matching none holds no such literal. None: not probe-able."""
+    dirs = {_norm(c).rpartition("/")[0] for c in created if c} - {"", "."}
+    if not dirs or not all(d.isascii() for d in dirs):
+        return None
+    return tuple(
+        re.compile(rb"[\\/]+".join(re.escape(part.encode()) for part in d.split("/"))) for d in sorted(dirs)
+    )
+
+
 def walked_created(data: bytes, created: Sequence[str]) -> List[str]:
     """The `created` paths a test module's bytes walk: the bytes hold a walk primitive
     (`rglob(`, `os.walk(`, `.glob(`, `iterdir(`, `ls-files`) and a quoted literal that,
     normalised, equals the path's own directory. Shallower ancestors never count: a
     repo-root literal such as the package name would select nearly every walker.
     "", "." never count."""
+    probe = _walk_probe(tuple(created))
+    if probe is not None and not any(rx.search(data) for rx in probe):
+        return []
     if not any(w in data for w in _WALK_PRIMITIVES):
         return []
     lits = {
@@ -225,3 +287,18 @@ def tree_scanners(
     if not paths:
         return []
     return sorted(rel for rel, data in _tracked_test_bytes(repo_root, exclude) if walked_created(data, paths))
+
+
+def scan_tracked(
+    repo_root: Path, named: Sequence[str], created: Sequence[str], *, exclude: Collection[str] = ()
+) -> List[str]:
+    """Sorted union of `literal_namers(named)` and `tree_scanners(created)` from ONE read
+    of each candidate module. Same candidate set and failure mode as either alone."""
+    by_base = _by_basename(named)
+    paths = [c for c in created if c]
+    found = set()
+    if by_base or paths:
+        for rel, data in _tracked_test_bytes(repo_root, exclude):
+            if (by_base and _names(data, by_base)) or (paths and walked_created(data, paths)):
+                found.add(rel)
+    return sorted(found)

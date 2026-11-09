@@ -109,8 +109,37 @@ def test_held_spine_writes_are_subtracted_even_when_the_marker_lacks_the_chunk(r
     assert "a.py" in _committed(repo)
 
 
-def test_a_path_declared_by_held_and_landed_chunks_refuses(repo):
+def test_a_held_spine_only_chunk_sharing_a_landed_path_still_refuses(repo):
+    (repo / "docs").mkdir()
+    (repo / "docs" / "plan.md").write_text(
+        "---\ntitle: p\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: H1\n  title: held\n  change_kind: code-edit\n  surface: a.py\n"
+        "  writes:\n    - a.py\n  disposition: open\n  deferred: false\n```\n",
+        encoding="utf-8", newline="\n",
+    )
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t1", paths=("a.py",)),), plan_path="docs/plan.md",
+    )
+    out = _run(repo, request, held=[{"chunk": "H1", "reason": "halted"}], plan_path="docs/plan.md")
+    assert out["refused"] == "held-landed-overlap", out
+
+
+def _with_c2_report(repo: Path, request: CommitRequest) -> CommitRequest:
+    (repo / "c2-report.md").write_text("DONE: C2\n", encoding="utf-8")
+    c1, c2 = request.chunks
+    return CommitRequest(chunks=(c1, ChunkCommit(id=c2.id, title=c2.title, paths=c2.paths, report="c2-report.md")))
+
+
+def test_a_held_chunk_without_a_result_does_not_refuse_on_shared_paths(repo):
     request = _two_chunks(repo, second_paths=("b.py", "a.py"))
+    out = _run(repo, request, held=[{"chunk": "C2", "reason": "never started"}])
+    assert out["committed"] is True, out
+    assert _committed(repo) == ["a.py"]
+
+
+def test_a_path_declared_by_held_and_landed_chunks_refuses(repo):
+    request = _with_c2_report(repo, _two_chunks(repo, second_paths=("b.py", "a.py")))
     head = _git(["rev-parse", "HEAD"], repo)
     out = _run(repo, request, held=[{"chunk": "C2", "reason": "halted"}])
     assert out["committed"] is False
@@ -123,7 +152,7 @@ def test_a_path_declared_by_held_and_landed_chunks_refuses(repo):
 def test_the_overlap_refusal_prints_a_release_param_that_lands(repo):
     import re
 
-    request = _two_chunks(repo, second_paths=("b.py", "a.py"))
+    request = _with_c2_report(repo, _two_chunks(repo, second_paths=("b.py", "a.py")))
     held = [{"chunk": "C2", "reason": "halted"}]
     refused = _run(repo, request, held=held)
     assert refused["refused"] == "held-landed-overlap"

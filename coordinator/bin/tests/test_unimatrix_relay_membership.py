@@ -26,6 +26,7 @@ def load(name):
 
 R = load("unimatrix-relay")
 M = load("unimatrix-membership")
+FR = load("unimatrix-file-relay")
 
 
 def keygen(path):
@@ -46,7 +47,7 @@ def env(tmp_path):
         events.append(ev)
         return M.notify(h, ev, desktop=lambda *a, **kw: False)
 
-    return {"keys": {n: keygen(k / n) for n in ("signer", "other", "a", "b")}, "home": home, "ak": ak,
+    return {"keys": {n: keygen(k / n) for n in ("signer", "other", "a", "b", "afile")}, "home": home, "ak": ak,
             "events": events, "notifier": notifier}
 
 
@@ -84,7 +85,7 @@ def test_put_adopts_rewrites_only_managed_lines_with_from_pins_and_notifies(env)
     pin(env)
     foreign = "ssh-ed25519 AAAAFOREIGNKEYBODYxxxxxxxx me@laptop\n"
     comment = "# keep me\n"
-    stale = R.relay_line(body(env, "a")).replace("restrict,", "restrict,port-forwarding,") + "\n"
+    stale = R.relay_line(body(env, "a"), "alpha").replace("restrict,", "restrict,port-forwarding,") + "\n"
     env["ak"].write_text(comment + foreign + stale, encoding="utf-8")
     snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
     reply = push(env, snap, sig)
@@ -94,7 +95,8 @@ def test_put_adopts_rewrites_only_managed_lines_with_from_pins_and_notifies(env)
     assert lines[0] == "# keep me" and lines[1] == foreign.strip()
     assert "port-forwarding" not in text
     managed = [l for l in lines if R.managed_key_body(l)]
-    assert managed == ['from="192.168.1.0/24",' + R.relay_line(body(env, "a"))]
+    assert managed == ['from="192.168.1.0/24",' + R.relay_line(body(env, "a"), "alpha")]
+    assert managed[0].count(" --peer alpha\"") == 1
     assert [e["kind"] for e in env["events"]] == ["join"]
     assert (env["home"] / "unimatrix" / "membership" / "events.log").read_text().count("join") == 1
 
@@ -118,7 +120,7 @@ def test_put_is_idempotent_and_revoke_removes_the_line(env):
 
 def test_genesis_keeps_an_unlisted_relay_line_and_reports_it_unenrolled(env):
     pin(env)
-    hand = R.relay_line(body(env, "other")) + "\n"
+    hand = R.relay_line(body(env, "other"), "gamma") + "\n"
     env["ak"].write_text(hand, encoding="utf-8")
     snap, sig = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
     reply = push(env, snap, sig)
@@ -131,7 +133,7 @@ def test_genesis_keeps_an_unlisted_relay_line_and_reports_it_unenrolled(env):
 
 def test_later_adoption_still_keeps_the_unlisted_line_and_revoking_a_listed_key_drops_only_it(env):
     pin(env)
-    hand = R.relay_line(body(env, "other")) + "\n"
+    hand = R.relay_line(body(env, "other"), "gamma") + "\n"
     env["ak"].write_text(hand, encoding="utf-8")
     s1, g1 = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
     s2, g2 = sign(env, s1, {"op": "join", "member": member(env, "b", "beta")})
@@ -244,3 +246,41 @@ def test_main_get_and_put_through_ssh_original_command(env, monkeypatch, capsys)
     with pytest.raises(SystemExit) as ex:
         R.main()
     assert ex.value.code == 1
+
+
+def test_a_member_with_a_file_key_gets_a_separate_file_leg_line_and_revoke_removes_both(env):
+    pin(env)
+    m = {**member(env, "a", "alpha"), "file_pub": env["keys"]["afile"][1]}
+    s1, g1 = sign(env, None, {"op": "join", "member": m})
+    assert push(env, s1, g1)["authorized_keys"] == "updated"
+    lines = env["ak"].read_text(encoding="utf-8").splitlines()
+    assert lines == ['from="192.168.1.0/24",' + R.relay_line(body(env, "a"), "alpha"),
+                     'from="192.168.1.0/24",' + FR.file_line(body(env, "afile"), "alpha")]
+    assert "unimatrix-file-relay.py" in lines[1] and "unimatrix-file-relay.py" not in lines[0]
+    before = env["ak"].read_bytes()
+    assert R.reconcile_authorized_keys(M.verified_members(env["home"]), env["ak"], M, lambda: False) == "unchanged"
+    assert env["ak"].read_bytes() == before
+    s2, g2 = sign(env, s1, {"op": "revoke", "box": "alpha"})
+    push(env, s2, g2)
+    assert env["ak"].read_text(encoding="utf-8") == ""
+
+
+def test_a_member_without_a_file_key_gets_only_the_relay_line_so_messaging_is_unaffected(env):
+    pin(env)
+    s1, g1 = sign(env, None, {"op": "join", "member": member(env, "a", "alpha")})
+    push(env, s1, g1)
+    lines = env["ak"].read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and "unimatrix-file-relay.py" not in lines[0]
+    assert R.parse_mode("send 12") == ("send", 12) and R.parse_mode("put set1") is None
+
+
+def test_dropping_file_pub_from_a_member_revokes_the_file_line_only(env):
+    pin(env)
+    m = {**member(env, "a", "alpha"), "file_pub": env["keys"]["afile"][1]}
+    s1, g1 = sign(env, None, {"op": "join", "member": m})
+    push(env, s1, g1)
+    s2, g2 = sign(env, s1, {"op": "revoke", "box": "alpha"})
+    s3, g3 = sign(env, s2, {"op": "join", "member": member(env, "a", "alpha")})
+    push(env, s3, g3)
+    text = env["ak"].read_text(encoding="utf-8")
+    assert body(env, "a") in text and body(env, "afile") not in text

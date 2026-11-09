@@ -142,13 +142,17 @@ def test_a_withheld_peer_claimed_path_no_longer_refuses(repo):
     assert "b.py" not in _committed(repo)
 
 
-def test_all_withheld_lands_only_the_record_dir(repo):
+def test_all_withheld_never_commits_the_run_state_record(repo):
+    # state/warp/ is local run state, never committed (adae3a1632): with every chunk path
+    # withheld, the withhold record itself is excluded and nothing lands.
     (repo / "b.py").write_text("b\n", encoding="utf-8")
     request = CommitRequest(chunks=(ChunkCommit(id="C2", title="t2", paths=("b.py",)),))
     _withhold(repo, RUN, [("b.py", "peer run hunks")])
+    head = _git(["rev-parse", "HEAD"], repo)
     out = _run(repo, request)
-    assert out["committed"] is True, out
-    assert _committed(repo) == [f"state/warp/{RUN}/withhold.jsonl"]
+    assert out["committed"] is False and out["nothing_to_commit"] is True, out
+    assert f"state/warp/{RUN}/withhold.jsonl" in out["run_artifacts"]["ignored_excluded"], out
+    assert _git(["rev-parse", "HEAD"], repo) == head
     assert "?? b.py" in _status(repo)
     assert list(out["withheld_chunks"]) == ["C2"]
 

@@ -339,10 +339,10 @@ def test_native_communicate_receives_only_budget_left_after_admission(tmp_path, 
 
 def test_mac_provider_helper_reinsertion_cannot_impersonate_parent(tmp_path, monkeypatch):
     capture = fake_cli(tmp_path, monkeypatch)
-    original = agents._build_env
+    original = agents._unattended_env
     def reinsert(*a, **kw):
         return {**original(*a, **kw), **{key: "parent-identity" for key in agents._OWN_IDENTITY_ENV}}
-    monkeypatch.setattr(agents, "_build_env", reinsert)
+    monkeypatch.setattr(agents, "_unattended_env", reinsert)
     monkeypatch.setenv(agents.FIRE_TOKEN_ENV, "existing-fire-token")
     agents.run_agent("x", {"label": "execute"}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", parent_session_id="real-parent")
     env = json.loads(capture.read_text())["env"]

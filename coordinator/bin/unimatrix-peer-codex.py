@@ -122,10 +122,40 @@ def codex_binary():
     return found
 
 
-def rollout_path(thread_id):
-    """Newest rollout jsonl of the thread under codex_home()/sessions, or None before it exists."""
-    found = sorted((codex_home() / "sessions").glob(f"**/rollout-*{thread_id}.jsonl"))
+def rollout_path(thread_id, home=None):
+    """Newest rollout jsonl of the thread under (home or codex_home())/sessions, or None before it exists."""
+    found = sorted((Path(home) if home else codex_home()).joinpath("sessions").glob(f"**/rollout-*{thread_id}.jsonl"))
     return found[-1] if found else None
+
+
+def rollout_index(home=None):
+    """thread id -> newest rollout jsonl, from one walk of (home or codex_home())/sessions.
+
+    A rollout is named rollout-<timestamp>-<36-char thread id>.jsonl.
+    """
+    out = {}
+    for path in sorted((Path(home) if home else codex_home()).joinpath("sessions").glob("**/rollout-*.jsonl")):
+        out[path.stem[-36:]] = path
+    return out
+
+
+def thread_addressable(thread_id, home=None, index=None):
+    """True when the thread has a rollout whose first session_meta does not mark it a sub-agent.
+
+    Reads only the first rollout line. `index` is a rollout_index() result, so a caller
+    checking many threads walks the sessions tree once.
+    """
+    path = index.get(thread_id) if index is not None else rollout_path(thread_id, home)
+    if path is None:
+        return False
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            row = json.loads(fh.readline())
+    except (OSError, ValueError):
+        return False
+    payload = row.get("payload") if isinstance(row, dict) and row.get("type") == "session_meta" else None
+    source = payload.get("source") if isinstance(payload, dict) else None
+    return not (source == "subagent" or (isinstance(source, dict) and "subagent" in source))
 
 
 def rollout_rows(path):

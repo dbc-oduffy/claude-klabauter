@@ -130,6 +130,30 @@ def _diff_sections(diff_text: str) -> List[tuple]:
     return [(_covered_paths_from_diff(s), s) for s in _DIFF_SECTION.split(diff_text) if s.startswith("diff --git ")]
 
 
+def _measure_sections(sections: List[tuple]) -> tuple:
+    """`(loc, surfaces, files)` of a frozen diff's sections: the rows `diff --numstat` would give for the
+    same diff (added plus deleted hunk lines per file, 0 for a binary or mode-only file), through the same
+    `_count_measured_row` filters. No git: it reads text the caller already holds."""
+    from coordinator_core.ops.review_freeze_diff import _c_unquote, _parse_diff_git_header
+
+    loc, surfaces, files = 0, set(), set()
+    for _covered, text in sections:
+        lines = text.split("\n")
+        a_path, b_path = _parse_diff_git_header(lines[0][len("diff --git "):])
+        path, in_hunk, changed = b_path or a_path, False, 0
+        for line in lines[1:]:
+            if in_hunk:
+                if line[:1] in ("+", "-"):
+                    changed += 1
+            elif line.startswith("@@"):
+                in_hunk = True
+            elif line.startswith("rename to "):
+                path = _c_unquote(line[len("rename to "):])
+        if path:
+            loc += _count_measured_row(path, changed, surfaces, files)
+    return loc, surfaces, files
+
+
 def _write_slice(repo_root: Path, slice_id: str, text: str, sha_content: str) -> dict:
     """Write a slice's diff and head.sha pair from text already held (no git), with `freeze_diff`'s
     collision rule: a differing occupant is shelved for a run-keyed prep id, an error otherwise."""
@@ -278,7 +302,29 @@ def _partition(
     by_base: Dict[str, List[str]] = {}
     for p in paths:
         by_base.setdefault(_effective_base(p, base, bases), []).append(p)
+    held: dict = {}
+
+    def load_whole() -> Optional[dict]:
+        """The caller's frozen whole diff as sections plus its head sha, loaded once; the refusal when
+        the freeze failed."""
+        if "sections" not in held:
+            whole = whole_diff(out)
+            if whole.get("error"):
+                return whole
+            whole_path = Path(whole["diff_path"])
+            held["sections"] = _diff_sections(whole_path.read_bytes().decode("utf-8"))
+            try:
+                held["sha"] = whole_path.with_name(whole_path.name[: -len(".diff")] + ".head.sha").read_text(
+                    encoding="utf-8").strip()
+            except OSError:
+                held["sha"] = head or ""
+        return None
+
     loc, surfaces, files = 0, set(), set()
+    if not head and whole_diff is not None and load_whole() is None:
+        # Worktree basis: the whole diff is already frozen, so its sections are the measure; no numstat spawn per base.
+        loc, surfaces, files = _measure_sections(held["sections"])
+        by_base = {}
     for b, group_declared in by_base.items():
         if head:
             try:
@@ -327,22 +373,13 @@ def _partition(
         fallback_paths=sorted(fb_files),
     )
     n = 0
-    held: dict = {}
 
     def freeze(rev: str, slice_id: str, group: List[str], *, worktree: bool, ranged: bool = False) -> dict:
         if whole_diff is None:
             return freeze_diff(repo_root, rev, slice_id, group, worktree=worktree)
-        if "sections" not in held:
-            whole = whole_diff(out)
-            if whole.get("error"):
-                return {"error": whole["error"], "whole_error": True}
-            whole_path = Path(whole["diff_path"])
-            held["sections"] = _diff_sections(whole_path.read_bytes().decode("utf-8"))
-            try:
-                held["sha"] = whole_path.with_name(whole_path.name[: -len(".diff")] + ".head.sha").read_text(
-                    encoding="utf-8").strip()
-            except OSError:
-                held["sha"] = head or ""
+        refused = load_whole()
+        if refused is not None:
+            return {"error": refused["error"], "whole_error": True}
         wanted = set(group)
         text = "".join(s for covered, s in held["sections"] if covered & wanted)
         sha = held["sha"] if ranged else f"{rev} worktree"

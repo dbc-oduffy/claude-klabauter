@@ -889,12 +889,25 @@ def _blob_fetch_local(root: Path, specs: list) -> Optional[dict]:
     return data
 
 
+def _one_read_wall(root: Path, token: str, fn):
+    """`fn()` under ONE object-read wall: the reads nested in it run inline on one worker, where each
+    outermost read would otherwise start a thread of its own. The wall covers the whole body, so keep
+    bodies to one record's reads; a stall raises `PackReadDeadline` to the caller (`_blob_fetch` suppresses it
+    and falls back to a git spawn)."""
+    import threading
+
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import _under_read_wall
+
+    return _under_read_wall("object-read", resolve_git_common_dir(root), f"{token}:{threading.get_ident()}", fn)
+
+
 def _blob_fetch(root: Path, specs: list) -> Optional[dict]:
     from coordinator_core.git.run import run_git
 
     specs = list(dict.fromkeys(specs))
     with contextlib.suppress(Exception):  # unresolvable here: git reads the batch
-        local = _blob_fetch_local(root, specs)
+        local = _one_read_wall(root, "blobs", lambda: _blob_fetch_local(root, specs))
         if local is not None:
             return local
     proc = run_git(["cat-file", "--batch"], cwd=str(root), input="".join(s + "\n" for s in specs).encode())
@@ -1099,6 +1112,7 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
         return set()
     released: set = set()
     pending: dict = {}
+    differing: list = []
     for p in paths:
         head, keep = blobs[f"HEAD:{p}"], blobs[kept[p]]
         if head is None or keep is None:
@@ -1106,13 +1120,17 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
         if head == keep or kept_work.checkin_form(root, p, keep) == head:
             released.add(p)
         elif base_sha:
-            # The run-base blob is read only for a path whose kept bytes differ from HEAD.
-            from coordinator_core.ops.dispatch_emit import landing_halted_view
+            differing.append(p)
+    if differing:
+        # The run-base blobs are read only for paths whose kept bytes differ from HEAD, in one read.
+        from coordinator_core.ops.dispatch_emit import landing_halted_view
 
-            spec = f"{base_sha}:{p}"
-            base = landing_halted_view.shared("base_blob", (str(root), spec), lambda: _blob_fetch(root, [spec]))
+        specs = [f"{base_sha}:{p}" for p in differing]
+        base = landing_halted_view.shared("base_blob", (str(root), tuple(specs)), lambda: _blob_fetch(root, specs))
+        for p, spec in zip(differing, specs):
             if base is None:
-                continue
+                break
+            head, keep = blobs[f"HEAD:{p}"], blobs[kept[p]]
             base_text = (base[spec] or b"").decode("utf-8", "replace")
             if _hunks_present(base_text, keep.decode("utf-8", "replace"), head.decode("utf-8", "replace")):
                 released.add(p)
@@ -1143,26 +1161,83 @@ def _history_blobs(root: Path, base_sha: str, paths: list) -> dict:
     if not head:
         raise ValueError("no head")
     found: dict = {p: [] for p in paths}
-    queue, seen = [head], {head, base_sha}
-    walked = 0
-    while queue:
-        sha = queue.pop(0)
-        walked += 1
-        if walked > _HISTORY_COMMITS:
-            raise ValueError("span too long")
-        commit = git_state.read_commit(root, sha)
-        entries = landing_halted_view.tree_entries(root, sha, paths) if commit is not None else None
-        if entries is None:
-            raise ValueError("unreadable commit")
+    key = str(root)
+    for sha in _commit_spine(root, head, base_sha):
+        have = {p: _ENTRIES[(key, sha, p)] for p in paths if (key, sha, p) in _ENTRIES}
+        missing = [p for p in paths if p not in have]
+        if missing:
+            entries = landing_halted_view.tree_entries(root, sha, missing)
+            if entries is None:
+                raise ValueError("unreadable commit")
+            if len(_ENTRIES) + len(missing) > _ENTRIES_MAX:
+                _ENTRIES.clear()
+            for p in missing:
+                have[p] = _ENTRIES[(key, sha, p)] = entries.get(p)
         for p in paths:
-            entry = entries.get(p)
+            entry = have[p]
             if entry is not None and entry[1] not in found[p] and len(found[p]) < _HISTORY_VERSIONS:
                 found[p].append(entry[1])
+    return found
+
+
+#: `root -> (HEAD sha, {(base_sha, cap): commit shas in walk order | the ValueError text})`: the spine is path-free,
+#: so every halted record at one HEAD shares one walk. A HEAD change drops the root's walks.
+_WALKS: dict = {}
+_WALKS_MAX_ROOTS = 8
+_WALKS_MAX_BASES = 256
+_SPAN_TOO_LONG = "span too long"
+
+#: `(root, commit sha, path) -> (mode, blob sha) | None`: a commit's tree never changes, so entries outlive HEAD;
+#: the map is cleared whole when it would pass `_ENTRIES_MAX`.
+_ENTRIES: dict = {}
+_ENTRIES_MAX = 100_000
+
+
+def _commit_spine(root: Path, head: str, base_sha: str) -> tuple:
+    """The commit shas from `head` back toward `base_sha`, breadth first, walked once per `(root, head, base_sha)`.
+    Raises `ValueError` "span too long" past `_HISTORY_COMMITS` for every caller of that key; that outcome is a
+    fact of the immutable graph and is cached with the successes. "unreadable commit" may be transient and is never cached."""
+    from coordinator_core.git import git_state
+
+    key = str(root)
+    cached = _WALKS.get(key)
+    if cached is None or cached[0] != head:
+        cached = _WALKS[key] = (head, {})
+        while len(_WALKS) > _WALKS_MAX_ROOTS:
+            _WALKS.pop(next(iter(_WALKS), None), None)
+    bases = cached[1]
+    slot = (base_sha, _HISTORY_COMMITS)
+    if slot not in bases:
+        try:
+            walked: object = _walk_spine(root, head, base_sha, git_state)
+        except ValueError as exc:
+            if str(exc) != _SPAN_TOO_LONG:
+                raise
+            walked = _SPAN_TOO_LONG
+        if len(bases) >= _WALKS_MAX_BASES:
+            bases.pop(next(iter(bases), None), None)
+        bases[slot] = walked
+    spine = bases[slot]
+    if isinstance(spine, str):
+        raise ValueError(spine)
+    return spine
+
+
+def _walk_spine(root: Path, head: str, base_sha: str, git_state) -> tuple:
+    queue, seen, order = [head], {head, base_sha}, []
+    while queue:
+        sha = queue.pop(0)
+        if len(order) >= _HISTORY_COMMITS:
+            raise ValueError(_SPAN_TOO_LONG)
+        commit = git_state.read_commit(root, sha)
+        if commit is None:
+            raise ValueError("unreadable commit")
+        order.append(sha)
         for parent in commit.parents:
             if parent not in seen:
                 seen.add(parent)
                 queue.append(parent)
-    return found
+    return tuple(order)
 
 
 def _landed_in_history(root: Path, base_sha: str, pending: dict) -> set:
@@ -1174,7 +1249,7 @@ def _landed_in_history(root: Path, base_sha: str, pending: dict) -> set:
     from coordinator_core.ops.dispatch_emit import kept_work
 
     try:
-        versions = _history_blobs(root, base_sha, sorted(pending))
+        versions = _one_read_wall(root, "history", lambda: _history_blobs(root, base_sha, sorted(pending)))
         specs = list(dict.fromkeys(s for shas in versions.values() for s in shas[:_HISTORY_VERSIONS]))
         blobs = _blob_batch(root, specs) if specs else {}
         if blobs is None:

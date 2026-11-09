@@ -9,11 +9,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from coordinator_core.git.run import GitResult  # noqa: E402
+from percolate import dest_refresh  # noqa: E402
 from percolate.dest_refresh import (  # noqa: E402
     default_remote_branch,
     fast_forward_consumer,
     fast_forward_dest,
     fetch_dest_upstream,
+    reconcile_dest_before_push,
     refresh_dest_from_origin,
 )
 
@@ -561,3 +564,82 @@ def test_consumer_unreachable_origin_reports_stale_tracking_counts(origin_and_cl
     result = fast_forward_consumer(clone)
     assert not result.ok and "could not fetch origin" in result.reason
     assert result.ahead == 1 and result.behind == 0
+
+
+_ORIGIN_URL = "git@example.invalid:team/dest.git"
+_AGENT_STDERR = (
+    'sign_and_send_pubkey: signing failed for ED25519 "k" from agent: agent refused operation\n'
+    "git@example.invalid: Permission denied (publickey).\n"
+    "fatal: Could not read from remote repository.\n"
+)
+_PLAIN_STDERR = "fatal: unable to access 'https://example.invalid/x.git/': Could not resolve host\n"
+
+
+def _fail_fetches(monkeypatch, stderr: str, *, local_ref: bool = False) -> None:
+    real_git = dest_refresh._git
+
+    def _git_double(repo_root, args, *, remote=False):
+        is_origin_fetch = args[:1] == ["fetch"] and "origin" in args and "." not in args
+        is_local_fetch = args[:1] == ["fetch"] and "." in args
+        if is_local_fetch if local_ref else is_origin_fetch:
+            return GitResult(128, "", stderr, False)
+        return real_git(repo_root, args, remote=remote)
+
+    monkeypatch.setattr(dest_refresh, "_git", _git_double)
+
+
+def _origin_fetch_reasons(clone: Path) -> dict:
+    out, err = _capture()
+    return {
+        "fetch_dest_upstream": fetch_dest_upstream(clone, out=out, err=err).reason,
+        "fast_forward_consumer": fast_forward_consumer(clone).reason,
+        "reconcile_dest_before_push": reconcile_dest_before_push(clone, out=out, err=err).reason,
+    }
+
+
+def test_every_origin_fetch_site_names_stderr_line_url_and_unlock_first_remediation(
+    origin_and_clone, monkeypatch
+):
+    clone = origin_and_clone[1]
+    _git(clone, "remote", "set-url", "origin", _ORIGIN_URL)
+    _fail_fetches(monkeypatch, _AGENT_STDERR)
+
+    for site, reason in _origin_fetch_reasons(clone).items():
+        assert "could not fetch origin" in reason, site
+        assert "fatal: Could not read from remote repository." in reason, site
+        assert _ORIGIN_URL in reason, site
+        assert "Unlock or approve your SSH agent" in reason, site
+        assert reason.index("Unlock or approve") < reason.index("IdentityFile"), site
+        assert "IdentityAgent none" not in reason, site
+
+
+def test_every_origin_fetch_site_for_a_non_ssh_failure_has_line_and_url_but_no_ssh_remediation(
+    origin_and_clone, monkeypatch
+):
+    clone = origin_and_clone[1]
+    _git(clone, "remote", "set-url", "origin", _ORIGIN_URL)
+    _fail_fetches(monkeypatch, _PLAIN_STDERR)
+
+    for site, reason in _origin_fetch_reasons(clone).items():
+        assert "Could not resolve host" in reason, site
+        assert _ORIGIN_URL in reason, site
+        assert "SSH agent" not in reason, site
+
+
+def test_local_main_fast_forward_failure_names_stderr_line_and_the_local_remote(
+    origin_and_clone, monkeypatch
+):
+    origin, clone = origin_and_clone
+    _git(origin, "checkout", "main")
+    _commit(origin, "main-moved")
+    _git(origin, "checkout", "parked")
+    _fail_fetches(monkeypatch, _PLAIN_STDERR, local_ref=True)
+
+    out, err = _capture()
+    result = refresh_dest_from_origin(clone, out=out, err=err)
+
+    warning = " ".join(result.warnings)
+    assert "could not be fast-forwarded to origin/main" in warning
+    assert "Could not resolve host" in warning
+    assert "(remote: .)" in warning
+    assert "SSH agent" not in warning

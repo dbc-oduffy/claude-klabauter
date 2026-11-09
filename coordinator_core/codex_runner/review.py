@@ -74,8 +74,13 @@ def _build_env(
     keys = _ENV_ALLOW + (_ENV_ALLOW_WINDOWS if windows else ())
     if allow_api_key(environ, requested):
         keys = keys + API_KEY_ENV
-    child = provider_identity_env({k: environ[k] for k in keys if environ.get(k)}, environ, provider="codex", role=role)
-    child["GIT_TERMINAL_PROMPT"] = "0"  # Unattended agent shells must fail instead of prompting.
+    return provider_identity_env({k: environ[k] for k in keys if environ.get(k)}, environ, provider="codex", role=role)
+
+
+def _unattended_env(*args, **kwargs) -> dict[str, str]:
+    """`_build_env` plus GIT_TERMINAL_PROMPT=0: unattended agent shells must fail instead of prompting."""
+    child = _build_env(*args, **kwargs)
+    child["GIT_TERMINAL_PROMPT"] = "0"
     return child
 
 
@@ -260,7 +265,7 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
     with open(events_path, "wb") as out, open(stderr_path, "wb") as err:
         try:
             proc = subprocess.Popen(
-                argv, cwd=str(run_dir), env=_build_env(requested=req.allow_api_key), shell=False,
+                argv, cwd=str(run_dir), env=_unattended_env(requested=req.allow_api_key), shell=False,
                 stdin=subprocess.DEVNULL, stdout=out, stderr=err, creationflags=flags,
             )
         except OSError as exc:

@@ -36,6 +36,7 @@ VENDORED_SCRIPTS = (
     "unimatrix-local-transport.py",
     "unimatrix-peer-codex.py",
     "unimatrix-peer-agy.py",
+    "unimatrix-peer-grok.py",
     "unimatrix-agy-leg.py",
     "unimatrix-peer-router.py",
     "unimatrix-agy-hook-pretool.py",
@@ -52,9 +53,14 @@ VENDORED_SCRIPTS = (
     "unimatrix-membership.py",
     "unimatrix-doctor.py",
     "unimatrix-pair.py",
+    "unimatrix-file.py",
+    "unimatrix-file-relay.py",
+    "unimatrix-passphrase.py",
 )
 
 AUTOLINK_SCRIPT = "unimatrix-autolink.py"
+PASSPHRASE_SCRIPT = "unimatrix-passphrase.py"
+STAGING_SUFFIX = ".new"
 _SCRIPT_REF = re.compile(r"unimatrix-[a-z0-9-]+\.py")
 
 AGY_HOOK_KEY = "unimatrix-agy-leg"
@@ -67,7 +73,7 @@ DOCTRINE_SEED_SCRIPT = "unimatrix-doctrine-seed.py"
 PLUGIN_GEN_SCRIPT = "unimatrix-plugin-gen.py"
 AGY_PLUGIN_TREE_DIR = "agy-plugin"
 CODEX_SHELL_MATCHER = ".*"
-HOST_NAMES = ("claude", "codex", "agy")
+HOST_NAMES = ("claude", "codex", "agy", "grok")
 
 _BIN_DIR = Path(__file__).resolve().parent
 PLUGIN_ROOT = _BIN_DIR.parent
@@ -145,12 +151,43 @@ def script_closure(src_dir, root=AUTOLINK_SCRIPT):
     return seen
 
 
+ROUTER_SCRIPT = "unimatrix-peer-router.py"
+PIPE_MARKER = "PipeServer"
+
+
+class PipeCapabilityRefused(Exception):
+    """A win32 install that would ship or keep a router without the Win32 named-pipe transport."""
+
+
+def _has_pipe_marker(path):
+    try:
+        return PIPE_MARKER in Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def check_win32_pipe_capability(src_dir, dest_dir):
+    """On win32, refuse a source router lacking the pipe transport (which also covers downgrading an
+    installed pipe-capable router). No-op elsewhere."""
+    if sys.platform != "win32":
+        return
+    if _has_pipe_marker(Path(src_dir) / ROUTER_SCRIPT):
+        return
+    installed = _has_pipe_marker(Path(dest_dir) / ROUTER_SCRIPT)
+    what = "would downgrade the installed pipe-capable router" if installed else "carries no pipe transport"
+    raise PipeCapabilityRefused(
+        f"source {ROUTER_SCRIPT} {what}: missing Win32 named-pipe capability ({PIPE_MARKER}); "
+        f"install from the klabauter published mirror tree")
+
+
 def install_scripts(src_dir, dest_dir):
-    """Copy VENDORED_SCRIPTS plus the autolink closure from src_dir into dest_dir; return the copied names."""
+    """Copy VENDORED_SCRIPTS plus the autolink closure from src_dir into dest_dir; return the copied names.
+    Raises PipeCapabilityRefused on win32 before any copy when the source router lacks the pipe transport."""
     wanted = list(VENDORED_SCRIPTS) + sorted(script_closure(src_dir) - set(VENDORED_SCRIPTS))
     missing = [n for n in wanted if not (Path(src_dir) / n).is_file()]
     if missing:
         raise FileNotFoundError(f"vendored scripts missing in {src_dir}: {', '.join(missing)}")
+    check_win32_pipe_capability(src_dir, dest_dir)
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     for name in wanted:
@@ -174,12 +211,16 @@ def forced_command_interpreter():
     return sys.executable
 
 
-def authorized_keys_line(dest_dir, interpreter=None, key_body="<key-body>"):
+def authorized_keys_line(dest_dir, interpreter=None, key_body="<key-body>", file_peer=None):
     """Paste-ready `restrict,command=...` authorized_keys line; `key_body` defaults to the <key-body> placeholder.
-    A path with a space is quoted inside the command and each inner quote escaped for sshd."""
+    A path with a space is quoted inside the command and each inner quote escaped for sshd.
+    `file_peer` (the calling box) makes it the file key's line: the separate unimatrix-file-relay.py
+    forced command with a fixed `--peer <box>`."""
     interp = interpreter or forced_command_interpreter()
-    relay = str(Path(dest_dir) / "unimatrix-relay.py")
+    relay = str(Path(dest_dir) / ("unimatrix-file-relay.py" if file_peer is not None else "unimatrix-relay.py"))
     parts = [f'\\"{p}\\"' if " " in p else p for p in (interp, relay)]
+    if file_peer is not None:
+        parts += ["--peer", file_peer]
     return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} unimatrix'
 
 
@@ -207,32 +248,107 @@ def _pub_body(pub_path):
     return fields[1]
 
 
-def pair_key(alias, run=subprocess.run):
+def _item_alias(priv):
+    """The 1Password item alias of a key file: its name less `unimatrix-` (the rule ensure_agent applies)."""
+    name = Path(priv).name
+    return name[len("unimatrix-"):] if name.startswith("unimatrix-") else name
+
+
+def _mint(priv, comment, run, unencrypted, remint, on_mint=None):
+    """Mint the key at `priv`: passphrase-encrypted with the 1Password item's passphrase unless `unencrypted`
+    (then the plain `-N ""` ssh-keygen mint). A `remint` writes the new key (sibling path) and its item (staging
+    title) first, replaces the superseded files, then deletes the superseded item and retitles the new one; a failure
+    before the replace leaves the superseded key and item untouched. PassphraseSourceMissing / OnePasswordLocked
+    propagate."""
+    roster = _sibling("unimatrix-roster.py")
+    alias = _item_alias(priv)
+    mod = _sibling(PASSPHRASE_SCRIPT)
+    stage = alias + STAGING_SUFFIX if remint and not unencrypted else alias
+    target = Path(str(priv) + ".new") if remint else priv
+    side = [target, Path(str(target) + ".pub")]
+    if remint:
+        for stale in side:
+            stale.unlink(missing_ok=True)
+    priv.parent.mkdir(parents=True, exist_ok=True)
+    passphrase = None
+    try:
+        if not unencrypted:
+            passphrase = mod.read_passphrase(mod.ensure_item(stage, run), run)
+            try:
+                mod.mint_key(target, comment, passphrase)
+            except ImportError as exc:
+                raise RuntimeError(f"minting an encrypted key needs the `cryptography` package ({exc}); run "
+                                   f"`{sys.executable} -m pip install cryptography`, or pass --unencrypted-key") from exc
+        else:
+            kg = run(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", comment, "-f", str(target)],
+                     capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
+            if kg.returncode or not target.is_file():
+                raise RuntimeError(f"ssh-keygen failed: {(kg.stderr or kg.stdout or '').strip()[:200]}")
+    except BaseException:
+        if remint:
+            for stale in side:
+                stale.unlink(missing_ok=True)
+            if not unencrypted:
+                try:
+                    mod.delete_item(stage, run)
+                except RuntimeError:
+                    pass
+        raise
+    if remint:
+        for part in reversed(side):
+            os.replace(part, priv if part == side[0] else Path(str(priv) + ".pub"))
+        try:
+            mod.delete_item(alias, run)
+        except mod.PassphraseSourceMissing:
+            if not unencrypted:
+                raise
+        except RuntimeError as exc:
+            if not unencrypted:
+                raise RuntimeError(f"the new key is in place but its passphrase item {mod.item_name(stage)} is not "
+                                   f"yet titled {mod.item_name(alias)} (the superseded item could not be deleted: "
+                                   f"{exc}); re-run --remint") from exc
+        if not unencrypted:
+            _retitle_item(mod, stage, alias, run)
+    if not unencrypted and on_mint:
+        on_mint(mod.op_ref(alias, run))
+
+
+def _retitle_item(mod, stage, alias, run):
+    """Rename the staging passphrase item to the alias's title; the new key is already in place, so a failure
+    names the item that holds its passphrase."""
+    r = mod._op(["item", "edit", mod.item_name(stage), f"--vault={mod._vault(run)}",
+                 f"--title={mod.item_name(alias)}"], run)
+    if r.returncode:
+        raise RuntimeError(f"the new key is in place but its passphrase item {mod.item_name(stage)} could not be "
+                           f"renamed to {mod.item_name(alias)}: {mod._tail(r)}")
+
+
+def pair_key(alias, run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
     """Return (private key path, public key body) for this box's pair with `alias`. Reads the key autolink's
     resolve_key finds when it is alias-specific and present; otherwise mints (or adopts an unrecorded file at)
-    <settings home>/.secrets/ssh/unimatrix-<alias> and records unimatrix.keys.<alias>. Never overwrites a key.
-    RuntimeError when the alias reduces to nothing, ssh-keygen fails, or the machine-local record cannot be made."""
+    <settings home>/.secrets/ssh/unimatrix-<alias> and records unimatrix.keys.<alias>. Never overwrites a key
+    except under `remint`, which deletes the old pair and its 1Password item first. The mint is passphrase-encrypted
+    with the item's passphrase (`on_mint(ref)` receives the op reference) unless `unencrypted`.
+    RuntimeError when the alias reduces to nothing, the mint fails, or the machine-local record cannot be made;
+    PassphraseSourceMissing / OnePasswordLocked (RuntimeError) when the passphrase source cannot be reached."""
     autolink, roster = _sibling(AUTOLINK_SCRIPT), _sibling("unimatrix-roster.py")
     found = autolink.resolve_key(
         roster, alias,
         local_fn=lambda r, a: autolink.machine_local_key(r, a, run=run),
         ssh_fn=lambda r, a: autolink.ssh_identity_file(r, a, run=run))
-    if found != roster.default_key() and Path(found).is_file():
+    alias_key = found != roster.default_key() and Path(found).is_file()
+    if alias_key and not remint:
         priv = Path(found)
     else:
         safe = _ALIAS_UNSAFE.sub("-", alias)
         if not safe.strip("-"):
             raise RuntimeError(f"alias {alias!r} has no usable characters for a key file name")
-        priv = roster.settings_home() / ".secrets" / "ssh" / f"unimatrix-{safe}"
+        priv = Path(found) if alias_key else roster.settings_home() / ".secrets" / "ssh" / f"unimatrix-{safe}"
         reader = roster.settings_home() / "bin" / "_machine_local.py"
         if not reader.is_file():
             raise RuntimeError(f"{reader} is missing; an unrecorded pair key would not be found next run")
-        if not priv.is_file():
-            priv.parent.mkdir(parents=True, exist_ok=True)
-            kg = run(["ssh-keygen", "-t", "ed25519", "-N", "", "-C", "unimatrix", "-f", str(priv)],
-                     capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
-            if kg.returncode or not priv.is_file():
-                raise RuntimeError(f"ssh-keygen failed: {(kg.stderr or kg.stdout or '').strip()[:200]}")
+        if remint or not priv.is_file():
+            _mint(priv, "unimatrix", run, unencrypted, remint, on_mint)
         rec = run([sys.executable, str(reader), "set", f"{autolink.KEYS_PREFIX}{alias}", str(priv)],
                   capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
         if rec.returncode:
@@ -242,6 +358,31 @@ def pair_key(alias, run=subprocess.run):
     if not pub.is_file():
         raise RuntimeError(f"{pub} is missing; cannot read the public key of {priv}")
     return priv, _pub_body(pub)
+
+
+FILE_KEY_NAME = "unimatrix-file"
+
+
+def file_key(run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
+    """(private key path, public key line, fingerprint) of this box's file-transfer key, minted at
+    <settings home>/.secrets/ssh/unimatrix-file when absent; never overwrites (bar `remint`, which deletes the old
+    pair and its 1Password item first) and never touches the relay key. The mint is passphrase-encrypted unless
+    `unencrypted` (`on_mint(ref)` receives the op reference).
+    RuntimeError when the mint fails or the minted key does not read back as ssh-ed25519;
+    PassphraseSourceMissing / OnePasswordLocked (RuntimeError) when the passphrase source cannot be reached."""
+    roster = _sibling("unimatrix-roster.py")
+    priv = roster.settings_home() / ".secrets" / "ssh" / FILE_KEY_NAME
+    pub = Path(str(priv) + ".pub")
+    if remint or not priv.is_file():
+        _mint(priv, "unimatrix-file", run, unencrypted, remint, on_mint)
+    if not pub.is_file():
+        raise RuntimeError(f"{pub} is missing; cannot read the public key of {priv}")
+    body = _pub_body(pub)
+    fp = run(["ssh-keygen", "-lf", str(pub)], capture_output=True, text=True, timeout=30,
+             creationflags=roster.no_window())
+    if fp.returncode or not (fp.stdout or "").strip():
+        raise RuntimeError(f"ssh-keygen -lf failed: {(fp.stderr or fp.stdout or '').strip()[:200]}")
+    return priv, f"ssh-ed25519 {body}", fp.stdout.split()[1]
 
 
 def render_ssh_config_block(alias, key_path):
@@ -327,6 +468,62 @@ def install_over_link(alias, body, run=subprocess.run):
 def agy_hooks_path():
     """agy's global hook discovery file."""
     return Path.home() / ".gemini" / "config" / "hooks.json"
+
+
+def agy_plugins_path():
+    """agy's global plugin registration file (sibling of hooks.json)."""
+    return agy_hooks_path().with_name("plugins.json")
+
+
+def _plugin_entry_matches(entry, tree):
+    if not isinstance(entry, dict) or entry.get("include_only") != [tree.name]:
+        return False
+    return os.path.normcase(os.path.normpath(str(entry.get("path", "")))) == os.path.normcase(os.path.normpath(str(tree.parent)))
+
+
+def seed_agy_plugin(path, tree):
+    """Register the generated agy plugin tree in agy's plugins.json; return "created", "added" or "present".
+
+    agy scans each `entries` path one level deep, so the entry names the tree's parent and
+    `include_only` narrows it to the tree. Other entries and keys are preserved; a re-run adds nothing.
+    """
+    path, tree = Path(path), Path(tree)
+    data = {}
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8") or "{}")
+        except ValueError as exc:
+            raise ValueError(f"{path} is not valid JSON ({exc}); fix or remove it") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("entries", []), list):
+            raise ValueError(f"{path} has an unexpected shape (want an object with an `entries` list)")
+    entries = data.setdefault("entries", [])
+    if any(_plugin_entry_matches(e, tree) for e in entries):
+        return "present"
+    entries.append({"path": str(tree.parent), "include_only": [tree.name]})
+    existed = path.exists()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "added" if existed else "created"
+
+
+def unseed_agy_plugin(path, tree):
+    """Remove only our registration from plugins.json; return "removed" or "absent"."""
+    path, tree = Path(path), Path(tree)
+    if not path.exists():
+        return "absent"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8") or "{}")
+    except ValueError as exc:
+        raise ValueError(f"{path} is not valid JSON ({exc}); fix or remove it") from exc
+    entries = data.get("entries") if isinstance(data, dict) else None
+    if not isinstance(entries, list):
+        return "absent"
+    kept = [e for e in entries if not _plugin_entry_matches(e, tree)]
+    if len(kept) == len(entries):
+        return "absent"
+    data["entries"] = kept
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return "removed"
 
 
 def codex_hooks_path():
@@ -1164,6 +1361,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     agy_sj = Path(agy_skills_json) if agy_skills_json else (
         agy_hooks_path().with_name("skills.json") if hooks_path is None else Path(hooks_path).with_name("agy-skills.json")
     )
+    agy_pj = agy_plugins_path() if hooks_path is None else Path(hooks_path).with_name("agy-plugins.json")
     codex_sd = Path(codex_skills) if codex_skills else (
         Path.home() / ".agents" / "skills" if hooks_path is None else Path(hooks_path).with_name("codex-agents-skills")
     )
@@ -1171,19 +1369,38 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     ap.add_argument("--install", action="store_true", help="copy the vendored scripts into the settings home")
     ap.add_argument("--uninstall", action="store_true", help="remove everything --install seeded for Codex and agy")
     ap.add_argument("--force", action="store_true", help="warn instead of refusing outside the verified range")
-    ap.add_argument("--hosts", help="comma list of claude,codex,agy; default codex,agy with the Claude range gate. "
+    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs no hooks); default codex,agy with the Claude range gate. "
                     "Naming no claude skips the gate when `claude` is not on PATH")
     ap.add_argument("--pair", metavar="ALIAS", help="mint or read the pair key for a far box and print its "
                     "authorized_keys line and ssh config block")
+    ap.add_argument("--file-key", action="store_true", help="mint (or read) this box's file-transfer key, "
+                    "separate from the relay key, and print its public line and fingerprint for the membership signer")
+    ap.add_argument("--unencrypted-key", action="store_true", help="with --pair or --file-key: mint the private key "
+                    "without a passphrase (for boxes with no 1Password); the default mint is passphrase-encrypted")
+    ap.add_argument("--remint", action="store_true", help="with --pair or --file-key: delete the existing private "
+                    "key, its .pub and its 1Password passphrase item, then mint anew")
     ap.add_argument("--plugin-root", metavar="DIR", help="seed Codex and agy doctrine and skills from this plugin "
                     "root (doctrine in DIR.parent or DIR, skills in DIR/skills) instead of this script's own location")
     ap.add_argument("--out", metavar="DIR", help="write the agy plugin tree (translated plugin source) into DIR; "
                     f"default under --install: <settings home>/unimatrix/{AGY_PLUGIN_TREE_DIR}")
     args = ap.parse_args(argv)
     skills_root = Path(args.plugin_root) / "skills" if args.plugin_root else SKILLS_ROOT
+    if args.file_key:
+        try:
+            priv, pub_line, fp = file_key(run=pair_run or subprocess.run, unencrypted=args.unencrypted_key,
+                                          remint=args.remint, on_mint=lambda ref: print(
+                                              f"minted a passphrase-encrypted private key\npassphrase: {ref}", file=out))
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
+            print(f"REFUSE: {exc}", file=out)
+            return 6
+        print(f"file key: {priv}\nfingerprint: {fp}\n"
+              f"file_pub (give to the membership signer; verify the fingerprint there): {pub_line}", file=out)
+        return 0
     if args.pair is not None:
         try:
-            priv, body = pair_key(args.pair, run=pair_run or subprocess.run)
+            priv, body = pair_key(args.pair, run=pair_run or subprocess.run, unencrypted=args.unencrypted_key,
+                                  remint=args.remint, on_mint=lambda ref: print(
+                                      f"minted a passphrase-encrypted private key\npassphrase: {ref}", file=out))
         except (RuntimeError, ValueError, OSError, subprocess.SubprocessError) as exc:
             print(f"REFUSE: {exc}", file=out)
             return 6
@@ -1226,6 +1443,8 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         steps = []
         if want_agy:
             steps.append(("agy hook", hp, lambda: unseed_agy_hook(hp)))
+            steps.append(("agy plugin", agy_pj, lambda: unseed_agy_plugin(
+                agy_pj, (Path(dest_dir) if dest_dir else settings_home() / "unimatrix") / AGY_PLUGIN_TREE_DIR)))
             steps.append(("agy skills", agy_sj, lambda: _seed().unseed_agy_skills(agy_sj, skills_root)))
             steps.append(("agy coordinator doctrine", agy_rp, lambda: _seed().unseed_block(
                 agy_rp, _seed().DOCTRINE_BEGIN, _seed().DOCTRINE_END)))
@@ -1283,9 +1502,14 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     except FileNotFoundError as exc:
         print(f"REFUSE: {exc}", file=out)
         return 3
+    except PipeCapabilityRefused as exc:
+        print(f"REFUSE: {exc}", file=out)
+        return 5
     print(f"installed {len(copied)} scripts into {dest}", file=out)
     print(f"authorized_keys line for the far side (paste verbatim, fill <key-body>): "
           f"{authorized_keys_line(dest)}", file=out)
+    print(f"authorized_keys line for the far side's file key (fill <key-body> and <box>, this box's name): "
+          f"{authorized_keys_line(dest, file_peer='<box>')}", file=out)
     engine_root, provenance = resolve_engine_root()
     hp = Path(hooks_path) if hooks_path else agy_hooks_path()
     if want_agy:
@@ -1328,6 +1552,14 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         _seed_agy_config(hp.with_name("config.json"), out)
         if not _write_agy_plugin_tree(args, out, dest):
             missing.append("agy plugin tree")
+        else:
+            tree = Path(args.out) if args.out else dest / AGY_PLUGIN_TREE_DIR
+            if tree.is_dir():
+                try:
+                    print(f"agy plugin {seed_agy_plugin(agy_pj, tree)} in {agy_pj}", file=out)
+                except (OSError, ValueError) as exc:
+                    missing.append("agy plugin registration")
+                    print(f"WARN: agy plugin not registered: {exc}", file=out)
     try:
         block = render_peer_doctrine(dest)
     except (OSError, ValueError) as exc:

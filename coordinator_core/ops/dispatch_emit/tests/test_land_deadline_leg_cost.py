@@ -332,3 +332,76 @@ def test_foreign_halted_withheld_listing_skips_token_only_runs_and_keeps_halted_
     assert token_only in plain
     assert token_only not in narrowed
     assert halted in plain and halted in narrowed
+
+
+def _record_root_listings(monkeypatch):
+    """Count every `os.scandir`/`os.listdir` of the record root; returns the call list."""
+    import os
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    listings = []
+    real_scandir, real_listdir = os.scandir, os.listdir
+
+    def watch(path):
+        if str(path).replace("\\", "/").rstrip("/").endswith(RECORD_DIR_ROOT):
+            listings.append(str(path))
+
+    def scandir(path=".", *a, **k):
+        watch(path)
+        return real_scandir(path, *a, **k)
+
+    def listdir(path=".", *a, **k):
+        watch(path)
+        return real_listdir(path, *a, **k)
+
+    monkeypatch.setattr(os, "scandir", scandir)
+    monkeypatch.setattr(os, "listdir", listdir)
+    return listings
+
+
+def _halted_sibling_root(tmp_path, monkeypatch):
+    import json
+
+    from coordinator_core.benchmarks import land_run_leg_budget_profile as lb
+    from coordinator_core.ops.dispatch_emit import halted_run, halted_withheld_index
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.session import touch_record
+
+    monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
+    (tmp_path / ".git").mkdir()
+    _token_only, halted = lb.add_siblings(tmp_path, 2)
+    marker = tmp_path / RECORD_DIR_ROOT / halted / halted_run.HALTED_FILE
+    marker.write_text(json.dumps({"status": halted_run.STATUS_HALTED}), encoding="utf-8")
+    halted_withheld_index.rebuild(tmp_path)
+    return halted
+
+
+def test_pre_integrity_scans_list_the_record_root_once_per_release_scope(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, land_run, sibling_claims
+
+    _halted_sibling_root(tmp_path, monkeypatch)
+    listings = _record_root_listings(monkeypatch)
+
+    with halted_hold_release.release_scope():
+        sibling_claims.halted_records(tmp_path, "own", ["a/p.py"])
+        land_run._read_markers_strict(tmp_path, "own")
+        land_run.foreign_halted_withheld(tmp_path, "own", None, ["a/p.py"])
+        land_run._read_markers_strict(tmp_path, "own")
+
+    assert len(listings) == 1, listings
+
+
+def test_read_markers_strict_still_refuses_a_corrupt_in_ttl_halt_marker(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, land_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    halted = _halted_sibling_root(tmp_path, monkeypatch)
+    (tmp_path / RECORD_DIR_ROOT / halted / halted_run.HALTED_FILE).write_text("{not json", encoding="utf-8")
+
+    with halted_hold_release.release_scope():
+        with pytest.raises(ValueError):
+            land_run._read_markers_strict(tmp_path, "own")
+        held = land_run.foreign_halted_withheld(tmp_path, "own", None, ["a/p.py"])
+        assert held == {"a/p.py": land_run.UNREADABLE_HALT_RECORD}
+        land_run._read_markers_strict(tmp_path, halted)

@@ -506,3 +506,45 @@ def test_run_records_reads_other_box_run_from_tracked_outcome(tmp_path):
     assert recs["ask-landed-1"].reconciled is True
     assert recs["ask-halted-1"].reconciled is False
     assert recs["ask-halted-1"].sizing_rel == "state/sizings/s.yaml"
+
+
+def test_claims_inside_a_land_scope_share_one_peer_view_and_match_outside_a_scope(repo, live, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    for n in range(3):
+        _manifest(repo, f"p{n}", writes=[f"pkg/m{n}.py"])
+        run_token.mint(repo, f"p{n}", "s.mjs", session_id=PEER)
+    paths = ["pkg/m0.py", "pkg/m1.py", "pkg/m2.py", "pkg/none.py"]
+    expected = _claims(repo, paths)
+    assert set(expected) == {"pkg/m0.py", "pkg/m1.py", "pkg/m2.py"}
+
+    listed: list = []
+    decided: list = []
+    real_held, real_live = run_token.held_records, wrd._live_peer_run
+    monkeypatch.setattr(run_token, "held_records", lambda root: listed.append(1) or real_held(root))
+    monkeypatch.setattr(
+        wrd, "_live_peer_run", lambda root, record, *a, **k: decided.append(record["run_id"]) or real_live(root, record, *a, **k)
+    )
+    with land_deadline.scope(60.0):
+        assert _claims(repo, paths) == expected
+        assert _claims(repo, ["pkg/m1.py"]) == {"pkg/m1.py": [PEER]}
+    assert len(listed) == 1
+    assert sorted(decided) == ["p0", "p1", "p2"]
+
+    listed.clear()
+    decided.clear()
+    assert _claims(repo, paths) == expected
+    assert _claims(repo, paths) == expected
+    assert len(listed) == 2 and len(decided) == 6
+
+
+def test_a_land_scope_peer_view_is_never_held_into_a_following_scope(repo, live):
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    _manifest(repo, "p1", writes=["a.py"])
+    run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
+    with land_deadline.scope(60.0):
+        assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
+    live.add(PEER)
+    with land_deadline.scope(60.0):
+        assert _claims(repo, ["a.py"]) == {}

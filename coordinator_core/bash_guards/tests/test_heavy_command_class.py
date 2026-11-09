@@ -692,6 +692,7 @@ _NOT_HEAVY = {
     "coordinator/bin/refresh-plugin-live-install.py": "file-sync tooling",
     "coordinator/bin/structural-index-refresh.py": "admitted upstream by close_background post_close_admission",
     "coordinator/bin/unimatrix-agy-hook-launch.py": "detached agy relay leg, network-bound, not a memory-heavy job",
+    "coordinator/bin/unimatrix-agy-hook-pretool.py": "detached agy relay leg launcher, network-bound, not a memory-heavy job",
     "coordinator/bin/unimatrix-autolink.py": "detached ssh bridge supervisors, network-bound, not a memory-heavy job",
     "coordinator/bin/unimatrix-codex-launch.py": "codex app-server daemon launch, not a memory-heavy job",
     "coordinator/bin/unimatrix-host-guard.py": "wall-bounded shim child for a host hook",

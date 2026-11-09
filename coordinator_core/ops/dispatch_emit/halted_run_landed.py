@@ -13,7 +13,9 @@ sibling status or a solo run with no halt marker, and refuses unless every manif
 worktree; a marker-less run writes nothing and replies the not-applicable close),
 ``landed_under`` (string, optional run id: admits a run with no sibling status or halt record whose
 work landed under that other run; the named run's marker must read ``landed`` at a sha matching
-``sha``/``shas``, else the "never ran" refusal stands; writes nothing and replies the not-applicable close).
+``sha``/``shas``, else the "never ran" refusal stands; writes nothing and replies the not-applicable close),
+``foreign`` (list of path strings, optional: owed withheld paths holding only a concurrent run's hunks; voided
+unless the run's own ``kept.json`` fingerprints the path, which refuses).
 Each sha is a lowercase hex commit sha, full or abbreviated to at least 4
 characters; an abbreviation must name exactly one commit and the reply and
 recorded marker carry the full 40-hex sha. The run's sibling status must read

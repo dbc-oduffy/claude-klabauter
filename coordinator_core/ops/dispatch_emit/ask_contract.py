@@ -900,6 +900,8 @@ def delivery_note_locate(root: Any, run_id: str) -> str:
 
 LEDGER_HALT_FILE = "ledger-halt.json"
 HALT_PLAN_FIELD = "plan"
+#: `halted.json` list of split dependency trees (`halt_split_tree.find_split_trees`); key absent when none.
+HALT_LIVE_BREAKAGE_FIELD = "live_breakage"
 #: Commit trailer naming the plan a halt commit landed chunks for; `resume_landed_rows` reads it.
 HALT_PLAN_TRAILER = "Halt-Plan"
 RESUME_LEDGER_KEY = "resume_ledger"

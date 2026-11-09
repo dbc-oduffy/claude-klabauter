@@ -702,7 +702,7 @@ def test_completion_return_is_last_so_no_phase_follows_it():
     no_slices = "return { halted: 'review prep returned no slices'"
     assert script.count(no_slices) <= 1
     script = script.replace(noop, "", 1).replace(no_slices, "", 1)
-    completion = script.index("return {\n  schema:")
+    completion = script.index("return {\n  next_action:")
     assert "phase(" not in script[completion:]
     assert "await agent(" not in script[completion:]
 

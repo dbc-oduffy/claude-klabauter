@@ -44,7 +44,13 @@ def test_terminal_sha_spawns_the_runner_module_detached(tmp_path, monkeypatch):
     (argv, kw), = calls
     assert argv == [sys.executable, "-m", RUNNER_MODULE, "--repo", str(tmp_path), "--run-id", "run-x"]
     assert kw["stdin"] is subprocess.DEVNULL and kw["stdout"] is subprocess.DEVNULL
-    assert kw["start_new_session"] is True or "creationflags" in kw
+    if sys.platform == "win32":
+        assert kw["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+        assert kw["creationflags"] & subprocess.CREATE_NO_WINDOW
+        assert "start_new_session" not in kw
+    else:
+        assert kw["start_new_session"] is True
+        assert "creationflags" not in kw
 
 
 def test_a_spawn_failure_is_this_legs_failure(tmp_path, monkeypatch):

@@ -12,8 +12,8 @@ The script stamps two body lines the check reads: `Checkpoint-Plan: <path>`
 and `Checkpoint-Base: <run base sha>`. A checkpoint without them comes from
 a script emitted before this guard and is refused: re-emit it.
 
-Zero spawns: history is walked in-process, first parent only, from HEAD back
-to the run base.
+Zero spawns: history is walked in-process, over every parent, for the commits
+in base..HEAD; a merge counts only where it differs from all its parents.
 """
 
 from __future__ import annotations
@@ -174,24 +174,59 @@ def _is_engine_stamp(
     return nb is not None and nb == ob
 
 
+def _is_base(sha: str, base: str) -> bool:
+    return sha.startswith(base) or base.startswith(sha)
+
+
+def _reachable(common_dir: Path, start: str, stop: Optional[str] = None) -> List[str]:
+    """Commits reachable from `start` over every parent, `start` first, capped at `_WALK_CAP`.
+    A commit named by the `stop` sha or prefix is listed but not expanded."""
+    seen: List[str] = []
+    marked = set()
+    queue = [start]
+    while queue and len(seen) < _WALK_CAP:
+        sha = queue.pop(0)
+        if sha in marked:
+            continue
+        marked.add(sha)
+        seen.append(sha)
+        if stop is not None and _is_base(sha, stop):
+            continue
+        meta = commit_meta(common_dir, sha)
+        if meta is not None:
+            queue.extend(meta.get("parents") or [])
+    return seen
+
+
 def _moved_outside_run(
     common_dir: Path, head: Optional[str], base: str, paths: Sequence[str], plan: str
 ) -> List[str]:
+    """Declared paths changed by a commit in base..HEAD (not the run's own checkpoints).
+    A path restored to its base bytes still counts: the revert is the change."""
+    if not head or not paths:
+        return []
+    candidates = _reachable(common_dir, head, stop=base)
+    base_sha = next((s for s in candidates if _is_base(s, base)), None)
+    walk = [s for s in candidates if s != base_sha]
+    if base_sha is not None:
+        # Capped like the head walk: base history deeper than `_WALK_CAP` is not excluded, so a
+        # merge side line reaching that far back can list pre-base commits as in base..HEAD.
+        ancestors = set(_reachable(common_dir, base_sha))
+        walk = [s for s in walk if s not in ancestors]
     out: List[str] = []
-    sha = head
-    for _ in range(_WALK_CAP):
-        if not sha or sha.startswith(base) or base.startswith(sha):
-            return out
+    for sha in walk:
         meta = commit_meta(common_dir, sha)
         if meta is None:
-            return out
+            continue
         parents = meta.get("parents") or []
         msg_subject = (meta.get("message") or "").split("\n", 1)[0]
-        if parents and not msg_subject.startswith("checkpoint("):
-            for p in paths:
-                if _blob_at_commit(common_dir, sha, p) != _blob_at_commit(common_dir, parents[0], p):
-                    if _is_engine_stamp(common_dir, sha, parents[0], msg_subject, p, plan):
-                        continue
-                    out.append(f"{p} by {sha[:10]} ({msg_subject[:60]})")
-        sha = parents[0] if parents else None
+        if not parents or msg_subject.startswith("checkpoint("):
+            continue
+        for p in paths:
+            blob = _blob_at_commit(common_dir, sha, p)
+            if any(blob == _blob_at_commit(common_dir, parent, p) for parent in parents):
+                continue
+            if _is_engine_stamp(common_dir, sha, parents[0], msg_subject, p, plan):
+                continue
+            out.append(f"{p} by {sha[:10]} ({msg_subject[:60]})")
     return out

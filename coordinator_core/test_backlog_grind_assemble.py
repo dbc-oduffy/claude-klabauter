@@ -84,6 +84,7 @@ pytestmark = [
 ]
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
+from coordinator_core.testing.fake_engine_root import write_fake_engine_root  # noqa: E402
 _PACKAGE_DIR = _REPO_ROOT / "coordinator_core" / "backlog_grind_assemble"
 
 #: The five surface cadences (D-2's "one assembler ... call one
@@ -3258,6 +3259,29 @@ class TestMintRunIdShapeAC1:
             f"mise-inventory/{payload['run_id']}.md"
         )
 
+    @pytest.mark.parametrize("argv_tail", [["--plain", "mise-en-place"], ["mise-en-place", "--plain"]])
+    def test_cli_mint_run_id_plain_prints_only_the_bare_run_id(
+        self, tmp_path, capsys, monkeypatch, argv_tail
+    ):
+        state_root = tmp_path / "state"
+        monkeypatch.setattr(
+            bga.readers_mise_en_place, "_resolve_state_root", lambda: str(state_root)
+        )
+        exit_code = bga.main(["mint-run-id", *argv_tail])
+        assert exit_code == bga.EXIT_OK
+        out = capsys.readouterr().out
+        lines = out.splitlines()
+        assert len(lines) == 1
+        assert bga.readers_mise_en_place._RUN_ID_ARG_RE.match(lines[0])
+
+    def test_cli_mint_run_id_plain_still_refuses_unclaimed_and_extra_args(self):
+        assert bga.main(["mint-run-id", "--plain"]) == bga.EXIT_USAGE
+        assert (
+            bga.main(["mint-run-id", "mise-en-place", "extra", "--plain"])
+            == bga.EXIT_USAGE
+        )
+        assert bga.main(["mint-run-id", "bug-blitz", "--plain"]) == bga.EXIT_USAGE
+
 
 class TestMintRunIdSatisfiesArgRegexAC2:
     """AC2: every minted run id satisfies `_RUN_ID_ARG_RE` -- the existing
@@ -3691,11 +3715,10 @@ class TestTrampolineDispatchRouting:
             "this test will pass."
         )
 
-    def test_mint_run_id_routes_to_brief_module_main_not_main_drop(self, monkeypatch):
-        # CLAUDE_KLABAUTER_ROOT set explicitly: _backlog_grind_assemble_entry re-runs
-        # its full resolution ladder on every call and this test box has no
-        # machine-local registry entry for it.
-        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    def test_mint_run_id_routes_to_brief_module_main_not_main_drop(self, monkeypatch, tmp_path):
+        # A stamped engine root is pinned explicitly: the resolver never
+        # accepts the unstamped claude-klabauter checkout as the engine.
+        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", write_fake_engine_root(tmp_path))
         shim = _load_entry_point_shim()
         brief_calls: list = []
         drop_calls: list = []
@@ -3722,12 +3745,12 @@ class TestTrampolineDispatchRouting:
         list(_EXPECTED_CALLEE_BY_SUBCOMMAND.items()),
     )
     def test_every_allowlisted_subcommand_reaches_its_intended_callee(
-        self, monkeypatch, subcommand, expected_callee
+        self, monkeypatch, tmp_path, subcommand, expected_callee
     ):
         # The structural guard: this is what makes the NEXT added verb fail
         # loudly (wrong callee recorded) rather than silently landing in the
         # `main_drop` fallthrough the way `mint-run-id` did.
-        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+        monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", write_fake_engine_root(tmp_path))
         shim = _load_entry_point_shim()
         seen: dict = {}
 

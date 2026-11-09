@@ -139,15 +139,34 @@ const RUN_SCRIPT_SUFFIX = __RUN_SCRIPT_SUFFIX__;
 
 // Trap: the emit agent re-serializes the reply path, so a Windows path can arrive with each backslash doubled; fold backslashes and runs of separators into single slashes.
 function _normEmitPath(p) {
-  const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
+  // Trap: a repo-qualified reference ("<repo>:state/...") names this repo's relative path; a one-letter prefix is a drive.
+  const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/').replace(/^[A-Za-z][A-Za-z0-9._-]+:(?=[^/])/, '');
   // Trap: emit may answer repo-relative; compared raw against the absolute WARP_PREFIX it reads as outside.
-  return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : WARP_PREFIX.slice(0, -'scratch/warp/'.length) + s.replace(/^\.\//, '');
+  return _runDirScript((s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : WARP_PREFIX.slice(0, -'scratch/warp/'.length) + s.replace(/^\.\//, ''));
+}
+
+// A reply naming the run's own state/warp/<run> directory names the run whose script is scratch/warp/<run>.workflow.mjs; a deeper path stays as given.
+function _runDirScript(p) {
+  const dir = WARP_PREFIX.slice(0, -'scratch/warp/'.length) + 'state/warp/';
+  if (p.slice(0, dir.length).toLowerCase() !== dir.toLowerCase()) return p;
+  const run = p.slice(dir.length).replace(/\/$/, '');
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run) ? WARP_PREFIX + run + RUN_SCRIPT_SUFFIX : p;
+}
+
+// A size-step hand-off can name its handoffs record (state/handoffs/**/*.md) as path; the run it started is the run_id beside it, whose script sits under scratch/warp/.
+function _handoffScript(e) {
+  if (!e || typeof e.path !== 'string' || e.path === '' || _pathRunId(e.path) !== '') return e;
+  if (typeof e.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(e.run_id)) return e;
+  const p = _normEmitPath(e.path);
+  const dir = WARP_PREFIX.slice(0, -'scratch/warp/'.length) + 'state/handoffs/';
+  if (p.slice(0, dir.length).toLowerCase() !== dir.toLowerCase() || !p.endsWith('.md') || p.split('/').indexOf('..') !== -1) return e;
+  return { ...e, path: WARP_PREFIX + e.run_id + RUN_SCRIPT_SUFFIX };
 }
 
 // Trap: a relaying agent mis-copies run_id (the ask's own id); the script path's basename is the run id, so never read the relayed one.
 function _pathRunId(p) {
   if (typeof p !== 'string') return '';
-  const b = p.replace(/\\/g, '/').split('/').pop();
+  const b = _normEmitPath(p).split('/').pop();
   return (b.endsWith(RUN_SCRIPT_SUFFIX) && b.indexOf('.staged-') === -1) ? b.slice(0, b.length - RUN_SCRIPT_SUFFIX.length) : '';
 }
 
@@ -324,7 +343,7 @@ async function _chainHop(child, handoff) {
   let emitted;
   if (typeof _re === 'string' && _re !== '') return fail('emit failed: ' + _re);
   if (named(_rp)) {
-    emitted = { path: _rp, run_id: _pathRunId(_rp), fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
+    emitted = { path: _rp, run_id: _pathRunId(_rp) || (named(_rr) ? _rr : ''), fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
   } else {
     try {
       emitted = await _emitLeg(child, { ...params, __LAUNCHER_PARAM__: true }, 'chain-emit-' + child.run_id);
@@ -332,6 +351,7 @@ async function _chainHop(child, handoff) {
       return fail('emit threw: ' + String(e && e.message ? e.message : e));
     }
   }
+  emitted = _handoffScript(emitted);
   const refusal = _emitRefusal(child, emitted, true);
   if (refusal !== null) return fail(refusal);
   emitted = { ...emitted, run_id: _pathRunId(emitted.path) };

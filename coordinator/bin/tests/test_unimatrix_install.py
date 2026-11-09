@@ -61,11 +61,15 @@ def _run(argv, text, dest=None, hooks=None):
     return rc, buf.getvalue()
 
 
+def _write_stubs(src, router_text="# stub PipeServer\n"):
+    for n in ui.VENDORED_SCRIPTS:
+        (src / n).write_text(router_text if n == ui.ROUTER_SCRIPT else "# stub\n", encoding="utf-8")
+
+
 def _stub_src(monkeypatch, tmp_path):
     src = tmp_path / "src"
     src.mkdir()
-    for n in ui.VENDORED_SCRIPTS:
-        (src / n).write_text("# stub\n", encoding="utf-8")
+    _write_stubs(src)
     monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
 
 
@@ -81,6 +85,7 @@ def test_range_constant_and_scripts():
         "unimatrix-local-transport.py",
         "unimatrix-peer-codex.py",
         "unimatrix-peer-agy.py",
+        "unimatrix-peer-grok.py",
         "unimatrix-agy-leg.py",
         "unimatrix-peer-router.py",
         "unimatrix-agy-hook-pretool.py",
@@ -97,6 +102,9 @@ def test_range_constant_and_scripts():
         "unimatrix-membership.py",
         "unimatrix-doctor.py",
         "unimatrix-pair.py",
+        "unimatrix-file.py",
+        "unimatrix-file-relay.py",
+        "unimatrix-passphrase.py",
     )
 
 
@@ -179,8 +187,7 @@ def test_install_copies_scripts_and_prints_rc_notice(monkeypatch, tmp_path, plat
     monkeypatch.setattr(sys, "platform", plat)
     src = tmp_path / "src"
     src.mkdir()
-    for n in ui.VENDORED_SCRIPTS:
-        (src / n).write_text("# stub\n", encoding="utf-8")
+    _write_stubs(src)
     monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
     dest = tmp_path / "home" / "unimatrix"
     rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
@@ -237,12 +244,59 @@ def test_install_refuses_outside_range_without_copying(monkeypatch, tmp_path):
 def test_install_force_outside_range_proceeds(monkeypatch, tmp_path):
     src = tmp_path / "src"
     src.mkdir()
-    for n in ui.VENDORED_SCRIPTS:
-        (src / n).write_text("# stub\n", encoding="utf-8")
+    _write_stubs(src)
     monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
     dest = tmp_path / "unimatrix"
     rc, out = _run(["--install", "--force"], "2.2.0", dest, tmp_path / "h" / "hooks.json")
     assert rc == 0 and "WARN" in out and dest.is_dir()
+
+
+def _pipeless_src(monkeypatch, tmp_path):
+    src = tmp_path / "src"
+    src.mkdir()
+    _write_stubs(src, router_text="# stub without the transport\n")
+    monkeypatch.setattr(ui, "__file__", str(src / "unimatrix-install.py"))
+    return src
+
+
+def test_win32_pipeless_source_router_refused_nothing_copied(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    _pipeless_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "h" / "hooks.json")
+    assert rc != 0 and not dest.exists()
+    assert out.count("REFUSE") == 1 and "named-pipe" in out and "klabauter published mirror" in out
+    assert "installed" not in out
+
+
+def test_win32_downgrade_of_installed_pipe_router_refused(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    _pipeless_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    dest.mkdir(parents=True)
+    installed = dest / ui.ROUTER_SCRIPT
+    installed.write_text("# has PipeServer\n", encoding="utf-8")
+    rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "h" / "hooks.json")
+    assert rc != 0 and "downgrade" in out and "named-pipe" in out
+    assert [p.name for p in dest.iterdir()] == [ui.ROUTER_SCRIPT]
+    assert installed.read_text(encoding="utf-8") == "# has PipeServer\n"
+
+
+def test_win32_pipe_capable_source_copies(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    _stub_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    rc, _ = _run(["--install"], "2.1.316", dest, tmp_path / "h" / "hooks.json")
+    assert rc == 0 and (dest / ui.ROUTER_SCRIPT).is_file()
+
+
+@pytest.mark.parametrize("plat", ["darwin", "linux"])
+def test_posix_pipeless_source_router_copies(monkeypatch, tmp_path, plat):
+    monkeypatch.setattr(sys, "platform", plat)
+    _pipeless_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    rc, _ = _run(["--install"], "2.1.316", dest, tmp_path / "h" / "hooks.json")
+    assert rc == 0 and (dest / ui.ROUTER_SCRIPT).is_file()
 
 
 def test_install_missing_sources_fails(monkeypatch, tmp_path):
@@ -513,7 +567,9 @@ def test_trust_codex_hook_marks_hook_trusted_in_real_codex(tmp_path, home_name):
     states = tomllib.loads(cfg)["hooks"]["state"]
     assert set(states) == {
         f"{hp}:pre_tool_use:0:0", f"{hp}:session_start:0:0",
-        f"{hp}:session_start:0:1", f"{hp}:session_end:0:0",
+        f"{hp}:session_start:0:1", f"{hp}:session_end:0:0", f"{hp}:subagent_start:0:0",
+        *(f"{hp}:{event}:0:0" for event in (
+            "user_prompt_submit", "post_tool_use", "stop", "subagent_stop", "pre_compact", "post_compact")),
     }
     assert all(row["trusted_hash"].startswith("sha256:") for row in states.values())
 
@@ -720,6 +776,21 @@ def test_no_claude_on_path_hosts_skip_gate_but_bare_install_refuses(monkeypatch,
     assert "gate skipped" in buf.getvalue() and (home / ".codex" / "hooks.json").exists()
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "claude,codex"], dest_dir=tmp_path / "d", out=buf) == 2
+
+
+def test_hosts_grok_ships_the_adapter_and_installs_no_hooks(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.setattr(ui.shutil, "which", lambda name: None)
+    dest = tmp_path / "d"
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok"], dest_dir=dest, out=buf) == 0
+    assert (dest / "unimatrix-peer-grok.py").is_file()
+    assert not (home / ".codex" / "hooks.json").exists()
+    assert not (home / ".gemini" / "config" / "hooks.json").exists()
+    assert not (home / ".grok").exists()
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok,bogus"], dest_dir=dest, out=buf) == 2
 
 
 class _FakeCodex:
@@ -1152,21 +1223,51 @@ def test_main_windows_install_registers_the_run_value_and_migrates_the_task(winr
 
 
 class _PairBox:
-    """Fake subprocess.run for --pair: ssh -G, _machine_local get and set, ssh-keygen."""
+    """Fake subprocess.run for --pair: ssh -G, _machine_local get and set, ssh-keygen, and the 1Password `op` CLI."""
 
-    def __init__(self, store=None):
+    def __init__(self, store=None, op_missing=False, items=None, vault="Vault"):
         self.store, self.calls = dict(store or {}), []
+        self.op_missing, self.items, self.vault = op_missing, dict(items or {}), vault
+        self.fail_edit = False
+
+    def _op(self, argv, done):
+        if self.op_missing:
+            raise FileNotFoundError("op")
+        if argv[1] == "read":
+            name = argv[-1].split("/")[3]
+            return done(0, self.items[name]) if name in self.items else done(1, "", "isn't an item in the vault")
+        if argv[1:3] == ["item", "create"]:
+            title = next(a for a in argv if a.startswith("--title="))[len("--title="):]
+            self.items[title] = "generated-pass-" + title
+            return done()
+        if argv[1:3] == ["item", "delete"]:
+            return done() if self.items.pop(argv[3], None) is not None else done(1, "", "isn't an item")
+        if argv[1:3] == ["item", "edit"]:
+            if self.fail_edit:
+                return done(1, "", "boom")
+            title = next(a for a in argv if a.startswith("--title="))[len("--title="):]
+            if title in self.items:
+                raise AssertionError("retitle would collapse two items")
+            self.items[title] = self.items.pop(argv[3])
+            return done()
+        raise AssertionError(argv)
 
     def __call__(self, argv, **kw):
         self.calls.append(list(argv))
-        done = lambda rc=0, out="": type("R", (), {"returncode": rc, "stdout": out, "stderr": ""})()
+        done = lambda rc=0, out="", err="": type("R", (), {"returncode": rc, "stdout": out, "stderr": err})()
+        if argv[0] == "op":
+            return self._op(argv, done)
         if argv[0] == "ssh":
             return done(0, "")
+        if argv[0] == "ssh-keygen" and argv[1] == "-lf":
+            return done(0, "256 SHA256:FAKEFP unimatrix (ED25519)\n")
         if argv[0] == "ssh-keygen":
             path = Path(argv[argv.index("-f") + 1])
             path.write_text("PRIVATE", encoding="utf-8")
             Path(str(path) + ".pub").write_text("ssh-ed25519 AAAAPAIRBODY unimatrix\n", encoding="utf-8")
             return done()
+        if argv[2] == "get" and argv[3] == "unimatrix.passphrase_vault":
+            return done(0, self.vault) if self.vault else done(1)
         if argv[2] == "get":
             return done(0, self.store[argv[3]]) if argv[3] in self.store else done(1)
         self.store[argv[3]] = argv[4]
@@ -1185,13 +1286,208 @@ def _pair_home(monkeypatch, tmp_path, reader=True):
 def test_pair_mints_records_and_second_run_reads_same_key(monkeypatch, tmp_path):
     home = _pair_home(monkeypatch, tmp_path)
     box = _PairBox()
-    priv, body = ui.pair_key("far-1", run=box)
+    refs = []
+    priv, body = ui.pair_key("far-1", run=box, unencrypted=True, on_mint=refs.append)
     assert priv == home / ".secrets" / "ssh" / "unimatrix-far-1" and body == "AAAAPAIRBODY"
-    assert box.store == {"unimatrix.keys.far-1": str(priv)}
+    assert box.store == {"unimatrix.keys.far-1": str(priv)} and refs == []
     keygens = [c for c in box.calls if c[0] == "ssh-keygen"]
     assert len(keygens) == 1 and "-N" in keygens[0] and keygens[0][keygens[0].index("-N") + 1] == ""
-    priv2, body2 = ui.pair_key("far-1", run=box)
+    assert not [c for c in box.calls if c[0] == "op"]
+    priv2, body2 = ui.pair_key("far-1", run=box, unencrypted=True)
     assert (priv2, body2) == (priv, body) and len([c for c in box.calls if c[0] == "ssh-keygen"]) == 1
+
+
+def _passphrase():
+    return ui._sibling("unimatrix-passphrase.py")
+
+
+def test_pair_default_mints_a_passphrase_encrypted_key_from_the_1password_item(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox()
+    refs = []
+    priv, body = ui.pair_key("far-1", run=box, on_mint=refs.append)
+    assert priv == home / ".secrets" / "ssh" / "unimatrix-far-1" and _passphrase().is_encrypted(priv)
+    assert refs == ["op://Vault/unimatrix-far-1/password"] and box.items == {"unimatrix-far-1": "generated-pass-unimatrix-far-1"}
+    assert box.store == {"unimatrix.keys.far-1": str(priv)}
+    assert not [c for c in box.calls if c[0] == "ssh-keygen"]
+    secret = box.items["unimatrix-far-1"]
+    assert not [c for c in box.calls if any(secret in a for a in c)]
+    assert not [p for p in home.rglob("*") if p.is_file() and secret.encode() in p.read_bytes()]
+    first = priv.read_bytes()
+    priv2, body2 = ui.pair_key("far-1", run=box)
+    assert (priv2, body2) == (priv, body) and priv.read_bytes() == first
+
+
+def test_pair_default_with_no_op_cli_refuses_naming_the_passphrase_source(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    with pytest.raises(_passphrase().PassphraseSourceMissing, match="passphrase_source_missing: op CLI"):
+        ui.pair_key("far-1", run=_PairBox(op_missing=True))
+    assert not (home / ".secrets" / "ssh" / "unimatrix-far-1").exists()
+    buf = io.StringIO()
+    assert ui.main(["--pair", "far-1"], out=buf, pair_run=_PairBox(op_missing=True)) == 6
+    assert "REFUSE: passphrase_source_missing: op CLI" in buf.getvalue()
+
+
+def test_pair_default_with_unset_vault_key_refuses_naming_the_key(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+    buf = io.StringIO()
+    assert ui.main(["--pair", "far-1"], out=buf, pair_run=_PairBox(vault="")) == 6
+    assert "REFUSE: passphrase_source_missing" in buf.getvalue() and "unimatrix.passphrase_vault" in buf.getvalue()
+
+
+def test_pair_default_with_locked_1password_refuses_typed(monkeypatch, tmp_path):
+    _pair_home(monkeypatch, tmp_path)
+
+    class Locked(_PairBox):
+        def _op(self, argv, done):
+            return done(1, "", "You are not currently signed in")
+
+    buf = io.StringIO()
+    assert ui.main(["--pair", "far-1"], out=buf, pair_run=Locked()) == 6
+    assert "REFUSE: 1password_locked" in buf.getvalue()
+
+
+def test_pair_remint_removes_old_pair_and_item_then_mints_encrypted(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
+    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
+    key.parent.mkdir(parents=True)
+    key.write_text("OLD", encoding="utf-8")
+    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
+    box.store["unimatrix.keys.far-1"] = str(key)
+    refs = []
+    priv, body = ui.pair_key("far-1", run=box, remint=True, on_mint=refs.append)
+    assert priv == key and body != "OLDBODY" and _passphrase().is_encrypted(key)
+    assert box.items == {"unimatrix-far-1": "generated-pass-unimatrix-far-1.new"}
+    assert refs == ["op://Vault/unimatrix-far-1/password"]
+    assert not list(key.parent.glob("*.new*"))
+    ops = [(c[2], next((a for a in c if a.startswith("--title=")), c[3])) for c in box.calls
+           if c[0] == "op" and c[1] == "item"]
+    assert ops == [("create", "--title=unimatrix-far-1.new"), ("delete", "unimatrix-far-1"),
+                   ("edit", "--title=unimatrix-far-1")]
+
+
+def test_pair_remint_writes_new_key_and_item_before_deleting_the_superseded_ones(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
+    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
+    key.parent.mkdir(parents=True)
+    key.write_text("OLD", encoding="utf-8")
+    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
+    box.store["unimatrix.keys.far-1"] = str(key)
+    mod = _passphrase()
+    seen = []
+    real_mint, real_delete = mod.mint_key, mod.delete_item
+    monkeypatch.setattr(mod, "mint_key", lambda p, c, pw: (seen.append(("mint", Path(p).name,
+                        key.read_text(encoding="utf-8"), dict(box.items))), real_mint(p, c, pw))[1])
+    monkeypatch.setattr(mod, "delete_item", lambda a, run=None: (seen.append(("delete", a,
+                        _passphrase().is_encrypted(key), dict(box.items))), real_delete(a, run))[1])
+    ui.pair_key("far-1", run=box, remint=True)
+    assert seen[0][:3] == ("mint", "unimatrix-far-1.new", "OLD")
+    assert set(seen[0][3]) == {"unimatrix-far-1", "unimatrix-far-1.new"}
+    assert seen[1][:3] == ("delete", "far-1", True) and set(seen[1][3]) == {"unimatrix-far-1", "unimatrix-far-1.new"}
+
+
+def test_pair_remint_failing_before_the_new_key_is_written_keeps_the_superseded_key_and_item(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
+    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
+    key.parent.mkdir(parents=True)
+    key.write_text("OLD", encoding="utf-8")
+    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
+    box.store["unimatrix.keys.far-1"] = str(key)
+    mod = _passphrase()
+
+    def boom(p, c, pw):
+        Path(p).write_text("PARTIAL", encoding="utf-8")
+        raise RuntimeError("mint failed")
+
+    monkeypatch.setattr(mod, "mint_key", boom)
+    with pytest.raises(RuntimeError, match="mint failed"):
+        ui.pair_key("far-1", run=box, remint=True)
+    assert key.read_text(encoding="utf-8") == "OLD" and Path(str(key) + ".pub").is_file()
+    assert box.items == {"unimatrix-far-1": "old-secret"} and not list(key.parent.glob("*.new*"))
+
+
+def test_pair_remint_with_locked_1password_keeps_the_superseded_key_and_item(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
+    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
+    key.parent.mkdir(parents=True)
+    key.write_text("OLD", encoding="utf-8")
+    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
+    box.store["unimatrix.keys.far-1"] = str(key)
+    mod = _passphrase()
+
+    def locked(alias, run=None):
+        raise mod.OnePasswordLocked("1password_locked: test")
+
+    monkeypatch.setattr(mod, "ensure_item", locked)
+    with pytest.raises(mod.OnePasswordLocked):
+        ui.pair_key("far-1", run=box, remint=True)
+    assert key.read_text(encoding="utf-8") == "OLD" and Path(str(key) + ".pub").is_file()
+    assert box.items == {"unimatrix-far-1": "old-secret"}
+
+
+def _remint_box(home, monkeypatch):
+    box = _PairBox(items={"unimatrix-far-1": "old-secret"})
+    key = home / ".secrets" / "ssh" / "unimatrix-far-1"
+    key.parent.mkdir(parents=True)
+    key.write_text("OLD", encoding="utf-8")
+    Path(str(key) + ".pub").write_text("ssh-ed25519 OLDBODY c\n", encoding="utf-8")
+    box.store["unimatrix.keys.far-1"] = str(key)
+    return box, key
+
+
+def test_pair_remint_failing_to_delete_the_superseded_item_names_the_new_item_and_remint(monkeypatch, tmp_path):
+    box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
+    mod = _passphrase()
+
+    def locked(alias, run=None):
+        raise mod.OnePasswordLocked("1password_locked: test")
+
+    monkeypatch.setattr(mod, "delete_item", locked)
+    with pytest.raises(RuntimeError, match=r"new key is in place.*unimatrix-far-1\.new.*re-run --remint"):
+        ui.pair_key("far-1", run=box, remint=True)
+    assert mod.is_encrypted(key)
+
+
+def test_pair_remint_replaces_the_public_half_before_the_private_half(monkeypatch, tmp_path):
+    box, key = _remint_box(_pair_home(monkeypatch, tmp_path), monkeypatch)
+    order = []
+    real = ui.os.replace
+    monkeypatch.setattr(ui.os, "replace", lambda a, b: (order.append(Path(b).name), real(a, b))[1])
+    ui.pair_key("far-1", run=box, remint=True)
+    assert order == ["unimatrix-far-1.pub", "unimatrix-far-1"]
+
+
+def test_pair_default_without_cryptography_refuses_typed_and_leaves_no_key(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    mod = _passphrase()
+
+    def missing(p, c, pw):
+        raise ImportError("No module named 'cryptography'")
+
+    monkeypatch.setattr(mod, "mint_key", missing)
+    buf = io.StringIO()
+    assert ui.main(["--pair", "far-1"], out=buf, pair_run=_PairBox()) != 0
+    assert "cryptography" in buf.getvalue()
+    assert not (home / ".secrets" / "ssh" / "unimatrix-far-1").exists()
+
+
+def test_file_key_default_is_encrypted_and_remint_with_no_op_refuses(monkeypatch, tmp_path):
+    home = _pair_home(monkeypatch, tmp_path)
+    buf = io.StringIO()
+    box = _PairBox()
+    assert ui.main(["--file-key"], out=buf, pair_run=box) == 0
+    assert "passphrase: op://Vault/unimatrix-file/password" in buf.getvalue()
+    assert _passphrase().is_encrypted(home / ".secrets" / "ssh" / "unimatrix-file")
+    keygens = [c for c in box.calls if c[0] == "ssh-keygen"]
+    assert len(keygens) == 1 and keygens[0][1] == "-lf"
+    buf = io.StringIO()
+    assert ui.main(["--file-key", "--remint"], out=buf, pair_run=_PairBox(op_missing=True)) == 6
+    assert "REFUSE: passphrase_source_missing" in buf.getvalue()
+    assert (home / ".secrets" / "ssh" / "unimatrix-file").is_file()
 
 
 def test_pair_adopts_unrecorded_existing_key_without_overwriting(monkeypatch, tmp_path):
@@ -1225,7 +1521,7 @@ def test_pair_without_machine_local_reader_fails_before_minting(monkeypatch, tmp
 def test_pair_main_prints_line_and_block_and_exits_zero(monkeypatch, tmp_path):
     _pair_home(monkeypatch, tmp_path)
     buf = io.StringIO()
-    rc = ui.main(["--pair", "x"], out=buf, pair_run=_PairBox())
+    rc = ui.main(["--pair", "x", "--unencrypted-key"], out=buf, pair_run=_PairBox())
     text = buf.getvalue()
     assert rc == 0 and "Host x\n" in text and "IdentityFile " in text and "unimatrix-x" in text
     assert any(l.startswith('restrict,command="') and l.endswith("ssh-ed25519 AAAAPAIRBODY unimatrix")
@@ -1480,6 +1776,54 @@ def test_agy_config_seeded_empty_0600_only_when_absent(monkeypatch, tmp_path):
     assert rc == 0 and cfg.read_text(encoding="utf-8") == '{"mine": 1}'
 
 
+def test_seed_agy_plugin_is_idempotent_and_preserves_other_entries(tmp_path):
+    pj = tmp_path / "home" / ".gemini" / "config" / "plugins.json"
+    tree = tmp_path / "dest" / "agy-plugin"
+    assert ui.seed_agy_plugin(pj, tree) == "created"
+    assert ui.seed_agy_plugin(pj, tree) == "present"
+    data = json.loads(pj.read_text(encoding="utf-8"))
+    assert data["entries"] == [{"path": str(tree.parent), "include_only": ["agy-plugin"]}]
+    data["entries"].insert(0, {"path": "/mine"})
+    data["inherits"] = [{"path": "/shared.json"}]
+    pj.write_text(json.dumps(data), encoding="utf-8")
+    assert ui.seed_agy_plugin(pj, tree) == "present"
+    assert ui.seed_agy_plugin(pj, tmp_path / "other" / "agy-plugin") == "added"
+    after = json.loads(pj.read_text(encoding="utf-8"))
+    assert after["entries"][0] == {"path": "/mine"} and after["inherits"] == [{"path": "/shared.json"}]
+    assert len(after["entries"]) == 3
+    assert ui.unseed_agy_plugin(pj, tree) == "removed"
+    assert ui.unseed_agy_plugin(pj, tree) == "absent"
+    assert len(json.loads(pj.read_text(encoding="utf-8"))["entries"]) == 2
+
+
+def test_seed_agy_plugin_refuses_a_corrupt_file_untouched(tmp_path):
+    pj = tmp_path / "plugins.json"
+    pj.write_text("{not json", encoding="utf-8")
+    with pytest.raises(ValueError):
+        ui.seed_agy_plugin(pj, tmp_path / "agy-plugin")
+    assert pj.read_text(encoding="utf-8") == "{not json"
+
+
+def test_default_agy_install_registers_plugin_in_plugins_json(monkeypatch, tmp_path):
+    plugin = _engine_tree_and_plugin(monkeypatch, tmp_path)
+    tree = tmp_path / "dest" / "agy-plugin"
+    argv = ("--install", "--hosts", "agy", "--plugin-root", str(plugin))
+    home, rc, out = _default_install(monkeypatch, tmp_path, argv)
+    pj = home / ".gemini" / "config" / "plugins.json"
+    assert tree.is_dir(), out
+    entries = json.loads(pj.read_text(encoding="utf-8"))["entries"]
+    assert entries == [{"path": str(tree.parent), "include_only": ["agy-plugin"]}]
+    ui.main(list(argv), version_text="2.1.316", dest_dir=tmp_path / "dest", out=io.StringIO())
+    assert json.loads(pj.read_text(encoding="utf-8"))["entries"] == entries
+    assert ui.main(["--uninstall", "--hosts", "agy"], dest_dir=tmp_path / "dest", out=io.StringIO()) == 0
+    assert json.loads(pj.read_text(encoding="utf-8"))["entries"] == []
+
+
+def test_host_map_agy_expands_plugin_root_not_plugin_dir():
+    cfg = json.loads((Path(ui.__file__).parent / "unimatrix-host-map.json").read_text(encoding="utf-8"))
+    assert cfg["agy"]["plugin_root_token"] == "${PLUGIN_ROOT}"
+
+
 def test_hosts_writes_only_named_host_paths(monkeypatch, tmp_path):
     home, rc, _ = _default_install(monkeypatch, tmp_path, ("--install", "--hosts", "codex"))
     assert rc == 0 and (home / ".codex").exists()
@@ -1543,7 +1887,7 @@ def test_external_lifecycle_launcher_calls_published_engine_in_process(tmp_path,
     (core / "__init__.py").write_text("", encoding="utf-8")
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "external_registry.py").write_text(
-        'import pathlib\ndef register_current(payload):\n pathlib.Path(__file__).with_name("registered").write_text(payload["session_id"])\ndef unregister(sid):\n pathlib.Path(__file__).with_name("ended").write_text(sid)\n', encoding="utf-8")
+        'import pathlib\ndef register_current(payload):\n pathlib.Path(__file__).with_name("registered").write_text(payload["session_id"])\ndef unregister(sid, payload=None):\n pathlib.Path(__file__).with_name("ended").write_text(sid)\n', encoding="utf-8")
     hooks = core / "host_hooks"
     hooks.mkdir()
     (hooks / "__init__.py").write_text("", encoding="utf-8")
@@ -1689,3 +2033,36 @@ def test_codex_install_scope_reports_local_tools_with_native_limits(monkeypatch,
     assert rc==0
     assert 'Codex local-tool PreToolUse (shell, projected edits, MCP, spawn briefs; native coverage limits apply)' in output
     assert 'shell-command PreToolUse only' not in output
+
+
+def test_file_peer_line_names_the_file_relay_script_and_the_peer_pin():
+    line = ui.authorized_keys_line("/home/a/unimatrix", interpreter="/usr/bin/python3", key_body="AAAAk", file_peer="alpha")
+    assert line.startswith('restrict,command="/usr/bin/python3 ')
+    assert line.endswith('unimatrix-file-relay.py --peer alpha" ssh-ed25519 AAAAk unimatrix')
+    plain = ui.authorized_keys_line("/home/a/unimatrix", interpreter="/usr/bin/python3")
+    assert "unimatrix-file-relay.py" not in plain and "unimatrix-relay.py" in plain
+
+
+@pytest.mark.skipif(__import__("shutil").which("ssh-keygen") is None, reason="ssh-keygen required")
+def test_file_key_mints_a_separate_key_is_idempotent_and_never_touches_the_relay_key(monkeypatch, tmp_path):
+    home = tmp_path / "settings"
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    relay_key = home / ".secrets" / "ssh" / "unimatrix-zero"
+    relay_key.parent.mkdir(parents=True)
+    relay_key.write_text("relay private key")
+    buf = io.StringIO()
+    assert ui.main(["--file-key", "--unencrypted-key"], out=buf) == 0
+    priv = home / ".secrets" / "ssh" / "unimatrix-file"
+    assert priv.is_file() and relay_key.read_text() == "relay private key"
+    text = buf.getvalue()
+    assert str(priv) in text and "SHA256:" in text and "ssh-ed25519 " in text
+    first = priv.read_bytes()
+    assert ui.main(["--file-key", "--unencrypted-key"], out=io.StringIO()) == 0 and priv.read_bytes() == first
+
+
+def test_install_prints_a_separate_file_key_line(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    dest = tmp_path / "home" / "unimatrix"
+    rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
+    assert rc == 0
+    assert [l for l in out.splitlines() if "unimatrix-file-relay.py --peer <box>" in l and "restrict,command=" in l]

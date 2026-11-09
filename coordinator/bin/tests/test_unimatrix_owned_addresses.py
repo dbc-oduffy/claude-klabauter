@@ -2,6 +2,7 @@
 import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,8 @@ hook = load('unimatrix-codex-hook-sessionstart')
 router = load('unimatrix-peer-router')
 SID = '01a1b63b-acfb-78d1-86f2-a74ad6ca4572'
 OTHER = '01a1b63c-040a-76f2-a9b9-929d9a0d0098'
+CLI_ROOT = {SID: {'id': SID, 'cwd': '/work/claude-klabauter', 'source': 'cli',
+                  'thread_source': 'user', 'agent_path': None}}
 
 
 def address(**updates):
@@ -114,7 +117,7 @@ def test_malformed_owned_binding_does_not_fall_back_to_legacy_allocator(tmp_path
 
 
 def test_picker_accepts_owned_name_legacy_alias_and_native_uuid(tmp_path):
-    peer = {**address(), 'vendor': 'codex', 'target': SID, 'aliases': ['legacy-safe']}
+    peer = {**address(), 'vendor': 'codex', 'target': SID, 'aliases': ['legacy-safe'], 'codexPid': os.getpid()}
     r = router.Router([peer], sessions_dir=tmp_path, state_dir=tmp_path, endpoint_dir=tmp_path)
     for name in (peer['name'], 'legacy-safe', SID, f'codex-{SID}'):
         assert r.pick_peer(name) == peer['name']
@@ -148,15 +151,30 @@ def test_discovery_projects_engine_alias_and_default_refresh_retains_it(tmp_path
     monkeypatch.setattr(router.socket, 'gethostname', lambda: 'Machine-a')
     monkeypatch.setattr(router._roster(), 'settings_home', lambda: settings)
     monkeypatch.setattr(router, 'lock_held', lambda path: True)
-    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: {})
+    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: CLI_ROOT)
+    monkeypatch.setattr(router, 'codex_rollout_addressable', lambda home, ident, index: True)
     peer, = router.load_lock_peers(locks, 'codex')
     assert peer['name'] == address()['name'] and peer['target'] == SID
     assert f'codex-{SID}' in peer['aliases']
     r = router.Router([peer], sessions_dir=tmp_path, state_dir=tmp_path,
                       endpoint_dir=tmp_path, codex_locks_dir=locks)
     r.discovered = {peer['name']}
-    binding.unlink()
     assert list(r._live_discovered()) == [peer['name']]
+    binding.unlink()
+    assert list(r._live_discovered()) == []
+
+
+def test_discovery_refuses_codex_peer_without_engine_address(tmp_path, monkeypatch, capsys):
+    settings, locks = tmp_path / 'settings', tmp_path / 'locks'
+    (settings / 'host-sessions/codex').mkdir(parents=True)
+    locks.mkdir()
+    (locks / f'{SID}.lock').touch()
+    monkeypatch.setattr(router._roster(), 'settings_home', lambda: settings)
+    monkeypatch.setattr(router, 'lock_held', lambda path: True)
+    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: CLI_ROOT)
+    monkeypatch.setattr(router, 'codex_rollout_addressable', lambda home, ident, index: True)
+    assert router.load_lock_peers(locks, 'codex') == []
+    assert f'refusing Codex peer without engine address: {SID}' in capsys.readouterr().err
 
 
 def test_discovery_refuses_malformed_owned_binding(tmp_path, monkeypatch, capsys):
@@ -166,13 +184,13 @@ def test_discovery_refuses_malformed_owned_binding(tmp_path, monkeypatch, capsys
     (locks / f'{SID}.lock').touch()
     monkeypatch.setattr(router._roster(), 'settings_home', lambda: settings)
     monkeypatch.setattr(router, 'lock_held', lambda path: True)
-    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: {})
+    monkeypatch.setattr(router, 'codex_thread_metadata', lambda home: CLI_ROOT)
     assert router.load_lock_peers(locks, 'codex') == []
     assert 'refusing Codex address' in capsys.readouterr().err
 
 
 def test_face_exports_owned_identity_for_read_only_mirror_projection(tmp_path):
-    peer = {**address(), 'vendor': 'codex', 'target': SID, 'aliases': ['legacy-safe']}
+    peer = {**address(), 'vendor': 'codex', 'target': SID, 'aliases': ['legacy-safe'], 'codexPid': os.getpid()}
     face = router.Registration(peer['name'], 'test-endpoint', str(tmp_path), vendor='codex', peer=peer)
     assert face.data['sessionId'].startswith('peer-')  # harness identity remains its genuine face
     assert face.data['session_id'] == SID and face.data['target'] == SID

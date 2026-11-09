@@ -299,6 +299,7 @@ def test_face_health_retries_missing_face_after_failed_restart(tmp_path, monkeyp
     assert spawned == ["missing"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows endpoints are named pipes, not files")
 def test_failed_face_bind_stop_preserves_unowned_endpoint(tmp_path):
     from types import SimpleNamespace
     mod = load("unimatrix-peer-router")

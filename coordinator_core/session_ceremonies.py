@@ -8,11 +8,11 @@ import re
 import sys
 import threading
 import time
-import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 from coordinator_core.agent_pipe import bridge
+from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.ops.invoke_from_argv import _run_entrypoint
 
 _retry_lock = threading.Lock()
@@ -21,12 +21,7 @@ _pending_active = {}
 
 
 def _write_json(path: Path, value: dict):
-    staged = path.with_name(path.name + ".tmp." + uuid.uuid4().hex)
-    try:
-        staged.write_text(json.dumps(value, indent=2), encoding="utf-8", newline="\n")
-        staged.replace(path)
-    finally:
-        staged.unlink(missing_ok=True)
+    atomic_write_bytes(path, json.dumps(value, indent=2).encode("utf-8"))
 
 
 def _advance(request: dict) -> dict:

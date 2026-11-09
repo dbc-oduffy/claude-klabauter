@@ -45,7 +45,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     halted_record_message,
 )
 from coordinator_core.ops.dispatch_emit.land_run_halt import (
-    _settle_ledger_pointer, held_rows_for, marker_kind,
+    _peer_only_after_checkpoint, _settle_ledger_pointer, held_rows_for, marker_kind,
 )
 from coordinator_core.ops.dispatch_emit.halted_record_request import (  # noqa: F401 -- re-exported
     _coded_rows,
@@ -501,6 +501,15 @@ def _land(
     tracked_gone = set(_tracked_at_head(worktree_root, gone))
     dropped = [{"path": p, "reason": "deletion-git-cannot-see"} for p in gone if p not in tracked_gone]
     gone = [p for p in gone if p in tracked_gone]
+    peer_only = _peer_only_after_checkpoint(
+        worktree_root, run_id, halted.get(HALT_PLAN_FIELD), run_base, product + gone
+    )
+    if peer_only:
+        product = [p for p in product if p not in peer_only]
+        gone = [p for p in gone if p not in peer_only]
+        run_written = [p for p in run_written if p not in peer_only]
+        post_candidates = [p for p in post_candidates if p not in peer_only]
+        uncoded_dirt = [p for p in uncoded_dirt if p not in peer_only]
     withheld: dict = dict(process_withheld)
     withheld.update({p: halt_product_gates.SCRATCH_EXPORT for p in scratch_declared})
 

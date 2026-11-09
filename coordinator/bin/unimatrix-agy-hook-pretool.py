@@ -31,8 +31,10 @@ import shlex
 import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+SPAWN_DEBOUNCE_S = 30.0
 HERE = Path(__file__).resolve().parent
 LAUNCH = HERE / "unimatrix-agy-hook-launch.py"
 PASS = {"decision": "ask"}
@@ -87,11 +89,39 @@ def leg_current(conv, agy_pid, state=None):
 
 
 def launch_prefix(conv, agy_pid):
-    """Shell text that starts the launcher detached and silent, for sh (POSIX) or cmd (Windows)."""
-    argv = [sys.executable, str(LAUNCH), "--conversation", conv, "--agy-pid", str(agy_pid)]
+    """Shell text that starts the launcher detached and silent, for sh. None on Windows: agy runs
+    PowerShell there, which rejects cmd syntax, so bootstrap_rewrite spawns the launcher itself."""
     if os.name == "nt":
-        return f'start "" /B {subprocess.list2cmdline(argv)} >nul 2>&1', " & "
+        return None
+    argv = [sys.executable, str(LAUNCH), "--conversation", conv, "--agy-pid", str(agy_pid)]
     return f"(nohup {' '.join(shlex.quote(a) for a in argv)} >/dev/null 2>&1 &)", "; "
+
+
+def spawn_launcher(conv, agy_pid):
+    """Windows: start the launcher detached from this hook, since the command line cannot carry the
+    start (agy's PowerShell rejects cmd syntax). The hook's own environment lacks the language-server
+    token; the launcher is idempotent, so a failed or tokenless start only leaves the leg pending.
+    A start stamp (STATE/<conv>.spawned) debounces it: each hook is a fresh process, so a start within
+    SPAWN_DEBOUNCE_S of the stamp is skipped. An unwritable stamp never blocks the start."""
+    stamp = state_dir() / f"{conv}.spawned"
+    try:
+        if time.time() - stamp.stat().st_mtime < SPAWN_DEBOUNCE_S:
+            return
+    except OSError:
+        pass
+    try:
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.touch()
+    except OSError:
+        pass
+    flags = (getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+             | getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    try:
+        subprocess.Popen([sys.executable, str(LAUNCH), "--conversation", conv, "--agy-pid", str(agy_pid)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         close_fds=True, creationflags=flags)
+    except OSError:
+        pass
 
 
 def load_sibling(name):
@@ -120,13 +150,47 @@ def bootstrap_rewrite(payload, agy_pid):
     if (not isinstance(conv, str) or not CONV_RE.match(conv) or call.get("name") != "run_command"
             or not isinstance(cmd, str) or not cmd or leg_current(conv, agy_pid)):
         return None
-    start, sep = launch_prefix(conv, agy_pid)
+    prefix = launch_prefix(conv, agy_pid)
+    if prefix is None:
+        spawn_launcher(conv, agy_pid)
+        return None
+    start, sep = prefix
     return {"reason": "PM-installed unimatrix hook: also (re)starts the agy leg for Claude/Codex peer messaging in the background.",
             "overwrite": {"CommandLine": f"{start}{sep}{cmd}"}}
 
 
 SEND_SCRIPT = HERE / "unimatrix-send.py"
 UNSAFE_SHELL_TEXT = ("$", "`", "\n", "\r", "%", "^")
+
+
+SHELL_SYNTAX_OUTSIDE_QUOTES = set("();<>|&{}@#,")
+
+
+def quote_aware_tokens(cmd):
+    """Split a Windows command line on unquoted whitespace, keeping backslashes literal and dropping the
+    quote marks. None on an unterminated quote or on shell syntax outside quotes."""
+    tokens, cur, quote, has = [], [], None, False
+    for c in cmd:
+        if quote:
+            if c == quote:
+                quote = None
+            else:
+                cur.append(c)
+        elif c in "'\"":
+            quote, has = c, True
+        elif c.isspace():
+            if has or cur:
+                tokens.append("".join(cur))
+            cur, has = [], False
+        elif c in SHELL_SYNTAX_OUTSIDE_QUOTES:
+            return None
+        else:
+            cur.append(c)
+    if quote:
+        return None
+    if has or cur:
+        tokens.append("".join(cur))
+    return tokens
 
 
 def is_peer_reply(payload):
@@ -139,17 +203,20 @@ def is_peer_reply(payload):
     cmd = args.get("CommandLine") if isinstance(args, dict) else None
     if call.get("name") != "run_command" or not isinstance(cmd, str) or any(c in cmd for c in UNSAFE_SHELL_TEXT):
         return False
-    try:
-        lexer = shlex.shlex(cmd, posix=os.name != "nt", punctuation_chars=True)
-        lexer.whitespace_split = True
-        tokens = list(lexer)
-    except ValueError:
-        return False
     if os.name == "nt":
-        tokens = [t[1:-1] if len(t) > 1 and t[0] == t[-1] == '"' else t for t in tokens]
+        tokens = quote_aware_tokens(cmd)
+        if tokens is None:
+            return False
+    else:
+        try:
+            lexer = shlex.shlex(cmd, posix=True, punctuation_chars=True)
+            lexer.whitespace_split = True
+            tokens = list(lexer)
+        except ValueError:
+            return False
     if len(tokens) < 2 or tokens[0] != sys.executable or tokens[1] != str(SEND_SCRIPT):
         return False
-    return not any(t and set(t) <= set("();<>|&") for t in tokens)
+    return os.name == "nt" or not any(t and set(t) <= set("();<>|&") for t in tokens)
 
 
 def decide(payload, agy_pid, engine_root=None, raw=None):

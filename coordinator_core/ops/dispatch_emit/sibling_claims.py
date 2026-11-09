@@ -90,7 +90,7 @@ def _withholds_any(marker: dict, covering: Sequence[str]) -> bool:
         withheld = halted_run._withheld_of(marker)
     except Exception:  # noqa: BLE001 -- unknown set: it holds
         return True
-    return any(run_ownership._covers(w, c) for w in withheld for c in covering)
+    return run_ownership.covers_any(withheld, covering)
 
 
 def index_clear_runs(root: Path, covering: Optional[Sequence[str]]) -> frozenset:
@@ -124,9 +124,7 @@ def _index_clear_read(root: Path, wanted: tuple) -> frozenset:
             if stamp is None or now - stamp > run_token.TTL_SECONDS:
                 continue
             entry = idx._parse(index / name)
-            if entry is not None and entry.paths and not any(
-                run_ownership._covers(w, c) for w in entry.paths for c in wanted
-            ):
+            if entry is not None and entry.paths and not run_ownership.covers_any(entry.paths, wanted):
                 clear.add(run_id)
         return frozenset(clear)
     except Exception:  # noqa: BLE001 -- index unreadable: every marker is read
@@ -167,6 +165,7 @@ def _unlanded_run_ids(
     now = time.time()
     found = []
     clear = index_clear_runs(root, covering)
+    home = run_token._record_home(root)
     for run_id, stamp in halted_hold_release.record_stamps(root):
         if run_id == own_run_id or run_id in clear:
             continue
@@ -191,7 +190,7 @@ def _unlanded_run_ids(
                 found.append(run_id)
             continue
         for claimed in (False, True):
-            record = run_token.read_cached(run_token._record_path(root, run_id, claimed=claimed))
+            record = run_token.read_cached(run_token._record_path(root, run_id, claimed=claimed, home=home))
             if record is not None and run_token._fresh(record):
                 if minted_before is not None and (record.get("minted_at"), run_id) >= tuple(minted_before):
                     break

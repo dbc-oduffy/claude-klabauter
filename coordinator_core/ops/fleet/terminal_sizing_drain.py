@@ -109,7 +109,7 @@ def is_registered_repo(root: Path) -> bool:
 
         reg_dir = mr.registry_dir()
         here = os.path.normcase(os.path.abspath(str(root)))
-        for fname in ("registry.toml", "registry.local.toml"):
+        for fname in mr.REGISTRY_LAYER_FILES:
             for key, val in mr.load_flat_registry_file(reg_dir / fname).items():
                 if (
                     key.startswith("repos.")

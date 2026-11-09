@@ -8,11 +8,15 @@ Reads go through `halt_resume_record.bounded_read`; no git, no directory listing
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import threading
+import time
 from pathlib import Path
-from typing import Iterable, Mapping, Optional, Sequence, Union
+from typing import Callable, Iterable, Mapping, Optional, Sequence, Union
 
+from coordinator_core import warp_live
 from coordinator_core.ops.dispatch_emit import live_run_writes
 from coordinator_core.ops.dispatch_emit.halt_resume_record import (
     MISSING,
@@ -24,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.halt_resume_record import (
 from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir, legacy_record_dir
 
 INDEX_FILE = "coordinator-warp-live-run-index.json"
+CLAIMS_DIR = "coordinator-warp-live-claims"
 SCHEMA = "live-run-index/1"
 WRITE_DEADLINE_MS = 2000.0
 
@@ -63,7 +68,11 @@ def _store(path: Path, runs: dict) -> bool:
     return bounded_write(path, data, WRITE_DEADLINE_MS) is not STALLED
 
 
+_NO_STORE = object()
+
+
 def _mutate(root: Union[str, Path], fn) -> bool:
+    """Run `fn(runs)` under the index lock and store. `fn` returning `_NO_STORE` skips the store (True)."""
     path = index_path(root)
     if path is None:
         return False
@@ -71,8 +80,189 @@ def _mutate(root: Union[str, Path], fn) -> bool:
         if write_outstanding(path):
             return False
         runs = _load(root, path)
-        fn(runs)
+        if fn(runs) is _NO_STORE:
+            return True
         return _store(path, runs)
+
+
+def claim(
+    root: Union[str, Path],
+    run_id: str,
+    writes: Iterable[str],
+    ended: Optional[Callable[[str], bool]] = None,
+) -> Optional[dict[str, list[str]]]:
+    """Atomically claim `writes` as this run's footprint unless another indexed run's footprint overlaps.
+
+    Overlapping runs for which `ended(run_id)` holds (default `warp_live.run_is_over`) are dropped from
+    the hits, per hit only: the index is pruned in the background, so an ended run may still be listed.
+
+    Returns `{}` when claimed, the overlap hits (run id -> paths, nothing written) when refused, and
+    `None` when the claim could not be made atomically (no common dir, cross-process lock not taken,
+    write outstanding, stalled store): the caller falls back to its read-only advisory check.
+    Takes the cross-process index lock itself, so never call it inside `live_run_writes._index_lock`
+    (held_lock is not re-entrant). A None footprint (minted, unstaged) never blocks."""
+    from coordinator_core import locked_write
+
+    path = index_path(root)
+    if path is None:
+        return None
+    mine = sorted({w for w in writes if isinstance(w, str) and w})
+    over = ended if ended is not None else lambda rid: warp_live.run_is_over(Path(root), rid)
+    claims = _claims_dir(path)
+    created: list[Path] = []
+    try:
+        hits = _claim_markers(claims, run_id, mine, over, created)
+    except OSError:
+        _unlink_all(created)
+        return None
+    if hits:
+        _unlink_all(created)
+        return hits
+
+    def apply(runs: dict):
+        others = {
+            rid: frozenset(p for p in e["footprint"] if isinstance(p, str))
+            for rid, e in runs.items()
+            if rid != run_id and isinstance(e, dict) and isinstance(e.get("footprint"), list)
+        }
+        found = overlaps(mine, others)
+        if found:
+            hits.update({rid: p for rid, p in found.items() if not over(rid)})
+        if hits:
+            return _NO_STORE
+        entry = runs.get(run_id)
+        entry = dict(entry) if isinstance(entry, dict) else {"minted_at": None}
+        entry["footprint"] = mine
+        runs[run_id] = entry
+        return None
+
+    try:
+        with locked_write.held_lock(path, timeout=live_run_writes._INDEX_LOCK_SECONDS):
+            stored = _mutate(root, apply)
+    except (locked_write.LockTimeout, locked_write.LockAnchorError, OSError):
+        stored = False
+    if not stored:
+        _unlink_all(created)
+        return None
+    if hits:
+        _unlink_all(created)
+    return hits
+
+
+def _claims_dir(index_file: Path) -> Path:
+    return index_file.parent / CLAIMS_DIR
+
+
+def _unlink_all(paths: Iterable[Path]) -> None:
+    for p in paths:
+        try:
+            p.unlink()
+        except OSError:
+            pass
+
+
+def _read_marker(p: Path) -> Optional[tuple[str, str]]:
+    """(run_id, path) of a claim marker; None when gone or still unwritten after a short wait."""
+    for _ in range(10):
+        try:
+            data = json.loads(p.read_bytes().decode("utf-8"))
+            return str(data["run"]), str(data["path"])
+        except FileNotFoundError:
+            return None
+        except (ValueError, KeyError, TypeError, UnicodeDecodeError, OSError):
+            time.sleep(0.005)
+    return None
+
+
+ABANDONED_MARKER_SECONDS = 30.0
+
+
+def _marker_is_abandoned(p: Path) -> bool:
+    """A marker still unreadable this long after creation belongs to a claimer that died between
+    create and write; left alone it would refuse its path forever."""
+    try:
+        return time.time() - p.stat().st_mtime > ABANDONED_MARKER_SECONDS
+    except OSError:
+        return False
+
+
+def _claim_markers(
+    claims: Path, run_id: str, mine: Sequence[str], over: Callable[[str], bool], created: list[Path]
+) -> dict[str, list[str]]:
+    """Create one O_EXCL marker per path of `mine`, then scan every other holder's markers.
+
+    The exclusive create decides an identical path; creating before scanning means two overlapping
+    claimers cannot both miss each other (at least one refuses). Markers of ended holders are
+    removed. Appends the markers this call created to `created`; the caller unlinks them on a hit."""
+    claims.mkdir(parents=True, exist_ok=True)
+    wanted = {marker_name(w): w for w in mine}
+    for name, rel in wanted.items():
+        target = claims / name
+        body = json.dumps({"run": run_id, "path": rel}).encode("utf-8")
+        for attempt in (0, 1):
+            try:
+                fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                holder = _read_marker(target)
+                dead = _marker_is_abandoned(target) if holder is None else holder[0] != run_id and over(holder[0])
+                if attempt == 0 and dead:
+                    _unlink_all([target])
+                    continue
+                break
+            try:
+                os.write(fd, body)
+            finally:
+                os.close(fd)
+            created.append(target)
+            break
+    held: dict[str, set[str]] = {}
+    markers: dict[Path, str] = {}
+    for p in claims.iterdir():
+        read_back = _read_marker(p)
+        if read_back is None:
+            if p.name in wanted and not p.exists():
+                continue
+            if _marker_is_abandoned(p):
+                _unlink_all([p])
+            elif p.name in wanted:
+                held.setdefault("?", set()).add(wanted[p.name])
+            continue
+        rid, rel = read_back
+        if rid == run_id:
+            if p.name not in wanted:
+                _unlink_all([p])
+            continue
+        held.setdefault(rid, set()).add(rel)
+        markers[p] = rid
+    found = overlaps(mine, {rid: frozenset(paths) for rid, paths in held.items()})
+    hits: dict[str, list[str]] = {}
+    for rid, paths in found.items():
+        if rid != "?" and over(rid):
+            _unlink_all(p for p, owner in markers.items() if owner == rid)
+        else:
+            hits[rid] = paths
+    return hits
+
+
+def marker_name(path: str) -> str:
+    """Claim-marker file name for a path: a digest of its normalised form."""
+    norm = live_run_writes._norm(path).as_posix()
+    return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:32]
+
+
+def release(root: Union[str, Path], run_id: str) -> None:
+    """Unlink every claim marker held by `run_id`. Never raises."""
+    path = index_path(root)
+    if path is None:
+        return
+    claims = _claims_dir(path)
+    try:
+        for p in claims.iterdir():
+            held = _read_marker(p)
+            if held is not None and held[0] == run_id:
+                _unlink_all([p])
+    except OSError:
+        pass
 
 
 def add(root: Union[str, Path], run_id: str, minted_at: float) -> bool:
@@ -92,7 +282,8 @@ def stage(root: Union[str, Path], run_id: str, footprint: Iterable[str], minted_
 
 
 def remove(root: Union[str, Path], run_id: str) -> bool:
-    """Drop a run (consumed, released or ended)."""
+    """Drop a run (consumed, released or ended) and the claim markers it holds."""
+    release(root, run_id)
     return _mutate(root, lambda runs: runs.pop(run_id, None))
 
 

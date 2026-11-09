@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_prod
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
+PEER_EDIT = "peer_edit.py"  # a measured path the commit omits: no chunk declares it
 _VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": ["C3"]}]}
 
 
@@ -133,9 +134,10 @@ def test_mismatch_pins_both_sides(repo):  # noqa: F811
 
     assert land_run._measured_mismatch(repo, record, ["p.py"], [], {}) == []
     assert land_run._measured_mismatch(repo, record, ["p.py", "q.py"], [], {}) == ["q.py"]
-    assert land_run._measured_mismatch(repo, record, [], [], {}) == ["p.py"]
+    assert land_run._measured_mismatch(repo, record, [], [], {}) == []
     _write(repo, "p.py", "p = 2\n")
     assert land_run._measured_mismatch(repo, record, ["p.py"], [], {}) == ["p.py"]
+    assert land_run._measured_mismatch(repo, record, [], [], {}) == ["p.py"]
 
 
 def test_mismatch_tolerates_a_recorded_path_already_at_head(repo):  # noqa: F811
@@ -152,12 +154,15 @@ def test_mismatch_compares_removals(repo):  # noqa: F811
     assert land_run._measured_mismatch(repo, {"blobs": {}, "removed": []}, [], ["README.md"], {}) == ["README.md"]
 
 
-def test_detail_for_an_omitted_path_names_full_ids_and_the_omission_not_end_of_file(repo):  # noqa: F811
+def test_omitted_path_holding_the_measured_bytes_is_satisfied_and_other_bytes_refuse_naming_the_omission(repo):  # noqa: F811
     _write(repo, "p.py", "p = 1\n")
     blob = _blob(repo, "p.py")
     record = {"blobs": {"p.py": blob}, "removed": []}
 
+    assert land_run._measured_mismatch(repo, record, [], [], {}) == []
+    _write(repo, "p.py", "p = 2\n")
     assert land_run._measured_mismatch(repo, record, [], [], {}) == ["p.py"]
+    _write(repo, "p.py", "p = 1\n")
     detail = land_run._mismatch_detail(repo, "p.py", record["blobs"], {}, RUN2, omitted=True)
 
     assert f"measured {blob}, landing {blob}" in detail
@@ -196,3 +201,61 @@ def test_settled_blob_overrides_the_worktree_blob(repo):  # noqa: F811
     record = {"blobs": {"p.py": "a" * 40}, "removed": []}
 
     assert land_run._measured_mismatch(repo, record, ["p.py"], [], {"p.py": "a" * 40}) == []
+
+
+def test_omitted_path_a_live_peer_holds_names_the_peer_and_never_advises_a_whole_hand_commit(halted, monkeypatch):  # noqa: F811
+    resume, token = _stage(halted)
+    _write(halted, PEER_EDIT, "peer = 1\n")
+    _record(halted, [C3_PATH, C4_PATH, LANE, LANE_TEST, PEER_EDIT])
+    _write(halted, PEER_EDIT, "peer = 2\n")
+    asked = []
+
+    def peers(root, paths, *a, **k):
+        asked.append(list(paths))
+        return {p: "live peer run ask-20261109T000000-69bc98" for p in paths}
+
+    monkeypatch.setattr(land_run, "_live_peer_holders", peers)
+    head = _git(halted, "rev-parse", "HEAD")
+
+    out = _terminal_with(halted, token, resume, _VERDICT)
+
+    assert out["committed"] is False and out["refused"] == land_run.LANDING_TREE_DIFFERS, out
+    assert PEER_EDIT in asked[0] and out["paths"] == [PEER_EDIT]
+    assert "held by live peer run ask-20261109T000000-69bc98" in out["error"]
+    assert "hand-commit this path whole" not in out["error"] and "or hand-commit" not in out["error"]
+    assert _git(halted, "rev-parse", "HEAD") == head
+
+
+def test_omitted_path_no_live_peer_holds_still_refuses_with_the_remeasure_remedy(halted, monkeypatch):  # noqa: F811
+    resume, token = _stage(halted)
+    _write(halted, PEER_EDIT, "peer = 1\n")
+    _record(halted, [C3_PATH, C4_PATH, LANE, LANE_TEST, PEER_EDIT])
+    _write(halted, PEER_EDIT, "peer = 2\n")
+    monkeypatch.setattr(land_run, "_live_peer_holders", lambda *a, **k: {})
+
+    out = _terminal_with(halted, token, resume, _VERDICT)
+
+    assert out["refused"] == land_run.LANDING_TREE_DIFFERS, out
+    assert "held by" not in out["error"]
+    assert land_run._measured_rev_call(RUN2) in out["error"] and out["paths"] == [PEER_EDIT]
+
+
+def test_live_peer_holders_names_the_run_from_the_claim_scan_else_the_session(tmp_path, monkeypatch):
+    from coordinator_core.ops import warp_run_deliverable
+
+    held = {"a.py": {"sid-b", "sid-a"}, "b.py": {"sid-c"}}
+    monkeypatch.setattr(land_run, "_peer_held", lambda *a, **k: held)
+    seen = {}
+
+    def scan(root, paths, *a):
+        seen["paths"] = list(paths)
+        return {"a.py": [("t", "ask-2", "sid-a"), ("t", "ask-1", "sid-b")]}
+
+    monkeypatch.setattr(warp_run_deliverable, "_live_claim_scan", scan)
+    out = land_run._live_peer_holders(tmp_path, ["a.py", "b.py"], "me", "run", None, None, None, None, ())
+
+    assert out == {"a.py": "live peer run ask-1, ask-2", "b.py": "live peer session sid-c"}
+    assert sorted(seen["paths"]) == ["a.py", "b.py"]
+
+    monkeypatch.setattr(land_run, "_peer_held", lambda *a, **k: {})
+    assert land_run._live_peer_holders(tmp_path, ["a.py"], "me", "run", None, None, None, None, ()) == {}

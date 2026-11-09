@@ -38,7 +38,7 @@ def main(argv=None):
             elif event == 'SessionStart' and not payload.get('agent_id'):
                 external_registry.register_current(payload)
         except Exception as exc:
-            sys.stderr.write(f'external session registration unavailable: {type(exc).__name__}\n')
+            sys.stderr.write(f'external session registration unavailable: {type(exc).__name__}: {exc}\n')
         result = {}
         if event != 'SessionEnd':
             from coordinator_core.host_hooks.session_context import context

@@ -32,17 +32,16 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # Acts on the klabauter checkout and settings home, never the caller's worktree.
     "fleet.klabauter_freshness":             "none",
     "orientation.regenerate_cache":          "common_dir",
-    "ceremony.pickup": "show_top",
-    "ceremony.handoff": "show_top",
-    "ceremony.workday_start": "show_top",
-    "ceremony.workday_complete": "show_top",
-    "ceremony.workstream_start": "show_top",
-    "ceremony.quick_wrap": "show_top",
-    "ceremony.result": "show_top",
+    "ceremony.pickup":                      "show_top",
+    "ceremony.handoff":                     "show_top",
+    "ceremony.workday_start":               "show_top",
+    "ceremony.workday_complete":            "show_top",
+    "ceremony.workstream_start":            "show_top",
+    "ceremony.quick_wrap":                  "show_top",
+    "ceremony.result":                      "show_top",
     "workflow.fire":                         "common_dir",
     "engine_ask.submit":                     "common_dir",
     "workflow.fire_status":                  "common_dir",
-    "engine_ask.submit":                     "common_dir",
     "handoff.blocked_by_dependents":         "common_dir",
     "hooks.nudge_foreground_agent_dispatch": "common_dir",
     "hooks.nudge_em_code_dispatch":          "common_dir",
@@ -330,11 +329,13 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # entry dispatch resolves repo_root=None and the handler refuses outright.
     "plan.prep_gate":                        "common_dir",
     "plan.readiness_verdict":                "common_dir",
+    "plan.set_code_done":                    "common_dir",
     "plan.premise_scope":                    "common_dir",
     "plan.premise_record":                   "common_dir",
     "plan.backfill_warp_executing":          "common_dir",
     "plan.repin_register":                   "common_dir",
     "plan.stamp_prepped":                    "common_dir",
+    "plan.reapprove_mechanical_tags":        "common_dir",
     "plan.record_residue_rulings":           "common_dir",
     "plan.mise_prep_probe":                  "common_dir",
     "plan.mise_upgrade_apply":               "common_dir",
@@ -701,6 +702,12 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # scratch.delete — "show_top", MUTATING: repo_root is the caller's _origin_worktree, so a warm
     # engine whose own cwd is another checkout still reads the run record in the calling repo.
     "scratch.delete":                         "show_top",
+    # ask_spool.withdraw — "show_top", MUTATING: the spool lives under the calling worktree's
+    # .coordinator-local/ask-spool, the same root the submit hook spooled into.
+    "ask_spool.withdraw":                     "show_top",
+    # scratch.record_run_path, scratch.keep — "show_top", MUTATING: same run-record lookup as scratch.delete.
+    "scratch.record_run_path":                "show_top",
+    "scratch.keep":                           "show_top",
     # run.paths_trash — "show_top", MUTATING: same run-record lookup as scratch.delete.
     "run.paths_trash":                        "show_top",
     "cartography.count_references":           "none",
@@ -1038,6 +1045,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "fleet.mode_set":                            "none",
     "fleet.mode_show":                           "none",
     "warm.request_status":                       "none",
+    # repo.setup — "none": the target is the caller-supplied `root` param, never the worktree
+    # the engine runs in.
+    "repo.setup":                                "none",
 }
 
 # ---------------------------------------------------------------------------

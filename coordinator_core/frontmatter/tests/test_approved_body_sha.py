@@ -60,6 +60,15 @@ def test_frontmatter_only_edit_does_not_trip():
     assert check_approved_body(text)[0] == APPROVED_BODY_OK
 
 
+def test_changed_remedy_names_the_tag_reapprove_op_unless_executing():
+    changed = _edited(_approved())
+    assert "plan.reapprove_mechanical_tags" in check_approved_body(changed)[1]
+    executing = changed.replace("status: approved", "status: executing")
+    message = check_approved_body(executing)[1]
+    assert "review-exec-auth-stamp restamp" in message
+    assert "plan.reapprove_mechanical_tags" not in message
+
+
 def test_absent_field_on_approved_plan_is_unverifiable_not_changed():
     assert check_approved_body(_plan_text())[0] == APPROVED_BODY_UNVERIFIABLE
     assert check_approved_body(_plan_text(status="draft"))[0] == APPROVED_BODY_NOT_APPLICABLE

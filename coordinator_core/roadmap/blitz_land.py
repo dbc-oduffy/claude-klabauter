@@ -828,10 +828,10 @@ def _verified_prior_sha(
     if not isinstance(prior, str) or not re.fullmatch(r"[0-9a-fA-F]{40}", prior):
         return None, f"not a full 40-hex SHA: {prior!r}"
     from coordinator_core.git.git_dir import resolve_git_common_dir
-    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_objects import read_object_header
 
     try:
-        found = read_object(resolve_git_common_dir(worktree_root), prior)
+        found = read_object_header(resolve_git_common_dir(worktree_root), prior)
     except Exception as exc:  # noqa: BLE001 - any read failure is "cannot verify"
         return None, f"object store unreadable: {type(exc).__name__}: {exc}"
     if found is None or found[0] != "commit":

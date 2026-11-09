@@ -949,70 +949,28 @@ def _undeclared_dirty(
     return out
 
 
-def _own_drift_actuals(
-    worktree_root: Path, run_dir: Optional[Path], drift: Sequence, declared: Sequence[str],
-    session_id: Optional[str], review_writes: Optional[dict], reviewed: Optional[dict] = None,
-    record_dir: Optional[Path] = None, run_id: Optional[str] = None,
+from coordinator_core.ops.dispatch_emit.own_drift import _own_drift_actuals, _own_record_dir  # noqa: E402,F401
+
+
+def _delivered_rows_missing_writes(
+    worktree_root: Path, chunks: Sequence[ChunkCommit], absent_untracked: set, report_cache: dict,
 ) -> dict:
-    """``{path: actual}`` for each content-sha256 entry of a commit_v2 ``blob_drift`` list whose
-    current bytes are the bytes the run's review pass read (``reviewed``, ``{path: sha256}`` of the
-    stored review prep: the reviewed bytes are the ones that land, whoever wrote them) or are the
-    run's own last recorded write (``drift_attribution.classify``: the run
-    session's and the fix-pass agents' touch ledgers, not bounded by the run record's start, so a
-    refire keeps the run's earlier own write). The ledgers read are the session's, every review
-    writer's and every agent the session dispatched (the reverify, verify and evidence legs write
-    under types the review-writer set omits). A path whose bytes are a blob the run's own record
-    dir holds (``record_dir``: ``kept.json``, ``measured-rev.json``) is owned too: an executor's
-    Write/Edit reaches no ledger, and these are the bytes its chunk left. Those are the bytes the
-    run left; a foreign or unrecorded rewrite is absent and keeps refusing. When ``reviewed`` is
-    empty (the commit's prep lookup requires the prep to cover every declared path, which a delivery
-    note or sizing record defeats) the run's stored review prep is read by ``run_id`` alone.
-    Hash-only, no spawn."""
-    from coordinator_core.ops.dispatch_emit import drift_attribution
-    from coordinator_core.ops.dispatch_emit.terminal_commit_review import REVIEW_RECORD_AGENT
-
-    actual = {
-        d["path"]: d["actual"] for d in drift
-        if isinstance(d, dict) and d.get("basis") == "content-sha256"
-        and isinstance(d.get("path"), str) and isinstance(d.get("actual"), str) and d["actual"]
-    }
-    if not actual:
-        return {}
-    if not (isinstance(reviewed, dict) and reviewed):
-        reviewed = drift_attribution.run_reviewed_hashes(worktree_root, session_id, run_id)
-    read_equal = {
-        p: a for p, a in actual.items()
-        if isinstance(reviewed, dict) and reviewed.get(drift_attribution._norm(p)) == a
-    }
-    actual = {p: a for p, a in actual.items() if p not in read_equal}
-    if not actual:
-        return read_equal
-    owned = drift_attribution.classify(
-        worktree_root, run_dir if run_dir is not None else worktree_root, list(actual), declared,
-        session_id=session_id,
-        agent_ids=sorted(
-            {a for a in (review_writes or {}).values() if a and a != REVIEW_RECORD_AGENT}
-            | set(drift_attribution.session_agent_ids(worktree_root, session_id))
-        ),
-        own_blobs=drift_attribution.run_recorded_blobs(record_dir, list(actual)),
-        run_started_at=0.0,
-    )[drift_attribution.RUN_OWNED]
-    return {**read_equal, **{p: actual[p] for p in owned}}
-
-
-def _own_record_dir(worktree_root: Path, art_run_id: object, ask_run_dir: Optional[Path]) -> Optional[Path]:
-    """The run's record directory, or None: ``ask_run_dir`` when the manifest named one, else
-    ``ask_contract.record_dir`` for a safe run id."""
-    if ask_run_dir is not None:
-        return ask_run_dir
-    if not isinstance(art_run_id, str) or not art_run_id:
-        return None
-    from coordinator_core.ops.dispatch_emit import ask_contract
-
-    try:
-        return ask_contract.record_dir(worktree_root, art_run_id)
-    except ValueError:
-        return None
+    """``{chunk id: [declared path]}`` for chunks whose own report says DONE yet declare a write
+    that is absent from the worktree and untracked at HEAD: landing the rest would commit a
+    partial row. A chunk with no report keeps the quiet drop (nothing asserts it was delivered)."""
+    out: dict = {}
+    for chunk in chunks:
+        if not chunk.report:
+            continue
+        missing = sorted(p for p in chunk.paths if p in absent_untracked)
+        if not missing:
+            continue
+        if chunk.report not in report_cache:
+            report_cache[chunk.report] = _read_rel(worktree_root, chunk.report)
+        text = report_cache[chunk.report]
+        if text is not None and _is_delivered_report(text):
+            out[chunk.id] = missing
+    return out
 
 
 def _run_owned_dirt(
@@ -1694,6 +1652,16 @@ def _stop_rule_fired_ids(worktree_root: Path, request: CommitRequest) -> set:
     return out
 
 
+def _held_chunk_has_result(worktree_root: Path, request: CommitRequest, chunk_id: str) -> bool:
+    """False only for a marker chunk whose executor report is missing or blank (never started). A
+    holder absent from the marker (spine row, another run's) cannot be shown unstarted: True."""
+    for chunk in request.chunks:
+        if chunk.id == chunk_id:
+            text = _read_rel(worktree_root, chunk.report) if chunk.report else None
+            return bool(text and text.strip())
+    return True
+
+
 def _held_write_paths(worktree_root: Path, request: CommitRequest, held_ids: set) -> dict:
     """``{path: [held chunk ids]}`` of every ``writes:`` path a held chunk declares: the marker's
     chunk paths plus the plan spine row of the same id (a held chunk may be absent from the marker)."""
@@ -1785,7 +1753,72 @@ def _stamp_on_refusal(params: dict, repo_root: Optional[Path], reply: dict) -> d
         return {"refusal_coded_stamp_error": f"{type(exc).__name__}: {exc}"}
 
 
+def _stamp_noop_done(
+    worktree_root: Path, repo_root: Optional[Path], plan_path: Optional[str], session_id: Optional[str],
+    done_chunks: list,
+) -> dict:
+    """Coded-stamp fields for a nothing-to-commit run's DONE rows, ``{}`` when none qualifies; a
+    raised stamp reports ``coded_stamp_error`` and never fails the landing reply."""
+    if repo_root is None or not plan_path or not done_chunks:
+        return {}
+    from coordinator_core.ops.dispatch_emit.refusal_coded_stamp import stamp_noop_done_rows
+
+    try:
+        return stamp_noop_done_rows(worktree_root, repo_root, {}, plan_path, session_id, done_chunks)
+    except Exception as exc:  # noqa: BLE001 -- the no-op reply stands
+        return {"coded_stamp_error": f"{type(exc).__name__}: {exc}"}
+
+
+def _chain_next_part(params: dict, repo_root: Optional[Path], reply: dict) -> None:
+    """Hand a committed, fully landed part of a whole-set inventory cut to part N+1 (one
+    detached spawn, no landing). Never on a refused, halted, already-landed, nothing-to-commit
+    or partial reply; never raises into the commit."""
+    try:
+        run_id, script = params.get("run_id"), params.get("script_path")
+        if (
+            repo_root is None or reply.get("committed") is not True or reply.get("refused")
+            or reply.get("already_landed") or params.get("incomplete_chunks")
+            or any((reply.get("stranded") or {}).values())
+            or not isinstance(run_id, str) or not run_id or not isinstance(script, str) or not script
+            or not script.endswith(".workflow.mjs")
+            or not script.removesuffix(".workflow.mjs").removesuffix(".spine").rpartition("-p")[2].isdigit()
+        ):
+            return
+        from coordinator_core.lifecycle import main_worktree_root
+        from coordinator_core.ops.dispatch_emit import tranche_chain
+
+        root = main_worktree_root(repo_root)
+        tranche_chain.chain_after_part(root, run_id, root / script)
+    except Exception as exc:  # noqa: BLE001 -- the chain never fails the commit
+        _record_chain_failure(repo_root, params, exc)
+
+
+def _record_chain_failure(repo_root: Optional[Path], params: dict, exc: Exception) -> None:
+    """Best-effort `tranche-chain.json` for a chain failure raised before the hand-off could
+    record it, written under `repo_root` (the main-worktree root may be what failed)."""
+    try:
+        from coordinator_core.ops.dispatch_emit import tranche_chain
+
+        if repo_root is not None and isinstance(params.get("run_id"), str):
+            tranche_chain.write_chain_record(repo_root, params["run_id"], None, f"{type(exc).__name__}: {exc}")
+    except Exception:  # noqa: BLE001
+        return
+
+
 def _terminal_commit(
+    params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
+    withheld: Optional[dict] = None, blockers: Optional[dict] = None,
+    regraded: Optional[dict] = None,
+    close_ctx: Optional[dict] = None,
+) -> dict:
+    """`_terminal_commit_settled`, then the next part of a whole-set cut when this commit landed one."""
+    reply = _terminal_commit_settled(params, repo_root, stranded, scope, withheld, blockers, regraded, close_ctx)
+    if isinstance(reply, dict) and isinstance(params, dict):
+        _chain_next_part(params, repo_root, reply)
+    return reply
+
+
+def _terminal_commit_settled(
     params: dict, repo_root: Optional[Path], stranded: dict, scope: dict,
     withheld: Optional[dict] = None, blockers: Optional[dict] = None,
     regraded: Optional[dict] = None,
@@ -2157,6 +2190,8 @@ def _terminal_commit_inner(
     # DR-475: the review floor is a trailer note, never a refusal. An empty-diff landing it flags
     # still short-circuits to the no-op landing when its ledger is met.
     floor_note = _review_floor_note(request, inline_review, prep_from_disk, worktree_root)
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+
     no_op = None
     if floor_note is not None and ask_run_dir is not None:
         no_op = _empty_diff_landing(worktree_root, request)
@@ -2164,12 +2199,17 @@ def _terminal_commit_inner(
         unmet, no_op_ledger, _ = _ledger_gate(
             worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated],
-            {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
+            requirements_ledger.owed_rows(manifest.owed),
             _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
             inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
             sidecar_root=worktree_root,
         )
         if unmet is None and no_op_ledger is not None:
+            if not rows_untouched:
+                no_op.update(_stamp_noop_done(
+                    worktree_root, repo_root, request.plan_path, session_id,
+                    [c for c in request.chunks if c.id not in incomplete_chunks],
+                ))
             return no_op
     over_budget = _xs_over_budget_refusal(
         worktree_root, params, _run_id_of(params, ask_run_dir, script_path_raw), request
@@ -2193,7 +2233,7 @@ def _terminal_commit_inner(
         unmet, ledger, open_rows = _ledger_gate(
             worktree_root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated],
-            {o.id: o.detail for o in manifest.owed if o.reason == "operator"},
+            requirements_ledger.owed_rows(manifest.owed),
             _read_rel(worktree_root, request.plan_path) if request.plan_path else None,
             inline_review,
             params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path,
@@ -2624,6 +2664,27 @@ def _terminal_commit_inner(
                     entry = overlap.setdefault(p, {"held": held_paths[p], "landed": []})
                     if chunk.id not in entry["landed"]:
                         entry["landed"].append(chunk.id)
+        # A held chunk with no executor report never started: it holds no work of its own, so a
+        # path it shares with a landed chunk lands with that chunk; the refusal names only the
+        # holders that produced a result.
+        for p in list(overlap):
+            producing = [h for h in overlap[p]["held"] if _held_chunk_has_result(worktree_root, request, h)]
+            if not producing:
+                for cid in held_paths[p]:
+                    barred[cid] = [q for q in barred.get(cid, ()) if q != p]
+                del held_paths[p], overlap[p]
+            else:
+                overlap[p]["held"] = producing
+                for cid in held_paths[p]:
+                    if cid not in producing:
+                        barred[cid] = [q for q in barred.get(cid, ()) if q != p]
+        if ask_run_dir is not None:
+            # Co-writers of one run (every holder in this run's own marker) land the path whole;
+            # a holder outside the marker is another run's and keeps the refusal.
+            for p in [p for p, e in overlap.items() if all(h in known_ids for h in e["held"])]:
+                for cid in held_paths[p]:
+                    barred[cid] = [q for q in barred[cid] if q != p]
+                del held_paths[p], overlap[p]
         if overlap:
             shown = "; ".join(
                 f"{p} (held {', '.join(e['held'])}; landed {', '.join(e['landed'])})"
@@ -2802,6 +2863,18 @@ def _terminal_commit_inner(
                 f"{absent}"
             )
         tracked_at_head, absent_from_head = partition
+        missing_new = _delivered_rows_missing_writes(
+            worktree_root, done_chunks + partial_chunks, set(absent_from_head), report_cache,
+        )
+        if missing_new:
+            shown = "; ".join(f"{cid}: {', '.join(paths)}" for cid, paths in sorted(missing_new.items()))
+            return _error(
+                "executor-DONE row(s) declare write(s) absent from the worktree and untracked at HEAD, "
+                f"so landing would commit a partial row: {shown}. Restore the file(s) or list the "
+                "chunk in params.incomplete_chunks, then re-fire",
+                refused="declared-write-missing",
+                missing_declared=missing_new,
+            )
         undeclared = [p for p in tracked_at_head if p not in declared_writes]
         if undeclared:
             return _error(
@@ -3349,14 +3422,22 @@ def _terminal_commit_inner(
     )
     deleted_paths, withheld_deleted = _sc.filter_own(deleted_paths, sibling_claims, own_declared)
     sibling_withheld.update(withheld_deleted)
-    foreign_held = foreign_halted_withheld(
-        worktree_root, sibling_run_id, request.plan_path,
-        [p for p in (*all_paths, *deleted_paths) if p not in chunk_declared],
+    from coordinator_core.ops.dispatch_emit import peer_hunk_gate as _phg
+    foreign_held = _phg.landing_holds(
+        worktree_root, session_id, sibling_run_id, request.plan_path, all_paths, deleted_paths,
+        chunk_declared, own_declared, own_seniority,
     )
     if foreign_held:
         all_paths = [p for p in all_paths if p not in foreign_held]
         deleted_paths = [p for p in deleted_paths if p not in foreign_held]
         sibling_withheld.update(foreign_held)
+
+    def _naming_held(reply: dict) -> dict:
+        """A nothing-to-commit reply still names the peer run each withheld path waits on."""
+        if sibling_withheld:
+            reply.setdefault("sibling_withheld", dict(sibling_withheld))
+        return reply
+
     if sibling_withheld:
         review_land = tuple(p for p in review_land if p not in sibling_withheld)
         if not all_paths and not deleted_paths:
@@ -3401,10 +3482,10 @@ def _terminal_commit_inner(
             _remove(worktree_root, receipt_paths)
             if close_ctx is not None:
                 close_ctx.clear()
-            return _with_withheld(_with_siblings({
+            return _with_withheld(_naming_held(_with_siblings({
                 "committed": False, "nothing_to_commit": not sibling_paths,
                 _ls.FOREIGN_EXCLUDED_KEY: foreign_excluded,
-            }))
+            })))
 
     # Run state (state/warp) is local and gitignored: it never reaches a commit, and each path held
     # back here is named in the reply's ignored_excluded.
@@ -3422,7 +3503,7 @@ def _terminal_commit_inner(
             _remove(worktree_root, receipt_paths)
             if close_ctx is not None:
                 close_ctx.clear()
-            return _with_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
+            return _with_withheld(_naming_held(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})))
 
     if ask_run_dir is not None:
         outcome_path = run_artifacts.write_tracked_outcome(worktree_root, ask_run_dir.name, "landed")
@@ -3460,7 +3541,7 @@ def _terminal_commit_inner(
             _remove(worktree_root, receipt_paths)
             if close_ctx is not None:
                 close_ctx.clear()
-            return _with_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
+            return _with_withheld(_naming_held(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths})))
 
     # The product commit never carries the session's claimed leftovers: commit_v2 would widen the
     # pathspec past the declared set. They land in the follow-on commit after this one.
@@ -4503,6 +4584,11 @@ def _terminal_commit_inner(
     reply["prefix_files"] = prefix_files
     reply.update(_declared_reconcile(ask_run_dir, all_paths))
     reply.update(usage_reply)
+    if (
+        not reply.get("committed") and reply.get("nothing_to_commit") and not reply.get("refused")
+        and not rows_untouched and not foreign_repo
+    ):
+        reply.update(_stamp_noop_done(worktree_root, repo_root, request.plan_path, session_id, done_chunks))
     if reply.get("committed"):
         from coordinator_core.ops.dispatch_emit import run_push
 

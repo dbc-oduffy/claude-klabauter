@@ -902,33 +902,45 @@ LIVE_OVERLAP_DEADLINE_S = 0.5
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `live-run-write-overlap` naming each other live run whose staged
     footprint intersects `writes`, and release this run's token so the refusal ends the run.
-    Trap: not atomic; two stages interleaving before either writes its manifest both pass.
-    A footprint read outliving LIVE_OVERLAP_DEADLINE_S degrades: the check is skipped with a logged
-    advisory and the stage proceeds (the read-only pre-check never aborts a stage)."""
+    The check and the footprint claim are one locked index mutation (`live_run_index.claim`), so two
+    stages cannot both pass. When the claim cannot be made (no lock, stalled store, no common dir) or
+    outlives LIVE_OVERLAP_DEADLINE_S, it degrades to the read-only `live_footprints` check, and a read
+    outliving the deadline skips the check with a logged advisory: the pre-check never aborts a stage.
+    Trap: a claim that outlives the deadline keeps running on its daemon thread and may still write
+    markers after this call returns or after `consume` released them; `over()` pruning reaps them."""
     import logging
     import threading
 
-    from coordinator_core.ops.dispatch_emit import live_run_writes, run_token
+    from coordinator_core.ops.dispatch_emit import live_run_index, live_run_writes, run_token
 
-    box: list = []
+    def within_deadline(fn):
+        box: list = []
 
-    def read() -> None:
-        try:
-            box.append(live_run_writes.live_footprints(root, exclude_run_id=run_id))
-        except BaseException as exc:  # noqa: BLE001 - surfaced below
-            box.append(exc)
+        def call() -> None:
+            try:
+                box.append(fn())
+            except BaseException as exc:  # noqa: BLE001 - surfaced by the caller
+                box.append(exc)
 
-    worker = threading.Thread(target=read, daemon=True)
-    worker.start()
-    worker.join(LIVE_OVERLAP_DEADLINE_S)
-    if not box:
-        logging.getLogger(__name__).warning(
-            "live-run-write-overlap check skipped: footprint read exceeded %ss", LIVE_OVERLAP_DEADLINE_S
-        )
-        return
-    if isinstance(box[0], BaseException):
-        raise box[0]
-    hits = live_run_writes.overlaps(writes, box[0])
+        worker = threading.Thread(target=call, daemon=True)
+        worker.start()
+        worker.join(LIVE_OVERLAP_DEADLINE_S)
+        return box
+
+    claimed = within_deadline(lambda: live_run_index.claim(root, run_id, writes))
+    if claimed and isinstance(claimed[0], BaseException):
+        raise claimed[0]
+    hits = claimed[0] if claimed else None
+    if hits is None:
+        box = within_deadline(lambda: live_run_writes.live_footprints(root, exclude_run_id=run_id))
+        if not box:
+            logging.getLogger(__name__).warning(
+                "live-run-write-overlap check skipped: footprint read exceeded %ss", LIVE_OVERLAP_DEADLINE_S
+            )
+            return
+        if isinstance(box[0], BaseException):
+            raise box[0]
+        hits = live_run_writes.overlaps(writes, box[0])
     if not hits:
         return
     named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
@@ -1047,21 +1059,31 @@ def _settle_unclaimed_register_rows(
 ) -> None:
     """Claim into the plan every register row it omits, re-checking after each claim; raise
     AskStageError REGISTER-ROWS-UNCLAIMED only once MAX_IN_RUN_REMEDY_ATTEMPTS claims left a row omitted."""
-    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS, remedy_or_halt
 
-    claimed_sizing, missing = _missing_register_rows(fm_text, run_sizing_rel, run_sizing)
-    for _ in range(MAX_IN_RUN_REMEDY_ATTEMPTS):
-        if not missing:
-            return
+    _, missing = _missing_register_rows(fm_text, run_sizing_rel, run_sizing)
+    if not missing:
+        return
+
+    def claim(_n: int) -> None:
+        nonlocal fm_text, missing
         _claim_register_rows(root, plan_path)
         split = split_frontmatter(plan_path.read_text(encoding="utf-8"))
         fm_text = split.fm_text if split is not None else fm_text
-        claimed_sizing, missing = _missing_register_rows(fm_text, run_sizing_rel, run_sizing)
-    if missing:
-        raise AskStageError(
+        _, missing = _missing_register_rows(fm_text, run_sizing_rel, run_sizing)
+        if missing:
+            raise RuntimeError(f"register row(s) {', '.join(missing)} still omitted")
+
+    halt = remedy_or_halt(
+        REGISTER_ROWS_UNCLAIMED_REFUSAL, claim,
+        lambda _f: AskStageError(
             f"{REGISTER_ROWS_UNCLAIMED_REFUSAL}: {plan_posix} omits register row(s) "
-            f"{', '.join(missing)} in register_claims.rows after {MAX_IN_RUN_REMEDY_ATTEMPTS} in-run claims."
-        )
+            f"{', '.join(missing)} in register_claims.rows after {MAX_IN_RUN_REMEDY_ATTEMPTS} in-run claims. "
+            f"{'; '.join(_f)}"
+        ),
+    )
+    if halt is not None:
+        raise halt
 
 
 def stage(
@@ -1154,7 +1176,11 @@ def stage(
     except InvalidChangeKindError as exc:
         raise AskStageError(f"INVALID-CHANGE-KIND: {plan_posix}: {exc}") from exc
     except SpineReadError as exc:
-        raise AskStageError(f"SPINE-REFUSED: {plan_posix}: {type(exc).__name__}: {exc}") from exc
+        digest = hashlib.sha256(plan_text.encode("utf-8")).hexdigest()[:12]
+        raise AskStageError(
+            f"SPINE-REFUSED: {plan_posix}: {type(exc).__name__}: {exc} "
+            f"[parsed the plan text stage read: {len(plan_text)} chars, sha256 {digest}]"
+        ) from exc
     raw_by_id, rows, sibling_roots = parse.raw_by_id, list(parse.rows), parse.sibling_roots
     exclusions = list(parse.exclusions)
     retired_resume: tuple[str, ...] = ()
@@ -2178,6 +2204,7 @@ def _parse_plan(root: Path, plan_path: Path, plan_text: str) -> _PlanParse:
         plan_path,
         exclusions=exclusions,
         cleared_gate_owners=own_gate_owners(raw_by_id.values(), root) | frozenset(sibling_roots),
+        plan_text=plan_text,
     )
     return _PlanParse(plan_text, raw_by_id, sibling_roots, tuple(rows), tuple(exclusions))
 

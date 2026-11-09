@@ -30,8 +30,9 @@ REFUSED = 2
 
 def _git(cwd, *args):
     """(returncode, stdout) of one git call in `cwd`."""
-    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True,
-                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    from coordinator_core.git.run import run_git
+
+    done = run_git(list(args), cwd=str(cwd) if cwd is not None else None)
     return done.returncode, done.stdout.strip()
 
 

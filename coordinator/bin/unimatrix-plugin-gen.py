@@ -7,7 +7,7 @@ Stdlib only; no subprocess, no LLM step.
 
 agy hooks.json is a top-level object keyed by hook name, each value {"<Event>": [...]} (shape from
 the agy 1.4.12 strict-validate relay; no agy doc on the build box). `agy plugin validate` proves the
-file loads, not that a hook fires: ${PLUGIN_DIR} expansion and a guard running need a live agy
+file loads, not that a hook fires: ${PLUGIN_ROOT} expansion and a guard running need a live agy
 session, which nothing here covers.
 """
 import json
@@ -78,6 +78,18 @@ def _field(head, key):
         if re.match(rf"{re.escape(key)}\s*:", line):
             return i, line.split(":", 1)[1].strip().strip("\"'")
     return None, None
+
+
+def _ensure_description(head, body, fallback):
+    """Add a one-line `description:` (first prose line of body, else fallback) when absent or empty; agy skips an item without one."""
+    i, val = _field(head, "description")
+    if val:
+        return
+    if i is not None:
+        del head[i]
+    first = next((ln.strip().lstrip("#>-* ").strip() for ln in body.split("\n")
+                  if ln.strip().lstrip("#>-* ").strip()), "") or fallback
+    head.append(f"description: {json.dumps(first[:200], ensure_ascii=False)}")
 
 
 class _Plan:
@@ -163,16 +175,17 @@ def _agents(plan, plugin_root):
             continue
         text = plan.rewrite(_lf(p.read_text(encoding="utf-8")))
         head, body = _split_frontmatter(text)
-        if head is not None:
-            i, val = _field(head, "model")
-            if i is not None:
-                new, reason = _map_model(val, plan.cfg)
-                if new is None:
-                    del head[i]
-                    plan.miss("agent-model", src, reason)
-                else:
-                    head[i] = f"model: {new}"
-                text = _join_frontmatter(head, body)
+        head = list(head or [])
+        i, val = _field(head, "model")
+        if i is not None:
+            new, reason = _map_model(val, plan.cfg)
+            if new is None:
+                del head[i]
+                plan.miss("agent-model", src, reason)
+            else:
+                head[i] = f"model: {new}"
+        _ensure_description(head, body, _field(head, "name")[1] or Path(rel).stem)
+        text = _join_frontmatter(head, body)
         plan.put(src, text.encode("utf-8"), "agent", src)
 
 
@@ -197,6 +210,7 @@ def _command_skills(plan, plugin_root):
             head.insert(0, f"name: {name}")
         else:
             head[i] = f"name: {name}"
+        _ensure_description(head, body, name)
         _put_skill_md(plan, out, _join_frontmatter(head, body), src)
 
 

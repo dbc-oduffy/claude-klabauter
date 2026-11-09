@@ -2,7 +2,8 @@
 
 File: <spool>/notices/<session_id>.jsonl, one compact JSON object per line
 ({"spool_id", "run_id"} for a mint; {"spool_id", "status": "failed", "attempts",
-"error"} for a failed drain, written by drain._notify). The reader makes one stat, renames the file to
+"error"} for a failed drain; {"spool_id", "status": "coalesced", "run_id"}; {"spool_id",
+"status": "withdrawn", "reason"}; all written by drain._notify). The reader makes one stat, renames the file to
 <session_id>.<pid>.reading, then reads and unlinks it, so a drain appending
 meanwhile creates a fresh file rather than losing a line to truncation.
 """
@@ -72,7 +73,7 @@ def consume_notices(repo_root: Optional[str], session_id: str) -> list[dict]:
                 except json.JSONDecodeError:
                     continue
                 if isinstance(obj, dict) and obj.get("spool_id") and (
-                    obj.get("run_id") or obj.get("status") == "failed"
+                    obj.get("run_id") or obj.get("status") in ("failed", "withdrawn")
                 ):
                     out.append(obj)
     finally:
@@ -85,9 +86,15 @@ def consume_notices(repo_root: Optional[str], session_id: str) -> list[dict]:
 
 def advisory_text(repo_root: Optional[str], session_id: str) -> str:
     """One line per minted spooled ask, or "" when none."""
-    return "\n".join(
-        "Your spooled ask %s could not be minted yet (attempt %s): %s" % (n["spool_id"], n.get("attempts"), n.get("error"))
-        if n.get("status") == "failed"
-        else "Your spooled ask %s minted run %s." % (n["spool_id"], n["run_id"])
-        for n in consume_notices(repo_root, session_id)
-    )
+    return "\n".join(_line(n) for n in consume_notices(repo_root, session_id))
+
+
+def _line(n: dict) -> str:
+    status = n.get("status")
+    if status == "failed":
+        return "Your spooled ask %s could not be minted yet (attempt %s): %s" % (n["spool_id"], n.get("attempts"), n.get("error"))
+    if status == "withdrawn":
+        return "Your spooled ask %s was withdrawn: %s" % (n["spool_id"], n.get("reason"))
+    if status == "coalesced":
+        return "Your spooled ask %s coalesced into run %s." % (n["spool_id"], n["run_id"])
+    return "Your spooled ask %s minted run %s." % (n["spool_id"], n["run_id"])

@@ -608,3 +608,90 @@ def test_citation_unbacked_marker_names_the_unbacked_citations_through_its_reaso
     data = json.loads(hr.write_halt_marker(d, halted="citation_unbacked", sizing_rel=SIZING, reason=reason).read_text())
     assert data["reason"] == reason
     assert "next_action" not in data
+
+
+def _split_fixture(tmp_path, *, lock_newer=True, build_script=True):
+    import os
+
+    pkg = tmp_path / "control" / "server"
+    (pkg / "dist").mkdir(parents=True)
+    (pkg / "node_modules").mkdir()
+    manifest = {"name": "example-game-repo-server", "main": "dist/index.js"}
+    if build_script:
+        manifest["scripts"] = {"build": "tsc"}
+    (pkg / "package.json").write_text(json.dumps(manifest))
+    entry, lock = pkg / "dist" / "index.js", pkg / "node_modules" / ".package-lock.json"
+    entry.write_text("")
+    lock.write_text("{}")
+    old, new = 1_700_000_000, 1_700_001_000
+    os.utime(entry, (old if lock_newer else new,) * 2)
+    os.utime(lock, (new if lock_newer else old,) * 2)
+
+
+def test_a_split_dependency_tree_is_named_as_live_breakage(tmp_path):
+    _split_fixture(tmp_path)
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    data = json.loads(hr.write_halt_marker(d, halted="ledger-check", sizing_rel=SIZING).read_text())
+    assert [(s["package_dir"], s["package_name"]) for s in data["live_breakage"]] == [("control/server", "example-game-repo-server")]
+
+
+def test_no_split_or_no_build_script_leaves_the_marker_without_live_breakage(tmp_path):
+    _split_fixture(tmp_path, lock_newer=False)
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    assert "live_breakage" not in json.loads(hr.write_halt_marker(d, halted="x", sizing_rel=SIZING).read_text())
+
+
+def test_a_newer_lockfile_without_a_build_script_is_not_a_split(tmp_path):
+    _split_fixture(tmp_path, build_script=False)
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    assert "live_breakage" not in json.loads(hr.write_halt_marker(d, halted="x", sizing_rel=SIZING).read_text())
+
+
+def test_a_split_alerts_the_live_gem_once_and_no_holder_means_no_alert(tmp_path, monkeypatch):
+    from coordinator_core.group_em import nomination
+    from coordinator_core.ops.dispatch_emit import halt_split_tree as hst
+
+    _split_fixture(tmp_path)
+    calls = []
+    monkeypatch.setattr(hst, "_ALERT_SENDER", lambda name, text: calls.append((name, text)))
+    monkeypatch.setattr(nomination, "identify", lambda root: {"state": "live", "holder": {"name": "gem-1"}})
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="ledger-check", sizing_rel=SIZING)
+    assert len(calls) == 1 and calls[0][0] == "gem-1"
+    assert d.name in calls[0][1] and "control/server" in calls[0][1]
+
+    calls.clear()
+    monkeypatch.setattr(nomination, "identify", lambda root: {"state": "none"})
+    fresh = _dir(tmp_path, "20261016T020000-bbbbbb")
+    data = json.loads(hr.write_halt_marker(fresh, halted="ledger-check", sizing_rel=SIZING).read_text())
+    assert calls == [] and data["live_breakage"]
+
+
+def test_a_split_halt_spawns_no_real_process_under_pytest(tmp_path, monkeypatch):
+    import coordinator_core.ops.ceremony.detached_spawn as ds
+    from coordinator_core.group_em import nomination
+
+    _split_fixture(tmp_path)
+    monkeypatch.setattr(nomination, "identify", lambda root: {"state": "live", "holder": {"name": "gem-1"}})
+    monkeypatch.setattr(ds, "spawn_detached", lambda *a, **k: pytest.fail("spawned"))
+    hr.write_halt_marker(_dir(tmp_path, "20261016T010000-aaaaaa"), halted="x", sizing_rel=SIZING)
+
+
+def test_a_rehalt_over_the_same_split_does_not_realert_but_a_changed_split_does(tmp_path, monkeypatch):
+    import os
+
+    from coordinator_core.group_em import nomination
+    from coordinator_core.ops.dispatch_emit import halt_split_tree as hst
+
+    _split_fixture(tmp_path)
+    calls = []
+    monkeypatch.setattr(hst, "_ALERT_SENDER", lambda name, text: calls.append(name))
+    monkeypatch.setattr(nomination, "identify", lambda root: {"state": "live", "holder": {"name": "gem-1"}})
+    d = _dir(tmp_path, "20261016T010000-aaaaaa")
+    hr.write_halt_marker(d, halted="ledger-check", sizing_rel=SIZING)
+    hr.write_halt_marker(d, halted="ledger-check", sizing_rel=SIZING)
+    assert len(calls) == 1
+    lock = tmp_path / "control" / "server" / "node_modules" / ".package-lock.json"
+    os.utime(lock, (1_700_002_000,) * 2)
+    hr.write_halt_marker(d, halted="ledger-check", sizing_rel=SIZING)
+    assert len(calls) == 2

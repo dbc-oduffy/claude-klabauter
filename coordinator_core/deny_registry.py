@@ -248,6 +248,10 @@ OP_REFUSAL_CLASS: Dict[str, OpClass] = {
     _OPS + "verdict_record_op:TestVerdictRefused": MALFORMED_REQUEST,
     _OPS + "tracker.push_suggestion:PushSuggestionRefused": MALFORMED_REQUEST,
     _OPS + "diagnostics_probes:DiagnosticsRefusal": MALFORMED_REQUEST,
+    # The terminal finalizer refuses to land an engine-authored commit when the branch or HEAD
+    # moved, the receipt or terminal marker is forged, or the finalizer is replayed.
+    _OPS + "workflow_fire.finalizer:FinalizerRefused": HEAD_INTEGRITY,
+    _OPS + "workflow_fire.headless:FinalizerRefused": HEAD_INTEGRITY,
     _OPS + "dispatch_emit.ask_brief:EmBriefRefused": _pending("C5"),
     _OPS + "dispatch_emit.co_declared_settle:OwnHunkRefused": _pending("C11"),
     _OPS + "dispatch_emit.own_hunk_stage:OwnHunkRefused": _pending("C11"),

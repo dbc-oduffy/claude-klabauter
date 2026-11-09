@@ -101,6 +101,43 @@ def test_a_prep_naming_only_foreign_slices_is_still_bound_to_its_group():
     assert len(result["prep"]["advisories"]) == 1
 
 
+_COLLAPSED = {
+    **_FULL,
+    "verdict": "single-reviewer-ok",
+    "slices": [{"id": "whole-diff", "files": [], "diff_path": "d/w.diff", "sidecar_path": "p.md"}],
+}
+
+
+def test_a_whole_diff_collapse_accepts_a_dispatched_reply_naming_prep_n_ids():
+    patch = "(r, n) => n === 0 ? { ...r, prep: { ...r.prep, slices: [{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }] } } : r"
+    result = _run_in_wave(_COLLAPSED, 9, patch=patch)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == "whole-diff"
+
+
+def test_a_whole_diff_collapse_with_a_clean_reply_binds_whole_diff():
+    result = _run_in_wave(_COLLAPSED, 9)
+    assert "halted" not in result and "error" not in result
+    assert result["wave"][0]["slice_id"] == "whole-diff"
+
+
+_TWO = {**_FULL, "slices": _FULL["slices"][:2]}
+
+
+def test_one_merged_group_of_two_real_slices_is_accepted_under_its_plus_joined_id():
+    ids = [s["id"] for s in _TWO["slices"]]
+    for patch in (None, "(r, n) => ({ ...r, review: { ...r.review, slice_id: _full.slices.map(s => s.id).join('+') } })"):
+        result = _run_in_wave(_TWO, 1, patch=patch)
+        assert "halted" not in result and "error" not in result
+        assert result["wave"][0]["slice_id"] == "+".join(ids)
+
+
+def test_a_two_slice_group_reply_naming_an_unknown_id_still_halts():
+    patch = "(r, n) => n === 0 ? { ...r, prep: { ...r.prep, slices: [{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }] } } : r"
+    result = _run_in_wave(_TWO, 1, patch=patch)
+    assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
+
+
 def test_an_id_no_run_slice_carries_still_halts_even_beside_a_member():
     patch = _prep_rewrite("[r.prep.slices[0], { ...r.prep.slices[0], id: 'zz-nonexistent' }]")
     result = _run_in_wave(_FULL, 9, patch=patch)

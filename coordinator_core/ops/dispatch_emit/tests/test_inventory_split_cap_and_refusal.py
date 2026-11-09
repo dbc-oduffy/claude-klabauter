@@ -176,23 +176,64 @@ def test_part_edge_onto_an_earlier_part_is_dropped(tmp_path, monkeypatch):
     assert "I8" in text
 
 
-def test_part_edge_onto_a_later_part_is_refused(tmp_path):
-    inventory = _repo_with_inventory(tmp_path)
-    text = inventory.read_text(encoding="utf-8").replace("| item 1 | `src/mod_1.py` | —", "| item 1 | `src/mod_1.py` | I8")
+def _item_one_depends_on(inventory, dep):
+    text = inventory.read_text(encoding="utf-8").replace("| item 1 | `src/mod_1.py` | —", f"| item 1 | `src/mod_1.py` | {dep}")
     inventory.write_text(text, encoding="utf-8")
 
-    with pytest.raises(im.InventoryPartError, match="I8"):
+
+def test_dependent_listed_before_its_predecessor_is_cut_into_a_later_part(tmp_path):
+    inventory = _repo_with_inventory(tmp_path)
+    _item_one_depends_on(inventory, "I8")
+
+    first, _ = im.mint_spine(str(inventory), part=(7, _ITEMS))
+    second, path = im.mint_spine(str(inventory), part=(_ITEMS, _ITEMS))
+
+    assert "id: I8\n" in first and "id: I1\n" not in first
+    assert "id: I1\n" in second and "chunk: I8" not in second
+    assert path.name == f"{_RUN_ID}-p{_ITEMS}.spine.md"
+    assert f"part_index: {_ITEMS}\npart_count: {_ITEMS}\n" in second
+    assert f"part_index: 7\npart_count: {_ITEMS}\n" in first
+
+
+def test_cycle_between_plan_items_is_the_only_part_refusal(tmp_path):
+    inventory = _repo_with_inventory(tmp_path)
+    _item_one_depends_on(inventory, "I8")
+    text = inventory.read_text(encoding="utf-8").replace("| item 8 | `src/mod_8.py` | —", "| item 8 | `src/mod_8.py` | I1")
+    inventory.write_text(text, encoding="utf-8")
+
+    with pytest.raises(im.InventoryPartError, match="cycle"):
         im.mint_spine(str(inventory), part=(1, 2))
 
 
-def test_fire_with_split_refuses_and_fires_nothing(tmp_path, monkeypatch):
+def test_item_waiting_on_an_unemitted_chunk_is_in_no_part_and_accounted(tmp_path):
+    rows = [
+        {"id": "a.C1", "title": "t", "surface": "a.py", "writes": ["a.py"], "change_kind": "code-edit", "body": "b"},
+        {"id": "b.C1", "title": "t", "surface": "b.py", "writes": ["b.py"], "change_kind": "code-edit", "body": "b",
+         "depends_on": [{"chunk": "a.C9", "gate_kind": "output-consumption-runtime"}]},
+        {"id": "c.C1", "title": "t", "surface": "c.py", "writes": ["c.py"], "change_kind": "code-edit", "body": "b",
+         "depends_on": [{"chunk": "b.C1", "gate_kind": "output-consumption-runtime"}]},
+        {"id": "d.C1", "title": "t", "surface": "d.py", "writes": ["d.py"], "change_kind": "code-edit", "body": "b"},
+    ]
+    held: dict = {}
+    placed = [r["id"] for i in (1, 2) for r in im.select_part(rows, list("abcd"), i, 2, excluded_out=held)]
+
+    assert sorted(placed) == ["a.C1", "d.C1"]
+    assert set(held) == {"b", "c"} and "a.C9" in held["b"] and "depends on withheld item b" == held["c"]
+
+
+def test_fire_with_split_fires_part_one_only(tmp_path, monkeypatch):
+    import coordinator_core.ops.workflow_fire.fire as fire_module
+
     cap = _cap_between_whole_and_part(tmp_path, monkeypatch)
     monkeypatch.setattr(emit_module, "_WORKFLOW_SCRIPT_BYTE_CAP", cap)
     inventory = Path(record_path(str(tmp_path), "mise-inventory", f"{_RUN_ID}.md"))
+    fired: list = []
+    monkeypatch.setattr(fire_module, "fire_workflow", lambda path, **kw: fired.append(path) or {"fired": True})
 
     rc = cli_module.main([*_argv(tmp_path, inventory), "--fire"])
 
-    assert rc == cli_module.EXIT_DATA_ERROR
+    assert rc == cli_module.EXIT_OK
+    assert [Path(p).name for p in fired] == [f"{_RUN_ID}-p1.workflow.mjs"]
 
 
 def test_inventory_outside_the_repo_is_refused(tmp_path, monkeypatch):

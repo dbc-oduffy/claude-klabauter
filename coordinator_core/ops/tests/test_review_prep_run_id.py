@@ -51,6 +51,32 @@ def test_run_id_returns_the_same_slices_as_explicit_paths(repo, rels):
     assert _shape(by_id) == _shape(by_paths)
 
 
+def test_run_id_call_ledgers_its_sidecar_and_no_run_id_records_nothing(repo):
+    from coordinator_core.ops.dispatch_emit import run_scratch
+
+    _write(repo, ["a/one.py"], 3)
+    _stage(repo, ["a/one.py"])
+    reply = rp._handler(_params(repo, "prep-led", run_id=RUN), repo)
+    assert reply["error"] is None
+    assert run_scratch.read_ledger(repo, RUN)["paths"] == [reply["sidecar_path"]]
+    explicit = rp._handler(_params(repo, "prep-nolen", paths=["a/one.py"]), repo)
+    assert explicit["error"] is None
+    assert run_scratch.read_ledger(repo, RUN)["paths"] == [reply["sidecar_path"]]
+    assert not record_dir(repo, "ask-none").exists()
+
+
+def test_a_failed_record_never_fails_the_prep(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_scratch
+
+    def boom(*a, **k):
+        raise OSError("disk")
+
+    monkeypatch.setattr(run_scratch, "record_paths", boom)
+    _write(repo, ["a/one.py"], 3)
+    _stage(repo, ["a/one.py"])
+    assert rp._handler(_params(repo, "prep-boom", run_id=RUN), repo)["error"] is None
+
+
 def test_explicit_call_after_run_id_call_is_served_from_the_store(repo, monkeypatch):
     rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
     _write(repo, rels, 30)

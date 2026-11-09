@@ -428,6 +428,13 @@ def test_declared_after_is_an_edge_without_writes_and_merges_with_overlap():
     assert c.after_edges([a, b, c.AskSlice(label="c", ask="c", writes=("x.py",), after=(0,))])[2] == (0, 1)
 
 
+def test_inferred_hints_sequence_the_later_slice_and_an_empty_inference_overlaps_nothing():
+    a, b = _slice("a", writes=("pkg/x.py",)), _slice("b", writes=("pkg/x.py",))
+    assert c.after_edges([a, b]) == {0: (), 1: (0,)}
+    assert c.after_edges([a, _slice("b", writes=None)]) == {0: (), 1: ()}
+    assert c.after_edges([a, _slice("b", writes=())]) == {0: (), 1: ()}
+
+
 def test_resolve_after_accepts_label_and_index_of_earlier_siblings():
     assert c.resolve_after("asks[2]", ["a", 1, "a"], ["a", "b", "c"], 2) == (0, 1)
 

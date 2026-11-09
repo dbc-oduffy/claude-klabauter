@@ -116,6 +116,11 @@ def peer_lists_us(ctx, mine, self_names):
     run, roster = ctx["run"], ctx["roster"]
 
     def check(remote, key, name):
+        verdict = ctx["autolink"].agent_state(key, run=run)
+        if verdict == "locked":
+            return [f"{name}: waiting: 1Password locked; encrypted key not loaded"]
+        if verdict == "missing":
+            return [f"{name}: passphrase_source_missing: encrypted key {key} cannot be loaded"]
         cmd = ["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
                remote, "membership", "get"]
         try:

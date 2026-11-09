@@ -27,17 +27,16 @@ import os
 import re
 import secrets
 import shlex
-import signal
 import socket
 import sys
 import time
-import threading
 from pathlib import Path
 
 READY_SECONDS = 15
 SEND_TIMEOUT = 900
 ROUTER_ENDPOINT_SEED = "unimatrix-peer-router"
 FRAME_LIMIT = 1 << 22
+ACCEPT_READ_SECONDS = 0.05
 LEG_SCAN_SECONDS = 2
 ACK_BODIES = frozenset({
     "", "ok", "okay", "k", "ack", "acked", "ack received", "acknowledged", "got it",
@@ -91,9 +90,25 @@ def _roster():
     return _sibling("unimatrix-roster.py", "unimatrix_roster")
 
 
+def _liveness():
+    """The liveness module (codex_holder_live), loaded on first use."""
+    return _sibling("unimatrix-liveness.py", "unimatrix_liveness")
+
+
 def _contract():
     """The peer contract module, loaded on first use."""
     return _sibling("unimatrix-peer-contract.py", "unimatrix_peer_contract")
+
+
+def _transport():
+    """The local transport module (sockets, named pipes, process locks), loaded on first use."""
+    return _sibling("unimatrix-local-transport.py", "unimatrix_local_transport")
+
+
+def __getattr__(name):
+    if name == "PipeServer":
+        return _transport().PipeServer
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def default_peers_file():
@@ -219,6 +234,39 @@ def codex_is_subagent(metadata):
     return isinstance(path, str) and path.startswith("/root/")
 
 
+def codex_parent_id(metadata):
+    """`source.subagent.thread_spawn.parent_thread_id` of a thread's metadata row, else None."""
+    source = metadata.get("source") if isinstance(metadata, dict) else None
+    if isinstance(source, str):
+        try:
+            source = json.loads(source)
+        except ValueError:
+            return None
+    spawn = source.get("subagent") if isinstance(source, dict) else None
+    spawn = spawn.get("thread_spawn") if isinstance(spawn, dict) else None
+    parent = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+    return parent if isinstance(parent, str) and parent else None
+
+
+def codex_root_parent(ident, lookup, max_depth=8):
+    """Sendable root above sub-agent `ident`, walking parent_thread_id via `lookup(id) -> metadata row`.
+
+    None when any link is unknown, cyclic, too deep, or the top is not a sendable root.
+    """
+    seen, current = {ident}, ident
+    for _ in range(max_depth):
+        row = lookup(current)
+        if not isinstance(row, dict) or not row:
+            return None
+        if not codex_is_subagent(row):
+            return current if current != ident and codex_is_sendable_root(row) else None
+        current = codex_parent_id(row)
+        if not current or current in seen:
+            return None
+        seen.add(current)
+    return None
+
+
 def codex_is_sendable_root(metadata):
     """Positive local identity evidence only; a held lock/address is not root proof.
 
@@ -244,39 +292,60 @@ def codex_is_sendable_root(metadata):
 def lock_held(path):
     """True while another process holds any flock on `path`; a free or unreadable file is not live.
 
-    Probes with an exclusive lock so a holder in shared mode still reads as held. Without
-    `fcntl` (Windows) nothing is discoverable, so nothing is live.
+    Probes with an exclusive lock so a holder in shared mode still reads as held. A missing or
+    unreadable file, or any lock error other than contention, reads as not held.
     """
     try:
-        import fcntl
-    except ImportError:
-        if sys.platform != "win32":
-            return False
-        import msvcrt
-        try:
-            with open(path, "r+b") as lock:
-                try:
-                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
-                except OSError as exc:
-                    import errno
-                    return exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK)
-                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
-                return False
-        except OSError:
-            return False
-    try:
-        fd = os.open(path, os.O_RDONLY)
+        file = open(path, "r+b" if sys.platform == "win32" else "rb")
     except OSError:
         return False
-    try:
+    with file:
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            return True
-        fcntl.flock(fd, fcntl.LOCK_UN)
+            if not _transport().lock_file(file):
+                return True
+            _transport().unlock_file(file)
+        except (OSError, ImportError):
+            return False
         return False
-    finally:
-        os.close(fd)
+
+
+_ROLLOUT_VERDICTS = {}
+
+
+def codex_rollout_addressable(home, ident, index):
+    """Second gate after codex_is_sendable_root: the thread has a rollout and it is not a sub-agent's.
+
+    `index` is a one-element list holding the scan's rollout_index, built on first need. A thread's
+    source never changes, so a verdict backed by a rollout is cached; a missing rollout is not.
+    """
+    key = (str(home), ident)
+    if key in _ROLLOUT_VERDICTS:
+        return _ROLLOUT_VERDICTS[key]
+    codex = _sibling("unimatrix-peer-codex.py", "unimatrix_peer_codex")
+    if not index:
+        index.append(codex.rollout_index(home))
+    verdict = codex.thread_addressable(ident, home, index[0])
+    if ident in index[0]:
+        _ROLLOUT_VERDICTS[key] = verdict
+    return verdict
+
+
+def codex_rollout_identity(home, ident, index):
+    """Identity from the rollout's first session_meta line, for a thread SQLite has no row for.
+
+    `index` is the scan's one-element rollout_index holder. Returns {} without positive evidence.
+    """
+    if not index:
+        index.append(_sibling("unimatrix-peer-codex.py", "unimatrix_peer_codex").rollout_index(home))
+    path = index[0].get(ident)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            row = json.loads(fh.readline())
+    except (OSError, ValueError, TypeError):
+        return {}
+    payload = row.get("payload") if isinstance(row, dict) and row.get("type") == "session_meta" else None
+    source = payload.get("source") if isinstance(payload, dict) else None
+    return {"source": source} if source is not None else {}
 
 
 def load_lock_peers(lock_dir, vendor, taken_names=(), taken_targets=()):
@@ -292,11 +361,13 @@ def load_lock_peers(lock_dir, vendor, taken_names=(), taken_targets=()):
         return peers
     metadata = codex_thread_metadata(Path(lock_dir).resolve().parent) if vendor == "codex" else {}
     cwds = {target: row["cwd"] for target, row in metadata.items()}
+    home, rollouts = Path(lock_dir).resolve().parent, []
     for f in names:
         ident = f[:-len(".lock")]
         if f.startswith(".") or not f.endswith(".lock") or not ident or ident in taken_targets:
             continue
-        if vendor == "codex" and not codex_is_sendable_root(metadata.get(ident, {})):
+        if vendor == "codex" and not codex_is_sendable_root(
+                metadata[ident] if ident in metadata else codex_rollout_identity(home, ident, rollouts)):
             continue
         legacy = readable_peer_name(vendor, ident, cwds.get(ident))
         address = None
@@ -314,18 +385,27 @@ def load_lock_peers(lock_dir, vendor, taken_names=(), taken_targets=()):
             continue
         if not lock_held(os.path.join(lock_dir, f)):
             continue
+        if vendor == "codex" and not codex_rollout_addressable(home, ident, rollouts):
+            continue
+        if vendor == "codex" and not address:
+            print(f'unimatrix: refusing Codex peer without engine address: {ident}', file=sys.stderr)
+            continue
         peer = {"name": name, "vendor": vendor, "target": ident}
         if address:
             peer.update(address)
             peer['aliases'] = [alias for alias in (legacy, f'codex-{ident}') if _contract().safe_alias(alias) and alias != name]
         if cwds.get(ident):
             peer["cwd"] = cwds[ident]
+        if vendor == "codex":
+            peer.update(_liveness().codex_thread_holder(home, ident))
         peers.append(peer)
     return peers
 
 
 SEND_SCRIPT = "unimatrix-send.py"
-NO_REPLY_MARKERS = {"[unimatrix-peer-codex] no reply before timeout"}
+STALE_CODEX_ERROR = "Codex peer is stale: no live attached process"
+NO_REPLY_MARKERS = {"[unimatrix-peer-codex] no reply before timeout",
+                    "[unimatrix-peer-grok] no reply before timeout"}
 NOT_DELIVERED_PREFIXES = ("[unimatrix-peer-agy] not delivered", "[unimatrix-peer-agy] delivery failed",
                           "delivery failed:")
 
@@ -335,13 +415,22 @@ def not_delivered(reply):
     return str(reply or "").lstrip().startswith(NOT_DELIVERED_PREFIXES)
 
 
-def wrap_inbound(sender, body):
-    """What a peer sees: `[<sender>] <body>` plus a trailer naming the sender and the exact reply command."""
+def wrap_inbound(sender, body, reply_to=None):
+    """What a peer sees: `[<sender>] <body>` plus a trailer naming the sender and the exact reply command.
+
+    `reply_to` overrides the --to address when the sender itself cannot be queued (a Codex v2 sub-agent).
+    """
     # Run through the interpreter, never the exec bit: Windows has none (check_posix_exec_assumptions).
-    send = f"{shlex.quote(sys.executable)} {shlex.quote(str(here() / SEND_SCRIPT))}"
+    if sys.platform == "win32":
+        # PowerShell call-operator form; a peer driving a POSIX shell on Windows cannot run it.
+        quote = lambda value: "'" + str(value).replace("'", "''") + "'"
+        send = f"& {quote(sys.executable)} {quote(here() / SEND_SCRIPT)}"
+    else:
+        quote = shlex.quote
+        send = f"{quote(sys.executable)} {quote(str(here() / SEND_SCRIPT))}"
     return (f"[{sender}] {body}\n\nFrom agent {sender}, not the PM. "
             f"Never answer them in plain text to the human at your keyboard. "
-            f"Reply to them with: {send} --to {shlex.quote(str(sender))} '<your reply>'")
+            f"Reply to them with: {send} --to {quote(str(reply_to or sender))} '<your reply>'")
 
 
 def is_ack(text):
@@ -374,58 +463,11 @@ def _private_dir(path):
     os.makedirs(path, mode=0o700, exist_ok=True)
 
 
-def bind_private_server(path):
-    """Bind a unix socket file that is 0600 from creation."""
-    try:
-        os.unlink(path)
-    except FileNotFoundError:
-        pass
-    _private_dir(os.path.dirname(path))
-    old = os.umask(0o177)
-    try:
-        srv = socket.socket(socket.AF_UNIX)
-        srv.bind(path)
-    finally:
-        os.umask(old)
-    os.chmod(path, 0o600)
-    srv.listen(32)
-    srv.setblocking(False)
-    return srv
-
-
-def _pipe_call(fn, *args, **kwargs):
-    """Give callers the same OSError contract as Unix socket operations."""
-    import pywintypes
-    try:
-        return fn(*args, **kwargs)
-    except pywintypes.error as exc:
-        raise OSError(exc.winerror, str(exc)) from exc
-
-
 def request_line(endpoint, request, timeout=SEND_TIMEOUT):
     """Send one JSON line to a local endpoint and return the one-line JSON answer."""
-    if endpoint.startswith("\\\\.\\pipe\\"):
-        import win32pipe
-        import win32file
-        deadline = time.monotonic() + timeout
-        _pipe_call(win32pipe.WaitNamedPipe, endpoint, max(1, int(timeout * 1000)))
-        handle = _pipe_call(win32file.CreateFile, endpoint, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                                      0, None, win32file.OPEN_EXISTING, 0, None)
-        try:
-            _pipe_call(win32file.WriteFile, handle, (json.dumps(request) + "\n").encode())
-            buf = bytearray()
-            while b"\n" not in buf:
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("router response timed out")
-                if not _pipe_call(win32pipe.PeekNamedPipe, handle, 0)[1]:
-                    time.sleep(0.01)
-                    continue
-                buf.extend(_pipe_call(win32file.ReadFile, handle, 65536)[1])
-                if len(buf) > FRAME_LIMIT:
-                    raise ValueError("router response exceeds frame limit")
-            return json.loads(buf.split(b"\n", 1)[0])
-        finally:
-            handle.Close()
+    if _transport().is_pipe(endpoint):
+        raw = _transport().pipe_exchange(endpoint, (json.dumps(request) + "\n").encode("utf-8"), timeout)
+        return json.loads(raw.split(b"\n", 1)[0] or b'{"ok":false,"error":"closed"}')
     s = socket.socket(socket.AF_UNIX)
     s.settimeout(timeout)
     try:
@@ -443,145 +485,9 @@ def request_line(endpoint, request, timeout=SEND_TIMEOUT):
     return json.loads(buf.split(b"\n", 1)[0] or b'{"ok":false,"error":"closed"}')
 
 
-class PipeServer:
-    """Byte-mode named pipes with a protected DACL granting only the current user access.
-
-    Blocking Win32 I/O stays on daemon threads; handlers run on the owning asyncio loop.
-    """
-
-    def __init__(self, endpoint, handler):
-        import pywintypes
-        import win32api
-        import win32con
-        import win32pipe
-        import win32security
-        self.endpoint, self.handler = endpoint, handler
-        self.loop = asyncio.get_running_loop()
-        self.closed = False
-        self.pending = None
-        token = win32security.OpenProcessToken(win32api.GetCurrentProcess(), win32con.TOKEN_QUERY)
-        try:
-            sid = win32security.GetTokenInformation(token, win32security.TokenUser)[0]
-        finally:
-            token.Close()
-        acl = win32security.ACL()
-        acl.AddAccessAllowedAce(win32security.ACL_REVISION, win32con.GENERIC_ALL, sid)
-        sd = win32security.SECURITY_DESCRIPTOR()
-        sd.SetSecurityDescriptorDacl(1, acl, 0)
-        sd.SetSecurityDescriptorControl(win32security.SE_DACL_PROTECTED, win32security.SE_DACL_PROTECTED)
-        self.security = pywintypes.SECURITY_ATTRIBUTES()
-        self.security.SECURITY_DESCRIPTOR = sd
-        # Bind synchronously so a successful constructor means the endpoint exists.
-        self.pending = self._new_pipe()
-        threading.Thread(target=self._accept, daemon=True).start()
-
-    def _new_pipe(self):
-        import win32pipe
-        return win32pipe.CreateNamedPipe(
-            self.endpoint, win32pipe.PIPE_ACCESS_DUPLEX,
-            win32pipe.PIPE_TYPE_BYTE | win32pipe.PIPE_READMODE_BYTE | win32pipe.PIPE_WAIT
-            | getattr(win32pipe, "PIPE_REJECT_REMOTE_CLIENTS", 8),
-            win32pipe.PIPE_UNLIMITED_INSTANCES, 65536, 65536, 0, self.security)
-
-    def _accept(self):
-        import pywintypes
-        import win32pipe
-        while True:
-            handle = self.pending
-            try:
-                try:
-                    win32pipe.ConnectNamedPipe(handle, None)
-                except pywintypes.error as exc:
-                    if exc.winerror != 535:  # client connected before ConnectNamedPipe
-                        raise
-                if self.closed:
-                    handle.Close()
-                    return
-                self.pending = self._new_pipe()
-                threading.Thread(target=self._read, args=(handle,), daemon=True).start()
-            except (OSError, pywintypes.error):
-                if not self.closed:
-                    self.loop.call_exception_handler({"message": "named pipe accept failed"})
-                return
-
-    def _read(self, handle):
-        import win32file
-        import pywintypes
-        try:
-            raw = bytearray()
-            while True:
-                raw.extend(win32file.ReadFile(handle, 65536)[1])
-                if len(raw) > FRAME_LIMIT:
-                    return
-                while b"\n" in raw:
-                    first, rest = raw.split(b"\n", 1)
-                    # Auth headers can be separate writes or share a write with the user frame.
-                    parsed = json.loads(first)
-                    if isinstance(parsed, dict) and parsed.get("type") == "auth":
-                        raw = bytearray(rest)
-                        continue
-                    break
-                else:
-                    continue
-                break
-            reader = asyncio.StreamReader(limit=FRAME_LIMIT, loop=self.loop)
-            reader.feed_data(bytes(raw))
-            reader.feed_eof()
-
-            class Writer:
-                def __init__(self):
-                    self.pending = bytearray()
-
-                def write(self, data):
-                    self.pending.extend(data)
-
-                async def drain(self):
-                    data, self.pending = bytes(self.pending), bytearray()
-                    if data:
-                        await asyncio.to_thread(_pipe_call, win32file.WriteFile, handle, data)
-
-                def close(self):
-                    pass
-
-            asyncio.run_coroutine_threadsafe(self.handler(reader, Writer()), self.loop).result()
-        except (OSError, ValueError, pywintypes.error):
-            pass
-        finally:
-            handle.Close()
-
-    def close(self):
-        self.closed = True
-        # Wake the synchronous accept; its thread owns and closes the pending handle.
-        import win32file
-        import pywintypes
-        try:
-            handle = win32file.CreateFile(self.endpoint,
-                win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                0, None, win32file.OPEN_EXISTING, 0, None)
-            handle.Close()
-        except (OSError, pywintypes.error):
-            pass
-
-
-
 async def start_private_server(handler, endpoint):
-    if endpoint.startswith("\\\\.\\pipe\\"):
-        return PipeServer(endpoint, handler)
-    srv = bind_private_server(endpoint)
-    try:
-        return await asyncio.start_unix_server(handler, sock=srv, limit=FRAME_LIMIT)
-    except BaseException:
-        srv.close()
-        raise
-
-
-def install_stop_signals(stop):
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        if sys.platform == "win32":
-            signal.signal(sig, lambda *_: loop.call_soon_threadsafe(stop.set))
-        else:
-            loop.add_signal_handler(sig, stop.set)
+    """Serve `handler` on a private local endpoint (current-user-only pipe or 0600 socket)."""
+    return await _transport().start_server(handler, endpoint, FRAME_LIMIT)
 
 
 class Registration:
@@ -655,9 +561,15 @@ def sweep_pid_files(sessions_dir, pid):
 
 # ------------------------------------------------------------------ face (registration child)
 
-async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=False, vendor=None, peer=None):
-    """Register `name`, take inbound frames on `endpoint`, forward each to the router."""
+async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=False, vendor=None, peer=None,
+                   owner_pid=None, owner_start=None):
+    """Register `name`, take inbound frames on `endpoint`, forward each to the router.
+
+    `owner_pid`/`owner_start` stamp the owning router's identity so a later router can reap this face.
+    """
     reg = Registration(name, endpoint, sessions_dir, cwd=cwd, vendor=vendor, peer=peer)
+    if owner_pid and owner_start:
+        reg.data.update(unimatrixRouterPid=owner_pid, unimatrixRouterStart=owner_start)
     if transport:
         reg.data.update(unimatrixTransport=True, vendor="transport")
 
@@ -690,17 +602,26 @@ async def run_face(name, endpoint, forward, sessions_dir, cwd=None, transport=Fa
                     return
                 if frame.get("type") == "user":
                     try:
-                        await asyncio.to_thread(request_line, forward,
-                                                {"op": "inbound", "peer": name, "frame": frame}, 15)
-                    except (OSError, ValueError):
-                        pass
+                        answer = await asyncio.to_thread(request_line, forward,
+                                                         {"op": "inbound", "peer": name, "frame": frame}, 15)
+                    except (OSError, ValueError) as exc:
+                        answer = {"ok": False, "error": f"router unreachable: {exc}"}
+                    if isinstance(answer, dict) and answer.get("ok") is False:
+                        # Silence is acceptance; only a refusal is written back.
+                        try:
+                            writer.write((json.dumps({"ok": False, "error": answer.get("error", "not delivered")})
+                                          + "\n").encode("utf-8"))
+                            await writer.drain()
+                        except OSError:
+                            pass
+                        return
         finally:
             writer.close()
 
     server = await start_private_server(on_conn, endpoint)
     reg.write()
     stop = asyncio.Event()
-    install_stop_signals(stop)
+    _transport().install_stop_handlers(stop)
     try:
         await stop.wait()
     finally:
@@ -727,7 +648,13 @@ def default_adapters():
         m = mod("unimatrix-peer-agy.py", "agy")
         return await m.agy_turn(m.leg_endpoint(peer["target"]), m.transcript_path(peer["target"]), text)
 
-    return {"codex": codex, "agy": agy}
+    async def grok(peer, text):
+        m = mod("unimatrix-peer-grok.py", "grok")
+        if not peer.get("cwd"):
+            return "delivery failed: grok peer has no cwd to pin the resume to"
+        return await m.grok_turn(peer["target"], peer["cwd"], text)
+
+    return {"codex": codex, "agy": agy, "grok": grok}
 
 
 class Router:
@@ -735,7 +662,7 @@ class Router:
 
     def __init__(self, peers, sessions_dir=None, state_dir=None, endpoint_dir=None,
                  adapters=None, ready_seconds=READY_SECONDS, legs_dir=None,
-                 codex_locks_dir=None, presence_dir=None):
+                 codex_locks_dir=None, presence_dir=None, grok_home=None):
         peers = list(peers)
         self.codex_home = Path(codex_locks_dir or default_codex_locks_dir()).resolve().parent
         metadata = codex_thread_metadata(self.codex_home) if any(p.get('vendor') == 'codex' for p in peers) else {}
@@ -762,11 +689,37 @@ class Router:
         self.legs_dir = str(legs_dir) if legs_dir else None
         self.codex_locks_dir = str(codex_locks_dir) if codex_locks_dir else None
         self.presence_dir = str(presence_dir) if presence_dir else None
+        self.grok_home = str(grok_home) if grok_home else None
         self.discovered = set()  # names found by a scan, not given at construction; only these retire
         self.scanner = None
         self.transport_sources = {}  # infrastructure face name -> registered caller name or None
         self.transport_targets = {}  # each infrastructure face is one source/destination conversation
         self.transport_lock = asyncio.Lock()
+        self.lease = None  # open router.lock handle, locked for the router lifetime
+        self.bound_faces = set()  # face endpoints whose child registration reached ready
+        self.dead_holders = set()  # Codex peers whose recorded holder is gone: no face, not listed
+
+    def peer_stale(self, name):
+        """True for a Codex peer without a live attached holder: dead (False) or unrecorded (None)."""
+        peer = self.peers.get(name)
+        if not isinstance(peer, dict) or peer.get("vendor") != "codex":
+            return False
+        return name in self.dead_holders or _liveness().codex_holder_live(peer) is not True
+
+    async def _drop_dead_holders(self):
+        """Stop the face of every peers-file Codex row whose recorded holder is gone.
+
+        The row stays in `self.peers` so discovery still treats its target as taken; peers.json is
+        never rewritten. A row with no recorded holder is unknown, not dead, and keeps its face.
+        """
+        for name, peer in list(self.peers.items()):
+            if (peer.get("vendor") != "codex" or name in self.discovered or name in self.dead_holders
+                    or _liveness().codex_holder_live(peer) is not False):
+                continue
+            self.dead_holders.add(name)
+            if name in self.faces:
+                await self._stop_face(name)
+            self.log("holder-gone", name)
 
     def log(self, *a):
         try:
@@ -797,12 +750,20 @@ class Router:
             _private_dir(self.state_dir)
             if sys.platform != "win32":
                 _private_dir(os.path.dirname(self.ctl))
+            self.lease = open(os.path.join(self.state_dir, "router.lock"), "a+b")
+            if not _transport().lock_file(self.lease):
+                self.lease.close()
+                self.lease = None
+                raise RuntimeError("peer router already owns the local endpoint")
             self.server = await self._bind_control()
+            await asyncio.to_thread(self._reconcile_orphan_faces)
+            await self._drop_dead_holders()
             for name in list(self.peers):
-                await self._spawn_face(name)
-            if self.legs_dir or self.codex_locks_dir or self.presence_dir:
+                if name not in self.dead_holders:
+                    await self._spawn_face(name)
+            if self.legs_dir or self.codex_locks_dir or self.presence_dir or self.grok_home:
                 await self.refresh_discovered()
-                self.scanner = asyncio.create_task(self._scan_discovered())
+            self.scanner = asyncio.create_task(self._scan_discovered())
         except BaseException:
             await self.stop()
             raise
@@ -825,6 +786,9 @@ class Router:
             scans.append(lambda tn, tt: load_lock_peers(self.presence_dir, "agy", tn, tt))
         if self.codex_locks_dir:
             scans.append(lambda tn, tt: load_lock_peers(self.codex_locks_dir, "codex", tn, tt))
+        if self.grok_home:
+            grok = _sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok")
+            scans.append(lambda tn, tt: grok.discover_peers(self.grok_home, _roster().pid_alive, tn, tt))
         for scan in scans:
             for peer in scan(names | set(live), targets):
                 prior = owned.get(peer['target'])
@@ -845,6 +809,7 @@ class Router:
 
     async def refresh_discovered(self):
         """Register a face for each newly live discovered peer and retire the ones whose record or lock went."""
+        await self._drop_dead_holders()
         live = await asyncio.to_thread(self._live_discovered)
         for name in sorted(self.discovered - set(live)):
             await self._retire(name)
@@ -866,7 +831,6 @@ class Router:
         """Drop a discovered peer: stop its face, remove its registry files and endpoint."""
         if name in self.faces:
             await self._stop_face(name)
-        _unlink(self.endpoint_of(name))
         self.peers.pop(name, None)
         self.locks.pop(name, None)
         self.discovered.discard(name)
@@ -877,8 +841,55 @@ class Router:
             await asyncio.sleep(LEG_SCAN_SECONDS)
             try:
                 await self.refresh_discovered()
+                await self._repair_faces()
             except Exception as e:
                 self.log("DISCOVER-SCAN-FAILED", type(e).__name__, e)
+
+    async def _repair_faces(self):
+        """Restart each peer face whose child exited; spawn one that is missing after a failed restart."""
+        for name in list(self.peers):
+            if name in self.dead_holders:
+                continue
+            proc = self.faces.get(name)
+            if proc is not None and proc.poll() is None:
+                continue
+            try:
+                if proc is None:
+                    await self._spawn_face(name)
+                else:
+                    await self.restart_face(name)
+            except Exception as exc:
+                self.log("FACE-REPAIR-FAILED", name, type(exc).__name__, exc)
+
+    def _reconcile_orphan_faces(self):
+        """Reap only locally stamped faces with matching process birth and a departed owner."""
+        roster = _roster()
+        try:
+            paths = list(Path(self.sessions_dir).glob("*.json"))
+        except OSError:
+            return
+        for path in paths:
+            try:
+                entry = json.loads(path.read_text(encoding="utf-8"))
+                pid, owner, name = entry.get("pid"), entry.get("unimatrixRouterPid"), entry.get("name")
+                if (type(pid) is not int or type(owner) is not int or pid <= 0 or owner <= 0
+                        or pid == os.getpid() or not isinstance(name, str)
+                        or entry.get("sessionId") != f"peer-{name}-{pid}"
+                        or entry.get("messagingSocketPath") != self.endpoint_of(name)
+                        or entry.get("pidDomain") != roster.pid_domain()
+                        or not entry.get("unimatrixRouterStart") or not entry.get("procStart")):
+                    continue
+                if roster.pid_alive(owner) and roster.proc_start(owner) == entry["unimatrixRouterStart"]:
+                    continue
+                if roster.pid_alive(pid):
+                    if roster.proc_start(pid) != entry["procStart"]:
+                        continue
+                    roster.tree_kill(pid)
+                sweep_pid_files(self.sessions_dir, pid)
+                _unlink(self.endpoint_of(name))
+                self.log("ORPHAN-FACE-REAPED", name, pid)
+            except (OSError, ValueError, TypeError):
+                continue
 
     async def _spawn_face(self, name):
         ep = self.endpoint_of(name)
@@ -887,12 +898,15 @@ class Router:
                                 "--sessions-dir", self.sessions_dir,
                                 "--vendor", self.peers.get(name, {}).get("vendor") or "transport",
                                 "--peer-json", json.dumps(self.peers.get(name, {})),
-                                "--cwd", self.peers.get(name, {}).get("cwd") or os.getcwd()]
+                                "--cwd", self.peers.get(name, {}).get("cwd") or os.getcwd(),
+                                "--owner-pid", str(os.getpid()),
+                                "--owner-start", _roster().proc_start(os.getpid())]
                                + (["--transport"] if name in self.transport_sources else []))
         self.faces[name] = proc
         await self._wait(f"face {name}",
                          lambda p=proc: os.path.exists(os.path.join(self.sessions_dir, f"{p.pid}.json")),
                          proc)
+        self.bound_faces.add(name)
         self.log("registered", name, "pid", proc.pid, ep)
 
     async def restart_face(self, name):
@@ -913,16 +927,24 @@ class Router:
             _roster().tree_kill(old.pid)
             await asyncio.to_thread(old.wait, 3)
         sweep_pid_files(self.sessions_dir, old.pid)
+        if name in self.bound_faces:
+            _unlink(self.endpoint_of(name))
+            self.bound_faces.discard(name)
 
     async def _bind_control(self):
         return await start_private_server(self._on_ctl, self.ctl)
 
     async def stop(self):
-        """Remove every entry, key, endpoint, key file and child this router wrote."""
+        """Remove every entry, key, endpoint, key file and child this router wrote.
+
+        Endpoints are unlinked only when this router bound them, so a router that lost the lease or
+        a face bind never removes another owner's endpoint.
+        """
         if self.scanner is not None:
             self.scanner.cancel()
             self.scanner = None
-        if self.server is not None:
+        bound = self.server is not None
+        if bound:
             self.server.close()
             self.server = None
         for t in list(self.tasks):
@@ -938,10 +960,16 @@ class Router:
                 _roster().tree_kill(p.pid)  # stuck: only here is the pid still ours, not recycled
                 await asyncio.to_thread(p.wait, 3)
             sweep_pid_files(self.sessions_dir, p.pid)
-        for name in self.faces:
+        for name in self.bound_faces:
             _unlink(self.endpoint_of(name))
+        self.bound_faces.clear()
         self.faces = {}
-        _unlink(self.ctl)
+        if bound:
+            _unlink(self.ctl)
+        if self.lease is not None:
+            _transport().unlock_file(self.lease)
+            self.lease.close()
+            self.lease = None
 
     # -- routing
 
@@ -971,6 +999,8 @@ class Router:
                 handler = self.handle_inbound
             else:
                 return {"ok": False, "error": "unknown peer or frame"}
+            if peer in self.peers and self.peer_stale(peer):
+                return {"ok": False, "error": STALE_CODEX_ERROR}
             if peer in self.peers and self.peers[peer].get('vendor') == 'codex':
                 metadata = codex_thread_metadata(self.codex_home)
                 if not codex_is_sendable_root(metadata.get(self.peers[peer].get('target'), {})):
@@ -982,23 +1012,55 @@ class Router:
         if op == "list":
             details = await asyncio.to_thread(self.session_details)
             sessions = sorted(details)
+            listed = {n: p for n, p in self.peers.items() if n not in self.dead_holders}
             details.update({name: {"vendor": peer["vendor"], "box": socket.gethostname().lower(),
                                    "cwd": peer.get("cwd") or ""}
-                            for name, peer in self.peers.items()})
-            return {"ok": True, "peers": sorted(self.peers), "sessions": sessions,
-                    "details": details, "ready": await asyncio.to_thread(self.peer_readiness)}
+                            for name, peer in listed.items()})
+            ready = await asyncio.to_thread(self.peer_readiness)
+            reachable, agents = await asyncio.to_thread(self.roster_rows, str(req.get("as") or "cli"), ready)
+            return {"ok": True, "peers": sorted(listed), "reachable": reachable, "sessions": sessions,
+                    "details": details, "ready": ready, "agents": agents}
         if op == "send":
             peer, text = req.get("to"), req.get("text")
-            try:
-                peer = self.pick_peer(peer) or peer
-            except ValueError as exc:
-                return {'ok': False, 'error': str(exc)}
-            # A peer's own shell knows its thread/conversation id, not the name the router gave it.
             by_target = {p.get("target"): n for n, p in self.peers.items()}
+            try:
+                picked = self.pick_peer(peer)
+            except ValueError as exc:
+                picked, refusal = None, str(exc)
+            else:
+                refusal = None
+            if picked is None and isinstance(peer, str):
+                # A Codex v2 sub-agent cannot queue input; its sendable root parent receives it.
+                ident = peer[len("codex-"):] if peer.startswith("codex-") else peer
+                root = await asyncio.to_thread(self.codex_subagent_root, ident)
+                if root == "":
+                    return {"ok": False, "error": f"Codex sub-agent {ident} has no resolvable sendable root parent"}
+                if root:
+                    try:
+                        picked = self.pick_peer(root)
+                    except ValueError as exc:
+                        return {"ok": False, "error": str(exc)}
+                    if picked is None:
+                        return {"ok": False, "error": f"root parent {root} of Codex sub-agent {ident} is not a live peer"}
+            if picked is None and refusal:
+                return {"ok": False, "error": refusal}
+            peer = picked or peer
+            # A peer's own shell knows its thread/conversation id, not the name the router gave it.
             sender = by_target.get(req.get("as_target")) or str(req.get("as") or "cli")
+            reply_to = None
+            as_target = req.get("as_target")
+            if sender not in self.peers and isinstance(as_target, str) and as_target:
+                root = await asyncio.to_thread(self.codex_subagent_root, as_target)
+                if root == "":
+                    return {"ok": False, "error": f"Codex sub-agent {as_target} has no resolvable sendable root parent to reply through"}
+                if root:
+                    reply_to = by_target.get(root) or root
+                    sender = f"codex-{as_target}"
             if peer not in self.peers and isinstance(peer, str):
                 if not isinstance(text, str) or is_ack(text):
                     return {"ok": False, "error": "empty or acknowledgement text is not delivered"}
+                if reply_to:
+                    sender = reply_to
                 if sender in self.peers:
                     return await self._peer_send_to_session(sender, peer, text)
                 return await self._transport_send_to_session(sender, peer, text)
@@ -1006,7 +1068,9 @@ class Router:
                 return {"ok": False, "error": f"no peer named {peer}", "peers": sorted(self.peers)}
             if not isinstance(text, str) or is_ack(text):
                 return {"ok": False, "error": "empty or acknowledgement text is not delivered"}
-            reply = await self.turn(peer, wrap_inbound(sender, text))
+            if self.peer_stale(peer):
+                return {"ok": False, "error": STALE_CODEX_ERROR}
+            reply = await self.turn(peer, wrap_inbound(sender, text, reply_to))
             if not_delivered(reply):
                 return {"ok": False, "error": str(reply).strip()}
             return {"ok": True, "reply": _contract().label(peer, reply)}
@@ -1033,12 +1097,55 @@ class Router:
         ready = {}
         metadata = codex_thread_metadata(self.codex_home) if any(p.get('vendor') == 'codex' for p in self.peers.values()) else {}
         for name, p in self.peers.items():
+            if name in self.dead_holders:
+                continue
             ok = p.get('vendor') != 'codex' or codex_is_sendable_root(metadata.get(p.get('target'), {}))
             if p.get("vendor") == "agy" and os.name != "nt":
                 m = _sibling("unimatrix-peer-agy.py", "unimatrix_peer_agy_ready")
                 ok = os.path.exists(m.leg_endpoint(p["target"]))
             ready[name] = ok
         return ready
+
+    def roster_rows(self, sender="cli", ready=None):
+        """(reachable names, one {name, box, vendor} row per reachable name).
+
+        Reachable: a peer that is ready, or an external roster session whose registered endpoint
+        exists; never `sender` itself. This is the set a send from `sender` can resolve now.
+        """
+        ready = self.peer_readiness() if ready is None else ready
+        entries = {}
+        try:
+            files = os.listdir(self.sessions_dir)
+        except FileNotFoundError:
+            files = []
+        for filename in files:
+            if not filename.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(self.sessions_dir, filename), encoding="utf-8") as file:
+                    entry = json.load(file)
+            except (OSError, ValueError):
+                continue
+            name = entry.get("name") if isinstance(entry, dict) else None
+            if (not isinstance(name, str) or name in self.peers or name in self.transport_sources
+                    or entry.get("unimatrixTransport") or not isinstance(entry.get("pid"), int)
+                    or not _roster().pid_alive(entry["pid"]) or not self.external_codex_sendable(entry)):
+                continue
+            if name in entries and (entry.get("startedAt") or 0) < (entries[name].get("startedAt") or 0):
+                continue
+            entries[name] = entry
+        names = {name for name, ok in ready.items() if ok}
+        for name, entry in entries.items():
+            endpoint = entry.get("messagingSocketPath")
+            if endpoint and _transport().endpoint_exists(endpoint):
+                names.add(name)
+        names.discard(sender)
+        contract = _contract()
+        box = contract.local_box()
+        rows = [{"name": n, "box": box, "vendor": self.peers[n]["vendor"],
+                 **({"stale": True} if self.peer_stale(n) else {})} if n in self.peers
+                else contract.agent_row(entries[n], box) for n in sorted(names)]
+        return sorted(names), rows
 
     async def turn(self, peer, text, addressed=None):
         """One adapter turn for `peer` under its lock; a failure becomes the reply text.
@@ -1051,6 +1158,8 @@ class Router:
             if addressed is not None:
                 self.addressed[peer] = addressed
             try:
+                if self.peer_stale(peer):
+                    return f"delivery failed: {STALE_CODEX_ERROR}"
                 if p["vendor"] == "codex":
                     metadata = await asyncio.to_thread(codex_thread_metadata, self.codex_home)
                     if not codex_is_sendable_root(metadata.get(p['target'], {})):
@@ -1238,6 +1347,23 @@ class Router:
             return False
         return codex_is_sendable_root(codex_thread_metadata(self.codex_home).get(target, {}))
 
+    def codex_subagent_root(self, ident):
+        """None when `ident` is not a known Codex sub-agent; else its sendable root thread id, or "" if unresolvable."""
+        if not isinstance(ident, str) or not re.fullmatch(r'[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}', ident):
+            return None  # a session name is no thread id: skip the sqlite read and rollout scan
+        metadata, rollouts = codex_thread_metadata(self.codex_home), []
+
+        def lookup(thread):
+            row = dict(metadata.get(thread) or {})
+            if not row or (codex_is_subagent(row) and not codex_parent_id(row)):
+                extra = codex_rollout_identity(self.codex_home, thread, rollouts)
+                if not row or codex_parent_id(extra):
+                    row = {**row, **extra}
+            return row
+        if not codex_is_subagent(lookup(ident)):
+            return None
+        return codex_root_parent(ident, lookup) or ""
+
     def resolve_sender(self, name, fallback=""):
         """Current messaging endpoint of the live roster session called `name`, else `fallback`.
 
@@ -1317,16 +1443,8 @@ class Router:
 def deliver(endpoint, data, sessions_dir=None):
     """Write an authenticated frame to a registered session's Unix socket or Windows pipe."""
     data = _roster().authenticated_data(endpoint, data, sessions_dir)
-    if endpoint.startswith("\\\\.\\pipe\\"):
-        import win32file
-        import win32pipe
-        _pipe_call(win32pipe.WaitNamedPipe, endpoint, 10000)
-        handle = _pipe_call(win32file.CreateFile, endpoint, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
-                                      0, None, win32file.OPEN_EXISTING, 0, None)
-        try:
-            _pipe_call(win32file.WriteFile, handle, data)
-        finally:
-            handle.Close()
+    if _transport().is_pipe(endpoint):
+        _check_delivery_reply(_transport().pipe_exchange(endpoint, data, 10, ACCEPT_READ_SECONDS))
         return
     s = socket.socket(socket.AF_UNIX)
     try:
@@ -1335,6 +1453,19 @@ def deliver(endpoint, data, sessions_dir=None):
         s.sendall(data)
     finally:
         s.close()
+
+
+def _check_delivery_reply(reply):
+    """Silence is acceptance (the harness writes no reply line); any line other than {"ok": true} raises."""
+    line = reply.split(b"\n", 1)[0].strip()
+    if not line:
+        return
+    try:
+        if json.loads(line).get("ok") is True:
+            return
+    except (ValueError, AttributeError):
+        pass
+    raise RuntimeError(f"refused: {line.decode('utf-8', 'replace')[:200]}")
 
 
 def _unlink(path):
@@ -1349,7 +1480,7 @@ def _unlink(path):
 async def serve(router):
     await router.start()
     stop = asyncio.Event()
-    install_stop_signals(stop)
+    _transport().install_stop_handlers(stop)
     try:
         await stop.wait()
     finally:
@@ -1366,6 +1497,10 @@ def cmd_send(argv):
     ctl = endpoint_path(ROUTER_ENDPOINT_SEED, a.endpoint_dir)
     try:
         resp = request_line(ctl, {"op": "send", "as": a.as_name, "to": a.peer, "text": " ".join(a.text)})
+    except PermissionError as e:
+        print(f"connect to router socket {ctl} denied by the caller's sandbox, not a router fault: {e}; "
+              "allow the socket path or run the send unsandboxed", file=sys.stderr)
+        return 1
     except OSError as e:
         print(f"router not reachable at {ctl}: {e}", file=sys.stderr)
         return 1
@@ -1388,9 +1523,11 @@ def cmd_face(argv):
     p.add_argument("--transport", action="store_true")
     p.add_argument("--vendor", default=None)
     p.add_argument("--peer-json", default='{}')
+    p.add_argument("--owner-pid", type=int, default=None)
+    p.add_argument("--owner-start", default=None)
     a = p.parse_args(argv)
     asyncio.run(run_face(a.name, a.endpoint, a.forward, a.sessions_dir, a.cwd, a.transport, a.vendor,
-                         json.loads(a.peer_json)))
+                         json.loads(a.peer_json), a.owner_pid, a.owner_start))
     return 0
 
 
@@ -1411,7 +1548,8 @@ def cmd_serve(argv):
         return 2
     asyncio.run(serve(Router(peers, a.sessions_dir, a.state_dir, a.endpoint_dir,
                              legs_dir=default_legs_dir(), codex_locks_dir=default_codex_locks_dir(),
-                             presence_dir=default_presence_dir())))
+                             presence_dir=default_presence_dir(),
+                             grok_home=_sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok").grok_home())))
     return 0
 
 

@@ -99,7 +99,7 @@ def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
 
     def run(argv, **kw):
         argvs.append(argv)
-        return subprocess.CompletedProcess(argv, 0, b"", b"")
+        return subprocess.CompletedProcess(argv, 0, b'{"ok": true}\n', b"")
 
     monkeypatch.setattr(subprocess, "run", run)
 
@@ -117,6 +117,45 @@ def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
         monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun, up=lan_up: lan if up else tun)
         bridge.relay_send(Conn())
         assert expect in argvs[-1] and ({"lan", "wg"} - {expect}).isdisjoint(argvs[-1])
+
+
+@pytest.mark.parametrize("is_win", [True, False])
+def test_bridge_relay_send_reaches_subprocess_run_on_either_platform(monkeypatch, tmp_path, is_win):
+    import subprocess
+    import types
+    bridge = load("bridge")
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps(
+        {"pid": os.getpid(), "messagingSocketPath": r"\\.\pipe\m", "farPid": 77, "macSocketPath": "/far/9.sock"}))
+    monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
+    monkeypatch.setattr(bridge, "IS_WIN", is_win)
+    monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
+    bridge.cfg = types.SimpleNamespace(endpoint=r"\\.\pipe\m", key="k", remote="lan", tunnel_remote=None, port=None)
+    bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
+    calls = []
+
+    def run(argv, **kw):
+        calls.append((argv, kw))
+        return subprocess.CompletedProcess(argv, 0, b'{"ok": true}\n', b"")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+    class Conn:
+        chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
+
+        def read(self):
+            return self.chunks.pop(0)
+
+        def close(self):
+            pass
+
+    bridge.relay_send(Conn())
+    bridge.log.close()
+    assert len(calls) == 1
+    argv, kw = calls[0]
+    assert argv[0] == "ssh" and argv[-2:] == ["lan", "send-batch 77"]
+    assert ("ControlMaster=auto" in " ".join(argv)) is (not is_win)
 
 
 def test_bridge_and_inbox_take_a_tunnel_alias_from_flag_or_environment(monkeypatch):

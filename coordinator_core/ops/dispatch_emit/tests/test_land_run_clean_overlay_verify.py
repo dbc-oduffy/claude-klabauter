@@ -56,6 +56,28 @@ def test_peer_dirt_in_the_worktree_does_not_fail_the_overlay(tmp_path):
     assert not cov.overlay_root(root, "run1").exists()
 
 
+def test_in_repo_overlay_holder_is_ledgered_for_the_run_end_reap(tmp_path):
+    from coordinator_core.ops.dispatch_emit import run_scratch
+
+    root, head = _repo(tmp_path)
+
+    cov.verify(root, "run1", head, [READER])
+
+    assert "scratch/clean-overlay/run1" in run_scratch.read_ledger(root, "run1")["paths"]
+
+
+def test_out_of_repo_overlay_holder_is_not_ledgered(tmp_path):
+    from coordinator_core.ops.dispatch_emit import run_scratch
+
+    root, head = _repo(tmp_path)
+    bulk = tmp_path / "bulk"
+    (root / "coordinator.local.md").write_text(f'---\nbulk_scratch_dir: "{bulk}"\n---\n', encoding="utf-8")
+
+    cov.verify(root, "run1", head, [READER])
+
+    assert run_scratch.read_ledger(root, "run1")["paths"] == []
+
+
 def test_a_red_in_the_candidate_is_red_even_when_the_worktree_is_clean(tmp_path):
     root, head = _repo(tmp_path, data="broken\n")
 

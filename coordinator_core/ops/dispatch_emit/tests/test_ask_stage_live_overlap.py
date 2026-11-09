@@ -29,11 +29,16 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _live_peer(root, run_id, writes):
+def _live_peer(root, run_id, writes, *, indexed=True):
+    from coordinator_core.ops.dispatch_emit import live_run_writes
+
     run_token.mint(root, run_id, SCRIPT, session_id=None)
     d = root / "scratch" / "warp" / run_id
     d.mkdir(parents=True, exist_ok=True)
-    (d / "manifest.json").write_text(json.dumps({"rows": [{"id": "P1", "writes": writes}]}), encoding="utf-8")
+    manifest = {"rows": [{"id": "P1", "writes": writes}]}
+    (d / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    if indexed:
+        live_run_writes.index_stage(root, run_id, manifest)
 
 
 def _live(root, run_id):
@@ -52,10 +57,11 @@ def test_overlap_refused_naming_run_and_paths_and_token_released(repo):
 def test_stalled_footprint_read_degrades_and_stages(repo, monkeypatch, caplog):
     import threading
 
-    from coordinator_core.ops.dispatch_emit import ask_stage, live_run_writes
+    from coordinator_core.ops.dispatch_emit import ask_stage, live_run_index, live_run_writes
 
     _live_peer(repo, "peer", ["pkg/b.py"])
     gate = threading.Event()
+    monkeypatch.setattr(live_run_index, "claim", lambda *a, **k: None)
     monkeypatch.setattr(live_run_writes, "live_footprints", lambda *a, **k: gate.wait(10))
     monkeypatch.setattr(ask_stage, "LIVE_OVERLAP_DEADLINE_S", 0.05)
     try:
@@ -85,3 +91,34 @@ def test_own_run_footprint_never_counts(repo):
     _live_peer(repo, "mine", ["pkg/a.py"])
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
     assert _live(repo, "mine")
+
+
+def test_claim_is_the_default_path_and_records_this_runs_footprint(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    seen = []
+    real = live_run_index.claim
+    monkeypatch.setattr(live_run_index, "claim", lambda root, rid, w: seen.append(rid) or real(root, rid, w))
+    assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
+    assert seen == ["mine"]
+
+
+def test_claimed_but_unstaged_peer_blocks(repo):
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    _live_peer(repo, "peer", ["other/z.py"], indexed=False)
+    assert live_run_index.claim(repo, "peer", ["pkg/b.py"]) == {}
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    with pytest.raises(AskStageError, match=r"live-run-write-overlap.*peer: pkg/b\.py"):
+        stage(repo, run_id="mine", plan_rel=PLAN_REL)
+    assert not _live(repo, "mine")
+
+
+def test_unclaimed_falls_back_to_readonly_check_and_still_refuses(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    _live_peer(repo, "peer", ["pkg/b.py"], indexed=False)
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    monkeypatch.setattr(live_run_index, "claim", lambda *a, **k: None)
+    with pytest.raises(AskStageError, match="live-run-write-overlap"):
+        stage(repo, run_id="mine", plan_rel=PLAN_REL)

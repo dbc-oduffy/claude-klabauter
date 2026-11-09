@@ -343,3 +343,66 @@ def test_worktree_measure_in_process_split_agrees_with_the_gate_and_spawns_one_g
     monkeypatch.setattr(ps, "_run_git", lambda argv, cwd: (seen.append(argv), real(argv, cwd))[1])
     assert ps._worktree_measure(base, paths, repo) == worktree_measure(base, paths, str(repo))
     assert [a[0] for a in seen] == ["diff"]
+
+
+def _mixed_worktree(repo):
+    """Modified, deleted, untracked, binary-modified and renamed paths against a committed base."""
+    _write(repo, ["mod.py", "del.py", "ren.py"], 6)
+    (repo / "bin.dat").write_bytes(b"\x00\x01\x02" * 40)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "m")
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _write(repo, ["mod.py", "new.py"], 9)
+    (repo / "del.py").unlink()
+    (repo / "bin.dat").write_bytes(b"\x00\x09" * 90)
+    (repo / "ren.py").rename(repo / "ren2.py")
+    _git(repo, "add", "-A")
+    _git(repo, "reset", "-q", "new.py")
+    return base, ["mod.py", "del.py", "bin.dat", "ren.py", "ren2.py", "new.py"]
+
+
+def test_measure_sections_agrees_with_the_gate_on_the_frozen_worktree_diff(repo):
+    from coordinator_core.ops import review_partition_slices as ps
+    from coordinator_core.ops.review_brightline_gate import worktree_measure
+    from coordinator_core.ops.review_freeze_diff import freeze_diff
+
+    base, paths = _mixed_worktree(repo)
+    frozen = freeze_diff(repo, base, "m-prep", paths, worktree=True)
+    assert frozen["error"] is None
+    sections = ps._diff_sections(Path(frozen["diff_path"]).read_bytes().decode("utf-8"))
+    assert ps._measure_sections(sections) == worktree_measure(base, paths, str(repo))
+
+
+def test_worktree_partition_from_a_whole_diff_runs_no_numstat_and_keeps_each_slice(repo, monkeypatch):
+    from coordinator_core.ops import review_partition_slices as ps
+    from coordinator_core.ops.review_freeze_diff import freeze_diff
+
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
+    _write(repo, rels, 30)
+    plain = partition_slices(repo, base, rels, "plain")
+    seen: list = []
+    real = ps._run_git
+    monkeypatch.setattr(ps, "_run_git", lambda argv, cwd: (seen.append(argv), real(argv, cwd))[1])
+    via_whole = partition_slices(
+        repo, base, rels, "whole",
+        whole_diff=lambda _out: freeze_diff(repo, base, "whole-g", rels, worktree=True),
+    )
+    assert via_whole["error"] is None and not seen
+    for key in ("verdict", "loc", "surfaces", "product_paths"):
+        assert via_whole[key] == plain[key]
+    assert [s["paths"] for s in via_whole["slices"]] == [s["paths"] for s in plain["slices"]]
+
+    def texts(s: dict) -> list:
+        return sorted(t for _c, t in ps._diff_sections(Path(s["diff_path"]).read_text(encoding="utf-8")))
+
+    for a, b in zip(via_whole["slices"], plain["slices"]):
+        assert texts(a) == texts(b)
+
+
+def test_worktree_partition_whole_diff_refusal_falls_back_to_the_numstat_measure(repo):
+    base = _git(repo, "rev-parse", "HEAD").strip()
+    _write(repo, ["a/b/x.py"], 40)
+    plain = partition_slices(repo, base, ["a/b/x.py"], "r")
+    refused = partition_slices(repo, base, ["a/b/x.py"], "r2", whole_diff=lambda _o: {"error": "boom"})
+    assert refused["loc"] == plain["loc"] == 40

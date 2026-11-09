@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import functools
 import json
+import os
 import re
 import sys
 import time
@@ -72,6 +73,7 @@ BACKGROUND_LEGS: tuple[str, ...] = (
     "memo-lifecycle",
     "post-close",
     "symbol-knowledge",
+    "scratch-reap",
 )
 
 
@@ -1335,6 +1337,52 @@ def _symbol_knowledge(ctx: JobContext) -> LegResult:
     return symbol_knowledge_leg(ctx)
 
 
+_RUN_ID_SHAPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _resume_run_id(ctx: JobContext) -> Optional[str]:
+    """The halted predecessor a refire resumes: ``record["resume"]["run_id"]`` (halt_refire.RESUME_KEYS)
+    or the ``resume_run_id`` close input. ``resume_halt_sha`` is a commit sha and is never read here."""
+    resume = ctx.record.get("resume")
+    named = resume.get("run_id") if isinstance(resume, dict) else _inputs(ctx).get("resume_run_id")
+    if isinstance(named, str) and named != ctx.run_id and _RUN_ID_SHAPE.fullmatch(named) and ".." not in named:
+        return named
+    return None
+
+
+def _scratch_reap(ctx: JobContext) -> LegResult:
+    """Tombstone the run's ledgered scratch, and the halted predecessor's when this run resumed one."""
+    from coordinator_core.ops.dispatch_emit import run_scratch, run_scratch_reap
+
+    ids = [ctx.run_id]
+    predecessor = _resume_run_id(ctx)
+    if predecessor:
+        ids.append(predecessor)
+    removed = kept = refused = 0
+    held: list[str] = []
+    seen = False
+    for rid in ids:
+        owns = (
+            os.path.lexists(run_scratch.ledger_path(ctx.root, rid))
+            or os.path.lexists(ctx.root / "scratch" / "warp" / rid)
+        )
+        if not owns:
+            continue
+        seen = True
+        reply = run_scratch_reap.reap_run(ctx.root, rid)
+        removed += len(reply["removed"])
+        kept += len(reply["kept"])
+        refused += len(reply["refused"])
+        if reply["held"]:
+            held.append(rid)
+    if not seen:
+        return LegResult("not-applicable", "no scratch ledger or warp dir for the run")
+    detail = f"scratch-reap: removed {removed}, kept {kept}, refused {refused}"
+    if held:
+        detail += f"; held: {', '.join(held)}"
+    return _leg("ran", detail, ctx)
+
+
 def _clean_clone_proof(ctx: JobContext) -> LegResult:
     """Spawn the clean-clone runner detached for the terminal sha; never waits for it."""
     if not ctx.terminal_sha:
@@ -1344,6 +1392,11 @@ def _clean_clone_proof(ctx: JobContext) -> LegResult:
     from coordinator_core.ops.ceremony.detached_spawn import _child_env, _windows_detached_flags
     from coordinator_core.ops.clean_clone_proof_contract import RUNNER_MODULE
 
+    from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn
+
+    admission = admit_before_spawn("clean-clone-proof-launch", 0.25)
+    if not admission.admitted:
+        return _leg("failed", f"clean-clone spawn not admitted: {admission.reason}", ctx)
     kwargs: dict = {"creationflags": _windows_detached_flags()} if sys.platform == "win32" else {"start_new_session": True}
     try:
         subprocess.Popen(
@@ -1377,6 +1430,7 @@ DEFAULT_RUNNERS: Mapping[str, Runner] = {
     "memo-lifecycle": _memo_lifecycle,
     "post-close": _post_close,
     "symbol-knowledge": _symbol_knowledge,
+    "scratch-reap": _scratch_reap,
 }
 
 

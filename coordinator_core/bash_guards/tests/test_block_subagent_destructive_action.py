@@ -1472,7 +1472,8 @@ def test_git_global_option_c_path_merge_still_denies():
 
 def test_git_unknown_local_verb_is_not_denied():
     payload = _payload("git frobnicate", agent_type="coordinator:executor")
-    assert _enveloped(guard.check)(payload) is None
+    verdict = guard.check(payload)
+    assert verdict is None or verdict.verdict_kind == "advisory"
 
 
 def test_git_unparseable_segment_does_not_become_allowed():
@@ -4964,6 +4965,9 @@ def test_private_index_commit_sequence_passes():
         "GIT_INDEX_FILE=scratch/i git update-index --add --cacheinfo 100644,abc,f.txt",
         "export GIT_INDEX_FILE=scratch/i && git update-index --refresh",
         "export GIT_INDEX_FILE=scratch/i && git apply --cached scratch/x.patch",
+        "export GIT_INDEX_FILE=$PWD/.git/idx-4aa53f && git read-tree HEAD && git update-index --cacheinfo 100644,abc,f.py",
+        'export GIT_INDEX_FILE="$PWD/.git/idx-4aa53f" && git apply --cached scratch/x.patch',
+        "export GIT_INDEX_FILE=${PWD}/.git/idx-4aa53f && git update-index --add --cacheinfo 100644,abc,f.py",
     ],
 )
 def test_plumbing_verb_passes_for_subagent(cmd):
@@ -4985,6 +4989,9 @@ def test_plumbing_verb_passes_for_subagent(cmd):
         "git update-index --add f.txt",
         "export GIT_INDEX_FILE=.git/index && git apply --cached scratch/x.patch",
         "export GIT_INDEX_FILE=$IDX && git apply --cached scratch/x.patch",
+        "export GIT_INDEX_FILE=$PWD/.git/index && git update-index --cacheinfo 100644,abc,f.py",
+        "export GIT_INDEX_FILE=$PWD && git apply --cached scratch/x.patch",
+        "export GIT_INDEX_FILE=$PWD/.git/idx-a && git reset --hard HEAD~1",
         "git apply --cached scratch/x.patch && export GIT_INDEX_FILE=scratch/i",
         "export GIT_INDEX_FILE=scratch/i && git apply --index scratch/x.patch",
         "export GIT_INDEX_FILE=scratch/i && git push --force origin main",
@@ -5063,3 +5070,35 @@ def test_op_relay_rm_f_defer_params_tail_is_classified_by_target():
     relay = "coordinator-invoke dispatch.run --params-file {p} && rm -f {p}"
     assert _rm_verdict(relay.format(p="build/out/defer-params.json")) == "deny"
     assert _rm_verdict(relay.format(p=".pytest_cache/defer-params.json")) == "allow"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm .git/idx-a1b2c3",
+        "rm -f .git/idx-a1b2c3",
+        "rm -f -- .git/idx-a1b2c3 .git/idx-d4e5",
+        "rm -f E:/repo/.git/idx-a1b2c3",
+    ],
+)
+def test_rm_of_private_temp_index_is_allowed(command):
+    assert _rm_verdict(command) == "allow"
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -f .git/index",
+        "rm -f .git/idx-",
+        "rm -f .git/idx-*",
+        "rm -f .git/HEAD",
+        "rm -rf .git",
+        "rm -f .git/idx-a1b2c3 .git/index",
+        "rm -f .git/sub/idx-a1b2c3",
+        "rm -f src/idx-a1b2c3",
+        "rm -f .git/../idx-a1b2c3",
+        "rm -f .git/idx-a1b2c3; rm -f .git/index",
+    ],
+)
+def test_rm_of_other_git_paths_stays_denied(command):
+    assert _rm_verdict(command) == "deny"

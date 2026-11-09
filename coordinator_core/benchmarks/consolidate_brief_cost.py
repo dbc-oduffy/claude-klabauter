@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional
 
 from coordinator_core.benchmarks import declare_benchmark_origin
-from coordinator_core.win_portability import no_console_creationflags
+from coordinator_core.git.run import run_git
 
 #: label -> argv (after `git`); the sha set is fed on stdin, one per line.
 SHAPES: dict[str, list[str]] = {
@@ -120,24 +120,15 @@ def _measure_shapes(repo: Path, shas: list[str], clock: _TreeClock, timeout_s: f
     stdin = "".join(f"{sha}\n" for sha in shas)
     out: dict[str, Any] = {}
     for label, argv in SHAPES.items():
-        timed_out = False
         before = clock.read()
-        proc = subprocess.Popen(
-            ["git", *argv], cwd=str(repo), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, **no_console_creationflags(),
-        )
-        try:
-            stdout, _ = proc.communicate(stdin.encode(), timeout=timeout_s)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            proc.kill()
-            stdout, _ = proc.communicate()
+        result = run_git(list(argv), cwd=str(repo), timeout=timeout_s, input=stdin.encode())
+        timed_out = result.timed_out
         process_ms = clock.read() - before
         out[label] = {
             "process_ms": round(process_ms, 1),
             "spawns": 1,
-            "bytes": len(stdout),
-            "rc": proc.returncode,
+            "bytes": len(result.stdout_bytes),
+            "rc": result.returncode,
             "timed_out": timed_out,
         }
     return out
@@ -163,10 +154,10 @@ _FIXTURE_COMMITS_PER_BRANCH = 4
 
 
 def _git(repo: Path, *args: str) -> str:
-    return subprocess.run(
-        ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
-        cwd=str(repo), capture_output=True, text=True, check=True, **no_console_creationflags(),
-    ).stdout
+    result = run_git(["-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=str(repo))
+    if not result.ok:
+        raise subprocess.CalledProcessError(result.returncode, ["git", *args], result.stdout, result.stderr)
+    return result.stdout
 
 
 def _fast_import_commit(ref: str, message: str, path: str, content: str, parent: Optional[str], stamp: int) -> str:
@@ -201,10 +192,9 @@ def _build_fixture(repo: Path) -> int:
                     "refs/heads/main" if c == 0 else None, stamp,
                 )
             )
-    subprocess.run(
-        ["git", "fast-import", "--quiet"], cwd=str(repo), input="".join(stream).encode("utf-8"),
-        capture_output=True, check=True, **no_console_creationflags(),
-    )
+    imported = run_git(["fast-import", "--quiet"], cwd=str(repo), input="".join(stream).encode("utf-8"))
+    if not imported.ok:
+        raise subprocess.CalledProcessError(imported.returncode, ["git", "fast-import"], imported.stdout, imported.stderr)
     _git(repo, "checkout", "-q", "-f", "main")
     return _FIXTURE_BRANCHES * _FIXTURE_COMMITS_PER_BRANCH
 

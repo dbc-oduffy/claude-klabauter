@@ -32,7 +32,8 @@ def test_existing_bridge_refreshes_far_pid_without_changing_local_identity(tmp_p
     cfg = SimpleNamespace(remote="macmini")
     roster.sync(bridges, {sock: row}, cfg, lambda *a: None)
     updated = json.loads(path.read_text())
-    expected = {**local, "farPid": 80954, "box": "macmini", "vendor": "unknown", "unimatrixRemote": "macmini"}
+    expected = {**local, "farPid": 80954, "box": "macmini", "vendor": "unknown", "unimatrixRemote": "macmini",
+                **roster.supervisor_fields()}
     if name is not None:
         expected["unimatrixFarName"] = name
     assert updated == expected

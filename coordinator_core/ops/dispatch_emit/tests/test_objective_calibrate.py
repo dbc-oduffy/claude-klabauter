@@ -88,6 +88,30 @@ def test_discriminating_falsifier_passes_and_pins(tmp_path):
     assert not (root / "scratch/objective-calibration" / RUN / sha).exists()
 
 
+def test_calibration_run_dir_is_ledgered_for_the_run_end_reap(tmp_path):
+    from coordinator_core.ops.dispatch_emit import run_scratch
+
+    root = _claude_klabauter(tmp_path, "lens.md")
+    sha = _repo(tmp_path / "work", "lens.md", "Lens 8\n")
+    calibrate({"run_id": RUN, "at": "wave0", "credited": [{"sha": sha, "repo_root": str(tmp_path / "work"),
+                                                            "axes": ["lens8"]}]}, root)
+    assert f"scratch/objective-calibration/{RUN}" in run_scratch.read_ledger(root, RUN)["paths"]
+
+
+def test_ledger_write_failure_never_breaks_calibration(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_scratch
+
+    def boom(*a, **k):
+        raise OSError("ledger unwritable")
+
+    monkeypatch.setattr(run_scratch, "record_paths", boom)
+    root = _claude_klabauter(tmp_path, "lens.md")
+    sha = _repo(tmp_path / "work", "lens.md", "Lens 8\n")
+    res = calibrate({"run_id": RUN, "at": "wave0", "credited": [{"sha": sha, "repo_root": str(tmp_path / "work"),
+                                                                  "axes": ["lens8"]}]}, root)
+    assert res["verdict"] == "pass"
+
+
 def test_pass_with_stale_candidate_sha_fails_instead_of_passing_unpinned(tmp_path):
     root = _claude_klabauter(tmp_path, "lens.md")
     sha = _repo(tmp_path / "work", "lens.md", "Lens 8\n")

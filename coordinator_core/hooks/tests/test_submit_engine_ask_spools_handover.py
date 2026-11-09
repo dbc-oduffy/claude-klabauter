@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import stat
+import sys
 import threading
 import time
 from pathlib import Path
@@ -44,7 +45,8 @@ def test_handover_pending_raised_by_the_emit_spools_a_0600_entry_holding_the_ask
     elapsed = time.monotonic() - t0
     spool_id = _assert_spooled_allow(env, repo)
     path = record.entry_path(str(repo), spool_id)
-    assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
+    if sys.platform != "win32":
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
     header, payload = record.read_entry(path)
     assert header["reason"] == "handover-pending" and header["session_id"] == "sess-real-emit"
     assert b"build the thing" in payload
@@ -158,3 +160,14 @@ def test_unwritable_placeholder_script_denies_but_names_the_spooled_entry(repo, 
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert f"spooled as {spool_id}" in hso["permissionDecisionReason"]
+    assert f"coordinator-invoke ask_spool.withdraw '{{\"spool_id\":\"{spool_id}\"" in hso["permissionDecisionReason"]
+
+
+def test_allow_envelope_names_the_withdraw_verb_with_the_spool_id(repo):
+    def emit(_p, _r):
+        raise HandoverPending(5)
+
+    env = mod.evaluate(_ask(repo), emit=emit)
+    spool_id = _assert_spooled_allow(env, repo)
+    context = env["hookSpecificOutput"]["additionalContext"]
+    assert f"coordinator-invoke ask_spool.withdraw '{{\"spool_id\":\"{spool_id}\",\"reason\":\"...\"}}'." in context

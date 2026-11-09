@@ -271,6 +271,12 @@ def _resolve_engine_stamp(engine_root: Path, override: str | None) -> str | None
         return None
 
 
+def _portable_flag(flag: str) -> str:
+    """Records the door source directory as `<door_dir>` so a published sidecar carries no build-host path."""
+    door_dir = str(_SOURCE.parent)
+    return flag.replace(door_dir, "<door_dir>") if door_dir in flag else flag
+
+
 def write_provenance(
     output_exe: Path, kind: str, compiler_path: str, engine_root: Path,
     *, image_sha256: str | None = None, engine_stamp: str | None = None,
@@ -344,7 +350,7 @@ def write_provenance(
         "require_warm": require_warm,
         "python_bin": portable_python_bin(Path(python_bin or sys.executable)),
         "rendered_source_sha256": rendered_source_sha256,
-        "compile_flags": list(compile_flags or []),
+        "compile_flags": [_portable_flag(flag) for flag in (compile_flags or [])],
         "door_c_sha256": source_sha256(_SOURCE),
         "sources": {path.name: source_sha256(path) for path in SOURCES},
         "image_sha256": image_sha256 if image_sha256 is not None else _sha256_file(output_exe),

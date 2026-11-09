@@ -4,7 +4,7 @@ The marker is `halted.json` in the run's record dir. It is rewritten to `resumed
 unlinked: terminal_commit drops record-dir deletions, so an unlinked marker would stay an
 uncommitted tracked deletion. The marker may carry `run_base_sha` (the halted run's review base,
 read by `halted_run_base`); `halted_ask_run_for` finds a halted `ask-*` run naming a sizing.
-`revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted run and read by `revised_halt`. Stdlib plus the atomic writer; no subprocess, no git.
+`revised_at` is stamped by `mark_revised` when workflow.revise lands on a halted run and read by `revised_halt`. Stdlib plus the atomic writer; no git. A halt over a split dependency tree stamps `live_breakage` and spawns one detached unimatrix-send alert to the live Group EM (`halt_split_tree`); no other subprocess.
 
 `halted_run_for` skips minted-only shell dirs and re-halts a `resumed` marker whose resumer died unstaged.
 Trap: a live resumer still at `minted` looks the same as a dead one, so a second refire in that window re-halts it
@@ -27,11 +27,12 @@ from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.git import call_io_scope
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import (
-    HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_HELD_ROWS_FIELD, HALT_PLAN_FIELD, HALT_RAG_CORPUS_DOWN,
-    RECORD_DIR_ROOT, RUN_DIR_ROOT, record_terminal_judge_at, refire_next_action_for, stamp_run_stage_at,
+    HALT_BLOCKING_FIELD, HALT_BLOCKING_ITEMS_FIELD, HALT_HELD_ROWS_FIELD, HALT_LIVE_BREAKAGE_FIELD, HALT_PLAN_FIELD,
+    HALT_RAG_CORPUS_DOWN, RECORD_DIR_ROOT, RUN_DIR_ROOT, record_terminal_judge_at, refire_next_action_for, stamp_run_stage_at,
 )
 from coordinator_core.ops.dispatch_emit.rag_use import RESTORE_MESSAGE
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import STATUS_HALTED
+from coordinator_core.ops.dispatch_emit.halt_split_tree import alert_live_gem, find_split_trees
 from coordinator_core.ops.dispatch_emit.halt_refire import is_exit_next_action, is_refire_next_action
 from coordinator_core.ops.dispatch_emit.halt_resume_record import STALLED
 
@@ -271,15 +272,39 @@ def write_halt_marker(
         payload[HALT_NEXT_ACTION_FIELD] = next_action
     if run_base_sha and _SHA40.fullmatch(run_base_sha):
         payload[HALT_RUN_BASE_FIELD] = run_base_sha
+    root = _target_root(Path(record_dir))
+    splits = find_split_trees(root) if root is not None else []
+    if splits:
+        payload[HALT_LIVE_BREAKAGE_FIELD] = splits
+    prior = _prior_live_breakage(Path(record_dir))
     target = _write(Path(record_dir), payload)
+    if splits and splits != prior:
+        alert_live_gem(root, Path(record_dir).name, splits)
     stamp_run_stage_at(Path(record_dir), "halted")
     if sizing_rel:
         _schedule_resume_build(Path(record_dir))
     return target
 
 
+def _prior_live_breakage(record_dir: Path):
+    """The `live_breakage` already on this run's marker, or None; a re-halt over the same split does not re-alert."""
+    try:
+        data = json.loads((record_dir / HALTED_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return data.get(HALT_LIVE_BREAKAGE_FIELD) if isinstance(data, dict) else None
+
+
 #: Test seam: a callable `(target_root, run_id)` replacing the detached spawn.
 _RESUME_SPAWNER = None
+
+
+def _target_root(record_dir: Path) -> Optional[Path]:
+    """The halted run's target root (`<root>/<RECORD_DIR_ROOT>/<run>`); None when the path is too shallow."""
+    try:
+        return Path(record_dir).parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
+    except IndexError:
+        return None
 
 
 def _schedule_resume_build(record_dir: Path) -> None:
@@ -288,9 +313,8 @@ def _schedule_resume_build(record_dir: Path) -> None:
 
     Skipped under pytest unless `_RESUME_SPAWNER` is set, so a fixture halt never starts a real process."""
     rd = Path(record_dir)
-    try:
-        root = rd.parents[len(PurePosixPath(RECORD_DIR_ROOT).parts)]
-    except IndexError:
+    root = _target_root(rd)
+    if root is None:
         return
     try:
         if _RESUME_SPAWNER is not None:

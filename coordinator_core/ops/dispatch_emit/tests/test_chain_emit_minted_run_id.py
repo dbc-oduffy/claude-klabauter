@@ -73,6 +73,23 @@ def test_a_minted_run_id_equal_to_the_asks_own_is_still_refused():
     assert "is not a fresh run id" in out["result"]["error"]
 
 
+_HANDOFF_MD = "/r/state/handoffs/2026-11/2026-11-09-x-ccbb6a.md"
+
+
+def test_a_handoff_md_path_is_never_started_and_the_hop_emits_its_own_run():
+    chained = f"/r/scratch/warp/{_MINTED}.workflow.mjs"
+    out = _drive({"path": _HANDOFF_MD, "run_id": "h", "fire_args": {}, "ask_brief": "x"},
+                 {"path": chained, "run_id": _MINTED, "fire_args": {}})
+    assert out["started"] == [chained]
+    assert out["result"]["chained_from"] == _ASK
+
+
+def test_a_non_script_path_from_the_chain_emit_is_refused_unstarted():
+    out = _relay(_HANDOFF_MD, _MINTED)
+    assert out["started"] == []
+    assert "non-script path" in out["result"]["error"]
+
+
 def test_the_handoff_run_id_is_used_when_the_gate_agent_already_emitted():
     out = _drive({"path": "/r/scratch/warp/chained.mjs", "run_id": _MINTED, "fire_args": {}})
     assert out["started"] == ["/r/scratch/warp/chained.mjs"]

@@ -221,6 +221,29 @@ def test_codex_home_defaults_to_home_dot_codex(monkeypatch):
     assert pcx.codex_home() == Path.home() / ".codex"
 
 
+def _rollout(home, thread_id, first_row):
+    day = home / "sessions" / "2026" / "11" / "08"
+    day.mkdir(parents=True, exist_ok=True)
+    (day / f"rollout-2026-11-08T00-00-00-{thread_id}.jsonl").write_text(
+        (first_row if isinstance(first_row, str) else json.dumps(first_row)) + "\n{}\n")
+
+
+def test_thread_addressable_needs_a_rollout_whose_source_is_not_subagent(tmp_path):
+    ids = {n: f"01a1b600-0000-7000-8000-0000000000{i:02x}" for i, n in enumerate(
+        ("cli", "sub", "str", "none", "torn", "other"))}
+    _rollout(tmp_path, ids["cli"], {"type": "session_meta", "payload": {"source": "cli"}})
+    _rollout(tmp_path, ids["sub"], {"type": "session_meta", "payload": {"source": {"subagent": {"x": 1}}}})
+    _rollout(tmp_path, ids["str"], {"type": "session_meta", "payload": {"source": "subagent"}})
+    _rollout(tmp_path, ids["torn"], '{"type": "session_m')
+    _rollout(tmp_path, ids["other"], {"type": "event_msg", "payload": {}})
+    index = pcx.rollout_index(tmp_path)
+    got = {n: pcx.thread_addressable(t, tmp_path, index) for n, t in ids.items()}
+    assert got == {"cli": True, "sub": False, "str": False, "none": False, "torn": False, "other": True}
+    assert pcx.thread_addressable(ids["cli"], tmp_path) is True  # single-id caller, no index
+    assert pcx.thread_addressable(ids["sub"], tmp_path) is False
+    assert pcx.rollout_path(ids["cli"], tmp_path) == index[ids["cli"]]
+
+
 def test_socket_path_env_override_and_default(monkeypatch):
     monkeypatch.setenv("CODEX_APP_SERVER_SOCK", "/x/y.sock")
     assert pcx.socket_path() == "/x/y.sock"

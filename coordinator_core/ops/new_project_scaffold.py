@@ -71,7 +71,9 @@ contract on a non-hanging run is unchanged.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -85,6 +87,7 @@ from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.content_root import read_content_root
 from coordinator_core.launchable import resolve_launchable
 from coordinator_core.machine_resolver import registry_get as _registry_get
+from coordinator_core.ops.repo_setup_contract import PROJECT_TYPES
 from coordinator_core.session.declared_writes import declare_write
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -99,8 +102,17 @@ _PROG = "new-project-scaffold.sh"
 
 _USAGE = (
     "Usage: new-project-scaffold.sh --name <name> [--parent <dir>] "
-    "[--template next-app|empty] [--no-smoke]"
+    "[--template next-app|empty|python-package] [--project-type game-dev|web-dev|data-science|general] "
+    "[--subtypes a,b] [--like <sibling-path-or-registry-slug>] [--no-smoke]"
 )
+
+_SUBTYPE_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
+
+# --like carries only what the sibling DECLARES: project_type/project_subtypes from its
+# coordinator.local.md frontmatter, plus the `## ` sections of its CLAUDE.md whose heading
+# contains "convention". Invariant: reads at most those two files; never the rest of the
+# CLAUDE.md (project-specific prose) and never pyproject.toml.
+_CONVENTION_HEADING_RE = re.compile(r"^##\s+.*convention", re.IGNORECASE)
 
 _GIT_TIMEOUT = 30
 _MACHINE_LOCAL_TIMEOUT = 15
@@ -176,11 +188,94 @@ def _register_repo(project_name: str, target: str) -> int:
     return 0
 
 
+def _resolve_sibling(like: str) -> Optional[Path]:
+    """An existing directory path wins; otherwise `like` is a registry slug (`repos.<slug>`)."""
+    candidate = Path(like).expanduser()
+    if candidate.is_dir():
+        return candidate
+    slug = like.lower().replace("-", "_")
+    stored = _registry_get(f"repos.{slug}") or ""
+    if stored and Path(stored).is_dir():
+        return Path(stored)
+    return None
+
+
+def _read_sibling(like: str) -> Tuple[Optional[dict], int]:
+    """Read-only: returns {project_type, subtypes, conventions} or (None, 1) with a one-line stderr."""
+    sibling = _resolve_sibling(like)
+    if sibling is None:
+        print(f"ERROR: --like sibling does not resolve to a directory or registry slug: {like}", file=sys.stderr)
+        return None, 1
+    local_md = sibling / "coordinator.local.md"
+    try:
+        local_text = local_md.read_text(encoding="utf-8")
+    except OSError:
+        print(f"ERROR: --like sibling has no readable coordinator.local.md: {sibling}", file=sys.stderr)
+        return None, 1
+
+    project_type = ""
+    subtypes: List[str] = []
+    lines = local_text.splitlines()
+    if lines and lines[0].strip() == "---":
+        in_block_subtypes = False
+        for line in lines[1:]:
+            if line.strip() == "---":
+                break
+            m = re.match(r"project_type:\s*(\S+)", line)
+            if m:
+                project_type = m.group(1).strip("'\"")
+                in_block_subtypes = False
+                continue
+            m = re.match(r"project_subtypes:\s*(.*)$", line)
+            if m:
+                rest = m.group(1).strip()
+                in_block_subtypes = not rest
+                if rest.startswith("["):
+                    subtypes = [s.strip().strip("'\"") for s in rest.strip("[]").split(",") if s.strip()]
+                continue
+            if in_block_subtypes:
+                item = re.match(r"\s*-\s*(\S+)", line)
+                if item:
+                    subtypes.append(item.group(1).strip("'\""))
+                    continue
+                in_block_subtypes = False
+    if project_type not in PROJECT_TYPES:
+        print(f"ERROR: --like sibling declares no valid project_type in {local_md}", file=sys.stderr)
+        return None, 1
+    subtypes = [s for s in subtypes if _SUBTYPE_RE.fullmatch(s)]
+
+    conventions: List[str] = []
+    try:
+        claude_lines = (sibling / "CLAUDE.md").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        claude_lines = []
+    capturing = False
+    in_fence = False
+    for line in claude_lines:
+        if line.lstrip().startswith(("```", "~~~")):
+            in_fence = not in_fence
+        elif not in_fence:
+            if line.startswith("## "):
+                capturing = bool(_CONVENTION_HEADING_RE.match(line))
+            elif line.startswith("# "):
+                capturing = False
+        if capturing:
+            conventions.append(line)
+    return {
+        "project_type": project_type,
+        "subtypes": subtypes,
+        "conventions": "\n".join(conventions).strip("\n"),
+    }, 0
+
+
 def _parse_args(argv: List[str]) -> Tuple[Optional[dict], int]:
     project_name = ""
+    like = ""
     parent_dir = ""
     template = "next-app"
     no_smoke = False
+    project_type = ""
+    subtypes: List[str] = []
 
     i = 0
     n = len(argv)
@@ -207,6 +302,27 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[dict], int]:
                 return None, 1
             template = value
             i += 2
+        elif arg == "--project-type":
+            value = argv[i + 1] if i + 1 < n else ""
+            if not value:
+                print("ERROR: --project-type requires a value", file=sys.stderr)
+                return None, 1
+            project_type = value
+            i += 2
+        elif arg == "--subtypes":
+            value = argv[i + 1] if i + 1 < n else ""
+            if not value:
+                print("ERROR: --subtypes requires a value", file=sys.stderr)
+                return None, 1
+            subtypes = [s.strip() for s in value.split(",")]
+            i += 2
+        elif arg == "--like":
+            value = argv[i + 1] if i + 1 < n else ""
+            if not value:
+                print("ERROR: --like requires a value", file=sys.stderr)
+                return None, 1
+            like = value
+            i += 2
         elif arg == "--no-smoke":
             no_smoke = True
             i += 1
@@ -220,16 +336,93 @@ def _parse_args(argv: List[str]) -> Tuple[Optional[dict], int]:
         print(_USAGE, file=sys.stderr)
         return None, 1
 
-    if template not in ("next-app", "empty"):
-        print(f"ERROR: --template must be 'next-app' or 'empty'; got: {template}", file=sys.stderr)
+    if template not in ("next-app", "empty", "python-package"):
+        print(
+            f"ERROR: --template must be 'next-app', 'empty' or 'python-package'; got: {template}",
+            file=sys.stderr,
+        )
         return None, 1
+
+    if project_type and project_type not in PROJECT_TYPES:
+        print(
+            f"ERROR: --project-type must be one of {', '.join(PROJECT_TYPES)}; got: {project_type}",
+            file=sys.stderr,
+        )
+        return None, 1
+
+    for sub in subtypes:
+        if not _SUBTYPE_RE.fullmatch(sub):
+            print(
+                f"ERROR: --subtypes takes comma-separated names of [a-z0-9][a-z0-9_-]*; got: {sub!r}",
+                file=sys.stderr,
+            )
+            return None, 1
 
     return {
         "project_name": project_name,
         "parent_dir": parent_dir,
         "template": template,
         "no_smoke": no_smoke,
+        "project_type": project_type,
+        "subtypes": subtypes,
+        "like": like,
     }, 0
+
+
+def _python_package_files(project_name: str) -> dict:
+    """Seed tree for the python-package template: repo-relative posix path -> content.
+
+    The import name is the project name lowercased with every non-alphanumeric run folded
+    to `_` (a leading digit gains a `_` prefix) so it is always an importable identifier.
+    """
+    pkg = re.sub(r"[^a-z0-9]+", "_", project_name.lower()).strip("_") or "pkg"
+    if pkg[0].isdigit():
+        pkg = f"_{pkg}"
+    pyproject = (
+        "[build-system]\n"
+        'requires = ["setuptools>=68"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+        "\n"
+        "[project]\n"
+        f"name = {json.dumps(project_name)}\n"
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.10"\n'
+        "dependencies = []\n"
+        "\n"
+        "[tool.setuptools.packages.find]\n"
+        f'include = ["{pkg}*"]\n'
+        "\n"
+        "[tool.pytest.ini_options]\n"
+        'testpaths = ["tests"]\n'
+        'markers = ["slow: excluded from the fast tier (scripts/run_fast_tests.py)"]\n'
+    )
+    runner = (
+        '"""Fast-tier test runner: pytest over tests/ minus tests marked `slow`."""\n'
+        "import subprocess\n"
+        "import sys\n"
+        "\n"
+        "\n"
+        "def main() -> int:\n"
+        '    cmd = [sys.executable, "-m", "pytest", "-m", "not slow", "-q", *sys.argv[1:]]\n'
+        "    return subprocess.run(cmd).returncode\n"
+        "\n"
+        "\n"
+        'if __name__ == "__main__":\n'
+        "    sys.exit(main())\n"
+    )
+    smoke_test = (
+        f"import {pkg}\n"
+        "\n"
+        "\n"
+        "def test_package_imports():\n"
+        f'    assert {pkg}.__name__ == "{pkg}"\n'
+    )
+    return {
+        "pyproject.toml": pyproject,
+        f"{pkg}/__init__.py": f"# {pkg}\n",
+        "tests/test_smoke.py": smoke_test,
+        "scripts/run_fast_tests.py": runner,
+    }
 
 
 def _is_consumer() -> bool:
@@ -320,6 +513,12 @@ def main(argv: List[str]) -> int:
     template = parsed["template"]
     no_smoke = parsed["no_smoke"]
 
+    sibling_info: Optional[dict] = None
+    if parsed["like"]:
+        sibling_info, like_rc = _read_sibling(parsed["like"])
+        if sibling_info is None:
+            return like_rc
+
     parent_dir = _resolve_parent_dir(parsed["parent_dir"])
     target = os.path.join(parent_dir, project_name)
 
@@ -342,6 +541,8 @@ def main(argv: List[str]) -> int:
     git_rc = _git_init_main(target)
     if git_rc != 0:
         return git_rc
+
+    written: set = set()
 
     if template == "next-app":
         root = read_content_root()
@@ -392,15 +593,24 @@ def main(argv: List[str]) -> int:
             for rendered_file in staging_path.rglob("*"):
                 if rendered_file.is_file():
                     declare_write(target_path / rendered_file.relative_to(staging_path))
+                    written.add(rendered_file.relative_to(staging_path).as_posix())
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
-    coordinator_project_type = "web-dev" if template == "next-app" else "general"
+    like_type = sibling_info["project_type"] if sibling_info else ""
+    like_subtypes = sibling_info["subtypes"] if sibling_info else []
+    coordinator_project_type = parsed["project_type"] or like_type or (
+        "web-dev" if template == "next-app" else "general"
+    )
+    seed_subtypes = parsed["subtypes"] or like_subtypes
+    seed_frontmatter = f"project_type: {coordinator_project_type}\n"
+    if seed_subtypes:
+        seed_frontmatter += f"project_subtypes: [{', '.join(seed_subtypes)}]\n"
     coordinator_local_path = os.path.join(target, "coordinator.local.md")
     readme_path = os.path.join(target, "README.md")
     try:
         with open(coordinator_local_path, "w", encoding="utf-8", newline="\n") as fh:
-            fh.write(f"---\nproject_type: {coordinator_project_type}\n---\n")
+            fh.write(f"---\n{seed_frontmatter}---\n")
         with open(readme_path, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(f"# {project_name}\n")
     except OSError as exc:
@@ -410,6 +620,33 @@ def main(argv: List[str]) -> int:
     # what was ACTUALLY written, not of an intended surface.
     declare_write(coordinator_local_path)
     declare_write(readme_path)
+    written.update(("coordinator.local.md", "README.md"))
+
+    if template == "python-package":
+        for rel, content in _python_package_files(project_name).items():
+            path = Path(target) / rel
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                    fh.write(content)
+            except OSError as exc:
+                print(f"{_PROG}: writing {rel} failed: {exc}", file=sys.stderr)
+                return 1
+            declare_write(path)
+            written.add(rel)
+
+    if sibling_info and sibling_info["conventions"]:
+        claude_md_path = os.path.join(target, "CLAUDE.md")
+        try:
+            with open(claude_md_path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(f"# {project_name}\n\n{sibling_info['conventions']}\n")
+        except OSError as exc:
+            print(f"{_PROG}: writing CLAUDE.md failed: {exc}", file=sys.stderr)
+            return 1
+        declare_write(claude_md_path)
+        written.add("CLAUDE.md")
+
+    print(f"new_project.scaffold.file_manifest: {json.dumps(sorted(written))}")
 
     if not no_smoke and template == "next-app":
         print(f"Running smoke checks in {target}...")

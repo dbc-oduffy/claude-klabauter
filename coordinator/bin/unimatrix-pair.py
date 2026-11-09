@@ -26,6 +26,7 @@ import getpass
 import importlib.util
 import json
 import os
+import posixpath
 import socket
 import subprocess
 import sys
@@ -70,12 +71,12 @@ def agent_socket(environ=None, platform=None, home=None):
     if env.get("SSH_AUTH_SOCK"):
         return env["SSH_AUTH_SOCK"]
     plat = platform or sys.platform
-    h = Path(home) if home else Path.home()
     if plat == "win32":
         return WINDOWS_AGENT_PIPE
+    h = Path(home) if home else Path.home()
     if plat == "darwin":
-        return str(h / "Library" / "Group Containers" / "2BUA8C4S2C.com.1password" / "t" / "agent.sock")
-    return str(h / ".1password" / "agent.sock")
+        return posixpath.join(h.as_posix(), "Library", "Group Containers", "2BUA8C4S2C.com.1password", "t", "agent.sock")
+    return posixpath.join(h.as_posix(), ".1password", "agent.sock")
 
 
 def make_agent_signer(mem, pin_pub_file, environ=None, run=subprocess.run, platform=None):

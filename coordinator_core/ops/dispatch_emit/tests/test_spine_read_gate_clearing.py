@@ -104,3 +104,42 @@ def test_absent_or_unrecognized_blocks_resolves_to_execution_and_withholds(
     ids = {row.id for row in read_spine(plan_path)}
 
     assert ids == set()
+
+
+def _klabauter_gated(writes: list[str]) -> str:
+    return (
+        "- id: C1\n"
+        "  title: mirror row\n"
+        "  surface: some/surface\n"
+        "  writes:\n"
+        + "".join(f"    - '{w}'\n" for w in writes)
+        + "  external_gate:\n"
+        "    - owner_repo: claude-klabauter\n"
+        "      requires: commit-in-owner-repo\n"
+        "      condition: land in klabauter\n"
+        "      blocks: execution\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "writes",
+    [
+        ["C:/dev/claude-klabauter/coordinator/bin/x.py", "C:/dev/claude-klabauter/coordinator/bin/tests/t.py"],
+        [r"C:\dev\claude-klabauter\coordinator\bin\x.py"],
+        ["/home/u/claude-klabauter/coordinator/bin/x.py"],
+        ["coordinator/bin/x.py"],
+    ],
+)
+def test_mirror_only_klabauter_gate_is_dropped_and_writes_resolve_to_claude_klabauter(tmp_path, writes):
+    rows = read_spine(_write_plan(tmp_path, _klabauter_gated(writes)))
+
+    assert [r.id for r in rows] == ["C1"]
+    assert all(w.startswith("coordinator/bin/") for w in rows[0].writes)
+
+
+def test_klabauter_only_path_keeps_the_gate_and_withholds(tmp_path):
+    body = _klabauter_gated(
+        ["C:/dev/claude-klabauter/coordinator/bin/x.py", "C:/dev/claude-klabauter/README.md"]
+    )
+
+    assert read_spine(_write_plan(tmp_path, body)) == []

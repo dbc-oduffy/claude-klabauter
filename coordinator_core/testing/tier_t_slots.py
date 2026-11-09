@@ -192,20 +192,28 @@ class Slot(NamedTuple):
     owner: str
 
 
-def _suite_mutex_blocks() -> bool:
-    """True while another session's suite run holds the machine-wide mutex.
+def suite_mutex_blocker() -> Optional[dict]:
+    """Return the foreign suite-mutex holder that blocks slot acquisition, else None.
 
     A holder that is this process or one of its ancestors is the caller's own
-    run and never blocks. Never raises: an unreadable mutex blocks nothing.
+    run and never blocks. ``suite_mutex.holder`` has already reclaimed a dead,
+    reused or heartbeat-stale holder, so a dict here is a live foreign run.
+    Never raises: an unreadable mutex blocks nothing.
     """
     try:
         meta = suite_mutex.holder()
         if meta is None:
-            return False
-        return not suite_mutex._holder_is_self_or_ancestor(int(meta.get("pid") or 0))
+            return None
+        if suite_mutex._holder_is_self_or_ancestor(int(meta.get("pid") or 0)):
+            return None
+        return meta
     except Exception as exc:
         _LOG.warning("tier_t_slots: suite-mutex read failed, not blocking: %s", exc)
-        return False
+        return None
+
+
+def _suite_mutex_blocks() -> bool:
+    return suite_mutex_blocker() is not None
 
 
 def acquire_slot(owner: str, cmd: str, timeout: float = 0.0, *,

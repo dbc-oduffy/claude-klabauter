@@ -9,9 +9,10 @@ has no producing row. Zero spawn; unknown (unreadable baseline, coarse delta) ho
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Mapping, Optional, Sequence
 
 FOREIGN_HUNK_UNPRODUCED = "foreign-hunk-unproduced"
+UNATTRIBUTABLE_LINES = "all (provenance unreadable)"
 UNKNOWN_OWNER = "unknown"
 NO_BASELINE_OWNER = "no-write-baseline"
 
@@ -71,7 +72,15 @@ def unproduced_hunks(
                 continue
             detail = f"provenance unreadable: {type(exc).__name__}: {exc}"
             if advisories is not None and _run_produced(Path(root), run_id, path):
-                advisories.append({"path": path, "detail": detail})
+                holder = _halted_holder(Path(root), run_id, own_plan, path)
+                if holder is None:
+                    advisories.append({"path": path, "detail": detail})
+                    continue
+                head_sha = _head_blob_sha(Path(root), path) if settled is not None else None
+                if head_sha:
+                    settled[path] = {"blob": head_sha, "owner": holder, "lines": UNATTRIBUTABLE_LINES}
+                else:
+                    out.append(Finding(path, FOREIGN_HUNK_UNPRODUCED, f"{detail}; run {holder} withholds the path"))
             else:
                 out.append(Finding(path, FOREIGN_HUNK_UNPRODUCED, detail))
             continue
@@ -94,6 +103,89 @@ def unproduced_hunks(
                 f"committed lines {bad} were not produced by run {run_id}; probable owner {owner}",
             ))
     return out
+
+
+def _halted_holder(root: Path, run_id: str, own_plan: Optional[str], path: str) -> Optional[str]:
+    """The halted peer run that still withholds `path`, else None (also None when the hold cannot be read)."""
+    try:
+        from coordinator_core.ops.dispatch_emit import land_run
+
+        holder = land_run.foreign_halted_withheld(root, run_id, own_plan, [path]).get(path)
+        return None if holder in (None, land_run.UNREADABLE_HALT_RECORD) else str(holder)
+    except Exception:  # noqa: BLE001 -- an unreadable hold is no named holder
+        return None
+
+
+def _head_blob_sha(root: Path, path: str) -> Optional[str]:
+    from coordinator_core.git.git_state import head_blobs
+
+    entry = head_blobs(root, [path]).get(path)
+    return entry[1] if entry is not None else None
+
+
+def peer_hunks_present(root: Path, holder: str, path: str) -> bool:
+    """True when a hunk of `holder`'s kept blobs for `path` (its text against HEAD) is in the worktree
+    file, or the evidence cannot be read. A run with no kept blob for `path` leaves no evidence: False."""
+    try:
+        from coordinator_core.git import git_objects
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.ops.dispatch_emit import kept_work
+        from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        blobs = kept_work.kept_fingerprints(record_dir(root, holder)).get(path)
+        if not blobs:
+            return False
+        common = resolve_git_common_dir(root)
+        form = kept_work.checkin_form(root, path, (root / path).read_bytes())
+        entry = _head_blob_sha(root, path)
+        head_obj = git_objects.read_object(common, entry) if entry else None
+        if form is None or (entry and head_obj is None):
+            return True
+        work = form.splitlines(keepends=True)
+        head = head_obj[1].splitlines(keepends=True) if head_obj else []
+        for blob in blobs:
+            obj = git_objects.read_object(common, blob)
+            lifted = kept_work.checkin_form(root, path, obj[1]) if obj is not None else None
+            if lifted is None:
+                continue
+            kept = lifted.splitlines(keepends=True)
+            for _tag, i1, i2, j1, j2 in rhc.changed_opcodes(head, kept):
+                added = kept[j1:j2]
+                if added and _occurrences(work, added) > _occurrences(head, added):
+                    return True
+                if not added and head[i1:i2] and _occurrences(work, head[i1:i2]) < _occurrences(head, head[i1:i2]):
+                    return True
+        return False
+    except Exception:  # noqa: BLE001 -- unreadable evidence holds
+        return True
+
+
+def _occurrences(lines: list, block: list) -> int:
+    n = len(block)
+    return sum(1 for k in range(len(lines) - n + 1) if lines[k : k + n] == block)
+
+
+def landable_under_hold(
+    root: Path, run_id: str, own_plan: Optional[str], held: Mapping[str, str],
+    split_only: frozenset = frozenset(),
+) -> set:
+    """The subset of `held` (`{path: halted holder run id}`, each path the landing run declares) this
+    landing can still carry: the holder's recorded hunks are not in the file, or the run's own hunks
+    split off as a settled blob. Any other path stays withheld, because its worktree bytes would carry
+    the holder's hunks. A `split_only` path (a reviewer flagged its peer hunks out of the ask) is
+    carried only through the split blob: an unrecorded peer hunk does not release it."""
+    keep: set = set()
+    for path, holder in held.items():
+        if path not in split_only and not peer_hunks_present(root, holder, path):
+            keep.add(path)
+            continue
+        settled: dict = {}
+        found = unproduced_hunks(root, run_id, [path], own_plan=own_plan, advisories=[], settled=settled)
+        entry = settled.get(path)
+        if not found and entry is not None and entry["lines"] not in ("", UNATTRIBUTABLE_LINES):
+            keep.add(path)
+    return keep
 
 
 def _owners(root: Path, run_id: str, path: str, own_plan: Optional[str]) -> list:

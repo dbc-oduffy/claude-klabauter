@@ -148,6 +148,19 @@ def test_tree_kill_reaches_a_grandchild(tmp_path):
         parent.wait(timeout=10)
 
 
+@pytest.mark.parametrize("n", [1, 5])
+def test_tree_kill_many_on_win32_is_one_taskkill_for_any_pid_count(monkeypatch, n):
+    roster = load("roster")
+    calls = []
+    monkeypatch.setattr(roster.sys, "platform", "win32")
+    monkeypatch.setattr(roster, "no_window", lambda: 0)
+    monkeypatch.setattr(roster.subprocess, "run", lambda argv, **kw: calls.append(argv))
+    roster.tree_kill_many(range(100, 100 + n))
+    assert len(calls) == 1
+    assert calls[0][:3] == ["taskkill", "/T", "/F"]
+    assert calls[0].count("/PID") == n
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
 def test_spawn_starts_children_in_their_own_process_group():
     import os
@@ -372,11 +385,105 @@ def test_mirrorable_drops_skipped_sockets_and_names_a_live_inbound_mirror_reache
 def test_inbound_names_counts_only_live_unimatrix_mirror_entries(sessions, monkeypatch):
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
-    monkeypatch.setattr(roster, "pid_alive", lambda pid: pid != 2)
+    monkeypatch.setattr(roster._liveness(), "pid_alive", lambda pid: pid != 2)
     for pid, extra in ((1, {"unimatrixMirror": True}), (2, {"unimatrixMirror": True}), (3, {}), (4, {"macSocketPath": "x"})):
         (sessions / f"{pid}.json").write_text(json.dumps({"pid": pid, "name": f"n{pid}", **extra}))
     (sessions / "5.json").write_text("not json")
     assert roster.inbound_names() == {"n1"}
+
+
+def _put(sessions, fname, /, **entry):
+    (sessions / fname).write_text(json.dumps(entry))
+
+
+def _own(roster, **extra):
+    me = os.getpid()
+    return {"pid": me, "procStart": roster.proc_start(me), **extra}
+
+
+def test_live_sessions_drops_a_recycled_pid_and_keeps_the_same_process(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    _put(sessions, "a.json", name="same", **_own(roster))
+    _put(sessions, "b.json", name="recycled", **{**_own(roster), "procStart": "Mon Jan  1 00:00:00 1990"})
+    assert roster.live_sessions() == [("same", None)]
+
+
+def test_inbound_names_drops_a_recycled_pid(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    _put(sessions, "a.json", name="n1", unimatrixMirror=True, **_own(roster))
+    _put(sessions, "b.json", name="n2", unimatrixMirror=True, **{**_own(roster), "procStart": "other"})
+    assert roster.inbound_names() == {"n1"}
+
+
+def test_a_mirror_needs_a_live_roster_supervisor_to_be_listed(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    me = os.getpid()
+    sup = {"unimatrixRosterPid": me, "unimatrixRosterProcStart": roster.proc_start(me)}
+    far = {roster.FAR_SOCKET_FIELD: FAR_SOCK}
+    _put(sessions, "live.json", name="live-sup", **_own(roster, **far, **sup))
+    _put(sessions, "dead.json", name="dead-sup", **_own(roster, **far, unimatrixRosterPid=me,
+                                                       unimatrixRosterProcStart="other"))
+    _put(sessions, "legacy.json", name="legacy", **_own(roster, **far))
+    _put(sessions, "local.json", name="local", **_own(roster))
+    assert sorted(n for n, _ in roster.live_sessions()) == ["live-sup", "local"]
+
+
+def test_bridge_cmd_names_its_supervisor_only_when_given():
+    roster = load("roster")
+    cmd = roster.bridge_cmd("ep", "b.log", "farbox", "k", supervisor=4321)
+    assert cmd[-2:] == ["--supervisor", "4321"]
+    assert "--supervisor" not in roster.bridge_cmd("ep", "b.log", "farbox", "k")
+
+
+def test_mirror_records_its_supervisor_and_launches_the_bridge_with_it(sessions, monkeypatch):
+    roster = load("roster")
+    cmds = []
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "spawn", lambda cmd: cmds.append(cmd) or FakeProc(31340))
+    monkeypatch.setattr(roster, "proc_start", lambda p, platform=None: f"start-{p}")
+    monkeypatch.setattr(roster.time, "sleep", lambda s: None)
+    cfg = roster.parse_args(["bridge.log", "--remote", "farbox", "--key", "k"])
+    roster.mirror({"entry": {"pid": 7, "name": "far-s", "messagingSocketPath": FAR_SOCK}, "key": "K"},
+                  cfg, lambda m: None)
+    entry = json.loads((sessions / "31340.json").read_text())
+    assert entry["unimatrixRosterPid"] == os.getpid()
+    assert entry["unimatrixRosterProcStart"] == f"start-{os.getpid()}"
+    assert cmds[0][-2:] == ["--supervisor", str(os.getpid())]
+
+
+def test_rename_live_mirror_rewrites_a_legacy_mirror_with_the_supervisor(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, entry = _mirror_one(roster, sessions, monkeypatch, "farbox")
+    path = sessions / "31339.json"
+    legacy = {k: v for k, v in entry.items() if not k.startswith("unimatrixRoster")}
+    path.write_text(json.dumps(legacy))
+    row = {"entry": {"pid": 7, "name": "far-c", "messagingSocketPath": FAR_SOCK}}
+    roster.rename_live_mirror(31339, FAR_SOCK, row, cfg, lambda m: None, [])
+    after = json.loads(path.read_text())
+    assert after["unimatrixRosterPid"] == os.getpid() and after["unimatrixRosterProcStart"] == "1"
+
+
+def test_reap_removes_orphaned_mirrors_and_kills_only_a_bridge_that_is_still_its_process(sessions, monkeypatch):
+    roster = load("roster")
+    killed = []
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill_many", lambda pids: killed.extend(pids))
+    me = os.getpid()
+    base = {roster.FAR_SOCKET_FIELD: FAR_SOCK, "unimatrixRemote": "farbox"}
+    _put(sessions, f"{me}.json", pid=me, procStart=roster.proc_start(me), **base)
+    _put(sessions, f"{me}.k.key", x=1)
+    _put(sessions, "999991.json", pid=999991, procStart="gone", **base)
+    _put(sessions, "999992.json", pid=999992, procStart="gone", **{**base, "unimatrixRemote": "other-box"})
+    sup = {"unimatrixRosterPid": me, "unimatrixRosterProcStart": roster.proc_start(me)}
+    _put(sessions, "999993.json", pid=999993, procStart="x", **base, **sup)
+    lines = []
+    roster.reap_orphaned_mirrors("farbox", lines.append)
+    assert killed == [me]
+    assert sorted(p.name for p in sessions.iterdir()) == ["999992.json", "999993.json"]
+    assert len(lines) == 2
 
 
 def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid=31339):
@@ -455,7 +562,7 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
     bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
     argvs = []
     monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
-    monkeypatch.setattr(bridge.subprocess, "run", lambda argv, **kw: argvs.append(argv) or subprocess.CompletedProcess(argv, 0, b"", b""))
+    monkeypatch.setattr(bridge.subprocess, "run", lambda argv, **kw: argvs.append(argv) or subprocess.CompletedProcess(argv, 0, b'{"ok": true}\n', b""))
 
     class Conn:
         chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
@@ -467,7 +574,7 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
             pass
 
     bridge.relay_send(Conn())
-    assert argvs[-1][-1] == f"send {expect}"
+    assert argvs[-1][-1] == f"send-batch {expect}"
 
 
 def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):

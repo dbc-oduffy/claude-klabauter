@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit import land_deadline
 
@@ -394,6 +394,76 @@ def _unresolved_out_of_ask(text: str) -> list:
     return out
 
 
+_CONFORMED = frozenset({"met", "n/a", "na"})
+
+
+def _unmet_conformance(text: str) -> list:
+    """`(label, naming_text)` for each `brief_conformance` row of a sidecar whose `status`/`verdict` is
+    not met and which names a file: through `file`/`files`, else the `<path>:` head of `file_line`
+    (the reviewer row schema) or `evidence`.
+    No other field is read."""
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import split_frontmatter
+    from coordinator_core.ops.review_mint.wave_bookkeeping import _brief_conformance_rows
+
+    split = split_frontmatter(text.replace("\r\n", "\n"))
+    fm = (yaml.safe_load(split.fm_text) or {}) if split else {}
+    out = []
+    for row in _brief_conformance_rows(fm if isinstance(fm, dict) else {}, text):
+        if str(row.get("status") or row.get("verdict") or "").lower() in _CONFORMED:
+            continue
+        files = row.get("files") if isinstance(row.get("files"), list) else [row.get("file")]
+        named = " ".join(str(f) for f in files if isinstance(f, str))
+        for key in ("file_line", "evidence"):
+            if named or not isinstance(row.get(key), str):
+                continue
+            head = row[key].partition(":")[0].strip()
+            named = head if head and not any(c.isspace() for c in head) else ""
+        if named:
+            out.append((str(row.get("item") or row.get("brief_item") or "brief-conformance"), named))
+    return out
+
+
+def landing_holds(
+    worktree_root: Path, session_id: Optional[str], run_id: str, plan_path: Optional[str],
+    all_paths: Sequence[str], deleted_paths: Sequence[str], chunk_declared: Iterable[str],
+    own_declared: Iterable[str], own_seniority: Optional[tuple],
+) -> dict:
+    """`{path: holding run id}` the landing must withhold: paths a halted peer withholds, plus paths a
+    reviewer's unresolved out-of-ask finding names while a peer co-declares them. A declared path in
+    either set is released when `landable_under_hold` can carry it (the peer's hunks are absent, or
+    this run's own hunks split off as a settled blob; an out-of-ask path only through the split), and
+    a deleted path or an unreadable halt record releases the hold."""
+    from coordinator_core.ops.dispatch_emit import hunk_provenance
+    from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
+    from coordinator_core.ops.workflow_fire.finalizer import review_owner
+    from coordinator_core.session.core import resolve_session_id
+
+    held = foreign_halted_withheld(worktree_root, run_id, plan_path, [*all_paths, *deleted_paths])
+    oa_paths = sorted({
+        p for p, _stem, _label in out_of_ask_holds(
+            worktree_root, review_owner(session_id) or resolve_session_id(), run_id, all_paths,
+        )
+    } - set(held))
+    if oa_paths:
+        held.update(co_declared_peer_holds(
+            worktree_root, run_id, oa_paths, own_declared, own_plan=plan_path, minted_before=own_seniority,
+        ))
+    declared = set(chunk_declared)
+    declared_held = {p: h for p, h in held.items() if p in declared}
+    if declared_held:
+        carried = hunk_provenance.landable_under_hold(
+            worktree_root, run_id, plan_path,
+            {p: h for p, h in declared_held.items() if h != UNREADABLE_HALT_RECORD and p not in deleted_paths},
+            split_only=frozenset(oa_paths),
+        )
+        for p, h in declared_held.items():
+            if p in carried or h == UNREADABLE_HALT_RECORD or p in deleted_paths:
+                del held[p]
+    return held
+
+
 def out_of_ask_holds(
     worktree_root: Path, session_id: str, run_id: str, landing_paths: Iterable[str],
 ) -> list:
@@ -425,7 +495,7 @@ def out_of_ask_holds(
                 text = (share / f"{stem}.md").read_text(encoding="utf-8")
             except OSError:
                 continue
-            for label, named in _unresolved_out_of_ask(text):
+            for label, named in (*_unresolved_out_of_ask(text), *_unmet_conformance(text)):
                 for path, name in zip(paths, names):
                     if _names_path(named, path, names.count(name) == 1):
                         holds.add((path, stem, label))

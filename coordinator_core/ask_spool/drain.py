@@ -1,6 +1,6 @@
 """Drain the engine-ask submit spool: claim each entry, mint its run once, record a notice.
 
-Contract (docs/reference/ask-spool.md): `run(repo_root) -> {minted, skipped, failed, notified}`.
+Contract (docs/reference/ask-spool.md): `run(repo_root) -> {minted, skipped, failed, notified, coalesced, withdrawn}`.
 An entry reaches `.minted` only with a run id: found already (`skipped`, no new mint) or minted
 through `submit_engine_ask.evaluate` on the stored payload. A failed mint leaves the entry
 pending with a bumped `attempts`; an entry is never deleted.
@@ -21,7 +21,7 @@ import json
 import os
 import re
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterator, Optional
 
 from coordinator_core.ask_spool import notice, record
@@ -91,20 +91,102 @@ def _lone_token_run(root: Path, session: str, spooled_at: float, taken: set) -> 
     return found[0] if found else None
 
 
-def _existing_run(root: Path, header: dict, tool_use_id: Optional[str], taken: set) -> Optional[str]:
-    """The run already minted for this entry, or None. Stamp first, then the original dispatch key."""
+def _find_run(
+    root: Path, header: dict, tool_use_id: Optional[str], taken: set, sizing_key: Optional[str] = None
+) -> tuple[Optional[str], bool]:
+    """(run_id, via_sizing): the run already minted for this entry, else (None, False).
+
+    Stamp, then the original dispatch key, then a submission naming the same sizing
+    (`sizing_key` "sizing:<rel>" only; via_sizing True), then the session's lone token."""
     session = header.get("session_id") or ""
     spooled_at = float(header.get("spooled_at") or 0)
+    sizing_rel = sizing_key[len("sizing:"):] if sizing_key and sizing_key.startswith("sizing:") else None
+    by_sizing: Optional[str] = None
     for run_id, sub in _submissions(root, spooled_at - _LOOKBACK_S):
         if run_id in taken:
             continue
         if sub.get("spool_id") == header["spool_id"]:
-            return run_id
+            return run_id, False
         if tool_use_id and session and sub.get("session_id") == session and sub.get("tool_use_id") == tool_use_id:
-            return run_id
+            return run_id, False
+        if by_sizing is None and sizing_rel and str(sub.get("sizing_rel") or "").replace("\\", "/") == sizing_rel:
+            by_sizing = run_id
+    if by_sizing:
+        return by_sizing, True
     if session:
-        return _lone_token_run(root, session, spooled_at, taken)
-    return None
+        return _lone_token_run(root, session, spooled_at, taken), False
+    return None, False
+
+
+def _existing_run(root: Path, header: dict, tool_use_id: Optional[str], taken: set) -> Optional[str]:
+    """The run already minted for this entry, or None. Stamp first, then the original dispatch key."""
+    return _find_run(root, header, tool_use_id, taken)[0]
+
+
+def _stale_reason(root: Path, key: str) -> Optional[str]:
+    """Why the entry's declared target moved or landed, else None. Stats and reads only; no git spawn.
+
+    "sizing:" keys: the sizing file is gone, its `plan:` edge names a missing file, or the plan
+    spine has rows that are all closed by disposition with nothing rulable and no ledger-halt
+    pointer (the all-landed cases `resumable_plan` still resumes are not stale). A sizing with no
+    `plan:` edge is fresh. "run:" keys: the run dir is gone. Any read trouble is not stale."""
+    try:
+        kind, _, target = key.partition(":")
+        if kind == "run":
+            if not _SAFE_NAME.match(target):
+                return None
+            from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+            return None if os.path.isdir(root / RUN_DIR_ROOT / target) else f"run {target} is gone"
+        if kind != "sizing":
+            return None
+        rel = PurePosixPath(target)
+        if rel.is_absolute() or ".." in rel.parts:
+            return None
+        sizing_path = root / rel
+        if not sizing_path.is_file():
+            return f"sizing {target} is gone"
+        import yaml
+
+        doc = yaml.safe_load(sizing_path.read_text(encoding="utf-8"))
+        edge = doc.get("plan") if isinstance(doc, dict) else None
+        if not isinstance(edge, str) or not edge.strip():
+            return None
+        from coordinator_core.ops.dispatch_emit.sizing_fire import single_dated_plan_edge
+
+        plan_rel = edge.strip()
+        plan_path = root / plan_rel
+        if not plan_path.is_file():
+            twin = single_dated_plan_edge(plan_rel)
+            plan_path = root / twin
+            if not plan_path.is_file():
+                return f"plan {plan_rel} is gone"
+            plan_rel = twin
+        from coordinator_core.ops.dispatch_emit import ask_contract
+        from coordinator_core.ops.dispatch_emit.spine_read import (
+            NON_DISPATCHABLE_DISPOSITIONS,
+            LocateStatus,
+            load_rows_memo,
+            with_canonical_disposition,
+        )
+
+        located = load_rows_memo(plan_path.read_text(encoding="utf-8"))
+        if located.status is not LocateStatus.LOCATED:
+            return None
+        rows = [with_canonical_disposition(r) for r in located.rows]
+        if not rows or any(
+            not isinstance(r, dict) or r.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS for r in rows
+        ):
+            return None
+        register = doc.get("requirement_register")
+        register_rows = register.get("rows") if isinstance(register, dict) else None
+        if isinstance(register_rows, list) and ask_contract.rulable_ids(register_rows):
+            return None
+        if ask_contract.ledger_halt_path(root, plan_rel).exists():
+            return None
+        return f"plan {plan_rel} has every row closed"
+    except Exception:  # noqa: BLE001 - an unreadable target is the mint's to refuse, never a withdrawal
+        return None
 
 
 def _mint(root: Path, header: dict, payload: dict, evaluate: Optional[Evaluate], taken: set) -> str:
@@ -226,15 +308,18 @@ def run(
     stale_after_s: float = STALE_CLAIM_S,
     now: Optional[float] = None,
 ) -> dict:
-    """Drain every pending entry once; counts of entries `{minted, skipped, failed, notified}`.
+    """Drain every pending entry once; counts `{minted, skipped, failed, notified, coalesced, withdrawn}`.
 
-    `minted` made a new run, `skipped` found its run already minted, `failed` stays pending.
+    `minted` made a new run, `skipped` found its run already minted, `failed` stays pending,
+    `coalesced` joined the run another entry of the same sizing or run key holds, `withdrawn`
+    was retired as stale (its sizing, plan or run is gone, or the plan's rows all closed).
     A drainer killed mid-entry leaves a claim that `stale_after_s` later returns to pending."""
     repo_root = str(repo_root)
     root = Path(repo_root)
-    counts = {"minted": 0, "skipped": 0, "failed": 0, "notified": 0}
+    counts = {"minted": 0, "skipped": 0, "failed": 0, "notified": 0, "coalesced": 0, "withdrawn": 0}
     _reclaim_stale(repo_root, stale_after_s, time.time() if now is None else now)
     taken: set = set()
+    by_key: dict = {}
     for sid in record.list_pending(repo_root):
         path = record.claim(repo_root, sid)
         if path is None:
@@ -243,29 +328,50 @@ def run(
         header: dict = {"spool_id": sid}
         payload = b""
         loaded = False
+        why: Optional[str] = None
         try:
             header, payload = record.read_entry(path)
             loaded = True
             parsed: Any = json.loads(payload)
             if not isinstance(parsed, dict):
                 raise ValueError("the spooled payload is not a JSON object")
-            run_id = _existing_run(root, header, parsed.get("tool_use_id"), taken)
-            minted_now = run_id is None
-            if run_id is None:
-                run_id = _mint(root, header, parsed, evaluate, taken)
+            key = record.coalesce_key(parsed)
+            why = _stale_reason(root, key) if key else None
+            if why:
+                if not record.withdraw(repo_root, sid, "stale: " + why, by="drain")["withdrawn"]:
+                    raise RuntimeError("the stale entry could not be withdrawn")
+            else:
+                run_id = by_key.get(key) if key else None
+                coalesced = run_id is not None
+                if run_id is None:
+                    run_id, coalesced = _find_run(root, header, parsed.get("tool_use_id"), taken, key)
+                minted_now = run_id is None
+                if run_id is None:
+                    run_id = _mint(root, header, parsed, evaluate, taken)
         except Exception as exc:  # BaseException (a kill) leaves the claim for the stale reclaim
             _fail(repo_root, sid, path, header, payload, f"{type(exc).__name__}: {exc}", counts, loaded)
             continue
-        taken.add(run_id)
-        _stamp(root, run_id, sid)
+        if why:
+            counts["withdrawn"] += 1
+            if _notify(repo_root, header, {"status": "withdrawn", "reason": "stale: " + why}):
+                counts["notified"] += 1
+            continue
+        if key and key not in by_key:
+            by_key[key] = run_id
+        stamped = {**header, "run_id": run_id, "minted_at": time.time()}
+        if coalesced:
+            stamped["coalesced_into"] = run_id
+        else:
+            taken.add(run_id)
+            _stamp(root, run_id, sid)
         try:
-            _rewrite(path, {**header, "run_id": run_id, "minted_at": time.time()}, payload)
+            _rewrite(path, stamped, payload)
         except OSError:
             pass
-        if _notify(repo_root, header, {"status": "minted", "run_id": run_id}):
+        if _notify(repo_root, header, {"status": "coalesced" if coalesced else "minted", "run_id": run_id}):
             counts["notified"] += 1
         record.mark_minted(repo_root, sid)
-        counts["minted" if minted_now else "skipped"] += 1
+        counts["coalesced" if coalesced else "minted" if minted_now else "skipped"] += 1
     _drain_remote_failover()
     return counts
 

@@ -54,6 +54,7 @@ RUN_BOUND_LEGS: tuple[str, ...] = (
     "memo-lifecycle",
     "post-close",
     "symbol-knowledge",
+    "scratch-reap",
 )
 SESSION_BOUND_LEGS: tuple[str, ...] = ("session-shape", "session-residue")
 STATUSES: frozenset[str] = frozenset(
@@ -438,7 +439,7 @@ def write_close_job(
 #: ``unlanded_paths``: ``{row id: [repo-relative paths]}`` for each ``unlanded`` row; a reclose drops the rows whose paths since landed.
 CLOSE_INPUT_KEYS: frozenset[str] = frozenset(
     {
-        "credited_rows", "resume_halt_sha", "review_record", "ledger_met", "ledger_judged",
+        "credited_rows", "resume_halt_sha", "resume_run_id", "review_record", "ledger_met", "ledger_judged",
         "incomplete", "review_only", "sibling_blocked", "landed_paths", "unlanded", "unlanded_paths",
     }
 )

@@ -7,7 +7,8 @@ rewrite (unimatrix-agy-hook-pretool.py) relaunches the leg live, which drains th
 
 Reads the payload's `conversationId`, takes the agy pid from os.getppid() (hooks are spawned by agy),
 and runs unimatrix-agy-hook-launch.py's start() in-process; start() spawns the leg detached and writes
-the leg record. Where the env does carry the address and token the leg starts live here.
+the leg record, then the conversation is upserted into peers.json (register_peer, as the Codex hook
+does). Where the env does carry the address and token the leg starts live here.
 
 Always exits 0. Prints one JSON object: a plain systemMessage noting registration when a leg record exists afterwards, else `{}`.
 
@@ -20,6 +21,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+VENDOR = "agy"
 NOTE = "Registered with the unimatrix peer router: Claude/Codex peers can message this session."
 
 
@@ -38,8 +40,28 @@ def register(payload, agy_pid):
     roster = launch.load_sibling("unimatrix-roster")
     conv = payload.get("conversationId") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
     state = roster.settings_home() / "unimatrix" / "agy-legs"
-    launch.start({"conversationId": conv, "agyPid": agy_pid}, roster, state)
-    return isinstance(conv, str) and bool(launch.CONV_RE.match(conv)) and (state / f"{conv}.json").is_file()
+    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) and payload.get("cwd") else None
+    launch.start({"conversationId": conv, "agyPid": agy_pid, "cwd": cwd}, roster, state)
+    registered = isinstance(conv, str) and bool(launch.CONV_RE.match(conv)) and (state / f"{conv}.json").is_file()
+    if registered:
+        bind_peer(conv, state / f"{conv}.json")
+    return registered
+
+
+def bind_peer(conv, record):
+    """Upsert this conversation into peers.json as an agy peer, named as the router names a leg record.
+
+    Never raises: the leg record already registers the peer with the router, so a peers.json
+    failure (lock timeout, conflicting alias) only loses the durable row.
+    """
+    try:
+        router = load_sibling("unimatrix-peer-router")
+        cwd = json.loads(record.read_text(encoding="utf-8")).get("cwd")
+        name = router.readable_peer_name(VENDOR, conv, cwd)
+        return load_sibling("unimatrix-codex-hook-sessionstart").register_peer(
+            router.default_peers_file(), name, VENDOR, conv)
+    except Exception:
+        return None
 
 
 def reply(registered, worker_pointer=None):

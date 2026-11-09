@@ -383,7 +383,7 @@ def _claim_event(session_id: str, cwd: Optional[Any], event_id: str) -> bool:
         key = hashlib.sha256((session_id + "\0" + event_id).encode("utf-8")).hexdigest()[:24]
         d = Path(share_dir(root, session_id)) / "advisory-event-claims"
         d.mkdir(parents=True, exist_ok=True)
-        os.close(os.open(str(d / key), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
+        (d / key).touch(exist_ok=False)
         return True
     except FileExistsError:
         return False

@@ -31,16 +31,57 @@ def test_census_lists_the_landing_path_legs() -> None:
 
 def test_leg_costs_sum_repeat_calls_and_leg_rows_mark_unreached() -> None:
     prof = lb.Profiler(attribute=False)
-    prof.marks = [("a", 10.0, 1), ("b", 30.0, 3), ("a", 40.0, 3)]
-    costs = prof.leg_costs(end_ms=100.0, end_spawns=7)
-    assert costs["a"] == {"process_time_ms": 80.0, "spawns": 6, "calls": 2}
-    assert costs["b"] == {"process_time_ms": 10.0, "spawns": 0, "calls": 1}
-    prof.marks = [("land_run.commit", 5.0, 0), ("extra.leg", 6.0, 0)]
-    by_leg = {r.attribution["leg"]: r for r in lb.leg_rows(prof, 9.0, 2)}
+    prof.marks = [("a", 10.0, 1, 2), ("b", 30.0, 3, 5), ("a", 40.0, 3, 9)]
+    costs = prof.leg_costs(end_ms=100.0, end_spawns=7, end_reads=20)
+    assert costs["a"] == {"process_time_ms": 80.0, "spawns": 6, "reads": 14, "calls": 2}
+    assert costs["b"] == {"process_time_ms": 10.0, "spawns": 0, "reads": 4, "calls": 1}
+    prof.marks = [("land_run.commit", 5.0, 0, 0), ("extra.leg", 6.0, 0, 3)]
+    by_leg = {r.attribution["leg"]: r for r in lb.leg_rows(prof, 9.0, 2, 4)}
+    assert by_leg["land_run.commit"].reads == 3 and by_leg["extra.leg"].reads == 1
     assert by_leg["land_run.commit"].attribution["measured"] is True
     assert by_leg["extra.leg"].attribution["in_census"] is False
     unreached = by_leg["land_run.script_read"]
     assert unreached.attribution["not_reached"] is True and unreached.process_time_ms == 0.0 and unreached.spawns == 0
+    assert unreached.reads == 0
+
+
+def test_read_counter_counts_opens_only_while_armed(tmp_path: Path) -> None:
+    target = tmp_path / "f.txt"
+    target.write_text("x", encoding="utf-8")
+    try:
+        target.read_text(encoding="utf-8")
+        assert lb._ReadCounter.armed is False
+        lb.arm_read_counter()
+        before = lb._ReadCounter.count
+        assert before == 0
+        target.read_text(encoding="utf-8")
+        target.read_text(encoding="utf-8")
+        assert lb.disarm_read_counter() >= 2
+        seen = lb._ReadCounter.count
+        target.read_text(encoding="utf-8")
+        assert lb._ReadCounter.count == seen
+    finally:
+        lb._ReadCounter.armed = False
+
+
+def test_profile_land_counts_reads_per_leg_and_leaves_counter_disarmed(tmp_path: Path) -> None:
+    target = tmp_path / "f.txt"
+    target.write_text("x", encoding="utf-8")
+
+    def call(_root, _base):
+        from coordinator_core.ops.dispatch_emit import land_deadline
+
+        land_deadline.check("land_run.script_read")
+        target.read_text(encoding="utf-8")
+        target.read_text(encoding="utf-8")
+        land_deadline.check("land_run.integrity")
+        return {}
+
+    rows = lb.profile_land(tmp_path, "0" * 40, attribute=False, call=call, legs=True)
+    by_axis = {r.axis: r for r in rows}
+    assert by_axis[lb.LEG_AXIS_PREFIX + lb.LEG_SCRIPT_READ].reads >= 2
+    assert by_axis[lb.WHOLE_OP].reads >= by_axis[lb.LEG_AXIS_PREFIX + lb.LEG_SCRIPT_READ].reads
+    assert lb._ReadCounter.armed is False
 
 
 def test_live_siblings_json_covers_every_census_leg(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -51,8 +92,10 @@ def test_live_siblings_json_covers_every_census_leg(tmp_path: Path, monkeypatch,
     assert set(lb.census_legs()) <= set(legs)
     for leg, row in legs.items():
         assert row["process_time_ms"] >= 0.0 and row["spawns"] >= 0
+        assert isinstance(row["reads"], int) and row["reads"] >= 0
         assert row["attribution"]["measured"] != row["attribution"]["not_reached"]
     assert legs["land_run.script_read"]["attribution"]["measured"] is True
+    assert legs["land_run.script_read"]["reads"] > 0
     whole = rows[0]["attribution"]
     assert rows[0]["axis"] == lb.WHOLE_OP and whole["live_siblings"] == 2
     assert set(whole["live_sibling_outcomes"]) == {"s0", "s1"}

@@ -1,5 +1,6 @@
 """Forced command for the unimatrix key on the receiving box: the ONLY thing that key
-can run. It moves Claude Code cross-session messages between boxes and nothing else.
+can run. It moves Claude Code cross-session messages between boxes and nothing else. File put/get
+belongs to a separate key and forced command (unimatrix-file-relay.py); this one refuses both.
 
 authorized_keys line (restrict = no pty, no forwarding of any kind; key body elided). The exact
 line for a box, with absolute interpreter and relay paths, is printed by `unimatrix-install.py --install`:
@@ -10,6 +11,8 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     plus key file, so the far box can mirror it and SendMessage it.
   send <pid>        read one message line on stdin and deliver it to that live
                     session's socket.
+  send-batch <pid>  deliver every stdin line to that session; prints one JSON result
+                    line ({"ok": true} or {"ok": false, "error": ...}) per message line.
   inbox <name>      register <name> as a session living on this box (entry + key on
                     stdin, two lines), listen on /tmp/cc-socks/unimatrix-<name>.sock, and
                     write each message delivered there to stdout as one line, so the
@@ -29,8 +32,8 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     base64 signature line); exit 1 when none is held.
   membership put    read the snapshot line and base64 signature line on stdin, verify against
                     the pinned signer key and the held epoch, adopt, and reconcile the
-                    relay-managed authorized_keys lines (from= pins generated); prints a JSON
-                    reply, exit 0 only when adopted. The relay never signs.
+                    relay-managed authorized_keys lines (from= and --peer pins generated);
+                    prints a JSON reply, exit 0 only when adopted. The relay never signs.
 
 Wire facts this relies on (Claude Code 2.1.3xx, peerProtocol 1): a message is one
 JSON line per connection, sender writes and closes, receiver sends nothing back.
@@ -75,6 +78,8 @@ def parse_mode(original_command):
         return "source", None
     if len(cmd) == 2 and cmd[0] == "send" and cmd[1].isdigit():
         return "send", int(cmd[1])
+    if len(cmd) == 2 and cmd[0] == "send-batch" and cmd[1].isdigit():
+        return "send-batch", int(cmd[1])
     if (len(cmd) == 2 and cmd[0] in ("inbox", "reply-inbox") and valid_inbox_name(cmd[1])
             and original_command == f"{cmd[0]} {cmd[1]}"):
         return cmd[0], cmd[1]
@@ -124,7 +129,51 @@ def alive(pid):
         return False
 
 
+_LIVENESS = []
+
+
+def _liveness():
+    """The spawn-free liveness module beside this script, loaded by path on first use."""
+    if not _LIVENESS:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "unimatrix_liveness", Path(__file__).resolve().parent / "unimatrix-liveness.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _LIVENESS.append(mod)
+    return _LIVENESS[0]
+
+
+def mirror_orphaned(d):
+    """True for a roster-made mirror (it carries the far-socket field) whose recorded roster
+    supervisor is not live; an entry that records no supervisor counts as orphaned."""
+    if not isinstance(d, dict) or not d.get("macSocketPath"):
+        return False
+    return not _liveness().supervisor_live(
+        {"pid": d.get("unimatrixRosterPid"), "procStart": d.get("unimatrixRosterProcStart")})
+
+
+def _peers_file():
+    home = os.environ.get("COORDINATOR_SETTINGS_HOME")
+    return (Path(home) if home else Path.home() / ".coordinator-claude-settings") / "unimatrix" / "peers.json"
+
+
+def codex_holder_dead(d, holders):
+    """True for a Codex face entry whose peers-file row records a holder that is dead or reused.
+
+    `holders` is a one-slot cache of {target: peer row}. No recorded holder is unknown, not dead."""
+    target = d.get("target")
+    if d.get("vendor") != "codex" or d.get("unimatrixMirror") or not isinstance(target, str):
+        return False
+    if not holders:
+        holders.append({str(r.get("target")): r for r in _liveness()._peer_rows(_peers_file())
+                        if r.get("vendor") == "codex"})
+    row = holders[0].get(target)
+    return row is not None and _liveness().codex_holder_live(row) is False
+
+
 def entries():
+    holders = []
     for f in os.listdir(os.path.expanduser(SESS)):
         m = re.fullmatch(r"(\d+)\.json", f)
         if not m:
@@ -135,7 +184,9 @@ def entries():
                 d = json.load(fh)
         except (OSError, ValueError):
             continue
-        if d.get("pid") != pid or not alive(pid):
+        if not isinstance(d, dict) or d.get("pid") != pid or not _liveness().entry_live(d) or mirror_orphaned(d):
+            continue
+        if codex_holder_dead(d, holders):
             continue
         keys = [k for k in os.listdir(os.path.expanduser(SESS)) if k.startswith(f"{pid}.") and k.endswith(".key")]
         if len(keys) != 1:
@@ -203,13 +254,42 @@ def engine_fields():
     return out
 
 
+def _load_sibling(filename, modname):
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(modname, Path(__file__).resolve().parent / filename)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def codex_export_refused(d, cache):
+    """True for a local Codex face whose thread is not an independently sendable root (state DB)
+    or has no addressable rollout (absent, or a sub-agent's session_meta): far boxes must not
+    list what a send to it would fail on. `cache` holds the scan's modules, metadata and rollout index."""
+    target = d.get("target")
+    if d.get("vendor") != "codex" or d.get("unimatrixMirror") or not isinstance(target, str):
+        return False
+    if not cache:
+        router = _load_sibling("unimatrix-peer-router.py", "unimatrix_peer_router")
+        codex = _load_sibling("unimatrix-peer-codex.py", "unimatrix_peer_codex")
+        home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        cache.update(router=router, codex=codex, home=home,
+                     metadata=router.codex_thread_metadata(home), index=codex.rollout_index(home))
+    if not cache["router"].codex_is_sendable_root(cache["metadata"].get(target, {})):
+        return True
+    return not cache["codex"].thread_addressable(target, cache["home"], cache["index"])
+
+
 def roster():
     fields = engine_fields()
     helpers = load_roster()
+    codex_cache = {}
     for pid, d, key in entries():
         reply_inbox = d.get("unimatrixMirror") is True and d.get("unimatrixReplyInbox") is True
         if d.get("macSocketPath") or (d.get("unimatrixMirror") and not reply_inbox):
             continue  # never re-export a far session we are only mirroring, whichever OS made the entry
+        if codex_export_refused(d, codex_cache):
+            continue
         with open(os.path.join(os.path.expanduser(SESS), key), encoding="utf-8") as fh:
             body = fh.read()
         exported = {**d, **helpers.session_identity(d)}
@@ -265,7 +345,8 @@ def load_roster():
     return mod
 
 
-def send(pid):
+def _session_path(pid):
+    """The live session's messaging endpoint for `pid`; exits when it is absent or not a session endpoint."""
     target = {p: d for p, d, _ in entries()}.get(pid)
     if not target:
         sys.exit(f"no live session with pid {pid}")
@@ -273,8 +354,16 @@ def send(pid):
     if endpoint_kind() == "pipe":
         if not path.lower().startswith(PIPE_PREFIX.lower()):
             sys.exit(f"refusing non-session pipe {path}")
+    elif os.path.dirname(path) != SOCKS or not stat.S_ISSOCK(os.stat(path).st_mode):
+        sys.exit(f"refusing non-session socket {path}")
+    return path
+
+
+def _write_line(path, line):
+    """Deliver one message line to the session endpoint `path` (pipe on Windows, unix socket elsewhere)."""
+    line = local_reply_address(line)
+    if endpoint_kind() == "pipe":
         import win32file
-        line = local_reply_address(sys.stdin.buffer.readline())
         line = load_roster().authenticated_data(path, line, os.path.expanduser(SESS))
         h = win32file.CreateFile(path, win32file.GENERIC_READ | win32file.GENERIC_WRITE,
                                  0, None, win32file.OPEN_EXISTING, 0, None)
@@ -283,13 +372,36 @@ def send(pid):
         finally:
             win32file.CloseHandle(h)
         return
-    if os.path.dirname(path) != SOCKS or not stat.S_ISSOCK(os.stat(path).st_mode):
-        sys.exit(f"refusing non-session socket {path}")
-    line = local_reply_address(sys.stdin.buffer.readline())
     s = socket.socket(socket.AF_UNIX)
-    s.connect(path)
-    s.sendall(line)
-    s.close()
+    try:
+        s.connect(path)
+        s.sendall(line)
+    finally:
+        s.close()
+
+
+def send(pid):
+    path = _session_path(pid)
+    _write_line(path, sys.stdin.buffer.readline())
+
+
+def send_batch(pid):
+    """Deliver every stdin line to `pid`, replying one JSON result line per message line.
+
+    A per-line fault (a blank line included, so replies stay index-aligned with the input) is
+    that line's error reply and the loop continues; only a target-level refusal exits, before
+    any line is read.
+    """
+    path = _session_path(pid)
+    for line in sys.stdin.buffer:
+        try:
+            if not line.strip():
+                raise ValueError("empty message line")
+            _write_line(path, line)
+            reply = {"ok": True}
+        except Exception as e:  # pywintypes.error is not an OSError subclass
+            reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        print(json.dumps(reply), flush=True)
 
 
 def pid_domain():
@@ -297,10 +409,9 @@ def pid_domain():
 
 
 def proc_start(pid):
-    """Raw `ps` start stamp of `pid` ('' when no such process); None when ps cannot answer."""
+    """Process-start stamp of `pid` read without a spawn; None when it cannot be read."""
     try:
-        return subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
-                              capture_output=True, text=True).stdout.strip()
+        return _liveness().proc_start(pid)
     except OSError:
         return None
 
@@ -528,6 +639,163 @@ def settings_home():
     return Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
 
 
+MANIFEST = "MANIFEST.sha256"
+MAX_DROP_BYTES = 8 << 30  # total member bytes one put may land; larger is refused too_large
+MAX_DROP_FILES = 100000  # non-manifest members (files and dirs) one put may land; more is refused too_many_files
+_MANIFEST_LINE_RE = re.compile(r"([0-9a-f]{64})  (.+)")
+
+
+class DropError(Exception):
+    """A put/get refusal; `args[0]` is the reason code in the reply."""
+
+
+def _skipped(name):
+    """AppleDouble sidecars, Finder metadata and the resource-fork tree never travel."""
+    return name.startswith("._") or name == ".DS_Store" or name == "__MACOSX"
+
+
+def _safe_rel(rel):
+    """True for a relative, forward-slash path with no empty, dot or `..` component and no skipped name."""
+    parts = rel.split("/")
+    return bool(rel) and not rel.startswith("/") and "\\" not in rel and "\x00" not in rel and all(
+        p not in ("", ".", "..") and not _skipped(p) for p in parts)
+
+
+def _sha256_file(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as fp:
+        for chunk in iter(lambda: fp.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def manifest_bytes(manifest):
+    """The manifest text for {relpath: sha256}: one "<sha256>  <relpath>" line per file, sorted."""
+    return "".join(f"{sha}  {rel}\n" for rel, sha in sorted(manifest.items())).encode("utf-8")
+
+
+def iter_tree(src):
+    """Yield ("dir"|"file", relpath, path) for everything pack sends from `src`; pack and the client's
+    cap pre-check both walk through this, so they cannot diverge. Regular files and dirs only;
+    AppleDouble, symlinks and a file named MANIFEST.sha256 are skipped."""
+    src = Path(src)
+    if src.is_file():
+        yield "file", src.name, src
+        return
+    for root, dnames, fnames in os.walk(src):
+        dnames[:] = sorted(d for d in dnames if not _skipped(d) and not os.path.islink(os.path.join(root, d)))
+        rel_root = Path(root).relative_to(src).as_posix()
+        for d in dnames:
+            yield "dir", d if rel_root == "." else f"{rel_root}/{d}", Path(root, d)
+        for f in sorted(fnames):
+            path = Path(root, f)
+            rel = f if rel_root == "." else f"{rel_root}/{f}"
+            if _skipped(f) or rel == MANIFEST or path.is_symlink() or not path.is_file():
+                continue
+            yield "file", rel, path
+
+
+def pack(src, out_fp):
+    """Write `src` (a file, or a folder's contents) to `out_fp` as one uncompressed tar whose first
+    member is MANIFEST.sha256. Regular files and dirs only; AppleDouble/.DS_Store/__MACOSX are
+    skipped. Returns the {relpath: sha256} manifest."""
+    import io
+    import tarfile
+    src = Path(src)
+    files, dirs = [], []
+    for kind, rel, path in iter_tree(src):
+        (dirs if kind == "dir" else files).append(rel if kind == "dir" else (rel, path))
+    manifest = {rel: _sha256_file(path) for rel, path in files}
+    text = manifest_bytes(manifest)
+    with tarfile.open(fileobj=out_fp, mode="w|") as tf:
+        info = tarfile.TarInfo(MANIFEST)
+        info.size = len(text)
+        info.mtime = 0
+        tf.addfile(info, io.BytesIO(text))
+        for rel in dirs:
+            tf.add(src / rel, arcname=rel, recursive=False)
+        for rel, path in files:
+            tf.add(path, arcname=rel, recursive=False)
+    return manifest
+
+
+def _parse_manifest(data):
+    manifest = {}
+    for line in data.decode("utf-8", "replace").splitlines():
+        m = _MANIFEST_LINE_RE.fullmatch(line)
+        if not m or not _safe_rel(m.group(2)) or m.group(2) == MANIFEST or m.group(2) in manifest:
+            raise DropError("bad_manifest")
+        manifest[m.group(2)] = m.group(1)
+        if len(manifest) > MAX_DROP_FILES:
+            raise DropError("too_many_files")
+    return manifest
+
+
+def _need_filter():
+    """Python 3.11.0-3.11.3 has no tarfile.data_filter: refuse rather than extract unfiltered."""
+    import tarfile
+    if not hasattr(tarfile, "data_filter"):
+        raise DropError("tarfile_filter_unavailable")
+
+
+def unpack(in_fp, dest):
+    """Extract the tar on `in_fp` into the new dir `dest` and verify it against its MANIFEST.sha256.
+
+    Refuses (DropError) any member that is not a regular file or dir, an unsafe or AppleDouble name,
+    a file absent from the manifest, a manifest line with no member, or a sha mismatch. Returns the
+    manifest. The caller owns removing `dest` on failure."""
+    import tarfile
+    _need_filter()
+    dest = Path(dest)
+    manifest, seen, total = None, set(), 0
+    try:
+        tf = tarfile.open(fileobj=in_fp, mode="r|")
+    except tarfile.TarError:
+        raise DropError("bad_tar") from None
+    with tf:
+        try:
+            for member in tf:
+                if manifest is None:
+                    if member.name != MANIFEST or not member.isreg() or member.size > 64 << 20:
+                        raise DropError("manifest_not_first")
+                    raw = tf.extractfile(member).read()
+                    manifest = _parse_manifest(raw)
+                    dest.mkdir(parents=True, exist_ok=True)
+                    (dest / MANIFEST).write_bytes(raw)
+                    continue
+                if not (member.isreg() or member.isdir()):
+                    raise DropError("bad_member_type")
+                if not _safe_rel(member.name) or member.name in seen:
+                    raise DropError("bad_member_name")
+                if member.isreg() and member.name not in manifest:
+                    raise DropError("extra_file")
+                total += member.size if member.isreg() else 0
+                if total > MAX_DROP_BYTES:
+                    raise DropError("too_large")
+                if len(seen) >= MAX_DROP_FILES:
+                    raise DropError("too_many_files")
+                seen.add(member.name)
+                tf.extract(member, dest, filter="data")
+        except tarfile.TarError:
+            raise DropError("bad_tar") from None
+    if manifest is None:
+        raise DropError("manifest_not_first")
+    if not manifest:
+        raise DropError("empty_drop")
+    for rel, sha in manifest.items():
+        path = dest / rel
+        if rel not in seen or path.is_symlink() or not path.is_file():
+            raise DropError("missing_file")
+        if _sha256_file(path) != sha:
+            raise DropError("sha_mismatch")
+    return manifest
+
+
+def _drop_reply(root, manifest):
+    return {"ok": True, "files": len(manifest), "bytes": sum(os.path.getsize(root / rel) for rel in manifest),
+            "manifest_sha256": hashlib.sha256(manifest_bytes(manifest)).hexdigest()}
+
+
 def load_membership():
     """The membership library beside this relay, loaded by path; None when it is not vendored here."""
     import importlib.util
@@ -551,16 +819,31 @@ def managed_key_body(line):
     if not text or text.startswith("#"):
         return None
     cmd = _COMMAND_RE.search(text)
-    if not cmd or "unimatrix-relay.py" not in cmd.group(1):
+    if not cmd or not any(s in cmd.group(1) for s in ("unimatrix-relay.py", "unimatrix-file-relay.py")):
         return None
     key = _KEY_RE.search(text, cmd.end())
     return key.group(1) if key else None
 
 
-def relay_line(key_body):
-    """The restrict line for `key_body` with this copy's interpreter and path, quoted as the installer does."""
+def relay_line(key_body, box):
+    """The restrict line for `key_body` with this copy's interpreter and path, quoted as the installer does.
+
+    `--peer <box>` pins the calling member into the forced command."""
     parts = [f'\\"{p}\\"' if " " in p else p for p in (sys.executable, str(Path(__file__).resolve()))]
+    parts += ["--peer", box]
     return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} unimatrix'
+
+
+def load_file_relay_line():
+    """`file_line` of the file-relay script beside this relay; None when it is not vendored here."""
+    import importlib.util
+    path = Path(__file__).with_name("unimatrix-file-relay.py")
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("unimatrix_file_relay_lines", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.file_line
 
 
 def windows_admin():
@@ -584,8 +867,8 @@ def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin,
     if is_admin():
         return "admin"
     want = {}
-    for m, line in zip(members, membership.authorized_keys_lines(members, relay_line)):
-        want[m["relay_pub"].split()[1]] = line
+    for body, line in membership.member_lines(members, relay_line, load_file_relay_line()):
+        want[body] = line
     path = Path(path)
     old = path.read_text(encoding="utf-8") if path.is_file() else ""
     out, kept = [], set()
@@ -645,7 +928,8 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
     try:
         prior, _ = membership.load_snapshot(home)
         try:
-            listed = {m["relay_pub"].split()[1] for m in prior["members"]} if prior else set()
+            listed = ({m[k].split()[1] for m in prior["members"] for k in ("relay_pub", "file_pub") if k in m}
+                      if prior else set())
         except (KeyError, IndexError, TypeError, AttributeError):
             listed = set()
         members = membership.adopt(home, snap, sig, notifier=notifier, run=run)
@@ -661,7 +945,7 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
 def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
-        sys.exit("usage: roster | send <pid> | inbox <name> | reply-inbox <name> | source | "
+        sys.exit("usage: roster | send <pid> | send-batch <pid> | inbox <name> | reply-inbox <name> | source | "
                  "grant <grantee> <note> <ttl> <repo> | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
@@ -688,6 +972,8 @@ def main():
         roster()
     elif mode == "send":
         send(arg)
+    elif mode == "send-batch":
+        send_batch(arg)
     elif mode == "source":
         # Far boxes vendor this relay; serving our own text keeps syncs off the full-shell key.
         sys.stdout.buffer.write(Path(__file__).read_bytes())

@@ -1,7 +1,7 @@
 """Pins for the Codex launcher (daemon + --remote argv) and the SessionStart peer registration."""
 import importlib.util
 import json
-import re
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -109,62 +109,79 @@ def _checkout(tmp_path, name, sub=None):
     return str(cwd)
 
 
+T1, T2, T3 = (f"00000000-0000-4000-8000-00000000000{i}" for i in (1, 2, 3))
+
+
+def _bind(tmp_path, thread, name):
+    """Write the engine's binding for thread; returns the registry dir the hook reads."""
+    reg = tmp_path / "bindings"
+    reg.mkdir(exist_ok=True)
+    (reg / f"{thread}.json").write_text(json.dumps({
+        "schema_version": 1, "provider": "codex", "session_id": thread, "address_version": 1,
+        "name": name, "box": socket.gethostname()}), encoding="utf-8")
+    return reg
+
+
 def _names(pf):
     return {p["target"]: p["name"] for p in contract.load_peers(pf)}
 
 
-def test_hook_registers_thread_in_loadable_peers_file(tmp_path):
+def test_hook_registers_thread_under_its_engine_name(tmp_path):
     pf = tmp_path / "unimatrix" / "peers.json"
+    reg = _bind(tmp_path, T1, "coordinator-content-repo-codex-box-50")
     work = tmp_path / "My Proj"
     work.mkdir()
-    out = hook.run({"session_id": "t1", "cwd": str(work)}, peers_file=pf)
+    out = hook.run({"session_id": T1, "cwd": str(work)}, peers_file=pf, registry_dir=reg)
     rows = contract.load_peers(pf)
-    assert len(rows) == 1 and rows[0]["vendor"] == "codex" and rows[0]["target"] == "t1"
-    assert re.fullmatch(r"My-Proj-[0-9a-f]{2}", rows[0]["name"])
-    assert rows[0]["name"] in out["systemMessage"] and "t1" in out["systemMessage"]
+    assert len(rows) == 1 and rows[0]["vendor"] == "codex" and rows[0]["target"] == T1
+    assert rows[0]["name"] == "coordinator-content-repo-codex-box-50"
+    assert rows[0]["name"] in out["systemMessage"] and T1 in out["systemMessage"]
 
 
 def test_same_thread_start_again_keeps_its_name(tmp_path):
     pf = tmp_path / "peers.json"
+    reg = _bind(tmp_path, T1, "w-codex-box-1")
     cwd = _checkout(tmp_path, "w")
-    hook.run({"session_id": "t1", "cwd": cwd}, peers_file=pf)
+    hook.run({"session_id": T1, "cwd": cwd}, peers_file=pf, registry_dir=reg)
     first = _names(pf)
-    hook.run({"session_id": "t1", "cwd": cwd}, peers_file=pf)
-    assert _names(pf) == first
+    hook.run({"session_id": T1, "cwd": cwd}, peers_file=pf, registry_dir=reg)
+    assert _names(pf) == first == {T1: "w-codex-box-1"}
 
 
-def test_two_threads_in_one_repo_get_distinct_names(tmp_path):
+def test_two_threads_in_one_repo_get_distinct_engine_names(tmp_path):
     pf = tmp_path / "peers.json"
     cwd = _checkout(tmp_path, "w")
-    for t in ("t1", "t2", "t3"):
-        hook.run({"session_id": t, "cwd": cwd}, peers_file=pf)
-    names = list(_names(pf).values())
-    assert len(set(names)) == 3 and all(re.fullmatch(r"w-[0-9a-f]{2}", n) for n in names)
+    for i, t in enumerate((T1, T2, T3), start=1):
+        reg = _bind(tmp_path, t, f"w-codex-box-{i}")
+        hook.run({"session_id": t, "cwd": cwd}, peers_file=pf, registry_dir=reg)
+    assert _names(pf) == {T1: "w-codex-box-1", T2: "w-codex-box-2", T3: "w-codex-box-3"}
 
 
-def test_hash_collision_moves_to_next_free_suffix(tmp_path, monkeypatch):
+def test_thread_without_binding_registers_no_codex_repo_name(tmp_path):
     pf = tmp_path / "peers.json"
-    cwd = _checkout(tmp_path, "w")
-    monkeypatch.setattr(hook.hashlib, "sha1", lambda b: type("H", (), {"digest": lambda s: b"\x0a" * 20})())
-    hook.run({"session_id": "t1", "cwd": cwd}, peers_file=pf)
-    hook.run({"session_id": "t2", "cwd": cwd}, peers_file=pf)
-    assert _names(pf) == {"t1": "w-0a", "t2": "w-0b"}
+    reg = tmp_path / "bindings"
+    reg.mkdir()
+    out = hook.run({"session_id": T1, "cwd": _checkout(tmp_path, "w")}, peers_file=pf, registry_dir=reg)
+    assert "unbound" in out["systemMessage"] and not pf.exists()
 
 
 def test_legacy_unsuffixed_row_for_the_thread_is_replaced(tmp_path):
     pf = tmp_path / "peers.json"
-    pf.write_text(json.dumps({"peers": [{"name": "codex-claude-klabauter", "vendor": "codex", "target": "t1"}]}))
-    hook.run({"session_id": "t1", "cwd": _checkout(tmp_path, "example-game-workbench-repo")}, peers_file=pf)
-    assert re.fullmatch(r"example-game-workbench-repo-[0-9a-f]{2}", _names(pf)["t1"]) and len(_names(pf)) == 1
+    pf.write_text(json.dumps({"peers": [{"name": "codex-claude-klabauter", "vendor": "codex", "target": T1}]}))
+    reg = _bind(tmp_path, T1, "claude-unreal-holo-codex-box-7")
+    hook.run({"session_id": T1, "cwd": _checkout(tmp_path, "example-game-workbench-repo")},
+             peers_file=pf, registry_dir=reg)
+    assert _names(pf) == {T1: "claude-unreal-holo-codex-box-7"}
 
 
 def test_same_binding_is_idempotent_and_other_rows_survive(tmp_path):
     pf = tmp_path / "peers.json"
     pf.write_text(json.dumps({"peers": [{"name": "a", "vendor": "agy", "target": "c1"}]}))
-    hook.run({"session_id": "t1", "cwd": _checkout(tmp_path, "w")}, peers_file=pf)
-    name = _names(pf)["t1"]
-    assert hook.register_peer(pf, name, "codex", "t1") == "present"
-    assert [p["name"] for p in contract.load_peers(pf)] == ["a", name]
+    reg = _bind(tmp_path, T1, "w-codex-box-2")
+    hook.run({"session_id": T1, "cwd": _checkout(tmp_path, "w")}, peers_file=pf, registry_dir=reg)
+    address = contract.read_codex_address(reg, T1, socket.gethostname())
+    assert hook.register_peer(pf, address["name"], "codex", T1, address=address) == "present"
+    assert [p["name"] for p in contract.load_peers(pf)] == ["a", "w-codex-box-2"]
 
 
 def test_inherited_launcher_peer_name_never_names_the_session(tmp_path, monkeypatch):
@@ -172,8 +189,10 @@ def test_inherited_launcher_peer_name_never_names_the_session(tmp_path, monkeypa
     monkeypatch.setenv("UNIMATRIX_PEER_NAME", "codex-claude-klabauter")
     monkeypatch.chdir(_checkout(tmp_path, "claude-klabauter"))
     pf = tmp_path / "peers.json"
-    out = hook.run({"session_id": "t1", "cwd": _checkout(tmp_path, "example-game-workbench-repo")}, peers_file=pf)
-    assert re.fullmatch(r"example-game-workbench-repo-[0-9a-f]{2}", _names(pf)["t1"])
+    reg = _bind(tmp_path, T1, "claude-unreal-holo-codex-box-3")
+    out = hook.run({"session_id": T1, "cwd": _checkout(tmp_path, "example-game-workbench-repo")},
+                   peers_file=pf, registry_dir=reg)
+    assert _names(pf) == {T1: "claude-unreal-holo-codex-box-3"}
     assert "claude-klabauter" not in out["systemMessage"]
 
 
@@ -182,12 +201,13 @@ def test_name_is_the_checkout_not_a_subdirectory_of_it(tmp_path):
     assert hook.peer_base({"cwd": cwd}) == "example-game-workbench-repo"
 
 
-def test_resume_from_another_checkout_replaces_the_stale_name(tmp_path):
+def test_resume_from_another_checkout_keeps_the_engine_name(tmp_path):
     pf = tmp_path / "peers.json"
-    hook.run({"session_id": "t1", "cwd": _checkout(tmp_path, "claude-klabauter")}, peers_file=pf)
-    hook.run({"session_id": "t1", "cwd": _checkout(tmp_path, "example-game-workbench-repo")}, peers_file=pf)
-    assert len(contract.load_peers(pf)) == 1
-    assert _names(pf)["t1"].startswith("example-game-workbench-repo-")
+    reg = _bind(tmp_path, T1, "claude-klabauter-codex-box-4")
+    hook.run({"session_id": T1, "cwd": _checkout(tmp_path, "claude-klabauter")}, peers_file=pf, registry_dir=reg)
+    hook.run({"session_id": T1, "cwd": _checkout(tmp_path, "example-game-workbench-repo")},
+             peers_file=pf, registry_dir=reg)
+    assert _names(pf) == {T1: "claude-klabauter-codex-box-4"}
 
 
 def test_unparseable_peers_file_is_left_untouched(tmp_path):

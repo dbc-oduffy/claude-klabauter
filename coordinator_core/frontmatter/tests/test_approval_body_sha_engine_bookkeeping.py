@@ -50,6 +50,15 @@ def _approved(**kw) -> str:
     return stamp_approved_body_sha(_plan(**kw))
 
 
+def _git(cwd, *args: str) -> None:
+    """The one git spawn shared by every test here (windowless on Windows)."""
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, **no_console_creationflags())
+
+
 def test_land_run_flip_keeps_the_stamp_valid():
     from coordinator_core.ops.dispatch_emit.plan_row_coding import flip_rows_coded
 
@@ -118,15 +127,12 @@ def test_legacy_stamp_over_canonical_body_sha_is_accepted():
 @pytest.mark.cadence
 def test_land_run_then_only_incomplete_emit_is_not_refused(tmp_path, monkeypatch):
     """Real dispatch.land_run on an incomplete approved plan, then the emit gate."""
-    import subprocess
-
     from coordinator_core.ops.dispatch_emit import land_run
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
     from coordinator_core.ops.dispatch_emit.op import _refuse_unapproved_body
-    from coordinator_core.win_portability import no_console_creationflags
 
     def git(*a):
-        subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True, **no_console_creationflags())
+        _git(tmp_path, *a)
 
     git("init", "-q")
     git("config", "user.email", "t@example.com")
@@ -168,6 +174,65 @@ def test_land_run_then_only_incomplete_emit_is_not_refused(tmp_path, monkeypatch
     _refuse_unapproved_body(str(plan))  # raises ValueError on "plan body changed since approval"
 
 
+def _seam_fixed(text: str, row_id: str, edges: list[str]) -> str:
+    """`text` after the same row patch `plan.seam_fix._write_edges` applies."""
+    import copy
+
+    from coordinator_core.frontmatter.body_blocks import locate_fenced_block
+    from coordinator_core.ops.plan_tasks_mutate import _parse_rows_or_abort, _patch_body
+
+    located = locate_fenced_block(text)
+    rows = _parse_rows_or_abort(located.body, "seam_fix")
+    original = copy.deepcopy(rows)
+    next(r for r in rows if r["id"] == row_id)["depends_on_plan"] = edges
+    start, end = located.span
+    return text[:start] + _patch_body(located.body, original, rows) + text[end:]
+
+
+@pytest.mark.parametrize("edges", [["docs/plans/a.md"], ["docs/plans/a.md", "docs/plans/b.md"]])
+def test_seam_fix_depends_on_plan_edges_keep_the_stamp_valid(edges):
+    approved = _approved()
+    fixed = _seam_fixed(approved, "C4", edges)
+    assert "depends_on_plan" in fixed and fixed != approved
+    assert check_approved_body(fixed)[0] == APPROVED_BODY_OK
+    again = _seam_fixed(fixed, "C4", edges + ["docs/plans/c.md"])
+    assert check_approved_body(again)[0] == APPROVED_BODY_OK
+    assert check_approved_body(fixed.replace("Prose.", "Different prose."))[0] == APPROVED_BODY_CHANGED
+    assert check_approved_body(fixed.replace("title: t3", "title: t3 edited"))[0] == APPROVED_BODY_CHANGED
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["  depends_on_plan: [docs/plans/a.md, docs/plans/b.md]\n", "  depends_on_plan:\n  - docs/plans/a.md\n  - docs/plans/b.md\n", "  depends_on_plan:\n    - docs/plans/a.md\n"],
+    ids=["flow", "block-same-indent", "block-deeper"],
+)
+def test_depends_on_plan_neutral_in_every_yaml_shape_and_neighbours_survive(field):
+    from coordinator_core.frontmatter.primitives import approval_body_sha
+
+    approved = _approved()
+    edited = approved.replace("  deferred: false\n- id: C4", f"{field}  deferred: false\n- id: C4", 1)
+    assert edited != approved and approval_body_sha(edited) == approval_body_sha(approved)
+    assert check_approved_body(edited)[0] == APPROVED_BODY_OK
+    assert check_approved_body(edited.replace("deferred: false\n- id: C4", "deferred: true\n- id: C4", 1))[0] == APPROVED_BODY_CHANGED
+
+
+def test_block_scalar_mentioning_depends_on_plan_is_content():
+    approved = _approved()
+    edited = approved.replace("    multi-line\n", "    multi-line\n    depends_on_plan: x\n", 1)
+    assert check_approved_body(edited)[0] == APPROVED_BODY_CHANGED
+
+
+def test_stamp_minted_before_any_engine_edit_hashes_the_same_and_old_edge_stamp_is_accepted():
+    from coordinator_core.frontmatter.primitives import approval_body_sha
+
+    plan = _plan()
+    assert "depends_on_plan" not in plan
+    assert approval_body_sha(plan) == approval_body_sha(plan, neutral_plan_edges=False)
+    authored = _seam_fixed(plan, "C4", ["docs/plans/a.md"])
+    old_stamped = authored.replace("status: approved\n", f"status: approved\napproved_body_sha: {approval_body_sha(authored, neutral_plan_edges=False)}\n", 1)
+    assert check_approved_body(old_stamped)[0] == APPROVED_BODY_OK
+
+
 _GATED_ROWS = """- id: C3
   title: t3
   change_kind: code-edit
@@ -199,10 +264,7 @@ def test_gate_clearance_keys_are_neutral_and_any_other_gate_key_is_not():
 def test_clearing_an_external_gate_keeps_the_stamp_valid_and_real_edit_refuses(tmp_path):
     from coordinator_core.ops.plan_tasks_mutate import _clear_gate
 
-    import subprocess
-    from coordinator_core.win_portability import no_console_creationflags
-
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
+    _git(tmp_path, "init", "-q")
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     plan = tmp_path / "docs" / "plans" / "plan.md"
     approved = _approved(rows=_GATED_ROWS)
@@ -242,12 +304,9 @@ def test_review_stamp_accept_keeps_a_sealed_plan_ok(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_evidence_append_keeps_a_sealed_plan_ok(tmp_path):
-    import subprocess
-
     from coordinator_core.ops.plan_tasks_mutate import _evidence_append
-    from coordinator_core.win_portability import no_console_creationflags
 
-    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
+    _git(tmp_path, "init", "-q")
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     plan = tmp_path / "docs" / "plans" / "plan.md"
     approved = _approved()

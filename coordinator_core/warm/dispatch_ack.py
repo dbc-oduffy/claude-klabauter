@@ -187,6 +187,118 @@ def _failure_text_of(result: Any) -> Optional[str]:
     return None
 
 
+JOURNAL_RETAIN_SECS = 24 * 3600.0
+_JOURNAL_SUFFIX = ".outcome.json"
+_JOURNAL_SAFE_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_")
+
+
+JOURNAL_DIRNAME = "ack-journal"
+
+
+def journal_dir_under(svc_dir: Any) -> str:
+    """The one journal location beside the engine's service files; the accept process
+    and the client both derive it here, so a client reads what a worker journaled."""
+    return os.path.join(os.fspath(svc_dir), JOURNAL_DIRNAME)
+
+
+def journal_dir_beside(sibling_dir: Any) -> Optional[str]:
+    """The journal for a directory under the same svc dir (the claims dir a pool worker
+    is handed), so a worker derives it with no extra argument. None for no directory."""
+    if not sibling_dir:
+        return None
+    return journal_dir_under(os.path.dirname(os.fspath(sibling_dir).rstrip("/\\")))
+
+
+def _journal_file(journal_dir: Any, key: Any) -> Optional[str]:
+    if not journal_dir or not isinstance(key, str) or not key or not set(key) <= _JOURNAL_SAFE_CHARS:
+        return None
+    return os.path.join(os.fspath(journal_dir), key + _JOURNAL_SUFFIX)
+
+
+def record_outcome(
+    journal_dir: Any,
+    key: str,
+    outcome: str,
+    *,
+    result: Any = None,
+    error_code: Optional[int] = None,
+    error_message: Optional[str] = None,
+) -> bool:
+    """Durably record that `key`'s op landed (`result`) or failed (`error`); an existing
+    entry is kept (check-then-replace, not atomic: two racing writers record the same outcome). Callable from the pool worker the moment its handler returns, so the
+    outcome survives a worker killed, a broken pool or an engine restart before the
+    accept process can stamp it. Stdlib-only, never raises; True when an entry now exists."""
+    path = _journal_file(journal_dir, key)
+    if path is None or outcome not in _FINISHED_OUTCOMES or os.path.exists(path):
+        return path is not None and os.path.exists(path)
+    entry: dict = {"outcome": outcome, "error_code": error_code}
+    if outcome == OUTCOME_ERROR:
+        entry["failure_text"] = _clip_text(str(error_message or ""))
+    else:
+        size, dropped = AckStore._measure(result)
+        entry["result_digest"] = _outcome_digest(result)
+        failure = _failure_text_of(result)
+        if failure:
+            entry["failure_text"] = failure
+        if size is not None:
+            entry["result"] = result
+        else:
+            entry["result_dropped"] = dropped
+    tmp = f"{path}.{os.getpid()}.tmp"
+    try:
+        os.makedirs(os.fspath(journal_dir), exist_ok=True)
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(entry, handle, separators=(",", ":"))
+        os.replace(tmp, path)
+    except (OSError, TypeError, ValueError, RecursionError):
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def read_outcome(journal_dir: Any, key: str) -> Optional[dict]:
+    """The `finished` poll payload journaled for `key`, or None. Never raises."""
+    path = _journal_file(journal_dir, key)
+    if path is None:
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            entry = json.load(handle)
+    except (OSError, ValueError, RecursionError):
+        return None
+    if not isinstance(entry, dict) or entry.get("outcome") not in _FINISHED_OUTCOMES:
+        return None
+    payload: dict = {"state": STATE_FINISHED, "outcome": entry["outcome"], "journaled": True}
+    if entry["outcome"] == OUTCOME_ERROR and entry.get("error_code") is not None:
+        payload["error_code"] = entry["error_code"]
+    if entry.get("failure_text") is not None:
+        payload["failure_text"] = entry["failure_text"]
+    if "result" in entry:
+        payload["result"] = entry["result"]
+    elif entry["outcome"] == OUTCOME_RESULT:
+        payload["result_digest"] = entry.get("result_digest") or {}
+        payload["result_dropped"] = entry.get("result_dropped", DROPPED_EVICTED)
+    return payload
+
+
+def prune_journal(journal_dir: Any, now: Optional[float] = None) -> None:
+    """Delete journal entries older than JOURNAL_RETAIN_SECS. Never raises."""
+    cutoff = (time.time() if now is None else now) - JOURNAL_RETAIN_SECS
+    try:
+        with os.scandir(os.fspath(journal_dir)) as entries:
+            for entry in entries:
+                try:
+                    if entry.name.endswith((_JOURNAL_SUFFIX, ".tmp")) and entry.stat().st_mtime < cutoff:
+                        os.unlink(entry.path)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 class AckStore:
 
     def __init__(
@@ -196,10 +308,18 @@ class AckStore:
         boot_ns: Optional[int] = None,
         executing_bound: Optional[Callable[[Optional[str]], float]] = None,
         clock: Callable[[], float] = time.monotonic,
+        journal_dir: Any = None,
     ) -> None:
         """`executing_bound` maps a method to the seconds an admitted record may
         read `executing`; None means unbounded. Passed in, never imported, so
-        this module stays stdlib-only. `clock` times failure-text retention."""
+        this module stays stdlib-only. `clock` times failure-text retention.
+
+        `journal_dir`, when given, makes a finished outcome durable: `stamp` journals
+        it, and `status` answers `finished` from the journal where memory alone would
+        read `unknowable` (worker killed or lost, engine restarted, record evicted)."""
+        self._journal_dir = journal_dir
+        if journal_dir:
+            prune_journal(journal_dir)
         self._clock = clock
         self._executing_bound = executing_bound
         self._capacity = capacity
@@ -265,6 +385,11 @@ class AckStore:
             failure = _failure_text_of(result)
         elif outcome == OUTCOME_ERROR and error_message:
             failure = _clip_text(str(error_message))
+        if self._journal_dir and outcome in _FINISHED_OUTCOMES:
+            record_outcome(
+                self._journal_dir, key, outcome,
+                result=result, error_code=error_code, error_message=error_message,
+            )
         with self._lock:
             record = self._records.get(key)
             if record is None:
@@ -439,7 +564,18 @@ class AckStore:
         return isinstance(boot_ns, int) and not isinstance(boot_ns, bool) and boot_ns != self.boot_ns
 
     def status(self, key: str, expect_engine: Optional[dict] = None) -> dict:
-        """The poll answer for `key`. `expect_engine` is the delivering engine the
+        """The poll answer for `key`: the in-memory answer, except that a journaled
+        outcome replaces a non-final one (`unknowable`, or `executing`: a worker that
+        landed its op before it was killed, lost or its engine restarted)."""
+        answer = self._status_in_memory(key, expect_engine)
+        if self._journal_dir and answer.get("state") in (STATE_UNKNOWABLE, STATE_EXECUTING):
+            journaled = read_outcome(self._journal_dir, key)
+            if journaled is not None:
+                return journaled
+        return answer
+
+    def _status_in_memory(self, key: str, expect_engine: Optional[dict] = None) -> dict:
+        """The in-memory answer. `expect_engine` is the delivering engine the
         caller was told (`error.data.engine_pid`/`engine_boot_ns`): when it names a
         different engine and this store holds no record of `key`, the answer is
         `unknowable/foreign-engine` and nothing is tombstoned -- this engine cannot

@@ -320,6 +320,34 @@ def test_advisory_names_the_written_file_in_the_runnable_fixer_command(repo_root
     assert "abs-path-ok:" in reason
 
 
+def test_advisory_names_settings_home_key_and_registry_forms_never_bare_reason(
+    repo_root: Path,
+) -> None:
+    target = repo_root / "pkg" / "mod.py"
+    target.parent.mkdir(parents=True)
+    out = check(_write_payload(str(target), "ROOT = '" + "D:" + r"\cache\runs'"))
+    assert out is not None
+    hook = out["hookSpecificOutput"]
+    reason = hook["additionalContext"]
+    assert reason.index("machine-local get <key>") < reason.index("--apply")
+    assert "settings-home-key-resolution.md" in reason
+    assert "abs-path-ok: key=<k>" in reason and "carve-out=<id>" in reason
+    assert "abs-path-ok: <reason>" not in reason
+    assert "permissionDecision" not in hook
+
+
+def test_listed_carve_out_in_target_repo_silences_the_advisory(repo_root: Path) -> None:
+    target = repo_root / "pkg" / "mod.py"
+    target.parent.mkdir(parents=True)
+    line = "ROOT = '" + "D:" + r"\cache\runs'  # abs-path-ok: carve-out=fx"
+    assert check(_write_payload(str(target), line)) is not None
+    (repo_root / ".abs-path-carve-outs.toml").write_text(
+        '[[carve_out]]\nid = "fx"\nreason = "fixture"\npaths = ["pkg/mod.py"]\n',
+        encoding="utf-8",
+    )
+    assert check(_write_payload(str(target), line)) is None
+
+
 def test_class_is_advisory_and_no_path_returns_permission_decision(repo_root: Path, tmp_target: str) -> None:
     assert CLASS == "advisory"
 

@@ -1129,6 +1129,98 @@ def test_dotted_dep_does_not_warn_about_blocked_chunks(tmp_path, recwarn):
     assert not [w for w in recwarn if "depends_on_plan" in str(w.message)]
 
 
+def _bound_row(rid, *targets, path="src/shared.py"):
+    return {
+        "id": rid,
+        "writes": [path],
+        "depends_on": [{"chunk": t, "gate_kind": "output-consumption-runtime"} for t in targets],
+    }
+
+
+def test_bound_shared_path_group_takes_unblocked_members_in_order_and_defers_the_blocked_one():
+    rows = [_bound_row("c.C0", "pred.P1"), _bound_row("b.B0", "a.A0"), _bound_row("a.A0")]
+    taken, report = im.select_tranche(rows, ["c", "b", "a", "pred"], 10, bound={"b": {"a"}})
+    assert sorted(r["id"] for r in taken) == ["a.A0", "b.B0"]
+    assert [d["plan"] for d in report["deferred"]] == ["c"]
+    assert "pred" in report["deferred"][0]["reason"]
+    order, _ = im._pick_groups(
+        [["c", "b", "a"]],
+        {"a": 1, "b": 1, "c": 1},
+        {"a": set(), "b": {"a"}, "c": {"pred"}},
+        {"c": "src/shared.py"},
+        10,
+        {"c": "a (depends_on_plan of b)"},
+    )
+    assert order == ["a", "b"]
+
+
+def test_bound_shared_path_group_with_no_blocked_member_is_taken_whole_in_order():
+    rows = [_bound_row("b.B0", "a.A0"), _bound_row("a.A0"), _bound_row("c.C0")]
+    taken, report = im.select_tranche(rows, ["b", "a", "c"], 10, bound={"b": {"a"}})
+    assert sorted(r["id"] for r in taken) == ["a.A0", "b.B0", "c.C0"] and report["deferred"] == []
+    by_id = {r["id"]: r for r in taken}
+    assert [e["chunk"] for e in by_id["b.B0"]["depends_on"]] == ["a.A0"]
+
+
+def test_bound_group_member_whose_in_group_predecessor_is_blocked_defers_with_it():
+    rows = [
+        _bound_row("a.A0", "pred.P1"),
+        _bound_row("b.B0", "a.A0"),
+        _bound_row("c.C0"),
+    ]
+    taken, report = im.select_tranche(rows, ["a", "b", "c", "pred"], 10, bound={"b": {"a"}})
+    assert [r["id"] for r in taken] == ["c.C0"]
+    assert sorted(d["plan"] for d in report["deferred"]) == ["a", "b"]
+
+
 def test_dotted_dep_on_a_closed_satisfied_parent_yields_no_edge(tmp_path):
     by_id = {r["id"]: r for r in _mint(_dotted_inventory(tmp_path, "P1.A2", "landed"))}
     assert "depends_on" not in by_id["P2.B1"]
+
+
+def _plan_edge_vs_shared_write_inventory(tmp_path, early_plan_edge: bool):
+    (tmp_path / ".git").mkdir()
+    plan_dir = tmp_path / "docs" / "plans"
+    plan_dir.mkdir(parents=True)
+    edge = (
+        "  depends_on_plan:\n"
+        "    - {plan: docs/plans/fixture-plan-y.md, chunk: Y1, gate_kind: epistemic-premise}\n"
+        if early_plan_edge
+        else ""
+    )
+    (plan_dir / "fixture-plan-x.md").write_text(
+        "---\nrun_id: fixture-plan-x\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: X1\n  title: X step\n  writes:\n    - some/shared/catalog.py\n"
+        + edge
+        + "```\n",
+        encoding="utf-8",
+    )
+    (plan_dir / "fixture-plan-y.md").write_text(
+        "---\nrun_id: fixture-plan-y\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "- id: Y1\n  title: Y step\n  writes:\n    - some/shared/catalog.py\n```\n",
+        encoding="utf-8",
+    )
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    path = inv_dir / "20261109T000000-seam.md"
+    path.write_text(
+        "---\nrun_id: 20261109T000000-seam\n---\n\n## Chunk table\n\n"
+        "| id | spec path | summary | footprint | deps | verification | complexity | disposition |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| PX | `docs/plans/fixture-plan-x.md` | plan X | `docs/plans/fixture-plan-x.md` | — | scoped pytest | S | in_progress |\n"
+        "| PY | `docs/plans/fixture-plan-y.md` | plan Y | `docs/plans/fixture-plan-y.md` | — | scoped pytest | S | in_progress |\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_declared_plan_edge_outranks_an_opposite_shared_write_edge(tmp_path):
+    by_id = {r["id"]: r for r in _mint(_plan_edge_vs_shared_write_inventory(tmp_path, True))}
+    assert [e["chunk"] for e in by_id["PX.X1"]["depends_on"]] == ["PY.Y1"]
+    assert "depends_on" not in by_id["PY.Y1"]
+
+
+def test_shared_write_edge_still_derived_without_a_plan_edge(tmp_path):
+    by_id = {r["id"]: r for r in _mint(_plan_edge_vs_shared_write_inventory(tmp_path, False))}
+    assert "depends_on" not in by_id["PX.X1"]
+    assert [e["chunk"] for e in by_id["PY.Y1"]["depends_on"]] == ["PX.X1"]

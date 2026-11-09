@@ -170,6 +170,60 @@ def test_a_leading_id_subject_is_not_a_checkpoint_refusal(repo):
     assert checkpoint_refusal(repo, repo / ".git", None, "C1: do it", []) is None
 
 
+def _out(repo, *args):
+    return subprocess.run(
+        ["git", *args], cwd=str(repo), capture_output=True, text=True, check=True, **_NOWIN
+    ).stdout.strip()
+
+
+def _merged_head_with_base_on_second_parent(repo):
+    """Base sits on a merge's second parent; HEAD is that merge. Returns the base sha."""
+    seed = _out(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "upstream", seed)
+    _write(repo, "docs/up.txt", "u\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "upstream line")
+    _git(repo, "checkout", "-q", "-b", "run", seed)
+    _write(repo, "src/a.py", "v1\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "run base")
+    base = _out(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "upstream")
+    _git(repo, "merge", "-q", "--no-ff", "-m", "ladder merge", "run")
+    return base
+
+
+def test_a_merge_that_leaves_the_declared_path_alone_is_not_outside_the_run(repo):
+    from coordinator_core.git.checkpoint_guard import _moved_outside_run
+
+    base = _merged_head_with_base_on_second_parent(repo)
+    _write(repo, "docs/later.txt", "l\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "plain")
+    head = _out(repo, "rev-parse", "HEAD")
+    assert _moved_outside_run(repo / ".git", head, base, ["src/a.py"], "docs/p.md") == []
+
+
+def test_a_revert_after_a_merge_is_still_outside_the_run(repo):
+    from coordinator_core.git.checkpoint_guard import _moved_outside_run
+
+    base = _merged_head_with_base_on_second_parent(repo)
+    _write(repo, "src/a.py", "v0\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "peer reverts a")
+    head = _out(repo, "rev-parse", "HEAD")
+    moved = _moved_outside_run(repo / ".git", head, base, ["src/a.py"], "docs/p.md")
+    assert len(moved) == 1 and moved[0].startswith("src/a.py by ")
+
+
+def test_an_abbreviated_base_still_bounds_the_walk(repo):
+    from coordinator_core.git.checkpoint_guard import _moved_outside_run
+
+    base = _merged_head_with_base_on_second_parent(repo)
+    head = _out(repo, "rev-parse", "HEAD")
+    assert _moved_outside_run(repo / ".git", head, base[:8], ["src/a.py"], "docs/p.md") == []
+
+
 def test_an_ordinary_commit_is_untouched(repo):
     _write(repo, "src/a.py", "v1\n")
     assert gcommit.commit_paths(repo, ["src/a.py"], "fix a")

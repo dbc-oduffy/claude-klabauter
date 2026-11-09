@@ -56,6 +56,11 @@ _HARD: ContextVar[Optional[float]] = ContextVar("land_run_hard_deadline", defaul
 #: a scope.
 _LEGS: ContextVar[Optional[list]] = ContextVar("land_run_legs", default=None)
 
+#: True once a reserved leg has been recorded in the innermost scope; keeps `check` O(1) per leg.
+#: Trap: a ContextVar set inside a `copy_context().run` worker never reaches the parent, unlike the
+#: shared `_LEGS` list; a reserved leg must be checked in the scope's own context.
+_RESERVED_OPEN: ContextVar[bool] = ContextVar("land_run_reserved_open", default=False)
+
 #: The server's result window (seconds from submit) the request ran under; None when unbound.
 _SERVER_WINDOW: ContextVar[Optional[float]] = ContextVar("land_run_server_window", default=None)
 
@@ -137,9 +142,11 @@ def scope(budget_secs: Optional[float] = None) -> Iterator[None]:
     # redemption) is in no leg, and a first-leg halt reports `legs: []` (75f803).
     spawn_token = spawn_counter.bind_scope()
     legs_token = _LEGS.set([_ledger_entry(SCOPE_LEG, _now())])
+    open_token = _RESERVED_OPEN.set(False)
     try:
         yield
     finally:
+        _RESERVED_OPEN.reset(open_token)
         _LEGS.reset(legs_token)
         spawn_counter.reset_scope(spawn_token)
         _CEILING.reset(ceiling_token)
@@ -185,17 +192,22 @@ def check(leg: str) -> None:
     if refused:
         by = _BOUND_BY.get() or (BOUND_BUDGET, BOUND_BUDGET)
         raise LandDeadlineExceeded(leg, _legs_elapsed(now), by[1] if reserved else by[0])
+    _record(leg, now)
+
+
+def _record(leg: str, now: float) -> None:
+    """Append `leg` to the scope ledger and latch the reserved-open flag (O(1) per leg)."""
     ledger = _LEGS.get()
     if ledger is not None:
         ledger.append(_ledger_entry(leg, now))
+        if _is_reserved(leg):
+            _RESERVED_OPEN.set(True)
 
 
 def mark(leg: str) -> None:
     """Record `leg` as started without ever refusing: names a span of the ledger so a halt's
     `leg_costs` attributes the time before the next `check` to it. A no-op outside a scope."""
-    ledger = _LEGS.get()
-    if ledger is not None:
-        ledger.append(_ledger_entry(leg, _now()))
+    _record(leg, _now())
 
 
 def _ledger_entry(leg: str, now: float) -> tuple:
@@ -211,7 +223,7 @@ def _is_reserved(leg: str) -> bool:
 def _reserved_leg_open() -> bool:
     """True once a reserved leg has started in this scope: the integrity leg stays open until the
     commit, so every leg checked after it draws on the reserve."""
-    return any(_is_reserved(entry[0]) for entry in (_LEGS.get() or []))
+    return bool(_RESERVED_OPEN.get())
 
 
 def _legs_elapsed(now: float) -> list:

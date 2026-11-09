@@ -855,9 +855,42 @@ def _without_gate_clearance(row_lines: list[str]) -> list[str]:
     ).splitlines(keepends=True)
 
 
-def approval_body_sha(file_text: str) -> Optional[str]:
+_ENGINE_PLAN_EDGES_RE = re.compile(r'^depends_on_plan[ \t]*:')
+
+
+def _without_plan_edges(row_lines: list[str], content_indent: int) -> list[str]:
+    """The row minus its `depends_on_plan` field: the key line at the row's key
+    indent plus every continuation (deeper-indented, blank, or a same-indent
+    `- ` list item). Only key-indent lines are tested, so block-scalar content
+    that mentions the key stays. Trap: an author's post-approval hand edit of
+    `depends_on_plan` is neutralised too, since the field cannot be told from
+    the `plan.seam_fix` append."""
+    out: list[str] = []
+    dropping = False
+    for n, line in enumerate(row_lines):
+        text = line.rstrip('\r\n')
+        indent = len(text) - len(text.lstrip(' \t'))
+        stripped = text.strip()
+        if n > 0 and indent == content_indent and _ENGINE_PLAN_EDGES_RE.match(stripped):
+            dropping = True
+            continue
+        if dropping:
+            if indent > content_indent or not stripped or (
+                indent == content_indent and stripped.startswith('-')
+            ):
+                continue
+            dropping = False
+        out.append(line)
+    return out
+
+
+def approval_body_sha(file_text: str, *, neutral_plan_edges: bool = True) -> Optional[str]:
     """The hash `approved_body_sha` binds: `canonical_body_sha` with the
     ENGINE-OWNED spine bookkeeping neutralised.
+
+    `plan.seam_fix` appends `depends_on_plan` edges to rows; per row that field is
+    dropped too (`neutral_plan_edges=False` reproduces the hash minted before that,
+    which `check_approved_body` still accepts).
 
     `dispatch.land_run` flips rows open -> coded, writes `disposition_ref`,
     and re-sorts rows to honour the D5 open-before-coded order. None of that is a
@@ -899,6 +932,8 @@ def approval_body_sha(file_text: str) -> Optional[str]:
     for s_idx, e_idx, row_id in spans:
         row_lines = _without_gate_clearance(lines[s_idx:e_idx])
         content_indent = _SPINE_KEY_INDENT_RE.match(row_lines[0]).end() - len('id:')
+        if neutral_plan_edges:
+            row_lines = _without_plan_edges(row_lines, content_indent)
         is_do = True
         kept: list[str] = []
         detail_spans: list[list] = []
@@ -976,13 +1011,18 @@ def check_approved_body(file_text: str) -> tuple[str, str]:
             )
         return APPROVED_BODY_NOT_APPLICABLE, ''
     current = approval_body_sha(file_text)
-    if stamped.lower() in (current, canonical_body_sha(file_text)):
+    if stamped.lower() in (
+        current,
+        canonical_body_sha(file_text),
+        approval_body_sha(file_text, neutral_plan_edges=False),
+    ):
         return APPROVED_BODY_OK, ''
     status = (read_fm_field_unquoted(split.fm_text, 'status') or '').lower()
     remedy = (
         'run `review-exec-auth-stamp restamp <plan> --by <reviewer> --reason <text>`'
         if status == 'executing'
-        else 're-run plan review to re-approve'
+        else 'run `plan.reapprove_mechanical_tags` if only tag lines were added, else '
+        're-run plan review to re-approve'
     )
     return (
         APPROVED_BODY_CHANGED,

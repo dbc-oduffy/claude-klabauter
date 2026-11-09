@@ -76,6 +76,17 @@ def _materialise(repo_root: Path, sha: str, dest: Path) -> Optional[str]:
     return None if rc == 0 else f"archive_failed: git archive exit {rc}"
 
 
+def _ledger_run_dir(repo_root: Path, run_id: str) -> None:
+    """Record the run's calibration dir in its scratch ledger so the run-end reap removes what the
+    per-sha rmtree leaves behind. A ledger failure is swallowed: calibration never depends on it."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_scratch
+
+        run_scratch.record_paths(repo_root, run_id, [f"scratch/objective-calibration/{run_id}"])
+    except (OSError, ValueError):
+        pass
+
+
 def _check_credited(repo_root: Path, run_id: str, script: Path, axes: list, entry: dict) -> tuple:
     """One credited sha: materialise, run the falsifier there, return (out_entry, problems)."""
     sha = str(entry.get("sha") or "")
@@ -84,6 +95,7 @@ def _check_credited(repo_root: Path, run_id: str, script: Path, axes: list, entr
     src_root = Path(entry.get("repo_root") or repo_root)
     dest = repo_root / "scratch" / "objective-calibration" / run_id / sha
     problems: list = []
+    _ledger_run_dir(repo_root, run_id)
     try:
         err = _materialise(src_root, sha, dest)
         if err:

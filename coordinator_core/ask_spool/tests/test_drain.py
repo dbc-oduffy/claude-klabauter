@@ -38,6 +38,10 @@ def _write_submission(root, run_id, **fields):
     (d / "submission.json").write_text(json.dumps({"run_id": run_id, **fields}), encoding="utf-8")
 
 
+def _counts(**kw):
+    return {"minted": 0, "skipped": 0, "failed": 0, "notified": 0, "coalesced": 0, "withdrawn": 0, **kw}
+
+
 class Engine:
     """Stands in for submit_engine_ask.evaluate: mints a run and writes its submission record."""
 
@@ -68,9 +72,9 @@ def test_drain_mints_one_run_per_entry_and_second_call_mints_zero(tmp_path):
     ids = [_spool(tmp_path, tuid=f"tu{n}") for n in range(3)]
     engine = Engine(tmp_path)
     first = drain.run(str(tmp_path), evaluate=engine)
-    assert first == {"minted": 3, "skipped": 0, "failed": 0, "notified": 3}
+    assert first == _counts(minted=3, notified=3)
     again = drain.run(str(tmp_path), evaluate=engine)
-    assert again == {"minted": 0, "skipped": 0, "failed": 0, "notified": 0}
+    assert again == _counts()
     assert engine.calls == 3
     for sid in ids:
         assert os.path.exists(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
@@ -152,7 +156,7 @@ def test_drainer_killed_after_claim_is_reclaimed_and_mints_once(tmp_path):
 def test_refused_mint_keeps_the_entry_pending_with_attempts_and_a_failure_notice(tmp_path):
     sid = _spool(tmp_path)
     counts = drain.run(str(tmp_path), evaluate=Engine(tmp_path, refuse=True))
-    assert counts == {"minted": 0, "skipped": 0, "failed": 1, "notified": 1}
+    assert counts == _counts(failed=1, notified=1)
     path = record.entry_path(str(tmp_path), sid)
     header, payload = record.read_entry(path)
     assert header["attempts"] == 1 and "HandoverPending" in header["last_error"]
@@ -181,7 +185,7 @@ def test_malformed_entry_is_failed_not_deleted(tmp_path):
 
 
 def test_empty_or_absent_spool_drains_to_zero(tmp_path):
-    assert drain.run(str(tmp_path), evaluate=Engine(tmp_path)) == {"minted": 0, "skipped": 0, "failed": 0, "notified": 0}
+    assert drain.run(str(tmp_path), evaluate=Engine(tmp_path)) == _counts()
 
 
 def test_unsafe_session_id_writes_no_notice_outside_the_notices_dir(tmp_path):
@@ -194,7 +198,7 @@ def test_unsafe_session_id_writes_no_notice_outside_the_notices_dir(tmp_path):
 
 
 def test_run_on_an_empty_spool_drains_nothing(tmp_path):
-    assert drain.run(str(tmp_path)) == {"minted": 0, "skipped": 0, "failed": 0, "notified": 0}
+    assert drain.run(str(tmp_path)) == _counts()
 
 
 def test_run_executes_queued_remote_failover_and_leaves_counts_unchanged(tmp_path, monkeypatch):
@@ -207,9 +211,188 @@ def test_run_executes_queued_remote_failover_and_leaves_counts_unchanged(tmp_pat
         lambda op, params: seen.append((op, params)) or {"served_by": "far", "reply": {"ok": 1}},
     )
     key = background.launch("session.peer_roster", {"a": 1})
-    assert drain.run(str(tmp_path)) == {"minted": 0, "skipped": 0, "failed": 0, "notified": 0}
+    assert drain.run(str(tmp_path)) == _counts()
     assert seen == [("session.peer_roster", {"a": 1})]
     assert background.read_handle(key)["status"] == "done"
+
+
+SIZING = "state/sizings/2026-11/s1.yaml"
+PLAN = "docs/plans/2026-11/p1.md"
+
+
+def _sizing_payload(tuid, sizing=SIZING, sid="sess1"):
+    return json.dumps(
+        {
+            "tool_name": "Workflow",
+            "session_id": sid,
+            "tool_use_id": tuid,
+            "tool_input": {"name": "ask", "args": {"sizing": sizing}},
+        }
+    ).encode()
+
+
+def _spool_sizing(root, tuid, sizing=SIZING, sid="sess1"):
+    spool_id, created = record.spool_ask(
+        str(root), _sizing_payload(tuid, sizing, sid), session_id=sid, tool_use_id=tuid, reason="engine_unreachable"
+    )
+    assert created
+    return spool_id
+
+
+def _write_sizing(root, plan=PLAN, register=None):
+    path = root / SIZING
+    path.parent.mkdir(parents=True, exist_ok=True)
+    doc = {"schema": "sizing-object"}
+    if plan:
+        doc["plan"] = plan
+    if register is not None:
+        doc["requirement_register"] = {"rows": register}
+    path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def _write_plan(root, dispositions, rel=PLAN):
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    rows = "".join(f"- id: C{n}\n  title: t\n  disposition: {d}\n" for n, d in enumerate(dispositions, 1))
+    path.write_text(f"# P\n\n## Tasks\n\n```yaml plan-tasks\n{rows}```\n", encoding="utf-8")
+
+
+def _no_popen(monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("the drain spawned a process")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+
+
+def test_two_entries_of_one_sizing_mint_once_and_the_second_coalesces(tmp_path):
+    _write_sizing(tmp_path)
+    _write_plan(tmp_path, ["open"])
+    first = _spool_sizing(tmp_path, "tuA")
+    second = _spool_sizing(tmp_path, "tuB")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1
+    assert counts["minted"] == 1 and counts["coalesced"] == 1 and counts["notified"] == 2
+    a, _ = record.read_entry(record.entry_path(str(tmp_path), first, record.MINTED_SUFFIX))
+    b, _ = record.read_entry(record.entry_path(str(tmp_path), second, record.MINTED_SUFFIX))
+    assert b["coalesced_into"] == a["run_id"] == b["run_id"] and "coalesced_into" not in a
+    statuses = sorted(n["status"] for n in _notices(tmp_path))
+    assert statuses == ["coalesced", "minted"]
+    sub = tmp_path / "scratch" / "warp" / a["run_id"] / "submission.json"
+    assert json.loads(sub.read_text())["spool_id"] == a["spool_id"]
+
+
+def test_entries_of_different_sizings_each_mint(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    other = "state/sizings/2026-11/s2.yaml"
+    (tmp_path / other).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
+    _spool_sizing(tmp_path, "tuA")
+    _spool_sizing(tmp_path, "tuB", sizing=other)
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 2 and counts["minted"] == 2 and counts["coalesced"] == 0
+
+
+def test_entry_of_a_sizing_an_earlier_drain_minted_coalesces_on_sizing_rel(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    _write_submission(tmp_path, "ask-20261104T150000-dddddd", session_id="other", tool_use_id="zz", sizing_rel=SIZING)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 0 and counts["coalesced"] == 1 and counts["minted"] == 0
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["coalesced_into"] == "ask-20261104T150000-dddddd"
+    sub = tmp_path / "scratch" / "warp" / "ask-20261104T150000-dddddd" / "submission.json"
+    assert "spool_id" not in json.loads(sub.read_text())
+
+
+def test_bare_asks_do_not_coalesce(tmp_path):
+    _spool(tmp_path, tuid="tuA")
+    _spool(tmp_path, tuid="tuB")
+    engine = Engine(tmp_path)
+    assert drain.run(str(tmp_path), evaluate=engine)["minted"] == 2
+
+
+def _withdrawn(root, sid):
+    header, _ = record.read_entry(record.entry_path(str(root), sid, record.WITHDRAWN_SUFFIX))
+    return header
+
+
+def test_absent_sizing_withdraws_with_a_notice_and_no_mint(tmp_path, monkeypatch):
+    _no_popen(monkeypatch)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 0 and counts["withdrawn"] == 1 and counts["minted"] == 0 and counts["notified"] == 1
+    assert _withdrawn(tmp_path, sid)["withdraw_reason"].startswith("stale: ")
+    assert not os.path.exists(record.entry_path(str(tmp_path), sid, record.CLAIMED_SUFFIX))
+    (n,) = _notices(tmp_path)
+    assert n["status"] == "withdrawn" and n["reason"].startswith("stale: ")
+
+
+def test_plan_edge_naming_an_absent_file_withdraws(tmp_path, monkeypatch):
+    _no_popen(monkeypatch)
+    _write_sizing(tmp_path)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    assert drain.run(str(tmp_path), evaluate=engine)["withdrawn"] == 1
+    assert engine.calls == 0 and "stale: plan" in _withdrawn(tmp_path, sid)["withdraw_reason"]
+
+
+def test_all_closed_spine_withdraws(tmp_path, monkeypatch):
+    _no_popen(monkeypatch)
+    _write_sizing(tmp_path)
+    _write_plan(tmp_path, ["coded", "wont_do"])
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    assert drain.run(str(tmp_path), evaluate=engine)["withdrawn"] == 1
+    assert engine.calls == 0 and "every row closed" in _withdrawn(tmp_path, sid)["withdraw_reason"]
+
+
+def test_open_row_sizing_without_plan_edge_and_resumable_cases_are_not_stale(tmp_path):
+    _write_sizing(tmp_path)
+    _write_plan(tmp_path, ["coded", "open"])
+    _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    assert drain.run(str(tmp_path), evaluate=engine)["minted"] == 1
+
+    _write_sizing(tmp_path, plan=None)
+    _spool_sizing(tmp_path, "tuB", sid="sess2")
+    assert drain.run(str(tmp_path), evaluate=engine)["withdrawn"] == 0
+
+
+def test_all_closed_spine_with_a_rulable_register_row_or_halt_pointer_still_resumes(tmp_path):
+    _write_plan(tmp_path, ["coded"])
+    _write_sizing(tmp_path, register=[{"id": "R1", "status": "open"}])
+    _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    assert drain.run(str(tmp_path), evaluate=engine)["minted"] == 1
+
+    _write_sizing(tmp_path)
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    halt = ask_contract.ledger_halt_path(tmp_path, PLAN)
+    halt.parent.mkdir(parents=True)
+    halt.write_text("{}", encoding="utf-8")
+    _spool_sizing(tmp_path, "tuB", sid="sess2")
+    assert drain.run(str(tmp_path), evaluate=engine)["withdrawn"] == 0
+
+
+def test_run_key_entry_for_a_gone_run_withdraws(tmp_path):
+    payload = json.dumps(
+        {
+            "tool_name": "Workflow",
+            "session_id": "sess1",
+            "tool_use_id": "tuA",
+            "tool_input": {"name": "ask", "args": {"resume_run_id": "ask-20261104T150000-eeeeee"}},
+        }
+    ).encode()
+    sid, _ = record.spool_ask(str(tmp_path), payload, session_id="sess1", tool_use_id="tuA", reason="r")
+    engine = Engine(tmp_path)
+    assert drain.run(str(tmp_path), evaluate=engine)["withdrawn"] == 1
+    assert engine.calls == 0 and "is gone" in _withdrawn(tmp_path, sid)["withdraw_reason"]
 
 
 def test_a_failover_drain_error_never_fails_the_spool_drain(tmp_path, monkeypatch):
@@ -219,4 +402,4 @@ def test_a_failover_drain_error_never_fails_the_spool_drain(tmp_path, monkeypatc
         raise RuntimeError("x")
 
     monkeypatch.setattr(background, "drain_pending", boom)
-    assert drain.run(str(tmp_path)) == {"minted": 0, "skipped": 0, "failed": 0, "notified": 0}
+    assert drain.run(str(tmp_path)) == _counts()

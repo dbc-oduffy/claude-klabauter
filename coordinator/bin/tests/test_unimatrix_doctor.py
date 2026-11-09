@@ -121,9 +121,9 @@ def box(tmp_path, monkeypatch):
 
     b.adopt = adopt
 
-    def relay_line(pub):
+    def relay_line(pub, peer="alpha"):
         body = pub.split()[1]
-        return f'restrict,command="python3 /x/unimatrix/unimatrix-relay.py" ssh-ed25519 {body} unimatrix'
+        return f'restrict,command="python3 /x/unimatrix/unimatrix-relay.py --peer {peer}" ssh-ed25519 {body} unimatrix'
 
     b.relay_line = relay_line
 
@@ -260,3 +260,19 @@ def test_cli_entrypoint_exits_non_zero_on_a_box_with_no_snapshot(tmp_path):
                             "USERPROFILE": str(tmp_path / "h")})
     assert r.returncode == 1
     assert "problem: no signed membership snapshot is stored" in r.stdout and "is in no signed membership record" in r.stdout
+
+
+@pytest.mark.parametrize("verdict, needle", [("locked", "waiting: 1Password locked"),
+                                            ("missing", "passphrase_source_missing")])
+def test_peer_check_names_an_unloadable_encrypted_key_without_dialling(box, verdict, needle):
+    class AL:
+        @staticmethod
+        def agent_state(key, run=None):
+            return verdict
+
+    def no_dial(cmd, **kw):
+        raise AssertionError("no ssh dial for a key the agent cannot hold")
+
+    ctx = {"run": no_dial, "roster": box.al._roster(), "autolink": AL}
+    probs = box.dr.peer_lists_us(ctx, {"epoch": 1}, {"me"})("peer", "/k", "alpha")
+    assert len(probs) == 1 and needle in probs[0] and probs[0].startswith("alpha:")

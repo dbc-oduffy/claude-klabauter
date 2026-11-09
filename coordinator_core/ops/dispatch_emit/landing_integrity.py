@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Mapping, Optional, Sequence
 
@@ -91,6 +92,7 @@ PY_UNPARSEABLE = "py-unparseable"
 SINCE_BASE_OVERLAP = "since-base-overlap"
 IMPORT_CLOSURE_UNTRACKED = "import-closure-untracked"
 LOST_DEFINITION = "lost-definition"
+UNREADABLE_PACK_INDEX = SINCE_BASE_OVERLAP
 
 CLAIM_PROVENANCE_REASONS = (
     "import-closure-untracked", "peer-hunks-co-declared", "out-of-ask-hunks", "shipped-claim-unbacked",
@@ -491,7 +493,8 @@ def invariant_findings(
     """One finding per repo-wide invariant a landing diff touches that no fresh passing retest
     ran. An invariant node red in a fresh ``fail`` retest and in its ``baseline.evidence`` (red on a
     pure-HEAD export) is credited foreign, not a finding; ``foreign_out`` receives ``{node: evidence}``.
-    Table lookup plus one record read; zero spawns. Paths other halted runs withhold
+    Table lookup plus one record read; zero spawns, except when the in-run retest budget is spent with
+    no verdict: then one export and one pytest run over the owed nodes (``owed_check_cleared``). Paths other halted runs withhold
     (``halted_hold_release.residue_paths``) are residue at HEAD, not this run's diff: they select no
     invariant. Residue bytes are never touched."""
     owed = landing_invariant_nodes(worktree_root, landed_paths, run_id)
@@ -508,6 +511,7 @@ def invariant_findings(
         foreign = evidenced_clear_ids(fresh["baseline"], measured=True)
     red, only_base_red = _red_nodes(fresh, foreign)
     out = []
+    measured: Optional[set] = None
     for node in owed:
         if node in ran or node.split("::")[0] in ran:
             continue
@@ -527,7 +531,15 @@ def invariant_findings(
                 f"{', '.join(actual[:3])}"
             )
         elif spent and fresh is None:
-            detail = f"repo-wide invariant {node}: no fresh retest verdict exists after the in-run retest"
+            if measured is None:
+                from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+                # No verdict is not a failure: measure the owed nodes only, once, in an export of the landing.
+                missing = [n for n in owed if n not in ran and n.split("::")[0] not in ran]
+                measured = ltt.owed_check_cleared(worktree_root, params, run_id, missing)
+            if node in measured:
+                continue
+            detail = f"repo-wide invariant {node}: no fresh retest verdict exists and the landing's own run of it did not pass"
         elif spent and fresh.get("status") == "pass":
             detail = f"repo-wide invariant {node}: the in-run retest passed without running it"
         elif spent and fresh.get("status") != "fail":
@@ -576,10 +588,17 @@ def _landing_test_gate(
     (``params.task_output_path``); with no baseline evidence each id's file is its own refusal (the
     red counts caused, never inferred pre-existing from a path) whose remedy retests that file. With no id known the refusal names the ``failed_tests`` param."""
     if _retest_record_status(worktree_root, run_id) == RETEST_RUNNING:
-        return [RetestAwait("", TARGETED_TESTS_FAILED,
-                        "the run's retest is still running; poll: " + retest_remedy(params)
-                        + " --poll; if poll reports it abandoned past deadline, re-run: "
-                        + retest_remedy(params))], "retest-running"
+        from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
+        from coordinator_core.ops.dispatch_emit.landing_targeted_tests import _in_leg_attempt
+
+        await_detail = (
+            "the run's retest is still running; poll: " + retest_remedy(params)
+            + " --poll; if poll reports it abandoned past deadline, re-run: " + retest_remedy(params)
+        )
+        return [remedy_or_halt(
+            TARGETED_TESTS_FAILED, _in_leg_attempt,
+            lambda _f: RetestAwait("", TARGETED_TESTS_FAILED, await_detail), attempts=1,
+        )], "retest-running"
     fresh = fresh_targeted_verdict(worktree_root, run_id) if run_id else None
     # `not in` (key absent) here: an empty failed_tests list still means the launcher named nothing,
     # unlike the truthiness test below.
@@ -651,8 +670,40 @@ def _landing_test_gate(
         ], "failed"
     sidecar_red = sidecar_base_red(worktree_root, params)
     sidecar_red = sidecar_red | _base_measured_foreign(worktree_root, params, run_id, fresh)
-    findings, check = failed_targeted_tests(
-        fresh, retest_remedy(params), cleared=base_red_cleared(worktree_root, params, fresh) | sidecar_red)
+    cleared = base_red_cleared(worktree_root, params, fresh) | sidecar_red
+    findings, check = failed_targeted_tests(fresh, retest_remedy(params), cleared=cleared)
+    from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+
+    base = fresh.get("baseline")
+    if check == "failed" and isinstance(base, Mapping) and not base.get("caused"):
+        owed = ltt.unevidenced_ids(base, cleared)
+        passing = ltt.owed_check_cleared(worktree_root, params, run_id, owed) if owed else set()
+        if passing:
+            findings, check = failed_targeted_tests(fresh, retest_remedy(params), cleared=cleared | passing)
+        if owed and check == "failed":
+            left = len(owed) - len(passing)
+            findings = [
+                replace(f, detail=f"{f.detail}; owed base check ran (HEAD + the run's landing paths): "
+                                  f"{left} of {len(owed)} id(s) not cleared there (red, not shown to run, or export failed)")
+                if f.detail else f for f in findings
+            ]
+    base_note = ""
+    base_red: set[str] = set()
+    if check == "failed" and isinstance(base, Mapping) and base.get("caused"):
+        base_red, base_note = ltt.base_check_red(worktree_root, run_id, [str(n) for n in base["caused"]])
+        if base_red:
+            moved = {
+                **base, "caused": [n for n in base["caused"] if str(n) not in base_red],
+                "pre_existing": [*(base.get("pre_existing") or []), *sorted(base_red)],
+            }
+            findings, check = failed_targeted_tests(
+                {**fresh, "baseline": moved}, retest_remedy(params), cleared=cleared | base_red)
+    if check == "failed" and base_note:
+        findings = [replace(f, detail=f"{f.detail}; {base_note}") if f.detail else f for f in findings]
+    if check == "pre-existing-only" and base_red:
+        attributed = GateFindings(findings)
+        attributed.foreign_evidence = {n: [FAILING_AT_BASE] for n in sorted(base_red)}
+        return attributed, check
     if check == "pass" and fresh.get("status") == "pass" and _ran_zero_int(fresh.get("tests_run")):
         return [_ran_zero_finding(params)], "failed"
     if check == "pre-existing-only" and sidecar_red:
@@ -812,4 +863,41 @@ def since_base_findings(
     unique = list(dict.fromkeys(paths))
     if not unique:
         return []  # the commit walk to base is the cost; no declared path, no walk
-    return list(since_base_overlap.find_overlaps(worktree_root, unique, base_sha, run_id=run_id, plan=plan))
+    found = list(since_base_overlap.find_overlaps(worktree_root, unique, base_sha, run_id=run_id, plan=plan))
+    return found + _unreadable_pack_index_findings(worktree_root, unique)
+
+
+def _unreadable_pack_index_findings(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:
+    """Findings(UNREADABLE_PACK_INDEX) for declared paths whose HEAD object cannot be located: an
+    absent object reads as "no overlap", so a pack index that does not parse must surface here
+    instead of passing the since-base check silently."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+    from coordinator_core.git.since_base_overlap import _head_sha
+
+    root = Path(worktree_root)
+    try:
+        common_dir = resolve_git_common_dir(root)
+        head = _head_sha(root)
+        if not head:
+            return []
+        lost = []
+        for path in paths:
+            blob = _blob_at_commit(common_dir, head, path)
+            if blob is ABSENT:
+                continue
+            if blob is None or git_objects.read_object_header(common_dir, blob) is None:  # type: ignore[arg-type]
+                lost.append(path)
+        if not lost:
+            return []
+        bad = git_objects.unreadable_pack_indexes(common_dir)
+    except OSError:
+        return []
+    if not bad:
+        return []
+    names = ", ".join(bad[:3]) + (f" (+{len(bad) - 3} more)" if len(bad) > 3 else "")
+    return [
+        Finding(path, UNREADABLE_PACK_INDEX, f"HEAD object not locatable; unreadable pack index: {names}")
+        for path in lost
+    ]

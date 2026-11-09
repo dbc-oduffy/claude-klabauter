@@ -255,7 +255,7 @@ def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optio
     return {
         "kind": first.reason, "remedy": "landing-runs-targeted-retest",
         "nodes": nodes, "command": retest_remedy(params, list(dict.fromkeys(_node_file(n) for n in nodes))),
-        "attempt": done + 1, "max_attempts": MAX_IN_RUN_REMEDY_ATTEMPTS,
+        "attempt": min(done + 1, MAX_IN_RUN_REMEDY_ATTEMPTS), "max_attempts": MAX_IN_RUN_REMEDY_ATTEMPTS,
         "exhausted": done >= MAX_IN_RUN_REMEDY_ATTEMPTS,
     }
 
@@ -360,18 +360,10 @@ def failed_targeted_tests(
         return [tests_failed_finding("",
             f"{shown}tests {status}, no baseline to attribute them{note}; re-run: {remedy or retest_remedy(None)}",
         )], "failed"
-    from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
-
     caused = [str(n) for n in (baseline.get("caused") or [])]
     if not caused:
-        evidenced = evidenced_clear_ids(baseline, measured=True) if measured else set()
-        failing = [
-            str(i.get("id") if isinstance(i, Mapping) else i)
-            for key in ("pre_existing", "foreign", "unverified") for i in (baseline.get(key) or [])
-        ]
-        if measured:
-            evidenced = evidenced | {str(n) for n in cleared}
-        unevidenced = [n for n in dict.fromkeys(failing) if n not in evidenced]
+        failing = _baseline_failing(baseline)
+        unevidenced = unevidenced_ids(baseline, cleared) if measured else list(dict.fromkeys(failing))
         if failing and not unevidenced:
             return [], "pre-existing-only"
         if not failing:
@@ -529,6 +521,97 @@ def base_red_cleared(worktree_root: Path, params: Mapping, verdict: Optional[Map
             except (OSError, UnicodeDecodeError):
                 pass
     return out
+
+
+def _baseline_failing(baseline: Mapping) -> list[str]:
+    """Every failing id a baseline names outside ``caused`` (``pre_existing``, ``foreign``, ``unverified``)."""
+    return [
+        str(i.get("id") if isinstance(i, Mapping) else i)
+        for key in ("pre_existing", "foreign", "unverified") for i in (baseline.get(key) or [])
+    ]
+
+
+def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = ()) -> list[str]:
+    """The failing ids of an engine-written ``baseline`` with no baseline evidence and not in ``cleared``:
+    the ids ``failed_targeted_tests`` would count caused, base check owed."""
+    from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
+
+    evidenced = evidenced_clear_ids(baseline, measured=True) | {str(n) for n in cleared}
+    return [n for n in dict.fromkeys(_baseline_failing(baseline)) if n not in evidenced]
+
+
+OWED_CHECK_SECS = 300.0
+
+
+def owed_check_cleared(worktree_root: Path, params: Mapping, run_id: Optional[str], ids: Sequence[str]) -> set[str]:
+    """The owed base check: ``ids`` that pass in an export of HEAD plus only the run's own landing paths
+    (no peer's worktree dirt), so their red in the live tree came from a file the run never wrote. An id
+    still red there, or not shown to have run, stays unevidenced. Empty when ``ids`` is empty, the run's
+    landing set is not derivable, or the export or run fails. One export and one pytest run over ``ids`` only;
+    the export is always removed."""
+    from coordinator_core.ops.dispatch_emit import retest_targeted as rt
+
+    wanted = list(dict.fromkeys(str(n) for n in ids if n))
+    if not wanted or not run_id:
+        return set()
+    root = Path(worktree_root)
+    writes, _ = rt._landing_paths(root, run_id, dict(params))
+    if not writes:
+        return set()
+    ran = _ran_in_export(root, run_id, wanted, writes, "owed", require_pass=True)
+    return set() if ran is None else set(wanted) - ran[0]
+
+
+def _ran_in_export(
+    root: Path, run_id: str, wanted: Sequence[str], writes: Sequence[str], tag: str, require_pass: bool = False,
+) -> Optional[tuple[set[str], str]]:
+    """Run ``wanted`` in an export of HEAD plus ``writes``: ``(failed ids, head sha)``, or None when the
+    export or run fails or ran fewer tests than ``wanted`` (and, with ``require_pass``, any red). One
+    export and one pytest run; the export is always removed."""
+    import time
+
+    from coordinator_core.ops.dispatch_emit import landing_export as le, retest_targeted as rt
+    from coordinator_core.testing import baseline_export
+
+    out_dir = le.run_export_root(root, run_id).with_name(f"export-{tag}")
+    log = out_dir.with_name(f"{tag}.log")
+    try:
+        head = le.build_head_export(root, out_dir, list(writes)).head_sha
+        status, _, _, used = rt._run_pass(rt._run_argv, out_dir, list(wanted), log, time.monotonic() + OWED_CHECK_SECS)
+        if (require_pass and status != "pass") or status not in ("pass", "fail") or not used:
+            return None
+        if (rt._ran_total(log) or 0) < len(wanted):
+            return None
+        return set(rt._failed_node_ids(log, out_dir)), str(head)
+    except (le.LandingExportError, RuntimeError, OSError):
+        return None
+    finally:
+        baseline_export.remove(out_dir)
+        try:
+            log.unlink()
+        except OSError:
+            pass
+
+
+def base_check_red(worktree_root: Path, run_id: Optional[str], ids: Sequence[str]) -> tuple[set[str], str]:
+    """The base check on caused ids: run ``ids`` in a pure-HEAD export (no run blobs, no peer dirt).
+    ``(red_at_base, note)``: ``red_at_base`` the ids still red there (not the run's doing, attributed
+    pre_existing), ``note`` the one-line receipt naming the check, or why it could not run (then no id
+    is red at base). One export and one pytest run over ``ids`` only; the export is always removed."""
+    wanted = list(dict.fromkeys(str(n) for n in ids if n))
+    if not wanted:
+        return set(), ""
+    if not run_id:
+        return set(), "base check not run (no run id)"
+    ran = _ran_in_export(Path(worktree_root), run_id, wanted, [], "base")
+    if ran is None:
+        return set(), "base check not run at HEAD (export or run failed, or ran fewer tests than named)"
+    failed, head = ran
+    red = set(wanted) & failed
+    return red, (
+        f"base check: ran {len(wanted)} caused id(s) at HEAD {head[:10]}: "
+        f"{len(red)} red there (pre_existing), {len(wanted) - len(red)} green (caused)"
+    )
 
 
 def reverify_verdict(record: Mapping) -> object:

@@ -1,9 +1,10 @@
-"""N stall dumps in the window make the server exit itself once, log one line, and respect holds."""
+"""N stall dumps (or in-memory stall marks) in the window make the server exit itself once, log one line, and respect holds."""
 
 from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 
 import pytest
@@ -71,7 +72,7 @@ def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
     _run(tmp_path)
     # Fresh dumps after the restart line, still inside the rate-limit interval.
     stall = tmp_path / "stall-dumps"
-    later = NOW + 30
+    later = NOW + hang_restart.RESTART_MIN_INTERVAL_SECS / 2
     _dumps(stall, hang_restart.HANG_DUMP_THRESHOLD, end=later, pid=222)
     exits = []
     out = hang_restart.maybe_restart(stall, server_pid=888, now=later, exit_fn=exits.append)
@@ -81,6 +82,17 @@ def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
     # A third trigger the same second adds no duplicate suppressed line.
     hang_restart.maybe_restart(stall, server_pid=888, now=later, exit_fn=exits.append)
     assert len(_lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)) == 2
+
+
+def test_a_wedged_replacement_is_restarted_within_a_minute_not_held_for_minutes(tmp_path):
+    assert hang_restart.RESTART_MIN_INTERVAL_SECS <= 30.0
+    _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
+    _run(tmp_path)
+    later = NOW + hang_restart.RESTART_MIN_INTERVAL_SECS + 5
+    _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, end=later, pid=44)
+    exits = []
+    out = hang_restart.maybe_restart(tmp_path / "stall-dumps", server_pid=44, now=later, exit_fn=exits.append)
+    assert out == "restart" and exits == [44]
 
 
 def test_old_dumps_before_the_last_restart_never_retrigger(tmp_path):
@@ -166,3 +178,67 @@ def test_exit_server_signals_a_foreign_pid_and_exits_own_pid(monkeypatch):
     hang_restart.exit_server(os.getpid() + 1)
     hang_restart.exit_server(os.getpid())
     assert calls == [("kill", os.getpid() + 1), ("exit", 0)]
+
+
+def _fresh_marks(monkeypatch):
+    monkeypatch.setattr(hang_restart, "_stall_marks", {})
+
+
+def test_note_stall_below_threshold_never_exits_and_touches_no_disk(tmp_path, monkeypatch):
+    _fresh_marks(monkeypatch)
+    monkeypatch.setattr(hang_restart, "_disk_decision", lambda *a: pytest.fail("disk read below threshold"))
+    exits = []
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD - 1):
+        assert hang_restart.note_stall(tmp_path / "stall-dumps", server_pid=7, exit_fn=exits.append) is None
+    assert exits == []
+
+
+def test_note_stall_exits_at_threshold_even_when_the_disk_leg_never_returns(tmp_path, monkeypatch):
+    _fresh_marks(monkeypatch)
+    release = threading.Event()
+    monkeypatch.setattr(hang_restart, "_disk_decision", lambda *a: release.wait(30))
+    exits = []
+    t0 = time.monotonic()
+    out = None
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        out = hang_restart.note_stall(tmp_path / "stall-dumps", server_pid=7, exit_fn=exits.append, deadline=0.2)
+    release.set()
+    assert out == "restart" and exits == [7]
+    assert time.monotonic() - t0 < 5
+
+
+def test_note_stall_honours_a_publish_hold_and_logs_it(tmp_path, monkeypatch):
+    _fresh_marks(monkeypatch)
+    (tmp_path / breadcrumb.PUBLISH_MARKER_FILENAME).write_text("not json")
+    exits = []
+    out = None
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        out = hang_restart.note_stall(tmp_path / "stall-dumps", server_pid=7, exit_fn=exits.append)
+    assert out == "suppressed" and exits == []
+    assert "action=suppressed reason=publish-hold" in _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)[0]
+
+
+def test_note_stall_logs_a_restart_line_when_the_disk_answers(tmp_path, monkeypatch):
+    _fresh_marks(monkeypatch)
+    exits = []
+    for _ in range(hang_restart.HANG_DUMP_THRESHOLD):
+        hang_restart.note_stall(tmp_path / "stall-dumps", server_pid=7, exit_fn=exits.append)
+    assert exits == [7]
+    assert "pid=7 action=restart" in _lines(tmp_path / hang_restart.HANG_RESTART_LOG_FILENAME)[0]
+
+
+def test_accept_stall_watcher_counts_before_it_touches_the_filesystem(tmp_path, monkeypatch):
+    seen = []
+    monkeypatch.setattr(hang_restart, "note_stall", lambda d, **kw: seen.append(d))
+    blocked = threading.Event()
+
+    class _Claim:
+        def exists(self):
+            assert seen, "the stall was not counted before the claim stat"
+            blocked.set()
+            return True
+
+    disarm = server._arm_accept_stall(tmp_path / "stall-dumps", 0.05, _Claim(), "k", ["gate"])
+    assert blocked.wait(5)
+    disarm()
+    assert seen == [tmp_path / "stall-dumps"]

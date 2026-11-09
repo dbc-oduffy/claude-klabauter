@@ -420,3 +420,53 @@ def test_unmarked_item_matching_no_turn_is_relayed_without_pm_verbatims(repo):
         doc = _sizing(repo, ready["sizing"])
         assert "pm_verbatims" not in doc
         assert c.slice_ask_source(doc) == "relayed"
+
+
+def _planned_sizing(repo, name, plan_rel, writes):
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_fanout_sizings_arm import _sizing as planned
+
+    path = repo / plan_rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = "".join(f"    - {w}\n" for w in writes)
+    path.write_text(
+        "---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        f"- id: A1\n  title: T\n  disposition: open\n  writes:\n{body}```\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    return planned(repo, name, plan_rel)
+
+
+def test_sizings_arm_undeclared_items_with_shared_plan_writes_are_sequenced(repo):
+    a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])
+    b = _planned_sizing(repo, "b", "docs/plans/2026-10-16-b.md", ["pkg/x.py"])
+    out = _go(repo, {"sizings": [{"sizing": a, "label": "a"}, {"sizing": b, "label": "b"}]})
+    first, second = out["runs"]
+    assert "after" not in first
+    assert second["after"] == [first["run_id"]]
+
+
+def test_sizings_arm_undeclared_items_with_disjoint_plan_writes_stay_parallel(repo):
+    a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])
+    b = _planned_sizing(repo, "b", "docs/plans/2026-10-16-b.md", ["pkg/y.py"])
+    out = _go(repo, {"sizings": [{"sizing": a, "label": "a"}, {"sizing": b, "label": "b"}]})
+    assert all("after" not in r for r in out["runs"])
+
+
+def test_sizings_arm_declared_writes_win_over_inference(repo):
+    a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])
+    b = _planned_sizing(repo, "b", "docs/plans/2026-10-16-b.md", ["pkg/x.py"])
+    out = _go(repo, {"sizings": [
+        {"sizing": a, "label": "a", "writes": ["one/a.py"]},
+        {"sizing": b, "label": "b", "writes": ["two/b.py"]},
+    ]})
+    assert all("after" not in r for r in out["runs"])
+
+
+def test_sizings_arm_planless_sizing_infers_nothing_and_overlaps_nothing(repo):
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_fanout_sizings_arm import _sizing as planned
+
+    a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])
+    assert mod._writes_or_inferred(repo, planned(repo, "p", plan=None), None) is None
+    assert mod._writes_or_inferred(repo, "state/sizings/missing.yaml", None) is None
+    assert mod._writes_or_inferred(repo, a, None) == ("pkg/x.py",)

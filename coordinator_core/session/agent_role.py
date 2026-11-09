@@ -8,6 +8,11 @@ ROLES = frozenset({"em", "worker", "workflow-agent", "reviewer", "unknown"})
 SOURCES = frozenset({"startup", "resume", "clear", "compact", "fork"})
 
 
+def _engine_issued_contract(env):
+    """True when env carries what `independent_child_env` stamps on an engine child."""
+    return bool(env.get(ROLE_ENV) or env.get("COORDINATOR_PARENT_SESSION_ID"))
+
+
 def classify(payload, env, *, native_main=False, exec_worker=False, native_role=None):
     if payload.get("hook_event_name") == "SubagentStart" or payload.get("agent_id"):
         return "worker"
@@ -21,8 +26,12 @@ def classify(payload, env, *, native_main=False, exec_worker=False, native_role=
             return explicit
         if exec_worker:
             return "reviewer" if native_role == "reviewer" else "worker"
-    if exec_worker:
-        return "reviewer" if native_role == "reviewer" else "worker"
+    if exec_worker:  # reached only without an explicit ROLE_ENV
+        if native_role == "reviewer":
+            return "reviewer"
+        if _engine_issued_contract(env):
+            return "worker"
+        native_main = True  # root `codex exec`: no engine-issued contract, so not an engine child.
     if env.get("COORDINATOR_JOB_MODE") in ("blitz", "cron"):
         return "unknown"
     if not native_main or payload.get("hook_event_name") != "SessionStart" or payload.get("source") not in SOURCES:

@@ -1,5 +1,5 @@
 """Prepared offline fixtures; no CLI, socket, live DB, process or model calls."""
-import asyncio,importlib.util,json,sqlite3
+import asyncio,importlib.util,json,os,sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 import pytest
@@ -50,7 +50,8 @@ def router(tmp_path,monkeypatch):
  metadata=rows(tmp_path);monkeypatch.setattr(R,'codex_thread_metadata',lambda home:metadata)
  monkeypatch.setattr(R,'endpoint_path',lambda seed,endpoint_dir=None:str(tmp_path/(seed+'.sock')))
  async def forbidden(*a,**kw):pytest.fail('No native adapter/fallback may run for excluded child')
- peers=[{'name':'root-face','vendor':'codex','target':ROOT},{'name':'child-face','vendor':'codex','target':CHILD,'aliases':['child-readable']},{'name':'unknown-face','vendor':'codex','target':UNKNOWN},{'name':'agy-face','vendor':'agy','target':'agy-target'}]
+ live=os.getpid()
+ peers=[{'name':'root-face','vendor':'codex','target':ROOT,'codexPid':live},{'name':'child-face','vendor':'codex','target':CHILD,'aliases':['child-readable'],'codexPid':live},{'name':'unknown-face','vendor':'codex','target':UNKNOWN,'codexPid':live},{'name':'agy-face','vendor':'agy','target':'agy-target'}]
  obj=R.Router(peers,sessions_dir=tmp_path,state_dir=tmp_path,endpoint_dir=tmp_path,adapters={'codex':forbidden,'agy':forbidden},codex_locks_dir=tmp_path/'locks')
  return obj,metadata
 
@@ -61,13 +62,23 @@ def test_fixed_peer_configuration_cannot_bypass_root_eligibility(router):
  for alias in [CHILD,'codex-'+CHILD,'child-face','child-readable',UNKNOWN,'unknown-face']:
   with pytest.raises(ValueError,match='independently sendable root'):obj.pick_peer(alias)
 
-@pytest.mark.parametrize('alias',[CHILD,'codex-'+CHILD,'child-face','child-readable'])
+@pytest.mark.parametrize('alias',['child-face','child-readable'])
 def test_fixed_child_send_refuses_without_parent_retarget_or_fallback(router,alias,monkeypatch):
  obj,_=router
  async def forbidden(*a,**kw):pytest.fail('Excluded child must not reach transport fallback')
  monkeypatch.setattr(obj,'_transport_send_to_session',forbidden)
  got=asyncio.run(obj._dispatch({'op':'send','to':alias,'text':'substantive nonce payload'}))
  assert got['ok'] is False and 'independently sendable root' in got['error']
+
+@pytest.mark.parametrize('alias',[CHILD,'codex-'+CHILD])
+def test_child_thread_id_send_retargets_to_sendable_root_parent_only(router,alias,monkeypatch):
+ obj,_=router;seen=[]
+ async def root_adapter(peer,text):seen.append((peer['target'],text));return 'ok'
+ obj.adapters['codex']=root_adapter
+ async def forbidden(*a,**kw):pytest.fail('Child thread id must not reach transport fallback')
+ monkeypatch.setattr(obj,'_transport_send_to_session',forbidden)
+ asyncio.run(obj._dispatch({'op':'send','to':alias,'text':'substantive nonce payload'}))
+ assert [t for t,_ in seen]==[ROOT]
 
 def test_turn_rechecks_per_uuid_source_before_native_adapter(router):
  obj,metadata=router;metadata[ROOT]={'source':CHILD_SOURCE,'thread_source':'subagent'}
@@ -78,8 +89,10 @@ def test_lock_discovery_applies_same_positive_root_classifier(tmp_path,monkeypat
  locks=tmp_path/'locks';locks.mkdir();metadata=rows(tmp_path)
  for sid in [ROOT,CHILD,UNKNOWN]:(locks/(sid+'.lock')).write_text('inert lock fixture')
  monkeypatch.setattr(R,'codex_thread_metadata',lambda home:metadata);monkeypatch.setattr(R,'lock_held',lambda path:True)
- monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(read_codex_address=lambda *a:None))
+ monkeypatch.setattr(R,'_contract',lambda:SimpleNamespace(read_codex_address=lambda home,ident,box:{'address_version':1,'name':'repo-codex-box-1','box':box},safe_alias=lambda a:True))
  monkeypatch.setattr(R,'_roster',lambda:SimpleNamespace(settings_home=lambda:tmp_path))
+ rollout=tmp_path/'sessions'/('rollout-2026-01-01T00-00-00-'+ROOT+'.jsonl');rollout.parent.mkdir()
+ rollout.write_text(json.dumps({'type':'session_meta','payload':{'source':'vscode'}})+'\n')
  got=R.load_lock_peers(locks,'codex')
  assert len(got)==1 and got[0]['target']==ROOT
  assert all(row['target']!=CHILD for row in got)

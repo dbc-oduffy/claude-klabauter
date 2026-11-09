@@ -42,5 +42,8 @@ def provider_identity_env(base: Mapping[str, str], source: Mapping[str, str], *,
     env = dict(base)
     env.update({key: source[key] for key in IDENTITY_ENV if source.get(key)})
     projected = subprocess_identity_env(base=env)
-    return independent_child_env(projected, provider=provider, role=role,
-                                 parent=attributable_session_id())
+    child = independent_child_env(projected, provider=provider, role=role,
+                                  parent=attributable_session_id())
+    # Caller projection also stamps caller-owned keys (CLAUDECODE, ...); only the caller's
+    # allowlisted base and the COORDINATOR_ identity namespace may reach the child.
+    return {k: v for k, v in child.items() if k in base or k.startswith("COORDINATOR_")}

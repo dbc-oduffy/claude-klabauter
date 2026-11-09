@@ -236,12 +236,27 @@ def test_desktop_notify_on_windows_never_spawns_a_shell(monkeypatch):
 
 
 def test_authorized_keys_lines_prefix_from_pin(keys):
-    relay = lambda body: f'restrict,command="python3 relay.py" ssh-ed25519 {body} unimatrix'
+    relay = lambda body, box: f'restrict,command="python3 relay.py --peer {box}" ssh-ed25519 {body} unimatrix'
     lines = M.authorized_keys_lines([member(keys, cidrs=["10.0.0.0/8", "192.168.1.0/24"]), member(keys, "beta", "beta.local", cidrs=[])], relay)
     body = keys["relay"][1].split()[1]
-    assert lines[0] == f'from="10.0.0.0/8,192.168.1.0/24",restrict,command="python3 relay.py" ssh-ed25519 {body} unimatrix'
-    assert lines[1].startswith("restrict,command=")
+    assert lines[0] == f'from="10.0.0.0/8,192.168.1.0/24",restrict,command="python3 relay.py --peer alpha" ssh-ed25519 {body} unimatrix'
+    assert lines[1].startswith('restrict,command="python3 relay.py --peer beta"')
     bad = member(keys)
     bad["from_cidrs"] = ['1.2.3.4",command="x']
     with pytest.raises(M.MembershipError, match="from_cidr"):
         M.authorized_keys_lines([bad], relay)
+
+
+def test_file_pub_is_optional_must_be_a_distinct_ed25519_key_and_gets_its_own_line(keys):
+    relay = lambda body, box: f"relay {box} {body}"
+    file_ = lambda body, box: f"file {box} {body}"
+    plain = member(keys, cidrs=())
+    M._validate_member(plain)
+    withfile = {**plain, "file_pub": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIfilekeybodyxxxxxxxxxxxx"}
+    M._validate_member(withfile)
+    assert M.authorized_keys_lines([plain], relay, file_) == [f"relay alpha {plain['relay_pub'].split()[1]}"]
+    assert [l.split()[0] for l in M.authorized_keys_lines([withfile], relay, file_)] == ["relay", "file"]
+    assert M.authorized_keys_lines([withfile], relay) == [f"relay alpha {plain['relay_pub'].split()[1]}"]
+    for bad in ({**plain, "file_pub": "ssh-rsa AAAA"}, {**plain, "file_pub": plain["relay_pub"]}, {**plain, "extra": "x"}):
+        with pytest.raises(M.MembershipError):
+            M._validate_member(bad)

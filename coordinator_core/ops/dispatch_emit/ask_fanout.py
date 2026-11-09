@@ -647,6 +647,21 @@ def _read_sizings(
     return out
 
 
+def _writes_or_inferred(worktree: Path, rel: str, writes: Optional[tuple[str, ...]]) -> Optional[tuple[str, ...]]:
+    """Declared `writes` as given; for an undeclared item the sizing's plan-spine writes
+    (`sibling_footprint.inferred_writes`). An unreadable sizing or an empty inference stays None; the
+    stamping loop below refuses an unreadable sizing."""
+    if writes is not None:
+        return writes
+    from coordinator_core.ops.dispatch_emit import sibling_footprint
+
+    try:
+        inferred = sibling_footprint.inferred_writes(worktree, _load_parent(worktree, rel))
+    except _Refused:
+        return None
+    return inferred or None
+
+
 def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
     """The sizings arm: sibling runs over existing planned sizings, each stamped with its marker."""
     items = _read_sizings(params)
@@ -656,7 +671,10 @@ def _fanout_sizings(params: Mapping, worktree: Path, confirm: bool) -> dict:
     mode = params.get(contract.EDGES_FROM_PARAM)
     if mode is not None and mode != contract.EDGES_FROM_BLOCKED_BY:
         raise _Refused(f"{contract.EDGES_FROM_PARAM} must be absent or {contract.EDGES_FROM_BLOCKED_BY!r}")
-    slices = [contract.AskSlice(label, rel, (), writes, wave) for rel, label, writes, wave, _i, _b in items]
+    slices = [
+        contract.AskSlice(label, rel, (), _writes_or_inferred(worktree, rel, writes), wave)
+        for rel, label, writes, wave, _i, _b in items
+    ]
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     parent_id = f"ask-parent-{stamp}-{uuid.uuid4().hex[:6]}"
     run_ids = [f"ask-{stamp}-{uuid.uuid4().hex[:6]}" for _ in items]

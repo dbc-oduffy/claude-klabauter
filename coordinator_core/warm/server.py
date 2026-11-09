@@ -178,6 +178,7 @@ gap found and named during C15 execution, 2026-08-18.
 from __future__ import annotations
 
 import concurrent.futures
+import errno
 import faulthandler
 import inspect
 from concurrent.futures.process import BrokenProcessPool
@@ -185,6 +186,7 @@ import json
 import multiprocessing
 import os
 import queue
+import shutil
 import signal
 import sys
 import collections
@@ -1085,10 +1087,33 @@ def _pool_dispatch_worker(
     disarm = _arm_stall_dump(stall_secs, claim, _op_repo_root(msg))
     dispatch_fence.hold(claim_dir, dispatch_key if claim is not None else None)
     try:
-        return _pool_dispatch_worker_body(msg, caller)
+        out = _pool_dispatch_worker_body(msg, caller)
+        _journal_landed(msg, claim_dir, dispatch_key, out)
+        return out
     finally:
         dispatch_fence.release()
         disarm()
+
+
+def _journal_landed(msg: Any, claim_dir: Optional[str], dispatch_key: Optional[str], out: Any) -> None:
+    """Journal a mutating keyed op's outcome the moment its handler returns, so a worker killed
+    before the accept process stamps it still leaves the landed result readable. Never raises."""
+    try:
+        journal = dispatch_ack.journal_dir_beside(claim_dir)
+        if not journal or dispatch_key is None or not isinstance(out, dict):
+            return
+        if not _op_may_mutate(_effective_method(msg)):
+            return
+        if "result" in out:
+            dispatch_ack.record_outcome(journal, dispatch_key, dispatch_ack.OUTCOME_RESULT, result=out["result"])
+        elif isinstance(out.get("error"), dict):
+            err = out["error"]
+            dispatch_ack.record_outcome(
+                journal, dispatch_key, dispatch_ack.OUTCOME_ERROR,
+                error_code=err.get("code"), error_message=err.get("message"),
+            )
+    except Exception:  # noqa: BLE001 -- journaling never fails an op
+        pass
 
 
 _LEG_SUFFIX = ".leg"
@@ -1298,6 +1323,154 @@ def _repo_drive_probe_ms(repo_root) -> str:
     return f"{(time.perf_counter() - t0) * 1000:.2f}"
 
 
+#: Longest one drive probe may run before its drive is declared stalled.
+_DRIVE_PROBE_SECS = 0.25
+
+#: Free bytes under which a drive is full for an op (a named ENOSPC, not a hang).
+_DRIVE_FULL_FREE_BYTES = 64 * 1024 * 1024
+
+#: How long a healthy verdict is reused, so the admission check stays one probe per drive per second.
+_DRIVE_VERDICT_TTL_SECS = 1.0
+
+#: A pool-result wait is cut into slices this long; each slice end re-checks the op's drive.
+_DRIVE_WAIT_SLICE_SECS = 1.0
+
+_drive_lock = threading.Lock()
+#: drive key -> (probe thread, result box, started monotonic); present while a probe is unfinished.
+_drive_probes: dict = {}
+_drive_ok_until: dict = {}
+
+
+class _DriveFault(Exception):
+    """A pool-result wait ended because the op's drive is full or not answering."""
+
+    def __init__(self, verdict: dict):
+        super().__init__(verdict.get("case"))
+        self.verdict = verdict
+
+
+def _drive_key(path: str) -> str:
+    drive = os.path.splitdrive(path)[0]
+    return drive.upper() if drive else path
+
+
+def _probe_drive(root: str, box: dict) -> None:
+    """Runs on a throwaway daemon thread: a list of `root` plus its free space. A stalled drive
+    parks only this thread."""
+    try:
+        with os.scandir(root) as it:
+            next(it, None)
+        box["free"] = shutil.disk_usage(root).free
+    except OSError as exc:
+        box["errno"] = exc.errno
+    except Exception:  # noqa: BLE001 -- an unreadable probe is no verdict
+        pass
+    finally:
+        box["done"] = True
+
+
+def _drive_verdict(repo_root) -> Optional[dict]:
+    """None when `repo_root`'s drive answers and has room; else `{case: drive_stall | enospc, drive,
+    ...}`. Never blocks past `_DRIVE_PROBE_SECS`: the probe runs on its own thread, and a drive whose
+    probe is still unfinished is stalled at once without another thread. Never raises."""
+    try:
+        if not repo_root:
+            return None
+        root = os.fspath(repo_root)
+        key = _drive_key(root)
+        now = time.monotonic()
+        with _drive_lock:
+            entry = _drive_probes.get(key)
+            if entry is None:
+                if _drive_ok_until.get(key, 0.0) > now:
+                    return None
+                box: dict = {"done": False}
+                thread = threading.Thread(target=_probe_drive, args=(root, box), daemon=True, name="drive-probe")
+                entry = (thread, box, now)
+                _drive_probes[key] = entry
+                thread.start()
+        thread, box, started = entry
+        left = _DRIVE_PROBE_SECS - (time.monotonic() - started)
+        if left > 0:
+            thread.join(left)
+        with _drive_lock:
+            if not box["done"]:
+                return {"case": "drive_stall", "drive": key, "probe_secs": _DRIVE_PROBE_SECS}
+            if _drive_probes.get(key, (None,))[0] is thread:
+                del _drive_probes[key]
+            err = box.get("errno")
+            free = box.get("free")
+            if err == errno.ENOSPC or (free is not None and free < _DRIVE_FULL_FREE_BYTES):
+                return {"case": "enospc", "drive": key, "free_bytes": free}
+            if err in (errno.EIO, errno.ETIMEDOUT):
+                return {"case": "drive_stall", "drive": key, "errno": err}
+            _drive_ok_until[key] = time.monotonic() + _DRIVE_VERDICT_TTL_SECS
+            return None
+    except Exception:  # noqa: BLE001 -- a failing check never fails an op
+        return None
+
+
+def _await_pool_result(future: "concurrent.futures.Future", wait_left: float, repo_root) -> dict:
+    """`future.result(timeout=wait_left)`, cut into `_DRIVE_WAIT_SLICE_SECS` slices when `repo_root`
+    is known: after each slice the op's drive is checked and a full or stalled one raises
+    `_DriveFault`, so a blocked disk write fails its one op long before the result deadline."""
+    if not repo_root:
+        return future.result(timeout=wait_left)
+    end = time.monotonic() + wait_left
+    while True:
+        left = end - time.monotonic()
+        step = min(_DRIVE_WAIT_SLICE_SECS, max(left, 0.0))
+        done, _pending = concurrent.futures.wait([future], timeout=step)
+        if done:
+            return future.result()
+        if left <= step:
+            raise concurrent.futures.TimeoutError()
+        verdict = _drive_verdict(repo_root)
+        if verdict is not None:
+            raise _DriveFault(verdict)
+
+
+def _drive_fault_envelope(msg: dict, verdict: dict, *, started: bool) -> dict:
+    """The named error for an op failed by its drive. Not started: determinate (`INTERNAL_ERROR`,
+    safe to re-run once the drive recovers). Started and mutating: `WARM_DISPATCH_INDETERMINATE`,
+    reconcile before re-running."""
+    drive = verdict.get("drive")
+    if verdict.get("case") == "enospc":
+        free = verdict.get("free_bytes")
+        what = f"ENOSPC: drive {drive} is full" + (f" ({free // (1024 * 1024)} MiB free)" if isinstance(free, int) else "")
+    else:
+        what = f"DRIVE_STALL: drive {drive} is not answering"
+    if not started:
+        message = f"{what}; this request was not started and nothing was written. Re-run once {drive} recovers."
+        code = INTERNAL_ERROR
+    elif _op_may_mutate(_effective_method(msg)):
+        message = (
+            f"{what}; this MUTATING op had started and its outcome is unknown. "
+            "Reconcile against real state before re-running."
+        )
+        code = WARM_DISPATCH_INDETERMINATE
+    else:
+        message = f"{what}; this read-only op was abandoned. Re-run once {drive} recovers."
+        code = INTERNAL_ERROR
+    diagnosis = {**verdict, "op": msg.get("method"), "phase": "running" if started else "queued"}
+    return {
+        "jsonrpc": "2.0",
+        "id": msg.get("id"),
+        "error": {"code": code, "message": message, "data": {"diagnosis": diagnosis}},
+    }
+
+
+def _drive_fault_row(response: Any) -> dict:
+    """`drive_fault` / `drive` request-row fields when `response` is a drive-fault envelope."""
+    try:
+        diagnosis = response["error"]["data"]["diagnosis"]
+        if diagnosis.get("case") in ("drive_stall", "enospc") and diagnosis.get("drive"):
+            return {"drive_fault": diagnosis["case"], "drive": diagnosis["drive"]}
+    except (KeyError, TypeError, AttributeError):
+        pass
+    return {}
+
+
 def _stall_timing_lines(op_ident, elapsed, cpu_delta) -> str:
     """`op-elapsed-s`, `process-cpu-s` and `thread-elapsed-s` header lines.
 
@@ -1313,6 +1486,27 @@ def _stall_timing_lines(op_ident, elapsed, cpu_delta) -> str:
         f"op-elapsed-s: {elapsed:.3f}\nprocess-cpu-s: {cpu}\n"
         f"thread-elapsed-s: {json.dumps(per_thread)}\n"
     )
+
+
+def _render_all_thread_stacks() -> str:
+    """Every thread's stack in `faulthandler.dump_traceback` layout, rendered in Python.
+
+    Trap: `faulthandler.dump_traceback(file=...)` writes to a real file descriptor with the
+    GIL held, so a stalled volume under that file freezes every thread in the process.
+    """
+    me = threading.get_ident()
+    out = []
+    for ident, frame in sys._current_frames().items():
+        label = "Current thread" if ident == me else "Thread"
+        out.append(f"{label} 0x{ident:016x} (most recent call first):\n")
+        depth = 0
+        while frame is not None and depth < 100:
+            code = frame.f_code
+            out.append(f'  File "{code.co_filename}", line {frame.f_lineno} in {code.co_name}\n')
+            frame = frame.f_back
+            depth += 1
+        out.append("\n")
+    return "".join(out)
 
 
 def _write_stall_record(
@@ -1332,8 +1526,6 @@ def _write_stall_record(
     `key`/`leg` name a record that has no claim (an accept-side hang). Returns the
     record path, or None when nothing was written. Never raises."""
     try:
-        import tempfile
-
         sinks = "unavailable"
         try:
             from coordinator_core import atomic_append
@@ -1348,10 +1540,7 @@ def _write_stall_record(
                     leg = _leg_path(claim).read_text(encoding="utf-8").strip()
                 except OSError:
                     pass
-        with tempfile.TemporaryFile(mode="w+b") as raw:
-            faulthandler.dump_traceback(file=raw, all_threads=True)
-            raw.seek(0)
-            threads = raw.read().decode("utf-8", errors="replace")
+        threads = _render_all_thread_stacks()
         stall_dir = Path(stall_dir)
         stall_dir.mkdir(parents=True, exist_ok=True)
         probe = _fs_probe_ms(stall_dir)
@@ -1384,6 +1573,18 @@ def _write_stall_record(
     return final
 
 
+def _note_stall_in_memory(stall_dir) -> None:
+    """Count a detected stall toward the hang restart before any filesystem call. Never raises."""
+    try:
+        from coordinator_core.warm import hang_restart
+
+        hang_restart.note_stall(
+            stall_dir, server_pid=os.getppid() if _WORKER_STALL_DIR is not None else os.getpid()
+        )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _arm_stall_dump(
     stall_secs: float, claim: Optional[Path] = None, repo_root=None
 ) -> Callable[[], None]:
@@ -1412,6 +1613,8 @@ def _arm_stall_dump(
     def _watch() -> None:
         if done.wait(stall_secs):
             return
+        if stall_dir is not None:
+            _note_stall_in_memory(stall_dir)
         trace = _LegTrace()
         trace.note(time.monotonic() - t0, _sample_leg(op_ident))
         record = _emit()
@@ -1447,7 +1650,8 @@ def _arm_stall_dump(
                 stderr.flush()
             except Exception:  # noqa: BLE001 -- the sink line never costs the traceback
                 pass
-            faulthandler.dump_traceback(file=stderr, all_threads=True)
+            stderr.write(_render_all_thread_stacks())
+            stderr.flush()
         except Exception:  # noqa: BLE001 -- diagnostics never stop an op
             pass
         return record
@@ -1493,6 +1697,8 @@ def _arm_accept_stall(
     def _watch() -> None:
         if done.wait(stall_secs):
             return
+        if phase[0] != "result":
+            _note_stall_in_memory(stall_dir)
         try:
             if claim is not None and claim.exists():
                 return
@@ -1745,8 +1951,30 @@ def _is_hook_lane(method: Any) -> bool:
     )
 
 
-#: Short mutating ops that take a reserved slot like a hook, so heavy wedged holders cannot starve them.
-_LIGHT_MUTATING_OPS = frozenset({"memo.send"})
+#: Short ops that take a reserved slot like a hook, so heavy wedged holders cannot starve them.
+_LIGHT_MUTATING_OPS = frozenset({"memo.send", "ping"})
+
+#: Light ops that never take a dispatch claim: a claim create on a stalled svc dir would park the
+#: pool worker, and these ops have no withdrawal guarantee to arbitrate.
+_CLAIMLESS_OPS = frozenset({"ping"})
+
+
+def _guard_pool_applies(ctx_state: Mapping) -> bool:
+    """Guard-class ops get their own pool on a context that owns one, unless its heavy pool was
+    replaced by a non-process stand-in and no guard pool was injected beside it."""
+    if "_guard_pool_lock" not in ctx_state:
+        return False
+    heavy = ctx_state.get("_dispatch_pool")
+    return (
+        ctx_state.get("_guard_pool") is not None
+        or heavy is None
+        or isinstance(heavy, concurrent.futures.ProcessPoolExecutor)
+    )
+
+
+def _is_claimless(method: Any) -> bool:
+    """True for a hook-prefixed op or a `_CLAIMLESS_OPS` member: dispatched with no claim file."""
+    return isinstance(method, str) and (method in _CLAIMLESS_OPS or method.startswith(_HOOK_LANE_PREFIXES))
 
 #: Pool workers beyond `DISPATCH_PROCESS_POOL_SIZE` that only hook-class and light ops may use.
 _LIGHT_RESERVE_WORKERS = 2
@@ -1754,6 +1982,22 @@ _LIGHT_RESERVE_WORKERS = 2
 #: Ceiling on terminated-but-still-alive workers from recycled pools; at it, a stalled pool is
 #: not recycled again and requests are refused as saturated instead of spawning more workers.
 _MAX_RETIRED_WORKERS = DISPATCH_PROCESS_POOL_SIZE + _LIGHT_RESERVE_WORKERS
+
+#: Workers started the moment a pool loses one (guard pool; the heavy pool starts one), so the
+#: replacement pool's first frames meet booted workers, not a cold `_worker_process_init`.
+_HEAL_PREWARM_WORKERS = 2
+
+#: Ceiling on the background prewarm of a replacement pool.
+_HEAL_PREWARM_WAIT_SECS = 30.0
+
+#: How long a COMPUTE_ONLY op whose worker died waits for the replacement pool before it falls
+#: back to running in the accept process; half the door's 8s hook read deadline.
+_HEAL_RETRY_WAIT_SECS = 4.0
+
+
+def _prewarm_noop() -> None:
+    """Submitted to a fresh pool so `_worker_process_init` runs before a real frame needs it."""
+    return None
 
 
 def _is_light_mutating(method: Any) -> bool:
@@ -2326,6 +2570,44 @@ def _register_stack_dump_signal(engine_root=None) -> "str | None":
         _STACK_DUMP_FILE = None
         return None
     return "kill -USR1 {0}   # every thread's stack -> {1}".format(os.getpid(), path)
+
+
+#: Operator dump-request file in the svc dir; the `warm-engine-stop.py` twin
+#: constant is pinned equal by `test_warm_engine_stop_confirm.py`.
+DUMP_REQUEST_FILENAME = "dump-request"
+DUMP_REQUEST_POLL_SECS = 0.1
+
+
+def _poll_dump_requests(svc: Path, stall_dir: Path, stop: "threading.Event") -> None:
+    """Answer each `<svc>/dump-request` with an all-threads record in `stall_dir`, then
+    delete the request (the deletion is the ack). Depends on neither the accept loop nor the
+    pool; works on Windows, which has no SIGUSR1. Never raises."""
+    request = svc / DUMP_REQUEST_FILENAME
+    while not stop.wait(DUMP_REQUEST_POLL_SECS):
+        try:
+            if not request.exists():
+                continue
+            _write_stall_record(stall_dir, None, key="operator-stop")
+            request.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001 -- diagnostics never stop the server
+            pass
+
+
+def _start_dump_request_poll(engine_root=None) -> "threading.Event":
+    """Start the daemon `dump-request-poll` thread; returns its stop event."""
+    stop = threading.Event()
+    svc = breadcrumb.svc_dir(engine_root)
+    try:
+        (svc / DUMP_REQUEST_FILENAME).unlink(missing_ok=True)
+        threading.Thread(
+            target=_poll_dump_requests,
+            args=(svc, svc / _STALL_DUMPS_DIRNAME, stop),
+            name="dump-request-poll",
+            daemon=True,
+        ).start()
+    except Exception:  # noqa: BLE001
+        pass
+    return stop
 
 
 def _suppress_pool_worker_consoles() -> None:
@@ -3512,6 +3794,8 @@ class _ServerContext:
         self._drain_trigger = _DrainTrigger()
         self._dispatch_pool: Optional["concurrent.futures.ProcessPoolExecutor"] = None
         self._dispatch_pool_lock = threading.Lock()
+        self._guard_pool: Optional["concurrent.futures.ProcessPoolExecutor"] = None
+        self._guard_pool_lock = threading.Lock()
         self._worker_threads: "list[threading.Thread]" = []
         self._pool_size = WORKER_POOL_SIZE
         self._guard_queue: "queue.Queue[Any]" = queue.Queue()
@@ -3573,6 +3857,9 @@ class _ServerContext:
                     self._stall_dir = breadcrumb.svc_dir(self.engine_root) / _STALL_DUMPS_DIRNAME
                     self._claim_dir = breadcrumb.svc_dir(self.engine_root) / _CLAIMS_DIRNAME
                     _prune_dispatch_claims(self._claim_dir)
+                    if _ack_store._journal_dir is None:
+                        _ack_store._journal_dir = dispatch_ack.journal_dir_beside(self._claim_dir)
+                        dispatch_ack.prune_journal(_ack_store._journal_dir)
                     old_stop = self.__dict__.get("_telemetry_drain_stop")
                     if old_stop is not None:
                         old_stop.set()
@@ -3586,6 +3873,72 @@ class _ServerContext:
                         initargs=(str(stderr_dir), str(self._stall_dir), forward_queue),
                     )
         return self._dispatch_pool
+
+    def _ensure_guard_pool(self) -> "concurrent.futures.ProcessPoolExecutor":
+        """The pool hook-class and light ops run in. A heavy op's overdue-worker kill or stalled-pool
+        recycle swaps out `_dispatch_pool` only, so it never takes an in-flight guard verdict with it;
+        sized to the slots the admission gate leaves those classes."""
+        if self._guard_pool is None:
+            with self._guard_pool_lock:
+                if self._guard_pool is None:
+                    self._ensure_dispatch_pool()
+                    stderr_dir = self._worker_stderr_dir
+                    mp_context = multiprocessing.get_context()
+                    forward_queue = mp_context.Queue(maxsize=_FORWARD_QUEUE_MAX)
+                    old_stop = self.__dict__.get("_guard_telemetry_drain_stop")
+                    if old_stop is not None:
+                        old_stop.set()
+                    self._guard_telemetry_drain_stop = _start_telemetry_drain(forward_queue)
+                    self._guard_pool = concurrent.futures.ProcessPoolExecutor(
+                        max_workers=max(1, DISPATCH_PROCESS_POOL_SIZE - 1) + _LIGHT_RESERVE_WORKERS,
+                        mp_context=mp_context,
+                        initializer=_worker_process_init,
+                        initargs=(str(stderr_dir), str(self._stall_dir), forward_queue),
+                    )
+        return self._guard_pool
+
+    def _drop_pool(self, pool: Any) -> bool:
+        """Identity-checked: forget `pool` if it is still the live dispatch or guard pool."""
+        with self._dispatch_pool_lock:
+            if self._dispatch_pool is pool:
+                self._dispatch_pool = None
+                return True
+        if "_guard_pool_lock" in self.__dict__:
+            with self._guard_pool_lock:
+                if self._guard_pool is pool:
+                    self._guard_pool = None
+                    return True
+        return False
+
+    def _heal_lost_pool(self, broken: Any, guard: bool) -> Optional[threading.Event]:
+        """After a worker death dropped `broken`, rebuild and prewarm its replacement off the request
+        path. Returns the event set when the replacement is ready; None when `broken` is not a real
+        process pool. One heal per pool class runs at a time: a concurrent loss gets the running event."""
+        if not isinstance(broken, concurrent.futures.ProcessPoolExecutor):
+            return None
+        healing = self.__dict__.setdefault("_pool_healing", {})
+        with self._dispatch_pool_lock:
+            running = healing.get(guard)
+            if running is not None and not running.is_set():
+                return running
+            done = threading.Event()
+            healing[guard] = done
+        threading.Thread(
+            target=self._heal_run, args=(guard, done), name="warm-pool-heal", daemon=True
+        ).start()
+        return done
+
+    def _heal_run(self, guard: bool, done: threading.Event) -> None:
+        try:
+            pool = self._ensure_guard_pool() if guard else self._ensure_dispatch_pool()
+            futures = [
+                pool.submit(_prewarm_noop) for _ in range(_HEAL_PREWARM_WORKERS if guard else 1)
+            ]
+            concurrent.futures.wait(futures, timeout=_HEAL_PREWARM_WAIT_SECS)
+        except Exception:  # noqa: BLE001 -- the next request rebuilds the pool lazily
+            pass
+        finally:
+            done.set()
 
     def _admission_gate(self) -> "_AdmissionGate":
         """Per-context slot gate sized `DISPATCH_PROCESS_POOL_SIZE`, built on first use."""
@@ -3601,20 +3954,27 @@ class _ServerContext:
         future: "concurrent.futures.Future",
         op: Optional[str],
         dispatch_key: Optional[str] = None,
+        guard: bool = False,
     ) -> None:
         """Record `future` (op, submit time, dispatch key) until it resolves; feeds
-        `_stalled_holders` and `_recycle_stalled_pool`."""
+        `_stalled_holders` and `_recycle_stalled_pool`. A `guard` future runs in the guard pool and is
+        invisible to both: a stalled heavy op neither counts it as a holder nor recycles it away."""
         tasks = self.__dict__.setdefault("_pool_tasks", {})
         tasks[future] = (op, time.monotonic(), dispatch_key)
         future.add_done_callback(lambda f: tasks.pop(f, None))
+        if guard:
+            guard_futs = self.__dict__.setdefault("_guard_futs", set())
+            guard_futs.add(future)
+            future.add_done_callback(guard_futs.discard)
 
     def _stalled_holders(self) -> list:
-        """Ops of unresolved pool tasks older than `STALL_DUMP_SECS`."""
+        """Ops of unresolved heavy-pool tasks older than `STALL_DUMP_SECS`."""
         now = time.monotonic()
+        guard_futs = self.__dict__.get("_guard_futs", ())
         return [
             op
-            for op, started, _key in list(self.__dict__.get("_pool_tasks", {}).values())
-            if now - started > STALL_DUMP_SECS
+            for fut, (op, started, _key) in list(self.__dict__.get("_pool_tasks", {}).items())
+            if now - started > STALL_DUMP_SECS and fut not in guard_futs
         ]
 
     def _saturation_confirmed(self, saturated: bool) -> bool:
@@ -3640,8 +4000,11 @@ class _ServerContext:
             self._dispatch_pool = None
             self.__dict__["_saturated_checks"] = 0
             tasks = self.__dict__.setdefault("_pool_tasks", {})
-            keys = [key for _op, _started, key in list(tasks.values()) if key is not None]
-            tasks.clear()
+            guard_futs = self.__dict__.get("_guard_futs", ())
+            heavy = [(fut, row) for fut, row in list(tasks.items()) if fut not in guard_futs]
+            keys = [row[2] for _fut, row in heavy if row[2] is not None]
+            for fut, _row in heavy:
+                tasks.pop(fut, None)
         _ack_store.reconcile_restarted(keys)
         procs = list((getattr(stuck_pool, "_processes", None) or {}).values())
         try:
@@ -3676,9 +4039,7 @@ class _ServerContext:
         if dispatch_key is not None:
             dispatch_fence.write(claim.parent, dispatch_key)
             _ack_store.stamp_killing(dispatch_key, pid, proc.is_alive)
-        with self._dispatch_pool_lock:
-            if self._dispatch_pool is pool:
-                self._dispatch_pool = None
+        self._drop_pool(pool)
         try:
             proc.terminate()
         except Exception:  # noqa: BLE001
@@ -3757,6 +4118,7 @@ class _ServerContext:
                         dispatch_key=dispatch_key,
                         slow_phase=row_fields.get("slow_phase"),
                         spans=row_fields.get("spans"),
+                        **_drive_fault_row(response),
                     )
                 else:
                     telemetry.record_request(
@@ -3771,6 +4133,7 @@ class _ServerContext:
                         dispatch_key=dispatch_key,
                         slow_phase=row_fields.get("slow_phase"),
                         spans=row_fields.get("spans"),
+                        **_drive_fault_row(response),
                     )
             except Exception:  # noqa: BLE001 -- telemetry never fails a caller
                 pass
@@ -3781,6 +4144,7 @@ class _ServerContext:
         *,
         caller: Optional[CallerContext] = None,
         dispatch_key: Optional[str] = None,
+        _healed_retry: bool = False,
     ) -> dict:
         """The `dispatch=` callable a real accept-loop worker thread
         (`_worker_loop`) hands to `_handle_connection` -- submits the call
@@ -3802,17 +4166,31 @@ class _ServerContext:
         _disarm_accept = lambda: None  # noqa: E731
         try:
             _eff = _effective_method(msg)
-            pool = self._ensure_dispatch_pool()
-            holders = self._stalled_holders()
-            saturated = len(holders) >= DISPATCH_PROCESS_POOL_SIZE
-            if self._saturation_confirmed(saturated) and self._retired_workers_alive() < _MAX_RETIRED_WORKERS:
-                self._recycle_stalled_pool(pool, holders)
+            _guard_class = _guard_pool_applies(self.__dict__) and (_is_hook_lane(_eff) or _is_light_mutating(_eff))
+            _drive_root = None if _guard_class else _op_repo_root(msg)
+            _fault = _drive_verdict(_drive_root)
+            if _fault is not None:
+                if dispatch_key is not None:
+                    _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+                return _drive_fault_envelope(msg, _fault, started=False)
+            if _guard_class:
+                pool = self._ensure_guard_pool()
+            else:
                 pool = self._ensure_dispatch_pool()
-            elif saturated and not (_is_hook_lane(_eff) or _is_light_mutating(_eff)):
-                return _pool_saturated_envelope(
-                    msg, holders, getattr(self, "_worker_stderr_dir", None)
-                )
-            claim = _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
+                holders = self._stalled_holders()
+                saturated = len(holders) >= DISPATCH_PROCESS_POOL_SIZE
+                if self._saturation_confirmed(saturated) and self._retired_workers_alive() < _MAX_RETIRED_WORKERS:
+                    self._recycle_stalled_pool(pool, holders)
+                    pool = self._ensure_dispatch_pool()
+                elif saturated and not (_is_hook_lane(_eff) or _is_light_mutating(_eff)):
+                    return _pool_saturated_envelope(
+                        msg, holders, getattr(self, "_worker_stderr_dir", None)
+                    )
+            claim = (
+                None
+                if _is_claimless(_eff)
+                else _claim_path(getattr(self, "_claim_dir", None), dispatch_key)
+            )
             _phase = ["gate"]
             _method = msg.get("method")
             _deadline = _withdrawal_deadline_secs(_method, msg)
@@ -3866,16 +4244,35 @@ class _ServerContext:
                 gate.release(_hook, _light)
                 raise
             future.add_done_callback(lambda _f: gate.release(_hook, _light))
-            self._track_pool_task(future, msg.get("method"), dispatch_key)
+            if _guard_class:
+                self._track_pool_task(future, msg.get("method"), dispatch_key, guard=True)
+            else:
+                self._track_pool_task(future, msg.get("method"), dispatch_key)
             self._pool_outstanding.enter()
             future.add_done_callback(lambda _f: self._pool_outstanding.exit())
             if dispatch_key is not None:
                 future.add_done_callback(lambda _f: _stamp_pool_future(dispatch_key, _f))
             _phase[0] = "result"
             try:
-                out = future.result(timeout=_wait_left)
+                out = _await_pool_result(future, _wait_left, _drive_root)
                 _release_claim(claim)
                 return out
+            except _DriveFault as fault:
+                # The worker is left parked, never terminated: killing one pool process breaks the
+                # whole pool and fails every neighbour, and a process blocked on a dead drive
+                # survives terminate() anyway. New ops on this drive are refused at admission.
+                withdrawn = future.cancel() or (
+                    claim is not None and _take_claim(claim, os.getpid(), on_error=False)
+                )
+                future.add_done_callback(lambda _f: _release_claim(claim))
+                if dispatch_key is not None:
+                    if withdrawn:
+                        _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_NOT_DISPATCHED)
+                    else:
+                        _ack_store.mark_withdrawn(dispatch_key)
+                return _with_reconcile_route(
+                    _drive_fault_envelope(msg, fault.verdict, started=not withdrawn), dispatch_key
+                )
             except concurrent.futures.TimeoutError:
                 # NEGATIVE SPEC: CANCEL FIRST. `Future.cancel()` succeeds only
                 # on a task no worker has picked up, so a successful cancel
@@ -3952,12 +4349,10 @@ class _ServerContext:
             # the first dead worker fails every request the server ever
             # receives for its whole idle life. Drop the corpse so the next
             # request rebuilds a fresh pool.
-            with self._dispatch_pool_lock:
-                # Identity-checked: a straggler of a pool already replaced (an
-                # overdue-worker kill) must not drop the successor.
-                broken = pool
-                if self._dispatch_pool is pool:
-                    self._dispatch_pool = None
+            # Identity-checked: a straggler of a pool already replaced (an
+            # overdue-worker kill) must not drop the successor.
+            broken = pool
+            healed = self._heal_lost_pool(broken, _guard_class) if self._drop_pool(pool) else None
             diagnosis = _dead_worker_diagnosis(broken, getattr(self, "_worker_stderr_dir", None))
             if broken is not None:
                 try:
@@ -3981,12 +4376,22 @@ class _ServerContext:
             # twice under two Commit-Tokens, 2026-08-19). Return the honest
             # refusal instead; `warm.client`'s pass-through surfaces it to the
             # caller unchanged, same as a client-detected indeterminate case.
-            if _op_may_mutate(msg.get("method")):
+            if _op_may_mutate(_eff):
                 if dispatch_key is not None:
                     _ack_store.stamp(dispatch_key, dispatch_ack.OUTCOME_WORKER_LOST)
                 return _with_reconcile_route(
                     _pool_broken_indeterminate_envelope(msg, diagnosis), dispatch_key
                 )
+            # A worker death with no side effect to double (COMPUTE_ONLY, no dispatch key) retries
+            # once on the prewarmed replacement before the GIL-bound in-process run below, which
+            # under a burst of queued frames stalls every door past its read deadline.
+            if (
+                healed is not None
+                and dispatch_key is None
+                and not _healed_retry
+                and healed.wait(_HEAL_RETRY_WAIT_SECS)
+            ):
+                return self._pool_dispatch_untimed(msg, caller=caller, _healed_retry=True)
             # `isolated=False`, explicitly: this fallback runs the op IN
             # THIS process, on this connection's own accept-thread -- the
             # exact threaded, unisolated shape the spike measured 8/8
@@ -4036,6 +4441,11 @@ class _ServerContext:
         if self._dispatch_pool is not None:
             try:
                 self._dispatch_pool.shutdown(wait=False, cancel_futures=True)
+            except Exception:  # noqa: BLE001
+                pass
+        if self.__dict__.get("_guard_pool") is not None:
+            try:
+                self._guard_pool.shutdown(wait=False, cancel_futures=True)
             except Exception:  # noqa: BLE001
                 pass
         return None
@@ -4800,6 +5210,8 @@ def _run_guarded() -> int:
              "attach a debugger to inspect a slow server here",
         file=sys.stderr,
     )
+
+    _start_dump_request_poll(repo_root)
 
     _suppress_pool_worker_consoles()
 

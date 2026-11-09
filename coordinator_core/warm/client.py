@@ -1265,6 +1265,21 @@ def _poll_command_for(dispatch_key: str, engine: Optional[dict] = None) -> str:
     return f"python3 -m coordinator_core.invoke {_RECONCILE_POLL_METHOD} '{params}' --bare"
 
 
+def _journaled_outcome(dispatch_key: Optional[str]) -> Optional[dict]:
+    """The `finished` payload the engine journaled for `dispatch_key` (the op landed
+    before its reply or worker was lost), or None. Failure-path only; never raises."""
+    if not dispatch_key:
+        return None
+    try:
+        from coordinator_core.warm import breadcrumb, dispatch_ack
+        from coordinator_core.warm.engine_root import current_engine_clone
+
+        svc = breadcrumb.svc_dir(current_engine_clone())
+        return dispatch_ack.read_outcome(dispatch_ack.journal_dir_under(svc), dispatch_key)
+    except Exception:  # noqa: BLE001 -- diagnostics never mask the envelope
+        return None
+
+
 _STALL_DUMPS_DIRNAME = "stall-dumps"
 _SAFE_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.")
 
@@ -1326,9 +1341,18 @@ def _indeterminate_envelope(
     `no_reply` case (vs the server's `worker_died`): op, how long the client
     waited after delivery, and the stage that ended the wait.
     """
+    landed = _journaled_outcome(dispatch_key)
+    if landed is not None and landed.get("result") is not None and landed.get("outcome") == "result":
+        return {"jsonrpc": "2.0", "id": msg.get("id"), "result": landed["result"]}
     text = _indeterminate_text_for(msg.get("method"))
     message = f"{text} ({detail})"
     data: dict = {"retry_safe": False}
+    if landed is not None:
+        data["landed"] = landed
+        message = (
+            f"warm dispatch LANDED: the engine journaled this op's outcome before the reply was lost; "
+            f"it ran exactly once, do NOT retry. Outcome: {json.dumps(landed, default=str)[:600]}. {message}"
+        )
     if waited_secs is not None:
         data["diagnosis"] = {
             "case": "no_reply",

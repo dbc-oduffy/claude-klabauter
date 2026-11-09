@@ -165,7 +165,7 @@ def _refusal(script: str, child_id: str, reply: dict, sizing_rel: str = ""):
     m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n\nfunction _emitRefusalReason\(.*?\n\}\n", script, re.S)
     assert m
     prog = (
-        "const WARP_PREFIX='/r/scratch/warp/';"
+        "const WARP_PREFIX='/r/scratch/warp/';const RUN_SCRIPT_SUFFIX='.workflow.mjs';"
         + m.group(0)
         + f"console.log(JSON.stringify(_emitRefusal({{run_id:{json.dumps(child_id)},sizing_rel:{json.dumps(sizing_rel)}}},{json.dumps(reply)})));"
     )
@@ -882,3 +882,109 @@ def test_unreconciled_32004_emit_reply_is_an_emit_failure_never_an_empty_run_id(
     assert "run id" not in got
     silent = {"path": "", "run_id": "", "fire_args": {}}
     assert _chain_refusal(script, "ask-r1", silent) == "emit reply path is not a non-empty string"
+
+
+def _emit_js(script: str, prefix: str, expr: str):
+    """Evaluate ``expr`` under node against the launcher's emit-path functions with WARP_PREFIX=``prefix``."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not available")
+    m = re.search(r"function _normEmitPath\(.*?\n\}\n\n.*?function _isOwnRedirect\(.*?\n\}\n\nfunction _emitRefusal\(child, e, chained\) \{.*?\n\}\n\nfunction _emitRefusalReason\(.*?\n\}\n", script, re.S)
+    assert m
+    prog = f"const WARP_PREFIX={json.dumps(prefix)};const RUN_SCRIPT_SUFFIX='.workflow.mjs';" + m.group(0) + f"console.log(JSON.stringify({expr}));"
+    out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return json.loads(out.stdout)
+
+
+_ROOTS = [
+    ("/r/scratch/warp/", lambda p: p),
+    ("C:/r/scratch/warp/", lambda p: "C:" + p),
+]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("prefix,mk", _ROOTS)
+def test_own_state_warp_run_dir_reply_is_accepted_and_resolves_to_the_run_script(tmp_path, prefix, mk):
+    _, script = _write(tmp_path)
+    child = '{run_id:"ask-r1",sizing_rel:""}'
+    base = {"run_id": "ask-r1", "fire_args": {}}
+    for path in (mk("/r/state/warp/ask-r1"), mk("/r/state/warp/ask-r1/"), mk("/r//state//warp//ask-r1"),
+                 mk("/r/state/warp/ask-r1").replace("/", "\\"), "state/warp/ask-r1"):
+        reply = dict(base, path=path)
+        assert _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(reply)})") is None, path
+        assert _emit_js(script, prefix, f"_normEmitPath({json.dumps(path)})") == prefix + "ask-r1.workflow.mjs"
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("prefix,mk", _ROOTS)
+def test_foreign_state_warp_paths_are_still_refused(tmp_path, prefix, mk):
+    _, script = _write(tmp_path)
+    child = '{run_id:"ask-r1",sizing_rel:""}'
+    base = {"run_id": "ask-r1", "fire_args": {}}
+    deeper = dict(base, path=mk("/r/state/warp/ask-r1/run-stage.json"))
+    assert "is outside" in _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(deeper)})")
+    other_state = dict(base, path=mk("/r/state/elsewhere/ask-r1"))
+    assert "is outside" in _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(other_state)})")
+    traversal = dict(base, path=mk("/r/state/warp/../x"))
+    assert _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(traversal)})") == (
+        "emit reply path contains .." + _REEMIT
+    )
+    other_repo = dict(base, path=mk("/other/state/warp/ask-r1"))
+    assert "is outside" in _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(other_repo)})")
+    foreign_run = dict(base, run_id="ask-other", path=mk("/r/state/warp/ask-other"))
+    assert _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(foreign_run)})").startswith("emit reply run_id ask-other is not")
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("prefix,mk", _ROOTS)
+def test_chained_handoffs_reply_resolves_to_the_run_id_the_size_step_returned(tmp_path, prefix, mk):
+    _, script = _write(tmp_path)
+    child = '{run_id:"ask-r1",sizing_rel:""}'
+    handoff = mk("/r/state/handoffs/2026-11/2026-11-07-917a58-4-fleet-state-response-shape.md")
+    reply = {"path": handoff, "run_id": "warp-fleet-20261107T120000-7a5db6", "fire_args": {}}
+    resolved = _emit_js(script, prefix, f"_handoffScript({json.dumps(reply)})")
+    assert resolved["path"] == prefix + "warp-fleet-20261107T120000-7a5db6.workflow.mjs"
+    assert _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(resolved)},true)") is None
+    qualified = dict(reply, path="example-cockpit-repo:state/handoffs/2026-11/x.md")
+    assert _emit_js(script, prefix, f"_handoffScript({json.dumps(qualified)})")["path"] == resolved["path"]
+    assert _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(resolved)},true)") is None
+    state_dir = {"path": mk("/r/state/warp/warp-fleet-20261107T120000-7a5db6"), "run_id": "", "fire_args": {}}
+    assert _emit_js(script, prefix, f"_pathRunId({json.dumps(state_dir['path'])})") == "warp-fleet-20261107T120000-7a5db6"
+    assert _emit_js(script, prefix, f"_emitRefusal({child},{json.dumps(state_dir)},true)") is None
+
+
+@pytest.mark.spawns_process
+def test_chained_handoffs_reply_stays_refused_without_a_fresh_run_id_or_outside_handoffs(tmp_path):
+    _, script = _write(tmp_path)
+    prefix = "/r/scratch/warp/"
+    child = '{run_id:"ask-r1",sizing_rel:""}'
+
+    def refusal(reply):
+        got = _emit_js(script, prefix, f"_emitRefusal({child},_handoffScript({json.dumps(reply)}),true)")
+        return got if got is None else got[: -len(_REEMIT)]
+
+    md = "/r/state/handoffs/2026-11/x.md"
+    no_run = {"path": md, "run_id": "", "fire_args": {}}
+    assert "yields an empty run id" in refusal(no_run)
+    own = dict(no_run, run_id="ask-r1")
+    assert "is not a fresh run id" in refusal(own)
+    unsafe = dict(no_run, run_id="../evil")
+    assert "yields an empty run id" in refusal(unsafe)
+    elsewhere = {"path": "/r/state/other/x.md", "run_id": "warp-fresh", "fire_args": {}}
+    assert "yields an empty run id" in refusal(elsewhere)
+    outside_repo = {"path": "/other/state/handoffs/x.md", "run_id": "warp-fresh", "fire_args": {}}
+    assert "yields an empty run id" in refusal(outside_repo)
+    not_md = {"path": "/r/state/handoffs/x.json", "run_id": "warp-fresh", "fire_args": {}}
+    assert "yields an empty run id" in refusal(not_md)
+    traversal = {"path": "/r/state/handoffs/../x.md", "run_id": "warp-fresh", "fire_args": {}}
+    assert "yields an empty run id" in refusal(traversal)
+
+
+def test_chain_hop_keeps_the_hand_off_run_id_when_its_path_is_not_a_run_script(tmp_path):
+    _, script = _write(tmp_path)
+    assert "_pathRunId(_rp) || (named(_rr) ? _rr : '')" in script
+    assert "emitted = _handoffScript(emitted);" in script

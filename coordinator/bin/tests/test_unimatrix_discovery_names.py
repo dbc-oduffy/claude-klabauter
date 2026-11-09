@@ -25,11 +25,26 @@ codex = _load("unimatrix-peer-codex.py", "discovery_names_codex")
 def _database(path, rows):
     connection = sqlite3.connect(path)
     try:
-        connection.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT)")
-        connection.executemany("INSERT INTO threads VALUES (?, ?)", rows)
+        connection.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT, source TEXT)")
+        connection.executemany("INSERT INTO threads VALUES (?, ?, 'cli')", rows)
         connection.commit()
     finally:
         connection.close()
+
+
+@pytest.fixture(autouse=True)
+def rollouts_exist(monkeypatch):
+    """Short fixture ids cannot name a rollout file; the rollout gate is stubbed open."""
+    monkeypatch.setattr(router, "codex_rollout_addressable", lambda home, ident, index: True)
+
+
+@pytest.fixture(autouse=True)
+def engine_addresses(monkeypatch):
+    """Discovery admits only Codex threads with an engine address; each fixture id gets one."""
+    def read(directory, ident, box):
+        return {"schema_version": 1, "provider": "codex", "session_id": ident,
+                "address_version": 1, "name": f"claude-klabauter-codex-test-{ident}", "box": box}
+    monkeypatch.setattr(router._contract(), "read_codex_address", read)
 
 
 def test_sqlite_metadata_enriches_live_names_without_duplicating_fixed_targets(tmp_path, monkeypatch):
@@ -48,7 +63,7 @@ def test_sqlite_metadata_enriches_live_names_without_duplicating_fixed_targets(t
     by_target = {peer["target"]: peer for peer in peers}
     assert set(by_target) == {"live", "other"}
     assert len({peer["name"] for peer in peers}) == 2
-    assert all(peer["name"].startswith("codex-coordinator-content-repo-") for peer in peers)
+    assert all(any(alias.startswith("codex-coordinator-content-repo-") for alias in peer["aliases"]) for peer in peers)
     assert all(peer["cwd"] == "/work/coordinator-content-repo" for peer in peers)
     assert peers == router.load_lock_peers(locks, "codex", taken_targets={"configured"})
 
@@ -59,9 +74,10 @@ def test_unreadable_database_does_not_hide_live_sessions(tmp_path, monkeypatch):
     (locks / "live.lock").touch()
     (tmp_path / "state_5.sqlite").write_bytes(b"not a database")
     monkeypatch.setattr(router, "lock_held", lambda path: True)
+    monkeypatch.setattr(router, "codex_rollout_identity", lambda home, ident, index: {"source": "cli"})
     peers = router.load_lock_peers(locks, "codex")
     assert len(peers) == 1 and peers[0]["target"] == "live"
-    assert peers[0]["name"].startswith("codex-session-")
+    assert any(alias.startswith("codex-session-") for alias in peers[0]["aliases"])
     assert not (tmp_path / "state_5.sqlite-journal").exists()
 
 
@@ -69,7 +85,7 @@ def test_subagent_writer_locks_are_not_independently_messageable_peers(tmp_path,
     locks = tmp_path / "thread-writer-locks"
     locks.mkdir()
     records = [
-        ("root", "/work/claude-klabauter", '"cli"', "cli", None),
+        ("root", "/work/claude-klabauter", '"cli"', "user", None),
         ("source-child", "/work/claude-klabauter", json.dumps({"subagent": {
             "thread_spawn": {"parent_thread_id": "root"}}}), None, None),
         ("source-kind-child", "/work/claude-klabauter", None, "subagent", None),

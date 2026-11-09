@@ -31,6 +31,14 @@ def test_unrun_symbol_knowledge_leg_is_failed_and_outstanding():
     assert block["outstanding"] == ["symbol-knowledge"]
 
 
+def test_unrun_scratch_reap_leg_is_failed_and_outstanding():
+    legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS if leg != "scratch-reap"}
+    block = rc.build_close_block("r1", True, legs)
+    assert block["legs"]["scratch-reap"] == {"status": "failed", "detail": "leg did not run"}
+    assert block["outstanding"] == ["scratch-reap"]
+    assert rc.RUN_BOUND_LEGS.index("scratch-reap") == rc.RUN_BOUND_LEGS.index("symbol-knowledge") + 1
+
+
 def test_outstanding_equals_failed_set():
     legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS}
     legs["lessons"] = LegResult("failed", "boom")

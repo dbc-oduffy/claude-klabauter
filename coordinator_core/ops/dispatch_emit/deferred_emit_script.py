@@ -90,6 +90,7 @@ function _replyTwinRel(pending, stem) {
 async function _startLoop(firstPath) {
   let path = firstPath;
   let lastSha = null;
+  if (typeof firstPath !== 'string' || !firstPath.endsWith('.mjs')) return { ok: false, error: 'refusing to start a non-script path: ' + String(firstPath) };
   for (let round = 0; round <= MAX_STAGE_ROUNDS; round++) {
     const result = START_ARGS === null ? await workflow({ scriptPath: path }) : await workflow({ scriptPath: path, args: START_ARGS });
     const pending = (result !== null && typeof result === 'object') ? result.__PENDING_KEY__ : null;
@@ -122,6 +123,9 @@ function _pathRunId(p) {
   const b = p.replace(/\\/g, '/').split('/').pop();
   return (b.endsWith(RUN_SCRIPT_SUFFIX) && b.indexOf('.staged-') === -1) ? b.slice(0, b.length - RUN_SCRIPT_SUFFIX.length) : '';
 }
+function _isScriptPath(p) {
+  return typeof p === 'string' && p.trim().replace(/["']+$/, '').endsWith('.mjs');
+}
 if (!first.ok) return { status: 'failed', run_id: ASK_RUN_ID, error: first.error };
 const handoff = (first.result !== null && typeof first.result === 'object') ? first.result.__CHAIN_KEY__ : null;
 if (handoff === null || typeof handoff !== 'object') return first.result;
@@ -135,7 +139,8 @@ const _briefCarry = __BRIEF_CARRY__;
 const _chainJson = JSON.stringify({ ...chainParams, ..._briefCarry, __LAUNCHER_PARAM__: true });
 let chain;
 if (typeof _re === 'string' && _re !== '') return _fail('emit failed: ' + _re);
-if (!_blankPath(_rp)) {
+// Trap: a hand-off path that is not a `.mjs` script (the L-sized ask's handoff .md) is never started; the hop emits its own chained run.
+if (!_blankPath(_rp) && _isScriptPath(_rp)) {
   chain = { path: _rp, run_id: _rr, fire_args: (_rf !== null && typeof _rf === 'object') ? _rf : {} };
 } else {
   chain = await agent(
@@ -150,6 +155,7 @@ if (!_blankPath(_rp)) {
   );
 }
 if (!chain || _blankPath(chain.path)) return _fail((chain && chain.error) || 'the chain emit returned no script path');
+if (!_isScriptPath(chain.path)) return _fail('the chain emit returned a non-script path ' + JSON.stringify(chain.path));
 // Trap: the path basename is the trusted run id; the emit's minted run_id stands in only when the basename yields none (a path the
 // suffix/staged check rejects), and the ask-equal refusal below still catches a relay that copied the ask's own id.
 let _chainRun = _pathRunId(chain.path);

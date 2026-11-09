@@ -197,3 +197,23 @@ def test_run_unresolved_when_plan_differs_or_ambiguous(tmp_path, monkeypatch):
     )
     assert ch.checkpoint_run_id(tmp_path, MSG, "s1") is None
     assert ch.checkpoint_run_id(tmp_path, "no plan line", "s1") is None
+
+
+def test_blob_equal_to_head_is_withheld_with_a_reason(tmp_path):
+    root = _repo(tmp_path)
+    head_sha = subprocess.run(
+        ["git", "rev-parse", "HEAD:f.txt"], cwd=root, capture_output=True, text=True, check=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+    reasons: dict = {}
+    kept, withheld = ch.withhold_head_equal(root, {"f.txt": head_sha}, reasons)
+    assert kept == {} and withheld == ["f.txt"]
+    assert reasons["f.txt"] == ch.HEAD_EQUAL_REASON
+
+
+def test_blob_differing_from_head_is_kept(tmp_path):
+    root = _repo(tmp_path)
+    other = git_objects.write_object(resolve_git_common_dir(root), b"blob", b"changed\n")
+    reasons: dict = {}
+    kept, withheld = ch.withhold_head_equal(root, {"f.txt": other}, reasons)
+    assert kept == {"f.txt": other} and withheld == [] and reasons == {}

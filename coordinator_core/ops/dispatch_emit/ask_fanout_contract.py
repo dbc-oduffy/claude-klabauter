@@ -59,7 +59,7 @@ FanoutFn = Callable[[dict, Any], dict]
 
 @dataclass(frozen=True)
 class AskSlice:
-    """One separable ask. ``writes`` None means no hint was given (overlaps nothing)."""
+    """One separable ask. ``writes`` None means no hint was given and none was inferred (overlaps nothing)."""
 
     label: str
     ask: str
@@ -505,8 +505,9 @@ def after_edges(slices: Sequence[AskSlice]) -> dict[int, tuple[int, ...]]:
 
     j follows earlier i when both declare writes and those overlap (exact path, one a directory
     prefix of the other, or a glob covering a path or intersecting another glob), when both carry a ``wave`` and i's is lower, or when j declared ``after`` naming i. A slice with no ``writes``
-    hint overlaps nothing: undeclared slices run in parallel and the shared-tree claim mechanism
-    arbitrates their overlap. An empty ``writes`` list likewise overlaps nothing.
+    hint overlaps nothing here: the sizings arm fills undeclared slices from their sizing's plan spine
+    before calling (``sibling_footprint.inferred_writes``), and the stage-time footprint claim is the
+    backstop for the rest. An empty ``writes`` list likewise overlaps nothing.
     """
     edges: dict[int, tuple[int, ...]] = {}
     for j, later in enumerate(slices):

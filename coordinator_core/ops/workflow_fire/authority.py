@@ -36,14 +36,22 @@ def caller_principal(cwd: str | None = None) -> Principal:
 
 
 def require_submission_em(session_id: str, cwd: str) -> str | None:
-    """Return a refusal before submission can emit or mint any run."""
+    """Return a refusal only for a session-identity mismatch; a non-EM caller is recorded, not refused."""
     caller = caller_principal(cwd)
     if not caller.session_id or caller.session_id != session_id:
         return 'The submitted session must match the actual invoking session.'
     if caller.role != 'em':
-        return ('Only a verified EM may submit a new workflow; caller role is '
-                + caller.role + '. Register this main session through its lifecycle hook first.')
+        _record_non_em_submit(caller.session_id, cwd)
     return None
+
+
+def _record_non_em_submit(session_id: str, cwd: str) -> None:
+    """Advisory only: no deny_registry irreversible class covers a non-EM submit."""
+    try:
+        from coordinator_core.guard_advisory_counter import record_advisory_fire
+        record_advisory_fire('submit-engine-ask-non-em', session_id, cwd)
+    except Exception:
+        pass
 
 
 def require_fire_authority(script_path: str, expected: str | None, *, cwd: str | None,

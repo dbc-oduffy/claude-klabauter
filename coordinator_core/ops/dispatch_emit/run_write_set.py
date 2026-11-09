@@ -116,6 +116,8 @@ def _split_peer_held(root: Path, ordered: list, own_session: str, run_id: str) -
         except Exception:  # noqa: BLE001 -- no base: the checkpoint walk stops at the first non-checkpoint commit
             run_base = None
     selves = land_run._firing_sessions(root, run_id, own_session or None) if run_id else set()
+    if run_id:
+        selves |= land_run._prior_pass_sessions(root, run_id)
     emitter = recorded_emitter(root, run_id) if run_id else None
     if emitter:
         selves.add(emitter)

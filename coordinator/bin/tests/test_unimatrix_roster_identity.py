@@ -2,6 +2,7 @@
 import asyncio
 import importlib.util
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -89,6 +90,8 @@ def test_two_boxes_with_identical_far_socket_and_name_get_distinct_display_route
     monkeypatch.setattr(roster, "proc_start", lambda pid: "local-start")
     monkeypatch.setattr(roster, "pid_domain", lambda: "win32:machine-a")
     monkeypatch.setattr(roster, "pid_alive", lambda pid: True)
+    monkeypatch.setattr(roster._liveness(), "pid_alive", lambda pid: True)
+    monkeypatch.setattr(roster._liveness(), "proc_start", lambda pid: "local-start")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(tmp_path))
     monkeypatch.setattr(roster, "local_endpoint", lambda seed: str(tmp_path / (roster.hashlib.sha256(seed.encode()).hexdigest() + ".sock")))
     monkeypatch.setattr(roster, "write_peer_key", lambda *args: None)
@@ -113,13 +116,20 @@ def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path,
     entries = [
         {"pid": 101, "name": "group-em-09", "version": "2.1.319", "status": "idle", "cwd": "/group"},
         {"pid": 102, "name": "remote-codex", "sessionId": "peer-codex-a-102", "box": "macmini",
-         "macSocketPath": "/far.sock", "status": "idle", "cwd": "/work/repo"},
+         "macSocketPath": "/far.sock", "status": "idle", "cwd": "/work/repo",
+         "unimatrixRemote": "user@macmini", "farPid": 7, "procStart": "start-102", "pidDomain": "domain",
+         "unimatrixVendor": "codex", "unimatrixBox": "macmini", "messagingSocketPath": str(tmp_path / "local.sock")},
         {"pid": 103, "name": "hidden-transport", "unimatrixTransport": True},
     ]
+    (tmp_path / "local.sock").write_text("")
     for entry in entries:
         (tmp_path / f"{entry['pid']}.json").write_text(json.dumps(entry))
     monkeypatch.setattr(router._roster(), "pid_alive", lambda pid: True)
-    r = router.Router([{"name": "local-peer", "vendor": "codex", "target": "root", "cwd": "/local"}],
+    monkeypatch.setattr(router._roster(), "proc_start", lambda pid: "start-102")
+    monkeypatch.setattr(router._roster(), "pid_domain", lambda: "domain")
+    monkeypatch.setattr(router, "codex_is_sendable_root", lambda metadata: True)
+    r = router.Router([{"name": "local-peer", "vendor": "codex", "target": "root", "cwd": "/local",
+                       "codexPid": os.getpid()}],
                       sessions_dir=tmp_path, state_dir=tmp_path / "state")
     response = asyncio.run(r._dispatch({"op": "list"}))
     assert response["sessions"] == ["group-em-09", "remote-codex"]
@@ -131,5 +141,7 @@ def test_router_and_cli_list_vendor_box_and_cwd_without_changing_names(tmp_path,
     assert send.main(["--list"]) == 0
     lines = capsys.readouterr().out.splitlines()
     remote = next(line for line in lines if line.startswith("remote-codex\t"))
-    assert "vendor=codex" in remote and "box=macmini" in remote and "cwd=/work/repo" in remote
-    assert any(line.startswith("local-peer\tready\tvendor=codex\t") for line in lines)
+    assert remote.split("\t") == ["remote-codex", "macmini", "codex", "session"]
+    assert response["details"]["remote-codex"]["cwd"] == "/work/repo"
+    local = next(line for line in lines if line.startswith("local-peer\t")).split("\t")
+    assert local[2:] == ["codex", "ready"]

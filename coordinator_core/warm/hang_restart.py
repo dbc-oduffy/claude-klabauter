@@ -1,8 +1,9 @@
 """Hang auto-restart: N stall dumps inside a window make the warm server exit itself.
 
-Evaluated at the point a stall dump lands (`server._write_stall_record`), so a healthy
-engine pays nothing: no thread, no timer, no watcher process. The respawn-on-next-op path
-restarts the server; this module only decides, logs one line, and exits.
+Evaluated where a stall is detected (`note_stall`, in memory, before any filesystem call) and
+where a stall dump lands (`maybe_restart`, counting records on disk), so a healthy engine pays
+nothing: no timer, no watcher process; a helper thread exists only at the threshold. The
+respawn-on-next-op path restarts the server; this module only decides, logs one line, and exits.
 
 Every decision appends one line to `<svc>/hang-restarts.log`:
 `<UTC> pid=<server pid> action=restart|suppressed [reason=...] count=.. window_s=.. dumps=..`.
@@ -23,7 +24,7 @@ from coordinator_core.warm import breadcrumb
 
 HANG_DUMP_THRESHOLD = 8
 HANG_WINDOW_SECS = 60.0
-RESTART_MIN_INTERVAL_SECS = 300.0
+RESTART_MIN_INTERVAL_SECS = 20.0
 HANG_RESTART_LOG_FILENAME = "hang-restarts.log"
 _LOG_TAIL_BYTES = 16384
 _DUMPS_NAMED = 5
@@ -120,6 +121,80 @@ def _append(log: Path, now: float, server_pid: int, action: str, count: int, win
     stamp = time.strftime(_LINE_STAMP_FMT, time.gmtime(now))
     with open(log, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(f"{stamp} pid={server_pid} action={action} count={count} window_s={window:g} dumps={named}\n")
+
+
+_DECISION_DEADLINE_SECS = 1.0
+_stall_marks: dict = {}
+_stall_marks_lock = threading.Lock()
+
+
+def _disk_decision(stall_dir: Path, pid: int, now: float, count: int, window: float, min_interval: float) -> str:
+    """The hold / rate-limit / log leg of an in-memory trigger. Reads and appends
+    files, so the caller bounds it."""
+    svc = stall_dir.parent
+    log = svc / HANG_RESTART_LOG_FILENAME
+    with _decision_lock:
+        lines = _tail_lines(log)
+        last_restart, _ = _last_line(lines, restart=True)
+        reason = _hold_reason(svc, now)
+        if reason is None and last_restart is not None and now - last_restart < min_interval:
+            reason = "rate-limited"
+        if reason is not None:
+            last_sup, line = _last_line(lines, restart=False)
+            if last_sup is None or now - last_sup >= window or f"reason={reason}" not in line:
+                _append(log, now, pid, f"suppressed reason={reason}", count, window, [])
+            return "suppressed"
+        _append(log, now, pid, "restart", count, window, [])
+    return "restart"
+
+
+def note_stall(
+    stall_dir,
+    *,
+    server_pid: Optional[int] = None,
+    exit_fn: Optional[Callable[[int], None]] = None,
+    threshold: int = HANG_DUMP_THRESHOLD,
+    window: float = HANG_WINDOW_SECS,
+    min_interval: float = RESTART_MIN_INTERVAL_SECS,
+    deadline: float = _DECISION_DEADLINE_SECS,
+) -> Optional[str]:
+    """Count a stall in memory the instant it is detected, before any filesystem call.
+
+    `maybe_restart` counts stall records on disk, so it cannot see a stall of the very
+    filesystem it reads. At `threshold` marks inside `window` (per `stall_dir`), the
+    hold / rate-limit / log leg runs on a helper thread bounded by `deadline`; a hold
+    or rate limit suppresses, an unfinished leg (stalled disk) restarts anyway.
+    Returns `"restart"`, `"suppressed"` or None. Never raises.
+    """
+    try:
+        stall_dir = Path(stall_dir)
+        mono = time.monotonic()
+        pid = os.getpid() if server_pid is None else server_pid
+        with _stall_marks_lock:
+            marks = [m for m in _stall_marks.get(str(stall_dir), []) if mono - m < window]
+            marks.append(mono)
+            _stall_marks[str(stall_dir)] = marks
+            count = len(marks)
+            if count < threshold:
+                return None
+            _stall_marks.pop(str(stall_dir), None)
+        verdict: list = []
+
+        def _leg() -> None:
+            try:
+                verdict.append(_disk_decision(stall_dir, pid, time.time(), count, window, min_interval))
+            except Exception:  # noqa: BLE001 -- an unreadable hold reads as no hold
+                verdict.append("restart")
+
+        helper = threading.Thread(target=_leg, name="hang-restart-decision", daemon=True)
+        helper.start()
+        helper.join(deadline)
+        if verdict and verdict[0] == "suppressed":
+            return "suppressed"
+        (exit_fn or exit_server)(pid)
+        return "restart"
+    except Exception:  # noqa: BLE001 -- the dump path never raises
+        return None
 
 
 def maybe_restart(

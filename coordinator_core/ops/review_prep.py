@@ -300,18 +300,24 @@ def _freeze_whole_by_base(
     return {"diff_path": str(diff_path), "error": None}
 
 
-def foreign_claims(repo_root: Path, rev_range: str, paths: List[str], own_session: str) -> List[str]:
+def foreign_claims(
+    repo_root: Path, rev_range: str, paths: List[str], own_session: str, scanned: Optional[frozenset] = None
+) -> List[str]:
     """Declared `paths` changed by a commit in `rev_range` that a live session other than
-    `own_session` claims. One `git log` spawn; none when `paths` is empty."""
+    `own_session` claims. `scanned` (the peer-base log's changed set) answers it with no spawn;
+    without it, one `git log` spawn; none when `paths` is empty."""
     if not paths:
         return []
-    proc = run_git(
-        ["-C", str(repo_root), "log", "--name-only", "--format=", rev_range, "--", *map(git_pathspec, paths)],
-        timeout=_GIT_TIMEOUT_SECS,
-    )
-    if proc.returncode != 0:
-        return []
-    changed = sorted({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()})
+    if scanned is not None:
+        changed = sorted(scanned)
+    else:
+        proc = run_git(
+            ["-C", str(repo_root), "log", "--name-only", "--format=", rev_range, "--", *map(git_pathspec, paths)],
+            timeout=_GIT_TIMEOUT_SECS,
+        )
+        if proc.returncode != 0:
+            return []
+        changed = sorted({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()})
     if not changed:
         return []
     claims = claim_index.lookup(changed, cwd=str(repo_root))
@@ -589,6 +595,16 @@ def _inside_repo(path: str) -> bool:
     return not (norm == ".." or norm.startswith("../") or norm.startswith("/") or PureWindowsPath(path).drive)
 
 
+def _record_run_sidecar(repo_root: Path, run_id: str, sidecar: Path) -> None:
+    """Ledger the sidecar under the run so its close leg reaps it; never raises into review.prep."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_scratch
+
+        run_scratch.record_paths(repo_root, run_id, [_rel(sidecar, repo_root)])
+    except (OSError, ValueError):  # recording is best-effort: a failed record must not fail the prep
+        pass
+
+
 def review_prep(
     repo_root: Path,
     *,
@@ -609,7 +625,8 @@ def review_prep(
     docstring. ``undeclared_edits`` names the members of ``paths`` that no row declared and that
     changed since the stage dirt snapshot; the reply and sidecar carry them as ``undeclared_edits``.
     ``peer_held`` names members of ``paths`` a live session touches; they stay in review and ride on
-    the reply's ``peer_held`` next to those ``live_runs`` withholds.
+    the reply's ``peer_held`` next to those ``live_runs`` withholds. An unparseable ``.py`` among
+    ``undeclared_edits`` never refuses: it leaves review and rides on the reply's ``foreign_unparseable``.
     With ``live_runs``, a path another live run withholds or claims stays in review and is
     listed in ``peer_held``; the peer-hunks gate settles it at commit. The handler derives ``live_runs``
     from halted runs' withheld sets (``land_run.foreign_halted_withheld``) when ``params.run_id`` is
@@ -643,19 +660,67 @@ def review_prep(
 
     from coordinator_core.ops.review_peer_bases import _has_object_store
 
+    held = set(peer_held)
+    own_paths = [p for p in paths if p not in held]
     with review_prep_legs.leg("parse_gate"):
         if head:
             broken = []
             if _has_object_store(repo_root):
-                broken = _unparseable_py_at_native(repo_root, head, paths)
+                broken = _unparseable_py_at_native(repo_root, head, own_paths)
                 if broken is None:
-                    broken = unparseable_py_at(repo_root, head, paths)
+                    broken = unparseable_py_at(repo_root, head, own_paths)
         else:
-            broken = unparseable_py(repo_root, paths)
+            broken = unparseable_py(repo_root, own_paths)
+    undeclared_set = set(undeclared_edits)
+    foreign_broken = [f for f in broken if f.path in undeclared_set]
+    broken = [f for f in broken if f.path not in undeclared_set]
     if broken:
         return _fail(
             "review.prep refused: py-unparseable: " + "; ".join(f"{f.path} {f.detail}" for f in broken)
         )
+    foreign_unparseable = [{"path": f.path, "detail": f.detail} for f in foreign_broken]
+    if foreign_unparseable:
+        dropped = {f["path"] for f in foreign_unparseable}
+        paths = [p for p in paths if p not in dropped]
+        peer_held = [p for p in peer_held if p not in dropped]
+        undeclared_edits = [p for p in undeclared_edits if p not in dropped]
+        if not paths:
+            zero = _fail("")
+            zero.update(
+                plan_id=_plan_id(repo_root, plan_path),
+                share_dir=_rel(Path(share_dir(str(repo_root), session_id)), repo_root) if session_id else "",
+                basis="range" if head else "worktree",
+                run_base_sha=base,
+                excluded=excluded,
+                error=None,
+                foreign_unparseable=foreign_unparseable,
+            )
+            return _for_group(zero, group_index, group_count)
+    reply = _prepare(
+        repo_root, base, paths, slice_prefix, plan_path, head, session_id, group_index, group_count,
+        run_id, excluded, peer_held, undeclared_edits,
+    )
+    if foreign_unparseable and not reply.get("error"):
+        reply = {**reply, "foreign_unparseable": foreign_unparseable}
+    return reply
+
+
+def _prepare(
+    repo_root: Path,
+    base: str,
+    paths: List[str],
+    slice_prefix: str,
+    plan_path: str,
+    head: Optional[str],
+    session_id: str,
+    group_index: Optional[int],
+    group_count: Optional[int],
+    run_id: str,
+    excluded: List[dict],
+    peer_held: List[str],
+    undeclared_edits: Sequence[str],
+) -> dict:
+    """The claim, serve-or-compute and group-slice tail of ``review_prep`` once the parse gate passed."""
     session = session_id or resolve_session_id(str(repo_root))
     if not session:
         return _fail("no session id: pass session_id or run under a session")
@@ -663,6 +728,8 @@ def review_prep(
     share = Path(share_dir(str(repo_root), session))
     sidecar = share / f"{slice_prefix}.review-prep.md"
     lock = share / f"{slice_prefix}.review-prep.lock"
+    if run_id:
+        _record_run_sidecar(repo_root, run_id, sidecar)
 
     fresh_bases: List[dict] = []
 
@@ -822,7 +889,7 @@ def _compute(
         _write_pre_review_snapshot(share, repo_root, slice_prefix, base, paths, contents, hashes)
     out["pre_review_manifest"] = _rel(_manifest_path(share, slice_prefix), repo_root)
 
-    out["peer_bases"] = peer_bases
+    out["peer_bases"] = dict(peer_bases)
     if part is None:
         part = run_partition()
         if part["error"]:
@@ -869,7 +936,10 @@ def _compute(
         if not is_magic_pathspec(p) and not _covers(p, sliced_index)
     )
     with review_prep_legs.leg("foreign_claims"):
-        out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session)
+        from coordinator_core.ops.review_peer_bases import PeerBases
+
+        scanned = peer_bases.changed if isinstance(peer_bases, PeerBases) else None
+        out["foreign_claims"] = foreign_claims(repo_root, rev_range, paths, session, scanned)
     out["sidecar_path"] = _rel(sidecar, repo_root)
     with review_prep_legs.leg("write_sidecar"):
         _write_sidecar(sidecar, out, session, paths, head)
@@ -1152,23 +1222,27 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
         return _fail("review.prep params.live_runs must map run ids to objects")
     run_id = str(params.get("run_id") or "")
     if live_runs is None and run_id:
+        from coordinator_core.git.call_io_scope import call_io_scope
         from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld
 
-        with review_prep_legs.leg("handler.halted_withheld"):
+        with review_prep_legs.leg("handler.halted_withheld"), call_io_scope():
             held = foreign_halted_withheld(repo_root, run_id, str(params.get("plan_path") or "") or None, [str(p) for p in paths])
         live_runs = holders_from_held(held) or None
-    return review_prep(
-        repo_root,
-        base=base,
-        paths=[str(p) for p in paths],
-        slice_prefix=slice_prefix,
-        plan_path=str(params.get("plan_path") or ""),
-        head=head or None,
-        session_id=str(params.get("session_id") or ""),
-        group_index=group_index,
-        group_count=group_count,
-        run_id=run_id,
-        live_runs=live_runs,
-        undeclared_edits=undeclared,
-        peer_held=list(held_by_peer),
-    )
+    from coordinator_core.ops.review_freeze_diff import diff_targets_batch
+
+    with diff_targets_batch(repo_root):
+        return review_prep(
+            repo_root,
+            base=base,
+            paths=[str(p) for p in paths],
+            slice_prefix=slice_prefix,
+            plan_path=str(params.get("plan_path") or ""),
+            head=head or None,
+            session_id=str(params.get("session_id") or ""),
+            group_index=group_index,
+            group_count=group_count,
+            run_id=run_id,
+            live_runs=live_runs,
+            undeclared_edits=undeclared,
+            peer_held=list(held_by_peer),
+        )

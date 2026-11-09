@@ -232,7 +232,14 @@ colon (or only whitespace) does not exempt the line. This matters because a
 genuine incident writeup (this guard's own originating incident, or the
 sibling `foreign-platform-path-guard.md` wiki page) quotes the real
 corrupted path AS the evidence and must stay quotable -- the escape hatch
-exists for exactly that case, reviewable per-diff, never a silent registry.
+exists for exactly that case, reviewable per-diff.
+
+On a CODE SURFACE (`abs_path_carve_outs.CODE_SURFACE_EXTS`: code, tests,
+launchers) the reason alone is self-certification and no longer discharges:
+the marker must be `abs-path-ok: key=<registry key>` or
+`abs-path-ok: carve-out=<id>`, or the exact site must be listed, all in the
+tracked `.abs-path-carve-outs.toml`. That list is a diff-reviewed file, not
+a silent registry. A malformed list is one `carve-out-file-malformed` finding.
 
 Evidence-artifact exemption -- an ARTIFACT-CLASS carve-out, not a directory allowlist
 --------------------------------------------------------------------------------------
@@ -411,11 +418,14 @@ import subprocess
 import yaml
 from coordinator_core.win_portability import leaf_spawn_creationflags
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import TYPE_CHECKING, List, Optional, Set, Tuple
 
 from coordinator_core.ops.session._path_shape_regexes import WIN_DRIVE_RE
+
+if TYPE_CHECKING:
+    from coordinator_core.ops.session.abs_path_carve_outs import CarveOuts
 
 # --- root-shape regexes -------------------------------------------------
 
@@ -1069,6 +1079,24 @@ class Finding:
     line: int
     rule: str  # "posix-home" | "drive-letter" | "unc" | "mixed-separators" | "dead-registry-rung"
     matched: str
+    hint: str = field(default="", compare=False)
+
+    def __str__(self) -> str:
+        head = f"{self.file}:{self.line} {self.rule} {self.matched}"
+        return f"{head} -- {self.hint}" if self.hint else head
+
+
+_BARE_REASON_HINT = (
+    "a bare abs-path-ok reason no longer exempts on a code surface; list the site in "
+    ".abs-path-carve-outs.toml or use `abs-path-ok: key=<k>` / `carve-out=<id>`"
+)
+
+
+def _code_surface_exts() -> Tuple[str, ...]:
+    # Deferred: abs_path_carve_outs imports _MARKER_RE from this module.
+    from coordinator_core.ops.session.abs_path_carve_outs import CODE_SURFACE_EXTS
+
+    return CODE_SURFACE_EXTS
 
 
 def _line_has_marker_with_reason(line: str) -> bool:
@@ -1269,12 +1297,18 @@ def _is_terminal_plan(text: str, filename: str) -> bool:
     return bool(match) and match.group(1) in _TERMINAL_PLAN_STATUSES
 
 
-def detect_in_text(text: str, filename: str = "") -> List[Finding]:
+def detect_in_text(
+    text: str, filename: str = "", carve_outs: "Optional[CarveOuts]" = None
+) -> List[Finding]:
     """Pure, filesystem-free -- returns every `Finding` in `text`.
 
     A line carrying `abs-path-ok: <non-empty reason>` is skipped entirely
-    (for all four rules); a bare `abs-path-ok:` with no reason is NOT an
-    exemption and the line is scanned normally.
+    (for all four rules) when `filename` is NOT a code surface
+    (`CODE_SURFACE_EXTS`); a bare `abs-path-ok:` with no reason is NOT an
+    exemption and the line is scanned normally. On a code-surface
+    `filename` the skip needs `marker_is_discharged` against `carve_outs`
+    (None means an empty registry): a registry key, a listed carve-out id
+    or a listed site, never the reason alone.
 
     A `filename` matching `_EVIDENCE_ARTIFACT_PATH_PREFIXES`, an exact file
     in `_EVIDENCE_ARTIFACT_EXACT_FILES`, or the format-scoped capture-data
@@ -1376,8 +1410,23 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
         abs_end = line_start_offset + m_end
         return _inside_any_span(abs_start, abs_end, class2_spans)
 
+    code_surface = lower_filename.endswith(_code_surface_exts())
+    hinted_lines: Set[int] = set()
+    if code_surface:
+        from coordinator_core.ops.session.abs_path_carve_outs import (
+            CarveOuts,
+            marker_is_discharged,
+        )
+
+        registry = carve_outs if carve_outs is not None else CarveOuts()
+
     for lineno, line in enumerate(text.splitlines(), start=1):
-        if _line_has_marker_with_reason(line):
+        if code_surface:
+            if marker_is_discharged(line, filename, registry):
+                continue
+            if _line_has_marker_with_reason(line):
+                hinted_lines.add(lineno)
+        elif _line_has_marker_with_reason(line):
             continue
 
         line_start_offset = line_offsets[lineno - 1] if line_offsets else 0
@@ -1508,6 +1557,11 @@ def detect_in_text(text: str, filename: str = "") -> List[Finding]:
                     continue
                 findings.append(Finding(filename, lineno, "dead-registry-rung", m.group(0)))
 
+    if hinted_lines:
+        findings = [
+            replace(f, hint=_BARE_REASON_HINT) if f.line in hinted_lines else f
+            for f in findings
+        ]
     return findings
 
 
@@ -1554,8 +1608,20 @@ def scan_repo(root: Path) -> List[Finding]:
     """Scan every tracked file under `root` (any git repo -- this module is
     not coordinator-content-repo-specific) and return all `Finding`s. Never raises on a
     per-file read failure; that file is simply skipped."""
+    from coordinator_core.ops.session.abs_path_carve_outs import (
+        CARVE_OUTS_FILENAME,
+        load_carve_outs,
+    )
+
     findings: List[Finding] = []
+    carve_outs = load_carve_outs(root)
+    if carve_outs.malformed:
+        findings.append(
+            Finding(CARVE_OUTS_FILENAME, 1, "carve-out-file-malformed", carve_outs.malformed)
+        )
     for rel in _tracked_files(root):
+        if rel == CARVE_OUTS_FILENAME:
+            continue  # the registry quotes the literals it reviews
         full = root / rel
         try:
             if full.stat().st_size > _MAX_FILE_BYTES:
@@ -1567,11 +1633,16 @@ def scan_repo(root: Path) -> List[Finding]:
         # decode as a path are not a citation.
         if "\0" in text or not _maybe_relevant(text):
             continue
-        findings.extend(detect_in_text(text, rel))
+        findings.extend(detect_in_text(text, rel, carve_outs))
     return findings
 
 
-def new_violations(before: str, after: str, filename: str = "") -> List[Finding]:
+def new_violations(
+    before: str,
+    after: str,
+    filename: str = "",
+    carve_outs: "Optional[CarveOuts]" = None,
+) -> List[Finding]:
     """Multiset difference of `detect_in_text(after)` over
     `detect_in_text(before)`, keyed by `(rule, matched)` -- ignores line
     number (a write shifts line numbers even for untouched content). A
@@ -1588,11 +1659,11 @@ def new_violations(before: str, after: str, filename: str = "") -> List[Finding]
     must not be denied by the very guard whose finding it's quoting.
     """
     before_counts = Counter(
-        (f.rule, f.matched) for f in detect_in_text(before, filename)
+        (f.rule, f.matched) for f in detect_in_text(before, filename, carve_outs)
     )
     seen: Counter = Counter()
     new: List[Finding] = []
-    for f in detect_in_text(after, filename):
+    for f in detect_in_text(after, filename, carve_outs):
         key = (f.rule, f.matched)
         seen[key] += 1
         if seen[key] > before_counts.get(key, 0):

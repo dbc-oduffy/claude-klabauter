@@ -544,6 +544,44 @@ def _run_left_nothing(root: Path, run_id: str, paths: list) -> set:
         return set()
 
 
+def _peer_only_after_checkpoint(
+    root: Path, run_id: str, plan_rel: object, run_base: Optional[str], paths: list
+) -> set:
+    """Paths the run's own checkpoint already landed whose current bytes its own kept record does not
+    fingerprint: the remaining dirt is a peer's and is neither landed nor withheld.
+
+    Same rule as ``halted_hunk_attribution`` 2b: a blob ``kept.json`` fingerprints for the path is the
+    run's. A path outside the run's baseline, a deleted path and unreadable evidence are never released.
+
+    Trap: a hunk the run wrote after its last checkpoint, on a first halt with no prior ``kept.json``,
+    reads as the peer's here.
+    """
+    if not paths or not isinstance(plan_rel, str) or not plan_rel:
+        return set()
+    from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
+    from coordinator_core.ops.dispatch_emit import kept_work, own_checkpoint_paths
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        baseline = hha._baseline(root, run_id)
+        if baseline is None:
+            return set()
+        landed = own_checkpoint_paths.checkpoint_landed_paths(
+            root, plan_rel, run_base, [p for p in paths if p in baseline]
+        )
+        if not landed:
+            return set()
+        kept = kept_work.kept_fingerprints(record_dir(root, run_id))
+        out = set()
+        for p in landed:
+            current = kept_work.fingerprint(root, p)
+            if current is not None and current not in kept.get(p, frozenset()):
+                out.add(p)
+        return out
+    except Exception:  # noqa: BLE001 -- unknown is not foreign
+        return set()
+
+
 def _withhold_importers_of_withheld(root: Path, product: list, removed: list, owner: dict, withheld: dict) -> bool:
     """Withhold, to a fixpoint, each chunk whose landing ``.py`` imports a name only a withheld path
     binds (reason ``import-closure-untracked``); True when any chunk was added. A finding that names
@@ -669,6 +707,8 @@ def _land(
     product = [p for p in declared if p in differ]
     removed = [p for p in declared if p in gone]
     idle = _run_left_nothing(root, run_id, product + removed)
+    peer_only = _peer_only_after_checkpoint(root, run_id, halted.get(HALT_PLAN_FIELD), run_base, product + removed)
+    idle |= peer_only
     product = [p for p in product if p not in idle]
     removed = [p for p in removed if p not in idle]
     withheld: dict = dict(process_withheld)
@@ -739,7 +779,7 @@ def _land(
 
     from coordinator_core.ops.dispatch_emit.halted_record_commit import _run_written, _withhold_run_dirt
 
-    run_written = _run_written(root, session_id, run_id)
+    run_written = [p for p in _run_written(root, session_id, run_id) if p not in peer_only]
     written_entries = _entries_at(root, None, run_written) if run_written else {}
     if written_entries is None:
         own_changed = {p for p in run_written if (root / p).exists()}

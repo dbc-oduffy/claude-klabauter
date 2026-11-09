@@ -13,7 +13,6 @@ registration shows in the TUI. Never fails the session: every path exits 0.
 register_peer() is the shared registration helper: it takes the vendor and target, so another
 vendor's SessionStart hook differs only in payload field names and vendor.
 """
-import hashlib
 import importlib.util
 import json
 import os
@@ -57,33 +56,26 @@ def peer_base(payload):
     return (checkout_name(cwd) if isinstance(cwd, str) and cwd else "") or VENDOR
 
 
-def session_name(rows, base, vendor, thread):
-    """<base>-<2 hex>, unique per thread: this thread's own bound name is kept, else a free suffix.
+def codex_holder(pid=None):
+    """{codexPid, codexProcStart} of pid (default: this hook's parent, the Codex process); {} when unreadable.
 
-    The suffix starts at a hash of the thread id so a name is stable across restarts and is only
-    moved off when another thread already holds it.
-    """
-    own = re.compile(re.escape(base) + r"-[0-9a-f]{2}")
-    taken = {}
-    for r in rows:
-        if isinstance(r, dict):
-            if r.get('vendor') == vendor and r.get('target') == thread and 'address_version' in r:
-                return load_sibling('unimatrix-peer-contract').owned_codex_address(r, thread)['name']
-            if r.get("vendor") == vendor and r.get("target") == thread and own.fullmatch(str(r.get("name"))):
-                return r["name"]
-            taken[r.get("name")] = r.get("target")
-    start = hashlib.sha1(thread.encode("utf-8")).digest()[0]
-    for i in range(256):
-        name = f"{base}-{(start + i) % 256:02x}"
-        if name not in taken:
-            return name
-    raise ValueError(f"no free {base}-<hex> peer name")
+    codexProcStart is omitted when the start cannot be read: a pid alone still lets liveness decide."""
+    pid = os.getppid() if pid is None else pid
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return {}
+    holder = {"codexPid": pid}
+    try:
+        holder["codexProcStart"] = load_sibling("unimatrix-liveness").proc_start(pid)
+    except Exception:  # a hook must never break the session
+        pass
+    return holder
 
 
-def register_peer(peers_file, name, vendor, target, address=None):
+def register_peer(peers_file, name, vendor, target, address=None, holder=None):
     """Upsert {name, vendor, target} into peers_file atomically; return "added", "rebound" or "present".
 
     name may be a callable taking the current rows and returning the name, so it is chosen under the lock.
+    holder ({codexPid, codexProcStart}) is written onto the row and refreshes a prior one on rebind.
 
     Other rows remain unchanged. A same-target legacy name becomes an alias when an engine
     address is projected. Conflicts, unreadable JSON and non-list files raise ValueError without
@@ -140,6 +132,8 @@ def register_peer(peers_file, name, vendor, target, address=None):
         if address:
             name = address['name']
         row = {"name": name, "vendor": vendor, "target": target}
+        if holder:
+            row.update(holder)
         if address:
             row.update(address)
             aliases = []
@@ -163,6 +157,8 @@ def register_peer(peers_file, name, vendor, target, address=None):
             if isinstance(existing, dict) and existing.get("name") == name:
                 if existing.get("vendor") == vendor and existing.get("target") == target:
                     merged = {**existing, **row}
+                    if holder and "codexProcStart" not in holder:
+                        merged.pop("codexProcStart", None)
                     if not stale and merged == existing:
                         return "present"
                     rows[i] = merged
@@ -227,14 +223,15 @@ def _register(payload, peers_file=None, registry_dir=None):
     if registry_dir is None:
         registry_dir = load_sibling('unimatrix-roster').settings_home() / 'host-sessions' / 'codex'
     address = load_sibling('unimatrix-peer-contract').read_codex_address(registry_dir, thread, socket.gethostname())
-    base = peer_base(payload)
+    if not address:
+        return {"systemMessage": f"unimatrix: Codex thread {thread} is unbound: no engine address"}
     chosen = []
 
     def pick(rows):
-        chosen.append(address['name'] if address else session_name(rows, base, VENDOR, thread))
+        chosen.append(address['name'])
         return chosen[0]
 
-    status = register_peer(peers_file, pick, VENDOR, thread, address=address)
+    status = register_peer(peers_file, pick, VENDOR, thread, address=address, holder=codex_holder())
     return {"systemMessage": f"unimatrix: peer {chosen[0]} bound to Codex thread {thread} ({status})"}
 
 

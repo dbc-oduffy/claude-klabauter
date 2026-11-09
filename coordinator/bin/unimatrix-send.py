@@ -111,18 +111,16 @@ def main(argv=None):
             print("agents: " + ", ".join(resp["peers"]), file=sys.stderr)
         return 1
     if a.list:
-        ready = resp.get("ready", {})
-        details = resp.get("details", {})
+        reachable = resp.get("reachable")
+        if not isinstance(reachable, list):
+            print("router list reply lacks 'reachable'; restart the router", file=sys.stderr)
+            return 1
+        agents = {row.get("name"): row for row in resp.get("agents", []) if isinstance(row, dict)}
         peers = set(resp.get("peers", []))
-        rows = []
-        for name in sorted(peers | set(resp.get("sessions", []))):
-            info = details.get(name, {})
-            status = ("ready" if ready.get(name, True) else "not-ready (no leg)") if name in peers else info.get("status", "unknown")
-            columns = [name, status, "vendor=" + str(info.get("vendor", "unknown")),
-                       "box=" + str(info.get("box", "unknown")), "cwd=" + str(info.get("cwd", ""))]
-            rows.append("\t".join(str(column).replace("\t", " ").replace("\n", " ").replace("\r", " ")
-                                  for column in columns))
-        print("\n".join(rows))
+        _print_rows([(name, agents.get(name, {}).get("box", "-"), agents.get(name, {}).get("vendor", "-"),
+                      "stale" if agents.get(name, {}).get("stale") is True
+                      else "ready" if name in peers else "session") for name in reachable])
+        print("Message any of these with SendMessage; ListAgents lists them too.")
     elif resp.get("reply"):
         print(resp["reply"])
     elif resp.get("written") is True:

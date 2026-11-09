@@ -112,6 +112,11 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
         source_root = str(Path(__file__).resolve().parents[3])
         env['PYTHONPATH'] = source_root + os.pathsep + env.get('PYTHONPATH', '')
         command = [sys.executable, '-m', __name__, '--record', str(record_path)]
+        from coordinator_core.bash_guards._heavy_command_class import admit_before_spawn
+
+        admission = admit_before_spawn('headless-workflow-worker', 0.5)
+        if not admission.admitted:
+            raise RuntimeError(f'headless Workflow worker not admitted: {admission.reason}')
         with log.open('wb') as output:
             kwargs = {'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)} if os.name == 'nt' else {'start_new_session': True}
             child = subprocess.Popen(command, cwd=repo, env=env, stdin=subprocess.DEVNULL,

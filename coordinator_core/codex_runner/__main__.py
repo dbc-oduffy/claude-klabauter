@@ -56,11 +56,12 @@ def run_worker(run_dir: Path) -> RunResult:
 
         def on_spawn(pid: int) -> None:
             codex_pids.append(pid)
-            kwargs = {"provider": request.serving_provider}
             parent = request.parent_session_id
             if parent is None and request.assignment:
                 parent = request.assignment.get("session_id")
-            roster.write_record(pid, run_id, request.mode, request.repo_root, parent, **kwargs)
+            # Default provider stays implicit: write_record already defaults to codex.
+            extra = () if request.serving_provider == "codex" else (request.serving_provider,)
+            roster.write_record(pid, run_id, request.mode, request.repo_root, parent, *extra)
 
         result = _mode_run(req.mode)(req, run_dir, on_spawn)
     except BaseException as exc:  # noqa: BLE001 -- the worker must always leave a result

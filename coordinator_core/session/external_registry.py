@@ -85,6 +85,25 @@ def _allocate_address(directory: Path, cwd: str) -> dict:
         return {"address_version":1, "name":name, "box":box}
 
 
+_NATIVE_CODEX = re.compile(
+    r"codex(-(aarch64|arm64|x86_64|x64)-(apple-darwin|unknown-linux-(musl|gnu)|pc-windows-msvc))?")
+
+
+def _is_codex_host(process) -> bool:
+    """True for the Codex host: the native binary (bare or target-triple suffixed) or
+    `node .../codex.js`. Never a name prefix match, never arbitrary node."""
+    try:
+        stem = process.name().lower().removesuffix(".exe")
+        if _NATIVE_CODEX.fullmatch(stem):
+            return True
+        if stem != "node":
+            return False
+        argv = process.cmdline()
+    except Exception:
+        return False
+    return len(argv) > 1 and Path(str(argv[1]).replace("\\", "/")).name.lower() == "codex.js"
+
+
 def register_current(payload: dict, directory: Path | None = None) -> dict:
     """The sole external binding constructor; only observed Codex ancestors qualify."""
     _require_thread_lifecycle(payload)
@@ -96,7 +115,7 @@ def register_current(payload: dict, directory: Path | None = None) -> dict:
         raise ValueError("cwd must be absolute")
     host = None
     for process in psutil.Process(os.getpid()).parents():
-        if process.name().lower().removesuffix(".exe") == "codex":
+        if _is_codex_host(process):
             host = process
             break
     if host is None:
@@ -123,6 +142,8 @@ def register_current(payload: dict, directory: Path | None = None) -> dict:
         argv = host.cmdline()
     except (AttributeError, psutil.Error):
         argv = []
+    if argv and Path(argv[0].replace("\\", "/")).stem.lower() == "node":
+        argv = argv[1:]  # the launcher script stands in for the codex binary at argv[0]
     record["role"] = classify(payload, os.environ, **observed_cli_launch(argv))
     transcript = payload.get("transcript_path")
     if isinstance(transcript, str) and Path(transcript).is_absolute():

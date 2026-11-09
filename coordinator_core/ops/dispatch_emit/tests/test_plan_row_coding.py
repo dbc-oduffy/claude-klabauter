@@ -92,6 +92,37 @@ def test_a_plan_mode_marker_maps_its_chunk_ids_to_itself(tmp_path):
     assert source_rows_by_plan(tmp_path, "missing.md", ["C1"]) == {}
 
 
+def test_a_merged_chunk_id_maps_to_every_constituent_row(tmp_path):
+    (tmp_path / _REL).write_text(_PLAN, encoding="utf-8")
+    assert source_rows_by_plan(tmp_path, _REL, ["C1-C2"]) == {_REL: {"C1", "C2"}}
+    assert source_rows_by_plan(tmp_path, _REL, ["C1-C2", "C1"]) == {_REL: {"C1", "C2"}}
+
+
+def test_a_merged_id_with_a_dashed_constituent_and_an_unknown_id_stay_whole(tmp_path):
+    dashed = _PLAN.replace("- id: C2", "- id: C-2")
+    (tmp_path / _REL).write_text(dashed, encoding="utf-8")
+    assert source_rows_by_plan(tmp_path, _REL, ["C1-C-2"]) == {_REL: {"C1", "C-2"}}
+    assert source_rows_by_plan(tmp_path, _REL, ["C1-C9"]) == {_REL: {"C1-C9"}}
+
+
+def test_a_merged_inventory_chunk_id_maps_to_each_constituents_source_row(tmp_path):
+    for name in ("a", "b"):
+        (tmp_path / f"{name}.md").write_text(_PLAN, encoding="utf-8")
+    inv = (
+        "---\nrun_id: x\n---\n\n## Chunk table\n\n"
+        "| id | spec path | summary | footprint | deps | verification | complexity | disposition |\n"
+        "|---|---|---|---|---|---|---|---|\n"
+        "| a | `a.md` | one | `a.py` | — | t | S | queued |\n"
+        "| b | `b.md` | two | `b.py` | — | t | S | queued |\n"
+    )
+    inv_dir = tmp_path / "state" / "mise-inventory"
+    inv_dir.mkdir(parents=True)
+    (inv_dir / "inv.md").write_text(inv, encoding="utf-8")
+    spine = "state/mise-inventory/inv.spine.md"
+    (tmp_path / spine).write_text("---\nderived_from: mise inventory record\n---\n", encoding="utf-8")
+    assert source_rows_by_plan(tmp_path, spine, ["a.C1-b.C1"]) == {"a.md": {"C1"}, "b.md": {"C1"}}
+
+
 def test_inventory_record_rel_is_none_for_a_path_that_is_not_a_spine(tmp_path):
     assert inventory_record_rel(tmp_path, "docs/plans/p.md") is None
 

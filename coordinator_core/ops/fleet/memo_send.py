@@ -165,7 +165,12 @@ from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.ignore_match import IgnoreMatcher
 from coordinator_core.git import git_state
-from coordinator_core.git.git_objects import _read_object, read_ref_loose_or_packed, write_object
+from coordinator_core.git.git_objects import (
+    _read_object,
+    read_object_header,
+    read_ref_loose_or_packed,
+    write_object,
+)
 from coordinator_core.git.index_write import (
     IndexStaleAfterCommit,
     IndexWriteError,
@@ -804,7 +809,7 @@ def _delivery_commit_is_object(receiver_repo_path: Path, sha: str) -> bool:
     contract, which this read never touches).
     """
     common_dir = resolve_git_common_dir(receiver_repo_path)
-    found = _read_object(common_dir, sha)
+    found = read_object_header(common_dir, sha)
     return found is not None and found[0] == "commit"
 
 

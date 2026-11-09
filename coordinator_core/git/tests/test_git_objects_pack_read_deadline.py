@@ -35,7 +35,7 @@ def _stream(payload: bytes) -> bytes:
 def test_deadline_constant_is_below_server_stall_dump_secs() -> None:
     from coordinator_core.warm import server
 
-    assert 2 * go.PACK_READ_DEADLINE_SECS < server.STALL_DUMP_SECS
+    assert go.PACK_READ_DEADLINE_SECS < server.STALL_DUMP_SECS
 
 
 def test_healthy_read_is_byte_identical_without_deadline() -> None:
@@ -115,6 +115,74 @@ def test_healthy_path_does_not_reopen_pack(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(go, "_read_pack_object_at", lambda *a, **k: (3, b"ok"))
     monkeypatch.setattr(go, "_read_pack_bytes", lambda p: pytest.fail("reopened on healthy read"))
     assert go._read_pack_object_deadlined(tmp_path, tmp_path / "p.pack", b"x", 0) == (3, b"ok")
+
+
+@pytest.fixture
+def _short_wall(monkeypatch):
+    monkeypatch.setattr(go, "PACK_READ_DEADLINE_SECS", 0.3)
+    go._PACK_STALL_UNTIL.clear()
+    go._OBJECT_CACHE.clear()
+    yield
+    go._PACK_STALL_UNTIL.clear()
+    go._OBJECT_CACHE.clear()
+
+
+def test_alternates_share_one_wall_not_one_each(monkeypatch, tmp_path: Path, _short_wall) -> None:
+    import threading
+    import time
+
+    release = threading.Event()
+    reads = []
+
+    def slow_local(common_dir, sha):
+        reads.append(common_dir)
+        release.wait(30)
+        return None
+
+    monkeypatch.setattr(go, "_read_local_object", slow_local)
+    monkeypatch.setattr(go, "_alternate_common_dirs", lambda c: [tmp_path / "a1", tmp_path / "a2"])
+    t0 = time.monotonic()
+    try:
+        with pytest.raises(go.PackReadDeadline):
+            go._read_object(tmp_path, "a" * 40)
+        assert time.monotonic() - t0 < 0.3 * 2
+        assert reads == [tmp_path]
+        assert go._object_cache_get((str(tmp_path), "a" * 40)) is go._CACHE_MISS
+    finally:
+        release.set()
+
+
+def test_nested_read_object_runs_inline_inside_the_wall(monkeypatch, tmp_path: Path, _short_wall) -> None:
+    seen = []
+
+    def local(common_dir, sha):
+        seen.append((sha[0], getattr(go._PACK_WORKER, "inside", False)))
+        if sha[0] == "a":
+            return go._read_object(common_dir, "b" * 40)
+        return ("blob", b"base")
+
+    monkeypatch.setattr(go, "_read_local_object", local)
+    assert go._read_object(tmp_path, "a" * 40) == ("blob", b"base")
+    assert seen == [("a", True), ("b", True)]
+    assert getattr(go._PACK_WORKER, "inside", False) is False
+
+
+def test_cache_hit_stays_outside_the_wall(monkeypatch, tmp_path: Path, _short_wall) -> None:
+    go._object_cache_put((str(tmp_path), "a" * 40), ("blob", b"x"))
+    monkeypatch.setattr(go, "run_bounded", lambda *a, **k: pytest.fail("cache hit entered the wall"))
+    assert go._read_object(tmp_path, "a" * 40) == ("blob", b"x")
+
+
+def test_packed_contains_overrun_raises_not_false(monkeypatch, tmp_path: Path, _short_wall) -> None:
+    import threading
+
+    release = threading.Event()
+    monkeypatch.setattr(go, "_locate_packed", lambda *a, **k: release.wait(30))
+    try:
+        with pytest.raises(go.PackReadDeadline):
+            go.packed_contains(tmp_path, "a" * 40)
+    finally:
+        release.set()
 
 
 def test_read_local_object_propagates_deadline_not_missing(monkeypatch, tmp_path: Path) -> None:

@@ -296,10 +296,33 @@ def repo_root_names(repo_root: Path) -> frozenset:
     doing it per path would turn a whole-corpus sweep into a stat storm on a
     shared box.
     """
-    try:
+    def _list() -> frozenset:
         return frozenset(entry.name for entry in repo_root.iterdir())
+
+    try:
+        names = run_bounded(f"root-iterdir:{repo_root}", _list, deadline=REPO_SCAN_DEADLINE_SECS, default=None)
     except OSError:
         return frozenset()
+    if names is None:
+        _scan_stalled("repo_root_names", repo_root)
+        return frozenset()
+    return names
+
+
+# Healthy scans finish in single-digit ms; a stalled drive is dropped, never waited on
+# (stall dumps 20261109T131053Z/131145Z: an iterdir/stat sweep held a pool worker 11.3s).
+REPO_SCAN_DEADLINE_SECS = 1.0
+REPO_SCAN_STALLED_ADVISORY = "repo_scan_stalled"
+
+
+def _scan_stalled(scan: str, repo_root: Path) -> None:
+    try:
+        sys.stderr.write(
+            f"prep_gate: {REPO_SCAN_STALLED_ADVISORY}: {scan} over {repo_root} exceeded "
+            f"{REPO_SCAN_DEADLINE_SECS}s; ROOT-EXISTENCE runs without it\n"
+        )
+    except Exception:
+        pass
 
 
 def repo_nested_names(repo_root: Path, root_names: frozenset) -> Dict[str, tuple]:
@@ -323,17 +346,27 @@ def repo_nested_names(repo_root: Path, root_names: frozenset) -> Dict[str, tuple
     more than one root entry is ambiguous and carries every parent, so the
     detail line offers candidates rather than asserting one.
     """
-    nested: Dict[str, list] = {}
-    for name in root_names:
-        if name.startswith("."):
-            continue
-        try:
-            children = [entry.name for entry in (repo_root / name).iterdir() if entry.is_dir()]
-        except OSError:
-            continue
-        for child in children:
-            nested.setdefault(child, []).append(name)
-    return {child: tuple(sorted(parents)) for child, parents in nested.items()}
+    def _scan() -> Dict[str, tuple]:
+        nested: Dict[str, list] = {}
+        for name in root_names:
+            if name.startswith("."):
+                continue
+            try:
+                children = [entry.name for entry in (repo_root / name).iterdir() if entry.is_dir()]
+            except OSError:
+                continue
+            for child in children:
+                nested.setdefault(child, []).append(name)
+        return {child: tuple(sorted(parents)) for child, parents in nested.items()}
+
+    try:
+        found = run_bounded(f"nested-iterdir:{repo_root}", _scan, deadline=REPO_SCAN_DEADLINE_SECS, default=None)
+    except OSError:
+        return {}
+    if found is None:
+        _scan_stalled("repo_nested_names", repo_root)
+        return {}
+    return found
 
 
 def repo_gitignored_roots(repo_root: Path) -> frozenset:

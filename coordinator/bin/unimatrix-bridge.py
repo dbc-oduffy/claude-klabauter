@@ -9,7 +9,7 @@ Usage:
                       [--remote <lan-ssh-alias>] [--tunnel-remote <ssh-alias>] [--key <path>]
 
 <tcp-port> "relay" sends each message through the unimatrix key's forced-command
-relay (`send <remote-pid>`) over `ssh <lan-ssh-alias>`; --remote is required then.
+relay (`send-batch <remote-pid>`, `send` against an older relay) over `ssh <lan-ssh-alias>`; --remote is required then.
 --tunnel-remote (or $UNIMATRIX_TUNNEL_REMOTE) is used only while --remote does not answer.
 --key defaults to <settings home>/.secrets/ssh/unimatrix-zero.
 
@@ -84,6 +84,8 @@ def parse_args(argv):
     p.add_argument("--remote", help="ssh alias of the far box on the LAN, tried first (required for relay)")
     p.add_argument("--tunnel-remote", default=None, help="ssh alias over the tunnel, used only when --remote does not answer")
     p.add_argument("--key", default=None, help="private key for the relay (default: settings-home .secrets)")
+    p.add_argument("--supervisor", type=int, default=None,
+                   help="roster pid this bridge exits with; its start stamp is read from this bridge's mirror entry")
     a = p.parse_args(argv)
     a.tunnel_remote = a.tunnel_remote or os.environ.get("UNIMATRIX_TUNNEL_REMOTE") or None
     a.port = None if a.port == "relay" else int(a.port)
@@ -313,26 +315,75 @@ def relay_send(conn):
         return
     # A win32 peer's socket is a named pipe with no pid in its name; the roster records `farPid`.
     far_pid = str(mine.get("farPid") or os.path.basename(mine[FAR_SOCKET_FIELD]).removesuffix(".sock"))
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WIN else 0
+    target = f"{mine.get('name') or far_pid} (pid {far_pid})"
     for line in lines:
         log.write(f"relay >> {line!r}\n")
-        target = f"{mine.get('name') or far_pid} (pid {far_pid})"
-        started = time.monotonic()
+    started = time.monotonic()
+    r = _ssh_relay(f"send-batch {far_pid}", b"".join(l + b"\n" for l in lines))
+    if r.returncode and r.stderr.lstrip().startswith(b"usage:"):
+        log.write("relay: far relay lacks send-batch; sending per line\n")
+        _send_per_line(lines, far_pid, target)
+        return
+    ms = round((time.monotonic() - started) * 1000)
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    replies = _batch_replies(r.stdout)
+    for i, line in enumerate(lines):
+        error = None
+        if i < len(replies):
+            if replies[i].get("ok") is False:
+                error = f"relay: {replies[i].get('error', 'delivery refused')}"
+        elif r.returncode:
+            log.write(f"relay send failed {r.returncode}: {r.stderr!r}\n")
+            error = f"ssh exit {r.returncode}: " + r.stderr.decode(errors="replace").strip()[-300:]
+        else:
+            error = "relay: no delivery reply for this message"
+        _record_outcome(line, target, ts, ms, error)
+
+
+def _ssh_relay(command, data):
+    """One ssh to the far relay running `command` with `data` on stdin; any fault is a 255 result."""
+    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WIN else 0
+    try:
+        remote = pick_remote(cfg.remote, getattr(cfg, "tunnel_remote", None))
+        return subprocess.run(["ssh", "-i", cfg.key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", *ssh_mux_options(), remote, command],
+                              input=data, capture_output=True, timeout=30, creationflags=flags)
+    except Exception as e:  # any send-leg fault is a failed delivery, never a silent one
+        return subprocess.CompletedProcess([], 255, b"", f"{type(e).__name__}: {e}".encode())
+
+
+def _batch_replies(stdout):
+    """The send-batch per-line JSON replies, in line order; unparseable output yields none."""
+    replies = []
+    for raw in (stdout or b"").splitlines():
         try:
-            remote = pick_remote(cfg.remote, getattr(cfg, "tunnel_remote", None))
-            r = subprocess.run(["ssh", "-i", cfg.key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", *ssh_mux_options(), remote, f"send {far_pid}"],
-                               input=line + b"\n", capture_output=True, timeout=30, creationflags=flags)
-        except Exception as e:  # any send-leg fault is a failed delivery, never a silent one
-            r = subprocess.CompletedProcess([], 255, b"", f"{type(e).__name__}: {e}".encode())
+            reply = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(reply, dict):
+            replies.append(reply)
+    return replies
+
+
+def _record_outcome(line, target, ts, ms, error):
+    if error:
+        record_delivery({"ts": ts, "target": target, "ok": False, "error": error, "ms": ms})
+        notify_sender(line, target, error)
+    else:
+        record_delivery({"ts": ts, "target": target, "ok": True, "ms": ms})
+
+
+def _send_per_line(lines, far_pid, target):
+    """Old-relay fallback: one ssh `send` per line, for far relays that predate send-batch."""
+    for line in lines:
+        started = time.monotonic()
+        r = _ssh_relay(f"send {far_pid}", line + b"\n")
         ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
         ms = round((time.monotonic() - started) * 1000)
+        error = None
         if r.returncode:
             log.write(f"relay send failed {r.returncode}: {r.stderr!r}\n")
             error = f"ssh exit {r.returncode}: " + r.stderr.decode(errors="replace").strip()[-300:]
-            record_delivery({"ts": ts, "target": target, "ok": False, "error": error, "ms": ms})
-            notify_sender(line, target, error)
-        else:
-            record_delivery({"ts": ts, "target": target, "ok": True, "ms": ms})
+        _record_outcome(line, target, ts, ms, error)
 
 
 def pump_local_to_sock(conn, s):
@@ -441,6 +492,46 @@ def return_leg():
         threading.Thread(target=serve_return, args=(c,), daemon=True).start()
 
 
+SUPERVISOR_POLL_SECONDS = 15
+
+
+def supervisor_gone():
+    """True when the roster that spawned this bridge is no longer the process it was.
+
+    The start stamp comes from this bridge's own mirror entry, which the roster writes just after
+    spawning; until it exists only the pid is checked."""
+    mine = _load(f"{os.getpid()}.json") or {}
+    return not _roster()._liveness().entry_live(
+        {"pid": cfg.supervisor, "procStart": mine.get("unimatrixRosterProcStart")})
+
+
+def drop_own_files():
+    """Remove this bridge's registry entry, peer key and (unix) endpoint."""
+    base = os.path.expanduser(SESSIONS)
+    try:
+        names = [f for f in os.listdir(base) if f.startswith(f"{os.getpid()}.")]
+    except OSError:
+        names = []
+    paths = [os.path.join(base, f) for f in names]
+    if not IS_WIN:
+        paths.append(cfg.endpoint)
+    for path in paths:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
+def watch_supervisor():
+    """Exit with the roster: blocking accept loops cannot poll, so this daemon thread does."""
+    while True:
+        time.sleep(SUPERVISOR_POLL_SECONDS)
+        if supervisor_gone():
+            log.write(f"supervisor {cfg.supervisor} gone; exiting\n")
+            drop_own_files()
+            os._exit(0)
+
+
 def main(argv=None):
     global cfg, log
     argv = sys.argv[1:] if argv is None else argv
@@ -453,6 +544,8 @@ def main(argv=None):
     _lock()  # create before serving threads exist: _lock()'s check-then-set is unguarded
     if cfg.return_port:
         threading.Thread(target=return_leg, daemon=True).start()
+    if cfg.supervisor is not None:
+        threading.Thread(target=watch_supervisor, daemon=True).start()
     for conn in accept_loop(cfg.endpoint):
         log.write("client connected\n")
         threading.Thread(target=serve_one, args=(conn,), daemon=True).start()

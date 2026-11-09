@@ -69,3 +69,39 @@ def test_real_coarse_delta_on_baselined_path_is_advisory(monkeypatch, tmp_path):
     advisories: list = []
     assert hp.unproduced_hunks(tmp_path, ME, [OWN], own_plan=None, advisories=advisories) == []
     assert len(advisories) == 1 and COARSE in advisories[0]["detail"]
+
+
+def test_unattributable_run_produced_path_a_halted_peer_withholds_settles_to_head_naming_the_peer(
+    raising, monkeypatch, tmp_path,
+):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    peer = "ask-20261029T000000-bbbbbb"
+    monkeypatch.setattr(land_run, "foreign_halted_withheld", lambda root, run, plan, paths: {OWN: peer})
+    monkeypatch.setattr(hp, "_head_blob_sha", lambda root, path: "a" * 40)
+    advisories: list = []
+    settled: dict = {}
+    found = hp.unproduced_hunks(tmp_path, ME, [OWN], own_plan=None, advisories=advisories, settled=settled)
+    assert found == [] and advisories == []
+    assert settled[OWN] == {"blob": "a" * 40, "owner": peer, "lines": hp.UNATTRIBUTABLE_LINES}
+
+
+def test_unattributable_held_path_without_a_settle_target_is_a_finding_naming_the_peer(
+    raising, monkeypatch, tmp_path,
+):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    peer = "ask-20261029T000000-bbbbbb"
+    monkeypatch.setattr(land_run, "foreign_halted_withheld", lambda root, run, plan, paths: {OWN: peer})
+    found = hp.unproduced_hunks(tmp_path, ME, [OWN], own_plan=None, advisories=[])
+    assert [f.reason for f in found] == [hp.FOREIGN_HUNK_UNPRODUCED] and peer in found[0].detail
+
+
+def test_unattributable_path_no_halted_peer_withholds_stays_an_advisory(raising, monkeypatch, tmp_path):
+    from coordinator_core.ops.dispatch_emit import land_run
+
+    monkeypatch.setattr(land_run, "foreign_halted_withheld", lambda root, run, plan, paths: {})
+    advisories: list = []
+    assert hp.unproduced_hunks(tmp_path, ME, [OWN], own_plan=None, advisories=advisories, settled={}) == []
+    assert [a["path"] for a in advisories] == [OWN]
+    assert advisories[0]["detail"].startswith("provenance unreadable")

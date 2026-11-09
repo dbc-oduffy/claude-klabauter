@@ -338,13 +338,17 @@ def _main_mint_run_id(rest: list[str]) -> int:
     dispatches `collect(cadence, run_id=...)`: ask each reader's own
     `mint_run_id(cadence)` (a reader lacking the attribute abstains via
     `getattr(..., None)`, never a crash) and take the first non-`None`
-    result. This module never learns what a run id looks like — it prints
+    result. `--plain` (anywhere after the verb) prints only the bare run id
+    on one line instead of the JSON object; the default output is unchanged.
+    This module never learns what a run id looks like — it prints
     the reader's own `.run_id`/`.inventory_path` fields verbatim (AC1, AC7).
 
     No reader claiming `cadence` is a usage error (exit `EXIT_USAGE`) naming
     the cadence — never an exit-0 mint (AC5). Same exit code for a missing
     or malformed cadence argument.
     """
+    plain = "--plain" in rest
+    rest = [token for token in rest if token != "--plain"]
     if len(rest) != 1:
         return _usage()
     cadence = rest[0]
@@ -367,6 +371,9 @@ def _main_mint_run_id(rest: list[str]) -> int:
             print(f"backlog-grind-assemble: {exc}", file=sys.stderr)
             return EXIT_USAGE
         if minted is not None:
+            if plain:
+                print(minted.run_id)
+                return EXIT_OK
             print(
                 json.dumps(
                     {"run_id": minted.run_id, "inventory_path": minted.inventory_path},

@@ -17,6 +17,8 @@ docs/reference/ask-spool.md):
   writes <id>.holder (its pid); a respool of an id with a .claimed or .minted
   is a no-op, and a .claimed is reclaimed only when older than CLAIM_STALE_S
   and its holder is provably dead (unreadable or ambiguous reads as alive).
+- <id>.withdrawn is a fourth terminal state (legacy name <id>.json.withdrawn is
+  read as withdrawn, never renamed); `withdraw` records why in the header.
 """
 
 from __future__ import annotations
@@ -35,6 +37,9 @@ CLAIMED_SUFFIX = ".claimed"
 MINTED_SUFFIX = ".minted"
 TMP_SUFFIX = ".tmp"
 HOLDER_SUFFIX = ".holder"
+WITHDRAWN_SUFFIX = ".withdrawn"
+LEGACY_WITHDRAWN_SUFFIX = ".json.withdrawn"
+WITHDRAW_REASON_MAX = 500
 TMP_STALE_S = 60.0
 CLAIM_STALE_S = 300.0
 FILE_MODE = 0o600
@@ -233,6 +238,8 @@ def spool_ask(
         os.path.exists(final)
         or _live_claim(repo_root, spool_id)
         or os.path.exists(entry_path(repo_root, spool_id, MINTED_SUFFIX))
+        or os.path.exists(entry_path(repo_root, spool_id, WITHDRAWN_SUFFIX))
+        or os.path.exists(entry_path(repo_root, spool_id, LEGACY_WITHDRAWN_SUFFIX))
         or _tmp_fresh_peer(spool_dir(repo_root), spool_id)
     ):
         return spool_id, False
@@ -357,6 +364,79 @@ def release(repo_root: str, spool_id: str) -> None:
             os.unlink(claimed)
         except FileNotFoundError:
             pass
+
+
+def coalesce_key(payload: dict) -> Optional[str]:
+    """Which sizing or run an entry asks for: "sizing:<rel>", "run:<id>", or None for a bare ask.
+
+    Read from payload["tool_input"]["args"]; a string args (free-text ask) has no key.
+    """
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    args = tool_input.get("args") if isinstance(tool_input, dict) else None
+    if not isinstance(args, dict):
+        return None
+    sizing = args.get("sizing")
+    if isinstance(sizing, str) and sizing.strip():
+        rel = sizing.strip().replace("\\", "/")
+        while rel.startswith("./"):
+            rel = rel[2:]
+        return "sizing:" + rel
+    from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_RUN_ID_ARG
+
+    run_id = args.get(RESUME_RUN_ID_ARG)
+    if isinstance(run_id, str) and run_id.strip():
+        return "run:" + run_id.strip()
+    return None
+
+
+def withdraw(repo_root: str, spool_id: str, reason: str, *, by: str = "em") -> dict:
+    """Retire one entry by rename to <id>.withdrawn and record why in its header.
+
+    by="em" retires a pending <id>.json only; by="drain" retires the <id>.claimed
+    the caller holds. Returns {"spool_id", "state", "withdrawn"}; state names the
+    entry's state when it is not retired ("claimed", "minted", "absent") and
+    "withdrawn" when it is. ValueError on an empty reason.
+    """
+    if by not in ("em", "drain"):
+        raise ValueError("ask_spool withdraw: by must be 'em' or 'drain'")
+    reason = (reason or "").strip()[:WITHDRAW_REASON_MAX]
+    if not reason:
+        raise ValueError("ask_spool withdraw requires a non-empty reason")
+    dst = entry_path(repo_root, spool_id, WITHDRAWN_SUFFIX)
+    result = {"spool_id": spool_id, "state": "withdrawn", "withdrawn": True}
+    if os.path.exists(dst) or os.path.exists(entry_path(repo_root, spool_id, LEGACY_WITHDRAWN_SUFFIX)):
+        result["withdrawn"] = False
+        return result
+    src = entry_path(repo_root, spool_id, CLAIMED_SUFFIX if by == "drain" else PENDING_SUFFIX)
+    try:
+        os.rename(src, dst)
+    except OSError:
+        if os.path.exists(entry_path(repo_root, spool_id, MINTED_SUFFIX)):
+            state = "minted"
+        elif os.path.exists(entry_path(repo_root, spool_id, CLAIMED_SUFFIX)):
+            state = "claimed"
+        else:
+            state = "absent"
+        return {"spool_id": spool_id, "state": state, "withdrawn": False}
+    _drop_holder(repo_root, spool_id)
+    header, payload = read_entry(dst)
+    header["withdraw_reason"] = reason
+    header["withdrawn_by"] = by
+    header["withdrawn_at"] = time.time()
+    body = json.dumps(header, separators=(",", ":")).encode("utf-8") + b"\n" + payload
+    tmp = entry_path(repo_root, spool_id, f".{os.getpid()}-{secrets.token_hex(4)}{TMP_SUFFIX}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, FILE_MODE)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(body)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return result
 
 
 def mark_minted(repo_root: str, spool_id: str) -> str:

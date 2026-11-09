@@ -19,8 +19,7 @@ parts a composer CAN close (i, ii, iv) -- part (iii), the permission-mode
 requirement, is a settled unclosable residual on this path (§6) and is
 recorded, not resolved, here.
 
-Sibling to coordinator/workflows/wsc-review-partition.mjs (content repo, C2):
-this script produces exactly the `args` object that Workflow script consumes
+This script produces exactly the `args` object the review-wave Workflow consumes
 -- `{ slices: [ { id, diffPath, shaRange, wasteReport,
 reviewer: {sidecarPath, contractBlocks} } ] }`,
 no other top-level or per-role key. The integrator stage is retired
@@ -112,8 +111,8 @@ A slice entry carries EITHER a pre-frozen `diffPath` (passed through
 verbatim) OR a `range`, which this script freezes itself by delegating to
 the installed `freeze-review-diff` CLI -- never by reimplementing it.
 
-Output on stdout: ONE JSON object, the literal `args` payload for C2's
-`wsc-review-partition.mjs` script.
+Output on stdout: ONE JSON object, the literal `args` payload for the
+review-wave Workflow.
 """
 
 from __future__ import annotations

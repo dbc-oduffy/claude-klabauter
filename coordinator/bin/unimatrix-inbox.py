@@ -228,7 +228,8 @@ def main(argv=None):
     rc = p.wait()
     far_err.join(timeout=2)
     log.write(f"inbox ended rc={rc}\n")
-    sys.exit(rc)
+    if rc:
+        sys.exit(rc)
 
 
 if __name__ == "__main__":

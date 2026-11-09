@@ -161,3 +161,44 @@ def test_a_record_file_written_during_the_op_is_never_relanded(repo, monkeypatch
     assert out["relanded"] == []
     assert _git(["rev-parse", "HEAD"], repo).strip() != head
     assert "run_artifact_residue" not in out
+
+
+def _checkpointed_then_peer_edited(repo) -> None:
+    """product.py: own checkpoint landed it, a peer edited it after; done.py: the run's uncommitted product."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import _marker_script
+
+    plan = "docs/plans/p.md"
+    (repo / "docs" / "plans").mkdir()
+    (repo / plan).write_text("plan\n", encoding="utf-8")
+    _write_record(repo, RUN)
+    (repo / "done.py").write_text("d = 1\n", encoding="utf-8")
+    _marker_script(repo, [("C1", ["done.py", "product.py"])], {"C1": "DONE: C1\n"})
+    (repo / RECORD_DIR_ROOT / RUN / "manifest.json").write_text(
+        json.dumps({"write_baseline": {"done.py": None, "product.py": None}}), encoding="utf-8")
+    (repo / "product.py").write_text("x = 2\n", encoding="utf-8")
+    _git(["add", plan, "product.py"], repo)
+    message = repo.parent / "checkpoint-message.txt"
+    message.write_text(f"checkpoint(wave 1): 1 row — C1\n\nCheckpoint-Plan: {plan}\n", encoding="utf-8")
+    _git(["commit", "-q", "-F", str(message)], repo)
+    (repo / "product.py").write_text("x = 3  # a concurrent run\n", encoding="utf-8")
+
+
+def test_a_checkpoint_landed_path_holding_only_a_peers_hunk_is_neither_landed_nor_withheld(repo):
+    _checkpointed_then_peer_edited(repo)
+
+    out = _call(repo, {"halted": "refusal", "reason": "x", "plan": "docs/plans/p.md"})
+
+    assert out["committed"] is True, out
+    assert out["withheld"] == {"done.py": "halt-record-only"}
+    assert "product.py" not in _landed(repo, out, "--name-only")
+
+
+def test_a_checkpoint_landed_path_is_withheld_when_the_halt_names_no_plan(repo):
+    _checkpointed_then_peer_edited(repo)
+
+    out = _call(repo)
+
+    assert out["withheld"] == {"done.py": "halt-record-only", "product.py": "halt-record-only"}

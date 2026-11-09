@@ -164,7 +164,120 @@ def test_two_gates_one_owner_repo_refuse_naming_them(tmp_path):
 
     assert result["exit_code"] == 1
     assert "2 external_gate entries match" in result["error"]
+    assert "gate_index=1" in result["error"] and "gate_index=2" in result["error"]
     assert plan.read_bytes() == before
+
+
+def _two_gate_plan(repo: Path, approved: bool = False) -> Path:
+    rows = _ROW_GATED.replace(
+        "      blocks: execution\n",
+        "      blocks: execution\n    - owner_repo: coordinator-content-repo\n      condition: DoE lands the flip too\n"
+        "      blocks: execution\n",
+    )
+    text = _PLAN.format(rows=rows)
+    return _seed_plan(repo, "g.md", _approved(text) if approved else text)
+
+
+def _gate_states(plan: Path) -> list:
+    rows = yaml.safe_load(_spine(plan.read_text(encoding="utf-8")))
+    return [g.get("cleared") is True for g in rows[0]["external_gate"]]
+
+
+def test_condition_exact_beats_prefix_and_clears_only_that_gate(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _two_gate_plan(repo)
+
+    result = _call(repo, plan, condition="DoE lands the flip")
+
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    assert _gate_states(plan) == [True, False]
+
+
+def test_condition_unique_prefix_clears_only_that_gate(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _two_gate_plan(repo)
+
+    result = _call(repo, plan, condition="DoE lands the flip t")
+
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    assert _gate_states(plan) == [False, True]
+
+
+def test_ambiguous_or_unmatched_condition_refuses_naming_gate_index(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _two_gate_plan(repo)
+    before = plan.read_bytes()
+
+    ambiguous = _call(repo, plan, condition="DoE")
+    unmatched = _call(repo, plan, condition="nothing like it")
+
+    for result in (ambiguous, unmatched):
+        assert result["exit_code"] == 1
+        assert "gate_index=1" in result["error"] and "gate_index=2" in result["error"]
+    assert plan.read_bytes() == before
+
+
+def test_gate_index_selects_and_out_of_range_refuses(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _two_gate_plan(repo)
+    before = plan.read_bytes()
+
+    assert _call(repo, plan, gate_index=3)["exit_code"] == 1
+    assert _call(repo, plan, gate_index=0)["exit_code"] == 1
+    assert _call(repo, plan, gate_index="x")["exit_code"] == 1
+    assert plan.read_bytes() == before
+
+    result = _call(repo, plan, gate_index=2)
+
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    assert _gate_states(plan) == [False, True]
+
+
+def test_condition_and_gate_index_together_refused_bytes_unchanged(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _two_gate_plan(repo)
+    before = plan.read_bytes()
+
+    result = _call(repo, plan, condition="anything", gate_index=2)
+
+    assert result["exit_code"] == 1 and "not both" in result["error"], result
+    assert plan.read_bytes() == before
+
+
+def test_unknown_selector_key_refused_by_name_bytes_unchanged(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _two_gate_plan(repo)
+    before = plan.read_bytes()
+
+    for key in ("index", "entry"):
+        result = _call(repo, plan, **{key: 1})
+        assert result["exit_code"] == 1 and repr(key) in result["error"], result
+    assert plan.read_bytes() == before
+
+
+def test_single_gate_with_mismatched_condition_refuses(tmp_path):
+    repo = _make_git_repo(tmp_path)
+    plan = _seed_plan(repo, "g.md", _PLAN.format(rows=_ROW_GATED))
+    before = plan.read_bytes()
+
+    assert _call(repo, plan, condition="something else")["exit_code"] == 1
+    assert plan.read_bytes() == before
+
+
+def test_selected_clear_keeps_approval_stamp(tmp_path):
+    from coordinator_core.frontmatter.primitives import approval_body_sha, check_approved_body
+
+    repo = _make_git_repo(tmp_path)
+    plan = _two_gate_plan(repo, approved=True)
+    approved = plan.read_text(encoding="utf-8")
+
+    result = _call(repo, plan, condition="DoE lands the flip t")
+
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    text = plan.read_text(encoding="utf-8")
+    assert f"approved_body_sha: {approval_body_sha(text)}" in text.split("---")[1].replace('"', "")
+    assert check_approved_body(text)[0] == "ok"
+    assert _gate_states(plan) == [False, True]
 
 
 def test_frontmatter_gate_with_row_clears(tmp_path):

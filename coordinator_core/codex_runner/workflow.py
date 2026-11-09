@@ -24,7 +24,7 @@ from typing import Any, Callable
 import jsonschema
 
 from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
-from coordinator_core.codex_runner.review import _build_env
+from coordinator_core.codex_runner.review import _unattended_env
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.model_tiers import model_for_tier
@@ -88,7 +88,7 @@ def _environment() -> dict[str, str]:
     source.pop("CODEX_RUNNER_ALLOW_API_KEY", None)
     source.pop("OPENAI_API_KEY", None)
     source.pop("CODEX_API_KEY", None)
-    env = _build_env(source, requested=False)
+    env = _unattended_env(source, requested=False)
     # The shared provider helper preserves caller identity for ordinary helper
     # subprocesses. A fresh native agent is a new session, so scrub AFTER that
     # helper (it can reinsert the bound caller even when its input was scrubbed).

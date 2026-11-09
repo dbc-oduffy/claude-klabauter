@@ -58,6 +58,17 @@ def test_edge_onto_unminted_chunk_of_taken_item_defers_dependent(tmp_path, budge
     assert {r.id for r in read_spine(spine_path)} == ids
 
 
+def test_whole_set_cut_counts_only_placeable_items_and_holds_the_dependent(tmp_path):
+    inv = _repo(tmp_path, _plans(), [("pred", "—"), ("dep", "—"), ("free", "—")])
+
+    assert im.whole_set_part_count(str(inv), 100, 1) is None, "a set within max_rows is one run"
+    assert im.whole_set_part_count(str(inv), 1, 1) == 2, "dep.C1 waits on the unemitted pred.C1"
+    assert im.whole_set_part_count(str(inv), 1, 2) is None, "two placeable rows fit one part"
+    held: dict = {}
+    text, _ = im.mint_spine(str(inv), part=(2, 2), accounting_out=held)
+    assert "dep.C1" not in text and held["dep"].startswith("waits on pred.C1")
+
+
 def test_edge_onto_chunk_of_no_inventory_item_still_refuses(tmp_path):
     rows = [
         {"id": "a.C1", "title": "t", "surface": "s.py", "writes": ["s.py"], "change_kind": "code-edit",
