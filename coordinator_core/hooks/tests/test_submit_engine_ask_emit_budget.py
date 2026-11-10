@@ -310,6 +310,28 @@ def test_sizing_submission_emit_process_time_is_under_the_bar(repo):
     assert spent < BAR_S, f"submit hook emit took {spent:.3f}s process time (bar {BAR_S}s)"
 
 
+def test_default_ask_with_em_context_mints_its_run_in_hook_under_the_bar(repo):
+    """The 7b0ba7 shape (raw relayed ask plus em_context, default args) is accepted under the bar with its run minted in-hook; the bulk emit runs in the background run."""
+    payload = real._payload(repo, {
+        "ask": "build the thing", "source": "relayed",
+        "em_context": "EM context (not the PM's words):\nEngine friction: the emit outran the hook budget.\n",
+    })
+    mod.evaluate(payload)  # warm the imports; the bar is the steady-state emit
+
+    start = time.process_time()
+    env = mod.evaluate(payload)
+    spent = time.process_time() - start
+
+    hso = env["hookSpecificOutput"]
+    reason = hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow", env
+    assert spent < BAR_S, f"submit hook emit took {spent:.3f}s process time (bar {BAR_S}s)"
+    assert "emit overrun" not in reason, reason
+    found = re.search(r"ask-\d{8}T\d{6}-[0-9a-f]{6}", reason)
+    assert found, reason
+    assert (_token_dir(repo) / f"{found.group(0)}.json").is_file()
+
+
 def _hoist_states(monkeypatch, replies):
     from coordinator_core.ops.dispatch_emit import op, prompt_fragments
 

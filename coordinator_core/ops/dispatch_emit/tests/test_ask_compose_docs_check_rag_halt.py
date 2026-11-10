@@ -37,16 +37,24 @@ def _label_at(script, label):
     return script.index(f"label: '{label}'")
 
 
-def test_plan_docs_check_and_gate_precede_plan_review(monkeypatch, tmp_path):
+def _checker_prompt_span(script, label):
+    """The composed agent call of the `label` docs-checker leg, from its prompt to its label."""
+    end = _label_at(script, label)
+    return script[script.rindex("agent(", 0, end):end]
+
+
+def test_plan_docs_check_runs_the_gate_itself_ahead_of_plan_review(monkeypatch, tmp_path):
     script = _m_plus(monkeypatch, _ue_declared_repo(tmp_path))
-    assert _label_at(script, "plan-docs-check") < _label_at(script, "plan-docs-check-gate") < _label_at(script, "plan-review")
-    assert script.count(GATE_OP) >= 2
+    assert "label: 'plan-docs-check-gate'" not in script
+    assert _label_at(script, "plan-docs-check") < _label_at(script, "plan-review")
+    assert GATE_OP in _checker_prompt_span(script, "plan-docs-check")
 
 
-def test_diff_docs_check_and_gate_precede_the_code_review_wave(tmp_path):
+def test_diff_docs_check_runs_the_gate_itself_ahead_of_the_code_review_wave(tmp_path):
     script = _compose(repo_root=_ue_declared_repo(tmp_path), **_named_fragment())
-    assert _label_at(script, "diff-docs-check") < _label_at(script, "diff-docs-check-gate")
-    assert _label_at(script, "diff-docs-check-gate") < script.index("phase('Review wave')")
+    assert "label: 'diff-docs-check-gate'" not in script
+    assert _label_at(script, "diff-docs-check") < script.index("phase('Review wave')")
+    assert GATE_OP in _checker_prompt_span(script, "diff-docs-check")
     assert "label: 'review:coordinator:docs-checker'" not in script
 
 
@@ -61,6 +69,8 @@ def test_a_non_ue_compose_carries_no_docs_check_leg(monkeypatch, tmp_path):
 def test_the_checker_schema_admits_rag_down_and_degraded():
     assert ask_compose._DOCS_CHECK_SCHEMA["properties"]["verdict"]["enum"] == ["ok", "corrected", "rag_down", "degraded"]
     assert "degraded_bands" in ask_compose._DOCS_CHECK_SCHEMA["properties"]
+    assert ask_compose._DOCS_CHECK_SCHEMA["properties"]["gate"] is ask_compose._DOCS_GATE_SCHEMA
+    assert "gate" not in ask_compose._DOCS_CHECK_SCHEMA["required"]
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="needs node to evaluate the composed halt lines")

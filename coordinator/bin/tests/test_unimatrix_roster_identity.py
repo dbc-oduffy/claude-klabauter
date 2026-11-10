@@ -73,6 +73,34 @@ def test_strict_legacy_peer_name_is_readable_without_retargeting(tmp_path, monke
     assert json.loads((tmp_path / "31337.json").read_text()) == first
 
 
+def test_mirror_stamps_box_and_sync_restamps_older_box_none_mirror(tmp_path, monkeypatch):
+    entry = {"pid": 9, "name": "group-em-ad", "sessionId": UUID, "version": "2.1.319",
+             "box": None, "unimatrixBox": None, "messagingSocketPath": "/far.sock"}
+    monkeypatch.setattr(roster, "spawn", lambda command: SimpleNamespace(pid=9569))
+    monkeypatch.setattr(roster.time, "sleep", lambda _: None)
+    monkeypatch.setattr(roster, "proc_start", lambda pid: "local-start")
+    monkeypatch.setattr(roster, "pid_domain", lambda: "win32:machine-a")
+    monkeypatch.setattr(roster, "local_endpoint", lambda far: str(tmp_path / "local.sock"))
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(roster, "write_peer_key", lambda *args: None)
+    monkeypatch.setattr(roster, "local_peer_key", lambda *args: {})
+    cfg = SimpleNamespace(remote="me@macmini", key="unused", tunnel_remote=None, log=str(tmp_path / "log"))
+    row = {"entry": entry, "key": "test-token"}
+    roster.mirror(row, cfg, lambda _: None, scan=[])
+    path = tmp_path / "9569.json"
+    fresh = json.loads(path.read_text())
+    assert fresh["box"] == "macmini" and fresh["unimatrixBox"] == "macmini"
+    old = dict(fresh, box=None)
+    del old["unimatrixBox"], old["unimatrixRemote"]
+    path.write_text(json.dumps(old))
+    assert roster.remote_mirrors([old], "me@macmini") == [old]
+    roster.rename_live_mirror(9569, "/far.sock", row, cfg, lambda _: None, scan=[])
+    healed = json.loads(path.read_text())
+    assert healed["box"] == "macmini" and healed["unimatrixBox"] == "macmini"
+    assert roster.remote_mirrors([healed], "me@macmini") == [healed]
+    assert roster.remote_mirrors([healed], "me@other") != [healed]
+
+
 def test_explicit_peer_and_native_names_are_not_rewritten():
     assert roster.mirror_entry_name({"name": "friendly-codex"}, "macmini", scan=[]) == "friendly-codex"
     entry = {"name": "codex-" + UUID, "sessionId": UUID, "version": "2.1.319"}

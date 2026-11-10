@@ -966,6 +966,17 @@ def _acceptance_skipped(sizing: Mapping) -> bool:
     return sizing_acceptance_skipped(sizing.get("route"), est.get("tshirt") if isinstance(est, Mapping) else None)
 
 
+#: `em_analysis` key a multi-ask child's sizing carries its asks entry's `writes` under (newline-joined).
+SLICE_WRITES_KEY = "ask_writes"
+
+
+def slice_writes(sizing: Mapping) -> list[str]:
+    """The asks-entry `writes` the fan-out stamped on a child sizing; [] when none."""
+    analysis = sizing.get("em_analysis")
+    raw = analysis.get(SLICE_WRITES_KEY) if isinstance(analysis, Mapping) else None
+    return [w.strip() for w in raw.splitlines() if w.strip()] if isinstance(raw, str) else []
+
+
 def collect_fire_refusals(
     sizing: Mapping,
     *,
@@ -1011,7 +1022,7 @@ def collect_fire_refusals(
     route = effective_route(sizing)
     if route != expected:
         out.append(f"`route` is {route!r}, but arm {arm!r} fires only route {expected!r}")
-    if arm == ARM_XS and not list(writes):
+    if arm == ARM_XS and not list(writes) and not slice_writes(sizing):
         out.append(
             "XS needs `writes` (the ask's file footprint): a sizing carries no footprint; "
             "name it as args.writes beside args.sizing"

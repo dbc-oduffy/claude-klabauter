@@ -253,6 +253,19 @@ def _exit_route_js(run_id_js: str) -> str:
     )
 
 
+# A `{sizing}` refire call of a run that carries a footprint names it as `writes`: the XS arm refuses a
+# sizing without one. `_writes` is the script's footprint; a script without it leaves the call as built.
+_WITH_FOOTPRINT_JS = "\n".join(
+    [
+        "function _withFootprint(_call) {",
+        "  if (typeof _call !== 'string' || typeof _writes === 'undefined' || !Array.isArray(_writes) || !_writes.length) return _call;",
+        "  if (_call.includes('\"writes\"')) return _call;",
+        "  return _call.replace(/(args: \\{\"sizing\": \"[^\"]*\")\\}\\}\\)$/, (_m, _head) => _head + ', \"writes\": ' + JSON.stringify(_writes) + '}})');",
+        "}",
+    ]
+)
+
+
 def refire_next_action_js(
     call_js: str,
     legacy_js: str,
@@ -272,6 +285,7 @@ def refire_next_action_js(
     j = json.dumps
     return "\n".join(
         [
+            _WITH_FOOTPRINT_JS,
             "function _refireNextAction() {",
             "  if (!_halted || typeof _halted !== 'object') return;",
             _exit_route_js(run_id_js),
@@ -304,7 +318,7 @@ def refire_next_action_js(
             "  _halted.next_action = {",
             f"    kind: {j(REFIRE_KIND)},",
             f"    op: _hk === {j(HALT_USAGE_LIMIT)} ? {j(OP_WORKFLOW_RESUME)} : {j(OP_ENGINE_ASK)},",
-            f"    call: {call_js},",
+            f"    call: _withFootprint({call_js}),",
             f"    resume: Object.assign({{ run_id: {run_id_js}, sizing: {sizing_js}, halted: _hk, stage: {stage_js} }}, Object.prototype.hasOwnProperty.call(_haltPhase, _hk) ? {{ {j(RESUME_PHASE_KEY)}: _haltPhase[_hk] }} : {{}}),",
             "    input: _input,",
             "    detail: _detail === undefined ? null : _detail,",

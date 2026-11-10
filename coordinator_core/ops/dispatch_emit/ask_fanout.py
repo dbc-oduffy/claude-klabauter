@@ -360,6 +360,10 @@ def _slice_record(
         record["em_analysis"].update(to_em_analysis(route_pref))
     if stop_after:
         record["em_analysis"][STOP_AFTER_KEY] = stop_after
+    if sl.writes and sized is None:
+        from coordinator_core.ops.dispatch_emit.sizing_fire import SLICE_WRITES_KEY
+
+        record["em_analysis"][SLICE_WRITES_KEY] = "\n".join(sl.writes)
     if parent_rows is not None and (sl.rows or sized is None):
         record[rr.REGISTER_KEY] = {
             rr.SOURCES_KEY: sources,

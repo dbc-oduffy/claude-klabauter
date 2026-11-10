@@ -8,8 +8,9 @@ lines over the run base still drops a sibling's since-base line and is a finding
 ``Checkpoint-Plan:`` equal to it and either no stamped base, one on the walked chain, one among the run
 base's first-parent ancestors, or one the run's own record names (``landing_integrity.closing_bases``).
 A dropped line a non-own commit added is still the run's own when it matches a line the run recorded for that
-path at an earlier pass (``kept.json``, ``withheld-prints.json``, ``measured-rev.json``) that the base lacked: a
-peer hand-land swept the run's in-flight hunk, and the run removing it is its own edit. A standing finding
+path at an earlier pass that the base lacked (``kept.json``, ``withheld-prints.json``, ``measured-rev.json``, or
+lines one of the run's own commits introduced): a peer hand-land swept or re-landed the run's hunk, and the
+run removing it is its own edit. A standing finding
 names the foreign commit and the dropped lines' range in it.
 ``Session-Id`` cannot discriminate (concurrent runs share it), nor can plan text alone (a prior run of the
 same plan stamps it).
@@ -69,6 +70,15 @@ def is_own_commit(
         return True
     anchors = (base_sha, *chain, *ancestors, *run_bases)
     return any(a.startswith(b) for b in stamped for a in anchors)
+
+
+def _is_plan_checkpoint(common_dir: Path, sha: str, plan: Optional[str]) -> bool:
+    """True when ``sha`` is a checkpoint commit of ``plan``: its lines are a run's unlanded work, so a
+    landing that rewrites one in place still drops it."""
+    if plan is None:
+        return False
+    message = (commit_meta(common_dir, sha) or {}).get("message", "")
+    return any(checkpoint_plan_matches(p, plan) for p in _PLAN_RE.findall(message))
 
 
 def _halt_names_plan(message: str, plan: str, halt_plan_re: "re.Pattern[str]") -> bool:
@@ -230,6 +240,29 @@ def _own_recorded_lines(
     return +own
 
 
+def _own_commit_lines(
+    common_dir: Path, versions: Sequence[Tuple[str, object]], own: set, base_blob: object
+) -> Counter:
+    """Lines each run-own commit in ``versions`` (newest first) introduced to the path over the version
+    below it, minus the lines the base held, as a multiset keyed on the newline-stripped text. A peer
+    re-landing the run's byte-identical lines after the run's own commit dropped them adds lines in this set;
+    a line an own commit merely carried over from a peer commit is not here. Unreadable blobs add nothing."""
+    out: Counter = Counter()
+    for k, (sha, blob) in enumerate(versions):
+        if sha not in own:
+            continue
+        older_blob = versions[k + 1][1] if k + 1 < len(versions) else base_blob
+        lines, older = _lines(common_dir, blob), _lines(common_dir, older_blob)
+        if lines is None or older is None:
+            continue
+        added = Counter(l.rstrip(b"\r\n") for l in lines)
+        added.subtract(Counter(l.rstrip(b"\r\n") for l in older))
+        out |= +added
+    base_lines = _lines(common_dir, base_blob) or []
+    out.subtract(Counter(l.rstrip(b"\r\n") for l in base_lines))
+    return +out
+
+
 def check(
     worktree_root: Path,
     paths: Sequence[str],
@@ -332,16 +365,18 @@ def check(
         inserted = Counter(
             l.rstrip(b"\r\n") for tag, _i1, _i2, j1, j2 in head_ops if tag in ("insert", "replace") for l in new_lines[j1:j2]
         )
-        tracked = []
+        # A line rewritten in place stays tracked (soft) only to catch one a foreign plan checkpoint added.
+        tracked: List[Tuple[int, bool]] = []
         for tag, i1, i2, j1, j2 in head_ops:
             if tag not in ("delete", "replace"):
                 continue
-            for i in range(i1 + (j2 - j1 if tag == "replace" else 0), i2):
+            rewritten_to = i1 + (j2 - j1) if tag == "replace" else i1
+            for i in range(i1, i2):
                 text = head_lines[i].rstrip(b"\r\n")
                 if inserted[text] > 0 and _WORD_RE.search(text):
                     inserted[text] -= 1
                 else:
-                    tracked.append(i)
+                    tracked.append((i, i < rewritten_to))
         if not tracked:
             continue
         if not chain_walked:
@@ -376,20 +411,21 @@ def check(
             if older is None:
                 unreadable = True
                 break
-            still: List[int] = []
+            still: List[Tuple[int, bool]] = []
             hits: List[int] = []
             ops = _opcodes(older, cur)
-            for i in tracked:
+            for i, soft in tracked:
                 for tag, i1, _i2, j1, j2 in ops:
                     if j1 <= i < j2:
                         if tag == "equal":
-                            still.append(i1 + (i - j1))
-                        elif sha not in own:
+                            still.append((i1 + (i - j1), soft))
+                        elif sha not in own and not (soft and not _is_plan_checkpoint(common_dir, sha, plan)):
                             hits.append(i)
                         break
             if hits:
                 if own_lines is None:
                     own_lines = _own_recorded_lines(root, common_dir, run_id, path, base_blob)
+                    own_lines |= _own_commit_lines(common_dir, versions, own, base_blob)
                 foreign = []
                 for i in hits:
                     text = cur[i].rstrip(b"\r\n")

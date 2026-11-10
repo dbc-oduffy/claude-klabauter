@@ -341,7 +341,7 @@ def test_a_token_refusal_leaves_a_note_the_missing_file_diagnosis_names(repo):
     path.parent.mkdir(parents=True)
     assert _check(_land_run_argv(repo), _transcript(repo, params)) is not None
     assert not path.exists()
-    assert _refused_note(repo).read_text(encoding="utf-8") == guard._LEG_PARAMS_TOKEN
+    assert _refused_note(repo).read_text(encoding="utf-8") == "block_subagent_commit: " + guard._LEG_PARAMS_TOKEN
     assert guard._LEG_PARAMS_TOKEN in chan.missing_file_diagnosis(str(path))
 
 
@@ -360,7 +360,7 @@ def test_a_halt_commit_whose_live_token_was_consumed_mid_run_is_admitted_from_th
     run_token.mint(repo, _RUN, _SCRIPT)
     assert _check(_land_run_argv(repo), tp) is not None
     assert not path.exists()
-    assert _refused_note(repo).read_text(encoding="utf-8") == guard._LEG_PARAMS_TOKEN
+    assert _refused_note(repo).read_text(encoding="utf-8") == "block_subagent_commit: " + guard._LEG_PARAMS_TOKEN
 
 
 def test_a_halt_commit_with_a_claimed_record_is_admitted(repo):
@@ -458,3 +458,25 @@ def test_a_large_commit_stage_prompt_still_writes_the_params_file(repo):
         fh.write(json.dumps(record) + "\n")
     assert _check(_emitted_argv(repo), tp) is None
     assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8")) == params
+
+
+def test_a_backpointer_only_git_commit_agent_gets_the_file_but_is_still_denied(repo, monkeypatch):
+    # The write widens to effective_type; the admit stays on the raw agent_type.
+    monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda root, agent_id: _COMMIT_AGENT)
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": run_token.mint(repo, _RUN, _SCRIPT)}
+    assert _check(_emitted_argv(repo), _transcript(repo, params), agent_type="") is not None
+    assert json.loads(chan.params_path(repo, _RUN).read_text(encoding="utf-8")) == params
+
+
+def test_a_skipped_writer_leaves_a_note_naming_the_guard_and_the_skip_leg(repo, monkeypatch):
+    monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: None)
+    path = chan.params_path(repo, _RUN)
+    path.parent.mkdir(parents=True)
+    _check(_emitted_argv(repo), _transcript(repo, {"script_path": _SCRIPT, "run_id": _RUN, "run_token": "0" * 32}))
+    assert _refused_note(repo).read_text(encoding="utf-8") == "block_subagent_commit: " + guard._LEG_SKIP_NO_GIT_ROOT
+
+
+def test_an_unrelated_subagent_type_gets_no_params_file(repo):
+    params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": run_token.mint(repo, _RUN, _SCRIPT)}
+    assert _check(_emitted_argv(repo), _transcript(repo, params), agent_type="coordinator:executor") is not None
+    assert not chan.params_path(repo, _RUN).exists()

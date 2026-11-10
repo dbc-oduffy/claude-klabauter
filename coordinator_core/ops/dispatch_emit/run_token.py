@@ -26,6 +26,8 @@ Removal rule: only a landed commit, an ended or refused run, or a sanctioned pee
 removes a record; a removal without a landed commit (`consume`, `discard`, a re-`mint`) first
 leaves `retired/<run_id>.json`, which `halt_admits` reads so a halted run's record-only commit
 survives it; `readmit_reviewed` is the only retired->live path, and only while no live, claimed or spent record exists.
+`consume` and `discard` then wake the stages parked behind the ended run (`_wake_stage_waiters`);
+`release` restores a running run and wakes nothing.
 `tests/test_run_token_removers_enumerated.py` names every `consume` / `discard`
 caller with its condition. This module's own unlinks are the protocol and are outside that walk:
 `mint` unlinks a stale claimed record, a stale halted receipt, a stale escrow
@@ -514,7 +516,7 @@ def _publish_record(path: Path, text: str) -> None:
         raise RecordWriteCancelled(path.stem)
     fd, tmp = tempfile.mkstemp(prefix=".mint.", dir=str(path.parent))
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
         if gate is not None and not gate.commit():
             raise RecordWriteCancelled(path.stem)
@@ -719,7 +721,7 @@ def readmit_reviewed(repo_root: Path, run_id: object, token: object, script_path
         fd = os.open(live, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except OSError:
         return False
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         json.dump(record, fh, sort_keys=True)
     _index("index_mint", repo_root, run_id, record["minted_at"])
     return True
@@ -794,7 +796,7 @@ def _write_claim(fd: int, record: dict, budget_secs: Optional[float] = None) -> 
     identity: dict = {"claimed_at": time.time(), "pid": os.getpid(), "thread": threading.get_ident()}
     if isinstance(budget_secs, (int, float)) and budget_secs > 0:
         identity["deadline"] = identity["claimed_at"] + budget_secs
-    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
         json.dump({**record, **identity}, fh, sort_keys=True)
     return identity
 
@@ -1020,6 +1022,85 @@ def consume(repo_root: Path, run_id: str, *, landed: Optional[dict] = None) -> N
         _unlink_both(repo_root, run_id, claimed=claimed)
     _unlink_both(repo_root, run_id, escrow=True)
     _index("index_remove", repo_root, run_id)
+    _wake_stage_waiters(repo_root, run_id)
+
+
+def _wake_stage_waiters(repo_root: Path, ended_run_id: str) -> None:
+    """The end of `ended_run_id` (`consume`, `discard`; never `release`, which restores a running
+    run) frees every stage parked behind it (`stage_wait.wake_on_end`). Each freed waiter's token is
+    retired, so the spool's live-token coalescing cannot swallow its refire, then its
+    `engine-ask {sizing, resume_run_id}` refire is spooled, then one background drain starts
+    (`_kick_spool_drain`); no mint or spawn runs inside this call. Never raises: a failure is a logged advisory."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    try:
+        from coordinator_core.ops.dispatch_emit import stage_wait
+
+        waiters = stage_wait.wake_on_end(repo_root, ended_run_id)
+    except Exception:  # noqa: BLE001 -- a wake must never fail the blocker's own removal
+        log.warning("stage wake after %s ended failed", ended_run_id, exc_info=True)
+        return
+    spooled = False
+    for waiter in waiters:
+        try:
+            spooled = _resume_stage_waiter(repo_root, waiter) or spooled
+        except Exception:  # noqa: BLE001
+            log.warning("stage resume of %s after %s ended failed", waiter.get("run_id"), ended_run_id, exc_info=True)
+    if spooled:
+        _kick_spool_drain(repo_root)
+
+
+def _kick_spool_drain(repo_root: Path) -> None:
+    """Start one background `ask_spool.drain.run` so the spooled refires mint now, not at the next
+    engine boot. A daemon thread: the blocker's op returns without waiting on the mint, and a
+    process that exits first leaves the entries pending for the server's own drain. Never raises."""
+    import threading
+
+    def _drain() -> None:
+        try:
+            from coordinator_core.ask_spool import drain
+
+            drain.run(str(repo_root))
+        except Exception:  # noqa: BLE001 -- entries stay pending for the next drain
+            import logging
+
+            logging.getLogger(__name__).warning("stage-wait spool drain failed", exc_info=True)
+
+    try:
+        threading.Thread(target=_drain, name="stage-wait-drain", daemon=True).start()
+    except RuntimeError:
+        pass
+
+
+def _resume_stage_waiter(repo_root: Path, waiter: dict) -> bool:
+    """Retire the waiter's token and spool its refire; True when a refire entry was spooled."""
+    import logging
+
+    from coordinator_core.ask_spool import record as spool
+    from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_RUN_ID_ARG
+
+    run_id = waiter["run_id"]
+    sizing_rel = (_read_rec(repo_root, run_id) or {}).get("sizing_rel")
+    discard(repo_root, run_id)
+    if not (isinstance(sizing_rel, str) and sizing_rel):
+        logging.getLogger(__name__).warning("stage-wait %s has no sizing to refire; its token is retired", run_id)
+        return False
+    payload = {
+        "tool_name": "Workflow",
+        "tool_input": {"name": "coordinator:engine-ask", "args": {"sizing": sizing_rel, RESUME_RUN_ID_ARG: run_id}},
+    }
+    session = waiter.get("session_id") or "stage-wait"
+    tool_use_id = f"stage-wait-{run_id}-{int(waiter.get('started_at') or 0)}"
+    payload.update(session_id=session, tool_use_id=tool_use_id)
+    spool.spool_ask(
+        str(repo_root),
+        json.dumps(payload, sort_keys=True).encode("utf-8"),
+        session_id=session,
+        tool_use_id=tool_use_id,
+        reason="stage-wait: blocker ended",
+    )
+    return True
 
 
 def discard(repo_root: Path, run_id: str) -> Optional[dict]:
@@ -1036,6 +1117,7 @@ def discard(repo_root: Path, run_id: str) -> Optional[dict]:
     _unlink_both(repo_root, run_id)
     _unlink_both(repo_root, run_id, escrow=True)
     _index("index_remove", repo_root, run_id)
+    _wake_stage_waiters(repo_root, run_id)
     return record
 
 

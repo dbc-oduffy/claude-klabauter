@@ -1,4 +1,6 @@
-from coordinator_core.agent_pipe.agy import AgyAdapter
+import json
+
+from coordinator_core.agent_pipe.agy import DEFAULT_ALLOW_COMMANDS, AgyAdapter
 from coordinator_core.agent_pipe.agy_model import (
     DEFAULT_MODEL,
     MODEL_ENV,
@@ -31,7 +33,10 @@ def test_never_bypasses_permissions(monkeypatch):
     monkeypatch.delenv(MODEL_ENV, raising=False)
     argv = job_argv("p")
     assert "--dangerously-skip-permissions" not in argv
-    assert "--settings" not in argv
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    allow = settings["permissions"]["allow"]
+    assert allow == [f"command({c} *)" for c in DEFAULT_ALLOW_COMMANDS]
+    assert not {"command(python *)", "command(python3 *)", "command(git *)", "command(nohup *)"} & set(allow)
 
 
 def test_adapter_fresh_spawn_is_job_argv(monkeypatch):

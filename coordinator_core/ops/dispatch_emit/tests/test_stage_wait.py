@@ -102,3 +102,53 @@ def test_park_and_wake_spawn_nothing_and_stay_under_budget(repo, monkeypatch):
     stage_wait.wake_on_end(repo, "b1")
     assert time.process_time() - start < 0.2
     assert spawned == []
+
+
+class _NoThreadLock:
+    """Stands in for per-process `_lock`: separate engine processes share only the record lock file."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def test_concurrent_blocker_ends_in_separate_processes_still_wake_the_waiter(repo, monkeypatch):
+    import threading
+
+    monkeypatch.setattr(stage_wait, "_lock", _NoThreadLock())
+    real_write = stage_wait._write
+
+    def slow_write(path, record):
+        time.sleep(0.01)
+        real_write(path, record)
+
+    monkeypatch.setattr(stage_wait, "_write", slow_write)
+    for i in range(10):
+        waiter = f"w{i}"
+        stage_wait.park(repo, waiter, ["b1", "b2"], [], session_id="s1")
+        out = []
+        barrier = threading.Barrier(2)
+
+        def end(blocker):
+            barrier.wait()
+            out.extend(stage_wait.wake_on_end(repo, blocker))
+
+        threads = [threading.Thread(target=end, args=(b,)) for b in ("b1", "b2")]
+        [t.start() for t in threads]
+        [t.join() for t in threads]
+        assert [w["run_id"] for w in out] == [waiter]
+        assert stage_wait.read(repo, waiter)["started"] is True
+
+
+def test_stale_record_lock_is_stolen_and_fresh_one_is_not_left_behind(repo):
+    import os
+
+    stage_wait.park(repo, "waiter", ["b1"], [], session_id="s1")
+    lock = stage_wait._path(repo, "waiter").with_suffix(stage_wait._LOCK_SUFFIX)
+    lock.write_text("")
+    old = time.time() - stage_wait._LOCK_STALE_S - 5
+    os.utime(lock, (old, old))
+    assert [w["run_id"] for w in stage_wait.wake_on_end(repo, "b1")] == ["waiter"]
+    assert not lock.exists()

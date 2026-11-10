@@ -89,7 +89,7 @@ from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from coordinator_core.housekeeping import archive_index as archive_index_mod
 from coordinator_core.housekeeping.archive_index import ArchiveIndex
-from coordinator_core.housekeeping.corpus import read_live_corpus
+from coordinator_core.housekeeping.corpus import LIVE_CORPUS_KEYS, read_live_corpus
 from coordinator_core.housekeeping.gate_clear import (
     CONFLICT,
     apply_gate_clear,
@@ -122,6 +122,48 @@ PathLike = Union[str, Path]
 #: there, and this module's own scope is which records to OFFER to
 #: `evaluate_gate_clear`, not gate-clear's own internal vocabulary).
 _AWAITING_GATE = "awaiting_gate"
+
+#: Extra frontmatter keys the cycle's one live read carries so the post-commit redrive needs no second read.
+_REDRIVE_KEYS: Tuple[str, ...] = ("deliverable_id", "shipped_in")
+
+_EMPTY_REDRIVE: Dict[str, Any] = {
+    "advanced": [], "refused": [], "commit_shas": [], "scan_incomplete": False, "errors": [],
+}
+
+
+def _redrive_and_report(
+    common_dir: Path,
+    worktree_root: Path,
+    records: Dict[Path, Dict[str, Any]],
+    moved_dst: Dict[str, Path],
+) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
+    """Redrive batons whose terminal handoff or plan already licenses advancing them, and list
+    plans parked at landed. Never raises: a failure lands in the redrive result's `errors`.
+
+    `moved_dst` maps a live handoff relpath to the archive destination it was just moved to; a
+    terminal record keys `handoff_metas` by that destination, an unmoved one by its live path.
+    """
+    metas: Dict[str, Dict[str, Any]] = {}
+    for path, record in records.items():
+        if record.get("deployment_state") not in TERMINAL_DEPLOYMENT_STATES:
+            continue
+        rel = rel_id(path, worktree_root)
+        dst = moved_dst.get(rel)
+        metas[rel_id(dst, worktree_root) if dst is not None else rel] = record
+    try:
+        from coordinator_core.ops.cascade_backstop_sweep import plan_frontmatters
+        from coordinator_core.ops.cascade_redrive import landed_parked, redrive_terminal_divergences
+
+        plan_fms = plan_frontmatters(worktree_root)
+        redrive = redrive_terminal_divergences(common_dir, handoff_metas=metas, plan_fms=plan_fms)
+        parked = landed_parked(worktree_root, plan_fms=plan_fms)
+    except Exception as exc:  # noqa: BLE001 -- the redrive leg never fails the cycle
+        return (
+            {**_EMPTY_REDRIVE, "scan_incomplete": True,
+             "errors": [{"deliverable_id": None, "error": f"{type(exc).__name__}: {exc}"}]},
+            [],
+        )
+    return redrive, parked
 
 
 def _transition_target_rel(worktree_root: Path, transition_params: Any) -> Set[str]:
@@ -287,7 +329,7 @@ def run(
     live_dir = worktree_root / "state" / "handoffs"
     archive_dir = worktree_root / "archive" / "handoffs"
 
-    live_result = read_live_corpus(live_dir)
+    live_result = read_live_corpus(live_dir, keys=LIVE_CORPUS_KEYS + _REDRIVE_KEYS)
     records = live_result.records
 
     cache_path = archive_index_mod.cache_path_for(common_dir)
@@ -462,6 +504,14 @@ def run(
         bool(archive_index_mod.revalidate(archive_idx)) if archive_dir_exists else False
     )
 
+    archived_set = set(archived)
+    cascade_redrive, landed_parked_plans = _redrive_and_report(
+        common_dir,
+        worktree_root,
+        records,
+        {m.candidate_id: m.dst for m in handoff_moves if m.candidate_id in archived_set},
+    )
+
     archive_nonterminal = sorted(
         (
             {"id": rel_id(Path(p), worktree_root), "deployment_state": state}
@@ -529,6 +579,8 @@ def run(
         "scan_gaps": live_result.scan_gaps,
         "index_rebuilt": index_rebuilt,
         "index_cache_written": index_cache_written,
+        "cascade_redrive": cascade_redrive,
+        "landed_parked": landed_parked_plans,
         "invariant": {
             "archive_nonterminal": archive_nonterminal,
             "gate_dead_blockers": gate_dead_blockers,

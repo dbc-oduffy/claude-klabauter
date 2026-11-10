@@ -7098,11 +7098,105 @@ def _prompt_sourced_params_admit(
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     leg = _prompt_sourced_params_admit_leg(typed_path, git_root, transcript_path)
+    note_path = typed_path if os.path.isabs(typed_path) else os.path.join(git_root, typed_path)
     if leg is None:
-        chan.clear_refusal(typed_path)
+        chan.clear_refusal(note_path)
     else:
-        chan.note_refusal(typed_path, leg)
+        chan.note_refusal(note_path, _NOTE_GUARD_PREFIX + leg)
     return leg
+
+
+#: Prefix of every refusal note this guard leaves beside a params file; the op quotes it.
+_NOTE_GUARD_PREFIX = "block_subagent_commit: "
+
+_LEG_SKIP_NOT_SUBAGENT = "leg:run-token-params-skipped-not-a-subagent-call"
+_LEG_SKIP_NO_GIT_ROOT = "leg:run-token-params-skipped-no-git-root"
+_LEG_SKIP_PAYLOAD_SHAPE = "leg:run-token-params-skipped-payload-shape"
+_LEG_SKIP_COMMAND_SHAPE = "leg:run-token-params-skipped-command-shape"
+
+
+def _canonical_params_operand(cmd_for_scan: str) -> Optional[str]:
+    """The one canonical run `--params-file` operand of a run-token op segment, any shape, else None.
+
+    Used only to place a skip note; it admits nothing and writes no params.
+    """
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    tokens = _tokenize_full_command(cmd_for_scan)
+    if tokens is None:
+        return None
+    found: Set[str] = set()
+    for seg in (s for s in _segments_from_tokens(tokens) if s):
+        if not _token_matches_binary(seg[0], _COORDINATOR_INVOKE_BINARY):
+            continue
+        op_idx = _first_positional_after_invoke_module(seg, 1)
+        if op_idx is None or seg[op_idx] not in _RUN_TOKEN_OPS:
+            continue
+        rest = seg[op_idx + 1:]
+        found.update(v for t, v in zip(rest, rest[1:]) if t == "--params-file" and chan.is_canonical_params_path(v))
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def _note_params_writer_skipped(cmd_for_scan: str, git_root: Optional[str], leg: str) -> None:
+    """Leave `block_subagent_commit: <leg>` beside the canonical params file a skipped writer would have written."""
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    operand = _canonical_params_operand(cmd_for_scan)
+    if operand is None:
+        return
+    if not os.path.isabs(operand):
+        if not git_root:
+            return
+        operand = os.path.join(git_root, operand)
+    chan.note_refusal(operand, _NOTE_GUARD_PREFIX + leg)
+
+
+def _reach_params_writer(
+    cmd_for_scan: str,
+    payload: Dict[str, Any],
+    git_root: Optional[str],
+    session_id: str,
+    payload_legs: Set[str],
+    heredoc_hit: bool,
+) -> "Tuple[Any, Optional[str], Optional[str], str]":
+    """Run the prompt-sourced params writer for a git-commit-agent's Bash call, noting each skip.
+
+    Returns (params_leg, typed_params_file, written_target, token_root). Trap: the write
+    gates on `effective_type`, which includes the backpointer a subagent can write for itself;
+    that is safe only because the file's content comes from the spawn transcript's params block,
+    never from the command, and the token check still gates the commit. The caller's admit stays
+    on the raw `agent_type`.
+    """
+    params_leg: Any = _PARAMS_LEG_UNSET
+    typed_params_file = (
+        None
+        if payload_legs or heredoc_hit or not git_root
+        else _prefixed_params_file_value(cmd_for_scan)
+    )
+    written_target = _params_file_write_target(cmd_for_scan) if git_root else None
+    token_root = git_root or ""
+    if typed_params_file is not None and git_root:
+        token_root = _run_root(typed_params_file, _typed_repo_operand(cmd_for_scan), git_root, session_id)
+    if written_target is not None:
+        # A demoted deny still runs the command: the file must hold the prompt's params then.
+        _prompt_sourced_params_admit(written_target, git_root, _spawn_transcript(payload))
+    elif typed_params_file is not None:
+        params_leg = _prompt_sourced_params_admit(typed_params_file, token_root, _spawn_transcript(payload))
+    else:
+        loose_file = (
+            _loose_params_file_value(cmd_for_scan)
+            if git_root and not (payload_legs or heredoc_hit)
+            else None
+        )
+        if loose_file is not None:
+            _prompt_sourced_params_admit(loose_file, git_root, _spawn_transcript(payload))
+        elif not git_root:
+            _note_params_writer_skipped(cmd_for_scan, git_root, _LEG_SKIP_NO_GIT_ROOT)
+        elif payload_legs or heredoc_hit:
+            _note_params_writer_skipped(cmd_for_scan, git_root, _LEG_SKIP_PAYLOAD_SHAPE)
+        else:
+            _note_params_writer_skipped(cmd_for_scan, git_root, _LEG_SKIP_COMMAND_SHAPE)
+    return params_leg, typed_params_file, written_target, token_root
 
 
 def _prompt_sourced_params_admit_leg(
@@ -7448,6 +7542,10 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     )
 
     if not _caller_is_subagent(payload):
+        if payload.get("agent_type") == _GIT_COMMIT_AGENT_TYPE:
+            _note_params_writer_skipped(
+                cmd_for_scan, resolve_git_root(payload.get("cwd")), _LEG_SKIP_NOT_SUBAGENT
+            )
         return None
     raw_agent_id = payload.get("agent_id") or ""
 
@@ -7490,32 +7588,15 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             ownership_reason = "a persona commit names its paths: `coordinator-invoke ceremony.commit_v2 --params-file <f>`"
 
     is_git_commit_agent = agent_type == _GIT_COMMIT_AGENT_TYPE
-    if is_git_commit_agent:
-        params_leg: Any = _PARAMS_LEG_UNSET
-        typed_params_file = (
-            None
-            if payload_legs or heredoc_stdin_import_hit or not git_root
-            else _prefixed_params_file_value(cmd_for_scan)
+    params_leg: Any = _PARAMS_LEG_UNSET
+    if is_git_commit_agent or effective_type == _GIT_COMMIT_AGENT_TYPE:
+        params_leg, typed_params_file, written_target, token_root = _reach_params_writer(
+            cmd_for_scan, payload, git_root, session_id, payload_legs, heredoc_stdin_import_hit
         )
-        written_target = _params_file_write_target(cmd_for_scan) if git_root else None
-        token_root = git_root
-        if typed_params_file is not None and git_root:
-            token_root = _run_root(
-                typed_params_file, _typed_repo_operand(cmd_for_scan), git_root, session_id
-            )
+    if is_git_commit_agent:
         if written_target is not None:
-            # A demoted deny still runs the command: the file must hold the prompt's params then.
-            _prompt_sourced_params_admit(written_target, git_root, _spawn_transcript(payload))
             refusal = ownership_reason = _LEG_PARAMS_FILE_WRITTEN_BY_COMMAND
         else:
-            if typed_params_file is not None:
-                params_leg = _prompt_sourced_params_admit(
-                    typed_params_file, token_root, _spawn_transcript(payload)
-                )
-            elif git_root and not (payload_legs or heredoc_stdin_import_hit):
-                loose_file = _loose_params_file_value(cmd_for_scan)
-                if loose_file is not None:
-                    _prompt_sourced_params_admit(loose_file, git_root, _spawn_transcript(payload))
             may_commit, ownership_reason = _git_commit_agent_may_commit(
                 cmd_for_scan, git_root, session_id, cwd
             )

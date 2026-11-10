@@ -199,6 +199,49 @@ def _frozen_waves_lines(repo_root: str, run_id: str) -> list[str]:
     ]
 
 
+READ_STAGED_PARAM = "read_staged"
+
+_STAGED_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "gate_report_path": {"type": ["string", "null"]},
+        "approval_record": {"type": ["object", "null"]},
+        "waves": {"type": "array"},
+        "error": {"type": ["string", "null"]},
+    },
+}
+
+
+def _staged_from_disk_lines(repo_root: str, run_id: str, trail_dir: str) -> list[str]:
+    """When the stage reply lost its `gate_report_path` (the stage agent's relay of the op was
+    truncated or refused), one read-only `roadmap.blitz_stage` call re-reads the frozen gate report
+    and `approval.json` from disk. `_rb` is rebuilt only when BOTH exist; otherwise it is left
+    untouched and the halt that follows stands."""
+    from coordinator_core.ops.dispatch_emit import ask_compose as ac
+
+    prompt = ac._cat(
+        f"{_emit._BRIEF_PRECEDENCE_CLAUSE}\n\n{ac._ANCHOR_CLAUSE.format(root=repo_root)}\n\n",
+        f"Run `{ac._INVOKE} {STAGE_OP} '",
+        f"js:JSON.stringify({{ {READ_STAGED_PARAM}: {{ roadmap_id: _rb.roadmapId, trail_dir: {ac._lit(trail_dir)} }} }})",
+        f"'{ac._repo_flag(repo_root)}` once and return its JSON reply verbatim "
+        '(or {"error": ...} when it refuses). Commit nothing.',
+    )
+    call = ac._agent(
+        prompt, label="staged-from-disk", phase="roadmap-blitz", agent_type=ac._OP_RELAY_AGENT_TYPE,
+        agent_model=ac._MECHANICAL_MODEL, schema=_STAGED_SCHEMA, effort=ac._MECHANICAL_EFFORT,
+        run_id=run_id,
+    )
+    return [
+        "  if (!_rb?.gate_report_path && typeof _rb?.roadmapId === 'string' && _rb.roadmapId) {",
+        f"    const _disk = await {call};",
+        "    if (_disk?.gate_report_path && _disk?.approval_record) {",
+        "      _rb = { ..._rb, gate_report_path: _disk.gate_report_path, stage: { ...(_rb.stage ?? {}), "
+        "gate_report_path: _disk.gate_report_path, approval_record: _disk.approval_record, waves: _disk.waves ?? [] } };",
+        "    }",
+        "  }",
+    ]
+
+
 def roadmap_stage_lines(
     *,
     repo_root: str,
@@ -236,6 +279,7 @@ def roadmap_stage_lines(
         f"  _rb = await {ROADMAP_STAGE_FN}({{ repoRoot: REPO_ROOT, sizing: _sizingRel, "
         f"interactionMode: {lit(str(interaction_mode))}, approver: {lit(approver)}, {chatty_keys}"
         f"trailDir: {lit(run_dir + '/roadmap-blitz')} }});",
+        *_staged_from_disk_lines(repo_root, run_id, run_dir + '/roadmap-blitz'),
         f"  if (!_rb || !_rb.gate_report_path) {{ {halt(chr(39) + 'roadmap-blitz returned no gate_report_path' + chr(39))} }}",
         "  }",
         "  if (!_halted) {",

@@ -138,9 +138,11 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "verify:", "runs a row's or a wave's scoped tests and reports"),
     _earns(
         "ask", "verify",
-        "runs the manifest's scoped tests, writes the declared docs and note, then rules the criterion and the "
-        "ledger; absorbed the terminal test, criterion-judge, docs and ledger-check legs and the reviewer rows' verdict-write",
+        "takes the verify-tests leg's result inline, writes the declared docs and note, then rules the criterion and the "
+        "ledger; absorbed the criterion-judge, docs and ledger-check legs and the reviewer rows' verdict-write",
     ),
+    _earns("ask", "verify-tests", "runs the manifest's scoped tests on a haiku test-runner and reports raw evidence; the verify agent rules on it"),
+    _earns("ask", "overlay-verify", "runs the clean-overlay verify producer on a haiku test-runner and relays its exit code"),
     _earns("ask", "footprint", "reads the baton for an XS sizing's write footprint when the sizing carries none"),
     _earns("ask", "size-retry", "re-runs the scout when its first pass did not assemble the sizing"),
     _earns("ask", "apply-rulings", "applies the EM's J<n> rulings to a pulled plan in place; spawned only when the gate's pending_rulings is non-empty"),
@@ -150,7 +152,7 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "ledger-fix:", "fixes one reopened chunk behind a not_met ledger row inside its footprint; the chunks run in parallel"),
     _earns("ask", "ledger-reverify", "re-judges only the reopened rows and re-runs only the reopened chunks' scoped tests"),
     _earns("ask", "halt-fix", "closes the owned failing tests and blocked-slice findings inside the review footprint before the review_blocked halt"),
-    _earns("ask", "halt-reverify", "re-runs only the owned failing ids and re-judges only the blocked slices' findings after a halt-fix leg"),
+    _earns("ask", "halt-reverify", "re-runs only the owned failing ids on a haiku test-runner and re-reads the blocked slices' findings after a halt-fix leg; writes nothing"),
     _earns("ask", "ledger-recovery-record", "writes recovery.json once the loop's final chunk statuses are known; a held-only run has no other agent to fold the write into"),
     _earns("ask", "remnant-complete", "completes the not_met remnant (unattributed or capped ledger rows, a not_met criterion, a delivery FAIL) inside its footprint; the judge stays read-only"),
     _earns("ask", "remnant-reverify", "re-runs the scoped tests and re-rules the ledger, criterion and delivery once after the remnant leg"),

@@ -152,6 +152,10 @@ _KIND_FIELD = re.compile(r"^(derived_from|scope_mode)[ \t]*:[ \t]*(.*?)[ \t]*$",
 _SIZING_OBJECT_RESOLUTION = re.compile(r"^[0-9a-f]{7,64}$")
 
 
+#: The first leg checked in the product landing; a halt on it means nothing started or committed.
+SCRIPT_READ_LEG = "land_run.script_read"
+
+
 def _error(message: str, **extra: object) -> dict:
     return {"committed": False, "sha": None, "error": message, **extra}
 
@@ -240,25 +244,45 @@ def _dispatch(params: dict, repo_root: Optional[Path]) -> dict:
     # A halt landing is the run leaving its record in the tree; the leg budget refusing it strands
     # run state uncommitted, so only the dispatcher and server-window clamps bound it.
     budget = float("inf") if mode == "halted" else None
-    try:
-        with land_deadline.scope(budget_secs=budget):
-            reply = _dispatch_mode(mode, root, repo_root, params)
-            if mode == "product" and isinstance(reply, dict) and reply.get("committed") is True:
-                land_leg_record.write(
-                    root, params.get("run_id"), outcome=land_leg_record.OUTCOME_LANDED,
-                    leg=None, bound_by=None, legs=land_deadline.leg_costs(),
-                )
-                _chain_landed_tranche(root, params, reply)
-            return reply
-    except land_deadline.LandDeadlineExceeded as exc:
-        reply = land_deadline.halt_reply(exc)
-        rel = land_leg_record.write(
-            root, params.get("run_id"), outcome=land_leg_record.OUTCOME_HALT,
-            leg=exc.leg, bound_by=exc.bound_by, legs=reply["leg_costs"],
-        )
-        if rel:
-            reply["leg_record"] = rel
-        return reply
+    retried = False
+    while True:
+        try:
+            with land_deadline.scope(budget_secs=budget):
+                reply = _dispatch_mode(mode, root, repo_root, params)
+                if mode == "product" and isinstance(reply, dict) and reply.get("committed") is True:
+                    land_leg_record.write(
+                        root, params.get("run_id"), outcome=land_leg_record.OUTCOME_LANDED,
+                        leg=None, bound_by=None, legs=land_deadline.leg_costs(),
+                    )
+                    _chain_landed_tranche(root, params, reply)
+                return reply
+        except land_deadline.LandDeadlineExceeded as exc:
+            if not retried and _script_read_stall_retryable(mode, exc):
+                retried = True
+                continue
+            return _deadline_halt(root, params, exc)
+
+
+def _script_read_stall_retryable(mode: str, exc: land_deadline.LandDeadlineExceeded) -> bool:
+    """True for a product halt on the first leg (``land_run.script_read``: nothing started, nothing
+    committed) while the dispatcher window still holds a full leg budget plus the reply margin."""
+    if mode != "product" or exc.leg != SCRIPT_READ_LEG:
+        return False
+    from coordinator_core import dispatch_abandon
+
+    left = dispatch_abandon.remaining()
+    return left is None or left >= land_deadline.LAND_BUDGET_SECS + dispatch_abandon.REPLY_MARGIN_SECS
+
+
+def _deadline_halt(root: Path, params: dict, exc: land_deadline.LandDeadlineExceeded) -> dict:
+    reply = land_deadline.halt_reply(exc)
+    rel = land_leg_record.write(
+        root, params.get("run_id"), outcome=land_leg_record.OUTCOME_HALT,
+        leg=exc.leg, bound_by=exc.bound_by, legs=reply["leg_costs"],
+    )
+    if rel:
+        reply["leg_record"] = rel
+    return reply
 
 
 def _chain_landed_tranche(root: Path, params: dict, reply: dict) -> None:
@@ -1603,14 +1627,14 @@ def _ledger_gate(
     root: Path, run_dir: Path, verdict: object, manifest_abs: Optional[Path], gated: Sequence[str],
     operator: dict, plan_text: Optional[str], inline_review: dict, resume_ledger: object,
     plan_rel: Optional[str], fence: Optional[dict] = None, recovery_reasons: Optional[dict] = None,
-    code_paths: Sequence[str] = (),
+    code_paths: Sequence[str] = (), advisories: Optional[list] = None,
 ) -> tuple[Optional[dict], object, list]:
     """``(refusal or None, ledger, open rows)`` for a ledger-bearing ask run: the refusal when the
     verdict does not pass ``requirements_ledger.judge`` against the live register rows (a not_met row a
     gated chunk withholds passes and returns in ``open``), or when a ledger resume has no work since its
     halt. A run emitted without a ledger is not gated. ``recovery_reasons`` is ``{chunk: reason}`` of the
     chunks ``recovery.json`` backs (``_recovery_backing``): they extend ``gated`` and their open rows carry
-    that reason."""
+    that reason. ``advisories`` (out-param) receives the judge's ignored-verdict-id advisory line."""
     from coordinator_core.ops.dispatch_emit import requirements_ledger
     from coordinator_core.ops.dispatch_emit.engine_owned_rows import routed_roots
 
@@ -1752,18 +1776,18 @@ def _ledger_gate(
         )
         if on_breach:
             result = {**result, "pass": False, "failures": [*result["failures"], *on_breach]}
+    advisory = requirements_ledger.advisory_text(result)
+    if advisory is not None and advisories is not None:
+        advisories.append(advisory)
     if result["pass"]:
         return None, ledger, [
             {**r, "reason": recovery_reasons.get(str(r["reason"])[len("withheld_by "):], r["reason"])}
             if str(r.get("reason", "")).startswith("withheld_by ") else r
             for r in result.get("open") or []
         ]
-    foreign = [str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON]
     message = "the requirements are not met: " + "; ".join(
         (f"{f['id']}: {f['reason']}" if f["id"] is not None else f["reason"]) for f in result["failures"][:10]
     )
-    if foreign:
-        message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
     from coordinator_core.ops.dispatch_emit.halt_landing import since_halt_close
 
     landed = since_halt_close(since_halt, result["failures"], verdict)
@@ -2113,9 +2137,25 @@ def _own_run_seniority(root: Path, run_id: object, script_path: object) -> Optio
         return None
 
 
+def _submitter_session(root: Path, run_id: object) -> str:
+    """The session that submitted the run (its stage record's ``session_id``), else ``""``. One read."""
+    if not isinstance(run_id, str):
+        return ""
+    try:
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+        sid = (read_run_stage(root, run_id) or {}).get("session_id")
+    except Exception:  # noqa: BLE001 -- an unreadable stage record names no submitter
+        return ""
+    return sid if isinstance(sid, str) else ""
+
+
 def _firing_sessions(root: Path, run_id: object, session_id: Optional[str]) -> set:
-    """Sessions that are this landing's own hand: the landing caller, the session on the run's token and the run's recorded emitter."""
+    """Sessions that are this landing's own hand: the landing caller, the run's submitting session, the session on the run's token and the run's recorded emitter."""
     own = {session_id} if session_id else set()
+    submitter = _submitter_session(root, run_id)
+    if submitter:
+        own.add(submitter)
     if isinstance(run_id, str):
         try:
             from coordinator_core.ops.dispatch_emit import run_token
@@ -2144,11 +2184,19 @@ def _prior_pass_sessions(root: Path, run_id: object) -> set:
         return out
     try:
         from coordinator_core.ops.dispatch_emit import run_token
-        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, record_dir
         from coordinator_core.ops.dispatch_emit.halted_run import recorded_emitter
-        from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
 
-        for rid in (run_id, *_resumed_chain(root, run_id)):
+        chain: tuple = ()
+        try:
+            # `_resumed_chain` reads only `run.json`: no ledger file, no predecessors, and no ledger import.
+            if (record_dir(root, run_id) / "run.json").is_file():
+                from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+                chain = tuple(_resumed_chain(root, run_id))
+        except ValueError:  # an unsafe id names no ledger
+            chain = ()
+        for rid in (run_id, *chain):
             stage = read_run_stage(root, rid) or {}
             out.update(s for s in (stage.get("session_id"), *(stage.get("adopted_from") or ())) if isinstance(s, str) and s)
             emitter = recorded_emitter(root, rid)
@@ -2207,7 +2255,8 @@ def _peer_held(
     run's declared writes holds over ``paths``; ``minted_before`` is ``_own_run_seniority``'s answer.
     ``declaration_only`` is an out-set: it receives the held paths no live touch claim holds.
     A touch claim by ``own_sid`` or any of ``self_sessions`` (the run's firing session) is self, never a
-    peer; another run's declared writes still hold even from that session.
+    peer; another run's declared writes still hold even from that session, except runs minted under the
+    run's submitting session (`_submitter_session`), which are this run's siblings and never hold it.
     A bare declaration never holds a path this run's own checkpoint landed; a live touch claim still
     does. A per-run artifact (`co_declared_settle.is_per_run_artifact`) is never held by a run declaration:
     the hunk gate settles it. A claim read that fails answers no hold."""
@@ -2247,7 +2296,7 @@ def _peer_held(
         from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
 
         claims = warp_run_deliverable.live_run_write_claims(
-            root, list(paths), exclude_session="", cwd=str(root),
+            root, list(paths), exclude_session=_submitter_session(root, run_id), cwd=str(root),
             minted_before=minted_before,
             exclude_run=run_id if isinstance(run_id, str) else None,
         )
@@ -3028,13 +3077,15 @@ def _worktree_blob(root: Path, rel: str) -> Optional[str]:
 
 def _measured_mismatch(
     root: Path, record: dict, product: Sequence[str], deleted: Sequence[str], settled: dict, own=None,
-    baseline: Optional[Mapping] = None, owned_now=None,
+    baseline: Optional[Mapping] = None, owned_now=None, no_change=None,
 ) -> list:
     """Paths where the product changes a commit would introduce (``product`` path -> blob, ``deleted``
     removals) differ from the record's ``blobs``/``removed``. A record path the commit omits counts
     unless HEAD already holds the recorded blob. Paths *own* (an ``OwnArtifacts``) covers never count.
     ``owned_now`` (paths -> the subset whose bytes are the run's own last write) drops a landing path
-    the run's review/fix leg rewrote after the record; a foreign rewrite stays."""
+    the run's review/fix leg rewrote after the record; a foreign rewrite stays. ``no_change`` (paths ->
+    the subset the run provably never changed, ``_run_made_no_change``) drops a landing path whose
+    difference is a peer's alone."""
     from coordinator_core.git.commit import checkin_blob_sha
 
     blobs = record.get("blobs") if isinstance(record.get("blobs"), dict) else {}
@@ -3053,12 +3104,50 @@ def _measured_mismatch(
         differing = {p for p in differing if not own.covers(p)}
     if owned_now is not None and differing & landing:
         differing -= set(owned_now(sorted(differing & landing)))
+    if no_change is not None and differing & landing:
+        differing -= set(no_change(sorted(differing & landing)))
     if baseline:
         differing = {
             p for p in differing
             if not (p in landing and _own_hunks_agree(root, p, blobs.get(p), baseline, settled))
         }
     return sorted(differing)
+
+
+def _run_made_no_change(root: Path, run_id: Optional[str], baseline: Optional[Mapping], owned_now):
+    """A ``paths -> never-changed subset`` callable: those baselined paths where no blob the run's
+    record dir holds (kept chunks, post-checkpoint, measured-rev) carries an own hunk over the write
+    baseline and ``owned_now`` finds no run write, so any difference from HEAD is a peer's. A missing or
+    unreadable record, blob or baseline keeps the path out."""
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.ops.dispatch_emit import drift_attribution
+
+    def never_changed(paths):
+        if not baseline or not run_id or not safe_id(run_id):
+            return []
+        wanted = [p for p in paths if baseline.get(p)]
+        if not wanted:
+            return []
+        try:
+            common = resolve_git_common_dir(root)
+            recorded = drift_attribution.run_recorded_blobs(record_dir(root, run_id), wanted)
+            written = set(owned_now(wanted)) if owned_now is not None else set()
+            out = []
+            for p in wanted:
+                if p in written:
+                    continue
+                objs = [git_objects.read_object(common, b) for b in recorded.get(p, [])]
+                if not objs or any(o is None for o in objs):
+                    continue
+                hunks = [_own_hunks(root, p, baseline[p], o[1]) for o in objs]
+                if all(h is not None and not h for h in hunks):
+                    out.append(p)
+            return out
+        except Exception:
+            return []
+
+    return never_changed
 
 
 def _own_bytes_now(root: Path, run_dir, session_id, run_id, inline_review):
@@ -3314,12 +3403,13 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     ledger = None
     open_rows: list = []
     fence: dict = {}
+    ledger_advisory: list = []
     if ask_run_dir is not None:
         unmet, ledger, open_rows = _ledger_gate(
             root, ask_run_dir, params.get("ledger_verdict"), manifest_abs,
             [g.id for g in manifest.gated], requirements_ledger.owed_rows(manifest.owed),
             plan_text, inline_review, params.get(TERMINAL_RESUME_LEDGER_PARAM), request.plan_path, fence,
-            recovery_reasons, code_paths=floor_code,
+            recovery_reasons, code_paths=floor_code, advisories=ledger_advisory,
         )
         if unmet is not None:
             if not (unmet.get(ALREADY_LANDED_KEY) and unmet.get("committed")):
@@ -3729,14 +3819,19 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
     paths = list(dict.fromkeys([*candidates, *art_present]))
     deleted = sorted(set(deleted) | set(art_deleted))
     paths = [p for p in paths if p not in deleted]
+    run_baseline = manifest.write_baseline if manifest is not None else {}
     if unmeasured:
         own_covers = _run_owned(root, art_run_id).covers
         unmeasured = [p for p in unmeasured if not own_covers(p)]
         if unmeasured:
             own_now = set(_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review)(unmeasured))
             unmeasured = [p for p in unmeasured if p not in own_now]
-        run_baseline = manifest.write_baseline if manifest is not None else {}
         unmeasured = [p for p in unmeasured if not _peer_dirt_only(root, p, run_baseline)]
+    if unmeasured:
+        unchanged = set(_run_made_no_change(
+            root, measured_run, run_baseline, _own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review),
+        )(unmeasured))
+        unmeasured = [p for p in unmeasured if p not in unchanged]
     if unmeasured:
         held_now = _peer_held(
             root, unmeasured, session_id, rid, script_path,
@@ -4321,6 +4416,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                 own=_run_owned(root, art_run_id),
                 baseline=manifest.write_baseline if manifest is not None else None,
                 owned_now=_own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review),
+                no_change=_run_made_no_change(
+                    root, measured_run, manifest.write_baseline if manifest is not None else None,
+                    _own_bytes_now(root, ask_run_dir, session_id, sibling_run_id, inline_review),
+                ),
             )
         )
         if differing:
@@ -4642,6 +4741,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         reply["criterion_status"] = "not_met" if unlanded_rows or review_gap else criterion["status"]
     if ledger_partial:
         reply["ledger_partial"] = ledger_partial
+    if ledger_advisory:
+        reply["ledger_advisory"] = ledger_advisory
     if excluded_unmeasured:
         reply["excluded_unmeasured"] = excluded_unmeasured
     if objective_gate is not None:

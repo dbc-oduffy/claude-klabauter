@@ -480,6 +480,63 @@ def test_op_read_of_a_gate_report_refuses_a_missing_or_foreign_path(tmp_path):
             _handler({"read_gate_report": bad}, repo_root=tmp_path / ".git")
 
 
+def test_staged_from_disk_returns_gate_report_and_approval_a_truncated_reply_lost(tmp_path, roadmap, commit_calls):
+    staged = bs.stage_roadmap(tmp_path, str(roadmap), approval=APPROVED, trail_dir=TRAIL)
+    truncated = {k: v for k, v in staged.items() if k not in ("gate_report_path", "approval_record")}
+    assert "gate_report_path" not in truncated and "approval_record" not in truncated
+    disk = bs.staged_from_disk(tmp_path, roadmap.name, TRAIL)
+    assert disk["gate_report_path"] == staged["gate_report_path"]
+    assert disk["approval_record"] == staged["approval_record"]
+    assert disk["gate_report_state"] == "already-frozen"
+    assert [[b["id"] for b in w["batons"]] for w in disk["waves"]] == [
+        [b["id"] for b in w["batons"]] for w in staged["waves"]
+    ]
+
+
+def test_staged_from_disk_reports_each_missing_file_as_none(tmp_path):
+    none = bs.staged_from_disk(tmp_path, "rm-test", TRAIL)
+    assert none["gate_report_path"] is None and none["approval_record"] is None and none["waves"] == []
+    _freeze(tmp_path, {"batons": [], "waves": []})
+    report_only = bs.staged_from_disk(tmp_path, "rm-test", TRAIL)
+    assert report_only["gate_report_path"] and report_only["approval_record"] is None
+    (tmp_path / TRAIL).mkdir(parents=True)
+    (tmp_path / TRAIL / "approval.json").write_text(
+        json.dumps({"verdict": "declined", "recorded_at": "2026-11-10T00:00:00Z"}), encoding="utf-8"
+    )
+    assert bs.staged_from_disk(tmp_path, "rm-test", TRAIL)["approval_record"] is None
+    (tmp_path / TRAIL / "approval.json").write_text(
+        json.dumps({"verdict": "approved", "recorded_at": "2026-11-10T00:00:00Z"}), encoding="utf-8"
+    )
+    both = bs.staged_from_disk(tmp_path, "rm-test", TRAIL)
+    assert both["approval_record"] == {"path": f"{TRAIL}/approval.json", "recorded_at": "2026-11-10T00:00:00Z"}
+
+
+def test_staged_from_disk_refuses_corrupt_json_and_ignores_non_dict_approval(tmp_path):
+    (tmp_path / TRAIL).mkdir(parents=True)
+    approval = tmp_path / TRAIL / "approval.json"
+    approval.write_text("{not json", encoding="utf-8")
+    with pytest.raises(bs.BlitzStageRefused):
+        bs.staged_from_disk(tmp_path, "rm-test", TRAIL)
+    approval.write_text("[1]", encoding="utf-8")
+    assert bs.staged_from_disk(tmp_path, "rm-test", TRAIL)["approval_record"] is None
+    approval.write_text(json.dumps({"verdict": "approved", "recorded_at": "t"}), encoding="utf-8")
+    report = _freeze(tmp_path, {"batons": [], "waves": []})
+    (tmp_path / bs.record_homes.record_path("", "plan-blitz", f"rm-test/{bs.GATE_REPORT_NAME}")).write_text(
+        "{bad", encoding="utf-8"
+    )
+    with pytest.raises(bs.BlitzStageRefused):
+        bs.staged_from_disk(tmp_path, "rm-test", TRAIL)
+
+
+@pytest.mark.parametrize(
+    "roadmap_id,trail",
+    [("../x", "scratch/t"), ("a/b", "scratch/t"), ("rm-test", "../x"), ("rm-test", "/abs")],
+)
+def test_staged_from_disk_refuses_names_that_climb_or_are_absolute(tmp_path, roadmap_id, trail):
+    with pytest.raises(bs.BlitzStageRefused):
+        bs.staged_from_disk(tmp_path, roadmap_id, trail)
+
+
 def test_rerun_duplicates_no_stub(tmp_path, roadmap):
     first = bs.stage_roadmap(tmp_path, str(roadmap))
     files_before = sorted(p.name for p in (tmp_path / "state" / "handoffs").iterdir())

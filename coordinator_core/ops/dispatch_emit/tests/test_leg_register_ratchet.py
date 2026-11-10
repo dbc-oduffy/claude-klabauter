@@ -537,6 +537,53 @@ def test_tier_justification_every_expensive_leg_names_its_class(tmp_path):
     assert not offenders, "\n".join(sorted(set(offenders)))
 
 
+#: Ask legs allowed on a sonnet-or-above type: they author code, plans or sizings, or rule a verdict.
+_ASK_AUTHORING_LEGS: frozenset[str] = frozenset(
+    {
+        "size", "size-retry", "size-reword", "accept", "apply-rulings", "footprint", "plan", "plan-review", "plan-revise", "plan-patch",
+        "plan-prep-repair", "pull-split", "xl-exit", "work:", "halt-fix", "ledger-fix:", "ledger-late",
+        "ledger-replan", "ledger-remaining", "ledger-recovery-record", "ledger-reverify", "remnant-complete",
+        "remnant-record", "remnant-reverify", "verify", "review:coordinator:code-reviewer",
+        "review:coordinator:integrator",
+    }
+)
+#: Mechanical ask legs that run on the haiku test-runner; each must stay off every floor set.
+_ASK_TEST_RUNNER_LEGS = ("halt-reverify", "verify-tests")
+
+
+def _non_authoring_expensive(emitted: dict[Key, list[lr.EmittedLeg]]) -> list[Key]:
+    return sorted(
+        key
+        for key, legs in emitted.items()
+        if key[0] == "ask" and key[1] not in _ASK_AUTHORING_LEGS
+        for leg in legs
+        if (leg.model or emit._AGENT_MODELS.get(leg.agent_type)) in {"sonnet", "opus"}
+    )
+
+
+def test_every_ask_leg_on_a_sonnet_or_above_type_is_an_authoring_leg(tmp_path):
+    offenders = _non_authoring_expensive(_emitted(tmp_path))
+    assert not offenders, f"{sorted(set(offenders))} run on sonnet or above without being a declared authoring leg"
+
+
+def test_the_authoring_refusal_fires_on_a_stray_sonnet_leg():
+    stray = lr.EmittedLeg("stray-reverify", "p", "coordinator:executor", "sonnet", effort="low")
+    assert _non_authoring_expensive({("ask", "stray-reverify"): [stray]}) == [("ask", "stray-reverify")]
+    assert _non_authoring_expensive({("ask", "verify"): [stray]}) == []
+    assert _non_authoring_expensive({("ask", "stray-reverify"): [lr.EmittedLeg("x", "p", "coordinator:test-runner", "haiku")]}) == []
+
+
+def test_halt_reverify_and_the_verify_test_run_ride_the_haiku_test_runner_off_the_floor(tmp_path):
+    emitted = _emitted(tmp_path, golden=False)
+    for label in _ASK_TEST_RUNNER_LEGS:
+        key = ("ask", label)
+        assert key not in _RUNTIME_FLOOR and key not in _OP_ONLY_FLOOR
+        assert _declared(*key).cls is lr.LegClass.EARNS_ITS_COST and not _declared(*key).runtime_floor
+        assert {(leg.agent_type, leg.model, leg.effort) for leg in emitted[key]} == {
+            ("coordinator:test-runner", "haiku", "low")
+        }, key
+
+
 def test_tier_justification_every_leg_declares_an_effort(tmp_path):
     missing = sorted({key for key, legs in _emitted(tmp_path).items() for leg in legs if not leg.effort})
     assert not missing, f"leg(s) {missing} declare no effort"

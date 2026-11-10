@@ -35,6 +35,94 @@ def test_render_presence_line_absent():
     assert mod.render_presence_line({"verdict": "absent"}) is None
 
 
+def _stamp_heartbeat(root, sid, now, ahead=300):
+    import json
+
+    from coordinator_core.group_em import watch_heartbeat as hb
+
+    (root / "state").mkdir(parents=True, exist_ok=True)
+    (root / "state" / "group-em-watch.json").write_text(
+        json.dumps(
+            {
+                "holder_session_id": sid,
+                "holder_name": "stamped-name",
+                "last_tick_at": hb.iso_instant(now),
+                "tick_source": "monitor",
+                "next_expected_by": hb.iso_instant(now + ahead),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _box(monkeypatch, root, sid="sid-live", live=True):
+    monkeypatch.setattr(
+        mod.nomination,
+        "box_holder",
+        lambda *a, **k: {"repo_root": str(root), "session_id": sid, "peer_name": "group-em-ad", "live": live},
+    )
+
+
+def test_foreign_cwd_reads_the_gem_home_heartbeat(monkeypatch, tmp_path):
+    import time
+
+    home, foreign = tmp_path / "home", tmp_path / "foreign"
+    foreign.mkdir()
+    _stamp_heartbeat(home, "sid-live", time.time())
+    _box(monkeypatch, home)
+    from_home = mod.compute_context({"cwd": str(home)})
+    from_foreign = mod.compute_context({"cwd": str(foreign)})
+    assert from_home == from_foreign
+    assert "group-em-ad" in from_foreign and "GROUP EM WATCH: armed" in from_foreign
+
+
+def test_missing_heartbeat_is_unknown_never_vacant(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    _box(monkeypatch, home)
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "GROUP EM WATCH: UNKNOWN" in out and "vacant" not in out.lower()
+
+
+def test_expired_heartbeat_is_unknown_not_armed(monkeypatch, tmp_path):
+    import time
+
+    home = tmp_path / "home"
+    _stamp_heartbeat(home, "sid-live", time.time() - 4 * 7 * 86400, ahead=60)
+    _box(monkeypatch, home)
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "UNKNOWN" in out and "armed" not in out
+
+
+def test_heartbeat_of_another_holder_is_unknown(monkeypatch, tmp_path):
+    import time
+
+    home = tmp_path / "home"
+    _stamp_heartbeat(home, "sid-old", time.time())
+    _box(monkeypatch, home)
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "UNKNOWN" in out and "armed" not in out
+
+
+def test_dead_holder_is_unknown_and_unnamed(monkeypatch, tmp_path):
+    import time
+
+    home = tmp_path / "home"
+    _stamp_heartbeat(home, "sid-live", time.time())
+    _box(monkeypatch, home, live=False)
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "UNKNOWN" in out and "armed" not in out and "group-em-ad" not in out
+
+
+def test_no_box_holder_stale_cwd_heartbeat_is_unknown(monkeypatch, tmp_path):
+    import time
+
+    monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
+    _stamp_heartbeat(tmp_path, "sid-x", time.time() - 99999, ahead=60)
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "UNKNOWN" in out and "armed" not in out
+
+
 def test_render_uhura_line_none_record():
     assert mod.render_uhura_line(None) is None
 

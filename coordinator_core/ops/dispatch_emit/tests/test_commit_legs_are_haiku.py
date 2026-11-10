@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit import leg_register as lr
-from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _composed
+from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _ask, _composed
 
 import pytest
 
 pytestmark = pytest.mark.complete
+
+_REPO = Path(__file__).resolve().parents[4]
 
 _COMMIT_AGENT = "coordinator:git-commit-agent"
 _REQUIRED = {
@@ -73,3 +77,23 @@ def test_a_sonnet_commit_leg_is_named(tmp_path: Path):
     idx = next(i for i, s in enumerate(scripts) if any(l.label == "halt-commit" for l in lr.emitted_legs(s)))
     mutated = {**composed, "ask": [*scripts[:idx], _swap_model(scripts[idx], "halt-commit"), *scripts[idx + 1 :]]}
     assert ("ask", "halt-commit", "sonnet") in _offenders(mutated)
+
+
+_LAND_RUN_COMMAND = re.compile(r"coordinator-invoke dispatch\.land_run --params-file ")
+
+
+def _default_ask_commit_legs() -> list[lr.EmittedLeg]:
+    return [l for l in lr.emitted_legs(_ask()) if l.agent_type == _COMMIT_AGENT]
+
+
+def test_the_default_ask_has_exactly_one_haiku_commit_leg():
+    legs = _default_ask_commit_legs()
+    assert [(l.label, l.model) for l in legs] == [("commit:wave-", "haiku")]
+
+
+def test_the_commit_prompt_is_one_land_run_command():
+    prompt = ask_compose._commit_stage_call(
+        head="H", anchor="A", repo_root=str(_REPO), run_id="ask-20261110T000000-abcdef"
+    )
+    assert len(_LAND_RUN_COMMAND.findall(prompt)) == 1
+    assert _COMMIT_AGENT in prompt

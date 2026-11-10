@@ -34,6 +34,36 @@ def test_review_recovery_sits_between_the_review_wave_and_the_blocked_halt():
     assert f"attempt <= {SELF_CORRECTION_CAP}" in script
 
 
+def _recover(**kw) -> str:
+    return ask_compose._review_recover_js(
+        head="H", anchor="A", session_tail="", record_dir="state/warp/r1", run_id="r1", **kw
+    )
+
+
+def _opts(js: str, label: str) -> str:
+    """The option object of the `agent(...)` call carrying `label`."""
+    at = js.index(f"label: '{label}'")
+    return js[at : js.index("schema:", at)]
+
+
+def test_halt_reverify_runs_on_the_haiku_test_runner_and_halt_fix_stays_on_the_executor():
+    js = _recover()
+    reverify, fix = _opts(js, HALT_REVERIFY_LABEL), _opts(js, HALT_FIX_LABEL)
+    assert "agentType: 'coordinator:test-runner'" in reverify and "model: 'haiku'" in reverify
+    assert "agentType: 'coordinator:executor'" in fix and "model: 'sonnet'" in fix
+
+
+def test_halt_reverify_carries_the_test_runner_clause_and_degrades_on_a_bare_host():
+    from coordinator_core.ops.dispatch_emit import emit
+
+    clause = emit._test_runner_clause("REPO")
+    assert clause in _recover(repo_root="REPO")
+    assert "agentType: 'general-purpose'" in _opts(
+        _recover(agent_type_host=emit._AGENT_TYPE_HOST_DEGRADED), HALT_REVERIFY_LABEL
+    )
+    assert "model: 'haiku'" in _opts(_recover(agent_type_host=emit._AGENT_TYPE_HOST_DEGRADED), HALT_REVERIFY_LABEL)
+
+
 _HARNESS = """
 const log = () => {};
 const _USAGE_LIMIT_RE = /quota/i;

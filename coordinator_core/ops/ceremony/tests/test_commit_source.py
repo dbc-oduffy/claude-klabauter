@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
+from coordinator_core.git import git_objects
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.ceremony import commit_source
 from coordinator_core.telemetry import spawn_counter
@@ -122,6 +123,36 @@ def test_backslash_paths_normalised(tmp_path):
     assert read("sub\\c.txt") == b"c1\n"
     assert read("sub/c.txt") == b"c1\n"
     assert read("sub\\nothere.txt") is None
+
+
+def _stalling_read(real, fail_times):
+    calls = {"n": 0}
+
+    def fake(common_dir, sha):
+        calls["n"] += 1
+        if calls["n"] <= fail_times:
+            raise git_objects.PackReadDeadline("pack_read_stalled: test")
+        return real(common_dir, sha)
+
+    return fake, calls
+
+
+def test_one_stalled_pack_read_is_retried(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    fake, calls = _stalling_read(commit_source._read_object, 1)
+    monkeypatch.setattr(commit_source, "_read_object", fake)
+    read = _reader(repo, paths=[])
+    assert read("b.txt") == b"b0\n"
+    assert calls["n"] >= 2
+
+
+def test_two_stalled_pack_reads_raise_pack_read_stalled(tmp_path, monkeypatch):
+    repo = _repo(tmp_path)
+    fake, _ = _stalling_read(commit_source._read_object, 2)
+    monkeypatch.setattr(commit_source, "_read_object", fake)
+    read = _reader(repo, paths=[])
+    with pytest.raises(git_objects.PackReadStalled):
+        read("b.txt")
 
 
 def test_zero_spawns_and_no_subprocess_import(tmp_path):

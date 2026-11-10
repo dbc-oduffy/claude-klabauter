@@ -25,6 +25,24 @@ def test_missing_canonical_path_names_the_writer(tmp_path):
     assert "Cannot read" not in message
 
 
+def test_missing_canonical_path_without_a_note_says_the_writer_was_not_reached(tmp_path):
+    path = tmp_path / "scratch" / "warp" / "ask-1" / "terminal-commit-params.json"
+    _, stderr, _ = _dispatch_argv(["ping", "--params-file", str(path)], str(tmp_path), allow_warm=False)
+    message = _message(stderr)
+    assert "run-token writer was not reached" in message
+    assert "never written" in message and "did not run or refused" in message
+
+
+def test_missing_canonical_path_with_a_note_names_the_refusing_leg(tmp_path):
+    path = tmp_path / "scratch" / "warp" / "ask-1" / "terminal-commit-params.json"
+    path.parent.mkdir(parents=True)
+    path.with_name("terminal-commit-params.refused").write_text("some-leg", encoding="utf-8")
+    from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+    text = chan.missing_file_diagnosis(str(path))
+    assert "some-leg" in text and "was not reached" not in text
+
+
 def test_missing_arbitrary_path_keeps_the_existing_message(tmp_path):
     path = tmp_path / "other" / "params.json"
     _, stderr, exit_code = _dispatch_argv(

@@ -1394,6 +1394,9 @@ def test_ac6_the_cockpit_wire_envelope_key_set_is_unchanged(repo: Path):
     # instead would be the wrong repair: it would write an internal key into
     # the frozen producer contract.
     act.pop("_scope_touch_paths", None)
+    # `cascade_redrive` is additive (contract section 6, like `deferred`): present only when
+    # something was archived, so the frozen seven keys are asserted without it.
+    assert isinstance(act.pop("cascade_redrive"), dict)
     assert set(act) == _ENVELOPE_KEYS, (
         f"dry_run:false envelope drifted from the producer contract; "
         f"missing={_ENVELOPE_KEYS - set(act)!r} "
@@ -1809,3 +1812,101 @@ def test_cascade_terminal_shape_is_terminal_to_scan_and_to_the_cycle(repo: Path)
 
     assert _cid(name) in result["archived"], result
     assert list((repo / "archive" / "handoffs").rglob(name))
+
+
+# ---------------------------------------------------------------------------
+# The act path redrives the batons joined to the handoffs it archived
+# ---------------------------------------------------------------------------
+
+_REDRIVE_DID = "dlv-archive-000000"
+
+
+def _seed_redrive_pair(repo: Path, monkeypatch) -> tuple:
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    sha = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    name = "2026-11-01-terminal-source.md"
+    _seed(
+        repo, name,
+        f"status: open\ndeployment_state: shipped\ndeliverable_id: {_REDRIVE_DID}\nshipped_in: {sha[:8]}",
+    )
+    baton = _seed(
+        repo, "2026-11-02-open-baton.md",
+        f"status: open\ndeployment_state: ready_to_fire\ndeliverable_id: {_REDRIVE_DID}\n"
+        'branch: work/test/2026-01-01\npredecessor: "none"',
+    )
+    return name, baton, sha[:8]
+
+
+def test_act_redrives_the_open_baton_with_the_archived_handoffs_own_shipped_in(repo: Path, monkeypatch):
+    name, baton, sha = _seed_redrive_pair(repo, monkeypatch)
+    cid = _cid(name)
+
+    act = _handler(
+        {"mode": "already-terminal", "dry_run": False, "cap": 10, "candidate_ids": [cid]},
+        repo_root=_common_dir(repo),
+    )
+
+    assert act["exit_code"] == 0, act
+    assert [item["id"] for item in act["acted"]] == [cid]
+    redrive = act["cascade_redrive"]
+    assert redrive["errors"] == [], redrive
+    assert [Path(a["path"]).name for a in redrive["advanced"]] == [baton.name], redrive
+    text = baton.read_text(encoding="utf-8")
+    assert "deployment_state: shipped" in text
+    assert f"shipped_in: {sha}" in text
+
+
+def test_a_redrive_failure_is_reported_and_never_changes_the_archive_exit_code(repo: Path, monkeypatch):
+    import coordinator_core.ops.cascade_redrive as redrive_mod
+
+    name, baton, _sha = _seed_redrive_pair(repo, monkeypatch)
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("redrive exploded")
+
+    monkeypatch.setattr(redrive_mod, "redrive_terminal_divergences", _boom)
+
+    act = _handler(
+        {"mode": "already-terminal", "dry_run": False, "cap": 10, "candidate_ids": [_cid(name)]},
+        repo_root=_common_dir(repo),
+    )
+
+    assert act["exit_code"] == 0, act
+    assert [item["id"] for item in act["acted"]] == [_cid(name)]
+    assert "redrive exploded" in act["cascade_redrive"]["errors"][0]["error"]
+    assert "deployment_state: ready_to_fire" in baton.read_text(encoding="utf-8")
+
+
+def test_redrive_is_scoped_to_the_archived_handoffs_deliverable_ids(repo: Path, monkeypatch):
+    other = _seed(
+        repo, "2026-11-03-unrelated-baton.md",
+        "status: open\ndeployment_state: ready_to_fire\ndeliverable_id: dlv-unrelated-000000\n"
+        'branch: work/test/2026-01-01\npredecessor: "none"',
+    )
+    name, _baton, _sha = _seed_redrive_pair(repo, monkeypatch)
+
+    act = _handler(
+        {"mode": "already-terminal", "dry_run": False, "cap": 10, "candidate_ids": [_cid(name)]},
+        repo_root=_common_dir(repo),
+    )
+
+    assert {a["deliverable_id"] for a in act["cascade_redrive"]["advanced"]} == {_REDRIVE_DID}
+    assert "deployment_state: ready_to_fire" in other.read_text(encoding="utf-8")
+
+
+def test_dry_run_never_imports_or_calls_the_redrive(repo: Path, monkeypatch):
+    import coordinator_core.ops.cascade_redrive as redrive_mod
+
+    name, _baton, _sha = _seed_redrive_pair(repo, monkeypatch)
+    monkeypatch.setattr(
+        redrive_mod, "redrive_terminal_divergences",
+        lambda *_a, **_kw: pytest.fail("dry_run:true must not redrive"),
+    )
+
+    preview = _handler(
+        {"mode": "already-terminal", "dry_run": True, "cap": 10},
+        repo_root=_common_dir(repo),
+    )
+
+    assert "cascade_redrive" not in preview

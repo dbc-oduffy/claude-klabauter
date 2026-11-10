@@ -242,3 +242,58 @@ def test_the_composed_script_never_carries_the_retired_orphaned_wording():
     script = _compose()
     assert "verify budget exceeded (" in script
     assert "orphaned, not stopped" not in script
+
+
+def _ask_verify_script() -> str:
+    from .test_ask_compose import _compose as ask_compose_script
+
+    return ask_compose_script()
+
+
+def _call_at(script: str, label: str) -> str:
+    at = script.index(f"label: '{label}'")
+    return script[at : script.index("schema:", at)]
+
+
+def test_the_ask_scoped_tests_run_on_a_haiku_test_runner_leg_awaited_before_the_verify_agent():
+    script = _ask_verify_script()
+    tests_at, verify_at = script.index("label: 'verify-tests'"), script.index("label: 'verify'")
+    assert script.count("label: 'verify-tests'") == 1 and script.count("label: 'verify'") == 1
+    assert script.rindex("_verifyTest = await agent(", 0, tests_at) < tests_at < verify_at
+    tests, verify = _call_at(script, "verify-tests"), _call_at(script, "verify")
+    assert "agentType: 'coordinator:test-runner'" in tests and "model: 'haiku'" in tests
+    assert "agentType: 'coordinator:executor'" in verify and "model: 'sonnet'" in verify
+
+
+def test_the_verify_agent_gets_the_tests_result_inline_and_returns_no_test_of_its_own():
+    script = _ask_verify_script()
+    run = _run_verify(script)
+    assert "if (_testWanted) {" in run and "JSON.stringify(_verifyTest ?? null)" in run
+    assert "_testWanted ? ('The scoped tests already ran in a separate test-runner leg" in run
+    assert "_verify.test = _verifyTest" in run and "Return one object: `items`" in run
+    assert "`test` (step 1" not in script
+
+
+def test_the_tests_leg_prompt_carries_the_deadline_and_the_measured_rev_instruction_the_verify_prompt_dropped():
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    tests = ask_compose._verify_tests_call(
+        head="H", anchor="A", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), run_id="r1"
+    )
+    verify = ask_compose._verify_call(
+        head="H", anchor="A", test_js=ask_compose._test_instruction_js("HEAD", "REPO"), docs_parts=(),
+        verdict_parts=("v",), judged=False, schema={}, run_id="r1", test_result_var="_verifyTest",
+    )
+    assert "Deadline: return your test_result within" in tests and "dispatch.measured_rev" in tests
+    assert "dispatch.measured_rev" not in verify and "Run the scoped test targets" not in verify
+
+
+def test_a_non_usage_limit_throw_in_the_tests_leg_leaves_the_result_null_and_the_verify_agent_still_runs():
+    run = _run_verify(_ask_verify_script())
+    assert "if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; log('verify-tests leg threw: '" in run
+    assert run.index("verify-tests leg threw") < run.index("_verify = await agent(")
+
+
+def _run_verify(script: str) -> str:
+    start = script.index("const _runVerify")
+    return script[start : script.index("\n", start)]

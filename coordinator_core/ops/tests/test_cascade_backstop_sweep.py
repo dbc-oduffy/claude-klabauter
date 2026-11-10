@@ -215,6 +215,77 @@ class TestDivergenceDetection:
         assert "repo_root" in result["error"]
 
 
+def _seed_dated_plan(repo: Path, rel: str, *, status: str, extra: str, deliverable_id: str = "dlv-d-000000") -> Path:
+    path = repo / "docs" / "plans" / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        f'---\ntitle: "T"\nstatus: {status}\ndeliverable_id: "{deliverable_id}"\n{extra}---\n\n# Plan\n',
+        encoding="utf-8",
+    )
+    return path
+
+
+class TestLandedParkedAndRecursiveScan:
+    def test_month_subdirectory_implemented_plan_is_counted(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_plan(repo, "2026-11/p1.md", status="implemented", deliverable_id="dlv-sub-111111")
+        _seed_handoff(repo, "h1.md", deliverable_id="dlv-sub-111111")
+
+        result = _run({}, repo_root=repo / ".git")
+        assert result["sources_scanned"]["plans"] == 1
+        assert [d["terminal_sources"] for d in result["divergences"]] == [["docs/plans/2026-11/p1.md"]]
+
+    def test_landed_parked_default_14_days_with_age_basis(self, tmp_path):
+        from datetime import date, timedelta
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        today = date.today()
+        _seed_dated_plan(repo, "2026-11/old_created.md", status="landed", extra=f"created: {today - timedelta(days=20)}\n")
+        _seed_dated_plan(
+            repo, "old_landed_at.md", status="landed",
+            extra=f"created: {today - timedelta(days=90)}\nlanded_at: {today - timedelta(days=30)}\n",
+        )
+        # created long ago but landed recently: landed_at wins, not parked.
+        _seed_dated_plan(
+            repo, "fresh_landed_at.md", status="landed",
+            extra=f"created: {today - timedelta(days=90)}\nlanded_at: {today - timedelta(days=2)}\n",
+        )
+        _seed_dated_plan(repo, "recent.md", status="landed", extra=f"created: {today - timedelta(days=3)}\n")
+        _seed_dated_plan(repo, "impl.md", status="implemented", extra=f"created: {today - timedelta(days=99)}\n")
+
+        result = _run({}, repo_root=repo / ".git")
+        by_plan = {e["plan"]: e for e in result["landed_parked"]}
+        assert set(by_plan) == {"docs/plans/2026-11/old_created.md", "docs/plans/old_landed_at.md"}
+        assert by_plan["docs/plans/2026-11/old_created.md"]["age_basis"] == "created"
+        assert by_plan["docs/plans/2026-11/old_created.md"]["age_days"] == 20
+        assert by_plan["docs/plans/old_landed_at.md"]["age_basis"] == "landed_at"
+        assert by_plan["docs/plans/old_landed_at.md"]["age_days"] == 30
+
+    def test_landed_days_param_overrides_the_default(self, tmp_path):
+        from datetime import date, timedelta
+
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_dated_plan(repo, "p.md", status="landed", extra=f"created: {date.today() - timedelta(days=5)}\n")
+
+        assert _run({}, repo_root=repo / ".git")["landed_parked"] == []
+        assert len(_run({"landed_days": 3}, repo_root=repo / ".git")["landed_parked"]) == 1
+
+    def test_landed_parked_listing_writes_nothing(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_repo(repo)
+        _seed_dated_plan(repo, "p.md", status="landed", extra="created: 2026-01-01\n")
+        _git(repo, "add", "-A")
+        _git(repo, "commit", "-m", "seed")
+
+        result = _run({}, repo_root=repo / ".git")
+        assert len(result["landed_parked"]) == 1
+        status = _git(repo, "status", "--porcelain")
+        assert status.stdout.strip() == ""
+
+
 class TestSlugPrefixFamilyDivergence:
     """AC6/AC7 (C4): the sweep must see a terminal plan whose spine-sharing
     handoff is non-terminal for a `kind`-ABSENT successor, even though the
@@ -237,7 +308,7 @@ class TestSlugPrefixFamilyDivergence:
 
         result = _run({}, repo_root=repo / ".git")
 
-        assert result["schema_version"] == 2
+        assert result["schema_version"] == 3
         assert len(result["slug_prefix_family_divergences"]) == 1
         entry = result["slug_prefix_family_divergences"][0]
         assert entry["plan_deliverable_id"] == self.ID_42

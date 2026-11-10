@@ -1633,6 +1633,16 @@ def _reserved_token_spent(root: Path, run_id: str) -> bool:
         return False
 
 
+def _spent_after_ensure(root: Path, run_id: str) -> bool:
+    """Whether `run_id` still holds no live run token after the launcher ensured one; a stalled read is not spent."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    try:
+        return not run_token.is_live(root, run_id) and run_token.escrowed(root, run_id) is None
+    except (OSError, ValueError):
+        return False
+
+
 def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
     """Why a slice sizing may not start now: an unlanded `after` predecessor."""
     from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
@@ -2944,6 +2954,13 @@ def _resume_route(
     except Exception as exc:  # the launcher's refusal text is the whole message
         return _refuse(f"The engine wrote no launcher: {exc}"), None
     _ensure_launcher_run_token(root, halted_id, sizing_rel, session_id)
+    if call_specific and _spent_after_ensure(root, halted_id):
+        # A call carrying `writes` recomposes the run, and a recomposed gate refuses a run whose token is not live;
+        # retire the halt so the plain emit below mints a fresh run id and token.
+        from coordinator_core.ops.dispatch_emit.halted_run import mark_resumed
+
+        mark_resumed(rd)
+        return None, None
     _record_refire(rd, script, "launcher", None)
     from coordinator_core import warp_live
 

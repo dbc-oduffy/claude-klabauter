@@ -53,6 +53,7 @@ from typing import Any, Optional
 
 from coordinator_core._hook_envelope import payload_of
 from coordinator_core.group_em import atomic_record
+from coordinator_core.group_em import nomination
 from coordinator_core.group_em import watch_heartbeat as group_em_watch_heartbeat
 from coordinator_core.hooks._envelope import context_only, no_advisory
 from coordinator_core.ipc import register_op
@@ -80,6 +81,8 @@ def render_watch_line(liveness: dict) -> Optional[str]:
     verdict = (liveness or {}).get("verdict")
     if not verdict:
         return None
+    if verdict == "unknown":
+        return f"GROUP EM WATCH: UNKNOWN ({liveness.get('reason') or 'no evidence'})"
     return f"GROUP EM WATCH: {verdict}"
 
 
@@ -114,14 +117,54 @@ def render_uhura_line(record: Optional[dict]) -> Optional[str]:
     )
 
 
+def _unknown_liveness(reason: str) -> dict:
+    return {"verdict": "unknown", "reason": reason}
+
+
+def resolve_watch_liveness(repo_root: str, now: float) -> Optional[dict]:
+    """The watch liveness for the box's Group EM, read from the G-EM home's heartbeat
+    (`nomination.box_holder`'s record `repo_root`) whatever the session's cwd.
+
+    Only a fresh heartbeat stamped by the live box holder reads `armed`; a missing, expired,
+    foreign-holder or dead-holder heartbeat reads `unknown`. With no box holder on record the
+    cwd heartbeat is read as before, with stale/absent likewise `unknown`. Never raises."""
+    try:
+        box = nomination.box_holder()
+    except Exception:  # noqa: BLE001
+        box = None
+    root = repo_root
+    if isinstance(box, dict) and isinstance(box.get("repo_root"), str) and box["repo_root"]:
+        root = box["repo_root"]
+    else:
+        box = None
+    try:
+        liveness = group_em_watch_heartbeat.read_liveness(root, now)
+    except Exception:  # noqa: BLE001
+        return _unknown_liveness("heartbeat unreadable")
+    if box is None:
+        if liveness.get("verdict") != group_em_watch_heartbeat.VERDICT_ARMED:
+            return _unknown_liveness("no live holder on record")
+        return liveness
+    if not box.get("live"):
+        return _unknown_liveness("holder session is not live")
+    box_sid = box.get("session_id")
+    stamped_name = None
+    if liveness.get("verdict") != group_em_watch_heartbeat.VERDICT_ARMED:
+        liveness = _unknown_liveness("heartbeat missing or expired")
+    elif liveness.get("holder_session_id") != box_sid:
+        liveness = _unknown_liveness("heartbeat names a different holder")
+    else:
+        stamped_name = liveness.get("holder_name")
+    liveness["holder_session_id"] = box_sid
+    liveness["holder_name"] = box.get("peer_name") or stamped_name
+    return liveness
+
+
 def compute_context(payload: dict) -> Optional[str]:
     cwd = payload.get("cwd")
     repo_root = cwd if isinstance(cwd, str) and cwd else os.getcwd()
 
-    try:
-        liveness = group_em_watch_heartbeat.read_liveness(repo_root, time.time())
-    except Exception:  # noqa: BLE001
-        liveness = None
+    liveness = resolve_watch_liveness(repo_root, time.time())
 
     presence_line = render_presence_line(liveness) if liveness else None
     watch_line = render_watch_line(liveness) if liveness else None

@@ -11,15 +11,15 @@ blocker's op. `wake_on_end` only flips the record, sends the start notice and re
 `engine-ask {"sizing": <rel>, "resume_run_id": <waiter run_id>}` payload, with
 `ask_spool.record.spool_ask`; `ask_spool.drain.run` mints it through `submit_engine_ask.evaluate`,
 whose resume branch (`_resume_run_id`, `halted_run_to_resume`) re-stages the run. No new op-catalog op.
-Traps C2 must handle, both outside this module:
-- `warm/server.py :: _AskSpoolDrainTrigger.maybe_drain` drains once per served repo after its first
-  request, so a spooled entry waits for the next engine boot unless C2 adds a drain trigger.
-- `ask_spool.drain._live_token_run` treats a `run:<id>` entry whose run still holds a live token as
+`run_token._wake_stage_waiters` starts a background drain (`_kick_spool_drain`) after spooling, since
+`warm/server.py :: _DrainTrigger.maybe_drain` drains only once per served repo.
+Trap: `ask_spool.drain._live_token_run` treats a `run:<id>` entry whose run still holds a live token as
   already minted (coalesced), so the parked stager's token must be gone before its refire drains.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import threading
@@ -32,7 +32,47 @@ STAGE_WAIT_DEADLINE_S = 7200.0
 
 _DIR = "coordinator-warp-stage-waits"
 _STARTED_SUFFIX = ".started"
+_LOCK_SUFFIX = ".lock"
+_LOCK_STALE_S = 5.0
+_LOCK_SPIN_S = 2.0
 _lock = threading.Lock()
+
+
+@contextlib.contextmanager
+def _record_lock(path: Path):
+    """Cross-process exclusion for one record's read-modify-write: an O_EXCL lock file beside it.
+
+    A lock older than `_LOCK_STALE_S` is a dead holder's and is stolen; past `_LOCK_SPIN_S` the
+    caller proceeds unlocked rather than deadlock."""
+    lock_path = path.with_suffix(_LOCK_SUFFIX)
+    held = False
+    end = time.monotonic() + _LOCK_SPIN_S
+    while True:
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+            os.close(os.open(str(lock_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
+            held = True
+            break
+        except FileExistsError:
+            try:
+                if time.time() - lock_path.stat().st_mtime > _LOCK_STALE_S:
+                    lock_path.unlink()
+                    continue
+            except OSError:
+                continue
+        except OSError:
+            break
+        if time.monotonic() >= end:
+            break
+        time.sleep(0.005)
+    try:
+        yield
+    finally:
+        if held:
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
 
 
 def _wait_dir(root: Path) -> Optional[Path]:
@@ -90,7 +130,7 @@ def park(
     if not names:
         raise ValueError("stage_wait.park: blockers must be non-empty")
     stamp = time.time() if now is None else now
-    with _lock:
+    with _lock, _record_lock(path):
         prior = read(root, run_id)
         keep = prior is not None and not prior.get("started")
         record = {
@@ -120,7 +160,7 @@ def clear(root: Path, run_id: str) -> None:
     path = _path(root, run_id)
     if path is None:
         return
-    for target in (path, path.with_suffix(_STARTED_SUFFIX)):
+    for target in (path, path.with_suffix(_STARTED_SUFFIX), path.with_suffix(_LOCK_SUFFIX)):
         try:
             target.unlink()
         except OSError:
@@ -163,27 +203,33 @@ def wake_on_end(root: Path, ended_run_id: str) -> list[dict]:
     except OSError:
         return []
     woken: list[dict] = []
-    with _lock:
-        for name in names:
-            path = directory / name
-            try:
-                record = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if not isinstance(record, dict) or record.get("started") or ended_run_id not in record.get("blockers", ()):
-                continue
-            record["blockers"] = [b for b in record["blockers"] if b != ended_run_id]
-            if record["blockers"]:
-                _write_quiet(path, record)
-                continue
-            if not _claim_start(path):
-                continue
-            _notify_started(root, record)
-            record["started"] = True
-            record["started_at"] = time.time()
-            _write_quiet(path, record)
+    for name in names:
+        path = directory / name
+        with _lock, _record_lock(path):
+            record = _wake_one(root, path, ended_run_id)
+        if record is not None:
             woken.append(record)
     return woken
+
+
+def _wake_one(root: Path, path: Path, ended_run_id: str) -> Optional[dict]:
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or record.get("started") or ended_run_id not in record.get("blockers", ()):
+        return None
+    record["blockers"] = [b for b in record["blockers"] if b != ended_run_id]
+    if record["blockers"]:
+        _write_quiet(path, record)
+        return None
+    if not _claim_start(path):
+        return None
+    _notify_started(root, record)
+    record["started"] = True
+    record["started_at"] = time.time()
+    _write_quiet(path, record)
+    return record
 
 
 def _write_quiet(path: Path, record: dict) -> None:

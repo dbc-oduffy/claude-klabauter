@@ -73,7 +73,8 @@ def _groupem_resolve_addressee(params: dict, repo_root: Optional[Path] = None) -
         peer_session_id (str, required) -- the session id to resolve.
 
     Returns:
-        {"name": str | None}
+        {"name": str | None}, or {"error": str} naming peer_session_id when
+        it is missing, empty or not a str.
 
     `name` is exactly `send_pass.resolve_addressee`'s own return value —
     `None` means REFUSAL (session id not in today's roster, no usable
@@ -90,6 +91,10 @@ def _groupem_resolve_addressee(params: dict, repo_root: Optional[Path] = None) -
     override = p.get("repo_root")
     target_root = override if isinstance(override, str) and override else str(Path.cwd())
 
-    name = group_em_send_pass.resolve_addressee(target_root, p["peer_session_id"])
+    peer_session_id = p.get("peer_session_id")
+    if not isinstance(peer_session_id, str) or not peer_session_id:
+        return {"error": "peer_session_id (non-empty str) is required"}
+
+    name = group_em_send_pass.resolve_addressee(target_root, peer_session_id)
 
     return {"name": name}

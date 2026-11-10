@@ -22,6 +22,7 @@ from typing import Optional
 from coordinator_core.dag import _read_meta
 from coordinator_core.lifecycle_constants import HANDOFF_TERMINAL_DEPLOYMENT
 from coordinator_core.ops.cascade_backstop_sweep import (
+    DEFAULT_LANDED_DAYS,
     _landed_parked_plans,
     _read_fm,
     _terminal_handoff_deliverable_ids,
@@ -36,9 +37,17 @@ from coordinator_core.ops.deliverable_cascade import (
 from coordinator_core.ops.fleet._common import main_worktree_root
 
 
-def landed_parked(worktree_root: Path, *, days: int = 14, today: Optional[date] = None) -> list[dict]:
-    """Plans at `status: landed` older than `days`: [{"plan", "deliverable_id", "age_days", "age_basis"}]."""
-    return _landed_parked_plans(worktree_root, days, today)
+def landed_parked(
+    worktree_root: Path,
+    *,
+    days: int = DEFAULT_LANDED_DAYS,
+    today: Optional[date] = None,
+    plan_fms: Optional[list[tuple[str, dict]]] = None,
+) -> list[dict]:
+    """Plans at `status: landed` older than `days`: [{"plan", "deliverable_id", "age_days", "age_basis"}].
+
+    `plan_fms` is a shared `plan_frontmatters` result that skips the corpus re-parse."""
+    return _landed_parked_plans(worktree_root, days, today, plan_fms)
 
 
 def _handoff_side(handoff_metas: Optional[dict[str, dict]], worktree_root: Path) -> dict[str, list[str]]:
@@ -88,6 +97,7 @@ def redrive_terminal_divergences(
     *,
     deliverable_ids: Optional[set[str]] = None,
     handoff_metas: Optional[dict[str, dict]] = None,
+    plan_fms: Optional[list[tuple[str, dict]]] = None,
 ) -> dict:
     """Advance the live handoffs a terminal source left open; one `cascade_terminal_sync` per deliverable.
 
@@ -99,7 +109,7 @@ def redrive_terminal_divergences(
     result: dict = {"advanced": [], "refused": [], "commit_shas": [], "scan_incomplete": False, "errors": []}
     try:
         worktree_root = main_worktree_root(common_dir)
-        plan_ids = _terminal_plan_deliverable_ids(worktree_root)
+        plan_ids = _terminal_plan_deliverable_ids(worktree_root, plan_fms)
         handoff_ids = _handoff_side(handoff_metas, worktree_root)
     except Exception as exc:  # noqa: BLE001 — the redrive never raises into its caller
         result["errors"].append({"deliverable_id": None, "error": f"scan failed: {exc}"})

@@ -274,3 +274,10 @@ def test_deferred_emit_run_past_the_grace_loses_its_footprint_records_only(repo,
     late = real() + warp_live.UNLAUNCHED_GRACE_SECONDS + 60
     monkeypatch.setattr(warp_live.time, "time", lambda: late)
     assert live_run_writes.live_footprints(repo, exclude_run_id=None) == {}
+
+
+def test_file_claims_drops_directories_and_root_but_keeps_files_and_unwritten_paths(repo):
+    (repo / "pkg").mkdir()
+    (repo / "pkg" / "a.py").write_text("x", encoding="utf-8")
+    got = live_run_writes.file_claims(repo, ["pkg", "pkg/a.py", "pkg/new.py", ".", "", "pkg\\a.py", "pkg\\"])
+    assert got == ["pkg/a.py", "pkg/new.py", "pkg\\a.py"]

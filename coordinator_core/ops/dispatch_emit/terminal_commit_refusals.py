@@ -358,17 +358,27 @@ _TEST_PATH = re.compile(r"(^|/)(tests?/|test_[^/]*$|[^/]*_test\.py$|[^/]*\.(test
 _NOT_RUN_TEXT = re.compile(r"\bnot[ _]run\b", re.I)
 
 REFUSED_TESTS_NOT_RUN = "tests-not-run"
+REFUSED_REVIEW_OWED = "review-owed"
 
 
 def _tests_not_run_refusal(
     worktree_root: Path, params: dict, request: CommitRequest, inline_review: dict
 ) -> Optional[dict]:
-    """The ``tests-not-run`` refusal when an XS-arm run declares a test file yet its
+    """The ``review-owed`` refusal (any arm) when a ``REQUIRES_CHANGES`` reviewer's findings are not
+    all in the landed tree (``terminal_commit_review.review_owed_refusal``). Else the
+    ``tests-not-run`` refusal when an XS-arm run declares a test file yet its
     ``inline_review.tests.status`` is ``not_run`` or its ledger verdict calls an item ``met`` on
     evidence that says the tests were not run, else None. Other arms and runs declaring no test
     file are not gated."""
     from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
+    from coordinator_core.ops.dispatch_emit.terminal_commit_review import review_owed_refusal
 
+    owed = review_owed_refusal(worktree_root, inline_review)
+    if owed is not None:
+        return _error(
+            f"{owed}; apply them or dispose each (rejected/suspended) in the reviewer's ledger, then re-fire",
+            refused=REFUSED_REVIEW_OWED,
+        )
     if _run_arm(worktree_root, params, request) != ARM_XS:
         return None
     declared = [p for c in request.chunks for p in (*c.paths, *c.prefixes) if p]
@@ -666,6 +676,36 @@ def _landing_integrity_gate(
             {"path": f.path, "reason": f.reason, "detail": f.detail} for f in findings
         ]
     return extra
+
+
+def _freed_import_targets(
+    worktree_root: Path, integrity: Sequence[dict], landing: Sequence[str], deleted: Sequence[str], *,
+    barred: Sequence[str], run_id: Optional[str], plan: Optional[str], session_id: Optional[str],
+    script_path: object, run_base: Optional[str], minted_before: Optional[tuple],
+) -> list:
+    """Each modified ``.py`` a ``lost-definition`` finding in ``integrity`` reads a name from, that a
+    halted sibling run's withhold index lists but no still-held run holds this landing (not ``barred``,
+    not peer-held): the landing adds it instead of refusing. Any other target, and one still held,
+    stays out and its finding refuses."""
+    from coordinator_core.authoring_leaks import import_closure
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_integrity as li
+    from coordinator_core.ops.dispatch_emit.land_run import _peer_held
+
+    pairs = import_closure.withheld_symbol_pairs(
+        worktree_root, [(f["path"], f["detail"]) for f in integrity if f["reason"] == li.LOST_DEFINITION],
+    )
+    out = {*landing, *deleted, *barred}
+    candidates = sorted(t for t in set(pairs.values()) if t not in out and (worktree_root / t).is_file())
+    indexed = halted_withheld_index.withheld_by_path(worktree_root) if candidates else {}
+    targets = [t for t in candidates if t in indexed]
+    if not targets:
+        return []
+    targets = [t for t in targets if t not in foreign_halted_withheld(worktree_root, run_id, plan, targets)]
+    held = _peer_held(
+        worktree_root, targets, session_id, run_id, script_path, plan_rel=plan, run_base=run_base,
+        minted_before=minted_before,
+    ) if targets else {}
+    return [t for t in targets if not held.get(t)]
 
 
 def _missing_run_outcome(params: object) -> Optional[dict]:

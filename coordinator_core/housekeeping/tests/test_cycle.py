@@ -277,7 +277,8 @@ def test_run_clears_a_gate_and_archives_every_terminal_record(repo):
         encoding="utf-8"
     )
     assert "deployment_state: ready_to_fire" in r1_text
-    assert "blocked_by" not in r1_text
+    assert "blocked_by: []" in r1_text
+    assert "gate_blocker_id" not in r1_text
 
     # R2 never cleared -- still awaiting_gate.
     r2_text = (repo / "state" / "handoffs" / "2026-08-02_00002_stuck.md").read_text(
@@ -552,3 +553,109 @@ def test_a_gate_naming_no_record_is_unresolvable_not_dead_even_when_close_is_fal
             "reason": "unresolved",
         }
     ]
+
+
+# ---------------------------------------------------------------------------
+# The redrive leg -- a terminal source licenses its open baton however it got there.
+# ---------------------------------------------------------------------------
+
+_REDRIVE_DID = "dlv-cycle-redrive-000"
+
+
+@pytest.fixture
+def redrive_root(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_SESSION_ID", "11111111-1111-1111-1111-111111111111")
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    root = _init_repo(tmp_path / "repo")
+    (root / "README.md").write_text("init\n", encoding="utf-8")
+    _commit_all(root, "init")
+    return root
+
+
+def _head(root: Path) -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=str(root), check=True, capture_output=True, text=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def _open_baton(root: Path, name: str = "2026-11-02_00001_open-baton.md") -> Path:
+    path = root / "state" / "handoffs" / name
+    _write_frontmatter(path, {
+        "title": '"Open baton"',
+        "created": "2026-01-01",
+        "branch": "work/test/2026-01-01",
+        "status": "open",
+        "predecessor": '"none"',
+        "deployment_state": "ready_to_fire",
+        "deliverable_id": _REDRIVE_DID,
+    })
+    return path
+
+
+def test_a_hand_written_implemented_plan_advances_its_open_baton(redrive_root):
+    baton = _open_baton(redrive_root)
+    plan = redrive_root / "docs" / "plans" / "2026-11" / "hand-written.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text(
+        f"---\nstatus: implemented\ndeliverable_id: {_REDRIVE_DID}\nshipped_in: {_head(redrive_root)}\n---\n\n# P\n",
+        encoding="utf-8",
+    )
+    _commit_all(redrive_root, "seed")
+
+    result = cycle.run(redrive_root, cap=10)
+
+    assert result["cascade_redrive"]["errors"] == [], result["cascade_redrive"]
+    assert [Path(a["path"]).name for a in result["cascade_redrive"]["advanced"]] == [baton.name]
+    assert result["cascade_redrive"]["advanced"][0]["source"] == "docs/plans/2026-11/hand-written.md"
+    assert "deployment_state: shipped" in baton.read_text(encoding="utf-8")
+
+
+def test_an_archived_terminal_handoff_advances_its_baton_with_its_own_shipped_in(redrive_root):
+    sha = _head(redrive_root)[:8]
+    baton = _open_baton(redrive_root)
+    source = redrive_root / "state" / "handoffs" / "2026-11-01_00001_source.md"
+    _write_frontmatter(source, {
+        "handoff_id": "hnd-source",
+        "deployment_state": "shipped",
+        "deliverable_id": _REDRIVE_DID,
+        "shipped_in": sha,
+    })
+    _commit_all(redrive_root, "seed")
+
+    result = cycle.run(redrive_root, cap=10)
+
+    assert result["archived"] == ["state/handoffs/2026-11-01_00001_source.md"]
+    redrive = result["cascade_redrive"]
+    assert redrive["errors"] == [], redrive
+    assert [a["source"] for a in redrive["advanced"]] == ["archive/handoffs/2026-11/2026-11-01_00001_source.md"]
+    assert f"shipped_in: {sha}" in baton.read_text(encoding="utf-8")
+
+
+def test_the_redrive_runs_when_nothing_was_archived_and_parked_plans_are_listed(redrive_root):
+    plan = redrive_root / "docs" / "plans" / "parked.md"
+    plan.parent.mkdir(parents=True)
+    plan.write_text("---\nstatus: landed\ncreated: 2020-01-01\n---\n\n# P\n", encoding="utf-8")
+    _commit_all(redrive_root, "seed")
+
+    result = cycle.run(redrive_root, cap=10)
+
+    assert result["archived"] == []
+    assert result["cascade_redrive"]["advanced"] == []
+    assert [p["plan"] for p in result["landed_parked"]] == ["docs/plans/parked.md"]
+    assert result["landed_parked"][0]["age_basis"] == "created"
+
+
+def test_a_raising_redrive_is_reported_and_never_fails_the_cycle(redrive_root, monkeypatch):
+    import coordinator_core.ops.cascade_redrive as redrive_mod
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("redrive exploded")
+
+    monkeypatch.setattr(redrive_mod, "redrive_terminal_divergences", _boom)
+
+    result = cycle.run(redrive_root, cap=10)
+
+    assert "redrive exploded" in result["cascade_redrive"]["errors"][0]["error"]
+    assert result["landed_parked"] == []
+    assert result["failed"] == []

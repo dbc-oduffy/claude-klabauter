@@ -446,6 +446,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/clean_clone_proof.py': ('in-repo-non-state', 'one verdict json per sha via tmp + os.replace under the tracked state/warp/clean-clone-proofs/: _write_verdict'),
     'coordinator_core/ops/dispatch_emit/run_stage_lookup.py': ('outside-repo', 'run-stage-lookup.json via tmp + replace in the Workflow run dir under the Claude projects dir, never the repo: record'),
     'coordinator_core/ops/dispatch_emit/run_close_lessons.py': ('outside-repo', 'front-matter stamp on a candidate queue_promote just wrote into the central lessons outbox, which is not this repo: _stamp'),
+    'coordinator_core/ops/dispatch_emit/stage_wait.py': ('outside-repo', 'stage wait records, their O_EXCL lock and started markers under run_token._record_home (<settings home>/machine-local/engine-records/<key>)/coordinator-warp-stage-waits: _write, _write_quiet, _record_lock, _claim_start'),
     'coordinator_core/ops/dispatch_emit/run_token.py': ('git-internal', 'sha256-only run-token records under <settings home>/machine-local/engine-records/<key>/coordinator-warp-run-tokens (reads fall back to the legacy <git common dir> copy): mint, admits and redeem claim by rename, bind_sizing rewrites in place'),
     'coordinator_core/bug_blitz/targeted_run.py': ('in-repo-non-state', 'runner record JSON at the caller-named --record path, no state/ component: write_record'),
     'coordinator_core/bug_blitz/foreign_edits.py': ('outside-repo', 'HEAD-tree cache under tempfile.gettempdir(), never the repo: head_tree'),

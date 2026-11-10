@@ -273,6 +273,13 @@ def main(argv: "list[str] | None" = None) -> int:
     failed = result.get("failed") or []
     conflicts = result.get("conflicts") or []
     print(f"closed {closed}, archived {len(archived)}")
+    redrive = result.get("cascade_redrive") or {}
+    parked = result.get("landed_parked") or []
+    print(f"redrove {len(redrive.get('advanced') or [])} baton(s); {len(parked)} plan(s) parked at landed > 14d")
+    for entry in parked:
+        print(f"  {entry.get('plan')}")
+    for err in redrive.get("errors") or []:
+        print(f"handoff-housekeeping: redrive error: {err}", file=sys.stderr)
     if conflicts:
         print(
             f"handoff-housekeeping: {len(conflicts)} gate-clear(s) lost a race and were "

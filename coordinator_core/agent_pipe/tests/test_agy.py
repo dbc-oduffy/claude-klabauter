@@ -1,6 +1,7 @@
 """Tests for the Antigravity adapter against the captured real stream."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import sys
@@ -47,12 +48,59 @@ def test_argv_shapes_and_no_bypass(monkeypatch):
     monkeypatch.setattr("coordinator_core.agent_pipe.agy.shutil.which", lambda name: "/bin/agy")
     a = AgyAdapter()
     spawn = a.spawn_argv("hi")
-    assert spawn == ["/bin/agy", "-p", "hi", "--output-format", "stream-json"]
+    assert spawn[:5] == ["/bin/agy", "-p", "hi", "--output-format", "stream-json"]
     resume = a.resume_argv("c1", "yo")
-    assert resume == ["/bin/agy", "--conversation", "c1", "-p", "yo", "--output-format", "stream-json"]
+    assert resume[:7] == ["/bin/agy", "--conversation", "c1", "-p", "yo", "--output-format", "stream-json"]
     assert a.spawn_argv("yo", conversation="c1") == resume
     for argv in (spawn, resume):
-        assert not any("dangerously" in x or x == "--settings" for x in argv)
+        assert not any("dangerously" in x for x in argv)
+        settings = json.loads(argv[argv.index("--settings") + 1])
+        assert settings == {"permissions": {"allow": [f"command({c} *)" for c in agy_mod.DEFAULT_ALLOW_COMMANDS]}}
+
+
+def test_caller_allowlist_is_rendered_and_no_argv_carries_a_bare_wildcard(monkeypatch):
+    monkeypatch.setattr("coordinator_core.agent_pipe.agy.shutil.which", lambda name: "/bin/agy")
+    for a in (AgyAdapter(), AgyAdapter(["pytest", "git status"])):
+        for argv in (a.spawn_argv("p"), a.resume_argv("c", "t")):
+            allow = json.loads(argv[argv.index("--settings") + 1])["permissions"]["allow"]
+            assert allow and all(r != "command(*)" and r.startswith("command(") and r != "command( *)" for r in allow)
+    custom = json.loads(AgyAdapter(["pytest"]).spawn_argv("p")[-1])
+    assert custom == {"permissions": {"allow": ["command(pytest *)"]}}
+
+
+def test_wildcard_or_empty_allowlist_entry_is_refused():
+    import pytest
+
+    for bad in (["*"], ["command(*)"], ["git", "*"], ["py*"], [""], []):
+        with pytest.raises(ValueError):
+            AgyAdapter(bad)
+
+
+def _would_allow(command: str) -> bool:
+    return any(command == c or command.startswith(c + " ") for c in agy_mod.DEFAULT_ALLOW_COMMANDS)
+
+
+def test_default_allowlist_is_exact_prefixes_and_never_permits_push_or_python_dash_c():
+    defaults = agy_mod.DEFAULT_ALLOW_COMMANDS
+    assert not set(defaults) & {"python", "python3", "git", "nohup"}
+    assert all(len(c.split()) >= 2 for c in defaults)
+    assert all(c.split()[1] != "*" and not c.startswith("nohup nohup") for c in defaults)
+    assert _would_allow("git status -s")
+    assert _would_allow("nohup python3 coordinator/bin/unimatrix-agy-leg.py /tmp/s")
+    for denied in ("git push origin main", "git fetch", "git remote add x y", "python -c 'print(1)'",
+                   "python3 -c 'x'", "nohup python -c 'x'", "nohup sh -c x", "nohup git push", "python other.py"):
+        assert not _would_allow(denied), denied
+
+
+def test_validated_refuses_bare_interpreters_push_dash_c_and_metacharacters():
+    import pytest
+
+    for bad in (["python"], ["python3"], ["git"], ["nohup"], ["nohup *"], ["python -c"], ["python3 -c x"],
+                ["nohup python -c"], ["git push"], ["git fetch"], ["nohup git push"], ["git status; rm x"],
+                ["python coordinator/bin/x.py && ls"]):
+        with pytest.raises(ValueError):
+            AgyAdapter(bad)
+    AgyAdapter(["python coordinator/bin/x.py", "nohup  python3   coordinator/bin/y.py", "git log"])
 
 
 def test_agy_missing_from_path_falls_back_to_bare_name(monkeypatch):
@@ -83,4 +131,4 @@ def test_agy_acp_driver_starts_prompts_and_resumes_over_acp(monkeypatch):
 
 def test_agy_adapter_headless_argv_unchanged_by_acp_driver(monkeypatch):
     monkeypatch.setattr(agy_mod.shutil, "which", lambda name: None)
-    assert AgyAdapter().spawn_argv("p") == ["agy", "-p", "p", "--output-format", "stream-json"]
+    assert AgyAdapter().spawn_argv("p")[:5] == ["agy", "-p", "p", "--output-format", "stream-json"]

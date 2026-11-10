@@ -25,7 +25,7 @@ from coordinator_core.git.git_state import (
     head_tree_sha,
     read_index,
 )
-from coordinator_core.git.git_objects import _read_object
+from coordinator_core.git.git_objects import _read_object, retry_past_stall
 
 _TREE_MODE = 0o40000
 
@@ -63,9 +63,13 @@ def post_commit_reader(
             state["index"] = read_index(root)
         return state["index"]  # type: ignore[return-value]
 
+    def _read(sha: str):
+        # One stalled pack read is retried past the latch; a second raises PackReadStalled.
+        return retry_past_stall(common_dir, lambda: _read_object(common_dir, sha))
+
     def _tree(dir_path: str, sha: str) -> Optional[_TreeEntries]:
         if dir_path not in trees:
-            obj = _read_object(common_dir, sha)
+            obj = _read(sha)
             entries = None
             if obj is not None and obj[0] == "tree":
                 entries = _parse_tree_entries(obj[1])
@@ -91,7 +95,7 @@ def post_commit_reader(
         return entries.get(parts[-1]) if entries else None
 
     def _blob(sha: str) -> Optional[bytes]:
-        obj = _read_object(common_dir, sha)
+        obj = _read(sha)
         return obj[1] if obj is not None and obj[0] == "blob" else None
 
     def _from_paths(path: str) -> Optional[bytes]:

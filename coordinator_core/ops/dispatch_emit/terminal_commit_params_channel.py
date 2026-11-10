@@ -76,7 +76,7 @@ def note_refusal(params_path: str, leg: str) -> None:
     if _canonical_run_id(params_path) is None:
         return
     try:
-        Path(params_path).with_name(REFUSAL_FILE_NAME).write_text(leg, encoding="utf-8")
+        Path(params_path).with_name(REFUSAL_FILE_NAME).write_text(leg, encoding="utf-8", newline="\n")
     except OSError:
         pass
 
@@ -141,7 +141,10 @@ def missing_file_diagnosis(path: str, cwd: object = None) -> Optional[str]:
     cause = (
         f"The guard last refused this run's params with {leg}."
         if leg
-        else "That leg did not run or refused this command."
+        else (
+            "No refusal note exists, so `block_subagent_commit`'s run-token writer was not "
+            "reached on this Bash call: that leg did not run or refused this command."
+        )
     )
     return (
         f"terminal_commit params file for run {run_id} was never written. Its writer is the "

@@ -7,6 +7,10 @@ against the M/L band, run audit-roadmap, and freeze the gate report plan-blitz
 consumes.
 
 Wire params:
+    read_staged  (object, optional) — {roadmap_id: str, trail_dir: str (under scratch/)}; the op only
+                                    reads what a stage call left on disk and replies
+                                    {gate_report_path, gate_report_state, approval_record, waves},
+                                    path/record null when their file is absent; nothing is staged.
     read_gate_report (str, optional) — a repo-relative ``.../wave-1.gate-report.json``; when given
                                     the op only reads that frozen report and replies
                                     {gate_report_path, gate_report_state, waves}; nothing is staged
@@ -60,7 +64,12 @@ from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
-from coordinator_core.roadmap.blitz_stage import BlitzStageRefused, frozen_waves, stage_roadmap
+from coordinator_core.roadmap.blitz_stage import (
+    BlitzStageRefused,
+    frozen_waves,
+    stage_roadmap,
+    staged_from_disk,
+)
 
 GENERATES: list = []
 
@@ -121,6 +130,16 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "roadmap.blitz_stage" handler. See module docstring."""
     if repo_root is None:
         raise ValueError("roadmap.blitz_stage requires a resolved repo_root")
+    read_staged = params.get("read_staged")
+    if read_staged is not None:
+        if not isinstance(read_staged, dict):
+            raise ValueError("read_staged must be an object when supplied")
+        roadmap_id = _nonempty(read_staged.get("roadmap_id"), "read_staged.roadmap_id")
+        trail = _trail_dir(read_staged.get("trail_dir"))
+        try:
+            return staged_from_disk(Path(main_worktree_root(repo_root)), roadmap_id, trail)
+        except BlitzStageRefused as exc:
+            raise ValueError(str(exc)) from exc
     read_report = _optional_str(params, "read_gate_report")
     if read_report is not None:
         try:

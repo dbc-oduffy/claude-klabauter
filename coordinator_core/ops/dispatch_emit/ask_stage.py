@@ -1006,9 +1006,25 @@ def _chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
     return {rid for rid in candidates if rid in chain or (mine is not None and sizing_of(rid) == mine)}
 
 
-def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> None:
-    """Raise AskStageError `live-run-write-overlap` naming each other live run whose staged
-    footprint intersects `writes`, and release this run's token so the refusal ends the run.
+STAGE_WAIT_PARKED = "stage-wait"
+
+
+class StageWaiting(AskStageError):
+    """The stage's writes overlap only live engine runs: `wait` is its `stage_wait` record, its run token
+    stays live, and the blocker's end wakes it. A subclass of `AskStageError` so a caller that does not
+    know it still reports a stop; `_run_ask_stage` turns it into the non-halting `parked` reply."""
+
+    def __init__(self, message: str, wait: dict) -> None:
+        super().__init__(message)
+        self.wait = wait
+
+
+def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> Optional[dict]:
+    """Return None when no other live run's staged footprint intersects `writes`. When every
+    intersecting run is a live run of this engine (`run_token.is_live`) and this run has no expired
+    wait, park instead: keep the token and return the `stage_wait` record naming them. Otherwise raise
+    AskStageError `live-run-write-overlap` naming each such run, and release this run's token so the
+    refusal ends the run.
     The check and the footprint claim are one locked index mutation (`live_run_index.claim`), so two
     stages cannot both pass. When the claim cannot be made (no lock, stalled store, no common dir) or
     outlives LIVE_OVERLAP_DEADLINE_S, it degrades to the read-only `live_footprints` check, and a read
@@ -1018,7 +1034,7 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
     import logging
     import threading
 
-    from coordinator_core.ops.dispatch_emit import live_run_index, live_run_writes, run_token
+    from coordinator_core.ops.dispatch_emit import live_run_index, live_run_writes, run_token, stage_wait
 
     def within_deadline(fn):
         box: list = []
@@ -1044,7 +1060,7 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
             logging.getLogger(__name__).warning(
                 "live-run-write-overlap check skipped: footprint read exceeded %ss", LIVE_OVERLAP_DEADLINE_S
             )
-            return
+            return None
         if isinstance(box[0], BaseException):
             raise box[0]
         hits = {
@@ -1057,9 +1073,20 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
         kin = _chain_kin(root, run_id, hits)
         hits = {rid: paths for rid, paths in hits.items() if rid not in kin}
     if not hits:
-        return
+        stage_wait.clear(root, run_id)
+        return None
     named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
     release = "; ".join(f'dispatch.release_run_token {{"run_id": "{rid}"}}' for rid in sorted(hits))
+    if all(run_token.is_live(root, rid) for rid in hits) and not stage_wait.expired(root, run_id):
+        prior = stage_wait.read(root, run_id)
+        if prior is not None and prior.get("started"):
+            # A started record's marker would make the next wake's O_EXCL claim lose.
+            stage_wait.clear(root, run_id)
+        owner = run_token._read_rec(root, run_id) or {}
+        parked = stage_wait.park(root, run_id, sorted(hits), writes, session_id=owner.get("session_id") or "")
+        if parked is not None:
+            return parked
+    stage_wait.clear(root, run_id)
     run_token.consume(root, run_id)
     raise AskStageError(
         f"{LIVE_RUN_WRITE_OVERLAP}: writes overlap live run {named}. Resubmit when it lands, "
@@ -1593,8 +1620,18 @@ def stage(
 
     docs = doc_writes(run_id, run_sizing)
     with leg("overlap"):
-        _refuse_live_write_overlap(
-            root, run_id, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]
+        from coordinator_core.ops.dispatch_emit import live_run_writes
+
+        waiting = _refuse_live_write_overlap(
+            root,
+            run_id,
+            live_run_writes.file_claims(root, [*declared, *docs, *(w for r in draft_rows for w in r.writes)]),
+        )
+    if waiting is not None:
+        raise StageWaiting(
+            f"{STAGE_WAIT_PARKED}: writes overlap live run {', '.join(waiting['blockers'])}; parked until it lands "
+            "or is released.",
+            waiting,
         )
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
     chunks.append(ChunkCommit(id=DOCS_CHUNK_ID, title="run docs", paths=docs))
@@ -2498,6 +2535,13 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
         with leg("receipt"):
             handle, twin_rel = reply_sidecar.handle_and_twin(root, record_dir(root, run_id) / "manifest.json")
             ask_stage_receipt.write(record_dir(root, run_id), digest, handle, spine_sha)
+    except StageWaiting as exc:
+        wait = exc.wait
+        return {
+            PARKED_REPLY_KEY: STAGE_WAIT_PARKED,
+            "plan_path": params.get("plan_path") or None,
+            "waiting": {"blockers": wait["blockers"], "deadline": wait["deadline"]},
+        }
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}
         if getattr(exc, "owed_em_ids", None):

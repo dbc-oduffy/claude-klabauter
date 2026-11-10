@@ -725,7 +725,8 @@ def remote_mirrors(entries, remote=None):
         return entries
     want = box_label(remote)
     matches = [entry for entry in entries
-               if box_label(entry.get("unimatrixRemote") or entry.get("box") or "") == want]
+               if box_label(entry.get("unimatrixRemote") or entry.get(_contract().BOX_FIELD)
+                            or entry.get("box") or "") == want]
     if matches:
         return matches
     # Truly legacy records lack both remote fields. Callers still refuse ambiguous results.
@@ -762,7 +763,7 @@ def mirror(row, cfg, say, scan=None):
         d["unimatrixFarName"] = e["name"]
     d.update(mirror_identity(e, cfg.remote))
     c = _contract()
-    d.setdefault(c.BOX_FIELD, c.box_id(cfg.remote))
+    d[c.BOX_FIELD] = d.get(c.BOX_FIELD) or c.box_id(cfg.remote)
     d.update(pid=b.pid, procStart=proc_start(b.pid), pidDomain=pid_domain(),
              messagingSocketPath=endpoint, farPid=e["pid"], unimatrixRemote=cfg.remote,
              **{FAR_SOCKET_FIELD: far_sock}, **supervisor_fields(), **engine_fields(row))
@@ -798,6 +799,9 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
             continue
         if d.get(field) != value:
             updates[field] = value
+    contract = _contract()
+    if not d.get(contract.BOX_FIELD):
+        updates[contract.BOX_FIELD] = contract.box_id(cfg.remote)
     far_pid = row["entry"].get("pid")
     if isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid:
         updates["farPid"] = far_pid

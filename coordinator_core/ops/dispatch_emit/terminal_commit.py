@@ -357,6 +357,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import (  # noq
     _land_merge_artifacts,
     _retest_covers_targeted_set,
     _landing_integrity_gate,
+    _freed_import_targets,
     _missing_run_outcome,
     _measured_rev_drift_refusal,
     _readable_manifest,
@@ -3747,18 +3748,32 @@ def _terminal_commit_inner(
             commit_params["expected_content_sha256"] = {
                 p: h for p, h in commit_params["expected_content_sha256"].items() if p not in kept_supplied
             }
-    integrity_extra = _landing_integrity_gate(
-        worktree_root, all_paths, deleted_paths, record_abs, params,
-        _run_id_of(params, ask_run_dir, script_path_raw), request.plan_path,
-        residue_py=residue_py, residue_known=snapshot is not None,
-        merge_open=merge_plan is not None,
-        own_declared=sorted(declared_writes), session_id=session_id,
-        carried_paths=[p for p in carried if p not in kept_supplied], minted_before=own_seniority,
-        withheld=sorted({
-            *(art_landable.withheld if art_landable is not None else ()),
-            *sibling_withheld, *held_paths, *proc_wh, *wh_map,
-        }),
-    )
+    gate_withheld = sorted({
+        *(art_landable.withheld if art_landable is not None else ()),
+        *sibling_withheld, *held_paths, *proc_wh, *wh_map,
+    })
+
+    def _gate() -> dict:
+        return _landing_integrity_gate(
+            worktree_root, all_paths, deleted_paths, record_abs, params,
+            _run_id_of(params, ask_run_dir, script_path_raw), request.plan_path,
+            residue_py=residue_py, residue_known=snapshot is not None,
+            merge_open=merge_plan is not None,
+            own_declared=sorted(declared_writes), session_id=session_id,
+            carried_paths=[p for p in carried if p not in kept_supplied], minted_before=own_seniority,
+            withheld=gate_withheld,
+        )
+
+    integrity_extra = _gate()
+    if any(f["reason"] == "lost-definition" for f in integrity_extra.get("integrity", ())):
+        freed = _freed_import_targets(
+            worktree_root, integrity_extra["integrity"], all_paths, deleted_paths, barred=gate_withheld,
+            run_id=_run_id_of(params, ask_run_dir, script_path_raw), plan=request.plan_path,
+            session_id=session_id, script_path=script_path_raw, run_base=None, minted_before=own_seniority,
+        )
+        if freed:
+            all_paths.extend(freed)
+            integrity_extra = _gate()
     if integrity_extra.get("refused"):
         _unstamp_landed()
         _remove(worktree_root, receipt_paths)

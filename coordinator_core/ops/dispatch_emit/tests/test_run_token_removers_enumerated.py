@@ -9,11 +9,17 @@ condition, or remove the call. The walk is in-process `ast`; no spawn.
 from __future__ import annotations
 
 import ast
+import json
+import threading
 from pathlib import Path
 
 import coordinator_core
 
 import pytest
+
+from coordinator_core.ops.dispatch_emit import run_token as _rt
+
+_REAL_KICK = _rt._kick_spool_drain
 
 pytestmark = pytest.mark.complete
 
@@ -40,7 +46,7 @@ _ALLOWED: dict[tuple[str, str], tuple[int, str]] = {
     ("ops/dispatch_emit/minted_run.py", "_clear_dirless_mint"): (
         1, "abandon of a mint whose run dir never landed (never launched)"),
     ("ops/dispatch_emit/ask_stage.py", "_refuse_live_write_overlap"): (
-        1, "write-overlap refusal ending this run"),
+        1, "write-overlap refusal ending this run; reached only when a blocker is not a live engine run or the wait expired"),
     ("ops/dispatch_emit/terminal_commit.py", "_settle_token"): (
         1, "commit landed (sha present)"),
     ("ops/dispatch_emit/land_run.py", "_settle_token"): (
@@ -145,6 +151,183 @@ def test_run_token_own_unlinks_are_the_protocol_functions_only():
     # `_bounded_glob` (its nested `work`) reaps TTL-expired legacy unclaimed files in its listing pass.
     assert scopes == {"mint", "redeem_claim", "_unlink_both", "_drop_legacy", "sweep_expired_escrows",
                       "_bounded_glob", "work"}
+
+
+def test_only_consume_and_discard_wake_parked_stages():
+    """`release` restores a claimed record to live after a commit that landed nothing: not an end."""
+    tree = ast.parse((_PKG / "ops/dispatch_emit/run_token.py").read_text(encoding="utf-8"))
+    callers = {
+        fn.name
+        for fn in ast.walk(tree)
+        if isinstance(fn, ast.FunctionDef)
+        and any(
+            isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == "_wake_stage_waiters"
+            for n in ast.walk(fn)
+        )
+    }
+    assert callers == {"consume", "discard"}
+
+
+SCRIPT = "scratch/warp/x.mjs"
+SIZING = "state/sizings/2026-11/x.yaml"
+
+
+@pytest.fixture
+def repo(tmp_path, monkeypatch):
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    return root
+
+
+@pytest.fixture(autouse=True)
+def kicks(monkeypatch):
+    """Stub the background drain so spooled entries stay pending for assertion; records each kick."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    seen = []
+    monkeypatch.setattr(run_token, "_kick_spool_drain", lambda r: seen.append(str(r)))
+    return seen
+
+
+def _park_behind(root, blocker, waiter="waiter", *, sizing=SIZING, blockers=None):
+    from coordinator_core.ops.dispatch_emit import run_token, stage_wait
+
+    run_token.mint(root, blocker, SCRIPT, session_id="peer-sess")
+    run_token.mint(root, waiter, SCRIPT, session_id="s1", sizing_rel=sizing)
+    stage_wait.park(root, waiter, blockers or [blocker], ["a.py"], session_id="s1")
+
+
+def _spooled(root):
+    from coordinator_core.ask_spool import record
+
+    out = []
+    for spool_id in record.list_pending(str(root)):
+        header, body = record.read_entry(record.entry_path(str(root), spool_id))
+        out.append((header, json.loads(body)))
+    return out
+
+
+@pytest.mark.parametrize("ender", ["consume", "discard"])
+def test_blocker_end_wakes_the_waiter_once_and_spools_its_refire(repo, ender):
+    from coordinator_core.ask_spool import notice
+    from coordinator_core.ops.dispatch_emit import run_token, stage_wait
+
+    _park_behind(repo, "blocker")
+    getattr(run_token, ender)(repo, "blocker")
+    assert [n["status"] for n in notice.consume_notices(str(repo), "s1")] == ["started"]
+    assert stage_wait.read(repo, "waiter")["started"] is True
+    assert not run_token.is_live(repo, "waiter")
+    entries = _spooled(repo)
+    assert len(entries) == 1
+    _header, payload = entries[0]
+    assert payload["tool_input"]["name"] == "coordinator:engine-ask"
+    assert payload["tool_input"]["args"] == {"sizing": SIZING, "resume_run_id": "waiter"}
+    getattr(run_token, ender)(repo, "blocker")
+    assert len(_spooled(repo)) == 1
+    assert notice.consume_notices(str(repo), "s1") == []
+
+
+def test_a_wake_kicks_one_drain_and_a_non_wake_kicks_none(repo, kicks):
+    from coordinator_core.ops.dispatch_emit import run_token, stage_wait
+
+    _park_behind(repo, "blocker", "w1")
+    run_token.mint(repo, "w2", SCRIPT, session_id="s2", sizing_rel=SIZING)
+    stage_wait.park(repo, "w2", ["blocker"], [], session_id="s2")
+    run_token.consume(repo, "blocker")
+    assert kicks == [str(repo)]
+    run_token.mint(repo, "other", SCRIPT, session_id="p")
+    run_token.consume(repo, "other")
+    assert kicks == [str(repo)]
+
+
+def test_kick_runs_drain_run_on_the_repo(repo, monkeypatch):
+    from coordinator_core.ask_spool import drain
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    done = threading.Event()
+    calls = []
+
+    def fake_run(root, **k):
+        calls.append(root)
+        done.set()
+        return {}
+
+    monkeypatch.setattr(drain, "run", fake_run)
+    _REAL_KICK(repo)
+    assert done.wait(5) and calls == [str(repo)]
+
+
+def test_waiter_with_two_blockers_resumes_only_after_the_last(repo):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _park_behind(repo, "b1", blockers=["b1", "b2"])
+    run_token.consume(repo, "b1")
+    assert _spooled(repo) == [] and run_token.is_live(repo, "waiter")
+    run_token.mint(repo, "b2", SCRIPT, session_id="peer-sess")
+    run_token.discard(repo, "b2")
+    assert len(_spooled(repo)) == 1
+
+
+def test_release_wakes_nothing(repo):
+    from coordinator_core.ops.dispatch_emit import run_token, stage_wait
+
+    run_token.mint(repo, "blocker", SCRIPT, session_id="peer-sess")
+    token = run_token.mint(repo, "blocker", SCRIPT, session_id="peer-sess")
+    stage_wait.park(repo, "waiter", ["blocker"], [], session_id="s1")
+    assert run_token.redeem(repo, "blocker", token, SCRIPT)
+    assert run_token.release(repo, "blocker", token, SCRIPT)
+    assert stage_wait.read(repo, "waiter")["started"] is False
+    assert _spooled(repo) == []
+
+
+def test_a_failing_wake_never_fails_the_removal(repo, monkeypatch, caplog):
+    from coordinator_core.ops.dispatch_emit import run_token, stage_wait
+
+    run_token.mint(repo, "blocker", SCRIPT, session_id="peer-sess")
+
+    def boom(*a, **k):
+        raise RuntimeError("wake exploded")
+
+    monkeypatch.setattr(stage_wait, "wake_on_end", boom)
+    with caplog.at_level("WARNING"):
+        run_token.consume(repo, "blocker")
+    assert not run_token.is_live(repo, "blocker")
+    assert "stage wake after blocker ended failed" in caplog.text
+
+
+def test_a_failing_spool_never_fails_the_removal_or_the_other_waiters(repo, monkeypatch, caplog):
+    from coordinator_core.ask_spool import record
+    from coordinator_core.ops.dispatch_emit import run_token, stage_wait
+
+    _park_behind(repo, "blocker", "w1")
+    run_token.mint(repo, "w2", SCRIPT, session_id="s2", sizing_rel=SIZING)
+    stage_wait.park(repo, "w2", ["blocker"], [], session_id="s2")
+    real = record.spool_ask
+    calls = []
+
+    def flaky(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError("spool unwritable")
+        return real(*a, **k)
+
+    monkeypatch.setattr(record, "spool_ask", flaky)
+    with caplog.at_level("WARNING"):
+        run_token.consume(repo, "blocker")
+    assert len(calls) == 2 and len(_spooled(repo)) == 1
+    assert "stage resume of w1 after blocker ended failed" in caplog.text
+
+
+def test_waiter_without_a_sizing_retires_its_token_and_spools_nothing(repo, caplog):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    _park_behind(repo, "blocker", sizing=None)
+    with caplog.at_level("WARNING"):
+        run_token.consume(repo, "blocker")
+    assert not run_token.is_live(repo, "waiter")
+    assert _spooled(repo) == []
+    assert "no sizing to refire" in caplog.text
 
 
 def test_walk_resolves_aliased_and_from_imports(tmp_path):

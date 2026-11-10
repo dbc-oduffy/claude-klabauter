@@ -1413,9 +1413,47 @@ def _handle_act(
         acted.extend(new_acted)
         failed.extend(new_failed)
 
-    return declare_move_claims(
+    result = declare_move_claims(
         build_act_result(mode, acted, skipped, failed), moves, acted,
     )
+    if acted:
+        result["cascade_redrive"] = _redrive_archived(worktree_root, common_dir, moves, acted)
+    return result
+
+
+def _redrive_archived(
+    worktree_root: Path, common_dir: Path, moves: List[Move], acted: List[dict],
+) -> dict:
+    """Redrive the batons joined to the handoffs just archived, scoped to their own deliverable_ids.
+
+    Never raises: a redrive failure is reported in the returned dict and leaves the archive's
+    exit_code alone. Imported here so the dry_run:true path never pays for it.
+    """
+    try:
+        from coordinator_core.ops.cascade_redrive import redrive_terminal_divergences
+
+        acted_ids = {item["id"] for item in acted}
+        metas: Dict[str, dict] = {}
+        for move in moves:
+            if move.candidate_id in acted_ids:
+                metas[rel_id(move.dst, worktree_root)] = _read_meta(str(move.dst)) or {}
+        deliverable_ids = {
+            did.strip()
+            for meta in metas.values()
+            for did in (meta.get("deliverable_id"),)
+            if isinstance(did, str) and did.strip()
+        }
+        if not deliverable_ids:
+            return {"advanced": [], "refused": [], "commit_shas": [], "scan_incomplete": False, "errors": []}
+        return redrive_terminal_divergences(
+            common_dir, deliverable_ids=deliverable_ids, handoff_metas=metas,
+        )
+    except Exception as exc:  # noqa: BLE001 — the archive already landed; report, never fail it
+        _LOG.warning("archive_terminal_handoffs: cascade redrive failed — %s", exc)
+        return {
+            "advanced": [], "refused": [], "commit_shas": [], "scan_incomplete": True,
+            "errors": [{"deliverable_id": None, "error": str(exc)}],
+        }
 
 
 @register_op("fleet.archive_completed_handoffs")

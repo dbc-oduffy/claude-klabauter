@@ -667,6 +667,46 @@ def frozen_waves(repo_root: Path, gate_report_path: str) -> Dict[str, Any]:
     }
 
 
+def _read_json_or_refuse(path: Path, label: str) -> Any:
+    """Parsed JSON of ``path``; an unreadable or corrupt file is a ``BlitzStageRefused`` naming ``label``."""
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise BlitzStageRefused(f"{label} is not readable JSON: {exc}") from exc
+
+
+def staged_from_disk(repo_root: Path, roadmap_id: str, trail_dir: str) -> Dict[str, Any]:
+    """What a stage call left on disk for ``roadmap_id``: ``{gate_report_path, gate_report_state,
+    approval_record, waves}``, read-only. ``gate_report_path`` and ``approval_record`` are each
+    ``None`` when their file is absent, so a caller proceeds only on both. Refuses a roadmap id or
+    trail dir that is not a plain repo-relative name."""
+    for label, value in (("roadmap_id", roadmap_id), ("trail_dir", trail_dir)):
+        parts = value.replace("\\", "/").split("/")
+        if not value or value.startswith(("/", "\\")) or (len(value) > 1 and value[1] == ":") or ".." in parts:
+            raise BlitzStageRefused(f"{label} is not a plain repo-relative name: {value}")
+    if "/" in roadmap_id or "\\" in roadmap_id:
+        raise BlitzStageRefused(f"roadmap_id is not a plain repo-relative name: {roadmap_id}")
+    repo_root = Path(repo_root)
+    rel = Path(record_homes.record_path("", "plan-blitz", f"{roadmap_id}/{GATE_REPORT_NAME}")).as_posix()
+    report_file = repo_root / rel
+    approval_rel = f"{trail_dir.replace(chr(92), '/').rstrip('/')}/approval.json"
+    approval_file = repo_root / approval_rel
+    record: Optional[Dict[str, str]] = None
+    if approval_file.is_file():
+        first = _read_json_or_refuse(approval_file, approval_rel)
+        if isinstance(first, dict) and first.get("verdict") == "approved" and first.get("recorded_at"):
+            record = {"path": approval_rel, "recorded_at": first["recorded_at"]}
+    if not report_file.is_file():
+        return {"gate_report_path": None, "gate_report_state": "absent", "approval_record": record, "waves": []}
+    report = _read_json_or_refuse(report_file, rel)
+    return {
+        "gate_report_path": rel,
+        "gate_report_state": "already-frozen",
+        "approval_record": record,
+        "waves": _waves_of(report),
+    }
+
+
 def _record_approval(repo_root: Path, approval: Dict[str, Any], trail_dir: str) -> Dict[str, str]:
     """Write ``<trail_dir>/approval.json`` once; a resume finds and returns the first record."""
     rel = f"{trail_dir.rstrip('/')}/approval.json"
@@ -910,7 +950,7 @@ def stage_roadmap(
                 "approval_utterance": approval.get("utterance") or approval.get("ruling"),
             },
         )
-        overview.write_text(stamped, encoding="utf-8")
+        overview.write_text(stamped, encoding="utf-8", newline="\n")
         overview_stamped = True
         roadmap_files = sorted(
             Path(d, f).relative_to(repo_root).as_posix() for d, _, fs in os.walk(run_dir) for f in fs

@@ -58,8 +58,11 @@ def test_no_arm_no_halt_gate_reason_names_the_refire_call(tmp_path):
 def test_no_arm_gate_halt_yields_refire_envelope(tmp_path):
     s = _script()
     fn = re.search(r"function _refireNextAction\(\) \{.*?\n\}", s, re.S).group(0)
+    footprint = re.search(r"function _withFootprint\(_call\) \{.*?\n\}", s, re.S).group(0)
     js = (
         "let _runId='run-1', _sizingRel='state/sizings/x.yaml', _halted=null;\n"
+        + footprint
+        + "\n"
         + fn
         + "\n_halted={halted:'refusal',reason:'the gate returned no arm and no halt',sizing:_sizingRel,run_id:_runId};"
         "\n_refireNextAction(); console.log(JSON.stringify(_halted.next_action));"

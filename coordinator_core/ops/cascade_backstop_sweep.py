@@ -37,7 +37,7 @@ any candidate, under any outcome. See NEGATIVE-SPEC below.
 Terminal-node sources re-scanned (mirrors the two triggers C6/C6b actually
 fire from — see `deliverable_cascade.py`'s own module docstring "source_kind"
 contract):
-  - `docs/plans/*.md` carrying `status: implemented` and a `deliverable_id` —
+  - `docs/plans/**/*.md` (recursive) carrying `status: implemented` and a `deliverable_id` —
     the plan trigger's condition (`plan_status_transition._run_cascade`).
   - `state/handoffs/*.md` AND `archive/handoffs/**/*.md` whose
     `deployment_state` is a member of `HANDOFF_TERMINAL_DEPLOYMENT` and which
@@ -101,6 +101,7 @@ NEGATIVE-SPEC:
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -117,9 +118,12 @@ from coordinator_core.ops.deliverable_cascade import (
 from coordinator_core.ops.fleet._common import main_worktree_root
 from coordinator_core.ops.slug_prefix_family import is_slug_prefix_family
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 """First key of the returned manifest (C9 schema_version convention). Bumped
-1 -> 2 by C4: adds the `slug_prefix_family_divergences` key (AC6/AC7)."""
+1 -> 2 by C4: adds the `slug_prefix_family_divergences` key (AC6/AC7); 2 -> 3
+adds `landed_parked`."""
+
+DEFAULT_LANDED_DAYS = 14
 
 
 def _read_fm(path: Path) -> dict:
@@ -138,19 +142,83 @@ def _read_fm(path: Path) -> dict:
         return {}
 
 
-def _terminal_plan_deliverable_ids(worktree_root: Path) -> dict[str, list[str]]:
-    out: dict[str, list[str]] = {}
+_SWEPT_STATUS_LINE = re.compile(r"^status:[ \t]*['\"]?(?:implemented|landed)\b", re.MULTILINE)
+_SWEPT_KEY_LINES = re.compile(r"^(?:status|deliverable_id|landed_at|created):[^\r\n]*", re.MULTILINE)
+
+
+_HEAD_BYTES = 65536
+
+
+def _fm_text(path: Path) -> Optional[str]:
+    """The text between a file's opening `---` line and the next bare `---` line, read from the first
+    `_HEAD_BYTES` (the whole file when the head holds no closing fence); None when unreadable or
+    unfenced. Line endings are left as read. A file not opening with `---` at byte 0 takes the
+    general `split_frontmatter` route."""
+    try:
+        with path.open("rb") as fh:
+            data = fh.read(_HEAD_BYTES)
+            if len(data) == _HEAD_BYTES and _closing_fence(data.decode("utf-8", errors="ignore")) < 0:
+                data += fh.read()
+        text = data.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    if not text.startswith(("---\n", "---\r\n")):
+        split = split_frontmatter(text)
+        return None if split is None else split.fm_text
+    end = _closing_fence(text)
+    return text[4:end] if end >= 0 else None
+
+
+def _closing_fence(text: str) -> int:
+    """Offset of the first bare `---` line after the opening line, or -1."""
+    at = text.find("\n---", 3)
+    while at >= 0:
+        eol = text.find("\n", at + 4)
+        if not text[at + 4:eol if eol >= 0 else len(text)].strip(" \t\r"):
+            return at + 1
+        at = text.find("\n---", at + 1)
+    return -1
+
+
+def _read_swept_fm(path: Path) -> dict:
+    """The sweep's keys (status, deliverable_id, landed_at, created) of a plan whose `status:` line
+    names a status the sweep acts on (implemented, landed); any other plan reads as `{}`. Only those
+    single-line keys are YAML-parsed: parsing every plan's whole frontmatter costs ~12s of process
+    time on the real corpus."""
+    fm_text = _fm_text(path)
+    if fm_text is None or _SWEPT_STATUS_LINE.search(fm_text) is None:
+        return {}
+    from coordinator_core.frontmatter.yaml_load import safe_load
+
+    try:
+        return safe_load("\n".join(_SWEPT_KEY_LINES.findall(fm_text))) or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def plan_frontmatters(worktree_root: Path) -> list[tuple[str, dict]]:
+    """One pass over docs/plans: [(relpath, frontmatter)] sorted by path; frontmatter is `{}` for a
+    plan whose status the sweep does not act on. Callers needing several views of the corpus share
+    this result instead of re-parsing it."""
     plans_dir = worktree_root / "docs" / "plans"
     if not plans_dir.is_dir():
-        return out
-    for plan_path in sorted(plans_dir.glob("*.md")):
-        fm = _read_fm(plan_path)
+        return []
+    return [
+        (plan_path.relative_to(worktree_root).as_posix(), _read_swept_fm(plan_path))
+        for plan_path in sorted(plans_dir.rglob("*.md"))
+    ]
+
+
+def _terminal_plan_deliverable_ids(
+    worktree_root: Path, plan_fms: Optional[list[tuple[str, dict]]] = None
+) -> dict[str, list[str]]:
+    out: dict[str, list[str]] = {}
+    for rel, fm in plan_frontmatters(worktree_root) if plan_fms is None else plan_fms:
         if fm.get("status") != "implemented":
             continue
         did = fm.get("deliverable_id")
         if not isinstance(did, str) or not did.strip():
             continue
-        rel = plan_path.relative_to(worktree_root).as_posix()
         out.setdefault(did.strip(), []).append(rel)
     return out
 
@@ -168,19 +236,20 @@ def _as_date(value: Any) -> Optional[date]:
     return None
 
 
-def _landed_parked_plans(worktree_root: Path, days: int, today: Optional[date] = None) -> list[dict]:
+def _landed_parked_plans(
+    worktree_root: Path,
+    days: int,
+    today: Optional[date] = None,
+    plan_fms: Optional[list[tuple[str, dict]]] = None,
+) -> list[dict]:
     """Read-only: plans (recursive under docs/plans) at `status: landed` older
     than `days`. Age runs from `landed_at` when present, else `created`; a plan
     with neither parseable date is skipped. Entries:
     {"plan": relpath, "deliverable_id": str|None, "age_days": int,
     "age_basis": "landed_at"|"created"}, sorted by plan path."""
     out: list[dict] = []
-    plans_dir = worktree_root / "docs" / "plans"
-    if not plans_dir.is_dir():
-        return out
     now = today or date.today()
-    for plan_path in sorted(plans_dir.rglob("*.md")):
-        fm = _read_fm(plan_path)
+    for rel, fm in plan_frontmatters(worktree_root) if plan_fms is None else plan_fms:
         if fm.get("status") != "landed":
             continue
         basis = "landed_at"
@@ -196,7 +265,7 @@ def _landed_parked_plans(worktree_root: Path, days: int, today: Optional[date] =
         did = fm.get("deliverable_id")
         out.append(
             {
-                "plan": plan_path.relative_to(worktree_root).as_posix(),
+                "plan": rel,
                 "deliverable_id": did.strip() if isinstance(did, str) and did.strip() else None,
                 "age_days": age,
                 "age_basis": basis,
@@ -277,10 +346,12 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     No required params. Optional:
         deliverable_id (str) — restrict the sweep to one join key instead of
                                 every terminal source found on disk.
+        landed_days (int, default 14) — a plan at `status: landed` older than
+                                this is listed under `landed_parked`.
 
     Returns:
         {
-          "schema_version": 2,
+          "schema_version": 3,
           "sources_scanned": {"plans": <int>, "handoffs": <int>},
           "deliverable_ids_checked": <int>,
           "divergences": [
@@ -294,6 +365,10 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
               "plan_deliverable_id": ..., "plan_sources": [<relpath>, ...],
               "handoff_deliverable_id": ..., "handoff_path": ...,
             }, ...
+          ],
+          "landed_parked": [
+            {"plan": <relpath>, "deliverable_id": ..., "age_days": <int>,
+             "age_basis": "landed_at"|"created"}, ...
           ],
           "scan_incomplete": <bool>,
         }
@@ -320,6 +395,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
 
     worktree_root = main_worktree_root(repo_root)
     only_did = (params.get("deliverable_id") or "").strip() or None
+    raw_days = params.get("landed_days")
+    landed_days = raw_days if isinstance(raw_days, int) and not isinstance(raw_days, bool) else DEFAULT_LANDED_DAYS
 
     plan_ids = _terminal_plan_deliverable_ids(worktree_root)
     handoff_ids = _terminal_handoff_deliverable_ids(worktree_root)
@@ -387,5 +464,6 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         "deliverable_ids_checked": len(all_ids),
         "divergences": divergences,
         "slug_prefix_family_divergences": slug_prefix_family_divergences,
+        "landed_parked": _landed_parked_plans(worktree_root, landed_days),
         "scan_incomplete": scan_incomplete,
     }

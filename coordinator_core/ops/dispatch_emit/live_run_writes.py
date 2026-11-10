@@ -151,6 +151,22 @@ def live_footprints(root: Path, *, exclude_run_id: Optional[str]) -> dict[str, O
     return out
 
 
+def file_claims(root: Path, writes: Sequence[str]) -> list[str]:
+    """`writes` without the entries that name a directory in the tree, or the tree root itself.
+    Trap: `overlaps` reads a path as covering its descendants, so a declared directory (a gap-closing
+    row's `tools/pkg`) would claim every peer file under it; a run's claim is its files, and the
+    files it writes under a directory are declared by name."""
+    root = Path(root)
+    out: list[str] = []
+    for w in writes:
+        if not w:
+            continue
+        if _norm(w) == PurePosixPath(".") or (root / _norm(w)).is_dir():
+            continue
+        out.append(w)
+    return out
+
+
 def overlaps(writes: Sequence[str], footprints: Mapping[str, Optional[frozenset[str]]]) -> dict[str, list[str]]:
     """Run id -> the footprint paths that equal, contain or sit under one of `writes`. A None
     footprint, and a run with no overlap, are absent."""
