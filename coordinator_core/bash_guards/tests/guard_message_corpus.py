@@ -2082,6 +2082,14 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+    CorpusRow(
+        "grep-via-bash-rewrite",
+        "grep-via-bash-rewrite-bare-py-fire",
+        "coordinator/bin/plan-spine-check.py docs/plans/x.md | tail -5",
+        True,
+        _REWRITE,
+        False,
+    ),
         "grep-via-bash-rewrite",
         "grep-via-bash-rewrite-control",
         "echo hi",

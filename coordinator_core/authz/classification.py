@@ -2575,6 +2575,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # 5 YES (persisted on disk).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.close_halted_run_superseded": OpClass.MUTATING,
+    # dispatch.close_halted_run_rejected — MUTATING: rewrites one halted.json marker to `closed` (rejected,
+    # with the EM reason) and drops the run from the halt-withheld index (ops/dispatch_emit/halted_run_rejected.py).
+    # DR-208 five-question affirmation: 1 YES (marker rewrite, index entry removal); 2 No; 5 YES (persisted on disk).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.close_halted_run_rejected": OpClass.MUTATING,
     # dispatch.run_terminality — COMPUTE_ONLY: reads one run dir's halted.json and run-outcome.json and returns
     # terminal/resumable/reason; writes no file and spawns no process (ops/dispatch_emit/run_terminality.py).
     # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.

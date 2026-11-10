@@ -193,3 +193,9 @@ def test_split_without_a_peer_hold_has_an_empty_held_map(tmp_path, monkeypatch):
 def test_split_with_missing_manifest_is_empty_pair(tmp_path, monkeypatch):
     _claims(monkeypatch, {})
     assert rws.run_write_set_split(tmp_path, RUN, "me") == ((), {})
+
+
+def test_norm_is_stable_across_cached_calls():
+    assert rws._norm(" pkg\\b.py ") == "pkg/b.py"
+    assert rws._norm(" pkg\\b.py ") == "pkg/b.py"
+    assert rws._norm("pkg/./b.py") == "pkg/b.py"

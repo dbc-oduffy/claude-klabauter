@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import queue
 import threading
 from pathlib import Path
 from typing import Optional, Union
@@ -50,6 +51,31 @@ def _read_file(path: Path) -> bytes:
     return path.read_bytes()
 
 
+_idle_workers: list = []
+_idle_lock = threading.Lock()
+
+
+def _worker_loop(jobs: "queue.SimpleQueue") -> None:
+    while True:
+        job = jobs.get()
+        try:
+            job()
+        finally:
+            with _idle_lock:
+                _idle_workers.append(jobs)
+
+
+def _run_on_worker(job) -> None:
+    """Run `job` on an idle daemon worker, starting one only when none is idle. A worker stuck in a
+    stalled read is not idle, so a later read never queues behind it."""
+    with _idle_lock:
+        jobs = _idle_workers.pop() if _idle_workers else None
+    if jobs is None:
+        jobs = queue.SimpleQueue()
+        threading.Thread(target=_worker_loop, args=(jobs,), daemon=True).start()
+    jobs.put(job)
+
+
 def bounded_read(
     path: Union[str, Path], deadline_ms: float, max_bytes: int = DEFAULT_MAX_BYTES
 ) -> Union[bytes, _Sentinel]:
@@ -83,7 +109,7 @@ def bounded_read(
             done.set()
 
     try:
-        threading.Thread(target=work, daemon=True).start()
+        _run_on_worker(work)
     except BaseException:
         with _inflight_lock:
             _inflight.discard(key)

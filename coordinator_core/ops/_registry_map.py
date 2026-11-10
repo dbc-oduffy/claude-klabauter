@@ -421,6 +421,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "dispatch.run_terminality":                "coordinator_core.ops.dispatch_emit.run_terminality",
     "dispatch.record_halted_run_landed":       "coordinator_core.ops.dispatch_emit.halted_run_landed",
     "dispatch.close_halted_run_superseded":    "coordinator_core.ops.dispatch_emit.halted_run_superseded",
+    "dispatch.close_halted_run_rejected":      "coordinator_core.ops.dispatch_emit.halted_run_rejected",
     "dispatch.land_combined_index":            "coordinator_core.ops.dispatch_emit.combined_landing",
     "dispatch.release_run_token":              "coordinator_core.ops.dispatch_emit.release_run_token",
     "workflow.late_rows":                     "coordinator_core.ops.dispatch_emit.requirements_ledger",

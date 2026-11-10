@@ -317,6 +317,22 @@ def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path, monkeyp
     assert '"a"' in (tmp_path / 'art' / 'prompt.txt').read_text() and 'JSON Schema' in (tmp_path / 'art' / 'prompt.txt').read_text()
 
 
+@pytest.mark.parametrize('text', [
+    'Looking at it {not json} now.\n\n{"a": 3}',
+    'Narration.\n```json\n{"a": 3}\n```',
+])
+def test_grok_narration_then_trailing_json_object_is_the_result(tmp_path, monkeypatch, text):
+    _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': text}))
+    assert _run(tmp_path, 'grok') == {'a': 3}
+
+
+def test_grok_narration_without_trailing_json_or_with_trailing_prose_fails(tmp_path, monkeypatch):
+    for text in ('only narration', '{"a": 3}\nand then more prose'):
+        _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': text}))
+        with pytest.raises(workflow.AgentFailed, match='no schema-valid result'):
+            _run(tmp_path, 'grok')
+
+
 def test_agy_stage_spawns_resolved_binary_and_parses_result_event(tmp_path, monkeypatch):
     stream = '\n'.join(json.dumps(e) for e in [
         {'event': 'step_update', 'step_update': {}},

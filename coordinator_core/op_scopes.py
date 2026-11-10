@@ -856,6 +856,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.supersede_slice":                 "common_dir",
     "dispatch.record_halted_run_landed":        "common_dir",
     "dispatch.close_halted_run_superseded":     "common_dir",
+    "dispatch.close_halted_run_rejected":       "common_dir",
     "dispatch.land_combined_index":             "common_dir",
     "dispatch.release_run_token":               "common_dir",
     # dispatch.adopt_orphaned_run — MUTATING: re-homes a dead session's run dir under the caller.

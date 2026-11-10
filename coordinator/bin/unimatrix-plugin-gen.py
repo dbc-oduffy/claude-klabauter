@@ -325,13 +325,20 @@ def _agy_python():
     return "python" if os.name == "nt" else "python3"
 
 
-def _agy_hook_command(command, token):
-    """The shell-neutral launcher command for one Claude door hook command, else None."""
+def _agy_hook_command(command, out_dir):
+    """The shell-neutral launcher command for one Claude door hook command, else None.
+
+    The shim path is baked absolute: agy on Windows hands `${PLUGIN_ROOT}` to python unexpanded and
+    keeps literal quotes, so the path is quoted only when it holds a space.
+    """
     m = DOOR_CMD_RE.fullmatch(command)
     if not m:
         return None
     flags = (" --quiet" if m["quiet"] else "") + (" --pass-2" if m["pass2"] else "")
-    return f'{_agy_python()} "{token}/{SHIM_REL}"{flags}{m["rest"]}'
+    shim = f"{str(out_dir).replace(chr(92), '/').rstrip('/')}/{SHIM_REL}"
+    if " " in shim:
+        shim = f'"{shim}"'
+    return f"{_agy_python()} {shim}{flags}{m['rest']}"
 
 
 def _hooks(plan, plugin_root):
@@ -352,7 +359,7 @@ def _hooks(plan, plugin_root):
             out = {k: clean(v) for k, v in o.items() if k not in drop}
             command = out.get("command")
             if isinstance(command, str):
-                neutral = _agy_hook_command(command, plan.cfg["plugin_root_token"])
+                neutral = _agy_hook_command(command, plan.out_dir)
                 if neutral:
                     out["command"] = neutral
                     out.pop("shell", None)
@@ -362,7 +369,8 @@ def _hooks(plan, plugin_root):
             return out
         if isinstance(o, list):
             return [clean(v) for v in o]
-        return plan.rewrite(o) if isinstance(o, str) else o
+        # agy expands no ${PLUGIN_ROOT} in a hook arg on Windows: bake the dest dir into every string.
+        return plan.rewrite(o).replace(plan.cfg["plugin_root_token"], plan.out_dir) if isinstance(o, str) else o
 
     data = clean(data)
     events = data.get("hooks") if isinstance(data, dict) else None
@@ -484,6 +492,7 @@ def generate(plugin_root, out_dir, host="agy"):
     if not plugin_root.is_dir():
         raise ValueError(f"plugin root {plugin_root} is not a directory")
     plan = _Plan(cfg, cfg.get("token_suffixes", ()))
+    plan.out_dir = out_dir.resolve().as_posix()
     if not cfg:
         for kind, source in _inventory(plugin_root):
             plan.miss(kind, source, NO_MAP)

@@ -156,12 +156,28 @@ def test_idle_run_with_live_owner_is_refused_naming_the_release_op(repo, monkeyp
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
 
 
-def test_recently_active_run_with_dead_owner_is_refused(repo, monkeypatch):
+def test_recently_active_staged_run_with_dead_owner_does_not_block(repo, monkeypatch):
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: True)
+    _idle_peer(repo, "peer", ["pkg/b.py"], days=0)
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
+
+
+def test_recently_active_staged_run_with_live_owner_is_refused(repo, monkeypatch):
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: False)
     _idle_peer(repo, "peer", ["pkg/b.py"], days=0)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     with pytest.raises(AskStageError, match="live-run-write-overlap"):
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
+
+
+def test_halted_peer_with_dead_owner_is_not_treated_as_abandoned(repo, monkeypatch):
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: True)
+    _idle_peer(repo, "peer", ["pkg/b.py"], days=0)
+    (warp_live._ask_record_dir(repo, "peer") / "halted.json").write_text('{"status": "paused"}', encoding="utf-8")
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    assert not live_run_index.run_is_abandoned(repo, "peer")
 
 
 def test_stale_peer_does_not_block_the_readonly_fallback(repo, monkeypatch):
@@ -222,3 +238,64 @@ def test_unclaimed_falls_back_to_readonly_check_and_still_refuses(repo, monkeypa
     monkeypatch.setattr(live_run_index, "claim", lambda *a, **k: None)
     with pytest.raises(AskStageError, match="live-run-write-overlap"):
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
+
+
+def _spend(root, run_id):
+    """Write the sentinel a spent-token gate refusal leaves, without dropping the run's claims."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    d = root / RECORD_DIR_ROOT / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "token-spent.json").write_text("{}\n", encoding="utf-8")
+
+
+def test_spent_token_peer_with_claims_does_not_block_a_sibling(repo, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: False)
+    _live_peer(repo, "peer", ["pkg/b.py"], indexed=False)
+    assert live_run_index.claim(repo, "peer", ["pkg/b.py"]) == {}
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    with pytest.raises(AskStageError, match="live-run-write-overlap"):
+        stage(repo, run_id="mine", plan_rel=PLAN_REL)
+    _spend(repo, "peer")
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
+
+
+SIZING = "state/sizings/2026-11/chain-a.yaml"
+
+
+def _claiming_run(root, run_id, sizing, path="pkg/b.py"):
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    run_token.mint(root, run_id, SCRIPT, session_id=None, sizing_rel=sizing)
+    assert live_run_index.claim(root, run_id, [path]) == {}
+
+
+def test_chained_run_is_not_refused_by_its_ancestors_claims(repo):
+    _claiming_run(repo, "ask-20261110T020544-281faa", SIZING)
+    run_token.mint(repo, "mine", SCRIPT, session_id=None, sizing_rel=SIZING)
+    assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
+    assert _live(repo, "mine")
+
+
+def test_unrelated_sizing_peer_still_refuses_a_chained_run(repo):
+    _claiming_run(repo, "ask-20261110T020544-281faa", SIZING, path="pkg/a.py")
+    _claiming_run(repo, "peer", "state/sizings/2026-11/other.yaml")
+    run_token.mint(repo, "mine", SCRIPT, session_id=None, sizing_rel=SIZING)
+    with pytest.raises(AskStageError, match=r"live-run-write-overlap.*peer: pkg/b\.py") as err:
+        stage(repo, run_id="mine", plan_rel=PLAN_REL)
+    assert "281faa" not in str(err.value)
+
+
+def test_marking_a_token_spent_drops_the_runs_index_entry_and_claims(repo):
+    from coordinator_core.ops.dispatch_emit import ask_gate, live_run_index
+
+    _live_peer(repo, "peer", ["pkg/b.py"], indexed=False)
+    assert live_run_index.claim(repo, "peer", ["pkg/b.py"]) == {}
+    ask_gate._mark_token_spent(repo, "peer")
+    assert live_run_index.release(repo, "peer") == 0
+    assert "peer" not in (live_run_index.read(repo, 2000.0) or {})
+    run_token.mint(repo, "mine", SCRIPT, session_id=None)
+    assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows

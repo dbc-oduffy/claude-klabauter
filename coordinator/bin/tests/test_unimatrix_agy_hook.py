@@ -268,8 +268,9 @@ def test_windows_spawns_launcher_detached_when_leg_not_current(home, monkeypatch
     (cmd, kw), = calls
     assert cmd == [sys.executable, str(pre.LAUNCH), "--conversation", CONV, "--agy-pid", "4242"]
     assert kw["stdout"] is subprocess.DEVNULL and kw["stdin"] is subprocess.DEVNULL
-    detached = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
-    assert kw["creationflags"] & detached == detached
+    want = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kw["creationflags"] & want == want
+    assert not kw["creationflags"] & 0x8  # DETACHED_PROCESS: every descendant opens a visible console
 
 
 def test_windows_second_run_command_within_debounce_window_spawns_nothing(home, monkeypatch):
@@ -373,7 +374,7 @@ def test_launcher_windows_detaches_by_creationflags(monkeypatch):
     monkeypatch.setattr(launch.subprocess, "DETACHED_PROCESS", 0x8, raising=False)
     monkeypatch.setattr(launch.subprocess, "CREATE_NO_WINDOW", 0x08000000, raising=False)
     kw = launch.detach_kwargs()
-    assert kw == {"creationflags": 0x200 | 0x8 | 0x08000000}
+    assert kw == {"creationflags": 0x200 | 0x08000000}
 
 
 def test_launcher_without_token_starts_pending_leg_with_discovered_ls(home, monkeypatch):

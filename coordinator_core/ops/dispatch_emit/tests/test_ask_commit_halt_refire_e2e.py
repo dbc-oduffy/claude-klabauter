@@ -41,7 +41,7 @@ RESIDUE = "b.py"
 HALTED_STARTED = 1000.0
 _SID = "11111111-2222-3333-4444-555555555555"
 _REVIEWED = {"integration_stem": "rev-stem", "slices": 1, "fixes": 1}
-_MET = {"items": [{"id": "R1", "status": "met", "wired": True}]}
+_MET = {"items": [{"id": "R1", "status": "met", "wired": True, "command": "pytest test_ask_commit_halt_refire_e2e.py", "observed": "2 passed"}]}
 _HALT = {"halted": "commit", "plan": PLAN, "sizing": SIZING, "refused": "since-base-overlap"}
 
 

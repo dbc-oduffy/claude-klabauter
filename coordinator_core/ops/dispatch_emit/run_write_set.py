@@ -8,6 +8,7 @@ run's own checkpoint landed; a live touch claim still does. Never the tree. `run
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from pathlib import Path, PurePosixPath
@@ -33,6 +34,7 @@ def _str_list(value: object) -> list:
     return [p for p in value if isinstance(p, str)] if isinstance(value, list) else []
 
 
+@functools.lru_cache(maxsize=16384)
 def _norm(path: str) -> str:
     return PurePosixPath(path.strip().replace("\\", "/")).as_posix()
 

@@ -502,6 +502,38 @@ def test_a_path_only_in_legacy_reads_is_a_non_blocking_export(tmp_path, git):
     assert "reads:" in f[0]["detail"] and f[0]["path"] == "old.py"
 
 
+def _undeclared_pair(root):
+    return (_plan(root, "a", _row("R1", "[s/x.py]")), _plan(root, "b", _row("R2", "[s/x.py]")))
+
+
+def _collisions(reply):
+    return [f for f in reply["findings"] if f["class"] == "writes-collision"]
+
+
+def test_wave_boundary_orders_an_undeclared_in_run_collision_by_derivation(tmp_path, git):
+    root = _root(tmp_path)
+    a, b = _undeclared_pair(root)
+    assert _collisions(_check(root, [a, b]))
+    r = _wb(root, [a, b], [])
+    assert not _collisions(r) and r["verdict"] == "CLEAN"
+
+
+def test_wave_boundary_collision_the_derivation_cannot_order_still_blocks(tmp_path, git, monkeypatch):
+    from coordinator_core.ops import plan_seam_fix
+
+    root = _root(tmp_path)
+    a, b = _undeclared_pair(root)
+    real = plan_seam_fix.derive_edges
+
+    def unordered(pset, hubs, root_, order=None):
+        d = real(pset, hubs, root_, order)
+        return d._replace(graph={rel: set() for rel in d.graph})
+
+    monkeypatch.setattr(plan_seam_fix, "derive_edges", unordered)
+    r = _wb(root, [a, b], [])
+    assert len(_collisions(r)) == 2 and all(f["blocking"] for f in _collisions(r))
+
+
 def test_collision_ordering_follows_transitive_edges(tmp_path, git):
     root = _root(tmp_path)
     c = _plan(root, "c", _row("R3", "[s/x.py]"))

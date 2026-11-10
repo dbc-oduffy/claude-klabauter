@@ -661,8 +661,33 @@ def _append_canonical_usage(receipt: dict) -> dict:
 _FAMILY_BACKENDS = ("grok", "agy")
 _AGY_OK = frozenset({"success", "ok", "completed", "done"})
 _FENCE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
+
 # agy denies unlisted shell commands headlessly; this allow rule is the narrowest non-bypass grant.
 _AGY_SETTINGS = json.dumps({"permissions": {"allow": ["command(*)"]}})
+
+
+def _trailing_json(text: str):
+    """Parse a reply that is JSON, a fenced JSON block, or narration ending in a JSON object.
+
+    Raises ValueError (as json.loads does) when no object ends the text.
+    """
+    stripped = text.strip()
+    fence = _FENCE.match(stripped)
+    try:
+        return json.loads(fence.group(1) if fence else stripped)
+    except ValueError as whole_error:
+        decoder = json.JSONDecoder()
+        start = stripped.find("{")
+        while start != -1:
+            try:
+                value, end = decoder.raw_decode(stripped, start)
+            except ValueError:
+                value = None
+            else:
+                if isinstance(value, dict) and not stripped[end:].strip().strip("`").strip():
+                    return value
+            start = stripped.find("{", start + 1)
+        raise whole_error
 
 
 def _family_argv(backend: str, artifact_dir: Path) -> list[str]:
@@ -885,8 +910,7 @@ def run_agent(
         elif backend in _FAMILY_BACKENDS:
             text = _family_text(backend, artifact_dir / "stdout.jsonl")
             if schema is not None:
-                fence = _FENCE.match(text.strip())
-                value = json.loads(fence.group(1) if fence else text)
+                value = _trailing_json(text)
             else:
                 value = text
         else:

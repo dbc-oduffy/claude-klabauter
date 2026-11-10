@@ -108,7 +108,7 @@ def test_hooks_at_root_schema_matchers_and_plugin_root(plugin, tmp_path):
     pre = data["pre-tool-use"]["PreToolUse"]
     assert [g["matcher"] for g in pre] == ["run_command", "edit_file|write_file", "Weird"]
     assert "description" not in pre[0]["hooks"][0]
-    assert pre[0]["hooks"][0]["command"] == "python ${PLUGIN_ROOT}/hooks/scripts/run.py"
+    assert pre[0]["hooks"][0]["command"] == f"python {out.resolve().as_posix()}/hooks/scripts/run.py"
     assert not any("UserPromptSubmit" in v for v in data.values())
     assert {("matcher", "hooks/hooks.json"), ("hook-event", "hooks/hooks.json")} <= _unmapped(report)
 
@@ -333,7 +333,9 @@ def test_twice_byte_identical(plugin, tmp_path):
         rc = ui.main(["--hosts", "agy", "--out", str(d), "--plugin-root", str(plugin)], out=buf)
         assert rc == 0, buf.getvalue()
         assert "agy plugin tree written" in buf.getvalue() and "unmapped" in buf.getvalue()
-    ta, tb = _tree(a), _tree(b)
+    # hooks.json bakes its own dest dir; normalise it so the two trees compare on content.
+    ta = {k: v.replace(a.resolve().as_posix().encode(), b"<DEST>") for k, v in _tree(a).items()}
+    tb = {k: v.replace(b.resolve().as_posix().encode(), b"<DEST>") for k, v in _tree(b).items()}
     assert list(ta) == list(tb) and list(ta) == sorted(ta)
     assert ta == tb
     assert "hooks.json" in ta and "UNMAPPED.json" in ta
@@ -383,7 +385,8 @@ def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp
     report = gen.generate(plugin, out, "agy")
     data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
     got = [h["command"] for g in data["pre-tool-use"]["PreToolUse"] for h in g["hooks"]]
-    shim = f'{gen._agy_python()} "${{PLUGIN_ROOT}}/hooks/agy-hook-run.py"'
+    path = (out.resolve() / "hooks" / "agy-hook-run.py").as_posix()
+    shim = f'{gen._agy_python()} ' + (f'"{path}"' if " " in path else path)
     assert got == [
         f"{shim} hooks.preuse_bash_dispatch",
         f"{shim} --quiet --pass-2 --advisory hooks.x_check",
@@ -392,6 +395,7 @@ def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp
     for c in got:
         assert not re.search(r"^\s*\w+=|rc=\$\?|/dev/null|\$\{\w+:-|;|&&", c.replace("${PLUGIN_ROOT}", ""))
     assert all("shell" not in h for g in data["pre-tool-use"]["PreToolUse"] for h in g["hooks"])
+    assert "${PLUGIN_ROOT}" not in (out / "hooks.json").read_text(encoding="utf-8")
     assert (out / "hooks" / "agy-hook-run.py").is_file()
     assert "hook-command" not in {u["kind"] for u in report["unmapped"]}
 
@@ -455,7 +459,7 @@ def test_shim_runs_end_to_end_with_a_real_child_process(plugin, tmp_path):
 
 
 @pytest.mark.parametrize("os_name,exe", [("nt", "python"), ("posix", "python3")])
-def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch, os_name, exe):
+def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch, os_name, exe, tmp_path):
     monkeypatch.setattr(gen.os, "name", os_name)
-    cmd = gen._agy_hook_command(f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a", "${PLUGIN_ROOT}")
+    cmd = gen._agy_hook_command(f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a", tmp_path)
     assert cmd.startswith(exe + " ")

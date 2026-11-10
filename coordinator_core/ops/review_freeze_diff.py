@@ -217,6 +217,27 @@ def _error(message: str, uncovered_paths: Optional[List[str]] = None) -> dict:
 _is_magic_pathspec = is_magic_pathspec
 _git_pathspec = git_pathspec
 
+# Windows CreateProcess caps a command line at 32767 chars; a 646-path worktree freeze
+# overran it and git "exited -1" with no stderr. Budget well under the cap for the prefix.
+_ARGV_CHAR_BUDGET = 24000
+
+
+def _pathspec_chunks(specs: List[str], budget: int = _ARGV_CHAR_BUDGET) -> List[List[str]]:
+    """Split pathspecs into argv chunks whose joined length (one space each) stays within budget."""
+    chunks: List[List[str]] = []
+    cur: List[str] = []
+    size = 0
+    for spec in specs:
+        cost = len(spec) + 3  # separator plus worst-case quoting
+        if cur and size + cost > budget:
+            chunks.append(cur)
+            cur, size = [], 0
+        cur.append(spec)
+        size += cost
+    if cur:
+        chunks.append(cur)
+    return chunks
+
 
 def _c_unquote(token: str) -> str:
     """Reverse git's C-style quoting of a path (``core.quotePath``, on by
@@ -609,16 +630,20 @@ def _freeze_diff_worktree(
             "untracked additions from."
         )
 
-    diff_argv = ["--no-optional-locks", "diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--", *(_git_pathspec(p) for p in paths)]
-    dr = _git(diff_argv, cwd=repo_root)
-    if not dr.ok:
-        # Trap: git can exit non-zero with empty stderr (example-stats-repo 2026-11-01 got a bare base), so
-        # the exit code is the only fact left; never drop it.
-        raise ValueError(
-            f"git diff failed while freezing worktree base {base!r} over {len(paths)} path(s): "
-            f"exit {dr.returncode}: {dr.stderr.strip() or '(no stderr)'}"
-        )
-    diff_text = dr.stdout
+    diff_prefix = ["--no-optional-locks", "diff", "--src-prefix=a/", "--dst-prefix=b/", base, "--"]
+    diff_parts: List[str] = []
+    for chunk in _pathspec_chunks([_git_pathspec(p) for p in paths]):
+        dr = _git([*diff_prefix, *chunk], cwd=repo_root)
+        if not dr.ok:
+            # Trap: git can exit non-zero with empty stderr (example-stats-repo 2026-11-01 got a bare base), so
+            # the exit code is the only fact left; never drop it.
+            raise ValueError(
+                f"git diff failed while freezing worktree base {base!r} over {len(paths)} path(s): "
+                f"exit {dr.returncode}: {dr.stderr.strip() or '(no stderr)'}"
+            )
+        diff_parts.append(dr.stdout)
+    # Per-file diff sections are independent, so chunk outputs concatenate into one valid diff.
+    diff_text = "".join(diff_parts)
 
     tracked_covered = _covered_paths_from_diff(diff_text)
     index_stat = _index_stat_snapshot(repo_root)

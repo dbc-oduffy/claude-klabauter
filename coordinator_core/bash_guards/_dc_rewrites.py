@@ -47,6 +47,7 @@ from coordinator_core.bash_guards._rewrite_support import (
     _alt_record,
     _bt_grep_flags_and_operands,
     _bt_grep_python_rewrite,
+    _bt_python3_invocation,
     _crlf_strip,
     _offer,
     _override,
@@ -120,6 +121,110 @@ def check_find_exec_rewrite(
     return _impl(cmd, session_id, payload, git_root)
 
 
+_BARE_PY_ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
+_BARE_PY_KEYWORDS = frozenset(("!", "if", "then", "elif", "else", "while", "until", "do", "time"))
+_BARE_PY_WORD_STOPS = " \t\r\n|&;<>()"
+
+
+def _bare_py_word_end(cmd: str, i: int) -> int:
+    """End index of the shell word starting at ``i``: stops at unquoted
+    whitespace or an operator character, honouring quotes and backslashes."""
+    n = len(cmd)
+    j = i
+    while j < n:
+        c = cmd[j]
+        if c in _BARE_PY_WORD_STOPS:
+            break
+        if c == "\\":
+            j += 2
+            continue
+        if c in "'\"":
+            close = cmd.find(c, j + 1)
+            j = n if close < 0 else close + 1
+            continue
+        j += 1
+    return min(j, n)
+
+
+def _bare_py_insert_points(cmd: str) -> List[int]:
+    """Offsets of every command word that is a bare ``*.py`` path (no
+    interpreter ahead of it). Text scan only: a heredoc command is declined
+    whole, since a body line is not a command."""
+    if "<<" in cmd:
+        return []
+    n = len(cmd)
+    points: List[int] = []
+    cmd_pos = True
+    skip_word = False
+    i = 0
+    while i < n:
+        c = cmd[i]
+        if c in " \t\r":
+            i += 1
+        elif c == "\\" and i + 1 < n and cmd[i + 1] == "\n":
+            i += 2
+        elif c == "#":
+            nl = cmd.find("\n", i)
+            i = n if nl < 0 else nl
+        elif c in "|&;\n(":
+            cmd_pos = True
+            skip_word = False
+            i += 1
+        elif c == ")":
+            cmd_pos = False
+            i += 1
+        elif c in "<>":
+            while i < n and cmd[i] in "<>&":
+                i += 1
+            skip_word = True
+        else:
+            end = _bare_py_word_end(cmd, i)
+            if end <= i:
+                end = i + 1
+            word = cmd[i:end]
+            if skip_word:
+                skip_word = False
+            elif cmd_pos:
+                if _BARE_PY_ENV_ASSIGN_RE.match(word) or word in _BARE_PY_KEYWORDS or word == "{":
+                    pass
+                else:
+                    cmd_pos = False
+                    if word.rstrip("'\"").lower().endswith(".py") and len(word.strip("'\"")) > 3:
+                        points.append(i)
+            i = end
+    return points
+
+
+def _bare_py_command_word_rewrite(
+    cmd: str, payload: Optional[Dict[str, Any]]
+) -> Optional[Dict[str, Any]]:
+    """Rewrite a command word that is a bare ``*.py`` path to run under the
+    resolved python interpreter, or None. A shebang-less script run directly
+    makes bash take the ENOEXEC fallback and read the Python as shell text,
+    which under the Claude bash wrapper re-invokes itself without bound.
+    Advisory-only (allow + updatedInput), spawns nothing, never denies; a
+    segment already led by an interpreter or wrapper word is left alone."""
+    points = _bare_py_insert_points(cmd)
+    if not points:
+        return None
+    interp = _bt_python3_invocation()
+    out = cmd
+    for at in reversed(points):
+        out = out[:at] + interp + " " + out[at:]
+    if exceeds_tokenizable_ceiling(out):
+        return None
+    text = (
+        "Auto-rewritten: a .py path as the command word runs as shell text "
+        "when the file has no shebang. It now runs as '%s <script>'." % interp
+    )
+    return _alt_record(
+        "rewrite", "bare-py-command-word-rewrite", text, (),
+        report="the script you need run as written", authorize="the bare script path",
+        updated_input={"command": out},
+        em_text=text,
+    )
+
+
 def check_grep_via_bash_rewrite(
     cmd: str,
     session_id: str = "",
@@ -133,10 +238,17 @@ def check_grep_via_bash_rewrite(
     piped, composed, or carrying an unrecognized flag -- BX-6 owns the
     Windows deny policy for THAT residue, this row only owns the rewrite
     target. Never denies.
+
+    Also hosts the bare ``*.py`` command-word rewrite (host-independent,
+    registered under this entry's Bash matcher): it runs first and is not
+    disarmed by this entry's grep override.
     """
     if not cmd:
         return None
     cmd = _crlf_strip(cmd)
+    bare_py = _bare_py_command_word_rewrite(cmd, payload)
+    if bare_py is not None:
+        return bare_py
     if _override("COORDINATOR_ALLOW_GREP_VIA_BASH", payload=payload):
         return None
     classification = _bt_classify_command(cmd)

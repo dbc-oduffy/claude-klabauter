@@ -36,7 +36,7 @@ def detach_kwargs():
     """Popen kwargs that leave the child running after agy's run_command shell exits."""
     if os.name == "nt":
         flags = 0
-        for name in ("CREATE_NEW_PROCESS_GROUP", "DETACHED_PROCESS", "CREATE_NO_WINDOW"):
+        for name in ("CREATE_NEW_PROCESS_GROUP", "CREATE_NO_WINDOW"):  # never DETACHED_PROCESS: test_no_detached_process_spawn
             flags |= getattr(subprocess, name, 0)
         return {"creationflags": flags}
     return {"start_new_session": True}

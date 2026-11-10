@@ -195,6 +195,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.slice_supersede", 'registers "dispatch.supersede_slice"'),
     ("coordinator_core.ops.dispatch_emit.halted_run_landed", 'registers "dispatch.record_halted_run_landed"'),
     ("coordinator_core.ops.dispatch_emit.halted_run_superseded", 'registers "dispatch.close_halted_run_superseded"'),
+    ("coordinator_core.ops.dispatch_emit.halted_run_rejected", 'registers "dispatch.close_halted_run_rejected"'),
     ("coordinator_core.ops.dispatch_emit.combined_landing", 'registers "dispatch.land_combined_index"'),
     ("coordinator_core.ops.dispatch_emit.release_run_token", 'registers "dispatch.release_run_token"'),
     ("coordinator_core.ops.dispatch_emit.requirements_ledger", 'registers "workflow.revise"'),

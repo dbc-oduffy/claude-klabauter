@@ -195,9 +195,35 @@ def run_is_stale(root: Union[str, Path], run_id: str, now: Optional[float] = Non
         return False
 
 
+def run_is_abandoned(root: Union[str, Path], run_id: str) -> bool:
+    """True when the run's `run-stage.json` stage is `staged`, it holds no `halted.json` marker, and its
+    owner session (submission, else token record) has exited (`warp_live._owner_exited`); no age
+    requirement. An unknown owner, a live owner, a halted or unstaged run answers False; never raises.
+    Reads only this run's records, so call it for overlap hits, never across the index."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        root = Path(root)
+        record_dir = warp_live._ask_record_dir(root, run_id)
+        stage = warp_live._read_json(record_dir / "run-stage.json") or {}
+        if stage.get("stage") != "staged" or (record_dir / warp_live._HALTED_FILE).exists():
+            return False
+        record = run_token._read_rec(root, run_id) or {}
+        submission = warp_live._read_json(warp_live._submission_path(root, run_id)) or {}
+        owner = submission.get("session_id") or record.get("session_id")
+        if not (isinstance(owner, str) and owner):
+            return False
+        minted = record.get("minted_at")
+        if not isinstance(minted, (int, float)):
+            minted = _epoch(stage.get("staged_at")) or time.time()
+        return warp_live._owner_exited(owner, float(minted))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run_holds_no_claim(root: Union[str, Path], run_id: str) -> bool:
-    """`warp_live.run_is_over`, a run whose token is spent or retired (`ask_gate.token_retired`), or a
-    stale run (`run_is_stale`): none blocks another run's footprint."""
+    """`warp_live.run_is_over`, a run whose token is spent or retired (`ask_gate.token_retired`), an
+    abandoned run (`run_is_abandoned`), or a stale run (`run_is_stale`): none blocks another run's footprint."""
     if warp_live.run_is_over(Path(root), run_id):
         return True
     from coordinator_core.ops.dispatch_emit import ask_gate
@@ -207,7 +233,7 @@ def run_holds_no_claim(root: Union[str, Path], run_id: str) -> bool:
             return True
     except Exception:  # noqa: BLE001
         pass
-    return run_is_stale(root, run_id)
+    return run_is_abandoned(root, run_id) or run_is_stale(root, run_id)
 
 
 def _claims_dir(index_file: Path) -> Path:

@@ -2136,7 +2136,8 @@ def _live_write_overlap_deny(
         def self_ended(rid: str) -> bool:
             return bool(
                 _halt_marker_ended(root, rid) or _stage_halted(root, rid) or _status_of(root, rid) in ("halted", "landed")
-                or _ended_on_evidence(root, rid) or _staged_without_workflow(root, rid)
+                or _ended_on_evidence(root, rid) or live_run_index.run_is_abandoned(root, rid)
+                or _staged_without_workflow(root, rid)
                 or _stale_token_without_workflow(root, rid) or _never_ran_without_workflow(root, rid)
                 or (isinstance(deliverable, str) and _sibling_record_run_stopped(root, rid, deliverable))
             )

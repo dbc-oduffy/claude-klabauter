@@ -7856,6 +7856,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "review.prep": 2,
     # Enrolled 2026-10-26: halted-run supersede/combined-landing ops, pinned at measured reachable counts.
     "dispatch.close_halted_run_superseded": 1,
+    "dispatch.close_halted_run_rejected": 1,
     "dispatch.land_combined_index": 2,
     # Enrolled 2026-10-26: objective_* ops, pinned at measured reachable counts (7 (op, site) pairs).
     "dispatch.objective_calibrate": 1,

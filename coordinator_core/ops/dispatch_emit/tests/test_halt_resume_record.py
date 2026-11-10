@@ -263,3 +263,33 @@ def test_refire_record_names_script_sha_engine_and_time(tmp_path):
     assert lines[0]["engine_sha"] == hrr.engine_sha()
     assert lines[0]["launched_at"] == 123.5
     assert lines[1]["kind"] == "launcher" and lines[1]["composed_by_engine_sha"] is None
+
+
+def test_bounded_reads_reuse_one_worker_thread(tmp_path):
+    f = tmp_path / "a.json"
+    f.write_bytes(b"{}")
+    hrr.bounded_read(f, 1000)
+    before = threading.active_count()
+    for _ in range(20):
+        assert hrr.bounded_read(f, 1000) == b"{}"
+    assert threading.active_count() <= before
+
+
+def test_stalled_read_does_not_block_the_next_read(tmp_path, monkeypatch):
+    slow, fast = tmp_path / "slow.json", tmp_path / "fast.json"
+    slow.write_bytes(b"s")
+    fast.write_bytes(b"f")
+    release = threading.Event()
+    real = hrr._read_file
+
+    def gated(path):
+        if path.name == "slow.json":
+            release.wait(5)
+        return real(path)
+
+    monkeypatch.setattr(hrr, "_read_file", gated)
+    try:
+        assert hrr.bounded_read(slow, 20) is hrr.STALLED
+        assert hrr.bounded_read(fast, 1000) == b"f"
+    finally:
+        release.set()

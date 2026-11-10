@@ -668,3 +668,39 @@ def test_a_parent_ask_with_a_stage_or_status_record_still_denies(tmp_path):
     scratch.mkdir(parents=True)
     (scratch / "sibling-status.json").write_text('{"status": "held"}', encoding="utf-8")
     assert _submit(tmp_path)[0] == "deny"
+
+
+def _staged_owned_run(root: Path, run_id: str, session_id: str) -> None:
+    import json
+
+    from coordinator_core import warp_live
+
+    rd = root / "state" / "warp" / run_id
+    rd.mkdir(parents=True, exist_ok=True)
+    (rd / "run-stage.json").write_text('{"stage": "staged"}', encoding="utf-8")
+    submission = warp_live._submission_path(root, run_id)
+    submission.parent.mkdir(parents=True, exist_ok=True)
+    submission.write_text(json.dumps({"session_id": session_id}), encoding="utf-8")
+
+
+def test_a_staged_unhalted_dead_owner_run_is_not_denied(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    (tmp_path / ".git").mkdir()
+    _workflow_record(monkeypatch, "run-a")
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: sid == "dead-sess")
+    _live(tmp_path, {"run-a": {"pkg/mod.py"}})
+    _staged_owned_run(tmp_path, "run-a", "dead-sess")
+    assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {}) is None
+
+
+def test_a_staged_unhalted_run_with_a_live_owner_is_still_denied(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    (tmp_path / ".git").mkdir()
+    _workflow_record(monkeypatch, "run-a")
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: sid == "dead-sess")
+    _live(tmp_path, {"run-a": {"pkg/mod.py"}})
+    _staged_owned_run(tmp_path, "run-a", "live-sess")
+    why = mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {})
+    assert why and "run-a" in why

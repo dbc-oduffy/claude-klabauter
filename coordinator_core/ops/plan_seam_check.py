@@ -573,6 +573,36 @@ def _declared_append_hubs(root: Path) -> set:
     return {_normalize_path(i) for i in (x.strip().strip("\"'") for x in raw.split(",")) if i}
 
 
+class _DerivedOrder:
+    """The write-overlap order ``plan_seam_fix.derive_edges`` would give the set, as a symmetric
+    reachability test. Derived lazily on the first colliding pair: ``plan_seam_fix`` imports this
+    module, and ``derive_edges`` re-enters ``_collision_findings`` with a ctx carrying no phase."""
+
+    def __init__(self, pset: Dict[str, _Plan], ctx: dict):
+        self._pset, self._ctx = pset, ctx
+        self._graph: Optional[Dict[str, set]] = None
+
+    def orders(self, a: str, b: str) -> bool:
+        if self._graph is None:
+            from coordinator_core.ops.plan_seam_fix import derive_edges
+
+            self._graph = derive_edges(self._pset, self._ctx["hubs"], self._ctx.get("root") or Path(".")).graph
+        return _graph_reaches(self._graph, a, b) or _graph_reaches(self._graph, b, a)
+
+
+def _graph_reaches(graph: Dict[str, set], src: str, dst: str) -> bool:
+    seen: set = set()
+    stack = list(graph.get(src, ()))
+    while stack:
+        cur = stack.pop()
+        if cur == dst:
+            return True
+        if cur not in seen:
+            seen.add(cur)
+            stack.extend(graph.get(cur, ()))
+    return False
+
+
 def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
     """One record per (plan, path) naming the first other writer and counting the rest,
     then one `undetermined` record per live row whose writes are undeclared."""
@@ -586,6 +616,7 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
         for p in prefixes:
             prefix.setdefault(p, set()).add(rel)
     ordered = _edge_closure(pset, ctx)
+    derived = _DerivedOrder(pset, ctx) if ctx.get("phase") == "wave-boundary" else None
     appends = {rel: p.append_only_paths() for rel, p in pset.items()}
     hubs = ctx["hubs"]
     others: Dict[tuple, set] = {}
@@ -607,6 +638,8 @@ def _collision_findings(pset: Dict[str, _Plan], ctx: dict) -> list:
                 if other in ordered[rel] or rel in ordered[other]:
                     continue
                 if item in appends[rel] and item in appends[other]:
+                    continue
+                if derived is not None and derived.orders(rel, other):
                     continue
                 others.setdefault((rel, item), set()).add(other)
                 others.setdefault((other, item), set()).add(rel)

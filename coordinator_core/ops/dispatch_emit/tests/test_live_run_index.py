@@ -144,6 +144,50 @@ def test_run_is_stale_needs_dead_owner_and_old_activity(tmp_path, monkeypatch):
     assert not idx.run_is_stale(root, "unknown", now=minted + day + 1)
 
 
+def _staged_run(root, run_id, session_id, *, halted=False, stage="staged"):
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    run_token.mint(root, run_id, "scratch/w.mjs", session_id=session_id)
+    record = warp_live._ask_record_dir(root, run_id)
+    record.mkdir(parents=True, exist_ok=True)
+    (record / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
+    if halted:
+        (record / "halted.json").write_text(json.dumps({"status": "paused"}), encoding="utf-8")
+
+
+def test_run_is_abandoned_needs_staged_unhalted_dead_known_owner(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    root = _root(tmp_path)
+    _staged_run(root, "dead", "s1")
+    _staged_run(root, "halted", "s1", halted=True)
+    _staged_run(root, "minted", "s1", stage="minted")
+    _staged_run(root, "ownerless", None)
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: True)
+    assert idx.run_is_abandoned(root, "dead")
+    assert idx.run_holds_no_claim(root, "dead")
+    assert not idx.run_is_abandoned(root, "halted")
+    assert not idx.run_is_abandoned(root, "minted")
+    assert not idx.run_is_abandoned(root, "ownerless")
+    assert not idx.run_is_abandoned(root, "unknown")
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: False)
+    assert not idx.run_is_abandoned(root, "dead")
+    assert not idx.run_holds_no_claim(root, "dead")
+
+
+def test_claim_ignores_an_abandoned_peer_and_refuses_a_live_one(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    root = _root(tmp_path)
+    _staged_run(root, "peer", "s1")
+    assert idx.claim(root, "peer", ["a.py"]) == {}
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: False)
+    assert idx.claim(root, "mine", ["a.py"]) == {"peer": ["a.py"]}
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: True)
+    assert idx.claim(root, "mine", ["a.py"]) == {}
+
+
 def test_release_returns_the_marker_count(tmp_path):
     root = _root(tmp_path)
     assert idx.claim(root, "r1", ["a.py", "b.py"]) == {}
