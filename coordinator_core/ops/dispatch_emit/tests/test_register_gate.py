@@ -441,7 +441,7 @@ def wb_repo(tmp_path):
 
 def _wb_judged(rid, status="met", wired=True):
     return {"id": rid, "claim": "this-plan", "status": status, "wired": wired, "surface": "ui",
-            "observed_ref": "x.py::f"}
+            "observed_ref": "x.py::f", "command": "run x", "observed": "ok"}
 
 
 def _wb_review(rows, status="met"):
@@ -493,12 +493,24 @@ def test_writeback_also_claim_moves_a_row_the_plan_does_not_claim(wb_repo):
 
 def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(wb_repo):
     register_writeback(
+        wb_repo, _PLAN,
+        _wb_review([_wb_judged("r1", "partial", True)], status="not_met"),
+        "abc1234",
+    )
+
+    r1 = _wb_register(wb_repo)["rows"][0]
+    assert r1["status"] == "partial" and "met_by" not in r1
+    assert r1["last_progress_at"]
+
+
+def test_writeback_not_met_run_that_changes_no_row_state_writes_no_timestamp(wb_repo):
+    register_writeback(
         wb_repo, _PLAN, _wb_review([_wb_judged("r1", "partial", False)], status="not_met"), "abc1234"
     )
 
     r1 = _wb_register(wb_repo)["rows"][0]
     assert r1["status"] == "open" and "met_by" not in r1
-    assert r1["last_progress_at"]
+    assert "last_progress_at" not in r1
 
 
 def test_writeback_leaves_bytes_outside_the_register_block_unchanged(wb_repo):

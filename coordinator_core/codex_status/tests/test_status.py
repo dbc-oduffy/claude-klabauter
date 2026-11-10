@@ -111,7 +111,10 @@ def test_unknown_route_and_prices_never_render_confident_zero(tmp_path, monkeypa
     assert registered_alias(ROOT) == "actual-route"
     assert registered_alias(CHILD) is None
     text = render(summary(empty(ROOT)))
-    assert "route?" in text and "~$?" in text and "0.00" not in text
+    assert text.split(" · ")[0] == "unknown" and text.endswith("unknown") and "0.00" not in text
+    assert "route?" not in text and "context?" not in text and "~$?" not in text
+    assert render({"remaining_percent": 80, "alias": "a"}).count("unknown") >= 2 and "ctx" not in render({"remaining_percent": 80})
+    assert "ctx" in render({"before_compact_percent": 40})
 
 
 def test_discovery_joins_parent_identity_not_same_repository(tmp_path):
@@ -167,7 +170,7 @@ def test_unknown_model_only_never_renders_zero_priced_usage():
         ingest(state, event, source)
     value = summary(state)
     assert value["unpriced_events"] == 1 and value["priced_events"] == 0
-    assert "~$?" in render(value)
+    assert render(value).endswith("unknown") and "~$?" not in render(value)
 
 
 def test_canonical_native_overlap_needs_an_actual_request_join():

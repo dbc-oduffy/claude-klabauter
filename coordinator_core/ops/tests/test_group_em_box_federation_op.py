@@ -157,4 +157,6 @@ def test_suite_grant_receive_refuses_a_non_object_and_an_unpinned_issuer(homes):
     assert "error" in op._groupem_suite_grant_receive({})
     assert "error" in op._groupem_suite_grant_receive({"envelope": "x"})
     out = op._groupem_suite_grant_receive({"envelope": {"issuer_box_id": "box-unpinned", "sig": "ab"}})
-    assert out == {"ok": False, "reason": "bad_signature"}
+    assert out["ok"] is False
+    # The refusal names its cause (f6decda38b): an unpinned issuer reads no_pin, not a bare bad_signature.
+    assert out["reason"].startswith("bad_signature:no_pin:")

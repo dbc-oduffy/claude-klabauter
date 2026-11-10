@@ -177,3 +177,22 @@ def test_windows_prepare_emits_plan_without_executing(repo, stub_wm, capsys):
     assert rc == 0 and not calls and not env
     assert plan["argv"] == ["C:/bin/codex.exe", *wm.WORKER_ARGV["codex"]]
     assert plan["environment"] == {wm.WORKER_ENV: "codex"}
+
+
+def test_worker_launch_gets_no_grant_and_is_refused_by_fire_authority(repo, stub_wm, tmp_path, monkeypatch, capsys):
+    import json
+
+    from coordinator_core.ops.workflow_fire import authority
+    from coordinator_core.ops.workflow_fire import headless_em_grant as g
+
+    settings = tmp_path / "settings"
+    monkeypatch.setenv(g.SETTINGS_HOME_KEY, str(settings))
+    monkeypatch.setenv("COORDINATOR_SESSION_ID", "worker-sess")
+    rc, calls, env = _run(repo, stub_wm, platform="win32", prepare_only=True, which=lambda n: "codex.exe")
+    plan = json.loads(capsys.readouterr().out)
+    assert rc == 0 and not calls
+    assert g.HEADLESS_EM_TOKEN_ENV not in plan["environment"] and g.HEADLESS_EM_TOKEN_ENV not in env
+    assert not settings.exists()  # no grant dir was created
+    monkeypatch.setenv(wm.WORKER_ENV, "codex")
+    with pytest.raises(ValueError):
+        authority.require_fire_authority("s.py", None, cwd=None, native=True, backend="codex")

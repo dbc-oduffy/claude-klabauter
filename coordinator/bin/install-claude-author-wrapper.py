@@ -51,7 +51,7 @@ def main(argv: "list[str] | None" = None) -> int:
         return 1
 
     argv = (sys.argv[1:] if argv is None else argv)
-    if "--wrapper-src" not in argv:
+    if not any(a == "--wrapper-src" or a.startswith("--wrapper-src=") for a in argv):
         argv = argv + ["--wrapper-src", _default_wrapper_src()]
 
     try:

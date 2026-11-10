@@ -71,11 +71,23 @@ from pathlib import Path
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
 
-from coordinator_core.roadmap import census  # noqa: E402
-from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
+#: Bound by `_bootstrap()` so importing this file touches neither `sys.path` nor the engine.
+census = None
+no_console_creationflags = None
+
+
+def _bootstrap() -> None:
+    """Put the repo root on `sys.path` and bind the engine names the rest of the file reads."""
+    global census, no_console_creationflags
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from coordinator_core.roadmap import census as _census
+    from coordinator_core.win_portability import no_console_creationflags as _flags
+
+    census = _census
+    no_console_creationflags = _flags
+
 
 CURRENT = "CURRENT"
 DRIFT = "DRIFT"
@@ -312,6 +324,7 @@ def _targets(args: list, repo_root: Path) -> list:
 
 
 def main(argv: list) -> int:
+    _bootstrap()
     parser = argparse.ArgumentParser(
         prog="census-recheck",
         description="Re-ask a plan's counted premises of HEAD. Writes nothing.",

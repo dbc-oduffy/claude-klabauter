@@ -25,7 +25,7 @@ def status_title(value: dict) -> str:
     alias = value.get("alias")
     if not alias:
         raise ValueError("no exact registered route alias")
-    cost = f"~${value['usd']:.2f}" if value.get("priced_events") else "~$?"
+    cost = f"~${value['usd']:.2f}" if value.get("priced_events") else "unknown"
     partial = (not value.get("backlog_complete") or value.get("unpriced_events") or
                value.get("warnings") or not all(value.get("coverage", {}).values()))
     return f"{alias} · {cost}" + ("+" if partial else "")

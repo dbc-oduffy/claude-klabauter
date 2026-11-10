@@ -315,10 +315,15 @@ def ensure_agent(key, run=subprocess.run):
     return "loaded"
 
 
-if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1] == "askpass":
-        sys.exit(askpass_main(sys.argv[2:]))
+def main(argv=None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "askpass":
+        return askpass_main(argv[1:])
     if os.environ.get(REF_ENV):  # ssh-add runs SSH_ASKPASS as `<file> "<prompt>"`, with no subcommand word
-        sys.exit(askpass_main([]))
+        return askpass_main([])
     print(__doc__)
-    sys.exit(2)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

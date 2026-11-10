@@ -647,6 +647,8 @@ def candidate_test_additions(
         if _normalized_test_name(candidate.stem) in declared_names:
             continue
         target = _resolve_test_dir_target(candidate, repo_root)
+        if repo_root is not None and not (Path(repo_root) / target.parent).is_dir():
+            continue
         candidates.append(as_git_pathspec(target.as_posix()))
     return _dedupe(candidates)
 

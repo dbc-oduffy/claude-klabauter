@@ -899,6 +899,35 @@ STAGE_CLAIM_STALLED = "stage-claim-stalled"
 LIVE_OVERLAP_DEADLINE_S = 0.5
 
 
+_STAMP_DATE_RE = re.compile(r"^(?P<head>.*-)\d{8}(?P<tail>T\d{6}-[0-9a-f]{6})$")
+
+
+def _recorded_run_ids(root: Path, hits: Mapping[str, list[str]]) -> dict[str, list[str]]:
+    """`hits` re-keyed by each run's exact recorded id (the run-token record's), so a pasted
+    `dispatch.release_run_token` finds it. A hit id with no record whose only difference from exactly
+    one held record is the stamp's date digits maps to that record; any other id stays as given."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    try:
+        held = [r["run_id"] for r in run_token.held_records(root)]
+    except (OSError, ValueError, KeyError, TypeError):
+        return dict(hits)
+    known = set(held)
+    out: dict[str, list[str]] = {}
+    for rid, paths in hits.items():
+        exact = rid
+        match = None if rid in known else _STAMP_DATE_RE.match(rid)
+        if match is not None:
+            near = {
+                h for h in known
+                if (m := _STAMP_DATE_RE.match(h)) and m["head"] == match["head"] and m["tail"] == match["tail"]
+            }
+            if len(near) == 1:
+                exact = next(iter(near))
+        out.setdefault(exact, []).extend(p for p in paths if p not in out.get(exact, ()))
+    return out
+
+
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `live-run-write-overlap` naming each other live run whose staged
     footprint intersects `writes`, and release this run's token so the refusal ends the run.
@@ -940,12 +969,21 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
             return
         if isinstance(box[0], BaseException):
             raise box[0]
-        hits = live_run_writes.overlaps(writes, box[0])
+        hits = {
+            rid: paths
+            for rid, paths in live_run_writes.overlaps(writes, box[0]).items()
+            if not live_run_index.run_is_stale(root, rid)
+        }
     if not hits:
         return
+    hits = _recorded_run_ids(root, hits)
     named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
+    release = "; ".join(f'dispatch.release_run_token {{"run_id": "{rid}"}}' for rid in sorted(hits))
     run_token.consume(root, run_id)
-    raise AskStageError(f"{LIVE_RUN_WRITE_OVERLAP}: writes overlap live run {named}. Resubmit when it lands.")
+    raise AskStageError(
+        f"{LIVE_RUN_WRITE_OVERLAP}: writes overlap live run {named}. Resubmit when it lands, "
+        f"or release a run that has ended: {release}."
+    )
 
 
 KEPT_HUNKS_DRIFTED = "kept-hunks-drifted"
@@ -1250,7 +1288,7 @@ def stage(
             )
         if blocking_drops:
             _record_staging_drops(record, run_id, [{"id": d["id"], "reason": d["reason"]} for d in blocking_drops])
-        raise AskStageError(
+        refusal = AskStageError(
             f"the spine derives zero dispatchable rows{named}",
             owed_em_ids=[o.id for o in owed],
             plan_path=plan_posix,
@@ -1261,6 +1299,16 @@ def stage(
             ],
             criterion_blocking_drops=blocking_drops,
         )
+        from coordinator_core.ops.dispatch_emit.memo_rows import memo_row_slug
+        from coordinator_core.ops.dispatch_emit.spine_read import memo_close_route
+
+        # Trap: AskStageError (ask_stage_blocks) has no constructor slot for this; the reply reads it by getattr.
+        refusal.owed_memo_rows = [
+            {"id": o.id, "route": memo_close_route(o.id, memo_row_slug(raw_by_id.get(o.id) or {}))}
+            for o in owed
+            if o.reason == "memo-send"
+        ]
+        raise refusal
     if blocking_drops:
         _record_staging_drops(record, run_id, [{"id": d["id"], "reason": d["reason"]} for d in blocking_drops])
         raise AskStageError(
@@ -2359,6 +2407,8 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
         if getattr(exc, "owed_em_ids", None):
             reply["owed_em_ids"] = exc.owed_em_ids
             reply["owed_plan"] = exc.plan_path
+            if getattr(exc, "owed_memo_rows", None):
+                reply["owed_memo_rows"] = exc.owed_memo_rows
         if getattr(exc, "gated_rows", None):
             reply["gated_rows"] = exc.gated_rows
             reply["owed_plan"] = exc.plan_path

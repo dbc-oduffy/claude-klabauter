@@ -126,3 +126,26 @@ def test_stalled_index_write_degrades_instead_of_hanging(tmp_path, monkeypatch):
     monkeypatch.setattr(hrr, "atomic_write_bytes", real)
     assert idx.add(root, "r3", 1.0) is True
     assert "r3" in idx.read(root, 2000)
+
+
+def test_run_is_stale_needs_dead_owner_and_old_activity(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    root = _root(tmp_path)
+    run_token.mint(root, "r1", "scratch/w.mjs", session_id="s1")
+    minted = run_token._read_rec(root, "r1")["minted_at"]
+    day = idx.STALE_RUN_SECONDS
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: True)
+    assert idx.run_is_stale(root, "r1", now=minted + day + 1)
+    assert not idx.run_is_stale(root, "r1", now=minted + day - 1)
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: False)
+    assert not idx.run_is_stale(root, "r1", now=minted + day + 1)
+    assert not idx.run_is_stale(root, "unknown", now=minted + day + 1)
+
+
+def test_release_returns_the_marker_count(tmp_path):
+    root = _root(tmp_path)
+    assert idx.claim(root, "r1", ["a.py", "b.py"]) == {}
+    assert idx.release(root, "r1") == 2
+    assert idx.release(root, "r1") == 0

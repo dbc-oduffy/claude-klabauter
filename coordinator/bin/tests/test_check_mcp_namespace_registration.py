@@ -53,6 +53,17 @@ def _run(
     )
 
 
+def test_import_leaves_sys_path_unchanged_and_imports_no_lib_helper():
+    import importlib.util
+
+    before = list(sys.path)
+    spec = importlib.util.spec_from_file_location("check_mcp_namespace_inert", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert sys.path == before
+    assert mod.read_text is None and mod.scan_frontmatter is None
+
+
 def test_unregistered_namespace_warned_by_name(tmp_path):
     r = _run(tmp_path, registered=False)
     assert r.returncode == 0

@@ -1509,7 +1509,13 @@ def cmd_send(argv):
         if resp.get("peers"):
             print("peers: " + ", ".join(resp["peers"]), file=sys.stderr)
         return 1
-    print(resp["reply"])
+    if "reply" in resp:
+        print(resp["reply"])
+        return 0
+    delivered = ", ".join(f"{k}={resp[k]}" for k in ("msg_id", "sender") if k in resp)
+    print(f"delivered to {a.peer}" + (f" ({delivered})" if delivered else "") + "; the router returned no reply field")
+    print("router-version mismatch: the running router answers with an older or different send reply shape; "
+          "restart the router (stop the running unimatrix-peer-router.py and start it again)", file=sys.stderr)
     return 0
 
 

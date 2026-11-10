@@ -19,6 +19,16 @@ assert _spec is not None and _spec.loader is not None
 gbn = importlib.util.module_from_spec(_spec)
 sys.modules["group_em_box_notice"] = gbn
 _spec.loader.exec_module(gbn)
+gbn._bootstrap()
+
+
+def test_import_leaves_sys_path_unchanged_and_binds_no_engine_name():
+    before = list(sys.path)
+    spec = importlib.util.spec_from_file_location("group_em_box_notice_inert", _PATH)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    assert sys.path == before
+    assert fresh.nomination is None and fresh.render_notice is None
 
 AGENTS = [
     {"sessionId": "sid-me", "name": "coordinator-content-repo-9", "cwd": "/fake/coordinator-content-repo"},

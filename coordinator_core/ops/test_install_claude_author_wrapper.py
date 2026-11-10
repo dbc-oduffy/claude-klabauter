@@ -117,6 +117,17 @@ def test_check_only_reports_ready_when_already_installed(tmp_path, capsys):
     assert f"claude_author_wrapper: ready ({dst})" in capsys.readouterr().out
 
 
+def test_wrapper_src_equals_form_installs(tmp_path):
+    src = _make_wrapper_src(tmp_path)
+    assert main([f"--wrapper-src={src}"]) == 0
+    assert (Path(os.environ["HOME"]) / ".local" / "bin" / "claude-author").is_file()
+
+
+def test_wrapper_src_equals_form_empty_value_fails_loud(capsys):
+    assert main(["--wrapper-src="]) == 1
+    assert "--wrapper-src not supplied" in capsys.readouterr().out
+
+
 def test_no_note_when_local_bin_already_on_path(tmp_path, monkeypatch, capsys):
     src = _make_wrapper_src(tmp_path)
     home = Path(os.environ["HOME"])

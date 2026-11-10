@@ -65,6 +65,8 @@ def require_fire_authority(script_path: str, expected: str | None, *, cwd: str |
         if valid:
             return caller
         raise ValueError('Workflow delegation refused: ' + reason)
+    if _grant_verified_headless_em(caller):
+        return caller
     codex = (caller.env.get('COORDINATOR_AGENT_VENDOR') == 'codex'
              or caller.env.get('COORDINATOR_AGENT_PROVIDER') == 'codex'
              or bool(caller.env.get('CODEX_THREAD_ID')))
@@ -74,6 +76,21 @@ def require_fire_authority(script_path: str, expected: str | None, *, cwd: str |
     # The existing Claude harness keeps its own admission and guard chain.
     # An unknown legacy caller is not relabelled as an EM here.
     return caller
+
+
+def _explicit_worker_marker(env: dict) -> bool:
+    if str(env.get('COORDINATOR_AGENT_WORKER', '')).lower() in ('1', 'true', 'yes'):
+        return True
+    role = env.get('COORDINATOR_AGENT_ROLE')
+    return bool(role) and role != 'em'
+
+
+def _grant_verified_headless_em(caller: Principal) -> bool:
+    """True for a launcher-granted headless codex|agy|grok EM; an explicit worker marker always refuses."""
+    if not caller.session_id or _explicit_worker_marker(caller.env):
+        return False
+    from coordinator_core.ops.workflow_fire.headless_em_grant import headless_em_grant_matches
+    return headless_em_grant_matches(caller.env, caller.session_id)
 
 
 def assigned_script_delegation(script_path: str, expected: str | None,

@@ -193,5 +193,23 @@ def test_unmerged_sibling_scope_both_branches():
     assert SIBLINGS_MERGED_PARAM == "siblings_merged"
 
 
+def test_declared_subset_round_trips_and_gates():
+    chunk = ChunkCommit(id="C1", title="t", paths=("a.py", "tests/test_a.py"), declared=("a.py",))
+    marker = render_marker(CommitRequest(chunks=(chunk,)))
+    parsed = parse_marker(marker).chunks[0]
+    assert parsed.declared == ("a.py",)
+    assert parsed.gating_paths() == ("a.py",)
+
+
+def test_marker_without_declared_gates_on_paths_and_stays_byte_identical():
+    chunk = ChunkCommit(id="C1", title="t", paths=("a.py",))
+    marker = render_marker(CommitRequest(chunks=(chunk,)))
+    assert "declared" not in marker
+    parsed = parse_marker(marker).chunks[0]
+    assert parsed.declared is None and parsed.gating_paths() == ("a.py",)
+    equal = ChunkCommit(id="C1", title="t", paths=("a.py",), declared=("a.py",))
+    assert render_marker(CommitRequest(chunks=(equal,))) == marker
+
+
 def test_prefix_claim_label_literal():
     assert PREFIX_CLAIM_LABEL == "created-under-prefix:"

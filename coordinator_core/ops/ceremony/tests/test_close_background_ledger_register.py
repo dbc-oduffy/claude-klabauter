@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -172,6 +173,44 @@ def test_warp_run_without_a_docs_plans_edge_writes_no_claim_and_still_lands(tmp_
     assert out["result"].status == "ran", out["result"].detail
     assert out["rows"]["T22"]["status"] == "met"
     assert not out["rows"]["T22"].get("claimed_by")
+
+
+def test_repeat_partial_verdict_pass_returns_the_sizing_text_byte_identical():
+    judged = [{"id": "R1", "claim": "this-plan", "status": "met", "wired": False}]
+    t0 = datetime(2026, 11, 9, 21, 30, 0).astimezone()
+    first = rr.apply_verdicts(_SIZING_TEXT, judged, PLAN, SHA, t0, ["R1"])
+    assert first != _SIZING_TEXT
+    second = rr.apply_verdicts(first, judged, PLAN, SHA, t0 + timedelta(seconds=1), ["R1"])
+    assert second == first
+
+
+def test_repeated_sizing_ship_passes_over_an_unchanged_partial_run_write_once(tmp_path):
+    """The 58-commit loop: a met-but-unwired row was re-stamped each pass, so close-commit had a diff every time."""
+    _init_repo(tmp_path)
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "state" / "sizings").mkdir(parents=True)
+    (tmp_path / PLAN).write_text(f"---\nplan_id: p\nsizing_object: {SIZING}\n---\nbody\n", encoding="utf-8")
+    (tmp_path / SIZING).write_text(_wb_sizing_text([_wb_row("R1", anchor="relayed")]), encoding="utf-8")
+    criterion = {
+        "status": "not_met", "observation": "partial",
+        "register_rows": [{"id": "R1", "claim": "this-plan", "status": "met", "wired": False}],
+    }
+    run_close.write_close_job(
+        tmp_path, RUN, ("sizing-ship",), datetime.now().astimezone() + timedelta(minutes=10),
+        plan_rel=PLAN, terminal_sha=SHA, criterion=criterion,
+    )
+    texts, written = [], []
+    for _ in range(3):
+        ctx = cb.JobContext(tmp_path, tmp_path / ".git", RUN, (), None, SHA, run_close._load(tmp_path, RUN))
+        cb._sizing_ship(ctx)
+        texts.append((tmp_path / SIZING).read_text(encoding="utf-8"))
+        written.append(list(ctx.written))
+        if len(texts) == 1:
+            time.sleep(1.1)  # a re-stamp would differ by a second
+
+    assert written[0] == [SIZING]
+    assert written[1:] == [[], []]
+    assert texts[1] == texts[0] == texts[2]
 
 
 def test_refusal_detail_keeps_field_value_and_reason_past_the_clip(tmp_path, monkeypatch):

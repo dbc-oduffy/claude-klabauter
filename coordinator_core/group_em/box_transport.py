@@ -54,7 +54,7 @@ DEFAULT_TIMEOUT_S = 30.0
 
 #: Ops this module itself issues; the fallback's ops are admitted by ``policy.remote_safe``.
 ALLOWED_OPS: frozenset = frozenset(
-    {"session.peer_roster", "groupem.box_send", "groupem.suite_grant_receive"}
+    {"session.peer_roster", "groupem.box_send", "groupem.suite_grant_receive", "groupem.box_key_pin"}
 )
 RATE_MAX_CALLS = 12
 RATE_WINDOW_S = 60.0

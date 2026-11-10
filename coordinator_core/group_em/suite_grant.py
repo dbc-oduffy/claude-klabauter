@@ -211,6 +211,7 @@ def _relay_grant(
         "issued_at": _iso(issued),
         "expires_at": _iso(issued + ttl_minutes * 60),
         "note": note.strip(),
+        "issuer_key_fp": box_key.own_fingerprint(home),
     }
     if repo:
         record["scope_root"] = repo
@@ -286,6 +287,26 @@ def receive_relayed_grant(
     return reply
 
 
+_FP_MAX = 16
+_SIG_REMEDY = {
+    "no_pin": "pin the issuer key here (groupem.box_key_pin)",
+    "pin_mismatch": "re-pin the issuer key here (groupem.box_key_pin)",
+    "tag_mismatch": "same key, tag differs: tampering or engine version skew",
+    "unverified_issuer_key": "no issuer fingerprint: re-pin or upgrade issuer",
+}
+
+
+def _bad_signature_reason(why: dict) -> str:
+    """``bad_signature`` plus the failure kind, the fingerprint pinned here (``expected``) and the one the
+    issuer stamped (``got``). Fingerprints only, never key material; ``got`` is attacker-chosen so it is clipped."""
+    kind = why.get("kind")
+    if kind not in _SIG_REMEDY:
+        return "bad_signature"
+    got = why.get("got")
+    got_text = got[:_FP_MAX] if isinstance(got, str) and got else "none"
+    return f"bad_signature:{kind}:expected={why.get('expected') or 'none'}:got={got_text}:{_SIG_REMEDY[kind]}"
+
+
 def _receive_relayed_grant(
     envelope: object,
     *,
@@ -301,8 +322,9 @@ def _receive_relayed_grant(
         issuer_box = envelope.get("issuer_box_id")
         if not box_registry._valid_id(issuer_box):
             return {"ok": False, "reason": "bad_issuer_box"}
-        if not box_key.verify(envelope, issuer_box, home):
-            return {"ok": False, "reason": "bad_signature"}
+        why = box_key.diagnose(envelope, issuer_box, home)
+        if why is not None:
+            return {"ok": False, "reason": _bad_signature_reason(why)}
         grantee_sid = envelope.get("grantee_session_id")
         if (
             envelope.get("schema_version") != SCHEMA_VERSION

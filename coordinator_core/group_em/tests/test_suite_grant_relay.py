@@ -122,6 +122,7 @@ def _valid_envelope(boxes):
         "issued_at": suite_grant._iso(issued),
         "expires_at": suite_grant._iso(issued + 600),
         "note": "ruling",
+        "issuer_key_fp": box_key.own_fingerprint(boxes["home_a"]),
     }
     return box_key.sign(record, boxes["home_a"])
 
@@ -137,7 +138,7 @@ def test_unsigned_and_forged_envelopes_are_rejected_by_the_op_and_write_nothing(
 
     for bad in (unsigned, tampered, wrong_key):
         reply = op._groupem_suite_grant_receive({"envelope": bad})
-        assert reply == {"ok": False, "reason": "bad_signature"}
+        assert reply["ok"] is False and reply["reason"].startswith("bad_signature")
         assert not _relayed_file(two_boxes).exists()
 
     assert op._groupem_suite_grant_receive({"envelope": envelope}) == {"ok": True, "reason": "received"}
@@ -244,7 +245,8 @@ def test_far_box_audits_an_accepted_and_a_refused_arrival(two_boxes):
     assert op._groupem_suite_grant_receive({"envelope": {**envelope, "note": "tampered"}})["ok"] is False
     assert op._groupem_suite_grant_receive({"envelope": envelope})["ok"] is True
     refused, accepted = _audit_lines(two_boxes)
-    assert (refused["outcome"], refused["reason"]) == ("refused", "bad_signature")
+    assert refused["outcome"] == "refused"
+    assert refused["reason"].startswith("bad_signature:tag_mismatch:")
     assert accepted["outcome"] == "accepted"
     assert accepted["issuer_box_id"] == two_boxes["ida"]
     assert accepted["issuer_session_id"] == HOLDER
@@ -262,7 +264,7 @@ def test_refused_arrival_audit_is_bounded_and_carries_no_basis(two_boxes):
     (refused,) = _audit_lines(two_boxes)
     assert refused["outcome"] == "refused"
     assert len(refused["issuer_session_id"]) == suite_grant.AUDIT_FIELD_MAX
-    assert refused["reason"] == "bad_signature"
+    assert refused["reason"].startswith("bad_signature:tag_mismatch:")
     assert "basis" not in refused
 
 
@@ -372,9 +374,42 @@ def test_unpinned_issuer_is_refused_on_b_through_the_relay_and_audited(relay_rou
     _as_box(relay_route, "a", HOLDER)
     target = f"{relay_route['idb']}:{PEER}"
     result = suite_grant.issue_suite_grant(target, "ruling", directory=relay_route["dir_a"])
-    assert (result.ok, result.reason) == (False, f"{suite_grant.RELAY_FAILED}:bad_signature")
+    assert result.ok is False
+    assert result.reason.startswith(f"{suite_grant.RELAY_FAILED}:bad_signature:no_pin:expected=none:got=")
     assert not _relayed_file(relay_route).exists()
     assert _audit_lines(relay_route)[-1]["outcome"] == "refused"
+
+
+def test_machine_a_to_mini_repin_drift_names_both_fingerprints_and_the_remedy(relay_route):
+    """Box B holds a stale pin of A's key (A's key rotated): refused with both fingerprints, then
+    accepted once B re-pins."""
+    stale = base64.b64encode(b"s" * 32).decode()
+    _as_box(relay_route, "b", PEER)
+    op._groupem_box_key_pin({"box_id": relay_route["ida"], "key_b64": stale})
+    _as_box(relay_route, "a", HOLDER)
+    target = f"{relay_route['idb']}:{PEER}"
+    result = suite_grant.issue_suite_grant(target, "ruling", directory=relay_route["dir_a"])
+    stale_fp = box_key.key_fingerprint(b"s" * 32)
+    own_fp = box_key.own_fingerprint(relay_route["home_a"])
+    assert result.ok is False
+    assert f":bad_signature:pin_mismatch:expected={stale_fp}:got={own_fp}:" in result.reason
+    assert "groupem.box_key_pin" in result.reason
+    assert stale not in result.reason
+    assert not _relayed_file(relay_route).exists()
+    assert _audit_lines(relay_route)[-1]["reason"].startswith("bad_signature:pin_mismatch:")
+
+    assert _pin_a_on_b(relay_route)["pinned"] is True
+    _as_box(relay_route, "a", HOLDER)
+    assert suite_grant.issue_suite_grant(target, "ruling", directory=relay_route["dir_a"]).ok is True
+
+
+def test_tampered_envelope_under_the_matching_key_reads_tag_mismatch(two_boxes):
+    assert _pin_a_on_b(two_boxes)["pinned"] is True
+    envelope = {**_valid_envelope(two_boxes), "note": "edited"}
+    _as_box(two_boxes, "b", PEER)
+    reason = op._groupem_suite_grant_receive({"envelope": envelope})["reason"]
+    fp = box_key.own_fingerprint(two_boxes["home_a"])
+    assert reason.startswith(f"bad_signature:tag_mismatch:expected={fp}:got={fp}:")
 
 
 def test_relay_transport_failure_and_unregistered_key_are_not_acceptances(relay_route):

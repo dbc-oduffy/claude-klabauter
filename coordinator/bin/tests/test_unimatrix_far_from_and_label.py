@@ -94,6 +94,9 @@ def roster_env(tmp_path, monkeypatch):
     monkeypatch.setattr(roster, "spawn", lambda cmd: P())
     monkeypatch.setattr(roster, "proc_start", lambda pid, platform=None: "1")
     monkeypatch.setattr(roster.time, "sleep", lambda s: None)
+    liveness = roster._liveness()
+    monkeypatch.setattr(liveness, "pid_alive", lambda pid: roster.pid_alive(pid))
+    monkeypatch.setattr(liveness, "supervisor_live", lambda rec: True)
     return roster, sessions
 
 

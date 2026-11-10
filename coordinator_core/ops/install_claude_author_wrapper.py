@@ -76,6 +76,9 @@ def main(argv: List[str]) -> int:
                 return 1
             wrapper_src = argv[i + 1]
             i += 2
+        elif arg.startswith("--wrapper-src="):
+            wrapper_src = arg[len("--wrapper-src="):]
+            i += 1
         else:
             i += 1
 

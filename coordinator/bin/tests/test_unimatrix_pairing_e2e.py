@@ -230,9 +230,10 @@ def test_pairing_end_to_end(world, monkeypatch):
     AUTOLINK.run(roster=AUTOLINK._roster(), spawn=lambda cmd: spawned.append(cmd) or types.SimpleNamespace(pid=os.getpid()),
                  probe_fn=lambda *a, **k: None, key_fn=lambda roster, alias: str(w.keys["a"][0]),
                  pull_fn=lambda *a, **k: False, self_names={"boxa"})
-    remotes = {cmd[cmd.index("--remote") + 1] for cmd in spawned}
+    supervisors = [cmd for cmd in spawned if "--remote" in cmd]
+    remotes = {cmd[cmd.index("--remote") + 1] for cmd in supervisors}
     assert remotes and all(r.endswith("@boxb.local") for r in remotes)
-    assert len(spawned) == 2
+    assert len(supervisors) == 2
 
 
 def test_service_token_refuses_approve_without_signing_or_state(world):

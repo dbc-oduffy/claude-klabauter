@@ -560,12 +560,32 @@ def _open_sidecar_bounded(
     done = threading.Event()
 
     def _work() -> None:
-        try:
-            fd = os.open(str(make_dir() / filename), flags, 0o600)
-        except BaseException as exc:  # noqa: BLE001 -- handed to the waiting caller
-            box["err"] = exc
-            done.set()
-            return
+        # Windows reports a sharing violation from a concurrent holder as EACCES on open: that
+        # is contention, retried inside the same open deadline. POSIX EACCES is a real refusal.
+        retry_until = time.monotonic() + SIDECAR_OPEN_DEADLINE_SECS
+        sleep_for = 0.005
+        while True:
+            try:
+                fd = os.open(str(make_dir() / filename), flags, 0o600)
+                break
+            except PermissionError as exc:
+                if _FCNTL_AVAILABLE or box.get("abandoned"):
+                    box["err"] = exc
+                elif time.monotonic() >= retry_until:
+                    box["err"] = LockTimeout(
+                        f"Could not open coordinator lock sidecar within "
+                        f"{SIDECAR_OPEN_DEADLINE_SECS}s (held by another process): {exc}"
+                    )
+                else:
+                    time.sleep(sleep_for)
+                    sleep_for = min(sleep_for * 1.5, 0.1)
+                    continue
+                done.set()
+                return
+            except BaseException as exc:  # noqa: BLE001 -- handed to the waiting caller
+                box["err"] = exc
+                done.set()
+                return
         with guard:
             if box.get("abandoned"):
                 os.close(fd)

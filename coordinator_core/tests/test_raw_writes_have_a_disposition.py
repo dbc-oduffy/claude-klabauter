@@ -448,6 +448,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/ops/dispatch_emit/run_token.py': ('git-internal', 'sha256-only run-token records under <settings home>/machine-local/engine-records/<key>/coordinator-warp-run-tokens (reads fall back to the legacy <git common dir> copy): mint, admits and redeem claim by rename, bind_sizing rewrites in place'),
     'coordinator_core/bug_blitz/targeted_run.py': ('in-repo-non-state', 'runner record JSON at the caller-named --record path, no state/ component: write_record'),
     'coordinator_core/bug_blitz/foreign_edits.py': ('outside-repo', 'HEAD-tree cache under tempfile.gettempdir(), never the repo: head_tree'),
+    'coordinator_core/ops/workflow_fire/headless_em_grant.py': ('outside-repo', 'headless-EM grant record under <settings home>/state/headless-em-grants/<sha256(session)>.json, outside every checkout (tmp write + os.replace): write_headless_em_grant'),
     'coordinator_core/group_em/admission_post.py': ('outside-repo', 'append-only admission line under settings_home()/state/group-em/box, outside every repo: post'),
     'coordinator_core/hooks/submit_bug_blitz.py': ('in-repo-non-state', 'decisions record in the bug-blitz run dir, not state/: _write_decisions'),
     'coordinator_core/ops/dispatch_emit/ask_gate.py': ('in-repo-non-state', 'minted M-route spine at the path mint_m_spine names, written only when absent: the spine-direct mint'),

@@ -119,6 +119,53 @@ def sign(record: dict, home: Optional[Path] = None) -> dict:
     return signed
 
 
+def key_fingerprint(key: bytes) -> str:
+    """Non-secret 12-hex identity of ``key``: a domain-separated hash prefix, never the key."""
+    return hashlib.sha256(b"box-key-fp:" + key).hexdigest()[:12]
+
+
+def own_fingerprint(home: Optional[Path] = None) -> str:
+    """Fingerprint of this box's signing key (minted on first use, like ``sign``)."""
+    return key_fingerprint(ensure_key(home))
+
+
+def pinned_fingerprint(box_id: str, home: Optional[Path] = None) -> Optional[str]:
+    """Fingerprint of the key pinned here for ``box_id``; None when no usable pin exists."""
+    key = _read_peer_key(box_id, home)
+    return None if key is None else key_fingerprint(key)
+
+
+def diagnose(record: dict, box_id: str, home: Optional[Path] = None) -> Optional[dict]:
+    """None when ``verify`` passes, else ``{"kind", "expected", "got"}`` saying why it fails.
+
+    ``kind``: ``unsigned``; ``no_pin`` (nothing pinned for ``box_id``); ``pin_mismatch`` (the issuer
+    stamped ``issuer_key_fp`` and it differs from the pin's); ``tag_mismatch`` (stamped fingerprint
+    equals the pin's, tag still wrong: tampering, canonicalization or version skew);
+    ``unverified_issuer_key`` (no stamp, tag wrong: issuer predates the stamp). ``expected`` is the
+    pinned fingerprint, ``got`` the issuer's stamped one; either may be None. Never raises.
+    """
+    try:
+        if verify(record, box_id, home):
+            return None
+        sig = record.get("sig")
+        stamped = record.get("issuer_key_fp")
+        got = stamped if isinstance(stamped, str) and stamped else None
+        if not isinstance(sig, str) or not sig:
+            return {"kind": "unsigned", "expected": pinned_fingerprint(box_id, home), "got": got}
+        expected = pinned_fingerprint(box_id, home)
+        if expected is None:
+            kind = "no_pin"
+        elif got is None:
+            kind = "unverified_issuer_key"
+        elif got != expected:
+            kind = "pin_mismatch"
+        else:
+            kind = "tag_mismatch"
+        return {"kind": kind, "expected": expected, "got": got}
+    except Exception:
+        return {"kind": "unsigned", "expected": None, "got": None}
+
+
 def verify(record: dict, box_id: str, home: Optional[Path] = None) -> bool:
     """True only when ``record`` carries a valid tag under the key pinned here for ``box_id``."""
     try:

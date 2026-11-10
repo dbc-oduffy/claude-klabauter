@@ -6305,16 +6305,19 @@ def _terminal_commit_marker(
     pathless chunk (its row closes no-change); if every row is pathless, this
     returns ``None`` and ``compose_script`` emits no marker line at all.
     """
-    chunks = tuple(
-        ChunkCommit(
+    def _chunk(row) -> ChunkCommit:
+        paths = tuple(row_pathspecs.get(row.id, ()))
+        written = set(commit_pathspec_or_none([row]) or [])
+        return ChunkCommit(
             id=row.id,
             title=row.title,
-            paths=tuple(row_pathspecs.get(row.id, ())),
+            paths=paths,
             prefixes=tuple(row_prefixes.get(row.id, ())),
             report=_dispatch_report_path(plan_path, row.id) if plan_path else "",
+            declared=tuple(p for p in paths if p in written),
         )
-        for row in rows
-    )
+
+    chunks = tuple(_chunk(row) for row in rows)
     marker = render_marker(
         CommitRequest(
             chunks=chunks,

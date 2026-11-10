@@ -38,7 +38,16 @@ def _load():
 @pytest.fixture(scope="module")
 def cr():
     assert TOOL.is_file(), f"the fire-time census leg is missing: {TOOL}"
-    return _load()
+    mod = _load()
+    mod._bootstrap()
+    return mod
+
+
+def test_import_leaves_sys_path_unchanged_and_binds_no_engine_name():
+    before = list(sys.path)
+    mod = _load()
+    assert sys.path == before
+    assert mod.census is None and mod.no_console_creationflags is None
 
 
 def _plan(tmp_path: Path, census_yaml: str) -> Path:

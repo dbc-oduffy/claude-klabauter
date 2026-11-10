@@ -21,6 +21,34 @@ _spec.loader.exec_module(pp)
 SECRET = "correct-horse-battery-staple-9"
 
 
+def test_import_leaves_sys_path_unchanged():
+    before = list(sys.path)
+    spec = importlib.util.spec_from_file_location("unimatrix_passphrase_inert", _SRC)
+    spec.loader.exec_module(importlib.util.module_from_spec(spec))
+    assert sys.path == before
+
+
+def test_main_askpass_subcommand_dispatches_to_askpass_main(monkeypatch):
+    seen = []
+    monkeypatch.setattr(pp, "askpass_main", lambda argv: seen.append(argv) or 7)
+    assert pp.main(["askpass", "Enter passphrase: "]) == 7
+    assert seen == [["Enter passphrase: "]]
+
+
+def test_main_with_ref_env_runs_askpass_without_subcommand(monkeypatch):
+    seen = []
+    monkeypatch.setattr(pp, "askpass_main", lambda argv: seen.append(argv) or 0)
+    monkeypatch.setenv(pp.REF_ENV, "op://x")
+    assert pp.main(["prompt text"]) == 0
+    assert seen == [[]]
+
+
+def test_main_without_ref_env_prints_usage_and_returns_2(monkeypatch, capsys):
+    monkeypatch.delenv(pp.REF_ENV, raising=False)
+    assert pp.main([]) == 2
+    assert capsys.readouterr().out.strip()
+
+
 def _cp(rc=0, out="", err=""):
     return SimpleNamespace(returncode=rc, stdout=out, stderr=err)
 

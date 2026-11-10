@@ -17,6 +17,10 @@ REPO = Path(__file__).resolve().parents[3]
 TARGETS = REPO / "setup" / "publish-targets.portable"
 BIN = REPO / "coordinator" / "bin"
 PUBLISH_DEST = "publish-mirror:claude_klabauter"
+needs_targets = pytest.mark.skipif(
+    not TARGETS.exists(),
+    reason="setup/publish-targets.portable is not shipped in the published tree",
+)
 
 
 def _rows() -> list[dict]:
@@ -98,6 +102,7 @@ def _scripts() -> list[Path]:
     return sorted(BIN.glob("unimatrix-*.py"))
 
 
+@needs_targets
 def test_scripts_are_discovered_and_ship():
     rows = _rows()
     scripts = _scripts()
@@ -111,6 +116,7 @@ def test_parents_reads_are_found():
     assert any(segs for _, (_, segs) in reads), "AST scan found no parents[n]/<segment> read"
 
 
+@needs_targets
 def test_every_parents_path_resolves_inside_payload():
     rows = _rows()
     missing = []
@@ -125,6 +131,7 @@ def test_every_parents_path_resolves_inside_payload():
     assert not missing, "path read by a published unimatrix script is not in the payload: " + "; ".join(missing)
 
 
+@needs_targets
 def test_unmapped_path_is_refused():
     assert _shipped("coordinator/templates/unimatrix/not-a-real-file.md", _rows()) is None
     assert _shipped("elsewhere/peer-doctrine.md", _rows()) is None

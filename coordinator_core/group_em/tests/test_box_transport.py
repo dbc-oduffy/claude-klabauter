@@ -275,6 +275,13 @@ def test_op_outside_allowlist_is_refused_and_allowlisted_op_passes():
     assert ok["ok"] is True and len(calls) == 1
 
 
+def test_box_key_pin_is_allowlisted_and_dispatches():
+    assert "groupem.box_key_pin" in box_transport.ALLOWED_OPS
+    calls = []
+    out = box_transport.invoke_remote(BOX, "groupem.box_key_pin", {"box_id": "b"}, _runner("{}", calls=calls), timeout=1)
+    assert out["ok"] is True and len(calls) == 1
+
+
 def test_run_refuses_argv_outside_the_contained_shape(monkeypatch):
     spawned = []
     monkeypatch.setattr(box_transport.subprocess, "run", lambda *a, **k: spawned.append(a))

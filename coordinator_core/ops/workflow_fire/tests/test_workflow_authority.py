@@ -72,3 +72,62 @@ def test_missing_new_warm_context_does_not_borrow_daemon_role(monkeypatch):
     with core.warm_served_request():
         caller = authority.caller_principal()
     assert caller.role == 'unknown' and caller.env == {}
+
+
+def _headless(monkeypatch, tmp_path, family, extra_env=None, token_env=True, role='worker'):
+    from coordinator_core.ops.workflow_fire import headless_em_grant as grant
+    monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))
+    sid = 'headless-' + family
+    token = grant.write_headless_em_grant(sid, family)
+    env = {'CODEX_THREAD_ID': sid} if family == 'codex' else {}
+    if token_env:
+        env[grant.HEADLESS_EM_TOKEN_ENV] = token
+    env.update(extra_env or {})
+    monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal(sid, role, env))
+
+
+def _fire():
+    return authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex')
+
+
+@pytest.mark.parametrize('family', ['codex', 'agy', 'grok'])
+def test_grant_verified_headless_em_fires(monkeypatch, tmp_path, family):
+    _headless(monkeypatch, tmp_path, family)
+    assert _fire().session_id == 'headless-' + family
+
+
+@pytest.mark.parametrize('family', ['codex', 'agy', 'grok'])
+def test_unverified_headless_session_is_refused(monkeypatch, tmp_path, family):
+    _headless(monkeypatch, tmp_path, family, token_env=False)
+    with pytest.raises(ValueError, match='verified EM'):
+        _fire()
+
+
+def test_wrong_token_is_refused(monkeypatch, tmp_path):
+    from coordinator_core.ops.workflow_fire.headless_em_grant import HEADLESS_EM_TOKEN_ENV
+    _headless(monkeypatch, tmp_path, 'codex', {HEADLESS_EM_TOKEN_ENV: 'forged'})
+    with pytest.raises(ValueError, match='verified EM'):
+        _fire()
+
+
+@pytest.mark.parametrize('marker', [{'COORDINATOR_AGENT_WORKER': '1'}, {'COORDINATOR_AGENT_ROLE': 'worker'},
+                                    {'COORDINATOR_AGENT_ROLE': 'reviewer'}])
+def test_worker_marker_is_refused_despite_valid_grant(monkeypatch, tmp_path, marker):
+    _headless(monkeypatch, tmp_path, 'codex', marker)
+    with pytest.raises(ValueError, match='verified EM'):
+        _fire()
+
+
+def test_token_forwarded_via_caller_env_reaches_fire_authority(monkeypatch, tmp_path):
+    from coordinator_core.ops.workflow_fire import headless_em_grant as grant
+    monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path))
+    sid = 'headless-forwarded'
+    token = grant.write_headless_em_grant(sid, 'agy')
+    monkeypatch.setattr(core, 'attributable_session_id', lambda *a: sid)
+    monkeypatch.setattr(agent_role, 'role_for_caller', lambda env, s: 'unknown')
+    with core.warm_served_request(), bind_caller_env({grant.HEADLESS_EM_TOKEN_ENV: token}):
+        assert authority.require_fire_authority('unused.mjs', None, cwd=None, native=True,
+                                                backend='codex').session_id == sid
+    with core.warm_served_request(), bind_caller_env({grant.HEADLESS_EM_TOKEN_ENV: 'forged'}):
+        with pytest.raises(ValueError, match='verified EM'):
+            authority.require_fire_authority('unused.mjs', None, cwd=None, native=True, backend='codex')

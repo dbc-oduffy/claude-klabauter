@@ -73,6 +73,41 @@ def test_unpinned_box_is_false(tmp_path):
     assert box_key.verify(signed, "box-a", b) is False
 
 
+def test_fingerprint_is_short_and_not_the_key(tmp_path):
+    key = box_key.ensure_key(tmp_path)
+    fp = box_key.own_fingerprint(tmp_path)
+    assert len(fp) == 12 and fp == box_key.key_fingerprint(key)
+    assert base64.b64encode(key).decode() not in fp and key.hex() not in fp
+    assert box_key.pinned_fingerprint("box-a", tmp_path) is None
+
+
+def test_diagnose_names_each_failure_kind(tmp_path):
+    a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
+    stamp = lambda home: {"x": 1, "issuer_key_fp": box_key.own_fingerprint(home)}  # noqa: E731
+    good = box_key.sign(stamp(a), a)
+    assert box_key.diagnose(good, "box-a", b)["kind"] == "no_pin"
+    _pin_own(a, b)
+    assert box_key.diagnose(good, "box-a", b) is None
+    assert box_key.diagnose({"x": 1}, "box-a", b)["kind"] == "unsigned"
+
+    wrong = box_key.diagnose(box_key.sign(stamp(c), c), "box-a", b)
+    assert wrong == {
+        "kind": "pin_mismatch",
+        "expected": box_key.pinned_fingerprint("box-a", b),
+        "got": box_key.own_fingerprint(c),
+    }
+    assert wrong["expected"] != wrong["got"]
+
+    tampered = box_key.diagnose({**good, "x": 2}, "box-a", b)
+    assert tampered["kind"] == "tag_mismatch" and tampered["expected"] == tampered["got"]
+    assert box_key.diagnose(box_key.sign({"x": 1}, c), "box-a", b)["kind"] == "unverified_issuer_key"
+
+
+def test_diagnose_never_raises(tmp_path):
+    for rec in (None, "str", 5, {"sig": 7}):
+        assert box_key.diagnose(rec, "box-a", tmp_path)["kind"] == "unsigned"
+
+
 def test_verify_never_raises(tmp_path):
     a, b = tmp_path / "a", tmp_path / "b"
     _pin_own(a, b)

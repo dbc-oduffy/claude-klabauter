@@ -16,6 +16,24 @@ sir = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sir)
 
 
+def test_import_leaves_sys_path_unchanged():
+    before = list(sys.path)
+    spec = importlib.util.spec_from_file_location("structural_index_refresh_inert", _SRC)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    assert sys.path == before
+
+
+def test_bootstrap_without_file_global_is_a_noop():
+    before = list(sys.path)
+    source = _SRC.read_text(encoding="utf-8")
+    module = types.ModuleType("sir_no_file")
+    exec(compile(source, str(_SRC), "exec"), module.__dict__)  # noqa: S102
+    module.__dict__.pop("__file__", None)
+    module._bootstrap()
+    assert sys.path == before
+
+
 class FakeProc:
     def __init__(self, rc=0, timeout=False):
         self.rc, self.timeout = rc, timeout

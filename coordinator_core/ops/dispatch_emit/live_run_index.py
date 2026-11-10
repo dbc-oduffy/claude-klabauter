@@ -13,6 +13,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional, Sequence, Union
 
@@ -107,7 +108,7 @@ def claim(
     if path is None:
         return None
     mine = sorted({w for w in writes if isinstance(w, str) and w})
-    over = ended if ended is not None else lambda rid: warp_live.run_is_over(Path(root), rid)
+    over = ended if ended is not None else lambda rid: run_holds_no_claim(Path(root), rid)
     claims = _claims_dir(path)
     created: list[Path] = []
     try:
@@ -147,6 +148,56 @@ def claim(
     if hits:
         _unlink_all(created)
     return hits
+
+
+STALE_RUN_SECONDS = 24 * 3600.0
+
+
+def _epoch(stamp: object) -> Optional[float]:
+    """Epoch seconds of an ISO-8601 `...Z` stamp; None when absent or malformed."""
+    if not isinstance(stamp, str):
+        return None
+    try:
+        return datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+def run_is_stale(root: Union[str, Path], run_id: str, now: Optional[float] = None) -> bool:
+    """True when the run's owner session has exited (`warp_live._owner_exited`) and its last activity
+    (`run-stage.json` `last_activity_at`, else the token's or index entry's `minted_at`) is more than
+    `STALE_RUN_SECONDS` old. An unknown owner or an unknown activity time answers False; never raises."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_token
+
+        root = Path(root)
+        record = run_token._read_rec(root, run_id) or {}
+        submission = warp_live._read_json(warp_live._submission_path(root, run_id)) or {}
+        owner = submission.get("session_id") or record.get("session_id")
+        if not (isinstance(owner, str) and owner):
+            return False
+        stage = warp_live._read_json(warp_live._ask_record_dir(root, run_id) / "run-stage.json") or {}
+        minted = record.get("minted_at")
+        if not isinstance(minted, (int, float)):
+            path = index_path(root)
+            entry = _load(root, path).get(run_id) if path is not None else None
+            minted = entry.get("minted_at") if isinstance(entry, dict) else None
+        if not isinstance(minted, (int, float)):
+            minted = None
+        active = _epoch(stage.get("last_activity_at"))
+        if active is None:
+            active = minted
+        if active is None:
+            return False
+        now = time.time() if now is None else now
+        return now - active > STALE_RUN_SECONDS and warp_live._owner_exited(owner, float(minted or active))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def run_holds_no_claim(root: Union[str, Path], run_id: str) -> bool:
+    """`warp_live.run_is_over`, or a stale run (`run_is_stale`): neither blocks another run's footprint."""
+    return warp_live.run_is_over(Path(root), run_id) or run_is_stale(root, run_id)
 
 
 def _claims_dir(index_file: Path) -> Path:
@@ -250,19 +301,22 @@ def marker_name(path: str) -> str:
     return hashlib.sha1(norm.encode("utf-8")).hexdigest()[:32]
 
 
-def release(root: Union[str, Path], run_id: str) -> None:
-    """Unlink every claim marker held by `run_id`. Never raises."""
+def release(root: Union[str, Path], run_id: str) -> int:
+    """Unlink every claim marker held by `run_id`; returns how many were held. Never raises."""
     path = index_path(root)
     if path is None:
-        return
+        return 0
     claims = _claims_dir(path)
+    count = 0
     try:
         for p in claims.iterdir():
             held = _read_marker(p)
             if held is not None and held[0] == run_id:
                 _unlink_all([p])
+                count += 1
     except OSError:
         pass
+    return count
 
 
 def add(root: Union[str, Path], run_id: str, minted_at: float) -> bool:

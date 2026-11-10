@@ -1322,3 +1322,24 @@ def test_lock_peer_records_the_logging_codex_process_as_holder(tmp_path, monkeyp
         os.close(fd)
     assert peer["codexPid"] == os.getpid()
     assert pr._liveness().codex_holder_live(peer) is True
+
+
+@portable
+@pytest.mark.parametrize("resp,shown", [
+    ({"ok": True, "msg_id": "m1", "sender": "transport"}, "msg_id=m1"),
+    ({"ok": True}, "delivered to coordinator-content-repo-50"),
+])
+def test_cmd_send_reply_without_reply_field_reports_delivery_and_version_mismatch(monkeypatch, capsys, resp, shown):
+    monkeypatch.setattr(pr, "request_line", lambda *a, **k: resp)
+    assert pr.cmd_send(["coordinator-content-repo-50", "hello"]) == 0
+    out, err = capsys.readouterr()
+    assert shown in out
+    assert "router-version mismatch" in err and "restart the router" in err
+
+
+@portable
+def test_cmd_send_with_reply_field_prints_it_without_mismatch_notice(monkeypatch, capsys):
+    monkeypatch.setattr(pr, "request_line", lambda *a, **k: {"ok": True, "reply": "pong"})
+    assert pr.cmd_send(["peer", "hi"]) == 0
+    out, err = capsys.readouterr()
+    assert out.strip() == "pong" and "mismatch" not in err

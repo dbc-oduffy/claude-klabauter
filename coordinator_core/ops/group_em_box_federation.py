@@ -14,7 +14,9 @@ empty reachable spawn set.
 
 Negative-spec:
     - Never raises: an invalid param or I/O failure is `{"error": ...}`.
-    - Spawns nothing; every effect is a file read or write under a settings-home.
+    - `groupem.box_register` spawns only the ssh processes `box_transport.invoke_remote` reaches (one per
+      remote pin leg, each under `CONNECT_TIMEOUT_S`); every other op spawns nothing, and every
+      effect is a file read or write under a settings-home.
 """
 
 from __future__ import annotations
@@ -40,14 +42,27 @@ def _groupem_box_register(params: dict, repo_root: Optional[Path] = None) -> dic
         root (str) -- the settings-home root of the box to register.
         capability (dict, optional) -- the capability record; default is the `capability` already in
             `<root>/state/group-em/box.json`, else `box_probe.write_capability(root)` (this machine's probe).
+        box_id (str, optional) -- the box's id, for a remote box whose root is not locally readable;
+            without it the id is minted under ``root``.
+        transport (dict, optional) -- the remote box's transport (``{kind: ssh, host, invoke}``).
+        key_b64 (str, optional) -- the new box's signing key, base64, when its root is not locally
+            readable; without it that direction is reported unpinned.
 
     Returns:
-        {"registered": True, "box": <registry record>} or {"error": str}.
+        {"registered": True, "box": <registry record>, "pins": {"new_box_pinned": [ids],
+        "new_box_unpinned": [{id, reason}], "peers_pinned_new": [ids], "peers_unpinned_new":
+        [{id, reason}]}} or {"error": str}. A pin failure never fails the registration; remedy each
+        named id with `groupem.box_key_pin`. A far box on an older engine ignores ``refuse_mismatch``.
     """
     p = params if isinstance(params, dict) else {}
     root = _str(p, "root")
     if root is None:
         return {"error": "root (non-empty str) is required"}
+    box_id, transport = p.get("box_id"), p.get("transport")
+    if box_id is not None and not isinstance(box_id, str):
+        return {"error": "box_id must be str"}
+    if transport is not None and not isinstance(transport, dict):
+        return {"error": "transport must be an object"}
     cap = p.get("capability")
     if cap is not None and not isinstance(cap, dict):
         return {"error": "capability must be an object"}
@@ -56,9 +71,15 @@ def _groupem_box_register(params: dict, repo_root: Optional[Path] = None) -> dic
             cap = box_probe.stored_capability(Path(root))
         if cap is None:
             cap = box_probe.write_capability(Path(root)).get("capability") or {}
-        return {"registered": True, "box": box_registry.register(root, cap)}
+        record = box_registry.register(root, cap, box_id=box_id, transport=transport)
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise
         return {"error": f"{type(exc).__name__}: {exc}"}
+    from coordinator_core.group_em import box_onboarding_pins, box_transport
+
+    pins = box_onboarding_pins.exchange(
+        record, key_b64=_str(p, "key_b64"), timeout=box_transport.CONNECT_TIMEOUT_S
+    )
+    return {"registered": True, "box": record, "pins": pins}
 
 
 @register_op("groupem.box_place")
@@ -189,9 +210,11 @@ def _groupem_box_key_pin(params: dict, repo_root: Optional[Path] = None) -> dict
     Params:
         box_id (str) -- the peer box whose grants this box will accept.
         key_b64 (str) -- that box's key, base64 (its ``state/group-em/box-key`` text).
+        refuse_mismatch (bool, optional) -- when true and a pin for ``box_id`` exists with a different
+            fingerprint, write nothing and return ``{"pinned": False, "box_id", "reason": "pin_mismatch"}``.
 
     Returns:
-        {"pinned": True, "box_id"} or {"error": str}.
+        {"pinned": True, "box_id"} | {"pinned": False, "box_id", "reason"} or {"error": str}.
     """
     p = params if isinstance(params, dict) else {}
     box_id, key_b64 = _str(p, "box_id"), _str(p, "key_b64")
@@ -200,6 +223,11 @@ def _groupem_box_key_pin(params: dict, repo_root: Optional[Path] = None) -> dict
     try:
         from coordinator_core.group_em import box_key
 
+        if p.get("refuse_mismatch") is True:
+            key = box_key._decode_key(key_b64)
+            have = box_key.pinned_fingerprint(box_id)
+            if key is not None and have is not None and have != box_key.key_fingerprint(key):
+                return {"pinned": False, "box_id": box_id, "reason": "pin_mismatch"}
         box_key.pin_peer_key(box_id, key_b64)
         return {"pinned": True, "box_id": box_id}
     except Exception as exc:  # noqa: BLE001 -- degrade-never-raise

@@ -102,6 +102,59 @@ def test_locked_rmw_raises_lock_timeout_when_sidecar_open_blocks(tmp_path, monke
     assert target.read_text(encoding="utf-8") == "a"
 
 
+def _eacces_then_real(fails):
+    real = os.open
+    state = {"n": 0}
+
+    def _fn(path, *a, **k):
+        if str(path).endswith(".lock") and (fails is None or state["n"] < fails):
+            state["n"] += 1
+            raise PermissionError(13, "Permission denied", str(path))
+        return real(path, *a, **k)
+
+    return _fn, state
+
+
+def test_windows_eacces_on_sidecar_open_is_retried_then_succeeds(tmp_path, monkeypatch):
+    monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", False)
+    monkeypatch.setattr(locked_write, "_plat_try_lock", lambda fd: True)
+    monkeypatch.setattr(locked_write, "_plat_unlock", lambda fd: None)
+    monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
+    fn, state = _eacces_then_real(3)
+    monkeypatch.setattr(os, "open", fn)
+    target = tmp_path / "f.txt"
+    target.write_text("a", encoding="utf-8")
+    locked_write.locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
+    assert state["n"] == 3
+    assert target.read_text(encoding="utf-8") == "ab"
+
+
+def test_windows_persistent_eacces_raises_lock_timeout_past_the_bound(tmp_path, monkeypatch):
+    monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", False)
+    monkeypatch.setattr(locked_write, "SIDECAR_OPEN_DEADLINE_SECS", 0.2)
+    monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
+    fn, _ = _eacces_then_real(None)
+    monkeypatch.setattr(os, "open", fn)
+    target = tmp_path / "f.txt"
+    target.write_text("a", encoding="utf-8")
+    t0 = time.monotonic()
+    with pytest.raises(locked_write.LockTimeout):
+        locked_write.locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
+    assert time.monotonic() - t0 < _BUDGET
+    assert target.read_text(encoding="utf-8") == "a"
+
+
+def test_posix_eacces_on_sidecar_open_still_propagates(tmp_path, monkeypatch):
+    monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", True)
+    monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
+    fn, _ = _eacces_then_real(None)
+    monkeypatch.setattr(os, "open", fn)
+    target = tmp_path / "f.txt"
+    target.write_text("a", encoding="utf-8")
+    with pytest.raises(PermissionError):
+        locked_write.locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
+
+
 def test_try_once_lock_on_a_healthy_fs_is_not_a_stall(tmp_path, monkeypatch):
     # timeout=0 bounds lock contention only; the sidecar open keeps its own deadline.
     monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")

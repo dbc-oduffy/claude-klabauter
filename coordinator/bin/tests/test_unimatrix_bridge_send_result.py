@@ -1,6 +1,7 @@
 """A relay send releases the sender before the slow ssh leg; a failed leg still reaches the sender as a notice."""
 import importlib.util
 import json
+import os
 import subprocess
 import types
 from pathlib import Path
@@ -38,7 +39,8 @@ def env(tmp_path, monkeypatch):
     bridge = load_bridge()
     sessions = tmp_path / "sessions"
     sessions.mkdir()
-    (sessions / "1.json").write_text(json.dumps({"name": "far", "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock"}))
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps(
+        {"pid": os.getpid(), "name": "far", "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock", "unimatrixRemote": "lan"}))
     monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote=None, port=None)
@@ -55,7 +57,7 @@ def drive(bridge, deliveries, monkeypatch, returncode):
 
     def run(argv, **kw):
         argvs.append(argv)
-        return subprocess.CompletedProcess(argv, returncode, b"", b"denied" if returncode else b"")
+        return subprocess.CompletedProcess(argv, returncode, b"" if returncode else b'{"ok": true}\n', b"denied" if returncode else b"")
 
     monkeypatch.setattr(subprocess, "run", run)
     events = []
@@ -92,7 +94,7 @@ def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch):
     bridge, deliveries = env
     monkeypatch.setattr(bridge, "IS_WIN", False)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
-    assert "ControlMaster=auto" in argvs[-1] and argvs[-1][-2:] == ["lan", "send 9"]
+    assert "ControlMaster=auto" in argvs[-1] and argvs[-1][-2:] == ["lan", "send-batch 9"]
     monkeypatch.setattr(bridge, "IS_WIN", True)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
     assert not any("Control" in a for a in argvs[-1])

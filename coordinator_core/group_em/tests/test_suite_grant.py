@@ -426,10 +426,10 @@ def test_receive_refuses_unsigned_forged_tampered_and_unpinned(boxes):
     unsigned = {k: v for k, v in good.items() if k != "sig"}
     tampered = {**good, "expires_at": suite_grant._iso(NOW + 7200)}
     assert _receive(boxes, unsigned)["reason"] == "bad_signature"
-    assert _receive(boxes, tampered)["reason"] == "bad_signature"
+    assert _receive(boxes, tampered)["reason"].startswith("bad_signature")
     forged = {**good, "sig": "0" * 64}
-    assert _receive(boxes, forged)["reason"] == "bad_signature"
-    assert _receive(boxes, {**good, "issuer_box_id": "box-other"})["reason"] == "bad_signature"
+    assert _receive(boxes, forged)["reason"].startswith("bad_signature")
+    assert _receive(boxes, {**good, "issuer_box_id": "box-other"})["reason"].startswith("bad_signature")
     assert _receive(boxes, "nope")["reason"] == "bad_envelope"
     assert not (boxes["b"] / "suite-grants").exists()
 

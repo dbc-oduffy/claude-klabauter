@@ -147,6 +147,13 @@ class ChunkCommit:
     paths: tuple = field(default_factory=tuple)
     prefixes: tuple = field(default_factory=tuple)
     report: str = ""
+    # The unwidened ``writes:`` subset of ``paths``; None (older marker) means every path gates.
+    declared: Optional[tuple] = None
+
+    def gating_paths(self) -> tuple:
+        """The paths whose absence from a DONE row refuses the landing: the declared subset,
+        else all of ``paths``. Inferred test paths in ``paths`` stay advisory."""
+        return self.paths if self.declared is None else self.declared
 
 
 @dataclass(frozen=True)
@@ -190,13 +197,16 @@ def unmerged_sibling_scope(request: "CommitRequest", params) -> frozenset:
 
 
 def _chunk_to_dict(chunk: ChunkCommit) -> dict:
-    return {
+    out = {
         "id": chunk.id,
         "title": chunk.title,
         "paths": list(chunk.paths),
         "prefixes": list(chunk.prefixes),
         "report": chunk.report,
     }
+    if chunk.declared is not None and chunk.declared != chunk.paths:
+        out["declared"] = list(chunk.declared)
+    return out
 
 
 def _bare_path(path: str) -> str:
@@ -221,6 +231,9 @@ def _chunk_from_dict(obj: dict) -> ChunkCommit:
             paths=tuple(_bare_path(p) for p in obj["paths"]),
             prefixes=tuple(obj["prefixes"]),
             report=obj["report"],
+            declared=(
+                tuple(_bare_path(p) for p in obj["declared"]) if isinstance(obj.get("declared"), list) else None
+            ),
         )
     except (KeyError, TypeError) as exc:
         raise MalformedCommitRequestError(

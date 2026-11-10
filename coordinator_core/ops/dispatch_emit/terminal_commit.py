@@ -962,7 +962,7 @@ def _delivered_rows_missing_writes(
     for chunk in chunks:
         if not chunk.report:
             continue
-        missing = sorted(p for p in chunk.paths if p in absent_untracked)
+        missing = sorted(p for p in chunk.gating_paths() if p in absent_untracked)
         if not missing:
             continue
         if chunk.report not in report_cache:

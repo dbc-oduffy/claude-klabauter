@@ -12,6 +12,7 @@ decision_object`; `yaml` and `frontmatter.primitives` are imported inside functi
 """
 from __future__ import annotations
 
+import copy
 import hashlib
 import os
 import re
@@ -725,7 +726,7 @@ def apply_verdicts(
             and (not key or key in claimants(row))
         ):
             continue  # already met at this sha: a repeat bumps no timestamp and writes nothing
-        changed = True
+        before = copy.deepcopy(dict(row))
         if key and key not in claimants(row):
             row[ROW_CLAIMED_BY] = [*(row.get(ROW_CLAIMED_BY) or []), key]
         row[ROW_WIRED] = wired
@@ -735,8 +736,13 @@ def apply_verdicts(
             row.pop(ROW_WIRED_EVIDENCE, None)
         if met and wired:
             row[ROW_MET_BY] = met_by + ([ref] if ref not in met_by else [])
-        row[ROW_LAST_PROGRESS_AT] = stamp
         row[ROW_STATUS] = target
+        if {k: v for k, v in row.items() if k != ROW_LAST_PROGRESS_AT} == {
+            k: v for k, v in before.items() if k != ROW_LAST_PROGRESS_AT
+        }:
+            continue  # nothing but the timestamp would change (a repeat partial verdict): write nothing
+        row[ROW_LAST_PROGRESS_AT] = stamp
+        changed = True
     if not changed:
         return sizing_text
     return write_register_text(
