@@ -985,6 +985,56 @@ def test_peer_send_identifies_itself_by_thread_id_not_name(box):
     run(go())
 
 
+def test_grok_explicit_send_is_stamped_with_its_roster_name_and_replies_route_back(box):
+    """A send whose as_target is a Grok session id arrives as the grok peer name, not a transport face."""
+    async def go():
+        home = box / "grok"
+        home.mkdir()
+        repo = box / "myrepo"
+        (repo / ".git").mkdir(parents=True)
+        sid = "0123abcd-1111-2222-3333-444455556666"
+        (home / "active_sessions.json").write_text(
+            json.dumps([{"session_id": sid, "cwd": str(repo), "pid": os.getpid()}]), encoding="utf-8")
+        seen = []
+
+        async def grok(peer, text):
+            seen.append(text)
+            return "grok heard"
+        s = FakeSender(str(box / "s.sock"))
+        register_session(box, "em", s.path)
+        r = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state", endpoint_dir=box / "eps",
+                      adapters={**echo_adapters(), "grok": grok}, grok_home=home)
+        await r.start()
+        try:
+            want = f"grok-myrepo-0123abcd-on-{socket.gethostname().lower()}"
+            resp = await r._dispatch({"op": "send", "as_target": sid, "as": "cli", "to": "em", "text": "answer"})
+            assert resp["ok"] is True and resp["written"] is True
+            await until(lambda: len(s.frames) == 1)
+            assert f"[{want}] answer" in s.contents()[0]
+            assert "via Unimatrix transport" not in s.contents()[0] and "transport" not in resp.get("sender", "")
+            back = await r._dispatch({"op": "send", "as": "em", "to": want, "text": "thanks"})
+            assert back["ok"] is True and "grok heard" in back["reply"] and any("thanks" in t for t in seen)
+        finally:
+            s.close()
+            await r.stop()
+    run(go())
+
+
+def test_transport_send_reports_written_when_delivered(box):
+    async def go():
+        s = FakeSender(str(box / "s.sock"))
+        register_session(box, "em", s.path)
+        r = make_router(box, echo_adapters())
+        await r.start()
+        try:
+            resp = await r._dispatch({"op": "send", "as": "cli", "to": "em", "text": "hello there"})
+            assert resp["ok"] is True and resp["written"] is True and resp["msg_id"]
+        finally:
+            s.close()
+            await r.stop()
+    run(go())
+
+
 def test_send_cli_resolves_own_target_from_host_env():
     import importlib.util as iu
     spec = iu.spec_from_file_location("unimatrix_send", Path(__file__).resolve().parents[1] / "unimatrix-send.py")

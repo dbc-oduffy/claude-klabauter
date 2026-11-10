@@ -603,6 +603,63 @@ def test_identical_rerun_restores_missing_receipt(tmp_path):
     assert _receipt(_twin_path(tmp_path)).is_file()
 
 
+def _wide_manifest(rows: int = 15, files: int = 150) -> tuple[bytes, dict]:
+    """A manifest shaped like the refused 15-row migration: one path set repeated across every scope key."""
+    paths = [f"coordinator_core/ops/some_package/sub_module_{i:03d}/handler_{i:03d}_impl.py" for i in range(files)]
+    per_row = [paths[(i * 10) % files:][:60] for i in range(rows)]
+    manifest = {
+        "head_sha": "a" * 40,
+        "rows": [
+            {"id": f"C{i}", "brief_path": f"scratch/b{i}.md", "agent_type": "coordinator:executor", "model": "sonnet",
+             "wave": i % 3, "deps": [], "writes": per_row[i]}
+            for i in range(rows)
+        ],
+        "review_declared_paths": paths,
+        "review_code_paths": paths,
+        "test_targets": paths,
+        "wave_test_targets": {str(w): paths[: (w + 1) * files // 3] for w in range(3)},
+        "write_baseline": {p: hashlib.sha256(p.encode()).hexdigest() for p in paths},
+    }
+    raw = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("ascii")
+    return raw, {"path": "state/warp/run1/manifest.json", "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}
+
+
+def test_wide_manifest_over_cap_stages_a_packed_twin_under_the_cap_holding_the_whole_manifest(tmp_path):
+    raw, handle = _wide_manifest()
+    _script(tmp_path, f"export const meta = {{ name: 'x' }}\n// {'p' * 400_000}\n{nrc.STAGED_INLINE_SLOT}\nreturn 1;\n")
+    naive = len(SCRIPT) + len(json.dumps({"handle": handle, "text": raw.decode()})) + 400_000
+    assert naive > CAP
+    rel = twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=CAP, refuse=ValueError)
+    path = tmp_path / rel
+    assert path.stat().st_size <= CAP
+    assert not (tmp_path / nrc.staged_spill_rel("run1", handle["sha256"])).exists()
+    line = next(ln for ln in path.read_text(encoding="utf-8").splitlines() if ln.startswith("const _STAGED_INLINE = "))
+    assert nrc.STAGED_UNPACK_JS in path.read_text(encoding="utf-8")
+    inline = json.loads(line[len("const _STAGED_INLINE = _unpackStaged("):-2])
+    assert inline["handle"] == handle and "full_handle" not in inline
+    pack = inline[nrc.STAGED_PACK_KEY]
+    parts = inline["text"].split(pack["m"])
+    for i in range(1, len(parts), 2):
+        parts[i] = pack["t"][int(parts[i], 36)]
+    assert "".join(parts).encode("ascii") == raw
+    assert hashlib.sha256("".join(parts).encode("ascii")).hexdigest() == handle["sha256"]
+
+
+def test_pack_keeps_the_refusal_for_a_body_that_cannot_shrink(tmp_path):
+    raw, handle = _wide_manifest()
+    _script(tmp_path)
+    with pytest.raises(ValueError, match=nrc.STAGED_TWIN_OVER_CAP_HEAD):
+        twin.ensure_twin(tmp_path, "state/warp/run1/manifest.json", raw, handle, max_bytes=300, refuse=ValueError)
+    assert not _twin_path(tmp_path).exists()
+
+
+def test_pack_without_repeated_strings_or_free_mark_is_declined():
+    assert twin._pack_manifest('{"a":"unique-one","b":"unique-two"}') is None
+    repeated = '"a-repeated-string-literal"'
+    assert twin._pack_manifest(f'[{repeated},{repeated}]') is not None
+    assert twin._pack_manifest(f'[{repeated},{repeated},"{twin._PACK_MARKS}"]') is None
+
+
 def test_sweep_expired_twins_removes_receipt(tmp_path):
     _script(tmp_path)
     _call(tmp_path)

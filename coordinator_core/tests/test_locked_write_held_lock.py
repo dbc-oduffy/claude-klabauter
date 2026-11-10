@@ -80,6 +80,7 @@ from coordinator_core.locked_write import (  # noqa: E402
     held_lock,
 )
 from coordinator_core.lifecycle import git_common_dir  # noqa: E402
+from coordinator_core.locked_write import _lock_dir_path  # noqa: E402
 
 
 def _make_git_repo(root: Path) -> Path:
@@ -107,7 +108,7 @@ def _make_git_repo(root: Path) -> Path:
 
 def _lock_path_for(target: Path, repo: Path) -> Path:
     key = hashlib.sha1(os.path.realpath(str(target)).encode()).hexdigest()
-    lock_dir = git_common_dir(repo) / "coordinator-locks"
+    lock_dir = _lock_dir_path(repo)
     lock_dir.mkdir(parents=True, exist_ok=True)
     return lock_dir / f"{key}.lock"
 

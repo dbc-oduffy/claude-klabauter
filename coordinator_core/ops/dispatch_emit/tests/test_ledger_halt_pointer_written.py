@@ -39,6 +39,9 @@ def repo(tmp_path):
     _git(["config", "user.name", "t"], root)
     (root / "docs").mkdir()
     (root / "docs" / "guide.md").write_text("seed\n", encoding="utf-8")
+    # A halt naming a plan absent from disk has its plan nulled (halted_naming_existing_plan).
+    (root / "docs" / "plans").mkdir()
+    (root / "docs" / "plans" / "2026-10-16-demo.md").write_text("# demo plan\n", encoding="utf-8")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     (root / "run.mjs").write_text("// script\n", encoding="utf-8")

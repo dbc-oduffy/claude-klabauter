@@ -74,10 +74,26 @@ def _ledger_holder(root: Path, run_id: str, holder: Path) -> None:
 
 
 def _run(argv: list, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    return subprocess.run(
-        argv, cwd=str(cwd), capture_output=True, text=True, errors="replace", timeout=timeout,
-        **no_console_creationflags(),
+    """Run `argv` in a capped job (a killpg session off Windows); the tree is closed on every exit, so a
+    timed-out pytest leaves no grandchild. Raises `subprocess.TimeoutExpired` at the timeout."""
+    from coordinator_core.diagnostics.contained_run import spawn_in_capped_job
+
+    proc, close = spawn_in_capped_job(
+        argv,
+        popen_kwargs=dict(
+            cwd=str(cwd), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, errors="replace", **no_console_creationflags(),
+        ),
     )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        close()
+        proc.communicate()
+        raise
+    finally:
+        close()
+    return subprocess.CompletedProcess(argv, proc.returncode, out, err)
 
 
 def _gate_python(root: Path) -> str:

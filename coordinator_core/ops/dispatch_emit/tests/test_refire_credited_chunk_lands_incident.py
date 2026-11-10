@@ -45,7 +45,7 @@ def _plan_text() -> str:
         for rid, path in (("X0", X0_PATH), ("X1", X1_PATH))
     )
     return (
-        f"---\ntitle: credited refire\ndeliverable_id: {DLV}\nsizing_object: {SIZING}\n---\n\n"
+        f"---\ntitle: credited refire\nstatus: reviewed\ndeliverable_id: {DLV}\nsizing_object: {SIZING}\n---\n\n"
         f"## Tasks\n\n```yaml plan-tasks\n{rows}```\n"
     )
 

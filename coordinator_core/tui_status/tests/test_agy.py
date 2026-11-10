@@ -31,6 +31,18 @@ def test_missing_zero_or_bool_cost_is_unknown(tmp_path, monkeypatch):
         assert agy.line({"cost": cost}).endswith("unknown")
 
 
+def test_leg_record_prints_roster_name_and_unknown_id_stays_unknown(tmp_path, monkeypatch):
+    peers(tmp_path, monkeypatch, [])
+    legs = tmp_path / "agy-legs"
+    legs.mkdir()
+    conv = "11111111-2222-3333-4444-555555555555"
+    (legs / f"{conv}.json").write_text(json.dumps({"conversation": conv, "pid": 1, "cwd": str(tmp_path)}),
+                                       encoding="utf-8")
+    out = agy.line({"session_id": "s1", "conversation_id": conv, "cost": 0.5})
+    assert out.startswith(f"agy-{tmp_path.name}-") and out.endswith("unknown · ~$0.50")
+    assert agy.line({"conversation_id": "22222222-2222-3333-4444-555555555555"}).startswith("unknown")
+
+
 def test_ambiguous_match_prints_unknown(tmp_path, monkeypatch):
     peers(tmp_path, monkeypatch, [{"vendor": "agy", "target": "s1", "name": "a"},
                                   {"vendor": "agy", "target": "c1", "name": "b"}])

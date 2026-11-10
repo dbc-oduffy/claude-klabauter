@@ -354,3 +354,108 @@ def test_out_without_install_seeds_nothing_and_generator_failure_is_partial(plug
     assert rc == 7 and "WARN: agy plugin tree not written" in buf.getvalue()
     assert "not installed: agy plugin tree" in buf.getvalue()
     assert (foreign / "keep.txt").exists()
+
+
+_DOOR = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/hook-run"'
+_PASS2 = "; rc=$?; [ $rc -eq 2 ] && rc=0; exit $rc"
+
+
+def _door_hooks(plugin, commands):
+    groups = [{"matcher": "Bash", "hooks": [{"type": "command", "shell": "bash", "timeout": 5, "command": c}]}
+              for c in commands]
+    (plugin / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": groups}}), encoding="utf-8")
+
+
+def _load_shim(tree):
+    ns = {"__name__": "agy_hook_run_shim"}
+    exec(compile((tree / "hooks" / "agy-hook-run.py").read_text(encoding="utf-8"), "agy-hook-run.py", "exec"), ns)
+    return ns["main"], ns
+
+
+def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp_path):
+    cmds = [
+        f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.preuse_bash_dispatch",
+        f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} --advisory hooks.x_check 2>/dev/null{_PASS2}",
+        f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.guard_turn_intent 2>/dev/null{_PASS2}",
+    ]
+    _door_hooks(plugin, cmds)
+    out = tmp_path / "out"
+    report = gen.generate(plugin, out, "agy")
+    data = json.loads((out / "hooks.json").read_text(encoding="utf-8"))
+    got = [h["command"] for g in data["pre-tool-use"]["PreToolUse"] for h in g["hooks"]]
+    shim = f'{gen._agy_python()} "${{PLUGIN_ROOT}}/hooks/agy-hook-run.py"'
+    assert got == [
+        f"{shim} hooks.preuse_bash_dispatch",
+        f"{shim} --quiet --pass-2 --advisory hooks.x_check",
+        f"{shim} --quiet --pass-2 hooks.guard_turn_intent",
+    ]
+    for c in got:
+        assert not re.search(r"^\s*\w+=|rc=\$\?|/dev/null|\$\{\w+:-|;|&&", c.replace("${PLUGIN_ROOT}", ""))
+    assert all("shell" not in h for g in data["pre-tool-use"]["PreToolUse"] for h in g["hooks"])
+    assert (out / "hooks" / "agy-hook-run.py").is_file()
+    assert "hook-command" not in {u["kind"] for u in report["unmapped"]}
+
+
+def test_unrecognised_bash_only_hook_command_is_reported_not_silently_shipped(plugin, tmp_path):
+    _door_hooks(plugin, ["FOO=1 some-tool 2>/dev/null"])
+    report = gen.generate(plugin, tmp_path / "out", "agy")
+    assert "hook-command" in {u["kind"] for u in report["unmapped"]}
+    assert not (tmp_path / "out" / "hooks" / "agy-hook-run.py").exists()
+
+
+def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_path, monkeypatch):
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    main, ns = _load_shim(out)
+    calls = []
+
+    class _R:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    rcs = iter([2, 2, 0, 5])
+
+    def fake_run(cmd, **kw):
+        calls.append((cmd, kw))
+        return _R(next(rcs))
+
+    monkeypatch.setattr(ns["subprocess"], "run", fake_run)
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("COORDINATOR_DOOR_STDIN_MODE", raising=False)
+    assert main(["--pass-2", "--advisory", "hooks.a"]) == 0
+    assert main(["hooks.a"]) == 2
+    assert main(["--quiet", "hooks.a"]) == 0
+    assert main(["hooks.a"]) == 5
+    cmd, kw = calls[0]
+    assert Path(cmd[0]).parent == tmp_path / "home" / "bin" and Path(cmd[0]).stem == "hook-run"
+    assert cmd[1:] == ["--advisory", "hooks.a"]
+    assert kw["env"]["COORDINATOR_DOOR_STDIN_MODE"] == "hook"
+    assert kw["stderr"] is None and calls[2][1]["stderr"] == ns["subprocess"].DEVNULL
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME")
+    monkeypatch.setattr(ns["Path"], "home", classmethod(lambda c: tmp_path / "h"))
+    rcs = iter([0])
+    main(["hooks.a"])
+    assert Path(calls[-1][0][0]).parent == tmp_path / "h" / ".coordinator-claude-settings" / "bin"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script; the mocked leg covers Windows")
+def test_shim_runs_end_to_end_with_a_real_child_process(plugin, tmp_path):
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    home = tmp_path / "home"
+    (home / "bin").mkdir(parents=True)
+    exe = home / "bin" / "hook-run"
+    exe.write_text('#!/bin/sh\ncat; echo "$COORDINATOR_DOOR_STDIN_MODE $*"; exit 2\n', encoding="utf-8")
+    exe.chmod(0o755)
+    r = subprocess.run([sys.executable, str(out / "hooks" / "agy-hook-run.py"), "--pass-2", "hooks.a"],
+                       input="EVT", capture_output=True, text=True, env={"COORDINATOR_SETTINGS_HOME": str(home)})
+    assert r.returncode == 0 and r.stdout == "EVThook hooks.a\n"
+
+
+@pytest.mark.parametrize("os_name,exe", [("nt", "python"), ("posix", "python3")])
+def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch, os_name, exe):
+    monkeypatch.setattr(gen.os, "name", os_name)
+    cmd = gen._agy_hook_command(f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a", "${PLUGIN_ROOT}")
+    assert cmd.startswith(exe + " ")

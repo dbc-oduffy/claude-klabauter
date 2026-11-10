@@ -42,7 +42,6 @@ def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeyp
     )
     (tmp_path / ".git").mkdir()
     Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
-    (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("DELIVERABLE_ID", raising=False)
@@ -51,7 +50,7 @@ def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeyp
         "name": "gate fixture",
         "intent": "exercise the gate",
         "estimate": {"tshirt": "M", "provisional": True},
-        "route": "pm-decision",
+        "route": "plan",
         "detents": [],
         "fork": None,
         "xl_exit": "accept_multi_session",

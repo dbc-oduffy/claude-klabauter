@@ -76,7 +76,23 @@ def _build_env(
     keys = _ENV_ALLOW + (_ENV_ALLOW_WINDOWS if windows else ())
     if allow_api_key(environ, requested):
         keys = keys + API_KEY_ENV
-    return provider_identity_env({k: environ[k] for k in keys if environ.get(k)}, environ, provider="codex", role=role)
+    child = {k: environ[k] for k in keys if environ.get(k)}
+    if windows:
+        _prefer_installed_pwsh(child, environ)
+    return provider_identity_env(child, environ, provider="codex", role=role)
+
+
+def _prefer_installed_pwsh(child: dict[str, str], environ: dict) -> None:
+    """Put the PowerShell 7 install dir first on PATH: the sandbox otherwise resolves the unlaunchable
+    WindowsApps pwsh alias (CreateProcessAsUserW failed: 5). One stat, no spawn."""
+    root = environ.get("ProgramFiles") or environ.get("PROGRAMFILES")
+    if not root:
+        return
+    pwsh_dir = os.path.join(root, "PowerShell", "7")
+    if not os.path.isfile(os.path.join(pwsh_dir, "pwsh.exe")):
+        return
+    rest = [p for p in child.get("PATH", "").split(os.pathsep) if p and os.path.normcase(p) != os.path.normcase(pwsh_dir)]
+    child["PATH"] = os.pathsep.join([pwsh_dir, *rest])
 
 
 def _unattended_env(*args, **kwargs) -> dict[str, str]:

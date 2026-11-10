@@ -388,7 +388,9 @@ def test_no_path_outside_git_is_written(tmp_path):
     assert new_paths, "expected the baton write to land at least one new file"
     for p in new_paths:
         rel = p.relative_to(repo)
-        assert rel.parts[0] == ".git", f"wrote outside .git/: {rel}"
+        assert rel.parts[0] in (".git", ".coordinator-local"), (
+            f"wrote outside .git/ and .coordinator-local/: {rel}"
+        )
 
     # explicitly: no file under state/handoffs/ (or anywhere else in the
     # tracked tree) was created by minting/merging a baton.
@@ -500,7 +502,9 @@ def test_closure_mints_nothing_under_state_handoffs(tmp_path, monkeypatch):
 
     assert written, "the closure must actually write the baton record"
     for path in written:
-        assert ".git" in path.parts, f"wrote outside .git/: {path}"
+        assert ".git" in path.parts or ".coordinator-local" in path.parts, (
+            f"wrote outside .git/ and .coordinator-local/: {path}"
+        )
     assert not (repo / "state" / "handoffs").exists()
 
 

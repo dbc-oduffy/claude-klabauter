@@ -7,8 +7,9 @@ the sender, never with plain text to the human at the keyboard.
     unimatrix-send.py --list
 
 The sender is identified from the shell this runs in: CODEX_THREAD_ID (Codex) or
-ANTIGRAVITY_CONVERSATION_ID (agy) names the session, and the router maps it to that peer's
-name. --as overrides it. Reads no token and puts no credential in argv.
+ANTIGRAVITY_CONVERSATION_ID (agy) names the session, or a Grok session whose registry pid is an
+ancestor of this shell; the router maps it to that peer's name. --as overrides it. Reads no token
+and puts no credential in argv.
 """
 import argparse
 import importlib.util
@@ -74,8 +75,19 @@ def _list_from_sessions():
     print("Message any of these with SendMessage; ListAgents lists them too.")
 
 
-def own_target(env=os.environ):
-    return env.get("CODEX_THREAD_ID") or env.get("ANTIGRAVITY_CONVERSATION_ID") or ""
+def _grok_target():
+    """The Grok session id whose registry pid is an ancestor of this shell, else ''."""
+    try:
+        peer = _sibling("unimatrix-peer-grok.py", "unimatrix_peer_grok_send").own_session()
+    except Exception:
+        return ""
+    return peer["target"] if peer else ""
+
+
+def own_target(env=os.environ, grok=None):
+    """Session id of the sending agent: Codex or agy env, else the Grok session this shell descends from."""
+    return (env.get("CODEX_THREAD_ID") or env.get("ANTIGRAVITY_CONVERSATION_ID")
+            or (grok or _grok_target)())
 
 
 def main(argv=None):
@@ -123,11 +135,11 @@ def main(argv=None):
         print("Message any of these with SendMessage; ListAgents lists them too.")
     elif resp.get("reply"):
         print(resp["reply"])
-    elif resp.get("written") is True:
+    elif resp.get("written") is True or resp.get("msg_id"):
         print(f"sent to {a.to}")
     else:
-        print(f"not confirmed: router did not report {a.to} accepted the message", file=sys.stderr)
-        return 1
+        print(f"unconfirmed: router gave no delivery receipt for {a.to}; the message may have been delivered, "
+              "check before resending", file=sys.stderr)
     return 0
 
 

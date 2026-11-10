@@ -97,6 +97,18 @@ def test_grant_verified_headless_em_fires(monkeypatch, tmp_path, family):
 
 
 @pytest.mark.parametrize('family', ['codex', 'agy', 'grok'])
+def test_grant_verified_headless_em_is_its_own_fire_record_caller(monkeypatch, tmp_path, family):
+    _headless(monkeypatch, tmp_path, family, {'COORDINATOR_PARENT_SESSION_ID': 'someone-else'})
+    assert authority.fire_record_caller_session_id(_fire()) == 'headless-' + family
+
+
+def test_unverified_principal_inherits_parent_as_fire_record_caller():
+    worker = authority.Principal('w', 'worker', {'COORDINATOR_PARENT_SESSION_ID': 'parent'})
+    assert authority.fire_record_caller_session_id(worker) == 'parent'
+    assert authority.fire_record_caller_session_id(authority.Principal('w', 'worker', {})) is None
+
+
+@pytest.mark.parametrize('family', ['codex', 'agy', 'grok'])
 def test_unverified_headless_session_is_refused(monkeypatch, tmp_path, family):
     _headless(monkeypatch, tmp_path, family, token_env=False)
     with pytest.raises(ValueError, match='verified EM'):

@@ -2,7 +2,10 @@
 caller with no Workflow tool (Codex).
 
 Wire params: `ask` xor `sizing`; `ask_source` ("pm" | "relayed", required with `ask`); `session_id`,
-`caller` (identity string) and absolute `cwd`, all required and never read from the environment; optional
+`caller` (identity string) and absolute `cwd`, all required. A launcher-spawned headless EM may omit
+them: with `session_id` absent, `COORDINATOR_SESSION_ID` from the caller env is taken only when the
+headless-EM grant binds it (`COORDINATOR_ALLOW_HEADLESS_EM_TOKEN`), `caller` defaults to `<family>-em`
+from that grant and `cwd` to the op's repo root; an unbound env session id is refused as absent. Optional
 `repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,
 `em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and
 `fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`),
@@ -33,6 +36,33 @@ _KNOWN_KEYS = frozenset(
 )
 
 
+def _with_grant_bound_identity(params: dict, repo_root: Optional[Path]) -> dict:
+    """Fill an absent session_id, caller and cwd from the launcher env, only when the grant binds it.
+
+    An env session id the headless-EM grant does not bind (no token, wrong token, no grant) fills
+    nothing, so the gates refuse as for any absent session_id. Explicit params are never replaced.
+    """
+    sid = params.get("session_id")
+    if isinstance(sid, str) and sid.strip():
+        return params
+    from coordinator_core.ops.workflow_fire.headless_em_grant import HEADLESS_EM_FAMILIES, headless_em_grant_matches
+    from coordinator_core.session.caller_env import effective_caller_env
+
+    env = effective_caller_env()
+    env_sid = env.get("COORDINATOR_SESSION_ID")
+    if not (isinstance(env_sid, str) and env_sid.strip()):
+        return params
+    family = next((f for f in HEADLESS_EM_FAMILIES if headless_em_grant_matches(env, env_sid, f)), None)
+    if family is None:
+        return params
+    filled = dict(params, session_id=env_sid)
+    if not (isinstance(params.get("caller"), str) and params["caller"].strip()):
+        filled["caller"] = f"{family}-em"
+    if not (isinstance(params.get("cwd"), str) and params["cwd"].strip()) and repo_root is not None:
+        filled["cwd"] = str(repo_root)
+    return filled
+
+
 @register_op("engine_ask.submit")
 def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Submit one ask or sizing through the shared gates; see the module docstring for the wire contract."""
@@ -46,6 +76,7 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
             "refused": "bad-request",
             "reason": f"Unknown param(s): {', '.join(unknown)}. Accepted: {', '.join(sorted(_KNOWN_KEYS))}.",
         }
+    params = _with_grant_bound_identity(params, repo_root)
     # Session UUIDs resolve through the owned external-host binding. Display
     # aliases may not yet be exported by the installed transport on this box.
     target = params.get("notify_to", params.get("session_id"))

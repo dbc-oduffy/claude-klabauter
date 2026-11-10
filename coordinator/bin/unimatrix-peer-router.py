@@ -1277,7 +1277,7 @@ class Router:
         except Exception as exc:
             return {"ok": False, "error": f"transport delivery to {to} failed: {exc}"}
         self.log("SENT-TRANSPORT", source, "->", to, frame["msg_id"])
-        return {"ok": True, "msg_id": frame["msg_id"], "sender": transport}
+        return {"ok": True, "msg_id": frame["msg_id"], "sender": transport, "written": True}
 
     async def handle_transport_inbound(self, transport, frame):
         """Bridge both reply directions without pretending to be either endpoint's vendor."""
@@ -1326,7 +1326,7 @@ class Router:
         if peer in self.addressed:
             self.addressed[peer].add(to)
         self.log("SENT", peer, "->", to, frame["msg_id"])
-        return {"ok": True, "msg_id": frame["msg_id"]}
+        return {"ok": True, "msg_id": frame["msg_id"], "written": True}
 
     def external_codex_sendable(self, entry):
         """Gate resolved roster identity, never infer native UUID from a face/name/PID.

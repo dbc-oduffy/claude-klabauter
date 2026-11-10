@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_REFUSAL_HEAD
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import REVIEW_SIDECAR
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_all_landed_refire_e2e import (
     _BLITZ_FN,
@@ -33,6 +34,9 @@ from coordinator_core.win_portability import no_console_creationflags
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.usefixtures("m_plus_known_arm")]
 
 SIZING = "state/sizings/2026-10-22-65af6a-2-orphan-spines-kept-forever.yaml"
+# The resume's landed code owes the review floor; a carried prior-run verdict stands in for the review wave
+# this stubbed run never dispatches.
+_CARRIED_REVIEW = {"slice_id": "s1", "verdict": "PASS", "findings": 0, "applied": 0, "sidecar_path": REVIEW_SIDECAR}
 WRITES_HEAD = "Your writes are exactly these declared paths: "
 
 
@@ -44,6 +48,7 @@ def _run(root, leg) -> dict:
     requirements_ledger.revise(root, _PRIOR_RUN, note="finish the owed sizing update")
     requirements_ledger.start(root, _RUN, resumed_from=_PRIOR_RUN)
     reply = agent_gate_reply(root, _handler({"sizing_path": REL, "run_id": _RUN}, repo_root=root))
+    reply["resume_phases"] = {"reuse": ["review"], "verdicts": {"review": {"wave": [_CARRIED_REVIEW]}}}
     ledger = reply["resume_ledger"]
     ledger["revise_notes"] = ["finish the owed sizing update"]
     ledger["remaining"] = {"R1": {"remaining": [f"update {SIZING}"], "evidence": ""}}

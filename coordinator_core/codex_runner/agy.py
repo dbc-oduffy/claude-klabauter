@@ -18,7 +18,6 @@ import json
 import os
 import queue
 import re
-import shutil
 import subprocess
 import sys
 import threading
@@ -38,7 +37,7 @@ from coordinator_core.codex_runner.contract import (
     RunResult,
     findings_schema_path,
 )
-from coordinator_core.codex_runner.resolve import CodexUnavailable, allow_api_key
+from coordinator_core.codex_runner.resolve import CodexUnavailable, allow_api_key, resolve_native_cli
 from coordinator_core.codex_runner.review import _ENV_ALLOW_WINDOWS as _REVIEW_ENV_ALLOW_WINDOWS
 
 AGY_TIMEOUT_S = 900
@@ -78,10 +77,10 @@ class AgyError(RuntimeError):
 
 
 def resolve_agy() -> list[str]:
-    """Return [agy_path] from PATH; raise AgyUnavailable when absent."""
-    found = shutil.which("agy")
+    """Return [agy_path] from PATH, else ~/.agy/bin; raise AgyUnavailable when both miss."""
+    found = resolve_native_cli("agy")
     if not found:
-        raise AgyUnavailable("agy not found on PATH (install Antigravity CLI)")
+        raise AgyUnavailable("agy not found on PATH or in ~/.agy/bin (install Antigravity CLI)")
     return [found]
 
 

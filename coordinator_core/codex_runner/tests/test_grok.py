@@ -128,9 +128,26 @@ def test_non_json_response_is_failed_not_ok(env, tmp_path):
     assert res.status == "failed" and "no schema-valid findings" in res.error
 
 
-def test_grok_absent_is_named_unavailable(env, monkeypatch):
+def _no_native(monkeypatch, tmp_path):
+    empty = tmp_path / "emptyhome"
+    empty.mkdir(exist_ok=True)
+    for key in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(key, str(empty))
+    monkeypatch.setenv("PATH", str(empty))
+
+
+def test_grok_resolves_from_home_bin_when_path_lacks_it(tmp_path, monkeypatch):
+    _no_native(monkeypatch, tmp_path)
+    home = tmp_path / "emptyhome"
+    exe = home / ".grok" / "bin" / ("grok.exe" if sys.platform.startswith("win") else "grok")
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    assert grok.resolve_grok() == [str(exe)]
+
+
+def test_grok_absent_is_named_unavailable(env, monkeypatch, tmp_path):
     _, run_dir, req, mp = env
-    monkeypatch.setattr(grok.shutil, "which", lambda name: None)
+    _no_native(monkeypatch, tmp_path)
     with pytest.raises(grok.GrokUnavailable) as ei:
         grok.resolve_grok()
     assert isinstance(ei.value, CodexUnavailable)

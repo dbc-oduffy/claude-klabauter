@@ -380,16 +380,155 @@ def test_land_run_lands_a_verified_pre_existing_hunk(ask_run_repo):
     assert "a.py" in rig._names(root, landed["sha"])
 
 
-def test_land_run_refuses_a_drifted_pre_existing_hunk_naming_the_differing_line(ask_run_repo):
+def test_land_run_does_not_refuse_a_peer_drift_on_a_pre_existing_hunk_the_run_never_changed(ask_run_repo):
     from coordinator_core.ops.dispatch_emit.tests import test_ask_run_product_commit as rig
 
     root = ask_run_repo
     _stage_pre_existing_measured(root, rig)
     rig._put(root, "a.py", _PRE_FIX.replace("line9\n", "late-nine\n"))
-    head = rig._git(root, "rev-parse", "HEAD")
 
-    refused = rig._call(root)
+    out = rig._call(root)
 
-    assert refused["committed"] is False and refused["refused"] == land_run.LANDING_TREE_DIFFERS, refused
-    assert "first difference at line 4: measured 'fixed-four', landing 'line4'" in refused["error"], refused
-    assert rig._git(root, "rev-parse", "HEAD") == head
+    assert out["refused"] != land_run.LANDING_TREE_DIFFERS, out
+    assert out["committed"] is True, out
+
+
+# ---- tranche chain hand-off --------------------------------------------------------------------
+
+
+def _tranche_script(root, passes):
+    from coordinator_core.ops.dispatch_emit import tranche_chain
+
+    inv = root / "inv-t1.md"
+    inv.write_text("record\n", encoding="utf-8")
+    (root / "inv.md").write_text("base record\n", encoding="utf-8")
+    spine = root / "run1.md"
+    spine.write_text(
+        "---\nderived_from: mise inventory record\n---\nDerived from `inv-t1.md` by `dispatch.emit --inventory`\n",
+        encoding="utf-8",
+    )
+    spine.write_text(tranche_chain.stamp_tranche_state(spine.read_text(encoding="utf-8"), 28, passes), encoding="utf-8")
+    (root / "run1.workflow.mjs").write_text("//\n", encoding="utf-8")
+    return "run1.workflow.mjs"
+
+
+def _landed(root, monkeypatch, script, reply=None, **params):
+    from coordinator_core.ops.dispatch_emit import tranche_chain
+
+    spawns = []
+    monkeypatch.setattr(tranche_chain, "_spawn_detached", lambda *a: spawns.append(a))
+    land_run._chain_landed_tranche(
+        root, {"run_id": "run1", "script_path": script, "incomplete_chunks": [], **params},
+        {"committed": True, "sha": "a" * 40, **(reply or {})},
+    )
+    return spawns
+
+
+def test_landing_a_tranche_with_passes_remaining_spawns_exactly_one_chain(tmp_path, monkeypatch):
+    spawns = _landed(tmp_path, monkeypatch, _tranche_script(tmp_path, 2))
+
+    assert len(spawns) == 1
+    assert spawns[0][1] == "run1" and spawns[0][2]["row_budget"] == 28
+    assert spawns[0][2]["inventory_path"].endswith("inv.md")
+
+
+def test_landing_the_last_tranche_spawns_nothing(tmp_path, monkeypatch):
+    assert _landed(tmp_path, monkeypatch, _tranche_script(tmp_path, 0)) == []
+
+
+@pytest.mark.parametrize(
+    "reply, params",
+    [
+        ({"already_landed": True}, {}),
+        ({"refused": "unreviewed"}, {}),
+        ({"stranded": {"C1": ["a.py"]}}, {}),
+        ({}, {"incomplete_chunks": ["C2"]}),
+    ],
+)
+def test_a_halted_partial_or_repeat_land_never_chains(tmp_path, monkeypatch, reply, params):
+    assert _landed(tmp_path, monkeypatch, _tranche_script(tmp_path, 2), reply, **params) == []
+
+
+def test_chain_run_records_the_next_run_and_a_failure_in_tranche_chain_json(tmp_path, monkeypatch):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import ask_contract, tranche_chain
+
+    monkeypatch.setattr(ask_contract, "record_dir", lambda root, run_id: tmp_path / "rec" / run_id)
+    fired = []
+    ok = tranche_chain.run_chain(
+        tmp_path, "run1", {"row_budget": 28},
+        emit=lambda root, req: {"path": "x/run2.workflow.mjs", "ok": True, "run_id": "run2"},
+        fire=lambda *a: fired.append(a),
+    )
+    assert ok == {"chained": "run2", "chain_error": None} and len(fired) == 1
+    assert json.loads((tmp_path / "rec/run1/tranche-chain.json").read_text()) == {"chained": "run2", "chain_error": None}
+
+    def boom(root, req):
+        raise RuntimeError("no emit")
+
+    bad = tranche_chain.run_chain(tmp_path, "run1", {}, emit=boom, fire=lambda *a: None)
+    assert bad["chained"] is None and "no emit" in bad["chain_error"]
+    assert "no emit" in json.loads((tmp_path / "rec/run1/tranche-chain.json").read_text())["chain_error"]
+
+
+def _record_for_p(tmp_path, text):
+    from coordinator_core.git import commit
+
+    (tmp_path / ".git").mkdir(exist_ok=True)
+    (tmp_path / "p.py").write_text(text, encoding="utf-8", newline="")
+    return {"blobs": {"p.py": commit.checkin_blob_sha(tmp_path, "p.py")}, "removed": []}
+
+
+def test_no_change_drops_only_the_paths_the_run_never_changed(tmp_path):
+    record = _record_for_p(tmp_path, "x = 1\n")
+    (tmp_path / "p.py").write_text("x = 2\n", encoding="utf-8", newline="")
+    seen: list = []
+
+    def never_changed(paths):
+        seen.append(list(paths))
+        return []
+
+    assert land_run._measured_mismatch(tmp_path, record, ["p.py"], [], {}, no_change=never_changed) == ["p.py"]
+    assert seen == [["p.py"]]
+    assert land_run._measured_mismatch(tmp_path, record, ["p.py"], [], {}, no_change=lambda paths: ["p.py"]) == []
+
+
+def test_run_made_no_change_keeps_a_path_out_when_it_cannot_prove_it(tmp_path, monkeypatch):
+    base = {"p.py": "a" * 40}
+    assert land_run._run_made_no_change(tmp_path, "run1", None, None)(["p.py"]) == []
+    assert land_run._run_made_no_change(tmp_path, None, base, None)(["p.py"]) == []
+    assert land_run._run_made_no_change(tmp_path, "run1", base, None)(["other.py"]) == []
+    assert land_run._run_made_no_change(tmp_path, "run1", base, None)(["p.py"]) == []
+
+
+def test_run_made_no_change_separates_an_own_hunk_from_peer_bytes_only(tmp_path, monkeypatch):
+    from coordinator_core.git import git_dir, git_objects
+    from coordinator_core.ops.dispatch_emit import drift_attribution
+
+    monkeypatch.setattr(git_dir, "resolve_git_common_dir", lambda root: tmp_path)
+    monkeypatch.setattr(
+        drift_attribution, "run_recorded_blobs", lambda rdir, wanted: {p: ["b" * 40] for p in wanted},
+    )
+    monkeypatch.setattr(git_objects, "read_object", lambda common, sha: ("blob", b"bytes"))
+    base = {"own.py": "a" * 40, "peer.py": "a" * 40}
+    monkeypatch.setattr(land_run, "_own_hunks", lambda root, p, b, data: ["hunk"] if p == "own.py" else [])
+    never = land_run._run_made_no_change(tmp_path, "run1", base, lambda paths: [])
+    assert never(["own.py", "peer.py"]) == ["peer.py"]
+    written = land_run._run_made_no_change(tmp_path, "run1", base, lambda paths: ["peer.py"])
+    assert written(["own.py", "peer.py"]) == []
+
+
+def test_prior_pass_sessions_walks_the_resumed_chain_only_when_the_run_has_a_ledger(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import landing_integrity
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    walked = []
+    monkeypatch.setattr(landing_integrity, "_resumed_chain", lambda root, rid: walked.append(rid) or [])
+    assert land_run._prior_pass_sessions(tmp_path, "run-no-ledger") == set()
+    assert walked == []
+    ledger = record_dir(tmp_path, "run-ledger")
+    ledger.mkdir(parents=True)
+    (ledger / "run.json").write_text("{}", encoding="utf-8")
+    land_run._prior_pass_sessions(tmp_path, "run-ledger")
+    assert walked == ["run-ledger"]

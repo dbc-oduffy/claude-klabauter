@@ -1071,6 +1071,7 @@ _MANIFEST_SCHEMA = _obj(
         "error": {"type": ["string", "null"]},
         "owed_em_ids": {"type": "array", "items": _STR},
         "owed_plan": _STR,
+        "owed_memo_rows": {"type": "array", "items": {"type": "object"}},
         "gated_rows": {"type": "array", "items": {"type": "object"}},
         "rows": {
             "type": "array",
@@ -1228,6 +1229,7 @@ _ADOPT_STAGE_REPLY_HEAD_JS = (
     "'stage reply carries both error and manifest_handle'; return; }\n"
     "    if (r.error) { if (!soft && !_stageRefusal) { _stageRefusal = String(r.error); "
     "if (Array.isArray(r.owed_em_ids) && r.owed_em_ids.length) _stageOwedEm = { ids: r.owed_em_ids.map(String), "
+    "memo: Array.isArray(r.owed_memo_rows) ? r.owed_memo_rows : [], "
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; "
     "if (Array.isArray(r.gated_rows) && r.gated_rows.length) _stageGatedRows = { rows: r.gated_rows, "
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; "
@@ -3034,21 +3036,27 @@ def _single_exit_review(blocks: list[str]) -> str:
 
 #: The executor's own DONE line, as the delivery notes carry it (`<row>: DONE (... already delivered at HEAD by commit <sha>)`).
 _ALREADY_DELIVERED_RE = r"/\bDONE[^|]{0,120}?already delivered[^|]{0,80}?\bcommit\s+([0-9a-f]{4,40})\b/i"
-_ALREADY_DELIVERED_SCHEMA = _obj(["ok"], {"ok": {"type": ["boolean", "null"]}, "error": {"type": ["string", "null"]}, "close": {}})
+#: One executor note reporting the work already at HEAD with no commit named (`<row>: DONE (nothing changed)`).
+_AT_HEAD_NO_SHA_RE = r"/^\S+: DONE \((?:nothing changed|already at HEAD)\s*[,)]/i"
+_ALREADY_DELIVERED_SCHEMA = _obj(
+    ["ok"],
+    {"ok": {"type": ["boolean", "null"]}, "error": {"type": ["string", "null"]}, "sha": {"type": ["string", "null"]}, "close": {}},
+)
 
 
 def _already_delivered_fn(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
     """`async function _alreadyDeliveredClose()`: the no-slices guard's hook, true when the run closed landed.
 
-    The executor's claim is read from `_deliveryNotes` (no spawn); only a named sha costs one mechanical
-    agent running `dispatch.record_halted_run_landed {in_run: true}`, whose ancestry and clean-write-set
-    checks are the proof. A refusal leaves the reason in `_alreadyDeliveredRefusal` for the halt.
+    The executor's claim is read from `_deliveryNotes` (no spawn); only a named sha, or an all-notes
+    already-at-HEAD set with no sha, costs one mechanical agent running
+    `dispatch.record_halted_run_landed {in_run: true}`, whose ancestry and clean-write-set checks are
+    the proof (the op derives the sha when none is sent). A refusal leaves the reason in `_alreadyDeliveredRefusal` for the halt.
     """
     prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
         f"Run exactly this one command and return its JSON reply: `{_INVOKE} {_HALTED_ROUTE_OP} '",
-        "js:JSON.stringify({ run_id: _runId, sha: _sha, in_run: true })",
-        f"'{_repo_flag(repo_root)}`. Return ok, error and close verbatim (null where absent). Run nothing else.",
+        "js:JSON.stringify(Object.assign({ run_id: _runId, in_run: true }, _sha ? { sha: _sha } : {}))",
+        f"'{_repo_flag(repo_root)}`. Return ok, error, sha and close verbatim (null where absent). Run nothing else.",
     )
     call = _agent(
         prompt, label="already-delivered-close", phase="review", agent_type=_OP_RELAY_AGENT_TYPE,
@@ -3057,12 +3065,15 @@ def _already_delivered_fn(*, head: str, anchor: str, repo_root: str, run_id: str
     return (
         "  async function _alreadyDeliveredClose() {\n"
         f"    const _m = {_ALREADY_DELIVERED_RE}.exec(_deliveryNotes);\n"
-        "    if (!_m) return false;\n"
-        "    const _sha = _m[1].toLowerCase();\n"
+        "    const _sha = _m ? _m[1].toLowerCase() : null;\n"
+        "    if (!_sha) {\n"
+        "      const _notes = _deliveryNotes.split(' | ').filter((x) => x);\n"
+        f"      if (!_notes.length || !_notes.every((n) => {_AT_HEAD_NO_SHA_RE}.test(n))) return false;\n"
+        "    }\n"
         "    let _r = null;\n"
         f"    try {{ _r = await {call}; }} catch (e) {{ _alreadyDeliveredRefusal = 'the close agent failed: ' + "
         "String((e && e.message) ?? e).slice(0, 200); return false; }\n"
-        "    if (_r && _r.ok === true) { _alreadyDelivered = { sha: _sha, close: _r.close ?? null }; return true; }\n"
+        "    if (_r && _r.ok === true) { _alreadyDelivered = { sha: _sha ?? _r.sha ?? _r.close?.sha ?? null, close: _r.close ?? null }; return true; }\n"
         "    _alreadyDeliveredRefusal = String((_r && _r.error) ?? 'the close agent returned no reply').slice(0, 300);\n"
         "    return false;\n"
         "  }"
@@ -5417,7 +5428,7 @@ def compose_ask_script(
         "gate, plan or plan-blitz ready path returned none (' + (_noFoldCause ?? 'no fold site was reached') + ')' }; }"
     )
     b.append(
-        "  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt, owed_em_ids: _stageOwedEm?.ids ?? [], "
+        "  if (!_stagedManifest && _stageHalt) { _manifest = { error: _stageHalt, owed_em_ids: _stageOwedEm?.ids ?? [], owed_memo_rows: _stageOwedEm?.memo ?? [], "
         "owed_plan: _stageOwedEm?.plan ?? _stageGatedRows?.plan ?? _stageBlockingDrops?.plan ?? null, "
         "gated_rows: _stageGatedRows?.rows ?? [], criterion_blocking_drops: _stageBlockingDrops?.rows ?? [] }; }"
     )
@@ -6731,12 +6742,14 @@ NO_MANIFEST_PREFIX = "no folded stage manifest"
 def _all_em_next_action_js(sizing_rel: Optional[str]) -> str:
     """JS expression: `{next_action}` for a stage refusal that derived zero dispatchable rows with
     rows owed by the EM (the stage reply's `owed_em_ids`), else `{}`. Names the exact em-discharge
-    call per owed id, then the refire."""
+    call per owed id, then the refire. A memo-send id (the reply's `owed_memo_rows`, each carrying its
+    `spine_read.memo_close_route` text as `route`) names that resolve route instead."""
     return (
         "((_manifest?.owed_em_ids ?? []).length ? { next_action: "
         "'Every stage performer is the EM; nothing to dispatch. Perform each row, then record it: ' + "
         "_manifest.owed_em_ids"
-        ".map((id) => 'coordinator-invoke plan.tasks.mutate {\"verb\":\"em-discharge\",\"plan_path\":' "
+        ".map((id) => (_manifest.owed_memo_rows ?? []).find((m) => String(m.id) === id)?.route ?? "
+        "'coordinator-invoke plan.tasks.mutate {\"verb\":\"em-discharge\",\"plan_path\":' "
         "+ JSON.stringify(_manifest.owed_plan ?? _planRel ?? '') + ',\"id\":' + JSON.stringify(id) + ',\"text\":\"<what you did>\"}').join('; ') "
         f"+ '. Then refire: ' + {_refire_js(sizing_rel)} }} : {_gated_next_action_js(sizing_rel)})"
     )

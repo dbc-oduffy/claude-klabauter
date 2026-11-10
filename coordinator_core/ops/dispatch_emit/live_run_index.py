@@ -196,8 +196,18 @@ def run_is_stale(root: Union[str, Path], run_id: str, now: Optional[float] = Non
 
 
 def run_holds_no_claim(root: Union[str, Path], run_id: str) -> bool:
-    """`warp_live.run_is_over`, or a stale run (`run_is_stale`): neither blocks another run's footprint."""
-    return warp_live.run_is_over(Path(root), run_id) or run_is_stale(root, run_id)
+    """`warp_live.run_is_over`, a run whose token is spent or retired (`ask_gate.token_retired`), or a
+    stale run (`run_is_stale`): none blocks another run's footprint."""
+    if warp_live.run_is_over(Path(root), run_id):
+        return True
+    from coordinator_core.ops.dispatch_emit import ask_gate
+
+    try:
+        if ask_gate.token_retired(Path(root), run_id):
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    return run_is_stale(root, run_id)
 
 
 def _claims_dir(index_file: Path) -> Path:

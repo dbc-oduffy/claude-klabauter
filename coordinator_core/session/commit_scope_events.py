@@ -56,7 +56,7 @@ Negative-spec:
     ``resolution`` column — DoE ruled it an inert placeholder (2026-08-04).
     This JSONL sits ALONGSIDE that log; neither reads nor modifies it.
   - Writes go ONLY under ``.git/coordinator-sessions/``. (``locked_rmw``'s
-    own lock sidecar lives under the git common dir's ``coordinator-locks/``
+    own lock sidecar lives under ``<checkout>/.coordinator-local/locks/``
     — a property of the mandated write primitive, still never state/ and
     never the worktree.)
   - Do NOT invent a second write primitive: ``locked_write.locked_rmw`` is

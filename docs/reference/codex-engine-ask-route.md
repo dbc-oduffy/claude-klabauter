@@ -34,7 +34,10 @@ EOF
 ```
 
 - `ask` xor `sizing`; `ask_source` (`pm` | `relayed`) is required with `ask`.
-- `session_id`, `caller` and an absolute `cwd` are required and never read from the environment.
+- `session_id`, `caller` and an absolute `cwd` are required. A launcher-spawned headless EM (its env holds
+  `COORDINATOR_SESSION_ID` and the launcher's grant token) may omit all three: they come from the grant-bound
+  env (`caller` is `<family>-em`, `cwd` the `--repo` checkout). An env session id the grant does not bind is
+  refused as absent; an explicit `session_id` is never overridden.
 - Optional: `repo`, `agent_id`, `em_context`, `context`, `brief`, `brief_file`, `route_preference`, `em_rationale`,
   `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`, `fire`, `notify_to`.
 - Unknown params are refused. Full contract: the `coordinator_core/ops/engine_ask_submit.py` docstring.

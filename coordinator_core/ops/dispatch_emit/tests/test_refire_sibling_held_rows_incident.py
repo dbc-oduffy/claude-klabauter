@@ -68,12 +68,14 @@ def _cockpit_57c72c(repo, *, sibling_rows):
         **no_console_creationflags(),
     ).stdout.strip()
     open_row = {"disposition": "open", "writes": "\n    - some/x.py"}
+    # An em row naming a code file is a code deliverable and routes to an executor, never to discharge.
+    em_row = {"disposition": "open", "writes": "\n    - some/x.md"}
     rows = [
         ("C1", {"disposition": "coded", "disposition_ref": first, "writes": "\n    - some/c1.py", "register_rows": "[R1]"}),
         ("C11", {**open_row, "register_rows": "[R2]"}),
         ("C15", {**open_row, "register_rows": "[R3]"}),
-        ("C13", {**open_row, "performer": "em", "register_rows": "[R4]"}),
-        ("C20", {**open_row, "performer": "em", "register_rows": "[R5]"}),
+        ("C13", {**em_row, "performer": "em", "register_rows": "[R4]"}),
+        ("C20", {**em_row, "performer": "em", "register_rows": "[R5]"}),
     ]
     if sibling_rows:
         rows += [

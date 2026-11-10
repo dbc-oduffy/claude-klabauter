@@ -92,6 +92,85 @@ def discover_peers(home=None, pid_alive=None, taken_names=(), taken_targets=()):
     return peers
 
 
+def parent_pid(pid):
+    """Parent pid of `pid`, else None. Linux /proc, Windows toolhelp snapshot, else `ps` (macOS/BSD)."""
+    if os.name == "nt":
+        return _parent_pid_windows(pid)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+        return int(stat.rsplit(")", 1)[1].split()[1])
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True,
+                             timeout=5).stdout.strip()
+        return int(out) if out else None
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
+def _parent_pid_windows(pid):
+    import ctypes
+    from ctypes import wintypes
+
+    class Entry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_void_p),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+    for fn in (k32.Process32FirstW, k32.Process32NextW):
+        fn.argtypes = [wintypes.HANDLE, ctypes.POINTER(Entry)]
+        fn.restype = wintypes.BOOL
+    k32.CloseHandle.argtypes = [wintypes.HANDLE]
+    snap = k32.CreateToolhelp32Snapshot(0x2, 0)
+    if snap in (None, wintypes.HANDLE(-1).value):
+        return None
+    try:
+        entry = Entry()
+        entry.dwSize = ctypes.sizeof(Entry)
+        ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+        while ok:
+            if entry.th32ProcessID == pid:
+                return entry.th32ParentProcessID or None
+            ok = k32.Process32NextW(snap, ctypes.byref(entry))
+    finally:
+        k32.CloseHandle(snap)
+    return None
+
+
+def own_session(home=None, pid_alive=None, parent_of=None, start=None, max_depth=16):
+    """Which Grok session is this shell? The live registry peer whose pid is an ancestor of `start`
+    (default this process), else None. An empty registry skips the process walk."""
+    try:
+        rows = json.loads((Path(home) if home else grok_home()).joinpath("active_sessions.json")
+                          .read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(rows, list):
+        return None
+    by_pid = {}
+    live = {p["target"]: p for p in discover_peers(home, pid_alive)}
+    for row in rows:
+        if isinstance(row, dict) and type(row.get("pid")) is int and row.get("session_id") in live:
+            by_pid[row["pid"]] = live[row["session_id"]]
+    if not by_pid:
+        return None
+    step = parent_of or parent_pid
+    pid, seen = os.getpid() if start is None else start, set()
+    for _ in range(max_depth):
+        if pid in by_pid:
+            return by_pid[pid]
+        if pid is None or pid in seen:
+            return None
+        seen.add(pid)
+        pid = step(pid)
+    return None
+
+
 def resume_argv(binary, session_id, text, cwd):
     """The headless resume argv: pinned to the session cwd, never --add-dir or --fork-session."""
     return [binary, "-p", text, "-r", session_id, "--cwd", cwd,

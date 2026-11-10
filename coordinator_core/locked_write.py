@@ -124,7 +124,8 @@ locked_rmw raises RuntimeError immediately rather than silently skipping the loc
 
 Lock-file convention: all sidecar lock files live under
 ``<lock dir> / "<sha1>.lock"``. For locked_rmw the lock dir is
-``git_common_dir(repo_root) / "coordinator-locks"`` — the git common dir
+``<main checkout> / ".coordinator-local" / "locks"`` (a bare repo keeps
+``git_common_dir / "coordinator-locks"``) — derived from the git common dir
 rather than a repo-relative path, so linked worktrees share the main
 checkout's lock namespace and concurrent writers across worktrees are
 serialised correctly. For held_lock it is ``_machine_lock_dir()``
@@ -234,8 +235,8 @@ Orphan accumulation: the sidecar ``.lock`` files are intentionally never
 unlinked after release — deletion races on POSIX can cause a late opener to
 receive a different inode and silently lose the serialisation guarantee.
 These files are tiny (0 bytes for locked_rmw; one short JSON line for
-held_lock) and reside either inside ``.git/coordinator-locks/``, a
-git-internal path that is never committed, or — for held_lock — under
+held_lock) and reside either inside ``.coordinator-local/locks/``, a
+gitignored path that is never committed, or — for held_lock — under
 ``~/.coordinator/coordinator-locks/``, outside every checkout and so never
 committed either.  Accumulation of one file per distinct target path is
 accepted in v1.  The named fallback design for
@@ -245,6 +246,7 @@ flock (one sidecar per directory rather than per file).
 
 from __future__ import annotations
 
+import errno
 import os
 import time
 
@@ -398,13 +400,60 @@ def _lock_dir_path(anchor_root: Path) -> Path:
     for behind on the filesystem.
 
     Derives from the git common dir of the repository that *anchor_root* belongs
-    to, so worktrees share the same lock space as the main checkout.
+    to, so worktrees share the same lock space as the main checkout. A normal
+    repo's sidecars live in ``<main checkout>/.coordinator-local/locks`` (outside
+    ``.git``, which a sandboxed child cannot write); a bare repo keeps
+    ``<common dir>/coordinator-locks``.
 
     Uses coordinator_core.lifecycle.git_common_dir (lru_cache'd) to avoid
     spawning a subprocess on every call.
     """
     from coordinator_core.lifecycle import git_common_dir  # local import avoids cycles
-    return git_common_dir(anchor_root) / "coordinator-locks"
+    common = git_common_dir(anchor_root)
+    if common.name == ".git":
+        return common.parent / ".coordinator-local" / "locks"
+    return common / "coordinator-locks"
+
+
+def _legacy_lock_dir_path(anchor_root: Path) -> "Path | None":
+    """Return the pre-relocation sidecar dir (``<common dir>/coordinator-locks``) for a
+    normal repo, or None for a bare repo (whose sidecar dir never moved)."""
+    from coordinator_core.lifecycle import git_common_dir  # local import avoids cycles
+
+    common = git_common_dir(anchor_root)
+    # The primary dir for a ``.git`` common dir is outside it, so the two never coincide
+    # (one sidecar through two fds would self-deadlock under msvcrt).
+    return common / "coordinator-locks" if common.name == ".git" else None
+
+
+def _acquire_legacy_sidecar(
+    repo_root: Path, filename: str, flags: int, deadline: float
+) -> "int | None":
+    """Open and lock the legacy sidecar so a locked_rmw from before the relocation still
+    excludes this one. Returns the locked fd, or None when the repo is bare or its .git
+    refuses the open (a sandboxed child). LockTimeout propagates, the fd closed."""
+    legacy = _legacy_lock_dir_path(repo_root)
+    if legacy is None:
+        return None
+
+    def _mkdir() -> "Path":
+        legacy.mkdir(parents=True, exist_ok=True)
+        return legacy
+
+    try:
+        fd = _open_sidecar_bounded(_mkdir, filename, flags, 0, denial_final=True)
+    except (PermissionError, LockTimeout):
+        return None
+    except OSError as exc:
+        if exc.errno in (errno.EROFS, errno.EACCES, errno.EPERM):
+            return None
+        raise
+    try:
+        _acquire_flock(fd, max(0.0, deadline - time.monotonic()))
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def _lock_dir(repo_root: Path) -> Path:
@@ -562,7 +611,11 @@ def _sidecar_denial_message(path: str, exc: BaseException) -> str:
 
 
 def _open_sidecar_bounded(
-    make_dir: "Callable[[], Path]", filename: str, flags: int, timeout: float
+    make_dir: "Callable[[], Path]",
+    filename: str,
+    flags: int,
+    timeout: float,
+    denial_final: bool = False,
 ) -> int:
     """mkdir + open the lock sidecar on a daemon thread; return the fd.
 
@@ -582,7 +635,9 @@ def _open_sidecar_bounded(
     def _work() -> None:
         # Windows reports a sharing violation from a concurrent holder as EACCES on open: that
         # is contention, retried inside the same open deadline. POSIX EACCES is a real refusal.
-        retry_until = time.monotonic() + SIDECAR_OPEN_DEADLINE_SECS
+        # denial_final callers (the optional legacy sidecar) retry only briefly: a sandboxed
+        # denial must skip fast, a Windows sharing violation clears within it.
+        retry_until = time.monotonic() + (0.25 if denial_final else SIDECAR_OPEN_DEADLINE_SECS)
         sleep_for = 0.005
         while True:
             try:
@@ -727,9 +782,13 @@ def locked_rmw(
     Algorithm
     ---------
     1. Canonicalise key: sha1(os.path.realpath(target)).
-    2. Lock sidecar: git_common_dir(target's repo) / "coordinator-locks" / "<sha1>.lock".
+    2. Lock sidecar: _lock_dir_path(repo_root) / "<sha1>.lock", i.e.
+       <main checkout>/.coordinator-local/locks (bare repo: <common dir>/coordinator-locks).
        (repo_root is the caller's repo; git_common_dir resolves worktrees transparently.)
-    3. Acquire fcntl.LOCK_EX on the sidecar, poll-with-backoff up to *timeout* seconds.
+    2b. On a normal repo also lock the legacy <common dir>/coordinator-locks sidecar after
+       the first and release it first; skipped when .git refuses the open.
+    3. Acquire fcntl.LOCK_EX on the sidecar, poll-with-backoff up to *timeout* seconds
+       (one deadline covers both sidecars).
        Raises LockTimeout on expiry (fail-closed: nothing has been read or written).
     4. Read *target* (or "" if missing_ok is True and the file is absent).
     5. Call mutate(old_text) -> new_text.
@@ -787,8 +846,14 @@ def locked_rmw(
         lambda: _lock_dir(repo_root), f"{key}.lock", _open_flags, timeout
     )
     try:
+        deadline = time.monotonic() + timeout
         _acquire_flock(lock_fd, timeout)
-        # Lock is held from here through the write (or abort).
+        # Second lock, always after the first: the pre-relocation sidecar, so a peer still
+        # locking there is excluded too. None when bare or .git is write-denied.
+        legacy_fd = _acquire_legacy_sidecar(
+            repo_root, f"{key}.lock", _open_flags, deadline
+        )
+        # Locks are held from here through the write (or abort).
         try:
             # --- Read ---
             # Resolve symlinks so reads and writes go to the canonical file,
@@ -874,7 +939,15 @@ def locked_rmw(
             # The sidecar file is NOT deleted — deletion races can cause a new
             # opener to get a different inode and lose the serialisation guarantee
             # (classic POSIX lock-file pitfall).
-            _plat_unlock(lock_fd)
+            # Reverse of acquisition: legacy first, then the primary.
+            try:
+                if legacy_fd is not None:
+                    try:
+                        _plat_unlock(legacy_fd)
+                    finally:
+                        os.close(legacy_fd)
+            finally:
+                _plat_unlock(lock_fd)
 
     finally:
         os.close(lock_fd)

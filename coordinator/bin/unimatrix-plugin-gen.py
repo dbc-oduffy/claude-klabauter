@@ -11,6 +11,7 @@ file loads, not that a hook fires: ${PLUGIN_ROOT} expansion and a guard running 
 session, which nothing here covers.
 """
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -279,6 +280,60 @@ def _hook_name(event):
     return re.sub(r"(?<!^)(?=[A-Z])", "-", event).lower()
 
 
+SHIM_REL = "hooks/agy-hook-run.py"
+SHIM_SOURCE = '''"""agy hook launcher: runs the settings-home hook-run door with stdin mode `hook`, shell-neutral.
+
+argv: [--quiet] [--pass-2] <hook-run args...>. --quiet drops the door's stderr; --pass-2 maps its exit 2 to 0.
+"""
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def main(argv):
+    quiet = "--quiet" in argv
+    pass_2 = "--pass-2" in argv
+    rest = [a for a in argv if a not in ("--quiet", "--pass-2")]
+    home = os.environ.get("COORDINATOR_SETTINGS_HOME") or str(Path.home() / ".coordinator-claude-settings")
+    door = Path(home) / "bin" / ("hook-run.exe" if os.name == "nt" else "hook-run")
+    env = dict(os.environ, COORDINATOR_DOOR_STDIN_MODE="hook")
+    try:
+        rc = subprocess.run(
+            [str(door), *rest], env=env, stderr=subprocess.DEVNULL if quiet else None,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        ).returncode
+    except OSError as exc:
+        sys.stderr.write("agy-hook-run: cannot run %s: %s\\n" % (door, exc))
+        rc = 127
+    return 0 if pass_2 and rc == 2 else rc
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
+'''
+DOOR_CMD_RE = re.compile(
+    r'COORDINATOR_DOOR_STDIN_MODE=hook "\$\{COORDINATOR_SETTINGS_HOME:-[^}]*\}/bin/hook-run"'
+    r"(?P<rest>(?: --advisory)? hooks\.\w+)(?P<quiet> 2>/dev/null)?"
+    r"(?P<pass2>; rc=\$\?; \[ \$rc -eq 2 \] && rc=0; exit \$rc)?"
+)
+BASH_ONLY_RE = re.compile(r"^\s*[A-Za-z_]\w*=|rc=\$\?|/dev/null|\$\{\w+:-")
+
+
+def _agy_python():
+    """Interpreter name agy resolves on PATH: Windows has `python`, never a working `python3`."""
+    return "python" if os.name == "nt" else "python3"
+
+
+def _agy_hook_command(command, token):
+    """The shell-neutral launcher command for one Claude door hook command, else None."""
+    m = DOOR_CMD_RE.fullmatch(command)
+    if not m:
+        return None
+    flags = (" --quiet" if m["quiet"] else "") + (" --pass-2" if m["pass2"] else "")
+    return f'{_agy_python()} "{token}/{SHIM_REL}"{flags}{m["rest"]}'
+
+
 def _hooks(plan, plugin_root):
     src = plugin_root / "hooks" / "hooks.json"
     if not src.is_file():
@@ -290,9 +345,21 @@ def _hooks(plan, plugin_root):
         return
     drop = set(plan.cfg["hook_drop_fields"])
 
+    shim = []
+
     def clean(o):
         if isinstance(o, dict):
-            return {k: clean(v) for k, v in o.items() if k not in drop}
+            out = {k: clean(v) for k, v in o.items() if k not in drop}
+            command = out.get("command")
+            if isinstance(command, str):
+                neutral = _agy_hook_command(command, plan.cfg["plugin_root_token"])
+                if neutral:
+                    out["command"] = neutral
+                    out.pop("shell", None)
+                    shim.append(True)
+                elif BASH_ONLY_RE.search(command):
+                    plan.miss("hook-command", "hooks/hooks.json", f"bash-only syntax in command {command[:60]!r}")
+            return out
         if isinstance(o, list):
             return [clean(v) for v in o]
         return plan.rewrite(o) if isinstance(o, str) else o
@@ -314,6 +381,8 @@ def _hooks(plan, plugin_root):
                     group["matcher"] = _hook_matcher(group["matcher"], event, plan)
     named = {_hook_name(event): {event: events[event]} for event in sorted(events)} if isinstance(events, dict) else {}
     plan.put(plan.cfg["hooks_path"], _json_bytes(named), "hooks", "hooks/hooks.json")
+    if shim:
+        plan.put(SHIM_REL, SHIM_SOURCE.encode("utf-8"), "hooks", "hooks/hooks.json")
 
 
 def _rules(plan, plugin_root):

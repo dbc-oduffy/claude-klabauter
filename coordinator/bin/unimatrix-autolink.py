@@ -249,8 +249,7 @@ def detached(cmd):
     """Start `cmd` fully detached from this process and the session that ran it."""
     kw = {"stdin": subprocess.DEVNULL, "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
     if sys.platform == "win32":
-        flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) \
-            | getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
         return subprocess.Popen(cmd, creationflags=flags, **kw)
     return subprocess.Popen(cmd, start_new_session=True, **kw)
 

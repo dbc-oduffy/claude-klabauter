@@ -451,7 +451,13 @@ def landing_holds(
             worktree_root, run_id, oa_paths, own_declared, own_plan=plan_path, minted_before=own_seniority,
         ))
     declared = set(chunk_declared)
-    declared_held = {p: h for p, h in held.items() if p in declared}
+    live_held = _live_sibling_holds(
+        worktree_root, run_id, plan_path,
+        [p for p in all_paths if p in declared and p not in held and p not in deleted_paths],
+        own_declared, own_seniority,
+    )
+    held.update(live_held)
+    declared_held = {p: h for p, h in held.items() if p in declared and p not in live_held}
     if declared_held:
         carried = hunk_provenance.landable_under_hold(
             worktree_root, run_id, plan_path,
@@ -462,6 +468,40 @@ def landing_holds(
             if p in carried or h == UNREADABLE_HALT_RECORD or p in deleted_paths:
                 del held[p]
     return held
+
+
+def _live_sibling_holds(
+    root: Path, run_id: str, plan_path: Optional[str], paths: Sequence[str],
+    own_declared: Iterable[str], own_seniority: Optional[tuple],
+) -> dict:
+    """`{path: live sibling run id}` for each of `paths` a live sibling declares (stage manifest, index
+    or plan-spine `writes`, read by `co_declared_peer_holds`) while the path's worktree bytes carry a
+    hunk this run did not produce (`unproduced_hunks` attributed it; unreadable provenance holds
+    nothing here). A path with no foreign hunk is not held. A halted or launcher-gone sibling
+    (`hunk_provenance._non_live`) holds nothing here: halted holders are `foreign_halted_withheld`'s.
+    Never raises."""
+    if not paths:
+        return {}
+    try:
+        from coordinator_core.ops.dispatch_emit import hunk_provenance
+
+        candidates: dict = {}
+        for path, holder in co_declared_peer_holds(
+            root, run_id, paths, own_declared, own_plan=plan_path, minted_before=own_seniority,
+        ):
+            if holder != UNREADABLE_PEER_CLAIMS and not hunk_provenance._non_live(root, holder):
+                candidates.setdefault(path, holder)
+        if not candidates:
+            return {}
+        foreign = {
+            f.path for f in hunk_provenance.unproduced_hunks(
+                root, run_id, sorted(candidates), own_plan=plan_path, advisories=[],
+            )
+            if f.detail.startswith("committed lines")  # attributed foreign hunks; unreadable provenance is the integrity gate's
+        }
+        return {p: h for p, h in candidates.items() if p in foreign}
+    except Exception:  # noqa: BLE001 -- a hold that cannot be computed adds none
+        return {}
 
 
 def out_of_ask_holds(

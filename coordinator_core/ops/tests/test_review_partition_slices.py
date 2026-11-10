@@ -355,7 +355,8 @@ def _mixed_worktree(repo):
     _write(repo, ["mod.py", "new.py"], 9)
     (repo / "del.py").unlink()
     (repo / "bin.dat").write_bytes(b"\x00\x09" * 90)
-    (repo / "ren.py").rename(repo / "ren2.py")
+    (repo / "ren2.py").write_bytes((repo / "ren.py").read_bytes())
+    (repo / "ren.py").unlink()
     _git(repo, "add", "-A")
     _git(repo, "reset", "-q", "new.py")
     return base, ["mod.py", "del.py", "bin.dat", "ren.py", "ren2.py", "new.py"]

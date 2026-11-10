@@ -38,6 +38,16 @@ SLIM_ROW_KEYS = (
 # Per-row list keys that move to the spill; in-script readers of these (commit leg, footprint, halt write-set) resolve the full list from it.
 SPILLED_ROW_KEYS = ("writes", "writes_under")
 
+# A packed twin carries the manifest text with its repeated JSON strings replaced by `<mark><base36 index><mark>`
+# beside `{m: mark, t: [string literals]}` under this key; `STAGED_UNPACK_JS` rebuilds the byte-identical text, so
+# the handle stays the full manifest's and every in-script reader sees the whole manifest, with no spill.
+STAGED_PACK_KEY = "pack"
+STAGED_UNPACK_JS = (
+    "function _unpackStaged(o) { const p = o.pack; const a = o.text.split(p.m); "
+    "for (let i = 1; i < a.length; i += 2) a[i] = p.t[parseInt(a[i], 36)]; "
+    "const r = { ...o }; delete r.pack; r.text = a.join(''); return r; }"
+)
+
 # Head of the refusal when a staged twin exceeds the Workflow runner cap (distinct from the relay-corrupt head).
 STAGED_TWIN_OVER_CAP_HEAD = "staged twin over the Workflow runner cap"
 

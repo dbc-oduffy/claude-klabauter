@@ -59,6 +59,58 @@ def resolve_codex(platform: Optional[str] = None, env: Optional[dict] = None) ->
         raise CodexUnavailable(f"{fnm_miss}; codex not on PATH either") from fnm_miss
 
 
+def resolve_native_cli(
+    family: str, platform: Optional[str] = None, env: Optional[dict] = None, which=None,
+    home: Optional[Path] = None,
+) -> Optional[str]:
+    """The native executable for `family` (codex, agy, grok): PATH first, then `<home>/.<family>/bin`.
+
+    POSIX returns which(family). Windows takes a native `<family>.exe` on PATH as-is, else maps the
+    npm `.cmd`/`.bat` shim to its native package exe without executing it. Only codex's package layout
+    is known; a shim for another family raises CodexUnavailable unless the home bin dir holds the exe.
+    `which` is called with one name.
+    A PATH miss falls back to the family's home bin dir (a detached child may not inherit the PATH
+    entry); `home` defaults to HOME/USERPROFILE of `env`, else Path.home(). None when both miss.
+    """
+    if which is None:
+        path = (os.environ if env is None else env).get("PATH", "")
+        which = lambda name: shutil.which(name, path=path)  # noqa: E731
+    windows = (platform or sys.platform).startswith("win")
+    try:
+        found = _resolve_on_path(family, windows, which)
+    except CodexUnavailable:
+        home_exe = _home_bin_exe(family, windows, env, home)
+        if home_exe:
+            return home_exe
+        raise
+    return found or _home_bin_exe(family, windows, env, home)
+
+
+def _resolve_on_path(family: str, windows: bool, which) -> Optional[str]:
+    if not windows:
+        return which(family)
+    native = which(f"{family}.exe")
+    if native:
+        return native
+    shim = which(family)
+    if not shim:
+        return None
+    if Path(shim).suffix.lower() not in {".cmd", ".bat"}:
+        return shim
+    if family != "codex":
+        raise CodexUnavailable(f"{family} resolves to the shim {shim}; its native package layout is unknown")
+    return _native_npm_codex(Path(shim))
+
+
+def _home_bin_exe(family: str, windows: bool, env: Optional[dict], home: Optional[Path]) -> Optional[str]:
+    if home is None:
+        e = os.environ if env is None else env
+        raw = e.get("USERPROFILE" if windows else "HOME") or e.get("HOME") or e.get("USERPROFILE")
+        home = Path(raw) if raw else Path.home()
+    exe = Path(home) / f".{family}" / "bin" / (f"{family}.exe" if windows else family)
+    return str(exe) if exe.is_file() else None
+
+
 def _native_npm_codex(shim: Path) -> str:
     """Resolve npm's optional native package without executing its .cmd shim."""
     import platform

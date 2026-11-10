@@ -203,7 +203,7 @@ class TestSingleProcessCorrectness:
             locked_rmw(target, _abort, repo_root=repo)
 
         # No unexpected temp files left (exclude known repo entries).
-        excluded = {"data.txt", ".gitkeep", ".git"}
+        excluded = {"data.txt", ".gitkeep", ".git", ".coordinator-local"}
         tmp_files = [
             f for f in parent.iterdir()
             if f.name not in excluded
@@ -232,7 +232,7 @@ class TestSingleProcessCorrectness:
                 locked_rmw(target, lambda old: "new content", repo_root=repo)
 
         # No temp files left — cleanup finally must have run os.unlink.
-        excluded = {"data.txt", ".gitkeep", ".git"}
+        excluded = {"data.txt", ".gitkeep", ".git", ".coordinator-local"}
         tmp_files = [
             f for f in parent.iterdir()
             if f.name not in excluded
@@ -332,8 +332,7 @@ class TestLockTimeout:
         # Derive the lock path the same way locked_rmw does internally.
         import hashlib
         key = hashlib.sha1(os.path.realpath(str(target)).encode()).hexdigest()
-        from coordinator_core.lifecycle import git_common_dir
-        lock_dir = git_common_dir(repo) / "coordinator-locks"
+        lock_dir = locked_write._lock_dir_path(repo)
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / f"{key}.lock"
 
@@ -569,15 +568,14 @@ class TestRepoRootVariants:
     def test_same_lock_sidecar_for_both_repo_root_variants(self, tmp_path):
         """The lock sidecar path is byte-for-byte identical for both repo_root spellings."""
         import hashlib
-        from coordinator_core.lifecycle import git_common_dir
 
         repo = _make_git_repo(tmp_path / "repo")
         dot_git = repo / ".git"
         target = repo / "data.txt"
         target.write_text("x", encoding="utf-8")
 
-        lock_dir_via_root = git_common_dir(repo) / "coordinator-locks"
-        lock_dir_via_dotgit = git_common_dir(dot_git) / "coordinator-locks"
+        lock_dir_via_root = locked_write._lock_dir_path(repo)
+        lock_dir_via_dotgit = locked_write._lock_dir_path(dot_git)
 
         assert lock_dir_via_root == lock_dir_via_dotgit, (
             f"Different lock dirs: {lock_dir_via_root} vs {lock_dir_via_dotgit}"
@@ -619,8 +617,7 @@ class TestCrashSafety:
         # Derive lock path.
         import hashlib
         key = hashlib.sha1(os.path.realpath(str(target)).encode()).hexdigest()
-        from coordinator_core.lifecycle import git_common_dir
-        lock_dir = git_common_dir(repo) / "coordinator-locks"
+        lock_dir = locked_write._lock_dir_path(repo)
         lock_dir.mkdir(parents=True, exist_ok=True)
         lock_path = lock_dir / f"{key}.lock"
 

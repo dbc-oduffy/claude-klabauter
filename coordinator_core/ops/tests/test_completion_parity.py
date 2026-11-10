@@ -418,7 +418,7 @@ class TestAppendSessionInternalLogic:
             tmp_path, "lock-check.md", "---\nagent_sessions:\n---\nBody.\n"
         )
 
-        lock_dir = repo / ".git" / "coordinator-locks"
+        lock_dir = repo / ".coordinator-local" / "locks"
         assert not lock_dir.exists()
 
         result = append_plan_session(

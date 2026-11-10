@@ -19,6 +19,14 @@ class Principal(NamedTuple):
     session_id: str
     role: str
     env: dict
+    grant_verified: bool = False
+
+
+def fire_record_caller_session_id(principal: Principal) -> str | None:
+    """Session id the fire record names as its caller: an EM or grant-verified headless EM is its own; others inherit the parent."""
+    if principal.role == 'em' or principal.grant_verified:
+        return principal.session_id
+    return principal.env.get('COORDINATOR_PARENT_SESSION_ID')
 
 
 def caller_principal(cwd: str | None = None) -> Principal:
@@ -66,7 +74,7 @@ def require_fire_authority(script_path: str, expected: str | None, *, cwd: str |
             return caller
         raise ValueError('Workflow delegation refused: ' + reason)
     if _grant_verified_headless_em(caller):
-        return caller
+        return caller._replace(grant_verified=True)
     codex = (caller.env.get('COORDINATOR_AGENT_VENDOR') == 'codex'
              or caller.env.get('COORDINATOR_AGENT_PROVIDER') == 'codex'
              or bool(caller.env.get('CODEX_THREAD_ID')))

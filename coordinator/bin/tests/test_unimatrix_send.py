@@ -80,10 +80,49 @@ def test_send_prints_sent_only_when_written(monkeypatch, capsys):
     assert rc == 0 and "sent to x" in capsys.readouterr().out
 
 
-def test_send_ok_without_written_marker_is_not_sent(monkeypatch, capsys):
+def test_send_ok_with_msg_id_is_confirmed_even_without_written_marker(monkeypatch, capsys):
     rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m"}, ["--to", "x", "hi"])
     cap = capsys.readouterr()
-    assert rc == 1 and "sent to" not in cap.out and "not confirmed" in cap.err
+    assert rc == 0 and "sent to x" in cap.out and cap.err == ""
+
+
+def test_send_unconfirmed_is_worded_unconfirmed_and_exits_zero_so_no_retry_block(monkeypatch, capsys):
+    rc, _ = _run(monkeypatch, {"ok": True}, ["--to", "x", "hi"])
+    cap = capsys.readouterr()
+    assert rc == 0 and "sent to" not in cap.out
+    assert "unconfirmed" in cap.err and "may have been delivered" in cap.err
+    assert "not delivered" not in cap.err and "not confirmed" not in cap.err
+
+
+def test_own_target_prefers_codex_and_agy_env_over_grok():
+    boom = lambda: "grok-sid"
+    assert us.own_target({"CODEX_THREAD_ID": "t"}, grok=boom) == "t"
+    assert us.own_target({"ANTIGRAVITY_CONVERSATION_ID": "c"}, grok=boom) == "c"
+    assert us.own_target({}, grok=boom) == "grok-sid"
+    assert us.own_target({}, grok=lambda: "") == ""
+
+
+def test_grok_shell_send_carries_its_session_id_as_sender_target(monkeypatch, tmp_path, capsys):
+    import json
+    import os
+    sid = "01a1c000-0000-7000-8000-00000000c0c0"
+    (tmp_path / "active_sessions.json").write_text(json.dumps(
+        [{"session_id": sid, "pid": os.getpid(), "cwd": str(tmp_path)}]), encoding="utf-8")
+    monkeypatch.setenv("GROK_HOME", str(tmp_path))
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
+    monkeypatch.delenv("UNIMATRIX_PEER_NAME", raising=False)
+    rc, fake = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "x", "hi"])
+    assert rc == 0 and fake.reqs[0]["as_target"] == sid and fake.reqs[0]["as"] == "cli"
+
+
+def test_non_grok_shell_send_has_empty_sender_target(monkeypatch, tmp_path):
+    monkeypatch.setenv("GROK_HOME", str(tmp_path))
+    monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
+    monkeypatch.delenv("ANTIGRAVITY_CONVERSATION_ID", raising=False)
+    monkeypatch.delenv("UNIMATRIX_PEER_NAME", raising=False)
+    rc, fake = _run(monkeypatch, {"ok": True, "msg_id": "m"}, ["--to", "x", "hi"])
+    assert fake.reqs[0]["as_target"] == ""
 
 
 def test_send_refusal_names_reason(monkeypatch, capsys):

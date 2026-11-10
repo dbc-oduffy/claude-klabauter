@@ -64,7 +64,7 @@ def test_coded_row_reads_its_disposition(tmp_path):
 
 def test_hand_commit_row_reads_landed_outside_the_executor(tmp_path):
     repo_ = _repo(tmp_path, {"A": (("a.py",), "open"), "B": (("b.py",), "open")})
-    sha = _commit(repo_, {"a.py": "1"}, "hand edit")
+    sha = _commit(repo_, {"a.py": "1"}, "hand edit", f"Halt-Plan: {_REL}")
     got = resumable_plan({"plan": _REL}, _SIZING, repo_)
     assert got.incomplete == ("B",)
     assert _reasons(got) == {"A": f"landed outside the executor at {sha}"}
@@ -88,7 +88,7 @@ def test_every_id_is_incomplete_xor_reasoned(tmp_path):
             "D": (("d.py",), "open"),
         },
     )
-    _commit(repo_, {"c.py": "1"}, "hand edit")
+    _commit(repo_, {"c.py": "1"}, "hand edit", f"Halt-Plan: {_REL}")
     got = resumable_plan({"plan": _REL}, _SIZING, repo_)
     reasoned = set(_reasons(got))
     assert set(got.incomplete) == {"B", "D"}

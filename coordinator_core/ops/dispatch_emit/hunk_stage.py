@@ -81,11 +81,17 @@ def _changed(a: List[bytes], b: List[bytes]) -> List[_Op]:
 
 def _map(ops: List[_Op], pos: int, end: bool) -> int:
     """A left-side position carried through the full opcodes ``ops`` to the right side; inside a
-    changed block a start maps to the block's start and an end to its end."""
+    changed block a start maps to the block's start and an end to its end. A start on a changed
+    block's end edge, or an end on its start edge, lies outside the block and maps past or before it."""
     for tag, i1, i2, j1, j2 in ops:
         if i1 <= pos <= i2:
             if tag == "equal":
                 return j1 + (pos - i1)
+            if i1 < i2:
+                if pos == i2 and not end:
+                    return j2
+                if pos == i1 and end:
+                    return j1
             return j2 if end else j1
     return pos
 

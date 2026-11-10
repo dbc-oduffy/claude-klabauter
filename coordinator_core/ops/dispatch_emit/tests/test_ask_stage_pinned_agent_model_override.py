@@ -21,7 +21,7 @@ def _refire_repo(root, agent_extra):
     plan = root / PLAN_REL
     plan.parent.mkdir(parents=True, exist_ok=True)
     plan.write_text(
-        "---\nrun_id: fixture\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
+        "---\nrun_id: fixture\nstatus: reviewed\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
         f"- id: A1\n  title: TA1\n  disposition: open\n{agent_extra}  writes:\n    - some/A1.py\n```\n",
         encoding="utf-8",
         newline="\n",

@@ -109,3 +109,45 @@ def test_turn_timeout_nonzero_and_garbage_return_no_reply(tmp_path):
     assert run_turn(lambda a, **k: subprocess.CompletedProcess(a, 1, "", "err"), tmp_path) == pg.NO_REPLY
     assert run_turn(lambda a, **k: subprocess.CompletedProcess(a, 0, "garbage", ""), tmp_path) == pg.NO_REPLY
     assert run_turn(lambda a, **k: (_ for _ in ()).throw(FileNotFoundError()), tmp_path) == pg.NO_REPLY
+
+
+def test_own_session_matches_an_ancestor_pid_to_the_registry_pid(tmp_path):
+    home = registry(tmp_path, [{"session_id": SID, "pid": 100, "cwd": str(tmp_path)}])
+    parents = {900: 500, 500: 100, 100: 1}
+    peer = pg.own_session(home, pid_alive=lambda p: True, parent_of=parents.get, start=900)
+    assert peer["target"] == SID and peer["name"] == pg.peer_name(SID, str(tmp_path))
+
+
+def test_own_session_none_when_no_ancestor_is_a_registry_pid(tmp_path):
+    home = registry(tmp_path, [{"session_id": SID, "pid": 100, "cwd": str(tmp_path)}])
+    parents = {900: 500, 500: 1}
+    assert pg.own_session(home, pid_alive=lambda p: True, parent_of=parents.get, start=900) is None
+
+
+def test_own_session_ignores_a_dead_registry_row_and_survives_a_parent_cycle(tmp_path):
+    home = registry(tmp_path, [{"session_id": SID, "pid": 100, "cwd": str(tmp_path)}])
+    assert pg.own_session(home, pid_alive=lambda p: False, parent_of={900: 100}.get, start=900) is None
+    live = registry(tmp_path, [{"session_id": SID, "pid": 7, "cwd": str(tmp_path)}])
+    assert pg.own_session(live, pid_alive=lambda p: True, parent_of={900: 500, 500: 900}.get, start=900) is None
+
+
+def test_own_session_empty_registry_never_walks_processes(tmp_path):
+    def boom(pid):
+        raise AssertionError("walked")
+
+    assert pg.own_session(registry(tmp_path, []), parent_of=boom, start=1) is None
+    assert pg.own_session(tmp_path / "missing", parent_of=boom, start=1) is None
+
+
+def test_real_parent_pid_finds_this_processes_parent():
+    assert pg.parent_pid(os.getpid()) == os.getppid()
+
+
+def test_own_session_real_walk_from_a_child_process_finds_the_registered_ancestor(tmp_path):
+    home = registry(tmp_path, [{"session_id": SID, "pid": os.getpid(), "cwd": str(tmp_path)}])
+    code = ("import importlib.util,sys;"
+            f"s=importlib.util.spec_from_file_location('g',r'{BIN / 'unimatrix-peer-grok.py'}');"
+            "m=importlib.util.module_from_spec(s);s.loader.exec_module(m);"
+            f"p=m.own_session(r'{home}');print(p['target'] if p else '')")
+    out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=30)
+    assert out.stdout.strip() == SID

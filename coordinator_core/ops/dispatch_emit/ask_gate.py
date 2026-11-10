@@ -1723,11 +1723,17 @@ TOKEN_SPENT_FILE = "token-spent.json"
 
 
 def _mark_token_spent(root: Path, run_id: str) -> None:
-    """Leave `TOKEN_SPENT_FILE` in the run's record dir for `retire_token_spent_halt`; best-effort."""
+    """Leave `TOKEN_SPENT_FILE` in the run's record dir for `retire_token_spent_halt`, and drop the
+    run's live-run index entry and claim markers; best-effort."""
+    from coordinator_core.ops.dispatch_emit import live_run_index
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, safe_id
 
     if not safe_id(run_id):
         return
+    try:
+        live_run_index.remove(root, run_id)
+    except Exception:  # noqa: BLE001
+        pass
     try:
         target = Path(root) / RECORD_DIR_ROOT / run_id
         target.mkdir(parents=True, exist_ok=True)

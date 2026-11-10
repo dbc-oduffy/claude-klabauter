@@ -34,12 +34,18 @@ from typing import Callable, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.repo_setup_contract import Verdict, make_item, validate_answers
+from coordinator_core.session import record_homes
 from coordinator_core.session.declared_writes import declare_write
 
 GENERATES: list = []
 
 _VALID_TYPES = ("game-dev", "web-dev", "data-science", "general")
-_CONSUMER_DIRS = ("docs", "docs/plans", "state/handoffs", "scratch/subagent-sandbox")
+_CONSUMER_DIRS = (
+    "docs",
+    "docs/plans",
+    Path(record_homes.home_dir("", "handoffs")).as_posix(),
+    "scratch/subagent-sandbox",
+)
 _AUTHOR_DIRS = ("docs", "scratch/subagent-sandbox")
 _ORIENTATION_CACHE = "## Active workstreams\n\n## Branch\n\n## Pinboard\n"
 _TRIPWIRE_BASE = (
@@ -461,7 +467,7 @@ def _step_manifests(ctx: _Ctx) -> None:
         ctx.existed("manifest", "agent-install-manifest.json present", manifest)
     else:
         ctx.open("manifest", "seed a schema-compliant agent-install-manifest.json (contract version 3)", manifest)
-    skeleton = ctx.root / "state" / "strategic" / "self-description.yaml"
+    skeleton = Path(record_homes.record_path(str(ctx.root), "strategic", "self-description.yaml"))
     if skeleton.exists():
         ctx.existed("self-description", "self-description.yaml present", skeleton)
     else:

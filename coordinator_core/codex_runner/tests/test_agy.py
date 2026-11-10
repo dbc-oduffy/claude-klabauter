@@ -101,10 +101,26 @@ def test_usage_delta():
     assert agy.usage_delta({"a": 1}, None) is None
 
 
-def test_agy_absent_is_named_unavailable(env, monkeypatch):
+def _no_native(monkeypatch, tmp_path):
+    empty = tmp_path / "emptyhome"
+    empty.mkdir(exist_ok=True)
+    for key in ("HOME", "USERPROFILE"):
+        monkeypatch.setenv(key, str(empty))
+    monkeypatch.setenv("PATH", str(empty))
+
+
+def test_agy_resolves_from_home_bin_when_path_lacks_it(tmp_path, monkeypatch):
+    _no_native(monkeypatch, tmp_path)
+    exe = tmp_path / "emptyhome" / ".agy" / "bin" / ("agy.exe" if sys.platform.startswith("win") else "agy")
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    assert agy.resolve_agy() == [str(exe)]
+
+
+def test_agy_absent_is_named_unavailable(env, monkeypatch, tmp_path):
     _, run_dir, req, mp = env
     mp.undo()
-    monkeypatch.setattr(agy.shutil, "which", lambda name: None)
+    _no_native(monkeypatch, tmp_path)
     with pytest.raises(agy.AgyUnavailable) as ei:
         agy.resolve_agy()
     assert isinstance(ei.value, CodexUnavailable)

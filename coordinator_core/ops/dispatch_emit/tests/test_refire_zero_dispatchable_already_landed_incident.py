@@ -47,7 +47,7 @@ def _register(ids):
 def _write_plan(repo, rows):
     """`rows` is `[(id, disposition, register_rows, performer)]`; written as a plan-tasks fence."""
     body = "".join(
-        f"- id: {i}\n  title: T{i}\n  disposition: {d}\n  writes:\n    - some/{i}.py\n"
+        f"- id: {i}\n  title: T{i}\n  disposition: {d}\n  writes:\n    - some/{i}.{'md' if p == 'em' else 'py'}\n"
         + (f"  register_rows: [{', '.join(rr)}]\n" if rr else "")
         + (f"  performer: {p}\n" if p else "")
         for i, d, rr, p in rows

@@ -213,6 +213,61 @@ def test_op_runs_the_gates_through_the_shared_function(params, monkeypatch):
     assert seen[0]["caller"] == "codex-em" and seen[0]["ask_source"] == "pm"
 
 
+@pytest.fixture
+def launcher_env(tmp_path, monkeypatch):
+    """A granted headless EM: returns the env a launcher-spawned codex EM carries."""
+    from coordinator_core.ops.workflow_fire import headless_em_grant as grant
+
+    monkeypatch.setenv(grant.SETTINGS_HOME_KEY, str(tmp_path / "settings"))
+    token = grant.write_headless_em_grant("sess-1", "codex")
+    env = {"COORDINATOR_SESSION_ID": "sess-1", grant.HEADLESS_EM_TOKEN_ENV: token}
+    monkeypatch.setattr("coordinator_core.session.caller_env.effective_caller_env", lambda: env)
+    return env
+
+
+def _no_args(tmp_path):
+    return {"ask": "build the thing", "ask_source": "pm"}
+
+
+def test_grant_bound_env_supplies_identity_when_params_omit_it(tmp_path, launcher_env, seen):
+    result = op._engine_ask_submit(_no_args(tmp_path), repo_root=tmp_path)
+    assert "refused" not in result
+    assert seen[0]["session_id"] == "sess-1" and seen[0]["cwd"] == str(tmp_path)
+
+
+def test_grant_bound_env_names_the_caller_by_granted_family(tmp_path, launcher_env, monkeypatch):
+    got = []
+    monkeypatch.setattr(gates, "submit_ask", lambda **kw: got.append(kw) or {"refused": "no-run", "reason": "x"})
+    op._engine_ask_submit(_no_args(tmp_path), repo_root=tmp_path)
+    assert got[0]["caller"] == "codex-em" and got[0]["session_id"] == "sess-1"
+
+
+@pytest.mark.parametrize("token", [None, "wrong-token"])
+def test_env_session_without_a_binding_token_is_refused(tmp_path, launcher_env, seen, token):
+    from coordinator_core.ops.workflow_fire.headless_em_grant import HEADLESS_EM_TOKEN_ENV
+
+    if token is None:
+        del launcher_env[HEADLESS_EM_TOKEN_ENV]
+    else:
+        launcher_env[HEADLESS_EM_TOKEN_ENV] = token
+    result = op._engine_ask_submit(_no_args(tmp_path), repo_root=tmp_path)
+    assert result["refused"] == "bad-request" and "session_id is required" in result["reason"]
+    assert seen == []
+
+
+def test_env_session_the_grant_binds_to_another_session_is_refused(tmp_path, launcher_env, seen):
+    launcher_env["COORDINATOR_SESSION_ID"] = "sess-other"
+    result = op._engine_ask_submit(_no_args(tmp_path), repo_root=tmp_path)
+    assert result["refused"] == "bad-request" and seen == []
+
+
+def test_explicit_session_id_is_never_replaced_by_the_env(tmp_path, launcher_env, monkeypatch):
+    got = []
+    monkeypatch.setattr(gates, "submit_ask", lambda **kw: got.append(kw) or {"refused": "no-run", "reason": "x"})
+    op._engine_ask_submit({**_no_args(tmp_path), "session_id": "sess-explicit", "caller": "me", "cwd": str(tmp_path)})
+    assert (got[0]["session_id"], got[0]["caller"]) == ("sess-explicit", "me")
+
+
 @pytest.mark.parametrize("answer", [None, {}, {"run_id": "r1"}, {"script_path": "x"}])
 def test_incomplete_submit_result_is_not_success(params, monkeypatch, answer):
     monkeypatch.setattr(gates, "submit_ask", lambda **kw: answer)

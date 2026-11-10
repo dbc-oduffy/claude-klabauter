@@ -109,6 +109,42 @@ def test_windows_prepare_emits_token_without_executing(capsys):
     assert g.headless_em_grant_matches(plan["environment"], plan["session_id"], "codex")
 
 
+def _win_prepare(family, which, capsys, **kw):
+    rc = hel.launch(family, [], which=which, execv=lambda *a: None, environ={}, platform="win32",
+                    prepare_only=True, **kw)
+    return rc, capsys.readouterr()
+
+
+@pytest.mark.parametrize("family", hel.FAMILIES)
+def test_windows_native_exe_on_path_used_as_is(family, capsys):
+    rc, out = _win_prepare(family, lambda n: f"pathbin/{n}" if n.endswith(".exe") else None, capsys)
+    assert rc == 0 and json.loads(out.out)["argv"] == [f"pathbin/{family}.exe"]
+
+
+def test_windows_codex_cmd_shim_maps_to_native_exe(tmp_path, capsys):
+    shim = tmp_path / "codex.cmd"
+    exe = (tmp_path / "node_modules" / "@openai" / "codex" / "vendor" / "x86_64-pc-windows-msvc" / "codex" / "codex.exe")
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    import platform
+    if platform.machine().lower() in {"arm64", "aarch64"}:
+        pytest.skip("x64 fixture layout")
+    rc, out = _win_prepare("codex", lambda n: str(shim) if n == "codex" else None, capsys)
+    assert rc == 0 and json.loads(out.out)["argv"] == [str(exe)]
+
+
+@pytest.mark.parametrize("family", hel.FAMILIES)
+def test_windows_shim_without_native_package_refused_naming_flag(family, tmp_path, capsys, home):
+    rc, out = _win_prepare(family, lambda n: str(tmp_path / f"{family}.cmd") if n == family else None, capsys)
+    assert rc == hel.REFUSED and out.out == "" and "--native-executable" in out.err
+    assert not (home / "state").exists()
+
+
+def test_windows_native_executable_flag_wins_over_path(capsys):
+    rc, out = _win_prepare("agy", lambda n: "pathbin/agy.exe", capsys, native_executable="given/agy.exe")
+    assert rc == 0 and json.loads(out.out)["argv"] == ["given/agy.exe"]
+
+
 def test_main_parses_family_session_and_passthrough(monkeypatch):
     seen = {}
     monkeypatch.setattr(hel, "launch", lambda family, extra, **k: seen.update(k, family=family, extra=extra) or 0)

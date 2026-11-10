@@ -163,6 +163,39 @@ def _slim_manifest(raw: bytes, handle: Mapping) -> tuple[str, dict] | None:
     return text, {"path": handle.get("path"), "sha256": hashlib.sha256(text.encode("ascii")).hexdigest(), "bytes": len(text)}
 
 
+_JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_PACK_MARKS = "~^|#@$%"
+_BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+
+def _base36(n: int) -> str:
+    digits = _BASE36[n % 36]
+    while n >= 36:
+        n //= 36
+        digits = _BASE36[n % 36] + digits
+    return digits
+
+
+def _pack_manifest(text: str) -> tuple[str, dict] | None:
+    """``(packed text, {m, t})`` replacing every repeated JSON string literal of ``text`` with a table
+    reference (``STAGED_UNPACK_JS`` inverts it), else None when no mark char is free or nothing repeats.
+
+    Lossless: a manifest repeats its write paths across rows, review scope, test scopes and baseline, so the
+    whole manifest stays readable in-script at a fraction of its size."""
+    mark = next((ch for ch in _PACK_MARKS if ch not in text), None)
+    if mark is None:
+        return None
+    counts: dict[str, int] = {}
+    for token in _JSON_STRING.findall(text):
+        counts[token] = counts.get(token, 0) + 1
+    table = [t for t, n in sorted(counts.items(), key=lambda kv: -kv[1]) if n > 1 and len(t) > 2 * len(mark) + 2]
+    if not table:
+        return None
+    index = {t: _base36(i) for i, t in enumerate(table)}
+    packed = _JSON_STRING.sub(lambda m: f"{mark}{index[m.group(0)]}{mark}" if m.group(0) in index else m.group(0), text)
+    return packed, {"m": mark, "t": table}
+
+
 def _land(target: Path, body: bytes, refuse: Callable[[str], Exception], label: str) -> None:
     """Write ``body`` to ``target`` atomically and verify it; no write when already identical."""
     try:
@@ -246,8 +279,9 @@ def ensure_twin(
     slots, uncontained target, write OSError; message starts ``staged twin write failed``);
     ``refuse_over_cap`` (default ``refuse``) builds the one raised when the twin still exceeds ``max_bytes``
     after slimming; both are passed in so this module never imports ``reply_sidecar``.
-    A body over ``max_bytes`` is slimmed when the manifest has a ``rows`` list: row bulk (``SPILLED_ROW_KEYS``)
-    leaves the inline text for a spill file beside the twin holding the full manifest.
+    A body over ``max_bytes`` is first packed (repeated JSON strings become table references the twin rebuilds
+    losslessly, ``STAGED_UNPACK_JS``); only if still over, and the manifest has a ``rows`` list, is it slimmed:
+    row bulk (``SPILLED_ROW_KEYS``) leaves the inline text for a spill file beside the twin holding the full manifest.
     No write when the twin on disk is already identical. The run's escrowed token (if live) is inlined
     as ``runToken`` into the twin only.
 
@@ -291,11 +325,14 @@ def ensure_twin(
         extras["runToken"] = token
     over_cap = refuse_over_cap or refuse
 
-    def render(payload: dict) -> bytes:
+    def render(payload: dict, packed: bool = False) -> bytes:
         inline = json.dumps({**payload, **extras}, ensure_ascii=True)
         out = list(lines)
         ending = out[slots[0]][len(_nested.STAGED_INLINE_SLOT):]
-        out[slots[0]] = f"const _STAGED_INLINE = {inline};{ending}"
+        if packed:
+            out[slots[0]] = f"{_nested.STAGED_UNPACK_JS}\nconst _STAGED_INLINE = _unpackStaged({inline});{ending}"
+        else:
+            out[slots[0]] = f"const _STAGED_INLINE = {inline};{ending}"
         return "".join(out).encode("utf-8")
 
     twin_rel = _nested.staged_twin_rel(run_id, sha)
@@ -304,6 +341,11 @@ def ensure_twin(
         raise refuse(f"staged twin write failed: {twin_rel!r} is outside {_RUN_DIR_ROOT}/")
     body = render({"handle": dict(handle), "text": raw.decode("ascii")})
     spill_target = None
+    if len(body) > max_bytes:
+        packed = _pack_manifest(raw.decode("ascii"))
+        if packed is not None:
+            packed_text, table = packed
+            body = render({"handle": dict(handle), "text": packed_text, _nested.STAGED_PACK_KEY: table}, packed=True)
     if len(body) > max_bytes:
         slim = _slim_manifest(raw, handle)
         if slim is not None:

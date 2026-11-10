@@ -15,7 +15,6 @@ from coordinator_core.codex_runner.identity_env import provider_identity_env
 import json
 import os
 import queue
-import shutil
 import subprocess
 import sys
 import threading
@@ -44,7 +43,7 @@ from coordinator_core.codex_runner.contract import (
     RunRequest,
     RunResult,
 )
-from coordinator_core.codex_runner.resolve import CodexUnavailable
+from coordinator_core.codex_runner.resolve import CodexUnavailable, resolve_native_cli
 from coordinator_core.codex_runner.review import _ENV_ALLOW_WINDOWS as _REVIEW_ENV_ALLOW_WINDOWS
 
 GROK_TIMEOUT_S = 900
@@ -73,10 +72,10 @@ class GrokUnavailable(CodexUnavailable):
 
 
 def resolve_grok() -> list[str]:
-    """Return [grok_path] from PATH; raise GrokUnavailable when absent."""
-    found = shutil.which("grok")
+    """Return [grok_path] from PATH, else ~/.grok/bin; raise GrokUnavailable when both miss."""
+    found = resolve_native_cli("grok")
     if not found:
-        raise GrokUnavailable("grok not found on PATH (install Grok Build)")
+        raise GrokUnavailable("grok not found on PATH or in ~/.grok/bin (install Grok Build)")
     return [found]
 
 

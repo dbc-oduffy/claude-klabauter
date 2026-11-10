@@ -89,7 +89,7 @@ _GROK_TEXT_EVENTS = frozenset({"assistant", "message", "text", "agent_message", 
 
 
 class GrokAdapter:
-    """Headless grok (`grok -p ... --output-format streaming-json`, plan mode, write/exec denied) as a resume-mode adapter.
+    """Headless grok (`grok -p ... --output-format streaming-json`, read-only `--tools` allowlist, write/exec denied) as a resume-mode adapter.
 
     The session id is ours (`-s`), so every message is attributed to it. Text events are messages;
     a `result` event counts only when no text event came first. Trap: the streaming-json event

@@ -50,6 +50,45 @@ def test_missing_or_bad_peers_file_is_none(tmp_path, monkeypatch):
     assert resolve_name("grok", ["s1"]) is None
 
 
+def test_grok_session_absent_from_peers_resolves_from_active_sessions(tmp_path, monkeypatch):
+    peers(tmp_path, monkeypatch, [])
+    home = tmp_path / "grokhome"
+    home.mkdir()
+    repo = tmp_path / "coordinator-content-repo"
+    (repo / ".git").mkdir(parents=True)
+    sid = "01a1c2d6-f3c4-7340-92bd-257341b50f06"
+    (home / "active_sessions.json").write_text(json.dumps(
+        [{"session_id": sid, "cwd": str(repo), "pid": 1}]), encoding="utf-8")
+    monkeypatch.setenv("GROK_HOME", str(home))
+    name = resolve_name("grok", [sid])
+    assert name is not None and name.startswith("grok-coordinator-content-repo-01a1c2d6-on-")
+    assert resolve_name("grok", ["other"]) is None
+
+
+def test_peers_row_wins_over_grok_session_source(tmp_path, monkeypatch):
+    peers(tmp_path, monkeypatch, [{"vendor": "grok", "target": "s1", "name": "from-peers"}])
+    home = tmp_path / "grokhome"
+    home.mkdir()
+    (home / "active_sessions.json").write_text(json.dumps(
+        [{"session_id": "s1", "cwd": str(tmp_path), "pid": 1}]), encoding="utf-8")
+    monkeypatch.setenv("GROK_HOME", str(home))
+    assert resolve_name("grok", ["s1"]) == "from-peers"
+
+
+def test_agy_leg_record_resolves_roster_name(tmp_path, monkeypatch):
+    peers(tmp_path, monkeypatch, [])
+    legs = tmp_path / "unimatrix" / "agy-legs"
+    legs.mkdir()
+    repo = tmp_path / "coordinator-content-repo"
+    (repo / ".git").mkdir(parents=True)
+    conv = "11111111-2222-3333-4444-555555555555"
+    (legs / f"{conv}.json").write_text(json.dumps(
+        {"conversation": conv, "pid": 1, "cwd": str(repo)}), encoding="utf-8")
+    name = resolve_name("agy", ["s-other", conv])
+    assert name is not None and name.startswith("agy-coordinator-content-repo-") and "-on-" in name
+    assert resolve_name("agy", ["99999999-2222-3333-4444-555555555555"]) is None
+
+
 def test_format_line_unknown_slots_never_zero_or_full():
     line = format_line(None, None, None)
     assert line == "unknown · unknown · unknown"

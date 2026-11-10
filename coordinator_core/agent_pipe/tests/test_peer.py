@@ -141,13 +141,16 @@ def test_real_adapters_build_native_argv_without_bypass_flags(home):
         assert not [a for a in argv if "dangerously" in a or "bypass" in a]
 
 
-def test_grok_participant_is_resume_mode_with_plan_mode_argv_and_no_bypass(home, monkeypatch):
-    monkeypatch.setattr("coordinator_core.codex_runner.grok.shutil.which", lambda name: "/bin/grok")
+def test_grok_participant_is_resume_mode_with_read_only_allowlist_argv_and_no_bypass(home, monkeypatch):
+    monkeypatch.setattr("coordinator_core.codex_runner.grok.resolve_native_cli", lambda name: "/bin/grok")
     g = peer.grok_participant("grok1", conversation="sid-1")
     assert g.mode == peer.RESUME and g.conversation == "sid-1"
     argv = g.adapter.resume_argv("sid-1", "hi")
     assert argv[:3] == ["/bin/grok", "-p", "hi"] and argv[argv.index("-s") + 1] == "sid-1"
-    assert argv[argv.index("--permission-mode") + 1] == "plan"
+    assert "--permission-mode" not in argv
+    assert argv[argv.index("--tools") + 1] == "Read,Grep"
+    denied = [argv[i + 1] for i, a in enumerate(argv) if a == "--deny"]
+    assert {"Edit", "Write", "Bash"} <= set(denied)
     assert not [a for a in argv if "always-approve" in a or "bypass" in a or "yolo" in a]
     fresh = g.adapter.spawn_argv("hello")
     assert fresh[fresh.index("-s") + 1] == g.adapter.session

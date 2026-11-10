@@ -46,6 +46,21 @@ def test_cost_below_display_floor_or_zero_is_unknown(tmp_path, monkeypatch):
     assert grok.line({"cost": {"total_cost_usd": 0.005}}).endswith("~$0.01")
 
 
+def test_session_in_active_sessions_prints_roster_name(tmp_path, monkeypatch):
+    peers(tmp_path, monkeypatch, [])
+    home = tmp_path / "grokhome"
+    home.mkdir()
+    repo = tmp_path / "coordinator-content-repo"
+    (repo / ".git").mkdir(parents=True)
+    sid = "01a1c2d6-f3c4-7340-92bd-257341b50f06"
+    (home / "active_sessions.json").write_text(json.dumps(
+        [{"session_id": sid, "cwd": str(repo), "pid": 1}]), encoding="utf-8")
+    monkeypatch.setenv("GROK_HOME", str(home))
+    out = grok.line({"session_id": sid, "cost": {"total_cost_usd": 1.23}})
+    assert out.startswith("grok-coordinator-content-repo-01a1c2d6-on-") and out.endswith("~$1.23")
+    assert grok.line({"session_id": "nope"}).startswith("unknown")
+
+
 def test_ambiguous_peer_rows_print_unknown_name(tmp_path, monkeypatch):
     peers(tmp_path, monkeypatch, [{"vendor": "grok", "target": "s1", "name": "a"},
                                   {"vendor": "grok", "target": "s1", "name": "b"}])

@@ -3,6 +3,9 @@
 Usage: headless-em-launch.py <codex|agy|grok> [--session-id ID] [--prepare-only] [--native-executable PATH] [-- cli args...]
        (--help prints this text)
 
+Without --native-executable the CLI is resolved from PATH (on Windows a .exe as-is, or codex's npm shim
+mapped to its native exe).
+
 Resolves the child session id (--session-id, else COORDINATOR_SESSION_ID, else a fresh uuid4), writes
 the grant for (session id, family), and hands the child COORDINATOR_SESSION_ID plus the grant token
 (COORDINATOR_ALLOW_HEADLESS_EM_TOKEN). Exit 2 on a refusal, 127 when the CLI is not on PATH.
@@ -59,7 +62,14 @@ def launch(family, extra, *, session_id=None, which=shutil.which, execv=os.execv
         print("headless-em-launch: Windows launch must run in the current PowerShell process; "
               "use --prepare-only and start the CLI from it", file=sys.stderr)
         return REFUSED
-    cli = native_executable or which(family + ".exe" if platform == "win32" else family)
+    cli = native_executable
+    if not cli:
+        from coordinator_core.codex_runner.resolve import CodexUnavailable, resolve_native_cli
+        try:
+            cli = resolve_native_cli(family, platform, which=which)
+        except CodexUnavailable as exc:
+            print(f"headless-em-launch: {exc}; pass --native-executable with its installed path", file=sys.stderr)
+            return REFUSED
     if not cli:
         print(f"headless-em-launch: {family} is not on PATH", file=sys.stderr)
         return 127

@@ -142,6 +142,75 @@ def test_windows_path_fallback_resolves_native_and_never_shell(tmp_path, monkeyp
     assert "shell=True" not in inspect.getsource(resolve)
 
 
+@pytest.mark.parametrize("family", ["codex", "agy", "grok"])
+def test_native_cli_posix_is_plain_which(family, tmp_path):
+    assert resolve.resolve_native_cli(family, "linux", which=lambda n: f"/bin/{n}") == f"/bin/{family}"
+    assert resolve.resolve_native_cli(family, "linux", which=lambda n: None, home=tmp_path) is None
+
+
+@pytest.mark.parametrize("family", ["codex", "agy", "grok"])
+@pytest.mark.parametrize("platform,name", [("linux", "{f}"), ("win32", "{f}.exe")])
+def test_native_cli_falls_back_to_home_bin(family, platform, name, tmp_path):
+    exe = tmp_path / f".{family}" / "bin" / name.format(f=family)
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    got = resolve.resolve_native_cli(family, platform, which=lambda n: None, home=tmp_path)
+    assert got == str(exe)
+    on_path = resolve.resolve_native_cli(family, platform, which=lambda n: f"P/{n}", home=tmp_path)
+    assert on_path.startswith("P/")
+
+
+def test_native_cli_home_defaults_to_env_home(tmp_path):
+    exe = tmp_path / ".grok" / "bin" / "grok"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    env = {"HOME": str(tmp_path), "USERPROFILE": str(tmp_path), "PATH": ""}
+    assert resolve.resolve_native_cli("grok", "linux", env) == str(exe)
+
+
+@pytest.mark.parametrize("family", ["codex", "agy", "grok"])
+def test_native_cli_windows_exe_on_path_wins(family):
+    seen = []
+    got = resolve.resolve_native_cli(family, "win32", which=lambda n: seen.append(n) or f"X/{n}")
+    assert got == f"X/{family}.exe" and seen == [f"{family}.exe"]
+
+
+def test_native_cli_windows_absent_is_none(tmp_path):
+    assert resolve.resolve_native_cli("agy", "win32", which=lambda n: None, home=tmp_path) is None
+
+
+def test_native_cli_windows_codex_shim_maps_without_exec(monkeypatch):
+    monkeypatch.setattr(resolve, "_native_npm_codex", lambda shim: f"native-of-{shim.name}")
+    got = resolve.resolve_native_cli("codex", "win32", which=lambda n: "npm/codex.cmd" if n == "codex" else None)
+    assert got == "native-of-codex.cmd"
+
+
+@pytest.mark.parametrize("family", ["agy", "grok"])
+def test_native_cli_windows_unknown_shim_layout_refuses(family, tmp_path):
+    with pytest.raises(resolve.CodexUnavailable, match=family):
+        resolve.resolve_native_cli(
+            family, "win32", which=lambda n: f"npm/{family}.cmd" if n == family else None, home=tmp_path
+        )
+
+
+@pytest.mark.parametrize("family", ["agy", "grok"])
+def test_native_cli_windows_unusable_shim_falls_back_to_home_bin(family, tmp_path):
+    exe = tmp_path / f".{family}" / "bin" / f"{family}.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    got = resolve.resolve_native_cli(
+        family, "win32", which=lambda n: f"npm/{family}.cmd" if n == family else None, home=tmp_path
+    )
+    assert got == str(exe)
+
+
+def test_native_cli_default_which_reads_env_path(tmp_path):
+    exe = tmp_path / "agy.exe"
+    exe.write_text("")
+    got = resolve.resolve_native_cli("agy", "win32", {"PATH": str(tmp_path), "PATHEXT": ".EXE"})
+    assert got is None or os.path.normcase(got) == os.path.normcase(str(exe))
+
+
 class _Proc:
     def __init__(self, out="", err=""):
         self.stdout, self.stderr = out, err

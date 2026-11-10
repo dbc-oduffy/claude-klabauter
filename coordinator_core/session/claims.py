@@ -205,8 +205,9 @@ def _atomic_dedup_append_lock_anchor(touched: str) -> Optional[Path]:
     THIRD parent is the git common dir itself: ``parents[0]`` = the ``<sid>``
     directory, ``parents[1]`` = ``coordinator-sessions``, ``parents[2]`` =
     the git common dir (named ``.git`` for every non-bare, non-worktree-
-    private layout this hub uses). ``held_lock``'s sidecar directory is
-    ``git_common_dir(anchor_root) / "coordinator-locks"`` — passing that
+    private layout this hub uses). The sidecar directory is
+    ``_lock_dir_path(anchor_root)`` (``<checkout>/.coordinator-local/locks``
+    for a ``.git`` common dir) — passing that
     common dir's PARENT (the repo/worktree root) as ``anchor_root`` re-
     derives the identical common dir, landing this writer in the SAME lock
     sidecar ``scope.touch()`` uses when it is called with ``root or cwd``

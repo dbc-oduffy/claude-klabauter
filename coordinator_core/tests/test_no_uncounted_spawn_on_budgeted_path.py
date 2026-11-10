@@ -333,6 +333,61 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/remote_engine_handle.py",
         ("_remote_engine_handle",),
     ),
+    # Spawn-free on landing (empty function-granular reachable set), 2026-11-09.
+    "ask_spool.withdraw": (
+        "coordinator_core/ops/ask_spool_withdraw.py",
+        ("_handler",),
+    ),
+    "ceremony.result": (
+        "coordinator_core/ops/session_ceremonies.py",
+        ("result",),
+    ),
+    # The six launch ops register a nested `invoke` closure the walker cannot index, so they
+    # enrol on the module-level `_launch` it delegates to; the one reachable site is the detached
+    # worker `Popen` legitimized below.
+    **{
+        f"ceremony.{_ceremony}": ("coordinator_core/ops/session_ceremonies.py", ("_launch",))
+        for _ceremony in (
+            "handoff",
+            "pickup",
+            "quick_wrap",
+            "workday_complete",
+            "workday_start",
+            "workstream_start",
+        )
+    },
+    "codex_status.snapshot": (
+        "coordinator_core/ops/codex_status.py",
+        ("snapshot",),
+    ),
+    "consolidate_assemble.brief": (
+        "coordinator_core/consolidate_assemble/ops.py",
+        ("_consolidate_assemble_brief",),
+    ),
+    "dispatch.docs_check_rag_gate": (
+        "coordinator_core/ops/dispatch_emit/docs_check_gate_op.py",
+        ("_handler",),
+    ),
+    "hooks.preuse_bash_dispatch": (
+        "coordinator_core/hooks/preuse_bash_dispatch.py",
+        ("_handler",),
+    ),
+    "plan.set_code_done": (
+        "coordinator_core/ops/plan_set_code_done.py",
+        ("_handler",),
+    ),
+    "roadmap.wiring_seams": (
+        "coordinator_core/ops/roadmap_wiring_seams.py",
+        ("_handler",),
+    ),
+    "scratch.keep": (
+        "coordinator_core/ops/scratch_record.py",
+        ("_keep_handler",),
+    ),
+    "scratch.record_run_path": (
+        "coordinator_core/ops/scratch_record.py",
+        ("_record_handler",),
+    ),
     # Spawn-free on landing (empty function-granular reachable set), 2026-10-16.
     "design.registry.lookup": (
         "coordinator_core/ops/design_registry_lookup.py",
@@ -2130,6 +2185,28 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
             "dispatch.measured_rev",
         )
     },
+    **{
+        (
+            f"ceremony.{_ceremony}",
+            "coordinator_core/ops/session_ceremonies.py",
+            "_launch_admitted",
+            "<dynamic>",
+            0,
+        ): _Legitimation(
+            counter=_GLOBAL_SUBPROCESS_SPAWN,
+            counted_by="coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py",
+            executed="Measured 2026-11-10 under `test_ceremony_launch_ops_spawn_exactly_one_detached_worker`: "
+            "`ops._launch` run per ceremony with `subprocess.Popen` substituted, exactly one call.",
+        )
+        for _ceremony in (
+            "handoff",
+            "pickup",
+            "quick_wrap",
+            "workday_complete",
+            "workday_start",
+            "workstream_start",
+        )
+    },
     (
         "bin.workday_complete_backfill_scan.scan",
         "coordinator_core/ops/workday_complete_backfill_scan.py",
@@ -3653,13 +3730,10 @@ _CLUSTER_D5_OPEN_DISPOSITION: dict[str, tuple[tuple[str, str, str, int], ...]] =
         ("coordinator_core/ops/emit/resolvers.py", "resolve_coordinator_root", "<dynamic>", 0),
     ),
     "workflow.fire": (
-        ("coordinator_core/ops/workflow_fire/fire.py", "_pid_alive", "tasklist", 0),
         ("coordinator_core/ops/workflow_fire/fire.py", "_shim_plugin_dir", "<dynamic>", 0),
         ("coordinator_core/ops/workflow_fire/fire.py", "fire_workflow", "<dynamic>", 0),
     ),
-    "workflow.fire_status": (
-        ("coordinator_core/ops/workflow_fire/fire.py", "_pid_alive", "tasklist", 0),
-    ),
+    "workflow.fire_status": (),
 }
 
 
@@ -3726,9 +3800,11 @@ def test_cluster_d5_open_disposition_matches_live_measurement():
     # 33 -> 35: `sizings.summary` and `workflow_runs.list` each reach resolvers.py::resolve_coordinator_root.
     # 35 -> 37 on 2026-10-28: `active_reference_guard_many` joins the apply_disposal and
     # assemble_disposal_manifest rows.
-    assert total_pairs == 37, (
+    # 37 -> 35 on 2026-11-09: `workflow.fire` and `workflow.fire_status` no longer reach
+    # `fire.py::_pid_alive`.
+    assert total_pairs == 35, (
         f"_CLUSTER_D5_OPEN_DISPOSITION now totals {total_pairs} (op, site) pairs, not the "
-        "37 measured 2026-10-28 after active_reference_guard_many joined the two distill rows; 35 measured 2026-10-24 after sizings.summary and workflow_runs.list registered; 33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
+        "35 measured 2026-11-09 after workflow.fire and workflow.fire_status stopped reaching _pid_alive; 37 measured 2026-10-28 after active_reference_guard_many joined the two distill rows; 35 measured 2026-10-24 after sizings.summary and workflow_runs.list registered; 33 measured 2026-10-22 after handoff.archive_transition stopped reaching its D5 site; 34 measured 2026-10-12 after f10d5c0233 put the batched files_citing prefetch on distill.apply_disposal and distill.assemble_disposal_manifest; 32 measured 2026-10-03 (see the comment above); 33 measured 2026-10-02 after handoff.columns' D5 site moved onto run_git; 34 left after changelog.upsert_reviewed and a since-retired completion op stopped reaching "
         "their D5 sites (was 38 after the 2026-08-30 rot sweep dropped handoff.reconcile_close_terminal's "
         "single pair -- the op is deleted from the tree and absent from ops/_registry_map.py, "
         "so its row could only ever read a missing file. 39 - 1 = 38. Update this constant "
@@ -7306,7 +7382,28 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # review.reverify: static reachable-site ceiling, not execution evidence. The one site is
     # foreign_halted_withheld's run_git (probe-open and revert legs), reached once per still-held
     # halted run, so the dynamic count scales with halted runs; not enrolled.
-    "review.reverify": 1,
+    # Raised 1->2 2026-11-10: the second site is halted_run._schedule_resume_build ->
+    # detached_spawn.spawn_detached, reached via foreign_halted_withheld -> warp_run_deliverable
+    # (_live_peer_tail -> _halt_abandoned -> write_halt_marker). Detached and best-effort, fired only
+    # when an abandoned run is halted; the op never waits on it.
+    # Measured 2026-11-10: `spawn_detached` (no-op child) 2.3ms wall max over 7 calls, parent CPU
+    # below the 15.6ms clock tick; one `run_git rev-parse HEAD` 123.9ms wall max, same CPU tick.
+    # Both far under the 500ms bar.
+    "review.reverify": 2,
+    # Pinned 2026-11-10 at their measured static reachable-site counts (`_measure_static_spawn_counts`).
+    # Each git site is the single `run_git` Popen (the Windows/POSIX paths share one site).
+    "fleet.klabauter_freshness": 2,
+    "handoff.human_gate_clear": 1,
+    "plan.reapprove_mechanical_tags": 1,
+    "session.landing_hold": 1,
+    # No reachable site survives the walk; pinned so a future one is a named failure.
+    "repo.setup": 0,
+    # Five reach-only sites, all detached or background by design: fire_workflow / headless.start
+    # launch the workflow, `_shim_plugin_dir` resolves the shim, `publish_lag` is two git reads.
+    # Measured 2026-11-10: a detached spawn is 2.3ms wall max (parent never waits); a git read
+    # 123.9ms wall max, parent CPU below the 15.6ms clock tick. The pin is a static ceiling; the
+    # detached legs add no blocking time, so the op stays under the 500ms bar.
+    "engine_ask.submit": 5,
     # Enrolled 2026-08-30 (second reconciliation pass): both entered the live
     # registry mid-close from concurrent peer work, measured at their live
     # reachable-site counts.
@@ -7650,7 +7747,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "strategic.generate": 1,
     "tracker.mint_person": 1,
     "workflow_runs.list": 2,
-    "workflow.fire_status": 1,
+    "workflow.fire_status": 0,
     # Newly live ops measured at their reachable-site counts when first pinned.
     "ci.run_commenting_sweep": 1,
     # close.background's legs run lazy imports and a detached launch the static walk does not
@@ -7710,10 +7807,6 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "hooks.handoff_segment_inject": 2,
     "hooks.mise_autofire": 1,
     "hooks.pickup_autofire": 1,
-    # 8 -> 9, 2026-10-09: same deploy-dirty-tree `git status` as warm_guard.evaluate (gated).
-    # 5 -> 6, 2026-10-29: `spawn_detached` via `halted_run._schedule_resume_build` (reach-only on
-    # a bash dispatch; detached Popen measured 0ms CPU / 2-5ms wall, skipped under pytest).
-    "hooks.preuse_bash_dispatch": 6,
     "hooks.session_start_cloud_focus": 1,
     "hooks.session_start_repair_prepare_commit_msg_hook": 2,
     # 3 -> 4, 2026-10-29: `rollback_check._git`, reach-only (commit_paths leaves `detect_rollback`
@@ -7963,3 +8056,40 @@ def test_commit_merge_spawns_one_commit_tree_through_git_invoke(tmp_path, monkey
         commit_tree = [s for s in spawns if "commit-tree" in s.argv]
         assert len(commit_tree) == 1, [s.argv for s in spawns]
         assert commit_tree[0].origin == "_git._invoke", commit_tree[0]
+
+
+@pytest.mark.parametrize(
+    "ceremony",
+    ("handoff", "pickup", "quick_wrap", "workday_complete", "workday_start", "workstream_start"),
+)
+def test_ceremony_launch_ops_spawn_exactly_one_detached_worker(ceremony, tmp_path, monkeypatch):
+    """Companion for the six `ceremony.*` legitimizations: `_launch` makes exactly one
+    `subprocess.Popen` per call, the detached worker, and no other spawn."""
+    import io
+    import subprocess
+    from contextlib import nullcontext
+    from types import SimpleNamespace
+
+    from coordinator_core.bash_guards import _heavy_command_class as capacity
+    from coordinator_core.ops import session_ceremonies as ops
+
+    monkeypatch.setattr(capacity, "_load_box_memory_host", lambda: SimpleNamespace(
+        admission_file=lambda: "fixture", admission_lock=lambda path: nullcontext()))
+    monkeypatch.setattr(capacity, "admit_before_spawn", lambda *a, **k: SimpleNamespace(
+        admitted=True, reason="admitted", peak_gib=0.25))
+    monkeypatch.setattr(capacity, "register_spawn", lambda *a, **k: True)
+    monkeypatch.setattr(capacity, "release_spawn", lambda *a, **k: None)
+    monkeypatch.setattr(ops, "_runs", lambda: tmp_path / "runs")
+
+    class _Child:
+        stdin = io.BytesIO()
+        pid = 4567
+
+    popen_calls: list = []
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: popen_calls.append(a) or _Child())
+    params: dict = {"session_id": "01a1b63c-040a-76f2-a9b9-929d9a0d0098"}
+    if ceremony == "pickup":
+        params["artifact_path"] = "state/handoffs/test.md"
+    result = ops._launch(ceremony, params, tmp_path)
+    assert result["state"] == "accepted", result
+    assert len(popen_calls) == 1, popen_calls

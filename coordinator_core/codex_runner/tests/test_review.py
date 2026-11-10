@@ -182,6 +182,35 @@ def test_windows_env_keeps_essentials_and_posix_does_not_gain_them():
     assert {"SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "COMSPEC"}.isdisjoint(posix)
 
 
+def test_windows_env_puts_installed_pwsh_dir_ahead_of_windowsapps(tmp_path, monkeypatch):
+    pf = tmp_path / "Program Files"
+    pwsh_dir = pf / "PowerShell" / "7"
+    pwsh_dir.mkdir(parents=True)
+    (pwsh_dir / "pwsh.exe").write_text("")
+    alias = str(tmp_path / "WindowsApps")
+    src = {"PATH": os.pathsep.join([alias, str(tmp_path / "Windows")]), "ProgramFiles": str(pf)}
+
+    def no_spawn(*a, **k):
+        raise AssertionError("spawned a process")
+
+    monkeypatch.setattr(review.subprocess, "Popen", no_spawn)
+    monkeypatch.setattr(review.subprocess, "run", no_spawn)
+    parts = review._unattended_env(src, windows=True)["PATH"].split(os.pathsep)
+    assert parts[0] == str(pwsh_dir)
+    assert parts.index(str(pwsh_dir)) < parts.index(alias)
+    again = review._build_env({**src, "PATH": os.pathsep.join(parts)}, windows=True)["PATH"].split(os.pathsep)
+    assert again.count(str(pwsh_dir)) == 1
+
+
+def test_pwsh_path_untouched_when_not_windows_or_not_installed(tmp_path):
+    pf = tmp_path / "pf"
+    (pf / "PowerShell" / "7").mkdir(parents=True)
+    src = {"PATH": "/p", "ProgramFiles": str(pf)}
+    assert review._build_env(src, windows=True)["PATH"] == "/p"
+    (pf / "PowerShell" / "7" / "pwsh.exe").write_text("")
+    assert review._build_env(src, windows=False)["PATH"] == "/p"
+
+
 def test_child_env_never_sees_api_key(env):
     tmp_path, run_dir, req, mp = env
     mp.setenv("OPENAI_API_KEY", "sk-leak")

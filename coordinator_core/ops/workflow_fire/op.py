@@ -195,7 +195,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
         raise ValueError(f"a {backend} backend cannot use the Claude executor")
     if params.get("private_engine") is not None and (backend != "codex" or executor != "headless"):
         raise ValueError("a private native engine requires an explicit Codex headless executor")
-    from coordinator_core.ops.workflow_fire.authority import require_fire_authority
+    from coordinator_core.ops.workflow_fire.authority import fire_record_caller_session_id, require_fire_authority
 
     principal = require_fire_authority(
         script_path, expected, cwd=str(repo_root) if repo_root is not None else None,
@@ -215,8 +215,7 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
             concurrency_cap=params.get("concurrency_cap", fire.DEFAULT_CONCURRENCY_CAP),
             timeout_s=params.get("timeout_s", 7200),
             args=params.get("args"), run_id=params.get("run_id"),
-            caller_session_id=(principal.session_id if principal.role == "em"
-                               else principal.env.get("COORDINATOR_PARENT_SESSION_ID")),
+            caller_session_id=fire_record_caller_session_id(principal),
             expected=expected,
             **private_args,
         )
