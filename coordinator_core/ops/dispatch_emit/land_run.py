@@ -1152,9 +1152,11 @@ def _footprint_fence(
     from coordinator_core.ops.dispatch_emit import footprint_breach
     from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
 
+    from coordinator_core.ops.dispatch_emit.write_baseline import predecessor_withheld
+
     allowed = set(writes) | set(widened_paths(run_dir)) | set(
         footprint_breach.serving_writes(root / plan_rel if plan_rel else None, resume.get("blocking") or [])
-    )
+    ) | predecessor_withheld(root, _cited_sizing(root, plan_rel), run_dir)
     paths, stage_head = _manifest_declared(manifest_abs)
     base, _source = _halt_base(root, resume, plan_rel, stage_head)
     if base is None:

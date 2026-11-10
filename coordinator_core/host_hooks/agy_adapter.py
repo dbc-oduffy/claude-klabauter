@@ -42,6 +42,8 @@ class AgyAdapter:
             resolved = "PreToolUse"
         workspaces = payload.get("workspacePaths")
         cwd = str(workspaces[0]) if isinstance(workspaces, (list, tuple)) and workspaces else ""
+        if not cwd and isinstance(payload.get("cwd"), str):
+            cwd = payload["cwd"]
         return HostEvent(
             host=HOST_AGY,
             event=str(resolved or ""),

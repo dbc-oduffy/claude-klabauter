@@ -690,18 +690,25 @@ def _trailing_json(text: str):
         raise whole_error
 
 
-def _family_argv(backend: str, artifact_dir: Path) -> list[str]:
+_OP_RELAY_AGENT_TYPE = "coordinator:op-relay"
+# The op-relay child runs one coordinator-invoke and nothing else. The rule grammar is grok's;
+# a rejected pattern surfaces as the named cancel error. Same literal as ask_compose._OP_RELAY_AGENT_TYPE.
+_RELAY_ALLOW = "Bash(coordinator-invoke:*)"
+
+
+def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None) -> list[str]:
     """Write-capable argv for a grok/agy stage (prompt via file for grok, stdin for agy).
 
     Never carries grok.FORBIDDEN_FLAGS or agy --dangerously-skip-permissions; the
     stage model is left to the CLI default because Workflow tiers do not map to
-    these families.
+    these families. A grok op-relay child gets only a coordinator-invoke allow rule.
     """
     try:
         if backend == "grok":
+            allow = _RELAY_ALLOW if agent_type == _OP_RELAY_AGENT_TYPE else "Bash"
             return [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
                     "--output-format", "json", "--permission-mode", "acceptEdits",
-                    "--allow", "Bash", "--no-subagents", "--no-auto-update"]
+                    "--allow", allow, "--no-subagents", "--no-auto-update"]
         return [*resolve_agy(), "--input-format", "stream-json", "--output-format", "stream-json",
                 "-p=", "--mode", "accept-edits", "--settings", _AGY_SETTINGS]
     except (GrokUnavailable, AgyUnavailable) as exc:
@@ -734,6 +741,21 @@ def _family_text(backend: str, stdout: Path) -> str:
     if not isinstance(response, str) or not response.strip():
         raise ValueError("agy result has no response (a tool permission was likely denied)")
     return response
+
+
+def _grok_cancellation(stdout: Path, stderr: Path) -> str | None:
+    """A named error when the grok envelope reports stopReason cancelled, else None."""
+    try:
+        envelope = json.loads(stdout.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(envelope, dict) or str(envelope.get("stopReason", "")).lower() not in ("cancelled", "canceled"):
+        return None
+    try:
+        reason = stderr.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        reason = ""
+    return "grok run cancelled (stopReason cancelled): " + (reason[-1000:] or "no stderr reason")
 
 
 def _save_process(artifact_dir: Path, proc, backend: str, options: dict, requested_model,
@@ -804,6 +826,8 @@ def run_agent(
             'Native execution platform: Windows. Run supplied commands with PowerShell. '
             'For a quoted executable use the PowerShell call operator &, followed by the quoted path. '
             'Do not wrap a command in cmd.exe /c, use POSIX parameter expansion, or add literal backslash-escaped quotes. '
+            'Run each coordinator-invoke as one plain command, coordinator-invoke <op> \'<json>\': no Set-Location, '
+            'variable assignment, pipeline or semicolon; the working directory is already set. '
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
         ) + full_prompt
     native_schema = _codex_schema(schema) if schema is not None else None
@@ -874,7 +898,7 @@ def run_agent(
         if options.get("model"):
             argv += ["--model", str(options["model"])]
     elif backend in _FAMILY_BACKENDS:
-        argv = _family_argv(backend, artifact_dir)
+        argv = _family_argv(backend, artifact_dir, options.get("agentType"))
     else:
         raise AgentFailed(f"unknown agent backend: {backend}")
     stdin_text = full_prompt
@@ -908,6 +932,10 @@ def run_agent(
             if schema is not None and value is None:
                 value = json.loads(envelope["result"])
         elif backend in _FAMILY_BACKENDS:
+            if backend == "grok":
+                cancelled = _grok_cancellation(artifact_dir / "stdout.jsonl", artifact_dir / "stderr.txt")
+                if cancelled:
+                    raise AgentFailed(cancelled)
             text = _family_text(backend, artifact_dir / "stdout.jsonl")
             if schema is not None:
                 value = _trailing_json(text)

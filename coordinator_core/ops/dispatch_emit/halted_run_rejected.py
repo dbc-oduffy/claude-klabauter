@@ -21,7 +21,7 @@ from typing import Optional
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops.dispatch_emit.halted_run_superseded import (
-    _blob_ids, _classify_paths, _end_parent_ask, _halt_anchor, _refuse,
+    _blob_ids, _classify_paths, _end_parent_ask, _halt_anchor, _newest_touch, _refuse,
 )
 
 OP_NAME = "dispatch.close_halted_run_rejected"
@@ -114,7 +114,13 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         missing = [p for p in others if p not in kept]
         if missing:
             bad.append(f"{missing[0]} (no kept blob and not named rejected)")
-        done, unclassified = _classify_paths([p for p in others if p in kept], {}, head, keep, base, anchor)
+        # A hand-landed edit whose blob differs from the kept one (re-edited, eol-normalised) is superseded, not
+        # unclassifiable: the post-halt log is read only when some unrejected path is not byte-landed.
+        pending = [p for p in others if p in kept and head[p] != keep.get(p)]
+        touched = _newest_touch(root, anchor, pending) if pending else {}
+        if touched is None:
+            return _refuse("git log failed; retry")
+        done, unclassified = _classify_paths([p for p in others if p in kept], touched, head, keep, base, anchor)
         dispositions.update(done)
         bad += unclassified
     for p in rejected:

@@ -341,6 +341,20 @@ def test_write_tracked_outcome_round_trips_outside_run_state(tmp_path):
     assert ra.read_tracked_outcome(tmp_path, "../evil") == {}
 
 
+def test_write_tracked_outcome_is_lf_and_skips_an_unchanged_rewrite(tmp_path):
+    run_id = "warp-x-20261102T000000-abcdef"
+    rel = ra.write_tracked_outcome(tmp_path, run_id, "halted")
+    target = tmp_path / rel
+    assert b"\r" not in target.read_bytes() and target.read_bytes().endswith(b"}\n")
+    ns = target.stat().st_mtime_ns
+    assert ra.write_tracked_outcome(tmp_path, run_id, "halted") == rel
+    assert target.stat().st_mtime_ns == ns
+    assert ra.write_tracked_outcome(tmp_path, run_id, "landed") == rel
+    assert ra.read_tracked_outcome(tmp_path, run_id)["state"] == "landed"
+    assert b"\r" not in target.read_bytes()
+    assert list(target.parent.glob("*.tmp")) == []
+
+
 def test_sharded_delivery_note_is_a_candidate_and_maps_back(graph):
     shard = f"docs/delivery/2026-10/{RUN}.md"
     (graph / f"docs/delivery/{RUN}.md").unlink()

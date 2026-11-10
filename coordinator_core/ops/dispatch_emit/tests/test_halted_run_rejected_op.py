@@ -90,6 +90,16 @@ def test_mixed_rejected_and_landed_closes(halted):
     assert not _indexed(root)
 
 
+def test_unrejected_path_hand_landed_with_a_different_blob_closes_superseded(halted):
+    # 124b4d: the EM hand-landed the kept SKILL.md edit, but HEAD's blob is not byte-equal to the kept blob.
+    root, record = halted
+    sha = _commit(root, {"b.txt": "b-kept-as-landed"})
+    reply = _call(root, ["a.txt"])
+    assert reply["ok"] is True, reply
+    assert reply["dispositions"]["b.txt"] == {"disposition": "superseded", "sha": sha}
+    assert not _indexed(root)
+
+
 def test_rejected_path_changed_at_head_refuses_naming_path(halted):
     root, record = halted
     _commit(root, {"a.txt": "a-later"})

@@ -299,8 +299,12 @@ def main(argv):
     door = Path(home) / "bin" / ("hook-run.exe" if os.name == "nt" else "hook-run")
     env = dict(os.environ, COORDINATOR_DOOR_STDIN_MODE="hook")
     try:
+        payload = sys.stdin.buffer.read()
+    except (OSError, ValueError):
+        payload = b""
+    try:
         rc = subprocess.run(
-            [str(door), *rest], env=env, stderr=subprocess.DEVNULL if quiet else None,
+            [str(door), *rest], env=env, input=payload, stderr=subprocess.DEVNULL if quiet else None,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).returncode
     except OSError as exc:

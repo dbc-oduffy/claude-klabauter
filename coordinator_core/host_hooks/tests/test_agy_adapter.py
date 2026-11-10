@@ -35,6 +35,20 @@ def test_missing_workspace_and_session_are_empty():
     assert (ev.cwd, ev.session_id) == ("", "")
 
 
+def test_top_level_cwd_is_the_fallback_and_reaches_origin_worktree():
+    import json
+
+    adapter = AgyAdapter()
+    cwd = "/work/agy-cwd"
+    payload = {"toolCall": PAYLOAD["toolCall"], "cwd": cwd}
+    engine_event = adapter.engine_event(adapter.adapt_event(payload))
+    assert engine_event["cwd"] == cwd
+    frame = json.loads(hook_http.build_request(engine_event, hook_http.DEFAULT_OP_NAME))
+    assert frame["_origin_worktree"] == cwd
+    # workspacePaths still wins when both are present
+    assert adapter.adapt_event({**PAYLOAD, "cwd": "/other"}).cwd == "/work/repo"
+
+
 def test_event_resolution_explicit_then_inferred():
     adapter = AgyAdapter()
     assert adapter.adapt_event(PAYLOAD, event="PostToolUse").event == "PostToolUse"

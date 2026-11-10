@@ -2933,6 +2933,75 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
     return 1 if failed else 0
 
 
+def cs_resolve_move_memos(entries: Sequence[tuple[str, Sequence[str]]]) -> int:
+    """Stamp N inbox memos resolved, each with its OWN disposition, and move each
+    ``<x>/inbox/<name>`` to ``<x>/archive/<name>``. Commits and stages nothing.
+
+    ``entries`` is ``[(memo_path, disposition_args), ...]``. stdout carries only
+    the pathspec for one scoped commit (inbox deletion then archive addition per
+    memo, POSIX repo-relative, one per line); progress and failures go to stderr.
+    A memo that fails leaves the others stamped and moved; the return is 1 if
+    any failed. A memo outside an ``inbox`` directory is refused before any write.
+
+    An ``--actioned-note`` given with ``--realized-by`` is stamped as
+    ``decision: accepted`` + ``decision_note`` + ``realized_by`` (the engine
+    would otherwise discard the realized-by beside an actioned_note)."""
+    from coordinator_core.wire_paths import rel_id
+
+    failed = 0
+    pathspecs: list[str] = []
+    for memo_path, disposition_args in entries:
+        src = Path(memo_path).resolve()
+        if src.parent.name != "inbox":
+            print(f"cs_resolve_move_memos: {memo_path}: not under an inbox/ directory", file=sys.stderr)
+            failed += 1
+            continue
+        dest = src.parent.parent / "archive" / src.name
+        if dest.exists():
+            print(f"cs_resolve_move_memos: {memo_path}: {dest} already exists", file=sys.stderr)
+            failed += 1
+            continue
+        worktree = _worktree_root(src)
+        sid = resolve_current_session_id(worktree_root=worktree) if worktree else None
+        if not sid or worktree is None:
+            print(f"cs_resolve_move_memos: {memo_path}: could not resolve a session id or git root", file=sys.stderr)
+            failed += 1
+            continue
+        disposition = _parse_disposition_args(tuple(disposition_args))
+        if disposition.get("actioned_note") and disposition.get("realized_by"):
+            # The engine drops realized_by beside actioned_note; keep both values.
+            disposition["decision_note"] = disposition.pop("actioned_note")
+            disposition.setdefault("decision", "accepted")
+        result = _call_memo_transition(
+            str(src),
+            {
+                "verb": "resolve",
+                "session_id": sid,
+                "at": _now_iso(),
+                "defer_commit": True,
+                **disposition,
+            },
+        )
+        _print_surface_advisory_line("cs_resolve_move_memos", result, worktree)
+        if int(result.get("exit_code", 1)) != 0:
+            print(f"cs_resolve_move_memos: {memo_path}: {_refusal_text(result)}", file=sys.stderr)
+            failed += 1
+            continue
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(src, dest)
+        except OSError as exc:
+            print(f"cs_resolve_move_memos: {memo_path}: stamped but move failed: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+        root = worktree.resolve()
+        pathspecs += [rel_id(src, root), rel_id(dest, root)]
+        print(f"cs_resolve_move_memos: {src.name} resolved and moved to archive", file=sys.stderr)
+    for spec in pathspecs:
+        print(spec)
+    return 1 if failed else 0
+
+
 # ---------------------------------------------------------------------------
 # cs_stamp_plan_implemented — native in-process call to the completed
 # coordinator_core.ops.plan_status_transition port (no subprocess/node hop).

@@ -174,8 +174,9 @@ def predecessor_withheld(root: Path, sizing_rel: Optional[str], run_dir: Path) -
     Every indexed same-sizing run is walked, not only the last holder of each path, so a later
     run that changed a path an earlier run withheld still chains. A path is credited only while its
     current blob equals the print the newest same-sizing run that withheld it recorded (newest by
-    index ``at_ns``, run id as tiebreak); a missing print or a mismatch credits nothing (a foreign
-    edit after the halt stays dirt), and only credited paths are fingerprinted."""
+    index ``at_ns``, run id as tiebreak); a missing print credits nothing, and a mismatch credits only
+    while the live blob still holds every line the run added over HEAD (``_carries_print``), so a
+    peer's hunk beside it keeps the credit and a foreign rewrite stays dirt."""
     if not sizing_rel:
         return frozenset()
     from coordinator_core.ops.dispatch_emit.halted_withheld_index import entries
@@ -191,7 +192,50 @@ def predecessor_withheld(root: Path, sizing_rel: Optional[str], run_dir: Path) -
         for p in _clean_paths(entry.paths):
             if p not in newest or stamp > newest[p][0]:
                 newest[p] = (stamp, entry.prints.get(p))
-    return frozenset(p for p, (_, print_) in newest.items() if print_ is not None and print_ == fingerprint(root, p))
+    return frozenset(
+        p for p, (_, print_) in newest.items() if print_ is not None and _carries_print(root, p, print_, fingerprint(root, p))
+    )
+
+
+#: Largest recorded print blob read back to test for its hunks in a changed live file.
+_PRINT_READ_CAP = 1 << 20
+
+
+def _carries_print(root: Path, rel: str, print_: str, live: Optional[str]) -> bool:
+    """True when ``rel``'s live blob is the halt's ``print_``, or a later edit still holding every line
+    the halted run added over HEAD (a peer's hunk landed beside the withheld one). The print blob must be
+    persisted in the object store and add at least one non-blank line: an unreadable print, a pure deletion
+    or a foreign rewrite that dropped the run's lines credits nothing. In-process; reads at most the print,
+    HEAD and live bytes of a mismatching path."""
+    if live is None:
+        return False
+    if print_ == live:
+        return True
+    from collections import Counter
+
+    from coordinator_core.git import git_objects
+    from coordinator_core.git.git_state import head_blobs
+
+    common = common_dir_for(root)
+    if common is None:
+        return False
+    try:
+        held = git_objects.read_object(common, print_)
+        head = head_blobs(Path(root), [rel]).get(rel)
+        base = git_objects.read_object(common, head[1]) if head else None
+        data = (Path(root) / rel).read_bytes()
+    except (OSError, ValueError):
+        return False
+    if held is None or held[0] != "blob" or len(held[1]) > _PRINT_READ_CAP or len(data) > _PRINT_READ_CAP:
+        return False
+    if head and base is None:
+        return False
+
+    def _lines(raw: bytes) -> Counter:
+        return Counter(s.strip() for s in raw.splitlines() if s.strip())
+
+    added = _lines(held[1]) - (_lines(base[1]) if base else Counter())
+    return bool(added) and not (added - _lines(data))
 
 
 def predecessor_wrote(root: Path, run_dir: Path, baseline: Mapping[str, Optional[str]]) -> frozenset[str]:
@@ -230,8 +274,9 @@ def exclude_halted_withheld(
     A path whose live blob equals a withheld print of another halted run is that run's work, never
     this run's base. Same sizing: the baseline becomes HEAD's blob (None when HEAD lacks the path),
     so the hunk reads as this run's own write. Different sizing: the path is omitted, and an
-    unbaselined path is neither unwritten nor dirt. A print that no longer matches the live blob
-    leaves the capture alone. Spawn-free."""
+    unbaselined path is neither unwritten nor dirt. A same-sizing print the live blob no longer equals
+    still matches while the live blob holds every line the halted run added (``_carries_print``);
+    otherwise the capture is left alone. Spawn-free."""
     from coordinator_core.ops.dispatch_emit.halted_withheld_index import entries
 
     norm = PurePosixPath(sizing_rel.replace("\\", "/")).as_posix() if sizing_rel else None
@@ -243,7 +288,10 @@ def exclude_halted_withheld(
         bound = entry.sizing_rel
         is_same = norm is not None and bound is not None and PurePosixPath(bound.replace("\\", "/")).as_posix() == norm
         for p in _clean_paths(entry.paths):
-            if p in captured and captured[p] is not None and entry.prints.get(p) == captured[p]:
+            if p not in captured or captured[p] is None:
+                continue
+            want = entry.prints.get(p)
+            if want == captured[p] or (is_same and want is not None and _carries_print(root, p, want, captured[p])):
                 (same if is_same else foreign).add(p)
     foreign -= same
     if not same and not foreign:

@@ -818,7 +818,7 @@ def test_ensure_router_defers_to_a_supervisor_holding_the_lock(tmp_path, monkeyp
     mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: False)
     lock_dir = tmp_path / "unimatrix" / "router"
     lock_dir.mkdir(parents=True)
-    with open(lock_dir / "supervisor.lock", "a") as held:
+    with open(lock_dir / "supervisor.lock", "a", encoding="utf-8") as held:
         fcntl.flock(held, fcntl.LOCK_EX)
         assert mirror_all.ensure_router(lambda m: None) is False
     assert started == []

@@ -614,8 +614,11 @@ def write_tracked_outcome(worktree_root: Path, run_id: str, state: str, **extra:
     target = root / rel
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
+        payload = (json.dumps(body, indent=2, sort_keys=True) + "\n").encode("utf-8")
+        if target.is_file() and target.read_bytes() == payload:
+            return rel
         tmp = target.with_name(target.name + f".{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        tmp.write_bytes(payload)
         os.replace(tmp, target)
     except OSError:
         return None

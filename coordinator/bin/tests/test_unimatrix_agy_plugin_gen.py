@@ -425,6 +425,7 @@ def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_p
         return _R(next(rcs))
 
     monkeypatch.setattr(ns["subprocess"], "run", fake_run)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"PAYLOAD")))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     monkeypatch.delenv("COORDINATOR_DOOR_STDIN_MODE", raising=False)
     assert main(["--pass-2", "--advisory", "hooks.a"]) == 0
@@ -436,6 +437,9 @@ def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_p
     assert cmd[1:] == ["--advisory", "hooks.a"]
     assert kw["env"]["COORDINATOR_DOOR_STDIN_MODE"] == "hook"
     assert kw["stderr"] is None and calls[2][1]["stderr"] == ns["subprocess"].DEVNULL
+    assert kw["input"] == b"PAYLOAD" and "stdin" not in kw
+    assert kw["creationflags"] == getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    assert kw["creationflags"] & 0x00000008 == 0  # never DETACHED_PROCESS
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME")
     monkeypatch.setattr(ns["Path"], "home", classmethod(lambda c: tmp_path / "h"))
     rcs = iter([0])
@@ -456,6 +460,91 @@ def test_shim_runs_end_to_end_with_a_real_child_process(plugin, tmp_path):
     r = subprocess.run([sys.executable, str(out / "hooks" / "agy-hook-run.py"), "--pass-2", "hooks.a"],
                        input="EVT", capture_output=True, text=True, env={"COORDINATOR_SETTINGS_HOME": str(home)})
     assert r.returncode == 0 and r.stdout == "EVThook hooks.a\n"
+
+
+def _stub_home(tmp_path, body):
+    home = tmp_path / "home"
+    (home / "bin").mkdir(parents=True)
+    exe = home / "bin" / "hook-run"
+    exe.write_text(body, encoding="utf-8")
+    exe.chmod(0o755)
+    return home
+
+
+def test_shim_hands_its_stdin_to_a_real_door_child_on_every_os(plugin, tmp_path, monkeypatch, capfd):
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    main, ns = _load_shim(out)
+    stub = tmp_path / "door_stub.py"
+    stub.write_text("import os, sys\nsys.stdout.write(os.environ['COORDINATOR_DOOR_STDIN_MODE'] + ':' + sys.stdin.read())\n"
+                    "sys.stderr.write('door stderr')\nsys.exit(1)\n", encoding="utf-8")
+    real_run = subprocess.run
+
+    def run_stub(cmd, **kw):
+        return real_run([sys.executable, str(stub), *cmd[1:]], timeout=30, **kw)
+
+    monkeypatch.setattr(ns["subprocess"], "run", run_stub)
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"EVT")))
+    assert main(["hooks.a"]) == 1
+    cap = capfd.readouterr()
+    assert cap.out == "hook:EVT" and cap.err == "door stderr"
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(b"EVT")))
+    assert main(["--quiet", "hooks.a"]) == 1
+    cap = capfd.readouterr()
+    assert cap.out == "hook:EVT" and cap.err == ""
+
+
+def test_shim_passes_a_full_agy_pretooluse_payload_whole_on_every_os(plugin, tmp_path, monkeypatch, capfd):
+    # A real agy PreToolUse event is large and nested; a payload past the 64KiB pipe buffer is where an
+    # inherited or half-forwarded stdin deadlocks, so this one is ~256KiB and must arrive byte-identical.
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    main, ns = _load_shim(out)
+    stub = tmp_path / "door_echo.py"
+    stub.write_text("import sys\nsys.stdout.write(sys.stdin.read())\n", encoding="utf-8")
+    real_run = subprocess.run
+    monkeypatch.setattr(ns["subprocess"], "run",
+                        lambda cmd, **kw: real_run([sys.executable, str(stub), *cmd[1:]], timeout=30, **kw))
+    payload = json.dumps({
+        "hook_event_name": "PreToolUse", "conversationId": "0cf351a3-6538-4a9b-814c-52b1b75a596c",
+        "cwd": "C:/dev/coordinator-content-repo", "tool_name": "run_command",
+        "tool_input": {"CommandLine": "coordinator-invoke --help", "Cwd": "C:/dev/coordinator-content-repo", "Blocking": True},
+        "transcript": [{"role": "user", "content": [{"type": "text", "text": "x" * 512, "meta": {"n": i}}]}
+                       for i in range(500)],
+    })
+    assert len(payload) > 4 * 65536
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(payload.encode("utf-8")), encoding="utf-8"))
+    assert main(["hooks.a"]) == 0
+    assert json.loads(capfd.readouterr().out) == json.loads(payload)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script")
+def test_shim_pipes_payload_to_door_and_returns_promptly_with_open_stdin(plugin, tmp_path):
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    home = _stub_home(tmp_path, '#!/bin/sh\ncat\n')
+    r = subprocess.run([sys.executable, str(out / "hooks" / "agy-hook-run.py"), "hooks.a"],
+                       input=b'{"cwd": "/w"}', capture_output=True, timeout=30,
+                       env={"COORDINATOR_SETTINGS_HOME": str(home)})
+    assert r.returncode == 0 and r.stdout == b'{"cwd": "/w"}'
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script")
+def test_door_stderr_surfaces_without_quiet_and_not_with_it(plugin, tmp_path):
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    home = _stub_home(tmp_path, '#!/bin/sh\ncat >/dev/null\necho "door says no" >&2\nexit 1\n')
+    shim = str(out / "hooks" / "agy-hook-run.py")
+    env = {"COORDINATOR_SETTINGS_HOME": str(home)}
+    loud = subprocess.run([sys.executable, shim, "hooks.a"], input=b"x", capture_output=True, timeout=30, env=env)
+    quiet = subprocess.run([sys.executable, shim, "--quiet", "hooks.a"], input=b"x", capture_output=True,
+                           timeout=30, env=env)
+    assert loud.returncode == 1 and b"door says no" in loud.stderr
+    assert quiet.returncode == 1 and quiet.stderr == b""
 
 
 @pytest.mark.parametrize("os_name,exe", [("nt", "python"), ("posix", "python3")])
