@@ -39,6 +39,7 @@ from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 from coordinator_core.bash_guards._rewrite_support import _alt_record, _crlf_strip, _offer, _override
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 
@@ -170,6 +171,98 @@ def _add_has_narrowing_pathspec(after: str) -> bool:
     return False
 
 
+_SUBST_PLACEHOLDER = "__SUBST__"
+
+
+def _mask_command_substitutions(cmd: str) -> "tuple[str, List[str]]":
+    """``cmd`` with each ``$(...)`` / backtick substitution replaced by an
+    opaque placeholder token, plus the substitutions' inner texts (nested ones
+    included) so they can still be scanned as commands of their own.
+
+    A substitution is not a pathspec: its inner words (``git status --short
+    dir | awk ...``) must not be read as operands of the surrounding ``git
+    add``. Text is never expanded or executed. Single-quoted spans are
+    literal; an unterminated substitution is left as written."""
+    out: List[str] = []
+    inners: List[str] = []
+    i, n, sq = 0, len(cmd), False
+    while i < n:
+        ch = cmd[i]
+        if ch == "'":
+            sq = not sq
+        elif not sq and (cmd.startswith("$(", i) or ch == "`"):
+            end = -1
+            if ch == "`":
+                end = cmd.find("`", i + 1)
+                inner_start = i + 1
+            else:
+                inner_start = i + 2
+                depth, j, q = 1, inner_start, False
+                while j < n:
+                    c = cmd[j]
+                    if c == "'":
+                        q = not q
+                    elif not q and c == "(":
+                        depth += 1
+                    elif not q and c == ")":
+                        depth -= 1
+                        if depth == 0:
+                            end = j
+                            break
+                    j += 1
+            if end != -1:
+                inner = cmd[inner_start:end]
+                masked_inner, nested = _mask_command_substitutions(inner)
+                inners.append(masked_inner)
+                inners.extend(nested)
+                out.append(_SUBST_PLACEHOLDER)
+                i = end + 1
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out), inners
+
+
+def _add_pathspec_file_paths(
+    tokens: List[str], cwd: str
+) -> "tuple[List[str], bool]":
+    """Paths listed by a ``--pathspec-from-file`` option among the pre-``--``
+    ``tokens`` of a ``git add``, read in-process (no spawn) relative to
+    ``cwd``, and whether the list is unresolvable (``-`` = stdin).
+
+    Honours ``--pathspec-file-nul``. An unreadable file yields no paths:
+    git itself refuses it, so nothing is staged."""
+    pre: List[str] = []
+    for tok in tokens:
+        if tok == "--":
+            break
+        pre.append(tok)
+    nul = "--pathspec-file-nul" in pre
+    paths: List[str] = []
+    for idx, tok in enumerate(pre):
+        if tok.startswith("--pathspec-from-file="):
+            target = tok.split("=", 1)[1]
+        elif tok == "--pathspec-from-file" and idx + 1 < len(pre):
+            target = pre[idx + 1]
+        else:
+            continue
+        if target == "-":
+            return paths, True
+        fpath = target if os.path.isabs(target) else os.path.join(cwd, target)
+        try:
+            with open(fpath, "rb") as fh:
+                text = fh.read(1 << 20).decode("utf-8", "replace")
+        except OSError:
+            continue
+        for entry in text.split("\0") if nul else text.splitlines():
+            entry = entry.rstrip("\r") if not nul else entry
+            if len(entry) >= 2 and entry[0] == '"' and entry[-1] == '"':
+                entry = entry[1:-1]
+            if entry:
+                paths.append(entry)
+    return paths, False
+
+
 def check_blanket_git_add(
     cmd: str,
     session_id: str = "",
@@ -225,9 +318,16 @@ def check_blanket_git_add(
             )
         return None
 
+    _ga_masked, _ga_inners = _mask_command_substitutions(cmd)
+    _ga_segments = list(_awk_quote_aware_split(_ga_masked))
+    for _inner in _ga_inners:
+        _ga_segments.extend(_awk_quote_aware_split(_inner))
+    _ga_segments.extend(_ga_ps_segments)
+    _add_stdin_pathspec = False
+
     matched_cmd = ""
     _add_foreign_hit = False
-    for seg in list(_awk_quote_aware_split(cmd)) + _ga_ps_segments:
+    for seg in _ga_segments:
         if not seg.strip():
             continue
         # Non-empty placeholder: a blanked `-C "<dir>"` must still leave an
@@ -291,7 +391,15 @@ def check_blanket_git_add(
         past_dd = False
         should_deny = False
         deny_reason = ""
-        for tok in after.split():
+        _add_toks = after.split()
+        _pf_paths, _pf_stdin = _add_pathspec_file_paths(_add_toks, _ga_dash_c_cwd)
+        if _pf_stdin:
+            _add_stdin_pathspec = True
+        if _pf_paths:
+            if "--" not in _add_toks:
+                _add_toks.append("--")
+            _add_toks.extend(_pf_paths)
+        for tok in _add_toks:
             if tok == "--":
                 past_dd = True
                 continue
@@ -420,7 +528,7 @@ def check_blanket_git_add(
     # commit still passes."
     commit_matched_cmd = ""
     if not matched_cmd:
-        for seg in list(_awk_quote_aware_split(cmd)) + _ga_ps_segments:
+        for seg in _ga_segments:
             if not seg.strip():
                 continue
             seg_cmd = re.sub(r'"[^"]*"', "Q", seg)
@@ -485,6 +593,16 @@ def check_blanket_git_add(
             result = check_blanket_git_add(payload, session_id, hook_payload)
             if result is not None:
                 return result
+        if _add_stdin_pathspec:
+            return _alt_record(
+                "advisory", "blanket-git-add",
+                "Advisory: `git add --pathspec-from-file=-` reads its path list from "
+                "stdin, which this guard cannot resolve, so the paths were not checked "
+                "for foreign or root entries. Name the files after `--` to have them checked.",
+                (),
+                report="the stdin path list you need checked",
+                authorize="the stdin pathspec add",
+            )
         return None
 
     _REPORT = "the blanket git add or commit you need"
@@ -574,7 +692,7 @@ def _bt_no_peer_can_share_the_index(git_root: str, session_id: str) -> bool:
                         packed_text = fh.read()
                 if (" " + ref + "\n") not in packed_text:
                     return True
-        sessions = str(hub_for_common(Path(git_dir)))
+        sessions = str(hub_for_common(resolve_git_common_dir(git_root)))
         if not os.path.isdir(sessions):
             return True
         others = [
@@ -661,7 +779,7 @@ def _bt_add_subtree_foreign_paths_and_churn(
             sink_path,
         )
 
-        sid_dir = str(session_dir_for(Path(git_root) / ".git", session_id))
+        sid_dir = str(session_dir_for(resolve_git_common_dir(git_root), session_id))
         touch_record_path = sink_path(sid_dir)
         projection = project_live_claims(touch_record_path, cwd=git_root)
         if projection.degraded:
@@ -753,7 +871,7 @@ def _bt_commit_subtree_foreign_paths_and_churn(
             sink_path,
         )
 
-        sid_dir = str(session_dir_for(Path(git_root) / ".git", session_id))
+        sid_dir = str(session_dir_for(resolve_git_common_dir(git_root), session_id))
         touch_record_path = sink_path(sid_dir)
         projection = project_live_claims(touch_record_path, cwd=git_root)
         if projection.degraded:

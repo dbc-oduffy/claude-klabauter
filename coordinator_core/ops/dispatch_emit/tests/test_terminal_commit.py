@@ -288,7 +288,7 @@ def test_zero_stage_inline_review_runs_bookkeep_wave_and_review_stamp_mints(repo
         "---\n"
         "## Findings\n\n### Finding 1\nSomething.\n"
         "## Findings Ledger\n\n```json\n"
-        '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2"}]\n'
+        '[{"id": "finding-1", "file": "coordinator_core/foo.py", "before": "x = 1", "after": "x = 2", "verified": true}]\n'
         "```\n",
         encoding="utf-8",
     )

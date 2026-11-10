@@ -37,6 +37,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session_hub_path import hub_for_common
 
 #: Mirrors the one entry of `liveness._NON_SESSION_DIR_NAMES` this module
@@ -55,7 +56,7 @@ def session_audit_log_dir(git_root: str, session_id: Optional[str]) -> Optional[
     # created for real -- at the drive root on Windows.
     if not os.path.exists(os.path.join(git_root, ".git")):
         return None
-    sessions_root = str(hub_for_common(Path(git_root) / ".git"))
+    sessions_root = str(hub_for_common(resolve_git_common_dir(git_root)))
     sid = session_id or NO_SESSION_BUCKET
     sid_dir = os.path.join(sessions_root, sid)
     if sid != NO_SESSION_BUCKET and not os.path.isdir(sid_dir):

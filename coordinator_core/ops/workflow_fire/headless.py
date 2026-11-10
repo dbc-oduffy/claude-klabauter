@@ -506,6 +506,9 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
 
 
 if __name__ == '__main__':
+    from coordinator_core.spawn_policy import windowless  # console-less root: every child spawns hidden
+
+    windowless.install()
     parser = argparse.ArgumentParser(__doc__)
     parser.add_argument('--record', type=Path, required=True)
     options = parser.parse_args()

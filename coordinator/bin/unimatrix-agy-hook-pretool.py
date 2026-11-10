@@ -15,7 +15,7 @@ approves the exact command. Every other path also answers "ask": agy fails close
 invalid JSON, or a reply without `decision`, and "ask" keeps agy's own approval behaviour where
 "allow" would silently widen it.
 
-A leg is current only if it is alive, was started under this same agy process (the hook's parent),
+A leg is current only if it is alive, was started under this same agy process (the nearest agy ancestor of the hook; none found is never current),
 and its language server still accepts connections. An agy restart changes the token and port, so a
 leg that survives one is stale even though its pid is alive. A `pending` leg (started by SessionStart
 without a token) is never current: the rewrite relaunches it live.
@@ -49,6 +49,89 @@ def settings_home():
 
 def state_dir():
     return settings_home() / "unimatrix" / "agy-legs"
+
+
+AGY_EXE_NAMES = ("agy.exe", "agy")
+MAX_ANCESTOR_DEPTH = 8
+
+
+def _nt_process_table():
+    """{pid: (parent pid, lowercase exe name)} from one CreateToolhelp32Snapshot walk; {} on failure. No subprocess."""
+    import ctypes
+    from ctypes import wintypes
+
+    class ProcessEntry(ctypes.Structure):
+        _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD),
+                    ("th32ProcessID", wintypes.DWORD), ("th32DefaultHeapID", ctypes.c_size_t),
+                    ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
+                    ("th32ParentProcessID", wintypes.DWORD), ("pcPriClassBase", ctypes.c_long),
+                    ("dwFlags", wintypes.DWORD), ("szExeFile", ctypes.c_wchar * 260)]
+
+    table = {}
+    try:
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k32.Process32FirstW.argtypes = k32.Process32NextW.argtypes = [ctypes.c_void_p, ctypes.POINTER(ProcessEntry)]
+        k32.CloseHandle.argtypes = [ctypes.c_void_p]
+        snap = k32.CreateToolhelp32Snapshot(0x2, 0)  # TH32CS_SNAPPROCESS
+        if snap in (None, ctypes.c_void_p(-1).value):
+            return {}
+        try:
+            entry = ProcessEntry()
+            entry.dwSize = ctypes.sizeof(ProcessEntry)
+            ok = k32.Process32FirstW(snap, ctypes.byref(entry))
+            while ok:
+                table[entry.th32ProcessID] = (entry.th32ParentProcessID, entry.szExeFile.lower())
+                ok = k32.Process32NextW(snap, ctypes.byref(entry))
+        finally:
+            k32.CloseHandle(snap)
+    except (OSError, AttributeError, ValueError):
+        return {}
+    return table
+
+
+def _proc_reader():
+    """pid -> (parent pid, lowercase name) or None; Windows snapshot, else /proc. None reader: no process table here."""
+    if os.name == "nt":
+        table = _nt_process_table()
+        return table.get if table else None
+    if not Path("/proc/self/stat").exists():
+        return None
+
+    def read(pid):
+        try:
+            stat = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8", errors="replace")
+            name = Path(f"/proc/{pid}/comm").read_text(encoding="utf-8", errors="replace").strip().lower()
+            return int(stat[stat.rindex(")") + 2:].split()[1]), name
+        except (OSError, ValueError, IndexError):
+            return None
+    return read
+
+
+def agy_ancestor_pid(read=None, start=None, max_depth=MAX_ANCESTOR_DEPTH):
+    """Pid of the nearest ancestor of `start` (default: this process) whose exe is agy, else None.
+
+    The hook's direct parent is an intermediate launcher that exits with the hook, so getppid() is
+    never taken. `read(pid)` returns (parent pid, name) or None; it is the injected process table.
+    No agy ancestor within max_depth, or no table: None, noted on stderr.
+    """
+    read = read or _proc_reader()
+    pid = os.getpid() if start is None else start
+    seen = {pid}
+    for _ in range(max_depth):
+        row = read(pid) if read else None
+        if not row:
+            break
+        pid = row[0]
+        if not isinstance(pid, int) or pid <= 0 or pid in seen:
+            break
+        seen.add(pid)
+        parent = read(pid)
+        if parent and str(parent[1]).lower() in AGY_EXE_NAMES:
+            return pid
+    print(f"unimatrix-agy-hook: no agy ancestor within {max_depth} levels; agy_pid not recorded", file=sys.stderr)
+    return None
 
 
 def pid_alive(pid):
@@ -86,7 +169,13 @@ def leg_current(conv, agy_pid, state=None):
         return False
     if rec.get("mode", "live") != "live":
         return False  # a pending leg only queues; the first run_command relaunches it live
-    return rec.get("agy_pid") == agy_pid and ls_reachable(rec.get("ls_address"))
+    return agy_pid is not None and rec.get("agy_pid") == agy_pid and ls_reachable(rec.get("ls_address"))
+
+
+def launcher_argv(conv, agy_pid):
+    """Launcher command line; --agy-pid is omitted when no agy ancestor was found."""
+    argv = [sys.executable, str(LAUNCH), "--conversation", conv]
+    return argv + ["--agy-pid", str(agy_pid)] if agy_pid is not None else argv
 
 
 def launch_prefix(conv, agy_pid):
@@ -94,7 +183,7 @@ def launch_prefix(conv, agy_pid):
     PowerShell there, which rejects cmd syntax, so bootstrap_rewrite spawns the launcher itself."""
     if os.name == "nt":
         return None
-    argv = [sys.executable, str(LAUNCH), "--conversation", conv, "--agy-pid", str(agy_pid)]
+    argv = launcher_argv(conv, agy_pid)
     return f"(nohup {' '.join(shlex.quote(a) for a in argv)} >/dev/null 2>&1 &)", "; "
 
 
@@ -117,7 +206,7 @@ def spawn_launcher(conv, agy_pid):
         pass
     flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) | getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
-        subprocess.Popen([sys.executable, str(LAUNCH), "--conversation", conv, "--agy-pid", str(agy_pid)],
+        subprocess.Popen(launcher_argv(conv, agy_pid),
                          stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          close_fds=True, creationflags=flags)
     except OSError:
@@ -248,7 +337,7 @@ def main(argv=None):
     out = dict(PASS)
     try:
         raw = sys.stdin.read()
-        out = decide(json.loads(raw), os.getppid(), engine_root_arg(argv), raw)
+        out = decide(json.loads(raw), agy_ancestor_pid(), engine_root_arg(argv), raw)
     except Exception:
         out = dict(PASS)
     print(json.dumps(out))

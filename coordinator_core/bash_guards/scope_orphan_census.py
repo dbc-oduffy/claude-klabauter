@@ -102,12 +102,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
 
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.run import run_git
 from coordinator_core.session_hub_path import hub_for_common
 
 
 def _hub_dir(git_root: str) -> str:
-    return str(hub_for_common(Path(git_root) / ".git"))
+    return str(hub_for_common(resolve_git_common_dir(git_root)))
 
 __all__ = [
     "OrphanEvent",

@@ -558,3 +558,35 @@ def test_commit_pathspec_or_none_never_returns_an_empty_list():
 
 def test_candidate_test_additions_skips_a_helper_already_under_tests():
     assert candidate_test_additions(["tests/_libclang_host.py"]) == []
+
+
+@pytest.mark.parametrize("repo_root_given", [False, True])
+def test_candidate_test_additions_declares_no_test_for_a_dunder_module(
+    tmp_path, repo_root_given
+):
+    (tmp_path / "likeness/head_checks").mkdir(parents=True)
+    (tmp_path / "likeness/tests").mkdir(parents=True)
+    root = tmp_path if repo_root_given else None
+    assert (
+        candidate_test_additions(["likeness/head_checks/__main__.py"], root) == []
+    )
+    assert candidate_test_additions(["pkg/__init__.py"], root) == []
+
+
+def test_candidate_test_additions_still_pairs_an_ordinary_stem_beside_a_dunder(tmp_path):
+    (tmp_path / "likeness/head_checks/tests").mkdir(parents=True)
+    assert candidate_test_additions(
+        ["likeness/head_checks/__main__.py","likeness/head_checks/check_x.py"],
+        tmp_path,
+    ) == ["likeness/head_checks/tests/test_check_x.py"]
+
+
+def test_dunder_module_maps_to_no_terminal_test_target_even_when_declared(tmp_path):
+    assert (
+        _map_written_path_to_test_target(
+            "likeness/head_checks/__main__.py",
+            repo_root=tmp_path,
+            declared=frozenset({"likeness/tests/test___main__.py"}),
+        )
+        is None
+    )

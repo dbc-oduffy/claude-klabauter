@@ -3736,14 +3736,15 @@ _VERIFY_TEST_RUN_VAR = "_verifyTestRun"
 _VERIFY_TEST_LABEL = "scoped tests"
 _VERIFY_JUDGE_LABEL = "criterion judge"
 
-#: Names the agent a budget race abandoned: a lost `agent()` call keeps running and cannot be
-#: cancelled, so the result says orphaned, never stopped. The test-leg result keeps `tests.status` inside
+#: Names the agent a budget race abandoned. The runtime `agent()` call takes no cancel or wall option,
+#: so the scoped-tests agent is bounded by a prompt deadline below the budget and the emitter cannot
+#: observe its exit; the judge call carries no bound. The test-leg result keeps `tests.status` inside
 #: the digest enum (`error`) and carries the text in `summary` (-> `tests.note`); the judge result
 #: stays `indeterminate` and carries it in `reason`.
 _VERIFY_ORPHANED_JS = (
     "  const _orphaned = (r, label, asTest) => {\n"
     "    if (!(r && r.status === 'indeterminate' && String(r.reason ?? '').startsWith('verify budget exceeded ('))) return r;\n"
-    "    const why = r.reason + '; agent still running (orphaned), not stopped: ' + label;\n"
+    "    const why = r.reason + (asTest ? '; agent deadline-bounded, exit not observed: ' : '; agent unbounded, exit not observed: ') + label;\n"
     "    return asTest\n"
     "      ? { status: 'error', tests_run: 0, tests_failed: 0, summary: why, reason: r.reason }\n"
     "      : { status: 'indeterminate', differs_from_baseline: null, observation: null, reason: why, sidecar_path: null };\n"
@@ -3778,7 +3779,7 @@ def _verify_test_launch_js(test_call: str) -> str:
     """The Verify test leg started as a promise right after the all-rows barrier, so it runs beside
     whole-diff review and re-verify. A stop-rule halt before launch starts no agent; a later halt
     leaves the promise un-awaited and its result unbound. The race abandons the call on overrun; the
-    losing agent is never awaited."""
+    losing agent is never awaited, so the call's prompt bounds the agent itself."""
     race = _bounded_js("_testCall", VERIFY_WALL_BUDGET_S, _VERIFY_TEST_LABEL)
     return (
         f"{_VERIFY_ORPHANED_JS}\n"
@@ -3890,6 +3891,17 @@ def _scoped_test_steps(
     )
 
 
+def _verify_deadline_clause() -> str:
+    """The self-bound on the verify scoped-tests agent: a deadline at 80% of VERIFY_WALL_BUDGET_S, the
+    Bash tool timeout set to it, and a test_result returned by it, since a lost `agent()` call is never cancelled."""
+    deadline_s = max(1, VERIFY_WALL_BUDGET_S * 4 // 5)
+    return (
+        f"Deadline: return your test_result within {deadline_s}s of starting, never later. "
+        f"Run every pytest command with your Bash tool timeout set to {deadline_s * 1000} ms or less; "
+        "a run the timeout kills is status: error, reported at once, not retried. "
+    )
+
+
 def _verify_test_call_expr(
     review,
     scope: list[str],
@@ -3919,6 +3931,7 @@ def _verify_test_call_expr(
             scope, repo_root, typecheck, review_edits_base, owed_gates, surface, review_terminal,
             box_terms, slot_rows,
         )
+        + _verify_deadline_clause()
         + "Report raw evidence; do not gate. You have no Write tool: omit sidecar_path."
         + (f" The plan is {_spec_path_for_prompt(Path(plan_path), repo_root).as_posix()}." if plan_path else "")
         + _emit_sidecar_clause(plan_path, _VERIFY_LABEL)

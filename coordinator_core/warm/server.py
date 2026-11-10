@@ -5426,6 +5426,9 @@ def _process_entry() -> int:
     """Spawned-process entry: drop every inherited test-only variable, then boot. Kept out
     of `main()` so an in-process call from a test never rewrites the test's environment."""
     scrub_test_env()
+    from coordinator_core.spawn_policy import windowless  # noqa: PLC0415 -- console-less root: every child spawns hidden
+
+    windowless.install()
     return main()
 
 

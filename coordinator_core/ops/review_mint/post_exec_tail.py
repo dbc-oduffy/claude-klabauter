@@ -10,7 +10,8 @@ import json
 from dataclasses import dataclass
 from typing import Mapping, Sequence
 
-# Wall-clock hang bound on one verify agent call the run cannot cancel; not an engine-op budget.
+# Wall-clock hang bound on one verify agent call the run cannot cancel (the scoped-tests prompt carries a
+# deadline at 80% of it); not an engine-op budget.
 # Derivation: under half the 632s XL r34 verify, above a scoped dispatch_emit test run. The closing
 # verify runs two bounded calls in series (test leg, then judge), so its worst case is
 # 2 x VERIFY_WALL_BUDGET_S. Coupling: must exceed hung_test_budget.INVOCATION_BUDGET_S (180) of the
@@ -74,7 +75,8 @@ def review_groups(
 
 
 def bounded_js(call_expr: str, budget_s: int, label: str) -> str:
-    """JS expression racing `call_expr` against a timer; never rejects, never cancels the agent.
+    """JS expression racing `call_expr` against a timer; never rejects, never cancels the agent
+    (the runtime offers no cancel, so the caller bounds the agent in its own prompt).
     The timer is cleared when the race settles; `call_expr` must be a side-effect-free identifier."""
     reason = json.dumps(f"verify budget exceeded ({budget_s}s): {label}")
     return (

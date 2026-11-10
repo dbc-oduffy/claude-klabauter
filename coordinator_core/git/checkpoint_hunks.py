@@ -39,7 +39,8 @@ def _message_plan(message: str) -> str:
 def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Optional[str]:
     """The run id of the one live run of `session_id` whose sizing's plan is the message's
     `Checkpoint-Plan:`; None when the message names no plan, the session is unknown, or zero or
-    several runs match."""
+    several runs match. A token record that does not name its sizing (the pre-answer marker, or a
+    bind that did not rewrite it) falls back to the sizing its record-dir `run.json` names."""
     try:
         if not session_id:
             return None
@@ -47,6 +48,7 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
         if not plan:
             return None
         from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches
+        from coordinator_core.ops import warp_run_deliverable
         from coordinator_core.ops.dispatch_emit import run_token
 
         root = Path(root)
@@ -54,7 +56,9 @@ def checkpoint_run_id(root: Path, message: str, session_id: Optional[str]) -> Op
             record["run_id"]
             for record in run_token.live_records(root)
             if record.get("session_id") == session_id
-            and (own := _sizing_plan(root, record.get("sizing_rel")))
+            and (own := _sizing_plan(
+                root, record.get("sizing_rel") or warp_run_deliverable.record_sizing_rel(root, record["run_id"])
+            ))
             and checkpoint_plan_matches(plan, own)
         ]
         return found[0] if len(found) == 1 else None

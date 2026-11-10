@@ -226,3 +226,19 @@ def test_the_retest_clause_launches_once_and_polls_to_a_verdict():
 
 def test_the_judge_arm_leg_does_not_carry_the_ask_only_retest():
     assert "retest_targeted" not in _compose()
+
+
+def test_the_scoped_tests_call_states_a_deadline_below_the_budget_and_a_bash_timeout():
+    from coordinator_core.ops.review_mint.post_exec_tail import VERIFY_WALL_BUDGET_S
+
+    script = _compose()
+    deadline = VERIFY_WALL_BUDGET_S * 4 // 5
+    assert deadline < VERIFY_WALL_BUDGET_S
+    assert f"return your test_result within {deadline}s" in script
+    assert f"Bash tool timeout set to {deadline * 1000} ms or less" in script
+
+
+def test_the_composed_script_never_carries_the_retired_orphaned_wording():
+    script = _compose()
+    assert "verify budget exceeded (" in script
+    assert "orphaned, not stopped" not in script

@@ -644,7 +644,8 @@ def candidate_test_additions(
             # A non-test helper already living under tests/ is its own file;
             # pairing it would join tests/ onto itself (tests/tests/test_x.py).
             continue
-        if _normalized_test_name(candidate.stem) in declared_names:
+        test_name = _normalized_test_name(candidate.stem)
+        if test_name is None or test_name in declared_names:
             continue
         target = _resolve_test_dir_target(candidate, repo_root)
         if repo_root is not None and not (Path(repo_root) / target.parent).is_dir():
@@ -698,6 +699,7 @@ def _resolve_test_dir_target(
     applies. Stats only; never lists a directory.
     """
     test_name = _normalized_test_name(candidate.stem)
+    assert test_name is not None, "dunder stems are filtered by the caller"
     nearest = candidate.parent / "tests" / test_name
     if repo_root is None:
         return nearest
@@ -720,7 +722,11 @@ def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:
     return [(row.id, tuple(row.writes_under)) for row in wave if row.writes_under]
 
 
-def _normalized_test_name(stem: str) -> str:
+def _normalized_test_name(stem: str) -> str | None:
+    """The importable test file name for a module stem; None for a dunder stem
+    (``__main__``, ``__init__``), which has no stem-named test."""
+    if stem.startswith("__") and stem.endswith("__"):
+        return None
     return f"test_{stem.replace('-', '_')}.py"
 
 
@@ -738,11 +744,13 @@ def _candidate_test_targets(
     test_locator_suffixes: tuple[str, ...] = (),
 ) -> list[PurePosixPath]:
     test_name = _normalized_test_name(candidate.stem)
-    targets = [
-        parent / "tests" / test_name
-        for parent in (candidate.parent, *candidate.parent.parents)
-    ]
-    targets.append(candidate.parent / test_name)
+    targets: list[PurePosixPath] = []
+    if test_name is not None:
+        targets = [
+            parent / "tests" / test_name
+            for parent in (candidate.parent, *candidate.parent.parents)
+        ]
+        targets.append(candidate.parent / test_name)
     for pattern in test_locator_suffixes:
         if candidate.suffix != _locator_source_suffix(pattern):
             continue

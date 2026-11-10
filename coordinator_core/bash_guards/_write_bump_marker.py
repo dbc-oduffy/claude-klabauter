@@ -243,6 +243,7 @@ from typing import Dict, Optional
 
 from coordinator_core.git.repo_root import git_dir as _seam_git_dir
 from coordinator_core.machine_profile import out_of_repo_write_blocked
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.subagent_sandbox.engine import _SESSION_ID_FORMAT_RE
 
@@ -541,7 +542,7 @@ def resolve_em_session_id(git_root: str, agent_id: str) -> str:
     if not git_root or not agent_id:
         return ""
     backptr = (
-        hub_for_common(Path(git_root) / ".git") / ".agents" / agent_id / "em-session-id.txt"
+        hub_for_common(resolve_git_common_dir(git_root)) / ".agents" / agent_id / "em-session-id.txt"
     )
     try:
         content = backptr.read_text(encoding="utf-8")

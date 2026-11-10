@@ -30,6 +30,7 @@ from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 from coordinator_core.bash_guards._rewrite_support import _bt_git_resolved_subcommand
 from coordinator_core.git.correction_note import SENTINEL as _NOTE_SENTINEL
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session_hub_path import hub_for_common
 
 if TYPE_CHECKING:
@@ -550,7 +551,7 @@ def _rm_peer_claim_of(
     nothing" rather than "exclude everything" -- a genuine live peer stays
     contested, never a false-ALLOW.
     """
-    sess_dir = str(hub_for_common(Path(root) / ".git"))
+    sess_dir = str(hub_for_common(resolve_git_common_dir(root)))
     if not os.path.isdir(sess_dir):
         return ""
     try:

@@ -32,7 +32,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 INV_FILE = "coordinator_core/session/tests/test_machinery_paths.py"
 INV = f"{INV_FILE}::test_every_tracked_state_first_segment_is_on_the_allowlist"
-_START = re.compile(r"'python -m coordinator_core\.ops\.dispatch_emit\.retest_targeted ([^']*)'")
+_START = re.compile(r'"[^"]*-m coordinator_core\.ops\.dispatch_emit\.retest_targeted ([^"]*)"')
 
 
 def _emitted_retest_argv(root) -> list[str]:

@@ -19,6 +19,18 @@ def test_own_diff_blockers_keeps_only_own_files_both_sides():
     assert tb.own_diff_blockers(result, ["pkg/other.py"]) == []
 
 
+def test_own_diff_blockers_keeps_a_base_green_red_outside_the_footprint():
+    ratchet = "coordinator_core/tests/test_guard_matchers_ratchet.py::test_expected"
+    peer = "coordinator_core/tests/test_peer.py::test_x"
+    result = {
+        "failing": [ratchet, peer, "t.py::a"],
+        "passed_at_base": [ratchet, "t.py::a"],
+        "pre_existing": ["t.py::a"],
+    }
+    got = tb.own_diff_blockers(result, ["t.py"])
+    assert [b.node_id for b in got] == [ratchet]
+
+
 def test_own_diff_blockers_respects_pre_existing_and_pins_field():
     result = {"failing": ["t.py::a", "t.py::b"], "pre_existing": ["t.py::a"]}
     assert tb.own_diff_blockers(result, ["t.py"]) == [TestBlocker("t.py::b", "")]

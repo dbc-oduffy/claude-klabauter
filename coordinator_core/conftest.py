@@ -49,6 +49,25 @@ import sys
 
 import pytest
 
+# Every child a test spawns is windowless on Windows. A pytest under a console-less parent
+# (an agent's shell) otherwise opens one console window per git/python child, flashing and
+# stealing the PM's focus about once a second. Tests call subprocess directly in hundreds of
+# sites, so the default lives here (loaded under both rootdirs: the repo root's conftest imports
+# this module), not in a helper. An explicit creationflags value wins.
+if sys.platform == "win32" and not getattr(__import__("subprocess").Popen.__init__, "_windowless", False):
+    import subprocess as _subprocess
+
+    _popen_init = _subprocess.Popen.__init__
+
+    def _windowless_popen_init(self, *args, **kwargs):
+        # creationflags is Popen's 14th positional parameter; a caller passing it positionally keeps it.
+        if len(args) < 14 and not kwargs.get("creationflags"):
+            kwargs["creationflags"] = _subprocess.CREATE_NO_WINDOW
+        _popen_init(self, *args, **kwargs)
+
+    _windowless_popen_init._windowless = True
+    _subprocess.Popen.__init__ = _windowless_popen_init
+
 # BV-20260927-03: under a `rootdir = coordinator_core` invocation (this
 # file's own ``pytest.ini`` wins as configfile, confcutdir excludes the
 # repo-root conftest — see this module's docstring), nothing upstream of

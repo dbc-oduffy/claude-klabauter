@@ -70,7 +70,8 @@ def _ac3(text: str) -> None:
     assert text.count(f"}}), {ms}); }})]).finally(() => clearTimeout(_t)))()") == 2
     assert "verify budget exceeded (300s): scoped tests" in text
     assert "verify budget exceeded (300s): criterion judge" in text
-    assert "agent still running (orphaned), not stopped: " in text
+    assert "agent deadline-bounded, exit not observed: " in text
+    assert "orphaned, not stopped" not in text
     assert "await _testCall" not in text and "await _judgeCall" not in text
     guard = text.index("  if (!_halted) {\n  phase('Verify');")
     assert text.index("_testResult = await _verifyTestRun;") > guard
@@ -233,7 +234,8 @@ def test_an_overrunning_test_leg_resolves_to_a_recorded_orphan_and_nothing_await
     )
     assert got["test"]["status"] == "error"
     assert "verify budget exceeded (1s): scoped tests" in got["test"]["summary"]
-    assert "agent still running (orphaned), not stopped: scoped tests" in got["test"]["summary"]
+    assert "agent deadline-bounded, exit not observed: scoped tests" in got["test"]["summary"]
+    assert "orphaned" not in got["test"]["summary"]
     assert got["judge"]["status"] == "met"
 
 
@@ -246,7 +248,8 @@ def test_an_overrunning_judge_stays_indeterminate_and_names_the_orphan(monkeypat
     )
     assert got["test"]["status"] == "pass"
     assert got["judge"]["status"] == "indeterminate" and got["judge"]["differs_from_baseline"] is None
-    assert "agent still running (orphaned), not stopped: criterion judge" in got["judge"]["reason"]
+    assert "agent unbounded, exit not observed: criterion judge" in got["judge"]["reason"]
+    assert "orphaned" not in got["judge"]["reason"]
 
 
 @pytest.mark.spawns_process

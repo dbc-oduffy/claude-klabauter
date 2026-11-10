@@ -127,10 +127,15 @@ def _norm_path(p: str) -> str:
 def own_diff_blockers(
     result: Mapping[str, Any], own_paths, root: Optional[str] = None
 ) -> List[TestBlocker]:
-    """`from_reverify` blockers whose node id's file part is in `own_paths`.
+    """`from_reverify` blockers whose node id's file part is in `own_paths`, or whose node id is in
+    `passed_at_base` (green at base, red with the diff: the run's own, whatever its file).
 
     The file part is the text before the first `::`; both sides are normalised to `/`
-    separators with a leading `./` stripped.
+    separators with a leading `./` stripped. `pre_existing` nodes are already excluded.
     """
     own = {_norm_path(p) for p in own_paths or []}
-    return [b for b in from_reverify(result, root) if _norm_path(b.node_id.split("::", 1)[0]) in own]
+    base = {_norm_path(i) for i in result.get("passed_at_base") or []}
+    return [
+        b for b in from_reverify(result, root)
+        if _norm_path(b.node_id.split("::", 1)[0]) in own or _norm_path(b.node_id) in base
+    ]

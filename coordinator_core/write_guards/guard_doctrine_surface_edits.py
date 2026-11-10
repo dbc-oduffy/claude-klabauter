@@ -97,6 +97,7 @@ from coordinator_core.bounded_io import run_bounded
 from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_profile import feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.bash_guards import _write_bump_applicability
 from coordinator_core.write_guards._case_fold_path import casefold_path
@@ -465,7 +466,7 @@ def _write_repo_identity_advisory_log(
     """
     if not repo_root or not session_id:
         return
-    log_dir = session_dir_for(Path(repo_root) / ".git", session_id)
+    log_dir = session_dir_for(resolve_git_common_dir(repo_root), session_id)
 
     def _write() -> None:
         # NEVER mkdir here: an advisory log line minting a session directory

@@ -199,6 +199,31 @@ def test_run_unresolved_when_plan_differs_or_ambiguous(tmp_path, monkeypatch):
     assert ch.checkpoint_run_id(tmp_path, "no plan line", "s1") is None
 
 
+def _live_run(root: Path, run_id: str, sizing_rel: str, plan: str, *, session: str = "s1", in_token: bool) -> None:
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    (root / sizing_rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / sizing_rel).write_text(f'plan: "{plan}"\n', encoding="utf-8")
+    run_token.mint(root, run_id, "s.mjs", session_id=session, sizing_rel=sizing_rel if in_token else None)
+    (record_dir(root, run_id)).mkdir(parents=True, exist_ok=True)
+    (record_dir(root, run_id) / "run.json").write_text(f'{{"sizing_rel": "{sizing_rel}"}}', encoding="utf-8")
+
+
+def test_run_resolves_when_the_token_record_omits_its_sizing(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _live_run(tmp_path, "ask-1", "state/sizings/a.yaml", PLAN, in_token=False)
+    _live_run(tmp_path, "ask-2", "state/sizings/b.yaml", "docs/plans/other.md", in_token=False)
+    assert ch.checkpoint_run_id(tmp_path, MSG, "s1") == "ask-1"
+    assert ch.checkpoint_run_id(tmp_path, MSG, "s9") is None
+
+
+def test_run_unresolved_when_two_token_less_sizing_runs_match(tmp_path):
+    (tmp_path / ".git").mkdir()
+    _live_run(tmp_path, "ask-1", "state/sizings/a.yaml", PLAN, in_token=False)
+    _live_run(tmp_path, "ask-2", "state/sizings/b.yaml", PLAN, in_token=True)
+    assert ch.checkpoint_run_id(tmp_path, MSG, "s1") is None
+
+
 def test_blob_equal_to_head_is_withheld_with_a_reason(tmp_path):
     root = _repo(tmp_path)
     head_sha = subprocess.run(

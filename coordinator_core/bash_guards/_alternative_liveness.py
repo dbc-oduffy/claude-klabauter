@@ -122,6 +122,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import coordinator_core.bash_guards as _pkg
+from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
@@ -437,7 +438,7 @@ def _make_backpointer(git_root: str, agent_id: str, subagent_type: str, em_sid: 
     PRIMARY ``agent_type`` field at all (see
     ``_read_backpointer_subagent_type``), so a bare payload cannot trigger
     it; this fixture is the hermetic substitute for a real dispatch."""
-    hub = hub_for_common(Path(git_root) / ".git")
+    hub = hub_for_common(resolve_git_common_dir(git_root))
     agents_dir = os.path.join(str(hub), ".agents", agent_id)
     os.makedirs(agents_dir, exist_ok=True)
     with open(os.path.join(agents_dir, "em-session-id.txt"), "w", encoding="utf-8", newline="\n") as fh:

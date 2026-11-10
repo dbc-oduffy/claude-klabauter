@@ -611,6 +611,131 @@ def test_sessionstart_script_hardcodes_no_home_path():
     assert "/Users/" not in text
 
 
+# --- agy ancestor walk and workspace cwd ------------------------------------------------------
+
+def fake_tree(rows):
+    """Process table reader over {pid: (ppid, name)}."""
+    return rows.get
+
+
+HOOK_PID, LAUNCHER_PID, AGY_PID = 100, 200, 300
+AGY_TREE = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (AGY_PID, "cmd.exe"),
+            AGY_PID: (400, "agy.exe"), 400: (1, "explorer.exe")}
+
+
+def test_ancestor_walk_skips_the_intermediate_and_returns_agy():
+    assert pre.agy_ancestor_pid(fake_tree(AGY_TREE), start=HOOK_PID) == AGY_PID
+
+
+def test_ancestor_walk_takes_the_nearest_agy():
+    tree = {**AGY_TREE, 400: (500, "agy.exe"), 500: (1, "agy.exe")}
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) == AGY_PID
+
+
+def test_ancestor_walk_never_takes_a_non_agy_parent(capsys):
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (400, "cmd.exe"), 400: (1, "explorer.exe")}
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=HOOK_PID) is None
+    assert "no agy ancestor" in capsys.readouterr().err
+
+
+def test_ancestor_walk_respects_the_depth_bound():
+    tree = {i: (i + 1, "cmd.exe") for i in range(1, 20)}
+    tree[20] = (21, "agy.exe")
+    tree[21] = (1, "x")
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=1, max_depth=3) is None
+    assert pre.agy_ancestor_pid(fake_tree(tree), start=1, max_depth=30) == 20
+
+
+def test_ancestor_walk_survives_cycles_and_a_missing_table():
+    assert pre.agy_ancestor_pid(fake_tree({1: (2, "a"), 2: (1, "b")}), start=1) is None
+    assert pre.agy_ancestor_pid(fake_tree({}), start=1) is None
+
+
+def test_ancestor_walk_with_no_process_table_is_none(monkeypatch):
+    monkeypatch.setattr(pre, "_proc_reader", lambda: None)
+    assert pre.agy_ancestor_pid() is None
+
+
+def test_ancestor_walk_spawns_no_subprocess(monkeypatch):
+    def boom(*a, **k):
+        pytest.fail("spawned a process")
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    monkeypatch.setattr(subprocess, "run", boom)
+    assert pre.agy_ancestor_pid(fake_tree(AGY_TREE), start=HOOK_PID) == AGY_PID
+    pre.agy_ancestor_pid()  # the real table for this process
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows snapshot")
+def test_windows_snapshot_lists_this_process_with_its_parent():
+    table = pre._nt_process_table()
+    assert table[os.getpid()][0] == os.getppid()
+    assert table[os.getpid()][1].startswith("python")
+
+
+def test_pretool_main_uses_the_ancestor_not_getppid(home, monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(pre, "_proc_reader", lambda: fake_tree(AGY_TREE))
+    monkeypatch.setattr(pre.os, "getpid", lambda: HOOK_PID)
+    monkeypatch.setattr(pre, "decide", lambda payload, agy_pid, *a: seen.append(agy_pid) or {"decision": "ask"})
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(run_payload())))
+    pre.main()
+    assert seen == [AGY_PID]
+
+
+def test_leg_with_no_agy_pid_is_never_current(home, ls_server):
+    write_leg(home, pid=os.getpid(), agy_pid=None, ls=ls_server)
+    assert pre.leg_current(CONV, None) is False
+
+
+def test_launcher_argv_omits_agy_pid_when_none():
+    assert "--agy-pid" not in pre.launcher_argv(CONV, None)
+    assert pre.launcher_argv(CONV, 5)[-2:] == ["--agy-pid", "5"]
+
+
+def _sess_with_tree(monkeypatch, tree, payload):
+    monkeypatch.setattr(pre, "_proc_reader", lambda: fake_tree(tree))
+    monkeypatch.setattr(pre.os, "getpid", lambda: HOOK_PID)
+    real = sess.load_sibling
+    monkeypatch.setattr(sess, "load_sibling", lambda n: pre if n == "unimatrix-agy-hook-pretool" else real(n))
+    monkeypatch.setattr(sess.json, "load", lambda f: payload)
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: FakeProc())
+
+
+def test_sessionstart_records_the_agy_ancestor_and_workspace_cwd(home, agy_env, monkeypatch, capsys):
+    _sess_with_tree(monkeypatch, AGY_TREE, {"conversationId": CONV, "workspacePaths": ["/repo/x", "/other"]})
+    assert sess.main() == 0
+    rec = json.loads(record_path(home).read_text())
+    assert (rec["agy_pid"], rec["cwd"]) == (AGY_PID, "/repo/x")
+
+
+def test_sessionstart_with_no_agy_ancestor_records_none(home, agy_env, monkeypatch, capsys):
+    tree = {HOOK_PID: (LAUNCHER_PID, "python.exe"), LAUNCHER_PID: (1, "cmd.exe")}
+    _sess_with_tree(monkeypatch, tree, {"conversationId": CONV})
+    sess.main()
+    assert json.loads(record_path(home).read_text())["agy_pid"] is None
+    assert "no agy ancestor" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("payload,expected", [
+    ({"cwd": "/c", "workspacePaths": ["/w"]}, "/c"),
+    ({"cwd": "", "workspacePaths": ["/w"]}, "/w"),
+    ({"workspacePaths": ["/w", "/v"]}, "/w"),
+    ({"workspacePaths": []}, None),
+    ({"workspacePaths": [""]}, None),
+    ({"workspacePaths": "/w"}, None),
+    ({"workspacePaths": [5]}, None),
+    ({}, None),
+])
+def test_payload_cwd_falls_back_to_first_workspace_path(payload, expected):
+    assert sess.payload_cwd(payload) == expected
+
+
+def test_register_stamps_workspace_cwd_when_payload_cwd_absent(home, agy_env, monkeypatch):
+    monkeypatch.setattr(subprocess, "Popen", lambda cmd, **kw: FakeProc())
+    sess.register({"conversationId": CONV, "workspacePaths": ["/repo/x"]}, 77)
+    assert json.loads(record_path(home).read_text())["cwd"] == "/repo/x"
+
+
 def test_agy_leg_log_path_resolves_at_call_time(tmp_path, monkeypatch):
     monkeypatch.delenv("AGY_LEG_LOG", raising=False)
     leg = load("unimatrix-agy-leg")

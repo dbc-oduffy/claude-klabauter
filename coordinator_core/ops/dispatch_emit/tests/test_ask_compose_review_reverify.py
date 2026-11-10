@@ -163,6 +163,28 @@ def test_own_red_still_halts_and_foreign_red_rides_out_of_ask():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
+def test_base_green_red_outside_the_footprint_halts_as_owned_red():
+    out = _run_halt(
+        {"failing": [_FOREIGN_NODE, _OWN_NODE], "passed_at_base": [_FOREIGN_NODE], "pre_existing": []}, [_OWN]
+    )
+
+    assert out["halted"]["halted"] == ask_compose.HALT_REVIEW_BLOCKED
+    assert [f["node_id"] for f in out["halted"]["failing"]] == sorted([_FOREIGN_NODE, _OWN_NODE])
+    assert "out_of_ask" not in out["reverify"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_base_green_red_that_is_pre_existing_stays_foreign():
+    out = _run_halt(
+        {"failing": [_FOREIGN_NODE], "passed_at_base": [_FOREIGN_NODE], "pre_existing": [_FOREIGN_NODE]}, [_OWN]
+    )
+
+    assert out["halted"] is None
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
 def test_no_declared_footprint_keeps_every_red_a_blocker():
     out = _run_halt({"failing": [_FOREIGN_NODE]}, None)
 

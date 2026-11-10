@@ -6,8 +6,9 @@ leg starts pending: it binds its endpoint and queues peer messages. The language
 discovered from the agy pid's listening ports. The first run_command through the PreToolUse hook's
 rewrite (unimatrix-agy-hook-pretool.py) relaunches the leg live, which drains the queue.
 
-Reads the payload's `conversationId`, takes the agy pid from os.getppid() (hooks are spawned by agy),
-and runs unimatrix-agy-hook-launch.py's start() in-process; start() spawns the leg detached and writes
+Reads the payload's `conversationId`, takes the agy pid from the nearest agy.exe ancestor of this hook
+(agy launches hooks through a short-lived intermediate process, so getppid() is never used; none found
+records no agy pid), takes the leg cwd from the payload `cwd` else `workspacePaths[0]`, and runs unimatrix-agy-hook-launch.py's start() in-process; start() spawns the leg detached and writes
 the leg record, then the conversation is upserted into peers.json (register_peer, as the Codex hook
 does). Where the env does carry the address and token the leg starts live here.
 
@@ -33,6 +34,16 @@ def load_sibling(name):
     return mod
 
 
+def payload_cwd(payload):
+    """Payload `cwd` when a non-empty string, else the first non-empty string of `workspacePaths`, else None."""
+    cwd = payload.get("cwd")
+    if isinstance(cwd, str) and cwd:
+        return cwd
+    paths = payload.get("workspacePaths")
+    first = paths[0] if isinstance(paths, list) and paths else None
+    return first if isinstance(first, str) and first else None
+
+
 def register(payload, agy_pid):
     """Start the leg for payload's conversation; True when a leg record for it exists afterwards."""
     if not isinstance(payload, dict):
@@ -41,7 +52,7 @@ def register(payload, agy_pid):
     roster = launch.load_sibling("unimatrix-roster")
     conv = payload.get("conversationId") or os.environ.get("ANTIGRAVITY_CONVERSATION_ID")
     state = roster.settings_home() / "unimatrix" / "agy-legs"
-    cwd = payload.get("cwd") if isinstance(payload.get("cwd"), str) and payload.get("cwd") else None
+    cwd = payload_cwd(payload)
     launch.start({"conversationId": conv, "agyPid": agy_pid, "cwd": cwd}, roster, state)
     registered = isinstance(conv, str) and bool(launch.CONV_RE.match(conv)) and (state / f"{conv}.json").is_file()
     if registered:
@@ -81,7 +92,7 @@ def main():
         except Exception:
             pointer = None
         try:
-            registered = register(payload, os.getppid())
+            registered = register(payload, load_sibling("unimatrix-agy-hook-pretool").agy_ancestor_pid())
         except Exception:
             registered = False
         out = reply(registered, pointer)

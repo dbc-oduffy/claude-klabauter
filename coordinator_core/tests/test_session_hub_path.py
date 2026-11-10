@@ -44,6 +44,35 @@ def test_sessions_dir_in_git_repo_uses_coordinator_local(tmp_path):
     )
 
 
+def _linked_worktree(tmp_path):
+    main = tmp_path / "main"
+    private = main / ".git" / "worktrees" / "wt"
+    private.mkdir(parents=True)
+    (private / "commondir").write_text("../..\n", encoding="utf-8")
+    wt = tmp_path / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text(f"gitdir: {private}\n", encoding="utf-8")
+    return main, wt
+
+
+def test_linked_worktree_and_main_share_one_hub(tmp_path):
+    from coordinator_core.bash_guards._override_log_path import session_audit_log_dir
+
+    main, wt = _linked_worktree(tmp_path)
+    expected = main / ".coordinator-local" / "coordinator-sessions" / "no-session"
+    assert Path(session_audit_log_dir(str(main), None)) == expected
+    assert Path(session_audit_log_dir(str(wt), None)) == expected
+
+
+def test_linked_worktree_other_guard_sites_resolve_main_hub(tmp_path):
+    from coordinator_core.bash_guards import scope_orphan_census
+
+    main, wt = _linked_worktree(tmp_path)
+    hub = str(main / ".coordinator-local" / "coordinator-sessions")
+    assert scope_orphan_census._hub_dir(str(wt)) == hub
+    assert scope_orphan_census._hub_dir(str(main)) == hub
+
+
 def test_module_is_a_leaf():
     code = (
         "import sys; import coordinator_core.session_hub_path;"
