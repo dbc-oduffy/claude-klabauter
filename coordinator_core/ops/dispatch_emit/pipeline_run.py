@@ -5,6 +5,7 @@ carries ``REVISIONS_MARKER``; ``workflow.revise`` appends here.
 """
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path
@@ -17,13 +18,14 @@ from coordinator_core.session.declared_writes import declare_write
 
 __all__ = [
     "REVISIONS_MARKER", "FINISHED_REL", "emitted_pipeline_run", "run_name", "revisions_rel", "finished_rel",
-    "pipeline_run_state", "reads_revisions", "append_revision",
+    "pipeline_run_state", "reads_revisions", "append_revision", "asks_peer_relay", "executing_run",
 ]
 
 #: The preamble sentence an emitted pipeline script carries when its stages read the revisions file.
 REVISIONS_MARKER = "Read the run's revisions file before acting; its newest entries override earlier scope."
 
-_EMITTED_SUFFIX = ".workflow.mjs.emitted.json"
+_SCRIPT_SUFFIX = ".workflow.mjs"
+_EMITTED_SUFFIX = _SCRIPT_SUFFIX + ".emitted.json"
 
 
 def emitted_pipeline_run(root: Path, run_id: str) -> Optional[Path]:
@@ -73,6 +75,51 @@ def pipeline_run_state(root: Path, run_id: str) -> str:
 def reads_revisions(script: str) -> bool:
     """True when the emitted script text carries ``REVISIONS_MARKER``."""
     return REVISIONS_MARKER in script
+
+
+#: Scripts `executing_run` reads, newest first; a research run older than this many fires is not the live one.
+EXECUTING_SCAN_CAP = 40
+
+_RELAY_VERB = r"(?:relay|forward|notify|ping|tell)"
+_PEER = r"(?:peers?|sessions?|teammates?|siblings?|claude-[\w-]*-\d+)"
+_PEER_RELAY = re.compile(
+    rf"send[\s_-]*message|\b{_RELAY_VERB}\b[^.\n]{{0,80}}?\b{_PEER}(?![\w-])", re.IGNORECASE
+)
+
+
+def asks_peer_relay(text: str) -> bool:
+    """True when ``text`` asks a stage to SendMessage, relay to or notify a peer session.
+
+    Lexical and lenient toward prose that merely mentions a peer: a relay verb must govern the peer
+    within one clause.
+    """
+    return _PEER_RELAY.search(str(text)) is not None
+
+
+def executing_run(root: Path, sizing_rel: str) -> Optional[str]:
+    """The live research ``pipeline-`` run id whose emitted script closes against ``sizing_rel``, else None.
+
+    The script carries its ``research.close`` params (``"sizing": <rel>``), so the ask run that
+    reached it through a sizing is found by that path alone; newest script wins.
+    """
+    base = Path(root) / RUN_DIR_ROOT
+    needle = f'"sizing": {json.dumps(sizing_rel)}'
+    try:
+        scripts = sorted(
+            base.glob(f"{RUN_ID_PREFIX}research-*{_SCRIPT_SUFFIX}"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+    except OSError:
+        return None
+    for script in scripts[:EXECUTING_SCAN_CAP]:
+        run_id = script.name[: -len(_SCRIPT_SUFFIX)]
+        if pipeline_run_state(root, run_id) != "live":
+            continue
+        try:
+            if needle in script.read_text(encoding="utf-8"):
+                return run_id
+        except OSError:
+            continue
+    return None
 
 
 def append_revision(root: Path, run_id: str, text: str, sender: str, kind: str) -> Path:

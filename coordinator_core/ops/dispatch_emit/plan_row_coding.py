@@ -447,6 +447,17 @@ def _withheld_paths(message: str) -> frozenset:
     return frozenset(m.group("v").replace("\\", "/").removeprefix("./") for m in _WITHHELD_LINE.finditer(message or ""))
 
 
+_LANDS_CHUNKS_LINE = re.compile(r"^Lands-Chunks:[ \t]*(?P<v>.+?)[ \t]*$", re.MULTILINE)
+
+
+def _lands_chunks(message: str) -> Optional[frozenset]:
+    """Ids named by the message's ``Lands-Chunks:`` trailers, None when it carries none."""
+    found = [m.group("v") for m in _LANDS_CHUNKS_LINE.finditer(message or "")]
+    if not found:
+        return None
+    return frozenset(i for v in found for i in re.split(r"[,\s]+", v) if i)
+
+
 def _carries_row_evidence(message: str, deliverable_id: Optional[str], plan_path: str) -> bool:
     """True when the commit names this plan: its ``Deliverable-Id`` trailer or a ``Halt-Plan`` line."""
     if deliverable_id is not None and deliverable_id in {m.group("v") for m in _DELIVERABLE_TRAILER.finditer(message)}:
@@ -484,7 +495,9 @@ def outside_landings(
     A merge commit and a commit whose ``Deliverable-Id`` trailers exclude the plan's deliverable are always
     stepped over: a touch of a shared file by someone else's work is not this row's landing.
     ``require_evidence`` also steps over every commit that does not name this plan (its ``Deliverable-Id``
-    or a ``Halt-Plan`` line), so a bare file touch is never credit.
+    or a ``Halt-Plan`` line), so a bare file touch is never credit. It also denies a chunk the credit of a
+    commit whose ``Lands-Chunks:`` trailer omits it: the run's own landing touched a shared write of a
+    row it left open.
     """
     from coordinator_core.git.commit_walk import commit_meta as _commit_meta
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -501,6 +514,10 @@ def outside_landings(
         if csha not in metas:
             metas[csha] = _commit_meta(cdir, csha)
         return metas[csha]
+
+    def _names_other_chunks(meta_, chunk_id) -> bool:
+        named = _lands_chunks((meta_ or {}).get("message") or "")
+        return named is not None and chunk_id not in named
 
     def _step(cdir, tree, name):
         key = (tree, name)
@@ -571,7 +588,8 @@ def outside_landings(
             hit = next(
                 (
                     csha for csha, parent in walked
-                    if not _withheld_paths((commit_meta(common_dir, csha) or {}).get("message") or "").intersection(chunk.paths)
+                    if not (require_evidence and _names_other_chunks(commit_meta(common_dir, csha), chunk.id))
+                    and not _withheld_paths((commit_meta(common_dir, csha) or {}).get("message") or "").intersection(chunk.paths)
                     and _blob_at_commit(common_dir, csha, path)
                     != (_blob_at_commit(common_dir, parent, path) if parent else ABSENT)
                 ),

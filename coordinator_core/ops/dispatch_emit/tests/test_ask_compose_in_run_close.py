@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
+
+import pytest
+
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from coordinator_core.ops.review_test_blocker import TEST_BLOCKER
 from coordinator_core.warp_fire import fire_command
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
@@ -145,3 +152,57 @@ def test_return_fire_falls_back_to_commit_released_list(monkeypatch):
         "fire: _splitExit ? _splitExit.fire : (_halted && _halted.halted === 'research' && "
         "Array.isArray(_halted.fire) ? _halted.fire : (_commit?.close?.siblings?.released ?? [])),"
     ) in script
+
+
+def test_in_run_review_halt_over_base_reds_promotes_next_action_to_terminal_commit(monkeypatch):
+    script = _script(monkeypatch)
+    promote = script[script.index("const _hcBase") :]
+    assert "_reviewReverify.pre_existing.map(_hcPx)" in promote
+    assert "_halted.failing.every((n) => _hcBase.has(_hcPx(n)))" in promote
+    assert "_nextAction = { kind: 'terminal_commit', op: 'dispatch.terminal_commit', params: { incomplete_chunks: _incompleteChunks" in promote
+    assert script.index("const _hcBase") > script.index("const _closeable")
+
+
+def _promotion_fragment(script: str) -> str:
+    start = script.rindex("if (_halted && _halted.halted ===", 0, script.index("const _hcBase"))
+    end_marker = "held: [] } }; } }"
+    return script[start : script.index(end_marker, start) + len(end_marker)]
+
+
+def _promoted_next_action(fragment: str, failing: list[str], pre_existing: list[str], blocker: str):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node unavailable to evaluate the composed promotion")
+    program = (
+        "const _halted = {halted: %s, blocker: %s, failing: %s}; "
+        "const _reviewReverify = {pre_existing: %s}; const _incompleteChunks = ['C2']; "
+        "const _posixRel = %s; let _nextAction = {kind: 'revise_and_refire'}; %s "
+        "console.log(JSON.stringify(_nextAction));"
+    ) % (
+        json.dumps(ask_compose.HALT_REVIEW_BLOCKED),
+        json.dumps(blocker),
+        json.dumps(failing),
+        json.dumps(pre_existing),
+        ask_compose._POSIX_LAMBDA,
+        fragment,
+    )
+    out = subprocess.run([node, "-e", program], capture_output=True, text=True, timeout=30, **_NO_CONSOLE)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+_NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
+
+
+def test_composed_promotion_evaluates_to_terminal_commit_only_over_base_reds(monkeypatch):
+    fragment = _promotion_fragment(_script(monkeypatch))
+    promoted = _promoted_next_action(fragment, ["./a.py::t"], ["a.py::t"], TEST_BLOCKER)
+    assert promoted == {
+        "kind": "terminal_commit",
+        "op": "dispatch.terminal_commit",
+        "params": {"incomplete_chunks": ["C2"], "held": []},
+    }
+    own = _promoted_next_action(fragment, ["a.py::t", "b.py::own"], ["a.py::t"], TEST_BLOCKER)
+    assert own == {"kind": "revise_and_refire"}
+    other = _promoted_next_action(fragment, ["a.py::t"], ["a.py::t"], "other_blocker")
+    assert other == {"kind": "revise_and_refire"}

@@ -434,6 +434,7 @@ def mint(
     kind: str = "ask",
     marker: bool = False,
     carry_prior: bool = False,
+    ask_sha256: Optional[str] = None,
 ) -> str:
     """Write the run's record and return the token. Raises ValueError when no git dir resolves,
     the run id is malformed, `script_path` is empty or `kind` is not one of `KINDS`: an unbound
@@ -453,7 +454,11 @@ def mint(
 
     `marker=True` is the submit hook's pre-answer mint of a brand-new run id: one record write through
     the `WRITE_GATE`, no prior-record read, no stale-twin sweep, no live-index update. The run's own
-    emit re-mints the id in full."""
+    emit re-mints the id in full.
+
+    `ask_sha256` is the normalized hash of a raw ask's text (`extant_work.normalized_ask_hash`),
+    recorded so a refire of the same ask finds this run. A full mint passing None keeps the key of
+    the record it replaces."""
     if not isinstance(script_path, str) or not script_path.strip():
         raise ValueError("run token: script_path is required")
     if kind not in KINDS:
@@ -472,12 +477,16 @@ def mint(
         "sizing_rel": sizing_rel,
         "kind": kind,
     }
+    if ask_sha256:
+        record["ask_sha256"] = ask_sha256
     if marker:
         _publish_record(path, json.dumps(record, sort_keys=True))
         return token
     # Receipt first: unlinking first would erase the remint case's receipt. The spent receipt stays:
     # it matches only the landed token's digest, so a re-mint still answers that token already_landed.
     replaced = _read_rec(repo_root, run_id)
+    if not ask_sha256 and replaced is not None and isinstance(replaced.get("ask_sha256"), str):
+        record["ask_sha256"] = replaced["ask_sha256"]
     if (
         carry_prior and replaced is not None and _fresh(replaced)
         and replaced.get("script_path") == script_path and isinstance(replaced.get("sha256"), str)
@@ -1029,8 +1038,8 @@ def _wake_stage_waiters(repo_root: Path, ended_run_id: str) -> None:
     """The end of `ended_run_id` (`consume`, `discard`; never `release`, which restores a running
     run) frees every stage parked behind it (`stage_wait.wake_on_end`). Each freed waiter's token is
     retired, so the spool's live-token coalescing cannot swallow its refire, then its
-    `engine-ask {sizing, resume_run_id}` refire is spooled, then one background drain starts
-    (`_kick_spool_drain`); no mint or spawn runs inside this call. Never raises: a failure is a logged advisory."""
+    `engine-ask {sizing, resume_run_id}` refire is spooled for the warm server's own drain; no
+    drain, mint or spawn runs inside this call. Never raises: a failure is a logged advisory."""
     import logging
 
     log = logging.getLogger(__name__)
@@ -1041,36 +1050,11 @@ def _wake_stage_waiters(repo_root: Path, ended_run_id: str) -> None:
     except Exception:  # noqa: BLE001 -- a wake must never fail the blocker's own removal
         log.warning("stage wake after %s ended failed", ended_run_id, exc_info=True)
         return
-    spooled = False
     for waiter in waiters:
         try:
-            spooled = _resume_stage_waiter(repo_root, waiter) or spooled
+            _resume_stage_waiter(repo_root, waiter)
         except Exception:  # noqa: BLE001
             log.warning("stage resume of %s after %s ended failed", waiter.get("run_id"), ended_run_id, exc_info=True)
-    if spooled:
-        _kick_spool_drain(repo_root)
-
-
-def _kick_spool_drain(repo_root: Path) -> None:
-    """Start one background `ask_spool.drain.run` so the spooled refires mint now, not at the next
-    engine boot. A daemon thread: the blocker's op returns without waiting on the mint, and a
-    process that exits first leaves the entries pending for the server's own drain. Never raises."""
-    import threading
-
-    def _drain() -> None:
-        try:
-            from coordinator_core.ask_spool import drain
-
-            drain.run(str(repo_root))
-        except Exception:  # noqa: BLE001 -- entries stay pending for the next drain
-            import logging
-
-            logging.getLogger(__name__).warning("stage-wait spool drain failed", exc_info=True)
-
-    try:
-        threading.Thread(target=_drain, name="stage-wait-drain", daemon=True).start()
-    except RuntimeError:
-        pass
 
 
 def _resume_stage_waiter(repo_root: Path, waiter: dict) -> bool:

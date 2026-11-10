@@ -1547,6 +1547,34 @@ def revise(
     root = Path(repo_root)
     dir_ = run_dir(root, run_id)
     run = read_run(dir_)
+    verbatim_only = not (
+        named or all_of_pm_ask is not None or withheld_entries or credit_entries or red_entries or build_only
+        or stop_after or retraction is not None or row_retraction is not None or claim or accept_entries
+        or add_paths or widened or ledger_verdict
+    )
+    if (
+        (text or has_note) and str(run_id).startswith("ask-")
+        and verbatim_only
+    ):
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+        warp = (read_run_stage(root, run_id) or {}).get("warp_run")
+        if isinstance(warp, str) and warp and warp != run_id and read_run(run_dir(root, warp)) is not None:
+            if outcome is not None:
+                outcome["executing_run"] = warp
+            return revise(root, warp, verbatim=verbatim, note=note, sender=sender, outcome=outcome)
+    if (
+        run is not None and isinstance(run.get("sizing_rel"), str) and (text or has_note)
+        and verbatim_only
+    ):
+        from coordinator_core.ops.dispatch_emit import pipeline_run
+        from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
+
+        executing = pipeline_run.executing_run(root, normalize_sizing_rel(root, run["sizing_rel"]))
+        if executing is not None:
+            if outcome is not None:
+                outcome["executing_run"] = executing
+            return revise(root, executing, verbatim=verbatim, note=note, sender=sender, outcome=outcome)
     _refuse_additions(root, dir_, run_id, run, add_paths, outcome)
     if widened and run is not None:
         _stamp_widened_rows(root, dir_, run_id, run, widened, outcome)
@@ -1582,6 +1610,12 @@ def revise(
                 )
             if has_note and len(str(note).encode("utf-8")) > VERBATIM_BYTE_CAP:
                 raise LedgerRefused(f"note exceeds {VERBATIM_BYTE_CAP} bytes")
+            if any(pipeline_run.asks_peer_relay(t) for t in (text, str(note) if has_note else "")):
+                raise LedgerRefused(
+                    f"stages cannot message peers: research pipeline run {run_id!r} has no SendMessage, so a "
+                    "revision asking a stage to relay to a peer would be dropped; not delivered. "
+                    "Relay from your own session when the run closes."
+                )
             who = _clean_sender(sender) or "em"
             if text:
                 pipeline_run.append_revision(root, run_id, text, who, "verbatim")
@@ -1952,7 +1986,8 @@ def judge(
 
     `note_ids` are the run's live revise-note ids (`note_ids(run_dir)`): a verdict item under one is
     not a register row and is not `NOT_A_ROW_REASON`; it passes only as `met`, else fails
-    `NOTE_NOT_MET_REASON`. Any other unregistered id still fails `NOT_A_ROW_REASON`."""
+    `NOTE_NOT_MET_REASON`. Any other unregistered id is ignored and listed in the result's `advisory`
+    (`[{id, reason}]`, present only when non-empty): it never fails the verdict."""
     floor = review_floor.floor_reason(list(code_paths), review_verdicts or 0)
     verdict = normalize_verdict(verdict)
     rows = verdict.get("items") if isinstance(verdict, Mapping) else None
@@ -2066,18 +2101,25 @@ def judge(
     withheld_ids = {w["id"] for w in ledger.withheld}
     own_notes = set(note_ids) - set(order)
     unknown = sorted(set(by_id) - set(order) - withheld_ids - gated_ids - set(operator) - own_notes)
-    failures.extend({"id": rid, "reason": NOT_A_ROW_REASON} for rid in unknown)
     failures.extend(
         {"id": rid, "reason": NOTE_NOT_MET_REASON}
         for rid in sorted(own_notes & set(by_id)) if by_id[rid].get("status") != "met"
     )
     open_rows.extend(dict(w) for w in ledger.withheld)
     result = {"pass": not failures, "failures": failures, "open": open_rows}
+    if unknown:
+        result["advisory"] = [{"id": rid, "reason": f"{NOT_A_ROW_REASON}: ignored, never judged"} for rid in unknown]
     if review_verdicts is not None:
         result["receipt"] = review_floor.receipt(review_verdicts)
     if floor is not None:
         result["review_floor_note"] = floor
     return result
+
+
+def advisory_text(result: Mapping) -> Optional[str]:
+    """One line naming each verdict id `judge` ignored (`result["advisory"]`), or None when it ignored none."""
+    ids = [str(a["id"]) for a in result.get("advisory") or ()]
+    return f"verdict ids that are not register rows were ignored: {', '.join(ids)}" if ids else None
 
 
 def apply_verdict(repo_root: Path, sizing_rel: str, verdict: Mapping, *, run_id: str, sha: str) -> list[dict]:
@@ -2204,7 +2246,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     marker is stamped `revised_at` and the reply names the fresh refire). On an emitted research pipeline
     run (`pipeline-` id) only `verbatim` and `note` are taken: they append to the run's revisions file and
     reply `{ok, run_id, delivered, revisions, run_live: None, item: None, note}`; a finished run, a
-    pre-revision script, or any other parameter replies an error. A refused request replies `{"error": str}`.
+    pre-revision script, a note asking a stage to message a peer ("stages cannot message peers"), or any
+    other parameter replies an error. A verbatim/note-only revise to the `ask-` id of a run whose
+    research pipeline is live resolves to that `pipeline-` run: `run_id` is the executing id,
+    `requested_run_id` the ask id, `run_live` true. A refused request replies `{"error": str}`.
     """
     if repo_root is None:
         return {"error": "workflow.revise requires repo_root"}
@@ -2235,10 +2280,12 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     except LedgerRefused as exc:
         return {"error": str(exc)}
     if "pipeline_revisions" in outcome:
+        executing = outcome.get("executing_run")
         return _mutation_reply(
             (f"revision appended to {outcome['pipeline_revisions']}",), (), params["run_id"],
-            run_id=params["run_id"], delivered=True, revisions=outcome["pipeline_revisions"],
-            run_live=None, item=None,
+            run_id=executing or params["run_id"], delivered=True, revisions=outcome["pipeline_revisions"],
+            run_live=True if executing else None, item=None,
+            **({"requested_run_id": params["run_id"]} if executing else {}),
             note="appended to the run's revisions file: if the run is still running, each stage reads it "
                  "at its next stage start; a stage already running does not see it.",
         )
@@ -2333,13 +2380,23 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             "the plan will be pulled on register-pin-drift."
         )
     unclaimed_plan, unclaimed = _unclaimed_rows(root, ledger.sizing_rel, spine=True)
+    refire_claims: Optional[tuple[Optional[str], list[str]]] = None
+    idle_refusal: Optional[str] = None
+    if not live and not landed_sha and not _sizing_shipped(root, ledger.sizing_rel):
+        refire_claims = _unclaimed_rows(root, ledger.sizing_rel)
+        if refire_claims[0] and not _rows_owe_work(root, ledger.sizing_rel, refire_claims[1]):
+            idle_refusal = (
+                f"run {'halted' if halted else 'finished'}: no refire offered, no register row is open "
+                f"({', '.join(refire_claims[1])} met, waived or deferred), so a ledger re-plan would add no row."
+            )
     if unclaimed:
         out["unclaimed_rows"] = unclaimed
-        warnings.append(
-            f"{unclaimed_plan}: no plan row claims register row(s) {', '.join(unclaimed)}"
-            + (": the refire's ledger re-plan leg adds rows serving them." if not live else
-               ": add a row whose register_rows names them (next.call).")
-        )
+        if not idle_refusal:
+            warnings.append(
+                f"{unclaimed_plan}: no plan row claims register row(s) {', '.join(unclaimed)}"
+                + (": the refire's ledger re-plan leg adds rows serving them." if not live else
+                   ": add a row whose register_rows names them (next.call).")
+            )
     refused: list[dict] = list(widen_refused)
     if params.get("build_only") and not outcome.get("research_dropped"):
         refused.append({"input": "build_only", "reason": "the bound sizing holds no research block to remove"})
@@ -2350,8 +2407,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["note"] = f"run closed landed at {landed_sha[:12]}: every row is met by that commit; no refire is owed."
     elif not live and _sizing_shipped(root, ledger.sizing_rel):
         out["note"] = "run closes: the sizing is shipped, every row is credited, and no refire is owed."
+    elif idle_refusal:
+        out["note"] = idle_refusal
     elif not live:
-        out.update(_refire(ledger.sizing_rel, root, halted=halted))
+        out.update(_refire(ledger.sizing_rel, root, unclaimed=refire_claims, halted=halted))
     elif verify_staged(dir_):
         out["lands_on_refire"] = True
         out.update(_refire(ledger.sizing_rel, root))
@@ -2681,6 +2740,28 @@ def _token_not_a_runner(root: Path, run_id: str) -> bool:
         return bool(warp_live.runner_unproven(root, run_id))
     except Exception:  # noqa: BLE001 -- unknown never reports a run dead
         return False
+
+
+def _rows_owe_work(root: Path, sizing_rel: Optional[str], ids: Sequence[str]) -> bool:
+    """True when any register row in `ids` is open, partial, or met without `wired: true`: work a
+    refire's ledger re-plan leg could add a row for. An unreadable register answers True (the
+    refire path stands)."""
+    try:
+        register = rr.read_register(_sizing_plan(root, sizing_rel)[2])
+    except (LedgerRefused, OSError):
+        return True
+    if register is None:
+        return True
+    want = {str(i) for i in ids}
+    for row in register.rows:
+        if str(row.get(rr.ROW_ID)) not in want:
+            continue
+        status = row.get(rr.ROW_STATUS)
+        if status in (rr.STATUS_OPEN, rr.STATUS_PARTIAL) or (
+            status == rr.STATUS_MET and row.get(rr.ROW_WIRED) is not True
+        ):
+            return True
+    return False
 
 
 def _refire(

@@ -78,6 +78,12 @@ def compute_ask_hash(words: str) -> str:
     return hashlib.sha256(words.encode("utf-8")).hexdigest()
 
 
+def normalized_ask_hash(words: str) -> str:
+    """`compute_ask_hash` of the ask with whitespace runs folded and case folded: the key a raw
+    ask's run token records, so a refire differing only in spacing or case reads as the same ask."""
+    return compute_ask_hash(" ".join(words.split()).casefold())
+
+
 def _tokens(text: str) -> frozenset:
     return frozenset(
         t for t in _TOKEN_RE.findall(text.lower()) if len(t) >= 4 and t not in _STOPWORDS

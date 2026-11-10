@@ -19,8 +19,6 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import run_token as _rt
 
-_REAL_KICK = _rt._kick_spool_drain
-
 pytestmark = pytest.mark.complete
 
 _PKG = Path(coordinator_core.__file__).resolve().parent
@@ -180,16 +178,6 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-@pytest.fixture(autouse=True)
-def kicks(monkeypatch):
-    """Stub the background drain so spooled entries stay pending for assertion; records each kick."""
-    from coordinator_core.ops.dispatch_emit import run_token
-
-    seen = []
-    monkeypatch.setattr(run_token, "_kick_spool_drain", lambda r: seen.append(str(r)))
-    return seen
-
-
 def _park_behind(root, blocker, waiter="waiter", *, sizing=SIZING, blockers=None):
     from coordinator_core.ops.dispatch_emit import run_token, stage_wait
 
@@ -228,34 +216,23 @@ def test_blocker_end_wakes_the_waiter_once_and_spools_its_refire(repo, ender):
     assert notice.consume_notices(str(repo), "s1") == []
 
 
-def test_a_wake_kicks_one_drain_and_a_non_wake_kicks_none(repo, kicks):
+def test_a_wake_spools_two_refires_and_starts_no_thread(repo, monkeypatch):
     from coordinator_core.ops.dispatch_emit import run_token, stage_wait
 
+    started = []
+    real_start = threading.Thread.start
+
+    def recording_start(self):
+        started.append(getattr(self._target, "__module__", "") or "")
+        return real_start(self)
+
+    monkeypatch.setattr(threading.Thread, "start", recording_start)
     _park_behind(repo, "blocker", "w1")
     run_token.mint(repo, "w2", SCRIPT, session_id="s2", sizing_rel=SIZING)
     stage_wait.park(repo, "w2", ["blocker"], [], session_id="s2")
     run_token.consume(repo, "blocker")
-    assert kicks == [str(repo)]
-    run_token.mint(repo, "other", SCRIPT, session_id="p")
-    run_token.consume(repo, "other")
-    assert kicks == [str(repo)]
-
-
-def test_kick_runs_drain_run_on_the_repo(repo, monkeypatch):
-    from coordinator_core.ask_spool import drain
-    from coordinator_core.ops.dispatch_emit import run_token
-
-    done = threading.Event()
-    calls = []
-
-    def fake_run(root, **k):
-        calls.append(root)
-        done.set()
-        return {}
-
-    monkeypatch.setattr(drain, "run", fake_run)
-    _REAL_KICK(repo)
-    assert done.wait(5) and calls == [str(repo)]
+    assert len(_spooled(repo)) == 2
+    assert [m for m in started if "ask_spool" in m or "drain" in m] == []
 
 
 def test_waiter_with_two_blockers_resumes_only_after_the_last(repo):

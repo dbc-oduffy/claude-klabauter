@@ -1,12 +1,16 @@
 """halted_run: marker round-trip, newest-dir rule, and the refusals that yield None."""
 
 import json
+import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
+from coordinator_core.git import call_io_scope
 from coordinator_core.ops.dispatch_emit import halted_run as hr
+from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
 pytestmark = pytest.mark.complete
@@ -32,6 +36,34 @@ def test_round_trip(tmp_path):
     assert json.loads(p.read_text())["halted"] == "criterion_not_met"
     assert hr.halted_run_for(tmp_path, SIZING) is None
     assert hr.mark_resumed(d) is False
+
+
+def _indexed_halted_run(root, stamp):
+    """A halted run whose marker predates its index entry, so `fresh_entry` answers from the entry."""
+    d = _dir(root, stamp)
+    marker = hr.write_halt_marker(d, halted="criterion_not_met", sizing_rel=SIZING)
+    old = time.time() - 10
+    os.utime(marker, (old, old))
+    idx.rebuild(root)
+    idx.add_run(root, d.name, ["a.py"], at_ns=time.time_ns() - 1_000_000_000)
+    return d
+
+
+def test_fresh_entry_memo_never_serves_the_state_before_record_released(tmp_path):
+    d = _indexed_halted_run(tmp_path, "20261016T010000-aaaaaa")
+    with call_io_scope.call_io_scope():
+        assert idx.fresh_entry(tmp_path, d.name) is not None
+        assert idx.fresh_entry(tmp_path, d.name) is not None
+        assert hr.record_released(d, "b" * 40, "landed") is True
+        assert idx.fresh_entry(tmp_path, d.name) is None
+
+
+def test_fresh_entry_memo_never_serves_the_state_before_mark_landed(tmp_path):
+    d = _indexed_halted_run(tmp_path, "20261016T020000-bbbbbb")
+    with call_io_scope.call_io_scope():
+        assert idx.fresh_entry(tmp_path, d.name) is not None
+        assert hr.mark_landed(d, "c" * 40) is True
+        assert idx.fresh_entry(tmp_path, d.name) is None
 
 
 def test_mark_superseded_writes_dispositions_only_when_given(tmp_path):

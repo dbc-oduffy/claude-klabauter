@@ -185,6 +185,33 @@ def test_a_later_day_reclose_is_refused_as_differing(repo, scratch, monkeypatch)
     assert again["exit_code"] == 1 and "trail record exists with different content" in again["error"]
 
 
+def test_a_different_run_id_the_same_day_files_under_a_versioned_run_dir(repo, scratch):
+    first = _close(repo, scratch, "corpus", outputs=["final.md"])
+    first_trail = (repo / _TRAIL).read_bytes()
+    (scratch / "final.md").write_text("second body\n")
+    second = _close(repo, scratch, "corpus", outputs=["final.md"], run_id="r2")
+    assert second["exit_code"] == 0 and second["committed"] is True, second
+    assert second["run_dir"] == f"{_run()}-v2" and second["trail"] == f"{_run()}-v2/trail.yaml"
+    assert 'run_id: "r2"' in (repo / second["trail"]).read_text(encoding="utf-8")
+    assert (repo / _TRAIL).read_bytes() == first_trail
+    assert (repo / _run() / "synthesis.md").exists() is False
+    assert (repo / _run() / "outputs" / "final.md").read_text() == "final body\n"
+    third = _close(repo, scratch, "corpus", outputs=["final.md"], run_id="r3")
+    assert third["run_dir"] == f"{_run()}-v3"
+    n = _count(repo)
+    again = _close(repo, scratch, "corpus", outputs=["final.md"], run_id="r2")
+    assert again["sha"] == second["sha"] and again["run_dir"] == second["run_dir"] and _count(repo) == n
+    assert first["run_dir"] == _run()
+
+
+def test_a_same_run_id_drift_the_same_day_is_not_versioned(repo, scratch):
+    assert _close(repo, scratch, "corpus", outputs=["final.md"])["exit_code"] == 0
+    (scratch / "final.md").write_text("changed\n")
+    again = _close(repo, scratch, "corpus", outputs=["final.md"])
+    assert again["exit_code"] == 1 and "different content" in again["error"]
+    assert not (repo / f"{_run()}-v2").exists()
+
+
 @pytest.mark.parametrize("tier", ["corpus", "deep"])
 def test_one_commit_whose_delta_is_the_copied_paths(repo, scratch, tier):
     before = _count(repo)

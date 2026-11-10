@@ -74,7 +74,7 @@ def write(
         body["reasons"] = {k: reasons[k] for k in sorted(reasons)}
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8")
+        path.write_text(json.dumps(body, indent=2) + "\n", encoding="utf-8", newline="\n")
     except OSError:
         return None
     return path

@@ -707,3 +707,33 @@ def test_a_claim_without_a_deadline_is_not_expired_by_age(tmp_path, monkeypatch)
     real = time.time()
     monkeypatch.setattr(run_token.time, "time", lambda: real + 10_000)
     assert run_token.claim_pending(repo, "ask-1", token, "a.mjs")
+
+
+def _ask_key(repo, run_id):
+    return run_token._read_rec(repo, run_id).get("ask_sha256")
+
+
+def test_mint_records_the_ask_key_on_both_paths_and_bind_sizing_keeps_it(tmp_path):
+    repo = _repo(tmp_path)
+    (repo / "state" / "sizings" / "mine.yaml").write_text("x", encoding="utf-8")
+    run_token.mint(repo, "ask-m", "a.mjs", marker=True, ask_sha256="k1")
+    assert _ask_key(repo, "ask-m") == "k1"
+    run_token.mint(repo, "ask-f", "a.mjs", ask_sha256="k2")
+    assert _ask_key(repo, "ask-f") == "k2"
+    assert run_token.bind_sizing(repo, "ask-f", "state/sizings/mine.yaml")
+    assert _ask_key(repo, "ask-f") == "k2"
+
+
+def test_a_full_remint_with_no_key_keeps_the_marker_key(tmp_path):
+    repo = _repo(tmp_path)
+    run_token.mint(repo, "ask-1", "a.mjs", marker=True, ask_sha256="k1")
+    run_token.mint(repo, "ask-1", "a.mjs", carry_prior=True)
+    assert _ask_key(repo, "ask-1") == "k1"
+    run_token.mint(repo, "ask-1", "a.mjs", ask_sha256="k2")
+    assert _ask_key(repo, "ask-1") == "k2"
+
+
+def test_a_mint_with_no_key_and_no_prior_record_has_none(tmp_path):
+    repo = _repo(tmp_path)
+    run_token.mint(repo, "ask-1", "a.mjs")
+    assert _ask_key(repo, "ask-1") is None

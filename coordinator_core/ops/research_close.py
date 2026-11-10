@@ -73,8 +73,11 @@ by walking HEAD for the close subject); when no such commit is found, missing fi
 written and the commit is made. A destination file or trail record holding different bytes
 is refused, never overwritten, except a trail record the new one extends (same keys, old paths a
 subset of the new, count not smaller): a re-close after adding outputs extends and commits the
-record. A run id whose trail already sits at another path (a later-day run dir, or the legacy
-``docs/research/trail/<run_id>.yaml``, found by ``_research_trail.locate_trail``) is refused.
+record. A different run id closing the same topic_slug on the same day, whose derived run dir's
+trail names another run, files under the next free ``<date>-<slug>-v2``, ``-v3`` ... dir with its
+own trail; the first run's dir is untouched. A run id whose trail already sits at another path
+(a later-day run dir, or the legacy ``docs/research/trail/<run_id>.yaml``,
+found by ``_research_trail.locate_trail``) is refused.
 
 ``group_runs`` (optional list of safe run ids, must include ``run_id``; per-group research fan-out):
 with a ``sizing``, the research block is dropped after this run's trail is written and only when
@@ -420,6 +423,24 @@ def _under_a_run_dir(rel: str) -> bool:
     return len(parts) > 2 and layout.classify("/".join(parts[:2])) == layout.RUN_DIR
 
 
+def _free_run_dir(worktree: Path, run_id: str, topic: str, date: str, run_slug: str):
+    """The run dir this close files under: ``<date>-<slug>``, or the first ``<date>-<slug>-vN`` (N>=2)
+    whose trail record is absent or names ``run_id``; a dir whose trail names another run is skipped."""
+    for n in range(1, 1000):
+        run_rel = layout.run_dir(topic, date, run_slug if n == 1 else f"{run_slug}-v{n}")
+        trail = worktree / _research_trail.trail_rel((_RESEARCH_DIR / run_rel).as_posix())
+        if not trail.is_file():
+            return run_rel
+        try:
+            with trail.open(encoding="utf-8") as fh:
+                head = fh.readline().strip()
+        except (OSError, UnicodeDecodeError):
+            return run_rel
+        if head == f"run_id: {json.dumps(run_id)}":
+            return run_rel
+    raise ValueError(f"no free versioned run dir for {run_slug!r} on {date}")
+
+
 def _close_committed(
     worktree: Path,
     scratch: Path,
@@ -481,8 +502,9 @@ def _close_archived(
 
     run_slug = re.sub(r"[^a-z0-9]+", "-", topic_slug.lower()).strip("-")
     try:
-        run_rel = layout.run_dir(
-            layout.topic_for(run_slug, meta.get("topic")), datetime.date.today().isoformat(), run_slug
+        run_rel = _free_run_dir(
+            worktree, run_id, layout.topic_for(run_slug, meta.get("topic")),
+            datetime.date.today().isoformat(), run_slug,
         )
     except ValueError as exc:
         return _err(f"run dir refused: {exc}")

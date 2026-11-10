@@ -332,6 +332,11 @@ def single_dated_plan_edge(plan_rel: str) -> str:
     return head + sep + re.sub(rf"^({DATE_HEAD_PATTERN})(?:{DATE_HEAD_PATTERN})+", r"\1", name)
 
 
+def flat_plan_edge(plan_rel: str) -> str:
+    """`plan_rel` with a `docs/plans/YYYY-MM/` month directory dropped to the flat `docs/plans/` path; other paths unchanged."""
+    return re.sub(r"^(docs/plans/)\d{4}-\d{2}/", r"\1", str(plan_rel).replace(chr(92), "/"))
+
+
 #: JS twin of `s_plan_path`, built from the same pattern; the planner prompt names its result.
 PLAN_PATH_JS = (
     "const _planPathFor = (rel) => { const s = String(rel).replace(/\\\\/g, '/').split('/').pop()"
@@ -383,6 +388,10 @@ def resumable_plan(
         twin = single_dated_plan_edge(plan_rel)
         if twin != plan_rel and not (root / plan_rel).is_file():
             plan_rel = twin
+        if not (root / plan_rel).is_file():
+            flat = flat_plan_edge(plan_rel)
+            if (root / flat).is_file():
+                plan_rel = flat
     if plan_rel is None and arm == ARM_XS:
         plan_rel = _xs_halt_spine(root, sizing_rel)
     if plan_rel is None:

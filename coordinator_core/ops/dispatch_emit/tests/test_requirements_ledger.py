@@ -353,7 +353,8 @@ def test_open_lists_withheld_and_non_essential_rows_in_ledger_order(run):
 def test_judge_refuses_unknown_and_duplicate_ids_and_a_shapeless_verdict(run):
     ledger = _ledger(run)
     out = rl.judge(ledger, _verdict(("R1", "met"), ("R1", "met"), ("R2", "met"), ("R3", "met"), ("R9", "met")))
-    assert {(f["id"], f["reason"]) for f in out["failures"]} == {("R1", "judged twice"), ("R9", "names no requirement row")}
+    assert {(f["id"], f["reason"]) for f in out["failures"]} == {("R1", "judged twice")}
+    assert [a["id"] for a in out["advisory"]] == ["R9"]
     assert not rl.judge(ledger, None)["pass"]
 
 
@@ -362,7 +363,7 @@ def test_a_verdict_id_naming_a_gated_chunk_is_ignored_not_judged(run):
     verdict = _verdict(("R1", "met"), ("R2", "met"), ("R3", "met"), ("X1", "met"))
     assert rl.judge(ledger, verdict, gated=("X1",)) == {"pass": True, "failures": [], "open": []}
     out = rl.judge(ledger, verdict)
-    assert [(f["id"], f["reason"]) for f in out["failures"]] == [("X1", "names no requirement row")]
+    assert out["failures"] == [] and [a["id"] for a in out["advisory"]] == ["X1"]
 
 
 def test_apply_verdict_writes_met_wired_and_superseded_rows(run):

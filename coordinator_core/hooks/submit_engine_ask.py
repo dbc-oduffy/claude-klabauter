@@ -76,6 +76,7 @@ from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
     resolve_after,
     unknown_keys_refusal,
 )
+from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
 from coordinator_core.ops.sizing_intake_contract import (
     EM_CONTEXT_DIGEST_PARAM,
     em_context_digest,
@@ -1255,9 +1256,11 @@ def _premint_marker(params: dict, root: Path, run_id: Optional[str] = None) -> d
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
     run_id = run_id or run_token.new_ask_run_id()
+    raw = params.get("ask")
     run_token.mint(
         root, run_id, f"{RUN_DIR_ROOT}/{run_id}.workflow.mjs",
         session_id=params.get("session_id") or None, marker=True,
+        ask_sha256=normalized_ask_hash(raw) if isinstance(raw, str) and raw.strip() else None,
     )
     return {"run_id": run_id}
 
@@ -2881,6 +2884,15 @@ def _resume_route(
             # The deferred emit resolves the halted run off the hook path through the same lookup; when
             # its script cannot be written the plain emit follows (None, None), never a refusal.
             return _taken_as_deferred(root, params), None
+    if halted_id is None and reserved_run_id is not None:
+        # A lookup-index miss must not hand a chained sizing to its parent's stale script: the
+        # `warp-<stem>-*` listing (one scandir, no index) still names a halt the index lacks.
+        from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for
+
+        try:
+            halted_id = _bounded_call(("halted-listing", str(root), sizing_rel), lambda: halted_run_for(root, sizing_rel))
+        except (OSError, ValueError):
+            return None, None
     if halted_id is None and reserved_run_id is None:
         try:
             halted_id = _bounded_call(("emitted", str(root), sizing_rel), lambda: _unmarked_emitted_run(root, sizing_rel))
@@ -3327,6 +3339,22 @@ def _evaluate(
         root = writer_root
         _note_root(root)
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
+
+    if not sizing_rel and ask and asks is None:
+        with warp_live.listing_scope():
+            held = warp_live.run_for_ask(
+                root, normalized_ask_hash(ask), session_id=session_id, transcript_path=transcript
+            )
+        if held is not None:
+            held_state, held_run, held_sizing = held
+            if held_state == "live":
+                return deny(
+                    "PreToolUse",
+                    f"Run {held_run} is already working this ask; its completion is your one wake. "
+                    "Do not poll or verify it meanwhile; unrelated work proceeds.",
+                )
+            if held_sizing:
+                sizing_rel = held_sizing
 
     try:
         sizing_doc = _load_sizing_doc(root, sizing_rel) if sizing_rel else {}

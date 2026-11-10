@@ -189,3 +189,10 @@ def test_lookup_cost_is_flat_in_corpus_size(tmp_path):
                            sizing_rel=SIZING_REL)
     assert res.exact
     assert time.process_time() - t0 < 0.05
+
+
+def test_normalized_ask_hash_folds_whitespace_and_case_and_leaves_compute_ask_hash_alone():
+    assert ew.normalized_ask_hash("Size  the\tGAPQ4\n ask ") == ew.normalized_ask_hash("size the gapq4 ask")
+    assert ew.normalized_ask_hash("size the gapq4 ask") != ew.normalized_ask_hash("size the other ask")
+    assert ew.normalized_ask_hash("size the gapq4 ask") == ew.compute_ask_hash("size the gapq4 ask")
+    assert ew.compute_ask_hash("Size  the ask") != ew.compute_ask_hash("size the ask")

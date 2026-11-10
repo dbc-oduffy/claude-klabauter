@@ -49,5 +49,23 @@ def test_doubled_edge_naming_a_real_file_is_used_as_is(repo):  # noqa: F811
     assert plan is not None and plan.plan_rel == DOUBLED
 
 
+def test_month_path_edge_resolves_to_the_flat_plan(repo):  # noqa: F811
+    _plan(repo, rel=SINGLE)
+    plan = resumable_plan({"plan": "docs/plans/2026-10/2026-10-30-kane-skull.md"}, REL, repo, "m_plus")
+    assert plan is not None and plan.plan_rel == SINGLE
+
+
+def test_month_path_edge_naming_a_real_file_is_used_as_is(repo):  # noqa: F811
+    month = "docs/plans/2026-10/2026-10-30-kane-skull.md"
+    _plan(repo, rel=SINGLE)
+    _plan(repo, rel=month)
+    plan = resumable_plan({"plan": month}, REL, repo, "m_plus")
+    assert plan is not None and plan.plan_rel == month
+
+
+def test_month_path_edge_with_no_flat_plan_stays_unresolved(repo):  # noqa: F811
+    assert resumable_plan({"plan": "docs/plans/2026-10/2026-10-30-kane-skull.md"}, REL, repo, "m_plus") is None
+
+
 def test_doubled_edge_with_no_plan_on_disk_stays_unresolved(repo):  # noqa: F811
     assert resumable_plan({"plan": DOUBLED}, REL, repo, "m_plus") is None

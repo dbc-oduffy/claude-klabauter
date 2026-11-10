@@ -81,3 +81,33 @@ def test_resume_hook_process_time_stays_under_the_bar(tmp_path, seams):  # noqa:
     env, _ = mod._resume_route(root, SIZING_REL, _payload(root), {}, "s1", None, reserved_run_id=RESERVED_ID)
     assert env is not None
     assert time.process_time() - started < 0.5
+
+
+def _drop_index_entry(root: Path) -> None:
+    from coordinator_core.ops.dispatch_emit import halted_run as hr
+
+    hr.rebuild_lookup_index(root)
+    (root / hr.LOOKUP_INDEX_DIR / hr._lookup_key(SIZING_REL) / HALTED_ID).unlink()
+
+
+def test_a_lookup_index_miss_still_resumes_the_halted_run_over_the_parent(tmp_path, seams):  # noqa: F811
+    spawned, emitted, emit = seams
+    root = _repo(tmp_path, record=False)
+    _drop_index_entry(root)
+    _queue(root, PARENT_ID, "on the parent id")
+    env, result = mod._resume_route(
+        root, SIZING_REL, _payload(root), {}, "s1", None, reserved_run_id=PARENT_ID, ask_parent_id=PARENT_ID
+    )
+    assert env is not None and result is None
+    assert HALTED_ID in Path(_hso(env)["updatedInput"]["scriptPath"]).read_text(encoding="utf-8")
+    assert spawned == [HALTED_ID] and emitted == []
+    assert _inbox_texts(root, HALTED_ID) == ["on the parent id"]
+
+
+def test_a_reserved_id_with_no_halt_anywhere_still_takes_the_plain_emit(tmp_path, seams):  # noqa: F811
+    root = _repo(tmp_path, record=False)
+    (root / RECORD_DIR_ROOT / HALTED_ID / "halted.json").unlink()
+    _drop_index_entry(root)
+    assert mod._resume_route(
+        root, SIZING_REL, _payload(root), {}, "s1", None, reserved_run_id=PARENT_ID, ask_parent_id=PARENT_ID
+    ) == (None, None)

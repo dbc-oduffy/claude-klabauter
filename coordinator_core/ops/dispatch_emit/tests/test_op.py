@@ -24,6 +24,7 @@ from coordinator_core.ops.dispatch_emit.op import (
 )
 from coordinator_core.ops.dispatch_emit.pathspec import NoWritesDeclaredError
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
+from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_seed import repo as ask_repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing, repo  # noqa: F401
 
 pytestmark = pytest.mark.complete
@@ -638,3 +639,13 @@ def test_single_form_emit_opens_no_sizing_memo_scope(monkeypatch):
     monkeypatch.setattr(emit_op, "_dispatch_emit_body", body)
     assert emit_op._dispatch_emit({"a": 1}, None) == {"ok": True}
     assert seen == [None]
+
+
+def test_a_raw_ask_emit_mints_its_token_keyed_by_the_normalized_ask_hash(ask_repo):
+    from coordinator_core.ops.dispatch_emit import cli, run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+    from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
+
+    assert cli.main(["--ask", "add a thing", "--repo-root", str(ask_repo)]) == 0
+    (run_dir,) = (ask_repo / RECORD_DIR_ROOT).iterdir()
+    assert run_token._read_rec(ask_repo, run_dir.name).get("ask_sha256") == normalized_ask_hash("add a thing")

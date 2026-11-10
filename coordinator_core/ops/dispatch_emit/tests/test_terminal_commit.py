@@ -1644,3 +1644,63 @@ def test_every_declared_product_write_landed_carries_no_product_residue(repo):
     assert out["committed"] is True, out
     assert "product_residue" not in out
     assert out.get("ok") is not False
+
+
+def _review_halt_task_output(repo: Path, failing: list, pre_existing: list) -> str:
+    """A review_blocked/failing_test halt digest over a finished row (a.py) and an unfinished one (b.py)."""
+    import json
+
+    run_id = "warp-rh-1"
+    request = CommitRequest(
+        chunks=(
+            ChunkCommit(id="C1", title="t1", paths=("a.py",)),
+            ChunkCommit(id="C2", title="t2", paths=("b.py",)),
+        ),
+        session_id=None,
+    )
+    script = repo / "scratch" / "warp" / f"{run_id}.workflow.mjs"
+    script.parent.mkdir(parents=True)
+    script.write_text("// emitted\n" + render_marker(request) + "\n", encoding="utf-8")
+    digest = {
+        "run_id": run_id,
+        "halted_by": {"halted": "review_blocked", "blocker": "failing_test", "failing": failing},
+        "incomplete": ["C2"],
+        "ledger": {"items": [{"id": "R1", "status": "met"}]},
+        "review": {
+            "wave": [{"agent_type": "coordinator:reviewer", "verdict": "BLOCKED", "sidecar_path": "../wave-review.md",
+                      "applied": 0}],
+            "prep": None,
+            "delivery": None,
+            "reverify": {"status_before": "fail", "status_after": "fail", "failing": failing,
+                         "pre_existing": pre_existing},
+        },
+        "next_action": {"kind": "revise_and_refire", "params": {}},
+    }
+    out = repo / "task-output.json"
+    out.write_text(json.dumps(digest), encoding="utf-8")
+    return str(out)
+
+
+def test_a_review_halt_over_base_reds_lands_its_finished_rows_without_a_refusal(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    (repo / "b.py").write_text("b\n", encoding="utf-8")
+    _git(["add", "-N", "."], repo)
+    path = _review_halt_task_output(repo, ["tests/test_old.py::t"], ["tests/test_old.py::t"])
+
+    out = terminal_commit._handler({"task_output_path": path}, repo_root=repo / ".git")
+
+    assert out["committed"] is True, out
+    assert set(out["chunks_committed"]) == {"C1"}
+    assert "a.py" in _show(repo, "--name-only", "--format=", "HEAD").split()
+    assert "b.py" not in _show(repo, "--name-only", "--format=", "HEAD").split()
+
+
+def test_a_review_halt_over_an_own_red_still_lands_nothing(repo):
+    (repo / "a.py").write_text("a\n", encoding="utf-8")
+    path = _review_halt_task_output(repo, ["tests/test_a.py::t"], [])
+    before = _head(repo)
+
+    out = terminal_commit._handler({"task_output_path": path}, repo_root=repo / ".git")
+
+    assert out.get("committed") is not True, out
+    assert _head(repo) == before

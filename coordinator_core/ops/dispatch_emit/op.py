@@ -275,6 +275,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import slice_ask_source
 from coordinator_core.ops.dispatch_emit.ask_staged_prompts import PROMPTS_DIR
+from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
 from coordinator_core.ops.dispatch_emit.run_id_occupancy import spent_run_reason
 from coordinator_core.ops.dispatch_emit.run_token import normalize_sizing_rel
 from coordinator_core.ops.dispatch_emit.cloud_spawn_brief import build_cloud_spawn
@@ -3127,6 +3128,10 @@ def _dispatch_emit_body(
                 ask_run_token = _run_token.mint(
                     Path(ask_ctx["root"]), ask_ctx["run_id"], ask_script_path or "",
                     session_id=emitting_session_id, sizing_rel=ask_ctx["sizing_rel"], carry_prior=True,
+                    ask_sha256=(
+                        normalized_ask_hash(ask_ctx["prompt"])
+                        if ask_ctx["sizing_rel"] is None and ask_ctx["prompt"] else None
+                    ),
                 )
             except (OSError, ValueError):
                 # No git dir to hold the record, or no repo-relative script to bind it to: the run

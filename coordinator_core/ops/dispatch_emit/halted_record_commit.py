@@ -9,8 +9,10 @@ the halt reason in the message. Candidates are named paths, never the dirty tree
 deletion is declared, a deletion git cannot see is dropped, and a path a live peer's claim holds
 is withheld and named. Every halt kind, ``ledger-check`` included, lands the record and run artifacts
 only: a chunk's product and test files are withheld as ``halt-record-only``, because a shared dirty
-tree puts other runs' hunks in those files; the resumed run re-runs the chunks and its terminal
-commit lands them. The reply's ``targeted_tests.check`` still reports a carried verdict.
+tree puts other runs' hunks in those files. A ``review_blocked``/``failing_test`` halt whose every
+failing id is red at run_base lands its finished rows earlier, through ``dispatch.terminal_commit``
+(``terminal_commit_refusals._review_halt_commit_params``); any other halt waits for the resumed
+run's terminal commit. The reply's ``targeted_tests.check`` still reports a carried verdict.
 The commit carries no ``Lands-Chunks`` trailer and stamps no row coded. No receipt, sizing ship
 or close job runs. The run
 token is only checked (``run_token.halt_admits``, which accepts a retired record), never claimed: no branch, raise or killed op can strand

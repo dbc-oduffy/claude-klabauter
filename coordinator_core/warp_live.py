@@ -858,6 +858,34 @@ def live_run_for_sizing(
 
 
 @_scoped
+def run_for_ask(
+    repo_root: Path,
+    ask_sha256: str,
+    *,
+    session_id: Optional[str] = None,
+    transcript_path: Optional[str] = None,
+    tmpdir: Optional[str] = None,
+) -> Optional[tuple[str, str, Optional[str]]]:
+    """The run holding the raw ask whose normalized hash is `ask_sha256`, as `(state, run_id,
+    sizing_rel)`: state "live" for a running one, "halted" for a not-live one whose gate bound a
+    sizing. None when no held record carries the hash. One record listing; no spawn, no walk.
+    A live holder wins over a halted one."""
+    root = Path(repo_root)
+    dirs = _launch_dirs(tmpdir)
+    halted: Optional[tuple[str, str, Optional[str]]] = None
+    for record in _run_token.held_records(root):
+        if record.get("ask_sha256") != ask_sha256 or _unfired(root, record, dirs):
+            continue
+        sizing = record.get("sizing_rel")
+        sizing = sizing if isinstance(sizing, str) and sizing else None
+        if _record_live(root, record, session_id, transcript_path, dirs):
+            return ("live", record["run_id"], sizing)
+        if sizing and halted is None:
+            halted = ("halted", record["run_id"], sizing)
+    return halted
+
+
+@_scoped
 def live_run_for_session(
     repo_root: Path,
     session_id: Optional[str],

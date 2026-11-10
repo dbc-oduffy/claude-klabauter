@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 from typing import Callable, Sequence, Optional
 from coordinator_core.git.run import run_git
+from coordinator_core.ops.review_test_blocker import TEST_BLOCKER
 from coordinator_core.ops.dispatch_emit import review_floor
 from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld, _recovery_backing
 from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM
@@ -109,23 +110,122 @@ def _halted_commit_params(digest: dict) -> Optional[dict]:
         or not isinstance(items, list)
     ):
         return None
+    return {
+        **_halt_commit_base(digest, items),
+        "inline_review": review,
+        "arm": "xs",
+    }
+
+
+def _halt_commit_base(digest: dict, items: list) -> dict:
+    """The params every halted-run commit shares: unfinished rows, script path, no holds, ledger verdict."""
     keep = ("id", "status", "essential", "wired", "superseded_by", "withheld_by", "post_commit_acts",
             "met_by", "root_read", "remaining", "gaps_closed")
-    verdict = {
-        "items": [
-            {"essential": True, **{k: i[k] for k in keep if k in i}}
-            for i in items if isinstance(i, dict)
-        ]
-    }
     incomplete = digest.get("incomplete")
     return {
         "incomplete_chunks": [c for c in incomplete if isinstance(c, str)] if isinstance(incomplete, list) else [],
-        "script_path": f"scratch/warp/{run_id}.workflow.mjs",
-        "inline_review": review,
-        "arm": "xs",
+        "script_path": f"scratch/warp/{digest.get('run_id')}.workflow.mjs",
         "held": [],
-        "ledger_verdict": verdict,
+        "ledger_verdict": {
+            "items": [
+                {"essential": True, **{k: i[k] for k in keep if k in i}}
+                for i in items if isinstance(i, dict)
+            ]
+        },
     }
+
+
+def _posix_id(node_id: object) -> str:
+    s = str(node_id).replace("\\", "/")
+    while s.startswith("./"):
+        s = s[2:]
+    return s
+
+
+def _review_halt_commit_params(digest: dict) -> Optional[dict]:
+    """The `dispatch.terminal_commit` params of a digest halted `review_blocked`/`failing_test` whose every
+    failing id is red at run_base, else ``None``.
+
+    Red at run_base is membership in the review `test` return's `pre_existing` list
+    (`digest.review.reverify`), the list `_reviewRecover` excludes from its own gaps. An unfinished row
+    stays in `incomplete_chunks`, so it is not landed. The inline review mirrors the wave-bookkeeping
+    form `wake_digest` emits, from the review stage returns the digest carries.
+    """
+    halted = digest.get("halted_by")
+    run_id = digest.get("run_id")
+    review = digest.get("review")
+    ledger = digest.get("ledger")
+    items = ledger.get("items") if isinstance(ledger, dict) else None
+    if (
+        not isinstance(halted, dict)
+        or halted.get("halted") != "review_blocked"
+        or halted.get("blocker") != TEST_BLOCKER
+        or not isinstance(run_id, str)
+        or not run_id
+        or not isinstance(review, dict)
+        or not isinstance(items, list)
+    ):
+        return None
+    failing = halted.get("failing")
+    reverify = review.get("reverify")
+    if not isinstance(failing, list) or not failing or not isinstance(reverify, dict):
+        return None
+    pre_existing = reverify.get("pre_existing")
+    if not isinstance(pre_existing, list):
+        return None
+    at_base = {_posix_id(n) for n in pre_existing}
+    if any(_posix_id(n) not in at_base for n in failing):
+        return None
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_KEY
+    from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
+
+    wave = review.get("wave")
+    wave = [w for w in wave if isinstance(w, dict)] if isinstance(wave, list) else []
+    prep = review.get("prep") if isinstance(review.get("prep"), dict) else None
+    delivery = review.get("delivery") if isinstance(review.get("delivery"), dict) else None
+    status = reverify.get("status_after")
+    inline_review = {
+        "integration_stem": review_wave_bookkeeping_stem(run_id, None),
+        "slices": len(wave),
+        "fixes": sum(int(w.get("applied") or 0) for w in wave),
+        "prep_sidecar": prep.get("sidecar_path") if prep else None,
+        "plan_id": run_id,
+        "wave_sidecar_paths": [w["sidecar_path"] for w in wave if w.get("sidecar_path")],
+        "wave_reviews": [
+            {"agent_type": w.get("agent_type"), "sidecar_path": w["sidecar_path"], "verdict": w.get("verdict")}
+            for w in wave if w.get("sidecar_path")
+        ],
+        "prep": None if prep is None else {
+            "run_base_sha": prep.get("run_base_sha"),
+            "product_files": prep.get("product_files"),
+            "foreign_claims": prep.get("foreign_claims") or [],
+            "slice_files": [f for s in (prep.get("slices") or []) if isinstance(s, dict) for f in (s.get("files") or [])],
+        },
+        "delivery": None if delivery is None else {
+            "verdict": delivery.get("verdict"),
+            "product_files": delivery.get("product_files"),
+            "claims_unbacked": len(delivery.get("claims_unbacked") or []),
+            "unbacked": [
+                {"claim": c.get("claim"), "anchor": c.get("anchor")}
+                for c in (delivery.get("claims_unbacked") or []) if isinstance(c, dict)
+            ],
+        },
+        "wave_not_run": [],
+        "tests": {"status": status, "skipped": [], "run": None, "failed": None, "sidecar": None},
+        REVERIFY_KEY: {
+            "status_before": reverify.get("status_before"),
+            "status_after": status,
+            "reverify_error": reverify.get("reverify_error"),
+            "failing": reverify.get("failing") or [],
+            "pre_existing": pre_existing,
+            "foreign": reverify.get("foreign") or [],
+            "reverted": [
+                {"path": v.get("path"), "tests": v.get("tests") or []}
+                for v in (reverify.get("reverted") or []) if isinstance(v, dict)
+            ],
+        },
+    }
+    return {**_halt_commit_base(digest, items), "inline_review": inline_review}
 
 
 def _params_from_task_output(path_raw: str, run_id: Optional[str] = None) -> dict:
@@ -154,6 +254,10 @@ def _params_from_task_output(path_raw: str, run_id: Optional[str] = None) -> dic
         )
     if action.get("kind") == "revise_and_refire":
         recovered = _halted_commit_params(data)
+        if recovered is not None:
+            return recovered
+    if action.get("kind") in ("revise_and_refire", "terminal_commit"):
+        recovered = _review_halt_commit_params(data)
         if recovered is not None:
             return recovered
     if found.get("inline_review") is None and action.get("kind") == "terminal_commit":
