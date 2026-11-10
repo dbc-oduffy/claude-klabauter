@@ -1,4 +1,4 @@
-"""An ask checkpoint waits on its wave's `verify:wave-<n>` verdict: red withholds and carries; the emit route is unchanged."""
+"""An ask checkpoint waits on its wave's `verify:wave-<n>` verdict: red or timeout is recorded and never blocks the commit; the runner is deadline-bounded."""
 
 from __future__ import annotations
 
@@ -117,13 +117,24 @@ _W0 = [{"n": 0, "ids": ["C0"]}]
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.parametrize("reply", [_verdict("fail"), _verdict("error"), _verdict("pass", None), None, "throw"])
-def test_red_or_unproven_verdict_withholds_carries_and_records_no_sha(reply):
+def test_red_or_unproven_verdict_is_recorded_but_never_blocks_the_commit(reply):
     out = _run(_W0, {"0": reply}, {"0": ["t_a.py"]})
-    assert out["spawned"] == ["verify:wave-0"]
-    assert out["shas"] == []
-    assert out["carried"] == ["C0"]
+    assert out["spawned"] == ["verify:wave-0", "commit:wave-0"]
+    assert out["shas"] == ["sha-commit:wave-0"]
+    assert out["carried"] == []
     assert [w["wave"] for w in out["withheld"]] == [0]
     assert out["failures"] == [] and out["halted"] is None
+
+
+def test_wave_verify_prompts_carry_the_deadline_and_the_no_investigate_hang_report():
+    clause = emit._wave_verify_bound_clause()
+    assert emit._verify_deadline_clause() in clause
+    assert "timeout:" in clause and "node id" in clause and "never investigate" in clause
+    ask = ask_compose._wave_tests_green_js(None, repo_root=None, run_id="r1")
+    owed = emit._owed_gates_green_js(None, repo_root=None, owed_scope={"C0": ["t.py"]})
+    for js in (ask, owed):
+        assert emit._js_string_literal(emit._test_runner_clause(None) + clause) in js
+        assert "return false" not in js.split("const status")[1]
 
 
 @pytest.mark.spawns_process
@@ -150,8 +161,8 @@ def test_later_wave_commits_both_waves_paths_only_after_its_cumulative_scope_pas
     waves = [{"n": 0, "ids": ["C0"]}, {"n": 1, "ids": ["C1"]}]
     targets = {"0": ["t0.py"], "1": ["t0.py", "t1.py"]}
     out = _run(waves, {"0": _verdict("fail"), "1": _verdict("pass")}, targets)
-    assert out["spawned"] == ["verify:wave-0", "verify:wave-1", "commit:wave-1"]
-    assert out["shas"] == ["sha-commit:wave-1"]
+    assert out["spawned"] == ["verify:wave-0", "commit:wave-0", "verify:wave-1", "commit:wave-1"]
+    assert out["shas"] == ["sha-commit:wave-0", "sha-commit:wave-1"]
     assert out["carried"] == []
     assert [w["wave"] for w in out["withheld"]] == [0]
 

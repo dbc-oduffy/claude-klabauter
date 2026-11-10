@@ -154,7 +154,7 @@ def test_bridge_relay_send_reaches_subprocess_run_on_either_platform(monkeypatch
     bridge.log.close()
     assert len(calls) == 1
     argv, kw = calls[0]
-    assert argv[0] == "ssh" and argv[-2:] == ["lan", "send-batch 77"]
+    assert argv[0] == "ssh" and argv[-2] == "lan" and re.fullmatch(r"send-to 77 [0-9a-f]{16}", argv[-1])
     assert ("ControlMaster=auto" in " ".join(argv)) is (not is_win)
 
 

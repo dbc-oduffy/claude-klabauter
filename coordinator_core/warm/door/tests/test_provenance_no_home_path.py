@@ -44,5 +44,18 @@ def test_interpreter_outside_home_stays_absolute(tmp_path, monkeypatch):
     assert build.portable_python_bin(interp) == str(interp.resolve())
 
 
+def test_tilde_record_with_unresolved_home_raises_typed_error(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("~")))
+    with pytest.raises(build.HomeDirectoryUnresolvedError, match="USERPROFILE|HOME"):
+        build.expand_python_bin("~/AppData/Python313/python.exe")
+
+
+def test_tilde_record_with_resolved_home_still_expands(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
+    assert build.expand_python_bin("~/a/python.exe") == tmp_path / "a" / "python.exe"
+
+
 def test_relative_recording_is_not_expanded_to_absolute():
     assert not build.expand_python_bin("python.exe").is_absolute()

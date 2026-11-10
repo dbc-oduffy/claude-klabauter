@@ -107,6 +107,15 @@ def test_unresolved_engine_renders_the_absent_text(tmp_path, monkeypatch):
     assert "T1: owner claude-klabauter is not on this machine" in script
 
 
+def test_judge_and_falsifier_schemas_share_the_unbounded_clause_shape():
+    from coordinator_core.ops.review_mint.execute_review import _widen_judge_schema
+
+    judge = json.loads(_widen_judge_schema(json.dumps({"type": "object", "properties": {}})))
+    falsifier = json.loads(_falsifier_schema_literal())
+    assert judge["properties"]["clauses"] == falsifier["properties"]["clauses"]
+    assert "maxLength" not in judge["properties"]["clauses"]["items"]["properties"]["clause"]
+
+
 def test_judge_and_falsifier_schemas_share_roots_read():
     schema = json.loads(_falsifier_schema_literal())
     item = schema["properties"]["roots_read"]["items"]

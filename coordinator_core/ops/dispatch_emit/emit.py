@@ -417,6 +417,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     REVIEW_GROUPS_PHASE,
     resolve_operative_criterion,
     compose_execute_review,
+    unbound_clause_text,
 )
 from coordinator_core.ops.review_mint.post_exec_tail import (
     VERIFY_WALL_BUDGET_S,
@@ -3902,6 +3903,16 @@ def _verify_deadline_clause() -> str:
     )
 
 
+def _wave_verify_bound_clause() -> str:
+    """The bound on a `verify:wave-<n>` runner, appended to the runner clause: the verify deadline plus a no-investigate hang report."""
+    return (
+        " "
+        + _verify_deadline_clause()
+        + "On a hang or timeout, report status: error with summary starting 'timeout:' and the hanging "
+        "test node id, at once; never investigate, re-run, isolate or probe. "
+    )
+
+
 def _verify_test_call_expr(
     review,
     scope: list[str],
@@ -4377,6 +4388,7 @@ def _falsifier_schema_literal() -> str:
             },
         },
     )
+    unbound_clause_text(schema["properties"])
     schema["required"] = sorted(
         {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
     )
@@ -5691,9 +5703,9 @@ def _owed_gates_green_js(
 
     A wave whose carried-plus-done rows hold no `_gateOwed` entry passes with no leg. Otherwise one
     test-runner `verify:wave-<n>` leg runs the union of those rows' declared test scope; an empty
-    scope withholds (an owed gate with nothing to retest is not paid), and only `pass` /
-    `pass-with-skips` with a sidecar lets the commit leg run. Trap: the runner reports, the script
-    gates; a withheld row stays in `_gateOwed`, so the terminal commit still trails it owed.
+    scope withholds (an owed gate with nothing to retest is not paid). A non-pass verdict is
+    recorded and logged but never blocks the commit leg; the rows stay in `_gateOwed`, so the terminal
+    commit still trails them owed.
     """
     agent_type = _js_string_literal(_degrade_agent_type(_TEST_AGENT_TYPE, agent_type_host))
     sidecar = _emit_sidecar_clause_js(
@@ -5719,7 +5731,7 @@ def _owed_gates_green_js(
         f"        {_js_string_literal(_BRIEF_PRECEDENCE_CLAUSE + chr(10) * 2)} + "
         "'Run and report on the scoped test target(s) that retest the gate-owed rows ' + owed.join(', ') + "
         "' before the wave ' + n + ' checkpoint: ' + scope.join(', ') + '. ' + "
-        f"{_js_string_literal(_test_runner_clause(repo_root))} + {sidecar},\n"
+        f"{_js_string_literal(_test_runner_clause(repo_root) + _wave_verify_bound_clause())} + {sidecar},\n"
         f"        {{ label: 'verify:wave-' + n, phase: {phase}, agentType: {agent_type}, "
         f"{_model_opt(_TEST_AGENT_TYPE)}, effort: {_js_string_literal(_TEST_RUNNER_EFFORT)}, schema: _ROW_VERIFY_SCHEMA }}\n"
         "      );\n"
@@ -5730,8 +5742,8 @@ def _owed_gates_green_js(
         "    if ((status === 'pass' || status === 'pass-with-skips') "
         "&& typeof r.sidecar_path === 'string' && r.sidecar_path.trim()) return true;\n"
         "    _owedWithheld.push({ wave: n, ids: owed, status });\n"
-        "    log('checkpoint of wave ' + n + ' withheld: owed rows ' + owed.join(', ') + ' retest ' + (status || 'returned no verdict'));\n"
-        "    return false;\n"
+        "    log('wave ' + n + ' owed rows ' + owed.join(', ') + ' retest ' + (status || 'returned no verdict') + ((r && r.summary) ? ': ' + r.summary : '') + '; checkpoint proceeds, rows stay owed');\n"
+        "    return true;\n"
         "  }"
     )
 
@@ -6288,6 +6300,31 @@ def _dag_width_narration(dag, row_count: int, runtime_cap: int) -> str:
     return line
 
 
+_OPTIONAL_WRITES_LINE = re.compile(r"^[ \t]*optional_writes:[ \t]*(.+?)[ \t]*$", re.MULTILINE)
+
+
+def _row_optional_writes(body: str, declared=()) -> frozenset:
+    """Paths a row's body marks absence-tolerant: ``optional_writes: a, b`` lines, or a line that
+    opens with a ``declared`` write followed by ``required: false`` (the plan-spine marking; the
+    spine ``writes`` entries are plain strings, so the marking rides the row body). Only declared
+    writes are ever honoured by the caller."""
+    out: set = set()
+    for m in _OPTIONAL_WRITES_LINE.finditer(body or ""):
+        for tok in m.group(1).split(","):
+            tok = tok.strip().strip("`'\"")
+            if tok:
+                out.add(tok)
+    for path in declared:
+        marked = re.compile(
+            r"^[ \t]*(?:[-*][ \t]+)?[`'\"]?" + re.escape(path)
+            + r"[`'\"]?[ \t]*[:(,;—-]*[ \t]*\(?[ \t]*required:[ \t]*false\b",
+            re.MULTILINE,
+        )
+        if marked.search(body or ""):
+            out.add(path)
+    return frozenset(out)
+
+
 def _terminal_commit_marker(
     rows: list[WaveRow],
     row_pathspecs: dict[str, list[str]],
@@ -6321,6 +6358,7 @@ def _terminal_commit_marker(
     def _chunk(row) -> ChunkCommit:
         paths = tuple(row_pathspecs.get(row.id, ()))
         written = set(commit_pathspec_or_none([row]) or [])
+        optional = _row_optional_writes(row.body, paths)
         return ChunkCommit(
             id=row.id,
             title=row.title,
@@ -6328,6 +6366,7 @@ def _terminal_commit_marker(
             prefixes=tuple(row_prefixes.get(row.id, ())),
             report=_dispatch_report_path(plan_path, row.id) if plan_path else "",
             declared=tuple(p for p in paths if p in written),
+            optional=tuple(p for p in paths if p in written and p in optional),
         )
 
     chunks = tuple(_chunk(row) for row in rows)

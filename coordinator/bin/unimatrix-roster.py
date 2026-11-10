@@ -816,6 +816,37 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
         say(f"refresh mirror {sock} -> {d.get('name')} far pid {d.get('farPid')}")
 
 
+def crossed_mirrors(bridges, rows):
+    """Far sockets whose live mirror can reach the wrong session: (mirror name, far socket) pairs.
+
+    Crossed means the mirror's `farPid` is not its row's pid (checked after the refresh), or another
+    live mirror of this remote carries the identical session name for a different far socket. Names
+    compare in full: a box-labelled twin of a bare name is the intended disambiguation, not a crossing."""
+    seen, by_name, crossed = {}, {}, set()
+    for sock, row in rows.items():
+        b = bridges.get(sock)
+        if not b or b.poll() is not None:
+            continue
+        try:
+            with open(os.path.join(sessions_dir(), f"{b.pid}.json"), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(d, dict):
+            continue
+        name = d.get("name") if isinstance(d.get("name"), str) else row["entry"].get("name")
+        seen[sock] = name
+        far_pid = row["entry"].get("pid")
+        if isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid:
+            crossed.add(sock)
+        if isinstance(d.get("name"), str) and d["name"]:
+            by_name.setdefault(d["name"], []).append(sock)
+    for socks in by_name.values():
+        if len(socks) > 1:
+            crossed.update(socks)
+    return [(seen[s], s) for s in rows if s in crossed]
+
+
 def sync(bridges, rows, cfg, say):
     """One reconcile pass: `rows` is far socket -> roster row; `bridges` far socket -> Popen."""
     scan = live_sessions()
@@ -831,6 +862,9 @@ def sync(bridges, rows, cfg, say):
         nm = mirror_entry_name(row["entry"], cfg.remote, sock, scan)
         if isinstance(nm, str) and nm:
             scan.append((bare_name(nm), mirror_scan_key(cfg.remote, sock)))
+    for name, sock in crossed_mirrors(bridges, rows):
+        say(f"MISROUTE {name} {sock}")
+        unmirror(bridges.pop(sock).pid)
     for sock in [s for s in bridges if s not in rows]:
         unmirror(bridges.pop(sock).pid)
         say(f"unmirror {sock}")

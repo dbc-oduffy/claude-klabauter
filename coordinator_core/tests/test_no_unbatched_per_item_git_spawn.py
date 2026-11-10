@@ -849,11 +849,6 @@ _EXEMPT_SITES: frozenset[tuple[str, str, str, int]] = frozenset(
         # call starts that alias's own detached supervisors, long-lived processes bound to one
         # remote. No single process can supervise two peers.
         ("coordinator/bin/unimatrix-autolink.py", "run.link_all", "link_peer", 0),
-        # 2026-11-09 -- # class: retained-fallback. `unimatrix-bridge.py::_send_per_line` is the
-        # old-relay path: `relay_send` first sends every line in ONE ssh `send-batch`, and falls
-        # back to one `send` per line only when the far relay answers its usage error (a vendored
-        # relay that predates the verb). The batch cannot be retried against a relay that lacks it.
-        ("coordinator/bin/unimatrix-bridge.py", "_send_per_line", "_ssh_relay", 0),
     }
 )
 

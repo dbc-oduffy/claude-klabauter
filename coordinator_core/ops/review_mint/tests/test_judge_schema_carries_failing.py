@@ -29,6 +29,39 @@ def test_falsifier_schema_carries_failing():
     _assert_optional_failing(json.loads(_falsifier_schema_literal()))
 
 
+_LONG = "x" * 450
+
+
+def _result():
+    return {
+        "differs_from_baseline": False,
+        "baseline_output": "",
+        "clauses": [{"clause": _LONG, "status": "met"}],
+        "withheld_clauses": [{"clause": _LONG, "rows": ["C1"]}],
+    }
+
+
+def _validate_long_clause(schema):
+    import jsonschema
+
+    props = {k: v for k, v in schema["properties"].items() if k in _result()}
+    jsonschema.validate(_result(), {"type": "object", "properties": props})
+
+
+def test_widened_judge_schema_accepts_a_clause_over_200_chars():
+    _validate_long_clause(json.loads(_widen_judge_schema(json.dumps({"type": "object", "properties": {}}))))
+
+
+def test_widened_judge_schema_unbounds_a_clause_the_roster_schema_capped():
+    capped = {"type": "object", "properties": {"clauses": {"type": "array", "items": {
+        "type": "object", "properties": {"clause": {"type": "string", "maxLength": 200}}}}}}
+    _validate_long_clause(json.loads(_widen_judge_schema(json.dumps(capped))))
+
+
+def test_falsifier_schema_accepts_a_clause_over_200_chars():
+    _validate_long_clause(json.loads(_falsifier_schema_literal()))
+
+
 def test_judge_prompt_asks_for_failing_node_ids():
     _, prompt = _criterion_judge_prompt(
         _judge_review(), plan_path="docs/plans/example.md", run_base_sha="a" * 40,

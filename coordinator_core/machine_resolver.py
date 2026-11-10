@@ -48,6 +48,9 @@ its docstring can bind to `repos.content_root` reset-safely without duplicating
 a second TOML parser. `_registry_get` is kept as an alias for this module's
 own pre-existing internal callers.
 
+`require_key` / `SettingsKeyMissing`: the refusing form of `registry_get`; an
+unset or empty key raises the typed error naming the key, with no fallback.
+
 Negative-spec (do NOT "fix" while porting):
   - Do NOT shell out to a `machine-local` CLI/binary or `_machine_local.py` —
     the whole point of this module is to be Windows-invocable without a shell
@@ -268,6 +271,27 @@ def registry_get(key: str) -> Optional[str]:
     if found is None and key in _CONTENT_ROOT_KEY_PAIR:
         found = _registry_get_exact(_CONTENT_ROOT_KEY_PAIR[key])
     return found
+
+
+class SettingsKeyMissing(LookupError):
+    """A settings-home key is unset (or empty) on this machine; ``.key`` names it."""
+
+    code = "settings-key-missing"
+
+    def __init__(self, key: str):
+        self.key = key
+        super().__init__(
+            f"settings-home key '{key}' is not set on this machine; "
+            f"provision it with `machine-local set {key} <value>`"
+        )
+
+
+def require_key(key: str) -> str:
+    """Return ``registry_get(key)``; raise ``SettingsKeyMissing`` when it is unset."""
+    value = registry_get(key)
+    if value is None:
+        raise SettingsKeyMissing(key)
+    return value
 
 
 REGISTRY_LAYER_FILES = ("registry.toml", "registry.local.toml")

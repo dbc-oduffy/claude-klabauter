@@ -52,9 +52,9 @@ Negative-spec:
   - Git is asked twice at most per call: one ``cat-file --batch-check`` for HEAD's
     sha and every path-tracked question, and at wave-boundary one ``git diff -U0`` whose
     headers name the changed paths and whose text review.reachability reads in-process.
-  - ``unreachable`` (wave-boundary only) is non-blocking when a live, un-landed row of the same
-    plan declares the path in ``consumes`` or ``reads_at_head``; a consumer in another plan
-    does not exempt it. The sidecar is cut from the same reply.
+  - ``unreachable`` (wave-boundary only) is non-blocking when a live, un-landed row of any plan
+    in the run's set declares the path in ``consumes`` or ``reads_at_head``; a declarer in a plan
+    outside the set does not exempt it. The sidecar is cut from the same reply.
 """
 
 from __future__ import annotations
@@ -763,7 +763,7 @@ def _reachability_findings(pset, ctx) -> list:
     """`unreachable` findings for the landed rows' paths, from review.reachability run in-process.
 
     A finding is attributed to the plan whose landed row declared the path (an unattributable one
-    goes to the first set plan) and is non-blocking while a live, un-landed row of that same plan
+    goes to the first set plan) and is non-blocking while a live, un-landed row of any set plan
     declares the path in `consumes` or `reads_at_head`. An op error raises."""
     from coordinator_core.ops.review_reachability import _handler as reachability
 
@@ -799,17 +799,17 @@ def _reachability_findings(pset, ctx) -> list:
         path = _normalize_path(ref.split(":", 1)[0])
         owner = exact.get(path) or next(
             (prefixes[p] for p in prefixes if path == p or path.startswith(p.rstrip("/") + "/")), first)
-        plan = pset.get(owner)
-        awaited = plan is not None and any(
-            (owner, row.id) not in landed
+        awaited = any(
+            (rel, row.id) not in landed
             and (plan.raw_by_id.get(row.id) or {}).get("disposition") not in ("coded", "wont_do", "voided")
             and path in (_consumed(plan, row) | {_normalize_path(p) for p in (row.reads_at_head or ()) if isinstance(p, str) and p})
+            for rel, plan in pset.items()
             for row in plan.live_rows
         )
         findings.append(_finding(
             owner, UNREACHABLE, not awaited,
             f"{ref} is unreachable from production code"
-            + (": a later row of this plan consumes it" if awaited else ""),
+            + (": a later row of this run's plan set declares it" if awaited else ""),
             path=path))
     for click in result.get("click_paths", ()):
         if click.get("verdict") == "broken":

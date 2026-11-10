@@ -91,6 +91,55 @@ def test_classify_one_spawn_noop_and_land(tmp_path):
     )
 
 
+def _two_call_run(spawns, log_stdout, log_rc=0):
+    class P:
+        def __init__(self, rc, out):
+            self.returncode, self.stdout = rc, out
+
+    def run(argv, timeout=None):
+        spawns.append(argv)
+        if "log" in argv:
+            return P(log_rc, log_stdout)
+        return P(0, " M a.txt\n M b.txt\n")
+
+    return run
+
+
+def _timed(mid, mtime):
+    return du.DoneReport(mid, f"rep/{mid}.md", "r-t2-p2", mtime)
+
+
+def test_dirty_path_committed_after_report_routes_review_only_in_one_extra_spawn(tmp_path):
+    (tmp_path / "a.txt").write_text("x")
+    (tmp_path / "b.txt").write_text("y")
+    spawns = []
+    run = _two_call_run(spawns, "\x01500\na.txt\n\x01450\nb.txt\n")
+    done = {"A": _timed("A", 400.0), "B": _timed("B", 400.0)}
+    out = du.classify_done(tmp_path, done, {"A": ["a.txt"], "B": ["b.txt"]}, "inv", run=run)
+    assert len(spawns) == 2
+    for mid in ("A", "B"):
+        assert out[mid]["class"] == du.DONE_LAND and out[mid][du.HAND_LANDED] is True
+        assert "--review-only --rows " + mid + " --run-base <sha>" in out[mid]["route"]
+        assert "land_run" not in out[mid]["route"]
+
+
+def test_dirty_path_last_committed_before_report_still_lands(tmp_path):
+    (tmp_path / "a.txt").write_text("x")
+    (tmp_path / "b.txt").write_text("y")
+    run = _two_call_run([], "\x01100\na.txt\n")
+    done = {"A": _timed("A", 400.0), "B": _timed("B", 400.0)}
+    out = du.classify_done(tmp_path, done, {"A": ["a.txt"], "B": ["b.txt"]}, "inv", run=run)
+    assert out["A"][du.HAND_LANDED] is False and "dispatch.land_run" in out["A"]["route"]
+    assert out["B"][du.HAND_LANDED] is False and "dispatch.land_run" in out["B"]["route"]
+
+
+def test_commit_lookup_failure_fails_closed(tmp_path):
+    (tmp_path / "a.txt").write_text("x")
+    run = _two_call_run([], "\x01500\na.txt\n", log_rc=128)
+    out = du.classify_done(tmp_path, {"A": _timed("A", 400.0)}, {"A": ["a.txt"]}, "inv", run=run)
+    assert out["A"][du.HAND_LANDED] is False and "dispatch.land_run" in out["A"]["route"]
+
+
 def test_git_failure_fails_closed(tmp_path):
     (tmp_path / "a.txt").write_text("x")
 

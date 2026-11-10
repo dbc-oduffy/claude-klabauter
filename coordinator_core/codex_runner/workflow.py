@@ -14,6 +14,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import threading
 import uuid
@@ -26,6 +27,11 @@ import jsonschema
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
 from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
+from coordinator_core.codex_runner.sandbox_preflight import (
+    SandboxSetupRefused,
+    check_pwsh_launchable,
+    check_workspace_write,
+)
 from coordinator_core.codex_runner.review import _unattended_env
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
@@ -109,6 +115,7 @@ def _environment() -> dict[str, str]:
     env['COORDINATOR_ENGINE_ROOT'] = str(current_engine_clone())
     # Native tools/hooks need these Windows and coordinator runtime locations.
     for key in ("TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "COMSPEC",
+                "PATHEXT", "USERPROFILE", "HOME", "HOMEDRIVE", "HOMEPATH", "SYSTEMROOT",
                 "COORDINATOR_SETTINGS_HOME", "MACHINE_LOCAL_REGISTRY_DIR"):
         if source.get(key):
             env[key] = source[key]
@@ -539,6 +546,49 @@ def _codex_effort(options: dict, model: str | None, env: dict) -> str | None:
     return effort
 
 
+def _family_event_model(event: dict) -> str | None:
+    """Model a grok/agy event reports about itself, from the event or its init/result/session payload."""
+    for holder in (event, event.get("init"), event.get("session"), event.get("result"), event.get("step_update")):
+        if isinstance(holder, dict):
+            for name in ("model", "model_id", "modelId"):
+                value = holder.get(name)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()
+    return None
+
+
+_AGY_LOG_MODEL = re.compile(r'selected model override to backend: label="([^"]+)"')
+
+
+def _grok_envelope_model(raw: str) -> str | None:
+    """Model a grok --output-format json envelope ran: the modelUsage key with the most calls."""
+    try:
+        envelope = json.loads(raw)
+    except ValueError:
+        return None
+    usage = envelope.get("modelUsage") if isinstance(envelope, dict) else None
+    if not isinstance(usage, dict):
+        return None
+    named = [(name.strip(), row) for name, row in usage.items() if isinstance(name, str) and name.strip()]
+    if not named:
+        return None
+    def calls(item: tuple) -> int:
+        count = item[1].get("modelCalls") if isinstance(item[1], dict) else None
+        return count if isinstance(count, int) else 0
+
+    return max(named, key=calls)[0]
+
+
+def _agy_log_model(log: Path) -> str | None:
+    """Model label agy's own --log-file reports selecting; its stream-json carries none."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    found = _AGY_LOG_MODEL.findall(text)
+    return found[-1].strip() or None if found else None
+
+
 def _event_provenance(path: Path, backend: str) -> dict:
     """Observe actual CLI output only; requested models and parent IDs are not evidence."""
     result: dict = {
@@ -548,9 +598,14 @@ def _event_provenance(path: Path, backend: str) -> dict:
     }
     usages = []
     try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        raw = path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return result
+    lines = raw.splitlines()
+    if backend == "grok":
+        result["model"] = _grok_envelope_model(raw) or "unknown"
+    elif backend == "agy":
+        result["model"] = _agy_log_model(path.with_name(_AGY_LOG_NAME)) or "unknown"
     for line in lines:
         try:
             event = json.loads(line)
@@ -558,6 +613,8 @@ def _event_provenance(path: Path, backend: str) -> dict:
             continue
         if not isinstance(event, dict):
             continue
+        if backend in _FAMILY_BACKENDS and result["model"] == "unknown":
+            result["model"] = _family_event_model(event) or "unknown"
         kind = event.get("type")
         identity = event.get("thread_id") if kind == "thread.started" else event.get("session_id") if backend == "claude" else None
         if isinstance(identity, str):
@@ -659,6 +716,7 @@ def _append_canonical_usage(receipt: dict) -> dict:
 
 
 _FAMILY_BACKENDS = ("grok", "agy")
+_AGY_LOG_NAME = "agy.log"
 _AGY_OK = frozenset({"success", "ok", "completed", "done"})
 _FENCE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
 
@@ -712,9 +770,28 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
                     "--output-format", "json", "--permission-mode", "acceptEdits",
                     "--allow", allow, "--no-subagents", "--no-auto-update"]
         return [*resolve_agy(), "--input-format", "stream-json", "--output-format", "stream-json",
-                "-p=", "--mode", "accept-edits", "--settings", _AGY_SETTINGS]
+                "-p=", "--mode", "accept-edits", "--settings", _AGY_SETTINGS,
+                "--log-file", str(artifact_dir / _AGY_LOG_NAME)]
     except (GrokUnavailable, AgyUnavailable) as exc:
         raise AgentFailed(f"{backend} executable unavailable: {exc}") from exc
+
+
+def _grok_child_path(env: dict[str, str]) -> str:
+    """PATH for a headless grok child: settings-home bin first (bare coordinator-invoke), git's dir last.
+
+    The engine's own PATH may lack git; Git for Windows' cmd dir is found by one stat, no spawn.
+    """
+    parts = [str(settings_home() / 'bin'), env.get('PATH')]
+    git = shutil.which('git', path=env.get('PATH'))
+    if git:
+        return os.pathsep.join(filter(None, parts))
+    roots = [os.environ.get(k) for k in ('ProgramFiles', 'ProgramW6432', 'ProgramFiles(x86)')]
+    for root in filter(None, roots):
+        cmd_dir = Path(root) / 'Git' / 'cmd'
+        if (cmd_dir / 'git.exe').is_file():
+            parts.append(str(cmd_dir))
+            break
+    return os.pathsep.join(filter(None, parts))
 
 
 def _family_text(backend: str, stdout: Path) -> str:
@@ -863,8 +940,7 @@ def run_agent(
     env['COORDINATOR_AGENT_VENDOR'] = backend
     env['COORDINATOR_AGENT_ROLE'] = 'workflow-agent'
     if backend == 'grok':
-        # The bare-name coordinator-invoke the allow rule matches must resolve for a headless child.
-        env['PATH'] = os.pathsep.join(filter(None, [str(settings_home() / 'bin'), env.get('PATH')]))
+        env['PATH'] = _grok_child_path(env)
     for key, option in (("COORDINATOR_WORKFLOW_AGENT_TYPE", "agentType"), ("COORDINATOR_WORKFLOW_AGENT_LABEL", "label")):
         value = options.get(option)
         if isinstance(value, str) and value:
@@ -876,6 +952,20 @@ def run_agent(
     (artifact_dir / 'private-cli.json').unlink(missing_ok=True)
     if backend == "codex":
         preflight_auth(env=env, requested=False)
+        try:
+            check_pwsh_launchable(env)
+            try:
+                probe_argv = resolve_codex(env=env)
+            except Exception:
+                probe_argv = None
+            advisory = check_workspace_write(
+                repo_root, repo_root=repo_root, codex_home=env.get("CODEX_HOME"),
+                codex_argv=probe_argv, env=env,
+            )
+            if advisory:
+                print(advisory, file=sys.stderr)
+        except SandboxSetupRefused as exc:
+            raise AgentFailed(str(exc)) from exc
         native_cli = resolve_codex(env=env)
         # Resolve the real native binary before private PATH can affect lookup.
         if private_settings is not None:

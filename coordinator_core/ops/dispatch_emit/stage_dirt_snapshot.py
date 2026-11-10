@@ -14,7 +14,9 @@ indexed blob is the final word (a touch of a clean file is never an edit).
 
 Invariants: paths are repo-relative POSIX; the snapshot is write-once per run record (a refire keeps
 the first stage's marker); every failure reads as "no snapshot" and adds nothing to review. Traps:
-untracked files are not listed (a tree walk is not affordable); a deletion has no mtime, so it is
+``undeclared_edits`` lists no untracked file, while ``run_edits`` finds untracked-new files only in
+index-ancestor directories modified since the marker (a file overwritten in place under an unmodified
+directory, or an untracked file older than the marker, is not seen); a deletion has no mtime, so it is
 dated by its nearest existing ancestor directory's mtime, and a pre-stage deletion in a directory
 touched since reads as after-stage; dirt written within one filesystem clock tick before stage reads
 as after-stage (the peer-hold filter and the byte compare bound the false positives).
@@ -156,16 +158,11 @@ def _deleted_after(root: Path, rel: str, marker: int) -> bool:
             parent = parent.parent
 
 
-def undeclared_edits(root: Path, record: Path, declared: Sequence[str]) -> list:
-    """Sorted paths dirty now, modified at or after the stage marker, whose bytes are not the indexed
-    blob, that no ``declared`` entry names or contains. Empty when there is no snapshot or no index.
-    Peer holds are the caller's filter."""
-    marker = read_snapshot(record)
-    if marker is None:
-        return []
+def _tracked_edits(root: Path, marker: int, declared: Sequence[str]):
+    """``(sorted tracked edited paths, index entries)`` or ``None`` when the index cannot be parsed."""
     scanned = _stat_dirty(root)
     if scanned is None:
-        return []
+        return None
     now, entries = scanned
     root = Path(root)
     out = []
@@ -179,4 +176,96 @@ def undeclared_edits(root: Path, record: Path, declared: Sequence[str]) -> list:
         if st.st_mtime_ns < marker or _matches_index(root / p, entries[p].sha):
             continue
         out.append(p)
-    return sorted(out)
+    return sorted(out), entries
+
+
+def undeclared_edits(root: Path, record: Path, declared: Sequence[str]) -> list:
+    """Sorted paths dirty now, modified at or after the stage marker, whose bytes are not the indexed
+    blob, that no ``declared`` entry names or contains. Empty when there is no snapshot or no index.
+    Peer holds are the caller's filter."""
+    marker = read_snapshot(record)
+    if marker is None:
+        return []
+    scanned = _tracked_edits(root, marker, declared)
+    return [] if scanned is None else scanned[0]
+
+
+_PRUNED_DIRS = frozenset({"__pycache__", ".pytest_cache", ".git"})
+
+
+def _skipped(rel: str) -> bool:
+    """True for a path in a non-product prefix or under a pruned directory."""
+    return (rel + "/").startswith(_NON_PRODUCT_PREFIXES) or any(part in _PRUNED_DIRS for part in rel.split("/"))
+
+
+def _untracked_new(root: Path, marker: int, entries, record_rel: Optional[str]) -> list:
+    """Files absent from the index with mtime at or after ``marker``, found only in index-ancestor
+    directories whose own mtime is at or after it, plus the full contents of directories new since it."""
+    ancestors = {""}
+    for rel in entries:
+        if rel.startswith(_NON_PRODUCT_PREFIXES):
+            continue
+        parts = rel.split("/")[:-1]
+        for i in range(1, len(parts) + 1):
+            ancestors.add("/".join(parts[:i]))
+    out = []
+
+    def _new_tree(rel_dir: str) -> None:
+        for name, entry in _listing(root, rel_dir).items():
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            if _skipped(rel) or (record_rel and (rel + "/").startswith(record_rel + "/")):
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    if entry.stat(follow_symlinks=False).st_mtime_ns >= marker:
+                        _new_tree(rel)
+                elif rel not in entries and entry.stat(follow_symlinks=False).st_mtime_ns >= marker:
+                    out.append(rel)
+            except OSError:
+                continue
+
+    for rel_dir in ancestors:
+        try:
+            if os.stat(root / rel_dir if rel_dir else root).st_mtime_ns < marker:
+                continue
+        except OSError:
+            continue
+        for name, entry in _listing(root, rel_dir).items():
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            if _skipped(rel) or (record_rel and (rel + "/").startswith(record_rel + "/")):
+                continue
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    # An indexed-ancestor directory is examined in its own right; any other is new or untracked-only.
+                    if rel not in ancestors and entry.stat(follow_symlinks=False).st_mtime_ns >= marker:
+                        _new_tree(rel)
+                elif rel not in entries and entry.stat(follow_symlinks=False).st_mtime_ns >= marker:
+                    out.append(rel)
+            except OSError:
+                continue
+    return out
+
+
+def run_edits(root: Path, record: Path, declared: Sequence[str] = ()) -> list:
+    """Sorted repo-relative paths the run edited since the stage marker: tracked paths changed from
+    the indexed blob (deletions included) and untracked-new files, with no ``declared`` exclusion
+    (``declared`` is accepted for call-site symmetry with ``undeclared_edits`` and ignored). Skips
+    non-product prefixes, the record dir and anything under ``__pycache__``/``.pytest_cache``/``.git``.
+    Empty when there is no snapshot or no index. No git spawn; ignore filtering and peer holds are
+    the caller's."""
+    marker = read_snapshot(record)
+    if marker is None:
+        return []
+    scanned = _tracked_edits(root, marker, ())
+    if scanned is None:
+        return []
+    tracked, entries = scanned
+    root = Path(root)
+    record_rel = None
+    try:
+        record_rel = Path(record).resolve().relative_to(root.resolve()).as_posix()
+    except (OSError, ValueError):
+        pass
+    found = {p for p in tracked if not _skipped(p)}
+    found.update(_untracked_new(root, marker, entries, record_rel))
+    return sorted(found)

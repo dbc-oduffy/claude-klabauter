@@ -14,6 +14,10 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     session's socket.
   send-batch <pid>  deliver every stdin line to that session; prints one JSON result
                     line ({"ok": true} or {"ok": false, "error": ...}) per message line.
+  send-to <pid> <digest>
+                    send-batch, but only when the pid's live endpoint hashes to <digest>
+                    (first 16 hex of sha256 of the socket path); else exits `target mismatch`
+                    before reading any line.
   inbox <name>      register <name> as a session living on this box (entry + key on
                     stdin, two lines), listen on /tmp/cc-socks/unimatrix-<name>.sock, and
                     write each message delivered there to stdout as one line, so the
@@ -60,6 +64,14 @@ SOCKS = "/tmp/cc-socks"
 INBOX_NAME_RE = re.compile(r"[A-Za-z0-9_-](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?")
 
 
+DIGEST_RE = re.compile(r"[0-9a-f]{16}")
+
+
+def socket_digest(path):
+    """First 16 hex chars of the sha256 of a session endpoint path: the identity `send-to` verifies."""
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
+
+
 def valid_inbox_name(name):
     """1-64 ASCII routing characters, no edge dots or consecutive dots/path traversal."""
     return isinstance(name, str) and ".." not in name and INBOX_NAME_RE.fullmatch(name) is not None
@@ -81,6 +93,8 @@ def parse_mode(original_command):
         return "send", int(cmd[1])
     if len(cmd) == 2 and cmd[0] == "send-batch" and cmd[1].isdigit():
         return "send-batch", int(cmd[1])
+    if len(cmd) == 3 and cmd[0] == "send-to" and cmd[1].isdigit() and DIGEST_RE.fullmatch(cmd[2]):
+        return "send-to", (int(cmd[1]), cmd[2])
     if (len(cmd) == 2 and cmd[0] in ("inbox", "reply-inbox") and valid_inbox_name(cmd[1])
             and original_command == f"{cmd[0]} {cmd[1]}"):
         return cmd[0], cmd[1]
@@ -346,12 +360,18 @@ def load_roster():
     return mod
 
 
-def _session_path(pid):
-    """The live session's messaging endpoint for `pid`; exits when it is absent or not a session endpoint."""
+def _session_path(pid, expected_digest=None):
+    """The live session's messaging endpoint for `pid`; exits when it is absent or not a session endpoint.
+
+    With `expected_digest`, the endpoint must hash to it: a pid that now holds another session
+    exits `target mismatch` before any message is read.
+    """
     target = {p: d for p, d, _ in entries()}.get(pid)
     if not target:
         sys.exit(f"no live session with pid {pid}")
     path = target["messagingSocketPath"]
+    if expected_digest is not None and socket_digest(path) != expected_digest:
+        sys.exit(f"target mismatch: pid {pid} holds {target.get('name')}")
     if endpoint_kind() == "pipe":
         if not path.lower().startswith(PIPE_PREFIX.lower()):
             sys.exit(f"refusing non-session pipe {path}")
@@ -386,14 +406,14 @@ def send(pid):
     _write_line(path, sys.stdin.buffer.readline())
 
 
-def send_batch(pid):
+def send_batch(pid, expected_digest=None):
     """Deliver every stdin line to `pid`, replying one JSON result line per message line.
 
     A per-line fault (a blank line included, so replies stay index-aligned with the input) is
     that line's error reply and the loop continues; only a target-level refusal exits, before
     any line is read.
     """
-    path = _session_path(pid)
+    path = _session_path(pid, expected_digest)
     for line in sys.stdin.buffer:
         try:
             if not line.strip():
@@ -946,7 +966,7 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
 def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
-        sys.exit("usage: roster | send <pid> | send-batch <pid> | inbox <name> | reply-inbox <name> | source | "
+        sys.exit("usage: roster | send <pid> | send-batch <pid> | send-to <pid> <digest> | inbox <name> | reply-inbox <name> | source | "
                  "grant <grantee> <note> <ttl> <repo> | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
@@ -975,6 +995,8 @@ def main():
         send(arg)
     elif mode == "send-batch":
         send_batch(arg)
+    elif mode == "send-to":
+        send_batch(*arg)
     elif mode == "source":
         # Far boxes vendor this relay; serving our own text keeps syncs off the full-shell key.
         sys.stdout.buffer.write(Path(__file__).read_bytes())

@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import types
 from pathlib import Path
@@ -171,30 +172,39 @@ def test_n_lines_go_in_one_ssh_and_each_gets_a_record(bridge, monkeypatch):
     replies = b'{"ok": true}\n{"ok": false, "error": "ConnectionRefusedError: gone"}\n{"ok": true}\n'
     calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess([], 0, replies, b""))
     send_many(bridge, 3)
-    assert [c[0] for c in calls] == ["send-batch 4242"]
+    assert len(calls) == 1 and re.fullmatch(r"send-to 4242 [0-9a-f]{16}", calls[0][0])
     assert calls[0][1].count(b"\n") == 3
     assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered", "FAILED", "delivered"]
     (endpoint, frame), = bridge.written
     assert endpoint == SENDER and "gone" in json.loads(frame)["message"]
 
 
-def test_old_relay_usage_error_falls_back_to_per_line_send(bridge, monkeypatch):
-    def responder(cmd, data):
-        if cmd.startswith("send-batch"):
-            return subprocess.CompletedProcess([], 1, b"", b"usage: roster | send <pid> | inbox <name>\n")
-        return subprocess.CompletedProcess([], 0, b"", b"")
-
-    calls = record_ssh(monkeypatch, responder)
+def test_old_relay_usage_error_is_a_recorded_failure_not_a_per_line_resend(bridge, monkeypatch):
+    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess(
+        [], 1, b"", b"usage: roster | send <pid> | inbox <name>\n"))
     send_many(bridge, 2)
-    assert [c[0] for c in calls] == ["send-batch 4242", "send 4242", "send 4242"]
-    assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered", "delivered"]
+    assert len(calls) == 1 and re.fullmatch(r"send-to 4242 [0-9a-f]{16}", calls[0][0])
+    status = bridge.delivery_status()
+    assert [s.split()[0] for s in status] == ["FAILED", "FAILED"] and "lacks send-to" in status[0]
+    assert len(bridge.written) == 2
+
+
+def test_a_target_mismatch_is_recorded_failed_and_the_sender_notified(bridge, monkeypatch):
+    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess(
+        [], 1, b"", b"target mismatch: pid 4242 holds other-session\n"))
+    send_many(bridge, 1)
+    assert len(calls) == 1
+    status = bridge.delivery_status()
+    assert status[0].split()[0] == "FAILED" and "target mismatch" in status[0]
+    (endpoint, frame), = bridge.written
+    assert endpoint == SENDER and "target mismatch" in json.loads(frame)["message"]
 
 
 def test_a_relay_refusal_is_recorded_failed_and_not_retried_per_line(bridge, monkeypatch):
     calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess(
         [], 1, b"", b"no live session with pid 4242\n"))
     send_many(bridge, 2)
-    assert [c[0] for c in calls] == ["send-batch 4242"]
+    assert len(calls) == 1 and calls[0][0].startswith("send-to 4242 ")
     status = bridge.delivery_status()
     assert [s.split()[0] for s in status] == ["FAILED", "FAILED"] and "no live session" in status[0]
     assert len(bridge.written) == 2
@@ -223,7 +233,7 @@ def test_relay_send_batch_replies_per_line_and_continues_past_a_fault(monkeypatc
             raise ConnectionRefusedError("gone")
         seen.append(line)
 
-    monkeypatch.setattr(relay, "_session_path", lambda pid: "/p")
+    monkeypatch.setattr(relay, "_session_path", lambda pid, expected_digest=None: "/p")
     monkeypatch.setattr(relay, "_write_line", write)
     monkeypatch.setattr(relay.sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(b"a\nbad\n\nc\n")))
     relay.send_batch(1)

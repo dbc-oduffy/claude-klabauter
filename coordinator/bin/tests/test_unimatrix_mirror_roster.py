@@ -574,7 +574,8 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
             pass
 
     bridge.relay_send(Conn())
-    assert argvs[-1][-1] == f"send-batch {expect}"
+    digest = hashlib.sha256(far_socket.encode("utf-8")).hexdigest()[:16]
+    assert argvs[-1][-1] == f"send-to {expect} {digest}"
 
 
 def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):
@@ -589,6 +590,78 @@ def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):
     roster.sync(bridges, {}, None, lambda m: None)
     assert bridges == {} and killed == [55]
     assert sorted(p.name for p in sessions.iterdir()) == ["56.json"]
+
+
+def _sync_setup(roster, sessions, monkeypatch):
+    killed = []
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill", killed.append)
+    monkeypatch.setattr(roster, "proc_start", lambda p, platform=None: "1")
+    cfg = roster.parse_args(["bridge.log", "--remote", "farbox", "--key", "k"])
+    return cfg, killed
+
+
+def _put_mirror(sessions, pid, name, sock, far_pid):
+    path = sessions / f"{pid}.json"
+    path.write_text(json.dumps({"pid": pid, "name": name, "farPid": far_pid, "unimatrixRemote": "farbox",
+                                "unimatrixFarSocket": sock}))
+    return path
+
+
+def test_sync_repairs_far_pid_reuse_in_place_without_a_misroute(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    _put_mirror(sessions, 60, "far-c", FAR_SOCK, 7)
+    lines = []
+    row = {"entry": {"pid": 9, "name": "far-c", "messagingSocketPath": FAR_SOCK}, "key": "K"}
+    roster.sync({FAR_SOCK: FakeProc(60)}, {FAR_SOCK: row}, cfg, lines.append)
+    assert json.loads((sessions / "60.json").read_text())["farPid"] == 9
+    assert killed == [] and not any("MISROUTE" in m for m in lines)
+
+
+def test_sync_logs_misroute_and_unmirrors_a_mirror_whose_far_pid_is_not_its_rows(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    _put_mirror(sessions, 60, "far-c", FAR_SOCK, 7)
+    monkeypatch.setattr(roster, "rename_live_mirror", lambda *a, **kw: None)
+    lines = []
+    bridges = {FAR_SOCK: FakeProc(60)}
+    row = {"entry": {"pid": 9, "name": "far-c", "messagingSocketPath": FAR_SOCK}, "key": "K"}
+    roster.sync(bridges, {FAR_SOCK: row}, cfg, lines.append)
+    assert f"MISROUTE far-c {FAR_SOCK}" in lines
+    assert killed == [60] and bridges == {}
+    assert not (sessions / "60.json").exists()
+
+
+def test_sync_logs_misroute_for_two_mirrors_sharing_one_session_name(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    sock_b = "/tmp/cc-socks/5555.sock"
+    _put_mirror(sessions, 60, "group-em-ad", FAR_SOCK, 7)
+    _put_mirror(sessions, 61, "group-em-ad", sock_b, 8)
+    monkeypatch.setattr(roster, "rename_live_mirror", lambda *a, **kw: None)
+    lines = []
+    bridges = {FAR_SOCK: FakeProc(60), sock_b: FakeProc(61)}
+    rows = {FAR_SOCK: {"entry": {"pid": 7, "name": "group-em-ad", "messagingSocketPath": FAR_SOCK}, "key": "K"},
+            sock_b: {"entry": {"pid": 8, "name": "group-em-ad", "messagingSocketPath": sock_b}, "key": "K"}}
+    roster.sync(bridges, rows, cfg, lines.append)
+    assert f"MISROUTE group-em-ad {FAR_SOCK}" in lines and f"MISROUTE group-em-ad {sock_b}" in lines
+    assert sorted(killed) == [60, 61] and bridges == {}
+
+
+def test_sync_keeps_a_box_labelled_twin_of_a_bare_named_mirror(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    sock_b = "/tmp/cc-socks/5555.sock"
+    _put_mirror(sessions, 60, "group-em-ad", FAR_SOCK, 7)
+    _put_mirror(sessions, 61, "group-em-ad.farbox", sock_b, 8)
+    monkeypatch.setattr(roster, "rename_live_mirror", lambda *a, **kw: None)
+    lines = []
+    bridges = {FAR_SOCK: FakeProc(60), sock_b: FakeProc(61)}
+    rows = {FAR_SOCK: {"entry": {"pid": 7, "name": "group-em-ad", "messagingSocketPath": FAR_SOCK}, "key": "K"},
+            sock_b: {"entry": {"pid": 8, "name": "group-em-ad", "messagingSocketPath": sock_b}, "key": "K"}}
+    roster.sync(bridges, rows, cfg, lines.append)
+    assert killed == [] and len(bridges) == 2 and not any("MISROUTE" in m for m in lines)
 
 
 def test_roster_requires_remote():

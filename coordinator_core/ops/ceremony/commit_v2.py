@@ -660,6 +660,67 @@ def _checkpoint_symbol_refusal(
     return removed_symbol_refusal(worktree_root, staged, head)
 
 
+def _checkpoint_import_refusal(
+    worktree_root: Path, paths: list, deleted: list, untracked: list, blobs: dict
+) -> Optional[str]:
+    """Refusal text when a staged `.py` from-imports a `coordinator_core` name the would-be
+    tree (HEAD overlaid with the staged bytes) does not define. Fails open when the percolate
+    resolver is not on disk or HEAD is unresolvable."""
+    staged_py = [p for p in [*paths, *untracked] if p.endswith(".py")]
+    if not staged_py:
+        return None
+    head = head_sha(worktree_root)
+    if not head:
+        return None
+
+    lib = Path(__file__).resolve().parents[3] / "coordinator" / "lib"
+    if not (lib / "percolate" / "import_closure.py").is_file():
+        return None
+    if str(lib) not in sys.path:
+        sys.path.insert(0, str(lib))
+    from percolate.import_closure import (
+        CommitReadError,
+        find_would_be_tree_from_import_violations,
+    )
+    from coordinator_core.git.git_objects import read_object
+
+    common = resolve_git_common_dir(worktree_root)
+    overlay: dict = {}
+    for path in staged_py:
+        key = path.replace("\\", "/")
+        if key in blobs:
+            got = read_object(common, blobs[key])
+            raw = got[1] if got else None
+        else:
+            try:
+                raw = (worktree_root / path).read_bytes()
+            except OSError:
+                raw = None
+        if raw is not None:
+            overlay[key] = raw.decode("utf-8", "replace")
+    for path in deleted:
+        if path.endswith(".py"):
+            overlay[path.replace("\\", "/")] = None
+
+    def reader(sha: str):
+        got = read_object(common, sha)
+        return got[1] if got else None
+
+    try:
+        _examined, violations = find_would_be_tree_from_import_violations(
+            worktree_root, head, overlay, reader
+        )
+    except CommitReadError:
+        return None
+    if not violations:
+        return None
+    listed = "; ".join(f"{importer} imports {name}" for importer, name in violations[:10])
+    return (
+        f"checkpoint would land an import absent from the committed tree: {listed}. "
+        "Stage the defining file or hunk in the same checkpoint."
+    )
+
+
 def _split_gone_tracked(worktree_root: Path, paths: list) -> tuple:
     """(kept, deleted): `paths` entries absent from disk but tracked at HEAD move to
     `deleted`. Never raises; an unresolvable HEAD spine leaves `paths` untouched."""
@@ -1538,6 +1599,12 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             )
         if symbol_refusal is not None:
             return _error(symbol_refusal)
+        with ledger.phase("checkpoint_imports"):
+            import_refusal = _checkpoint_import_refusal(
+                worktree_root, raw_paths, raw_deleted, raw_untracked, expectations["supplied_blobs"]
+            )
+        if import_refusal is not None:
+            return _error(import_refusal)
 
     # Process files (see `_PROCESS_PREFIXES`) never ride in a
     # product commit on a non-DoE repo: a mixed call lands product first, process second.

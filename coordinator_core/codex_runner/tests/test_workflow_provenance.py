@@ -32,6 +32,8 @@ from coordinator_core.codex_runner import workflow
 def scratch_usage_home(tmp_path, monkeypatch):
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path / 'settings'))
     monkeypatch.setenv('COORDINATOR_LOCK_ROOT', str(tmp_path / 'locks'))
+    (tmp_path / 'codex-home').mkdir()
+    monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex-home'))
 
 
 def test_recorded_native_exec_shape_has_thread_and_cache_usage_only(tmp_path):
@@ -394,3 +396,135 @@ def test_builtin_workspace_policy_has_no_custom_permission_selector():
     assert '\"--sandbox\", \"workspace-write\"' in source
     assert 'default_permissions' not in source
     assert '_workspace_permissions' not in source
+
+
+def _stub_codex(monkeypatch, tmp_path):
+    calls = _stub_family(monkeypatch, tmp_path, stdout_text='')
+    inner = workflow._run_admitted
+
+    def fake(argv, prompt, **kw):
+        Path(argv[argv.index('-o') + 1]).write_text('{"a": 1}', encoding='utf-8')
+        return inner(argv, prompt, **kw)
+
+    monkeypatch.setattr(workflow, '_run_admitted', fake)
+    return calls
+
+
+def _unelevated_home(tmp_path, monkeypatch):
+    home = tmp_path / 'codex-home'
+    (home / 'config.toml').write_text('[windows]\nsandbox = "unelevated"\n', encoding='utf-8')
+    return home
+
+
+def test_codex_stage_runs_when_unelevated_root_unproven_and_probes_once(tmp_path, monkeypatch):
+    from coordinator_core.codex_runner import sandbox_preflight as sp
+    _unelevated_home(tmp_path, monkeypatch)
+    monkeypatch.setattr(sp, '_is_windows', lambda: True)
+    monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
+    monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
+    monkeypatch.setattr(workflow, 'check_pwsh_launchable', lambda env: None)
+    seen = {}
+    monkeypatch.setattr(workflow, 'check_workspace_write', lambda root, **kw: seen.update(kw) or 'advisory: warming')
+    calls = _stub_codex(monkeypatch, tmp_path)
+    assert _run(tmp_path, 'codex') == {'a': 1}
+    assert seen['codex_argv'] == ['/bin/codex-x'] and calls
+
+
+def test_codex_stage_argv_unchanged_without_unelevated_config(tmp_path, monkeypatch):
+    calls = _stub_codex(monkeypatch, tmp_path)
+    from coordinator_core.codex_runner import sandbox_preflight as sp
+    monkeypatch.setattr(sp, '_is_windows', lambda: True)
+    monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
+    monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
+    monkeypatch.setattr(workflow, 'check_pwsh_launchable', lambda env: None)
+    probes = []
+    monkeypatch.setattr(workflow, 'check_workspace_write', lambda root, **kw: probes.append(kw) or None)
+    assert _run(tmp_path, 'codex') == {'a': 1}
+    argv = calls[0][0]
+    assert argv[:7] == ['/bin/codex-x', 'exec', '--json', '--sandbox', 'workspace-write', '--ephemeral', '-o']
+    assert argv[7] == str(tmp_path / 'art' / 'last.txt') and argv[-1] == '-'
+    assert not {'-c', '--config'} & set(argv)
+    assert not (tmp_path / 'codex-home' / 'config.toml').exists() and len(probes) == 1
+
+
+def _family_model(tmp_path, monkeypatch, backend, events):
+    _stub_family(monkeypatch, tmp_path, stdout_text='\n'.join(json.dumps(e) for e in events))
+    _run(tmp_path, backend)
+    return json.loads((tmp_path / 'art' / 'process.json').read_text())['model']
+
+
+# Recorded agy 2026-11 stream-json (init/step_update/result) carries no model field; the
+# model-bearing shapes below are synthesised for the CLI reporting one.
+_AGY_RESULT = {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '{"a": 2}'}}
+
+
+@pytest.mark.parametrize('init', [
+    {'event': 'init', 'conversation_id': 'c', 'init': {'cwd': '/x', 'model': 'gemini-4-argon-medium'}},
+    {'event': 'init', 'conversation_id': 'c', 'model': 'gemini-4-argon-medium'}])
+def test_agy_process_json_records_model_the_cli_reported(tmp_path, monkeypatch, init):
+    assert _family_model(tmp_path, monkeypatch, 'agy', [init, _AGY_RESULT]) == 'gemini-4-argon-medium'
+
+
+def test_agy_result_event_model_is_recorded(tmp_path, monkeypatch):
+    done = {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '{"a": 2}', 'model': 'gemini-3.8-flash-low'}}
+    assert _family_model(tmp_path, monkeypatch, 'agy', [{'event': 'init', 'init': {}}, done]) == 'gemini-3.8-flash-low'
+
+
+def test_grok_process_json_records_model_the_cli_reported(tmp_path, monkeypatch):
+    assert _family_model(tmp_path, monkeypatch, 'grok', [{'text': '{"a": 1}', 'model': 'grok-build-1'}]) == 'grok-build-1'
+
+
+@pytest.mark.parametrize('backend,events', [
+    ('agy', [{'event': 'init', 'init': {'cwd': '/x'}}, _AGY_RESULT]),
+    ('grok', [{'text': '{"a": 1}'}])])
+def test_family_without_model_evidence_stays_unknown(tmp_path, monkeypatch, backend, events):
+    assert _family_model(tmp_path, monkeypatch, backend, events) == 'unknown'
+
+
+def test_family_blank_or_nonstring_model_stays_unknown(tmp_path, monkeypatch):
+    events = [{'event': 'init', 'init': {'model': '  '}}, {'event': 'init', 'model': 7}, _AGY_RESULT]
+    assert _family_model(tmp_path, monkeypatch, 'agy', events) == 'unknown'
+
+
+# Shapes recorded from real CLI runs 2026-11-10: grok --output-format json (indented envelope whose
+# only model evidence is the modelUsage key) and agy stream-json (no model; the agy --log-file does).
+_GROK_REAL = {'text': '{"a": 1}', 'stopReason': 'end_turn', 'sessionId': 's', 'usage': {'input_tokens': 5},
+              'modelUsage': {'grok-4.6-build': {'inputTokens': 5, 'modelCalls': 1}}}
+_AGY_REAL = [
+    {'event': 'init', 'conversation_id': 'c', 'init': {'cwd': '/x', 'tools': ['run_command'], 'permission_mode': 'request-review'}},
+    {'event': 'step_update', 'step_update': {'conversation_id': 'c', 'step_index': 2, 'state': 'DONE', 'step_type': 'agent_response'}},
+    _AGY_RESULT]
+_AGY_LOG = ('I1110 11:51:22.688106 1 printmode.go:208] Print mode: starting (promptLength=0, model="", conversationID="")\n'
+            'I1110 11:51:22.691619 1 model_config_manager.go:375] Propagating selected model override to backend: label="Gemini 4 Argon (Low)"\n')
+
+
+def test_grok_real_envelope_modelusage_key_is_the_recorded_model(tmp_path, monkeypatch):
+    _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps(_GROK_REAL, indent=2))
+    _run(tmp_path, 'grok')
+    assert json.loads((tmp_path / 'art' / 'process.json').read_text())['model'] == 'grok-4.6-build'
+
+
+def test_grok_multi_model_usage_records_the_most_called(tmp_path):
+    env = {'modelUsage': {'a': {'modelCalls': 1}, 'b': {'modelCalls': 4}}}
+    (tmp_path / 's.jsonl').write_text(json.dumps(env), encoding='utf-8')
+    assert workflow._event_provenance(tmp_path / 's.jsonl', 'grok')['model'] == 'b'
+
+
+def test_agy_real_stream_model_comes_from_its_log_file(tmp_path, monkeypatch):
+    calls = _stub_family(monkeypatch, tmp_path, stdout_text='\n'.join(json.dumps(e) for e in _AGY_REAL))
+    inner = workflow._run_admitted
+
+    def with_log(argv, prompt, **kw):
+        Path(argv[argv.index('--log-file') + 1]).write_text(_AGY_LOG, encoding='utf-8')
+        return inner(argv, prompt, **kw)
+
+    monkeypatch.setattr(workflow, '_run_admitted', with_log)
+    _run(tmp_path, 'agy')
+    assert calls[0][0][calls[0][0].index('--log-file') + 1] == str(tmp_path / 'art' / 'agy.log')
+    assert json.loads((tmp_path / 'art' / 'process.json').read_text())['model'] == 'Gemini 4 Argon (Low)'
+
+
+def test_agy_without_log_model_line_stays_unknown(tmp_path, monkeypatch):
+    assert _family_model(tmp_path, monkeypatch, 'agy', _AGY_REAL) == 'unknown'
+    (tmp_path / 'art' / 'agy.log').write_text('model=""\n', encoding='utf-8')
+    assert workflow._event_provenance(tmp_path / 'art' / 'stdout.jsonl', 'agy')['model'] == 'unknown'

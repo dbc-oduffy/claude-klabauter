@@ -27,6 +27,11 @@ from coordinator_core.codex_runner.contract import (
     RunResult,
 )
 from coordinator_core.codex_runner.resolve import ApiKeyRefused, CodexUnavailable, preflight_auth, resolve_codex
+from coordinator_core.codex_runner.sandbox_preflight import (
+    SandboxSetupRefused,
+    check_pwsh_launchable,
+    check_workspace_write,
+)
 from coordinator_core.codex_runner.review import _LIMIT_MARKERS, _build_env, _usage
 
 EXECUTE_TIMEOUT_S = 3600
@@ -142,6 +147,23 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
         preflight_auth(requested=req.allow_api_key)
     except ApiKeyRefused as exc:
         return RunResult(run_id=run_id, status=STATUS_FAILED, error=f"refused: {exc}")
+    advisory = None
+    try:
+        child_env = _child_env(req.allow_api_key)
+        check_pwsh_launchable(child_env)
+        try:
+            probe_argv = resolve_codex()
+        except CodexUnavailable:
+            probe_argv = None
+        advisory = check_workspace_write(
+            req.repo_root,
+            repo_root=req.repo_root,
+            codex_home=child_env.get("CODEX_HOME"),
+            codex_argv=probe_argv,
+            env=child_env,
+        )
+    except SandboxSetupRefused as exc:
+        return RunResult(run_id=run_id, status=STATUS_FAILED, error=str(exc))
     try:
         chunk = load_chunk(req.plan, req.chunk)
     except ChunkRefused as exc:
@@ -155,6 +177,9 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / "codex.stderr", "wb") as err_file:
+        if advisory:
+            err_file.write(f"{advisory}{os.linesep}".encode("utf-8"))
+            err_file.flush()
         try:
             proc = subprocess.Popen(
                 argv,

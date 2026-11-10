@@ -234,3 +234,54 @@ def test_request_flag_admits_api_key_login_and_env(env):
     req = RunRequest(mode="execute", repo_root=str(root), plan=str(plan), chunk="C1", allow_api_key=True)
     res = execute.run(req, tmp_path / "run1", lambda _pid: None)
     assert res.status == "ok" and seen.get("OPENAI_API_KEY") == "sk-x"
+
+
+def test_unelevated_unproven_root_runs_with_advisory(env):
+    from coordinator_core.codex_runner import sandbox_preflight as sp
+    root, plan, argv_out, tmp_path, mp = env
+    (tmp_path / "chome" / "config.toml").write_text('[windows]\nsandbox = "unelevated"\n', encoding="utf-8")
+    mp.setattr(sp, "_is_windows", lambda: True)
+    mp.setattr(execute, "check_pwsh_launchable", lambda env: None)
+    seen = {}
+
+    def fake_check(root_, **kw):
+        seen.update(kw)
+        return "advisory: warming"
+
+    mp.setattr(execute, "check_workspace_write", fake_check)
+    _jsonl(tmp_path, mp, [str(root / "src" / "a.py")])
+    res, pids = _run(root, plan, "C1", tmp_path)
+    assert not (res.error or "").startswith("refused:") and pids
+    assert seen["codex_argv"] == [sys.executable, FAKE]
+    assert "advisory: warming" in (tmp_path / "run1" / "codex.stderr").read_text(encoding="utf-8")
+
+
+def test_unelevated_proven_root_still_runs(env):
+    import json as _json
+    from coordinator_core.codex_runner import sandbox_preflight as sp
+    root, plan, argv_out, tmp_path, mp = env
+    (tmp_path / "chome" / "config.toml").write_text('[windows]\nsandbox = "unelevated"\n', encoding="utf-8")
+    mp.setattr(sp, "_is_windows", lambda: True)
+    mp.setattr(execute, "check_pwsh_launchable", lambda env: None)
+    rec = root / sp.PROVEN_ROOTS_RELPATH
+    rec.parent.mkdir(parents=True)
+    rec.write_text(_json.dumps([str(root)]), encoding="utf-8")
+    _jsonl(tmp_path, mp, [str(root / "src" / "a.py")])
+    res, _ = _run(root, plan, "C1", tmp_path)
+    assert not (res.error or "").startswith("refused:")
+
+
+def test_windowsapps_pwsh_refused_before_spawn(env):
+    import subprocess
+    from coordinator_core.codex_runner import sandbox_preflight as sp
+    root, plan, argv_out, tmp_path, mp = env
+    store = tmp_path / "Microsoft" / "WindowsApps"
+    store.mkdir(parents=True)
+    (store / "pwsh.exe").write_text("", encoding="utf-8")
+    mp.setattr(sp, "_is_windows", lambda: True)
+    mp.setattr(execute, "_child_env", lambda requested: {"Path": str(store), "ProgramFiles": str(tmp_path)})
+    mp.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
+    res, pids = _run(root, plan, "C1", tmp_path)
+    assert res.status == execute.STATUS_FAILED
+    assert "WindowsApps" in res.error and str(tmp_path / "PowerShell" / "7") in res.error
+    assert pids == []

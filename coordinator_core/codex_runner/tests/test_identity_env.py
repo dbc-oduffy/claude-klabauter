@@ -30,6 +30,19 @@ def test_provider_builders_keep_allowlists_but_not_parent_identity(monkeypatch,b
     assert not any(key in out for key in ('OPENAI_API_KEY','GEMINI_API_KEY','UNRELATED_SECRET'))
 
 
+def test_workflow_child_env_carries_pathext_and_home_only_when_present(monkeypatch):
+    from coordinator_core.codex_runner import workflow
+    keys = ('PATHEXT', 'USERPROFILE', 'HOME', 'HOMEDRIVE', 'HOMEPATH', 'SYSTEMROOT')
+    for key in keys:
+        monkeypatch.setenv(key, 'v-' + key)
+    out = workflow._environment()
+    assert all(out[key] == 'v-' + key for key in keys)
+    monkeypatch.delenv('PATHEXT')
+    monkeypatch.delenv('HOMEDRIVE')
+    out = workflow._environment()
+    assert 'PATHEXT' not in out and 'HOMEDRIVE' not in out and out['HOME'] == 'v-HOME'
+
+
 def test_execute_is_worker_and_api_key_opt_in_stays_explicit(monkeypatch):
     monkeypatch.setattr(core,'attributable_session_id',lambda cwd=None:SID)
     monkeypatch.setenv('OPENAI_API_KEY','explicit-paid-key')

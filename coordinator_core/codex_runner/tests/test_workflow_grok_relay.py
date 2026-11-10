@@ -126,6 +126,47 @@ def test_grok_child_path_leads_with_the_settings_home_bin(tmp_path, stub, monkey
     assert seen_env[0].split(workflow.os.pathsep)[0] == str(workflow.settings_home() / "bin")
 
 
+@pytest.mark.parametrize("git_on_path", [True, False])
+def test_grok_child_path_gains_git_dir_only_when_engine_path_lacks_git(tmp_path, monkeypatch, git_on_path):
+    program_files = tmp_path / "pf"
+    (program_files / "Git" / "cmd").mkdir(parents=True)
+    (program_files / "Git" / "cmd" / "git.exe").write_text("", encoding="utf-8")
+    monkeypatch.setenv("ProgramFiles", str(program_files))
+    monkeypatch.delenv("ProgramW6432", raising=False)
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.setattr(workflow.shutil, "which", lambda name, path=None: "git" if git_on_path else None)
+    parts = workflow._grok_child_path({"PATH": "base"}).split(workflow.os.pathsep)
+    assert parts[0] == str(workflow.settings_home() / "bin") and parts[1] == "base"
+    assert (str(program_files / "Git" / "cmd") in parts) is (not git_on_path)
+
+
+@pytest.mark.parametrize("git_on_path", [True, False])
+def test_run_agent_hands_the_grok_child_a_path_with_git_only_when_the_engine_lacks_it(
+        tmp_path, stub, monkeypatch, git_on_path):
+    _, box = stub
+    box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
+    program_files = tmp_path / "pf"
+    (program_files / "Git" / "cmd").mkdir(parents=True)
+    (program_files / "Git" / "cmd" / "git.exe").write_text("", encoding="utf-8")
+    monkeypatch.setenv("ProgramFiles", str(program_files))
+    monkeypatch.delenv("ProgramW6432", raising=False)
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.setattr(workflow.shutil, "which",
+                        lambda name, path=None: "git" if git_on_path and name == "git" else None)
+    seen_env = []
+    inner = workflow._run_admitted
+
+    def spy(argv, prompt, *, env, **kw):
+        seen_env.append(env["PATH"])
+        return inner(argv, prompt, env=env, **kw)
+
+    monkeypatch.setattr(workflow, "_run_admitted", spy)
+    _run(tmp_path, "coordinator:git-commit-agent")
+    parts = seen_env[0].split(workflow.os.pathsep)
+    assert parts[0] == str(workflow.settings_home() / "bin")
+    assert (str(program_files / "Git" / "cmd") in parts) is (not git_on_path)
+
+
 def test_other_grok_stages_keep_the_incumbent_allow(tmp_path, stub):
     seen, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))

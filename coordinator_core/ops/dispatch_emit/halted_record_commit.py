@@ -32,7 +32,7 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.session import landing_hold
 from coordinator_core.ops.dispatch_emit import halt_product_gates, process_artifact_policy, review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
-from coordinator_core.ops.dispatch_emit import halted_run
+from coordinator_core.ops.dispatch_emit import halted_run, stage_dirt_snapshot
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM
@@ -459,6 +459,11 @@ def _land(
         p for p in review_written if not review_edits.out_of_worktree(review_edits.norm(p))
     ]
     run_written = _run_written(worktree_root, session_id, run_id)
+    measured_only = [
+        p for p in stage_dirt_snapshot.run_edits(worktree_root, worktree_root / record_dir_rel, [])
+        if p not in run_written and not p.startswith(record_dir_rel + "/") and not halt_product_gates.is_scratch(p)
+    ]
+    run_written = run_written + measured_only
     request, _ = _run_request(worktree_root, params.get("script_path"))
     request_owned = {p: c.id for c in (request.chunks if request is not None else ()) for p in c.paths}
     coded, coded_error = _coded_rows(worktree_root, halted)
@@ -683,6 +688,18 @@ def _land(
     # Trap: taken before _record_kept appends kept.json/returns.json to ``paths``; the record files are
     # never post-checkpoint candidates, so they must not count as landed here.
     landed_now = set(paths) | set(deleted)
+    # Measured run edits carry no touch record, so they take the peer and sibling pass touch-record paths skip.
+    measured_gate = [p for p in measured_only if p in run_written and p not in landed_now and p not in withheld]
+    if measured_gate:
+        from coordinator_core.ops.dispatch_emit import sibling_claims as _sibling_claims
+
+        measured_holds: list = []
+        commit_v2._peer_claim_warnings(worktree_root, measured_gate, measured_holds, own_sid=session_id)
+        withheld.update({p: "peer-held" for p, _sid in measured_holds})
+        measured_claims = _sibling_claims.sibling_run_claims(worktree_root, run_id, measured_gate)
+        if measured_claims:
+            _, measured_sibling = _sibling_claims.filter_own(measured_gate, measured_claims, set(owner) | set(declared))
+            withheld.update({p: _sibling_claims.SIBLING_WITHHELD_REASON for p in measured_sibling if p not in withheld})
     _withhold_run_dirt(withheld, [*run_written, *post_candidates, *uncoded_dirt], snapshot.changed, landed_now)
     eviction = plan_tree_eviction(
         worktree_root, record_dir_rel, run_written, snapshot.changed,

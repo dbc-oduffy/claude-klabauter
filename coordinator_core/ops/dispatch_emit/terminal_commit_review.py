@@ -406,23 +406,96 @@ def _reviewer_applied_fixes(sidecar: Path) -> tuple:
     return done_at, frozenset(f for f, _ in _applied_fix_rows(text))
 
 
-def _applied_fix_rows(text: str) -> list:
-    """``[(file, row)]`` for each verified, unsuspended ledger row that changed text."""
+def _ledger_rows(text: str) -> list:
+    """The dict rows of the sidecar's ``## Findings Ledger`` block; empty when absent or malformed."""
     block = _LEDGER_BLOCK_RE.search(text)
     try:
         rows = json.loads(block.group(1)) if block else []
     except ValueError:
         rows = []
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _applied_fix_rows(text: str) -> list:
+    """``[(file, row)]`` for each verified ledger row whose status is ``applied`` (a row with no
+    status is applied) and that changed text. A ``handed-to-em``, ``open``, rejected or suspended
+    row is not an applied fix."""
     out = []
-    for row in rows if isinstance(rows, list) else []:
-        if not isinstance(row, dict) or row.get("verified") is not True:
+    for row in _ledger_rows(text):
+        if row.get("verified") is not True or (row.get("status") or "applied") != "applied":
             continue
-        if row.get("status") in ("suspended", "rejected") or not (row.get("before") or row.get("after")):
+        if not (row.get("before") or row.get("after")):
             continue
         f = row.get("file")
         if isinstance(f, str) and f:
             out.append((f.replace("\\", "/"), row))
     return out
+
+
+_DISPOSED_STATUSES = frozenset({"suspended", "rejected", "em-rejected", "em_rejected"})
+_VERDICT_RE = re.compile(r"^verdict:\s*['\"]?([A-Za-z_]+)", re.MULTILINE)
+REQUIRES_CHANGES = "REQUIRES_CHANGES"
+
+
+def _row_fix(row: dict) -> tuple:
+    b, a = row.get("before"), row.get("after")
+    return (b if isinstance(b, str) else "", a if isinstance(a, str) else "")
+
+
+def review_applied_in_tree(worktree_root: Path, inline_review: object) -> Optional[tuple]:
+    """``(applied, owed)`` derived from the landed tree, never from the reviewer's own count.
+
+    ``applied`` counts the wave's verified ``applied`` ledger rows whose change is present in the
+    file now (``_carries_applied_fix``). ``owed`` lists ``"<sidecar>:<id>"`` for every other row not
+    suspended or rejected, but only from a sidecar whose frontmatter ``verdict`` is
+    ``REQUIRES_CHANGES``: those findings are outstanding and the verdict stands. ``None`` when the
+    run names no wave sidecar or one has no readable ledger: the reviewer's count is then the only
+    evidence."""
+    listed = inline_review.get("wave_sidecar_paths") if isinstance(inline_review, dict) else None
+    if not isinstance(listed, list) or not listed:
+        return None
+    applied, owed = 0, []
+    for w in listed:
+        if not (isinstance(w, str) and w):
+            continue
+        try:
+            text = (worktree_root / w).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+        rows = _ledger_rows(text)
+        if not rows and _LEDGER_BLOCK_RE.search(text) is None:
+            return None
+        head = text.split("\n---", 2)[0] if text.startswith("---") else ""
+        found = _VERDICT_RE.search(head)
+        standing = bool(found) and found.group(1).upper() == REQUIRES_CHANGES
+        for i, row in enumerate(rows):
+            status = row.get("status") or "applied"
+            if status in _DISPOSED_STATUSES or row.get("out_of_ask") is True:
+                continue
+            f = row.get("file")
+            carried = (
+                status == "applied" and row.get("verified") is True and isinstance(f, str) and bool(f)
+                and (row.get("before") or row.get("after"))
+                and _carries_applied_fix(worktree_root / f.replace("\\", "/"), [_row_fix(row)])
+            )
+            if carried:
+                applied += 1
+            elif standing:
+                owed.append(f"{w}:{row.get('id') or f'row-{i + 1}'}")
+    return applied, owed
+
+
+def review_owed_refusal(worktree_root: Path, inline_review: object) -> Optional[str]:
+    """The refusal reason when a ``REQUIRES_CHANGES`` reviewer's findings are not all in the landed
+    tree, else ``None``. Names the owed findings."""
+    derived = review_applied_in_tree(worktree_root, inline_review)
+    if derived is None or not derived[1]:
+        return None
+    owed = derived[1]
+    return (
+        f"review verdict {REQUIRES_CHANGES} stands with {len(owed)} finding(s) not in the landed tree "
+        f"({derived[0]} applied): {', '.join(owed[:8])}{' ...' if len(owed) > 8 else ''}"
+    )
 
 
 class _WavePaths(frozenset):
@@ -587,11 +660,13 @@ def _write_resolution(worktree_root: Path, sizing_rel: str, sha: str, run_id: st
     return {}
 
 
-def _stage_returns(inline_review: dict) -> Optional[dict]:
+def _stage_returns(inline_review: dict, worktree_root: Optional[Path] = None) -> Optional[dict]:
     """The run record's stage-return fields out of the digest's
     ``inline_review``, or ``None`` when the digest predates them (no ``prep``
     block). Maps the digest's names onto the record keys ``review_stamp.mint``
-    reads."""
+    reads. With ``worktree_root``, ``fixes_applied`` is the count of ledger fixes present in the
+    tree (``review_applied_in_tree``) and ``review_owed`` lists the findings a standing
+    ``REQUIRES_CHANGES`` verdict still owes; the reviewer's own count is the fallback only."""
     if not isinstance(inline_review.get("prep"), dict):
         return None
     out: dict = {k: inline_review.get(k) for k in ("prep", "delivery", "tests", "criterion")}
@@ -604,6 +679,11 @@ def _stage_returns(inline_review: dict) -> Optional[dict]:
     fixes = inline_review.get("fixes")
     if isinstance(fixes, int) and not isinstance(fixes, bool):
         out["fixes_applied"] = fixes
+    derived = review_applied_in_tree(worktree_root, inline_review) if worktree_root is not None else None
+    if derived is not None:
+        out["fixes_applied"] = derived[0]
+        if derived[1]:
+            out["review_owed"] = derived[1]
     integration = inline_review.get("integration")
     if isinstance(integration, dict):
         out["integration_sidecar"] = integration.get("sidecar")

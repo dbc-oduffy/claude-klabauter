@@ -149,11 +149,14 @@ class ChunkCommit:
     report: str = ""
     # The unwidened ``writes:`` subset of ``paths``; None (older marker) means every path gates.
     declared: Optional[tuple] = None
+    # Declared writes the plan marks ``required: false``: their absence never refuses a landing.
+    optional: tuple = field(default_factory=tuple)
 
     def gating_paths(self) -> tuple:
         """The paths whose absence from a DONE row refuses the landing: the declared subset,
-        else all of ``paths``. Inferred test paths in ``paths`` stay advisory."""
-        return self.paths if self.declared is None else self.declared
+        else all of ``paths``, minus ``optional``. Inferred test paths in ``paths`` stay advisory."""
+        base = self.paths if self.declared is None else self.declared
+        return tuple(p for p in base if p not in self.optional) if self.optional else base
 
 
 @dataclass(frozen=True)
@@ -206,6 +209,8 @@ def _chunk_to_dict(chunk: ChunkCommit) -> dict:
     }
     if chunk.declared is not None and chunk.declared != chunk.paths:
         out["declared"] = list(chunk.declared)
+    if chunk.optional:
+        out["optional"] = list(chunk.optional)
     return out
 
 
@@ -234,6 +239,7 @@ def _chunk_from_dict(obj: dict) -> ChunkCommit:
             declared=(
                 tuple(_bare_path(p) for p in obj["declared"]) if isinstance(obj.get("declared"), list) else None
             ),
+            optional=tuple(_bare_path(p) for p in obj["optional"]) if isinstance(obj.get("optional"), list) else (),
         )
     except (KeyError, TypeError) as exc:
         raise MalformedCommitRequestError(

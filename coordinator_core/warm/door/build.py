@@ -103,12 +103,26 @@ def portable_python_bin(python_bin: Path) -> str:
         return str(resolved)
 
 
+class HomeDirectoryUnresolvedError(ValueError):
+    """A `~/` interpreter record cannot expand: the home variable is absent."""
+
+
 def expand_python_bin(recorded: str) -> Path:
     """Inverse of `portable_python_bin`: expands a leading `~/` against the
-    current home directory. Any other value is returned as-is, so a relative
-    path stays relative for the caller to refuse."""
+    current home directory, raising `HomeDirectoryUnresolvedError` naming the
+    home variable when none resolves (never a literal `~` path). Any other
+    value is returned as-is, so a relative path stays relative for the caller
+    to refuse."""
     if recorded.startswith(("~/", "~\\")):
-        return Path.home() / recorded[2:]
+        variable = "USERPROFILE" if os.name == "nt" else "HOME"
+        try:
+            home = Path.home()
+        except (RuntimeError, KeyError):
+            home = Path("~")
+        if not home.is_absolute():
+            raise HomeDirectoryUnresolvedError(
+                f"cannot expand {recorded!r}: home directory unresolved ({variable} unset)")
+        return home / recorded[2:]
     return Path(recorded)
 
 

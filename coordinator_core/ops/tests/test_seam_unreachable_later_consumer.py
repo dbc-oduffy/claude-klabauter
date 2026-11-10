@@ -86,11 +86,37 @@ def test_final_wave_unreachable_still_blocks(tmp_path):
     assert reply["verdict"] == "DRIFT" and reply["per_plan"][a] == "DRIFT"
 
 
-def test_consumer_in_a_different_plan_does_not_exempt(tmp_path):
+@pytest.mark.parametrize("key", ["consumes", "reads_at_head"])
+def test_pending_declarer_in_another_set_plan_exempts(tmp_path, key):
     a = _plan(tmp_path, "a", [_row("A1", API)])
-    b = _plan(tmp_path, "b", [_row("B1", "docs/out.md", f"  consumes: [{API}]\n")])
+    b = _plan(tmp_path, "b", [_row("B1", "docs/out.md", f"  {key}: [{API}]\n")])
     rng = _land(tmp_path, {API: API_SRC})
     reply = op._check_handler(_params([a, b], rng, [(a, "A1")]), tmp_path)
+    assert [(f["plan"], f["blocking"]) for f in _unreachable(reply)] == [(a, False)], reply["findings"]
+    assert reply["per_plan"][a] == "CLEAN"
+
+
+def test_landed_declarer_in_another_set_plan_still_blocks(tmp_path):
+    a = _plan(tmp_path, "a", [_row("A1", API)])
+    b = _plan(tmp_path, "b", [_row("B1", "notes.txt", f"  consumes: [{API}]\n")])
+    rng = _land(tmp_path, {API: API_SRC, "notes.txt": "n\n"})
+    reply = op._check_handler(_params([a, b], rng, [(a, "A1"), (b, "B1")]), tmp_path)
+    assert [(f["plan"], f["blocking"]) for f in _unreachable(reply)] == [(a, True)], reply["findings"]
+
+
+def test_closed_declarer_in_another_set_plan_still_blocks(tmp_path):
+    a = _plan(tmp_path, "a", [_row("A1", API)])
+    b = _plan(tmp_path, "b", [_row("B1", "docs/out.md", f"  consumes: [{API}]\n  disposition: wont_do\n")])
+    rng = _land(tmp_path, {API: API_SRC})
+    reply = op._check_handler(_params([a, b], rng, [(a, "A1")]), tmp_path)
+    assert [(f["plan"], f["blocking"]) for f in _unreachable(reply)] == [(a, True)], reply["findings"]
+
+
+def test_declarer_in_a_plan_outside_the_set_does_not_exempt(tmp_path):
+    a = _plan(tmp_path, "a", [_row("A1", API)])
+    _plan(tmp_path, "b", [_row("B1", "docs/out.md", f"  consumes: [{API}]\n")])
+    rng = _land(tmp_path, {API: API_SRC})
+    reply = op._check_handler(_params([a], rng, [(a, "A1")]), tmp_path)
     assert [(f["plan"], f["blocking"]) for f in _unreachable(reply)] == [(a, True)], reply["findings"]
     assert reply["per_plan"][a] == "DRIFT"
 

@@ -633,11 +633,11 @@ def _git_bytes(repo: Path, args: list[str], stdin: bytes | None = None) -> bytes
     return r.stdout_bytes
 
 
-def _read_commit_py_blobs(repo: Path, commit: str, roots: tuple[str, ...]) -> tuple[dict[str, str], set[str]]:
-    """`(py_sources, dirs)` for `commit`: every `.py` blob under `roots` keyed by
-    repo-relative posix path, and every directory any tracked entry sits in.
-    Two git spawns total (`ls-tree`, one batched `cat-file`); the worktree is
-    never read."""
+def _list_commit_py_entries(
+    repo: Path, commit: str, roots: tuple[str, ...]
+) -> tuple[list[tuple[str, str]], set[str]]:
+    """`([(path, blob_sha)], dirs)`: every `.py` blob under `roots` in `commit`
+    and every directory any tracked entry sits in. One `ls-tree` spawn."""
     listing = _git_bytes(repo, ["ls-tree", "-r", "-z", commit, "--", *roots])
     dirs: set[str] = set()
     wanted: list[tuple[str, str]] = []
@@ -652,6 +652,15 @@ def _read_commit_py_blobs(repo: Path, commit: str, roots: tuple[str, ...]) -> tu
             dirs.add("/".join(parts[:i]))
         if kind == "blob" and mode != "120000" and path.endswith(".py"):
             wanted.append((path, sha))
+    return wanted, dirs
+
+
+def _read_commit_py_blobs(repo: Path, commit: str, roots: tuple[str, ...]) -> tuple[dict[str, str], set[str]]:
+    """`(py_sources, dirs)` for `commit`: every `.py` blob under `roots` keyed by
+    repo-relative posix path, and every directory any tracked entry sits in.
+    Two git spawns total (`ls-tree`, one batched `cat-file`); the worktree is
+    never read."""
+    wanted, dirs = _list_commit_py_entries(repo, commit, roots)
     sources: dict[str, str] = {}
     # Trap: one cat-file over every blob (~2400 at 2026-11) measured 1.6-1.8s alone and timed out
     # at 19s under publish load against run_git's 2s local budget, refusing the engine row.
@@ -755,6 +764,57 @@ def find_commit_from_import_name_violations(
     `__init__.py`) and a module defining `__getattr__` or star-importing never
     flag. Raises `CommitReadError` on a failed git read: callers fail closed."""
     sources, dirs = _read_commit_py_blobs(repo, commit, roots)
+    return _from_import_violations(sources, dirs, sorted(sources))
+
+
+class _OverlayBlobs:
+    """Read-only mapping over a commit's `.py` entries with `overlay` bytes laid
+    on top (`None` = deleted); a blob is read through `reader(sha)` only when
+    the resolver asks for it."""
+
+    def __init__(self, entries, overlay, reader):
+        self._entries = dict(entries)
+        self._overlay = overlay
+        self._reader = reader
+
+    def __contains__(self, path):
+        if path in self._overlay:
+            return self._overlay[path] is not None
+        return path in self._entries
+
+    def __getitem__(self, path):
+        if path in self._overlay and self._overlay[path] is not None:
+            return self._overlay[path]
+        if path not in self._overlay and path in self._entries:
+            raw = self._reader(self._entries[path])
+            return (raw or b"").decode("utf-8", "replace")
+        raise KeyError(path)
+
+
+def find_would_be_tree_from_import_violations(
+    repo: Path, base_commit: str, overlay: dict, reader, roots: tuple[str, ...] = COMMIT_NAME_ROOTS
+) -> tuple[int, list[tuple[str, str]]]:
+    """`find_commit_from_import_name_violations`'s resolution over the tree
+    `base_commit` would become with `overlay` applied (`{path: source | None}`,
+    `None` = deleted), judged for the overlay's non-test `.py` importers only.
+    `reader(blob_sha) -> bytes | None` reads base blobs; only the importers'
+    targets are read. One git spawn. Raises `CommitReadError` on a failed listing."""
+    entries, dirs = _list_commit_py_entries(repo, base_commit, roots)
+    for path, source in overlay.items():
+        if source is not None:
+            parts = path.split("/")
+            dirs.update("/".join(parts[:i]) for i in range(1, len(parts)))
+    sources = _OverlayBlobs(entries, overlay, reader)
+    importers = sorted(
+        p for p, s in overlay.items()
+        if s is not None and p.endswith(".py") and any(p.startswith(r + "/") for r in roots)
+    )
+    return _from_import_violations(sources, dirs, importers)
+
+
+def _from_import_violations(sources, dirs: set[str], importers: list[str]) -> tuple[int, list[tuple[str, str]]]:
+    """Shared resolution: `importers` checked against the `sources` mapping
+    (`in` / `[]` by repo-relative path) and `dirs`."""
     # A module may be both an importer and another importer's target. The
     # namespace cache alone used to parse that same committed source again.
     # All readers below are read-only, so share its AST for this one immutable
@@ -778,8 +838,8 @@ def find_commit_from_import_name_violations(
 
     violations: list[tuple[str, str]] = []
     examined = 0
-    for importer in sorted(sources):
-        if _is_test_path(importer):
+    for importer in importers:
+        if _is_test_path(importer) or importer not in sources:
             continue
         source = sources[importer]
         if not _COMMIT_FROM_IMPORT_RE.search(source):

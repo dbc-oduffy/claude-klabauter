@@ -2215,6 +2215,21 @@ ROOTS_READ_SCHEMA = {
 }
 
 
+def unbound_clause_text(properties: dict) -> None:
+    """Make every ``clauses[].clause`` / ``withheld_clauses[].clause`` a string of any length,
+    in place: the run feeds the agent the exit clause verbatim, so the schema must accept the
+    echo. Shared by ``_widen_judge_schema`` and ``dispatch_emit.emit._falsifier_schema_literal``."""
+    properties.setdefault(
+        "clauses",
+        {"type": "array", "items": {"type": "object", "properties": {"clause": {"type": "string"}}}},
+    )
+    for key in ("clauses", WITHHELD_CLAUSES_KEY):
+        items = properties.get(key, {}).get("items")
+        clause = items.get("properties", {}).get("clause") if isinstance(items, dict) else None
+        if isinstance(clause, dict):
+            clause.pop("maxLength", None)
+
+
 def _widen_judge_schema(schema_literal: str) -> str:
     """The judge's roster schema plus the two fields the terminal verdict is
     computed from, matching ``dispatch_emit.emit._falsifier_schema_literal`` so
@@ -2291,13 +2306,14 @@ def _widen_judge_schema(schema_literal: str) -> str:
                 "additionalProperties": False,
                 "required": ["clause", "rows"],
                 "properties": {
-                    "clause": {"type": "string", "maxLength": 200},
+                    "clause": {"type": "string"},
                     "rows": {"type": "array", "items": {"type": "string", "maxLength": 100}},
                     "register_rows": {"type": "array", "items": {"type": "string", "maxLength": 100}},
                 },
             },
         },
     )
+    unbound_clause_text(properties)
     schema["required"] = sorted(
         {*schema.get("required", []), "differs_from_baseline", "baseline_output"}
     )

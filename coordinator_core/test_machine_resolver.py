@@ -164,6 +164,43 @@ def test_all_resolution_rungs_absent_returns_unknown(monkeypatch, tmp_path):
     assert mr.compute_machine_live() == "unknown"
 
 
+# --- require_key: typed refusal on a missing settings-home key ---------------
+
+
+def test_require_key_missing_raises_naming_key(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "machine-local"
+    reg_dir.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    with pytest.raises(mr.SettingsKeyMissing) as exc:
+        mr.require_key("paths.nope")
+    assert exc.value.key == "paths.nope"
+    assert exc.value.code == "settings-key-missing"
+    assert "paths.nope" in str(exc.value)
+    assert "machine-local set paths.nope" in str(exc.value)
+
+
+def test_require_key_empty_value_is_a_miss(monkeypatch, tmp_path):
+    reg_dir = _write_registry(tmp_path, "registry.toml", "paths.empty", "")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    with pytest.raises(mr.SettingsKeyMissing):
+        mr.require_key("paths.empty")
+
+
+def test_require_key_hit_matches_registry_get(monkeypatch, tmp_path):
+    reg_dir = _write_registry(tmp_path, "registry.toml", "paths.data", "somewhere")
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    assert mr.require_key("paths.data") == "somewhere"
+    assert mr.require_key("paths.data") == mr.registry_get("paths.data")
+
+
+def test_require_key_env_override_hit(monkeypatch, tmp_path):
+    reg_dir = tmp_path / "machine-local"
+    reg_dir.mkdir()
+    monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
+    monkeypatch.setenv("MACHINE_LOCAL_PATHS_DATA", "fromenv")
+    assert mr.require_key("paths.data") == "fromenv"
+
+
 # --- Contributor: env > registry > live(git email) > "unknown" ---------------
 
 

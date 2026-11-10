@@ -1237,9 +1237,15 @@ def _account_done_item(
 ) -> None:
     """Account for an item whose every open chunk is DONE-unlanded: discharged when all are
     `no-op`, withheld (its dependents wait) when any is `land`."""
-    lands = [e["id"] for e in entries if e["class"] == _DONE_LAND]
-    if lands:
-        reason = f"done, unlanded: land {', '.join(lands)} first"
+    lands = [e["id"] for e in entries if e["class"] == _DONE_LAND and not e.get("hand_landed")]
+    reviews = [e["id"] for e in entries if e["class"] == _DONE_LAND and e.get("hand_landed")]
+    if lands or reviews:
+        reason = f"done, unlanded: land {', '.join(lands)} first" if lands else ""
+        if reviews:
+            ids = ",".join(reviews)
+            reason = (
+                f"{reason}; " if reason else ""
+            ) + f"done, hand-landed: review with --review-only --rows {ids} --run-base <sha>"
         withheld_items[row_id] = reason
         if withheld_rows_out is not None:
             withheld_rows_out[row_id] = _open_rows(inventory_path, spec_path, plan_cache)

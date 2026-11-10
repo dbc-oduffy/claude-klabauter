@@ -94,7 +94,7 @@ def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch):
     bridge, deliveries = env
     monkeypatch.setattr(bridge, "IS_WIN", False)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
-    assert "ControlMaster=auto" in argvs[-1] and argvs[-1][-2:] == ["lan", "send-batch 9"]
+    assert "ControlMaster=auto" in argvs[-1] and argvs[-1][-2] == "lan" and argvs[-1][-1].startswith("send-to 9 ")
     monkeypatch.setattr(bridge, "IS_WIN", True)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
     assert not any("Control" in a for a in argvs[-1])

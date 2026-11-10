@@ -328,6 +328,7 @@ _DISPOSITIONS: Dict[str, Tuple[str, str]] = {
     'coordinator_core/codex_runner/__main__.py': ('outside-repo', 'worker result.json (tmp + os.replace) under <settings-home>/codex-runs/<run_id>, never the repo: _write_result'),
     'coordinator_core/codex_runner/agy.py': ('outside-repo', 'agy conversation events and stderr logs under <settings-home>/codex-runs/<run_id>, never the repo: AgyConversation.open'),
     'coordinator_core/codex_runner/execute.py': ('outside-repo', 'codex stderr and events.jsonl under <settings-home>/codex-runs/<run_id>, never the repo: run'),
+    'coordinator_core/codex_runner/sandbox_preflight.py': ('ignored-target', 'codex-sandbox-proven-roots.json and codex-sandbox-warmup.json via tmp + os.replace under the gitignored repo .coordinator-local/: _atomic_write_json'),
     'coordinator_core/codex_runner/review.py': ('outside-repo', 'codex events and stderr logs under <settings-home>/codex-runs/<run_id>, never the repo: run'),
     'coordinator_core/codex_runner/grok.py': ('outside-repo', 'grok events and stderr logs under <settings-home>/codex-runs/<run_id>, never the repo: review_run, _read_stream'),
     'coordinator_core/codex_runner/roster.py': ('outside-repo', 'roster record json via tmp + os.replace under <settings-home>/codex-runs, never the repo: write_record'),

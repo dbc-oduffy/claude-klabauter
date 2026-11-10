@@ -1492,7 +1492,19 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             _release_own_index_lock(repo_root)
     if isinstance(reply, dict) and reply.get("committed") and reply.get("sha"):
         _fire_index_refresh(repo_root)
-    return reply
+    return _outcome_keys_last(reply)
+
+
+_OUTCOME_KEYS_LAST = ("nothing_to_commit", "committed", "sha")
+
+
+def _outcome_keys_last(reply):
+    """``reply`` with the outcome keys moved to the end, values unchanged, so a ``| tail`` of the
+    printed JSON still shows the result after a long ``undeclared_dirty`` list."""
+    if not isinstance(reply, dict):
+        return reply
+    tail = {k: reply[k] for k in _OUTCOME_KEYS_LAST if k in reply}
+    return {**{k: v for k, v in reply.items() if k not in tail}, **tail}
 
 
 def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
@@ -2023,6 +2035,7 @@ def _terminal_commit_inner(
 
     script_path_raw = params["script_path"]
     incomplete_chunks = set(params["incomplete_chunks"]) - set(params.get("landed_chunks") or [])
+    caller_listed_incomplete = frozenset(incomplete_chunks)
     inline_review = params.get("inline_review")
 
     from coordinator_core.git.commit_trailers import _UUID_RE
@@ -2353,7 +2366,7 @@ def _terminal_commit_inner(
     )
     record_abs: Optional[Path] = None
     record: Optional[dict] = None
-    stage_returns = _stage_returns(inline_review) if inline_review is not None else None
+    stage_returns = _stage_returns(inline_review, worktree_root) if inline_review is not None else None
     if (
         inline_review is not None
         and inline_review.get("plan_id")
@@ -2885,7 +2898,9 @@ def _terminal_commit_inner(
             )
         tracked_at_head, absent_from_head = partition
         missing_new = _delivered_rows_missing_writes(
-            worktree_root, done_chunks + partial_chunks, set(absent_from_head), report_cache,
+            worktree_root,
+            [c for c in done_chunks + partial_chunks if c.id not in caller_listed_incomplete],
+            set(absent_from_head), report_cache,
         )
         if missing_new:
             shown = "; ".join(f"{cid}: {', '.join(paths)}" for cid, paths in sorted(missing_new.items()))

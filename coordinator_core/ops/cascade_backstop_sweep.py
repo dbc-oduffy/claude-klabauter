@@ -101,6 +101,7 @@ NEGATIVE-SPEC:
 
 from __future__ import annotations
 
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Optional
 
@@ -151,6 +152,56 @@ def _terminal_plan_deliverable_ids(worktree_root: Path) -> dict[str, list[str]]:
             continue
         rel = plan_path.relative_to(worktree_root).as_posix()
         out.setdefault(did.strip(), []).append(rel)
+    return out
+
+
+def _as_date(value: Any) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value.strip()[:10])
+        except ValueError:
+            return None
+    return None
+
+
+def _landed_parked_plans(worktree_root: Path, days: int, today: Optional[date] = None) -> list[dict]:
+    """Read-only: plans (recursive under docs/plans) at `status: landed` older
+    than `days`. Age runs from `landed_at` when present, else `created`; a plan
+    with neither parseable date is skipped. Entries:
+    {"plan": relpath, "deliverable_id": str|None, "age_days": int,
+    "age_basis": "landed_at"|"created"}, sorted by plan path."""
+    out: list[dict] = []
+    plans_dir = worktree_root / "docs" / "plans"
+    if not plans_dir.is_dir():
+        return out
+    now = today or date.today()
+    for plan_path in sorted(plans_dir.rglob("*.md")):
+        fm = _read_fm(plan_path)
+        if fm.get("status") != "landed":
+            continue
+        basis = "landed_at"
+        start = _as_date(fm.get("landed_at"))
+        if start is None:
+            basis = "created"
+            start = _as_date(fm.get("created"))
+        if start is None:
+            continue
+        age = (now - start).days
+        if age <= days:
+            continue
+        did = fm.get("deliverable_id")
+        out.append(
+            {
+                "plan": plan_path.relative_to(worktree_root).as_posix(),
+                "deliverable_id": did.strip() if isinstance(did, str) and did.strip() else None,
+                "age_days": age,
+                "age_basis": basis,
+            }
+        )
     return out
 
 

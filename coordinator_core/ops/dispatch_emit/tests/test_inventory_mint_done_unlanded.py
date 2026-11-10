@@ -139,6 +139,56 @@ def test_land_item_withholds_its_dependents(tmp_path):
     assert withheld["D"] == "depends on withheld item B"
 
 
+def _hand_land_b(tmp_path: Path, live_bytes: bytes) -> dict:
+    """B's DONE report predates a commit of src/b.py; the live file then differs from HEAD."""
+    import os
+    import time
+
+    inv = _fixture(tmp_path)
+    inv.write_text(
+        inv.read_text(encoding="utf-8") + "| D | — | s d | `src/d.py` | B | v | S | in_progress |\n",
+        encoding="utf-8",
+    )
+    _report(tmp_path, "B")
+    rep = tmp_path / _DISPATCH_REPORT_DIR / f"{BASE}-t1-p1.spine" / "B.md"
+    past = time.time() - 100
+    os.utime(rep, (past, past))
+    _git(tmp_path, "add", "src/b.py")
+    _git(tmp_path, "commit", "-q", "-m", "hand-land B")
+    (tmp_path / "src" / "b.py").write_bytes(live_bytes)
+    out: dict = {}
+    acct: dict = {}
+    withheld: dict = {}
+    rows = _mint(inv, done_unlanded_out=out, accounting_out=acct, withheld_out=withheld)
+    return {"out": out, "acct": acct, "withheld": withheld, "ids": {r["id"] for r in rows}}
+
+
+def test_crlf_only_diff_after_hand_land_never_asks_for_land_run(tmp_path):
+    entry = _hand_land_b(tmp_path, b"dirty\r\n")["out"]["B"]
+    assert entry["class"] == "no-op" or (entry["hand_landed"] and "land_run" not in entry["route"])
+
+
+def test_hand_landed_done_row_routes_review_only_not_land_run(tmp_path):
+    got = _hand_land_b(tmp_path, b"a later run's edit\n")
+    entry = got["out"]["B"]
+    assert entry["class"] == "land" and entry["hand_landed"] is True
+    assert "--review-only --rows B --run-base <sha>" in entry["route"]
+    assert "land_run" not in entry["route"]
+    assert "--review-only --rows B --run-base <sha>" in got["acct"]["B"]
+    assert "land_run" not in got["acct"]["B"] and "land B first" not in got["acct"]["B"]
+    assert "D" not in got["ids"]
+
+
+def test_never_committed_done_row_still_routes_to_land_run(tmp_path):
+    inv = _fixture(tmp_path)
+    _report(tmp_path, "B")
+    out: dict = {}
+    acct: dict = {}
+    _mint(inv, done_unlanded_out=out, accounting_out=acct)
+    assert out["B"]["hand_landed"] is False and "dispatch.land_run" in out["B"]["route"]
+    assert acct["B"] == "done, unlanded: land B first"
+
+
 def test_checkpoint_landed_chunk_is_not_classified(tmp_path):
     inv = _fixture(tmp_path)
     _git(tmp_path, "add", "-A")

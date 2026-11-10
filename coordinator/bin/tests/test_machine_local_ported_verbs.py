@@ -75,7 +75,7 @@ def _local(sandbox: str) -> str:
     return Path(sandbox, "registry.local.toml").read_bytes().decode()
 
 
-def test_subcommand_set_is_the_fifteen_doe_names_plus_retire_publisher(monkeypatch):
+def test_subcommand_set_is_the_fifteen_doe_names_plus_retire_publisher_and_require(monkeypatch):
     seen: dict = {}
     real = argparse.ArgumentParser.parse_args
 
@@ -94,7 +94,31 @@ def test_subcommand_set_is_the_fifteen_doe_names_plus_retire_publisher(monkeypat
         "check", "path", "dir", "set", "unset", "array-append", "array-set",
         "migrate-publish-mirrors",
     }
-    assert seen["names"] == doe_names | {"retire-publisher"}
+    assert seen["names"] == doe_names | {"retire-publisher", "require"}
+
+
+def test_require_miss_is_typed_exit_3_stdout_empty(tmp_path):
+    sandbox = str(tmp_path)
+    _write_file(os.path.join(sandbox, "registry.toml"), "schema = 1\n")
+    r = _run_ml(sandbox, ["require", "paths.nope"])
+    assert r.returncode == 3
+    assert r.stdout == ""
+    assert "settings-key-missing: paths.nope" in r.stderr
+    assert _run_ml(sandbox, ["get", "paths.nope"]).returncode == 1
+
+
+def test_require_hit_prints_value_exit_0(tmp_path):
+    sandbox = str(tmp_path)
+    _write_file(os.path.join(sandbox, "registry.toml"), "schema = 1\n")
+    _write_file(os.path.join(sandbox, "registry.local.toml"),
+                'schema = 1\n[paths]\ncache_root = "cache-here"\n')
+    r = _run_ml(sandbox, ["require", "paths.cache_root"])
+    assert (r.returncode, r.stdout.strip()) == (0, "cache-here")
+
+
+def test_require_rejects_default_flag(tmp_path):
+    r = _run_ml(str(tmp_path), ["require", "paths.nope", "--default", "x"])
+    assert r.returncode == 2 and r.stdout == ""
 
 
 # ---------------------------------------------------------------- check

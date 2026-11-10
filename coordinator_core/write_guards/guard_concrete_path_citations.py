@@ -421,7 +421,42 @@ def _claim_warn_once(repo_root: "Path | None", payload: dict) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _fix_hint(target: str, *, committable: bool) -> str:
+#: Ordered (class, settings-home key, word set); first class whose words meet
+#: the assigned identifier or the literal's segments wins, else the default.
+_ROOT_CLASS_KEYS: Tuple[Tuple[str, str, frozenset], ...] = (
+    ("cache", "paths.cache_root", frozenset({"cache", "caches"})),
+    ("scratch", "paths.scratch_root", frozenset({"scratch", "tmp", "temp"})),
+    (
+        "run_output",
+        "paths.run_output_root",
+        frozenset({"out", "output", "outputs", "runs", "results", "artifacts"}),
+    ),
+)
+_DEFAULT_ROOT_KEY = "paths.data_root"
+_WORD_SPLIT_RE = re.compile(r"[^A-Za-z0-9]+")
+
+
+def _key_for(line: str, matched: str) -> str:
+    """Settings-home key for a literal's root class; pure string work."""
+    ident = line.split("=", 1)[0] if "=" in line else ""
+    words = {
+        w.lower()
+        for w in _WORD_SPLIT_RE.split(ident) + _WORD_SPLIT_RE.split(matched)
+        if w
+    }
+    for _cls, key, vocab in _ROOT_CLASS_KEYS:
+        if words & vocab:
+            return key
+    return _DEFAULT_ROOT_KEY
+
+
+def _key_for_finding(f: Finding, after: str) -> str:
+    lines = after.splitlines()
+    line = lines[f.line - 1] if 1 <= f.line <= len(lines) else ""
+    return _key_for(line, f.matched)
+
+
+def _fix_hint(target: str, *, committable: bool, key: str = _DEFAULT_ROOT_KEY) -> str:
     """The offer, with the just-written file's path already spliced into the
     fixer invocation.
 
@@ -446,10 +481,10 @@ def _fix_hint(target: str, *, committable: bool) -> str:
         else "wrong on other hosts if this file is ever kept or copied."
     )
     return (
-        "Resolve through the settings-home key: `machine-local get <key>` "
+        f"Resolve through the settings-home key: `machine-local get {key}` "
         "(`docs/reference/settings-home-key-resolution.md`), run "
         f"`{_FIX_COMMAND} --apply {target}`, or mark the line "
-        "`abs-path-ok: key=<k>` / `abs-path-ok: carve-out=<id>` "
+        f"`abs-path-ok: key={key}` / `abs-path-ok: carve-out=<id>` "
         f"(listed in `.abs-path-carve-outs.toml`). {consequence[0].upper()}{consequence[1:]}"
     )
 
@@ -471,17 +506,23 @@ def _first_citation(violations: List[Finding]) -> str:
 #: 80+ bytes and only exempt from `MESSAGE_PROSE_CAP_BYTES` inside a
 #: cue-window backtick span, so echoing it twice spent a third of the cap
 #: restating what the runnable command already says.
-def _loud_reason(target: str, violations: List[Finding]) -> str:
+def _hint_key(violations: List[Finding], after: str) -> str:
+    return _key_for_finding(violations[0], after) if violations else _DEFAULT_ROOT_KEY
+
+
+def _loud_reason(target: str, violations: List[Finding], after: str = "") -> str:
     return (
         f"[concrete-path-citation guard] WARN: new hardcoded path"
-        f"{_first_citation(violations)} -- {_fix_hint(target, committable=True)}"
+        f"{_first_citation(violations)} -- "
+        f"{_fix_hint(target, committable=True, key=_hint_key(violations, after))}"
     )
 
 
-def _quiet_reason(target: str, violations: List[Finding]) -> str:
+def _quiet_reason(target: str, violations: List[Finding], after: str = "") -> str:
     return (
         f"[concrete-path-citation guard] WARN (scratch): new hardcoded path"
-        f"{_first_citation(violations)} -- {_fix_hint(target, committable=False)}"
+        f"{_first_citation(violations)} -- "
+        f"{_fix_hint(target, committable=False, key=_hint_key(violations, after))}"
     )
 
 
@@ -572,7 +613,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             return {
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
-                    "additionalContext": _loud_reason(target, new),
+                    "additionalContext": _loud_reason(target, new, after),
                 }
             }
 
@@ -582,7 +623,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return {
             "hookSpecificOutput": {
                 "hookEventName": "PreToolUse",
-                "additionalContext": _quiet_reason(target, new),
+                "additionalContext": _quiet_reason(target, new, after),
             }
         }
     except Exception:

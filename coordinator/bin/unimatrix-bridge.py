@@ -10,7 +10,7 @@ Usage:
                       [--remote <lan-ssh-alias>] [--tunnel-remote <ssh-alias>] [--key <path>]
 
 <tcp-port> "relay" sends each message through the unimatrix key's forced-command
-relay (`send-batch <remote-pid>`, `send` against an older relay) over `ssh <lan-ssh-alias>`; --remote is required then.
+relay (`send-to <remote-pid> <digest>`; an older relay fails the delivery) over `ssh <lan-ssh-alias>`; --remote is required then.
 --tunnel-remote (or $UNIMATRIX_TUNNEL_REMOTE) is used only while --remote does not answer.
 --key defaults to <settings home>/.secrets/ssh/unimatrix-zero.
 
@@ -320,13 +320,15 @@ def relay_send(conn):
     for line in lines:
         log.write(f"relay >> {line!r}\n")
     started = time.monotonic()
-    r = _ssh_relay(f"send-batch {far_pid}", b"".join(l + b"\n" for l in lines))
-    if r.returncode and r.stderr.lstrip().startswith(b"usage:"):
-        log.write("relay: far relay lacks send-batch; sending per line\n")
-        _send_per_line(lines, far_pid, target)
-        return
+    far_digest = hashlib.sha256(mine[FAR_SOCKET_FIELD].encode("utf-8")).hexdigest()[:16]
+    r = _ssh_relay(f"send-to {far_pid} {far_digest}", b"".join(l + b"\n" for l in lines))
     ms = round((time.monotonic() - started) * 1000)
     ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    if r.returncode and r.stderr.lstrip().startswith(b"usage:"):
+        log.write("relay: far relay lacks send-to; upgrade it\n")
+        for line in lines:
+            _record_outcome(line, target, ts, ms, "far relay lacks send-to; upgrade it")
+        return
     replies = _batch_replies(r.stdout)
     for i, line in enumerate(lines):
         error = None
@@ -371,20 +373,6 @@ def _record_outcome(line, target, ts, ms, error):
         notify_sender(line, target, error)
     else:
         record_delivery({"ts": ts, "target": target, "ok": True, "ms": ms})
-
-
-def _send_per_line(lines, far_pid, target):
-    """Old-relay fallback: one ssh `send` per line, for far relays that predate send-batch."""
-    for line in lines:
-        started = time.monotonic()
-        r = _ssh_relay(f"send {far_pid}", line + b"\n")
-        ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
-        ms = round((time.monotonic() - started) * 1000)
-        error = None
-        if r.returncode:
-            log.write(f"relay send failed {r.returncode}: {r.stderr!r}\n")
-            error = f"ssh exit {r.returncode}: " + r.stderr.decode(errors="replace").strip()[-300:]
-        _record_outcome(line, target, ts, ms, error)
 
 
 def pump_local_to_sock(conn, s):
