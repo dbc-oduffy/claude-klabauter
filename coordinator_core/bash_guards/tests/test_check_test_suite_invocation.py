@@ -27,6 +27,7 @@ import pytest
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import core as session_core
 from coordinator_core.session import grant as grant_module
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.guard_messages.testing import envelope_of
 
@@ -1541,7 +1542,7 @@ def _make_git_repo(tmp_path):
 def _write_live_session(repo, sid):
     """A session whose meta.json makes it read LIVE (fresh last_activity,
     Layer-2 recency path -- same shape as test_grant.py's ``_live_session``)."""
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = hub_for_common(Path(repo) / ".git") / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(
         json.dumps({"pid": "999", "last_activity": session_core.now_iso()}),
@@ -2817,7 +2818,7 @@ def test_touched_set_read_never_falls_back_to_the_session_level_file(tmp_path, m
     agents; borrowing it to phrase "the tests you touched" would launder
     exactly the relevance R9 asserts. An unresolvable agent id reads as an
     empty set, never as the session's."""
-    sessions = tmp_path / ".git" / "coordinator-sessions"
+    sessions = hub_for_common(tmp_path / ".git")
     (sessions / "sess1").mkdir(parents=True)
     (sessions / "sess1" / "touched.txt").write_text(
         "tests/test_someone_elses.py\n", encoding="utf-8"

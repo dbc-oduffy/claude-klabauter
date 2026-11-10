@@ -14,7 +14,7 @@ def repo(tmp_path):
 
 
 def _claim(repo, class_="handoff", name="b.md"):
-    d = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / name
+    d = repo / ".coordinator-local" / "coordinator-sessions" / f"{class_}-claims" / name
     d.mkdir(parents=True)
     return d
 

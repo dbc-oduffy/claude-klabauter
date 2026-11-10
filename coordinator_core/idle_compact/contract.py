@@ -77,10 +77,10 @@ def _hub_marker(session_id: str, name: str, cwd: Optional[str]) -> Optional[Path
 
 
 def optout_marker_path(session_id: str, cwd: Optional[str] = None) -> Optional[Path]:
-    """``<git-common-dir>/coordinator-sessions/<sid>/idle-compact-optout``; None outside a git repo."""
+    """``<session hub>/<sid>/idle-compact-optout``; None outside a git repo."""
     return _hub_marker(session_id, OPTOUT_MARKER_NAME, cwd)
 
 
 def compact_hold_marker_path(session_id: str, cwd: Optional[str] = None) -> Optional[Path]:
-    """``<git-common-dir>/coordinator-sessions/<sid>/compact-hold``; None outside a git repo."""
+    """``<session hub>/<sid>/compact-hold``; None outside a git repo."""
     return _hub_marker(session_id, COMPACT_HOLD_MARKER_NAME, cwd)

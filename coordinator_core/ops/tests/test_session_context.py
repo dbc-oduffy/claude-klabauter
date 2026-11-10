@@ -20,6 +20,8 @@ Extraction source: coordinator_core/ops/review_trail_write.py:_resolve_session_i
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import os
 from pathlib import Path
 
@@ -50,7 +52,7 @@ class TestTier1Env:
         assert result == "sess-tier1-wins"
 
     def test_tier1_wins_over_sentinel(self, monkeypatch, tmp_path):
-        sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
+        sentinel = hub_for_common(tmp_path / ".git") / ".current-session-id"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sess-from-sentinel\n", encoding="utf-8")
 
@@ -73,7 +75,7 @@ class TestTier2Env:
 
     def test_tier2_empty_string_ignores_sentinel(self, monkeypatch, tmp_path):
         """CLAUDE_CODE_SESSION_ID set to empty string → sentinel is ignored → None."""
-        sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
+        sentinel = hub_for_common(tmp_path / ".git") / ".current-session-id"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sess-from-sentinel", encoding="utf-8")
 
@@ -90,7 +92,7 @@ class TestSentinelRemoved:
         monkeypatch.delenv(_ENV1, raising=False)
         monkeypatch.delenv(_ENV2, raising=False)
 
-        sentinel = tmp_path / ".git" / "coordinator-sessions" / ".current-session-id"
+        sentinel = hub_for_common(tmp_path / ".git") / ".current-session-id"
         sentinel.parent.mkdir(parents=True)
         sentinel.write_text("sess-from-sentinel-abc", encoding="utf-8")
 
@@ -101,7 +103,7 @@ class TestSentinelRemoved:
         monkeypatch.delenv(_ENV1, raising=False)
         monkeypatch.delenv(_ENV2, raising=False)
 
-        (tmp_path / ".git" / "coordinator-sessions").mkdir(parents=True)
+        hub_for_common(tmp_path / ".git").mkdir(parents=True)
 
         result = resolve_current_session_id(worktree_root=tmp_path)
         assert result is None

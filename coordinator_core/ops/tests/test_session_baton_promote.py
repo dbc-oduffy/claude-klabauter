@@ -8,6 +8,8 @@ Spec backlink: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C3.
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import subprocess
 from pathlib import Path
 
@@ -36,7 +38,7 @@ def _ensure_session_dir(repo: Path, sid: str) -> Path:
     one-successor.md § C6) no longer mkdir's it itself, so a fixture calling
     the promote op (or `store.merge_baton` directly) without going through
     session init must bring it into being."""
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     return sdir
 

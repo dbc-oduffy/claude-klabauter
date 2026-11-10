@@ -16,6 +16,7 @@ pytestmark = pytest.mark.complete
 from coordinator_core import machine_profile, warp_fire
 from coordinator_core.session import engine_route_state as ers
 from coordinator_core.session import xs_lane_budget
+from coordinator_core.session_hub_path import session_dir_for
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 HOOK_RUN_PATH = os.path.join(REPO_ROOT, "coordinator", "bin", "hook-run.py")
@@ -62,7 +63,7 @@ class Door:
         self.repo = tmp_path / "repo"
         (self.repo / ".git").mkdir(parents=True)
         if role_marker:
-            marker_dir = self.repo / ".git" / "coordinator-sessions" / SID
+            marker_dir = session_dir_for(self.repo / ".git", SID)
             marker_dir.mkdir(parents=True)
             (marker_dir / "em-role-asserted").write_text("1", encoding="utf-8")
         self.home = tmp_path / "sh"

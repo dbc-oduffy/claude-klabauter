@@ -74,7 +74,7 @@ Calibration (D7 — session-scoped; D7b made it durable 2026-07-29):
     find itself calibrated. The whole absent-key leg was dead code that always fell to
     PASS — the hole DoE's state/bug-backlog/2026-07-22-nudge-foreground-calibration-not-
     cross-process.yaml records. Calibration now also writes
-        .git/coordinator-sessions/<session_id>/.harness-bg-capable
+        .coordinator-local/coordinator-sessions/<session_id>/.harness-bg-capable
     which is what actually survives between processes; the in-memory set is kept as a
     same-interpreter fast path. Do NOT re-collapse this to the set alone — that is the
     exact regression, and it is invisible, because the gate keeps passing.
@@ -99,7 +99,7 @@ ENV-HATCH RE-PLUMB (D6):
     The bash hook checked COORDINATOR_AGENT_FOREGROUND_OK from the process env. The
     resident engine runs at server-spawn time with a fixed env, so that env var is
     unreachable at hook-call time. Re-plumbed to a session-scoped sentinel file:
-        .git/coordinator-sessions/<session_id>/.foreground-ok
+        .coordinator-local/coordinator-sessions/<session_id>/.foreground-ok
     An operator enables intentional foreground dispatch for a session by touching that
     file directly. As of 2026-08-13 (docs/plans/2026-08-13-guard-messages-stop-handing-
     agents-the-keys.md), neither rendered message names this path, the touch command, or
@@ -137,7 +137,7 @@ ABSENT-tool_input FALLBACK (D8):
 # the 2026-07-31 re-land, verified BINDING when it is the sole emitter on its matcher.)
 
 Negative-spec:
-    This op is MUTATING: it writes a sentinel under .git/coordinator-sessions/, which fails
+    This op is MUTATING: it writes a sentinel under .coordinator-local/coordinator-sessions/, which fails
     question 3 of the DR-208 checklist. It writes exactly ONE marker (.harness-bg-capable)
     and nothing else — no coordinator substrate (handoffs, review-trail, commits) and never
     rag's relational store. Do NOT "restore" that marker to in-memory module state to win
@@ -173,6 +173,7 @@ from coordinator_core.hooks._envelope import deny, no_advisory, payload_of, rewr
 from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
+from coordinator_core.session_hub_path import session_dir_for
 
 GUARD_NAME = "nudge-foreground-agent-dispatch"
 
@@ -196,12 +197,12 @@ _REROUTE_NOTICE = (
 
 
 def _foreground_ok_path(git_root: str, session_id: str) -> Path:
-    session_dir = Path(git_root) / "coordinator-sessions" / session_id
+    session_dir = session_dir_for(Path(git_root), session_id)
     return session_dir / ".foreground-ok"
 
 
 def _bg_capable_path(git_root: str, session_id: str) -> Path:
-    return Path(git_root) / "coordinator-sessions" / session_id / ".harness-bg-capable"
+    return session_dir_for(Path(git_root), session_id) / ".harness-bg-capable"
 
 
 def _mark_bg_capable(git_root: str, session_id: str) -> None:

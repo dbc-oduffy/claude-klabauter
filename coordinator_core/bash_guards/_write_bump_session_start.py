@@ -40,8 +40,8 @@ Storage location: TWO records are written, per
 read-settings-home-first" call in that plan's Problem section; the hub now lives under the engine data root):
 
   1. The existing per-session state hub this fleet already keeps
-     (:func:`coordinator_core.session.core.sessions_dir` — `<git-common-dir>/coordinator-sessions/`,
-     resolved via `git rev-parse --git-common-dir`, worktree-safe). A plain single-value text file
+     (:func:`coordinator_core.session.core.sessions_dir` — `session_hub_path.hub_for_common(<git-common-dir>)`,
+     i.e. `<main checkout>/.coordinator-local/coordinator-sessions/`, worktree-safe). A plain single-value text file
      (`write_bump_launch_cwd`), matching the existing `started_at` / `head_at_start` convention in
      `coordinator_core.session.core.init()`. This hub is REPO-RELATIVE — it moves when `cwd`
      crosses a repo boundary, which is exactly the defect the data-root hub below fixes.
@@ -121,7 +121,7 @@ _ANCHOR_SUBDIR = "write-bump-anchor"
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census).
 # write_session_start_record writes write_bump_launch_cwd under
-# sessions_dir()/<session_id>/ (.git/coordinator-sessions/, untracked) and
+# sessions_dir()/<session_id>/ (.coordinator-local/coordinator-sessions/, untracked) and
 # under the data-root write-bump-anchor hub -- neither is a tracked
 # repo artifact.
 GENERATES = []
@@ -138,7 +138,7 @@ GENERATES = []
 CLAUDE_PROJECT_DIR_LIVE_IN_HOOK_ENV = False
 
 #: Single-value record file name, written once per session under
-#: `<git-common-dir>/coordinator-sessions/<session_id>/` AND under the data-root hub's
+#: `<hub>/<session_id>/` (the `session_hub_path` hub) AND under the data-root hub's
 #: `<session_id>/` directory -- same filename, same single-scalar content, two locations.
 _RECORD_FILENAME = "write_bump_launch_cwd"
 
@@ -233,13 +233,18 @@ def _ensure_initialised_session_dir(
         # negative-spec pins it to on the paths that never write.
         from coordinator_core.lifecycle import main_worktree_root
 
-        # `sessions_base` IS `<git-common-dir>/coordinator-sessions`, so the
-        # common dir is its parent and the worktree root falls out of pure path
-        # logic -- `main_worktree_root` spawns nothing. Handing `init` BOTH
+        # `sessions_base` IS the `session_hub_path` hub: `<main checkout>/.coordinator-local/
+        # coordinator-sessions` for a normal repo (the checkout is two levels up), else
+        # `<bare common dir>/coordinator-sessions` -- pure path logic,
+        # `main_worktree_root` spawns nothing. Handing `init` BOTH
         # pre-resolved answers is what keeps this call at zero process
         # creations; without `root` it would fall through to `core.git_root`,
         # which spawns `git rev-parse` on the interactive boot path.
-        root = str(main_worktree_root(Path(sessions_base).parent))
+        hub_parent = Path(sessions_base).parent
+        if hub_parent.name == ".coordinator-local":
+            root = str(hub_parent.parent)
+        else:
+            root = str(main_worktree_root(hub_parent))
     except Exception:
         root = ""
     try:

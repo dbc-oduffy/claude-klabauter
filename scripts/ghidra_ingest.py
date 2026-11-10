@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Record a binary's Ghidra program facts (functions, xrefs, imports, strings) in the REA ledger.
 
 Runs Ghidra's headless analyzer over a copy of the binary (never executing it) and writes the

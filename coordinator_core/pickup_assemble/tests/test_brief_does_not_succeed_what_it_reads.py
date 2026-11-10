@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import pytest
 
 import coordinator_core.pickup_brief as pb
@@ -69,7 +71,7 @@ def _seed(repo: Path, name: str, extra_fm: str) -> Path:
 
 
 def _claims_root(repo: Path) -> Path:
-    return repo / ".git" / "coordinator-sessions" / "handoff-claims"
+    return hub_for_common(repo / ".git") / "handoff-claims"
 
 
 def test_briefing_a_live_baton_twice_mints_nothing_and_enrols_it(

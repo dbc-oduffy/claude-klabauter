@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Optional: start Codex attached to the app-server daemon with --remote.
 
 Using this launcher is NOT required for peer delivery. A plain `codex` TUI started without

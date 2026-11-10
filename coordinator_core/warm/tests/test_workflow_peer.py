@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import pytest
 from coordinator_core.warm import workflow_peer as peer
+from coordinator_core.session_hub_path import hub_for_common
 SID='11111111-2222-4333-8444-555555555555'
 PARENT='11111111-2222-4333-8444-666666666666'
 class Process:
@@ -13,7 +14,7 @@ class Process:
  def exe(self):return self.image
 @pytest.fixture
 def case(tmp_path,monkeypatch):
- repo=tmp_path/'repo';repo.mkdir();protected=repo/'.git/coordinator-sessions/workflow-fires/headless'/('a'*32);protected.mkdir(parents=True)
+ repo=tmp_path/'repo';repo.mkdir();protected=hub_for_common(repo/'.git')/'workflow-fires/headless'/('a'*32);protected.mkdir(parents=True)
  engine=tmp_path/'engine';engine.mkdir();bin=protected/'private-bin';bin.mkdir()
  image=tmp_path/'codex.exe';image.write_bytes(b'native observed executable')
  alias=bin/'sizing-assemble.exe';alias.write_bytes(b'committed native required door')
@@ -21,7 +22,7 @@ def case(tmp_path,monkeypatch):
  script=repo/'assigned.mjs';script.write_text('return {ok:true};')
  row['script_sha256']=hashlib.sha256(script.read_bytes()).hexdigest()
  (engine/'coordinator_core').mkdir();(engine/'coordinator_core/_engine_stamp').write_text('sha:'+row['source_sha']+'\n')
- fire_record=repo/'.git/coordinator-sessions/workflow-fires'/('a'*32+'.json')
+ fire_record=hub_for_common(repo/'.git')/'workflow-fires'/('a'*32+'.json')
  record={'fire_id':row['fire_id'],'state':'running','executor':'headless','backend':'codex','pid':10,'pid_birth':10.0,'caller_session_id':PARENT,'repo_root':str(repo),'script_path':str(script),'sha256':row['script_sha256'],'script_sha256':row['script_sha256'],'source_sha':row['source_sha'],'engine_root':str(engine)}
  fire_record.write_text(json.dumps(record))
  roster=protected/'worker-bindings.json';roster.write_text(json.dumps(row))

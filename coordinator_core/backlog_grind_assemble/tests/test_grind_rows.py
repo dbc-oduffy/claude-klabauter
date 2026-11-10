@@ -24,6 +24,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.backlog_grind_assemble import grind_rows
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 # One test class spawns a real `git` process (in a tmp repo) to observe the
 # actual working-tree status `close` leaves behind -- the whole point of that
@@ -580,7 +581,7 @@ def _make_repo(tmp_path):
 def _touched_paths(repo, sid):
     from coordinator_core.session import touch_record
 
-    p = Path(repo) / ".git" / "coordinator-sessions" / sid / "touch-record.jsonl"
+    p = session_dir_for(Path(repo) / ".git", sid) / "touch-record.jsonl"
     if not p.is_file():
         return []
     raw = p.read_bytes()
@@ -1327,7 +1328,7 @@ class TestCloseReleasesRowClaim:
         close_fixture.update(
             claims=claims,
             as_session=as_session,
-            claim_dir=tmp_path / ".git" / "coordinator-sessions" / "row-claims" / key,
+            claim_dir=hub_for_common(tmp_path / ".git") / "row-claims" / key,
             root=tmp_path,
         )
         return close_fixture
@@ -1409,6 +1410,9 @@ class TestRunRecordLandsTheRunsBookkeeping:
         from coordinator_core.tests.git_seed import seeded_repo
 
         seeded_repo(tmp_path, readme="x")
+        (tmp_path / ".git" / "info").mkdir(parents=True, exist_ok=True)
+        with open(tmp_path / ".git" / "info" / "exclude", "a", encoding="utf-8") as fh:
+            fh.write(".coordinator-local/\n")
         for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", self.SID)

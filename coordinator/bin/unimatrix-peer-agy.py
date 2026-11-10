@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """agy peer adapter: deliver one turn to a live agy conversation through its agy-run leg
 (unimatrix-agy-leg.py) and read the reply from the conversation transcript.
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """census-recheck — re-ask a plan's counted premises of HEAD. Writes nothing.
 
 WHY THIS EXISTS. The mise-prep bar records a plan's counted premises as

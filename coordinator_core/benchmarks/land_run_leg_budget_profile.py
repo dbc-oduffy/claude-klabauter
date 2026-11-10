@@ -72,6 +72,7 @@ if str(_REPO) not in sys.path:
 from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home  # noqa: E402
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
+from coordinator_core.session_hub_path import session_dir_for  # noqa: E402
 from coordinator_core.benchmarks.land_run_slow_disk_profile import (  # noqa: E402
     DEFAULT_CHAIN,
     DEFAULT_TRACKED,
@@ -513,7 +514,7 @@ def add_live_sibling_runs(root: Path, count: int) -> list:
         _git(["commit", "-q", "-m", message, "--", path, plan], root)
         _write(root, path, "head = 0\n" + OWN_LINES + "tail = 1\n")
         session_scope.touch(sess, path, cwd=str(root))
-        sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / sess)
+        sink = touch_record.sink_path(session_dir_for(root / ".git", sess))
         touch_record.append_event(
             sink, session_id=sess, agent_id=None, verb="T", path=path,
             content_hash=touch_record.compute_content_hash(root / path), kind="w",
@@ -646,7 +647,7 @@ def build_halted_shape_fixture(tmp_path: Path, stack: ExitStack, *, tracked: int
 
     root, base = build_land_fixture(tmp_path, mode="clean", tracked=tracked, chain=chain, stack=stack)
     paths = [*HALTED_SHAPE_PY, HALTED_SHAPE_DOC]
-    sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF)
+    sink = touch_record.sink_path(session_dir_for(root / ".git", SELF))
     for i, rel in enumerate(paths):
         _write(root, rel, f"# halted shape {i}\n" if rel.endswith(".md") else f'"""Halted-shape module {i}."""\n\nVALUE_{i} = {i}\n')
         session_scope.touch(SELF, rel, cwd=str(root))

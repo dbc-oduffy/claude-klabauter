@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import hub_for_common
 import re
 import subprocess
 
@@ -41,7 +43,7 @@ def test_committed_repo_with_only_own_session_has_no_peer(fresh_repo):
     (fresh_repo / "a.txt").write_text("a")
     _git(fresh_repo, "add", "a.txt")
     _git(fresh_repo, "commit", "-qm", "init")
-    (fresh_repo / ".git" / "coordinator-sessions" / "s1").mkdir(parents=True)
+    (hub_for_common(fresh_repo / ".git") / "s1").mkdir(parents=True)
     assert guard._bt_no_peer_can_share_the_index(str(fresh_repo), "s1")
 
 
@@ -49,7 +51,7 @@ def test_a_second_session_dir_means_a_peer_may_share_the_index(fresh_repo):
     (fresh_repo / "a.txt").write_text("a")
     _git(fresh_repo, "add", "a.txt")
     _git(fresh_repo, "commit", "-qm", "init")
-    sessions = fresh_repo / ".git" / "coordinator-sessions"
+    sessions = hub_for_common(fresh_repo / ".git")
     (sessions / "s1").mkdir(parents=True)
     (sessions / "s2").mkdir()
     assert not guard._bt_no_peer_can_share_the_index(str(fresh_repo), "s1")

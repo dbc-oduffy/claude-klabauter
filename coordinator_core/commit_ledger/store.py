@@ -8,8 +8,9 @@ NOT a basename or path (both move when the boot sweep archives a file), and
 NOT stored in handoff markdown frontmatter or in ``session_baton/store.py``
 (session-keyed, wrong unit for this ledger, and a sibling collision).
 
-Store location: ``<git-common-dir>/coordinator-sessions/.commit-ledger/
-<handoff_id>.jsonl`` — one JSON object per line, append-only. Dot-prefixed
+Store location: ``<session hub>/.commit-ledger/<handoff_id>.jsonl``
+(the session hub is ``session_hub_path.hub_for_common``) — one JSON
+object per line, append-only. Dot-prefixed
 (``.commit-ledger``) deliberately: ``ops/session/reap.py ::
 _reap_stale_sessions`` archives any non-dot child of the session hub after
 24h of inactivity and explicitly skips dot children — a bare
@@ -175,6 +176,7 @@ from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, spli
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.locked_write import LockTimeout, held_lock
 from coordinator_core.session import core
+from coordinator_core.session_hub_path import HUB_NAME
 
 _LOG = logging.getLogger(__name__)
 
@@ -237,8 +239,7 @@ def _find_first_match(root, ref):
 
 
 def ledger_dir(cwd: Optional[str] = None) -> Optional[Path]:
-    """The commit-ledger directory (``<git-common-dir>/coordinator-sessions/
-    .commit-ledger``), or ``None`` when the session hub is unresolvable (not
+    """The commit-ledger directory (``<session hub>/.commit-ledger``), or ``None`` when the session hub is unresolvable (not
     a git repo)."""
     base = core.sessions_dir(cwd)
     if not base:
@@ -262,12 +263,10 @@ def _lock_anchor(path: Path) -> Optional[Path]:
     position, mirroring ``coordinator_core.session.claims::
     _atomic_dedup_append_lock_anchor`` for the sibling ``touched.txt``
     writer under the same session hub. ``path`` is always
-    ``<git-common-dir>/coordinator-sessions/.commit-ledger/<handoff_id>
-    .jsonl``, so its THIRD parent is the git common dir itself
-    (``parents[0]`` = ``.commit-ledger``, ``parents[1]`` =
-    ``coordinator-sessions``, ``parents[2]`` = the git common dir, named
-    ``.git`` for every non-bare, non-worktree-private layout this hub
-    uses).
+    ``<session hub>/.commit-ledger/<handoff_id>.jsonl``
+    (``session_hub_path.hub_for_common``), so ``parents[1]`` is the hub, its
+    parent ``.coordinator-local`` for every non-bare layout, and the anchor
+    the checkout root above it.
 
     Returns ``None`` when ``path`` does not have the expected shape (a test
     fixture writing to an ad-hoc temp path, for instance) so the caller can
@@ -278,10 +277,12 @@ def _lock_anchor(path: Path) -> Optional[Path]:
     parents = p.parents
     if len(parents) < 3:
         return None
-    common_dir = parents[2]
-    if common_dir.name != ".git":
+    if len(parents) < 4 or parents[1].name != HUB_NAME:
         return None
-    return common_dir.parent
+    local_dir = parents[2]
+    if local_dir.name != ".coordinator-local":
+        return None
+    return parents[3]
 
 
 def _entry_line(

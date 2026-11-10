@@ -7,6 +7,7 @@ import json
 import time
 
 import coordinator_core.ipc as ipc
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
@@ -29,7 +30,7 @@ def _call(repo, monkeypatch, params) -> tuple[dict, list[dict]]:
     msg = {"jsonrpc": "2.0", "id": 1, "method": _OP, "params": params, "_origin_worktree": str(repo)}
     response = asyncio.run(ipc.dispatch_message(msg))
     assert "result" in response, response
-    sink = common / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common) / "logs" / "op-latency.jsonl"
     rows = [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines()]
     return response["result"], [r for r in rows if r.get("kind") == "process_time" and r.get("op") == _OP]
 

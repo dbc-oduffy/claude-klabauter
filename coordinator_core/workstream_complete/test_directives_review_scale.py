@@ -42,6 +42,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.ceremony.wsc_disposition import (
     LEGACY_PREDECESSOR_CONSUMED,
     PREDECESSOR_CONSUMED,
@@ -429,6 +430,7 @@ def _init_git_repo(root: Path) -> None:
     _run_git(["init", "-q"], str(root))
     _run_git(["config", "user.email", "t@example.com"], str(root))
     _run_git(["config", "user.name", "t"], str(root))
+    (root / ".git" / "info" / "exclude").write_text(".coordinator-local/\n", encoding="utf-8")
     (root / "a.py").write_text("x = 1\n", encoding="utf-8")
     _run_git(["add", "a.py"], str(root))
     subprocess.run(
@@ -454,7 +456,7 @@ def _measure(root, session_id, stage_paths, slices=None):
             ["git", "rev-list", "--max-parents=0", "HEAD"],
             cwd=str(root), check=True, capture_output=True, text=True, **_NO_CONSOLE,
         ).stdout.split()[0]
-        claim = Path(root) / ".git" / "coordinator-sessions" / session_id
+        claim = session_dir_for(Path(root) / ".git", session_id)
         claim.mkdir(parents=True, exist_ok=True)
         (claim / "head_at_start").write_text(floor + "\n", encoding="utf-8")
     history = session_history.read_session_history(Path(root), session_id)

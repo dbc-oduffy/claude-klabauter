@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """agy SessionStart hook: register the conversation's leg at boot.
 
 agy's SessionStart env carries only ANTIGRAVITY_CONVERSATION_ID, not ANTIGRAVITY_CSRF_TOKEN, so the

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 bin/claude-klabauter-revendor-schema.py — general, named-schema re-vendor for every schema
 vendored under coordinator_core/frontmatter/schemas/.

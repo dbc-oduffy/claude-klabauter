@@ -42,6 +42,7 @@ from pathlib import Path
 from typing import Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit.ask_contract import GatedRow
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.sibling_repo_provision_contract import (
     ROUTE_REMEDY,
@@ -221,7 +222,7 @@ def grant_file(repo_root: Path, session_id: str) -> Path:
     """The run's cross-repo grant ledger: one absolute posix sibling path per line, written when
     a run's sibling ``writes:`` pass the approval check and read by
     ``write_guards.block_cross_repo_agent_write``."""
-    return Path(repo_root) / ".git" / "coordinator-sessions" / session_id / GRANT_FILE
+    return session_dir_for(Path(repo_root) / ".git", session_id) / GRANT_FILE
 
 
 def record_grants(repo_root: Path, session_id: str, sibling_paths: Iterable[str]) -> None:

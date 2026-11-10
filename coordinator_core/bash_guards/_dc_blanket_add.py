@@ -22,6 +22,7 @@ import os
 import re
 import sys
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
@@ -38,6 +39,7 @@ from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 from coordinator_core.bash_guards._rewrite_support import _alt_record, _crlf_strip, _offer, _override
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 
 def _awk_quote_aware_split(cmd: str) -> List[str]:
@@ -556,7 +558,7 @@ def _bt_add_resolve_subtree_dir_token(
 
 def _bt_no_peer_can_share_the_index(git_root: str, session_id: str) -> bool:
     """True when no other session can be staging into this repo: it has no
-    commits yet, or ``.git/coordinator-sessions`` holds no session dir other
+    commits yet, or ``.coordinator-local/coordinator-sessions`` holds no session dir other
     than ``session_id``. Zero-spawn (file reads only); False on any doubt."""
     try:
         git_dir = os.path.join(git_root, ".git")
@@ -572,7 +574,7 @@ def _bt_no_peer_can_share_the_index(git_root: str, session_id: str) -> bool:
                         packed_text = fh.read()
                 if (" " + ref + "\n") not in packed_text:
                     return True
-        sessions = os.path.join(git_dir, "coordinator-sessions")
+        sessions = str(hub_for_common(Path(git_dir)))
         if not os.path.isdir(sessions):
             return True
         others = [
@@ -659,7 +661,7 @@ def _bt_add_subtree_foreign_paths_and_churn(
             sink_path,
         )
 
-        sid_dir = os.path.join(git_root, ".git", "coordinator-sessions", session_id)
+        sid_dir = str(session_dir_for(Path(git_root) / ".git", session_id))
         touch_record_path = sink_path(sid_dir)
         projection = project_live_claims(touch_record_path, cwd=git_root)
         if projection.degraded:
@@ -751,7 +753,7 @@ def _bt_commit_subtree_foreign_paths_and_churn(
             sink_path,
         )
 
-        sid_dir = os.path.join(git_root, ".git", "coordinator-sessions", session_id)
+        sid_dir = str(session_dir_for(Path(git_root) / ".git", session_id))
         touch_record_path = sink_path(sid_dir)
         projection = project_live_claims(touch_record_path, cwd=git_root)
         if projection.degraded:

@@ -9,6 +9,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.ceremony_common.run import single_flight as sf
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 TODAY = "2026-10-12"
@@ -120,4 +121,4 @@ def test_gitfile_worktree_resolves_common_dir(tmp_path):
     (wt / ".git").write_text(f"gitdir: {common / 'worktrees' / 'w'}")
     a = sf.acquire(wt, ceremony="fixture-ceremony", marker_path=wt / "m", today=TODAY, session_id="s")
     assert a.state == sf.ADMITTED
-    assert a.lock_path.resolve().parent == (common / "coordinator-sessions" / "fixture-ceremony-runs").resolve()
+    assert a.lock_path.resolve().parent == (hub_for_common(common) / "fixture-ceremony-runs").resolve()

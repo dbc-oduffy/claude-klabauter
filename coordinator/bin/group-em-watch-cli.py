@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 group-em-watch-cli.py — thin front on
 `coordinator_core.group_em.watch_heartbeat.read_liveness` /

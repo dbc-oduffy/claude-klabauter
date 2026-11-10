@@ -29,7 +29,7 @@ merely "some plan/problem-set path reaches the executor branch".
 
 The back-pointer subagent_type lookup (``_read_backpointer_subagent_type``)
 is monkeypatched directly rather than exercised via real
-``.git/coordinator-sessions/`` fixtures -- these tests are about the regex
+session-hub fixtures -- these tests are about the regex
 widening and the fast-exit/gate interaction, not the identity-resolution
 chain (already covered by the module's own reference-hook port history).
 """

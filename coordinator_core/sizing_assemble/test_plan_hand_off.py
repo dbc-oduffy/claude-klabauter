@@ -11,6 +11,7 @@ import coordinator_core.sizing_assemble as sizing_assemble
 from coordinator_core import warp_fire, warp_live
 from coordinator_core.session import record_homes
 from coordinator_core.session_baton import store
+from coordinator_core.session_hub_path import session_dir_for
 
 _COMMON = ["--intent", "Ship the thing", "--premise-provenance", "read", "--premise-evidence", "read it"]
 _NAME = "2026-10-12-x.yaml"
@@ -28,7 +29,7 @@ def _engine_ask_line(repo: Path) -> str:
 def repo(tmp_path: Path, monkeypatch) -> Path:
     (tmp_path / ".git").mkdir()
     Path(record_homes.record_path(str(tmp_path), "sizings", "2026-10-12-x.yaml")).parent.mkdir(parents=True)
-    sdir = tmp_path / ".git" / "coordinator-sessions" / "sid-ho"
+    sdir = session_dir_for(tmp_path / ".git", "sid-ho")
     sdir.mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-ho")

@@ -29,6 +29,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import pytest
 
 import coordinator_core.pickup_assemble as pa
@@ -39,7 +41,7 @@ pytestmark = [pytest.mark.cadence]
 
 
 def _seed_claim_dir(repo: Path, class_: str, basename: str, holder_sid: str) -> Path:
-    cdir = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    cdir = hub_for_common(repo / ".git") / f"{class_}-claims" / basename
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "session_id").write_text(f"{holder_sid}\n", encoding="utf-8")
     (cdir / "stage").write_text("apply\n", encoding="utf-8")

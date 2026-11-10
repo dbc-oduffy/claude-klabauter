@@ -500,7 +500,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # strang-11 B8 new ops — all keyed on git_common_dir: handlers derive worktree via
     # main_worktree_root(common_dir), matching the fleet.*/handoff.*/ceremony.* precedent.
     # Class-A ops (fleet.*) use archive_and_commit and read/write main-worktree-rooted paths.
-    # Class-B/composite ops (session.*) read/write .git/coordinator-sessions/ and state/ paths,
+    # Class-B/composite ops (session.*) read/write .coordinator-local/coordinator-sessions/ and state/ paths,
     # both derived from the main worktree root. Spec: docs/plans/2026-07-06-strang-11-b8-session-init-op-absorption.md § C5
     # "fleet.archive_shipped_handoffs" REMOVED -- op key SUBSUMED (not
     # renamed), module deleted 2026-08-25 (C1b, docs/plans/2026-08-25-the-

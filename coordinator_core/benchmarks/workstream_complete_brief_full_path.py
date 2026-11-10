@@ -23,6 +23,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
@@ -140,7 +141,7 @@ def _build(repo: Path) -> None:
         if line.startswith(f":{HISTORY_COMMITS - WINDOW} ")
     )
     _git(repo, "checkout", "-q", "-f", "main")
-    claim = repo / ".git" / "coordinator-sessions" / SESSION_ID
+    claim = hub_for_common(repo / ".git") / SESSION_ID
     claim.mkdir(parents=True)
     (claim / "head_at_start").write_text(floor, encoding="ascii")
     (claim / "started_at").write_text(

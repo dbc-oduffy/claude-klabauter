@@ -10,6 +10,7 @@ import json
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import ask_contract, drift_attribution, kept_work, terminal_commit
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift import (  # noqa: F401 -- fixtures
     SID,
@@ -28,7 +29,7 @@ RUN_ID = "run-1"
 
 def _read_event(repo, rel: str, digest: str, at: float) -> None:
     """The expectation the session's ledger holds: a read of the pre-edit bytes."""
-    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID)
+    sink = touch_record.sink_path(session_dir_for(repo / ".git", SID))
     touch_record.append_event(
         sink, session_id=SID, agent_id=None, verb="T", path=rel, content_hash=digest, kind="r", timestamp=at,
     )

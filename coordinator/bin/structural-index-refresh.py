@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """structural-index-refresh -- never-blocking ceremony hook for example-retrieval-repo's `ensure`.
 
 Keeps `<repo>/.structural-index/` current by running example-retrieval-repo's

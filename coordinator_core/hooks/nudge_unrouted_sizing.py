@@ -260,7 +260,7 @@ is explicitly documented as unreliable for this purpose (it inherits the dispatc
 EM's own id inside a subagent process). The house-authoritative test, per
 `coordinator/hooks/scripts/runtime-tripwire-em-check.py` (coordinator-content-repo repo; docstring
 ~lines 26-45, implementation ~1585-1600): a firing `session_id` found under
-`<git-common-dir>/coordinator-sessions/.agents/<session_id>/em-session-id.txt` is a
+`<hub>/.agents/<session_id>/em-session-id.txt` (hub = `.coordinator-local/coordinator-sessions`) is a
 SUBAGENT session, full stop — never fire. `_is_subagent_session` below is that same
 lookup, resolved via `git_common_dir` (worktree-safe) rather than a raw `.git` join,
 matching this module's own established convention for every other per-session
@@ -372,6 +372,7 @@ from coordinator_core.hooks.nudge_harness_directive_dispatch import (
     last_assistant_text as _last_assistant_text,
 )
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.session.scope import (
     _TOUCH_RECORD_FILENAME,
     _read_touch_record_as_legacy_lines,
@@ -614,7 +615,7 @@ def _sentinel_path(payload: dict) -> str | None:
         return None
     session_key, _has_true_sid = _session_key(payload)
     return os.path.join(
-        git_dir, "coordinator-sessions", session_key,
+        str(session_dir_for(Path(git_dir), session_key)),
         "unrouted-sizing-nudge.fired",
     )
 
@@ -651,7 +652,7 @@ def _session_has_dispatched(session_id: str, repo_root: str) -> bool:
         common_dir = git_common_dir(Path(repo_root))
     except Exception:
         return False
-    dispatched = common_dir / "coordinator-sessions" / session_id / "dispatched-agents.txt"
+    dispatched = session_dir_for(common_dir, session_id) / "dispatched-agents.txt"
     try:
         return dispatched.is_file() and dispatched.stat().st_size > 0
     except OSError:
@@ -710,7 +711,7 @@ def _session_touched_lines(session_id: str, repo_root: str) -> list[str]:
         common_dir = git_common_dir(Path(repo_root))
     except Exception:
         return []
-    sink_path = common_dir / "coordinator-sessions" / session_id / _TOUCH_RECORD_FILENAME
+    sink_path = session_dir_for(common_dir, session_id) / _TOUCH_RECORD_FILENAME
     try:
         lines, degraded = _read_touch_record_as_legacy_lines(sink_path)
     except Exception:
@@ -906,7 +907,7 @@ def _is_subagent_session(session_id: str, repo_root: str) -> bool:
 
     Per runtime-tripwire-em-check.py (coordinator-content-repo repo, docstring ~lines 26-45,
     implementation ~1585-1600): a firing session_id found under
-    `<git-common-dir>/coordinator-sessions/.agents/<session_id>/em-session-id.txt`
+    `<hub>/.agents/<session_id>/em-session-id.txt` (hub = `.coordinator-local/coordinator-sessions`)
     is a dispatched subagent's own session, not the EM's. This is a SECOND, narrower
     net alongside the cheap `agent_id` check in `op()` — not a replacement for it —
     covering the gap `agent_id` can miss (and never trusting
@@ -926,7 +927,7 @@ def _is_subagent_session(session_id: str, repo_root: str) -> bool:
         common_dir = git_common_dir(Path(repo_root))
     except Exception:
         return False
-    marker = common_dir / "coordinator-sessions" / ".agents" / session_id / "em-session-id.txt"
+    marker = hub_for_common(common_dir) / ".agents" / session_id / "em-session-id.txt"
     try:
         return marker.is_file()
     except OSError:
@@ -938,7 +939,7 @@ def _dispatch_rows(session_id: str, repo_root: str) -> list[tuple[str, str, int]
         common_dir = git_common_dir(Path(repo_root))
     except Exception:
         return []
-    dispatch_file = common_dir / "coordinator-sessions" / session_id / "dispatched-agents.txt"
+    dispatch_file = session_dir_for(common_dir, session_id) / "dispatched-agents.txt"
     try:
         with open(dispatch_file, "r", encoding="utf-8", errors="replace") as fh:
             lines = fh.readlines()

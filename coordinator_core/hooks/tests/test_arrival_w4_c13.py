@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.hooks import runtime_tripwire_stop_watcher as sw
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +220,7 @@ def test_main_impl_no_dispatch_file_removes_any_stale_lock(tmp_path, monkeypatch
         lambda timeout=2.0: f'{{"session_id": "{_REAL_SESSION_ID}"}}',
     )
     assert sw._main_impl() == 0
-    lock = repo / ".git" / "coordinator-sessions" / _REAL_SESSION_ID / "stop-watcher.pid"
+    lock = session_dir_for(repo / ".git", _REAL_SESSION_ID) / "stop-watcher.pid"
     assert not lock.is_file()
 
 
@@ -228,7 +229,7 @@ def test_main_impl_launches_detached_watcher_and_writes_pid_lock(tmp_path, monke
     _init_repo(repo)
     monkeypatch.chdir(repo)
 
-    sessions_dir = repo / ".git" / "coordinator-sessions"
+    sessions_dir = hub_for_common(repo / ".git")
     session_dir = sessions_dir / _REAL_SESSION_ID
     session_dir.mkdir(parents=True)
     dispatch_file = session_dir / "dispatched-agents.txt"
@@ -255,7 +256,7 @@ def test_main_impl_live_lock_does_not_stack_a_second_watcher(tmp_path, monkeypat
     _init_repo(repo)
     monkeypatch.chdir(repo)
 
-    sessions_dir = repo / ".git" / "coordinator-sessions"
+    sessions_dir = hub_for_common(repo / ".git")
     session_dir = sessions_dir / _REAL_SESSION_ID
     session_dir.mkdir(parents=True)
     dispatch_file = session_dir / "dispatched-agents.txt"

@@ -26,6 +26,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from coordinator_core.session_hub_path import hub_for_common
 
 import pytest
 
@@ -89,16 +90,14 @@ def _live(monkeypatch):
 
 
 def _write_shape(repo: Path, sid: str, shape: dict) -> None:
-    shape_dir = repo / ".git" / "coordinator-sessions" / sid
+    shape_dir = hub_for_common(repo / ".git") / sid
     shape_dir.mkdir(parents=True, exist_ok=True)
     (shape_dir / "session-shape.json").write_text(json.dumps(shape), encoding="utf-8")
 
 
 def _write_handoff_claim(repo: Path, handoff_relpath: str, sid: str) -> None:
     claim_dir = (
-        repo
-        / ".git"
-        / "coordinator-sessions"
+        hub_for_common(repo / ".git")
         / "handoff-claims"
         / Path(handoff_relpath).name
     )

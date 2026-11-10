@@ -29,7 +29,7 @@ Coverage:
   (f) CLI — --dry-run (no commit), --message, --groups-json, mutually
       exclusive flags, unresolvable-session exit 1, usage exit 2.
 
-Class B: substrate is untracked .git/coordinator-sessions/ — commit
+Class B: substrate is untracked .coordinator-local/coordinator-sessions/ — commit
 assertions here ARE made (commit_session_offer is the one mutating surface
 this module owns), scoped to the test's own tmp_path fixture repo, never
 the real corpus.
@@ -38,6 +38,8 @@ Spec backlink: coordinator_core/ops/session/safe_commit_offer.py
 """
 
 from __future__ import annotations
+
+from coordinator_core.session_hub_path import hub_for_common
 
 import asyncio
 import json
@@ -66,7 +68,14 @@ def _make_repo(tmp_path):
     # check=True on every fixture-setup git call
     # (mirrors test_scope.py's _make_repo): a silent fixture-setup failure
     # must not masquerade as a passing test.
-    return seeded_repo(tmp_path, readme="x")
+    repo = seeded_repo(tmp_path, readme="x")
+    # The session hub lives under .coordinator-local, outside .git; keep it out
+    # of `git status` the way a real checkout's .gitignore does.
+    exclude = Path(repo) / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    with open(exclude, "a", encoding="utf-8", newline="\n") as fh:
+        fh.write(".coordinator-local/\n")
+    return repo
 
 
 def _agent_claim(agent_dir, *paths, owner_sid=None, ts=None):
@@ -1844,8 +1853,7 @@ class TestHandler:
         from coordinator_core.lifecycle import git_common_dir
 
         log_file = (
-            git_common_dir(Path(repo))
-            / "coordinator-sessions"
+            hub_for_common(git_common_dir(Path(repo)))
             / "logs"
             / "sessionend-auto-commit-diagnostics.log"
         )
@@ -1874,8 +1882,7 @@ class TestHandler:
         from coordinator_core.lifecycle import git_common_dir
 
         log_file = (
-            git_common_dir(Path(repo))
-            / "coordinator-sessions"
+            hub_for_common(git_common_dir(Path(repo)))
             / "logs"
             / "sessionend-auto-commit-diagnostics.log"
         )
@@ -1908,8 +1915,7 @@ class TestHandler:
         from coordinator_core.lifecycle import git_common_dir
 
         log_file = (
-            git_common_dir(Path(repo))
-            / "coordinator-sessions"
+            hub_for_common(git_common_dir(Path(repo)))
             / "logs"
             / "sessionend-auto-commit-diagnostics.log"
         )
@@ -1947,8 +1953,7 @@ class TestHandler:
         from coordinator_core.lifecycle import git_common_dir
 
         log_file = (
-            git_common_dir(Path(repo))
-            / "coordinator-sessions"
+            hub_for_common(git_common_dir(Path(repo)))
             / "logs"
             / "sessionend-auto-commit-diagnostics.log"
         )
@@ -1988,8 +1993,7 @@ class TestHandler:
         from coordinator_core.lifecycle import git_common_dir
 
         log_file = (
-            git_common_dir(Path(repo))
-            / "coordinator-sessions"
+            hub_for_common(git_common_dir(Path(repo)))
             / "logs"
             / "sessionend-auto-commit-diagnostics.log"
         )
@@ -3051,7 +3055,7 @@ def test_agent_touched_dotgit_entry_never_becomes_a_candidate():
     from coordinator_core.ops.session import safe_commit_offer
 
     for e in (
-        ".git/coordinator-sessions/s/review-targets.txt",
+        ".git/s/review-targets.txt",
         "sub/.git/x",
         ".git/",
     ):

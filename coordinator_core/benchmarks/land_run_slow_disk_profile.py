@@ -61,6 +61,7 @@ from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settin
 from coordinator_core.benchmarks.commit_leg_profile import _ChildMeter  # noqa: E402
 from coordinator_core.benchmarks.isolated_clone import fresh_git_clone  # noqa: E402
 from coordinator_core.git.run import run_git  # noqa: E402
+from coordinator_core.session_hub_path import HUB_NAME, session_dir_for  # noqa: E402
 
 BAR_MS = 500.0
 DEFAULT_DELAY_S = 12.0
@@ -266,7 +267,7 @@ def build_land_fixture(parent: Path, *, mode: str, tracked: int, chain: int, sta
     session_core.init(SELF, cwd=str(root))
     _write(root, PATH_P, "head = 0\n" + OWN_LINES + "tail = 1\n" if mode == "clean" else "head = 1\n")
     session_scope.touch(SELF, PATH_P, cwd=str(root))
-    sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF)
+    sink = touch_record.sink_path(session_dir_for(root / ".git", SELF))
     touch_record.append_event(
         sink, session_id=SELF, agent_id=None, verb="T", path=PATH_P,
         content_hash=touch_record.compute_content_hash(root / PATH_P), kind="w",
@@ -447,7 +448,7 @@ NOOP_OP = "bench.op_latency_noop"
 
 def _is_sink_parent(name) -> bool:
     parts = Path(os.fspath(name)).parts
-    return "coordinator-sessions" in parts and "logs" in parts
+    return HUB_NAME in parts and "logs" in parts
 
 
 def _leg_label(frame) -> str:

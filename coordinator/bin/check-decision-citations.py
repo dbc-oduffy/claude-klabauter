@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """check-decision-citations -- a cited DR-nnn / SC-DR-nnn id must resolve somewhere in the fleet.
 
 Default mode exits 1 on a live dangling id the committed baseline does not list, 0 when clean (or

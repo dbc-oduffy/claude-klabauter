@@ -311,7 +311,7 @@ def _dispatch_tier_u_grant(args: list[str], repo_root: Path) -> dict[str, Any]:
 
     IN-PROCESS, unlike every other handler in this table, and that is the
     point. The grant is a single small JSON write into
-    `.git/coordinator-sessions/<sid>/`; spawning an interpreter for it
+    `.coordinator-local/coordinator-sessions/<sid>/`; spawning an interpreter for it
     would add two cold starts to a ceremony whose per-composition cost is
     already the thing being attacked
     (`state/handoffs/2026-08-19-the-320-second-ceremony.md`). Spawning also
@@ -402,7 +402,7 @@ def _compensate_grant_write(
 #: Per-directive-id compensators, fired in reverse landing order by
 #: `apply_base.execute_directives` when a handler raises. Only the grant
 #: write registers one: it is the single directive here whose effect
-#: OUTLIVES the run (a token in `.git/coordinator-sessions/<sid>/` that a
+#: OUTLIVES the run (a token in `.coordinator-local/coordinator-sessions/<sid>/` that a
 #: later Tier-U consumer reads), so it is the only one an aborted run can
 #: strand.
 _COMPENSATORS: dict[str, Any] = {

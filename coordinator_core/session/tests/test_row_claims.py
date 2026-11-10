@@ -43,11 +43,11 @@ def env(tmp_path, monkeypatch):
         def clear(row):
             return claims.clear_claim_if_dead("row", row, baton_repo_root=str(repo), cwd=str(repo))
 
-        sessions_dir = repo / ".git" / "coordinator-sessions"
+        sessions_dir = repo / ".coordinator-local" / "coordinator-sessions"
 
         @staticmethod
         def claim_dir(key=BUG_KEY):
-            return repo / ".git" / "coordinator-sessions" / "row-claims" / key
+            return repo / ".coordinator-local" / "coordinator-sessions" / "row-claims" / key
 
     return Env
 

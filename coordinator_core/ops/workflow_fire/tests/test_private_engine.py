@@ -10,6 +10,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 # Always test the sibling candidate, including before source integration.
 path = Path(__file__).parents[1] / 'private_engine.py'
 spec = importlib.util.spec_from_file_location('private_engine_candidate', path)
@@ -44,8 +46,9 @@ def prepared(tmp_path, monkeypatch):
     catalog.write_text(json.dumps({'entrypoints': ['coordinator-invoke', 'named-cli', '_private-helper', 'cold-only'],
                                    'door_eligible_entrypoints': ['coordinator-invoke', 'named-cli', '_private-helper']}))
     fire_id = 'b' * 32
-    artifact = repo / '.git/coordinator-sessions/workflow-fires/headless' / fire_id
+    artifact = hub_for_common(repo / '.git') / 'workflow-fires/headless' / fire_id
     artifact.mkdir(parents=True)
+    (repo / '.git').mkdir(exist_ok=True)
     script = repo / 'flow.mjs'
     script.write_text('export default async()=>{};')
     record_path = artifact.parents[1] / (fire_id + '.json')

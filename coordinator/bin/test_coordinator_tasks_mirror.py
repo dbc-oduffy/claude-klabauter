@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from coordinator_core.session_hub_path import hub_for_common
 import shutil
 import subprocess
 import sys
@@ -375,7 +376,7 @@ def test_sid_resolution_ignores_cwd(tmp_path) -> None:
     from coordinator_core.session.core import resolve_session_id
 
     print("--- sid-resolution: cwd is never a resolution input")
-    sentinel_dir = tmp_path / ".git" / "coordinator-sessions"
+    sentinel_dir = hub_for_common(tmp_path / ".git")
     sentinel_dir.mkdir(parents=True)
     (sentinel_dir / ".current-session-id").write_text("sibling-repo-sid\n", encoding="utf-8")
 

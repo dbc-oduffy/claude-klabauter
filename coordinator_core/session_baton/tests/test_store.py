@@ -19,6 +19,7 @@ import pytest
 
 import coordinator_core.pickup_assemble as pickup_assemble
 from coordinator_core.session_baton import store
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -49,7 +50,7 @@ def _ensure_session_dir(repo: Path, sid: str) -> Path:
     session hub already relies on (``coordinator_core.session.claims``'s own
     ``if not Path(sdir).is_dir(): return`` no-op posture at the sibling
     ``touched.txt`` writer)."""
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     return sdir
 
@@ -86,7 +87,7 @@ def _make_non_dot_git_common_dir_repo(tmp_path):
 def test_baton_path_lives_under_git_coordinator_sessions(tmp_path):
     repo = _make_repo(tmp_path)
     path = store.baton_path("sid-1", cwd=str(repo))
-    assert path == repo / ".git" / "coordinator-sessions" / "sid-1" / "baton.json"
+    assert path == session_dir_for(repo / ".git", "sid-1") / "baton.json"
 
 
 def test_baton_path_none_for_empty_sid(tmp_path):
@@ -111,7 +112,7 @@ def test_read_baton_missing_file_returns_default_skeleton(tmp_path):
 
 def test_read_baton_corrupt_file_degrades_to_default(tmp_path):
     repo = _make_repo(tmp_path)
-    path = repo / ".git" / "coordinator-sessions" / "sid-corrupt" / "baton.json"
+    path = session_dir_for(repo / ".git", "sid-corrupt") / "baton.json"
     path.parent.mkdir(parents=True)
     path.write_text("{not json", encoding="utf-8")
     record = store.read_baton("sid-corrupt", cwd=str(repo))
@@ -229,7 +230,7 @@ def test_merge_baton_promoted_to_explicit_none_is_settable(tmp_path):
 
 def test_write_baton_absent_session_dir_creates_nothing_and_says_so(tmp_path, capsys):
     repo = _make_repo(tmp_path)
-    sessions_root = repo / ".git" / "coordinator-sessions"
+    sessions_root = hub_for_common(repo / ".git")
     assert not sessions_root.exists()
 
     ok = store.write_baton(
@@ -245,7 +246,7 @@ def test_write_baton_absent_session_dir_creates_nothing_and_says_so(tmp_path, ca
 
 def test_merge_baton_absent_session_dir_creates_nothing_and_says_so(tmp_path, capsys):
     repo = _make_repo(tmp_path)
-    sessions_root = repo / ".git" / "coordinator-sessions"
+    sessions_root = hub_for_common(repo / ".git")
     assert not sessions_root.exists()
 
     merged = store.merge_baton("sid-nodir2", cwd=str(repo), first_prompt="p1")
@@ -268,7 +269,7 @@ def test_write_baton_takes_lock_under_non_dot_git_common_dir(tmp_path):
     resolved common dir; an unlocked fallback never does."""
     workdir, common_dir = _make_non_dot_git_common_dir_repo(tmp_path)
     sid = "sid-non-dot-git"
-    sdir = common_dir / "coordinator-sessions" / sid
+    sdir = session_dir_for(common_dir, sid)
     sdir.mkdir(parents=True, exist_ok=True)
 
     ok = store.write_baton(sid, store.default_record(sid), cwd=str(workdir))

@@ -15,7 +15,7 @@ an invalid record — and bumping their ``const`` is a change to a contract
 this repo does not own and cannot unilaterally version
 (``CLAUDE.md`` § Architecture: two hard external deps whose schemas we must
 not break). So the narrowing lives in a claude-klabauter-owned artifact beside it:
-``.git/coordinator-sessions/<sid>/tier-u-grant-scope.json``. Their record
+``.coordinator-local/coordinator-sessions/<sid>/tier-u-grant-scope.json``. Their record
 stays byte-identical and schema-valid; nothing they validate changes.
 
 THE SEMANTICS ARE NARROW-ONLY, AND THAT IS THE SAFETY PROPERTY

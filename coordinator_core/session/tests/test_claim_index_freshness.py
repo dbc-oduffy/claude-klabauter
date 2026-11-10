@@ -68,7 +68,7 @@ def test_second_claim_by_existing_session_seen_by_next_lookup(tmp_path):
 
 def test_second_claim_via_append_touch_claims_seen_by_next_lookup(tmp_path):
     root = str(tmp_path)
-    base = os.path.join(root, ".git", "coordinator-sessions")
+    base = os.path.join(root, ".coordinator-local", "coordinator-sessions")
     touch_record.append_touch_claims(["a.py"], "peer", root, kind=W)
     assert claim_index.lookup(["a.py", "b.py"], sessions_dir=base)["b.py"] == []
 

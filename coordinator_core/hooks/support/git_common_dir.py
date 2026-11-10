@@ -3,6 +3,14 @@ from __future__ import annotations
 
 import os
 
+from coordinator_core.session_hub_path import hub_for_common
+
+
+def resolve_session_hub(git_root: str) -> str:
+    """Session hub directory for *git_root*'s repo, or ``""`` outside git."""
+    common = resolve_git_common_dir(git_root)
+    return str(hub_for_common(common)) if common else ""
+
 
 def resolve_git_common_dir(git_root: str) -> str:
     try:

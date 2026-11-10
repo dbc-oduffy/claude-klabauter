@@ -9,6 +9,8 @@ behaviour.
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import os
 import subprocess
 import time
@@ -332,7 +334,7 @@ def test_claim_plan_for_execution_refuses_a_blocked_plan_and_leaves_no_claim(
     assert result is False
     assert elapsed_ms < 200, f"claim_plan(for_execution) process_time {elapsed_ms:.1f}ms over the 200ms bar"
     assert plan.read_text(encoding="utf-8") == original
-    claim_dir = repo / ".git" / "coordinator-sessions" / "plan-claims" / "blocked-plan"
+    claim_dir = hub_for_common(repo / ".git") / "plan-claims" / "blocked-plan"
     assert not claim_dir.is_dir()
 
 

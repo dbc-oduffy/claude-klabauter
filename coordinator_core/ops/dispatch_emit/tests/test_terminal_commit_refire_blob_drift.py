@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import review_prep
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -74,7 +75,7 @@ def _write(repo: Path, rel: str, text: str) -> None:
 
 def _record(repo: Path, rel: str, text: str, at: float, session: str = SID) -> None:
     """The run session's touch event: it wrote ``text`` to ``rel`` at ``at``."""
-    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / session)
+    sink = touch_record.sink_path(session_dir_for(repo / ".git", session))
     touch_record.append_event(
         sink, session_id=session, agent_id=None, verb="T", path=rel,
         content_hash=_sha(text), kind="w", timestamp=at,

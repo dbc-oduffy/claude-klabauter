@@ -50,6 +50,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, TYPE_CHECKING, Tuple
 from coordinator_core import machine_path_leak
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared, _git_tree_facts, commit_tripwires
 from coordinator_core.bash_guards._command_tokenizer import (
     _strip_heredocs as _bt_strip_heredocs,
@@ -594,7 +595,7 @@ def check_validate_commit(
     if session_id:
         git_root = _toplevel_or_probe(_cwd)
         if git_root:
-            sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
+            sessions_root = str(hub_for_common(Path(git_root) / ".git"))
             session_dir = os.path.join(sessions_root, session_id)
             if os.path.isdir(session_dir):
                 # lazy, per-call import.

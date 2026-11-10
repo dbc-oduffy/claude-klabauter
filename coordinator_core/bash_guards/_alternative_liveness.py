@@ -122,6 +122,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import coordinator_core.bash_guards as _pkg
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling as _exceeds_tokenizable_ceiling,
 )
@@ -429,18 +430,19 @@ def _scratch_git_repo():
 
 def _make_backpointer(git_root: str, agent_id: str, subagent_type: str, em_sid: str = "altliveemsess") -> None:
     """Writes the on-disk back-pointer chain
-    (``.git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt`` ->
-    ``.git/coordinator-sessions/<em_sid>/dispatched-agents.txt``)
+    (``.coordinator-local/coordinator-sessions/.agents/<agent_id>/em-session-id.txt`` ->
+    ``.coordinator-local/coordinator-sessions/<em_sid>/dispatched-agents.txt``)
     ``block_subagent_plan_body_bash_write`` reads its SECONDARY identity leg
     from -- that guard, unlike its siblings, does not consult the payload's
     PRIMARY ``agent_type`` field at all (see
     ``_read_backpointer_subagent_type``), so a bare payload cannot trigger
     it; this fixture is the hermetic substitute for a real dispatch."""
-    agents_dir = os.path.join(git_root, ".git", "coordinator-sessions", ".agents", agent_id)
+    hub = hub_for_common(Path(git_root) / ".git")
+    agents_dir = os.path.join(str(hub), ".agents", agent_id)
     os.makedirs(agents_dir, exist_ok=True)
     with open(os.path.join(agents_dir, "em-session-id.txt"), "w", encoding="utf-8", newline="\n") as fh:
         fh.write(em_sid + "\n")
-    sess_dir = os.path.join(git_root, ".git", "coordinator-sessions", em_sid)
+    sess_dir = os.path.join(str(hub), em_sid)
     os.makedirs(sess_dir, exist_ok=True)
     with open(os.path.join(sess_dir, "dispatched-agents.txt"), "a", encoding="utf-8", newline="\n") as fh:
         fh.write("%s\t%s\t%s\n" % (agent_id, "altlive-teammate", subagent_type))
@@ -1166,7 +1168,7 @@ def _isolated_session_scope():
     needed here.
 
     The latch marker lands in a private temp directory, never the real
-    repo's `.git/coordinator-sessions/`: a phantom `altlive-probe-<hex>`
+    repo's `.coordinator-local/coordinator-sessions/`: a phantom `altlive-probe-<hex>`
     directory there, however briefly, reads as a live peer session to every
     real session's liveness scan and to a concurrent xdist worker's hub-litter
     check -- cleanup after the fact cannot win that race."""

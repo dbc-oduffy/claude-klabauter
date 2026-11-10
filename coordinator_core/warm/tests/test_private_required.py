@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import pytest
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.warm.door import build as builder
 from coordinator_core.warm.door import private_required
 
@@ -89,7 +90,7 @@ def private_door(tmp_path):
     root=make_stub_engine_root(tmp_path)
     repo=(tmp_path/"repo");repo.mkdir();(repo/".git").mkdir()
     settings=tmp_path/"settings";settings.mkdir()
-    fire=repo/".git"/"coordinator-sessions"/"workflow-fires"/"headless"/("a"*32)
+    fire=hub_for_common(repo/".git")/"workflow-fires"/"headless"/("a"*32)
     aliases=fire/"private-bin";aliases.mkdir(parents=True)
     bindings=fire/"worker-bindings.json";bindings.write_text("{}")
     executable=aliases/"coordinator-invoke.exe";shutil.copyfile(binary,executable)
@@ -162,7 +163,7 @@ def test_private_preflight_rejects_unc_before_filesystem():
 
 def test_required_native_adjacent_root_embedded_nul_refuses(private_door):
     root,repo,settings,row,write,run=private_door
-    aliases=repo/".git"/"coordinator-sessions"/"workflow-fires"/"headless"/row["fire_id"]/"private-bin"
+    aliases=hub_for_common(repo/".git")/"workflow-fires"/"headless"/row["fire_id"]/"private-bin"
     (aliases/"door.engine-root.txt").write_bytes(str(root).encode()+b"\x00unexpected")
     code,out,err=run()
     assert code!=0 and "not-delivered" in err

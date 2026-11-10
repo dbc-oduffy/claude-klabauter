@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """box-memory-snapshot.py [--top N] [--admit-peak GIB] -- one-screen box memory snapshot (Windows and macOS).
 
 On macOS available is the kernel figure, commit limit is physical + swap capacity, nonpaged pool

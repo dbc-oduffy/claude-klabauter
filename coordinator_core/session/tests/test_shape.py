@@ -54,7 +54,7 @@ def _make_repo(tmp_path):
 
 
 def _sdir(repo, sid):
-    d = Path(repo) / ".git" / "coordinator-sessions" / sid
+    d = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -133,7 +133,7 @@ class TestSessionShapeSet:
         _sdir(repo, "s1")
         ok = shape.session_shape_set("s1", {"pickup": {"file": "h.md"}}, cwd=str(repo))
         assert ok is True
-        shape_file = Path(repo) / ".git" / "coordinator-sessions" / "s1" / "session-shape.json"
+        shape_file = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s1" / "session-shape.json"
         data = json.loads(shape_file.read_text())
         assert data["schema_version"] == 1
         assert data["session_id"] == "s1"
@@ -145,7 +145,7 @@ class TestSessionShapeSet:
         ok = shape.session_shape_set("s-str", '{"plan": {"id": 7}}', cwd=str(repo))
         assert ok is True
         data = json.loads(
-            (Path(repo) / ".git" / "coordinator-sessions" / "s-str" / "session-shape.json").read_text()
+            (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s-str" / "session-shape.json").read_text()
         )
         assert data["plan"] == {"id": 7}
 
@@ -170,7 +170,7 @@ class TestSessionShapeSet:
         shape.session_shape_set("s2", {"actioned_memos": [{"id": "a"}]}, cwd=str(repo))
         shape.session_shape_set("s2", {"actioned_memos": [{"id": "b"}]}, cwd=str(repo))
         data = json.loads(
-            (Path(repo) / ".git" / "coordinator-sessions" / "s2" / "session-shape.json").read_text()
+            (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s2" / "session-shape.json").read_text()
         )
         assert data["actioned_memos"] == [{"id": "a"}, {"id": "b"}]
 
@@ -180,7 +180,7 @@ class TestSessionShapeSet:
         shape.session_shape_set("s3", {"pickup": {"v": 1}}, cwd=str(repo))
         shape.session_shape_set("s3", {"pickup": {"v": 2}}, cwd=str(repo))
         data = json.loads(
-            (Path(repo) / ".git" / "coordinator-sessions" / "s3" / "session-shape.json").read_text()
+            (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s3" / "session-shape.json").read_text()
         )
         assert data["pickup"] == {"v": 2}
 
@@ -194,7 +194,7 @@ class TestSessionShapeSet:
             cwd=str(repo),
         )
         data = json.loads(
-            (Path(repo) / ".git" / "coordinator-sessions" / "s4" / "session-shape.json").read_text()
+            (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s4" / "session-shape.json").read_text()
         )
         assert data["schema_version"] == 1
         assert data["session_id"] == "s4"
@@ -205,13 +205,13 @@ class TestSessionShapeSet:
         # Do NOT pre-create the session dir.
         ok = shape.session_shape_set("s-new", {"pickup": {}}, cwd=str(repo))
         assert ok is True
-        assert (Path(repo) / ".git" / "coordinator-sessions" / "s-new" / "session-shape.json").is_file()
+        assert (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s-new" / "session-shape.json").is_file()
 
     def test_lock_released_on_success(self, tmp_path):
         repo = _make_repo(tmp_path)
         _sdir(repo, "s5")
         shape.session_shape_set("s5", {"pickup": {}}, cwd=str(repo))
-        lock = Path(repo) / ".git" / "coordinator-sessions" / "s5" / "session-shape.lock"
+        lock = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s5" / "session-shape.lock"
         assert not lock.exists()
 
     def test_no_temp_leftovers_after_write(self, tmp_path):
@@ -414,7 +414,7 @@ class TestProducerSet:
         )
         assert ok is True
         data = json.loads(
-            (Path(repo) / ".git" / "coordinator-sessions" / "p1" / "session-shape.json").read_text()
+            (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "p1" / "session-shape.json").read_text()
         )
         assert data["producer"]["typed_command"] == "/pickup"
         assert "captured_at" in data["producer"]
@@ -426,7 +426,7 @@ class TestProducerSet:
             "p2", typed_command="unresolved", cwd=str(repo)
         )
         data = json.loads(
-            (Path(repo) / ".git" / "coordinator-sessions" / "p2" / "session-shape.json").read_text()
+            (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "p2" / "session-shape.json").read_text()
         )
         assert data["producer"]["typed_command"] == "unresolved"
 
@@ -437,7 +437,7 @@ class TestProducerSet:
             "p3", typed_command=None, cwd=str(repo)
         )
         raw = (
-            Path(repo) / ".git" / "coordinator-sessions" / "p3" / "session-shape.json"
+            Path(repo) / ".coordinator-local" / "coordinator-sessions" / "p3" / "session-shape.json"
         ).read_text()
         data = json.loads(raw)
         # Present key, JSON null -- not an absent key.

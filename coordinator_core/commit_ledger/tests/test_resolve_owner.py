@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.commit_ledger import resolve_owner
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.test_baton_assemble import _init_repo
 
 pytestmark = [
@@ -22,7 +23,7 @@ def _seed_handoff_claim(
     claimed_at: str | None = None,
     stage: str | None = None,
 ) -> Path:
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
     if claimed_at is not None:
@@ -33,7 +34,7 @@ def _seed_handoff_claim(
 
 
 def _agent_dir(repo_root: Path, agent_id: str, owner_sid: str) -> Path:
-    agent_dir = repo_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    agent_dir = hub_for_common(repo_root / ".git") / ".agents" / agent_id
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "em-session-id.txt").write_text(owner_sid + "\n", encoding="utf-8")
     return agent_dir
@@ -91,7 +92,7 @@ def test_agent_commit_resolves_via_owning_em_session(tmp_path):
 def test_agent_dir_with_missing_back_pointer_raises(tmp_path):
     _init_repo(tmp_path)
     agent_id = "agent-orphaned"
-    orphan_dir = tmp_path / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    orphan_dir = hub_for_common(tmp_path / ".git") / ".agents" / agent_id
     orphan_dir.mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(ValueError, match="back-pointer"):

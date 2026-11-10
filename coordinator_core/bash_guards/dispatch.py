@@ -384,6 +384,7 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "destructive-git-clean": ("git",),
     "destructive-git-revert": ("git",),
     "blanket-git-add": ("git",),
+    "stale-temp-index-base": ("git",),
     "destructive-rm": ("rm",),
     "runaway-find": ("find",),
     "stale-write": (">", "tee"),
@@ -2292,6 +2293,54 @@ def _evaluate_payload_json_budgeted(
     return _held_demoted
 
 
+_STALE_INDEX_NAMED_PATHS = 5
+
+
+def _check_stale_temp_index_base(cmd: str, payload: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Deny a `GIT_INDEX_FILE=<tmp> git commit` whose index undoes a commit landed on HEAD.
+
+    Spawns nothing unless a commit segment carries a leading GIT_INDEX_FILE
+    assignment. Fails open on any probe failure.
+    """
+    if not cmd or "GIT_INDEX_FILE" not in cmd:
+        return None
+    tokens = _dc._bt_tokenize_full_command(_dc._bt_strip_heredocs(_dc._crlf_strip(cmd)))
+    if tokens is None:
+        return None
+    from coordinator_core.bash_guards._stale_index_base import stale_base_reverted_paths
+
+    for seg_tokens, _pipe in _dc._bt_segments_from_tokens_with_pipe_flag(tokens):
+        if not seg_tokens or _dc._bt_git_resolved_subcommand(seg_tokens) != "commit":
+            continue
+        if _dc._bt_commit_is_noop_invocation(seg_tokens):
+            continue
+        index_file = _dc._bt_git_index_file_env(seg_tokens)
+        if not index_file:
+            continue
+        reverted = stale_base_reverted_paths(
+            index_file, _dc._bt_probe_cwd(seg_tokens, payload, cmd), _dc._dc_git_probe._run_git
+        )
+        if not reverted:
+            continue
+        from coordinator_core.bash_guards._rewrite_support import _deny_record, _offer
+
+        shown = ", ".join(reverted[:_STALE_INDEX_NAMED_PATHS])
+        if len(reverted) > _STALE_INDEX_NAMED_PATHS:
+            shown += " (+%d more)" % (len(reverted) - _STALE_INDEX_NAMED_PATHS)
+        text = (
+            "BLOCKED: this index predates HEAD: committing it reverts %s from commits "
+            "landed since. Rebuild the index from the current HEAD (read-tree HEAD) "
+            "and reapply your hunks." % shown
+        )
+        return _deny_record(
+            "stale-temp-index-base",
+            text,
+            em_text=text,
+            members=(_offer("GIT_INDEX_FILE=<tmp> git read-tree HEAD", "<tmp>, your scratch index"),),
+        )
+    return None
+
+
 def _build_guard_chain(
     cmd: str,
     session_id: str,
@@ -2671,6 +2720,7 @@ def _build_guard_chain(
         # entry: `docs/reference/guard-tool-name-membership.md` § 3.
         GuardEntry("destructive-git-revert", lambda: _git_revert_full()[0], True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("blanket-git-add", lambda: _dc.check_blanket_git_add(cmd, session_id, hook_payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
+        GuardEntry("stale-temp-index-base", lambda: _check_stale_temp_index_base(cmd, payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=COMMAND_TOOL_NAMES),
         GuardEntry("runaway-find", lambda: _dc.check_runaway_find(cmd, session_id, payload=payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=("Bash",)),
         GuardEntry("block-worktree-creation", lambda: _check_worktree_creation(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_worktree_creation)),
         GuardEntry("p4-verb-fence", lambda: _check_p4_verb_fence(payload), True, GuardBand.CONFINEMENT_DENY, AdvisoryValue.NOT_COST_ARGUED, matchers=tuple(_matchers_p4_verb_fence)),

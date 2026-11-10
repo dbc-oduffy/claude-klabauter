@@ -29,7 +29,7 @@ module's output as one input among several.
 
 Claimer resolution is ledger-first (C5, 2026-08-07) via
 ``coordinator_core.claim_state.resolve_claim_state`` — the ledger
-(``<common_dir>/coordinator-sessions/handoff-claims/``, branch-independent)
+(``<session hub>/handoff-claims/``, branch-independent)
 wins over the tracked-frontmatter mirror whenever it holds a live claim, so a
 handoff whose mirror reverted to ``status: open`` on a branch switch (while
 the ledger still holds the claim) is no longer silently excluded from this

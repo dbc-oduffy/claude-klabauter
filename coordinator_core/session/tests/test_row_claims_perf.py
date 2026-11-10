@@ -49,7 +49,7 @@ def test_row_claim_blocker_spawns_nothing(repo, monkeypatch):
     monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: True)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-perf")
     assert claims.claim_artifact("row", _ROW, baton_repo_root=str(repo), cwd=str(repo))
-    sessions_dir = repo / ".git" / "coordinator-sessions"
+    sessions_dir = repo / ".coordinator-local" / "coordinator-sessions"
     key = claims.row_claim_key(_ROW)
     with _count_spawns_attributed(monkeypatch) as spawns:
         assert claims.row_claim_blocker(sessions_dir, key, "sid-other") == "sid-perf"

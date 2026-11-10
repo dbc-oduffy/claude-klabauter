@@ -104,6 +104,7 @@ from coordinator_core.ops.ceremony.branch_resolution import (
     analyze_session_scoping,
     session_commit_count_attributed,
 )
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.telemetry.op_latency import record_fact_span
 
 #: Instruments the FACT BOUNDARY (C1, plan
@@ -363,7 +364,7 @@ def _session_pickup_kind_impl(worktree_root: Path, common_dir: Path, sid: str) -
     """Untimed body of `session_pickup_kind` — see that function's docstring
     for the full contract; this exists only so `_timed_fact` can wrap the
     call without altering what is returned."""
-    shape_path = common_dir / "coordinator-sessions" / sid / "session-shape.json"
+    shape_path = session_dir_for(common_dir, sid) / "session-shape.json"
     shape, source = _read_session_shape(common_dir, sid)
 
     if source == "absent" and shape_path.exists():

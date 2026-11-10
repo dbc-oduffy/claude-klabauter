@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Static fleet scan for test code that writes outside its repo or scratch.
 
 Contract: coordinator/docs/wiki/test-design-discipline/test-filesystem-containment.md.

@@ -366,6 +366,6 @@ def test_bounded_batch_of_ceiling_minus_five_files_leaves_every_touch_event(monk
         for i in range(n):
             claimed_write.replace_bytes(tmp_path / f"f{i}.txt", b"x")
 
-    log = tmp_path / ".git" / "coordinator-sessions" / "sid-declared-bound" / "touch-record.jsonl"
+    log = tmp_path / ".coordinator-local" / "coordinator-sessions" / "sid-declared-bound" / "touch-record.jsonl"
     events = [touch_record.decode_line(l) for l in touch_record.iter_complete_lines(log.read_bytes())]
     assert len(events) == n

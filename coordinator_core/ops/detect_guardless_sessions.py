@@ -6,7 +6,7 @@ Purpose: coordinator guards reach a session only because it was launched via
 `claude-author`, which execs `claude --plugin-dir <DoE>/coordinator`. A session
 launched as bare `claude` (cmd.exe, `-NoProfile`, or explicit `claude.exe`)
 gets ZERO coordinator guards, in any repo, silently. Session records under
-`.git/coordinator-sessions/` are written BY the coordinator hooks, so a
+`.coordinator-local/coordinator-sessions/` are written BY the coordinator hooks, so a
 guardless session leaves no record there — absence in that ledger is
 unobservable by construction. This module derives its signal from something
 that exists INDEPENDENTLY of coordinator hooks instead: the live OS process
@@ -24,7 +24,7 @@ coordinator plugin directory. Rejected alternatives, and why:
   - Harness-written per-session transcripts (`~/.claude/projects/<proj>/
     <session-id>.jsonl`) — real, verified to exist independently of
     coordinator hooks (see run-report sidecar), but the delta against
-    `.git/coordinator-sessions/<id>/` is NOT a clean guardless signal:
+    `.coordinator-local/coordinator-sessions/<id>/` is NOT a clean guardless signal:
     dispatched subagents get their own transcript files too, without ever
     writing their own coordinator-sessions directory (only the top-level EM
     session writes one). Diffing those two populations conflates "guardless

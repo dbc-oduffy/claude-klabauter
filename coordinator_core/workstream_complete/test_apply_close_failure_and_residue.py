@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ceremony_common import apply_halt
 from coordinator_core.session import scope
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import apply as ws_apply
 
@@ -196,7 +197,7 @@ def test_an_owned_file_the_commit_landed_is_not_residue(monkeypatch, repo: Path)
 
 def test_a_held_in_flight_baton_with_no_stamp_is_residue(monkeypatch, repo: Path) -> None:
     baton = "2026-10-14-run.md"
-    claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / baton
+    claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / baton
     claim_dir.mkdir(parents=True)
     (claim_dir / "session_id").write_text(SID, encoding="utf-8")
     handoffs = repo / "state" / "handoffs"

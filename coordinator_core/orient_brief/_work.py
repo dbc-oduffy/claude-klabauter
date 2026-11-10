@@ -35,6 +35,7 @@ from coordinator_core.contract.decision_object.reader_result import (
     truncate_external_text,
 )
 from coordinator_core.lifecycle_constants import PLAN_ORPHAN_TERMINAL_STATUS
+from coordinator_core.session_hub_path import hub_for_common
 
 _LIST_CAP = 15
 _GATE_STALE_DAYS = 6
@@ -243,7 +244,7 @@ def _live_ledger_claims(root: Path, names: list[str]) -> set[str]:
     if not common:
         return set()
     try:
-        present = set(os.listdir(Path(common) / "coordinator-sessions" / "handoff-claims"))
+        present = set(os.listdir(hub_for_common(Path(common)) / "handoff-claims"))
     except OSError:
         return set()
     contested = [n for n in names if n in present]

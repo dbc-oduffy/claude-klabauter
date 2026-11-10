@@ -2372,8 +2372,9 @@ def _log_failed_groups_diagnostic(
     try:
         from coordinator_core.lifecycle import git_common_dir
 
-        common_dir = git_common_dir(Path(worktree_root))
-        log_dir = common_dir / "coordinator-sessions" / "logs"
+        from coordinator_core.session_hub_path import hub_for_common
+
+        log_dir = hub_for_common(git_common_dir(Path(worktree_root))) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         lines = [
@@ -2430,8 +2431,9 @@ def _log_excluded_diagnostic(
     try:
         from coordinator_core.lifecycle import git_common_dir
 
-        common_dir = git_common_dir(Path(worktree_root))
-        log_dir = common_dir / "coordinator-sessions" / "logs"
+        from coordinator_core.session_hub_path import hub_for_common
+
+        log_dir = hub_for_common(git_common_dir(Path(worktree_root))) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         preview = excluded[:_EXCLUDED_LOG_PREVIEW_COUNT]
@@ -2486,8 +2488,9 @@ def _log_dropped_groups_diagnostic(
     try:
         from coordinator_core.lifecycle import git_common_dir
 
-        common_dir = git_common_dir(Path(worktree_root))
-        log_dir = common_dir / "coordinator-sessions" / "logs"
+        from coordinator_core.session_hub_path import hub_for_common
+
+        log_dir = hub_for_common(git_common_dir(Path(worktree_root))) / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         lines = [

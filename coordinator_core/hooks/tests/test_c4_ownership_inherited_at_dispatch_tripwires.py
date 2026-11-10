@@ -63,12 +63,13 @@ from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.session.scope_report import assert_paths_in_session_scope
 from coordinator_core.session import touch_record
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Real git is load-bearing for the AC6 behavioural tripwire: it dispatches
 # real payloads at track_touched_files._handler against a real repo's
 # `git_common_dir`, asserting claims land under the actual
-# `.git/coordinator-sessions/<sid>/touch-record.jsonl` sink -- a mocked
+# `.coordinator-local/coordinator-sessions/<sid>/touch-record.jsonl` sink -- a mocked
 # common_dir would not exercise the real session-dir bootstrap this pin
 # covers.
 #
@@ -197,7 +198,7 @@ def _touch_record_entries(common_dir: Path, session_id: str) -> list[str]:
     splitting the line by hand -- the encoding is that module's contract and
     a hand-rolled parser here would drift from it exactly as the retired
     `touched.txt` path did."""
-    sink = common_dir / "coordinator-sessions" / session_id / "touch-record.jsonl"
+    sink = session_dir_for(common_dir, session_id) / "touch-record.jsonl"
     entries: list[str] = []
     # `discover_family` resolves the base sink PLUS any rotated siblings --
     # the same read contract `session/scope.py` and `session/claims.py` use.

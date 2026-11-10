@@ -59,6 +59,7 @@ import pytest
 import coordinator_core.baton_assemble.apply as ba_apply
 import coordinator_core.pickup_assemble as pa
 from coordinator_core.session import claims as claims_mod
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external git process; runs at cadence gates, not per-commit.
@@ -112,7 +113,7 @@ def _seed_handoff(
 
 
 def _make_ledger_claim(repo: Path, basename: str, holder_sid: str) -> Path:
-    claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / basename
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(f"{holder_sid}\n", encoding="utf-8")
     (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
@@ -207,12 +208,12 @@ def repo(tmp_path):
     # to already exist and no-ops, observably, when it does not — pre-create
     # it so `_adopt_into_baton`'s advisory append is actually exercised
     # rather than silently declining for an unrelated reason.
-    (r / ".git" / "coordinator-sessions" / SELF_SID).mkdir(parents=True, exist_ok=True)
+    (session_dir_for(r / ".git", SELF_SID)).mkdir(parents=True, exist_ok=True)
     return r
 
 
 def _baton_json_path(repo: Path) -> Path:
-    return repo / ".git" / "coordinator-sessions" / SELF_SID / "baton.json"
+    return hub_for_common(repo / ".git") / SELF_SID / "baton.json"
 
 
 # ---------------------------------------------------------------------------
@@ -266,9 +267,9 @@ def test_sequential_pickup_unifies_with_predicate_on(repo, monkeypatch):
     assert f"continued_into: {SUCCESSOR_REL}" in a_text
 
     # Step 3 landed: parent's claim released, successor claimed.
-    assert not (repo / ".git" / "coordinator-sessions" / "handoff-claims" / "a.md").is_dir()
+    assert not (hub_for_common(repo / ".git") / "handoff-claims" / "a.md").is_dir()
     successor_claim = (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / SUCCESSOR_NAME
+        hub_for_common(repo / ".git") / "handoff-claims" / SUCCESSOR_NAME
     )
     assert successor_claim.is_dir()
     assert (successor_claim / "session_id").read_text(encoding="utf-8").strip() == SELF_SID
@@ -300,10 +301,10 @@ def test_simultaneous_pickup_degraded_ordering_unifies_with_predicate_on(repo, m
         text = (repo / "state" / "handoffs" / name).read_text(encoding="utf-8")
         assert "deployment_state: continued" in text
         assert not (
-            repo / ".git" / "coordinator-sessions" / "handoff-claims" / name
+            hub_for_common(repo / ".git") / "handoff-claims" / name
         ).is_dir()
     successor_claim = (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / SUCCESSOR_NAME
+        hub_for_common(repo / ".git") / "handoff-claims" / SUCCESSOR_NAME
     )
     assert successor_claim.is_dir()
 
@@ -428,10 +429,10 @@ def test_kill_after_parents_stamped_before_any_claim_release_resumes_same_succes
     assert called2 == []  # RESUME path — never re-mints
     for name in ("a.md", "b.md"):
         assert not (
-            repo / ".git" / "coordinator-sessions" / "handoff-claims" / name
+            hub_for_common(repo / ".git") / "handoff-claims" / name
         ).is_dir()
     successor_claim = (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / SUCCESSOR_NAME
+        hub_for_common(repo / ".git") / "handoff-claims" / SUCCESSOR_NAME
     )
     assert successor_claim.is_dir()
     # SAME successor as the one the original mint produced — identity, not
@@ -467,12 +468,12 @@ def test_kill_after_successor_claimed_before_releasing_any_parent_resumes(
 
     assert len(called) == 1
     successor_claim = (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / SUCCESSOR_NAME
+        hub_for_common(repo / ".git") / "handoff-claims" / SUCCESSOR_NAME
     )
     assert successor_claim.is_dir()  # the claim DID land before the crash
     for name in ("a.md", "b.md"):
         assert (
-            repo / ".git" / "coordinator-sessions" / "handoff-claims" / name
+            hub_for_common(repo / ".git") / "handoff-claims" / name
         ).is_dir()  # neither parent released yet
 
     # Restore the REAL release primitive for the resume pass — only the
@@ -492,7 +493,7 @@ def test_kill_after_successor_claimed_before_releasing_any_parent_resumes(
     assert called2 == []
     for name in ("a.md", "b.md"):
         assert not (
-            repo / ".git" / "coordinator-sessions" / "handoff-claims" / name
+            hub_for_common(repo / ".git") / "handoff-claims" / name
         ).is_dir()
     assert successor_claim.is_dir()
 
@@ -529,11 +530,11 @@ def test_kill_after_releasing_one_parent_before_the_other_resumes(repo, monkeypa
 
     assert len(called) == 1
     successor_claim = (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / SUCCESSOR_NAME
+        hub_for_common(repo / ".git") / "handoff-claims" / SUCCESSOR_NAME
     )
     assert successor_claim.is_dir()
     released = [n for n in ("a.md", "b.md") if not (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / n
+        hub_for_common(repo / ".git") / "handoff-claims" / n
     ).is_dir()]
     assert len(released) == 1  # exactly one parent released before the crash
 
@@ -550,7 +551,7 @@ def test_kill_after_releasing_one_parent_before_the_other_resumes(repo, monkeypa
 
     assert called2 == []
     successor_claim = (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / SUCCESSOR_NAME
+        hub_for_common(repo / ".git") / "handoff-claims" / SUCCESSOR_NAME
     )
     assert successor_claim.is_dir()
 
@@ -595,9 +596,9 @@ def test_resume_refuses_a_dangling_continued_into(repo, monkeypatch):
         pa._resume_pending_unification(repo)
 
     # The real claim survived the refusal; no phantom claim was taken.
-    assert (repo / ".git" / "coordinator-sessions" / "handoff-claims" / "a.md").is_dir()
+    assert (hub_for_common(repo / ".git") / "handoff-claims" / "a.md").is_dir()
     assert not (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / "gone.md"
+        hub_for_common(repo / ".git") / "handoff-claims" / "gone.md"
     ).is_dir()
 
 
@@ -620,7 +621,7 @@ def test_run_unification_predicate_off_mutates_nothing(repo, monkeypatch):
         text = (repo / "state" / "handoffs" / name).read_text(encoding="utf-8")
         assert "continued" not in text
         assert (
-            repo / ".git" / "coordinator-sessions" / "handoff-claims" / name
+            hub_for_common(repo / ".git") / "handoff-claims" / name
         ).is_dir()
 
 
@@ -651,10 +652,10 @@ def test_run_over_several_batons_yields_one_successor_carrying_them_as_legs(
         assert "deployment_state: continued" in text
         assert f"continued_into: {SUCCESSOR_REL}" in text
         assert not (
-            repo / ".git" / "coordinator-sessions" / "handoff-claims" / name
+            hub_for_common(repo / ".git") / "handoff-claims" / name
         ).is_dir()
     assert (
-        repo / ".git" / "coordinator-sessions" / "handoff-claims" / SUCCESSOR_NAME
+        hub_for_common(repo / ".git") / "handoff-claims" / SUCCESSOR_NAME
     ).is_dir()
 
 
@@ -722,4 +723,4 @@ def test_run_unification_never_touches_a_foreign_held_baton(repo, monkeypatch):
     assert report["parents"] == []
     assert not (repo / SUCCESSOR_REL).exists()
     assert "continued" not in foreign.read_text(encoding="utf-8")
-    assert (repo / ".git" / "coordinator-sessions" / "handoff-claims" / "a.md").is_dir()
+    assert (hub_for_common(repo / ".git") / "handoff-claims" / "a.md").is_dir()

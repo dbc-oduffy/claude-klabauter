@@ -11,6 +11,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops.dispatch_emit import ask_contract
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
@@ -52,7 +53,7 @@ def _write(repo, rel, text):
 
 def _touch(repo, rel, text, kind, ts):
     touch_record.append_event(
-        touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID),
+        touch_record.sink_path(session_dir_for(repo / ".git", SID)),
         session_id=SID, agent_id=None, verb="T", path=rel,
         content_hash=_sha(text), kind=kind, timestamp=ts,
     )

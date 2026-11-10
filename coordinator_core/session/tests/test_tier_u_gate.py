@@ -67,7 +67,7 @@ def _make_repo(tmp_path):
 
 
 def _live_session(repo, sid):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(
         json.dumps({"pid": "999", "last_activity": core.now_iso()}, indent=2) + "\n",

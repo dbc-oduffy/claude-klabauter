@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """agy PreToolUse hook: the Klabauter guard first, then keep a live agy leg for this conversation.
 
 Order: unimatrix-host-guard.py (loaded as a sibling; `--engine-root <path>` selects the engine) answers

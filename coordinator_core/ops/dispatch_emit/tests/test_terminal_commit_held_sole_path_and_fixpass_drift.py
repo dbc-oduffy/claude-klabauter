@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit import review_edits  # noqa: I001 -- after terminal_commit: import order breaks a cycle
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
@@ -60,7 +61,7 @@ def repo(tmp_path, monkeypatch):
 
 
 def _session_sink(repo: Path) -> Path:
-    return touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SELF)
+    return touch_record.sink_path(session_dir_for(repo / ".git", SELF))
 
 
 def _run(repo: Path, request: CommitRequest, **params) -> dict:
@@ -129,7 +130,7 @@ def test_a_held_chunk_with_a_disjoint_landed_chunk_commits_only_the_landed_paths
 
 
 def _agent_write(repo: Path, rel: str, text: str, at: float) -> None:
-    hub = repo / ".git" / "coordinator-sessions"
+    hub = hub_for_common(repo / ".git")
     (hub / SELF).mkdir(parents=True, exist_ok=True)
     (hub / SELF / "dispatched-agents.txt").write_text(f"{AGENT}\thost\tcoordinator:code-reviewer\t1\n", encoding="utf-8")
     agent_dir = hub / ".agents" / AGENT

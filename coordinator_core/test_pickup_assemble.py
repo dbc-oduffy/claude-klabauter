@@ -11,6 +11,7 @@ Run: cd /Users/example-operator/X/claude-klabauter && python3 -m pytest coordina
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.tests.git_seed import seeded_repo
 import json
 import os
@@ -83,6 +84,9 @@ def _git_commit_backdated(repo: Path, message: str, iso_date: str) -> subprocess
 
 def _init_repo(repo: Path) -> None:
     seeded_repo(repo, branch="work/test/2026-01-01", email="test@example.com", name="Test")
+    (repo / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    with open(repo / ".git" / "info" / "exclude", "a", encoding="utf-8") as fh:
+        fh.write(".coordinator-local/\n")  # as a real checkout's .gitignore: the session hub is not dirt
 
 
 def _seed_handoff(repo: Path, name: str, status: str = "open", deployment_state: str = "active", kind: str = "", scope: list[str] | None = None) -> Path:
@@ -177,7 +181,7 @@ class TestHandoffBranch:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
-        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("live-peer-sid\n", encoding="utf-8")
         (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
@@ -200,7 +204,7 @@ class TestHandoffBranch:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
-        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
         (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
@@ -222,7 +226,7 @@ class TestHandoffBranch:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
-        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
         (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
@@ -246,7 +250,7 @@ class TestHandoffBranch:
         repo = tmp_path / "repo"
         _init_repo(repo)
         _seed_handoff(repo, "h1.md")
-        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("dead-peer-sid\n", encoding="utf-8")
         (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
@@ -1648,7 +1652,7 @@ class TestNewFunctionsAreReadOnly:
 
 
 def _write_claim(repo: Path, class_: str, basename: str, session_id: str, age_minutes: float) -> Path:
-    claims_dir = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = hub_for_common(repo / ".git") / f"{class_}-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text(f"{session_id}\n", encoding="utf-8")
     claimed_at = datetime.now(timezone.utc) - timedelta(minutes=age_minutes)
@@ -1768,7 +1772,7 @@ class TestClaimGrantTruthTable:
         never `denied` on account of the missing age."""
         repo = tmp_path / "repo"
         _init_repo(repo)
-        claims_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claims_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         claims_dir.mkdir(parents=True)
         (claims_dir / "session_id").write_text("peer-sid\n", encoding="utf-8")
         # No claimed_at file at all -> age is an evidence gap, not staleness.
@@ -1917,7 +1921,7 @@ def _self_lstart() -> str:
 
 
 def _write_holder_meta(repo: Path, sid: str, meta: dict) -> Path:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
     return sdir
@@ -1931,7 +1935,7 @@ def _write_touched(repo: Path, sid: str, lines: list[str]) -> Path:
     exactly as `test_claim_neighbours.py::_session_touched` does."""
     from coordinator_core.session import scope, touch_record
 
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     sink = str(sdir / scope._TOUCH_RECORD_FILENAME)
     for line in lines:
@@ -2177,7 +2181,7 @@ class TestHolderEvidence:
     def test_corrupt_meta_json_sets_evidence_error_verdict_unchanged(self, tmp_path, monkeypatch):
         repo = tmp_path / "repo"
         _init_repo(repo)
-        sdir = repo / ".git" / "coordinator-sessions" / "peer-sid"
+        sdir = session_dir_for(repo / ".git", "peer-sid")
         sdir.mkdir(parents=True)
         (sdir / "meta.json").write_text("{not valid json", encoding="utf-8")
         _write_claim(repo, "handoff", "h1.md", "peer-sid", age_minutes=1)

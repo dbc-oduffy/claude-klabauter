@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Keep every live far-box session mirrored here: poll the far relay's `roster`, run one
 relay-mode bridge per far session, and remove it when the session exits.
 

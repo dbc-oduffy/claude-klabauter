@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Keep every live local session mirrored on the far box: one relay `inbox` client per
 session, started when the session appears and tree-killed when it exits.
 

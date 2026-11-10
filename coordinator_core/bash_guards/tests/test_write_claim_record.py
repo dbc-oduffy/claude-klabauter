@@ -41,6 +41,7 @@ import pytest
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.bash_guards.write_claim_record import (
     record_write_claims,
@@ -74,7 +75,7 @@ def _repo(tmp_path, name="repo") -> str:
 
 
 def _events(root, session_id=_SESSION_ID):
-    sink = sink_path(os.path.join(root, ".git", "coordinator-sessions", session_id))
+    sink = sink_path(os.path.join(str(hub_for_common(Path(root) / ".git")), session_id))
     if not sink.exists():
         return []
     raw = sink.read_bytes()
@@ -86,7 +87,7 @@ def _touched_paths(root, session_id=_SESSION_ID) -> set:
 
 
 def _sink_bytes(root, session_id=_SESSION_ID) -> bytes:
-    sink = sink_path(os.path.join(root, ".git", "coordinator-sessions", session_id))
+    sink = sink_path(os.path.join(str(hub_for_common(Path(root) / ".git")), session_id))
     return sink.read_bytes() if sink.exists() else b""
 
 
@@ -275,7 +276,7 @@ def test_ac6_none_root_never_raises_and_records_nothing():
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits only")
 def test_ac6_unwritable_sink_directory_never_raises(tmp_path):
     root = _repo(tmp_path)
-    sid_dir = os.path.join(root, ".git", "coordinator-sessions", _SESSION_ID)
+    sid_dir = os.path.join(str(hub_for_common(Path(root) / ".git")), _SESSION_ID)
     os.makedirs(sid_dir)
     original_mode = os.stat(sid_dir).st_mode
     try:
@@ -308,7 +309,7 @@ def test_ac6_recorder_never_flips_the_guard_verdict(tmp_path, monkeypatch):
 
     if os.name != "nt":
         broken = _repo(tmp_path, name="broken")
-        sid_dir = os.path.join(broken, ".git", "coordinator-sessions", _SESSION_ID)
+        sid_dir = os.path.join(str(hub_for_common(Path(broken) / ".git")), _SESSION_ID)
         os.makedirs(sid_dir)
         original_mode = os.stat(sid_dir).st_mode
         try:

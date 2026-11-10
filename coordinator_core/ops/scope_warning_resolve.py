@@ -10,9 +10,11 @@ import os
 import re
 import sys
 import tempfile
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.ops._git_root_util import git_root as _resolve_git_root
+from coordinator_core.session_hub_path import session_dir_for
 
 VALID_RESOLUTIONS: Tuple[str, ...] = (
     "legitimate-mine",
@@ -67,8 +69,8 @@ def resolve(
         )
         return ("", 1)
 
-    log_file = os.path.join(
-        git_root, ".git", "coordinator-sessions", session_id, "scope-warnings.log"
+    log_file = str(
+        session_dir_for(Path(git_root) / ".git", session_id) / "scope-warnings.log"
     )
     if not os.path.isfile(log_file):
         print(f"Error: log file not found: {log_file}", file=sys.stderr)

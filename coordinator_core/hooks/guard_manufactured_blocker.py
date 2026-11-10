@@ -42,7 +42,7 @@ the source script's own fail-open contract (exit 0 on every failure path).
 
 Firing cadence: an altitude-check trigger fires AT MOST ONCE PER SESSION
 (`_has_fired_this_session`, a git-common-dir sentinel under
-`coordinator-sessions/<session>/`, mirroring `em_report_altitude`'s own
+`.coordinator-local/coordinator-sessions/<session>/`, mirroring `em_report_altitude`'s own
 per-session tally shape) and self-discharges (`_auto_discharge_fire` records
 both the fire and its discharge in the block-discharge ledger in the same
 call) -- no manual `block-discharge record` round trip. A repeat trigger in
@@ -66,6 +66,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from typing import Mapping, Optional
 
 from coordinator_core import block_discharge as _block_discharge
@@ -75,6 +76,7 @@ from coordinator_core.hooks.support.posture import resolve_posture
 from coordinator_core.hooks.support.touch_record import _touch_lines
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
+from coordinator_core.session_hub_path import session_dir_for
 
 GUARD_NAME = "guard-manufactured-blocker"
 
@@ -742,7 +744,7 @@ _FIRED_MARKER_FILENAME = "guard-manufactured-blocker-fired.json"
 def _fired_marker_path(payload: Mapping, filename: str = _FIRED_MARKER_FILENAME) -> "Optional[str]":
     """Per-session has-fired sentinel path, mirroring
     `em_report_altitude._tally_path`'s shape (git-common-dir
-    `coordinator-sessions/<session>/`, not `state/`, so this stays session
+    `.coordinator-local/coordinator-sessions/<session>/`, not `state/`, so this stays session
     bookkeeping rather than tracked repo content). None when no home is
     resolvable or `session_id` is unsafe as a path segment."""
     session_id = payload.get("session_id")
@@ -757,7 +759,7 @@ def _fired_marker_path(payload: Mapping, filename: str = _FIRED_MARKER_FILENAME)
     git_dir = _resolve_git_dir(os.path.join(repo_root, ".git"))
     if not git_dir:
         return None
-    return os.path.join(git_dir, "coordinator-sessions", safe_session, filename)
+    return os.path.join(str(session_dir_for(Path(git_dir), safe_session)), filename)
 
 
 def _has_fired_this_session(payload: Mapping, filename: str = _FIRED_MARKER_FILENAME) -> bool:

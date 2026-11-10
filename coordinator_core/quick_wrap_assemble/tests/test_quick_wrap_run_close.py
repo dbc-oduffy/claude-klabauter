@@ -13,6 +13,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.ops.dispatch_emit import run_close
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
 from coordinator_core.quick_wrap_assemble import (
     _directives,
@@ -128,7 +129,7 @@ def test_birth_floor_is_none_without_a_claim_dir(tmp_path):
 
 
 def test_birth_floor_never_uses_mtime(tmp_path):
-    claim = tmp_path / "coordinator-sessions" / SID
+    claim = session_dir_for(tmp_path, SID)
     claim.mkdir(parents=True)
     before = _session_birth_floor(tmp_path, SID)
     future = time.time() + 86400

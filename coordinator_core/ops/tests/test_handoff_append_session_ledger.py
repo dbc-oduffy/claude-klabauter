@@ -31,6 +31,8 @@ Spec backlink: coordinator_core/ops/handoff_append_session_ledger.py
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import asyncio
 import os
 import tempfile
@@ -92,10 +94,10 @@ def _seed(repo: Path, name: str, body: str = _LEDGER_BODY, **kw) -> Path:
 
 
 def _write_dispatched_agents(repo: Path, session_id: str, rows: "list[str]") -> None:
-    """Plant `<repo>/.git/coordinator-sessions/<sid>/dispatched-agents.txt`
+    """Plant `<hub>/<sid>/dispatched-agents.txt`
     with tab-delimited `<agentId>\\t<model>\\t<subagent_type>\\t<ts>` rows —
     same shape `hooks.track_dispatched_agents` writes."""
-    d = repo / ".git" / "coordinator-sessions" / session_id
+    d = session_dir_for(repo / ".git", session_id)
     d.mkdir(parents=True, exist_ok=True)
     text = "".join(row + "\n" for row in rows)
     (d / "dispatched-agents.txt").write_text(text, encoding="utf-8")

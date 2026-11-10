@@ -59,7 +59,7 @@ def _set_me(monkeypatch, sid="em-sid"):
 
 
 def _make_agent_dir_with_touch(repo, agent_id, owner_sid, path):
-    adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    adir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".agents" / agent_id
     adir.mkdir(parents=True, exist_ok=True)
     (adir / "em-session-id.txt").write_text(owner_sid + "\n", encoding="utf-8")
     sink = adir / scope._TOUCH_RECORD_FILENAME

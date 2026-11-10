@@ -1850,10 +1850,13 @@ def _apply_worktree_refusal(seg: str, remaining: List[str]) -> Optional[str]:
 
 
 #: A `GIT_INDEX_FILE=<literal path>` assignment (`export` or command prefix). A variable-held,
-#: empty or `.git/index` value is the shared index, so only a literal other path counts; a leading
-#: `$PWD/` or `${PWD}/` is the one variable admitted.
+#: empty or `.git/index` value is the shared index, so only a literal other path counts. A leading
+#: `$VAR/`, `${VAR}/` or `$VAR\` (also PowerShell `$env:GIT_INDEX_FILE=`) is admitted when a literal
+#: tail follows; a bare `$VAR` has no tail, and a variable-prefixed tail named `index` is refused.
 _PRIVATE_INDEX_RE = re.compile(
-    r"""(?:^|[\s;&|(])(?:export\s+)?GIT_INDEX_FILE=(["']?)((?:\$PWD/|\$\{PWD\}/)?[^\s"';&|$`()]+)\1"""
+    r"""(?:^|[\s;&|(])(?:export\s+)?(?:GIT_INDEX_FILE=|\$env:GIT_INDEX_FILE\s*=\s*)(["']?)"""
+    r"""((?:\$\{?\w+\}?[/\\])?[^\s"';&|$`()]+)\1""",
+    re.IGNORECASE,
 )
 
 
@@ -1864,7 +1867,9 @@ def _private_index_in_play(raw: str, before_word: str) -> bool:
         if cut != -1 and m.start() > cut:
             continue
         path = m.group(2).replace("\\", "/")
-        if path.rstrip("/").rsplit("/", 1)[-1] == "index" and ".git" in path.split("/"):
+        if path.rstrip("/").rsplit("/", 1)[-1].lower() == "index" and (
+            ".git" in path.split("/") or path.startswith("$")
+        ):
             continue
         return True
     return False
@@ -3160,11 +3165,9 @@ def _evaluate_git_segment_anchored(
         return _plumbing_verdict(subcmd, remaining)
 
     if subcmd == "apply":
-        # `--cached` against a private index writes no worktree file and no shared index.
-        if (
-            "--cached" in remaining
-            and not any(t in ("--index", "--3way", "-3", "--unsafe-paths") for t in remaining)
-            and _private_index_in_play(_RAW_CMD.get(), "apply")
+        # `--cached` alone stages hunks and writes no worktree file.
+        if "--cached" in remaining and not any(
+            t in ("--index", "--3way", "-3", "--unsafe-paths") for t in remaining
         ):
             return None
         # Report-only forms write nothing.

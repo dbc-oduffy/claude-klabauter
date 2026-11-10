@@ -11,13 +11,13 @@ Three ACs pinned here:
       grant record denied across all four MATCHERS tools; a sibling path in
       the same session directory (not the grant record) allowed -- proves
       filename-anchored, not directory-anchored; a similarly-named file
-      OUTSIDE `.git/coordinator-sessions/` allowed -- proves path-anchored,
+      OUTSIDE the session hub allowed -- proves path-anchored,
       not filename-alone; a non-MATCHERS tool_name allowed (defense-in-
       depth pin).
 
   AC13 (TestScopeEqualsEnforcement) -- real scope equals stated scope, per
       DR-104 requirement (2): deny EXACTLY
-      `.git/coordinator-sessions/<sid>/claude-md-write-grant.json` -- no
+      `<session hub>/<sid>/claude-md-write-grant.json` -- no
       WIDER (other files in that directory allowed) and no NARROWER (any
       `<sid>` value matches; the guard is session-id-agnostic). Named
       precedent: DR-104 cites `check_blanket_git_add`'s documented scope
@@ -49,7 +49,11 @@ builder, `_deny`/`_allow` helpers).
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from coordinator_core.session.claude_md_grant import _GRANT_FILENAME
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.write_guards import block_subagent_grant_record_write as guard
 from coordinator_core.write_guards import engine
 
@@ -98,7 +102,7 @@ def _make_plain_clone(tmp_path):
 
 
 def _grant_path(repo_root, sid="sess-123"):
-    return str(repo_root / ".git" / "coordinator-sessions" / sid / _GRANT_FILENAME)
+    return str(session_dir_for(repo_root / ".git", sid) / _GRANT_FILENAME)
 
 
 class TestBaseCases:
@@ -133,10 +137,7 @@ class TestBaseCases:
     def test_sibling_path_in_same_session_dir_allowed(self, tmp_path):
         repo_root = _make_plain_clone(tmp_path)
         sibling = str(
-            repo_root
-            / ".git"
-            / "coordinator-sessions"
-            / "sess-123"
+            session_dir_for(repo_root / ".git", "sess-123")
             / "plan-body-write-block.log"
         )
         _allow(sibling, cwd=str(repo_root))
@@ -157,10 +158,7 @@ class TestScopeEqualsEnforcement:
         _deny(_grant_path(repo_root, sid="sess-abc"), cwd=str(repo_root))
         _allow(
             str(
-                repo_root
-                / ".git"
-                / "coordinator-sessions"
-                / "sess-abc"
+                session_dir_for(repo_root / ".git", "sess-abc")
                 / "some-other-record.json"
             ),
             cwd=str(repo_root),
@@ -191,7 +189,7 @@ class TestLinkedWorktreeResolution:
         )
 
         grant_path = str(
-            common_dir / "coordinator-sessions" / "sess-123" / _GRANT_FILENAME
+            session_dir_for(common_dir, "sess-123") / _GRANT_FILENAME
         )
 
         _deny(grant_path, cwd=str(repo_root))
@@ -209,10 +207,10 @@ class TestLinkedWorktreeResolution:
         )
 
         literal_joined = str(
-            repo_root / ".git" / "coordinator-sessions" / "sess-123" / _GRANT_FILENAME
+            session_dir_for(repo_root / ".git", "sess-123") / _GRANT_FILENAME
         )
         assert literal_joined != str(
-            common_dir / "coordinator-sessions" / "sess-123" / _GRANT_FILENAME
+            session_dir_for(common_dir, "sess-123") / _GRANT_FILENAME
         )
 
 
@@ -230,10 +228,7 @@ class TestTraversalAndCaseFoldBypasses:
     def test_traversal_segment_denied(self, tmp_path):
         repo_root = _make_plain_clone(tmp_path)
         traversal_path = str(
-            repo_root
-            / ".git"
-            / "coordinator-sessions"
-            / "sess-123"
+            session_dir_for(repo_root / ".git", "sess-123")
             / "x"
             / ".."
             / _GRANT_FILENAME
@@ -242,12 +237,10 @@ class TestTraversalAndCaseFoldBypasses:
 
     def test_differently_cased_candidate_denied(self, tmp_path):
         repo_root = _make_plain_clone(tmp_path)
-        cased_path = str(
-            repo_root
-            / ".git"
-            / "Coordinator-Sessions"
-            / "SESS-123"
-            / _GRANT_FILENAME.upper()
+        cased_path = (
+            str(session_dir_for(repo_root / ".git", "SESS-123")).swapcase()
+            + os.sep
+            + _GRANT_FILENAME.upper()
         )
         _deny(cased_path, cwd=str(repo_root))
 
@@ -263,8 +256,8 @@ class TestUNCPathHandling:
         monkeypatch.setattr(
             guard, "_resolve_git_common_dir", lambda cwd: unc_common_dir
         )
-        grant_path = (
-            unc_common_dir + "\\coordinator-sessions\\sess-123\\" + _GRANT_FILENAME
+        grant_path = str(
+            session_dir_for(Path(unc_common_dir), "sess-123") / _GRANT_FILENAME
         )
         _deny(grant_path, cwd="irrelevant")
 
@@ -283,10 +276,7 @@ class TestTraversalResolutionScopeEqualsEnforcement:
         and back into the session directory)."""
         repo_root = _make_plain_clone(tmp_path)
         traversal_path = str(
-            repo_root
-            / ".git"
-            / "coordinator-sessions"
-            / "sess-123"
+            session_dir_for(repo_root / ".git", "sess-123")
             / "sub"
             / ".."
             / ".."

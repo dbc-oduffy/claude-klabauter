@@ -19,6 +19,7 @@ from typing import Any
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.tests.fleet_mode_independence_fixtures import Case, GuardFixtures
 
 _G = "coordinator_core.bash_guards."
@@ -211,7 +212,7 @@ def _post_executor(*, executor_ran: bool) -> Case:
         mp.setattr(nd, "resolve_mode", lambda k, s: False)
         g._PKG_CACHE.clear()
         if executor_ran:
-            d = repo / ".git" / "coordinator-sessions" / sid
+            d = session_dir_for(repo / ".git", sid)
             d.mkdir(parents=True)
             (d / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
         payload = {

@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import subprocess
 import sys
 from pathlib import Path
@@ -27,7 +29,7 @@ def _make_repo(tmp_path):
 
 
 def _session(repo: Path, sid: str) -> Path:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     return sdir
 

@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import inspect
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import pytest
 
 from coordinator_core import baton_assemble as ba
@@ -48,7 +50,7 @@ def _seed_handoff_claim(repo_root, session_id: str, basename: str, claimed_at: s
     (and therefore `compute_baton_unification_verdict`'s held-set read)
     consults -- mirrors `test_j_divergent_deliverable_id.py`'s own helper of
     the same name, restated because it has no shared home."""
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
     (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
@@ -142,7 +144,7 @@ class TestAuthoringASpinoffLeavesTheHeldClaimUntouched:
         )
         _seed_handoff_claim(tmp_path, session_id, held_path.name, "2026-08-19T09:00:00Z")
         held_ledger = (
-            tmp_path / ".git" / "coordinator-sessions" / "handoff-claims" / held_path.name
+            hub_for_common(tmp_path / ".git") / "handoff-claims" / held_path.name
         )
         held_claim_before = (held_ledger / "session_id").read_text(encoding="utf-8")
         held_text_before = held_path.read_text(encoding="utf-8")

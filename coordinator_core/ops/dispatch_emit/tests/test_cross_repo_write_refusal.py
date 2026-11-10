@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 from pathlib import Path
 
 import pytest
@@ -197,7 +199,7 @@ def test_absolute_write_in_distant_checkout_asks_pm_records_grant_and_splits(tmp
     assert check_cross_repo_writes(rows, repo_root, approved=True, env=LOCAL, session_id="s1") == [
         "ue-project"
     ]
-    ledger = repo_root / ".git" / "coordinator-sessions" / "s1" / "cross-repo-writes.txt"
+    ledger = session_dir_for(repo_root / ".git", "s1") / "cross-repo-writes.txt"
     assert ledger.read_text(encoding="utf-8").split() == [target]
 
     home, siblings = split_sibling_paths(["a.md", target], repo_root)

@@ -13,6 +13,7 @@ here.
 from __future__ import annotations
 
 import subprocess
+from coordinator_core.session_hub_path import hub_for_common
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -49,7 +50,7 @@ def _init_repo(tmp_path: Path) -> str:
 
 
 def _push_started_at_to_future(root: str, sid: str) -> None:
-    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    sdir = hub_for_common(Path(root) / ".git") / sid
     future = datetime.fromtimestamp(
         datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
     )
@@ -61,7 +62,7 @@ def _push_started_at_to_future(root: str, sid: str) -> None:
 def _claim(root: str, sid: str, path: str) -> None:
     from coordinator_core.session import touch_record
 
-    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    sdir = hub_for_common(Path(root) / ".git") / sid
     sdir.mkdir(parents=True, exist_ok=True)
     touch_record.append_event(
         touch_record.sink_path(sdir),

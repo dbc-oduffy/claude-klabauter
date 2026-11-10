@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.hooks import nudge_unrouted_sizing as m
 from coordinator_core.session import touch_record
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -23,7 +24,7 @@ def _git_init(repo):
 
 
 def _session_dir(repo, session_id):
-    d = repo / ".git" / "coordinator-sessions" / session_id
+    d = session_dir_for(repo / ".git", session_id)
     os.makedirs(d, exist_ok=True)
     return d
 

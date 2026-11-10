@@ -112,7 +112,7 @@ def _make_repo(tmp_path):
 
 
 def _sdir(repo, sid):
-    return Path(repo) / ".git" / "coordinator-sessions" / sid
+    return Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
 
 
 def _age_session_dir_records(sdir, epoch) -> None:

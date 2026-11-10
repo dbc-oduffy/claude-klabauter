@@ -3,7 +3,7 @@ coordinator_core.ops._git_root_util — shared `git rev-parse --show-toplevel` r
 
 Purpose: single implementation of the "resolve the enclosing git repo root, or
 None if not in one" primitive shared by scope_soak_enable and
-scope_warning_resolve (both need GIT_ROOT to locate `.git/coordinator-sessions/`).
+scope_warning_resolve (both need GIT_ROOT to locate `.coordinator-local/coordinator-sessions/`).
 
 Spec backlink: coordinator-content-repo:pln-bash-to-naked-python-engine-mi-c09292,
     chunk B3 (handoff-gate-aging.sh + scope-soak-enable + scope-warning-resolve port)

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Diagnose every Unimatrix link, both sides: unsigned authorized_keys lines, dead or IP-pinned aliases.
 
 Usage:

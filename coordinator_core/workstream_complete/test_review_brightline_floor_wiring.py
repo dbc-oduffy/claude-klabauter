@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workstream_complete import session_history
 from coordinator_core.ops import review_brightline_gate
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
@@ -134,7 +135,7 @@ def _head_sha(cwd: Path) -> str:
 def _start_session(root: Path) -> str:
     """Record HEAD as the session's `head_at_start`: the floor the history window walks from."""
     floor = _head_sha(root)
-    claim = root / ".git" / "coordinator-sessions" / _SID
+    claim = hub_for_common(root / ".git") / _SID
     claim.mkdir(parents=True, exist_ok=True)
     (claim / "head_at_start").write_text(floor, encoding="utf-8")
     return floor

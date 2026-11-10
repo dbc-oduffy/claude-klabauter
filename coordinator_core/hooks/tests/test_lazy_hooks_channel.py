@@ -70,7 +70,7 @@ empty rather than reused):
 
 Negative-spec:
   - Does NOT live-dispatch any of the fifteen hooks.* ops (six mutate
-    `.git/coordinator-sessions/` or tempdir) — (c) is a resolution proof,
+    `.coordinator-local/coordinator-sessions/` or tempdir) — (c) is a resolution proof,
     not an execution proof, per AC3's own text.
   - Does NOT chase `test_op_module_map_matches_live_registry`'s pre-existing
     `distill.curate_clusters` / `memo.fate_backfill` / `updatedocs.gates` gap

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import pytest
 
 import coordinator_core.baton_assemble as ba
@@ -49,7 +51,7 @@ def _hold(monkeypatch, *basenames: str) -> None:
 
 
 def _seed_claim(repo: Path, sid: str, basename: str) -> Path:
-    d = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    d = hub_for_common(repo / ".git") / "handoff-claims" / basename
     d.mkdir(parents=True)
     (d / "session_id").write_text(sid + "\n", encoding="utf-8")
     (d / "stage").write_text("apply\n", encoding="utf-8")
@@ -167,7 +169,7 @@ def test_replay_of_this_runs_own_scaffold_still_resumes(tmp_path, target_fm):
 
 
 def _claim_names(repo: Path) -> set[str]:
-    d = repo / ".git" / "coordinator-sessions" / "handoff-claims"
+    d = hub_for_common(repo / ".git") / "handoff-claims"
     return {p.name for p in d.iterdir()} if d.is_dir() else set()
 
 

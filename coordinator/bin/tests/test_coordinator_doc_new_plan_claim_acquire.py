@@ -28,6 +28,7 @@ import contextlib
 import importlib.machinery
 import importlib.util
 import os
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 import sys
 import tempfile
@@ -117,7 +118,7 @@ _SESSION_B = "test-session-picker"
 
 
 def _plan_claims_dir(repo: Path) -> Path:
-    return repo / ".git" / "coordinator-sessions" / "plan-claims"
+    return hub_for_common(repo / ".git") / "plan-claims"
 
 
 class PlanScaffoldTakesNoClaimTest(unittest.TestCase):

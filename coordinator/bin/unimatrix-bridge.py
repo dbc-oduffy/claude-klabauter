@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Bridge a local endpoint to a remote Claude session so SendMessage("uds:<endpoint>")
 lands on another box.
 

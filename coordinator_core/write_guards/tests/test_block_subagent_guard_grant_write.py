@@ -6,6 +6,7 @@ import uuid
 from pathlib import Path
 
 from coordinator_core.session.guard_unlock_sentinel import sentinel_path
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.write_guards import block_subagent_guard_grant_write as guard
 from coordinator_core.write_guards import engine
 
@@ -56,7 +57,7 @@ def _make_plain_clone(tmp_path):
 
 
 def _grant_path(repo_root, sid="sess-123"):
-    return str(repo_root / ".git" / "coordinator-sessions" / sid / _GRANT_FILENAME)
+    return str(session_dir_for(repo_root / ".git", sid) / _GRANT_FILENAME)
 
 
 def _unique_sid(prefix="sess"):
@@ -95,10 +96,7 @@ class TestGrantRecordLeg:
     def test_sibling_path_in_same_session_dir_allowed(self, tmp_path):
         repo_root = _make_plain_clone(tmp_path)
         sibling = str(
-            repo_root
-            / ".git"
-            / "coordinator-sessions"
-            / "sess-123"
+            session_dir_for(repo_root / ".git", "sess-123")
             / "plan-body-write-block.log"
         )
         _allow(sibling, cwd=str(repo_root))
@@ -122,10 +120,7 @@ class TestGrantRecordLeg:
         _deny(_grant_path(repo_root, sid="sess-xyz"), cwd=str(repo_root))
         _allow(
             str(
-                repo_root
-                / ".git"
-                / "coordinator-sessions"
-                / "sess-xyz"
+                session_dir_for(repo_root / ".git", "sess-xyz")
                 / "some-other-record.json"
             ),
             cwd=str(repo_root),

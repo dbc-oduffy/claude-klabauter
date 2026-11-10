@@ -32,6 +32,7 @@ pinned), and the "reads never bump" carve-out.
 from __future__ import annotations
 
 import subprocess
+from coordinator_core.session_hub_path import hub_for_common
 from pathlib import Path
 
 import pytest
@@ -2065,7 +2066,7 @@ AC7_AGENT_ID = "coordinatorexecutor-deadbeef"
 
 
 def _write_em_backpointer(session_root: Path, agent_id: str, em_sid: str) -> None:
-    d = session_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    d = hub_for_common(session_root / ".git") / ".agents" / agent_id
     d.mkdir(parents=True, exist_ok=True)
     (d / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
 

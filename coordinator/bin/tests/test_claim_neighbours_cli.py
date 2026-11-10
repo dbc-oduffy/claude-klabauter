@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import os
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 import sys
 from datetime import datetime
@@ -54,7 +55,7 @@ def _init_repo(root: Path, name: str) -> Path:
 
 
 def _sessions_dir(repo: Path) -> Path:
-    return repo / ".git" / "coordinator-sessions"
+    return hub_for_common(repo / ".git")
 
 
 def _write(path: Path, content: str) -> None:

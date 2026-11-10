@@ -479,7 +479,7 @@ Negative-spec:
     live session holds one.
   - Does NOT resolve the marker's session id against the TARGET repo. The
     EM back-pointer `effective_session_id` reads lives in the SESSION's own
-    `.git/coordinator-sessions/`, so `own_git_root` stays its `git_root`
+    `.coordinator-local/coordinator-sessions/`, so `own_git_root` stays its `git_root`
     argument even though the marker's DIRECTORY moved to the target --
     conflating the two would break the parent plan's AC7 (a dispatched
     subagent inherits its EM's marker without a second one).

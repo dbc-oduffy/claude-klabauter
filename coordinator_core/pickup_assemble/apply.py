@@ -216,6 +216,7 @@ from coordinator_core.session.claims import (
     release_artifact,
 )
 from coordinator_core.session.core import in_warm_served_request
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry.composition_record import (
     flush_composition_record,
     make_fleet_budget,
@@ -670,7 +671,7 @@ def _resolve_cli(cli_name: str) -> Callable[[list[str], Path], dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 def _session_decision_file_dir(root: Path) -> Path:
-    return root / ".git" / "coordinator-sessions" / "decisions"
+    return hub_for_common(root / ".git") / "decisions"
 
 
 def _sanitize_for_filename(value: str) -> str:
@@ -1766,7 +1767,7 @@ def drop(
         # write) — turning an ordinary "briefed it, changed my mind" into a
         # partial-mutation exit. Widening `_unclaim` to tolerate that is NOT
         # the fix; not calling it is.
-        claims_dir = root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+        claims_dir = hub_for_common(root / ".git") / f"{class_}-claims" / basename
         claim_is_brief_stage = claim_stage(claims_dir) == CLAIM_STAGE_BRIEF
 
         # A brief-stage LOCK beside an apply-stage FRONTMATTER STAMP is not a

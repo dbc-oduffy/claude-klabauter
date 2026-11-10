@@ -159,6 +159,7 @@ from coordinator_core.workstream_complete.directives_session_hygiene import (
     build_terminal_sizing_sweep_directive,
 )
 from coordinator_core.session_baton.store import merge_baton
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.telemetry.op_latency import new_correlation_id
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -850,7 +851,7 @@ def _session_birth_floor(common_dir: Path, sid: str) -> float | None:
     """Session claim dir birth time (epoch seconds), or `None` when the platform has none."""
     from coordinator_core.ops.dispatch_emit.run_close import dir_birth_time
 
-    return dir_birth_time(common_dir / "coordinator-sessions" / sid)
+    return dir_birth_time(session_dir_for(common_dir, sid))
 
 
 def _run_close_gate(
@@ -1690,7 +1691,7 @@ def _print_commits_into_baton(root: Path, sid: str, history: Any) -> None:
     Compatible with ``brief()``'s own READ-ONLY contract: that docstring
     means "mutates no TRACKED-tree state" (handoffs, plans — the Tier-B
     stateless-computation guarantee); the session baton is the ephemeral,
-    ``.git/coordinator-sessions/<sid>/`` -scoped advisory record C1
+    ``.coordinator-local/coordinator-sessions/<sid>/`` -scoped advisory record C1
     establishes, already written unconditionally on every session's first
     prompt (``session_baton_mint``) — a second, best-effort merge here adds
     no new mutation SURFACE, only more complete data on an existing one.

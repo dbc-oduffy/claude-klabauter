@@ -22,8 +22,8 @@ affordance, so the return value always names ``baton_path`` and the running
 needed rather than assuming the session recalls it exists.
 
 SCOPE, STATED PLAINLY. The baton lives at
-``<git-common-dir>/coordinator-sessions/<sid>/baton.json`` -- inside ``.git/``,
-never pushed. A note therefore survives COMPACTION (same VM, same session) but
+``<session hub>/<sid>/baton.json`` (``session_hub_path.hub_for_common``) --
+untracked, never pushed. A note therefore survives COMPACTION (same VM, same session) but
 NOT the reclamation of a cloud VM. That is the right scope for its purpose:
 the reader it is written for is this session, after the wave. A note that must
 outlive the session belongs in a committed artifact, and this op is not that.

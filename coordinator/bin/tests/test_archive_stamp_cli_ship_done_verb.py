@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import os
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 from pathlib import Path
 
@@ -94,7 +95,7 @@ def test_bare_sha_form_stamps_releases_archives_and_prints_both_lines(tmp_path, 
     assert [ln for ln in out if ln.startswith("plan-terminality=")] == [
         "plan-terminality=no-plan-linked"
     ]
-    assert not (repo / ".git" / "coordinator-sessions" / "handoff-claims" / name).exists()
+    assert not (hub_for_common(repo / ".git") / "handoff-claims" / name).exists()
     assert not hp.exists()
     (twin,) = (repo / "archive" / "handoffs").rglob(name)
     text = twin.read_text(encoding="utf-8")

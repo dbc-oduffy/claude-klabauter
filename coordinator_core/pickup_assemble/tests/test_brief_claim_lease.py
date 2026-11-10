@@ -34,6 +34,8 @@ coordinator_core/pickup_assemble/tests/test_brief_claim_lease.py -q
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -128,7 +130,7 @@ def _seed_memo(repo: Path, name: str, *, status: str = "open") -> Path:
 
 
 def _claim_dir(repo: Path, class_: str, basename: str) -> Path:
-    return repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    return hub_for_common(repo / ".git") / f"{class_}-claims" / basename
 
 
 def _write_claim(
@@ -1111,7 +1113,7 @@ def test_git_common_dir_resolvers_agree(tmp_path, as_session):
 
     assert common_dir is not None
     assert sessions_dir is not None
-    assert Path(sessions_dir).parent.resolve() == Path(common_dir).resolve()
+    assert Path(sessions_dir).resolve() == hub_for_common(Path(common_dir)).resolve()
 
 
 def test_apply_keeps_its_promotion_when_a_non_stamp_verb_banks_a_mutation(

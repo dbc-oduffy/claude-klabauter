@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import pytest
 
 from coordinator_core import baton_assemble as ba
@@ -49,7 +51,7 @@ def _seed_handoff_claim(
     claimed_at: str | None = None,
     stage: str | None = None,
 ) -> Path:
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
     if claimed_at is not None:

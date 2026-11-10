@@ -23,6 +23,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
 from coordinator_core.hooks import context_pressure_precompact as cpp  # noqa: E402
+from coordinator_core.session_hub_path import session_dir_for  # noqa: E402
 from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
@@ -204,7 +205,7 @@ def _session_repo(tmp_path, sid, *, notes=None, turns=0):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True)
     (sdir / "baton.json").write_text(
         json.dumps({"session_id": sid, "carry_forward": notes or []}), encoding="utf-8"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.ops.dispatch_emit import review_edit_source
 from coordinator_core.session import touch_record
 
@@ -12,7 +13,8 @@ SINCE = 1000.0
 
 
 def _store(root: Path) -> Path:
-    hub = root / ".git" / "coordinator-sessions"
+    (root / ".git").mkdir(exist_ok=True)
+    hub = hub_for_common(root / ".git")
     (hub / SID).mkdir(parents=True)
     return hub
 

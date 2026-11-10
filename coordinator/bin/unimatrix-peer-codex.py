@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Codex adapter for the unimatrix peer router: one user turn into a live Codex thread.
 
 Speaks the Codex app-server control protocol (JSON-RPC text frames over a WebSocket on a unix

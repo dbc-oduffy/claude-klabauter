@@ -31,6 +31,7 @@ from coordinator_core.canvas_harvest.tests.test_fixture_round_trip import (
 )
 from coordinator_core.op_census.timing import PROCESS_TIME_BAR_MS
 from coordinator_core.session import touch_record
+from coordinator_core.session_hub_path import session_dir_for
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -88,7 +89,7 @@ def _cli_cmd(mode: str, url: str, out: Path, transcript: Path) -> list:
 
 
 def _touched(repo: Path) -> set:
-    path = repo / ".git" / "coordinator-sessions" / SESSION / "touch-record.jsonl"
+    path = session_dir_for(repo / ".git", SESSION) / "touch-record.jsonl"
     if not path.is_file():
         return set()
     events = [touch_record.decode_line(line) for line in touch_record.iter_complete_lines(path.read_bytes())]

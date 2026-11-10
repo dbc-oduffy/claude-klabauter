@@ -36,6 +36,8 @@ figure on this repo's own 65-dir hub was 0.000ms for the same filter.)
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import os
 import time
 from datetime import datetime, timezone
@@ -95,7 +97,7 @@ def test_hub_four_populations_positively_identified(tmp_path):
     reason this assertion is RED against HEAD. Both uuid-shaped session dirs
     are (and must remain) reaped in both worlds.
     """
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
 
     store = _plant_no_meta_dir(sessions, "decisions", filename="a-record.md")
     harness_fixture = _plant_no_meta_dir(sessions, _HARNESS_FIXTURE)
@@ -122,7 +124,7 @@ def test_every_denylisted_name_survives_a_reap_pass(tmp_path):
     """AC4: iterate ``_NON_SESSION_DIR_NAMES`` itself, not a hand-copied
     list — a name added to the denylist later is covered here without
     anyone remembering to extend this test."""
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     sessions.mkdir()
 
     planted = [
@@ -155,7 +157,7 @@ def test_gate_alone_keeps_non_session_dirs_with_denylist_emptied(tmp_path, monke
     neither the dot-prefix skip, the `_`-prefix skip, nor (now-empty)
     denylist membership, so HEAD reaps it on this cold fixture.
     """
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
 
     monkeypatch.setattr(reap, "_NON_SESSION_DIR_NAMES", frozenset())
 

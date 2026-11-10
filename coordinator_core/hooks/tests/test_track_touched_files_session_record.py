@@ -50,6 +50,7 @@ import pytest
 from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import touch_record
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process (git init fixture); runs at cadence gates,
@@ -93,7 +94,7 @@ class TestSessionRecordAccompaniesTheClaim:
 
         common_dir = git_common_dir(repo)
         session_id = "recordfeed00000001"
-        session_dir = common_dir / "coordinator-sessions" / session_id
+        session_dir = session_dir_for(common_dir, session_id)
 
         assert not session_dir.exists(), (
             "test fixture leaked a pre-existing session dir; the point of "
@@ -133,7 +134,7 @@ class TestSessionRecordAccompaniesTheClaim:
 
         common_dir = git_common_dir(repo)
         session_id = "recordfeed00000002"
-        session_dir = common_dir / "coordinator-sessions" / session_id
+        session_dir = session_dir_for(common_dir, session_id)
 
         _fire(repo, common_dir, session_id, target)
         meta_file = session_dir / "meta.json"

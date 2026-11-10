@@ -8,6 +8,8 @@ import os
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
+
 from coordinator_core.git import call_io_scope as cis
 from coordinator_core.git import commit_trailers as ct
 
@@ -28,7 +30,7 @@ def opens(monkeypatch):
 
 
 def _write(tmp_path, text):
-    d = tmp_path / "coordinator-sessions" / SID
+    d = session_dir_for(tmp_path, SID)
     d.mkdir(parents=True)
     p = d / "session-shape.json"
     p.write_text(text, encoding="utf-8")

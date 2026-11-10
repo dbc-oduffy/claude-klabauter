@@ -78,7 +78,7 @@ def _make_repo(tmp_path):
 
 
 def _write_session(repo, sid, meta: dict):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return sdir
@@ -93,7 +93,7 @@ def _stale(pid="1"):
 
 
 def _make_claim(repo, cls, basename, session_id=None, pid=None):
-    cdir = Path(repo) / ".git" / "coordinator-sessions" / f"{cls}-claims" / basename
+    cdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / f"{cls}-claims" / basename
     cdir.mkdir(parents=True, exist_ok=True)
     if session_id is not None:
         (cdir / "session_id").write_text(session_id)
@@ -104,7 +104,7 @@ def _make_claim(repo, cls, basename, session_id=None, pid=None):
 
 
 def _claim_dir(repo, cls, basename):
-    return Path(repo) / ".git" / "coordinator-sessions" / f"{cls}-claims" / basename
+    return Path(repo) / ".coordinator-local" / "coordinator-sessions" / f"{cls}-claims" / basename
 
 
 def _write_handoff(repo, basename, status="claimed", deployment_state="in_flight"):
@@ -324,7 +324,7 @@ class TestAtomicDedupAppendLockedBranch:
         # The exact shape `_atomic_dedup_append_lock_anchor` requires:
         # <repo>/.git/coordinator-sessions/<sid>/touched.txt — parents[2]
         # must be literally named ".git".
-        d = Path(repo) / ".git" / "coordinator-sessions" / sid
+        d = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
         d.mkdir(parents=True, exist_ok=True)
         return d / "touched.txt"
 
@@ -978,7 +978,7 @@ class TestClaimPlan:
     def _shape(self, repo, sid):
         f = (
             Path(repo)
-            / ".git"
+            / ".coordinator-local"
             / "coordinator-sessions"
             / sid
             / "session-shape.json"
@@ -1227,7 +1227,7 @@ class TestClaimPlan:
         # file) must return False, stderr, and never a silent success.
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)
-        claims_dir = Path(repo) / ".git" / "coordinator-sessions" / "plan-claims"
+        claims_dir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "plan-claims"
         claims_dir.mkdir(parents=True)
         # Pre-create the basename as a FILE (not a dir) sibling one level up
         # so shutil.rmtree's post-takeover os.mkdir collides with a
@@ -1576,7 +1576,7 @@ def _write_agent_claims(agent_dir, agent_id, owner_sid, paths):
 
 
 def _write_touch_claim(repo, sid, path, when=None):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     sink = sdir / scope._TOUCH_RECORD_FILENAME
     touch_record.append_event(
@@ -1598,7 +1598,7 @@ class TestClearClaimIfDeadArtifactClass:
         sid = "11111111-1111-4111-8111-111111111111"
         _write_session(repo, sid, _stale())
         _write_touch_claim(repo, sid, self._TARGET)
-        base = str(Path(repo) / ".git" / "coordinator-sessions")
+        base = str(Path(repo) / ".coordinator-local" / "coordinator-sessions")
         assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == [sid]
         assert claims.clear_claim_if_dead("artifact", self._TARGET, cwd=str(repo)) is True
         # Assert through the module's own read path, NOT the bytes of one file.
@@ -1683,8 +1683,8 @@ class TestClaimArtifactRefusesTheArtifactClass:
         assert claims.claim_artifact("artifact", self._TARGET, cwd=str(repo)) is False
         # No claim record anywhere -- not under the classed store, and not in
         # the touch plane either, which the caller never touched.
-        assert not (Path(repo) / ".git" / "coordinator-sessions" / "artifact-claims").exists()
-        base = str(Path(repo) / ".git" / "coordinator-sessions")
+        assert not (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "artifact-claims").exists()
+        base = str(Path(repo) / ".coordinator-local" / "coordinator-sessions")
         assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == []
 
     def test_refusal_does_not_advise_stripping_the_path(self, tmp_path, monkeypatch, capsys):
@@ -1728,7 +1728,7 @@ class TestReleaseArtifactArtifactClass:
         repo = _make_repo(tmp_path)
         _set_me(monkeypatch)
         _write_touch_claim(repo, "me-sid", self._TARGET)
-        base = str(Path(repo) / ".git" / "coordinator-sessions")
+        base = str(Path(repo) / ".coordinator-local" / "coordinator-sessions")
         assert claim_index.lookup([self._TARGET], sessions_dir=base)[self._TARGET] == ["me-sid"]
         assert claims.release_artifact("artifact", self._TARGET, cwd=str(repo)) is True
         # Read path, not file bytes -- see the sibling test's note.
@@ -1974,7 +1974,7 @@ class TestListClaimsBySessionChecked:
 
 class TestMyAgentTouched:
     def _make_agent(self, repo, aid, em_sid, paths):
-        adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / aid
+        adir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".agents" / aid
         adir.mkdir(parents=True, exist_ok=True)
         (adir / "em-session-id.txt").write_text(em_sid + "\n")
         _write_agent_claims(adir, aid, em_sid, paths)
@@ -2013,7 +2013,7 @@ class TestMyAgentTouched:
 
     def test_malformed_backpointer_soft_skipped(self, tmp_path):
         repo = _make_repo(tmp_path)
-        adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / "a1"
+        adir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".agents" / "a1"
         adir.mkdir(parents=True)
         (adir / "em-session-id.txt").write_text("")  # empty -> skip
         (adir / "touched.txt").write_text("x.py\n")
@@ -2033,7 +2033,7 @@ class TestMyAgentTouched:
         must not raise, and returns [] either way."""
         repo = _make_repo(tmp_path)
         self._make_agent(repo, "a1", "my-sid", ["mine.py"])
-        agents_dir = Path(repo) / ".git" / "coordinator-sessions" / ".agents"
+        agents_dir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".agents"
 
         original_mode = agents_dir.stat().st_mode
         os.chmod(agents_dir, 0o000)
@@ -2121,7 +2121,7 @@ class TestMyAgentTouched:
         from coordinator_core.session import touch_record
 
         repo = _make_repo(tmp_path)
-        adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / "a1"
+        adir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".agents" / "a1"
         adir.mkdir(parents=True, exist_ok=True)
         (adir / "em-session-id.txt").write_text("my-sid\n")
         assert not (adir / "touched.txt").exists()
@@ -2152,7 +2152,7 @@ class TestMyAgentTouched:
         .agents/ dir must NOT log anything — only an actual scan failure
         warns."""
         repo = _make_repo(tmp_path)
-        agents_dir = Path(repo) / ".git" / "coordinator-sessions" / ".agents"
+        agents_dir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".agents"
         agents_dir.mkdir(parents=True)
 
         out = claims.my_agent_touched("my-sid", mode="exact", cwd=str(repo))
@@ -2167,7 +2167,7 @@ class TestMyAgentTouched:
 
 
 def _touch_record_path(repo, sid):
-    return Path(repo) / ".git" / "coordinator-sessions" / sid / scope._TOUCH_RECORD_FILENAME
+    return Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid / scope._TOUCH_RECORD_FILENAME
 
 
 class TestSelfClaim:
@@ -2180,7 +2180,7 @@ class TestSelfClaim:
         # touch_record.append_event), never touched.txt / atomic_dedup_append.
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "fast-sid")
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "fast-sid"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "fast-sid"
         sdir.mkdir(parents=True)
         _write_session(repo, "fast-sid", _fresh())
         assert claims.self_claim("edited/file.py", cwd=str(repo)) is True
@@ -2260,7 +2260,7 @@ class TestSelfClaimAbsolutePathNormalization:
     ):
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "abs-sid")
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "abs-sid"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "abs-sid"
         sdir.mkdir(parents=True)
         (Path(repo) / "src").mkdir()
         target = Path(repo) / "src" / "new.py"
@@ -2277,7 +2277,7 @@ class TestSelfClaimAbsolutePathNormalization:
     ):
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "abs-sid2")
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "abs-sid2"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "abs-sid2"
         sdir.mkdir(parents=True)
         target = Path(repo) / "README.md"  # tracked -> git ls-files branch
         assert claims.self_claim(str(target), cwd=str(repo)) is True
@@ -2296,7 +2296,7 @@ class TestSelfClaimAbsolutePathNormalization:
         repo-relative, the raw absolute path is never appended."""
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "abs-sid3")
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "abs-sid3"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "abs-sid3"
         sdir.mkdir(parents=True)
 
         def _boom(*a, **k):
@@ -2358,7 +2358,7 @@ class TestReconcileDeadHandoffClaimFrontmatter:
 
     @staticmethod
     def _sessions_dir(repo):
-        return Path(repo) / ".git" / "coordinator-sessions"
+        return Path(repo) / ".coordinator-local" / "coordinator-sessions"
 
     @staticmethod
     def _status_of(hpath):
@@ -3234,7 +3234,7 @@ class TestDeadHolderResidueWarning:
 
     def test_residue_in_a_live_session_dir_is_named(self, tmp_path, monkeypatch, capsys):
         sid = "11111111-2222-3333-4444-555555555555"
-        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / sid
         self._holder_record(sdir, sid, "a.py", "b.py")
         monkeypatch.setattr(
             session_facts, "_dirty_paths", lambda *a, **k: self._computed({"a.py", "zzz.py"})
@@ -3255,7 +3255,7 @@ class TestDeadHolderResidueWarning:
         .archive/ where nothing looked. A peer read 'no directory' as 'no trace
         at all' and waited for an owner that had died hours earlier."""
         sid = "59196a45-e6de-47c5-8533-662d980dba9b"
-        base = tmp_path / ".git" / "coordinator-sessions"
+        base = tmp_path / ".coordinator-local" / "coordinator-sessions"
         archived = base / ".archive" / f"{sid}-2026-08-25"
         self._holder_record(archived, sid, "orphan.py")
         base.mkdir(parents=True, exist_ok=True)
@@ -3276,7 +3276,7 @@ class TestDeadHolderResidueWarning:
         """No residue -> no message. The takeover is genuinely uneventful and a
         warning on every stale claim would train the reader to ignore it."""
         sid = "22222222-3333-4444-5555-666666666666"
-        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / sid
         self._holder_record(sdir, sid, "committed.py")
         monkeypatch.setattr(session_facts, "_dirty_paths", lambda *a, **k: self._computed(set()))
         monkeypatch.setattr(
@@ -3291,7 +3291,7 @@ class TestDeadHolderResidueWarning:
         claimed at least one path -- it prints a degraded-evidence line
         distinguishable from both a clean tree and residue."""
         sid = "66666666-7777-8888-9999-aaaaaaaaaaaa"
-        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / sid
         self._holder_record(sdir, sid, "a.py")
         monkeypatch.setattr(
             session_facts,
@@ -3314,7 +3314,7 @@ class TestDeadHolderResidueWarning:
         called -- a degraded read with nothing claimed prints nothing, same as
         the clean-tree case."""
         sid = "77777777-8888-9999-aaaa-bbbbbbbbbbbb"
-        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / sid
         sdir.mkdir(parents=True, exist_ok=True)
         (sdir / "touch-record.jsonl").write_bytes(b"")
         monkeypatch.setattr(
@@ -3346,7 +3346,7 @@ class TestDeadHolderResidueWarning:
         # producer's internal guard later cannot quietly make claim-taking
         # raise.
         sid = "33333333-4444-5555-6666-777777777777"
-        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / sid
         self._holder_record(sdir, sid, "x.py")
         monkeypatch.setattr(
             claims, "_dead_holder_record_dir", lambda held_sid, cwd=None: str(sdir)
@@ -3380,7 +3380,7 @@ class TestDeadHolderResidueParsing:
         (a residue claim on either half of an in-progress rename is caught),
         by asserting the OLD half alone still intersects and is reported."""
         sid = "88888888-9999-aaaa-bbbb-cccccccccccc"
-        sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+        sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / sid
         _write_holder_record(sdir, sid, "old/name.py")
         monkeypatch.setattr(
             session_facts,
@@ -3402,7 +3402,7 @@ class TestDeadHolderResidueParsing:
         """A session id that is a string-prefix of another must not match its
         neighbour's archive dir. `bash_guards/_write_bump_marker.py ::
         sweep_stale_markers` documents this same collision class."""
-        base = tmp_path / ".git" / "coordinator-sessions"
+        base = tmp_path / ".coordinator-local" / "coordinator-sessions"
         archive = base / ".archive"
         short = "abc123"
         (archive / f"{short}-2026-08-25").mkdir(parents=True)
@@ -3417,7 +3417,7 @@ class TestDeadHolderResidueParsing:
     def test_newest_archive_wins(self, tmp_path, monkeypatch):
         """Lexicographic == chronological only because the suffix is zero-padded
         YYYY-MM-DD, which the match pattern now enforces."""
-        base = tmp_path / ".git" / "coordinator-sessions"
+        base = tmp_path / ".coordinator-local" / "coordinator-sessions"
         archive = base / ".archive"
         sid = "44444444-5555-6666-7777-888888888888"
         for d in ("2026-08-02", "2026-08-25", "2026-08-09"):
@@ -3432,7 +3432,7 @@ class TestDeadHolderResidueParsing:
     def test_live_dir_wins_over_archive(self, tmp_path, monkeypatch):
         """A session with BOTH a live dir and an archive entry resolves to the
         live one -- the archive leg is a fallback, not a preference."""
-        base = tmp_path / ".git" / "coordinator-sessions"
+        base = tmp_path / ".coordinator-local" / "coordinator-sessions"
         sid = "55555555-6666-7777-8888-999999999999"
         live = base / sid
         live.mkdir(parents=True)

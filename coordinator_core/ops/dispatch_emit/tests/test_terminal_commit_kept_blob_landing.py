@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import kept_work, peer_hunk_gate, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.session import core as session_core, touch_record
@@ -126,7 +127,7 @@ def test_a_recorded_blob_missing_from_the_object_store_refuses(repo):
 def _record_own_write(repo: Path, text: str) -> None:
     """The run session's latest own write of PATH, as the touch record carries it."""
     (repo / PATH).write_bytes(text.encode())
-    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SELF)
+    sink = touch_record.sink_path(session_dir_for(repo / ".git", SELF))
     touch_record.append_event(
         sink, session_id=SELF, agent_id=None, verb="T", path=PATH,
         content_hash=touch_record.compute_content_hash(repo / PATH), kind="w",

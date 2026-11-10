@@ -364,7 +364,7 @@ def test_classify_worktree_missing_compare_ref_treats_as_zero_ahead(tmp_path):
 # There is no per-worktree owner-session mapping (see module docstring's
 # KNOWN STRUCTURAL GAP note), so the gate answers a coarser question: is any
 # OTHER coordinator session live in this repo right now? live_session_ids()
-# is mocked directly rather than constructing real .git/coordinator-sessions/
+# is mocked directly rather than constructing real .coordinator-local/coordinator-sessions/
 # fixtures — the liveness predicate itself is exhaustively tested in
 # coordinator_core/session/tests/; this suite only needs to prove the sweep
 # consults it and reacts correctly to each outcome.

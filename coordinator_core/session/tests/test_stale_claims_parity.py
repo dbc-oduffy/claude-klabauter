@@ -66,7 +66,7 @@ def _make_repo(tmp_path: Path) -> Path:
 
 
 def _session(repo: Path, sid: str, meta: dict) -> None:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = repo / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
@@ -90,7 +90,7 @@ def _handoff(repo: Path, name: str, extra: str) -> Path:
 
 
 def _ledger(repo: Path, handoff_name: str, sid: str) -> None:
-    d = repo / ".git" / "coordinator-sessions" / "handoff-claims" / handoff_name
+    d = repo / ".coordinator-local" / "coordinator-sessions" / "handoff-claims" / handoff_name
     d.mkdir(parents=True, exist_ok=True)
     (d / "session_id").write_text(sid, encoding="utf-8")
     (d / "claimed_at").write_text("2026-08-07T10:00:00Z", encoding="utf-8")
@@ -129,7 +129,7 @@ def _setup_both(repo):
     _session(repo, "s-live-mirror", _live_meta())
     h = _handoff(repo, "2026-10-01-both.md", "claimed_by: s-live-mirror")
     _ledger(repo, h.name, "s-dead-ledger")
-    return lambda: (repo / ".git" / "coordinator-sessions" / "handoff-claims" / h.name / "session_id").write_text(
+    return lambda: (repo / ".coordinator-local" / "coordinator-sessions" / "handoff-claims" / h.name / "session_id").write_text(
         "s-live-mirror", encoding="utf-8"
     )
 

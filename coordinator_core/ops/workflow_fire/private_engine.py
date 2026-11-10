@@ -224,7 +224,8 @@ class OwnedPrivateEngine:
             raise ValueError('private publication stamp differs from approved source SHA')
         self.repo_root = _plain(record['repo_root'], directory=True)
         _plain(self.repo_root / '.git', directory=True)
-        registry = self.repo_root / '.git/coordinator-sessions/workflow-fires'
+        from coordinator_core.session_hub_path import hub_for_common
+        registry = hub_for_common(self.repo_root / '.git') / 'workflow-fires'
         self.record_path = _plain(record_path, directory=False)
         if not _same(self.record_path, registry / (self.fire_id + '.json')):
             raise ValueError('fire record is outside its exact protected metadata path')

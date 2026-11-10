@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.bash_guards import guard_post_executor_verification as g
 from coordinator_core.hooks import dispatch_escape as de
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
+from coordinator_core.session_hub_path import session_dir_for
 
 SID = "sess-inrun-1"
 FOREIGN = "sess-inrun-other"
@@ -58,7 +59,7 @@ def _payload(repo) -> dict:
 
 
 def _bash_armed(repo) -> dict:
-    d = repo / ".git" / "coordinator-sessions" / SID
+    d = session_dir_for(repo / ".git", SID)
     d.mkdir(parents=True)
     (d / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
     payload = {"tool_name": "Bash", "session_id": SID, "cwd": str(repo), "tool_input": {"command": "pytest"}}

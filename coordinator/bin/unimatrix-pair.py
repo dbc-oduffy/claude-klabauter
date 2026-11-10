@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Unimatrix pairing CLI: pin the signer, request a join, approve or revoke a member, fetch the snapshot.
 
 Only `approve` and `revoke` construct a signer, and each signs exactly once; 1Password is touched for

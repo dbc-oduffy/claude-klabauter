@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """group-em-box-notice — compute the box-wide Group EM notice and its exact recipients.
 
 The Group EM standing is box-wide: every live named session on the box, in any repo, is told once

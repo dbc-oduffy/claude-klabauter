@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
     ChunkCommit,
@@ -59,7 +60,7 @@ def _script(repo: Path) -> str:
 
 
 def _record(repo: Path, rel: str, digest) -> None:
-    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID)
+    sink = touch_record.sink_path(session_dir_for(repo / ".git", SID))
     touch_record.append_event(
         sink, session_id=SID, agent_id=None, verb="T", path=rel, content_hash=digest, kind="w",
     )
@@ -92,7 +93,7 @@ def _review(repo: Path, reviewed: dict, at: float) -> None:
 
 
 def _record_at(repo: Path, rel: str, digest, at: float) -> None:
-    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID)
+    sink = touch_record.sink_path(session_dir_for(repo / ".git", SID))
     touch_record.append_event(
         sink, session_id=SID, agent_id=None, verb="T", path=rel, content_hash=digest, kind="w",
         timestamp=at,
@@ -350,7 +351,7 @@ def test_the_delivery_note_is_declared_at_the_bytes_its_verdicts_append_left(ask
     ask._write(ask_repo, NOTE, "# delivered\n")
     ask._request(ask_repo, docs=(NOTE,))
     touch_record.append_event(
-        touch_record.sink_path(ask_repo / ".git" / "coordinator-sessions" / ask._SID),
+        touch_record.sink_path(session_dir_for(ask_repo / ".git", ask._SID)),
         session_id=ask._SID, agent_id=None, verb="T", path=NOTE,
         content_hash=_sha("# delivered\n"), kind="w", timestamp=1000.0,
     )

@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 
 from coordinator_core.benchmarks import warm_saturation_measure as m
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _proc(op, ms, route="warm_server", spawns=0, sid="s1", **kw):
@@ -14,7 +15,7 @@ def _proc(op, ms, route="warm_server", spawns=0, sid="s1", **kw):
 
 
 def test_read_rows_filters_window_and_junk(tmp_path):
-    sink = tmp_path / "a" / ".git" / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(tmp_path / "a" / ".git") / "logs" / "op-latency.jsonl"
     sink.parent.mkdir(parents=True)
     lines = [
         json.dumps({"op": "x", "t_start": 100.0}),
@@ -86,7 +87,8 @@ def test_occupancy_heavy_cap_reached_by_four_pids():
 
 def test_main_report_carries_bar_and_sid_keys(tmp_path, capsys):
     git = tmp_path / "repo" / ".git"
-    logs = git / "coordinator-sessions" / "logs"
+    logs = hub_for_common(git) / "logs"
+    git.mkdir(parents=True)
     logs.mkdir(parents=True)
     import time
     now = time.time()

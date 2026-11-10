@@ -26,7 +26,7 @@ touching disk; ``reclaim: true`` is the sole destructive opt-in.
 
 Liveness-scope fix (2026-08-10, EM-directed correction — see this module's
 git history / dispatch sidecar for the incident): ``session_live`` resolves
-its per-repo registry (``.git/coordinator-sessions/<sid>``) off the CALLING
+its per-repo registry (``.coordinator-local/coordinator-sessions/<sid>``) off the CALLING
 PROCESS's cwd, not off wherever the session actually ran. An earlier version
 of this op called it with one fixed cwd (this op's own repo) for every
 project-slug directory it swept — which reads EVERY session in EVERY OTHER

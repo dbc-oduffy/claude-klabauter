@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.ops.dispatch_emit import drift_attribution, terminal_commit
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift import (  # noqa: F401 -- fixtures
     _WITH_BASE,
@@ -27,7 +28,7 @@ LEG_AGENT = "a1b2c3d4e5f6a7b8c"
 def _leg_agent_write(repo, rel: str, digest: str, at: float, *, subagent_type: str = "coordinator:executor",
                      owner: str = SID, agent_id: str = LEG_AGENT) -> None:
     """The run's leg agent (a type the review-writer denylist skips) wrote ``rel`` in its own sink."""
-    hub = repo / ".git" / "coordinator-sessions"
+    hub = hub_for_common(repo / ".git")
     agent_dir = hub / ".agents" / agent_id
     agent_dir.mkdir(parents=True, exist_ok=True)
     (agent_dir / "em-session-id.txt").write_text(owner + "\n", encoding="utf-8")

@@ -38,6 +38,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
+
 pytestmark = [
     pytest.mark.spawns_process,
     pytest.mark.cadence,
@@ -163,7 +165,7 @@ def test_baton_assemble_dirty_tree_status_probe_precedes_subcommand(tmp_path: Pa
     from coordinator_core import baton_assemble
 
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-1")
-    touched_dir = tmp_path / ".git" / "coordinator-sessions" / "sess-1"
+    touched_dir = session_dir_for(tmp_path / ".git", "sess-1")
     touched_dir.mkdir(parents=True)
     (touched_dir / "touched.txt").write_text("", encoding="utf-8")
 

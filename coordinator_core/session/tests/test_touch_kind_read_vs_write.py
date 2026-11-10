@@ -44,13 +44,14 @@ def repo(tmp_path):
     concurrent sessions.
     """
     root = os.path.realpath(str(tmp_path))
-    os.makedirs(os.path.join(root, ".git", "coordinator-sessions"), exist_ok=True)
+    os.makedirs(os.path.join(root, ".git"), exist_ok=True)
+    os.makedirs(os.path.join(root, ".coordinator-local", "coordinator-sessions"), exist_ok=True)
     return root
 
 
 def _peer_claim(repo: str, sid: str, path: str, kind) -> None:
     """Write one peer TOUCH of `kind`, and make that peer read as live."""
-    sid_dir = os.path.join(repo, ".git", "coordinator-sessions", sid)
+    sid_dir = os.path.join(repo, ".coordinator-local", "coordinator-sessions", sid)
     os.makedirs(sid_dir, exist_ok=True)
     touch_record.append_event(
         touch_record.sink_path(sid_dir),
@@ -118,7 +119,7 @@ def test_a_read_touch_is_still_recorded(repo):
     _peer_claim(repo, "peer-reader", "pkg/mod.py", touch_record.KIND_READ)
 
     sink = touch_record.sink_path(
-        os.path.join(repo, ".git", "coordinator-sessions", "peer-reader")
+        os.path.join(repo, ".coordinator-local", "coordinator-sessions", "peer-reader")
     )
     projection = touch_record.project_live_claims(sink, cwd=repo)
     assert "pkg/mod.py" in projection.claims
@@ -188,7 +189,7 @@ def _my_claim(repo: str, sid: str, path: str, kind) -> None:
 
 
 def _sid_dir(repo: str, sid: str) -> str:
-    return os.path.join(repo, ".git", "coordinator-sessions", sid)
+    return os.path.join(repo, ".coordinator-local", "coordinator-sessions", sid)
 
 
 def test_a_holder_releases_its_own_in_flight_claim(repo, monkeypatch):
@@ -197,7 +198,7 @@ def test_a_holder_releases_its_own_in_flight_claim(repo, monkeypatch):
     still lands."""
     monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
     monkeypatch.setattr(
-        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".git", "coordinator-sessions")
+        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".coordinator-local", "coordinator-sessions")
     )
     _my_claim(repo, "mine", "pkg/mod.py", touch_record.KIND_WRITE)
 
@@ -213,7 +214,7 @@ def test_releasing_an_unknown_kind_claim_is_the_whole_corpus_migration(repo, mon
     one -- no separate legacy path to keep working."""
     monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
     monkeypatch.setattr(
-        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".git", "coordinator-sessions")
+        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".coordinator-local", "coordinator-sessions")
     )
     _peer_claim(repo, "peer-legacy", "pkg/mod.py", None)
     assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) == {
@@ -231,7 +232,7 @@ def test_the_post_commit_name_is_an_alias_and_adds_no_condition(repo, monkeypatc
     the name implies breaks a test instead of a peer's commit."""
     monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
     monkeypatch.setattr(
-        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".git", "coordinator-sessions")
+        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".coordinator-local", "coordinator-sessions")
     )
     _my_claim(repo, "mine", "never-committed.py", touch_record.KIND_WRITE)
 
@@ -247,7 +248,7 @@ def test_the_release_route_cannot_reach_a_peers_claim(repo, monkeypatch):
     nothing."""
     monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
     monkeypatch.setattr(
-        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".git", "coordinator-sessions")
+        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".coordinator-local", "coordinator-sessions")
     )
     _peer_claim(repo, "peer-writer", "pkg/mod.py", touch_record.KIND_WRITE)
 
@@ -411,7 +412,7 @@ def test_a_holder_can_enumerate_its_own_path_claims(repo, monkeypatch):
     a peer's claim never appears."""
     monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
     monkeypatch.setattr(
-        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".git", "coordinator-sessions")
+        scope.core, "sessions_dir", lambda cwd=None: os.path.join(repo, ".coordinator-local", "coordinator-sessions")
     )
     _my_claim(repo, "mine", "pkg/a.py", touch_record.KIND_WRITE)
     _my_claim(repo, "mine", "pkg/b.py", touch_record.KIND_READ)

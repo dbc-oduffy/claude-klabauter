@@ -169,7 +169,9 @@ claimed_by: mirror-sid
 Body.
 """,
     )
-    claim_dir = fake_common_dir / "coordinator-sessions" / "handoff-claims" / "held.md"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    claim_dir = hub_for_common(fake_common_dir) / "handoff-claims" / "held.md"
     claim_dir.mkdir(parents=True)
     (claim_dir / "session_id").write_text("ledger-sid\n", encoding="utf-8")
     (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")

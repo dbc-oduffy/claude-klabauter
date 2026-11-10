@@ -11,6 +11,8 @@ Spec backlink: docs/plans/2026-09-27-emitter-dag-terminal-commit-wake-digest.md
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import subprocess
 from pathlib import Path
 
@@ -415,7 +417,7 @@ def test_worktree_freeze_registers_diff_files_as_review_targets_and_nothing_else
     result = freeze_diff(tmp_path, base, "w-reg", paths=["pkg"], worktree=True)
 
     assert result["error"] is None, result["error"]
-    targets = tmp_path / ".git" / "coordinator-sessions" / "sess-freeze-1" / "review-targets.txt"
+    targets = session_dir_for(tmp_path / ".git", "sess-freeze-1") /"review-targets.txt"
     assert set(targets.read_text().split()) == {"pkg/a.py", "pkg/b.py"}
     for rel, admitted in (("pkg/b.py", True), ("other.py", False)):
         candidate = Path(guard.casefold_path(str(tmp_path / rel)))

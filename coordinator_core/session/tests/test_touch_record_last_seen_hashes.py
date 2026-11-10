@@ -13,7 +13,7 @@ SID = "sess-batch"
 
 
 def _sink(root: Path, sid: str = SID) -> Path:
-    return tr.sink_path(root / ".git" / "coordinator-sessions" / sid)
+    return tr.sink_path(root / ".coordinator-local" / "coordinator-sessions" / sid)
 
 
 def _ev(root: Path, path: str, h, *, sid: str = SID, ts: float = 1.0) -> None:

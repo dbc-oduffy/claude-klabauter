@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from coordinator_core import arrival_record as ar
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def test_append_then_has_arrived(tmp_path):
@@ -17,11 +18,11 @@ def test_append_then_has_arrived(tmp_path):
 
 
 def test_path_shape(tmp_path):
-    assert ar.arrival_log_path(tmp_path, "s1") == tmp_path / "coordinator-sessions" / "s1" / "subagent-arrivals.jsonl"
+    assert ar.arrival_log_path(tmp_path, "s1") == hub_for_common(tmp_path) / "s1" / "subagent-arrivals.jsonl"
 
 
 def test_survives_subagents_dir_deletion(tmp_path):
-    sub = tmp_path / "coordinator-sessions" / "s1" / "subagents"
+    sub = hub_for_common(tmp_path) / "s1" / "subagents"
     sub.mkdir(parents=True)
     (sub / "x").write_text("x")
     ar.append_arrival(tmp_path, "s1", "a1", "t", "now")
@@ -50,7 +51,7 @@ def test_unsafe_ids_refused(tmp_path, bad):
         ar.append_arrival(tmp_path, "s1", bad, "t", "now")
     with pytest.raises(ValueError):
         ar.has_arrived(tmp_path, "s1", bad)
-    assert not (tmp_path / "coordinator-sessions").exists()
+    assert not hub_for_common(tmp_path).exists()
 
 
 @pytest.mark.spawns_process

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Launch codex, agy or grok as a headless EM carrying a launcher-written fire grant.
 
 Usage: headless-em-launch.py <codex|agy|grok> [--session-id ID] [--prepare-only] [--native-executable PATH] [-- cli args...]

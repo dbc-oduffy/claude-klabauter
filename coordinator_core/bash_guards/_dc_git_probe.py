@@ -21,6 +21,7 @@ import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional, TYPE_CHECKING, Tuple
 from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command as _bt_tokenize_full_command,
@@ -29,6 +30,7 @@ from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._override_log_path import _override_log_path
 from coordinator_core.bash_guards._rewrite_support import _bt_git_resolved_subcommand
 from coordinator_core.git.correction_note import SENTINEL as _NOTE_SENTINEL
+from coordinator_core.session_hub_path import hub_for_common
 
 if TYPE_CHECKING:
     from coordinator_core.session.scope import OwnerFact
@@ -36,7 +38,7 @@ if TYPE_CHECKING:
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census). The one real
 # write in this module (guard-fail-open.log) resolves under
-# <git_root>/.git/coordinator-sessions/<session_id>/ -- untracked guard bookkeeping,
+# <git_root>/.coordinator-local/coordinator-sessions/<session_id>/ -- untracked guard bookkeeping,
 # never a tracked repo artifact.
 GENERATES = []
 
@@ -516,7 +518,7 @@ def _rm_peer_claim_of(
 
     Liveness order (Q24 -- CLOSED, see module docstring "CLOSED PORTING
     GAPS"): for each candidate peer session dir under
-    ``<root>/.git/coordinator-sessions/*``, canonical liveness
+    ``<root>/.coordinator-local/coordinator-sessions/*``, canonical liveness
     (``coordinator_core.session.liveness.live_session_ids``) is consulted
     FIRST, per-sid:
       - If the sid has a ``meta.json`` file, it is within canonical's scan
@@ -548,7 +550,7 @@ def _rm_peer_claim_of(
     nothing" rather than "exclude everything" -- a genuine live peer stays
     contested, never a false-ALLOW.
     """
-    sess_dir = os.path.join(root, ".git", "coordinator-sessions")
+    sess_dir = str(hub_for_common(Path(root) / ".git"))
     if not os.path.isdir(sess_dir):
         return ""
     try:

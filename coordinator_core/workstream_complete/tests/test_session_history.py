@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import session_history as sh
 
@@ -39,7 +40,7 @@ def _commit(root, rel, text, sid=None, extra=""):
 
 
 def _floor(root, value, sid=SID):
-    d = root / ".git" / "coordinator-sessions" / sid
+    d = hub_for_common(root / ".git") / sid
     d.mkdir(parents=True, exist_ok=True)
     (d / "head_at_start").write_text(value + "\n", encoding="utf-8")
 
@@ -49,6 +50,7 @@ def repo(tmp_path):
     root = tmp_path / "r"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
+    (root / ".git" / "info" / "exclude").write_text(".coordinator-local/\n", encoding="utf-8")
     _commit(root, "seed.txt", "seed\n")
     return root
 
@@ -110,7 +112,7 @@ def test_floor_decides_with_zero_spawns(repo, spawns, value, reason):
     if value is not None:
         _floor(repo, value)
     else:
-        (repo / ".git" / "coordinator-sessions" / SID).mkdir(parents=True)
+        (hub_for_common(repo / ".git") / SID).mkdir(parents=True)
     spawns.clear()
     h = sh.read_session_history(repo, SID)
     assert not h.resolved and h.reason == reason and h.window == ()

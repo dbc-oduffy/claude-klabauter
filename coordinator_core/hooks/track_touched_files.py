@@ -3,8 +3,8 @@ coordinator_core.hooks.track_touched_files — PostToolUse bookkeeping hook op.
 
 Purpose: Records the file path modified by the current Edit/Write/MultiEdit/NotebookEdit
 tool call into two append-only T-event logs:
-  - per-session:  .git/coordinator-sessions/<session_id>/touch-record.jsonl
-  - per-agent:    .git/coordinator-sessions/.agents/<agent_id>/touch-record.jsonl
+  - per-session:  .coordinator-local/coordinator-sessions/<session_id>/touch-record.jsonl
+  - per-agent:    .coordinator-local/coordinator-sessions/.agents/<agent_id>/touch-record.jsonl
     (agent-keyed write fires only for subagent tool calls — agent_id present and
     resolving to a known agent shape.)
 
@@ -14,7 +14,7 @@ track-touched-files.sh (deleted 2026-07-22, DoE ``3a561713``).
 Bookkeeping op (MUTATING) — the product is the on-disk write side-effect, NOT an advisory.
 Returns no_advisory() (empty dict) on every invocation path.
 
-Write confinement (hard): writes ONLY under .git/coordinator-sessions/ (session-runtime
+Write confinement (hard): writes ONLY under .coordinator-local/coordinator-sessions/ (session-runtime
 layer); NEVER writes state/, archive/, or any path outside that tree.
 
 D6 write-atomicity: uses a module-level asyncio.Lock per target file to serialise
@@ -48,7 +48,7 @@ absence of that read.
 
 Negative-spec:
     Do NOT emit advisories — this op's value is the on-disk write side-effect.
-    Do NOT write state/, archive/, or any path outside .git/coordinator-sessions/.
+    Do NOT write state/, archive/, or any path outside .coordinator-local/coordinator-sessions/.
     Do NOT trust the resolved session id as a subagent-vs-EM discriminator anywhere
     else — it is used here for attribution-when-absent ONLY, gated by the
     != session_id guard above.
@@ -88,6 +88,7 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
 from coordinator_core.session import touch_record
 from coordinator_core.session.scope import normalize_touch_path
+from coordinator_core.session_hub_path import hub_for_common
 
 # C7 (docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repointing-
 # its-writers.md): the SAME filename session/scope.py's `touch()` (C4) and
@@ -398,8 +399,8 @@ async def _handler(params: dict, repo_root=None) -> dict:
     """PostToolUse bookkeeping op: append T-events for touched file paths into per-session records.
 
     Records file_path (normalized to repo-relative) into:
-      - .git/coordinator-sessions/<session_id>/touch-record.jsonl  (session-keyed, always)
-      - .git/coordinator-sessions/.agents/<agent_id>/touch-record.jsonl  (agent-keyed, subagent only)
+      - .coordinator-local/coordinator-sessions/<session_id>/touch-record.jsonl  (session-keyed, always)
+      - .coordinator-local/coordinator-sessions/.agents/<agent_id>/touch-record.jsonl  (agent-keyed, subagent only)
 
     Defense-in-depth: exits early on non-edit tool names — the hooks.json matcher
     already restricts to Write|Edit|MultiEdit|NotebookEdit; the check here is a
@@ -460,11 +461,11 @@ async def _handler(params: dict, repo_root=None) -> dict:
     _common_dir: Path | None = None
     try:
         _common_dir = git_common_dir(_effective_root) if _effective_root else None
-        _sessions_base = _common_dir / "coordinator-sessions" if _common_dir else None
+        _sessions_base = hub_for_common(_common_dir) if _common_dir else None
         if _sessions_base is None:
             return no_advisory()
     except RuntimeError:
-        _sessions_base = Path(git_root) / "coordinator-sessions"
+        _sessions_base = hub_for_common(Path(git_root))
     session_dir = str(_sessions_base / session_id)
     touch_record_sink = os.path.join(session_dir, _TOUCH_RECORD_FILENAME)
 

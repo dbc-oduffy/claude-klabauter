@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 from pathlib import Path
 
 from coordinator_core.ops.session.legacy_touch_corpus_drain_check import (
@@ -15,7 +17,7 @@ def _write(path: Path, text: str) -> None:
 
 
 def test_empty_sessions_base_reports_zero(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
 
     report = check_drain(sessions_base)
 
@@ -34,7 +36,7 @@ def test_missing_sessions_base_reports_zero(tmp_path):
 
 
 def test_touched_only_dir_counts_as_undrained(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
 
     report = check_drain(sessions_base)
@@ -46,7 +48,7 @@ def test_touched_only_dir_counts_as_undrained(tmp_path):
 
 
 def test_dir_with_sibling_record_counts_as_drained(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-1" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-1","agent":null,"path":"a/b.py"}\n')
 
@@ -58,7 +60,7 @@ def test_dir_with_sibling_record_counts_as_drained(tmp_path):
 
 
 def test_agent_keyed_dirs_are_scanned(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / ".agents" / "aid-1" / "touched.txt", "a/b.py\n")
 
     report = check_drain(sessions_base)
@@ -68,7 +70,7 @@ def test_agent_keyed_dirs_are_scanned(tmp_path):
 
 
 def test_archive_component_is_excluded(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / ".archive" / "sid-old" / "touched.txt", "a/b.py\n")
 
     report = check_drain(sessions_base)
@@ -78,7 +80,7 @@ def test_archive_component_is_excluded(tmp_path):
 
 
 def test_mixed_corpus_reports_correct_count(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-2" / "touched.txt", "c/d.py\n")
     _write(sessions_base / "sid-2" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-2","agent":null,"path":"c/d.py"}\n')
@@ -94,7 +96,7 @@ def test_mixed_corpus_reports_correct_count(tmp_path):
 
 
 def test_main_exits_nonzero_when_undrained(tmp_path, capsys):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
 
     exit_code = main(["--sessions-base", str(sessions_base)])
@@ -105,7 +107,7 @@ def test_main_exits_nonzero_when_undrained(tmp_path, capsys):
 
 
 def test_main_exits_zero_when_fully_drained(tmp_path, capsys):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-1" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-1","agent":null,"path":"a/b.py"}\n')
 
@@ -128,7 +130,7 @@ def test_empty_sibling_over_real_claims_is_undrained(tmp_path):
     treats as orphans and is free to sweep. This module gates removal of
     the legacy union-read, so a false green here is unrecoverable loss.
     """
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-1" / "touch-record.jsonl", "")
 

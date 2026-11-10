@@ -22,7 +22,7 @@ finding in its own sidecar under a `## Findings Ledger` heading (a fenced
     `before` over `after` in the target file, marks the row `em-rejected`.
   - `targets --add <path> [<path> ...]`: EM-only. Registers the review target
     set a confined reviewer may write to
-    (`<git_root>/.git/coordinator-sessions/<session_id>/review-targets.txt`),
+    (`.coordinator-local/coordinator-sessions/<session_id>/review-targets.txt`),
     read by the re-scoped `write_guards.block_confined_agent_write` (M1).
     `--session-id` defaults from the hook-provided session-id env
     (`resolve_session_id`'s own precedence) when omitted.
@@ -844,7 +844,9 @@ _AGENT_KEY_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 def _session_targets_path(repo_root: Path, session_id: str, agent_key: Optional[str] = None) -> Path:
     name = "review-targets.txt" if agent_key is None else f"review-targets.{agent_key}.txt"
-    return repo_root / ".git" / "coordinator-sessions" / session_id / name
+    from coordinator_core.session_hub_path import session_dir_for
+
+    return session_dir_for(repo_root / ".git", session_id) / name
 
 
 def targets_add(

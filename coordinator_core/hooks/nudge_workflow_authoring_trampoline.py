@@ -58,6 +58,7 @@ from coordinator_core.hooks.support.session_hub import (
     session_id_is_real,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import session_dir_for
 
 _WIKI_ANCHOR = (
     "coordinator/docs/wiki/coordinator-tripwires/"
@@ -150,7 +151,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     if not common_dir:
         return no_advisory()
 
-    session_dir = Path(common_dir) / "coordinator-sessions" / session_id
+    session_dir = session_dir_for(Path(common_dir), session_id)
     nudged_sentinel = session_dir / _SENTINEL_NAME
     try:
         if nudged_sentinel.is_file():

@@ -53,6 +53,8 @@ Spec backlink (C5): pln-person-identity-primitive-firs-dbc797 § C5
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import asyncio
 import os
 import subprocess
@@ -102,7 +104,7 @@ def _seed_plan_claim(
 
 
 def _monkeypatch_sessions_dir(monkeypatch, worktree_root: Path) -> None:
-    """Point `core.sessions_dir` at `<worktree_root>/.git/coordinator-sessions`
+    """Point `core.sessions_dir` at `hub_for_common(<worktree_root>/.git)`
     directly -- no `git rev-parse`, no `git init`. `resolve_claimed_plan_path`
     (and `list_held_plan_claims`, which it delegates to for tier (b)) reads
     this directory tree only; it never touches git objects, so a real repo
@@ -110,7 +112,7 @@ def _monkeypatch_sessions_dir(monkeypatch, worktree_root: Path) -> None:
     monkeypatch.setattr(
         core,
         "sessions_dir",
-        lambda cwd=None: str(worktree_root / ".git" / "coordinator-sessions"),
+        lambda cwd=None: str(hub_for_common(worktree_root / ".git")),
     )
 
 
@@ -358,7 +360,7 @@ def test_batch_sweep_never_stamps_minted_by_on_unrelated_handoffs(tmp_path, monk
     # dispatch report for this chunk): with the in-normalizer resolve
     # temporarily restored AND `resolve_operating_person` monkeypatched to
     # return {"github": "dbc-example-operator"}, this test fails exactly as intended.
-    monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(tmp_path / "repo" / ".git" / "coordinator-sessions"))
+    monkeypatch.setattr(core, "sessions_dir", lambda cwd=None: str(hub_for_common(tmp_path / "repo" / ".git")))
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-sweep-never-stamps")
     # This module does not
     # import `resolve_operating_person` today (that is the fix), so
@@ -541,7 +543,7 @@ def test_batch_sweep_backfills_placeholder_summary_on_a_committed_record(
     -- this test is coverage for the shape, not evidence it currently fires.
     """
     monkeypatch.setattr(
-        core, "sessions_dir", lambda cwd=None: str(tmp_path / "repo" / ".git" / "coordinator-sessions")
+        core, "sessions_dir", lambda cwd=None: str(hub_for_common(tmp_path / "repo" / ".git"))
     )
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-placeholder-sweep")
     repo = tmp_path / "repo"
@@ -667,7 +669,7 @@ def test_batch_sweep_end_to_end_spinoff_key_absent_not_stamped(tmp_path, monkeyp
     defect actually manifested in before this fix."""
     session_id = "sid-carry-spinoff-e2e"
     monkeypatch.setattr(
-        core, "sessions_dir", lambda cwd=None: str(tmp_path / "repo" / ".git" / "coordinator-sessions")
+        core, "sessions_dir", lambda cwd=None: str(hub_for_common(tmp_path / "repo" / ".git"))
     )
     monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
     repo = tmp_path / "repo"

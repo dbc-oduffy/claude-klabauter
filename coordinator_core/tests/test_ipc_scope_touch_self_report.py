@@ -55,6 +55,7 @@ import coordinator_core.ops.queue_append  # noqa: F401 -- registers queue.append
 import coordinator_core.ops.queue_promote  # noqa: F401 -- registers queue.promote
 from coordinator_core.ipc import dispatch_message, _REGISTRY, _SCOPE_TOUCH_PATHS_KEY
 from coordinator_core.session import core, scope, liveness, touch_record
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.ops.session.safe_commit_offer import compute_offer
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
@@ -76,7 +77,7 @@ def _make_repo(tmp_path):
 
 
 def _sdir(repo, sid):
-    return Path(repo) / ".git" / "coordinator-sessions" / sid
+    return session_dir_for(Path(repo) / ".git", sid)
 
 
 def _touched_events(repo, sid):
@@ -252,9 +253,8 @@ def test_no_resolvable_session_no_claim_op_still_succeeds(tmp_path, monkeypatch)
 
     assert "error" not in d
     assert d["result"] == {"ok": True}
-    assert not (Path(repo) / ".git" / "coordinator-sessions").is_dir() or not any(
-        (Path(repo) / ".git" / "coordinator-sessions").glob("*/touch-record.jsonl")
-    )
+    hub = hub_for_common(Path(repo) / ".git")
+    assert not hub.is_dir() or not any(hub.glob("*/touch-record.jsonl"))
 
 
 def test_repeat_identical_declaration_still_resolves_to_one_owned_path(tmp_path, monkeypatch):
@@ -283,7 +283,7 @@ def test_handler_declaring_nothing_behaves_exactly_as_before(tmp_path, monkeypat
     assert "error" not in d
     assert d["result"] == {"ok": True}
     assert not (
-        Path(repo) / ".git" / "coordinator-sessions" / "sid-9" / "touch-record.jsonl"
+        session_dir_for(Path(repo) / ".git", "sid-9") / "touch-record.jsonl"
     ).is_file()
 
 
@@ -299,7 +299,7 @@ def _live_dirs_liveness(cwd=None):
     root = core.git_root(cwd)
     if not root:
         return frozenset()
-    sessions_root = Path(root) / ".git" / "coordinator-sessions"
+    sessions_root = hub_for_common(Path(root) / ".git")
     if not sessions_root.is_dir():
         return frozenset()
     return frozenset(p.name for p in sessions_root.iterdir() if p.is_dir())
@@ -338,7 +338,7 @@ def test_cross_repo_declaration_does_not_steal_target_repos_native_claim(
     assert len(my_events) == 1
     assert my_events[0].path == "shared.yaml"
 
-    assert not (repo_b / ".git" / "coordinator-sessions" / "sid-caller").exists()
+    assert not session_dir_for(repo_b / ".git", "sid-caller").exists()
 
     offer = compute_offer("sid-bnative", cwd=str(repo_b))
     assert "shared.yaml" in offer["safe_paths"]

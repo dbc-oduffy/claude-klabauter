@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import json
 import stat
 import subprocess
@@ -65,7 +67,7 @@ def _seed_session_shape(repo: Path, session_id: str, deliverable_id: str) -> Non
     git_dir = Path(
         _git(["rev-parse", "--absolute-git-dir"], repo).stdout.strip()
     )
-    shape_dir = git_dir / "coordinator-sessions" / session_id
+    shape_dir = session_dir_for(git_dir, session_id)
     shape_dir.mkdir(parents=True, exist_ok=True)
     (shape_dir / "session-shape.json").write_text(
         json.dumps({"pickup": {"deliverable_id": deliverable_id}}),

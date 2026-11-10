@@ -63,6 +63,7 @@ from coordinator_core.benchmarks.process_time import (
     batched_process_time_ms,
     in_process_time_ms,
 )
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.subagent_sandbox.engine import load_policy, resolve_git_root
 from coordinator_core.subagent_sandbox.provision_report import (
     _build_doc_text,
@@ -116,7 +117,7 @@ def _build_close_leg_fixture(repo: Path) -> None:
     (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
     subprocess.run(["git", "add", "seed.txt"], cwd=repo, check=True, creationflags=ncw)
     subprocess.run(["git", "commit", "-qm", "seed"], cwd=repo, check=True, creationflags=ncw)
-    claim_dir = repo / ".git" / "coordinator-sessions" / "c7-absolute-budget-sid"
+    claim_dir = hub_for_common(repo / ".git") / "c7-absolute-budget-sid"
     claim_dir.mkdir(parents=True)
 
 

@@ -9,6 +9,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops.review_mint import wave_bookkeeping
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
@@ -64,7 +65,7 @@ def _fire(tmp_path, monkeypatch, *, drift: set) -> tuple:
 
     for i, rel in enumerate(declared):
         touch_record.append_event(
-            touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID),
+            touch_record.sink_path(session_dir_for(repo / ".git", SID)),
             session_id=SID, agent_id=None, verb="T", path=rel,
             content_hash=_sha("seed\n"), kind="w", timestamp=1.0 + i,
         )
@@ -73,7 +74,7 @@ def _fire(tmp_path, monkeypatch, *, drift: set) -> tuple:
     if "foo.py" not in drift:
         _write(repo, "foo.py", "seed\n# edit\n")
         touch_record.append_event(
-            touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID),
+            touch_record.sink_path(session_dir_for(repo / ".git", SID)),
             session_id=SID, agent_id=None, verb="T", path="foo.py",
             content_hash=_sha("seed\n# edit\n"), kind="w", timestamp=9.0,
         )
@@ -81,7 +82,7 @@ def _fire(tmp_path, monkeypatch, *, drift: set) -> tuple:
         if rel not in drift:
             _write(repo, rel, "seed\nown edit\n")
             touch_record.append_event(
-                touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID),
+                touch_record.sink_path(session_dir_for(repo / ".git", SID)),
                 session_id=SID, agent_id=None, verb="T", path=rel,
                 content_hash=_sha("seed\nown edit\n"), kind="w", timestamp=9.0,
             )

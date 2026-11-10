@@ -1,6 +1,6 @@
 """Single-flight admission for a ceremony run: the once-per-day marker check plus a run-scoped lock.
 
-The lock lives under `<git-common-dir>/coordinator-sessions/<ceremony>-runs/`. No timeout takeover and
+The lock lives under `<hub>/<ceremony>-runs/` (hub: `session_hub_path.hub_for_common`). No timeout takeover and
 no force flag exist: a lock is taken over only when its holder is provably dead (`launching`) or
 dated before today (`awaiting-finish`). An unreadable or undeterminable holder counts as alive.
 """
@@ -14,6 +14,7 @@ from pathlib import Path
 
 from coordinator_core.daily_day import local_day
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.session_hub_path import hub_for_common
 
 ADMITTED = "admitted"
 IN_FLIGHT = "in-flight"
@@ -37,7 +38,7 @@ class Admission:
 
 
 def _lock_dir(repo_root: Path, ceremony: str) -> Path:
-    return resolve_git_common_dir(repo_root) / "coordinator-sessions" / f"{ceremony}-runs"
+    return hub_for_common(resolve_git_common_dir(repo_root)) / f"{ceremony}-runs"
 
 
 def _own_start_epoch() -> int:

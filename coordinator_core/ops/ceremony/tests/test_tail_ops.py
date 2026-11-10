@@ -85,6 +85,8 @@ Spec backlink: pln-wsc-tail-slim-down-op-scoped-c-e9a265 § C17b (liveness call 
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import asyncio
 import time
 from pathlib import Path
@@ -116,7 +118,7 @@ def test_archive_idempotency(tmp_path):
     assert result["skipped"] == []
     assert result["unknown"] == [f"{tail_ops.OP_CS_ARCHIVE}:already-archived-or-absent"]
 
-    sdir = common_dir / "coordinator-sessions" / "sid-1"
+    sdir = hub_for_common(common_dir) /"sid-1"
     sdir.mkdir(parents=True)
     (sdir / "meta.json").write_text("{}", encoding="utf-8")
 
@@ -134,7 +136,7 @@ def test_archive_idempotency(tmp_path):
 
 def test_archive_moves_session_dir(tmp_path):
     common_dir = _make_common_dir(tmp_path)
-    sdir = common_dir / "coordinator-sessions" / "sid-2"
+    sdir = hub_for_common(common_dir) /"sid-2"
     sdir.mkdir(parents=True)
     (sdir / "meta.json").write_text('{"session_id": "sid-2"}', encoding="utf-8")
 
@@ -144,13 +146,13 @@ def test_archive_moves_session_dir(tmp_path):
     assert result["acted"] == [f"{tail_ops.OP_CS_ARCHIVE}:sid-2"]
     assert not sdir.is_dir()
 
-    archive_dirs = list((common_dir / "coordinator-sessions" / ".archive").glob("sid-2-*"))
+    archive_dirs = list((hub_for_common(common_dir) /".archive").glob("sid-2-*"))
     assert len(archive_dirs) == 1, f"expected exactly one archived dir; got {archive_dirs}"
     assert (archive_dirs[0] / "meta.json").is_file()
 
 
 def _make_claim(common_dir: Path, artifact_class: str, basename: str, *, held_by: str | None) -> Path:
-    claim_dir = common_dir / "coordinator-sessions" / f"{artifact_class}-claims" / basename
+    claim_dir = hub_for_common(common_dir) /f"{artifact_class}-claims" / basename
     claim_dir.mkdir(parents=True)
     if held_by is not None:
         (claim_dir / "session_id").write_text(held_by, encoding="utf-8")

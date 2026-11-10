@@ -16,6 +16,7 @@ from coordinator_core.ops.scope_soak_enable import enable, main
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -30,21 +31,21 @@ _ISO_UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2
 
 def test_1_creates_sentinel_when_not_present(tmp_path):
     text, rc = enable(git_root=str(tmp_path))
-    sentinel = tmp_path / ".git" / "coordinator-sessions" / ".warn-mode-enabled-at"
+    sentinel = hub_for_common(tmp_path / ".git") / ".warn-mode-enabled-at"
     assert sentinel.is_file()
     assert rc == 0
 
 
 def test_2_sentinel_contains_valid_iso_timestamp(tmp_path):
     enable(git_root=str(tmp_path))
-    sentinel = tmp_path / ".git" / "coordinator-sessions" / ".warn-mode-enabled-at"
+    sentinel = hub_for_common(tmp_path / ".git") / ".warn-mode-enabled-at"
     ts = sentinel.read_text(encoding="utf-8").strip()
     assert _ISO_UTC_RE.match(ts), f"sentinel timestamp format invalid: {ts!r}"
 
 
 def test_3_idempotent_second_run_does_not_overwrite(tmp_path):
     enable(git_root=str(tmp_path))
-    sentinel = tmp_path / ".git" / "coordinator-sessions" / ".warn-mode-enabled-at"
+    sentinel = hub_for_common(tmp_path / ".git") / ".warn-mode-enabled-at"
     first_ts = sentinel.read_text(encoding="utf-8").strip()
 
     text2, rc2 = enable(git_root=str(tmp_path))

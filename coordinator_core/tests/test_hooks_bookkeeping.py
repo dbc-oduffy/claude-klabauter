@@ -3,7 +3,7 @@ coordinator_core.tests.test_hooks_bookkeeping — Round-trip contract tests for 
 bookkeeping hook ops (pcore-08 C5).
 
 Tests assert:
-  - On-disk write side-effects (path + byte format) under a tmp .git/coordinator-sessions/ fixture.
+  - On-disk write side-effects (path + byte format) under a tmp .coordinator-local/coordinator-sessions/ fixture.
   - Dedup idempotency: C1 (touched.txt) and C4 (dispatched-agents.txt).
   - Single-line compact jsonl with no embedded newline: C3 (agent_completion_log).
   - Collision→AMBIGUOUS rewrite: C4 (track_dispatched_agents).
@@ -14,7 +14,7 @@ Tests assert:
     collision vs. non-collision, dedup idempotency, golden byte-match of tab-delimited col-1.
   - Concurrent invocation safety (asyncio.gather) for C1 and C4 (D6 write-atomicity).
   - Golden-snapshot normalizer self-test (two captures → byte-identical normalized output);
-    path normalizer covers BOTH POSIX and Windows .git/coordinator-sessions/ shapes.
+    path normalizer covers BOTH POSIX and Windows .coordinator-local/coordinator-sessions/ shapes.
   - Source-level grep: no bare blocking I/O sits unwrapped in the 3 async handler bodies.
 
 All handlers are async; we use asyncio.run() in sync test functions — no pytest-asyncio.
@@ -38,6 +38,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
@@ -58,8 +60,12 @@ class _FakeCtx:
 
 
 def _cs_dir(repo_root: Path) -> Path:
-    """Return the .git/coordinator-sessions/ directory under repo_root."""
-    return repo_root / ".git" / "coordinator-sessions"
+    """Return the session hub directory (.coordinator-local/coordinator-sessions/) under repo_root.
+
+    Also makes ``repo_root/.git`` exist: the hub no longer lives under it, and a missing
+    ``.git`` would make the common-dir walk fail."""
+    (repo_root / ".git").mkdir(parents=True, exist_ok=True)
+    return hub_for_common(repo_root / ".git")
 
 
 def _make_session(
@@ -115,18 +121,19 @@ _ISO_TS_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z")
 _EPOCH_INT_RE = re.compile(r"\b\d{10,11}\b")
 _HEX_SHA_RE = re.compile(r"\b[0-9a-f]{40,64}\b")
 _HEX_SID_RE = re.compile(r"\b[0-9a-f]{12,39}\b")
-# POSIX path: anything ending with .git/coordinator-sessions/<rest>
-_POSIX_CS_PATH_RE = re.compile(r"[^\s\"']+\.git/coordinator-sessions[^\s\"',\n]*")
+# POSIX path: anything ending with .coordinator-local/coordinator-sessions/<rest>
+# (or the pre-relocation .git/coordinator-sessions/<rest>)
+_POSIX_CS_PATH_RE = re.compile(r"[^\s\"']+\.(?:git|coordinator-local)/coordinator-sessions[^\s\"',\n]*")
 # Windows path: backslash separators
-_WIN_CS_PATH_RE = re.compile(r"[^\s\"']+\.git\\coordinator-sessions[^\s\"',\n]*")
+_WIN_CS_PATH_RE = re.compile(r"[^\s\"']+\.(?:git|coordinator-local)\\coordinator-sessions[^\s\"',\n]*")
 
 
 def normalize_snapshot(text: str) -> str:
     """Normalize volatile fields in a captured log/file output for golden comparison.
 
     Replaces: ISO timestamps → <TS>, Unix epoch ints → <EPOCH>, long hex strings → <SHA>/<SID>,
-    POSIX .git/coordinator-sessions paths → <CS-POSIX-PATH>,
-    Windows .git\\coordinator-sessions paths → <CS-WIN-PATH>.
+    POSIX .coordinator-local/coordinator-sessions paths → <CS-POSIX-PATH>,
+    Windows .coordinator-local\\coordinator-sessions paths → <CS-WIN-PATH>.
 
     Stable fields (relative file paths, literal strings, column separators) are
     preserved unchanged — the normalized form is the expected golden shape.
@@ -161,14 +168,14 @@ class TestNormalizer:
         assert normalize_snapshot(capture_a) == normalize_snapshot(capture_b)
 
     def test_posix_cs_path_normalized(self) -> None:
-        """POSIX .git/coordinator-sessions/ paths are replaced with <CS-POSIX-PATH>."""
-        text = "/repo/.git/coordinator-sessions/abc123/touched.txt"
+        """POSIX .coordinator-local/coordinator-sessions/ paths are replaced with <CS-POSIX-PATH>."""
+        text = "/repo/.coordinator-local/coordinator-sessions/abc123/touched.txt"
         assert "<CS-POSIX-PATH>" in normalize_snapshot(text)
         assert "/repo/" not in normalize_snapshot(text)
 
     def test_windows_cs_path_normalized(self) -> None:
-        r"""Windows .git\coordinator-sessions\ paths are replaced with <CS-WIN-PATH>."""
-        text = r"C:\repo\.git\coordinator-sessions\abc123\touched.txt"
+        r"""Windows .coordinator-local\coordinator-sessions\ paths are replaced with <CS-WIN-PATH>."""
+        text = r"C:\repo\.coordinator-local\coordinator-sessions\abc123\touched.txt"
         assert "<CS-WIN-PATH>" in normalize_snapshot(text)
         assert r"C:\repo" not in normalize_snapshot(text)
 
@@ -213,7 +220,7 @@ class TestTrackTouchedFiles:
 
     def test_session_keyed_write(self, tmp_path: Path) -> None:
         """Handler appends a T-event for file_path to
-        .git/coordinator-sessions/<sid>/touch-record.jsonl."""
+        .coordinator-local/coordinator-sessions/<sid>/touch-record.jsonl."""
         from coordinator_core.hooks.track_touched_files import _handler
         ctx = self._ctx(tmp_path)
         sid = "aabbccddeeff0011"
@@ -665,7 +672,7 @@ class TestAgentCompletionLog:
         )
 
     def test_no_tmp_write_path(self, tmp_path: Path) -> None:
-        """The op MUST NOT write to /tmp or any path outside .git/coordinator-sessions/."""
+        """The op MUST NOT write to /tmp or any path outside .coordinator-local/coordinator-sessions/."""
         from coordinator_core.hooks.agent_completion_log import _handler
         # Import module object first; avoids __import__ in wraps=.
         import coordinator_core.hooks.agent_completion_log as acl_mod
@@ -681,7 +688,7 @@ class TestAgentCompletionLog:
             log_file_arg = call.args[0]
             assert "coordinator-sessions" in log_file_arg or \
                    "coordinator-sessions" in log_file_arg.replace("\\", "/"), (
-                f"log_file arg must be under .git/coordinator-sessions/; got {log_file_arg!r}"
+                f"log_file arg must be under .coordinator-local/coordinator-sessions/; got {log_file_arg!r}"
             )
 
     def test_defaults_fill_absent_fields(self, tmp_path: Path) -> None:

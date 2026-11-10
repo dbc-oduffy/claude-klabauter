@@ -43,7 +43,9 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _session_shape_path(common_dir: Path, sid: str) -> Path:
-    return common_dir / "coordinator-sessions" / sid / "session-shape.json"
+    from coordinator_core.session_hub_path import session_dir_for
+
+    return session_dir_for(common_dir, sid) / "session-shape.json"
 
 
 def _fake_result(returncode: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
@@ -1657,7 +1659,7 @@ def test_the_three_frontmatter_readers_share_one_parser(tmp_path: Path):
 
 
 def _fact_span_rows(repo_root: Path) -> list[dict]:
-    sink = repo_root / ".git" / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = repo_root / ".coordinator-local" / "coordinator-sessions" / "logs" / "op-latency.jsonl"
     if not sink.exists():
         return []
     rows = []

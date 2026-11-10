@@ -18,7 +18,7 @@ Spec backlink: pln-touched-txt-path-poisoning-nor-ecab01
 
 Scope, precisely
 -----------------
-- `.git/coordinator-sessions/**/touched.txt`, INCLUDING `.agents/<aid>/`
+- `.coordinator-local/coordinator-sessions/**/touched.txt`, INCLUDING `.agents/<aid>/`
   subdirs, EXCLUDING every path with a `.archive` path component.
   `compute_scope`'s other-session scan skips dot-entries, so archived
   poisoning is inert and deliberately left unmigrated (see plan § AC7).
@@ -93,10 +93,10 @@ Negative-spec
   lock acquisition is preserved in the written output rather than
   silently clobbered by a stale pre-computed replacement.
 - The backup destination MUST NOT be a plain (non-dot-prefixed) subdirectory
-  directly under `.git/coordinator-sessions/` — `compute_scope`'s
+  directly under `.coordinator-local/coordinator-sessions/` — `compute_scope`'s
   other-session scan does `os.listdir(<sessions_base>)` and would read such
   a subdir as a live session dir. The default backup destination is a
-  dot-prefixed sibling of `coordinator-sessions/` under the git common dir.
+  dot-prefixed sibling of the hub (`sessions_base.parent`).
 - Idempotent: a second `apply=True` run over its own output is a no-op
   (every remaining entry classifies as `clean`) — proven by this module's
   own test suite, not merely asserted here.
@@ -104,7 +104,7 @@ Negative-spec
 
 from __future__ import annotations
 
-GENERATES = []  # rewrites touched.txt files under <git-common-dir>/coordinator-sessions/ and writes a timestamped backup dir under the git common dir; session bookkeeping under .git/, never a tracked path
+GENERATES = []  # rewrites touched.txt files under .coordinator-local/coordinator-sessions/ and writes a timestamped backup dir beside the hub; session bookkeeping under .coordinator-local/, never a tracked path
 
 import argparse
 import json
@@ -311,7 +311,7 @@ def run_migration(
 ) -> MigrationReport:
     """Dry-run (default) or apply the touched.txt prefix migration.
 
-    ``sessions_base`` is ``<git-common-dir>/coordinator-sessions``.
+    ``sessions_base`` is ``<session hub: .coordinator-local/coordinator-sessions>``.
     ``worktree_root`` is the CORRECTED worktree root (main_worktree_root's
     return value), used both for the containment check and as the ``cwd``
     passed to ``normalize_touch_path`` for the absolute-rescue class.
@@ -454,7 +454,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--sessions-base",
         required=True,
-        help="path to <git-common-dir>/coordinator-sessions",
+        help="path to the session hub (session_hub_path.hub_for_common)",
     )
     ap.add_argument(
         "--worktree-root",
@@ -476,6 +476,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     sessions_base = Path(args.sessions_base)
     worktree_root = Path(args.worktree_root)
     backup_dir = Path(args.backup_dir) if args.backup_dir else None
+    # The backup dir is a dot-prefixed sibling of the hub, wherever the hub lives.
     git_common_dir = sessions_base.parent
 
     report = run_migration(

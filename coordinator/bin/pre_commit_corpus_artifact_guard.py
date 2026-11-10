@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """coordinator/bin/pre_commit_corpus_artifact_guard.py — refuse a commit that stages a
 Example-retrieval-repo corpus artifact, or any oversized real blob.
 
@@ -56,9 +57,16 @@ Negative-spec:
 
 Spec backlink: docs/plans/2026-09-18-doe-holds-no-scripts.md, chunk W2-C5.
 
-Never imports `coordinator_core`: a stdlib-only CLI that runs with no engine-root
-bootstrap, so it keeps its own git spawns and is exempt from the shared git runner
+Never imports `coordinator_core` on the guard path: it runs with no engine-root bootstrap,
+so it keeps its own git spawns and is exempt from the shared git runner
 (`coordinator_core/tests/test_shared_git_runner.py :: _CONTRACT_EXEMPT_MODULES`).
+Only ``--install-hook`` imports it, after putting this checkout's engine root on sys.path.
+
+``--install-hook`` (run in the target repo) is the sanctioned install and repair of this
+repo's ``.git/hooks/pre-commit``: absent -> write the self-resolving hook body; already
+that body -> rewrite only if stale; a copied forwarder stub -> replaced via the hook
+disposition table (original kept as ``pre-commit.retired``); any other hook -> left
+untouched, exit 2.
 """
 
 from __future__ import annotations
@@ -131,12 +139,77 @@ def _max_bytes() -> int:
     return mb * 1024 * 1024
 
 
+def _write_hook_atomic(path, body: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(body.encode("utf-8"))
+    if os.name != "nt":
+        os.chmod(tmp, 0o755)
+    os.replace(tmp, path)
+
+
+def _install_hook() -> int:
+    """Install or repair this repo's pre-commit hook; see the module docstring."""
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from coordinator_core.git import hook_dispositions
+    from coordinator_core.git.corpus_guard_hook import STAMP, hook_body, is_forwarder_stub
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+
+    top = _git(["rev-parse", "--show-toplevel"])
+    if top.returncode != 0 or not top.stdout.strip():
+        print("[corpus-artifact-guard] --install-hook: not inside a git repo", file=sys.stderr)
+        return 2
+    root = Path(top.stdout.strip())
+    hooks = resolve_git_common_dir(root) / "hooks"
+    target = hooks / "pre-commit"
+
+    body = hook_body()
+    if is_forwarder_stub(body):
+        print("[corpus-artifact-guard] generated hook body is a forwarder stub; refusing", file=sys.stderr)
+        return 2
+
+    if not target.exists():
+        hooks.mkdir(parents=True, exist_ok=True)
+        _write_hook_atomic(target, body)
+        print(f"[corpus-artifact-guard] installed {target}")
+        return 0
+
+    try:
+        text = target.read_bytes().decode("utf-8")
+    except UnicodeDecodeError:
+        text = ""
+    if STAMP in text:
+        if text == body:
+            print(f"[corpus-artifact-guard] {target} is current")
+        else:
+            _write_hook_atomic(target, body)
+            print(f"[corpus-artifact-guard] rewrote {target}")
+        return 0
+    if is_forwarder_stub(text):
+        verdicts = hook_dispositions.apply_repo(root, check_only=False)
+        for entry_id, hook, verdict in verdicts:
+            print(f"[corpus-artifact-guard] {entry_id} {hook}: {verdict}")
+        replaced = [v for v in verdicts if v[0] == "forwarder-stub-pre-commit"]
+        return 0 if replaced and replaced[0][2] in ("replaced", "current") else 2
+    print(f"[corpus-artifact-guard] {target} is not an engine hook; left untouched", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="pre_commit_corpus_artifact_guard.py",
         description="Refuse a commit that stages a example-retrieval-repo corpus artifact or an oversized blob.",
     )
-    parser.parse_args(argv[1:] if argv is not None else None)
+    parser.add_argument(
+        "--install-hook",
+        action="store_true",
+        help="install or repair this repo's .git/hooks/pre-commit with the self-resolving hook body",
+    )
+    args = parser.parse_args(argv[1:] if argv is not None else None)
+
+    if args.install_hook:
+        return _install_hook()
 
     if os.environ.get(_BYPASS_ENV) == "1":
         print(f"[corpus-artifact-guard] bypassed via {_BYPASS_ENV}=1", file=sys.stderr)

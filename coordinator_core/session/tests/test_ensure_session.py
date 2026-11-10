@@ -53,7 +53,7 @@ def repo(tmp_path):
 
 
 def _hub(repo: Path) -> Path:
-    return repo / ".git" / "coordinator-sessions"
+    return repo / ".coordinator-local" / "coordinator-sessions"
 
 
 class TestDirectoryAndRecordTogether:

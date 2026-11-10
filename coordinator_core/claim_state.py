@@ -12,8 +12,8 @@ Problem section). A handoff was claimed on branch `two-tier-engine-root`
 (commit 11fe08d51 stamped the frontmatter mirror). A peer moved the shared
 worktree to `main`, which never carried that commit — the mirror reverted to
 `status: open` with no claim fields while the branch-independent claim ledger
-(`<common_dir>/coordinator-sessions/handoff-claims/<basename>/`, living inside
-the git *directory*, not the worktree) still held the claim. A fully-worked
+(`<hub>/handoff-claims/<basename>/`, the `.coordinator-local/coordinator-sessions` hub,
+shared by every worktree, not per-worktree) still held the claim. A fully-worked
 baton advertised itself for pickup with an entire session's work already done.
 
 This module generalizes `baton_assemble/apply.py`'s `_ledger_claim_record` /
@@ -79,6 +79,7 @@ from coordinator_core.frontmatter.primitives import (
 )
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.liveness import cs_claim_holder_live
+from coordinator_core.session_hub_path import hub_for_common
 
 # ---------------------------------------------------------------------------
 # Claim-dir path convention — re-homed from coordinator_core.ops.fleet._common
@@ -96,17 +97,17 @@ _HANDOFF_CLAIM_SUBDIR = "handoff-claims"
 
 
 def _sessions_dir(common_dir: Path) -> Path:
-    """Return the coordinator-sessions dir: <common_dir>/coordinator-sessions/.
+    """Return the session hub dir (``session_hub_path.hub_for_common``).
 
-    The sessions dir lives inside the git dir (common_dir), NOT the worktree.
+    Keyed on the git common dir, so every linked worktree shares one hub.
     """
-    return common_dir / "coordinator-sessions"
+    return hub_for_common(common_dir)
 
 
 def handoff_claim_dir(common_dir: Path, handoff_path: Path) -> Path:
     """Derive the handoff claim-lock dir for a given handoff path.
 
-    <common_dir>/coordinator-sessions/handoff-claims/<handoff_path.name> —
+    <hub>/handoff-claims/<handoff_path.name> —
     the single shared claim-dir convention (see
     ``coordinator_core.ops.fleet._common``'s original docstring for this
     function, preserved verbatim there via re-export).

@@ -98,8 +98,8 @@ and anything outside the repo entirely) and fires AT MOST ONCE PER SESSION:
 a scratch tree full of citations would otherwise warn on every touch, which
 is exactly the noise a low-stakes tier exists to avoid. The once-per-session
 claim is a session-scoped sentinel file
-(`coordinator-sessions/<session>/concrete-path-citation-warn.fired`) under
-the repo's git common directory, mirroring
+(`<session hub>/<session>/concrete-path-citation-warn.fired`) under
+the repo's session hub, mirroring
 `coordinator_core.hooks.nudge_harness_directive_dispatch`'s established
 fire-once pattern (atomic `open(..., "x")` claim).
 
@@ -138,6 +138,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from coordinator_core.lifecycle import find_repo_root, git_common_dir
 from coordinator_core.ops.session.abs_path_carve_outs import load_carve_outs
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.ops.session.guard_concrete_path_citations import (
     Finding,
     new_violations,
@@ -396,7 +397,7 @@ def _claim_warn_once(repo_root: "Path | None", payload: dict) -> bool:
     # (`liveness._NON_SESSION_DIR_NAMES`, the same fallback
     # `bash_guards/_override_log_path` uses) whenever the session's own
     # directory does not already exist.
-    sessions_root = base / "coordinator-sessions"
+    sessions_root = hub_for_common(base)
     session_key = _session_key(payload)
     sentinel_dir = sessions_root / session_key
     if not sentinel_dir.is_dir():

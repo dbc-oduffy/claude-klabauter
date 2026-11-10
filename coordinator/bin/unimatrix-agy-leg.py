@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """agy-side leg: run BY agy (its run_command, backgrounded) so it inherits agy's own
 ANTIGRAVITY_CSRF_TOKEN / ANTIGRAVITY_LS_ADDRESS / ANTIGRAVITY_CONVERSATION_ID. The token never
 leaves this process: it is not logged, written, or forwarded.

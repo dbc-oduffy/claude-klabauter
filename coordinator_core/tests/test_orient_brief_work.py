@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.orient_brief import _work
+from coordinator_core.session_hub_path import hub_for_common
 
 _DAY = 86400
 
@@ -211,7 +212,7 @@ def test_req_w2_live_ledger_claim_suppresses_and_dead_one_does_not(tmp_path, mon
     root = _repo(tmp_path)
     _handoff(root, "a-held.md", title="held", created="2026-10-02")
     _handoff(root, "b-dead.md", title="dead holder", created="2026-10-01")
-    claims = root / ".git" / "coordinator-sessions" / "handoff-claims"
+    claims = hub_for_common(root / ".git") / "handoff-claims"
     for name, session in (("a-held.md", "live-session"), ("b-dead.md", "dead-session")):
         (claims / name).mkdir(parents=True)
         (claims / name / "session_id").write_text(session)

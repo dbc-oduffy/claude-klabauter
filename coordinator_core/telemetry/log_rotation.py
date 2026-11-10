@@ -1,7 +1,7 @@
 """
 coordinator_core.telemetry.log_rotation — generic size-based cascade
 rotation for unbounded append-only sinks under
-``<git_common_dir>/coordinator-sessions/logs/``.
+``<session hub>/logs/`` (``session_hub_path.hub_for_common``).
 
 Purpose: five sinks in that directory
 (``coordinator_core.telemetry.op_latency``'s ``op-latency.jsonl``,

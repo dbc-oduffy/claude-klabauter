@@ -42,6 +42,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.session_hub_path import hub_for_common
 import coordinator_core.ops.gate_dimension_review as gate_dimension_review
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -129,9 +130,9 @@ def _is_git(argv: "list[str]") -> bool:
 
 def _seed_session_with_peer(repo: Path, sid: str, peer_sid: str, *, with_floor: bool) -> None:
     """Own + peer commits with trailers; `head_at_start` is the seed commit when `with_floor`."""
-    claim_dir = repo / ".git" / "coordinator-sessions" / sid
+    claim_dir = hub_for_common(repo / ".git") / sid
     claim_dir.mkdir(parents=True)
-    (repo / ".git" / "coordinator-sessions" / peer_sid).mkdir(parents=True)
+    (hub_for_common(repo / ".git") / peer_sid).mkdir(parents=True)
     if with_floor:
         (claim_dir / "head_at_start").write_text(
             _git("rev-parse", "HEAD", cwd=repo).stdout.strip(), encoding="utf-8"
@@ -228,9 +229,9 @@ def test_brief_call_one_builds_no_review_scope_and_so_cannot_truncate_one(repo, 
     """
     sid = "22222222-2222-2222-2222-222222222222"
     peer_sid = "33333333-3333-3333-3333-333333333333"
-    claim_dir = repo / ".git" / "coordinator-sessions" / sid
+    claim_dir = hub_for_common(repo / ".git") / sid
     claim_dir.mkdir(parents=True)
-    peer_claim_dir = repo / ".git" / "coordinator-sessions" / peer_sid
+    peer_claim_dir = hub_for_common(repo / ".git") / peer_sid
     peer_claim_dir.mkdir(parents=True)
     import os as _os
 
@@ -284,7 +285,7 @@ def test_close_coverage_advisory_reaches_the_dimension_on_the_ordinary_close(rep
     `rev-parse`), so the only added subprocess is the dimension's own
     `git log`. Asserted as at most one call, never as none."""
     sid = "22222222-2222-2222-2222-222222222222"
-    claim_dir = repo / ".git" / "coordinator-sessions" / sid
+    claim_dir = hub_for_common(repo / ".git") / sid
     claim_dir.mkdir(parents=True)
     (claim_dir / "head_at_start").write_text("a" * 40, encoding="utf-8")
     _patch_gate_with_sid(monkeypatch, sid)
@@ -310,7 +311,7 @@ def test_close_coverage_advisory_reaches_the_dimension_on_the_ordinary_close(rep
 
 def test_close_coverage_advisory_stays_silent_without_head_at_start(repo, monkeypatch):
     sid = "22222222-2222-2222-2222-222222222222"
-    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
+    (hub_for_common(repo / ".git") / sid).mkdir(parents=True)
     _patch_gate_with_sid(monkeypatch, sid)
 
     def _fail_if_called(*args, **kwargs):
@@ -324,7 +325,7 @@ def test_close_coverage_advisory_stays_silent_without_head_at_start(repo, monkey
 
 def test_close_coverage_advisory_directive_is_always_already_satisfied_and_ungated(repo, monkeypatch):
     sid = "22222222-2222-2222-2222-222222222222"
-    claim_dir = repo / ".git" / "coordinator-sessions" / sid
+    claim_dir = hub_for_common(repo / ".git") / sid
     claim_dir.mkdir(parents=True)
     _patch_gate_with_sid(monkeypatch, sid)
 
@@ -353,7 +354,7 @@ def test_call_one_unresolved_scale_names_stage_paths_as_its_unlock(repo, monkeyp
     prose, so the route travels with the envelope that reports the problem.
     """
     sid = "44444444-4444-4444-4444-444444444444"
-    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
+    (hub_for_common(repo / ".git") / sid).mkdir(parents=True)
     _patch_gate_with_sid(monkeypatch, sid)
 
     review_scale = wsc.brief(decisions={}, repo_root=repo)["gates"]["review_scale"]
@@ -371,7 +372,7 @@ def test_call_one_unresolved_scale_names_stage_paths_as_its_unlock(repo, monkeyp
 
 def test_resolved_scale_carries_no_remediation(repo, monkeypatch):
     sid = "55555555-5555-5555-5555-555555555555"
-    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
+    (hub_for_common(repo / ".git") / sid).mkdir(parents=True)
     _patch_gate_with_sid(monkeypatch, sid)
 
     review_scale = wsc.brief(

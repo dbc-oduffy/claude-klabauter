@@ -19,6 +19,7 @@ Findings recorded in ``docs/research/2026-09-26-foreign-hunk-discriminator.md``.
 from __future__ import annotations
 
 import os
+from coordinator_core.session_hub_path import hub_for_common
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -67,7 +68,7 @@ def _write_session_touch(
     path: str,
     content_hash: Optional[str],
 ) -> None:
-    sdir = Path(git_root) / ".git" / "coordinator-sessions" / session_id
+    sdir = hub_for_common(Path(git_root) / ".git") / session_id
     sdir.mkdir(parents=True, exist_ok=True)
     touch_record.append_event(
         touch_record.sink_path(sdir),
@@ -86,7 +87,7 @@ def _write_agent_touch(
     path: str,
     content_hash: Optional[str],
 ) -> None:
-    adir = Path(git_root) / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    adir = hub_for_common(Path(git_root) / ".git") / ".agents" / agent_id
     adir.mkdir(parents=True, exist_ok=True)
     (adir / "em-session-id.txt").write_text(em_session_id, encoding="utf-8")
     touch_record.append_event(
@@ -105,7 +106,7 @@ def _write_agent_touch(
     # live via the recency-mtime fallback (Layer 2), so this mirrors real
     # dispatch provisioning closely enough for the excusal path to be
     # reachable at all.
-    (Path(git_root) / ".git" / "coordinator-sessions" / agent_id).mkdir(
+    (hub_for_common(Path(git_root) / ".git") / agent_id).mkdir(
         parents=True, exist_ok=True
     )
 

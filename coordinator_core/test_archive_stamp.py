@@ -22,6 +22,7 @@ from typing import Optional
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -129,13 +130,22 @@ def _default_caller_session_id(monkeypatch):
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
+def _ignore_hub(repo: Path) -> None:
+    """Ignore `.coordinator-local/` as a real checkout's .gitignore does, so the session hub is not dirt."""
+    (repo / ".git" / "info").mkdir(parents=True, exist_ok=True)
+    with open(repo / ".git" / "info" / "exclude", "a", encoding="utf-8") as fh:
+        fh.write(".coordinator-local/\n")
+
+
 def _init_repo(repo: Path) -> None:
     seeded_repo(repo, email="t@t", name="test")
+    _ignore_hub(repo)
 
 
 def _init_memo_repo(repo: Path) -> None:
     # memo.transition refuses a default-branch HEAD (1dccb23c3d), so these repos sit on a work branch.
     seeded_repo(repo, branch="work/test", email="t@t", name="test")
+    _ignore_hub(repo)
 
 
 def _seed_handoff(repo: Path, name: str, status: str, deployment_state: str, extra: str = "") -> Path:
@@ -1878,7 +1888,7 @@ class TestHandoffTransitionWrappers:
         rc = arstamp.cs_claim_handoff(str(hp))
         assert rc == 0
 
-        shape_path = repo / ".git" / "coordinator-sessions" / "sess-dlv" / "session-shape.json"
+        shape_path = session_dir_for(repo / ".git", "sess-dlv") / "session-shape.json"
         data = json.loads(shape_path.read_text(encoding="utf-8"))
         assert data["pickup"]["deliverable_id"] == "dlv-claim-test"
         assert data["pickup_history"][0]["deliverable_id"] == "dlv-claim-test"
@@ -1893,7 +1903,7 @@ class TestHandoffTransitionWrappers:
         rc = arstamp.cs_claim_handoff(str(hp))
         assert rc == 0
 
-        shape_path = repo / ".git" / "coordinator-sessions" / "sess-no-dlv" / "session-shape.json"
+        shape_path = session_dir_for(repo / ".git", "sess-no-dlv") / "session-shape.json"
         data = json.loads(shape_path.read_text(encoding="utf-8"))
         assert "deliverable_id" not in data["pickup"]
         assert "deliverable_id" not in data["pickup_history"][0]
@@ -1945,7 +1955,7 @@ class TestHandoffTransitionWrappers:
         rc = arstamp.cs_claim_handoff(str(hp))
         assert rc == 0
 
-        meta_path = repo / ".git" / "coordinator-sessions" / "sess-goal-1" / "meta.json"
+        meta_path = session_dir_for(repo / ".git", "sess-goal-1") / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         assert meta["goal"] == "pickup: Test Handoff goal1.md"
 
@@ -1976,7 +1986,7 @@ class TestHandoffTransitionWrappers:
         rc = arstamp.cs_claim_handoff(str(path))
         assert rc == 0
 
-        meta_path = repo / ".git" / "coordinator-sessions" / "sess-goal-2" / "meta.json"
+        meta_path = session_dir_for(repo / ".git", "sess-goal-2") / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         assert meta["goal"] == "pickup: Fallback summary text"
 
@@ -1991,7 +2001,7 @@ class TestHandoffTransitionWrappers:
         ok = session_core.init("sess-init-only", cwd=str(repo))
         assert ok is True
 
-        meta_path = repo / ".git" / "coordinator-sessions" / "sess-init-only" / "meta.json"
+        meta_path = session_dir_for(repo / ".git", "sess-init-only") / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8"))
         assert meta.get("goal", "") == ""
 
@@ -2824,7 +2834,7 @@ class TestMemoTransitionWrappers:
         repo = tmp_path / "repo"
         _init_memo_repo(repo)
         mp = _seed_memo(repo, "m5.md", "in_progress")
-        claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m5.md"
+        claim_dir = hub_for_common(repo / ".git") / "memo-claims" /"m5.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("sess-abc", encoding="utf-8")
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sess-abc")
@@ -2887,7 +2897,7 @@ class TestMemoTransitionWrappers:
         _git(repo, "worktree", "add", "-q", str(worktree), "-b", "wt1-branch")
         mp = _seed_memo(worktree, "m7.md", "in_progress")
 
-        claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m7.md"
+        claim_dir = hub_for_common(repo / ".git") / "memo-claims" /"m7.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("sess-owner", encoding="utf-8")
 
@@ -2908,7 +2918,7 @@ class TestMemoTransitionWrappers:
         _git(repo, "worktree", "add", "-q", str(worktree), "-b", "wt1-branch")
         mp = _seed_memo(worktree, "m8.md", "in_progress")
 
-        claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m8.md"
+        claim_dir = hub_for_common(repo / ".git") / "memo-claims" /"m8.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("sess-owner", encoding="utf-8")
 
@@ -2924,7 +2934,7 @@ class TestMemoTransitionWrappers:
         repo = tmp_path / "repo"
         _init_memo_repo(repo)
         mp = _seed_memo(repo, "m9dead.md", "in_progress")
-        claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m9dead.md"
+        claim_dir = hub_for_common(repo / ".git") / "memo-claims" /"m9dead.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("sess-owner", encoding="utf-8")
 
@@ -3402,7 +3412,7 @@ class TestSurfaceAdvisoryStderrLine:
         repo = tmp_path / "repo"
         _init_memo_repo(repo)
         mp = _seed_memo(repo, "held.md", "in_progress")
-        claim_dir = repo / ".git" / "coordinator-sessions" / "memo-claims" / "held.md"
+        claim_dir = hub_for_common(repo / ".git") / "memo-claims" /"held.md"
         claim_dir.mkdir(parents=True)
         (claim_dir / "session_id").write_text("sess-owner", encoding="utf-8")
         monkeypatch.setattr(arstamp, "cs_claim_holder_live", lambda claim_path: True)

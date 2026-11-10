@@ -51,6 +51,8 @@ import subprocess
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+from coordinator_core.session_hub_path import hub_for_common
+
 #: agent_id format guards (reference hook lines 96-130).
 _BARE_HEX_RE = re.compile(r"^[a-f0-9]{12,}$")
 _NAMED_TEAMMATE_RE = re.compile(r"^a.+-[a-f0-9]{16}$")
@@ -586,7 +588,8 @@ def _read_backpointer_subagent_type(
     existed — ``resolve_effective_types`` below passes nothing deliberately;
     tightening its posture is a separate decision, not made here.
     """
-    backptr = Path(git_root) / ".git" / "coordinator-sessions" / ".agents" / agent_id / "em-session-id.txt"
+    sessions_base = hub_for_common(Path(git_root) / ".git")
+    backptr = sessions_base / ".agents" / agent_id / "em-session-id.txt"
     try:
         content = backptr.read_text(encoding="utf-8")
     except OSError:
@@ -597,7 +600,6 @@ def _read_backpointer_subagent_type(
     if expected_em_session_id and em_sid != expected_em_session_id:
         return ""
 
-    sessions_base = Path(git_root) / ".git" / "coordinator-sessions"
     rows: list[str] = []
     for dispatch_file in _dispatch_files_for_session(sessions_base, em_sid):
         try:

@@ -13,6 +13,7 @@ from coordinator_core.bash_guards import _write_bump_marker as marker
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
 from coordinator_core.bash_guards import bump_foreign_repo_write as fg_guard
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
@@ -307,7 +308,7 @@ def test_clear_line_command_works_verbatim_on_a_fresh_machine(tmp_path):
 
 def test_resolve_em_session_id_reads_backpointer(tmp_path):
     root = _init_repo(tmp_path)
-    backptr_dir = root / ".git" / "coordinator-sessions" / ".agents" / "agent-abc123def456"
+    backptr_dir = hub_for_common(root / ".git") / ".agents" / "agent-abc123def456"
     backptr_dir.mkdir(parents=True)
     (backptr_dir / "em-session-id.txt").write_text("em-session-xyz\n", encoding="utf-8")
 
@@ -321,7 +322,7 @@ def test_resolve_em_session_id_absent_file_fails_open(tmp_path):
 
 def test_resolve_em_session_id_malformed_content_fails_open(tmp_path):
     root = _init_repo(tmp_path)
-    backptr_dir = root / ".git" / "coordinator-sessions" / ".agents" / "agent-abc"
+    backptr_dir = hub_for_common(root / ".git") / ".agents" / "agent-abc"
     backptr_dir.mkdir(parents=True)
     (backptr_dir / "em-session-id.txt").write_text("!! not a session id\n", encoding="utf-8")
 
@@ -335,7 +336,7 @@ def test_resolve_em_session_id_empty_args_fail_open():
 
 def test_effective_session_id_prefers_em_session_when_subagent(tmp_path):
     root = _init_repo(tmp_path)
-    backptr_dir = root / ".git" / "coordinator-sessions" / ".agents" / "agent-abc123def456"
+    backptr_dir = hub_for_common(root / ".git") / ".agents" / "agent-abc123def456"
     backptr_dir.mkdir(parents=True)
     (backptr_dir / "em-session-id.txt").write_text("em-session-xyz\n", encoding="utf-8")
 
@@ -364,7 +365,7 @@ def test_subagent_inherits_em_marker_without_a_second_one(tmp_path):
     em_session_id = "em-session-xyz"
     (gitdir / marker.marker_basename(em_session_id)).touch()
 
-    backptr_dir = root / ".git" / "coordinator-sessions" / ".agents" / "agent-abc123def456"
+    backptr_dir = hub_for_common(root / ".git") / ".agents" / "agent-abc123def456"
     backptr_dir.mkdir(parents=True)
     (backptr_dir / "em-session-id.txt").write_text(em_session_id + "\n", encoding="utf-8")
 

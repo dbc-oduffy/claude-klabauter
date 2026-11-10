@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 bin/claude-klabauter-doctor-probe.py — Tier-1 static diagnostic probe for the claude-klabauter install chain.
 
@@ -2939,7 +2940,7 @@ def _run_probe_stable_pid_miss(claude_klabauter_root: Path | None) -> _ProbeResu
       MISS  -> DEGRADED (sentinel AMBER + the named session(s)/reason(s)) — F0 is
                live again; someone must investigate why capture regressed.
       CLEAN -> PASS.
-      EMPTY -> SKIP (required=False) — no coordinator-sessions dir, or no session
+      EMPTY -> SKIP (required=False) — no session hub dir, or no session
                records in it (fresh install / CI); not applicable, not a fault.
 
     Negative-spec:

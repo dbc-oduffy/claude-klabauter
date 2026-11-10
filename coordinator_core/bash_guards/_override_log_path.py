@@ -6,7 +6,7 @@ Why this is shared rather than inlined at each call site: both writers
 `dispatch_checks`'s `COORDINATOR_OVERRIDE_BLANKET_ADD` leg) previously did
 `os.makedirs(<sessions>/<sid>, exist_ok=True)` for whatever `session_id` they
 were handed. `liveness.live_session_ids` enumerates every non-denylisted
-child of `.git/coordinator-sessions/` as a SESSION, so an audit write could
+child of `.coordinator-local/coordinator-sessions/` as a SESSION, so an audit write could
 manufacture a phantom session into the corpus that claim attribution and
 scope computation both read. Two copies of that rule would drift; one will
 not.
@@ -34,7 +34,10 @@ rather than dropping the line.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Optional
+
+from coordinator_core.session_hub_path import hub_for_common
 
 #: Mirrors the one entry of `liveness._NON_SESSION_DIR_NAMES` this module
 #: needs. Deliberately NOT an import: these guards run in a PreToolUse hook
@@ -52,7 +55,7 @@ def session_audit_log_dir(git_root: str, session_id: Optional[str]) -> Optional[
     # created for real -- at the drive root on Windows.
     if not os.path.exists(os.path.join(git_root, ".git")):
         return None
-    sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
+    sessions_root = str(hub_for_common(Path(git_root) / ".git"))
     sid = session_id or NO_SESSION_BUCKET
     sid_dir = os.path.join(sessions_root, sid)
     if sid != NO_SESSION_BUCKET and not os.path.isdir(sid_dir):

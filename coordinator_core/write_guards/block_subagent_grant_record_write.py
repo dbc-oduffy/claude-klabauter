@@ -5,7 +5,7 @@ write-grant record itself.
 Purpose: NEW per PM ruling 2026-08-08 ("Two bypass vectors, now in scope",
 vector 2). Before this module, nothing in ``write_guards/`` or
 ``bash_guards/`` guarded a subagent ``Write``/``Edit`` directly against
-``<git-common-dir>/coordinator-sessions/<sid>/claude-md-write-grant.json`` —
+``<session hub>/<sid>/claude-md-write-grant.json`` —
 the record ``coordinator_core.session.claude_md_grant`` writes and
 ``check_claude_md_write_grant`` reads to gate
 ``block_unauthorized_claude_md_write``. That record is not itself
@@ -18,8 +18,8 @@ closes that direct-artifact-write route.
 
 Fires-on: any ``Write``/``Edit``/``MultiEdit``/``NotebookEdit`` whose
 resolved target path is
-``<git-common-dir>/coordinator-sessions/<sid>/claude-md-write-grant.json``
-(any ``<sid>``), attempted by a dispatched subagent (non-empty top-level
+``<session hub>/<sid>/claude-md-write-grant.json``
+(any ``<sid>``; hub = ``session_hub_path.hub_for_common(<git-common-dir>)``), attempted by a dispatched subagent (non-empty top-level
 ``agent_id``).
 
 IDENTITY-GATE aspect modelled on
@@ -33,7 +33,7 @@ path this module exists to close open to every other subagent type.
 
 PATH-RESOLUTION aspect modelled on ``block_memo_status_hand_edit.py``, NOT
 on ``block_unauthorized_claude_md_write.py`` — that guard's own surface
-(CLAUDE.md-class files) never lives under ``.git/coordinator-sessions/``,
+(CLAUDE.md-class files) never lives under the session hub,
 so it has no session-hub resolution logic to copy. This module: resolves
 the repo root via the shared
 ``coordinator_core.write_guards._repo_root.resolve_repo_root``, which
@@ -42,7 +42,7 @@ WALKS for a ``.git`` entry first and falls back to a
 to ``cwd.anchor`` (see Negative-spec below — this fallback is genuinely
 reachable on the hot path, not merely theoretical), then the git COMMON
 dir via ``coordinator_core.git.git_dir.resolve_git_common_dir``
-(also pure path/text, no subprocess), joins ``coordinator-sessions/`` under
+(also pure path/text, no subprocess), derives the session hub from
 that resolved common dir, and gates containment on the RESOLVED path —
 never a bare lexical/regex match on the raw ``file_path`` string. A ``..``
 traversal segment anywhere in the candidate is COLLAPSED (lexically
@@ -78,7 +78,7 @@ shape):
   (1) No ``agent_id`` (top-level EM write) -> always allow. The EM is the
       one who legitimately acquires and writes the grant.
   (2) Resolved path does not match
-      ``<common-dir>/coordinator-sessions/<any-sid>/claude-md-write-grant.json``
+      ``<session hub>/<any-sid>/claude-md-write-grant.json``
       -> allow.
   (3) ``tool_name`` not in ``_INTERCEPTED_TOOLS`` -> allow (defense-in-
       depth, matches every sibling ``write_guards`` module's convention).
@@ -202,6 +202,7 @@ from typing import Any, Dict, Optional
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session.claude_md_grant import _GRANT_FILENAME
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 
@@ -261,7 +262,7 @@ def _resolve_git_common_dir(cwd: Optional[str]) -> Optional[str]:
 def _is_grant_record_path(normalized_file_path: str, common_dir: str) -> bool:
     """``True`` iff ``normalized_file_path`` (already backslash/slash-
     normalized), resolved against ``cwd``/``common_dir``, is a
-    ``coordinator-sessions/<any-sid>/<_GRANT_FILENAME>`` path under the
+    ``<session hub>/<any-sid>/<_GRANT_FILENAME>`` path under the
     resolved git common dir. Containment and filename match are both
     against the RESOLVED path, never a raw-string regex.
 
@@ -304,7 +305,7 @@ def _is_grant_record_path(normalized_file_path: str, common_dir: str) -> bool:
     abs_candidate_cf = casefold_path(abs_candidate)
 
     sessions_root = casefold_path(
-        _normalize_path(str(Path(common_dir) / "coordinator-sessions")).rstrip("/") + "/"
+        _normalize_path(str(hub_for_common(Path(common_dir)))).rstrip("/") + "/"
     )
 
     if not abs_candidate_cf.startswith(sessions_root):

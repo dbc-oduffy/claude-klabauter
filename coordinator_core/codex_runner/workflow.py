@@ -691,8 +691,10 @@ def _trailing_json(text: str):
 
 
 _OP_RELAY_AGENT_TYPE = "coordinator:op-relay"
-# The op-relay child runs one coordinator-invoke and nothing else. The rule grammar is grok's;
-# a rejected pattern surfaces as the named cancel error. Same literal as ask_compose._OP_RELAY_AGENT_TYPE.
+_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
+# Children that run coordinator-invoke and nothing else get only this allow rule. The rule grammar is
+# grok's; a rejected pattern surfaces as the named cancel error. Literals match ask_compose's.
+_INVOKE_ONLY_AGENT_TYPES = frozenset({_OP_RELAY_AGENT_TYPE, _COMMIT_AGENT_TYPE})
 _RELAY_ALLOW = "Bash(coordinator-invoke:*)"
 
 
@@ -701,11 +703,11 @@ def _family_argv(backend: str, artifact_dir: Path, agent_type: str | None = None
 
     Never carries grok.FORBIDDEN_FLAGS or agy --dangerously-skip-permissions; the
     stage model is left to the CLI default because Workflow tiers do not map to
-    these families. A grok op-relay child gets only a coordinator-invoke allow rule.
+    these families. A grok op-relay or commit-stage child gets only a coordinator-invoke allow rule.
     """
     try:
         if backend == "grok":
-            allow = _RELAY_ALLOW if agent_type == _OP_RELAY_AGENT_TYPE else "Bash"
+            allow = _RELAY_ALLOW if agent_type in _INVOKE_ONLY_AGENT_TYPES else "Bash"
             return [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
                     "--output-format", "json", "--permission-mode", "acceptEdits",
                     "--allow", allow, "--no-subagents", "--no-auto-update"]
@@ -826,8 +828,10 @@ def run_agent(
             'Native execution platform: Windows. Run supplied commands with PowerShell. '
             'For a quoted executable use the PowerShell call operator &, followed by the quoted path. '
             'Do not wrap a command in cmd.exe /c, use POSIX parameter expansion, or add literal backslash-escaped quotes. '
-            'Run each coordinator-invoke as one plain command, coordinator-invoke <op> \'<json>\': no Set-Location, '
-            'variable assignment, pipeline or semicolon; the working directory is already set. '
+            'Run each coordinator-invoke as one plain command, coordinator-invoke <op> \'<json>\', by that bare name '
+            '(it is on PATH): never its full path or the & operator, no Set-Location, '
+            'variable assignment, pipeline or semicolon; the working directory is already set, so run no cd or '
+            'Set-Location even where the task text asks for one. '
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
         ) + full_prompt
     native_schema = _codex_schema(schema) if schema is not None else None
@@ -858,6 +862,9 @@ def run_agent(
     env['COORDINATOR_AGENT_PROVIDER'] = backend
     env['COORDINATOR_AGENT_VENDOR'] = backend
     env['COORDINATOR_AGENT_ROLE'] = 'workflow-agent'
+    if backend == 'grok':
+        # The bare-name coordinator-invoke the allow rule matches must resolve for a headless child.
+        env['PATH'] = os.pathsep.join(filter(None, [str(settings_home() / 'bin'), env.get('PATH')]))
     for key, option in (("COORDINATOR_WORKFLOW_AGENT_TYPE", "agentType"), ("COORDINATOR_WORKFLOW_AGENT_LABEL", "label")):
         value = options.get(option)
         if isinstance(value, str) and value:

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import subprocess
+
+from coordinator_core.session_hub_path import session_dir_for
 from pathlib import Path
 
 import pytest
@@ -42,7 +44,7 @@ def _fixture_repo(repo: Path) -> None:
     (repo / "fresh" / "dir").mkdir(parents=True)
     (repo / "fresh" / "dir" / "new.md").write_text("n\n", encoding="utf-8")
     (repo / "peer.txt").write_text("peer\n", encoding="utf-8")
-    sink = ba.git_common_dir(repo) / "coordinator-sessions" / SESSION / "touch-record.jsonl"
+    sink = session_dir_for(ba.git_common_dir(repo), SESSION) / "touch-record.jsonl"
     for path in ("kept.txt", "new_name.txt", "fresh/dir/new.md"):
         append_event(sink, session_id=SESSION, agent_id=None, verb="T", path=path)
 

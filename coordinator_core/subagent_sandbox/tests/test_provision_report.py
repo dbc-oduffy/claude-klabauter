@@ -26,6 +26,7 @@ from typing import Optional
 import pytest
 import yaml
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.frontmatter.schema_validate import parse_yaml
@@ -157,15 +158,15 @@ def _write_backpointer(
     em_session_id: str,
     subagent_type: str,
 ) -> None:
-    """Fake .git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt +
-    .git/coordinator-sessions/<em_session_id>/dispatched-agents.txt back-pointer
+    """Fake <session hub>/.agents/<agent_id>/em-session-id.txt +
+    <session hub>/<em_session_id>/dispatched-agents.txt back-pointer
     chain, mirroring engine.resolve_effective_types' on-disk layout (see
     test_engine.py's identical helper)."""
-    agents_dir = git_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    agents_dir = hub_for_common(git_root / ".git") / ".agents" / agent_id
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "em-session-id.txt").write_text(em_session_id + "\n", encoding="utf-8")
 
-    session_dir = git_root / ".git" / "coordinator-sessions" / em_session_id
+    session_dir = hub_for_common(git_root / ".git") / em_session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     dispatch_file = session_dir / "dispatched-agents.txt"
     row = f"{agent_id}\t2026-07-13T00:00:00Z\t{subagent_type}\n"
@@ -2520,7 +2521,7 @@ def test_the_pointer_index_is_untracked_and_outside_the_reaped_tree(
     git_repo: Path, policy_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture
 ) -> None:
     """The index is a rebuildable cache, not a record. It lives under
-    `.git/coordinator-sessions/` beside the `.agents/` back-pointer chain, so
+    `.coordinator-local/coordinator-sessions/` beside the `.agents/` back-pointer chain, so
     it adds no commit churn and never enters the tree
     `reap-stale-subagent-sidecars.py` sweeps."""
     payload = _payload(
@@ -2538,7 +2539,7 @@ def test_the_pointer_index_is_untracked_and_outside_the_reaped_tree(
     # a second producer does not silently collide.
     assert (
         pointer.parent
-        == git_repo / ".git" / "coordinator-sessions" / ".agent-sidecars" / "report"
+        == hub_for_common(git_repo / ".git") / ".agent-sidecars" / "report"
     )
     assert not (
         git_repo / ".coordinator-local" / "subagent-share" / ".agent-sidecars"

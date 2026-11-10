@@ -23,6 +23,8 @@ import asyncio
 import json
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -34,7 +36,7 @@ class _FakeCtx:
 
 
 def _cs_dir(repo_root: Path) -> Path:
-    return repo_root / ".git" / "coordinator-sessions"
+    return hub_for_common(repo_root / ".git")
 
 
 def _ctx(tmp_path: Path) -> _FakeCtx:
@@ -549,7 +551,7 @@ def _provision_report_sidecar(tmp_path: Path, session_id: str, agent_id: str) ->
     sidecar_path.parent.mkdir(parents=True, exist_ok=True)
     sidecar_path.write_text("---\nstatus: open\n---\n\n## Run notes\n\n", encoding="utf-8")
 
-    pointer_dir = tmp_path / ".git" / "coordinator-sessions" / ".agent-sidecars" / "report"
+    pointer_dir = hub_for_common(tmp_path / ".git") / ".agent-sidecars" / "report"
     pointer_dir.mkdir(parents=True, exist_ok=True)
     (pointer_dir / agent_id).write_text(rel + "\n", encoding="utf-8")
     return sidecar_path

@@ -11,7 +11,7 @@ path state/ceremony/<ceremony>-receipt.json, so two concurrent /workstream-compl
 runs clobbered each other's receipt.  It is now re-keyed on `sid` — one shard file
 per session, filename `<sid-short>-<emitted_at>.json` — mirroring the append-only
 review-trail `<TIMESTAMP>-<SID_SHORT>` shape.  Kept under TRACKED state/ (not
-`.git/coordinator-sessions/<sid>/`) because the receipt is committed ceremony
+`.coordinator-local/coordinator-sessions/<sid>/`) because the receipt is committed ceremony
 *evidence* with a durable-history lifetime, not ephemeral per-session resumability
 state — see `~/.claude/docs/wiki/session-state-contract.md` (per-session-file
 convention: "separate file per session, never a shared singleton"; this module's

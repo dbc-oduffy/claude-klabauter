@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _init_repo, _write_artifact
 
@@ -33,7 +35,7 @@ def _stub_operator_config(monkeypatch):
 
 
 def _seed_handoff_claim(repo_root, session_id: str, basename: str, claimed_at: str) -> None:
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
     (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")

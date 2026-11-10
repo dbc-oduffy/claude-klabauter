@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import asyncio
 
 import pytest
@@ -23,7 +25,7 @@ def test_claim_reap_surface_is_deleted():
 
 
 def test_gated_fast_path_reaps_no_claims(tmp_path):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     sessions_dir.mkdir(parents=True)
     marker = reap._last_reap_path(sessions_dir)
     marker.touch()
@@ -40,7 +42,7 @@ def test_gated_fast_path_reaps_no_claims(tmp_path):
 
 
 def test_full_run_reaps_no_claims(tmp_path, monkeypatch):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     sessions_dir.mkdir(parents=True)
 
     monkeypatch.setattr(reap, "resolve_live_session_ids", lambda: frozenset())

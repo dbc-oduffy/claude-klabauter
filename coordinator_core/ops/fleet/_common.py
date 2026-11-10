@@ -1022,7 +1022,7 @@ def collect_live_handoff_paths(worktree_root: Path) -> List[Path]:
 #
 # archive_handoffs._is_terminal Check 4 and the claim readers must agree on the
 # SAME claim-dir path convention
-# (<common_dir>/coordinator-sessions/<claim-class>-claims/<name>) or a future
+# (<session hub>/<claim-class>-claims/<name>, session_hub_path.hub_for_common) or a future
 # rename silently no-ops one side. Hoisted here so they import the same
 # constants/helper instead of re-literaling the path segments.
 # coordinator_core.ops.session.reap re-exports _sessions_dir from this module

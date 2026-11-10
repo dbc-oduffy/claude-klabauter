@@ -76,7 +76,7 @@ other tooling). YYYY-MM is read from the plan's OWN FILENAME prefix
 archived plan.
 
 Single-flight rail: a dedicated O_EXCL lock file
-(<common_dir>/coordinator-sessions/archive-completed-plans.lock), same
+(<hub>/archive-completed-plans.lock, hub = session_hub_path.hub_for_common), same
 acquire/break-stale-lock/release shape as
 `archive_terminal_handoffs._acquire_sweep_lock` — copied rather than
 imported because that helper's own lock PATH is hardcoded to the handoff
@@ -212,7 +212,9 @@ _SWEEP_LOCK_STALE_S = 120.0
 
 
 def _sweep_lock_path(common_dir: Path) -> Path:
-    return common_dir / "coordinator-sessions" / "archive-completed-plans.lock"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(common_dir) / "archive-completed-plans.lock"
 
 
 def _acquire_sweep_lock(common_dir: Path) -> Optional[Path]:

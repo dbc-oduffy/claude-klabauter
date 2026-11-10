@@ -47,6 +47,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.git.commit_trailers import (
     apply_missing_trailers,
@@ -93,7 +94,7 @@ def repo(tmp_path, monkeypatch) -> Path:
     _git(["config", "user.name", "t"], r)
 
     monkeypatch.setenv("CLAUDE_SESSION_ID", _SID)
-    shape_dir = r / ".git" / "coordinator-sessions" / _SID
+    shape_dir = session_dir_for(r / ".git", _SID)
     shape_dir.mkdir(parents=True, exist_ok=True)
     (shape_dir / "session-shape.json").write_text(
         json.dumps({"pickup": {"deliverable_id": _DLV}}), encoding="utf-8"

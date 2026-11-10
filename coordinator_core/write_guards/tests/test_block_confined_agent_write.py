@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.write_guards import block_confined_agent_write as guard
 from coordinator_core.write_guards import engine
 
@@ -360,7 +361,7 @@ class TestRegisteredReviewTargets:
     non-listed candidate, still falls back to sandbox-only."""
 
     def _write_targets(self, repo_root: Path, session_id: str, *rel_paths: str) -> None:
-        targets_dir = repo_root / ".git" / "coordinator-sessions" / session_id
+        targets_dir = session_dir_for(repo_root / ".git", session_id)
         targets_dir.mkdir(parents=True, exist_ok=True)
         (targets_dir / "review-targets.txt").write_text(
             "\n".join(rel_paths) + "\n", encoding="utf-8"
@@ -509,7 +510,7 @@ class TestPerDispatchReviewTargets:
         monkeypatch.setattr(
             guard, "_read_backpointer_subagent_type", _stub_subagent_type("coordinator:code-reviewer")
         )
-        base = tmp_path / ".git" / "coordinator-sessions" / session_id
+        base = session_dir_for(tmp_path / ".git", session_id)
         base.mkdir(parents=True)
         return base
 

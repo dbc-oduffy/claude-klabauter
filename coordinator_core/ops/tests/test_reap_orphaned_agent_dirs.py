@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import os
 import time
 from pathlib import Path
@@ -52,7 +54,7 @@ def _make_agent_dir(
 
 @pytest.fixture
 def sessions_dir(tmp_path):
-    d = tmp_path / "coordinator-sessions"
+    d = tmp_path / HUB_NAME
     d.mkdir()
     return d
 

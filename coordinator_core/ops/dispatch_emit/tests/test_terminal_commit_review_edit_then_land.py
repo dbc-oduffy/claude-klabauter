@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.ops.dispatch_emit import ask_contract, kept_work, review_edits
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift import (  # noqa: F401 -- repo is a fixture
     _WITH_BASE,
@@ -45,7 +46,7 @@ def _executor_then_review_edit(repo, monkeypatch, *, final: str, review_in_ledge
     if review_in_ledger:
         _agent(repo, "rv1", [("a.py", _sha("C\n"), 2500.0)], subagent_type="coordinator:code-reviewer")
     else:
-        hub = repo / ".git" / "coordinator-sessions" / ".agents" / "rv1"
+        hub = hub_for_common(repo / ".git") / ".agents" / "rv1"
         hub.mkdir(parents=True, exist_ok=True)
         (hub / "em-session-id.txt").write_text(SID + "\n", encoding="utf-8")
         with (hub / touch_record.RECORD_FILENAME).open("ab") as fh:
@@ -53,7 +54,7 @@ def _executor_then_review_edit(repo, monkeypatch, *, final: str, review_in_ledge
                 session_id=SID, agent_id="rv1", verb=touch_record.VERB_TOUCH, path="a.py",
                 timestamp=2500.0, content_hash=_sha("C\n"), kind="w",
             ))
-    (repo / ".git" / "coordinator-sessions" / SID).mkdir(parents=True, exist_ok=True)
+    session_dir_for(repo / ".git", SID).mkdir(parents=True, exist_ok=True)
 
 
 def test_a_review_pass_edit_after_the_executor_write_lands(repo, monkeypatch):

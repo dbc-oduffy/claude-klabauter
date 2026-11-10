@@ -22,6 +22,8 @@ import json
 import os
 import subprocess
 from datetime import datetime, timezone
+
+from coordinator_core.session_hub_path import hub_for_common
 from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch_checks
@@ -64,7 +66,7 @@ def _init_repo(tmp_path):
 
 
 def _session_dir(repo, sid=SID):
-    return repo / ".git" / "coordinator-sessions" / sid
+    return hub_for_common(repo / ".git") / sid
 
 
 def _init_session(repo, sid=SID):

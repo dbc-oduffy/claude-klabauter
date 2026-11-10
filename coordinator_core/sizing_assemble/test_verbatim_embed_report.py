@@ -10,6 +10,7 @@ import yaml
 import coordinator_core.ops.baton_pm_turns as pm_turns
 import coordinator_core.sizing_assemble as sizing_assemble
 from coordinator_core.session import record_homes
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.session_baton import store
 
 _NAME = "2026-10-11-x.yaml"
@@ -43,7 +44,7 @@ def repo(tmp_path: Path) -> Path:
 
 @pytest.fixture()
 def sid(repo: Path, monkeypatch) -> str:
-    sdir = repo / ".git" / "coordinator-sessions" / "sid-vr"
+    sdir = session_dir_for(repo / ".git", "sid-vr")
     sdir.mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-vr")

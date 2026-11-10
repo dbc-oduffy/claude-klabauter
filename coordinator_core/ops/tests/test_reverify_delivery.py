@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 from pathlib import Path
 
 import pytest
@@ -393,7 +395,8 @@ def _peer_touch(root, sid, path, kind, monkeypatch):
 
     from coordinator_core.session import touch_record
 
-    sid_dir = os.path.join(root, ".git", "coordinator-sessions", sid)
+    os.makedirs(os.path.join(root, ".git"), exist_ok=True)
+    sid_dir = str(session_dir_for(os.path.join(root, ".git"), sid))
     os.makedirs(sid_dir, exist_ok=True)
     touch_record.append_event(
         touch_record.sink_path(sid_dir), session_id=sid, agent_id=None,

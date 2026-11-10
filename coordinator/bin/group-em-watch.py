@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 group-em-watch.py — CLI trampoline over the engine repo's
 coordinator_core.group_em.watch.

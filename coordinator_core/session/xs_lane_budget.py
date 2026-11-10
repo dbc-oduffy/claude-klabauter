@@ -1,6 +1,6 @@
 """Per-session XS by-hand lane / residue window: record + zero-spawn diff budget.
 
-The record lives at `<git common dir>/coordinator-sessions/<sid>/xs-lane.json` as
+The record lives at `<session hub>/<sid>/xs-lane.json` (`session_hub_path.hub_for_common`) as
 `{kind: xs|residue, base_sha, state: open|spent, paths: [repo-relative], denies?: int}`. `denies`
 counts the projected denies the lane took; it is separate from the line budget (a denied attempt
 consumes no budget) and is not spend. A present `denies` that is not a non-negative int makes the

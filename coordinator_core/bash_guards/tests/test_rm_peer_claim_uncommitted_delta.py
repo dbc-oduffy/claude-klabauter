@@ -30,6 +30,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
@@ -65,7 +67,7 @@ def _init_repo(tmp_path: Path) -> str:
 def _claim(root: str, sid: str, path: str) -> None:
     from coordinator_core.session import touch_record
 
-    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    sdir = hub_for_common(Path(root) / ".git") / sid
     sdir.mkdir(parents=True, exist_ok=True)
     touch_record.append_event(
         touch_record.sink_path(sdir),

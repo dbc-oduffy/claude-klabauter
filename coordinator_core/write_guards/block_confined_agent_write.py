@@ -33,7 +33,7 @@ Re-scoped 2026-09-26 (docs/plans/2026-09-26-retire-review-integrator.md,
 row M1) for the reviewer-applies-own-findings contract: a confined agent may
 ALSO write to a path in the invoking EM session's own registered review-target
 set, so a reviewer can apply its findings in place in the reviewed artifact.
-The set is read from ``<git_root>/.git/coordinator-sessions/<session_id>/
+The set is read from ``<git_root>/.coordinator-local/coordinator-sessions/<session_id>/
 review-targets.txt`` — one repo-relative forward-slash path per non-blank
 line, written by ``review-findings-ledger targets --add`` (claude-klabauter
 ``coordinator_core/ops/review_findings_ledger.py``). A candidate write is
@@ -57,7 +57,7 @@ Fires on any of ``MATCHERS`` when:
       ``<git_root>/state/subagent-share/<em_session_id>/`` — where
       ``<em_session_id>`` is the firing payload's own ``session_id`` (the
       EM session that dispatched this agent — verified this session against
-      a real ``.git/coordinator-sessions/.agents/<agent_id>/em-session-
+      a real ``.coordinator-local/coordinator-sessions/.agents/<agent_id>/em-session-
       id.txt`` back-pointer to equal the payload's ``session_id`` for a
       dispatched subagent's tool call).
 
@@ -150,6 +150,7 @@ from coordinator_core.bash_guards._helpers import (
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.agent_sidecar import SIDECAR_ROOT
 from coordinator_core.session.machinery_paths import legacy_share_dir, share_dir
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 from coordinator_core.write_guards._subagent_identity import (
@@ -207,7 +208,7 @@ def _deny_reason(file_path: str, payload: Optional[Dict[str, Any]] = None) -> st
 def _review_targets_file(git_root: str, session_id: str, agent_id: str = "") -> Path:
     """The dispatch's own `review-targets.<agent_id>.txt` when it exists (that
     set alone confines the agent to its slice), else the session-wide file."""
-    base = Path(git_root) / ".git" / "coordinator-sessions" / session_id
+    base = session_dir_for(Path(git_root) / ".git", session_id)
     if agent_id:
         per_agent = base / f"review-targets.{agent_id}.txt"
         if per_agent.is_file():

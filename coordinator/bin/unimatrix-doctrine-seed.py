@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Seed DoE doctrine and skills into the Codex and agy host surfaces.
 
 One managed-block implementation serves every marker pair (`split_block`, `seed_block`,

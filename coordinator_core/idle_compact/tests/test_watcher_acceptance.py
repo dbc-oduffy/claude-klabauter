@@ -15,6 +15,7 @@ from coordinator_core.idle_compact import contract, eligibility, watcher
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.session import harness_registry
 from coordinator_core.session_baton import store
+from coordinator_core.session_hub_path import session_dir_for
 
 BIN = Path(__file__).resolve().parents[3] / "coordinator" / "bin" / "idle-compact-watcher.py"
 NOW = 1_000_000.0
@@ -70,9 +71,9 @@ def env(tmp_path, monkeypatch):
     recorder = Recorder()
     monkeypatch.setattr(watcher, "make_injector", lambda: recorder)
 
-    sdir = tmp_path / "coordinator-sessions" / SID
+    sdir = session_dir_for(tmp_path, SID)
     sdir.mkdir(parents=True)
-    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "coordinator-sessions" / s)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: session_dir_for(tmp_path, s))
     return SimpleNamespace(hub=hub, transcript=transcript, ctx=ctx, state=state, recorder=recorder,
                            home=home, sdir=sdir, bin=_load_bin())
 

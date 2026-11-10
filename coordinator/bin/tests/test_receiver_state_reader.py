@@ -1,7 +1,7 @@
 """Tests coordinator/lib/receiver_state_reader.py's staleness-window computation.
 
 Zero-spawn: every fixture is synthesized JSON in a tmp dir; nothing here reads
-the live `.git/coordinator-sessions/` tree."""
+the live `.coordinator-local/coordinator-sessions/` tree."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from coordinator_core.session_hub_path import hub_for_common
 
 _LIB = str(Path(__file__).resolve().parents[2] / "lib")
 if _LIB not in sys.path:
@@ -24,7 +25,7 @@ SID = "abc123"
 
 
 def _write_record(repo_root: str, session_id: str, record: dict) -> str:
-    sdir = os.path.join(repo_root, ".git", "coordinator-sessions", session_id)
+    sdir = os.path.join(str(hub_for_common(Path(repo_root) / ".git")), session_id)
     os.makedirs(sdir, exist_ok=True)
     path = os.path.join(sdir, "receiver-state.json")
     with open(path, "w", encoding="utf-8") as fh:
@@ -53,7 +54,7 @@ def test_bare_dotdot_session_id_does_not_escape_sessions_directory(tmp_path):
     # A bare ".." contains no path separator, so a `^[A-Za-z0-9._-]+$` session-id
     # check would admit it (every char is in the allowed class), and
     # `receiver_state_path` would resolve one directory above the intended
-    # `.git/coordinator-sessions/<sid>/` sandbox. This test pins the rejection.
+    # `.coordinator-local/coordinator-sessions/<sid>/` sandbox. This test pins the rejection.
     escape_target = os.path.join(str(tmp_path), ".git", "receiver-state.json")
     os.makedirs(os.path.dirname(escape_target), exist_ok=True)
     with open(escape_target, "w", encoding="utf-8") as fh:
@@ -71,7 +72,7 @@ def test_single_dot_session_id_is_rejected(tmp_path):
 
 
 def test_malformed_json_is_unavailable(tmp_path):
-    sdir = os.path.join(str(tmp_path), ".git", "coordinator-sessions", SID)
+    sdir = str(hub_for_common(tmp_path / ".git") / SID)
     os.makedirs(sdir, exist_ok=True)
     with open(os.path.join(sdir, "receiver-state.json"), "w", encoding="utf-8") as fh:
         fh.write("{not json")
@@ -81,7 +82,7 @@ def test_malformed_json_is_unavailable(tmp_path):
 
 
 def test_unreadable_directory_in_place_of_file_is_unavailable(tmp_path):
-    sdir = os.path.join(str(tmp_path), ".git", "coordinator-sessions", SID)
+    sdir = str(hub_for_common(tmp_path / ".git") / SID)
     os.makedirs(os.path.join(sdir, "receiver-state.json"), exist_ok=True)
     result = rsr.read_receiver_state(str(tmp_path), SID)
     assert result["verdict"] == rsr.VERDICT_UNAVAILABLE
@@ -308,4 +309,4 @@ def test_receiver_state_path_rejects_unsafe_session_id(tmp_path):
 
 def test_receiver_state_path_shape(tmp_path):
     path = rsr.receiver_state_path(str(tmp_path), SID)
-    assert path == os.path.join(str(tmp_path), ".git", "coordinator-sessions", SID, "receiver-state.json")
+    assert path == str(hub_for_common(tmp_path / ".git") / SID / "receiver-state.json")

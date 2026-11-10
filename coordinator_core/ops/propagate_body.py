@@ -435,7 +435,7 @@ def _commit_delivery(
     private_env["GIT_INDEX_FILE"] = str(temp_index)
 
     try:
-        read_tree_result = _run_git(["read-tree", "HEAD"], worktree, env=private_env)
+        read_tree_result = _run_git(["read-tree", old_head], worktree, env=private_env)
         if read_tree_result.returncode != 0:
             return None, f"git read-tree failed: {read_tree_result.stderr.strip()}"
 

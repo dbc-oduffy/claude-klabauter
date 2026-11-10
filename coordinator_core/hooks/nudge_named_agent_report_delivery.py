@@ -21,7 +21,7 @@ Empirical basis (2026-07-30, this repo): three dispatches in one session. The on
 WITHOUT ``name`` (subagent_type ``Explore``) delivered its full report inline. The two
 WITH ``name`` (both ``general-purpose``) produced four idle notifications and zero
 reports between them. (An earlier revision of this paragraph cited
-``.git/coordinator-sessions/logs/agent-audit.jsonl`` as evidence that both had
+``.coordinator-local/coordinator-sessions/logs/agent-audit.jsonl`` as evidence that both had
 completed; it is not — that log records dispatch-out, not arrival, and every
 dispatch appears in it by construction. See
 ``agent_completion_log`` for why. The claim that stands on disk is the zero

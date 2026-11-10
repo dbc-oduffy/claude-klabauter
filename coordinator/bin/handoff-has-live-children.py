@@ -1,4 +1,4 @@
-# Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
+#!/usr/bin/env python3
 """handoff-has-live-children.py — reverse-membership guard: is a handoff still a live parent?
 
 Purpose: thin CLI veneer over the native `handoff.has_live_children` coordinator_core op,

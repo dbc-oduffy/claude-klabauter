@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import land_run, run_token
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
@@ -49,7 +50,7 @@ def _author(root: Path, rel: str, text: str) -> None:
     _write(root, rel, text)
     session_scope.touch(SELF, rel, cwd=str(root))
     touch_record.append_event(
-        touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF),
+        touch_record.sink_path(session_dir_for(root / ".git", SELF)),
         session_id=SELF, agent_id=None, verb="T", path=rel,
         content_hash=touch_record.compute_content_hash(root / rel), kind="w",
     )

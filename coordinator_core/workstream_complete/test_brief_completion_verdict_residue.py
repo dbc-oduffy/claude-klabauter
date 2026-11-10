@@ -9,6 +9,7 @@ import pytest
 
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.session import scope
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -39,7 +40,7 @@ def _claim(repo: Path, rel: str) -> None:
 
 
 def _hold_baton(repo: Path, basename: str) -> None:
-    claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / basename
     claim_dir.mkdir(parents=True)
     (claim_dir / "session_id").write_text(SID, encoding="utf-8")
 

@@ -186,7 +186,7 @@ resolved ``subagent_type``.** This is load-bearing and must not be
 but have NO ``dispatched-agents.txt`` back-pointer, so
 ``_read_backpointer_subagent_type()`` returns empty for every one of them
 (646 Workflow agent ids traced, zero present in any ``dispatched-agents.txt``;
-516 of them do have ``.git/coordinator-sessions/.agents/<id>/touched.txt``,
+516 of them do have ``.coordinator-local/coordinator-sessions/.agents/<id>/touched.txt``,
 which is written only from a non-empty top-level ``agent_id``). A type-keyed
 guard would silently exempt every Workflow agent -- precisely the fan-out
 shape causing the incident. It would look correct, pass review, and do
@@ -443,6 +443,7 @@ from coordinator_core.bash_guards._dialect import (
     resolve_segments_for_dialect as _resolve_segments_for_dialect,
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _strip_heredoc_bodies,
 )
@@ -3403,8 +3404,8 @@ def _agent_touched_test_files(raw_agent_id: str, session_id: str,
     ``project_live_claims`` contract) and never collapses a degraded
     stream to a hard failure -- see below.
 
-    Reads the agent-keyed sink, ``<git_common_dir>/coordinator-sessions/
-    .agents/<canonical_agent_id>/touch-record.jsonl``, through C3's single
+    Reads the agent-keyed sink, ``<hub>/.agents/<canonical_agent_id>/touch-record.jsonl``
+    (``<hub>`` = ``session_hub_path.hub_for_common(<git_common_dir>)``), through C3's single
     read seam, ``coordinator_core.session.touch_record.project_live_claims``
     -- never a second, ad hoc parse of that file. The raw agent id is
     canonicalized through the CANONICAL resolver,
@@ -3444,7 +3445,7 @@ def _agent_touched_test_files(raw_agent_id: str, session_id: str,
         if base is None:
             return []
         sink = touch_record.sink_path(
-            Path(base) / "coordinator-sessions" / ".agents" / canonical
+            hub_for_common(Path(base)) / ".agents" / canonical
         )
         projection = touch_record.project_live_claims(sink, cwd=repo_root)
     except Exception:

@@ -346,7 +346,9 @@ def main(argv: List[str], *, script_dir: Optional[str] = None) -> int:
     git_dir = _resolve_git_dir(plan_file)
     if not git_dir:
         return 0
-    sessions_dir = os.path.join(git_dir, "coordinator-sessions")
+    from coordinator_core.session_hub_path import hub_for_common
+
+    sessions_dir = str(hub_for_common(Path(git_dir)))
 
     session_id_env = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     em_sid_env = os.environ.get("em_sid", "")

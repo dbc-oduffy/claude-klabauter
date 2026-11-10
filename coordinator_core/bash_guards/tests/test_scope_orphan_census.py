@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.bash_guards import scope_orphan_census as census_mod
 from coordinator_core.git.run import GitResult
+from coordinator_core.session_hub_path import hub_for_common
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -41,7 +42,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 def _write_log(repo: Path, session_id: str, lines: list) -> Path:
-    session_dir = repo / ".git" / "coordinator-sessions" / session_id
+    session_dir = hub_for_common(repo / ".git") / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     log_path = session_dir / "scope-warnings.log"
     log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -145,7 +146,7 @@ def test_classify_deletion_unattributable_when_no_touch_claim(repo: Path):
 def _write_touch_record(repo: Path, session_id: str, path: str, verb: str = "T") -> None:
     from coordinator_core.session import touch_record as _touch_record
 
-    session_dir = repo / ".git" / "coordinator-sessions" / session_id
+    session_dir = hub_for_common(repo / ".git") / session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     sink = _touch_record.sink_path(session_dir)
     line = _touch_record.encode_line(

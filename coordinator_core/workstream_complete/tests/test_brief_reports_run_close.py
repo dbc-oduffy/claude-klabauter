@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.contract.decision_object.judgment import build_disposition, build_judgment_point
 from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.dispatch_emit import run_close as rc
@@ -40,7 +41,7 @@ def repo(tmp_path, monkeypatch):
     (root / "seed.txt").write_text("seed\n", encoding="utf-8")
     _git(root, "add", ".")
     _git(root, "commit", "-qm", "seed")
-    (root / ".git" / "coordinator-sessions" / SID).mkdir(parents=True)
+    (hub_for_common(root / ".git") / SID).mkdir(parents=True)
     monkeypatch.setattr(
         wsc,
         "compute_session_shape_gate",
@@ -136,7 +137,7 @@ def test_judgment_point_gating_only_discharged_directives_is_reported_not_asked(
 def test_record_older_than_a_later_claim_is_still_read(repo):
     _plan(repo)
     _record(repo)
-    claim = repo / ".git" / "coordinator-sessions" / SID
+    claim = hub_for_common(repo / ".git") / SID
     time.sleep(0.05)
     (claim / "memo-claim").write_text("later claim\n", encoding="utf-8")
     now = time.time()

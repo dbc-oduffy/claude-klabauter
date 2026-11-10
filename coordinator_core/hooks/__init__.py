@@ -58,7 +58,7 @@ Advisory hook ops ported from ~/.claude advisory/nudge command hooks (pcore-04, 
                                        reroute was reverted 2026-07-30 — it did not bind
                                        run_in_background on harness 2.1.220.
                                        MUTATING despite sitting in the advisory group: its
-                                       calibration marker is a .git/coordinator-sessions/
+                                       calibration marker is a .coordinator-local/coordinator-sessions/
                                        sentinel write — see authz/classification.py
     suggest_sonnet_research          — advisory; subagent suppression via agent_id
     nudge_em_code_dispatch           — denies EM code writes; subagent + session suppression
@@ -69,7 +69,7 @@ Advisory hook ops ported from ~/.claude advisory/nudge command hooks (pcore-04, 
                                        its final report to the parent the way an unnamed
                                        background subagent does
 
-Bookkeeping hook ops (pcore-08, D1) — write .git/coordinator-sessions/ session-runtime:
+Bookkeeping hook ops (pcore-08, D1) — write .coordinator-local/coordinator-sessions/ session-runtime:
     track_touched_files      — dedup-append to touched.txt (session + agent); MUTATING
     agent_completion_log     — jsonl append to logs/agent-audit.jsonl; MUTATING
     track_dispatched_agents  — tab-delimited dedup + collision rewrite; MUTATING
@@ -113,7 +113,7 @@ session.receiver_state, the detection half of the receiver-state split (DoE owns
 transport/hook-registration half):
     receiver_state_sensor           — Stop/SubagentStop; writes this session's own
                                        PAUSED/PRODUCING/UNKNOWN verdict to a NEW sibling
-                                       file (.git/coordinator-sessions/<sid>/
+                                       file (.coordinator-local/coordinator-sessions/<sid>/
                                        receiver-state.json); MUTATING
 
 Sidecar-fill surfacing op (run-report sidecar contract, surfacing half of the

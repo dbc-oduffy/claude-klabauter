@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 bin/claude-klabauter-revendor-handoff-schema.py — repeatable handoff-schema re-vendor.
 

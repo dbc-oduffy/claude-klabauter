@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.ops.dispatch_emit import cross_plan_write_overlap as overlap_mod
 from coordinator_core.ops.dispatch_emit.cross_plan_write_overlap import (
     CrossPlanWriteOverlap,
@@ -54,7 +55,7 @@ def _write_plan(root: Path, slug: str, writes: list[str]) -> Path:
 
 
 def _write_claim(root: Path, slug: str, sid: str = "peer-sid") -> Path:
-    claim_dir = root / ".git" / "coordinator-sessions" / "plan-claims" / slug
+    claim_dir = hub_for_common(root / ".git") / "plan-claims" / slug
     claim_dir.mkdir(parents=True)
     (claim_dir / "session_id").write_text(sid, encoding="utf-8")
     return claim_dir
@@ -176,7 +177,7 @@ def _overlapping_setup(tmp_path, monkeypatch):
 
 def test_override_reason_admits_and_logs_both_slugs_paths_and_reason(tmp_path, monkeypatch):
     plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
-    sess = tmp_path / ".git" / "coordinator-sessions" / "me-sid"
+    sess = session_dir_for(tmp_path / ".git", "me-sid")
     sess.mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_ALLOW_PLAN_OVERLAP", "agreed hold with peer EM")
 
@@ -195,9 +196,9 @@ def test_override_without_a_session_dir_logs_to_the_no_session_bucket(tmp_path, 
 
     check_cross_plan_write_overlap(plan_path, rows, tmp_path, session_id="ghost-sid")
 
-    log = tmp_path / ".git" / "coordinator-sessions" / "no-session" / "overrides.log"
+    log = session_dir_for(tmp_path / ".git", "no-session") / "overrides.log"
     assert "plan-b" in log.read_text(encoding="utf-8")
-    assert not (tmp_path / ".git" / "coordinator-sessions" / "ghost-sid").exists()
+    assert not (session_dir_for(tmp_path / ".git", "ghost-sid")).exists()
 
 
 @pytest.mark.parametrize("value", ["", "   "])
@@ -207,7 +208,7 @@ def test_empty_override_reason_still_refuses(tmp_path, monkeypatch, value):
 
     with pytest.raises(CrossPlanWriteOverlap):
         check_cross_plan_write_overlap(plan_path, rows, tmp_path)
-    assert not (tmp_path / ".git" / "coordinator-sessions" / "no-session").exists()
+    assert not (session_dir_for(tmp_path / ".git", "no-session")).exists()
 
 
 def test_override_with_no_overlap_logs_nothing(tmp_path, monkeypatch):
@@ -220,7 +221,7 @@ def test_override_with_no_overlap_logs_nothing(tmp_path, monkeypatch):
 
     check_cross_plan_write_overlap(plan_path, read_spine(plan_path), tmp_path)
 
-    assert not (tmp_path / ".git" / "coordinator-sessions" / "no-session").exists()
+    assert not (session_dir_for(tmp_path / ".git", "no-session")).exists()
 
 
 def test_own_session_claim_is_not_a_peer(tmp_path, monkeypatch):
@@ -245,14 +246,14 @@ def _stamp(claim_dir: Path, name: str, minutes_ago: int) -> None:
 
 def test_idle_peer_claim_past_the_window_does_not_block(tmp_path, monkeypatch):
     plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
-    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    claim = hub_for_common(tmp_path / ".git") / "plan-claims" / "plan-b"
     _stamp(claim, "claimed_at", 24 * 60)
     check_cross_plan_write_overlap(plan_path, rows, tmp_path)
 
 
 def test_recent_fire_keeps_an_old_claim_blocking(tmp_path, monkeypatch):
     plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
-    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    claim = hub_for_common(tmp_path / ".git") / "plan-claims" / "plan-b"
     _stamp(claim, "claimed_at", 24 * 60)
     _stamp(claim, "last_fired_at", 5)
     with pytest.raises(CrossPlanWriteOverlap):
@@ -261,7 +262,7 @@ def test_recent_fire_keeps_an_old_claim_blocking(tmp_path, monkeypatch):
 
 def test_stale_fire_and_stale_claim_does_not_block(tmp_path, monkeypatch):
     plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
-    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    claim = hub_for_common(tmp_path / ".git") / "plan-claims" / "plan-b"
     _stamp(claim, "claimed_at", 48 * 60)
     _stamp(claim, "last_fired_at", 24 * 60)
     check_cross_plan_write_overlap(plan_path, rows, tmp_path)
@@ -269,7 +270,7 @@ def test_stale_fire_and_stale_claim_does_not_block(tmp_path, monkeypatch):
 
 def test_fresh_claim_without_a_fire_still_blocks(tmp_path, monkeypatch):
     plan_path, rows = _overlapping_setup(tmp_path, monkeypatch)
-    claim = tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "plan-b"
+    claim = hub_for_common(tmp_path / ".git") / "plan-claims" / "plan-b"
     _stamp(claim, "claimed_at", 1)
     with pytest.raises(CrossPlanWriteOverlap):
         check_cross_plan_write_overlap(plan_path, rows, tmp_path)

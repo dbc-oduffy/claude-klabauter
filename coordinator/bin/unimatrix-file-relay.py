@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Forced command for the unimatrix FILE key on the receiving box: the ONLY thing that key can run.
 It lands and returns drop dirs and nothing else; the message key's forced command (unimatrix-relay.py)
 refuses put/get, and this one refuses every message mode.

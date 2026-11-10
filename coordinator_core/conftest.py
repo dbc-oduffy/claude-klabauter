@@ -988,7 +988,7 @@ def exercise_suspended_op(monkeypatch):
 # Closes the class of defect commit c08e942e9 named ("two test-isolation
 # defects that wrote outside the sandbox, and the seams that let them"), on the
 # surface it did not cover: the real repo's own
-# `.git/coordinator-sessions/`. Measured 2026-08-26 — three directories in the
+# `.coordinator-local/coordinator-sessions/`. Measured 2026-08-26 — three directories in the
 # LIVE hub carrying test-fixture names, minted by tests that resolved a repo
 # root from the process cwd (the live repo) while taking their session id from
 # a monkeypatched env var: `sess-1` and `sess-abc` (born 08-13, holding one
@@ -1069,10 +1069,11 @@ import uuid as _uuid
 
 import pytest as _pytest
 
-_LIVE_HUB = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    ".git",
-    "coordinator-sessions",
+from coordinator_core.session_hub_path import HUB_NAME as _HUB_NAME
+from coordinator_core.session_hub_path import hub_for_common as _hub_for_common
+
+_LIVE_HUB = str(
+    _hub_for_common(Path(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))) / ".git")
 )
 
 
@@ -1201,7 +1202,7 @@ def _redirect_live_session_hub(request, monkeypatch, tmp_path_factory):
     `real_home` is a read-only oracle against the live tree and keeps the real hub.
 
     Negative-spec: covers in-process `sessions_dir()` consumers only; code that
-    composes `<root>/.git/coordinator-sessions` itself, and child processes,
+    composes `<root>/.coordinator-local/coordinator-sessions` itself, and child processes,
     still reach the live hub and stay with `_no_new_live_session_hub_entries`."""
     if request.node.get_closest_marker("real_home"):
         yield
@@ -1218,7 +1219,7 @@ def _redirect_live_session_hub(request, monkeypatch, tmp_path_factory):
         if result and os.path.normcase(os.path.abspath(result)) == live:
             if "hub" not in holder:
                 holder["hub"] = str(
-                    tmp_path_factory.mktemp("redirected-live-hub") / "coordinator-sessions"
+                    tmp_path_factory.mktemp("redirected-live-hub") / _HUB_NAME
                 )
             return holder["hub"]
         return result
@@ -1276,7 +1277,7 @@ def _redirect_live_hub_from_common_dir_resolver(request, tmp_path_factory):
         if os.path.normcase(os.path.abspath(result)) == live:
             if "hub" not in holder:
                 holder["hub"] = (
-                    tmp_path_factory.mktemp("redirected-common-dir-hub") / "coordinator-sessions"
+                    tmp_path_factory.mktemp("redirected-common-dir-hub") / _HUB_NAME
                 )
             return holder["hub"]
         return result
@@ -1339,7 +1340,7 @@ def _hub_audit_hook(event: str, args: tuple) -> None:
     if not isinstance(target, (str, bytes, os.PathLike)):
         return
     text = os.fsdecode(target)
-    if "coordinator-sessions" in text:
+    if _HUB_NAME in text:
         _hub_written.add(text)
 
 

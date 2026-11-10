@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 coordinator-prepare-commit-msg — append Session-Id and Deliverable-Id trailers
 to every commit made inside an active coordinator session.
@@ -396,9 +397,16 @@ def _resolve_content_root() -> str:
 def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
     if not git_dir or not session_id:
         return ""
-    shape_path = os.path.join(
-        git_dir, "coordinator-sessions", session_id, "session-shape.json"
-    )
+    # Inline twin of session_hub_path.hub_for_common: the hook cannot import the engine on its hot path.
+    if os.path.basename(os.path.normpath(git_dir)) == ".git":
+        hub = os.path.join(
+            os.path.dirname(os.path.normpath(git_dir)),
+            ".coordinator-local",
+            "coordinator-sessions",
+        )
+    else:
+        hub = os.path.join(git_dir, "coordinator-sessions")
+    shape_path = os.path.join(hub, session_id, "session-shape.json")
     try:
         with open(shape_path, encoding="utf-8") as fh:
             data = json.load(fh)

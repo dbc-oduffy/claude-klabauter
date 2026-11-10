@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,7 @@ def _write(path: Path, text: str) -> None:
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_dry_run_writes_nothing(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
 
     report = run_migration(sessions_base, tmp_path, apply=False)
@@ -32,7 +34,7 @@ def test_dry_run_writes_nothing(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_apply_creates_sibling_and_never_touches_source(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "a/b.py\n")
     original_bytes = touched.read_bytes()
@@ -52,7 +54,7 @@ def test_apply_is_idempotent_second_run_is_no_op(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.session.liveness.session_live", lambda sid, cwd=None: True
     )
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "a/b.py\n")
 
@@ -72,7 +74,7 @@ def test_migrated_entries_are_visible_through_the_read_seam(tmp_path, monkeypatc
     monkeypatch.setattr(
         "coordinator_core.session.touch_record.session_live", lambda sid, cwd=None: True
     )
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "a/b.py\nc/d.py\n")
 
@@ -87,7 +89,7 @@ def test_migrated_entries_are_visible_through_the_read_seam(tmp_path, monkeypatc
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_dropped_entry_is_reported_and_never_written(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "../escape.py\n")
 
@@ -108,7 +110,7 @@ def test_dropped_entry_is_reported_and_never_written(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_blank_line_is_skipped_not_dropped(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "a/b.py\n\n")
 
@@ -126,7 +128,7 @@ def test_agent_dir_with_owner_backpointer_migrates_with_correct_ids(tmp_path, mo
     monkeypatch.setattr(
         "coordinator_core.session.touch_record.session_live", lambda sid, cwd=None: True
     )
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     agent_dir = sessions_base / ".agents" / "scout@session-abcd"
     _write(agent_dir / "touched.txt", "a/b.py\n")
     _write(agent_dir / "em-session-id.txt", "sid-owner-1")
@@ -150,7 +152,7 @@ def test_agent_dir_with_owner_backpointer_migrates_with_correct_ids(tmp_path, mo
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_agent_dir_without_owner_backpointer_is_skipped_untouched(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     agent_dir = sessions_base / ".agents" / "orphan-agent"
     _write(agent_dir / "touched.txt", "a/b.py\n")
 
@@ -164,7 +166,7 @@ def test_agent_dir_without_owner_backpointer_is_skipped_untouched(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_agent_dir_with_empty_owner_backpointer_is_skipped(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     agent_dir = sessions_base / ".agents" / "orphan-agent-2"
     _write(agent_dir / "touched.txt", "a/b.py\n")
     _write(agent_dir / "em-session-id.txt", "")
@@ -177,7 +179,7 @@ def test_agent_dir_with_empty_owner_backpointer_is_skipped(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_archive_component_is_excluded_from_migration(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / ".archive" / "old" / "touched.txt", "a/b.py\n")
 
     report = run_migration(sessions_base, tmp_path, apply=True)
@@ -188,7 +190,7 @@ def test_archive_component_is_excluded_from_migration(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_already_drained_dir_is_left_alone_and_untouched_bytes(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "a/b.py\n")
     record_path = sessions_base / "sid-1" / "touch-record.jsonl"
@@ -204,7 +206,7 @@ def test_already_drained_dir_is_left_alone_and_untouched_bytes(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_unrecognized_shape_is_reported_and_untouched(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "nested" / "touched.txt", "a/b.py\n")
 
     report = run_migration(sessions_base, tmp_path, apply=True)
@@ -219,7 +221,7 @@ def test_unknown_timestamp_entries_use_epoch_sentinel(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.session.touch_record.session_live", lambda sid, cwd=None: True
     )
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "a/b.py\n")
 
@@ -233,7 +235,7 @@ def test_unknown_timestamp_entries_use_epoch_sentinel(tmp_path, monkeypatch):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_empty_touched_file_still_creates_empty_sibling(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     touched = sessions_base / "sid-1" / "touched.txt"
     _write(touched, "")
 
@@ -249,7 +251,7 @@ def test_empty_touched_file_still_creates_empty_sibling(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_totals_and_report_shape(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-2" / "touched.txt", "../escape.py\n")
 

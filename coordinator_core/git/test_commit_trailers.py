@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.git import commit_trailers
 from coordinator_core.git.commit_trailers import compute_missing_trailer_args
 from coordinator_core.session.claimed_plan import list_held_plan_claims
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -32,7 +33,7 @@ def _init_repo(tmp_path: Path) -> Path:
 
 
 def _write_shape(repo: Path, sid: str, shape: dict) -> None:
-    shape_dir = repo / ".git" / "coordinator-sessions" / sid
+    shape_dir = session_dir_for(repo / ".git", sid)
     shape_dir.mkdir(parents=True, exist_ok=True)
     (shape_dir / "session-shape.json").write_text(json.dumps(shape), encoding="utf-8")
 
@@ -63,7 +64,7 @@ def _write_plan_with_scope(
 
 
 def _write_plan_claim(repo: Path, sid: str, plan_stem: str, claimed_at: str) -> None:
-    claim_dir = repo / ".git" / "coordinator-sessions" / "plan-claims" / plan_stem
+    claim_dir = hub_for_common(repo / ".git") / "plan-claims" / plan_stem
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(sid, encoding="utf-8")
     (claim_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
@@ -520,13 +521,13 @@ _ONLY_ATTRIBUTION_ARGS = [
 
 
 def _write_sentinel(repo: Path, sid: str) -> None:
-    sentinel_dir = repo / ".git" / "coordinator-sessions"
+    sentinel_dir = hub_for_common(repo / ".git")
     sentinel_dir.mkdir(parents=True, exist_ok=True)
     (sentinel_dir / ".current-session-id").write_text(sid, encoding="utf-8")
 
 
 def _write_session_meta(repo: Path, sid: str, meta: dict) -> None:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
@@ -961,9 +962,7 @@ def _write_handoff_claim(repo: Path, handoff_relpath: str, sid: str) -> None:
     running pytest process's own session registry entry (see `_SID`
     fixture setup in each test below)."""
     claim_dir = (
-        repo
-        / ".git"
-        / "coordinator-sessions"
+        hub_for_common(repo / ".git")
         / "handoff-claims"
         / Path(handoff_relpath).name
     )

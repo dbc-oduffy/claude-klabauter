@@ -9,7 +9,7 @@ owns detection). All ladder logic and the sibling-file writer live in
 `coordinator_core.session.receiver_state` — this module holds NO detection logic of its
 own, matching `track_touched_files.py`'s own "thin op over the library module" shape.
 
-Write target: `.git/coordinator-sessions/<session_id>/receiver-state.json` — a NEW
+Write target: `.coordinator-local/coordinator-sessions/<session_id>/receiver-state.json` — a NEW
 per-session sibling file (module docstring of `session.receiver_state`; never
 `meta.json`, never `state/`). Classification: MUTATING (it writes).
 

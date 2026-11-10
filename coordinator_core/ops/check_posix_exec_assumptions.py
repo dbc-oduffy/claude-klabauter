@@ -2195,12 +2195,39 @@ def _is_os_sep(node: ast.AST) -> bool:
     )
 
 
+_PY_ENTRYPOINT_DIRS = frozenset({"coordinator/bin", "bin", "scripts"})
+_MAIN_GUARD_RE = re.compile(r"^if __name__", re.MULTILINE)
+
+# Two-leg pair, granted by rule rather than per file: the POSIX leg is the
+# `#!/usr/bin/env python3` shebang with git mode 100755; the Windows leg is
+# `python <path>`, which coordinator/lib exec_cli already uses to run targets.
+# Exempts env_shebang and mode_100755 only -- never extensionless_exec or Tier A.
+PY_ENTRYPOINT_REASON = (
+    "Admission test: two-leg pair. A top-level __main__ .py in coordinator/bin, "
+    "bin or scripts is run on POSIX by its env-python3 shebang and exec bit, "
+    "and on Windows as `python <path>` (coordinator/lib exec_cli)."
+)
+
+
+def is_py_entrypoint(relpath: str, text: str) -> bool:
+    """True iff `relpath` is a top-level (not nested, not `test_*`) `.py` in
+    coordinator/bin, bin or scripts whose `text` has an `if __name__` line."""
+    parent, _, name = relpath.replace("\\", "/").rpartition("/")
+    return (
+        parent in _PY_ENTRYPOINT_DIRS
+        and name.endswith(".py")
+        and not name.startswith("test_")
+        and _MAIN_GUARD_RE.search(text) is not None
+    )
+
+
 def _scan_python_file(
     relpath: str,
     abspath: Path,
     hits: Dict[str, Set[str]],
     stale_markers: "List[str] | None" = None,
     src: "str | None" = None,
+    entrypoints: "Set[str] | None" = None,
 ) -> None:
     """`stale_markers`, if given, collects `"<relpath>:<lineno>"` for every
     `_FIXTURE_MARKER` line in this file that suppressed nothing -- see
@@ -2214,6 +2241,8 @@ def _scan_python_file(
     try:
         if src is None:
             src = abspath.read_text(encoding="utf-8")
+        if entrypoints is not None and is_py_entrypoint(relpath, src):
+            entrypoints.add(relpath)
         tree = ast.parse(src, filename=str(abspath))
     except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
         return
@@ -2387,6 +2416,7 @@ def _scan_raw(root) -> Dict[str, List[str]]:
 
     env_shebang: List[str] = []
     extensionless_exec: List[str] = []
+    entrypoints: Set[str] = set()
     ast_hits: Dict[str, Set[str]] = {
         "path_separator": set(),
         "posix_mode_bits": set(),
@@ -2415,9 +2445,10 @@ def _scan_raw(root) -> Dict[str, List[str]]:
             extensionless_exec.append(relpath)
 
         if relpath.endswith(".py"):
-            _scan_python_file(relpath, abspath, ast_hits)
+            _scan_python_file(relpath, abspath, ast_hits, entrypoints=entrypoints)
 
-    mode_100755 = _mode_755_paths(root)
+    mode_100755 = [p for p in _mode_755_paths(root) if p not in entrypoints]
+    env_shebang = [p for p in env_shebang if p not in entrypoints]
     tier_a = _scan_tier_a(root, files)
 
     raw: Dict[str, List[str]] = {

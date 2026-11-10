@@ -209,6 +209,35 @@ def _write_returned_halt(result_text: str | None, script_path: str | None, root=
         pass
 
 
+def _write_commit_stage_halt(
+    journal_path: str, terminal_status: str, script_path: str | None, root=None
+) -> None:
+    """Land `halted.json` when the finished run's commit-stage leg was cancelled or failed; never raises."""
+    if not script_path:
+        return
+    try:
+        from pathlib import Path
+
+        from coordinator_core.ops.dispatch_emit import ask_contract
+        from coordinator_core.ops.dispatch_emit.commit_stage_halt import halt_run_on_commit_stage_end
+
+        base = Path(root) if root is not None else next(
+            (p for p in (Path.cwd(), *Path.cwd().parents) if (p / ask_contract.RUN_DIR_ROOT).is_dir()), None
+        )
+        if base is None:
+            return
+        found = _submitted_launch(base, script_path)
+        if found is None:
+            return
+        run_id, sizing_rel, launched_at = found
+        halt_run_on_commit_stage_end(
+            ask_contract.record_dir(base, run_id), journal_path,
+            terminal_status=terminal_status, sizing_rel=sizing_rel, launched_at=launched_at,
+        )
+    except Exception:
+        pass
+
+
 def _watch(
     transcript_path: str,
     journal_path: str,
@@ -242,6 +271,7 @@ def _watch(
             except Exception:
                 pass
             _write_returned_halt(record.result_text, script_path)
+            _write_commit_stage_halt(journal_path, record.status, script_path)
             print(f"terminal: {record.status}")
             sys.stdout.flush()
             _emit_cost(journal_path)

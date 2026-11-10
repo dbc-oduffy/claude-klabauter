@@ -75,7 +75,7 @@ this leg fires on the ABSENCE of both, so there is nothing to compare and
 nothing to deny -- see "R14 warns; it does not refuse" in the plan's
 Design decisions. Fires at most once per `(session_id, subagent_type)` --
 a session-scoped sentinel file under
-`<git common dir>/coordinator-sessions/<session_id>/`, the same hub every
+`.coordinator-local/coordinator-sessions/<session_id>/`, the same hub every
 other per-session dedup marker in this package uses (see
 `hooks.support.session_hub`). Dedup is advisory-only plumbing, not a
 correctness gate: an unresolvable session id or git root just means the
@@ -136,6 +136,7 @@ from coordinator_core.hooks.block_unenumerated_agent_type import (
 )
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.hooks.support.session_hub import (
     ensure_session_dir,
     session_id_is_real,
@@ -201,7 +202,7 @@ def _claim_unpinned_advisory_once(payload: Dict[str, Any], subagent_type: str) -
     common_dir = resolve_git_common_dir(repo_root)
     if not common_dir:
         return True
-    session_dir = Path(common_dir) / "coordinator-sessions" / str(session_id)
+    session_dir = session_dir_for(Path(common_dir), str(session_id))
     safe_type = _UNSAFE_CHARS_RE.sub("_", subagent_type) or "unknown"
     sentinel = session_dir / (_UNPINNED_SENTINEL_PREFIX + safe_type)
     try:

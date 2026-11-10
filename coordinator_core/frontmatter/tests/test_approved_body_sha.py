@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.frontmatter import primitives as prim
 from coordinator_core.session import record_homes
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.primitives import (
     APPROVED_BODY_CHANGED,
@@ -190,7 +191,7 @@ def test_claim_plan_for_execution_refuses_changed_body_and_leaves_no_claim(tmp_p
 
     assert "plan review" in capsys.readouterr().err
     assert "status: approved" in plan.read_text(encoding="utf-8")
-    assert not (tmp_path / ".git" / "coordinator-sessions" / "plan-claims" / "p").exists()
+    assert not (hub_for_common(tmp_path / ".git") / "plan-claims" / "p").exists()
 
 
 def test_claim_plan_for_execution_warns_on_absent_stamp(tmp_path, me, capsys):

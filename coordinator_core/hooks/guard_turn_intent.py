@@ -6,7 +6,7 @@ Purpose: engine port of the turn-intent step coordinator-content-repo folded int
 `coordinator/hooks/scripts/guard-manufactured-blocker.py`
 (`_turn_intent_step`, `_heuristic_turn_intent`, and `main`'s use of them). An
 EM under Cockpit ends every turn with `<turn-intent>{"needs_pm":bool,"ask":"..."}</turn-intent>`;
-this op records that tail to `<git-common-dir>/coordinator-sessions/<session>/turn-intent.json`
+this op records that tail to `<session hub>/<session>/turn-intent.json`
 and blocks a missing tail at most `BLOCK_CAP` times (own durable counter, never
 `stop_hook_active`), only in a session holding the EM role marker AND running
 under Cockpit. After the cap the record is labelled `source: heuristic`

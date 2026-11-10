@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 coordinator-harvest-deferrals — PM-gated deferral harvest from a plan's
 machine-parseable ## Tasks task-spine into the improvement queue / lessons-outbox.

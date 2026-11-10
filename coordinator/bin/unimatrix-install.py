@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Unimatrix installer: Claude Code version-range gate plus copy of the vendored scripts.
 
 Default mode checks `claude --version` against VERIFIED_RANGE; `--install` copies

@@ -181,6 +181,7 @@ from coordinator_core.session import core as _session_core
 from coordinator_core import env_locality as _env_locality
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session_baton.store import merge_baton, read_baton
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.session.work_state import _parse_fm_dict
 from coordinator_core.shipped_in_tokens import (
     _NO_COMMIT_TOKEN_RE as _SHIPPED_NO_COMMIT_RE,
@@ -996,10 +997,22 @@ def chain_ancestor_count(abs_artifact_path: Path, repo_root: Path, classificatio
 # gates.claim / gates.claim_grant  (R4)
 # ---------------------------------------------------------------------------
 
+def _claim_ledger_dir(repo_root: Path, class_: str, basename: str) -> Path:
+    """`<hub>/<class>-claims/<basename>` for the repo at `repo_root` (zero spawn).
+
+    A repo with no resolvable `.git` falls back to `<repo_root>/.git` as the
+    common dir, so a bare fixture still yields a hub path."""
+    try:
+        common = lifecycle_mod.git_common_dir(repo_root)
+    except Exception:
+        common = Path(repo_root) / ".git"
+    return hub_for_common(common) / f"{class_}-claims" / basename
+
+
 def gates_claim(abs_artifact_path: Path, repo_root: Path, class_: str, basename: str) -> dict[str, Any]:
     """`gates.claim` — ported from HEAD's `compute_claim_gate`: a read-only
     dual-read of the CLAIM LEDGER DIRECTORY ONLY
-    (`.git/coordinator-sessions/<class>-claims/<basename>/`), never the
+    (`.coordinator-local/coordinator-sessions/<class>-claims/<basename>/`), never the
     frontmatter mirror. `holder` is the ledger's recorded `session_id` iff
     that holder is currently live (`_claim_holder_live`/`_claim_holder_live_
     or_elsewhere`'s cross-repo arm) — `None` both when no ledger claim
@@ -1012,7 +1025,7 @@ def gates_claim(abs_artifact_path: Path, repo_root: Path, class_: str, basename:
     than what `gates.claim` answers at HEAD — a live artifact carrying only
     a stale `status: claimed`/`claimed_by` mirror with no live ledger entry
     must read `holder: None` here, matching HEAD, not the mirrored sid."""
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = _claim_ledger_dir(repo_root, class_, basename)
     if not claims_dir.is_dir():
         return {"fetch_state": "not_performed", "holder": None}
     holder_sid = None
@@ -1148,7 +1161,7 @@ def compute_claim_grant(
     regardless of claim state."""
     cwd_str = cwd if cwd is not None else str(repo_root)
     drop_invocation = f"pickup-assemble drop {artifact_path}"
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = _claim_ledger_dir(repo_root, class_, basename)
 
     def _no_claimant() -> dict[str, Any]:
         return {
@@ -1365,7 +1378,7 @@ def acquire_brief_claim(
     `claim_grant` already carries the authoritative verdict; this is
     advisory reservation only)."""
     cwd_str = cwd or str(repo_root)
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = _claim_ledger_dir(repo_root, class_, basename)
 
     prior_holder: Optional[str] = None
     prior_age: Optional[int] = None
@@ -3875,7 +3888,7 @@ def _claim_already_self_held(repo_root: Path, class_: str, basename: str) -> boo
     lock dir, so a directive builder can mark its own `claim-artifact`
     directive `already_satisfied` for idempotent same-session re-entry
     (memo's `claim_artifact` REJECTS a same-session reclaim by design)."""
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = _claim_ledger_dir(repo_root, class_, basename)
     if not claims_dir.is_dir():
         return False
     try:

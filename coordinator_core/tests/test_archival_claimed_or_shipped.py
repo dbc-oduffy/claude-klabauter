@@ -32,6 +32,7 @@ from unittest import mock
 import pytest
 
 from coordinator_core import archival
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core import claim_state
 
 
@@ -64,7 +65,7 @@ def _write_handoff(
 
 
 def _write_claim_dir(common_dir: Path, handoff_name: str, session_id: str, claimed_at: str = "") -> Path:
-    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir = hub_for_common(common_dir) / "handoff-claims" / handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
     if claimed_at:

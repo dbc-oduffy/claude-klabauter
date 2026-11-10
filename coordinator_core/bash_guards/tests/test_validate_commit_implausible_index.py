@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.guard_messages.testing import envelope_of
+from coordinator_core.session_hub_path import hub_for_common
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -89,7 +90,7 @@ def test_genuine_large_deletion_still_fires_and_scope_lines_are_capped(tmp_path)
     for i in range(200):
         _git(repo, "rm", "-q", "--cached", "f%03d.txt" % i)
     sid = "sess-cap"
-    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True)
+    (hub_for_common(repo / ".git") / sid).mkdir(parents=True)
     out = _text(
         dc.check_validate_commit(
             'git commit -q -m "tidy up" ', session_id=sid, cwd=str(repo)

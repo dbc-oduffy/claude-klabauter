@@ -19,6 +19,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry import host_sampler
 
 
@@ -32,7 +33,7 @@ def test_sample_once_writes_one_row(tmp_path: Path) -> None:
     row = host_sampler.sample_once(repo_root=repo_root)
     assert row is not None
 
-    sink = tmp_path / ".git" / "coordinator-sessions" / "logs" / "host-samples.jsonl"
+    sink = hub_for_common(tmp_path / ".git") / "logs" / "host-samples.jsonl"
     assert sink.exists()
     lines = sink.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 1
@@ -64,7 +65,7 @@ def test_disable_env_short_circuits(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     row = host_sampler.sample_once(repo_root=repo_root)
     assert row is None
 
-    sink = tmp_path / ".git" / "coordinator-sessions" / "logs" / "host-samples.jsonl"
+    sink = hub_for_common(tmp_path / ".git") / "logs" / "host-samples.jsonl"
     assert not sink.exists()
 
 
@@ -82,7 +83,7 @@ def test_multiple_samples_append_multiple_rows(tmp_path: Path) -> None:
     host_sampler.sample_once(repo_root=repo_root)
     host_sampler.sample_once(repo_root=repo_root)
 
-    sink = tmp_path / ".git" / "coordinator-sessions" / "logs" / "host-samples.jsonl"
+    sink = hub_for_common(tmp_path / ".git") / "logs" / "host-samples.jsonl"
     lines = sink.read_text(encoding="utf-8").strip().splitlines()
     assert len(lines) == 3
 

@@ -1083,7 +1083,7 @@ def _check(
     # module's own "THE AUTHORSHIP GATE IS ANTI-ACCIDENT, NOT ANTI-
     # ADVERSARY" note above. `_claim_already_self_held` (never re-derived —
     # AC4) answers "does the
-    # `.git/coordinator-sessions/handoff-claims/<basename>/` claim dir show
+    # `.coordinator-local/coordinator-sessions/handoff-claims/<basename>/` claim dir show
     # THIS session as the current holder?" — compared against what the
     # `claimed_by`-derived basis above implies should be true. A mismatch in
     # either direction (claim reaped/taken-over while claimed_by still names

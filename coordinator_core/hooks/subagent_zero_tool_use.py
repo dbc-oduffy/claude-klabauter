@@ -72,7 +72,7 @@ discriminated shape instead, built so a future detector can append records of a
 different `kind` to the same per-session store and the surface op's filter still
 works unmodified.
 
-Store location: `<git_common_dir>/coordinator-sessions/<session_id>/subagent-zero-tool-use.jsonl`
+Store location: `.coordinator-local/coordinator-sessions/<session_id>/subagent-zero-tool-use.jsonl`
 — a sibling of the `dispatched-agents.txt` / `push-failures-cursor.txt` per-session
 convention this tree already uses (track_dispatched_agents.py, auto_push.py).
 
@@ -92,6 +92,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir, main_worktree_root
+from coordinator_core.session_hub_path import hub_for_common
 
 
 GENERATES: list = []
@@ -348,12 +349,13 @@ async def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     try:
-        _sessions_base = git_common_dir(repo_root) / "coordinator-sessions"
+        _common = git_common_dir(repo_root)
     except RuntimeError:
-        _sessions_base = Path(str(repo_root)) / "coordinator-sessions"
+        _common = Path(str(repo_root))
+    _sessions_base = hub_for_common(_common)
     store_path = str(_sessions_base / session_id / "subagent-zero-tool-use.jsonl")
     try:
-        _worktree_root = str(main_worktree_root(_sessions_base.parent))
+        _worktree_root = str(main_worktree_root(_common))
     except Exception:  # noqa: BLE001 -- init resolves it itself on this arm
         _worktree_root = ""
 

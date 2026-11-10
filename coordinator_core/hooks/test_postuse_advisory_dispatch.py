@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from coordinator_core.hooks import postuse_advisory_dispatch as pad  # noqa: E402
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for  # noqa: E402
 from coordinator_core.temp_layout import managed_tempdir  # noqa: E402
 
 
@@ -467,11 +468,11 @@ def test_runtime_tripwire_happy_path_resolves_through_seam_and_fires(
     session_id = "test-session-rt-happy-path"
     em_sid = "test-session-rt-happy-path-em"
 
-    agent_dir = git_root / ".git" / "coordinator-sessions" / ".agents" / session_id
+    agent_dir = hub_for_common(git_root / ".git") / ".agents" / session_id
     agent_dir.mkdir(parents=True)
     (agent_dir / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
 
-    em_dir = git_root / ".git" / "coordinator-sessions" / em_sid
+    em_dir = session_dir_for(git_root / ".git", em_sid)
     em_dir.mkdir(parents=True)
     dispatched_at = int(time.time()) - 999_999
     (em_dir / "dispatched-agents.txt").write_text(

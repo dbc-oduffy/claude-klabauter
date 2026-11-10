@@ -74,8 +74,8 @@ _LOG = logging.getLogger(__name__)
 #: ``[[ "$fpath" == /* || "$fpath" == [A-Za-z]:* ]]``.
 # Generator-provenance declaration (coordinator_core/ops/generator_census). touch/normalize_
 # touch_path/archive write/append/move only session-hub artifacts under
-# `.git/coordinator-sessions/` (touched.txt event log, session-dir archival) --
-# all inside `.git/`, never a tracked repo path.
+# `.coordinator-local/coordinator-sessions/` (touched.txt event log, session-dir archival) --
+# all inside `.coordinator-local/`, never a tracked repo path.
 GENERATES = []
 
 #: An ordinary UNC path (``\\server\share\...``) is absolute too — the third
@@ -2927,7 +2927,7 @@ def relocate_touched_path(
 #: convention for the same idea — see :func:`_dst_is_claimable`). Neither
 #: prefix is reachable through ``normalize_touch_path`` returning ``None``,
 #: since both resolve to clean in-worktree relative paths.
-_UNCLAIMABLE_DST_PREFIXES: Tuple[str, ...] = (".git", ".archive")
+_UNCLAIMABLE_DST_PREFIXES: Tuple[str, ...] = (".git", ".archive", ".coordinator-local")
 
 
 def _dst_is_claimable(dst_norm: str) -> bool:

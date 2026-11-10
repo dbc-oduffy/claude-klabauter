@@ -78,7 +78,9 @@ def live_warm_server_pids(repo_root: Path) -> List[int]:
 
 
 def _sink_path(repo_root: Path) -> Path:
-    return repo_root / ".git" / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(repo_root / ".git") / "logs" / "op-latency.jsonl"
 
 
 def _sink_offset(path: Path) -> int:

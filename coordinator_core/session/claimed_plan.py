@@ -9,7 +9,7 @@ Two entrypoints, two different contracts:
   - ``resolve_claimed_plan_path`` — the pre-existing single-value resolver.
     Two-tier resolution, in order:
 
-      (a) ``<git-common-dir>/coordinator-sessions/<sid>/session-shape.json``'s
+      (a) ``<session hub>/<sid>/session-shape.json``'s
           ``plan.path`` field — the fast path, written best-effort by
           ``claims.claim_plan``'s ``session_shape_set`` call at claim time —
           returned ONLY when tier (b) still holds a claim on that same path
@@ -60,8 +60,7 @@ Second spec backlink: pln-a-commit-trailer-that-names-th-ce8a2e § C1a
 
 Negative-spec:
     - Do NOT re-derive the ``plan-claims/`` path convention (a literal
-      ``"plan-claims"`` join, or a hand-rolled ``<common_dir>/coordinator-sessions/
-      plan-claims"``) — import and reuse
+      ``"plan-claims"`` join, or a hand-rolled hub-path join) — import and reuse
       ``coordinator_core.session.claims.plan_claim_dir`` instead (its canonical
       home; ``ops.fleet._common`` only re-exports it). A second
       hand-rolled copy of that convention is exactly the class of bug

@@ -11,6 +11,8 @@ import subprocess
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 from coordinator_core.bash_guards import bump_foreign_repo_write as guard
 from coordinator_core.bash_guards._write_bump_marker import marker_basename, resolve_gitdir
 from coordinator_core.bash_guards._write_bump_message import CROSS_REPO_WARN_RISK
@@ -122,7 +124,7 @@ def test_off_returns_none_when_environment_stands_the_bump_down(repos, monkeypat
 
 
 def _subagent(repos, monkeypatch):
-    d = repos["anchor"] / ".git" / "coordinator-sessions" / ".agents" / "agent-1"
+    d = hub_for_common(repos["anchor"] / ".git") / ".agents" / "agent-1"
     d.mkdir(parents=True)
     (d / "em-session-id.txt").write_text(GEM_SID + "\n", encoding="utf-8")
     return {"agent_id": "agent-1"}

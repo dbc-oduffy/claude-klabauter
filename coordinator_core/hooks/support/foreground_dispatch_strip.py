@@ -82,9 +82,9 @@ reference op):
                            on that would gate every Agent call on the
                            machine).
 
-Calibration marker: `<git-common-dir>/coordinator-sessions/<session_id>/
+Calibration marker: `.coordinator-local/coordinator-sessions/<session_id>/
 .harness-bg-capable`, written (touch, idempotent) whenever the key arrives
-PRESENT with either value. Escape hatch: `<git-common-dir>/coordinator-
+PRESENT with either value. Escape hatch: `.coordinator-local/coordinator-
 sessions/<session_id>/.foreground-ok` -- when present, an otherwise-
 actionable dispatch passes through unrewritten for the rest of that session.
 Both markers are resolved from `git_dir`, itself resolved from `cwd` WITHOUT
@@ -154,6 +154,7 @@ from coordinator_core.hooks.support.git_common_dir import (
 )
 from coordinator_core.hooks.support.message_envelope import resolve_wiki_citation
 from coordinator_core.hooks.support.session_hub import ensure_session_dir
+from coordinator_core.session_hub_path import session_dir_for
 
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{4,}$")
 
@@ -225,11 +226,11 @@ def _resolve_git_dir(cwd: Any) -> Optional[str]:
 
 
 def _bg_capable_path(git_dir: str, session_id: str) -> Path:
-    return Path(git_dir) / "coordinator-sessions" / session_id / _BG_CAPABLE_MARKER_NAME
+    return session_dir_for(Path(git_dir), session_id) / _BG_CAPABLE_MARKER_NAME
 
 
 def _foreground_ok_path(git_dir: str, session_id: str) -> Path:
-    return Path(git_dir) / "coordinator-sessions" / session_id / _FOREGROUND_OK_MARKER_NAME
+    return session_dir_for(Path(git_dir), session_id) / _FOREGROUND_OK_MARKER_NAME
 
 
 def _mark_bg_capable(git_dir: Optional[str], session_id: str) -> None:

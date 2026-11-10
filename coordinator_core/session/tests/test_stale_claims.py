@@ -26,7 +26,7 @@ def _make_repo(tmp_path):
 
 
 def _write_session(repo, sid, meta: dict):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return sdir

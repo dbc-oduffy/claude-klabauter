@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """learn-lessons-age-sweep.py — completed-central-run cutoff derivation +
 routed-id/orphan-strip-list cross-check for the coordinator:learn-lessons skill.
 

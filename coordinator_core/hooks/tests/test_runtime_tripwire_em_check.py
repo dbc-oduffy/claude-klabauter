@@ -23,6 +23,7 @@ import json
 import os
 
 from coordinator_core.authz.classification import OpClass, classify
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 
 
@@ -64,7 +65,7 @@ def test_op_suppresses_for_a_subagent_session(tmp_path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
 
-    agents_dir = repo / ".git" / "coordinator-sessions" / ".agents" / "sess-abc12345"
+    agents_dir = hub_for_common(repo / ".git") / ".agents" / "sess-abc12345"
     agents_dir.mkdir(parents=True)
     (agents_dir / "em-session-id.txt").write_text("em-session\n", encoding="utf-8")
 
@@ -83,7 +84,7 @@ def test_op_returns_no_advisory_on_first_call_establishing_baselines(tmp_path) -
     result = _handler({"payload": payload})
     assert result == {}
 
-    cursor_dir = repo / ".git" / "coordinator-sessions" / "sess-abc12345"
+    cursor_dir = session_dir_for(repo / ".git", "sess-abc12345")
     assert (cursor_dir / "hooks-json-boot-hash.txt").is_file()
 
 

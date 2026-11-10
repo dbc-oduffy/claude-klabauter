@@ -50,14 +50,14 @@ Negative-spec (hard-won):
           disk write from an advisory hook handler is a violation.
 
       BOOKKEEPING ops (3, pcore-08 + receiver-state-sensor) — MAY write under
-      .git/coordinator-sessions/ only:
-        - agent_completion_log:    appends to .git/coordinator-sessions/logs/agent-audit.jsonl
-        - track_dispatched_agents: writes .git/coordinator-sessions/<sid>/dispatched-agents.txt
-                                   and .git/coordinator-sessions/.agents/<aid>/em-session-id.txt
-        - receiver_state_sensor:   writes .git/coordinator-sessions/<sid>/receiver-state.json
+      .coordinator-local/coordinator-sessions/ only:
+        - agent_completion_log:    appends to .coordinator-local/coordinator-sessions/logs/agent-audit.jsonl
+        - track_dispatched_agents: writes .coordinator-local/coordinator-sessions/<sid>/dispatched-agents.txt
+                                   and .coordinator-local/coordinator-sessions/.agents/<aid>/em-session-id.txt
+        - receiver_state_sensor:   writes .coordinator-local/coordinator-sessions/<sid>/receiver-state.json
                                    (NEW sibling file, docs/plans/2026-08-14-receiver-state-sensor.md)
         Write confinement (hard): bookkeeping ops MUST NOT write state/, archive/, or any
-        path outside .git/coordinator-sessions/. The write target is session-runtime/liveness
+        path outside .coordinator-local/coordinator-sessions/. The write target is session-runtime/liveness
         layer — not coordinator substrate (claude-klabauter's disk-truth custody) and not rag's
         workstate_store projection (custody-vs-projection boundary,
         docs/decisions/DR-236-state-is-disk-truth-workstate-store-is-pro.md; the successor
@@ -234,7 +234,7 @@ Negative-spec (hard-won):
         named memo path it was called with, containment-gated to a git-tracked
         cross-repo/ or state/ subtree, and MAY issue ONLY one scoped commit over that
         single path; MUST NOT write rag's relational store (dual-write ban); MUST NOT
-        acquire or write .git/coordinator-sessions/memo-claims/ (a separate claim
+        acquire or write .coordinator-local/coordinator-sessions/memo-claims/ (a separate claim
         surface owned by archive_stamp.py, out of this op's scope).
         Authorization: DR-273 established commit ownership; DR-272 § 2 supplies the
         DR-212 reconciliation DR-273 did not itself carry, and is the record this
@@ -1771,7 +1771,7 @@ def _resolve_declared_touch_root_and_path(
     session's own file and corrupt that repo's session-liveness resolution.
     The returned `repo_root` (== `caller_repo_root`) is threaded through to
     `session.scope.touch()`'s `cwd` param so the claim lands in the
-    caller's own `.git/coordinator-sessions/<sid>/touched.txt` — the one a
+    caller's own `.coordinator-local/coordinator-sessions/<sid>/touched.txt` — the one a
     same-repo `scoped_git_commit` call will actually read. `_record_self_
     reported_touches` ALSO forwards it as `touch()`'s `root` param: it was
     resolved via `core.git_root` and realpath'd above, satisfying

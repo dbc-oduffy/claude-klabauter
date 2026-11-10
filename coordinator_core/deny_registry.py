@@ -52,6 +52,7 @@ GUARD_DENY_CLASS: Dict[str, str] = {
     "block-external-workspace-vcs-write": BOX_DEGRADING,
     "block-editor-kill-by-name": BOX_DEGRADING,
     "blanket-git-add": DISRUPTIVE,
+    "stale-temp-index-base": DISRUPTIVE,
     "check-test-suite-invocation": BOX_DEGRADING,
     "block-dispatch-suite-invocation": BOX_DEGRADING,
     "block-worktree-tool": BOX_DEGRADING,

@@ -45,7 +45,7 @@ record why the engine stopped. Consequences of that one property:
       this module is the thing that gets invoked, built so that invocation
       never depends on the engine being alive.
 
-Sink: ``<git_common_dir>/coordinator-sessions/logs/host-samples.jsonl`` --
+Sink: ``<session hub>/logs/host-samples.jsonl`` --
 same directory as the other three known telemetry sinks
 (``coordinator_core.telemetry.log_rotation``'s module docstring), rotated by
 that module's shared cascade primitive rather than a fifth bespoke retention
@@ -386,12 +386,8 @@ def _log():
 
 def _sink_path(git_common_dir_path: Path) -> Path:
     """Resolve the host-sampler sink path under the given git common dir."""
-    return (
-        Path(git_common_dir_path)
-        / "coordinator-sessions"
-        / "logs"
-        / "host-samples.jsonl"
-    )
+    hub_path = _load_sibling("coordinator_core.session_hub_path", "../session_hub_path.py")
+    return hub_path.hub_for_common(Path(git_common_dir_path)) / "logs" / "host-samples.jsonl"
 
 
 class _FILETIME(ctypes.Structure):

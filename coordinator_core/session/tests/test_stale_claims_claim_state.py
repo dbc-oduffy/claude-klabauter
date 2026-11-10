@@ -7,6 +7,7 @@ from unittest import mock
 
 from coordinator_core import claim_state
 from coordinator_core.session import core, stale_claims
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 import pytest
@@ -28,7 +29,7 @@ def _make_repo(tmp_path):
 
 
 def _write_session(repo, sid, meta: dict):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return sdir
@@ -49,7 +50,7 @@ def _seed_handoff(repo, name: str, frontmatter_extra: str) -> Path:
 
 
 def _write_claim_dir(common_dir: Path, handoff_name: str, session_id: str, claimed_at: str = "") -> Path:
-    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir = hub_for_common(common_dir) / "handoff-claims" / handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
     if claimed_at:

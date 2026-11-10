@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Deterministic coordinator-plugin to host-plugin tree translator, driven by unimatrix-host-map.json.
 
 `generate(plugin_root, out_dir, host)` reads a Claude plugin source tree and writes the host's
@@ -284,11 +285,54 @@ SHIM_REL = "hooks/agy-hook-run.py"
 SHIM_SOURCE = '''"""agy hook launcher: runs the settings-home hook-run door with stdin mode `hook`, shell-neutral.
 
 argv: [--quiet] [--pass-2] <hook-run args...>. --quiet drops the door's stderr; --pass-2 maps its exit 2 to 0.
+An agy tool event (payload carries `toolCall`) is translated to the Claude shape for the door and the
+door's verdict back to an explicit agy decision (agy fails closed on `{}`); any other payload passes whole.
 """
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+
+def to_claude(raw):
+    """(payload bytes for the door, True) for an agy `toolCall` event, else (raw, False)."""
+    try:
+        p = json.loads(raw)
+    except ValueError:
+        return raw, False
+    call = p.get("toolCall") if isinstance(p, dict) else None
+    if not isinstance(call, dict):
+        return raw, False
+    args = call.get("args") if isinstance(call.get("args"), dict) else {}
+    name = str(call.get("name") or "")
+    if name == "run_command":
+        name, args = "Bash", {"command": str(args.get("CommandLine") or "")}
+    ws = p.get("workspacePaths")
+    cwd = str(ws[0]) if isinstance(ws, list) and ws else p.get("cwd") if isinstance(p.get("cwd"), str) else ""
+    out = {"hook_event_name": p.get("hookEventName") or p.get("hook_event_name") or "PreToolUse",
+           "session_id": str(p.get("conversationId") or "") or None, "cwd": cwd or None,
+           "tool_name": name, "tool_input": args}
+    return json.dumps(out).encode("utf-8"), True
+
+
+def to_agy(rc, out, err):
+    """The agy decision object for a door answer: deny and ask carry a reason, anything else is an explicit allow."""
+    try:
+        v = json.loads(out) if out.strip() else {}
+    except ValueError:
+        v = {}
+    v = dict(v) if isinstance(v, dict) else {}
+    nested = v.get("hookSpecificOutput")
+    if isinstance(nested, dict):
+        v.update(nested)
+    decision = str(v.get("permissionDecision") or v.get("decision") or "")
+    reason = str(v.get("permissionDecisionReason") or v.get("reason") or "").strip()
+    if decision in ("deny", "block") or (rc == 2 and not decision):
+        return {"decision": "deny", "reason": reason or err.strip() or "denied by coordinator guard"}
+    if decision in ("ask", "force_ask"):
+        return {"decision": decision, "reason": reason or "coordinator: confirm"}
+    return {"decision": "allow"}
 
 
 def main(argv):
@@ -302,15 +346,31 @@ def main(argv):
         payload = sys.stdin.buffer.read()
     except (OSError, ValueError):
         payload = b""
+    payload, agy = to_claude(payload)
+    extra = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE} if agy else {}
+    if not agy:
+        extra["stderr"] = subprocess.DEVNULL if quiet else None
     try:
-        rc = subprocess.run(
-            [str(door), *rest], env=env, input=payload, stderr=subprocess.DEVNULL if quiet else None,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        ).returncode
+        res = subprocess.run(
+            [str(door), *rest], env=env, input=payload, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0), **extra,
+        )
+        rc = res.returncode
     except OSError as exc:
         sys.stderr.write("agy-hook-run: cannot run %s: %s\\n" % (door, exc))
-        rc = 127
-    return 0 if pass_2 and rc == 2 else rc
+        return 127
+    if not agy:
+        return 0 if pass_2 and rc == 2 else rc
+    out = res.stdout.decode("utf-8", "replace")
+    err = res.stderr.decode("utf-8", "replace")
+    if err and not quiet:
+        sys.stderr.write(err)
+    if rc not in (0, 2):
+        sys.stdout.write(out)
+        return rc
+    if pass_2 and rc == 2:
+        rc = 0
+    sys.stdout.write(json.dumps(to_agy(rc, out, err)))
+    return 0
 
 
 if __name__ == "__main__":

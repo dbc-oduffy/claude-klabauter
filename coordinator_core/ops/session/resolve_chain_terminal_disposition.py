@@ -63,7 +63,7 @@ the wire param as the direct-override tier):
                                     coordinator_core.ops.session_context
   P4: `CLAUDE_CODE_SESSION_ID`    — platform-injected, per-session
   P5: REMOVED (KS-3, 2026-08-07) — was the `.current-session-id` sentinel
-      under <common_dir>/coordinator-sessions/. Unsound under concurrency
+      under the session hub (session_hub_path.hub_for_common). Unsound under concurrency
       (last-writer-wins across concurrent sessions sharing one worktree —
       see coordinator_core/bash_guards/guard_inprocess_search.py ~L84) AND
       its sole writer (session-init.py, the coordinator-content-repo SessionStart hook)

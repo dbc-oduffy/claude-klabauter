@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import os
 import subprocess
 import sys
@@ -48,7 +50,7 @@ def _init_repo(tmp_path):
 
 
 def _write_agents(tmp_path, sid, rows):
-    d = tmp_path / ".git" / "coordinator-sessions" / sid
+    d = session_dir_for(tmp_path / ".git", sid)
     d.mkdir(parents=True, exist_ok=True)
     (d / "dispatched-agents.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
 

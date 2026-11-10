@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Start the shipped agy leg for one conversation, replacing a stale one.
 
 Run by the SessionStart hook (no token: the leg starts pending, queuing peer messages) and inside an

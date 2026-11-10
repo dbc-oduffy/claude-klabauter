@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import land_run, run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_ledger as tcl
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -70,7 +71,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 def _claim(root: Path, rel: str) -> None:
     session_scope.touch(SELF, rel, cwd=str(root))
     touch_record.append_event(
-        touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF),
+        touch_record.sink_path(session_dir_for(root / ".git", SELF)),
         session_id=SELF, agent_id=None, verb="T", path=rel,
         content_hash=touch_record.compute_content_hash(root / rel), kind="w",
     )

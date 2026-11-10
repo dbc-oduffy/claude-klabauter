@@ -57,6 +57,7 @@ from coordinator_core.bash_guards._dialect import (
 )
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._rewrite_support import _alt_record, _crlf_strip, _offer, _override, _ready
+from coordinator_core.session_hub_path import HUB_NAME
 from coordinator_core.bash_guards.block_subagent_destructive_action import (
     _PS_REMOVE_VERBS,
     _ps_normalize_verb_token,
@@ -902,9 +903,10 @@ def check_destructive_rm(
             _pending_rm_touch_paths.append(tgt_abs)
 
             norm = tgt_abs.replace("\\", "/")
+            _hub_seg = "/" + HUB_NAME + "/"
             if (
-                "/coordinator-sessions/" in norm and "-claims/" in norm.split("/coordinator-sessions/", 1)[-1]
-            ) or re.search(r"/coordinator-sessions/[^/]*-claims$", norm):
+                _hub_seg in norm and "-claims/" in norm.split(_hub_seg, 1)[-1]
+            ) or re.search("/" + re.escape(HUB_NAME) + r"/[^/]*-claims$", norm):
                 if rm_override:
                     continue
                 return _alt_record(

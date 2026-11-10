@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """push-hold -- freeze or release the cadence push for a repo or one branch.
 
 Usage:

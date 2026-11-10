@@ -61,7 +61,7 @@ def _rename_commit(root: Path, minute: int, old: str, new: str, extra: bytes, si
 
 
 def _session_files(root: Path, sid: str, *, floor: str | None) -> None:
-    sdir = root / ".git" / "coordinator-sessions" / sid
+    sdir = root / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "started_at").write_text(STARTED_AT + "\n", encoding="utf-8")
     if floor is not None:
@@ -71,6 +71,8 @@ def _session_files(root: Path, sid: str, *, floor: str | None) -> None:
 def _seeded(root: Path) -> str:
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
+    (root / ".git" / "info").mkdir(exist_ok=True)
+    (root / ".git" / "info" / "exclude").write_text(".coordinator-local/\n", encoding="utf-8")
     return _commit(root, 0, {"seed.txt": b"seed\n"}, None)
 
 
@@ -193,7 +195,7 @@ def test_diff_brightline_on_unresolved_history_degrades_with_its_reason_and_spaw
 ):
     root = tmp_path / "r"
     build_own_session(root)
-    (root / ".git" / "coordinator-sessions" / SID / "head_at_start").unlink()
+    (root / ".coordinator-local" / "coordinator-sessions" / SID / "head_at_start").unlink()
     history = read_session_history(root, SID)
     spawns.clear()
 

@@ -10,6 +10,7 @@ from typing import Any, Callable
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.tests.fleet_mode_independence_fixtures import Case, GuardFixtures
 
 _WG = "coordinator_core.write_guards."
@@ -43,7 +44,7 @@ def _agent(payload: dict, agent_id: str = _AGENT, session_id: str = _SESSION) ->
 
 
 def _dispatch_row(root: Path, subagent_type: str, agent_id: str = _AGENT, session_id: str = _SESSION) -> None:
-    sessions = root / ".git" / "coordinator-sessions"
+    sessions = hub_for_common(root / ".git")
     _put(sessions / ".agents" / agent_id / "em-session-id.txt", session_id + "\n")
     _put(sessions / session_id / "dispatched-agents.txt", f"{agent_id}\tx\t{subagent_type}\n")
 
@@ -307,7 +308,7 @@ FIXTURES[_WG + "block_sizing_object_schema_violation"] = _fixtures(
 # --- grant-record and archive writes by a subagent ---
 def _grant_record(r: Path, filename: str, sid: str = "sess-grant01") -> dict:
     _repo(r)
-    return _agent(_payload("Write", r / ".git" / "coordinator-sessions" / sid / filename, r, content="{}"))
+    return _agent(_payload("Write", session_dir_for(r / ".git", sid) / filename, r, content="{}"))
 
 
 def _claude_md_grant_name() -> str:

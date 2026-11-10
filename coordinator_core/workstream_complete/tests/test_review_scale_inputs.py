@@ -6,6 +6,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import review_scale_inputs as rsi
 from coordinator_core.workstream_complete import session_history as sh
@@ -38,7 +39,7 @@ def _commit(root, rel, text, sid=None, extra=""):
 
 
 def _floor(root, value, sid=SID):
-    d = root / ".git" / "coordinator-sessions" / sid
+    d = hub_for_common(root / ".git") / sid
     d.mkdir(parents=True, exist_ok=True)
     (d / "head_at_start").write_text(value + "\n", encoding="utf-8")
 
@@ -48,6 +49,7 @@ def repo(tmp_path):
     root = tmp_path / "r"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
+    (root / ".git" / "info" / "exclude").write_text(".coordinator-local/\n", encoding="utf-8")
     _commit(root, "seed.txt", "seed\n")
     _floor(root, _git(root, "rev-parse", "HEAD"))
     return root

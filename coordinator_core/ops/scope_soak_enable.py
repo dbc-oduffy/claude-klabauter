@@ -2,7 +2,7 @@
 coordinator_core.ops.scope_soak_enable — one-shot idempotent soak-clock sentinel writer.
 
 Purpose: starts the warn-only soak clock for scoped-safety-commits by writing
-`.git/coordinator-sessions/.warn-mode-enabled-at` with the current UTC ISO-8601
+`<session hub>/.warn-mode-enabled-at` with the current UTC ISO-8601
 timestamp, if the sentinel does not already exist. Idempotent: a pre-existing
 sentinel is never overwritten — its timestamp is echoed back instead.
 
@@ -30,11 +30,12 @@ GENERATES = []
 import os
 import sys
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 from coordinator_core.ops._git_root_util import git_root as _resolve_git_root
+from coordinator_core.session_hub_path import hub_for_common
 
-_SESSIONS_DIR_REL = os.path.join(".git", "coordinator-sessions")
 _SENTINEL_NAME = ".warn-mode-enabled-at"
 
 
@@ -48,7 +49,7 @@ def enable(git_root: Optional[str] = None) -> Tuple[str, int]:
         )
         return ("", 1)
 
-    sessions_dir = os.path.join(git_root, _SESSIONS_DIR_REL)
+    sessions_dir = str(hub_for_common(Path(git_root) / ".git"))
     sentinel = os.path.join(sessions_dir, _SENTINEL_NAME)
 
     if os.path.isfile(sentinel):

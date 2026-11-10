@@ -1387,7 +1387,7 @@ _TRANSCRIPT_MAX_AGE_SECS_DEFAULT = _CENSUS_DEFAULT_MAX_AGE_HOURS * 3600
 def box_live_session_ids() -> Optional[frozenset]:
     """Box-wide live session set, or None when liveness could not be established.
 
-    `live_session_ids(cwd)` is scoped to one repo's `coordinator-sessions`
+    `live_session_ids(cwd)` is scoped to one repo's session hub
     dir, so this unions the current repo, every distinct cwd in the harness
     registry, and each registry session whose process is still the same
     process. Any failure returns None: the caller keeps every file.

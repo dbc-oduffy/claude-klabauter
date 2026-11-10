@@ -35,6 +35,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.hooks.track_dispatched_agents as tda
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 VALID_AGENT_ID = "abcdef0123456789"
 VALID_SESSION_ID = "em-session-instrument-1"
@@ -106,7 +107,7 @@ def test_harness_shaped_17_char_agent_id_is_recorded(git_repo, real_id, capsys):
     asyncio.run(tda._handler(params, repo_root=str(git_repo)))
 
     rows = (
-        (git_repo / ".git" / "coordinator-sessions" / VALID_SESSION_ID / "dispatched-agents.txt")
+        (session_dir_for(git_repo / ".git", VALID_SESSION_ID) / "dispatched-agents.txt")
         .read_text()
         .splitlines()
     )
@@ -186,7 +187,7 @@ def test_cancelled_before_setup_dirs_reraises_and_logs_checkpoint(monkeypatch, g
 
     # Signature match: cancellation before _setup_dirs_sync completes leaves
     # BOTH artifacts absent, same as the reported 146-dispatch defect.
-    assert not (git_repo / "coordinator-sessions").exists()
+    assert not hub_for_common(git_repo / ".git").exists()
 
 
 def test_cancelled_before_lock_acquire_reraises_and_logs_checkpoint(git_repo, capsys):
@@ -197,7 +198,7 @@ def test_cancelled_before_lock_acquire_reraises_and_logs_checkpoint(git_repo, ca
     # the handler reaches `async with lock:` still holding checkpoint=
     # "before_lock_acquire" and suspends there until the holder releases it.
     dispatched = str(
-        git_repo / ".git" / "coordinator-sessions" / VALID_SESSION_ID / "dispatched-agents.txt"
+        session_dir_for(git_repo / ".git", VALID_SESSION_ID) / "dispatched-agents.txt"
     )
     lock = tda._get_file_lock(dispatched)
     params = _payload(session_id=VALID_SESSION_ID, agent_id=VALID_AGENT_ID)
@@ -254,11 +255,11 @@ def test_cancelled_before_process_dispatched_reraises_and_logs_checkpoint(
     # never got its row -- the asymmetric-artifact half of the defect
     # signature, distinct from the before_setup_dirs test's both-absent case.
     backpointer = (
-        git_repo / ".git" / "coordinator-sessions" / ".agents" / VALID_AGENT_ID / "em-session-id.txt"
+        hub_for_common(git_repo / ".git") / ".agents" / VALID_AGENT_ID / "em-session-id.txt"
     )
     assert backpointer.exists()
     dispatched = (
-        git_repo / ".git" / "coordinator-sessions" / VALID_SESSION_ID / "dispatched-agents.txt"
+        session_dir_for(git_repo / ".git", VALID_SESSION_ID) / "dispatched-agents.txt"
     )
     assert not dispatched.exists()
 
@@ -281,9 +282,9 @@ def test_success_path_writes_both_artifacts_with_no_breadcrumb(git_repo, capsys)
     assert stderr == ""
 
     common = git_repo / ".git"
-    dispatched = common / "coordinator-sessions" / VALID_SESSION_ID / "dispatched-agents.txt"
+    dispatched = session_dir_for(common, VALID_SESSION_ID) / "dispatched-agents.txt"
     backpointer = (
-        common / "coordinator-sessions" / ".agents" / VALID_AGENT_ID / "em-session-id.txt"
+        hub_for_common(common) / ".agents" / VALID_AGENT_ID / "em-session-id.txt"
     )
     assert dispatched.exists()
     assert VALID_AGENT_ID in dispatched.read_text(encoding="utf-8")

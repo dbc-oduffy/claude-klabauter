@@ -53,7 +53,7 @@ class TestReconcileClearsAnAwaitingGateStaleClaimant:
 
     @staticmethod
     def _sessions_dir(repo):
-        return Path(repo) / ".git" / "coordinator-sessions"
+        return Path(repo) / ".coordinator-local" / "coordinator-sessions"
 
     def test_awaiting_gate_stale_claimant_clears(self, tmp_path):
         repo = _make_repo(tmp_path)

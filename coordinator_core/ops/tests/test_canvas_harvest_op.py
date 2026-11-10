@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import asyncio
 import subprocess
 from pathlib import Path
@@ -174,6 +176,6 @@ def test_real_dispatch_claims_every_file_past_the_default_cap(monkeypatch, tmp_p
     assert "error" not in d
     assert d["result"]["ok"] is True and len(d["result"]["wrote"]) == n
     assert BOUND_KEY not in d["result"] and ipc._SCOPE_TOUCH_PATHS_KEY not in d["result"]
-    log = tmp_path / ".git" / "coordinator-sessions" / "sid-canvas" / "touch-record.jsonl"
+    log = session_dir_for(tmp_path / ".git", "sid-canvas") /"touch-record.jsonl"
     events = [touch_record.decode_line(x) for x in touch_record.iter_complete_lines(log.read_bytes())]
     assert len(events) == n

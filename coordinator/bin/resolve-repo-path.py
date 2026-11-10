@@ -1,4 +1,4 @@
-# Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
+#!/usr/bin/env python3
 """resolve-repo-path.py — emit the on-disk path for a registered repo shortname.
 
 Port of: resolve-repo-path.sh (DoE a1a568d2, 2026-07-22) — naked-Python port,

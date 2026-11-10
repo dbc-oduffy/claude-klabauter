@@ -41,6 +41,7 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import scope as touch_scope
 from coordinator_core.session import core as session_core
 from coordinator_core.session import touch_record
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 
@@ -142,7 +143,7 @@ class TestHandlerEndToEndCommonDirScopedRoot:
         asyncio.run(ttf._handler(params, repo_root=common_dir))
 
         touch_record_sink = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+            session_dir_for(common_dir, params["session_id"]) / "touch-record.jsonl"
         )
         assert touch_record_sink.exists(), "handler did not create the session touch-record.jsonl"
 
@@ -220,7 +221,7 @@ class TestHandlerNormalizeTouchPathRootWiring:
         )
 
         touch_record_sink = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+            session_dir_for(common_dir, params["session_id"]) / "touch-record.jsonl"
         )
         entries = _decoded_paths(touch_record_sink)
         assert "src/new.py" in entries
@@ -317,7 +318,7 @@ class TestHandlerZeroSpawnFastArmAtCaller:
         )
 
         touch_record_sink = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+            session_dir_for(common_dir, params["session_id"]) / "touch-record.jsonl"
         )
         entries = _decoded_paths(touch_record_sink)
         assert "README.md" in entries
@@ -349,7 +350,7 @@ class TestAC3OutOfWorktreePathReachableThroughHandler:
         asyncio.run(ttf._handler(params, repo_root=common_dir))
 
         touch_record_sink = (
-            common_dir / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+            session_dir_for(common_dir, params["session_id"]) / "touch-record.jsonl"
         )
         entries = _decoded_paths(touch_record_sink)
         assert entries == [], (
@@ -389,7 +390,7 @@ class TestHandlerRecordsTouchInTheFilesOwnRepo:
         }
         asyncio.run(ttf._handler(params, repo_root=git_common_dir(caller)))
 
-        sink = git_common_dir(sibling) / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+        sink = session_dir_for(git_common_dir(sibling), params["session_id"]) / "touch-record.jsonl"
         assert "src/new.py" in _decoded_paths(sink)
-        caller_sink = git_common_dir(caller) / "coordinator-sessions" / params["session_id"] / "touch-record.jsonl"
+        caller_sink = session_dir_for(git_common_dir(caller), params["session_id"]) / "touch-record.jsonl"
         assert "src/new.py" not in _decoded_paths(caller_sink)

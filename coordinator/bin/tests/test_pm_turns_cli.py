@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from coordinator_core.session_hub_path import hub_for_common
 
 import pytest
 
@@ -21,7 +22,7 @@ TRICKY = 'say "hi"\nline two sep é中文\n'
 def repo(tmp_path):
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-    (tmp_path / ".git" / "coordinator-sessions" / SID).mkdir(parents=True)
+    (hub_for_common(tmp_path / ".git") / SID).mkdir(parents=True)
     return tmp_path
 
 
@@ -41,7 +42,7 @@ def _run(repo, *args):
 
 
 def _log_lines(repo):
-    path = repo / ".git" / "coordinator-sessions" / SID / "pm_turns.jsonl"
+    path = hub_for_common(repo / ".git") / SID / "pm_turns.jsonl"
     return path.read_bytes().split(b"\n")
 
 

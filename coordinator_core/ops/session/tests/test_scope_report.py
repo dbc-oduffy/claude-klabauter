@@ -668,7 +668,7 @@ class TestClassifyDeniedPathLiveness:
     def test_liveness_oracle_is_asked_about_the_target_repo_not_the_process_cwd(
         self, monkeypatch
     ):
-        """Session registries are per-repo (`<repo>/.git/coordinator-sessions/`),
+        """Session registries are per-repo (`<repo>/.coordinator-local/coordinator-sessions/`),
         so "is <sid> live?" is only answerable relative to a repo. The zero-arg
         oracle resolved from the PROCESS cwd, so a cross-repo invocation read
         every peer of the TARGET repo as not-live — the reported incident.

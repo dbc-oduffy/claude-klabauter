@@ -106,7 +106,7 @@ emit = _emit
 # `apply_base.judgment_points_by_id` is the in-process sibling: it takes the
 # `judgment_points` list this process just built and indexes it without shape
 # checks, because a producer bug there should raise. This one takes an object
-# re-read from `.git/coordinator-sessions/decisions/*.json`, where a malformed
+# re-read from `<session hub>/decisions/*.json`, where a malformed
 # entry is a data state rather than a producer bug, and it lives beside the
 # writer so a rename of `judgment_points` or a point's `id` moves the site
 # `pickup_assemble.apply` depends on rather than silently starving it.

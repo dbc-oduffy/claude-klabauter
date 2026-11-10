@@ -25,7 +25,7 @@ Covers:
     archive in one call).
 
 Fixture idiom: a real throwaway git repo (`_Repo`), a claim dir at
-`<common_dir>/coordinator-sessions/handoff-claims/<basename>/`, and
+`<hub>/handoff-claims/<basename>/`, and
 `cs_claim_holder_live` monkeypatched at THIS module's own import site
 (`coordinator_core.ops.handoff_archive_transition.cs_claim_holder_live`) to
 force LIVE/DEAD — never a real live session, per the shared-tree
@@ -37,6 +37,8 @@ imported at module load time to fire `@register_op("handoff.archive_transition")
 """
 
 from __future__ import annotations
+
+from coordinator_core.session_hub_path import hub_for_common
 
 import asyncio
 import subprocess
@@ -138,10 +140,10 @@ class _Repo:
         return path
 
     def make_claim_dir(self, common_dir: Path, name: str, *, session_id: str) -> Path:
-        """<common_dir>/coordinator-sessions/handoff-claims/<name>/ with a
+        """<hub>/handoff-claims/<name>/ with a
         session_id file — mirrors claim_state.handoff_claim_dir's convention.
         """
-        claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / name
+        claim_dir = hub_for_common(common_dir) / "handoff-claims" / name
         claim_dir.mkdir(parents=True, exist_ok=True)
         (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
         return claim_dir

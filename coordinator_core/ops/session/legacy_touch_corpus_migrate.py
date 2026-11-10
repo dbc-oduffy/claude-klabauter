@@ -128,7 +128,7 @@ Negative-spec
 
 from __future__ import annotations
 
-GENERATES = []  # writes touch-record.jsonl siblings under <git-common-dir>/coordinator-sessions/; never touched.txt, never a tracked path
+GENERATES = []  # writes touch-record.jsonl siblings under the session hub; never touched.txt, never a tracked path
 
 import argparse
 import sys
@@ -446,7 +446,7 @@ def run_migration(
 ) -> MigrationReport:
     """Dry-run (default) or apply the legacy touch corpus migration.
 
-    ``sessions_base`` is ``<git-common-dir>/coordinator-sessions``.
+    ``sessions_base`` is the session hub (``session_hub_path.hub_for_common``).
     ``worktree_root`` is the worktree root ``classify_touch_entry``'s
     containment check and ``normalize_touch_path``'s absolute-rescue arm
     both need.
@@ -507,7 +507,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--sessions-base",
         required=True,
-        help="path to <git-common-dir>/coordinator-sessions",
+        help="path to the session hub (session_hub_path.hub_for_common)",
     )
     ap.add_argument(
         "--worktree-root",

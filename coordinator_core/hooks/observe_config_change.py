@@ -27,7 +27,7 @@ log directory, or a missing key must never propagate — fail-open is the
 whole contract for an observer hook.
 
 Where the record goes:
-`<git-common-dir>/coordinator-sessions/hook-observations/ConfigChange.jsonl`
+`.coordinator-local/coordinator-sessions/hook-observations/ConfigChange.jsonl`
 (one JSON object per line). DERIVED bookkeeping, not authored state — lives
 outside `state/subagent-share/` (DR-091 — that namespace is authored-only).
 `<git-common-dir>` resolution delegates to
@@ -55,6 +55,7 @@ from typing import Optional
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import hub_for_common
 
 _EVENT_NAME = "ConfigChange"
 
@@ -92,7 +93,7 @@ def _find_git_common_dir(start: Path) -> Optional[Path]:
 
 def _append_record(git_common_dir: Path, record: dict) -> None:
     try:
-        log_dir = git_common_dir / "coordinator-sessions" / "hook-observations"
+        log_dir = hub_for_common(git_common_dir) / "hook-observations"
         log_dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False)
         with (log_dir / f"{_EVENT_NAME}.jsonl").open("a", encoding="utf-8") as fh:

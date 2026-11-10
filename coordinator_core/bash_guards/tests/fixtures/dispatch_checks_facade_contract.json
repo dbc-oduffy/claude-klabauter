@@ -300,6 +300,7 @@
   "destructive-git-clean": "bash_guards/dispatch_checks.py",
   "destructive-git-revert": "bash_guards/dispatch_checks.py",
   "blanket-git-add": "bash_guards/dispatch_checks.py",
+  "stale-temp-index-base": "bash_guards/dispatch_checks.py",
   "runaway-find": "bash_guards/dispatch_checks.py",
   "block-worktree-creation": "bash_guards/block_worktree_creation.py",
   "p4-verb-fence": "bash_guards/p4_verb_fence.py",

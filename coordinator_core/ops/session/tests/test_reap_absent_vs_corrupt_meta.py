@@ -35,6 +35,8 @@ Negative-spec:
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import os
 import re
 import time
@@ -72,7 +74,7 @@ def _reap(sessions_dir: Path):
 
 class TestAbsentMetaIsReapableCorruptMetaIsNot:
     def test_record_less_dir_past_the_threshold_is_reaped(self, tmp_path):
-        sessions_dir = tmp_path / "coordinator-sessions"
+        sessions_dir = tmp_path / HUB_NAME
         sdir = _session_dir(
             sessions_dir, _SID_NO_META_OLD,
             age_seconds=reap._SESSION_STALE_SECONDS + 3600, meta=None,
@@ -90,7 +92,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         assert (sessions_dir / ".archive").is_dir()
 
     def test_record_less_dir_inside_the_threshold_is_kept(self, tmp_path):
-        sessions_dir = tmp_path / "coordinator-sessions"
+        sessions_dir = tmp_path / HUB_NAME
         sdir = _session_dir(
             sessions_dir, _SID_NO_META_FRESH, age_seconds=60, meta=None,
         )
@@ -104,7 +106,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         )
 
     def test_corrupt_meta_is_still_deferred_however_cold(self, tmp_path):
-        sessions_dir = tmp_path / "coordinator-sessions"
+        sessions_dir = tmp_path / HUB_NAME
         sdir = _session_dir(
             sessions_dir, _SID_CORRUPT_META_OLD,
             age_seconds=reap._SESSION_STALE_SECONDS * 10,
@@ -123,7 +125,7 @@ class TestAbsentMetaIsReapableCorruptMetaIsNot:
         assert "unreadable" in deferred[0]["reason"]
 
     def test_empty_record_less_dir_is_deferred_not_reaped(self, tmp_path):
-        sessions_dir = tmp_path / "coordinator-sessions"
+        sessions_dir = tmp_path / HUB_NAME
         sdir = sessions_dir / _SID_EMPTY
         sdir.mkdir(parents=True)
         stamp = time.time() - reap._SESSION_STALE_SECONDS * 10
@@ -156,7 +158,7 @@ class TestNonSessionStoresAreNeverReaped:
     def test_cold_populated_non_session_store_is_not_reaped(self, tmp_path, monkeypatch):
         monkeypatch.setattr(reap, "_SESSION_UUID_RE", re.compile(r".*"))
 
-        sessions_dir = tmp_path / "coordinator-sessions"
+        sessions_dir = tmp_path / HUB_NAME
         store = _session_dir(
             sessions_dir, "decisions",
             age_seconds=reap._SESSION_STALE_SECONDS * 30, meta=None,
@@ -195,7 +197,7 @@ class TestNonSessionStoresAreNeverReaped:
 
         monkeypatch.setattr(reap, "_SESSION_UUID_RE", re.compile(r".*"))
 
-        sessions_dir = tmp_path / "coordinator-sessions"
+        sessions_dir = tmp_path / HUB_NAME
         planted = []
         for name in sorted(_NON_SESSION_DIR_NAMES):
             if name.startswith("."):
@@ -232,7 +234,7 @@ class TestNonSessionStoresAreNeverReaped:
         before the `_`-prefix branch is ever reached, and this test would
         prove nothing about that branch. Bypassing the gate proves the
         `_`-prefix rule itself is what is doing the work."""
-        sessions_dir = tmp_path / "coordinator-sessions"
+        sessions_dir = tmp_path / HUB_NAME
         from coordinator_core.session.liveness import _NON_SESSION_DIR_NAMES
 
         assert "_branch-overrides" not in _NON_SESSION_DIR_NAMES, (

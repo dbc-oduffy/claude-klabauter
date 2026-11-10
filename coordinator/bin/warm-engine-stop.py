@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """warm-engine-stop.py — the operator hatch that takes down the warm pair
 (supervisor, front door, then server) of the clone this file lives in.
 

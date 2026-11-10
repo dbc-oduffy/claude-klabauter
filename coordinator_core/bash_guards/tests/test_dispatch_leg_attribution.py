@@ -10,6 +10,7 @@ import pytest
 
 import coordinator_core.ipc as ipc
 from coordinator_core.bash_guards import dispatch as chain
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.hooks import preuse_bash_dispatch  # noqa: F401  (registers the op)
 
 _OP = "hooks.preuse_bash_dispatch"
@@ -36,7 +37,7 @@ def _call(tmp_path, monkeypatch, command="ls"):
     }
     response = asyncio.run(ipc.dispatch_message(msg))
     assert "result" in response
-    sink = common / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common) / "logs" / "op-latency.jsonl"
     rows = [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines()]
     return [r for r in rows if r.get("kind") == "process_time" and r.get("op") == _OP]
 
@@ -126,7 +127,7 @@ def test_other_ops_rows_carry_no_attribution_fields(tmp_path, monkeypatch):
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
     asyncio.run(ipc.dispatch_message({"jsonrpc": "2.0", "id": 1, "method": "test.no_attribution",
                                       "params": {}, "_origin_worktree": str(tmp_path)}))
-    sink = common / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common) / "logs" / "op-latency.jsonl"
     rows = [json.loads(l) for l in sink.read_text(encoding="utf-8").splitlines()]
     pt = [r for r in rows if r.get("kind") == "process_time"]
     assert pt and all("legs" not in r and "handler_thread_ms" not in r for r in pt)

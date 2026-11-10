@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 coordinator.bin.waste-signal -- dynamic, opt-in instrument counting call redundancy and the
 work-vs-question ratio for one live-executed callable.

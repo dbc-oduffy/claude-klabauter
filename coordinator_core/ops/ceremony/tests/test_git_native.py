@@ -31,6 +31,8 @@ Spec backlink: pln-rebuild-the-wsc-commit-ceremon-f7c2a0 § C1.
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import inspect
 import subprocess
 from unittest.mock import MagicMock, patch
@@ -3153,9 +3155,9 @@ def test_dirty_relpaths_from_porcelain_fails_closed_on_a_degraded_producer_recor
 
 def test_add_paths_refuses_dotgit_component(tmp_path):
     repo = _init_real_repo(tmp_path)
-    sess = repo / ".git" / "coordinator-sessions" / "sid"
+    sess = hub_for_common(repo / ".git") / "sid"
     sess.mkdir(parents=True)
     (sess / "review-targets.txt").write_text("x\n", encoding="utf-8")
-    result = git_native.add_paths(repo, [".git/coordinator-sessions/sid/review-targets.txt"])
+    result = git_native.add_paths(repo, [".git/sid/review-targets.txt"])
     assert result.returncode != 0
     assert "'.git' path component" in result.stderr

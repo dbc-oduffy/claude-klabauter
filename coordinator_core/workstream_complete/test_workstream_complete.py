@@ -25,6 +25,7 @@ from typing import Any
 import pytest
 
 from coordinator_core.ceremony_common import apply_halt
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
@@ -3126,7 +3127,7 @@ def _write_session_floor(root: Path, sid: str) -> str:
         ["git", "rev-parse", "HEAD"], cwd=root, check=True, capture_output=True, text=True,
         **no_console_creationflags(),
     ).stdout.strip()
-    claim = root / ".git" / "coordinator-sessions" / sid
+    claim = hub_for_common(root / ".git") / sid
     claim.mkdir(parents=True, exist_ok=True)
     (claim / "head_at_start").write_text(head, encoding="utf-8")
     return head
@@ -3424,7 +3425,7 @@ def _make_live_session_claim_dir(repo_root: Path, sid: str) -> None:
     meta-less fallback reads this dir's own (just-now) mtime as the
     recency source, which is always well under the 30-minute liveness
     boundary, so this reads LIVE without needing to fabricate a meta.json."""
-    claim_dir = repo_root / ".git" / "coordinator-sessions" / sid
+    claim_dir = hub_for_common(repo_root / ".git") / sid
     claim_dir.mkdir(parents=True)
 
 
@@ -3434,7 +3435,7 @@ def _make_stale_session_claim_dir(repo_root: Path, sid: str) -> None:
     import json
     from datetime import datetime, timedelta, timezone
 
-    claim_dir = repo_root / ".git" / "coordinator-sessions" / sid
+    claim_dir = hub_for_common(repo_root / ".git") / sid
     claim_dir.mkdir(parents=True)
     stale_iso = (datetime.now(timezone.utc) - timedelta(hours=2)).strftime("%Y-%m-%dT%H:%M:%SZ")
     (claim_dir / "meta.json").write_text(
@@ -5774,7 +5775,7 @@ def test_no_walk_without_a_floor_on_the_review_scale_path(tmp_path):
     sid = "11111111-1111-1111-1111-111111111111"
     _init_git_repo(tmp_path)
     _commit_with_session_trailer(tmp_path, "own-1.md", sid)
-    claim = tmp_path / ".git" / "coordinator-sessions" / sid
+    claim = hub_for_common(tmp_path / ".git") / sid
     claim.mkdir(parents=True)
 
     spawned: list[object] = []
@@ -5803,7 +5804,7 @@ def test_history_window_holds_every_own_commit_regardless_of_peer_start_times(tm
     _init_git_repo(tmp_path, floor_for=own_sid)
     _commit_with_session_trailer(tmp_path, "own-1.md", own_sid)
     _commit_with_session_trailer(tmp_path, "own-2.md", own_sid)
-    (tmp_path / ".git" / "coordinator-sessions" / peer_sid).mkdir(parents=True)
+    (hub_for_common(tmp_path / ".git") / peer_sid).mkdir(parents=True)
     _commit_with_session_trailer(tmp_path, "peer-1.md", peer_sid)
     _commit_with_session_trailer(tmp_path, "own-3.md", own_sid)
 
@@ -6301,7 +6302,8 @@ _ENGAGE_HANDOFF = "state/handoffs/2026-09-22_232212_roadmap-ehms-01.md"
 def _engagement_fixture(
     tmp_path, monkeypatch, *, claimed_at, touched, started="2026-10-09T22:44:16Z", first_write_ts=None
 ):
-    sdir = tmp_path / ".git" / "coordinator-sessions" / _ENGAGE_SID
+    (tmp_path / ".git").mkdir()
+    sdir = hub_for_common(tmp_path / ".git") / _ENGAGE_SID
     sdir.mkdir(parents=True)
     (sdir / "started_at").write_text(started, encoding="utf-8")
     lines = []

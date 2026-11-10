@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.write_guards import block_memo_status_hand_edit as guard
 
 
@@ -173,7 +174,7 @@ class TestLiveClaimGate:
 
         assert guard._has_live_claim(str(tmp_path), "some-memo.md") is False
 
-        claim_dir = common_dir / "coordinator-sessions" / "memo-claims" / "some-memo.md"
+        claim_dir = hub_for_common(common_dir) / "memo-claims" / "some-memo.md"
         claim_dir.mkdir(parents=True)
         monkeypatch.setattr(
             "coordinator_core.liveness.cs_claim_holder_live", lambda claim_path: True

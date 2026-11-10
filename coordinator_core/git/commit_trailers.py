@@ -87,6 +87,7 @@ from typing import List, Optional, Sequence, Union
 
 from coordinator_core.git import repo_root as _repo_root_seam
 from coordinator_core.session import core as _session_core
+from coordinator_core.session_hub_path import session_dir_for
 
 _UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -118,7 +119,7 @@ def _resolve_session_id(git_dir: str) -> str:
     ``SESSION_ENV_PRECEDENCE``'s own docstring for the prior break-class
     defect two disagreeing copies of this ladder caused.
 
-    Tier 3->4 (the `<git_dir>/coordinator-sessions/.current-session-id`
+    Tier 3->4 (the `<hub>/.current-session-id`
     sentinel file, plus its liveness gate `_sentinel_session_live`) was
     REMOVED here, not merely gated -- KS-1. Two independent reasons: (1) it
     is unsound by construction under this fleet's concurrency, documented
@@ -254,13 +255,13 @@ def _read_session_shape(shape_path: str) -> object:
 
 
 def _resolve_deliverable_id_at(git_dir: str, session_id: str) -> str:
-    """Read `<git_dir>/coordinator-sessions/<session_id>/session-shape.json`
+    """Read `<hub>/<session_id>/session-shape.json` (hub for `git_dir`)
     and return `pickup.deliverable_id` if present and non-blank, else "".
     Omit-rather-than-guess, verbatim parity with the hook."""
     if not git_dir or not session_id:
         return ""
     shape_path = os.path.join(
-        git_dir, "coordinator-sessions", session_id, "session-shape.json"
+        str(session_dir_for(Path(git_dir), session_id)), "session-shape.json"
     )
     data = _read_session_shape(shape_path)
     if not isinstance(data, dict):
@@ -518,12 +519,12 @@ def session_holds_multiple_plan_claims(claims: Sequence[tuple]) -> bool:
 
 def _held_pickup_deliverable_ids(git_dir: str, session_id: str) -> List[str]:
     """DD1 (B2): the distinct non-blank `deliverable_id`s recorded in
-    `<git_dir>/coordinator-sessions/<session_id>/session-shape.json`'s
+    `<hub>/<session_id>/session-shape.json`'s
     `pickup_history[]` whose HANDOFF this session still holds a LIVE claim
     on -- the per-entry liveness read the ambiguity predicate below needs.
 
     Liveness is read per entry through `claim_state.handoff_claim_dir`
-    (`<common_dir>/coordinator-sessions/handoff-claims/<handoff>.name`) plus
+    (`<hub>/handoff-claims/<handoff>.name`) plus
     `liveness.cs_claim_holder_live`, the same pairing
     `handoff_archive_transition._live_claim_holder_or_none` already uses --
     a file read, no new subprocess. The resolved claim-dir holder is then
@@ -544,7 +545,7 @@ def _held_pickup_deliverable_ids(git_dir: str, session_id: str) -> List[str]:
     if not git_dir or not session_id:
         return []
     shape_path = os.path.join(
-        git_dir, "coordinator-sessions", session_id, "session-shape.json"
+        str(session_dir_for(Path(git_dir), session_id)), "session-shape.json"
     )
     data = _read_session_shape(shape_path)
     if not isinstance(data, dict):

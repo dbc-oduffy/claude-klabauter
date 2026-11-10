@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """List deferral-shaped prose outside a plan's task spine and optionally seed it to the improvement queue.
 
 Population: docs/plans/*.md stamped `status: implemented` with a filename date on or after --since

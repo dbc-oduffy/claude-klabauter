@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.coverage import _DagChainResult, _resolve_numstat_row_path
 from coordinator_core.ops import review_brightline_gate
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.ops.review_brightline_gate import (
     _classify_surface,
     _is_noise_path,
@@ -127,13 +128,13 @@ def _write_legacy_baton(path: Path, consumed_by: str) -> None:
 
 def _write_claim(repo: Path, sid: str, basename: str) -> None:
     """Write a ``handoff-claims`` claim-record for ``sid``/``basename`` under
-    the repo's session hub (``.git/coordinator-sessions/handoff-claims/``) —
+    the repo's session hub (``.coordinator-local/coordinator-sessions/handoff-claims/``) —
     the CLAIM-STORE ``build_ownership_index`` actually reads post-C19b-rewire.
     A ``claimed_by``/``consumed_by`` frontmatter field alone (written by
     ``_write_baton``/``_write_legacy_baton``) no longer suffices to register a
     baton as owned; this is the companion fixture call every test below needs
     for a baton it expects to appear in the owned set."""
-    claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / basename
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(sid, encoding="utf-8")
     (claim_dir / "claimed_at").write_text("2026-07-27T00:00:00Z", encoding="utf-8")

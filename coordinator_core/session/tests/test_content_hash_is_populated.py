@@ -54,7 +54,7 @@ def _init_repo(tmp_path: Path) -> str:
 
 
 def _push_started_at_to_future(root: str, sid: str) -> None:
-    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(root) / ".coordinator-local" / "coordinator-sessions" / sid
     future = datetime.fromtimestamp(
         datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
     )
@@ -80,7 +80,7 @@ class TestHookPathPopulatesHashAndRefusalFires:
             repo_root=root,
         ))
 
-        sink = Path(root) / ".git" / "coordinator-sessions" / sid / "touch-record.jsonl"
+        sink = Path(root) / ".coordinator-local" / "coordinator-sessions" / sid / "touch-record.jsonl"
         events = [
             touch_record.decode_line(line)
             for line in touch_record.iter_complete_lines(sink.read_bytes())
@@ -128,7 +128,7 @@ class TestBashReconcilerPopulatesHashAndRefusalFires:
         root = _init_repo(tmp_path)
         sid = "my-sess"
         assert core.init(sid, cwd=root)
-        session_dir = Path(root) / ".git" / "coordinator-sessions" / sid
+        session_dir = Path(root) / ".coordinator-local" / "coordinator-sessions" / sid
 
         (tmp_path / "bar.txt").write_text("this session's own bash write\n", encoding="utf-8")
 

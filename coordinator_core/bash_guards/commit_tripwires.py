@@ -167,8 +167,8 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census).
 # _log_pathspec_divergence_override appends to
-# <git_root>/.git/coordinator-sessions/<session_id>/overrides.log -- inside
-# .git, an untracked audit trail, never a tracked repo artifact.
+# <git_root>/.coordinator-local/coordinator-sessions/<session_id>/overrides.log -- inside
+# .coordinator-local, an untracked audit trail, never a tracked repo artifact.
 GENERATES = []
 
 
@@ -710,7 +710,7 @@ from coordinator_core.bash_guards._override_log_path import _override_log_path
 
 
 def _log_pathspec_divergence_override(cmd: str, cwd: Optional[str], session_id: str) -> None:
-    """Append one audit line to `.git/coordinator-sessions/<sid>/overrides.log`,
+    """Append one audit line to `.coordinator-local/coordinator-sessions/<sid>/overrides.log`,
     same path convention and one-line format `check_blanket_git_add` uses for
     its own `COORDINATOR_OVERRIDE_BLANKET_ADD` audit trail -- this is the
     override-logging convention peer guards in this codebase follow, not a

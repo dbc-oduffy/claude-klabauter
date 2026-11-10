@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Make each local unimatrix mirror look exactly like a session the harness wrote itself.
 
 - Key file: <pid>.<sha256(socket path)>.key. On Windows the harness hashes the pipe

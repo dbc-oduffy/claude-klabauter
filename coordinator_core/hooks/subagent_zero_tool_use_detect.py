@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Optional
 
 from coordinator_core._hook_envelope import payload_of
@@ -58,6 +59,7 @@ from coordinator_core.hooks.receiver_state_sensor import _handler as _receiver_s
 from coordinator_core.hooks.subagent_review_mark import _handler as _subagent_review_mark_handler
 from coordinator_core.hooks.subagent_zero_tool_use import _handler as _subagent_zero_tool_use_handler
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import session_dir_for
 
 # Path-traversal guard for session_id before it is used to build filesystem
 # paths -- mirrors the source script's own `_ID_CHARSET_RE`.
@@ -75,7 +77,7 @@ def _is_dispatched_this_session(git_root: "Optional[str]", session_id: str, agen
         return False
 
     dispatch_file = os.path.join(
-        common_dir, "coordinator-sessions", session_id, "dispatched-agents.txt"
+        str(session_dir_for(Path(common_dir), session_id)), "dispatched-agents.txt"
     )
     try:
         if not os.path.isfile(dispatch_file):

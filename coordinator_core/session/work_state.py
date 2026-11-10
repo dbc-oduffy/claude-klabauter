@@ -272,7 +272,7 @@ def _resolve_send_message_addresses(
     `send_message_address_resolved_at` (one UTC ISO-8601 stamp per call,
     shared by every candidate in this batch) exists so a reader of a
     PERSISTED copy of this dict (e.g. `pickup_assemble.apply`'s
-    session-scoped decision-object file, `.git/coordinator-sessions/
+    session-scoped decision-object file, `.coordinator-local/coordinator-sessions/
     decisions/<session>__<artifact>.json`, which persists this dict
     verbatim) can tell a stale address apart from a fresh one instead of
     trusting it silently. `.get(candidate.get("claimed_by") or "", "")`

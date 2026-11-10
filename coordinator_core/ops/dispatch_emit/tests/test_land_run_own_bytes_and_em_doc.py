@@ -9,6 +9,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.git import commit
 from coordinator_core.ops.dispatch_emit import land_run, measured_rev, requirements_ledger
 from coordinator_core.ops.dispatch_emit import terminal_commit_refusals
@@ -44,7 +45,7 @@ def _setup(tmp_path, declared=("a.py",)):
 
 def _own_write(root, rel, text, at=1000.0):
     touch_record.append_event(
-        touch_record.sink_path(root / ".git" / "coordinator-sessions" / SID),
+        touch_record.sink_path(session_dir_for(root / ".git", SID)),
         session_id=SID, agent_id=None, verb="T", path=rel, content_hash=_sha(text), kind="w", timestamp=at,
     )
 

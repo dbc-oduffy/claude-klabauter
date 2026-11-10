@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core import composition_budget
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.composition_budget import SKIP_AND_SURFACE, CompositionBudget
 from coordinator_core.telemetry import composition_record
 from coordinator_core.telemetry.composition_record import (
@@ -48,7 +49,7 @@ def _sink(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", _fake_git_common_dir
     )
-    sink_path = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink_path = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     return sink_path
 
 

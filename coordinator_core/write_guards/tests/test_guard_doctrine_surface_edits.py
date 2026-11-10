@@ -13,6 +13,7 @@ import time
 import pytest
 
 from coordinator_core.session import harness_registry as hr
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
 
 pytestmark = [pytest.mark.cadence]
@@ -90,7 +91,7 @@ def test_advisory_log_records_mismatch_and_decision_is_unchanged(tmp_path, monke
     unprotected.write_text("x = 1\n", encoding="utf-8")
     # A real session's hub directory is created by `core.init`; the advisory
     # logger never creates one itself.
-    (repo_root / ".git" / "coordinator-sessions" / "sess-mismatch").mkdir(parents=True)
+    (hub_for_common(repo_root / ".git") / "sess-mismatch").mkdir(parents=True)
 
     result = guard.check(
         {
@@ -101,7 +102,7 @@ def test_advisory_log_records_mismatch_and_decision_is_unchanged(tmp_path, monke
     )
 
     assert result is None
-    log_path = repo_root / ".git" / "coordinator-sessions" / "sess-mismatch" / "repo-identity-gate.log"
+    log_path = hub_for_common(repo_root / ".git") / "sess-mismatch" / "repo-identity-gate.log"
     assert log_path.is_file(), "advisory gates.repo_identity fact was not recorded"
     contents = log_path.read_text(encoding="utf-8")
     assert "gates.repo_identity" in contents
@@ -146,7 +147,7 @@ def test_advisory_log_not_written_without_repo_root(monkeypatch):
 
 def test_advisory_log_never_creates_a_session_dir(tmp_path, monkeypatch):
     """An advisory log line must never MINT session state: `live_session_ids`
-    enumerates every child of `.git/coordinator-sessions/` as a session."""
+    enumerates every child of the session hub as a session."""
     repo_root = _mismatch_box(tmp_path, monkeypatch, "sess-phantom", 9002)
     unprotected = repo_root / "some_file.py"
     unprotected.write_text("x = 1\n", encoding="utf-8")
@@ -160,7 +161,7 @@ def test_advisory_log_never_creates_a_session_dir(tmp_path, monkeypatch):
     )
 
     assert result is None
-    assert not (repo_root / ".git" / "coordinator-sessions" / "sess-phantom").exists()
+    assert not (hub_for_common(repo_root / ".git") / "sess-phantom").exists()
 
 
 # ---------------------------------------------------------------------------

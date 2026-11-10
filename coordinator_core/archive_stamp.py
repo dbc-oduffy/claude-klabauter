@@ -214,6 +214,7 @@ from coordinator_core.reconcile.commit_reality import (
 )
 from coordinator_core.reconcile.policy_loader import load_policy
 from coordinator_core.session.shape import session_shape_set
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.shipped_in_tokens import _NO_COMMIT_TOKEN_RE, _SHA_HEX_RE
 
 # shipped_in value grammar (DR-096, 2026-07-26 ruling) — the shape a
@@ -2691,7 +2692,7 @@ def cs_action_memo(memo_path: str, *disposition_args: str, return_result: bool =
     memo_common_dir = _git_common_dir(memo_git_root) if memo_git_root is not None else None
 
     if memo_common_dir is not None:
-        claim_dir = memo_common_dir / "coordinator-sessions" / "memo-claims" / mpath.name
+        claim_dir = hub_for_common(memo_common_dir) / "memo-claims" / mpath.name
         # Guard 1: claim dir absent -> PROCEED.
         if claim_dir.is_dir():
             caller_sid = resolve_current_session_id(worktree_root=memo_git_root)
@@ -2828,7 +2829,7 @@ def cs_resolve_memo(memo_path: str, *disposition_args: str, return_result: bool 
 
     Deliberately does NOT run cs_action_memo's pre-write memo-claims-dir ownership
     guard block: ``_resolve``'s own docstring negative-spec states it does not
-    acquire or write ``.git/coordinator-sessions/memo-claims/`` at all, and runs its
+    acquire or write ``.coordinator-local/coordinator-sessions/memo-claims/`` at all, and runs its
     OWN live-claim refusal (comparing the caller's session_id against an existing
     ``picked_up_by`` inside the same locked_rmw closure) rather than consulting that
     directory — duplicating cs_action_memo's directory-based guard here would check

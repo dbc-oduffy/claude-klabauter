@@ -55,6 +55,8 @@ Spec backlink: coordinator_core/ops/handoff_correct_body.py
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import asyncio
 import subprocess
 import textwrap
@@ -210,11 +212,11 @@ def _seed_archived_handoff(
 
 
 def _write_claim_dir(repo: Path, class_: str, basename: str, holder_session_id: str) -> Path:
-    """Create `.git/coordinator-sessions/<class>-claims/<basename>/session_id`
+    """Create `<hub>/<class>-claims/<basename>/session_id`
     naming `holder_session_id` as the recorded claim holder — the same
     stat `pickup_assemble._claim_already_self_held` reads for
     disagreement-detection (AC2/AC4, C3)."""
-    d = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    d = hub_for_common(repo / ".git") / f"{class_}-claims" / basename
     d.mkdir(parents=True, exist_ok=True)
     (d / "session_id").write_text(holder_session_id, encoding="utf-8")
     return d

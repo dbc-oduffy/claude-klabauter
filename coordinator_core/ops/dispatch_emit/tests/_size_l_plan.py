@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import run_token
 
@@ -152,7 +153,7 @@ def build_size_l_plan(
     if dirty_files > 0:
         _make_dirty_repo(root, dirty_files)
     if session_id:
-        seed = root / ".git" / "coordinator-sessions" / session_id
+        seed = session_dir_for(root / ".git", session_id)
         seed.mkdir(parents=True, exist_ok=True)
         (seed / "review-targets.txt").write_text("", encoding="utf-8", newline="\n")
     return root, PLAN_REL, RUN_ID

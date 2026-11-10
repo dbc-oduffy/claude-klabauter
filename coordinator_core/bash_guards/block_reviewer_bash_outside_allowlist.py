@@ -2722,7 +2722,6 @@ _DEFAULT_SCAFFOLDER_STANZA = (
 )
 
 _DEFAULT_ACCEPTED_FORMS_STANZA = (
-    "  <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
     "  python3 <claude-klabauter-live-root>/coordinator/bin/coordinator-doc-new.py --type review-findings ...",
 )
 

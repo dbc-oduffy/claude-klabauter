@@ -79,8 +79,8 @@ Seam-routing finding (2026-08-25 terminal-handoff-sweep C5, contributes to AC-9)
   `commit_pipeline :: commit`'s `commit_paths` (the C4 fold-in seam) — it does
   NOT, and the seam is genuinely unreachable from here, not merely unwired:
     - This module's own write (`_record_pickup_sync`) targets
-      `<git_common_dir>/coordinator-sessions/<sid>/session-shape.json`, a path
-      under `.git/` — untracked by construction (see `GENERATES = []` below),
+      `<session hub>/<sid>/session-shape.json` (`session_hub_path.hub_for_common`), a path
+      outside the tracked tree — untracked by construction (see `GENERATES = []` below),
       so it is not a candidate for ANY commit, this seam or another.
     - The claim-stamp write that DOES touch a tracked file (the handoff
       frontmatter's `status: open -> claimed` transition) is made by
@@ -415,7 +415,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                                          non-string or blank value is treated
                                          as absent (never a validation error).
 
-    Behavior: resolves <git_common_dir(repo_root)>/coordinator-sessions/<sid>/
+    Behavior: resolves <session hub of repo_root>/<sid>/
     session-shape.json (same path convention branch_resolution reads from —
     coordinator_core.ops.fleet._common._sessions_dir), acquires the SAME
     mkdir-based lock bash's cs_session_shape_set uses (see module docstring

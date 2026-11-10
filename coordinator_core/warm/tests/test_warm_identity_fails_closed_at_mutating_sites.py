@@ -41,6 +41,7 @@ import pytest
 
 from coordinator_core.session import core as session_core
 from coordinator_core.session import liveness as session_liveness
+from coordinator_core.session_hub_path import hub_for_common
 
 _SERVER_OWNER = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 _CALLER = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
@@ -124,7 +125,7 @@ def test_the_warm_flag_unwinds_so_a_later_cold_claim_check_is_unaffected(
 
 
 def _pickup_claim_dir(repo: Path, class_: str, basename: str, holder: str) -> Path:
-    d = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    d = hub_for_common(repo / ".git") / f"{class_}-claims" / basename
     d.mkdir(parents=True, exist_ok=True)
     (d / "session_id").write_text(holder, encoding="utf-8")
     (d / "stage").write_text("apply" + chr(10), encoding="utf-8")
@@ -222,7 +223,7 @@ def _declaring_result(path: Path) -> dict:
 
 
 def _session_dirs_under(repo: Path) -> set:
-    base = repo / ".git" / "coordinator-sessions"
+    base = hub_for_common(repo / ".git")
     if not base.is_dir():
         return set()
     return {p.name for p in base.iterdir() if p.is_dir()}

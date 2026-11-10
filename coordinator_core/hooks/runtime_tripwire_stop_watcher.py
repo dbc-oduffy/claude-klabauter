@@ -87,6 +87,7 @@ from typing import Optional
 from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir as _resolve_git_common_dir
 from coordinator_core.hooks.support.session_hub import session_id_is_real
+from coordinator_core.session_hub_path import hub_for_common
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -241,7 +242,7 @@ def _main_impl() -> int:
     common_dir = _resolve_git_common_dir(git_root)
     if not common_dir:
         return 0
-    sessions_dir = Path(common_dir) / "coordinator-sessions"
+    sessions_dir = hub_for_common(Path(common_dir))
     lock_dir = sessions_dir / session_id
     lock = lock_dir / "stop-watcher.pid"
 

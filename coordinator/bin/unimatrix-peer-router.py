@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Per-box peer router: register every Codex thread / agy conversation in peers.json, plus every
 live agy leg record, agy presence lock and Codex thread-writer-lock, as its own roster peer and
 route messages between any Claude session and any peer, or peer to peer. A discovered peer retires

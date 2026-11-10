@@ -9,6 +9,7 @@ import pytest
 pytestmark = pytest.mark.complete
 
 from pathlib import Path
+from coordinator_core.session_hub_path import hub_for_common
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
@@ -1677,7 +1678,7 @@ def test_row_round_trip_against_the_real_claims_module(tmp_path, monkeypatch):
     claim = ["claim-artifact", "row", _ROW_PATH, str(tmp_path)]
     release = ["release-artifact", "row", _ROW_PATH, str(tmp_path)]
     clear = ["clear-claim-if-dead", "row", _ROW_PATH, str(tmp_path)]
-    cdir = tmp_path / ".git" / "coordinator-sessions" / "row-claims" / _ROW_KEY
+    cdir = hub_for_common(tmp_path / ".git") / "row-claims" / _ROW_KEY
 
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-a")
     assert _cli.main(claim) == 0 and cdir.is_dir()

@@ -59,6 +59,7 @@ from __future__ import annotations
 
 import os
 import re
+from pathlib import Path
 from typing import Any
 
 from coordinator_core._hook_envelope import allow_advisory, no_advisory, payload_of
@@ -66,6 +67,7 @@ from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.hooks.support.message_envelope import compose, render
 from coordinator_core.hooks.support.session_hub import ensure_session_dir, session_id_is_real
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import session_dir_for
 
 _EXEMPT_TARGETS = {"explore", "plan"}
 
@@ -166,7 +168,7 @@ def _claim_offer_marker(cwd: str, session_id: str) -> bool:
         common_dir = resolve_git_common_dir(git_root)
         if not common_dir:
             return True
-        session_dir = os.path.join(common_dir, "coordinator-sessions", session_id)
+        session_dir = str(session_dir_for(Path(common_dir), session_id))
         if not session_id_is_real(session_id):
             return True
         ensure_session_dir(session_dir, session_id)

@@ -142,7 +142,7 @@ Prior art, read before touching this section again rather than re-deriving it:
     the first one.
 
 Mechanism: a marker file at
-`<git-COMMON-dir>/coordinator-sessions/<sid>/inprocess-search-footer-seen`, `<sid>`
+`<hub>/<sid>/inprocess-search-footer-seen` (`<hub>` = `session_hub_path.hub_for_common(<git-COMMON-dir>)`), `<sid>`
 resolved from the `CLAUDE_CODE_SESSION_ID` environment variable only (SC-DR-009;
 never `.current-session-id`, which is documented last-writer-wins under concurrent
 sessions and would let one session's marker answer for another's). The git COMMON dir
@@ -174,6 +174,7 @@ from coordinator_core.bash_guards._dialect import Dialect, dialect_from_tool_nam
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._verdict import record_silent
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.session_hub_path import session_dir_for
 
 #: Review: review-integrator -- Finding 3/4 (nit, mirrors guard_grep_via_
 #: bash.py's own precedent): these three attributes are vestigial in
@@ -230,7 +231,7 @@ def _latch_path(cwd: str, sid: str) -> Optional[Path]:
     if not repo_root:
         return None
     common_dir = resolve_git_common_dir(repo_root)
-    return Path(common_dir) / "coordinator-sessions" / sid / _LATCH_MARKER_NAME
+    return session_dir_for(Path(common_dir), sid) / _LATCH_MARKER_NAME
 
 
 def _footer_seen(cwd: str, sid: str) -> bool:

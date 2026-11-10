@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 cross-repo-memo — dispatch a cross-repo memo to a receiver-EM's working tree.
 

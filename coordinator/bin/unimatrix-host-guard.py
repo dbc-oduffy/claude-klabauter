@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Never-fail client for the Klabauter host-hook shim (Codex and agy PreToolUse guard).
 
 guard() runs `python -m coordinator_core.host_hooks.shim --host <host>` in a killable child under one

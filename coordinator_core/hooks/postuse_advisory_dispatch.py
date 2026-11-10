@@ -82,7 +82,7 @@ import os
 import re
 import sys
 import time
-
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from coordinator_core.ipc import register_op
@@ -92,6 +92,7 @@ from coordinator_core.hooks import nudge_hand_written_plan, nudge_unauthorized_h
 from coordinator_core.session.autonomous_sentinel import sentinel_path, sentinel_read_path
 from coordinator_core.session.context_usage_sidecar import read_usage
 from coordinator_core.session.mode_resolution import resolve_mode
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.temp_layout import legacy_top_level_path, managed_tempdir
 
 # `sentinel_path` is read directly by the mise-en-place CONTINUANCE detection
@@ -949,7 +950,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     forward defense, not an operative one today.
 
     Subagent detection: SESSION_ID must appear as a dirname under
-    .git/coordinator-sessions/.agents/. EM session_ids are not recorded there.
+    .coordinator-local/coordinator-sessions/.agents/. EM session_ids are not recorded there.
     Resolver-based fallback handles named teammates whose canonical id differs from
     SESSION_ID (mirrors coordinator-session.sh resolve_subagent_identity).
 
@@ -994,7 +995,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     if not git_root:
         return ""
 
-    agents_dir = os.path.join(git_root, ".git", "coordinator-sessions", ".agents")
+    agents_dir = os.path.join(str(hub_for_common(Path(git_root) / ".git")), ".agents")
     if not os.path.isdir(agents_dir):
         return ""
 
@@ -1030,7 +1031,7 @@ def _check_runtime_tripwire_sync(session_id: str, agent_id: str) -> str:
     # --- Read dispatch record from EM's dispatched-agents.txt ---
     # Record shape: agentId\tmodel\tsubagent_type\tdispatched-at
     dispatch_file = os.path.join(
-        git_root, ".git", "coordinator-sessions", em_sid, "dispatched-agents.txt"
+        str(session_dir_for(Path(git_root) / ".git", em_sid)), "dispatched-agents.txt"
     )
     if not os.path.isfile(dispatch_file):
         return ""

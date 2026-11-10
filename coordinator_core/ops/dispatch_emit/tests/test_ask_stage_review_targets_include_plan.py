@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 
@@ -39,7 +40,7 @@ def _repo(tmp_path):
 
 
 def _targets(repo, session):
-    path = repo / ".git" / "coordinator-sessions" / session / "review-targets.txt"
+    path = session_dir_for(repo / ".git", session) / "review-targets.txt"
     return path.read_text(encoding="utf-8").split()
 
 

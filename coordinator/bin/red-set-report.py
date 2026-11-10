@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """red-set-report.py — derive the red-cell census for a pytest path, never assert it.
 
 Spec backlink: pln-make-the-bash-guards-suite-a-g-2f81d6 § C1b

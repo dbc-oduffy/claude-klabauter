@@ -65,6 +65,7 @@ from coordinator_core.content_root import read_content_root
 from coordinator_core.frontmatter.sentinel_blocks import extract_block as _extract_sentinel_block
 from coordinator_core.git.repo_root import show_toplevel as _show_toplevel_no_spawn
 from coordinator_core.session import scope as session_scope
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.subagent_sandbox.plugin_root import (
     resolve_plugin_root as _resolve_plugin_root_impl,
 )
@@ -138,7 +139,7 @@ def _sanitize_segment(seg: str) -> Optional[str]:
 
 
 #: Leaf of the sidecar POINTER index, under the same
-#: ``.git/coordinator-sessions/`` home the ``.agents/`` back-pointer chain
+#: ``.coordinator-local/coordinator-sessions/`` home the ``.agents/`` back-pointer chain
 #: already occupies (``engine._read_backpointer_subagent_type``). Untracked and
 #: machine-local on purpose: it is a rebuildable cache of "where did this
 #: agent's sidecar go", not a record, so it must never enter the tree the
@@ -184,9 +185,7 @@ def _sidecar_pointer_path(git_root: str, raw_agent_id: str, kind: str = "report"
     if kind_seg is None or kind_seg != kind:
         return None
     return (
-        Path(git_root)
-        / ".git"
-        / "coordinator-sessions"
+        hub_for_common(Path(git_root) / ".git")
         / _SIDECAR_POINTER_DIRNAME
         / kind_seg
         / seg

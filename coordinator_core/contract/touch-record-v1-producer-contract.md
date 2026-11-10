@@ -35,8 +35,9 @@ the engine, not by this record.
 ## 2. Layout
 
 - Filename: `touch-record.jsonl` (`touch_record.RECORD_FILENAME`).
-- Session-keyed sink: `<git-dir>/coordinator-sessions/<sid>/touch-record.jsonl`.
-- Agent-keyed sink: `<git-dir>/coordinator-sessions/.agents/<agentId>/touch-record.jsonl`. Its
+- Session-keyed sink: `<hub>/<sid>/touch-record.jsonl`, `<hub>` being `session_hub_path.hub_for_common`
+  (`<main checkout>/.coordinator-local/coordinator-sessions`; a bare repo: `<common>/coordinator-sessions`).
+- Agent-keyed sink: `<hub>/.agents/<agentId>/touch-record.jsonl`. Its
   lines carry `sid` (the owning session) and `agent` (this `<agentId>`), so a line is attributable
   without consulting its directory.
 - Rotation: past a size bound the live file is renamed to

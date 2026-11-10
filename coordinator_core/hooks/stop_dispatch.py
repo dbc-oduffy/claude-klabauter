@@ -603,7 +603,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
     # the SAME payload["cwd"] every other leg above already reads, since
     # this in-process call bypasses that resolution. Never the ambient
     # process cwd: leaving `repo_root` at its own default here previously
-    # wrote a `sess-1` entry into THIS repo's own `.git/coordinator-sessions/`
+    # wrote a `sess-1` entry into THIS repo's own `.coordinator-local/coordinator-sessions/`
     # from a `tmp_path`-rooted test payload (caught by
     # coordinator_core/conftest.py's live-session-hub litter guard).
     try:

@@ -37,6 +37,7 @@ from coordinator_core.benchmarks.workstream_complete_brief_full_path import (
     _git,
     _window_message,
 )
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 SESSION_ID = "11111111-2222-3333-4444-555555555555"
@@ -138,8 +139,7 @@ def _build(repo: Path) -> None:
         if line.startswith(f":{HISTORY_COMMITS - WINDOW} ")
     )
     _git(repo, "checkout", "-q", "-f", "main")
-    sessions = repo / ".git" / "coordinator-sessions"
-    claim = sessions / SESSION_ID
+    claim = hub_for_common(repo / ".git") / SESSION_ID
     claim.mkdir(parents=True)
     (claim / "head_at_start").write_text(floor, encoding="ascii")
     (claim / "started_at").write_text(
@@ -149,7 +149,7 @@ def _build(repo: Path) -> None:
     (claim / "session-shape.json").write_text(_SHAPE, encoding="utf-8")
     (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
     (repo / PLAN_REL).write_text(_PLAN, encoding="utf-8")
-    held = sessions / "plan-claims" / "bench"
+    held = hub_for_common(repo / ".git") / "plan-claims" / "bench"
     held.mkdir(parents=True)
     (held / "session_id").write_text(SESSION_ID, encoding="ascii")
     (held / "claimed_at").write_text("2026-10-13T00:00:00+00:00", encoding="ascii")

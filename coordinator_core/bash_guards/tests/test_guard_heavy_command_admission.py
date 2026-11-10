@@ -28,6 +28,7 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     ProcRow,
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from coordinator_core.session_hub_path import hub_for_common
 
 pytestmark = pytest.mark.complete
 
@@ -467,7 +468,7 @@ class TestBoxHoldLeg:
         monkeypatch.setattr(guard, "_read_box_hold", lambda: self._hold())
         env = {OVERRIDE_KEYS["box-hold"]: "1"}
         assert _enveloped(guard.check)(_payload(self.SCOPED, env=env, cwd=tmp_path)) is None
-        logs = list((tmp_path / ".git" / "coordinator-sessions").rglob("overrides.log"))
+        logs = list(hub_for_common(tmp_path / ".git").rglob("overrides.log"))
         assert OVERRIDE_KEYS["box-hold"] in "".join(p.read_text(encoding="utf-8") for p in logs)
 
 
@@ -710,7 +711,7 @@ class TestOverrideKeys:
         return tmp_path
 
     def _log(self, repo) -> str:
-        logs = list((repo / ".git" / "coordinator-sessions").rglob("overrides.log"))
+        logs = list(hub_for_common(repo / ".git").rglob("overrides.log"))
         return "".join(p.read_text(encoding="utf-8") for p in logs)
 
     def test_identity_key_bypasses_only_the_identity_leg(self, host, repo):

@@ -79,6 +79,7 @@ from coordinator_core.git.repo_root import show_toplevel
 from coordinator_core.git.run import run_git
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import hub_for_common
 
 _FRONTMATTER_KV_RE = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):\s*(.*?)\s*$")
 
@@ -181,7 +182,7 @@ def _session_reap_due(repo_root: "Optional[str]") -> bool:
     try:
         import time
 
-        marker = Path(repo_root, ".git", "coordinator-sessions", ".last-reap")
+        marker = hub_for_common(Path(repo_root, ".git")) / ".last-reap"
         if not marker.exists():
             return True
         return (time.time() - marker.stat().st_mtime) >= _SESSION_REAP_PREGATE_SECONDS

@@ -23,7 +23,7 @@ from coordinator_core.pickup_assemble.tests._git_harness import (
 
 
 def _seed_session(repo: Path, sid: str, goal: str) -> Path:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = repo / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     meta = {
         "session_id": sid,

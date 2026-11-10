@@ -35,6 +35,8 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 from coordinator_core.bash_guards import dispatch as bash_dispatch
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.bash_guards import _dc_commit
@@ -79,7 +81,7 @@ def _push_started_at_to_future(root: str, sid: str) -> None:
     scope.compute_scope mtime fallback does NOT auto-adopt freshly-staged
     files into this session's own scope (mirrors the real-world case of a
     file staged before this session began)."""
-    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    sdir = hub_for_common(Path(root) / ".git") / sid
     future = datetime.fromtimestamp(
         datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
     )
@@ -123,7 +125,7 @@ class TestCheckFiveScopedStaging:
         # sibling-repo (DoE) surface and is explicitly UNCHANGED by this
         # plan -- the machine token stays the literal "orphan" even though
         # the operator-facing sentence above no longer says it.
-        log = Path(root) / ".git" / "coordinator-sessions" / sid / "scope-warnings.log"
+        log = hub_for_common(Path(root) / ".git") / sid / "scope-warnings.log"
         assert log.is_file()
         assert "foreign-staged | foo.txt | owner:orphan" in log.read_text(encoding="utf-8")
 
@@ -189,7 +191,7 @@ class TestCheckFiveScopedStaging:
         # Simulate track_touched_files' agent-keyed write: the dispatched
         # subagent's own touched.txt, back-pointered to the dispatching EM
         # session -- never appended to the EM's own touched.txt.
-        agent_dir = Path(root) / ".git" / "coordinator-sessions" / ".agents" / agent_id
+        agent_dir = hub_for_common(Path(root) / ".git") / ".agents" / agent_id
         agent_dir.mkdir(parents=True)
         (agent_dir / "em-session-id.txt").write_text(sid + "\n", encoding="utf-8")
         _claim(root, sid, "foo.txt", agent_id=agent_id)
@@ -716,7 +718,7 @@ class TestCheckFiveOwnerAttributionIntegration:
         _push_started_at_to_future(root, sid)
 
         other_touched = (
-            Path(root) / ".git" / "coordinator-sessions" / other_sid / "touched.txt"
+            hub_for_common(Path(root) / ".git") / other_sid / "touched.txt"
         )
         other_touched.write_text("peer.txt\n", encoding="utf-8")
 
@@ -812,7 +814,7 @@ class TestCheckFiveScopeAdvisoryTailClause:
         assert core.init(other_sid, cwd=root)
         _push_started_at_to_future(root, sid)
         other_touched = (
-            Path(root) / ".git" / "coordinator-sessions" / other_sid / "touched.txt"
+            hub_for_common(Path(root) / ".git") / other_sid / "touched.txt"
         )
         other_touched.write_text("peer.txt\npeer_del.txt\n", encoding="utf-8")
         return root, sid
@@ -969,9 +971,9 @@ def _claim(root: str, sid: str, *paths: str, agent_id: str = None) -> None:
     """
     from coordinator_core.session import touch_record
 
-    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    sdir = hub_for_common(Path(root) / ".git") / sid
     if agent_id is not None:
-        sdir = Path(root) / ".git" / "coordinator-sessions" / ".agents" / agent_id
+        sdir = hub_for_common(Path(root) / ".git") / ".agents" / agent_id
     sdir.mkdir(parents=True, exist_ok=True)
     for path in paths:
         touch_record.append_event(

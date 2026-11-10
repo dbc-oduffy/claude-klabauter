@@ -54,7 +54,7 @@ def _make_repo(tmp_path):
 
 
 def _write_session_meta(repo, sid, meta: dict):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return sdir
@@ -71,7 +71,7 @@ def _dead_session(repo, sid):
 
 
 def _grant_file(repo, sid):
-    return Path(repo) / ".git" / "coordinator-sessions" / sid / "claude-md-write-grant.json"
+    return Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid / "claude-md-write-grant.json"
 
 
 class TestWriteClaudeMdWriteGrant:
@@ -108,7 +108,7 @@ class TestWriteClaudeMdWriteGrant:
         repo = _make_repo(tmp_path)
         _live_session(repo, "s1")
         cmg.write_claude_md_write_grant("pm", "ask", session_id="s1", cwd=str(repo))
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "s1"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "s1"
         leftovers = [
             p for p in sdir.iterdir() if p.name.startswith("claude-md-write-grant.json.")
         ]

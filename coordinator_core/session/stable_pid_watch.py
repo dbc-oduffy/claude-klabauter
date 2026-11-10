@@ -87,7 +87,7 @@ population it was written about.
 
 Cost constraint (cadence-path, non-negotiable per CLAUDE.md § Load norm): NO
 process spawns, NO corpus walk beyond the session dirs themselves. One
-``Path.iterdir()`` over ``<git-common-dir>/coordinator-sessions/`` plus one
+``Path.iterdir()`` over the session hub (``session_hub_path.hub_for_common``) plus one
 ``meta.json`` read per session dir — the same read primitive
 (``core.read_meta_field``) the liveness path already uses, so this watch
 never becomes a second parser of that file's shape.
@@ -209,7 +209,7 @@ def scan_stable_pid_misses(
     """Scan every session dir for a Layer-1-disarming ``stable_pid`` miss.
 
     Args:
-        sessions_dir: explicit ``coordinator-sessions`` root to scan (tests
+        sessions_dir: explicit session-hub root to scan (tests
             pass a ``tmp_path``-rooted directory here). ``None`` ->
             ``core.sessions_dir(cwd)``.
         cwd: forwarded to ``core.sessions_dir`` when ``sessions_dir`` is
@@ -235,7 +235,7 @@ def scan_stable_pid_misses(
             "status": STATUS_EMPTY,
             "checked": 0,
             "misses": [],
-            "summary": "No coordinator-sessions directory found — nothing to check.",
+            "summary": "No session hub directory found — nothing to check.",
         }
 
     try:
@@ -245,7 +245,7 @@ def scan_stable_pid_misses(
             "status": STATUS_EMPTY,
             "checked": 0,
             "misses": [],
-            "summary": "coordinator-sessions directory unreadable — nothing to check.",
+            "summary": "session hub directory unreadable — nothing to check.",
         }
 
     checked = 0
@@ -308,7 +308,7 @@ def scan_stable_pid_misses(
             "status": STATUS_EMPTY,
             "checked": 0,
             "misses": [],
-            "summary": "coordinator-sessions directory has no session records — nothing to check.",
+            "summary": "session hub directory has no session records — nothing to check.",
         }
 
     if misses:

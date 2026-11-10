@@ -9,6 +9,7 @@ import hashlib
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import halt_product_gates, halted_run, peer_hunk_gate, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401 -- fixtures
@@ -80,7 +81,7 @@ def test_b_product_whose_bytes_drifted_from_the_recorded_write_is_withheld(sessi
     _write_record(repo, RUN)
     _product(repo)
     _marker_script(repo, [("C1", ["done.py"])], {"C1": "DONE: C1\n"})
-    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SELF)
+    sink = touch_record.sink_path(session_dir_for(repo / ".git", SELF))
     touch_record.append_event(
         sink, session_id=SELF, agent_id=None, verb="T", path="done.py",
         content_hash=hashlib.sha256(b"d = 1\n").hexdigest(), kind="w",

@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import importlib
 import json as _json
+from coordinator_core.session_hub_path import hub_for_common
 import os
 import shlex
 import shutil
@@ -183,7 +184,7 @@ _NEUTRAL_SCRATCH_PARENT = fleet_temp_root() / "guard-corpus-scratch"
 #: `tempfile.gettempdir()` because that is where this corpus used to mint,
 #: `d1cf0b986` moved the mint root out to a repo sibling (to stop
 #: `guard_inprocess_search`'s footer latch minting phantom session dirs into
-#: the live `.git/coordinator-sessions/` hub), and the exemption stopped
+#: the live `.coordinator-local/coordinator-sessions/` hub), and the exemption stopped
 #: recognizing its own fixtures -- 15 spans across 13 guards reported as
 #: leaks, from this one line. Defined HERE, next to the mint root, a
 #: relocation cannot desync the two again.
@@ -304,7 +305,7 @@ def _neutral_scratch_parent() -> str:
     1. OUTSIDE any git repo. `guard_inprocess_search._footer()`'s latch resolves
        its path by walking UPWARD from `cwd` for a `.git` entry. A scratch inside
        the repo makes that walk reach the real repo root, and the latch lands in
-       the live `.git/coordinator-sessions/` hub -- as a phantom session dir for
+       the live `.coordinator-local/coordinator-sessions/` hub -- as a phantom session dir for
        the two sites that mint their own `CLAUDE_CODE_SESSION_ID`, and, worse,
        silently under the REAL session's id for the ten that leave it ambient,
        where it suppresses the operator's footer paragraph for the rest of their
@@ -672,7 +673,7 @@ def _post_executor_setup(scratch_dir: Path, runs_so_far: int) -> Dict[str, str]:
     import os
 
     sid = os.environ["CLAUDE_CODE_SESSION_ID"]
-    ledger = scratch_dir / ".git" / "coordinator-sessions" / sid
+    ledger = hub_for_common(scratch_dir / ".git") / sid
     ledger.mkdir(parents=True)
     (ledger / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
     if runs_so_far:
@@ -2082,7 +2083,6 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
-    CorpusRow(
         "grep-via-bash-rewrite",
         "grep-via-bash-rewrite-bare-py-fire",
         "coordinator/bin/plan-spine-check.py docs/plans/x.md | tail -5",
@@ -2090,6 +2090,7 @@ ADVISORY_REWRITE_ROWS: List[CorpusRow] = [
         _REWRITE,
         False,
     ),
+    CorpusRow(
         "grep-via-bash-rewrite",
         "grep-via-bash-rewrite-control",
         "echo hi",
@@ -3829,7 +3830,7 @@ def _fire_em_report_altitude(text: str) -> Optional[Dict[str, Any]]:
     """Fires `em_report_altitude.op()` inside a fresh scratch git repo, with
     the bark-once tally sentinel redirected via `COORDINATOR_EM_REPORT_
     ALTITUDE_TALLY_DIR` -- WITHOUT this, `cwd=None` resolves the tally
-    against the REAL invoking repo's `.git/coordinator-sessions/<sid>/`
+    against the REAL invoking repo's `.coordinator-local/coordinator-sessions/<sid>/`
     (confirmed live: an earlier pass of this fixture left exactly that
     artifact behind in this checkout's `.git`), which is both a real-repo
     write this test suite must never make and, per state/lessons/2026-08-01-
@@ -7514,7 +7515,7 @@ def test_scratch_parent_is_outside_the_repo_and_is_exempt_here():
         "scratch parent %s is inside the repo at %s -- guard_inprocess_search's "
         "footer latch resolves by walking UPWARD for a .git entry, so every "
         "fixture tempdir minted here writes into the live "
-        ".git/coordinator-sessions/ hub: a phantom session dir for the sites "
+        ".coordinator-local/coordinator-sessions/ hub: a phantom session dir for the sites "
         "that mint their own CLAUDE_CODE_SESSION_ID, and a silent write under "
         "the real operator's id for the ones that leave it ambient."
         % (scratch, repo_root)

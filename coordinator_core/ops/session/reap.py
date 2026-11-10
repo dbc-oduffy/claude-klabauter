@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.session.reap — session.reap op (Class B cadence-gated reaper).
 
-Purpose: Reap stale/orphaned session substrate from .git/coordinator-sessions/.
+Purpose: Reap stale/orphaned session substrate from .coordinator-local/coordinator-sessions/.
 Three sub-reaps run behind the shared 12h .last-reap cadence gate:
   (i)  Stale sessions (last_activity > 24h inactive) → .archive/<sid>-<YYYY-MM-DD>/
   (ii) Stale agent dirs (newest-member mtime > 24h, AND no unreadable-legacy /
@@ -73,7 +73,7 @@ Spec backlinks:
   - session-state-contract.md § Negative-Spec: mkdir/flock decision (long-lived vs. ms-scope)
 
 Negative-spec:
-  - Does NOT use _common.archive_and_commit — substrate is untracked .git/coordinator-sessions/
+  - Does NOT use _common.archive_and_commit — substrate is untracked .coordinator-local/coordinator-sessions/
     and no git commit is performed.
   - Does NOT commit to git — mutation is directory mv/rm only; DR-211 git bounds do NOT apply.
   - Does NOT use raw pid (kill -0 / ps -p / psutil.pid_exists) for liveness checks.
@@ -918,7 +918,7 @@ def _build_error_result(reason: str) -> dict:
 
 @register_op("session.reap")
 async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
-    """session.reap — cadence-gated reaper for .git/coordinator-sessions/ substrate.
+    """session.reap — cadence-gated reaper for .coordinator-local/coordinator-sessions/ substrate.
 
     Three sub-reaps run behind a single 12h .last-reap cadence gate:
       (i)  Stale sessions (last_activity > 24h) → .archive/<sid>-YYYY-MM-DD/
@@ -929,7 +929,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     Sub-reap (iii) (orphaned claim dirs) was deleted under DR-344's kill bar;
     no op culls claim dirs.
 
-    Class-B op: no git commit; substrate is untracked .git/coordinator-sessions/.
+    Class-B op: no git commit; substrate is untracked .coordinator-local/coordinator-sessions/.
     Fail-closed-to-keep: any liveness-check error or ambiguity defers the record.
 
     params:
@@ -938,8 +938,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
       repo_root (str, optional): D3 consistency check only — NOT the path source.
 
     repo_root handler arg: the git common dir supplied by the engine
-    (_OP_KEY_SCOPE = "common_dir").  Sessions dir is <common_dir>/coordinator-sessions/
-    (inside the git dir, not the worktree — no worktree derivation needed).
+    (_OP_KEY_SCOPE = "common_dir").  Sessions dir is the hub resolved from
+    common_dir (session_hub_path.hub_for_common) — no worktree derivation needed.
 
     Wire output (session.reap-specific — NOT the frozen fleet envelope):
       exit_code     int   0=ok, 1=setup-error, 2=partial (failed[] non-empty)
@@ -964,7 +964,7 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return _build_error_result(mismatch)
 
     # sessions_dir derives directly from common_dir — no worktree derivation needed.
-    # Substrate lives inside .git/coordinator-sessions/ (inside the git dir), not the
+    # Substrate lives inside .coordinator-local/coordinator-sessions/ (untracked), not the
     # worktree.  main_worktree_root() is NOT called here: it is a pure path calculation
     # (returns common_dir.parent) that does not validate or raise on any input.
     # Removed discarded main_worktree_root() call whose

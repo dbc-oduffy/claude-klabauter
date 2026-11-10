@@ -15,8 +15,8 @@ useless to the operator -- it is the detached-and-silent shape the 2026-07-23
 detached CLI fires were killed for, reproduced in-process. A warning nobody
 reads is not observability.
 
-WHERE IT LIVES, and why not under `state/`: `<common_dir>/coordinator-sessions/
-archive-sweeps.receipt.jsonl`, the same git-common-dir-rooted location as the
+WHERE IT LIVES, and why not under `state/`: `<hub>/archive-sweeps.receipt.jsonl`
+(`session_hub_path.hub_for_common`), the same git-common-dir-rooted location as the
 cadence marker (`commit_pipeline._archive_sweep_marker`) and the single-flight
 lock (`archive_terminal_handoffs._sweep_lock_path`), for that marker's own
 load-bearing reason: these writes happen on the commit hot path, and a hot-path
@@ -67,7 +67,9 @@ _KEEP_BYTES = 64 * 1024
 
 
 def receipt_path(common_dir: Path) -> Path:
-    return common_dir / "coordinator-sessions" / "archive-sweeps.receipt.jsonl"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(common_dir) / "archive-sweeps.receipt.jsonl"
 
 
 def record_sweep_outcome(

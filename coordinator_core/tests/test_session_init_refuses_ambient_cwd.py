@@ -1,7 +1,7 @@
 """``session.core.init`` never resolves the session hub from the process cwd.
 
 Under pytest the process cwd is the real repo root, so an ``init(sid)`` with no
-``cwd`` would mint ``<repo>/.git/coordinator-sessions/<sid>`` in the live hub
+``cwd`` would mint ``<repo>/.coordinator-local/coordinator-sessions/<sid>`` in the live hub
 whatever tmp repo the test had built. The guard is a raise, not a ``False``
 return: ``False`` already means "not in a git repo" and callers treat it as a
 quiet no-op.
@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session import core
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def test_init_without_cwd_or_sessions_base_raises_and_writes_nothing(tmp_path, monkeypatch):
@@ -23,7 +24,7 @@ def test_init_without_cwd_or_sessions_base_raises_and_writes_nothing(tmp_path, m
         core.init("ambient-cwd-fixture")
     with pytest.raises(ValueError):
         core.init("ambient-cwd-fixture", cwd="")
-    assert not (tmp_path / ".git" / "coordinator-sessions").exists()
+    assert not hub_for_common(tmp_path / ".git").exists()
 
 
 def test_init_with_explicit_sessions_base_needs_no_cwd(tmp_path):

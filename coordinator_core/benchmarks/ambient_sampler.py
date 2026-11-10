@@ -17,7 +17,9 @@ DEFAULT_INTERVAL_SECONDS = 30.0
 
 
 def _sink_path(git_common_dir_path: Path) -> Path:
-    return Path(git_common_dir_path) / "coordinator-sessions" / "logs" / "ambient-load.jsonl"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(Path(git_common_dir_path)) / "logs" / "ambient-load.jsonl"
 
 
 def _resolve_live_sessions_count() -> Optional[int]:

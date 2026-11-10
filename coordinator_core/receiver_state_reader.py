@@ -7,7 +7,7 @@ verdict ladder last say about that session?** It is Arm A of the carrier choice
 made in `gem-11` -- see `docs/decisions/DR-group-em-read-pass-carrier.md` for
 the full ladder vocabulary, the arm-choice measurement, and why Arm A won.
 
-THE CARRIER -- `.git/coordinator-sessions/<session_id>/receiver-state.json`,
+THE CARRIER -- `.coordinator-local/coordinator-sessions/<session_id>/receiver-state.json`,
 written by claude-klabauter's `coordinator_core.session.receiver_state` module
 (`write_receiver_state`). See the DR above for the vocabulary and the
 measurement backing this choice.
@@ -92,7 +92,10 @@ import json
 import os
 import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
+
+from coordinator_core.session_hub_path import hub_for_common, hub_for_root
 
 #: `_parse_stamp` accepts only exact second-precision
 #: `%Y-%m-%dT%H:%M:%SZ`. If `write_receiver_state` ever emits a different
@@ -105,7 +108,6 @@ from typing import Any, Optional
 STALE_AFTER_SECONDS = 3600
 
 _SIBLING_FILENAME = "receiver-state.json"
-_SESSIONS_DIRNAME = os.path.join(".git", "coordinator-sessions")
 _SAFE_SID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 _LADDER_VERDICTS = frozenset({"PAUSED", "PRODUCING", "UNKNOWN"})
@@ -127,7 +129,8 @@ def receiver_state_path(repo_root: str, session_id: str) -> Optional[str]:
     # the character class alone.
     if not session_id or session_id in (".", "..") or not _SAFE_SID_RE.match(session_id):
         return None
-    return os.path.join(repo_root, _SESSIONS_DIRNAME, session_id, _SIBLING_FILENAME)
+    hub = hub_for_root(repo_root) or hub_for_common(Path(repo_root) / ".git")
+    return os.path.join(str(hub), session_id, _SIBLING_FILENAME)
 
 
 def _parse_stamp(value: Any) -> Optional[datetime]:

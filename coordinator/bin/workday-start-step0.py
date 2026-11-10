@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """workday-start-step0.py — deterministic Step 0 (Branch Setup) for /workday-start.
 
 Encapsulates the precedence switch documented in pipelines/workday-start-internals.md
@@ -248,9 +249,9 @@ def _exec_reconcile() -> int:
 # ---------------------------------------------------------------------------
 
 def _session_meta_dirs() -> "list[str]":
-    """Enumerate this tree's session-claim directories under the git common
-    dir's ``coordinator-sessions/`` hub (``coordinator_core.session.core.
-    sessions_dir``), skipping the hub's own non-session bookkeeping entries
+    """Enumerate this tree's session-claim directories under the session hub
+    (``coordinator_core.session.core.sessions_dir``,
+    ``session_hub_path.hub_for_common``), skipping the hub's own non-session bookkeeping entries
     (``_NON_SESSION_DIR_NAMES`` — the same denylist ``live_session_ids``
     filters on). Deliberately unfiltered by liveness: a session that has
     already ended still has other readers of its ``meta.json:branch`` field

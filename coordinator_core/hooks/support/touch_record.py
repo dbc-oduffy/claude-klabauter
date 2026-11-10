@@ -29,6 +29,9 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
+
+from coordinator_core.session_hub_path import session_dir_for
 
 
 def _touch_path(line: str):
@@ -116,5 +119,5 @@ def _touch_lines(git_dir: str, session_id: str) -> list[str]:
     rows with no `path` are skipped -- a malformed row degrades this to
     fewer touches, never to a crash on an edit-path hook.
     """
-    session_dir = os.path.join(git_dir, "coordinator-sessions", session_id)
+    session_dir = str(session_dir_for(Path(git_dir), session_id))
     return _touch_record_jsonl_paths(session_dir) + _touched_txt_paths(session_dir)

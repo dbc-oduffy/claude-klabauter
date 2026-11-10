@@ -32,6 +32,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workstream_complete import review_scale_inputs, session_history
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -47,7 +48,7 @@ def _init_git_repo(root: Path) -> None:
     (root / "README.md").write_text("seed\n", encoding="utf-8")
     subprocess.run(["git", "add", "README.md"], cwd=root, check=True, **_NO_WINDOW)
     subprocess.run(["git", "commit", "-q", "-m", "seed"], cwd=root, check=True, **_NO_WINDOW)
-    claim = root / ".git" / "coordinator-sessions" / _OWN
+    claim = hub_for_common(root / ".git") / _OWN
     claim.mkdir(parents=True)
     (claim / "head_at_start").write_text(_head(root), encoding="utf-8")
 
@@ -139,7 +140,7 @@ def test_chunk_commit_before_the_session_floor_is_neither_recovered_nor_conflict
     """The window is the session's own span: a ref outside it is another session's work."""
     _init_git_repo(tmp_path)
     older = _commit_without_trailer(tmp_path, "older.py")
-    claim = tmp_path / ".git" / "coordinator-sessions" / _OWN
+    claim = hub_for_common(tmp_path / ".git") / _OWN
     (claim / "head_at_start").write_text(older, encoding="utf-8")
     _commit_without_trailer(tmp_path, "later.py")
 

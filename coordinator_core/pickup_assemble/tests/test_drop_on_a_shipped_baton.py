@@ -28,6 +28,8 @@ coordinator_core/pickup_assemble/tests/test_drop_on_a_shipped_baton.py -q
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 from pathlib import Path
 
@@ -66,7 +68,7 @@ def _seed_handoff(repo: Path, name: str, deployment_state: str) -> Path:
 
 
 def _write_ledger_claim(repo: Path, basename: str, holder_sid: str) -> Path:
-    cdir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    cdir = hub_for_common(repo / ".git") / "handoff-claims" / basename
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "session_id").write_text(f"{holder_sid}\n", encoding="utf-8")
     (cdir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Restart one far-session bridge on a harness-shaped endpoint (cc-msg-<md5 hex>), then
 repoint its session registry entry, procStart and key file at the new bridge.
 

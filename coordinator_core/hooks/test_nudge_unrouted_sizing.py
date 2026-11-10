@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.hooks import nudge_unrouted_sizing as m
 from coordinator_core.session.scope import _TOUCH_RECORD_FILENAME
 from coordinator_core.session.touch_record import append_event
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -47,13 +48,13 @@ def _git_init(repo):
 
 
 def _write_touched(repo, session_id, *rel_paths):
-    sink = repo / ".git" / "coordinator-sessions" / session_id / _TOUCH_RECORD_FILENAME
+    sink = session_dir_for(repo / ".git", session_id) / _TOUCH_RECORD_FILENAME
     for rel in rel_paths:
         append_event(sink, session_id=session_id, agent_id=None, verb="T", path=rel)
 
 
 def _write_dispatched_agents(repo, session_id, content):
-    d = repo / ".git" / "coordinator-sessions" / session_id
+    d = session_dir_for(repo / ".git", session_id)
     os.makedirs(d, exist_ok=True)
     (d / "dispatched-agents.txt").write_text(content, encoding="utf-8")
 
@@ -134,7 +135,7 @@ def _payload(repo, session_id="sess-test", transcript_path=None, **over):
 
 
 def _write_em_session_marker(repo, session_id):
-    d = repo / ".git" / "coordinator-sessions" / ".agents" / session_id
+    d = hub_for_common(repo / ".git") / ".agents" / session_id
     os.makedirs(d, exist_ok=True)
     (d / "em-session-id.txt").write_text("em-parent-session\n", encoding="utf-8")
 
@@ -669,7 +670,7 @@ def test_in_flight_check_never_raises_on_arrival_check_exception(repo, monkeypat
 
 def test_dispatch_rows_never_raises_on_malformed_lines(repo):
     session_id = "sess-malformed-dispatch-rows"
-    d = repo / ".git" / "coordinator-sessions" / session_id
+    d = session_dir_for(repo / ".git", session_id)
     os.makedirs(d, exist_ok=True)
     (d / "dispatched-agents.txt").write_text("not-enough-columns\nalso\tbad\n", encoding="utf-8")
     assert m._dispatch_rows(session_id, str(repo)) == []
@@ -749,7 +750,7 @@ def test_malformed_row_alongside_valid_in_window_row_still_suppresses(repo):
     _write_sizing(repo, rel, _sizing_yaml(route="plan"))
     _write_touched(repo, session_id, rel)
     recent_ts = int(time.time()) - (2 * 60)
-    d = repo / ".git" / "coordinator-sessions" / session_id
+    d = session_dir_for(repo / ".git", session_id)
     os.makedirs(d, exist_ok=True)
     (d / "dispatched-agents.txt").write_text(
         f"not-enough-columns\nagentidvalid\tsonnet\texecutor\t{recent_ts}\n",

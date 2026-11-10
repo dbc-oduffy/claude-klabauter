@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import session_dir_for
 import subprocess
 from pathlib import Path
 
@@ -59,7 +61,7 @@ def as_session(monkeypatch):
 
 
 def _ensure_session_dir(repo: Path, sid: str) -> Path:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     return sdir
 

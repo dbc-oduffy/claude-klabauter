@@ -19,6 +19,7 @@ from coordinator_core.hooks import _em_write_budget as leaf  # noqa: E402
 from coordinator_core.hooks._em_write_budget import shell_write_budget  # noqa: E402
 from coordinator_core.session import em_turn_count as etc  # noqa: E402
 from coordinator_core.session import engine_route_state as ers  # noqa: E402
+from coordinator_core.session_hub_path import session_dir_for  # noqa: E402
 
 AGENT_IDS = ["a1", "wf-agent-7"]
 
@@ -74,7 +75,7 @@ def _turns(tmp_path, k):
 
 
 def _prefire_payload(tmp_path, **extra):
-    marker = tmp_path / "repo" / ".git" / "coordinator-sessions" / "sess-em-only" / "em-role-asserted"
+    marker = session_dir_for(tmp_path / "repo" / ".git", "sess-em-only") / "em-role-asserted"
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.write_text("1", encoding="utf-8")
     lines = [json.dumps({"type": "user", "message": {"role": "user", "content": "go"}}, separators=(",", ":"))]

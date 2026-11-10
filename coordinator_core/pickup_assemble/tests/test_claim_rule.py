@@ -34,6 +34,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 import coordinator_core.pickup_assemble as pa
@@ -77,7 +78,7 @@ def _seed_handoff(repo: Path, name: str) -> Path:
 
 
 def _claim_dir(repo: Path, class_: str, basename: str) -> Path:
-    return repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    return hub_for_common(repo / ".git") / f"{class_}-claims" / basename
 
 
 def _write_claim(

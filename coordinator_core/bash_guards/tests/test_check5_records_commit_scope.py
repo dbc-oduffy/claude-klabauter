@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.session import commit_scope_events
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
 
 import pytest
@@ -56,7 +57,7 @@ def _init_repo(tmp_path):
 
 
 def _session_dir(repo, sid=SID):
-    return repo / ".git" / "coordinator-sessions" / sid
+    return hub_for_common(repo / ".git") / sid
 
 
 def _init_session(repo, sid=SID):

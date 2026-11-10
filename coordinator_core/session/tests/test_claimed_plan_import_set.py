@@ -27,7 +27,7 @@ import json, subprocess, sys
 from pathlib import Path
 root = Path(sys.argv[1])
 subprocess.run(["git", "init", "-q"], cwd=str(root), check=True, capture_output=True)
-claim = root / ".git" / "coordinator-sessions" / "plan-claims" / "some-plan"
+claim = root / ".coordinator-local" / "coordinator-sessions" / "plan-claims" / "some-plan"
 claim.mkdir(parents=True)
 (claim / "session_id").write_text("sid-import-set", encoding="utf-8")
 (claim / "claimed_at").write_text("2026-10-17T00:00:00Z", encoding="utf-8")

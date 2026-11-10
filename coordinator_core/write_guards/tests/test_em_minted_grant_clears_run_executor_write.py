@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session import claude_md_grant as cmg
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.session import core, liveness
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.write_guards import block_unauthorized_claude_md_write as guard
@@ -107,6 +108,6 @@ def test_grant_with_a_dead_session_is_denied(env, monkeypatch):
 def test_grant_minted_in_another_repo_is_denied(env, tmp_path, monkeypatch):
     other = _make_repo(tmp_path / "other")
     _mint(other, monkeypatch, "S")
-    grant = other / ".git" / "coordinator-sessions" / "S" / "claude-md-write-grant.json"
+    grant = session_dir_for(other / ".git", "S") / "claude-md-write-grant.json"
     assert json.loads(grant.read_text(encoding="utf-8"))["granted_by"] == "pm"
     assert _denied(_guard(env, "S"))

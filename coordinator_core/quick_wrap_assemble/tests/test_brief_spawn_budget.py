@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import session_dir_for
 import subprocess
 from pathlib import Path
 
@@ -34,10 +36,11 @@ def _repo(root: Path, *, seed_floor: bool) -> None:
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
     (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    (root / ".gitignore").write_text(".coordinator-local/\n", encoding="utf-8")
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "-m", "seed")
     floor = _git(root, "rev-parse", "HEAD")
-    sdir = root / ".git" / "coordinator-sessions" / SID
+    sdir = session_dir_for(root / ".git", SID)
     sdir.mkdir(parents=True)
     (sdir / "started_at").write_text("2026-10-01T10:00:30Z\n", encoding="utf-8")
     if seed_floor:

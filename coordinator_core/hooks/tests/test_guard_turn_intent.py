@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.hooks import guard_turn_intent as gti
 from coordinator_core.hooks.support import turn_intent as ti
 from coordinator_core.hooks.support.cockpit_session import under_cockpit
+from coordinator_core.session_hub_path import session_dir_for
 
 TAIL = '<turn-intent>{"needs_pm":true,"ask":"Ship v2 or hold?"}</turn-intent>'
 NO_TAIL = "Ran the migration and all checks passed."
@@ -231,7 +232,7 @@ def test_non_uuid_session_writes_nothing(tmp_path):
     _r, git_dir, _sid, _d, payload = _seed(tmp_path, NO_TAIL, role=False)
     payload["session_id"] = "not-a-uuid"
     assert _run(payload) == {}
-    assert not (git_dir / "coordinator-sessions" / "not-a-uuid").exists()
+    assert not session_dir_for(git_dir, "not-a-uuid").exists()
 
 
 def test_last_assistant_message_preferred_for_intent(tmp_path):

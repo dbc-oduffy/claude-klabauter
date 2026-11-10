@@ -3,7 +3,7 @@ coordinator_core.session_baton.store — the lazy, session-scoped baton record.
 
 Spec backlink: docs/plans/2026-08-18-a-session-always-has-a-baton.md § C1 (D-A, D-B).
 
-Store location: ``<git-common-dir>/coordinator-sessions/<sid>/baton.json`` —
+Store location: ``<session hub>/<sid>/baton.json`` —
 the SAME per-session directory the existing claim ledger
 (``coordinator_core.session.claims``), write-bump anchor, and other
 per-session state already live in (see ``coordinator_core.session.core ::
@@ -59,7 +59,7 @@ racing a mint/merge on the SAME sid serialise correctly; a reader
 never a crash, matching this store's overall degrade-to-default posture.
 
 Negative-spec:
-    - Do NOT write anything outside ``.git/coordinator-sessions/<sid>/``.
+    - Do NOT write anything outside ``<session hub>/<sid>/``.
     - Do NOT treat this record as authoritative over commit trailers (D-B —
       out of C1's scope; the rebuild-fallback discipline is a C4/C5 concern,
       this module just stores whatever list a later caller gives it).
@@ -167,7 +167,7 @@ def default_record(session_id: str) -> Dict[str, Any]:
 
 def baton_dir(sid: str, cwd: Optional[str] = None) -> Optional[Path]:
     """The per-session directory the baton file lives in
-    (``<git-common-dir>/coordinator-sessions/<sid>``), or ``None`` when
+    (``<session hub>/<sid>``), or ``None`` when
     ``sid`` is empty or the session hub is unresolvable (not a git repo)."""
     if not sid:
         return None

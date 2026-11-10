@@ -30,8 +30,8 @@ A row without `sid` is counted in `rows_without_sid`; a low
 `distinct_sessions_in_rows` beside a high `rows_without_sid` means the writer
 did not resolve a session, not that the box is quiet.
 
-Trap: the op-latency sink is per repo (<git common dir>/coordinator-sessions/logs/
-op-latency.jsonl) while the engine is box-wide. Read every repo that had traffic
+Trap: the op-latency sink is per repo (<hub>/logs/op-latency.jsonl, hub per
+session_hub_path.hub_for_common) while the engine is box-wide. Read every repo that had traffic
 (--scan-root) or occupancy is under-counted.
 """
 from __future__ import annotations
@@ -85,6 +85,8 @@ def _common_dir(repo: Path) -> Path | None:
 
 
 def _sinks(repos: list[Path], scan_root: Path | None) -> list[Path]:
+    from coordinator_core.session_hub_path import hub_for_common
+
     cands = list(repos)
     if scan_root is not None and scan_root.is_dir():
         cands += [p for p in scan_root.iterdir() if p.is_dir()]
@@ -93,7 +95,7 @@ def _sinks(repos: list[Path], scan_root: Path | None) -> list[Path]:
         cd = _common_dir(r)
         if cd is None:
             continue
-        s = cd / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+        s = hub_for_common(cd) / "logs" / "op-latency.jsonl"
         key = str(s.resolve()) if s.exists() else None
         if key and key not in seen:
             seen.add(key)
@@ -121,7 +123,7 @@ def _read_rows(sink: Path, cutoff: float, tail_bytes: int) -> list[dict]:
                     continue
                 t = r.get("t_start")
                 if isinstance(t, (int, float)) and t >= cutoff:
-                    r["_sink"] = sink.parents[2].name if sink.parents[2].name != ".git" else sink.parents[3].name
+                    r["_sink"] = sink.parents[2].name if sink.parents[2].name not in (".git", ".coordinator-local") else sink.parents[3].name
                     rows.append(r)
     except OSError:
         pass

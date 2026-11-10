@@ -36,6 +36,8 @@ import textwrap
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 # Spawns a real subprocess (fresh interpreter) — the property under test
 # (sys.modules absence) is only meaningful in a process that never imported
 # ops.session_context for any other reason; the current test process may
@@ -100,7 +102,7 @@ class TestNoOpsSessionContextImport:
 
     def test_ops_session_context_absent_after_subagent_fire(self, tmp_path) -> None:
         repo = tmp_path
-        (repo / ".git" / "coordinator-sessions").mkdir(parents=True, exist_ok=True)
+        hub_for_common(repo / ".git").mkdir(parents=True, exist_ok=True)
         stdout = _run_subagent_shaped_handler(str(repo / ".git"))
         assert "OPS_SESSION_CONTEXT_LOADED=False" in stdout, (
             "coordinator_core.ops.session_context must NOT be imported as a "
@@ -114,10 +116,10 @@ class TestNoOpsSessionContextImport:
         removing the write needs a far higher evidence bar than removing the
         import, and is out of scope here)."""
         repo = tmp_path
-        (repo / ".git" / "coordinator-sessions").mkdir(parents=True, exist_ok=True)
+        hub_for_common(repo / ".git").mkdir(parents=True, exist_ok=True)
         _run_subagent_shaped_handler(str(repo / ".git"))
         bp = (
-            repo / ".git" / "coordinator-sessions" / ".agents"
+            hub_for_common(repo / ".git") / ".agents"
             / "deadbeefcafe0001" / "em-session-id.txt"
         )
         assert bp.exists(), (

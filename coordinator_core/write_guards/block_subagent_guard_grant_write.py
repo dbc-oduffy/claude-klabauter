@@ -9,7 +9,7 @@ directly on ``block_subagent_grant_record_write`` (the CLAUDE.md-grant
 write-channel leg) but covers TWO artifacts, not one:
 
   (1) The durable grant record at its git-common-dir-RESOLVED path,
-      ``<common-dir>/coordinator-sessions/<sid>/em-guard-grant.json`` — the
+      ``<session hub>/<sid>/em-guard-grant.json`` — the
       record ``coordinator_core.session.em_guard_grant`` (chunk C1, landing
       in the same wave) writes.
   (2) The DR-260 unlock sentinel itself, at the path
@@ -39,7 +39,7 @@ PATH-RESOLUTION aspect, leg (1) (the durable record): identical shape to
 ``block_subagent_grant_record_write``'s own — resolves the repo root via
 ``coordinator_core.write_guards._repo_root.resolve_repo_root``, then the
 git COMMON dir via ``coordinator_core.git.git_dir.resolve_git_common_dir``,
-joins ``coordinator-sessions/`` under that resolved common dir, and gates
+derives the session hub from that resolved common dir, and gates
 containment/filename match on the RESOLVED, case-folded path — never a bare
 lexical/regex match on the raw ``file_path`` string. A ``..`` traversal
 segment is lexically COLLAPSED via ``posixpath.normpath`` before the
@@ -141,6 +141,7 @@ from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.session.em_guard_grant import _GRANT_FILENAME
 from coordinator_core.session.guard_unlock_sentinel import _SENTINEL_PREFIX
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.temp_layout import fleet_temp_root
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
@@ -207,7 +208,7 @@ def _resolve_abs_candidate(normalized_file_path: str, base_dir: str) -> str:
 def _is_grant_record_path(normalized_file_path: str, common_dir: str) -> bool:
     """``True`` iff ``normalized_file_path``, resolved against
     ``common_dir``, is a
-    ``coordinator-sessions/<any-sid>/<_GRANT_FILENAME>`` path under the
+    ``<session hub>/<any-sid>/<_GRANT_FILENAME>`` path under the
     resolved git common dir. Mirrors
     ``block_subagent_grant_record_write._is_grant_record_path`` exactly."""
     abs_candidate_cf = casefold_path(
@@ -215,7 +216,7 @@ def _is_grant_record_path(normalized_file_path: str, common_dir: str) -> bool:
     )
 
     sessions_root = casefold_path(
-        _normalize_path(str(Path(common_dir) / "coordinator-sessions")).rstrip("/")
+        _normalize_path(str(hub_for_common(Path(common_dir)))).rstrip("/")
         + "/"
     )
 

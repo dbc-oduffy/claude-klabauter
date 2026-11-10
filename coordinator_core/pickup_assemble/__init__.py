@@ -163,6 +163,7 @@ from coordinator_core.ops.parse_completeness_item import (
     parse_completeness_item as _parse_completeness_item,
 )
 from coordinator_core.session_baton.store import merge_baton, read_baton
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.session import claims as _claims
 from coordinator_core.session import core as _session_core
 from coordinator_core.session import harness_registry as _harness_registry
@@ -2483,7 +2484,7 @@ def compute_claim_gate(repo_root: Path, class_: str, basename: str) -> dict[str,
     `revalidate_at_dispatch` (chunk C7 Part A4; see `build_liveness_judgment_
     point`'s docstring).
     """
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / f"{class_}-claims" / basename
     if not claims_dir.is_dir():
         # "ok" never appears from this module — this is a READ-ONLY producer
         # (AC3, no `git fetch`); it's reserved for a future fetch-capable
@@ -2929,7 +2930,7 @@ def acquire_brief_claim(
     3ef3bc90e012.yaml) — so a "stable-pid" basis is proof of death only when
     its OWN boolean also reads False — never on the basis string alone.
     """
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / f"{class_}-claims" / basename
 
     # Snapshot the incumbent BEFORE the mkdir race — after a successful
     # takeover the dir names us, and what we displaced is unrecoverable.
@@ -4382,7 +4383,7 @@ def compute_sender_reachability(sent_by: Optional[str]) -> dict[str, Any]:
     persisted/reused past the instant this call computed it -- `sent_by`
     (the UUID, C7) is the one durable identity a caller may hold onto.
     `resolved_at` (one UTC ISO-8601 stamp) is stamped alongside so a reader
-    of a PERSISTED copy of this dict (`.git/coordinator-sessions/decisions/
+    of a PERSISTED copy of this dict (`.coordinator-local/coordinator-sessions/decisions/
     *.json`, the one sanctioned exception per 68f8c14ce) can tell a stale
     address apart from a fresh one instead of trusting it silently. This
     function itself never writes anywhere -- persistence, if any, is entirely

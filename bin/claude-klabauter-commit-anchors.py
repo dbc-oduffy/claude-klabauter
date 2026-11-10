@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 bin/claude-klabauter-commit-anchors.py — Commit anchor trailer emitter for the DoE prepare-commit-msg hook.
 

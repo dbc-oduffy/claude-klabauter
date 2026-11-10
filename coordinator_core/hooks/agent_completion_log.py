@@ -3,7 +3,7 @@ coordinator_core.hooks.agent_completion_log — PostToolUse write hook op.
 
 Purpose: record every Agent-tool dispatch in the coordinator audit trail.
 Fires on PostToolUse for the Agent tool — one compact JSON line appended to
-.git/coordinator-sessions/logs/agent-audit.jsonl.
+.coordinator-local/coordinator-sessions/logs/agent-audit.jsonl.
 
 A ROW IS A DISPATCH-OUT RECORD, NOT AN ARRIVAL — the op name says "completion"
 for cross-repo reasons (it is the JSON-RPC method id "hooks.agent_completion_log",
@@ -56,6 +56,7 @@ from coordinator_core.ipc import register_op
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.session_hub_path import hub_for_common
 
 
 GENERATES: list = []
@@ -91,9 +92,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
         return no_advisory()
 
     try:
-        _sessions_base = git_common_dir(repo_root) / "coordinator-sessions"
+        _sessions_base = hub_for_common(git_common_dir(repo_root))
     except RuntimeError:
-        _sessions_base = Path(str(repo_root)) / "coordinator-sessions"
+        _sessions_base = hub_for_common(Path(str(repo_root)))
     log_file = str(_sessions_base / "logs" / "agent-audit.jsonl")
 
     description = field(params, "description") or "unknown"

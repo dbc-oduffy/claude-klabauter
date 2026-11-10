@@ -7,17 +7,19 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.benchmarks import commit_v2_paired_verdict as pv
+from coordinator_core.session_hub_path import hub_for_common
 
 OP = "ceremony.commit_v2"
 
 
 def _repo(tmp_path: Path) -> Path:
-    (tmp_path / ".git" / "coordinator-sessions" / "logs").mkdir(parents=True)
+    (hub_for_common(tmp_path / ".git") / "logs").mkdir(parents=True)
+    (tmp_path / ".git").mkdir(exist_ok=True)
     return tmp_path
 
 
 def _write(repo: Path, rows: list[dict], gen: str = "op-latency.jsonl") -> None:
-    p = repo / ".git" / "coordinator-sessions" / "logs" / gen
+    p = hub_for_common(repo / ".git") / "logs" / gen
     p.write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Spawn-free liveness for the unimatrix autolink supervisors: stdlib only, no subprocess.
 
 Loaded by path (importlib spec_from_file_location). `proc_start` reproduces `ps -o lstart=` byte

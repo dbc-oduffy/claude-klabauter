@@ -8,13 +8,14 @@ import uuid
 import pytest
 
 from coordinator_core import conftest as _cc
+from coordinator_core.session_hub_path import hub_for_common
 
 _UUID = str(uuid.uuid4())
 
 
 @pytest.fixture
 def hub(tmp_path):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     (hub / "test-session").mkdir(parents=True)
     (hub / _UUID).mkdir()
     return hub

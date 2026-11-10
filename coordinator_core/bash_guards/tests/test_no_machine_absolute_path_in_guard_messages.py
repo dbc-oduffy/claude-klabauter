@@ -146,7 +146,7 @@ NO exception, same as any other guard message:
      `gettempdir()` alone because that is where the corpus minted, and
      `d1cf0b986` moved the mint root OUT to a repo sibling (to stop
      `guard_inprocess_search`'s footer latch writing phantom session dirs
-     into the live `.git/coordinator-sessions/` hub). The CLASS of path did
+     into the live `.coordinator-local/coordinator-sessions/` hub). The CLASS of path did
      not change -- a fixture-minted tempdir a guard correctly names back --
      only the root's address did, so the exemption stopped recognizing its
      own fixtures and reported 15 spans across 13 guards as leaks. Reading
@@ -195,6 +195,8 @@ from __future__ import annotations
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import os
 import re
 import shutil
@@ -236,7 +238,7 @@ def _reap_probe_session_dir():
 
     `annotate_deny` resolves its sentinel path from the repo it is pointed at,
     which here is the live one, so a probe session id lands
-    `.git/coordinator-sessions/<_PROBE_SESSION_ID>/` for a session that never
+    `.coordinator-local/coordinator-sessions/<_PROBE_SESSION_ID>/` for a session that never
     existed -- and `session.liveness.live_session_ids` enumerates every
     non-denylisted child of that directory as a session, so the residue reads
     as a live phantom peer to every real session on the box.
@@ -255,9 +257,7 @@ def _reap_probe_session_dir():
     """
     yield
     probe_dir = (
-        Path(__file__).resolve().parents[3]
-        / ".git"
-        / "coordinator-sessions"
+        hub_for_common(Path(__file__).resolve().parents[3] / ".git")
         / _PROBE_SESSION_ID
     )
     if probe_dir.is_dir():

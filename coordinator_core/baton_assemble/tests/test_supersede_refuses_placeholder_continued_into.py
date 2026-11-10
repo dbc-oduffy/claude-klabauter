@@ -27,6 +27,8 @@ guard.
 from __future__ import annotations
 
 from pathlib import Path
+
+from coordinator_core.session_hub_path import hub_for_common
 from typing import Any
 
 import pytest
@@ -56,7 +58,7 @@ def _stub_operator_config(monkeypatch):
 
 
 def _seed_handoff_claim(repo_root: Path, session_id: str, basename: str, claimed_at: str) -> None:
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
     (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")

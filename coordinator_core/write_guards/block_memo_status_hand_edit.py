@@ -74,7 +74,7 @@ applies when a session actually holds a live claim on the memo. Two fixes,
 both required — narrowing only one leaves the other half of the over-fire:
   - Gate on a LIVE CLAIM (`_has_live_claim`): the memo-claim directory
     convention from `ops.fleet.archive_actioned_memos._memo_claim_dir`
-    (`<git-common-dir>/coordinator-sessions/memo-claims/<memo-filename>/`),
+    (`<session hub>/memo-claims/<memo-filename>/`),
     liveness read via `coordinator_core.liveness.cs_claim_holder_live`. A
     live claim keeps the hard-deny; no live claim degrades to an advisory
     `additionalContext` envelope (Axis-A: names the same runnable
@@ -103,6 +103,7 @@ from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.git.git_dir import resolve_git_common_dir
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._repo_root import resolve_repo_root
 
@@ -308,7 +309,7 @@ def _has_live_claim(cwd: Optional[str], memo_filename: str) -> bool:
     """``True`` iff a session currently holds a live claim on this memo.
 
     Convention mirrors ``ops.fleet.archive_actioned_memos._memo_claim_dir``:
-    ``<git-common-dir>/coordinator-sessions/memo-claims/<memo-filename>/``
+    ``<session hub>/memo-claims/<memo-filename>/``
     (itself mirroring the shell ``cs_sweep_actioned_memos`` claim_dir
     derivation). This is the missing half of the guard's original design:
     the docstring always argued a hand-edit "bypasses ... the live-claim
@@ -341,7 +342,7 @@ def _has_live_claim(cwd: Optional[str], memo_filename: str) -> bool:
     if not common_dir:
         # Indeterminate, not "no claim" -- fail toward deny.
         return True
-    claim_dir = Path(common_dir) / "coordinator-sessions" / "memo-claims" / memo_filename
+    claim_dir = hub_for_common(Path(common_dir)) / "memo-claims" / memo_filename
     if not claim_dir.is_dir():
         return False
     try:

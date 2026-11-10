@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """coordinator/bin/survey-consume-gate.py — EM-side Phase-0.5 consume-gate,
 in-process.
 

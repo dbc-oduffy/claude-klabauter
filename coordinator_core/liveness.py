@@ -179,7 +179,7 @@ def cs_claim_holder_live(claim_path: str) -> bool:
 
     Args:
         claim_path: Path to the claim directory (e.g.
-            .git/coordinator-sessions/<sid>/claims/<artifact>/).
+            .coordinator-local/coordinator-sessions/<sid>/claims/<artifact>/).
 
     Returns:
         True  — the holder session is confirmed live.

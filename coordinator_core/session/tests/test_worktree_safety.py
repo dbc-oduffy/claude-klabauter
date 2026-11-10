@@ -45,7 +45,7 @@ def _make_repo(tmp_path):
 
 
 def _write_session(repo, sid, meta: dict):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return sdir
@@ -153,7 +153,7 @@ class TestHistoryRewriteVerdictUnknownFailClosed:
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
-        sentinel_dir = Path(repo) / ".git" / "coordinator-sessions"
+        sentinel_dir = Path(repo) / ".coordinator-local" / "coordinator-sessions"
         sentinel_dir.mkdir(parents=True, exist_ok=True)
         (sentinel_dir / ".current-session-id").write_text("self-sid\n")
         _write_session(repo, "self-sid", _live_meta())

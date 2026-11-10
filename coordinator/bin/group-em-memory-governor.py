@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """group-em-memory-governor — pause the command that pushed the box into critical memory pressure.
 
 Started from a Claude Code session it detaches itself on start (outside the session's process tree

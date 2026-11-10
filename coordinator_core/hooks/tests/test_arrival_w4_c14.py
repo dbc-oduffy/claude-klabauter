@@ -5,6 +5,8 @@ import asyncio
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
+
 
 def _stop_message(out):
     """A Stop-event envelope carries its advisory at top-level systemMessage; Stop drops hookSpecificOutput."""
@@ -211,7 +213,7 @@ def _arm_zero_tool_use_detect(tmp_path, monkeypatch, raising=()):
     import coordinator_core.hooks.subagent_zero_tool_use_detect as mod
 
     (tmp_path / ".git").mkdir()
-    sess_dir = tmp_path / ".git" / "coordinator-sessions" / "sess-1"
+    sess_dir = session_dir_for(tmp_path / ".git", "sess-1")
     sess_dir.mkdir(parents=True)
     (sess_dir / "dispatched-agents.txt").write_text("agent-1\texecutor\n")
 

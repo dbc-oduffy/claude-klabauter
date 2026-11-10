@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 
 import pytest
+from coordinator_core.session_hub_path import hub_for_common
 
 pytestmark = pytest.mark.complete
 
@@ -167,7 +168,7 @@ def test_happy_path_runs_rebuild_then_publish_with_right_argv(tool, monkeypatch,
     ]
     assert result == "publish-repo-bundle: published"
 
-    record_path = tmp_path / "common" / "coordinator-sessions" / "publish-repo-bundle-last.json"
+    record_path = hub_for_common(tmp_path / "common") / "publish-repo-bundle-last.json"
     record = json.loads(record_path.read_text(encoding="utf-8"))
     assert record["exit_code"] == 0
     assert record["head"] == "deadbeef"
@@ -224,7 +225,7 @@ def test_publish_exit4_same_head_not_retried(tool, monkeypatch, tmp_path, fake_c
     repo_root = tmp_path / "target-repo"
     repo_root.mkdir()
     common_dir = tmp_path / "common"
-    record_path = common_dir / "coordinator-sessions" / "publish-repo-bundle-last.json"
+    record_path = hub_for_common(common_dir) / "publish-repo-bundle-last.json"
     record_path.parent.mkdir(parents=True)
     record_path.write_text(
         json.dumps({"exit_code": 4, "head": "deadbeef", "line": "prior refusal", "finished_at": "x"}),
@@ -244,7 +245,7 @@ def test_publish_exit4_different_head_is_retried(tool, monkeypatch, tmp_path, fa
     repo_root = tmp_path / "target-repo"
     repo_root.mkdir()
     common_dir = tmp_path / "common"
-    record_path = common_dir / "coordinator-sessions" / "publish-repo-bundle-last.json"
+    record_path = hub_for_common(common_dir) / "publish-repo-bundle-last.json"
     record_path.parent.mkdir(parents=True)
     record_path.write_text(
         json.dumps({"exit_code": 4, "head": "oldhead", "line": "prior refusal", "finished_at": "x"}),
@@ -313,7 +314,7 @@ def test_no_console_creationflags_used_by_run_and_wait(tool, monkeypatch, tmp_pa
 
 def _lease(tmp_path):
     """Where `_run_and_wait` puts the single-rebuild lease for a cwd with no `.git`."""
-    return tmp_path / "coordinator-sessions" / "scip-rebuild-lease.json"
+    return hub_for_common(tmp_path) / "scip-rebuild-lease.json"
 
 
 def _forbid_popen(tool, monkeypatch):

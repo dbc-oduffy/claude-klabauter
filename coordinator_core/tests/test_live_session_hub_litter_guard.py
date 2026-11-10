@@ -4,10 +4,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core import conftest as cc_conftest
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def test_a_fixture_named_dir_created_during_a_test_fails_loudly(tmp_path, monkeypatch):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     gen = cc_conftest._no_new_live_session_hub_entries.__wrapped__()
@@ -21,7 +22,7 @@ def test_a_fixture_named_dir_created_during_a_test_fails_loudly(tmp_path, monkey
 
 
 def test_a_uuid_shaped_dir_is_never_flagged(tmp_path, monkeypatch):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     gen = cc_conftest._no_new_live_session_hub_entries.__wrapped__()
@@ -34,7 +35,7 @@ def test_a_uuid_shaped_dir_is_never_flagged(tmp_path, monkeypatch):
 def test_a_registered_harness_session_is_never_flagged(tmp_path, monkeypatch):
     from coordinator_core.session import harness_registry
 
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setattr(harness_registry, "snapshot", lambda: {"not-a-uuid-peer": object()})
@@ -64,7 +65,7 @@ def _mint(hub, name, stable_pid):
 
 
 def test_a_peer_sessions_dir_is_not_our_leak(tmp_path, monkeypatch):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setenv("CLAUDE_PID", "20204")
@@ -76,7 +77,7 @@ def test_a_peer_sessions_dir_is_not_our_leak(tmp_path, monkeypatch):
 
 
 def test_our_own_sessions_dir_is_still_our_leak(tmp_path, monkeypatch):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setenv("CLAUDE_PID", "20204")
@@ -91,7 +92,7 @@ def test_our_own_sessions_dir_is_still_our_leak(tmp_path, monkeypatch):
 
 
 def test_a_dir_with_no_meta_json_is_still_flagged(tmp_path, monkeypatch):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setenv("CLAUDE_PID", "20204")
@@ -107,7 +108,7 @@ def test_a_dir_with_no_meta_json_is_still_flagged(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("meta_body", ["{ not json", "{}", '{"stable_pid": ""}'])
 def test_an_unusable_stamp_fails_closed(tmp_path, monkeypatch, meta_body):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setenv("CLAUDE_PID", "20204")
@@ -129,7 +130,7 @@ class _FakeRequest:
 
 
 def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path, monkeypatch):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     (hub / "test-c8-litter").mkdir(parents=True)
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setattr(cc_conftest, "_hub_entry_writers", {})
@@ -153,7 +154,7 @@ def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path, monkeypatch)
 
 
 def test_append_guard_says_so_when_no_writer_was_captured(tmp_path, monkeypatch):
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     (hub / "test-c8-litter").mkdir(parents=True)
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.setattr(cc_conftest, "_hub_entry_writers", {})
@@ -167,7 +168,7 @@ def test_no_claude_pid_in_our_env_fails_closed(tmp_path, monkeypatch):
     """Without our own `CLAUDE_PID` there is nothing to compare against, so the
     guard must behave exactly as it did before this exemption existed rather
     than exempting everything."""
-    hub = tmp_path / "coordinator-sessions"
+    hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
     monkeypatch.delenv("CLAUDE_PID", raising=False)

@@ -18,6 +18,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import subprocess
+from coordinator_core.session_hub_path import hub_for_common
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -799,7 +800,7 @@ class TestCheckStagedPathspecDivergence:
         # here so this test exercises the production shape; the
         # no-such-session fallback is covered by
         # `bash_guards/tests/test_override_log_path.py`.
-        (Path(root) / ".git" / "coordinator-sessions" / "test-session").mkdir(parents=True)
+        (hub_for_common(Path(root) / ".git") / "test-session").mkdir(parents=True)
 
         monkeypatch.setenv("COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE", "1")
         result = commit_tripwires.check_staged_pathspec_divergence(
@@ -807,7 +808,7 @@ class TestCheckStagedPathspecDivergence:
         )
         assert result is None
 
-        log_path = Path(root) / ".git" / "coordinator-sessions" / "test-session" / "overrides.log"
+        log_path = hub_for_common(Path(root) / ".git") / "test-session" / "overrides.log"
         assert log_path.is_file()
         contents = log_path.read_text(encoding="utf-8")
         assert "OVERRIDE-PATHSPEC-DIVERGENCE" in contents
@@ -835,7 +836,7 @@ class TestCheckStagedPathspecDivergence:
             'git commit -m "test" -- shared.txt', root, session_id="sess-no-such-dir"
         )
 
-        sessions = Path(root) / ".git" / "coordinator-sessions"
+        sessions = hub_for_common(Path(root) / ".git")
         assert not (sessions / "sess-no-such-dir").exists()
         contents = (sessions / "no-session" / "overrides.log").read_text(encoding="utf-8")
         assert "OVERRIDE-PATHSPEC-DIVERGENCE" in contents

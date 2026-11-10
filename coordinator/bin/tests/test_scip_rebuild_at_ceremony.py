@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from coordinator_core.session_hub_path import hub_for_common
 
 pytestmark = pytest.mark.complete
 
@@ -197,7 +198,7 @@ def test_prior_publish_line_surfaced_as_second_line(tool, monkeypatch, tmp_path)
     common_dir = tmp_path / "common"
     monkeypatch.setattr(tool, "_git_common_dir", lambda repo_root: common_dir)
 
-    record_dir = common_dir / "coordinator-sessions"
+    record_dir = hub_for_common(common_dir)
     record_dir.mkdir(parents=True)
     record_path = record_dir / "publish-repo-bundle-last.json"
     record_path.write_text(
@@ -282,7 +283,7 @@ def test_low_available_memory_skips_without_spawning(tool, monkeypatch, tmp_path
 
 
 def _write_lease(common, pid):
-    lease = common / "coordinator-sessions" / "scip-rebuild-lease.json"
+    lease = hub_for_common(common) / "scip-rebuild-lease.json"
     lease.parent.mkdir(parents=True)
     lease.write_text(json.dumps({"sequencer_pid": pid, "child_pid": None}), encoding="utf-8")
 

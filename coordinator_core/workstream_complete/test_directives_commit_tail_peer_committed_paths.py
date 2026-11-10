@@ -50,6 +50,7 @@ import pytest
 
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import claims as _session_claims
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.session import core as _session_core_mod
 from coordinator_core.session import scope as _session_scope
 from coordinator_core.session import touch_record as _touch_record
@@ -437,7 +438,7 @@ def test_run_close_commit_and_release_claims_releases_governing_plan_claim(
     assert _session_claims.claim_plan(slug, cwd=str(root)) is True
 
     common_dir = git_common_dir(root)
-    claim_dir = common_dir / "coordinator-sessions" / "plan-claims" / slug
+    claim_dir = hub_for_common(common_dir) / "plan-claims" / slug
 
     # BEFORE close: the claim exists, held by this session.
     assert claim_dir.is_dir()
@@ -482,7 +483,7 @@ def test_run_close_commit_and_release_claims_releases_on_commit_failure_too(
     assert _session_claims.claim_plan(slug, cwd=str(root)) is True
 
     common_dir = git_common_dir(root)
-    claim_dir = common_dir / "coordinator-sessions" / "plan-claims" / slug
+    claim_dir = hub_for_common(common_dir) / "plan-claims" / slug
     assert claim_dir.is_dir()
 
     # The staged path must EXIST: `run_close_commit` drops a `stage_paths`
@@ -584,7 +585,7 @@ def test_run_close_commit_and_release_claims_releases_full_touch_surface_not_jus
     _session_scope.touch(sid, unstaged_rel, cwd=str(root))
 
     common_dir = git_common_dir(root)
-    record = common_dir / "coordinator-sessions" / sid / "touch-record.jsonl"
+    record = hub_for_common(common_dir) / sid / "touch-record.jsonl"
 
     # BEFORE close: both paths are live T-claims.
     projection = _touch_record.project_live_claims(record, cwd=str(root))

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 coordinator/bin/hook-run.py — the ONE command-door entrypoint for every
 `hooks.<name>` op DoE registers (W4-C16, docs/plans/2026-09-18-doe-holds-no-

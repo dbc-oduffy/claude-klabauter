@@ -125,6 +125,7 @@ from typing import Any, Optional
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.git.repo_root import git_common_dir
 from coordinator_core.memo_corpus import memo_corpus_root
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_creationflags
 
 _NO_CONSOLE = no_console_creationflags()
@@ -695,7 +696,7 @@ def _session_base_candidates(repo_root: Path) -> list[str]:
 
 def resolve_session_start_time(repo_root: Path, sid: str) -> Optional[datetime]:
     """Resolves `$SESSION_START_TIME` (`d-resolve-session-start-time`): the
-    mtime of `.git/coordinator-sessions/<sid>/` under the git COMMON dir
+    mtime of `<session hub>/<sid>/` derived from the git COMMON dir
     (never a literal `<repo_root>/.git` join — see
     `coordinator_core.archive_stamp.cs_action_memo`'s own comment on why a
     linked-worktree join is wrong), or — if that claim dir is absent — the
@@ -710,7 +711,7 @@ def resolve_session_start_time(repo_root: Path, sid: str) -> Optional[datetime]:
     common_dir = _git_common_dir(repo_root)
     if common_dir is None:
         return None
-    claim_dir = common_dir / "coordinator-sessions" / sid
+    claim_dir = session_dir_for(common_dir, sid)
     if claim_dir.is_dir():
         try:
             return datetime.fromtimestamp(claim_dir.stat().st_mtime, tz=timezone.utc)

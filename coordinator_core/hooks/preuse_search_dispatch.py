@@ -26,7 +26,7 @@ being configured is not enough; a repo without an index adds nothing to the call
 Hot path: fires on every Grep/Glob, so the budget is file stats only — no git
 spawn, no staleness probe (the advisory names `project_staleness_check`
 instead of computing it). Sentinels live in the indexed repo's git common dir
-under `coordinator-sessions/<session_id>/`; when that cannot be resolved the
+under `.coordinator-local/coordinator-sessions/<session_id>/`; when that cannot be resolved the
 op stays silent rather than firing on every call.
 
 Kill-switch: env COORDINATOR_HOOK_PREUSE_SEARCH_DISPATCH_DISABLED=1.
@@ -56,6 +56,7 @@ from coordinator_core.hooks.support.session_hub import (
     session_id_is_real,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import session_dir_for
 
 _KILL_SWITCH = "COORDINATOR_HOOK_PREUSE_SEARCH_DISPATCH_DISABLED"
 _SEARCH_TOOLS = frozenset({"Read", "Grep", "Glob"})
@@ -295,7 +296,7 @@ def _chain(params: dict) -> dict:
         common_dir = resolve_git_common_dir(indexed_root)
     if not common_dir:
         return _only_turn_text()
-    session_dir = Path(common_dir) / "coordinator-sessions" / session_id
+    session_dir = session_dir_for(Path(common_dir), session_id)
 
     agent_id = params.get("agent_id")
     suffix = ""

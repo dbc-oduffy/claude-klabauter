@@ -230,6 +230,7 @@ from coordinator_core.ops.deliverable_carry import (
 )
 from coordinator_core.ops.dirty_tree_gate import parse_porcelain_paths
 from coordinator_core.ops.mint_deliverable_id import mint as _mint_deliverable_id
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.sizing_disposition import real_id
 from coordinator_core.ops.session_context import resolve_current_session_id
 from coordinator_core.ops.read_frontmatter_field import (
@@ -1169,7 +1170,7 @@ def _normalize_repo_relative_path(path: str) -> str:
     """Normalize a repo-relative path to a common forward-slash form.
 
     Windows carve-out (this is the load-bearing line, not incidental): both
-    inputs this function normalizes -- `.git/coordinator-sessions/<id>/
+    inputs this function normalizes -- `.coordinator-local/coordinator-sessions/<id>/
     touched.txt` lines and `git status --porcelain` paths -- are documented
     elsewhere as already forward-slash-normalized (`track_touched_files.
     _normalize_path` replaces `os.sep`; porcelain itself always emits `/`
@@ -1233,7 +1234,7 @@ def _compute_dirty_tree_attribution(
             ),
         }
 
-    sink_path = common_dir / "coordinator-sessions" / session_id / "touch-record.jsonl"
+    sink_path = session_dir_for(common_dir, session_id) / "touch-record.jsonl"
     projection = project_live_claims(sink_path, cwd=str(root))
     if projection.degraded:
         return {

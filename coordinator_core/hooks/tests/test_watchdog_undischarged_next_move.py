@@ -15,10 +15,12 @@ from __future__ import annotations
 import importlib
 import json
 import os
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.authz.classification import OpClass, classify
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 from coordinator_core.session import machinery_paths
 
@@ -210,7 +212,7 @@ def test_post_tool_use_suppresses_on_agent_id() -> None:
 
 def _write_touch_record(repo_root: str, session_id: str, rel_sizing_path: str) -> None:
     git_dir = os.path.join(repo_root, ".git")
-    session_dir = os.path.join(git_dir, "coordinator-sessions", session_id)
+    session_dir = str(session_dir_for(Path(git_dir), session_id))
     os.makedirs(session_dir, exist_ok=True)
     with open(os.path.join(session_dir, "touch-record.jsonl"), "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"path": rel_sizing_path}) + "\n")
@@ -280,7 +282,7 @@ def test_touched_txt_paths_reads_touch_record_jsonl_not_touched_txt(tmp_path) ->
     repo_root = _make_repo(tmp_path)
     session_id = "sid-touched-txt-paths"
     rel_path = "state/sizings/thing.yaml"
-    session_dir = os.path.join(repo_root, ".git", "coordinator-sessions", session_id)
+    session_dir = str(session_dir_for(Path(repo_root) / ".git", session_id))
     _write_touch_record(repo_root, session_id, rel_path)
     assert not os.path.exists(os.path.join(session_dir, "touched.txt"))
 

@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry.op_latency import (
     new_correlation_id,
     record_op_latency,
@@ -37,7 +38,7 @@ def _fake_common_dir(tmp_path):
 
 
 def _sink_for(fake_common_dir):
-    return fake_common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    return hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
 
 
 def test_record_op_started_with_no_repo_root_still_writes_a_row(tmp_path, monkeypatch):

@@ -312,8 +312,8 @@ def test_existing_host_entrypoint_route_performs_constructor_writes_in_host(tmp_
     script.write_text(
         'import os, json\nfrom pathlib import Path\n'
         'def main(argv):\n'
-        '    for leaf in ("coordinator-locks", "coordinator-sessions"):\n'
-        '        p=Path.cwd()/".git"/leaf\n'
+        '    from coordinator_core.session_hub_path import hub_for_common\n'
+        '    for p in (Path.cwd()/".git"/"coordinator-locks", hub_for_common(Path.cwd()/".git")):\n'
         '        p.mkdir(parents=True,exist_ok=True)\n'
         '        (p/"constructor-evidence").write_text(str(os.getpid()))\n'
         '    print(json.dumps({"pid":os.getpid(),"argv":argv}))\n'
@@ -324,8 +324,9 @@ def test_existing_host_entrypoint_route_performs_constructor_writes_in_host(tmp_
     reply = invoke._run_entrypoint('sizing-assemble', ['--fixture'], str(root))
     assert reply['exit_code'] == 0, reply
     assert json.loads(reply['stdout']) == {'pid': os.getpid(), 'argv': ['--fixture']}
-    for leaf in ('coordinator-locks', 'coordinator-sessions'):
-        assert (root/'.git'/leaf/'constructor-evidence').read_text() == str(os.getpid())
+    from coordinator_core.session_hub_path import hub_for_common
+    for p in (root/'.git'/'coordinator-locks', hub_for_common(root/'.git')):
+        assert (p/'constructor-evidence').read_text() == str(os.getpid())
 
 
 def test_atomic_writer_receives_all_protected_hashes_including_host_metadata(host, monkeypatch):

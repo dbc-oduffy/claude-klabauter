@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as guard
 from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 from coordinator_core.bash_guards import _helpers
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -43,7 +44,7 @@ def named_dispatch(tmp_path, monkeypatch):
     **no_console_creationflags())
     _sandbox_engine.reset_resolve_git_root_cache()
 
-    sessions = root / ".git" / "coordinator-sessions"
+    sessions = hub_for_common(root / ".git")
     (sessions / ".agents" / canonical).mkdir(parents=True, exist_ok=True)
     (sessions / ".agents" / canonical / "em-session-id.txt").write_text(
         session_id + "\n", encoding="utf-8"

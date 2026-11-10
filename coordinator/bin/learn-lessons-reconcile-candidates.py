@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 # learn-lessons-reconcile-candidates — CLI trampoline over claude-klabauter
 # coordinator_core.learn_lessons_assemble (the candidate-restatement
 # generator for a doctrine-wiki edit: surfaces places in a target wiki file

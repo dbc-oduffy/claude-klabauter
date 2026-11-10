@@ -77,6 +77,7 @@ import pytest
 from coordinator_core.hooks import track_touched_files as ttf
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import touch_record
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [
@@ -115,7 +116,7 @@ class TestHandlerWritesIntoFreshSessionDir:
 
         common_dir = git_common_dir(repo)
         session_id = "freshdirfeed0001"
-        session_dir = common_dir / "coordinator-sessions" / session_id
+        session_dir = session_dir_for(common_dir, session_id)
 
         assert not session_dir.exists(), (
             "test fixture leaked a pre-existing session dir; the point of "
@@ -170,8 +171,8 @@ class TestSessionRecordSelfCreatesViaCoreInit:
         repo = _make_repo(tmp_path)
         common_dir = git_common_dir(repo)
         session_id = "freshdirinit0001"
-        session_dir = common_dir / "coordinator-sessions" / session_id
-        sessions_base = common_dir / "coordinator-sessions"
+        session_dir = session_dir_for(common_dir, session_id)
+        sessions_base = hub_for_common(common_dir)
 
         assert not session_dir.exists(), (
             "test fixture leaked a pre-existing session dir; the point of "

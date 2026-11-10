@@ -8,6 +8,7 @@ import importlib.util
 import json
 import subprocess
 from pathlib import Path
+from coordinator_core.session_hub_path import hub_for_common
 
 import pytest
 
@@ -78,7 +79,7 @@ def test_grant_pm_writes_the_record_verbatim(engine_in_process, tmp_path, monkey
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "s-cli")
     note = 'approve the "one-line" edit'
     assert _cli.main(["grant", "pm", note]) == 0
-    grant = repo / ".git" / "coordinator-sessions" / "s-cli" / "claude-md-write-grant.json"
+    grant = hub_for_common(repo / ".git") / "s-cli" / "claude-md-write-grant.json"
     record = json.loads(grant.read_text(encoding="utf-8"))
     assert record["granted_by"] == "pm"
     assert record["note"] == note

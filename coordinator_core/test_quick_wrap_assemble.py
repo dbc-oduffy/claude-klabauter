@@ -29,6 +29,7 @@ from typing import Any
 import pytest
 
 from coordinator_core import quick_wrap_assemble as qwa
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.workstream_complete.session_history import SessionHistory
 
 _SID = "11111111-2222-3333-4444-555555555555"
@@ -55,7 +56,7 @@ def repo(tmp_path: Path) -> Path:
     """A worktree skeleton with a session-shape record and no pickup."""
     common = tmp_path / ".git"
     _write(
-        common / "coordinator-sessions" / _SID / "session-shape.json",
+        session_dir_for(common, _SID) / "session-shape.json",
         json.dumps({"schema_version": 1, "session_id": _SID}),
     )
     return tmp_path

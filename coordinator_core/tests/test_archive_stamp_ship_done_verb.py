@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.archive_stamp as arstamp
+from coordinator_core.session_hub_path import hub_for_common
 import coordinator_core.ops.handoff_archive_transition  # noqa: F401
 import coordinator_core.ops.handoff_stamp  # noqa: F401
 import coordinator_core.ops.handoff_transition  # noqa: F401
@@ -96,7 +97,7 @@ def _plan(repo: Path, name: str, status: str, **fields: str) -> str:
 
 
 def _claim_dir(repo: Path, basename: str) -> Path:
-    return repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    return hub_for_common(repo / ".git") / "handoff-claims" / basename
 
 
 def _archived(repo: Path, name: str) -> list[Path]:

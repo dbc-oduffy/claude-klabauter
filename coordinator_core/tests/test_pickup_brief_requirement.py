@@ -31,6 +31,7 @@ from typing import Any
 import pytest
 
 from coordinator_core.benchmarks import op_fixtures
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.benchmarks.isolated_clone import (
     mkdtemp_for_clone,
     reap_processes_under,
@@ -251,7 +252,7 @@ def test_claim_rule_no_claimant_grants(fixture_repo):
 
 def test_claim_rule_live_holder_denies(fixture_repo):
     basename = "2026-08-01_000000_chain-root.md"
-    claims_dir = fixture_repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(fixture_repo / ".git") / "handoff-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text("peer-session-live-0001", encoding="utf-8")
     (claims_dir / "pid").write_text(str(_unreachable_but_syntactically_valid_pid()), encoding="utf-8")
@@ -270,7 +271,7 @@ def _unreachable_but_syntactically_valid_pid() -> int:
 
 def test_single_artifact_takes_brief_claim(fixture_repo):
     basename = "2026-08-02_000000_chain-mid.md"
-    claims_dir = fixture_repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(fixture_repo / ".git") / "handoff-claims" / basename
     assert not claims_dir.is_dir()
     pb.brief(f"state/handoffs/{basename}", repo_root=fixture_repo, claim_at_brief=True)
     # Best-effort: the claim take must not raise, and the artifact must
@@ -357,7 +358,7 @@ def test_split_artifact_args_and_survey_never_claims(fixture_repo):
     for path in paths:
         pb.brief(path, repo_root=fixture_repo, claim_at_brief=False)
         basename = Path(path).name
-        claims_dir = fixture_repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir = hub_for_common(fixture_repo / ".git") / "handoff-claims" / basename
         assert not claims_dir.is_dir()
 
 

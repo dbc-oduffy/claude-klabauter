@@ -1,4 +1,4 @@
-# Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
+#!/usr/bin/env python3
 """fan-out-dispatch.py — Fan-out wave compiler: overlap pass + scoped executor prompts.
 
 Purpose: Collapse the entire fan-out ceremony into one EM-side call so fanning out is

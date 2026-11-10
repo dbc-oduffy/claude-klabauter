@@ -631,7 +631,7 @@ def _remove_minted_session_dir(cwd: str) -> None:
     Why a real directory exists to remove at all: this bench measures the REAL
     relay against the REAL worktree (`origin_worktree=cwd`), so
     `hooks.track_dispatched_agents` writes `dispatched-agents.txt` under
-    `<cwd>/.git/coordinator-sessions/<_SESSION_ID>/` exactly as it would for a
+    `<cwd>/.coordinator-local/coordinator-sessions/<_SESSION_ID>/` exactly as it would for a
     live session. Pointing the bench at a throwaway worktree instead would stop
     measuring the path it exists to measure. So the side effect is kept and
     reversed rather than avoided.
@@ -648,7 +648,9 @@ def _remove_minted_session_dir(cwd: str) -> None:
     """
     import shutil
 
-    victim = os.path.join(cwd, ".git", "coordinator-sessions", _SESSION_ID)
+    from coordinator_core.session_hub_path import session_dir_for
+
+    victim = str(session_dir_for(Path(cwd) / ".git", _SESSION_ID))
     if os.path.basename(victim) != _SESSION_ID:
         return
     try:

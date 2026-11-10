@@ -100,7 +100,7 @@ from coordinator_core.bash_guards._shape_classifier import (
 )
 
 # Every real write behind these guards (override_log, scope-warnings.log)
-# resolves under <git_root>/.git/coordinator-sessions/<session_id>/ or a
+# resolves under <git_root>/.coordinator-local/coordinator-sessions/<session_id>/ or a
 # session_dir -- untracked guard bookkeeping, never a tracked repo artifact.
 GENERATES = []
 

@@ -155,7 +155,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # COMPUTE_ONLY under the affirmation below, which no longer holds for this op).
     #
     # What reclassifies the op is a session-scoped sentinel under
-    # .git/coordinator-sessions/<sid>/ — .harness-bg-capable, which carries
+    # .coordinator-local/coordinator-sessions/<sid>/ — .harness-bg-capable, which carries
     # run_in_background calibration between processes. That is a sentinel creation, so
     # question 3 below is YES. (The op briefly wrote a second sentinel,
     # .foreground-reroute-noticed, for the 2026-07-29 updatedInput reroute; the reroute was
@@ -169,7 +169,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Reverting the marker to module state to win COMPUTE_ONLY back reintroduces it.
     #
     # Question 2 (rag's relational store) stays NO: the write target is
-    # .git/coordinator-sessions/ (session-runtime), outside the dual-write ban's set
+    # .coordinator-local/coordinator-sessions/ (session-runtime), outside the dual-write ban's set
     # entirely — same rationale as the hooks.* bookkeeping ops below.
     #
     # Carries no runtime cost: DR-208's single-writer serialization for MUTATING ops was an
@@ -265,10 +265,10 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #
     # Affirmation rationale (five-question checklist; all four ops share identical answers):
     #   1. Does it write, delete, or reorder any state file, queue, or git object?  YES.
-    #      Each op opens a file under .git/coordinator-sessions/ for write (touched.txt,
+    #      Each op opens a file under .coordinator-local/coordinator-sessions/ for write (touched.txt,
     #      meta.json, agent-audit.jsonl, dispatched-agents.txt respectively).
     #   2. Does it write into rag's relational store?                                No.
-    #      Write target is .git/coordinator-sessions/ (session-runtime layer), which is
+    #      Write target is .coordinator-local/coordinator-sessions/ (session-runtime layer), which is
     #      neither coordinator substrate (state/) nor rag's relational store.
     #      DR-208 Invariant-1 (dual-write ban) is satisfied because the write target is
     #      session-runtime, outside the ban's prohibited set entirely.
@@ -278,7 +278,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      (Question 1 is YES; write is the primary side-effect of each of these ops —
     #      that is precisely what distinguishes them from pcore-04's advisory population.)
     #   4. Does it mutate shared mutable state outside its own module?               YES.
-    #      On-disk files under .git/coordinator-sessions/ are shared across sessions.
+    #      On-disk files under .coordinator-local/coordinator-sessions/ are shared across sessions.
     #   5. Does it produce side effects observable across process boundaries?        YES.
     #      The on-disk writes are read by external consumers (greppers of
     #      agent-audit.jsonl and dispatched-agents.txt; readers of meta.json).
@@ -286,8 +286,8 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # Spec backlink: pln-pcore-08-async-bookkeeping-hoo-7920d5 § D2, C0.
     "hooks.track_touched_files": OpClass.MUTATING,
     # hooks.receiver_state_sensor — MUTATING: writes the receiver-state sibling file
-    # (.git/coordinator-sessions/<sid>/receiver-state.json), a session-runtime write
-    # under .git/coordinator-sessions/, same posture as track_touched_files above.
+    # (.coordinator-local/coordinator-sessions/<sid>/receiver-state.json), a session-runtime write
+    # under .coordinator-local/coordinator-sessions/, same posture as track_touched_files above.
     # Spec backlink: docs/plans/2026-08-14-receiver-state-sensor.md § C3
     "hooks.receiver_state_sensor": OpClass.MUTATING,
     "hooks.agent_completion_log": OpClass.MUTATING,
@@ -341,7 +341,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.runtime_tripwire_em_check — MUTATING. PostToolUse(Agent) leg only.
     # Five-question checklist:
     #   1. Writes/reorders a state file?  YES — writes/advances two per-session
-    #      cursor files under <git common dir>/coordinator-sessions/<sid>/
+    #      cursor files under .coordinator-local/coordinator-sessions/<sid>/
     #      (push-failures-cursor.txt, hooks-json-boot-hash.txt).
     #   2. Writes rag's relational store?  No — git-common-dir session
     #      bookkeeping, not state/'s substrate.
@@ -366,7 +366,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # hooks.subagent_review_mark — MUTATING, same session-runtime write class as
     # hooks.subagent_zero_tool_use directly above (same SubagentStop event, same
     # shim-engine-durable-write shape): it appends a review mark to the commit
-    # ledger under <git_common_dir>/coordinator-sessions/.commit-ledger/, an
+    # ledger under .coordinator-local/coordinator-sessions/.commit-ledger/, an
     # on-disk write read across process boundaries.
     "hooks.subagent_review_mark": OpClass.MUTATING,
     "hooks.subagent_zero_tool_use_surface": OpClass.COMPUTE_ONLY,
@@ -382,7 +382,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # pure read like its sibling COMPUTE_ONLY hooks.subagent_* ops.
     "hooks.subagent_sidecar_fill_check": OpClass.MUTATING,
     # hooks.context_pressure_precompact — MUTATING, same bookkeeping class as the four
-    # above (its write target is tempdir rather than .git/coordinator-sessions/, which
+    # above (its write target is tempdir rather than .coordinator-local/coordinator-sessions/, which
     # changes the location, not the class).
     #
     # Affirmation rationale (five-question checklist):
@@ -2820,20 +2820,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "fleet.backfill_dispositionless_memos": OpClass.MUTATING,
     # session.reap — MUTATING (Class B): cadence-gated (12h .last-reap mtime file marker) reaper
     # for stale sessions, stale agent dirs, and orphaned claim dirs inside
-    # .git/coordinator-sessions/. No git commit (untracked substrate). Per-record idempotent;
+    # .coordinator-local/coordinator-sessions/. No git commit (untracked substrate). Per-record idempotent;
     # recency liveness via resolve_live_session_ids / cs_claim_holder_live (never raw pid);
     # TOCTOU re-read before rm; fail-closed-to-keep on any liveness ambiguity (AC3).
     # DR-208 five-question affirmation (citing ops/session/reap.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Moves stale session/agent dirs to .git/coordinator-sessions/.archive/; rm -rf
+    #      Moves stale session/agent dirs to .coordinator-local/coordinator-sessions/.archive/; rm -rf
     #      orphaned claim dirs after TOCTOU re-read. No git commit (untracked substrate).
     #   2. Writes into rag's relational store?                                 No.
-    #      Writes only .git/coordinator-sessions/ (session-runtime layer, outside rag's store).
+    #      Writes only .coordinator-local/coordinator-sessions/ (session-runtime layer, outside rag's store).
     #      Dual-write ban (DR-208 / tri-plane DD#1) satisfied (session-runtime is not rag's noun).
     #   3. Opens any file for write (including sentinel creation)?             YES.
     #      Creates/updates the .last-reap cadence gate file; moves/removes dirs.
     #   4. Mutates shared mutable state outside its own module?                YES.
-    #      .git/coordinator-sessions/ dirs are shared across all coordinator sessions.
+    #      .coordinator-local/coordinator-sessions/ dirs are shared across all coordinator sessions.
     #   5. Persistent state changes observable across process boundaries?     YES.
     #      Reaped dirs / removed claims are observable by subsequent session-init runs.
     # Class-B non-git safety spec (NOT DR-211):
@@ -3085,16 +3085,16 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # session.record_pickup — MUTATING (Class B): DR-059 defense-in-depth port of bash's
     # cs_session_shape_set pickup write. Writes an append-only/versioned pickup record
     # (flat `pickup` field SET + `pickup_history[]` APPENDED) to
-    # .git/coordinator-sessions/<sid>/session-shape.json under the SAME mkdir-based lock
+    # .coordinator-local/coordinator-sessions/<sid>/session-shape.json under the SAME mkdir-based lock
     # convention bash's cs_session_shape_set uses (NOT locked_write.locked_rmw's fcntl
     # sidecar — the two remaining bash call sites, plan-claim + actioned_memos, target the
     # same file and do not exclude against fcntl). No git commit (untracked substrate).
     # DR-208 five-question affirmation (citing ops/session/record_pickup.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
-    #      Read-modify-writes .git/coordinator-sessions/<sid>/session-shape.json (pickup
+    #      Read-modify-writes .coordinator-local/coordinator-sessions/<sid>/session-shape.json (pickup
     #      + pickup_history fields only). No git commit (untracked substrate).
     #   2. Writes into rag's relational store?                                 No.
-    #      Writes only .git/coordinator-sessions/ (session-runtime layer, outside rag's store).
+    #      Writes only .coordinator-local/coordinator-sessions/ (session-runtime layer, outside rag's store).
     #   3. Opens any file for write (including sentinel creation)?             YES.
     #      mkdir-lock metadata files (pid/session_id/claimed_at) + atomic
     #      session-shape.json replace via mktemp+os.replace.
@@ -4455,7 +4455,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation (citing ops/workflow_fire/fire.py):
     #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
     #      _write_record(...) persists the registry record under
-    #      <git-common-dir>/coordinator-sessions/workflow-fires/<fire_id>.json, plus
+    #      .coordinator-local/coordinator-sessions/workflow-fires/<fire_id>.json, plus
     #      the cap lock (_acquire_cap_lock) and the child's log file.
     #   2. Writes into rag's relational store?                                 No.
     #      Writes only its own registry directory; no rag interaction. Dual-write
@@ -5109,7 +5109,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation:
     #   1. Writes, deletes, or reorders any state file, queue, or git object?   Yes.
     #      Cuts tags, mutates branches, writes a Tier-U grant token under
-    #      `.git/coordinator-sessions/<sid>/`.
+    #      `.coordinator-local/coordinator-sessions/<sid>/`.
     #   2. Writes into rag's relational store?                                  No.
     #   3. Opens any file for write (including sentinel creation)?              Yes.
     #      The Tier-U grant write/handback.
@@ -5330,7 +5330,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # baton.carry_forward — MUTATING: ops/baton_carry_forward.py
     # `append_note` calls `session_baton.store.merge_baton`, a
     # read-modify-write of the live session's baton.json under
-    # `.git/coordinator-sessions/<sid>/` — real, persistent (if
+    # `.coordinator-local/coordinator-sessions/<sid>/` — real, persistent (if
     # session-scoped) mutation, same class already affirmed for
     # session_baton.mint above.
     #
@@ -5347,7 +5347,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "baton.close_commit": OpClass.MUTATING,
 
     # baton.pm_turn_append — MUTATING: ops/baton_pm_turns.py `append_turn`
-    # appends one line to `.git/coordinator-sessions/<sid>/pm_turns.jsonl`
+    # appends one line to `.coordinator-local/coordinator-sessions/<sid>/pm_turns.jsonl`
     # under `held_lock`.
     #
     # baton.pm_turns — COMPUTE_ONLY: `read_turns` reads that file through

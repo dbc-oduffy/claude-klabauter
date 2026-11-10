@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry import host_sampler
 
 
@@ -39,7 +40,7 @@ def test_read_load_never_writes_sink(tmp_path: Path, monkeypatch: pytest.MonkeyP
     host_sampler.read_load()
     for _root, _dirs, files in os.walk(tmp_path):
         assert "should-not-appear.jsonl" not in files
-    assert not (tmp_path / "coordinator-sessions").exists()
+    assert not hub_for_common(tmp_path / ".git").exists()
 
 
 def test_read_load_spawns_nothing(monkeypatch: pytest.MonkeyPatch) -> None:

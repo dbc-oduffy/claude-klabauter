@@ -133,7 +133,7 @@ Negative-spec:
     params["memo"], containment-gated. main_worktree_root is NOT used here.
   - Does NOT perform base-required JSON-schema validation. Cross-field rules only
     (memos are foreign-authored; a sender's base-field slip must never block the receiver).
-  - ``resolve`` does NOT acquire or write ``.git/coordinator-sessions/memo-claims/`` — that
+  - ``resolve`` does NOT acquire or write ``.coordinator-local/coordinator-sessions/memo-claims/`` — that
     is a separate claim surface owned by archive_stamp.py's cs_action_memo, consumed only
     at the archival-gate path, entirely out of this module's scope. resolve's exclusion
     story is locked_rmw plus the picked_up_by collision check inside the SAME closure,
@@ -1725,7 +1725,7 @@ def _resolve(memo: str, session_id: str, at: str, params: dict, cwd: str | None 
     correction when ``decision:`` is unchanged, or fail-loud otherwise (verdict
     changes always fail loud, flag or no flag).
 
-    Negative-spec: does NOT acquire or write ``.git/coordinator-sessions/memo-claims/`` —
+    Negative-spec: does NOT acquire or write ``.coordinator-local/coordinator-sessions/memo-claims/`` —
     see the module-level negative-spec. resolve's exclusion story is locked_rmw plus the
     picked_up_by collision check inside this closure, nothing else.
     """

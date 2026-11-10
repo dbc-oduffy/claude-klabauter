@@ -30,7 +30,7 @@ def _plan(repo, slug, status, scope):
 
 
 def _peer_claim(repo, slug, sid, live=True):
-    sess = Path(repo) / ".git" / "coordinator-sessions"
+    sess = Path(repo) / ".coordinator-local" / "coordinator-sessions"
     cdir = sess / "plan-claims" / slug
     cdir.mkdir(parents=True)
     (cdir / "session_id").write_text(sid)
@@ -128,4 +128,4 @@ def test_plan_path_whose_stem_or_shape_disagrees_is_refused(tmp_path, me, bad):
     repo = _repo(tmp_path)
     _audit_plan(repo, "run-met")
     assert claims.claim_plan("run-met", cwd=str(repo), for_execution=True, plan_path=bad) is False
-    assert not (Path(repo) / ".git" / "coordinator-sessions" / "plan-claims" / "run-met").exists()
+    assert not (Path(repo) / ".coordinator-local" / "coordinator-sessions" / "plan-claims" / "run-met").exists()

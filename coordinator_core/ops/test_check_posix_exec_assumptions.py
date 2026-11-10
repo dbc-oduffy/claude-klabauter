@@ -2954,11 +2954,14 @@ def test_tracked_bin_scripts_agree_with_exec_bit_policy():
     off. A shebang survives only as a named env_shebang EXEMPTION (e.g. the
     byte-copied claude-author.py); a 100755 entry without any shebang is
     meaningless."""
+    from coordinator_core.ops.check_posix_exec_assumptions import is_py_entrypoint
+
     exempt = EXEMPTIONS["env_shebang"][REPO_PROJECT_MAKIMA]
     stray, bitten = [], []
     for path, mode in sorted(_tracked_script_modes().items()):
         shebang = _has_shebang(path)
-        if shebang and path not in exempt:
+        text = (_REPO_ROOT / path).read_text(encoding="utf-8", errors="replace")
+        if shebang and path not in exempt and not is_py_entrypoint(path, text):
             stray.append(path)
         if mode == "100755" and not shebang:
             bitten.append(path)
@@ -2982,3 +2985,129 @@ def test_real_tree_no_stale_exemptions(real_tree_scans):
     their exec bit/shebang with no corresponding EXEMPTIONS prune."""
     ok, msg = check_no_stale_exemptions(_REPO_ROOT, precomputed_raw=real_tree_scans[1])
     assert ok, msg
+
+
+# ---------------------------------------------------------------------------
+# Two-leg pair: a top-level __main__ .py in coordinator/bin, bin, scripts.
+# ---------------------------------------------------------------------------
+
+_ENTRYPOINT_SRC = (
+    "#!/usr/bin/env python3\n"
+    "def main():\n    pass\n\n\n"
+    'if __name__ == "__main__":\n    main()\n'
+)
+
+
+def _seed_entrypoint_shape(tmp_path: Path, relpath: str, text: str = _ENTRYPOINT_SRC):
+    repo = _init_repo(tmp_path)
+    target = repo / relpath
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    _commit_all(repo, exec_paths=[relpath])
+    return scan(repo)
+
+
+@pytest.mark.parametrize("parent", ["coordinator/bin", "bin", "scripts"])
+def test_py_entrypoint_is_not_env_shebang_or_mode_100755(tmp_path, parent):
+    result = _seed_entrypoint_shape(tmp_path, f"{parent}/x.py")
+
+    assert f"{parent}/x.py" not in result["env_shebang"]
+    assert f"{parent}/x.py" not in result["mode_100755"]
+
+
+def test_py_entrypoint_test_prefixed_file_is_still_a_violation(tmp_path):
+    result = _seed_entrypoint_shape(tmp_path, "coordinator/bin/test_x.py")
+
+    assert "coordinator/bin/test_x.py" in result["env_shebang"]
+    assert "coordinator/bin/test_x.py" in result["mode_100755"]
+
+
+def test_py_entrypoint_nested_file_is_still_a_violation(tmp_path):
+    result = _seed_entrypoint_shape(tmp_path, "coordinator/bin/sub/x.py")
+
+    assert "coordinator/bin/sub/x.py" in result["env_shebang"]
+    assert "coordinator/bin/sub/x.py" in result["mode_100755"]
+
+
+def test_py_entrypoint_without_main_guard_is_still_a_violation(tmp_path):
+    result = _seed_entrypoint_shape(
+        tmp_path, "coordinator/bin/x.py", "#!/usr/bin/env python3\nprint('x')\n"
+    )
+
+    assert "coordinator/bin/x.py" in result["env_shebang"]
+    assert "coordinator/bin/x.py" in result["mode_100755"]
+
+
+def test_py_entrypoint_outside_the_three_dirs_is_still_a_violation(tmp_path):
+    result = _seed_entrypoint_shape(tmp_path, "tools/x.py")
+
+    assert "tools/x.py" in result["env_shebang"]
+    assert "tools/x.py" in result["mode_100755"]
+
+
+def test_py_entrypoint_exemption_does_not_reach_extensionless_exec(tmp_path):
+    result = _seed_entrypoint_shape(tmp_path, "bin/x", _ENTRYPOINT_SRC)
+
+    assert "bin/x" in result["extensionless_exec"]
+    assert "bin/x" in result["env_shebang"]
+
+
+def test_is_py_entrypoint_predicate_edges():
+    from coordinator_core.ops.check_posix_exec_assumptions import is_py_entrypoint
+
+    guard = 'if __name__ == "__main__":\n    pass\n'
+    assert is_py_entrypoint("scripts/a.py", guard)
+    assert not is_py_entrypoint("scripts/a.py", "    " + guard)
+    assert not is_py_entrypoint("scripts/a.sh", guard)
+    assert not is_py_entrypoint("a/scripts/a.py", guard)
+
+
+def _find_git_bash():
+    import os
+    import shutil
+
+    found = shutil.which("bash")
+    if found and "system32" not in found.lower():
+        return found
+    git = shutil.which("git")
+    if git:
+        for rel in ("../../bin/bash.exe", "../bin/bash.exe"):
+            cand = (Path(git).parent / rel).resolve()
+            if cand.is_file():
+                return str(cand)
+    return None
+
+
+def test_shebanged_script_run_by_bare_path_in_bash_runs_python_or_fails_loud(tmp_path):
+    """On a box where `env python3` resolves to a Store alias stub or nothing,
+    a bare-path run must fail non-zero with a message, never exit 0 silently."""
+    bash = _find_git_bash()
+    if bash is None:
+        pytest.skip("bash is absent")
+    sentinel = "BARE_PATH_SENTINEL_7f3a"
+    script = tmp_path / "probe_entry.py"
+    script.write_text(
+        f"#!/usr/bin/env python3\nprint({sentinel!r})\n", encoding="utf-8", newline="\n"
+    )
+    script.chmod(0o755)
+
+    proc = subprocess.Popen(
+        [bash, "-c", f'"{script.as_posix()}"'],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        cwd=str(tmp_path),
+        creationflags=_NO_WINDOW,
+    )
+    try:
+        out, err = proc.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        pytest.fail("bare-path run of a shebanged script hung past 20s")
+
+    if sentinel in out:
+        assert proc.returncode == 0, err
+    else:
+        assert proc.returncode != 0, "exited 0 without running the script"
+        assert err.strip(), "failed non-zero but printed no error"

@@ -2,8 +2,8 @@
 coordinator_core.hooks.track_dispatched_agents — PostToolUse Agent bookkeeping op.
 
 Purpose: Records agent IDs dispatched by the EM into two session-runtime files:
-    .git/coordinator-sessions/<session_id>/dispatched-agents.txt   (tab-delimited log)
-    .git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt (back-pointer)
+    .coordinator-local/coordinator-sessions/<session_id>/dispatched-agents.txt   (tab-delimited log)
+    .coordinator-local/coordinator-sessions/.agents/<agent_id>/em-session-id.txt (back-pointer)
 
 Ported from the retired ~/.claude/plugins/coordinator-claude/coordinator/hooks/scripts/
 track-dispatched-agents.sh (deleted 2026-07-22, DoE ``3a561713``). Faithful port of all write logic and
@@ -58,7 +58,7 @@ resolvedModel → response.model → input.model → "unknown"). This op is
 dormant-correct if the manifest cannot flatten nested tool_response.* inputs.
 
 Negative-spec:
-    - MUST NOT write state/, archive/, or any path outside .git/coordinator-sessions/.
+    - MUST NOT write state/, archive/, or any path outside .coordinator-local/coordinator-sessions/.
       Write confinement: session-runtime layer only (SC-2, pcore-08 plan § ipc.py D2).
     - Returns no_advisory() (empty dict) — product is the on-disk write side-effect,
       not an advisory string.
@@ -92,6 +92,7 @@ from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+from coordinator_core.session_hub_path import hub_for_common
 
 _locks_mutex: threading.Lock = threading.Lock()
 _locks: Dict[str, asyncio.Lock] = {}
@@ -483,14 +484,14 @@ async def _handler(params: dict, repo_root=None) -> dict:
         )
         return no_advisory()
     try:
-        _sessions_base = git_common_dir(repo_root) / "coordinator-sessions"
+        _sessions_base = hub_for_common(git_common_dir(repo_root))
     except RuntimeError as exc:
         print(
             f"track_dispatched_agents: guard=git_common_dir_raised — falling back to repo_root "
             f"agent_id={agent_id!r} session_id={session_id!r}: {exc}",
             file=sys.stderr,
         )
-        _sessions_base = Path(str(repo_root)) / "coordinator-sessions"
+        _sessions_base = hub_for_common(Path(str(repo_root)))
     sessions_base = str(_sessions_base)
     session_dir = str(_sessions_base / session_id)
     agent_dir = str(_sessions_base / ".agents" / agent_id)

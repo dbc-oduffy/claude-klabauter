@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """group-em-home: resolve, seed, migrate, and inspect the machine-local G-EM home.
 
 Verbs: `path`, `ensure`, `holder`, `migrate`, `sync [--push]`, `prune`; `--json` on each. Exit 3 on a

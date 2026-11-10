@@ -11,6 +11,8 @@ Port of: coordinator-complete-entry.sh (DoE a1a568d2, 2026-07-22)
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import io
 import os
 import subprocess
@@ -1365,7 +1367,7 @@ class TestNativeSingleSessionLoe:
     def test_counts_dispatches_and_computes_tshirt(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-abc123")
-        sdir = repo / ".git" / "coordinator-sessions" / "sess-abc123"
+        sdir = session_dir_for(repo / ".git", "sess-abc123")
         sdir.mkdir(parents=True)
         # 6 lines total, 1 with an opus model field -> agent_dispatches=6,
         # opus_dispatches=1. Neither XL/L/M's higher ad/od thresholds are met
@@ -1394,7 +1396,7 @@ class TestNativeSingleSessionLoe:
     def test_empty_dispatched_agents_file_renders_zero_not_null(self, tmp_path, monkeypatch):
         repo = _make_repo(tmp_path)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-abc123")
-        sdir = repo / ".git" / "coordinator-sessions" / "sess-abc123"
+        sdir = session_dir_for(repo / ".git", "sess-abc123")
         sdir.mkdir(parents=True)
         (sdir / "dispatched-agents.txt").write_text("", encoding="utf-8")
         import os

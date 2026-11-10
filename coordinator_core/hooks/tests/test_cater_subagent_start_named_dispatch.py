@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.subagent_sandbox import engine
 from coordinator_core.hooks.cater_subagent_start import (
     NAMED_DISPATCH_ROW_RESOLVED_MARKER,
@@ -88,11 +89,11 @@ def _payload(agent_type: str, session_id: str, cwd: str, contract_blocks=None, a
 
 
 def _write_backpointer(git_root: Path, agent_id: str, em_sid: str, resolved_subagent_type: str) -> None:
-    agents_dir = git_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    agents_dir = hub_for_common(git_root / ".git") / ".agents" / agent_id
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
 
-    session_dir = git_root / ".git" / "coordinator-sessions" / em_sid
+    session_dir = session_dir_for(git_root / ".git", em_sid)
     session_dir.mkdir(parents=True, exist_ok=True)
     dispatch_file = session_dir / "dispatched-agents.txt"
     with open(dispatch_file, "a", encoding="utf-8", newline="\n") as handle:

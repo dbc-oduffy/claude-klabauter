@@ -27,7 +27,7 @@ Owner-id extraction (the real work -- do not silently pick one):
 
         1. `claimed_by`           -- top-level frontmatter scalar.
         2. `claim_dir`            -- the artifact's OWN claim directory, at
-                                     `<repo>/.git/coordinator-sessions/
+                                     `.coordinator-local/coordinator-sessions/
                                      <class>-claims/<basename>/` (`class` in
                                      `handoff`|`memo`|`plan`), keyed on the
                                      artifact's BASENAME across all three
@@ -237,7 +237,7 @@ def _extract_claim_dir_owners(artifact_path: str, cwd: Optional[str] = None) -> 
 
     Resolves the claim base via `claims._claim_base` -- the same seam
     `claims.claim_artifact` itself resolves through -- rather than
-    re-deriving the `.git/coordinator-sessions` join by hand (negative-
+    re-deriving the `.coordinator-local/coordinator-sessions` join by hand (negative-
     spec). Returns `[]` when the base is unresolvable (not a git repo) or
     when no class has a claim dir for this basename.
     """

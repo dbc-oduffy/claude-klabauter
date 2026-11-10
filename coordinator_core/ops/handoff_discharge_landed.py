@@ -102,7 +102,9 @@ _LOCK_STALE_S = 120.0
 
 
 def _lock_path(common_dir: Path) -> Path:
-    return common_dir / "coordinator-sessions" / "handoff-discharge-landed.lock"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(common_dir) / "handoff-discharge-landed.lock"
 
 
 def _acquire_lock(common_dir: Path) -> Optional[Path]:

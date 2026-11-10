@@ -8,6 +8,7 @@ from typing import Optional
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 import coordinator_core.ops.handoff_archive_transition  # noqa: F401
@@ -92,7 +93,7 @@ def _seed_handoff(repo: Path, name: str, status: str, deployment_state: str, ext
 
 
 def _claim_dir(repo: Path, class_: str, basename: str) -> Path:
-    return repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    return hub_for_common(repo / ".git") / f"{class_}-claims" / basename
 
 
 class TestShipReleasesClaim:

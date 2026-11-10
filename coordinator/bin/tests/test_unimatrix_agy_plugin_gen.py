@@ -547,6 +547,82 @@ def test_door_stderr_surfaces_without_quiet_and_not_with_it(plugin, tmp_path):
     assert quiet.returncode == 1 and quiet.stderr == b""
 
 
+_REAL_RUN = subprocess.run
+AGY_EVENT = {
+    "cwd": "C:\\dev\\coordinator-content-repo", "workspacePaths": ["C:\\dev\\coordinator-content-repo"], "hookEventName": "PreToolUse",
+    "conversationId": "bdf34fcf-e5e4-4186-a45f-3eaac72afe97",
+    "toolCall": {"name": "run_command", "args": {"CommandLine": "coordinator-invoke engine_ask.submit --repo X",
+                                                 "Cwd": "C:\\dev\\coordinator-content-repo", "Blocking": True}},
+}
+
+
+def _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, door_py, argv=("hooks.a",), event=AGY_EVENT):
+    """Drive the generated shim with `event` against a stub door script; returns (rc, stdout, stderr, door stdin)."""
+    _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
+    out = tmp_path / "out"
+    gen.generate(plugin, out, "agy")
+    main, ns = _load_shim(out)
+    stub = tmp_path / "door_stub.py"
+    seen = tmp_path / "door_stdin.json"
+    stub.write_text("import sys\nopen(%r, 'w').write(sys.stdin.read())\n%s" % (str(seen), door_py), encoding="utf-8")
+    real_run = _REAL_RUN
+    monkeypatch.setattr(ns["subprocess"], "run",
+                        lambda cmd, **kw: real_run([sys.executable, str(stub), *cmd[1:]], timeout=30, **kw))
+    monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(json.dumps(event).encode("utf-8"))))
+    rc = main(list(argv))
+    cap = capfd.readouterr()
+    return rc, cap.out, cap.err, json.loads(seen.read_text(encoding="utf-8"))
+
+
+def test_shim_translates_real_agy_coordinator_invoke_payload_and_prints_explicit_allow(plugin, tmp_path, monkeypatch, capfd):
+    rc, out, err, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n")
+    assert rc == 0 and json.loads(out) == {"decision": "allow"} and err == ""
+    assert door_in == {
+        "hook_event_name": "PreToolUse", "session_id": AGY_EVENT["conversationId"], "cwd": "C:\\dev\\coordinator-content-repo",
+        "tool_name": "Bash", "tool_input": {"command": "coordinator-invoke engine_ask.submit --repo X"},
+    }
+
+
+def test_shim_agy_cwd_falls_back_to_top_level_cwd_and_other_tools_keep_their_args(plugin, tmp_path, monkeypatch, capfd):
+    ev = {"cwd": "/w", "toolCall": {"name": "view_file", "args": {"AbsolutePath": "/w/a"}}}
+    rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "", event=ev)
+    assert rc == 0 and json.loads(out) == {"decision": "allow"}
+    assert door_in["cwd"] == "/w" and door_in["tool_name"] == "view_file" and door_in["tool_input"] == {"AbsolutePath": "/w/a"}
+    assert door_in["hook_event_name"] == "PreToolUse"
+
+
+@pytest.mark.parametrize("door_py,reason", [
+    ("sys.stdout.write(json.dumps({'hookSpecificOutput': {'permissionDecision': 'deny', 'permissionDecisionReason': 'no rm'}}))", "no rm"),
+    ("sys.stdout.write(json.dumps({'decision': 'block', 'reason': 'flat no'}))", "flat no"),
+    ("sys.stdout.write(json.dumps({'decision': 'deny'}))", "denied by coordinator guard"),
+    ("sys.stderr.write('stderr why'); sys.exit(2)", "stderr why"),
+    ("sys.exit(2)", "denied by coordinator guard"),
+])
+def test_shim_agy_deny_always_carries_a_non_empty_reason(plugin, tmp_path, monkeypatch, capfd, door_py, reason):
+    rc, out, _, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "import json\n" + door_py + "\n")
+    assert rc == 0 and json.loads(out) == {"decision": "deny", "reason": reason}
+
+
+def test_shim_agy_ask_passes_through_and_door_failure_keeps_its_exit(plugin, tmp_path, monkeypatch, capfd):
+    rc, out, _, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd,
+                                  "sys.stdout.write('{\"decision\": \"ask\", \"reason\": \"sure?\"}')\n")
+    assert rc == 0 and json.loads(out) == {"decision": "ask", "reason": "sure?"}
+    rc, out, err, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stderr.write('boom'); sys.exit(1)\n")
+    assert rc == 1 and out == "" and err == "boom"
+
+
+def test_shim_agy_pass_2_allows_a_door_exit_2_and_quiet_drops_stderr(plugin, tmp_path, monkeypatch, capfd):
+    rc, out, err, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stderr.write('x'); sys.exit(2)\n",
+                                    argv=("--quiet", "--pass-2", "hooks.a"))
+    assert rc == 0 and json.loads(out) == {"decision": "allow"} and err == ""
+
+
+def test_shim_keeps_a_claude_shaped_payload_and_its_empty_verdict_unchanged(plugin, tmp_path, monkeypatch, capfd):
+    ev = {"tool_name": "Bash", "tool_input": {"command": "coordinator-invoke x"}, "cwd": "C:\\coordinator-content-repo"}
+    rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n", event=ev)
+    assert rc == 0 and out == "{}" and door_in == ev
+
+
 @pytest.mark.parametrize("os_name,exe", [("nt", "python"), ("posix", "python3")])
 def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch, os_name, exe, tmp_path):
     monkeypatch.setattr(gen.os, "name", os_name)

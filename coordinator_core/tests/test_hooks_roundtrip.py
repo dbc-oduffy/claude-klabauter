@@ -23,6 +23,7 @@ import tempfile
 import pytest
 
 from coordinator_core import _hook_envelope
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 
 
 def _run(result):
@@ -77,6 +78,7 @@ def _assert_no_unlock_mechanism(text: str, session_id: str = "") -> None:
     assert "touch" not in text, text
     assert ".foreground-ok" not in text, text
     assert ".git/coordinator-sessions" not in text, text
+    assert ".coordinator-local/coordinator-sessions" not in text, text
     assert "guard-override-keys" not in text, text
     if session_id:
         assert session_id not in text, text
@@ -325,8 +327,9 @@ def test_foreground_reroute_notice_fires_on_every_reroute(tmp_path) -> None:
     assert "touch" not in first_ctx, first_ctx
     assert ".foreground-ok" not in first_ctx, first_ctx
     assert ".git/coordinator-sessions" not in first_ctx, first_ctx
+    assert ".coordinator-local/coordinator-sessions" not in first_ctx, first_ctx
     assert sid not in first_ctx, "session id must never render, EM audience included"
-    assert not (git_root / "coordinator-sessions" / sid / ".foreground-reroute-noticed").exists(), (
+    assert not (session_dir_for(git_root, sid) / ".foreground-reroute-noticed").exists(), (
         "no notice-once marker is ever written any more"
     )
 
@@ -357,7 +360,7 @@ def test_calibration_survives_a_fresh_process(tmp_path) -> None:
         {"tool_name": "Agent", "run_in_background": "true", "session_id": sid},
         repo_root=str(git_root),
     )) == {}
-    assert (git_root / "coordinator-sessions" / sid / ".harness-bg-capable").exists()
+    assert (session_dir_for(git_root, sid) / ".harness-bg-capable").exists()
 
     mod._BG_CAPABLE_SESSIONS.discard(sid)
     result = _run(_handler(
@@ -391,7 +394,7 @@ def test_present_and_false_calibrates_for_later_absent_call(tmp_path) -> None:
         repo_root=str(git_root),
     ))
     assert result1 == {}, "present-and-false passes (explicit choice honoured)"
-    assert (git_root / "coordinator-sessions" / sid / ".harness-bg-capable").exists(), (
+    assert (session_dir_for(git_root, sid) / ".harness-bg-capable").exists(), (
         "presence (even false) must write the durable calibration marker"
     )
 
@@ -430,7 +433,7 @@ def test_foreground_escape_hatch_passes_through_unrewritten(tmp_path) -> None:
 
     git_root = tmp_path / ".git"
     sid = "test-reroute-hatch-01"
-    hatch = git_root / "coordinator-sessions" / sid / ".foreground-ok"
+    hatch = session_dir_for(git_root, sid) / ".foreground-ok"
     hatch.parent.mkdir(parents=True)
     hatch.touch()
 
@@ -780,13 +783,13 @@ def test_postuse_merge_contract_both_fire(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp)
 
     test_sid = "test-c8-merge-12ab34cd"
-    agent_dir = tmp / ".git" / "coordinator-sessions" / ".agents" / test_sid
+    agent_dir = hub_for_common(tmp / ".git") / ".agents" / test_sid
     agent_dir.mkdir(parents=True)
 
     em_sid = "test-c8-em-session-56ef"
     (agent_dir / "em-session-id.txt").write_text(em_sid + "\n")
 
-    em_session_dir = tmp / ".git" / "coordinator-sessions" / em_sid
+    em_session_dir = session_dir_for(tmp / ".git", em_sid)
     em_session_dir.mkdir(parents=True)
 
     past_ts = int(time.time()) - 3600
@@ -959,7 +962,7 @@ def test_dispatch_nudge_ok_git_tree_only_does_not_suppress(tmp_path) -> None:
 
     git_root = tmp_path / ".git"
     sid = "test-c4-dispatch-nudge-git-only"
-    git_home = git_root / "coordinator-sessions" / sid / ".dispatch-nudge-ok"
+    git_home = session_dir_for(git_root, sid) / ".dispatch-nudge-ok"
     git_home.parent.mkdir(parents=True)
     git_home.touch()
 
@@ -993,7 +996,7 @@ def test_autonomous_git_tree_only_does_not_suppress(tmp_path) -> None:
 
     git_root = tmp_path / ".git"
     sid = "test-c4-autonomous-git-only"
-    git_home = git_root / "coordinator-sessions" / sid / ".autonomous"
+    git_home = session_dir_for(git_root, sid) / ".autonomous"
     git_home.parent.mkdir(parents=True)
     git_home.touch()
 

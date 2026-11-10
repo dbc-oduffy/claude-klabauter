@@ -31,6 +31,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -97,7 +98,7 @@ def test_write_creates_record_with_default_cwd(tmp_path, monkeypatch):
 
     assert session_start.write_session_start_record("sess-1") is True
 
-    record = root / ".git" / "coordinator-sessions" / "sess-1" / "write_bump_launch_cwd"
+    record = hub_for_common(root / ".git") / "sess-1" / "write_bump_launch_cwd"
     assert record.is_file()
     assert record.read_text(encoding="utf-8").strip() == str(root)
 
@@ -107,7 +108,7 @@ def test_write_creates_record_with_explicit_launch_cwd(tmp_path):
 
     assert session_start.write_session_start_record("sess-2", launch_cwd=str(root)) is True
 
-    record = root / ".git" / "coordinator-sessions" / "sess-2" / "write_bump_launch_cwd"
+    record = hub_for_common(root / ".git") / "sess-2" / "write_bump_launch_cwd"
     assert record.read_text(encoding="utf-8").strip() == str(root)
 
 
@@ -117,7 +118,7 @@ def test_write_is_idempotent_across_repeat_calls(tmp_path):
     assert session_start.write_session_start_record("sess-3", launch_cwd=str(root)) is True
     assert session_start.write_session_start_record("sess-3", launch_cwd=str(root)) is True
 
-    record = root / ".git" / "coordinator-sessions" / "sess-3" / "write_bump_launch_cwd"
+    record = hub_for_common(root / ".git") / "sess-3" / "write_bump_launch_cwd"
     assert record.read_text(encoding="utf-8").strip() == str(root)
 
 
@@ -131,7 +132,7 @@ def test_a_compact_fired_from_a_scratch_clone_keeps_the_launch_anchor(tmp_path):
     session_start.write_session_start_record("sess-c", launch_cwd=str(clone))
 
     assert session_start.read_session_start_record("sess-c", cwd=str(clone)) == str(root)
-    assert not (clone / ".git" / "coordinator-sessions" / "sess-c").exists()
+    assert not (hub_for_common(clone / ".git") / "sess-c").exists()
 
 
 def test_write_fails_open_when_session_id_empty(tmp_path):
@@ -151,7 +152,7 @@ def test_write_fails_open_when_not_in_a_git_repo(tmp_path):
 )
 def test_write_fails_open_on_unwritable_sessions_dir(tmp_path):
     root = _init_repo(tmp_path)
-    sessions_hub = root / ".git" / "coordinator-sessions"
+    sessions_hub = hub_for_common(root / ".git")
     sessions_hub.mkdir(parents=True)
 
     original_mode = sessions_hub.stat().st_mode
@@ -207,7 +208,7 @@ def test_read_survives_resolution_from_a_different_subdirectory(tmp_path):
 
 def test_read_returns_none_for_empty_record_file(tmp_path):
     root = _init_repo(tmp_path)
-    session_dir = root / ".git" / "coordinator-sessions" / "sess-8"
+    session_dir = hub_for_common(root / ".git") / "sess-8"
     session_dir.mkdir(parents=True)
     (session_dir / "write_bump_launch_cwd").write_text("", encoding="utf-8")
 
@@ -220,7 +221,7 @@ def test_read_returns_none_for_empty_record_file(tmp_path):
 )
 def test_read_fails_open_on_unreadable_record(tmp_path):
     root = _init_repo(tmp_path)
-    session_dir = root / ".git" / "coordinator-sessions" / "sess-9"
+    session_dir = hub_for_common(root / ".git") / "sess-9"
     session_dir.mkdir(parents=True)
     record = session_dir / "write_bump_launch_cwd"
     record.write_text(str(root), encoding="utf-8")
@@ -325,7 +326,7 @@ def test_write_fails_open_when_settings_home_unwritable(tmp_path):
     finally:
         os.chmod(settings_home, original_mode)
 
-    record = root / ".git" / "coordinator-sessions" / "sess-h4" / "write_bump_launch_cwd"
+    record = hub_for_common(root / ".git") / "sess-h4" / "write_bump_launch_cwd"
     assert record.is_file()
 
 
@@ -338,7 +339,7 @@ def test_read_prefers_settings_home_record_over_in_repo_record(tmp_path):
 
     # Overwrite ONLY the in-repo record with a different value, leaving the settings-home
     # record as the original launch cwd -- the read must still return the settings-home value.
-    in_repo_record = root / ".git" / "coordinator-sessions" / "sess-h5" / "write_bump_launch_cwd"
+    in_repo_record = hub_for_common(root / ".git") / "sess-h5" / "write_bump_launch_cwd"
     in_repo_record.write_text("/some/other/foreign/repo", encoding="utf-8")
 
     assert session_start.read_session_start_record("sess-h5", cwd=str(root)) == str(root)
@@ -351,7 +352,7 @@ def test_read_falls_back_to_in_repo_record_when_settings_home_absent(tmp_path, m
     root = _init_repo(tmp_path)
     monkeypatch.setattr(session_start, "engine_data_root", _raise_unresolved)
 
-    session_dir = root / ".git" / "coordinator-sessions" / "sess-h6"
+    session_dir = hub_for_common(root / ".git") / "sess-h6"
     session_dir.mkdir(parents=True)
     (session_dir / "write_bump_launch_cwd").write_text(str(root), encoding="utf-8")
 
@@ -531,7 +532,7 @@ def test_write_leaves_no_session_dir_without_meta_json(tmp_path, monkeypatch):
 
     assert session_start.write_session_start_record("sid-init-constructor") is True
 
-    sdir = root / ".git" / "coordinator-sessions" / "sid-init-constructor"
+    sdir = hub_for_common(root / ".git") / "sid-init-constructor"
     assert (sdir / session_start._RECORD_FILENAME).is_file()
     assert (sdir / "meta.json").is_file(), (
         "the anchor minted a session directory with no meta.json -- "
@@ -558,7 +559,7 @@ def test_write_declines_to_mint_a_dir_when_init_cannot_write_the_record(
 
     assert session_start.write_session_start_record("sid-init-fails") is False
 
-    sdir = root / ".git" / "coordinator-sessions" / "sid-init-fails"
+    sdir = hub_for_common(root / ".git") / "sid-init-fails"
     assert not (sdir / session_start._RECORD_FILENAME).exists()
     assert not (sdir / "meta.json").exists()
     # The settings-home leg is independent and still carries the anchor.
@@ -574,8 +575,8 @@ def test_second_write_with_different_cwd_is_refused_and_changes_nothing(tmp_path
 
     hub_record = _hub() / "sid-once" / "write_bump_launch_cwd"
     assert hub_record.read_text(encoding="utf-8") == str(a)
-    assert not (b / ".git" / "coordinator-sessions" / "sid-once").exists()
-    a_record = a / ".git" / "coordinator-sessions" / "sid-once" / "write_bump_launch_cwd"
+    assert not (hub_for_common(b / ".git") / "sid-once").exists()
+    a_record = hub_for_common(a / ".git") / "sid-once" / "write_bump_launch_cwd"
     assert a_record.read_text(encoding="utf-8") == str(a)
 
 

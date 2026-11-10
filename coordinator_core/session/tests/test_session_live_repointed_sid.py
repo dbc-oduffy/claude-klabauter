@@ -41,7 +41,7 @@ def world(tmp_path, monkeypatch):
     monkeypatch.setattr(hr, "registry_dir", lambda: registry)
     pid = os.getpid()
     epoch = psutil.Process(pid).create_time()
-    sdir = tmp_path / ".git" / "coordinator-sessions" / OLD_SID
+    sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / OLD_SID
     sdir.mkdir(parents=True)
 
     def write_meta(start_epoch=epoch, last_activity=None):
@@ -158,11 +158,11 @@ def test_corpus_scan_reads_only_the_snapshot_built_index(world, monkeypatch):
 def test_clear_claim_if_dead_clears_path_claim_of_repointed_holder(world):
     repo = world["repo"]
     target = "docs/some/artifact.md"
-    sink = repo / ".git" / "coordinator-sessions" / OLD_SID / scope._TOUCH_RECORD_FILENAME
+    sink = repo / ".coordinator-local" / "coordinator-sessions" / OLD_SID / scope._TOUCH_RECORD_FILENAME
     touch_record.append_event(
         sink, session_id=OLD_SID, agent_id=None, verb=touch_record.VERB_TOUCH, path=target
     )
-    base = str(repo / ".git" / "coordinator-sessions")
+    base = str(repo / ".coordinator-local" / "coordinator-sessions")
 
     # Live holder: refused.
     assert claims.clear_claim_if_dead("artifact", target, cwd=str(repo)) is False

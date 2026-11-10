@@ -87,6 +87,8 @@ Spec backlink:
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
+
 import asyncio
 import json
 import os
@@ -150,7 +152,7 @@ class WscResolveRepo:
 
     def __init__(self, root: Path) -> None:
         self.root = root
-        (root / ".git" / "coordinator-sessions").mkdir(parents=True, exist_ok=True)
+        hub_for_common(root / ".git").mkdir(parents=True, exist_ok=True)
         (root / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
         (root / "cross-repo" / "inbox").mkdir(parents=True, exist_ok=True)
         (root / "docs" / "plans").mkdir(parents=True, exist_ok=True)
@@ -170,7 +172,7 @@ class WscResolveRepo:
         schema_version: int = 1,
         extra_fields: Optional[dict[str, Any]] = None,
     ) -> Path:
-        sid_dir = self.common_dir / "coordinator-sessions" / sid
+        sid_dir = session_dir_for(self.common_dir, sid)
         sid_dir.mkdir(parents=True, exist_ok=True)
         shape: dict[str, Any] = {
             "schema_version": schema_version,
@@ -265,7 +267,7 @@ class WscResolveRepo:
         return path
 
     def seed_started_at(self, sid: str, value: str) -> Path:
-        sid_dir = self.common_dir / "coordinator-sessions" / sid
+        sid_dir = session_dir_for(self.common_dir, sid)
         sid_dir.mkdir(parents=True, exist_ok=True)
         path = sid_dir / "started_at"
         path.write_text(value + "\n", encoding="utf-8")
@@ -335,7 +337,7 @@ def test_receipt_graceful_absent(tmp_path):
 def test_read_started_at_present(tmp_path):
     sid = "sess-sa-unit-001"
     common_dir = tmp_path / ".git"
-    sid_dir = common_dir / "coordinator-sessions" / sid
+    sid_dir = session_dir_for(common_dir, sid)
     sid_dir.mkdir(parents=True)
     (sid_dir / "started_at").write_text("2026-07-06T12:00:25Z\n", encoding="utf-8")
 
@@ -346,7 +348,7 @@ def test_read_started_at_present(tmp_path):
 def test_read_started_at_absent(tmp_path):
     sid = "sess-sa-unit-002"
     common_dir = tmp_path / ".git"
-    (common_dir / "coordinator-sessions" / sid).mkdir(parents=True)
+    session_dir_for(common_dir, sid).mkdir(parents=True)
 
     result = _read_started_at(common_dir, sid)
     assert result is None
@@ -355,7 +357,7 @@ def test_read_started_at_absent(tmp_path):
 def test_read_started_at_empty(tmp_path):
     sid = "sess-sa-unit-003"
     common_dir = tmp_path / ".git"
-    sid_dir = common_dir / "coordinator-sessions" / sid
+    sid_dir = session_dir_for(common_dir, sid)
     sid_dir.mkdir(parents=True)
     (sid_dir / "started_at").write_text("", encoding="utf-8")
 
@@ -497,7 +499,7 @@ items:
 def test_read_started_at_whitespace_only(tmp_path):
     sid = "sess-sa-ws-001"
     common_dir = tmp_path / ".git"
-    sid_dir = common_dir / "coordinator-sessions" / sid
+    sid_dir = session_dir_for(common_dir, sid)
     sid_dir.mkdir(parents=True)
     (sid_dir / "started_at").write_text("   \n   ", encoding="utf-8")
 
@@ -1249,7 +1251,7 @@ def _redate_init(root: Path) -> None:
 def _history_after(git_repo, sid: str, floor: str):
     from coordinator_core.workstream_complete.session_history import read_session_history
 
-    sdir = git_repo.common_dir / "coordinator-sessions" / sid
+    sdir = session_dir_for(git_repo.common_dir, sid)
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "head_at_start").write_text(floor + "\n", encoding="utf-8")
     return read_session_history(git_repo.root, sid)

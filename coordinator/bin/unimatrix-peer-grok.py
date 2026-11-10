@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Grok adapter for the unimatrix peer router: registry discovery and one cwd-pinned headless resume.
 
 Discovery reads <grok home>/active_sessions.json (no hooks). Delivery runs

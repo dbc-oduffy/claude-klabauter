@@ -3,7 +3,7 @@ coordinator_core.group_em.suite_grant -- the live Group EM's test-run grant: rec
 revoke, and the fail-closed reader the suite gate consults.
 
 Record: ``<settings-home>/state/group-em/suite-grants/<issuer_sid>/<grantee_sid>.json`` -- under the
-ISSUER's key, beside the nomination records, never in a grantee's ``.git/coordinator-sessions/``
+ISSUER's key, beside the nomination records, never in a grantee's ``.coordinator-local/coordinator-sessions/``
 dir (grant.py's "a writer writes only its own session" invariant holds). Claude-Klabauter-owned; DoE's
 ``tier-u-grant.schema.json`` and ``grant.py``'s ``_VALID_GRANTED_BY`` are untouched.
 

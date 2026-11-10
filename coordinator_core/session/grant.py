@@ -4,7 +4,7 @@ writer/reader, per DR-088 (test-breadth ladder, tiered invocation authority)
 layer 5: "Authorization grant — Tier U requires a live token; qualifying
 ceremonies write an implicit one."
 
-Writes/reads ``.git/coordinator-sessions/<sid>/tier-u-grant.json`` — a
+Writes/reads ``.coordinator-local/coordinator-sessions/<sid>/tier-u-grant.json`` — a
 per-session artifact precedented by ``session-shape.json`` (see
 ``coordinator_core.session.shape``): same directory, same
 ``tempfile.mkstemp`` + ``os.replace`` atomicity discipline, same sid
@@ -61,7 +61,7 @@ Spec backlink: cross-repo/inbox/2026-07-23-claude-central-em-dr088-grant-spec-an
 Spec backlink: coordinator-content-repo docs/decisions/DR-088-test-breadth-ladder-tiered-invocation-authority.md § Decision, layer 5
 
 Negative-spec (path-scoped read — NEVER glob):
-    Do NOT enumerate ``.git/coordinator-sessions/*/tier-u-grant.json`` (or
+    Do NOT enumerate ``.coordinator-local/coordinator-sessions/*/tier-u-grant.json`` (or
     any other glob) to answer "is there a live grant." Resolve the CALLING
     session's own sid and read ONLY that one directory. A glob would let a
     concurrent sibling EM session's live grant authorize a DIFFERENT
@@ -99,7 +99,7 @@ from coordinator_core.session import core, liveness
 #: The only two legal values of the ``granted_by`` field (DR-088 § Decision:
 #: "Authorization is granted two ways" — explicit PM, or implicit ceremony).
 # Generator-provenance declaration (coordinator_core/ops/generator_census). write_tier_u_grant/
-# revoke_tier_u_grant write/unlink only `.git/coordinator-sessions/<sid>/tier-u-
+# revoke_tier_u_grant write/unlink only `.coordinator-local/coordinator-sessions/<sid>/tier-u-
 # grant.json` -- git-internal session-hub state, never a tracked repo artifact.
 GENERATES = []
 

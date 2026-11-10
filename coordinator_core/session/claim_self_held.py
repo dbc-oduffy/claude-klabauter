@@ -16,6 +16,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.session import liveness as _liveness
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _explicitly_scoped_session_id() -> str:
@@ -75,7 +76,7 @@ def _claim_already_self_held(repo_root: Path, class_: str, basename: str) -> boo
     brief-time snapshot already answered for THIS session, not to change what
     the primitive decides for anyone else.
     """
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / f"{class_}-claims" / basename
     if not claims_dir.is_dir():
         return False
     try:

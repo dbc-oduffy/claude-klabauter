@@ -40,6 +40,13 @@ def test_the_executor_prompt_anchors_to_the_runtime_root_never_a_literal():
     assert "/home/user" not in prompt
 
 
+def test_the_anchor_cd_yields_where_the_platform_forbids_cd():
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    clause = ask_compose._ANCHOR_CLAUSE.format(root="/r")
+    assert "unless your working directory already is it or the platform note forbids cd" in clause
+
+
 def test_the_anchor_leads_the_preamble():
     preamble = _plan_context_preamble(_context("/repo"))
     assert preamble.splitlines()[0].startswith(f"Repo root: {_ROOT_EXPR}")

@@ -22,7 +22,7 @@ def _git(root: Path, *args: str) -> None:
 
 
 def _claim(root: Path, sid: str, path: str) -> None:
-    sdir = root / ".git" / "coordinator-sessions" / sid
+    sdir = root / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     touch_record.append_event(
         touch_record.sink_path(sdir), session_id=sid, agent_id=None,

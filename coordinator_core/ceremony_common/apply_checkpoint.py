@@ -1,7 +1,7 @@
 """Day-keyed JSONL resume checkpoint for ceremony apply.
 
 One file per (ceremony, local day, for_date/only key) under
-`<git-common-dir>/coordinator-sessions/<ceremony>-apply/`. Rows are appended with
+`<session hub>/<ceremony>-apply/` (the session hub, `session_hub_path.hub_for_common`). Rows are appended with
 `atomic_append.append_line`: `start`, `dispatching`, `landed`, `finished`. A rerun after a kill
 reads the file and skips every id with a `landed` row; an id with `dispatching` and no `landed`
 is `interrupted` and dispatches again, because nothing proves it landed.

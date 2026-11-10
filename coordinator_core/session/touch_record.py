@@ -213,6 +213,7 @@ from typing import Iterable, Optional
 from coordinator_core import atomic_append
 from coordinator_core.session.liveness import session_live
 from coordinator_core.session.path_dialect import canonicalize_relative_path
+from coordinator_core.session_hub_path import session_dir_for
 
 _logger = logging.getLogger(__name__)
 
@@ -537,7 +538,7 @@ def last_seen_hash(
     into, existing code).
 
     Reads ONLY this session's own sink family
-    (``discover_family(sink_path(<root>/.git/coordinator-sessions/
+    (``discover_family(sink_path(.coordinator-local/coordinator-sessions/
     <session_id>))``, the same sink-directory shape
     ``append_touch_claims`` already writes through), walked
     newest-generation-first and newest-line-first within a generation, and
@@ -604,7 +605,7 @@ def last_seen_events(
     if not session_id or not root or not wanted:
         return result
     try:
-        sid_dir = os.path.join(str(root), ".git", "coordinator-sessions", session_id)
+        sid_dir = str(session_dir_for(Path(root) / ".git", session_id))
         family = discover_family(sink_path(sid_dir))
         pending = set(wanted)
         for member in reversed(family):
@@ -1343,7 +1344,7 @@ def append_touch_claims(
     never.
 
     Exists because two callers had hand-copied the identical tail -- build
-    ``<root>/.git/coordinator-sessions/<sid>``, ``sink_path`` it, then loop
+    ``.coordinator-local/coordinator-sessions/<sid>``, ``sink_path`` it, then loop
     ``append_event`` swallowing per-path failures: ``bash_guards.
     dispatch_checks._rm_flush_touch`` (deletions, C9 2026-08-27) and
     ``bash_guards.write_claim_record.record_write_claims`` (writes,
@@ -1380,7 +1381,7 @@ def append_touch_claims(
     if not session_id or not root:
         return
     try:
-        sid_dir = os.path.join(str(root), ".git", "coordinator-sessions", session_id)
+        sid_dir = str(session_dir_for(Path(root) / ".git", session_id))
         sink = sink_path(sid_dir)
         for rel in paths:
             if not rel:

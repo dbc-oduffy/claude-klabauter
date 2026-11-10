@@ -28,6 +28,8 @@ Spec backlink: docs/plans/2026-08-25-the-legacy-touch-record-is-retired-by-repoi
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 from pathlib import Path
 
 import pytest
@@ -88,7 +90,7 @@ def test_main_argparse_description_names_the_record_as_retired_by_design(capsys)
 
 
 def test_iter_touched_files_yields_legacy_touched_txt_only(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-1" / "touch-record.jsonl", "")  # new-dialect sibling
     _write(sessions_base / "sid-2" / "touched.txt", "c/d.py\n")
@@ -102,7 +104,7 @@ def test_iter_touched_files_yields_legacy_touched_txt_only(tmp_path):
 
 
 def test_iter_touched_files_excludes_archive_component(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / ".archive" / "old" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-2" / "touched.txt", "c/d.py\n")
 
@@ -124,7 +126,7 @@ def test_iter_touched_files_empty_when_sessions_base_absent(tmp_path):
 
 @pytest.mark.spawns_process
 def test_plan_file_classifies_clean_entry_unchanged(tmp_path):
-    touched = tmp_path / "coordinator-sessions" / "sid-1" / "touched.txt"
+    touched = tmp_path / HUB_NAME / "sid-1" / "touched.txt"
     _write(touched, "a/b.py\n")
 
     outcome = plan_file(touched, tmp_path)
@@ -135,7 +137,7 @@ def test_plan_file_classifies_clean_entry_unchanged(tmp_path):
 
 @pytest.mark.spawns_process
 def test_plan_file_classifies_escaping_entry_as_dropped(tmp_path):
-    touched = tmp_path / "coordinator-sessions" / "sid-1" / "touched.txt"
+    touched = tmp_path / HUB_NAME / "sid-1" / "touched.txt"
     _write(touched, "../escape.py\n")
 
     outcome = plan_file(touched, tmp_path)
@@ -146,7 +148,7 @@ def test_plan_file_classifies_escaping_entry_as_dropped(tmp_path):
 
 @pytest.mark.spawns_process
 def test_dry_run_writes_nothing(tmp_path):
-    sessions_base = tmp_path / "coordinator-sessions"
+    sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "../escape.py\na/b.py\n")
     original = (sessions_base / "sid-1" / "touched.txt").read_bytes()
 
@@ -161,7 +163,7 @@ def test_dry_run_writes_nothing(tmp_path):
 @pytest.mark.spawns_process
 def test_apply_rewrites_file_and_writes_backup_and_manifest(tmp_path):
     repo = _make_repo(tmp_path)
-    sessions_base = repo / "coordinator-sessions"
+    sessions_base = repo / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "../escape.py\na/b.py\n")
     git_common_dir = repo
 
@@ -183,7 +185,7 @@ def test_apply_rewrites_file_and_writes_backup_and_manifest(tmp_path):
 @pytest.mark.spawns_process
 def test_apply_is_idempotent(tmp_path):
     repo = _make_repo(tmp_path)
-    sessions_base = repo / "coordinator-sessions"
+    sessions_base = repo / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "../escape.py\na/b.py\n")
 
     run_migration(sessions_base, repo, apply=True, git_common_dir=repo)

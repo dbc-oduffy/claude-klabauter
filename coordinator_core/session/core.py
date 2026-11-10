@@ -41,6 +41,7 @@ from pathlib import Path
 from typing import Dict, Iterator, Mapping, NamedTuple, Optional
 
 from coordinator_core.git.repo_root import git_common_dir, show_toplevel
+from coordinator_core.session_hub_path import hub_for_common
 
 # Deferred-import accessor (hot-path import diet round 2 — docs/plans/
 # 2026-08-08-seven-measured-levers-load-norm.md § C1). psutil measured
@@ -64,8 +65,8 @@ from coordinator_core.git.repo_root import git_common_dir, show_toplevel
 # surviving `os.kill` user; see that docstring / ``_win_create_time_epoch``.
 # Generator-provenance declaration (coordinator_core/ops/generator_census). update_meta_field/
 # update_meta_fields write only `<session_dir>/meta.json` under
-# `.git/coordinator-sessions/<sid>/` -- git-internal session-hub state, never a
-# tracked repo artifact.
+# `.coordinator-local/coordinator-sessions/<sid>/` -- untracked session-hub state
+# outside `.git`, never a tracked repo artifact.
 GENERATES = []
 
 _UNRESOLVED = object()
@@ -293,7 +294,7 @@ def _sessions_dir_resolve(cwd: Optional[str]) -> str:
     common = git_common_dir(cwd)
     if not common:
         return ""
-    return str(Path(common) / "coordinator-sessions")
+    return str(hub_for_common(Path(common)))
 
 
 class _SessionsDirResolutionFailed(Exception):
@@ -324,7 +325,7 @@ def reset_sessions_dir_cache() -> None:
 
 
 def sessions_dir(cwd: Optional[str] = None) -> str:
-    """Port of ``_cs_sessions_dir``: ``<git-common-dir>/coordinator-sessions``,
+    """Port of ``_cs_sessions_dir``: the session hub (``.coordinator-local/coordinator-sessions``),
     or ``""`` if not in a git repo.
 
     The hub is the repo's COMMON git dir (via ``_sessions_dir_resolve`` ->

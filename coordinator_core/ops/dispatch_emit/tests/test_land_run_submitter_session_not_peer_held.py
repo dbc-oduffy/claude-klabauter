@@ -9,6 +9,8 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
+
 from coordinator_core.ops.dispatch_emit import ask_contract, land_run, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
@@ -48,7 +50,7 @@ def _touch(root: Path, sid: str, rel: str) -> None:
     session_core.init(sid, cwd=str(root))
     session_scope.touch(sid, rel, cwd=str(root))
     touch_record.append_event(
-        touch_record.sink_path(root / ".git" / "coordinator-sessions" / sid),
+        touch_record.sink_path(session_dir_for(root / ".git", sid)),
         session_id=sid, agent_id=None, verb="T", path=rel,
         content_hash=touch_record.compute_content_hash(root / rel), kind="w",
     )

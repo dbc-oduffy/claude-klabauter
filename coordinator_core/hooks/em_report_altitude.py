@@ -88,7 +88,7 @@ Environment variables:
     COORDINATOR_EM_REPORT_ALTITUDE_TALLY_DIR=<dir>
         Overrides where the per-session has-fired sentinel is written (see
         `_tally_path`), falling back to the git-common-dir
-        `coordinator-sessions/<session>/` location when unset. Exists so a
+        `.coordinator-local/coordinator-sessions/<session>/` location when unset. Exists so a
         demo run (replaying an archived transcript through this op) or a test
         run does not write sentinel state into a live repo's session
         bookkeeping, and so successive demo/test runs do not inherit each
@@ -104,6 +104,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 from coordinator_core.hooks._envelope import context_only
 from coordinator_core.hooks.nudge_harness_directive_dispatch import (
@@ -112,6 +113,7 @@ from coordinator_core.hooks.nudge_harness_directive_dispatch import (
     _resolve_git_dir,
     _session_key,
 )
+from coordinator_core.session_hub_path import hub_for_common
 
 
 _WORD_BUDGET = 200
@@ -185,7 +187,7 @@ def _tally_path(payload: dict) -> str | None:
 
     Honours `COORDINATOR_EM_REPORT_ALTITUDE_TALLY_DIR` as an override for the
     directory the sentinel lives under, falling back to the git-common-dir
-    `coordinator-sessions/<session>/` location when unset. This exists so a
+    `.coordinator-local/coordinator-sessions/<session>/` location when unset. This exists so a
     demo run (replaying an archived transcript's ~100 messages through this
     op) does not write fired-state into a live repo's session bookkeeping,
     and so successive demo/test runs do not inherit each other's fired
@@ -203,7 +205,7 @@ def _tally_path(payload: dict) -> str | None:
     if not git_dir:
         return None
     session_key, _has_true_sid = _session_key(payload)
-    return os.path.join(git_dir, "coordinator-sessions", session_key, _TALLY_FILENAME)
+    return os.path.join(str(hub_for_common(Path(git_dir))), session_key, _TALLY_FILENAME)
 
 
 def _has_already_fired(payload: dict) -> bool:

@@ -554,7 +554,7 @@ def _dispatch_handoff_author_fork(args: list[str], repo_root: Path) -> dict[str,
 def _ledger_claim_record(predecessor_path: str, repo_root: Path) -> Optional[dict[str, str]]:
     """The durable, PREDECESSOR-SIDE claim record for `predecessor_path`, read
     off the branch-independent claim ledger
-    (`<common_dir>/coordinator-sessions/handoff-claims/<basename>/`), or None
+    (`<session hub>/handoff-claims/<basename>/`), or None
     when no such record exists.
 
     This is a SECOND, independent evidence source for DR-242's "was this baton
@@ -2183,8 +2183,8 @@ def _compensate_d5_release_claim(
     `compensators` seam via `_D1_COMPENSATORS` below (C5, 2026-08-02 --
     docs/plans/2026-08-02-roadmap-baton-supersession-hazard.md, § F5). Runs
     ONLY when d5 landed THIS run (genuinely released the session's plan
-    claim into the unversioned `<git-common-dir>/coordinator-sessions/`
-    store, which `git revert` cannot restore) and a LATER directive then
+    claim into the unversioned session hub
+    (`session_hub_path.hub_for_common`) store, which `git revert` cannot restore) and a LATER directive then
     failed (`APPLY_EXIT_PARTIAL_MUTATION`) -- re-acquires the same plan claim
     so an aborted d6 does not leave the session's own execution lock
     stranded on top of a half-applied succession.

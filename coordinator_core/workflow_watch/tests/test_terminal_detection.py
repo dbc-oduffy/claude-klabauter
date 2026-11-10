@@ -136,3 +136,29 @@ def test_journal_style_imbalance_text_does_not_terminate(tmp_path):
     )
     watcher = TerminalWatcher(str(p), "tid-1")
     assert watcher.check_record() is None
+
+
+def test_watch_on_a_completed_run_with_a_committed_commit_leg_leaves_no_halt_marker(tmp_path, monkeypatch):
+    import json
+
+    from coordinator_core import workflow_watch
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    run_id = "ask-20261110T071829-ab7f5a"
+    record_dir = ask_contract.record_dir(tmp_path, run_id)
+    record_dir.mkdir(parents=True)
+    (tmp_path / "scratch" / "warp" / run_id).mkdir(parents=True)
+    (tmp_path / "scratch" / "warp" / run_id / "submission.json").write_text(json.dumps({
+        "run_id": run_id, "script_path": "scripts/wf.js", "sizing_rel": "state/sizings/x.yaml", "submitted_at": 1.0,
+    }), encoding="utf-8")
+    journal = tmp_path / "journal.jsonl"
+    events = [
+        {"type": "started", "agentId": "a1", "label": "commit", "key": "k1"},
+        {"type": "result", "agentId": "a1", "key": "k1", "result": {"committed": True}},
+    ]
+    journal.write_text("".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
+    transcript = tmp_path / "t.jsonl"
+    _write(transcript, "<task-notification><task-id>t1</task-id><status>completed</status></task-notification>")
+    monkeypatch.chdir(tmp_path)
+    assert workflow_watch._watch(str(transcript), str(journal), "t1", 0.01, 5.0, script_path="scripts/wf.js") == 0
+    assert not (record_dir / "halted.json").exists()

@@ -7,6 +7,8 @@ manifest, never chosen here.
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import asyncio
 import os
 import subprocess
@@ -55,8 +57,8 @@ def test_two_stale_agents_with_touched_paths_spawn_one_status_in_total(tmp_path,
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
-    sessions = repo / ".git" / "coordinator-sessions"
-    sessions.mkdir()
+    sessions = hub_for_common(repo / ".git")
+    sessions.mkdir(parents=True)
     _stale_agent_with_touched_path(sessions, "agent-a")
     _stale_agent_with_touched_path(sessions, "agent-b")
     monkeypatch.setattr(reap, "resolve_live_session_ids", lambda: frozenset())

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.workstream_complete as wsc
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.ops.ceremony import wsc_disposition
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -37,7 +38,7 @@ def repo(tmp_path, monkeypatch):
     _git(root, "config", "user.email", "test@example.com")
     _git(root, "config", "user.name", "Test")
     seed = _commit(root, "seed.txt")
-    claim = root / ".git" / "coordinator-sessions" / _SID
+    claim = hub_for_common(root / ".git") / _SID
     claim.mkdir(parents=True)
     (claim / "head_at_start").write_text(seed, encoding="utf-8")
     monkeypatch.setattr(
@@ -109,7 +110,7 @@ def test_hand_measured_override_is_not_second_guessed(repo):
 
 def test_absent_head_at_start_leaves_the_scale_unresolved_with_no_census(repo):
     """No floor, no window: the census has nothing to cover and the scale never reads as resolved."""
-    (repo / ".git" / "coordinator-sessions" / _SID / "head_at_start").unlink()
+    (hub_for_common(repo / ".git") / _SID / "head_at_start").unlink()
     _commit(repo, "own.py", f"Session-Id: {_SID}")
     _commit(repo, "dispatched.py")
 

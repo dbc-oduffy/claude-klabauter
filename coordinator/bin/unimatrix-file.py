@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Move a file or folder to or from a fleet peer's per-peer drop dir over this box's own file key.
 
 Usage:

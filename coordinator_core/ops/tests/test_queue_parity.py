@@ -310,7 +310,7 @@ def _run_oracle_append(
 
     oracle_cwd: if supplied, the oracle subprocess runs from this directory. Set to a
     non-git directory to prevent the oracle's _resolve_session_id() sentinel fallback
-    (.git/coordinator-sessions/.current-session-id) when testing the session-absent path.
+    (<hub>/.current-session-id) when testing the session-absent path.
     """
     env = os.environ.copy()
     env["QUEUE_APPEND_OUTPUT_ROOT"] = str(out_root)
@@ -541,7 +541,7 @@ class TestQueueAppendByteParity:
         F8: absence of session env pinned identically on both sides.
 
         oracle_cwd isolation: oracle runs from a non-git tmp dir so its _resolve_session_id()
-        sentinel fallback (.git/coordinator-sessions/.current-session-id) cannot fire —
+        sentinel fallback (<hub>/.current-session-id) cannot fire —
         ensuring the oracle and native op both resolve to "" cleanly.
         """
         # Create a non-git directory for the oracle to run from.

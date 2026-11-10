@@ -317,6 +317,7 @@ from coordinator_core.session.machinery_paths import (
     machinery_root as _machinery_root,
     share_roots as _share_roots,
 )
+from coordinator_core.session_hub_path import session_dir_for
 
 from coordinator_core.workstream_complete import close_residue as _close_residue
 from coordinator_core.workstream_complete import completion_verdict as _completion_verdict
@@ -4864,7 +4865,7 @@ def _session_own_range_from_disk(root: Optional[Path], sid: Optional[str]) -> Op
 
     Both endpoints come from disk, never from git:
 
-    - The floor is `.git/coordinator-sessions/<sid>/head_at_start`, written
+    - The floor is `<session hub>/<sid>/head_at_start`, written
       at session start, a concrete 40-hex sha.
     - The tip is the literal token `HEAD`, which `git log <sha>..HEAD`
       resolves itself; a concrete sha would buy a `rev-parse` this range
@@ -4875,7 +4876,7 @@ def _session_own_range_from_disk(root: Optional[Path], sid: Optional[str]) -> Op
     if root is None or not sid:
         return None
     try:
-        floor = (root / ".git" / "coordinator-sessions" / sid / "head_at_start").read_text(
+        floor = (session_dir_for(root / ".git", sid) / "head_at_start").read_text(
             encoding="utf-8"
         ).strip()
     except (OSError, ValueError):

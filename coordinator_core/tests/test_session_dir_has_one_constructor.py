@@ -41,8 +41,10 @@ A ``mkdir``/``makedirs`` whose target resolves to **the session hub plus
 exactly one non-literal component** — i.e. ``<hub>/<sid>`` for a ``sid`` that
 is a variable. The hub is recognised two ways: a literal
 ``"coordinator-sessions"`` component, or a call to one of the hub resolvers
-(``sessions_dir``, ``_sessions_dir``). A call to ``session_dir(...)`` resolves
-to a session directory outright.
+(``sessions_dir``, ``_sessions_dir``, ``session_hub_path.hub_for_common`` /
+``hub_for_root``). A call to ``session_dir(...)`` or
+``session_hub_path.session_dir_for(...)`` resolves to a session directory
+outright.
 
 Deliberately NOT violations, because each is a different corpus or a
 literal-named sibling that is not a session:
@@ -70,6 +72,8 @@ from typing import List, Optional, Tuple
 
 import pytest
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 pytestmark = pytest.mark.complete
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -80,10 +84,10 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = ("coordinator_core", "coordinator/bin")
 
 #: Resolver calls that answer with the session HUB.
-_HUB_RESOLVERS = frozenset({"sessions_dir", "_sessions_dir"})
+_HUB_RESOLVERS = frozenset({"sessions_dir", "_sessions_dir", "hub_for_common", "hub_for_root"})
 
 #: Resolver calls that answer with a SESSION DIRECTORY outright.
-_SESSION_DIR_RESOLVERS = frozenset({"session_dir"})
+_SESSION_DIR_RESOLVERS = frozenset({"session_dir", "session_dir_for"})
 
 #: Marker components used by ``_recipe``.
 _HUB = ("<hub>",)
@@ -207,7 +211,7 @@ def _recipe(node: ast.AST, scope: dict, depth: int = 0) -> List[object]:
 
 def _hub_index(recipe: List[object]) -> Optional[int]:
     for i, comp in enumerate(recipe):
-        if comp is _HUB or comp == "coordinator-sessions":
+        if comp is _HUB or comp == HUB_NAME:
             return i
     return None
 
@@ -334,6 +338,32 @@ def test_a_new_bare_mkdir_of_a_session_dir_is_caught(tmp_path):
     )
     found = find_session_dir_mkdirs(tmp_path, tmp_path)
     assert found == ["newwriter.py:4::write_something"]
+
+
+def test_the_session_hub_path_resolvers_are_caught(tmp_path):
+    """The hub resolvers (``hub_for_common`` / ``hub_for_root``) and the
+    session-dir resolver (``session_dir_for``) answer with the hub / a session
+    dir, so a mkdir through them is a session-directory mkdir; a literal-named
+    hub child through them is not."""
+    mod = tmp_path / "resolverwriter.py"
+    mod.write_text(
+        "from coordinator_core.session_hub_path import hub_for_common, hub_for_root, session_dir_for\n"
+        "def via_hub(common, sid):\n"
+        "    (hub_for_common(common) / sid).mkdir(parents=True, exist_ok=True)\n"
+        "def via_root(cwd, sid):\n"
+        "    (hub_for_root(cwd) / sid).mkdir(parents=True, exist_ok=True)\n"
+        "def via_session_dir(common, sid):\n"
+        "    session_dir_for(common, sid).mkdir(parents=True, exist_ok=True)\n"
+        "def hub_child(common):\n"
+        "    (hub_for_common(common) / 'logs').mkdir(parents=True, exist_ok=True)\n",
+        encoding="utf-8",
+    )
+    found = find_session_dir_mkdirs(tmp_path, tmp_path)
+    assert found == [
+        "resolverwriter.py:3::via_hub",
+        "resolverwriter.py:5::via_root",
+        "resolverwriter.py:7::via_session_dir",
+    ]
 
 
 def test_the_os_makedirs_spelling_is_caught_too(tmp_path):

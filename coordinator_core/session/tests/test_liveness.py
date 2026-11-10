@@ -131,14 +131,14 @@ def _make_repo(tmp_path):
 
 
 def _write_session(repo, sid, meta: dict):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return sdir
 
 
 def _session_dir_path(repo, sid):
-    return Path(repo) / ".git" / "coordinator-sessions" / sid
+    return Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
 
 
 def _touch(path, epoch):
@@ -706,7 +706,7 @@ class TestLiveSessionIds:
 
     def test_returns_frozenset(self, tmp_path):
         repo = _make_repo(tmp_path)
-        (Path(repo) / ".git" / "coordinator-sessions").mkdir(parents=True)
+        (Path(repo) / ".coordinator-local" / "coordinator-sessions").mkdir(parents=True)
         assert isinstance(liveness.live_session_ids(cwd=str(repo)), frozenset)
 
     def test_live_and_stale_partition(self, tmp_path):
@@ -797,7 +797,7 @@ class TestLiveSessionIdsMetalessEnumeration:
 
     def test_reserved_non_session_dirs_still_excluded(self, tmp_path):
         repo = _make_repo(tmp_path)
-        base = Path(repo) / ".git" / "coordinator-sessions"
+        base = Path(repo) / ".coordinator-local" / "coordinator-sessions"
         for name in sorted(liveness._NON_SESSION_DIR_NAMES):
             d = base / name
             d.mkdir(parents=True, exist_ok=True)
@@ -832,7 +832,7 @@ class TestLiveSessionIdsCorpus:
         result = liveness.live_session_ids()
         assert isinstance(result, frozenset)
         assert all(isinstance(s, str) and s for s in result)
-        base = Path(core.git_root() or ".", ".git", "coordinator-sessions")
+        base = Path(core.git_root() or ".", ".coordinator-local", "coordinator-sessions")
         if base.is_dir():
             for sid in result:
                 assert (base / sid).is_dir()
@@ -858,7 +858,7 @@ class TestLiveSessionIdsCorpus:
         # overrides legitimately use non-UUID ids" (e.g. `no-session`), so a
         # positive UUID-only gate would be a behavior change with no way to
         # show non-regression against that documented contract.
-        base = Path(core.git_root() or ".", ".git", "coordinator-sessions")
+        base = Path(core.git_root() or ".", ".coordinator-local", "coordinator-sessions")
         if not base.is_dir():
             pytest.skip("no real .git/coordinator-sessions/ registry on this box")
         uuid_re = __import__("re").compile(
@@ -944,7 +944,7 @@ class TestLiveSessionVerdicts:
 
     def test_empty_sessions_dir_returns_empty_dict(self, tmp_path):
         repo = _make_repo(tmp_path)
-        (Path(repo) / ".git" / "coordinator-sessions").mkdir(parents=True)
+        (Path(repo) / ".coordinator-local" / "coordinator-sessions").mkdir(parents=True)
         assert liveness.live_session_verdicts(cwd=str(repo)) == {}
 
     @pytest.mark.skipif(
@@ -1160,7 +1160,7 @@ class TestLiveSessionVerdicts:
 
     def test_reserved_non_session_dirs_excluded_from_verdicts(self, tmp_path):
         repo = _make_repo(tmp_path)
-        base = Path(repo) / ".git" / "coordinator-sessions"
+        base = Path(repo) / ".coordinator-local" / "coordinator-sessions"
         for name in sorted(liveness._NON_SESSION_DIR_NAMES):
             d = base / name
             d.mkdir(parents=True, exist_ok=True)
@@ -1524,7 +1524,7 @@ class TestActiveSessions:
 
     def test_empty_sessions_dir_no_active(self, tmp_path):
         repo = _make_repo(tmp_path)
-        (Path(repo) / ".git" / "coordinator-sessions").mkdir(parents=True)
+        (Path(repo) / ".coordinator-local" / "coordinator-sessions").mkdir(parents=True)
         assert liveness.active_sessions(cwd=str(repo)) == ["(no active sessions)"]
 
     def test_live_line_format(self, tmp_path):
@@ -1607,7 +1607,7 @@ class TestActiveSessions:
 
     def test_reserved_non_session_dirs_still_excluded(self, tmp_path):
         repo = _make_repo(tmp_path)
-        base = Path(repo) / ".git" / "coordinator-sessions"
+        base = Path(repo) / ".coordinator-local" / "coordinator-sessions"
         for name in sorted(liveness._NON_SESSION_DIR_NAMES):
             d = base / name
             d.mkdir(parents=True, exist_ok=True)
@@ -1621,7 +1621,7 @@ class TestActiveSessions:
     def test_normal_session_dirs_unchanged_with_reserved_dirs_present(self, tmp_path):
         repo = _make_repo(tmp_path)
         for name in sorted(liveness._NON_SESSION_DIR_NAMES):
-            d = Path(repo) / ".git" / "coordinator-sessions" / name
+            d = Path(repo) / ".coordinator-local" / "coordinator-sessions" / name
             d.mkdir(parents=True, exist_ok=True)
             (d / "marker").write_text("x")
         _write_session(repo, "live-one", {"pid": "1", "last_activity": core.now_iso()})
@@ -2618,7 +2618,7 @@ class TestAbandonmentBasis:
     outlives-the-archiver.md)."""
 
     def _archive(self, repo, sid, date="2026-08-30"):
-        archive_root = Path(repo) / ".git" / "coordinator-sessions" / ".archive"
+        archive_root = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".archive"
         entry = archive_root / f"{sid}-{date}"
         entry.mkdir(parents=True, exist_ok=True)
         return entry
@@ -2719,7 +2719,7 @@ class TestAbandonmentBasis:
         # different population that must not be conflated with sub-reap
         # (i)'s `<sid>-<date>` session-archive shape.
         repo = _make_repo(tmp_path)
-        archive_root = Path(repo) / ".git" / "coordinator-sessions" / ".archive"
+        archive_root = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".archive"
         (archive_root / "_agents-s-agent-only-20260830").mkdir(parents=True)
         assert liveness.abandonment_basis("s-agent-only", cwd=str(repo)) == (
             False,
@@ -2826,7 +2826,7 @@ class TestAC1CharacterizationUnchanged:
         # NEW function, resolves a positive basis for the same sid via the
         # archive arm session_abandoned itself never gains.
         repo = _make_repo(tmp_path)
-        archive_root = Path(repo) / ".git" / "coordinator-sessions" / ".archive"
+        archive_root = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".archive"
         (archive_root / "s-archived-ac1-2026-08-30").mkdir(parents=True)
         assert liveness.session_abandoned("s-archived-ac1", cwd=str(repo)) is False
         assert liveness.abandonment_basis("s-archived-ac1", cwd=str(repo)) == (
@@ -2861,12 +2861,12 @@ class TestAC1CharacterizationUnchanged:
         # preserved: this copies live session dirs into a private fixture hub
         # and diffs against that. What is given up is only concurrency with
         # peers, which was never the property under test.
-        real = Path(core.git_root() or ".", ".git", "coordinator-sessions")
+        real = Path(core.git_root() or ".", ".coordinator-local", "coordinator-sessions")
         if not real.is_dir():
             pytest.skip("no real .git/coordinator-sessions/ registry on this box")
 
         repo = _make_repo(tmp_path)
-        hub = Path(repo) / ".git" / "coordinator-sessions"
+        hub = Path(repo) / ".coordinator-local" / "coordinator-sessions"
         hub.mkdir(parents=True, exist_ok=True)
         sids = []
         for p in sorted(real.iterdir()):

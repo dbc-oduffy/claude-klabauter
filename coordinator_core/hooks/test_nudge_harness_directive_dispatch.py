@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from coordinator_core.hooks import nudge_harness_directive_dispatch as m
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
@@ -315,7 +316,7 @@ def _git_init(repo):
 
 
 def _write_dispatched_agents(repo, session_id, content):
-    d = repo / ".git" / "coordinator-sessions" / session_id
+    d = session_dir_for(repo / ".git", session_id)
     os.makedirs(d, exist_ok=True)
     (d / "dispatched-agents.txt").write_text(content, encoding="utf-8")
 
@@ -485,7 +486,7 @@ def test_worktree_gitdir_pointer_allows_sentinel_write(tmp_path):
     }
     assert m.op(payload) is not None
     assert os.path.exists(
-        real_git / "coordinator-sessions" / "wt-sess" / "harness-directive-nudge.fired"
+        session_dir_for(real_git, "wt-sess") / "harness-directive-nudge.fired"
     )
     assert m.op(payload) is None
 

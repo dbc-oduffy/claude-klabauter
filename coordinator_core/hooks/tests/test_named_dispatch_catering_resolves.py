@@ -11,7 +11,7 @@ coordinator_core/subagent_sandbox/engine.py (via compose_catering)
 
 PRECONDITION FINDING (C3 body): no recorded SubagentStart payload existed on
 disk anywhere in this repo prior to this chunk -- grepping both incident
-agent ids across `state/`, `docs/`, and `.git/coordinator-sessions/.agents`
+agent ids across `state/`, `docs/`, and `.coordinator-local/coordinator-sessions/.agents`
 returned only prose. `state/audits/2026-08-25-named-dispatch-catering-back-
 pointer-key-form.md` (already on disk, written by a prior chunk in this same
 plan) DOES capture the real field values this bug depends on verbatim,
@@ -74,6 +74,7 @@ from coordinator_core.hooks.cater_subagent_start import (
     _is_named_teammate_agent_id,
     compose_catering,
 )
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.subagent_sandbox import engine as engine_mod
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
@@ -134,11 +135,11 @@ def _write_backpointer(git_root: Path, canonical_agent_id: str, em_sid: str, res
     """Build the two-hop back-pointer chain `resolve_effective_types` reads,
     keyed by the CANONICAL id form (post-C2) -- `.agents/<canonical>/`, not
     the raw subagent-side form the pre-fix code would have looked for."""
-    agents_dir = git_root / ".git" / "coordinator-sessions" / ".agents" / canonical_agent_id
+    agents_dir = hub_for_common(git_root / ".git") / ".agents" / canonical_agent_id
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "em-session-id.txt").write_text(em_sid + "\n", encoding="utf-8")
 
-    session_dir = git_root / ".git" / "coordinator-sessions" / em_sid
+    session_dir = session_dir_for(git_root / ".git", em_sid)
     session_dir.mkdir(parents=True, exist_ok=True)
     dispatch_file = session_dir / "dispatched-agents.txt"
     with open(dispatch_file, "a", encoding="utf-8", newline="\n") as handle:

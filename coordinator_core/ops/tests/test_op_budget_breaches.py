@@ -302,7 +302,7 @@ def test_untruncated_read_still_reports_a_real_direction(tmp_path, monkeypatch):
 
 
 def _warm_start_incident_rows():
-    """Fixture rows shaped like `.git/coordinator-sessions/logs/op-latency.1.jsonl`
+    """Fixture rows shaped like `.coordinator-local/coordinator-sessions/logs/op-latency.1.jsonl`
     — the rotated generation holding the `session.warm_start` incident: 73
     METHOD_NOT_FOUND completions over 33 hours from a looping SessionStart
     hook, real-shaped with two attributed callers."""

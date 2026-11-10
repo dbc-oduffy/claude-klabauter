@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """copy-currency-refresh -- off-boot recompute of the git-derived `Copies:` answers.
 
 The boot banner (`project-orientation.py::copies_banner`) only reads

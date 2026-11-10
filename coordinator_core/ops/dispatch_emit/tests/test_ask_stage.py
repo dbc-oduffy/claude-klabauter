@@ -7,6 +7,7 @@ import json
 import pytest
 import yaml
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import emit, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler, stage
@@ -208,7 +209,7 @@ def test_handler_refuses_malformed_params_with_a_structured_error(repo, params):
 def test_stage_registers_declared_paths_as_the_sessions_review_targets(repo):
     (repo / ".git").mkdir(exist_ok=True)
     m = stage(repo, run_id="r1", plan_rel=PLAN_REL, session_id="sess-1")
-    targets = (repo / ".git" / "coordinator-sessions" / "sess-1" / "review-targets.txt").read_text(encoding="utf-8")
+    targets = (session_dir_for(repo / ".git", "sess-1") / "review-targets.txt").read_text(encoding="utf-8")
     assert set(targets.split()) >= set(m.review_declared_paths)
 
 

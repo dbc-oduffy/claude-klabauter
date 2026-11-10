@@ -392,7 +392,7 @@ def test_gate_ignores_a_longer_prose_string_containing_the_substring(tmp_path):
     fixture = tmp_path / "fixture_substring_only.py"
     fixture.write_text(
         "def warn():\n"
-        "    return \"legacy record was .git/coordinator-sessions/<sid>/touched.txt.old\"\n",
+        "    return \"legacy record was .coordinator-local/coordinator-sessions/<sid>/touched.txt.old\"\n",
         encoding="utf-8",
     )
 

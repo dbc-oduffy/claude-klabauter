@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Codex SessionStart hook: bind this Codex thread to a stable peer name in peers.json.
 
 Reads the hook payload on stdin ({"session_id": <thread id>, "cwd": ...}). Fires on every thread

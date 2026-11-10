@@ -42,7 +42,7 @@ does not do):
       module never calls that helper and never reaches into the session
       scope module's touch API directly.
     - **Not for session-internal writes.** The touch record, ``meta.json``,
-      locks, anything under ``.git/coordinator-sessions/``, and the
+      locks, anything under ``.coordinator-local/coordinator-sessions/``, and the
       recorder chain itself are NOT routed through this seam (they would
       recurse through the very claim machinery this seam feeds).
     - **Not for `WRITE_SURFACE` install writers.** `coordinator_core/install/`

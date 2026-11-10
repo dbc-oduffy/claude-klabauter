@@ -86,6 +86,7 @@ from pathlib import Path
 
 from coordinator_core._hook_envelope import context_only
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.session_hub_path import session_dir_for
 
 
 _TELL_CITES_DIRECTIVE = re.compile(
@@ -294,7 +295,7 @@ def _sentinel_path(payload: dict) -> str | None:
         return None
     session_key, _has_true_sid = _session_key(payload)
     return os.path.join(
-        git_dir, "coordinator-sessions", session_key,
+        str(session_dir_for(Path(git_dir), session_key)),
         "harness-directive-nudge.fired",
     )
 
@@ -380,7 +381,7 @@ def _session_has_dispatched(payload: dict) -> bool:
     except Exception:
         return False
     session_key, _has_true_sid = _session_key(payload)
-    dispatched = common_dir / "coordinator-sessions" / session_key / "dispatched-agents.txt"
+    dispatched = session_dir_for(common_dir, session_key) / "dispatched-agents.txt"
     try:
         return dispatched.is_file() and dispatched.stat().st_size > 0
     except OSError:

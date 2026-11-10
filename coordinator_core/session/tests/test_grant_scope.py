@@ -18,7 +18,7 @@ def granted_session(tmp_path, monkeypatch):
     sid = "11111111-2222-3333-4444-555555555555"
 
     monkeypatch.setattr(core, "resolve_session_id", lambda cwd=None: sid)
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = repo / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True)
     monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: str(sdir))
     monkeypatch.setattr(core, "ensure_session", lambda s, cwd=None: str(sdir))
@@ -107,7 +107,7 @@ def test_a_scope_without_a_grant_authorizes_nothing(tmp_path, monkeypatch) -> No
     (repo / ".git").mkdir(parents=True)
     sid = "99999999-8888-7777-6666-555555555555"
     monkeypatch.setattr(core, "resolve_session_id", lambda cwd=None: sid)
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = repo / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True)
     monkeypatch.setattr(core, "session_dir", lambda s, cwd=None: str(sdir))
     monkeypatch.setattr(core, "ensure_session", lambda s, cwd=None: str(sdir))

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """handoff-housekeeping.py — the warm door onto `housekeeping.cycle`.
 
 Purpose: one CLI for the ONE handoff-housekeeping job — close finished

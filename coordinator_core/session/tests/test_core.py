@@ -114,7 +114,7 @@ def test_git_root_empty_outside_a_repo(tmp_path):
 def test_sessions_dir_and_session_dir_composition():
     root = core.git_root()
     sdir = core.sessions_dir()
-    assert sdir == str(Path(root) / ".git" / "coordinator-sessions")
+    assert sdir == str(Path(root) / ".coordinator-local" / "coordinator-sessions")
     one = core.session_dir("abc-123")
     assert one == str(Path(sdir) / "abc-123")
 
@@ -141,7 +141,7 @@ def test_sessions_dir_normal_repo_matches_legacy_dot_git_shape(tmp_path):
     repo.mkdir()
     _make_repo(repo)
     sdir = core.sessions_dir(cwd=str(repo))
-    assert sdir == str(repo / ".git" / "coordinator-sessions")
+    assert sdir == str(repo / ".coordinator-local" / "coordinator-sessions")
 
 
 def test_sessions_dir_in_real_worktree_is_creatable(tmp_path):
@@ -161,7 +161,7 @@ def test_sessions_dir_in_real_worktree_is_creatable(tmp_path):
     assert sdir
     Path(sdir).mkdir(parents=True, exist_ok=True)
     assert Path(sdir).is_dir()
-    assert Path(sdir).parent == (repo / ".git")
+    assert Path(sdir).parent == (repo / ".coordinator-local")
 
 
 def test_sessions_dir_two_worktrees_share_one_hub(tmp_path):
@@ -232,7 +232,7 @@ def test_sessions_dir_explicit_cwd_resolves_once_across_repeat_calls(tmp_path, m
     first = core.sessions_dir(cwd=str(repo))
     for _ in range(5):
         assert core.sessions_dir(cwd=str(repo)) == first
-    assert first == str(repo / ".git" / "coordinator-sessions")
+    assert first == str(repo / ".coordinator-local" / "coordinator-sessions")
     assert len(calls) == 1, f"expected exactly one resolution, got {len(calls)}: {calls}"
     core.reset_sessions_dir_cache()
 
@@ -269,7 +269,7 @@ def test_sessions_dir_failed_resolution_not_cached(tmp_path, monkeypatch):
     # Same cwd, but now a real repo -- if the failure had been cached this
     # would still incorrectly return "".
     _make_repo(target)
-    assert core.sessions_dir(cwd=str(target)) == str(target / ".git" / "coordinator-sessions")
+    assert core.sessions_dir(cwd=str(target)) == str(target / ".coordinator-local" / "coordinator-sessions")
     core.reset_sessions_dir_cache()
 
 
@@ -1055,7 +1055,7 @@ class TestResolveSessionId:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
+        sessions_dir = tmp_path / ".coordinator-local" / "coordinator-sessions"
         sessions_dir.mkdir(parents=True)
         (sessions_dir / ".current-session-id").write_text("legacy-sid")
         assert core.resolve_session_id(cwd=str(tmp_path)) == ""
@@ -1072,7 +1072,7 @@ class TestResolveSessionId:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
+        sessions_dir = tmp_path / ".coordinator-local" / "coordinator-sessions"
         sdir = sessions_dir / "live-sid"
         sdir.mkdir(parents=True)
         (sdir / "meta.json").write_text(
@@ -1087,7 +1087,7 @@ class TestResolveSessionId:
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "tier3-sid")
         subprocess.run(["git", "init", "-q"], cwd=tmp_path, **no_console_passthrough_kwargs())
-        sessions_dir = tmp_path / ".git" / "coordinator-sessions"
+        sessions_dir = tmp_path / ".coordinator-local" / "coordinator-sessions"
         sessions_dir.mkdir(parents=True)
         (sessions_dir / ".current-session-id").write_text("legacy-sid")
         assert core.resolve_session_id(cwd=str(tmp_path)) == "tier3-sid"
@@ -1223,7 +1223,7 @@ class TestInit:
         repo = self._make_repo(tmp_path)
         ok = core.init("test-sid-1", goal="ship it", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-1"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-1"
         assert (sdir / "started_at").is_file()
         assert (sdir / "head_at_start").is_file()
         # `touched.txt` is no longer created here (C5, docs/plans/2026-08-25-
@@ -1240,7 +1240,7 @@ class TestInit:
     def test_init_is_idempotent_preserves_started_at_and_goal(self, tmp_path):
         repo = self._make_repo(tmp_path)
         core.init("test-sid-2", goal="original goal", cwd=str(repo))
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-2"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-2"
         started_at_first = (sdir / "started_at").read_text()
 
         # Re-init with no goal -> existing goal preserved, started_at untouched.
@@ -1258,7 +1258,7 @@ class TestInit:
         """
         repo = self._make_repo(tmp_path)
         core.init("test-sid-goal-refresh", goal="original goal", cwd=str(repo))
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-goal-refresh"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-goal-refresh"
 
         # Re-init with a DIFFERENT non-empty goal -> stored goal unchanged.
         core.init("test-sid-goal-refresh", goal="a completely different goal", cwd=str(repo))
@@ -1335,7 +1335,7 @@ class TestInitWindowsGuard1:
 
         ok = core.init("test-sid-win-guard1", goal="win guard1", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-win-guard1"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-win-guard1"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid"] == str(real_ppid)
         assert meta["stable_pid_start_epoch"] == str(real_ct)
@@ -1368,7 +1368,7 @@ class TestInitWindowsGuard1:
 
         ok = core.init("test-sid-win-guard1-nomatch", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-win-guard1-nomatch"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-win-guard1-nomatch"
         meta = json.loads((sdir / "meta.json").read_text())
         assert "stable_pid" not in meta
 
@@ -1804,7 +1804,7 @@ class TestInitWindowsGuard1PreferenceOrder:
 
         ok = core.init("test-sid-claude-pid-preferred", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-claude-pid-preferred"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-claude-pid-preferred"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid"] == "4242"
         assert meta["stable_pid_start_epoch"] == "321"
@@ -1832,7 +1832,7 @@ class TestInitWindowsGuard1PreferenceOrder:
 
         ok = core.init("test-sid-claude-pid-nonmatch-falls-back", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-claude-pid-nonmatch-falls-back"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-claude-pid-nonmatch-falls-back"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid"] == "5555"
         assert meta["stable_pid_start_epoch"] == "654"
@@ -1852,7 +1852,7 @@ class TestInitWindowsGuard1PreferenceOrder:
 
         ok = core.init("test-sid-claude-pid-dead-falls-back", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-claude-pid-dead-falls-back"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-claude-pid-dead-falls-back"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid"] == "5556"
         assert meta["stable_pid_start_epoch"] == "111"
@@ -1878,7 +1878,7 @@ class TestInitWindowsGuard1PreferenceOrder:
         assert ok is True
         sdir = (
             Path(repo)
-            / ".git"
+            / ".coordinator-local"
             / "coordinator-sessions"
             / f"test-sid-claude-pid-garbage-{raw!r}-falls-back"
         )
@@ -1897,7 +1897,7 @@ class TestInitWindowsGuard1PreferenceOrder:
 
         ok = core.init("test-sid-claude-pid-neither-resolves", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "test-sid-claude-pid-neither-resolves"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "test-sid-claude-pid-neither-resolves"
         meta = json.loads((sdir / "meta.json").read_text())
         assert "stable_pid" not in meta
         assert meta["stable_pid_capture"] == "env-miss:absent|walk-miss:depth-exhausted"
@@ -1937,7 +1937,7 @@ class TestStablePidCaptureBreadcrumb:
 
         ok = core.init("bc-win-env-hit", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "bc-win-env-hit"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "bc-win-env-hit"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid_capture"] == "env-hit"
 
@@ -1960,7 +1960,7 @@ class TestStablePidCaptureBreadcrumb:
 
         ok = core.init("bc-win-walk-hit", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "bc-win-walk-hit"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "bc-win-walk-hit"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid_capture"] == "env-miss:absent|walk-hit:3"
         assert meta["stable_pid"] == "9001"
@@ -1981,7 +1981,7 @@ class TestStablePidCaptureBreadcrumb:
 
         ok = core.init("bc-win-both-miss", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "bc-win-both-miss"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "bc-win-both-miss"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid_capture"] == (
             "env-miss:absent|walk-miss:rung-unreadable:AccessDenied:2"
@@ -1995,7 +1995,7 @@ class TestStablePidCaptureBreadcrumb:
 
         ok = core.init("bc-win-psutil-absent", goal="x", cwd=str(repo))
         assert ok is True
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "bc-win-psutil-absent"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "bc-win-psutil-absent"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid_capture"] == "psutil-absent"
         assert "stable_pid" not in meta
@@ -2028,7 +2028,7 @@ class TestStablePidCaptureBreadcrumb:
 
         ok = core.init("bc-win-unexpected-exc", goal="x", cwd=str(repo))
         assert ok is True  # init() must not raise
-        sdir = Path(repo) / ".git" / "coordinator-sessions" / "bc-win-unexpected-exc"
+        sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / "bc-win-unexpected-exc"
         meta = json.loads((sdir / "meta.json").read_text())
         assert meta["stable_pid_capture"] == "env-miss:RuntimeError|walk-miss:RuntimeError"
         assert "stable_pid" not in meta
@@ -2433,7 +2433,7 @@ def test_sessions_dir_resolves_git_bash_posix_cwd_to_the_same_hub(tmp_path):
     native = core.sessions_dir(cwd=str(repo))
     posix = core.sessions_dir(cwd=_msys_spelling(repo))
 
-    assert native == str(repo / ".git" / "coordinator-sessions")
+    assert native == str(repo / ".coordinator-local" / "coordinator-sessions")
     assert posix == native
     assert posix != ""
     core.reset_sessions_dir_cache()
@@ -2449,7 +2449,7 @@ def test_sessions_dir_posix_cwd_below_the_root_resolves_to_the_repo_hub(tmp_path
     core.reset_sessions_dir_cache()
 
     assert core.sessions_dir(cwd=_msys_spelling(repo / "nested" / "deeper")) == str(
-        repo / ".git" / "coordinator-sessions"
+        repo / ".coordinator-local" / "coordinator-sessions"
     )
     core.reset_sessions_dir_cache()
 

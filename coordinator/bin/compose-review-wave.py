@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """compose-review-wave.py -- caller-side composer for the fired review
 partition workflow.
 

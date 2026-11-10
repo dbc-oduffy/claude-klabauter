@@ -52,7 +52,7 @@ Negative-spec:
   - Does NOT spawn a subprocess anywhere in its read/where/batch/ledger path
     — `is_item_live` is itself spawn-free (path-exists plus an in-process
     read, per its own docstring). The row-claim check reads the claim store
-    under `<repo_root>/.git/coordinator-sessions/row-claims/` (one stat per
+    under `<repo_root>/.coordinator-local/coordinator-sessions/row-claims/` (one stat per
     row, a liveness read only for a row with a claim dir): filesystem only.
 
 Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md § Design
@@ -70,6 +70,7 @@ from typing import Any, Mapping, Optional, Sequence
 from coordinator_core.contract import grind_vocab
 from coordinator_core.frontmatter import schema_validate
 from coordinator_core.session import claims
+from coordinator_core.session_hub_path import hub_for_common
 
 # Writes per-run queue row files under a caller-supplied row dir, not a stamped artifact.
 GENERATES = []
@@ -790,7 +791,7 @@ def select_rows(
             )
 
     claimed: list[ClaimedEntry] = []
-    sessions_dir = repo_root / ".git" / "coordinator-sessions"
+    sessions_dir = hub_for_common(repo_root / ".git")
     if (sessions_dir / f"{claims.ROW_CLAIM_CLASS}-claims").is_dir():
         unclaimed = []
         for item in filtered:

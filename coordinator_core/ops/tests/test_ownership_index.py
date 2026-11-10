@@ -10,6 +10,8 @@ Spec backlink: coordinator-content-repo:pln-gate-resolution-widen-the-engi-690ee
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import subprocess
 from pathlib import Path
 
@@ -63,7 +65,7 @@ def _write_baton(path: Path, sid: str) -> None:
 
 
 def _make_claim(repo: Path, cls: str, basename: str, session_id: str) -> None:
-    cdir = repo / ".git" / "coordinator-sessions" / f"{cls}-claims" / basename
+    cdir = hub_for_common(repo / ".git") / f"{cls}-claims" / basename
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "session_id").write_text(session_id, encoding="utf-8")
     (cdir / "claimed_at").write_text("2026-07-27T00:00:00Z", encoding="utf-8")

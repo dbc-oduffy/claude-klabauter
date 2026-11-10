@@ -6,6 +6,7 @@ import json
 import pytest
 
 from coordinator_core.op_census import occupancy_scan as scan_mod
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.op_census.occupancy_scan import (
     Liveness,
     Shape,
@@ -33,7 +34,7 @@ def _patch_git(monkeypatch, tmp_path):
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
     )
-    sink = fake_common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
     sink.parent.mkdir(parents=True)
     return sink
 

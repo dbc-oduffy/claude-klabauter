@@ -104,6 +104,7 @@ from coordinator_core.session import path_dialect
 from coordinator_core.session import scope
 from coordinator_core.session import shape
 from coordinator_core.session import touch_record
+from coordinator_core.session_hub_path import HUB_NAME, hub_for_common
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +125,7 @@ from coordinator_core.session import touch_record
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census). Every write in this
 # module (claim-dir pid/session_id/claimed_at/stage files, touched.txt appends,
-# stamped markers) targets `.git/coordinator-sessions/<sid>/...` -- git-internal
+# stamped markers) targets `.coordinator-local/coordinator-sessions/<sid>/...` --
 # session-hub state, never a tracked repo artifact.
 GENERATES = []
 
@@ -200,7 +201,7 @@ def _atomic_dedup_append_lock_anchor(touched: str) -> Optional[Path]:
     ``root`` parameter of its own (unlike ``scope.touch()``), so it cannot
     take the anchor as an argument the way that sibling writer does.
 
-    ``touched`` is always ``<git-common-dir>/coordinator-sessions/<sid>/
+    ``touched`` is always ``.coordinator-local/coordinator-sessions/<sid>/
     touched.txt`` (``core.session_dir`` / ``core.sessions_dir``), so its
     THIRD parent is the git common dir itself: ``parents[0]`` = the ``<sid>``
     directory, ``parents[1]`` = ``coordinator-sessions``, ``parents[2]`` =
@@ -241,12 +242,18 @@ def _atomic_dedup_append_lock_anchor(touched: str) -> Optional[Path]:
     """
     p = Path(os.path.abspath(touched))
     parents = p.parents
-    if len(parents) < 3:
+    if len(parents) < 4:
         return None
-    common_dir = parents[2]
-    if common_dir.name != ".git":
+    if parents[1].name != HUB_NAME or parents[2].name != ".coordinator-local":
         return None
-    return common_dir.parent
+    return parents[3]
+
+
+def _common_dir_of_hub(hub: Path) -> Path:
+    """Inverse of ``hub_for_common``: the git common dir a session hub belongs to."""
+    if hub.parent.name == ".coordinator-local":
+        return hub.parent.parent / ".git"
+    return hub.parent
 
 
 def canonical_claim_entry(entry: str) -> Optional[str]:
@@ -828,7 +835,7 @@ def _claim_base(class_: str, baton_repo_root: str, cwd: Optional[str]) -> Option
                 file=sys.stderr,
             )
             return None
-        return str(Path(baton_repo_root) / ".git" / "coordinator-sessions")
+        return str(hub_for_common(Path(baton_repo_root) / ".git"))
     base = core.sessions_dir(cwd)
     if not base:
         return None
@@ -861,7 +868,7 @@ def claim_dir_for(
         if baton_repo_root:
             if not (Path(baton_repo_root) / ".git").is_dir():
                 return None
-            base = str(Path(baton_repo_root) / ".git" / "coordinator-sessions")
+            base = str(hub_for_common(Path(baton_repo_root) / ".git"))
         else:
             base = core.sessions_dir(cwd)
         if not base:
@@ -2402,7 +2409,7 @@ def _resolve_path_claim_base(
     if baton_repo_root:
         if not (Path(baton_repo_root) / ".git").is_dir():
             return None, False
-        return str(Path(baton_repo_root) / ".git" / "coordinator-sessions"), True
+        return str(hub_for_common(Path(baton_repo_root) / ".git")), True
     base = core.sessions_dir(cwd)
     return base, True
 
@@ -2824,7 +2831,7 @@ def release_artifact_outcome(
     if baton_repo_root:
         if not (Path(baton_repo_root) / ".git").is_dir():
             return RELEASE_ALREADY_ABSENT
-        base = str(Path(baton_repo_root) / ".git" / "coordinator-sessions")
+        base = str(hub_for_common(Path(baton_repo_root) / ".git"))
     else:
         base = core.sessions_dir(cwd)
         if not base:
@@ -3174,8 +3181,7 @@ def _evidence_still_holds(
             from coordinator_core.ops.fleet._common import main_worktree_root
             from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
-            sessions_dir_path = claim_dir.parent.parent
-            common_dir = sessions_dir_path.parent
+            common_dir = _common_dir_of_hub(claim_dir.parent.parent)
             worktree = main_worktree_root(common_dir)
             if not worktree:
                 return False
@@ -3484,7 +3490,7 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
     ``_handoff_has_named_successor`` returning ``None`` is treated as "may have
     a successor", never as "has none".
 
-    ``sessions_dir``: the ``<common_dir>/coordinator-sessions`` dir (the same
+    ``sessions_dir``: the session hub dir (``session_hub_path.hub_for_common``; the same
     value ``clear_claim_if_dead`` resolves);
     the handoff worktree is derived from its parent (``common_dir``) via
     ``main_worktree_root`` — the single reviewed home for that derivation
@@ -3498,7 +3504,7 @@ def reconcile_dead_handoff_claim_frontmatter(basename: str, sessions_dir: Path) 
     from coordinator_core.ops.handoff_transition import _unclaim
     from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 
-    common_dir = sessions_dir.parent
+    common_dir = _common_dir_of_hub(sessions_dir)
     worktree = main_worktree_root(common_dir)
     handoff_path = worktree / "state" / "handoffs" / basename
 

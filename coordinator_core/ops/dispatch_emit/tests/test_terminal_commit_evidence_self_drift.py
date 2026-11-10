@@ -8,6 +8,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import criterion_evidence
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
@@ -52,7 +53,7 @@ def _fire(tmp_path, monkeypatch, recorded: str) -> tuple:
     _git(["commit", "-q", "-m", "seed"], repo)
     (repo / "foo.py").write_text("x = 2\n", encoding="utf-8", newline="")
     touch_record.append_event(
-        touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SID),
+        touch_record.sink_path(session_dir_for(repo / ".git", SID)),
         session_id=SID, agent_id=None, verb="T", path=EVIDENCE,
         content_hash=_sha(recorded), kind="w", timestamp=1.0,
     )

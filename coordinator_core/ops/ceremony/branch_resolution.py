@@ -39,7 +39,7 @@ the scoping-analysis + session-commit-primitive engine is live; the retired
 op handler's body was not.
 
 Branch resolution reads session-shape.json PYTHON-NATIVELY:
-  Path: <common_dir>/coordinator-sessions/<sid>/session-shape.json
+  Path: <hub>/<sid>/session-shape.json (session_hub_path.session_dir_for)
   Schema: {schema_version:1, pickup:{...}, actioned_memos:[...],
            plan:{scope_mode:...}, magnitude:...}
 
@@ -110,10 +110,12 @@ def _read_session_shape(common_dir: Path, sid: str) -> tuple[dict[str, Any], str
       "absent"         — file absent; L1b grep fallback should be used
 
     Python-native read — do NOT shell out to bin/coordinator-session-shape.
-    Per plan § C2.2: read from .git/coordinator-sessions/<sid>/session-shape.json
+    Per plan § C2.2: read from the session hub's <sid>/session-shape.json
     directly.
     """
-    shape_path = common_dir / "coordinator-sessions" / sid / "session-shape.json"
+    from coordinator_core.session_hub_path import session_dir_for
+
+    shape_path = session_dir_for(common_dir, sid) / "session-shape.json"
     if not shape_path.exists():
         return {}, "absent"
 
@@ -135,7 +137,7 @@ def _read_started_at(common_dir: Path, sid: str) -> str | None:
     """Read started_at for ``sid`` from the coordinator-sessions dir.
 
     Returns the trimmed ISO-8601 string from
-    ``<common_dir>/coordinator-sessions/<sid>/started_at``, or ``None`` when
+    ``<hub>/<sid>/started_at`` (``session_hub_path.session_dir_for``), or ``None`` when
     the file is absent or empty.
 
     Mirrors _read_session_shape (same dir, sibling file).  Python-native read.
@@ -143,7 +145,9 @@ def _read_started_at(common_dir: Path, sid: str) -> str | None:
     Spec backlink:
       docs/plans/2026-07-06-wsc-resolve-consume-doe-signals-x-to-d.md § C1
     """
-    started_at_path = common_dir / "coordinator-sessions" / sid / "started_at"
+    from coordinator_core.session_hub_path import session_dir_for
+
+    started_at_path = session_dir_for(common_dir, sid) / "started_at"
     if not started_at_path.exists():
         return None
     try:

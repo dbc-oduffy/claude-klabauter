@@ -416,7 +416,9 @@ def fire_tracker_and_roadmap_detached(
 
 
 def _sessions_dir(common_dir: Path) -> Path:
-    return common_dir / "coordinator-sessions"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(common_dir)
 
 
 def cs_archive(common_dir: Path, session_id: str) -> TailResult:
@@ -454,7 +456,7 @@ def _claim_held_by_me(claim_dir: Path, my_session_id: str) -> bool:
 def cs_release_artifact(common_dir: Path, artifact_class: str, basename: str) -> TailResult:
     """Native port of bash ``cs_release_artifact <class> <basename>``.
 
-    Self-release ONLY: releases ``<common_dir>/coordinator-sessions/<class>-claims/<basename>``
+    Self-release ONLY: releases ``<hub>/<class>-claims/<basename>`` (hub: ``session_hub_path.hub_for_common``)
     iff the CURRENT session is the recorded holder. Preserves the load-bearing TOCTOU
     double-read from the bash original (``_cs_claim_held_by_me`` called twice, keyed off
     ONE pre-resolved session id so the second read varies only on claim-dir CONTENT --

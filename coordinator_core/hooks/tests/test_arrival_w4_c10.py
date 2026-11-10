@@ -39,6 +39,7 @@ from coordinator_core.hooks import (
     sweep_boot,
 )
 from coordinator_core.ipc import _REGISTRY
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _run(coro):
@@ -296,7 +297,7 @@ def test_sweep_boot_session_reap_due_true_when_no_marker(tmp_path):
 
 
 def test_sweep_boot_session_reap_due_false_when_marker_fresh(tmp_path):
-    marker_dir = tmp_path / ".git" / "coordinator-sessions"
+    marker_dir = hub_for_common(tmp_path / ".git")
     marker_dir.mkdir(parents=True)
     (marker_dir / ".last-reap").write_text("", encoding="utf-8")
     assert sweep_boot._session_reap_due(str(tmp_path)) is False

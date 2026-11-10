@@ -148,11 +148,13 @@ def build_fixture(workdir: Path, lines: int, *, with_unique: bool) -> dict:
     os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
     session_core.init(SELF, cwd=str(root))
     _write(root, REPORT, "PARTIAL: X1\nNot done: nothing edited, files written by the run\n")
+    from coordinator_core.session_hub_path import session_dir_for
+
     for rel, text in ((REWRITTEN, repetitive_map(3, lines)), (NEW, repetitive_map(4, lines))):
         _write(root, rel, text)
         session_scope.touch(SELF, rel, cwd=str(root))
         touch_record.append_event(
-            touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF),
+            touch_record.sink_path(session_dir_for(root / ".git", SELF)),
             session_id=SELF, agent_id=None, verb="T", path=rel,
             content_hash=touch_record.compute_content_hash(root / rel), kind="w",
         )

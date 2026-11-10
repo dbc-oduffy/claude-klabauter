@@ -165,7 +165,7 @@ SUBAGENTS -- EM SESSION ID VIA THE EXISTING BACK-POINTER, NOT REIMPLEMENTED.
 `coordinator_core.subagent_sandbox.engine._read_backpointer_subagent_type`
 (that function's own docstring: "Back-pointer chain: agent_id ->
 em_session_id -> dispatched-agents.txt row") -- reading
-`.git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt` and
+`.coordinator-local/coordinator-sessions/.agents/<agent_id>/em-session-id.txt` and
 validating its first line against the same session-id-format regex that
 module already exports. This module only needs the FIRST hop (agent_id ->
 em_session_id); the second hop (em_session_id -> dispatched-agents.txt row)
@@ -175,8 +175,8 @@ its EM's session id, so a single `touch` by (or on behalf of) the EM stands
 the bump down for every subagent it dispatches too -- one clear, one
 session's worth of coverage, matching the plan's AC7.
 
-Note: this back-pointer's OWN path is a literal `<git_root>/.git/...` join,
-unlike this module's `resolve_gitdir()`. That is the existing, ported shape
+Note: this back-pointer's OWN path is resolved from a literal
+`<git_root>/.git` via `session_hub_path.hub_for_common`, unlike this module's `resolve_gitdir()`. That is the existing, ported shape
 (see `subagent_sandbox/engine.py` around line 271) and is left as-is here
 rather than "fixed" to go through `resolve_gitdir()` -- changing an
 established cross-module path convention is out of scope for this chunk,
@@ -243,6 +243,7 @@ from typing import Dict, Optional
 
 from coordinator_core.git.repo_root import git_dir as _seam_git_dir
 from coordinator_core.machine_profile import out_of_repo_write_blocked
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.subagent_sandbox.engine import _SESSION_ID_FORMAT_RE
 
 #: The marker's basename prefix. The full basename a caller creates is
@@ -529,7 +530,7 @@ def resolve_em_session_id(git_root: str, agent_id: str) -> str:
     """First hop of the existing back-pointer chain ported from
     `coordinator_core.subagent_sandbox.engine._read_backpointer_subagent_type`
     (see module docstring, "SUBAGENTS"): `agent_id -> em_session_id`, via
-    `.git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt`.
+    `.coordinator-local/coordinator-sessions/.agents/<agent_id>/em-session-id.txt`.
 
     Returns `""` (never raises) when `git_root`/`agent_id` is empty, the
     back-pointer file is missing/unreadable, or its first line does not
@@ -540,7 +541,7 @@ def resolve_em_session_id(git_root: str, agent_id: str) -> str:
     if not git_root or not agent_id:
         return ""
     backptr = (
-        Path(git_root) / ".git" / "coordinator-sessions" / ".agents" / agent_id / "em-session-id.txt"
+        hub_for_common(Path(git_root) / ".git") / ".agents" / agent_id / "em-session-id.txt"
     )
     try:
         content = backptr.read_text(encoding="utf-8")

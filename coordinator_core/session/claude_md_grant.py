@@ -4,7 +4,7 @@ grant for CLAUDE.md-class writes, per coordinator-content-repo
 docs/plans/2026-07-27-claude-md-altitude-triage.md § C5.
 
 Modeled DIRECTLY on ``coordinator_core.session.grant`` (the Tier-U grant,
-DR-088 layer 5): same ``.git/coordinator-sessions/<sid>/`` directory, same
+DR-088 layer 5): same ``.coordinator-local/coordinator-sessions/<sid>/`` directory, same
 ``liveness.session_live`` gate, same fail-closed-on-authorization posture,
 same sibling-isolation (path-scoped read, NEVER a glob — load-bearing on
 this fleet's shared-branch reality, several EM sessions routinely sharing
@@ -16,7 +16,7 @@ guard's own deny text states the 2026-07-27 PM ratification is a narrow
 named exception, not a reopening) — there is no ceremony-implicit route
 for a CLAUDE.md-class write the way there is for Tier-U.
 
-Writes/reads ``.git/coordinator-sessions/<sid>/claude-md-write-grant.json``.
+Writes/reads ``.coordinator-local/coordinator-sessions/<sid>/claude-md-write-grant.json``.
 
 Purpose: C4's write-guard (``block_unauthorized_claude_md_write``, not yet
 landed at the time this module was authored — Wave 4 gates C5 alongside
@@ -101,7 +101,7 @@ Precedent (persistence-shape cross-check, per C5's own instruction):
     coordinator_core/workday_complete/autonomous_verb.py — that module
     wraps an EXISTING CLI (``misc-session-and-guards autonomous-sentinel``)
     rather than persisting a session-hub artifact of its own; it has no
-    ``.git/coordinator-sessions/<sid>/`` write of its own to cross-check
+    ``.coordinator-local/coordinator-sessions/<sid>/`` write of its own to cross-check
     against. ``grant.py`` remains the sole applicable persistence-shape
     precedent for a NEW per-session grant artifact.
 
@@ -122,7 +122,7 @@ at the two places that actually see caller identity:
   2. ``coordinator_core/write_guards/block_subagent_grant_record_write.py``
      — gates a subagent's direct Write/Edit/MultiEdit/NotebookEdit against
      this module's own artifact path
-     (``.git/coordinator-sessions/<sid>/claude-md-write-grant.json``),
+     (``.coordinator-local/coordinator-sessions/<sid>/claude-md-write-grant.json``),
      independent of how the write was reached.
 
 ``_VALID_GRANTED_BY`` stays ``frozenset({"pm"})`` — the plan considered and
@@ -151,7 +151,7 @@ survives both legs" subsection: both legs together raise the cost of
 self-acquisition, they do not eliminate it.
 
 Negative-spec (path-scoped read — NEVER glob):
-    Do NOT enumerate ``.git/coordinator-sessions/*/claude-md-write-grant.json``
+    Do NOT enumerate ``.coordinator-local/coordinator-sessions/*/claude-md-write-grant.json``
     (or any other glob) to answer "is there a live grant." Resolve the
     CALLING session's own sid and read ONLY that one directory — identical
     rationale to ``grant.py``'s own negative-spec (a live grant held by a
@@ -179,7 +179,7 @@ from typing import List, Optional, Tuple
 from coordinator_core.session import core, liveness
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census). write_claude_md_write_
-# grant writes only `.git/coordinator-sessions/<sid>/claude-md-write-grant.json` --
+# grant writes only `.coordinator-local/coordinator-sessions/<sid>/claude-md-write-grant.json` --
 # git-internal session-hub state, never a tracked repo artifact.
 GENERATES = []
 

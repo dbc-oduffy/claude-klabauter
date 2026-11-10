@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
@@ -98,7 +99,7 @@ def _stale_run(root: Path, run_text: str) -> str:
     _git(["commit", "-q", "-m", "sibling adds a line"], root)
     _write(root, SHARED, run_text)
     session_scope.touch(SELF, SHARED, cwd=str(root))
-    sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF)
+    sink = touch_record.sink_path(session_dir_for(root / ".git", SELF))
     touch_record.append_event(
         sink, session_id=SELF, agent_id=None, verb="T", path=SHARED,
         content_hash=touch_record.compute_content_hash(root / SHARED), kind="w",

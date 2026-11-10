@@ -435,9 +435,10 @@ def newest_arming_epoch(session_id: str, repo_root: str) -> Optional[float]:
     """Epoch of the newest executor row dispatched after the session's last commit,
     or None when nothing arms. A row with an unreadable epoch arms (0.0)."""
     from coordinator_core.lifecycle import git_common_dir
+    from coordinator_core.session_hub_path import session_dir_for
 
     try:
-        sdir = git_common_dir(Path(repo_root)) / "coordinator-sessions" / session_id
+        sdir = session_dir_for(git_common_dir(Path(repo_root)), session_id)
         committed = _last_commit_time(sdir)
         newest: Optional[float] = None
         with open(sdir / "dispatched-agents.txt", "r", encoding="utf-8", errors="replace") as fh:

@@ -4,7 +4,7 @@ Ported from coordinator-content-repo `coordinator/hooks/scripts/_turn_intent.py`
 `hooks.guard_turn_intent`.
 
 An EM under Cockpit ends every turn with `<turn-intent>{"needs_pm":bool,"ask":"..."}</turn-intent>`.
-The Stop hook parses it and writes `<git-common-dir>/coordinator-sessions/<session_id>/turn-intent.json`
+The Stop hook parses it and writes `.coordinator-local/coordinator-sessions/<session_id>/turn-intent.json`
 (schema 1) for Cockpit. A missing tail is blocked at most BLOCK_CAP times, counted here and
 never via `stop_hook_active`, and only when the caller passes `role_marker` true
 (the marker is present AND `cockpit_session.under_cockpit()` holds); after that the
@@ -24,9 +24,11 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from typing import Callable, NamedTuple, Optional, Tuple
 
 from coordinator_core.hooks.support.session_hub import ensure_session_dir
+from coordinator_core.session_hub_path import session_dir_for
 
 SCHEMA = 1
 RECORD_NAME = "turn-intent.json"
@@ -54,7 +56,6 @@ _SENTENCE_END = re.compile(r"(?<=[.!?])\s+|\n+")
 
 _OPEN = "<turn-intent>"
 _CLOSE = "</turn-intent>"
-_HUB = "coordinator-sessions"
 
 
 class Marker(NamedTuple):
@@ -105,7 +106,7 @@ def strip_marker(text: str) -> str:
 
 
 def session_dir(git_common_dir: str, session_id: str) -> str:
-    return os.path.join(git_common_dir, _HUB, session_id)
+    return str(session_dir_for(Path(git_common_dir), session_id))
 
 
 def role_marker_present(directory: str) -> bool:

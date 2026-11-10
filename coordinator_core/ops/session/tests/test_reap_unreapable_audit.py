@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import asyncio
 import logging
 import os
@@ -27,7 +29,7 @@ def _plant_cold_dir(sessions_dir: Path, name: str) -> Path:
 
 
 def _hub_with_all_four_populations(tmp_path: Path) -> Path:
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     _plant_cold_dir(sessions, _UUID_1)
     _plant_cold_dir(sessions, _UUID_2)
     _plant_cold_dir(sessions, "decisions")
@@ -63,7 +65,7 @@ def test_collect_agrees_with_what_the_reaper_actually_leaves(tmp_path):
 
 
 def test_absent_hub_reports_an_empty_population_not_an_error(tmp_path):
-    assert reap._collect_unreapable(tmp_path / "coordinator-sessions") == []
+    assert reap._collect_unreapable(tmp_path / HUB_NAME) == []
 
 
 def test_op_handler_returns_names_and_count_and_mutates_nothing(tmp_path):

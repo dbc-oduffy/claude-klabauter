@@ -14,6 +14,7 @@ import os
 import pytest
 
 from coordinator_core.ops.scope_warning_resolve import VALID_RESOLUTIONS, main, resolve
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -31,7 +32,7 @@ _LOG_LINES = [
 
 
 def _make_repo(tmp_path, session_id: str = "test-session-1"):
-    sess_dir = tmp_path / ".git" / "coordinator-sessions" / session_id
+    sess_dir = session_dir_for(tmp_path / ".git", session_id)
     sess_dir.mkdir(parents=True)
     log = sess_dir / "scope-warnings.log"
     log.write_text("".join(_LOG_LINES), encoding="utf-8")
@@ -82,7 +83,7 @@ def test_8_invalid_resolution_code_exits_nonzero(tmp_path):
 
 
 def test_9_missing_log_file_exits_nonzero(tmp_path):
-    (tmp_path / ".git" / "coordinator-sessions" / "test-session-1").mkdir(parents=True)
+    session_dir_for(tmp_path / ".git", "test-session-1").mkdir(parents=True)
     text, rc = resolve("test-session-1", "1", "legitimate-mine", git_root=str(tmp_path))
     assert rc != 0
 

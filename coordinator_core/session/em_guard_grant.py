@@ -37,7 +37,7 @@ if the gated party (a subagent) can mint it; here it cannot, by
 construction of those two upstream guards, so there is no analogous defect
 to reopen.
 
-Writes/reads ``.git/coordinator-sessions/<sid>/em-guard-grant.json``, plus
+Writes/reads ``.coordinator-local/coordinator-sessions/<sid>/em-guard-grant.json``, plus
 the DR-260 sentinel at ``guard_unlock_sentinel.sentinel_path(sid,
 guard_name)``.
 
@@ -107,7 +107,7 @@ caller identity:
      was reached.
 
 Negative-spec (path-scoped read — NEVER glob):
-    Do NOT enumerate ``.git/coordinator-sessions/*/em-guard-grant.json``
+    Do NOT enumerate ``.coordinator-local/coordinator-sessions/*/em-guard-grant.json``
     (or any other glob) to answer "is there a live grant." Resolve the
     CALLING session's own sid and read ONLY that one directory — a
     concurrent sibling EM session's live grant must NOT authorize this
@@ -153,7 +153,7 @@ from coordinator_core.session import core, guard_unlock_sentinel, liveness
 #: chosen to buy. A name outside this set is a validation error (exit 2),
 #: never a silent no-op — see ``write_em_guard_grant``.
 # Generator-provenance declaration (coordinator_core/ops/generator_census). write_em_guard_grant
-# writes only `.git/coordinator-sessions/<sid>/em-guard-grant.json` plus the DR-260
+# writes only `.coordinator-local/coordinator-sessions/<sid>/em-guard-grant.json` plus the DR-260
 # unlock sentinel (also under the git-internal session hub) -- never a tracked repo
 # artifact.
 GENERATES = []

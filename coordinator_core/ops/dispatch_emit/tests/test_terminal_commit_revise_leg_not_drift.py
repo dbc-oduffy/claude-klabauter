@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.ops.dispatch_emit import review_edits, terminal_commit_review
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_drift import (  # noqa: F401 -- repo is a fixture
@@ -29,7 +30,7 @@ _REVIEWED_AT = 2000.0
 
 def _agent(repo: Path, agent_id: str, events, *, owner: str = SID, subagent_type: str = "coordinator:executor") -> None:
     """A dispatched agent of the session whose own touch record holds ``events`` ((path, hash, ts))."""
-    hub = repo / ".git" / "coordinator-sessions"
+    hub = hub_for_common(repo / ".git")
     adir = hub / ".agents" / agent_id
     adir.mkdir(parents=True, exist_ok=True)
     (adir / "em-session-id.txt").write_text(owner + "\n", encoding="utf-8")
@@ -52,7 +53,7 @@ def _setup(repo, monkeypatch, final: str) -> None:
     (repo / "a.py").write_bytes(final.encode("utf-8"))
     _record_at(repo, "a.py", _sha("A\n"), 1000.0)
     _review(repo, {"a.py": _sha("B\n")}, _REVIEWED_AT)
-    (repo / ".git" / "coordinator-sessions" / SID).mkdir(parents=True, exist_ok=True)
+    session_dir_for(repo / ".git", SID).mkdir(parents=True, exist_ok=True)
 
 
 def test_a_revise_leg_write_after_the_review_lands_at_its_bytes(repo, monkeypatch):

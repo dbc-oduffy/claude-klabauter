@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import json
 from pathlib import Path
 
@@ -8,9 +10,9 @@ from coordinator_core.session_baton import store
 
 
 def _session(tmp_path: Path, monkeypatch, sid: str) -> Path:
-    sdir = tmp_path / "coordinator-sessions" / sid
+    sdir = tmp_path / HUB_NAME / sid
     sdir.mkdir(parents=True)
-    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "coordinator-sessions" / s)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / HUB_NAME / s)
     return sdir
 
 

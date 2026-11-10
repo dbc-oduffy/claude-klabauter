@@ -48,6 +48,7 @@ from coordinator_core.ops.fleet._common import plan_claim_dir
 from coordinator_core.session import claims as session_claims
 from coordinator_core.session.claimed_plan import resolve_claimed_plan_path
 from coordinator_core.session import shape as session_shape
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.session.touch_record import append_event
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -103,7 +104,7 @@ def _seed_handoff_claim(
     claimed_at: str | None = None,
     stage: str | None = None,
 ) -> None:
-    claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
     claims_dir.mkdir(parents=True, exist_ok=True)
     (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
     if claimed_at is not None:
@@ -154,6 +155,8 @@ def _init_repo(repo: Path) -> None:
     _git(repo, "config", "commit.gpgsign", "false")
     _git(repo, "config", "user.email", "test@example.com")
     _git(repo, "config", "user.name", "Test")
+    with open(repo / ".git" / "info" / "exclude", "a", encoding="utf-8") as fh:
+        fh.write(".coordinator-local/\n")  # as a real checkout's .gitignore: the session hub is not dirt
     (repo / "README.md").write_text("init\n", encoding="utf-8")
     _git(repo, "add", "README.md")
     _git(repo, "commit", "-m", "init")
@@ -692,7 +695,7 @@ class TestSelfResolutionFromClaimLedger:
         claimed_at: str | None = None,
         stage: str | None = None,
     ) -> None:
-        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
         claims_dir.mkdir(parents=True, exist_ok=True)
         (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
         if claimed_at is not None:
@@ -871,7 +874,7 @@ class TestSelfResolutionFromClaimLedger:
         self._seed_handoff_claim(tmp_path, "sid-multi", earlier_by_name.name)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-multi")
 
-        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        claims_root = hub_for_common(tmp_path / ".git") / "handoff-claims"
         tied_mtime = 1_800_000_000.0
         for basename in (earlier_by_name.name, later_by_name.name):
             os.utime(claims_root / basename, (tied_mtime, tied_mtime))
@@ -908,7 +911,7 @@ class TestSelfResolutionFromClaimLedger:
         self._seed_handoff_claim(tmp_path, "sid-tied", second_seeded.name, claimed_at=tied)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-tied")
 
-        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        claims_root = hub_for_common(tmp_path / ".git") / "handoff-claims"
         earlier_mtime = 1_800_000_000.0
         later_mtime = 1_800_000_100.0
         os.utime(
@@ -1038,7 +1041,7 @@ class TestSelfResolutionFromClaimLedger:
         self._seed_handoff_claim(tmp_path, "sid-tied-all", two.name)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-tied-all")
 
-        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        claims_root = hub_for_common(tmp_path / ".git") / "handoff-claims"
         tied_mtime = 1_800_000_000.0
         for basename in (one.name, two.name):
             os.utime(claims_root / basename, (tied_mtime, tied_mtime))
@@ -1126,7 +1129,7 @@ class TestSelfResolutionFromClaimLedger:
         self._seed_handoff_claim(tmp_path, "sid-nonprimary-tie", tied_b.name)
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-nonprimary-tie")
 
-        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        claims_root = hub_for_common(tmp_path / ".git") / "handoff-claims"
         import os
 
         tied_mtime = 1_800_000_000.0
@@ -1182,7 +1185,7 @@ class TestSelfResolutionFromClaimLedger:
         )
         # Replace the `stage` file with a directory -- read_text() raises
         # OSError (IsADirectoryError), the exact unreadable-stage edge.
-        claims_root = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims"
+        claims_root = hub_for_common(tmp_path / ".git") / "handoff-claims"
         (claims_root / unreadable.name / "stage").mkdir()
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-unreadable-stage")
 
@@ -1277,7 +1280,7 @@ class TestClaimedPlanDeliverableIdCarry:
         )
         monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-ac8-absent")
         self._seed_plan_claim(tmp_path, "sid-ac8-absent", plan_slug)
-        assert not (tmp_path / ".git" / "coordinator-sessions" / "sid-ac8-absent").exists()
+        assert not (session_dir_for(tmp_path / ".git", "sid-ac8-absent")).exists()
 
         decision = ba.brief(
             "handoff", "fresh-handoff-ac8-absent", repo_root=tmp_path
@@ -6382,7 +6385,7 @@ class TestComputeDirtyTreeAttribution:
 
     def _touch_record_path(self, repo: Path, session_id: str) -> Path:
         common_dir = ba.git_common_dir(repo)
-        return common_dir / "coordinator-sessions" / session_id / "touch-record.jsonl"
+        return session_dir_for(common_dir, session_id) / "touch-record.jsonl"
 
     def _write_touch(self, repo: Path, session_id: str, path: str) -> None:
         sink = self._touch_record_path(repo, session_id)
@@ -6491,7 +6494,7 @@ class TestDirtyTreeCaseCEndToEndViaBrief:
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-brief")
         _init_repo(tmp_path)
         touch_record = (
-            ba.git_common_dir(tmp_path) / "coordinator-sessions" / "sess-brief" / "touch-record.jsonl"
+            session_dir_for(ba.git_common_dir(tmp_path), "sess-brief") / "touch-record.jsonl"
         )
         append_event(
             touch_record, session_id="sess-brief", agent_id=None, verb="T", path="state/handoffs/h1.md"
@@ -6512,9 +6515,7 @@ class TestDirtyTreeCaseCEndToEndViaBrief:
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-brief-clean")
         _init_repo(tmp_path)
         touch_record = (
-            ba.git_common_dir(tmp_path)
-            / "coordinator-sessions"
-            / "sess-brief-clean"
+            session_dir_for(ba.git_common_dir(tmp_path), "sess-brief-clean")
             / "touch-record.jsonl"
         )
         append_event(
@@ -6674,7 +6675,7 @@ class TestPlanTierSupersessionTargetResolution:
         """Mirrors `TestSelfResolutionFromClaimLedger._seed_handoff_claim` --
         duplicated locally (rather than reaching into a sibling test class)
         so this class's fixtures stay self-contained."""
-        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
         claims_dir.mkdir(parents=True, exist_ok=True)
         (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
 
@@ -7036,7 +7037,7 @@ class TestC9DiscoveryLabelPlanInput:
 class TestC5AbortD6LeavesPlanClaimIntact:
     """C5 (AC6's demonstration test): d5 (`session-claim-cli release-artifact
     plan <stem>`) genuinely releases the session's plan claim into the
-    UNVERSIONED `<git-common-dir>/coordinator-sessions/` store -- `git
+    UNVERSIONED `.coordinator-local/coordinator-sessions/` store -- `git
     revert` cannot restore it (F5). When a LATER directive (d6, the
     succession write) aborts, the session has already lost its plan claim
     with nothing to show for it -- a dirty abort. C5 closes this gap either
@@ -7521,7 +7522,7 @@ class TestSuccessorSideFanInDownEdge:
 
     @staticmethod
     def _seed_handoff_claim(repo_root: Path, session_id: str, basename: str, claimed_at: str) -> None:
-        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
         claims_dir.mkdir(parents=True, exist_ok=True)
         (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
         (claims_dir / "claimed_at").write_text(claimed_at, encoding="utf-8")
@@ -7792,7 +7793,7 @@ class TestClosedPredecessorDeclinesD6PerPredecessor:
         basename: str,
         claimed_at: str | None = None,
     ) -> None:
-        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
         claims_dir.mkdir(parents=True, exist_ok=True)
         (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
         if claimed_at is not None:
@@ -8144,7 +8145,7 @@ class TestRoadmapBatonDeclinesD6PerPredecessor:
         basename: str,
         claimed_at: str | None = None,
     ) -> None:
-        claims_dir = repo_root / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claims_dir = hub_for_common(repo_root / ".git") / "handoff-claims" / basename
         claims_dir.mkdir(parents=True, exist_ok=True)
         (claims_dir / "session_id").write_text(session_id, encoding="utf-8")
         if claimed_at is not None:

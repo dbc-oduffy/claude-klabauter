@@ -130,6 +130,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from coordinator_core.git.git_state import head_sha as _read_head_sha
 from coordinator_core.dag import _parse_inline_list, _read_meta, handoff_edges, resolve_target
 from coordinator_core.distill import log_append as _log_append
 from coordinator_core.distill import manifest_schema as _schema
@@ -888,7 +889,14 @@ async def _delete_tracked_and_append_log(
     try:
         base_env = _make_git_env(idx_path=idx_path)
 
-        rc, _out, err = await _run_git("read-tree", "HEAD", cwd=worktree_root, env=base_env)
+        # Stale-base pin: the private index is seeded from this sha, and the
+        # commit below is refused unless HEAD still equals it (a peer commit
+        # landing in between would otherwise be silently reverted).
+        base_head = _read_head_sha(worktree_root, fresh=True)
+
+        rc, _out, err = await _run_git(
+            "read-tree", base_head or "HEAD", cwd=worktree_root, env=base_env
+        )
         if rc != 0:
             err_msg = err.decode(errors="replace").strip()
             _LOG.error("distill.apply_disposal: git read-tree HEAD failed: %s", err_msg)
@@ -1091,10 +1099,18 @@ async def _delete_tracked_and_append_log(
         if not commit_paths:
             return [], denorm_written, denorm_write_failed, failed
 
-        rc, _out, err = await _run_git(
-            "-c", "commit.gpgsign=false", "commit", "-m", subject, "--", *commit_paths,
-            cwd=worktree_root, env=base_env,
-        )
+        current_head = _read_head_sha(worktree_root, fresh=True)
+        if base_head is not None and current_head != base_head:
+            rc, err = 1, (
+                f"stale-index-base: HEAD moved from {base_head} to {current_head} "
+                "since the private index was built; commit refused, no peer "
+                "commit reverted"
+            ).encode()
+        else:
+            rc, _out, err = await _run_git(
+                "-c", "commit.gpgsign=false", "commit", "-m", subject, "--", *commit_paths,
+                cwd=worktree_root, env=base_env,
+            )
         if rc != 0:
             err_msg = err.decode(errors="replace").strip()
             _LOG.error("distill.apply_disposal: git commit failed: %s", err_msg)

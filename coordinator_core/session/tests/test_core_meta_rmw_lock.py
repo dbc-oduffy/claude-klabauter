@@ -18,7 +18,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 def _session_dir(tmp_path: Path) -> Path:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_passthrough_kwargs())
-    sdir = tmp_path / ".git" / "coordinator-sessions" / "sid-rmw"
+    sdir = tmp_path / ".coordinator-local" / "coordinator-sessions" / "sid-rmw"
     sdir.mkdir(parents=True)
     (sdir / "meta.json").write_text(json.dumps({"session_id": "sid-rmw"}))
     return sdir

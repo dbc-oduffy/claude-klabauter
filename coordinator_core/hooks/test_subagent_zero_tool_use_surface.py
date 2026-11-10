@@ -5,6 +5,8 @@ import asyncio
 import json
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 
 def _run(coro):
     return asyncio.run(coro)
@@ -16,7 +18,7 @@ class _FakeCtx:
 
 
 def _cs_dir(repo_root: Path) -> Path:
-    return repo_root / ".git" / "coordinator-sessions"
+    return hub_for_common(repo_root / ".git")
 
 
 def _ctx(tmp_path: Path) -> _FakeCtx:

@@ -22,6 +22,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch_checks
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES
 from coordinator_core.guard_messages.testing import envelope_of
@@ -451,7 +452,7 @@ class TestOwnerNameProvenanceNote:
             return root
 
         def _push_started_at_to_future(root: str, sid: str) -> None:
-            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir = hub_for_common(Path(root) / ".git") / sid
             future = datetime.fromtimestamp(
                 datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
             )
@@ -460,7 +461,7 @@ class TestOwnerNameProvenanceNote:
             )
 
         def _claim(root: str, sid: str, path: str, name=None) -> None:
-            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir = hub_for_common(Path(root) / ".git") / sid
             sdir.mkdir(parents=True, exist_ok=True)
             touch_record.append_event(
                 touch_record.sink_path(sdir),
@@ -566,7 +567,7 @@ class TestOwnerNameProvenanceNote:
             return root
 
         def _push_started_at_to_future(root: str, sid: str) -> None:
-            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir = hub_for_common(Path(root) / ".git") / sid
             future = datetime.fromtimestamp(
                 datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
             )
@@ -575,7 +576,7 @@ class TestOwnerNameProvenanceNote:
             )
 
         def _claim(root: str, sid: str, path: str, name=None) -> None:
-            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir = hub_for_common(Path(root) / ".git") / sid
             sdir.mkdir(parents=True, exist_ok=True)
             touch_record.append_event(
                 touch_record.sink_path(sdir),
@@ -657,7 +658,7 @@ class TestOwnerNameProvenanceNote:
             return root
 
         def _push_started_at_to_future(root: str, sid: str) -> None:
-            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir = hub_for_common(Path(root) / ".git") / sid
             future = datetime.fromtimestamp(
                 datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
             )
@@ -666,7 +667,7 @@ class TestOwnerNameProvenanceNote:
             )
 
         def _claim(root: str, sid: str, path: str, name=None) -> None:
-            sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+            sdir = hub_for_common(Path(root) / ".git") / sid
             sdir.mkdir(parents=True, exist_ok=True)
             touch_record.append_event(
                 touch_record.sink_path(sdir),
@@ -884,7 +885,7 @@ class TestBulkRefusalIsReachedThroughCheckValidateCommit:
             )
 
         def _claim(sid, path):
-            sdir = tmp_path / ".git" / "coordinator-sessions" / sid
+            sdir = hub_for_common(tmp_path / ".git") / sid
             touch_record.append_event(
                 touch_record.sink_path(sdir),
                 session_id=sid,
@@ -908,7 +909,7 @@ class TestBulkRefusalIsReachedThroughCheckValidateCommit:
         future = datetime.fromtimestamp(
             datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc
         )
-        (tmp_path / ".git" / "coordinator-sessions" / sid / "started_at").write_text(
+        (hub_for_common(tmp_path / ".git") / sid / "started_at").write_text(
             future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8"
         )
 

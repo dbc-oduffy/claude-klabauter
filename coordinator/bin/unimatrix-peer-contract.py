@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Peer contract shared by the unimatrix peer router and adapters.
 
 Defines the peers.json schema, the cross-session frame (build and parse), the reply

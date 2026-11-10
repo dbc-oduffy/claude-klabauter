@@ -7,8 +7,8 @@ written-only-by-the-agent-it-names/C1.md), each fail-open arm is reached by
 making the back-pointer genuinely unreadable on a real temp git root --
 never by monkeypatching ``_read_backpointer_subagent_type``'s return value
 directly -- so these tests build real
-``.git/coordinator-sessions/.agents/<agent_id>/em-session-id.txt`` and
-``.git/coordinator-sessions/<em_sid>/dispatched-agents.txt`` fixtures on
+``<session hub>/.agents/<agent_id>/em-session-id.txt`` and
+``<session hub>/<em_sid>/dispatched-agents.txt`` fixtures on
 ``tmp_path``. Only the repo-root RESOLUTION itself (``resolve_repo_root``,
 a distinct concern from the back-pointer chain -- "which repo", not
 "what does this agent's back-pointer say") is stubbed to point at
@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.write_guards import block_foreign_family_sidecar_write as guard
 
 _AGENT_A = "aaaaaaaaaaaaaaaa"  # bare-hex, 16 chars
@@ -55,20 +56,20 @@ def _write_backpointer(
     dispatched_agents_present: bool = True,
 ) -> None:
     """Build a real ``.agents/<agent_id>/em-session-id.txt`` ->
-    ``dispatched-agents.txt`` chain under ``repo_root/.git/coordinator-sessions/``.
+    ``dispatched-agents.txt`` chain under the session hub of ``repo_root``.
 
     ``dispatched_rows`` are ``(agent_id, col2, subagent_type)`` 3-column
     rows written tab-separated; pass multiple rows for the same
     ``agent_id`` to exercise the ambiguous-match fail-closed-to-"" arm.
     """
-    agents_dir = repo_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    agents_dir = hub_for_common(repo_root / ".git") / ".agents" / agent_id
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "em-session-id.txt").write_text(em_session_id + "\n", encoding="utf-8")
 
     if not dispatched_agents_present:
         return
 
-    session_dir = repo_root / ".git" / "coordinator-sessions" / em_session_id
+    session_dir = hub_for_common(repo_root / ".git") / em_session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     rows = dispatched_rows if dispatched_rows is not None else []
     lines = "\n".join("\t".join(row) for row in rows)

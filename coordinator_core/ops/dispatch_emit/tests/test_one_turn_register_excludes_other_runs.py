@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 import yaml
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import baton_pm_turns as pm_turns
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.session_baton import store
@@ -44,7 +45,7 @@ def _write(repo, turn_text, derived_rows):
 def repo(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
-    sdir = tmp_path / ".git" / "coordinator-sessions" / "sid-f2"
+    sdir = session_dir_for(tmp_path / ".git", "sid-f2")
     sdir.mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-f2")

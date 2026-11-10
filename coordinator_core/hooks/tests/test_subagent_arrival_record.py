@@ -8,6 +8,7 @@ import json
 from coordinator_core.arrival_record import arrival_log_path, has_arrived
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks.subagent_arrival_record import _handler
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _repo(tmp_path):
@@ -54,13 +55,13 @@ def test_missing_agent_id_writes_nothing(tmp_path):
     out = _run({"session_id": "sess-3", "agent_type": "x"}, repo)
     assert out == no_advisory()
     assert not _log(repo, "sess-3").exists()
-    assert not (repo / ".git" / "coordinator-sessions").exists()
+    assert not hub_for_common(repo / ".git").exists()
 
 
 def test_missing_session_id_writes_nothing(tmp_path):
     repo = _repo(tmp_path)
     assert _run({"agent_id": "abc"}, repo) == no_advisory()
-    assert not (repo / ".git" / "coordinator-sessions").exists()
+    assert not hub_for_common(repo / ".git").exists()
 
 
 def test_unsafe_id_fails_open_and_writes_nothing(tmp_path):

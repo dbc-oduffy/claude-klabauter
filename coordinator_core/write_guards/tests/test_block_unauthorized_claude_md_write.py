@@ -27,7 +27,7 @@ docs/plans/2026-07-27-claude-md-altitude-triage.md § C4, not coverage:
       it.
 
 Seam: ``check_claude_md_write_grant`` is monkeypatched directly (module
-import binding) to avoid any real ``.git/coordinator-sessions/`` fixture --
+import binding) to avoid any real session-hub fixture --
 this file is about the guard's OWN detection/scope/deny-text behavior, not
 the grant module's own persistence semantics (already covered by
 ``coordinator_core/session/tests/test_claude_md_grant.py``).
@@ -40,6 +40,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.write_guards import block_unauthorized_claude_md_write as guard
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
@@ -159,7 +160,7 @@ def _make_repo(tmp_path):
 def _live_session(repo, sid):
     from coordinator_core.session import core as session_core
 
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(Path(repo) / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(
         json.dumps({"pid": "999", "last_activity": session_core.now_iso()}) + "\n",

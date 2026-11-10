@@ -36,6 +36,7 @@ from coordinator_core.hooks import observe_config_change as occ
 from coordinator_core.hooks import observe_post_compact as opc
 from coordinator_core.hooks import offer_exploration_tier_dispatch as oetd
 from coordinator_core.hooks import pickup_autofire as pa
+from coordinator_core.session_hub_path import hub_for_common
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +305,7 @@ def test_observe_config_change_writes_a_record(tmp_path, monkeypatch):
     (repo / ".git").mkdir(parents=True)
     resp = occ._handler({"cwd": str(repo), "session_id": "sid-1", "file_path": ".claude/settings.local.json"})
     assert resp == {}
-    log = repo / ".git" / "coordinator-sessions" / "hook-observations" / "ConfigChange.jsonl"
+    log = hub_for_common(repo / ".git") / "hook-observations" / "ConfigChange.jsonl"
     assert log.is_file()
     assert "sid-1" in log.read_text(encoding="utf-8")
 
@@ -325,7 +326,7 @@ def test_observe_post_compact_writes_the_whole_payload_verbatim(tmp_path):
     (repo / ".git").mkdir(parents=True)
     resp = opc._handler({"cwd": str(repo), "compact_summary": "s", "trigger": "manual"})
     assert resp == {}
-    log = repo / ".git" / "coordinator-sessions" / "hook-observations" / "PostCompact.jsonl"
+    log = hub_for_common(repo / ".git") / "hook-observations" / "PostCompact.jsonl"
     assert log.is_file()
     text = log.read_text(encoding="utf-8")
     assert "compact_summary" in text

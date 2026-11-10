@@ -136,6 +136,7 @@ from typing import Any, Dict, Optional
 from coordinator_core.bash_guards._helpers import COMMAND_LINE_LABEL
 from coordinator_core.bash_guards._write_bump_marker import resolve_gitdir
 from coordinator_core.bounded_io import run_bounded
+from coordinator_core.session_hub_path import hub_for_common
 
 #: Deadline for a dedupe-marker filesystem call on the hook path.
 _FS_DEADLINE_SECS = 0.4
@@ -496,7 +497,7 @@ def _rotate_known_logs(gitdir: Path) -> None:
     try:
         from coordinator_core.telemetry.log_rotation import rotate_all_known_sinks
 
-        rotate_all_known_sinks(gitdir / "coordinator-sessions" / "logs")
+        rotate_all_known_sinks(hub_for_common(gitdir) / "logs")
     except Exception:
         pass
 

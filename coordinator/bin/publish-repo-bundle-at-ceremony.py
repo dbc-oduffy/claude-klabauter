@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """coordinator/bin/publish-repo-bundle-at-ceremony.py -- detached sequencer chained
 after `scip-rebuild --ceremony NAME`: waits on the rebuild, then publishes the
 freshly-rebuilt structural index via example-retrieval-repo's `publish-repo-bundle` verb.
@@ -157,6 +158,15 @@ def _unresolved_cli_line(prefix: str, reason: str | None) -> str:
     if absent is None:
         return f"{prefix}: defect -- {reason}, but repos.project_rag is registered"
     return f"{prefix}: skipped -- {reason}"
+
+
+def _hub(common: Path) -> Path:
+    """The session hub for a git common dir, via the one shared resolver."""
+    if str(_REPO_ROOT) not in sys.path:
+        sys.path.insert(0, str(_REPO_ROOT))
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(common)
 
 
 def _git_common_dir(repo_root: Path) -> Path | None:
@@ -416,7 +426,7 @@ def _run_and_wait(
     lease = None
     if rebuild:
         common = _git_common_dir(cwd) or cwd
-        lease = common / "coordinator-sessions" / _LEASE_NAME
+        lease = _hub(common) / _LEASE_NAME
         duplicate = _claim_lease(lease)
         if duplicate:
             return None, "", f"{_DEDUPE_PREFIX}{duplicate}"
@@ -515,7 +525,7 @@ def run(
             exe_path = installed
 
     common_dir = _git_common_dir(repo_root) or repo_root
-    record_path = common_dir / "coordinator-sessions" / _RECORD_NAME
+    record_path = _hub(common_dir) / _RECORD_NAME
 
     rebuild_argv = [str(exe_path), "scip-rebuild", "--ceremony", ceremony]
     rebuild_code, _rebuild_out, rebuild_err = _run_and_wait(

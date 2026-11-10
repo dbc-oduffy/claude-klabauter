@@ -24,6 +24,8 @@ Spec backlink: coordinator_core/ops/completion_ops.py::day_coverage_sweep
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import datetime
 import subprocess
 from pathlib import Path
@@ -88,7 +90,7 @@ def _seed_desynced_open_handoff(repo: Path, name: str) -> Path:
 
 
 def _write_ledger_claim(repo: Path, handoff_name: str, holder_session_id: str) -> Path:
-    claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(holder_session_id, encoding="utf-8")
     (claim_dir / "claimed_at").write_text("2026-08-07T10:00:00Z", encoding="utf-8")

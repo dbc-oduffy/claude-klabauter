@@ -7,6 +7,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 
 def _past_iso(hours_ago: float) -> str:
     """Return an ISO-8601 UTC timestamp N hours in the past."""
@@ -20,7 +22,7 @@ class GitFreeSessionRepo:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.git_dir = root / ".git"
-        self.sessions_dir = self.git_dir / "coordinator-sessions"
+        self.sessions_dir = hub_for_common(self.git_dir)
         self.sessions_dir.mkdir(parents=True, exist_ok=True)
 
     @property

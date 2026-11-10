@@ -189,7 +189,9 @@ _SWEEP_LOCK_STALE_S = 120.0
 
 
 def _sweep_lock_path(common_dir: Path) -> Path:
-    return common_dir / "coordinator-sessions" / "archive-terminal-handoffs.lock"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(common_dir) / "archive-terminal-handoffs.lock"
 
 
 def _acquire_sweep_lock(common_dir: Path) -> Optional[Path]:

@@ -7,7 +7,7 @@ emitted workflow script, resolves ``--plugin-dir`` the way the
 ``claude-author`` shim does (never hardcoded), bounds the child with
 ``--max-turns``, confirms liveness (or an immediate non-zero exit) before
 returning, and records the fire in a JSON registry under
-``<git-common-dir>/coordinator-sessions/workflow-fires/`` — the run handle
+``<session hub>/workflow-fires/`` (``session_hub_path.hub_for_common``) — the run handle
 callers receive IS this registry record, not an in-memory pid a later,
 cold-spawned invocation of this engine could never see again.
 
@@ -115,7 +115,7 @@ from coordinator_core.session.core import sessions_dir
 from coordinator_core.warm import skew
 from coordinator_core.warm.engine_root import current_engine_clone
 
-# Runtime fire-registry/log state under <git-common-dir>/coordinator-sessions
+# Runtime fire-registry/log state under the session hub
 # -- not a repo artifact (mirrors session/core.py, session/claims.py).
 GENERATES = []
 
@@ -974,7 +974,7 @@ def _annotate_record(record: dict) -> dict:
     ``exit_code`` is null.
 
     Applied on every write and every refresh, so a reader who opens
-    ``<git-common-dir>/coordinator-sessions/workflow-fires/<id>.json``
+    ``<session hub>/workflow-fires/<id>.json``
     directly -- the obvious move when checking your own run, and the one
     that misled three sessions on 2026-08-19 -- sees from the record alone
     that ``state`` is a timestamped observation, not a current fact.

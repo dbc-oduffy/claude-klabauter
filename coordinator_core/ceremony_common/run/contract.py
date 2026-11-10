@@ -40,7 +40,7 @@ LEDGER_ROW_KEYS: tuple[str, ...] = (
 )
 DECISIONS_FILE = "decisions.jsonl"
 
-# `<git-common-dir>/coordinator-sessions/<ceremony><RUN_DIR_SUFFIX>/<run_id>`; ledger.run_dir builds it.
+# `<session hub>/<ceremony><RUN_DIR_SUFFIX>/<run_id>` (session_hub_path.hub_for_common); ledger.run_dir builds it.
 RUN_DIR_SUFFIX = "-runs"
 RUN_ID_RE = re.compile(r"\d{8}T\d{6}Z-\d{6}[0-9a-f]{4}")
 

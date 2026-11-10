@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Forced command for the unimatrix key on the receiving box: the ONLY thing that key
 can run. It moves Claude Code cross-session messages between boxes and nothing else. File put/get
 belongs to a separate key and forced command (unimatrix-file-relay.py); this one refuses both.

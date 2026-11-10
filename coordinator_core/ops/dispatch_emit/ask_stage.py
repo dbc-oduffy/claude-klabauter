@@ -16,7 +16,7 @@ import shlex
 import time
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import Callable, Mapping, Optional, Sequence
+from typing import Callable, Iterable, Mapping, Optional, Sequence
 
 from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.bash_guards.leg_attribution import leg
@@ -586,6 +586,48 @@ def _only_rows(
     return kept, [e for e in exclusions if e.get("id") in keep], retired, dropped
 
 
+def _is_closed_exclusion(e: Mapping) -> bool:
+    """A row the plan already counts done: landed by a checkpoint, or closed by a `disposition`."""
+    return e.get("reason") in ("checkpoint-landed", "disposition")
+
+
+_DRAFT_STATUS = re.compile(r"^status:\s*['\"]?draft\b", re.MULTILINE)
+
+
+def _draft_resume_without_evidence(
+    plan_text: str, dropped: Sequence, snap: Optional[resume_snapshot.Snapshot]
+) -> bool:
+    """True when a resume subset emptied a never-staged (`status: draft`) plan and the gate recorded
+    no reason for any row it dropped. A draft plan has no run history, so an unexplained drop is
+    not evidence of landing; a dropped row with a recorded reason stays dropped."""
+    if snap is None or not dropped:
+        return False
+    split = split_frontmatter(plan_text)
+    if split is None or _DRAFT_STATUS.search(split.fm_text) is None:
+        return False
+    return not any(snap.reasons.get(r.id) for r in dropped)
+
+
+def _resume_dropped_lines(
+    full_rows: Sequence, full_exclusions: Sequence, rows: Sequence, exclusions: Sequence,
+    snap: Optional[resume_snapshot.Snapshot],
+) -> list[str]:
+    """`<id> (<reason>)` for each spine row or exclusion the resume subset removed, so a zero-row
+    refusal names rows the gate read as landed or closed."""
+    kept = {r.id for r in rows} | {e.get("id") for e in exclusions}
+    by_exclusion = {e.get("id"): e for e in full_exclusions}
+    out: list[str] = []
+    for rid in dict.fromkeys([*(r.id for r in full_rows), *by_exclusion]):
+        if rid in kept:
+            continue
+        e = by_exclusion.get(rid) or {}
+        reason = (snap.reasons.get(rid) if snap else None) or " ".join(
+            str(x) for x in (e.get("reason"), e.get("detail")) if x
+        ) or "outside only_rows"
+        out.append(f"{rid} ({reason})")
+    return out
+
+
 def _drop_reminted_em_rows(plan_path: Path, raw_by_id: Mapping[str, Mapping], keep: frozenset) -> tuple[str, ...]:
     """Ids of a ledger re-plan's em-performed rows whose register rows an em-discharged
     em-performed row already serves; the caller omits them. A row with no register_rows, itself
@@ -928,6 +970,42 @@ def _recorded_run_ids(root: Path, hits: Mapping[str, list[str]]) -> dict[str, li
     return out
 
 
+def _chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
+    """The `candidates` that are `run_id`'s own chain: runs bound to the same sizing (a chained
+    run's `chained_from` ancestor and descendants carry the sizing it hands on) and any run on its
+    `resumed_from` chain. Their claims are the same work, never a peer's overlap.
+    Trap: a run with no bound sizing has no kin by sizing."""
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        tokens = {r.get("run_id"): r.get("sizing_rel") for r in run_token.held_records(root)}
+    except (OSError, ValueError, KeyError, TypeError):
+        tokens = {}
+
+    def sizing_of(rid: str) -> Optional[str]:
+        try:
+            bound = (rl.read_run(record_dir(root, rid)) or {}).get("sizing_rel") or tokens.get(rid)
+        except ValueError:
+            bound = tokens.get(rid)
+        return str(bound).replace("\\", "/") if bound else None
+
+    mine = sizing_of(run_id)
+    chain: set[str] = set()
+    cur = run_id
+    for _ in range(rl.CARRIED_HOP_CAP):
+        try:
+            prev = (rl.read_run(record_dir(root, cur)) or {}).get(rl.RESUMED_FROM_FIELD)
+        except ValueError:
+            break
+        if not (isinstance(prev, str) and prev and prev not in chain and prev != run_id):
+            break
+        chain.add(prev)
+        cur = prev
+    return {rid for rid in candidates if rid in chain or (mine is not None and sizing_of(rid) == mine)}
+
+
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> None:
     """Raise AskStageError `live-run-write-overlap` naming each other live run whose staged
     footprint intersects `writes`, and release this run's token so the refusal ends the run.
@@ -974,9 +1052,12 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
             for rid, paths in live_run_writes.overlaps(writes, box[0]).items()
             if not live_run_index.run_is_stale(root, rid)
         }
+    if hits:
+        hits = _recorded_run_ids(root, hits)
+        kin = _chain_kin(root, run_id, hits)
+        hits = {rid: paths for rid, paths in hits.items() if rid not in kin}
     if not hits:
         return
-    hits = _recorded_run_ids(root, hits)
     named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
     release = "; ".join(f'dispatch.release_run_token {{"run_id": "{rid}"}}' for rid in sorted(hits))
     run_token.consume(root, run_id)
@@ -1223,11 +1304,22 @@ def stage(
     exclusions = list(parse.exclusions)
     retired_resume: tuple[str, ...] = ()
     resume_snap = resume_snapshot.read(root, run_id, plan_posix) if only_rows is not None else None
+    if not ledger_resume and resume_snap is None and only_rows is not None and not len(only_rows):
+        # An empty resume set with no snapshot names no landed row; the parse already excluded landed and closed rows.
+        only_rows = None
     dropped_landed: list = []
+    resume_dropped: list[str] = []
     if only_rows is not None:
+        full_rows, full_exclusions = rows, exclusions
         rows, exclusions, retired_resume, dropped_landed = _only_rows(
             rows, exclusions, frozenset(only_rows), resume_snap
         )
+        if not ledger_resume and not rows and _draft_resume_without_evidence(
+            plan_text, dropped_landed, resume_snap
+        ):
+            rows, exclusions, retired_resume, dropped_landed, resume_snap = full_rows, full_exclusions, (), [], None
+        else:
+            resume_dropped = _resume_dropped_lines(full_rows, full_exclusions, rows, exclusions, resume_snap)
     ran_premises: dict[str, str] = {}
     if only_rows is not None:
         rows, ran_premises = _settle_ran_premises(rows, raw_by_id, root, plan_posix, run_id)
@@ -1275,17 +1367,21 @@ def stage(
                 f"{e['id']} ({e.get('detail') or ''})" for e in plan_held
             )
         already = {g.id for g in gated} | {o.id for o in owed} | {e["id"] for e in plan_held}
-        closed = [
-            e
-            for e in exclusions
-            if e.get("id") not in already
-            and e.get("reason") != "checkpoint-landed"
-            and e.get("detail") != "disposition: coded"
-        ]
+        left = [e for e in exclusions if e.get("id") not in already]
+        done = [e for e in left if _is_closed_exclusion(e)]
+        closed = [e for e in left if e not in done]
         if closed:
             named += "; excluded: " + ", ".join(
                 f"{e['id']} ({e.get('reason')}: {e.get('detail') or ''})" for e in closed
             )
+        if done:
+            named += "; already closed: " + ", ".join(
+                f"{e['id']} [{e.get('detail') or e.get('reason')}]" for e in done
+            )
+        seen = already | {e["id"] for e in left}
+        resume_only = [line for line in resume_dropped if line.split(" ", 1)[0] not in seen]
+        if resume_only:
+            named += "; dropped by the resume set: " + ", ".join(resume_only)
         if blocking_drops:
             _record_staging_drops(record, run_id, [{"id": d["id"], "reason": d["reason"]} for d in blocking_drops])
         refusal = AskStageError(

@@ -159,7 +159,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument(
         "--sessions-base",
         required=True,
-        help="path to <git-common-dir>/coordinator-sessions",
+        help="path to the session hub (session_hub_path.hub_for_common)",
     )
     args = ap.parse_args(argv)
 

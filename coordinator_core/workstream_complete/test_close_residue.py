@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.session import scope
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import close_residue as cr
 
@@ -39,7 +40,7 @@ def _claim(repo: Path, rel: str, sid: str = SID) -> None:
 
 
 def _hold_baton(repo: Path, basename: str, sid: str = SID, state: str | None = None) -> None:
-    claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / basename
     claim_dir.mkdir(parents=True)
     (claim_dir / "session_id").write_text(sid, encoding="utf-8")
     if state is not None:
@@ -92,7 +93,7 @@ def test_snapshot_reads_owned_paths_and_held_batons_with_no_spawn(repo: Path, mo
     _claim(repo, "tracked.txt")
     _hold_baton(repo, "b1.md")
     # A claim of another class is not a baton.
-    other = repo / ".git" / "coordinator-sessions" / "memo-claims" / "m.md"
+    other = hub_for_common(repo / ".git") / "memo-claims" / "m.md"
     other.mkdir(parents=True)
     (other / "session_id").write_text(SID, encoding="utf-8")
 
@@ -121,7 +122,7 @@ def test_snapshot_with_no_session_id_is_degraded(repo: Path) -> None:
 
 def test_snapshot_is_degraded_when_the_own_touch_record_is_malformed(repo: Path) -> None:
     _claim(repo, "tracked.txt")
-    sink = repo / ".git" / "coordinator-sessions" / SID / "touch-record.jsonl"
+    sink = hub_for_common(repo / ".git") / SID / "touch-record.jsonl"
     with sink.open("a", encoding="utf-8") as fh:
         fh.write("{not json\n")
     assert cr.snapshot(repo, SID).degraded is True
@@ -191,7 +192,7 @@ def test_running_plan_blitz_trail_is_in_flight_never_open(repo: Path) -> None:
 def test_finished_plan_blitz_trail_stays_open(repo: Path) -> None:
     rel = _trail_file(repo, cr.IN_FLIGHT_TRAIL_WINDOW_S + 600)
     _claim(repo, rel)
-    sdir = repo / ".git" / "coordinator-sessions" / SID
+    sdir = hub_for_common(repo / ".git") / SID
     (sdir / "started_at").write_text("2020-01-01T00:00:00Z", encoding="utf-8")
     payload = cr.owned_uncommitted_payload(repo, cr.snapshot(repo, SID))
     assert payload["verdict"] == "open" and payload["items"] == [rel]

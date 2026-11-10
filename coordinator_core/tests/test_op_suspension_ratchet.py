@@ -46,7 +46,7 @@ a guard that only checks content is green whenever nobody re-runs the audit, whi
 reproduces this plan's own § Problem one artifact to the left. Both SKIP, not fail,
 when the artifact they need is absent -- the three-state norm `op_census/timing.py`
 already uses for missing telemetry, applied here to a missing or unreadable audit
-document / sink (a fresh clone, a peer's box: `.git/coordinator-sessions/logs/` is
+document / sink (a fresh clone, a peer's box: `.coordinator-local/coordinator-sessions/logs/` is
 not a committed path, and this plan's audit record does not exist until C2/C5 land).
 
 THE AUDIT RECORD'S MACHINE-READABLE CONTRACT, stated here because nothing else in
@@ -741,7 +741,7 @@ def test_audit_is_not_stale_against_the_live_sink():
 
     SKIPs, never fails, when either artifact this comparison needs is absent:
     the audit document (not yet produced, same as the content test above) or the
-    live sink (a fresh clone, a peer's box -- `.git/coordinator-sessions/logs/`
+    live sink (a fresh clone, a peer's box -- `.coordinator-local/coordinator-sessions/logs/`
     is not a committed path). Both are the three-state norm `op_census/timing.py`
     already applies to missing telemetry.
     """
@@ -764,7 +764,7 @@ def test_audit_is_not_stale_against_the_live_sink():
     if not live_generations:
         pytest.skip(
             "no live op-latency sink on this box -- fresh clone or peer box, "
-            ".git/coordinator-sessions/logs/ is not a committed path"
+            ".coordinator-local/coordinator-sessions/logs/ is not a committed path"
         )
 
     live_paths = [str(p) for p in live_generations]

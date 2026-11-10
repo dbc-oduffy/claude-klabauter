@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Give the bare `claude` command back to the real Claude Code.
 
     python3 scripts/unstick_claude.py        (Windows: python scripts\\unstick_claude.py)

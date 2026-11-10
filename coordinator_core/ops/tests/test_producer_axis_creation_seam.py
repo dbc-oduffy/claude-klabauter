@@ -32,6 +32,8 @@ test module avoids widening the collision surface there.
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME, hub_for_common
+
 import asyncio
 import os
 import subprocess
@@ -97,7 +99,7 @@ def _write_handoff(worktree_root: Path, slug: str, *, extra_fm: str = "") -> Pat
 
 def test_both_creation_doors_emit_machine_minted(tmp_path, monkeypatch):
     monkeypatch.setattr(
-        session_core, "sessions_dir", lambda cwd=None: str(tmp_path / "coordinator-sessions")
+        session_core, "sessions_dir", lambda cwd=None: str(tmp_path / HUB_NAME)
     )
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -146,7 +148,7 @@ def test_resolver_accepted_set_and_model_literal_share_one_definition():
 
 
 def test_malformed_session_shape_degrades_to_unresolved(tmp_path, monkeypatch):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     monkeypatch.setattr(session_core, "sessions_dir", lambda cwd=None: str(sessions_dir))
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-malformed")
     sdir = sessions_dir / "sid-malformed"
@@ -161,7 +163,7 @@ def test_malformed_session_shape_degrades_to_unresolved(tmp_path, monkeypatch):
 
 def test_unresolvable_session_id_resolves_to_none_not_unresolved(monkeypatch, tmp_path):
     monkeypatch.setattr(
-        session_core, "sessions_dir", lambda cwd=None: str(tmp_path / "coordinator-sessions")
+        session_core, "sessions_dir", lambda cwd=None: str(tmp_path / HUB_NAME)
     )
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -217,7 +219,7 @@ def test_batch_sweep_never_backfills_producer_onto_existing_record(tmp_path, mon
     repo = tmp_path / "repo"
     _init_repo(repo)
     monkeypatch.setattr(
-        session_core, "sessions_dir", lambda cwd=None: str(repo / ".git" / "coordinator-sessions")
+        session_core, "sessions_dir", lambda cwd=None: str(hub_for_common(repo / ".git"))
     )
     monkeypatch.setenv("CLAUDE_SESSION_ID", "sid-sweeper")
 

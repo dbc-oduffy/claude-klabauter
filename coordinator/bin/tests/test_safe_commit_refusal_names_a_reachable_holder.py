@@ -7,6 +7,7 @@ import sys
 import time
 import types
 from pathlib import Path
+from coordinator_core.session_hub_path import hub_for_common
 
 import pytest
 
@@ -37,7 +38,7 @@ def _patch_registry(monkeypatch, mapping):
 
 
 def _session_dir(root: Path) -> Path:
-    d = root / ".git" / "coordinator-sessions" / _SID
+    d = hub_for_common(root / ".git") / _SID
     d.mkdir(parents=True)
     return d
 

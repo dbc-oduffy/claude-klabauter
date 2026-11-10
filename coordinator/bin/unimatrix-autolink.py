@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Bring up the cross-box Unimatrix link to every configured far box, once, and stay silent.
 
 Usage:

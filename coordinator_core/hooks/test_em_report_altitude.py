@@ -7,6 +7,7 @@ import os
 import pytest
 
 from coordinator_core.hooks import em_report_altitude as m
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _payload(cwd, **over):
@@ -261,7 +262,7 @@ def test_sentinel_dir_override_used_when_set(repo, tmp_path):
     override_dir = tmp_path / ".tally-isolation"
     written = override_dir / session_id / "em-report-altitude-tally.json"
     assert written.is_file()
-    assert not (repo / ".git" / "coordinator-sessions").exists()
+    assert not hub_for_common(repo / ".git").exists()
 
 
 def test_sentinel_falls_back_to_git_common_dir_when_env_unset(repo, monkeypatch):
@@ -272,7 +273,7 @@ def test_sentinel_falls_back_to_git_common_dir_when_env_unset(repo, monkeypatch)
     assert result is not None
 
     fallback_path = (
-        repo / ".git" / "coordinator-sessions" / session_id / "em-report-altitude-tally.json"
+        hub_for_common(repo / ".git") / session_id / "em-report-altitude-tally.json"
     )
     assert fallback_path.is_file()
 

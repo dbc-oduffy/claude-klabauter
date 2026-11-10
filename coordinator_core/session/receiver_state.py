@@ -12,7 +12,7 @@ distinct from ``session/liveness.py``, which answers only alive-vs-dead and repo
 session sitting untouched at a permission prompt for forty minutes as fully live. This
 module reads ONE session's own transcript structure (never another session's)
 and writes a verdict to a NEW per-session sibling
-file under ``.git/coordinator-sessions/<sid>/`` — never into ``meta.json``, never into
+file under ``.coordinator-local/coordinator-sessions/<sid>/`` — never into ``meta.json``, never into
 ``state/`` (see Negative-spec).
 
 Parts, ported from the DoE spike's ``probe-paused.py:114-148`` with one explicit,
@@ -90,7 +90,7 @@ named departure (the UNKNOWN-override fix):
         docstring: inherited-unverified, not a measurement this module claims.
 
     (d) SIBLING-FILE WRITER — ``write_receiver_state`` — whole-file atomic replace into
-        ``.git/coordinator-sessions/<sid>/receiver-state.json``, modeled on
+        ``.coordinator-local/coordinator-sessions/<sid>/receiver-state.json``, modeled on
         ``session/grant.py``'s WHOLE-FILE shape (create-or-overwrite via
         ``tempfile.mkstemp`` + ``os.replace`` in the session dir; no cross-process lock,
         no merge with prior content) rather than ``session/shape.py``'s merge-style
@@ -117,7 +117,7 @@ Negative-spec:
       gain. This module owns exactly one artifact: ``receiver-state.json``, a NEW
       sibling file.
     - Do NOT write to ``state/`` — session-runtime/liveness layer only
-      (``.git/coordinator-sessions/``), same confinement as every bookkeeping op in
+      (``.coordinator-local/coordinator-sessions/``), same confinement as every bookkeeping op in
       ``ipc.py``'s inventory.
     - Do NOT ``sleep`` anywhere on any path — see ipc.py DEC-2.
     - Do NOT add a CPU-time signal to the ladder: CPU delta does not discriminate
@@ -672,7 +672,7 @@ def write_receiver_state(
     stamp_iso: str,
     cwd: Optional[str] = None,
 ) -> bool:
-    """Whole-file atomic replace of `.git/coordinator-sessions/<sid>/receiver-state.json`
+    """Whole-file atomic replace of `.coordinator-local/coordinator-sessions/<sid>/receiver-state.json`
     — modeled on session/grant.py's WHOLE-FILE writer shape (tempfile.mkstemp + os.replace
     in the session dir; create-or-overwrite; no merge with prior content, no
     cross-process lock), NOT session/shape.py's merge-style writer. A receiver-state

@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry import cost_census
 
 
@@ -39,7 +40,7 @@ def test_run_census_summarizes_hot_path_op_and_is_comparable_across_runs(
     monkeypatch, tmp_path
 ):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    sink = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     now = time.time()
     op = cost_census.HOT_PATH_OPS[0]
     rows = [
@@ -65,7 +66,7 @@ def test_run_census_summarizes_hot_path_op_and_is_comparable_across_runs(
 
 def test_run_census_excludes_rows_outside_the_lookback_window(monkeypatch, tmp_path):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    sink = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     now = time.time()
     op = cost_census.HOT_PATH_OPS[0]
     rows = [
@@ -89,7 +90,7 @@ def test_run_census_never_raises_on_missing_sink(tmp_path, monkeypatch):
 
 def test_run_census_reads_rotated_generations_too(monkeypatch, tmp_path):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    logs_dir = common_dir / "coordinator-sessions" / "logs"
+    logs_dir = hub_for_common(common_dir) / "logs"
     now = time.time()
     op = cost_census.HOT_PATH_OPS[0]
     _write_jsonl(
@@ -107,7 +108,7 @@ def test_run_census_reads_rotated_generations_too(monkeypatch, tmp_path):
 
 def test_run_census_truncates_rather_than_reading_unbounded(monkeypatch, tmp_path):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    sink = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     now = time.time()
     op = cost_census.HOT_PATH_OPS[0]
     rows = [{"op": op, "t_start": now - 1, "elapsed_ms": 1.0, "kind": "complete"} for _ in range(10)]

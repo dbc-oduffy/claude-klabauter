@@ -29,6 +29,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.pickup_assemble.apply as pa_apply
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -130,7 +131,7 @@ def _write_foreign_fresh_claim(repo: Path, class_: str, basename: str, foreign_s
     live and with a just-now `claimed_at`. Not-live is `granted-with-warning`
     (compute_claim_grant row 4, age never read); pair with
     `_register_live_session` for a `denied` verdict."""
-    claim_dir = repo / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    claim_dir = hub_for_common(repo / ".git") / f"{class_}-claims" / basename
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "pid").write_text("999999\n", encoding="utf-8")
     (claim_dir / "session_id").write_text(f"{foreign_sid}\n", encoding="utf-8")
@@ -144,14 +145,14 @@ def _register_live_session(repo: Path, sid: str) -> None:
     recency fallback: an empty, freshly-created session dir with no
     meta.json falls back to the dir's own (just-now) mtime, which is well
     inside the 30-minute recency window."""
-    (repo / ".git" / "coordinator-sessions" / sid).mkdir(parents=True, exist_ok=True)
+    session_dir_for(repo / ".git", sid).mkdir(parents=True, exist_ok=True)
 
 
 def _seed_handoff_claimed_by(repo: Path, name: str, claimed_by_sid: str) -> Path:
     """Same shape as `_seed_handoff`, but with a `claimed_by` frontmatter
     field naming a (separately registered) live peer session — the signal
     `compute_liveness_signal`'s row (a) reads, independent of the
-    `.git/coordinator-sessions/handoff-claims/` claim-dir `compute_claim_grant`
+    `.coordinator-local/coordinator-sessions/handoff-claims/` claim-dir `compute_claim_grant`
     consults."""
     path = repo / "state" / "handoffs" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -904,7 +905,7 @@ class TestDropRoundTrip:
         exit_code, _report = pa_apply.apply("state/handoffs/h1.md", session_id=sid, repo_root=repo)
         assert exit_code == pa_apply.APPLY_EXIT_OK
 
-        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         assert claim_dir.is_dir()
 
         handoff_path = repo / "state" / "handoffs" / "h1.md"
@@ -959,7 +960,7 @@ class TestDropOnHalfAppliedArtifact:
         # frontmatter is untouched at its original open+ready_to_fire, but a
         # claim dir already exists, recorded under THIS session.
         _write_foreign_fresh_claim(repo, "handoff", "h1.md", foreign_sid=sid)
-        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         assert claim_dir.is_dir()
         original_text = handoff_path.read_text(encoding="utf-8")
 
@@ -1147,7 +1148,7 @@ class TestDropExplicitSessionIdUnderTwoLiveSessions:
         # The claim is recorded under MY session — the id `drop` must act
         # under via the explicit `--session-id`.
         _write_foreign_fresh_claim(repo, "handoff", "h1.md", foreign_sid=my_sid)
-        claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / "h1.md"
+        claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / "h1.md"
         assert claim_dir.is_dir()
 
         # Ambient env ambiguously names the OTHER live session. If `drop`

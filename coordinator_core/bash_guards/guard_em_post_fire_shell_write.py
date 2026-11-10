@@ -104,8 +104,9 @@ def _session_written_rels(session_id: str, root: str) -> set:
     try:
         from coordinator_core.lifecycle import git_common_dir
         from coordinator_core.session import touch_record
+        from coordinator_core.session_hub_path import session_dir_for
 
-        sink = touch_record.sink_path(Path(git_common_dir(Path(root))) / "coordinator-sessions" / session_id)
+        sink = touch_record.sink_path(session_dir_for(Path(git_common_dir(Path(root))), session_id))
         claims, _degraded, _reasons = touch_record._read_stream_claims(sink)
         return {p for p, ev in claims.items() if ev.verb == touch_record.VERB_TOUCH}
     except Exception:  # noqa: BLE001 -- unreadable record: the revert stays denied

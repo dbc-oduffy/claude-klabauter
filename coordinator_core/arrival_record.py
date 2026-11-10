@@ -2,7 +2,7 @@
 coordinator_core.arrival_record -- the per-session SubagentStop arrival log.
 
 One line per subagent stop at
-``<git-common-dir>/coordinator-sessions/<session_id>/subagent-arrivals.jsonl``.
+``<hub>/<session_id>/subagent-arrivals.jsonl`` (hub: ``session_hub_path.hub_for_common``).
 It records arrival time, unlike ``agent-audit.jsonl``, which records
 dispatch-out time. It lives beside the session, not under
 ``<session-id>/subagents/``, so it survives that directory's deletion.
@@ -20,9 +20,9 @@ from pathlib import Path
 from typing import Union
 
 from coordinator_core.atomic_append import append_line
+from coordinator_core.session_hub_path import session_dir_for
 
 _ARRIVALS_NAME = "subagent-arrivals.jsonl"
-_SESSIONS_DIR = "coordinator-sessions"
 
 PathLike = Union[str, Path]
 
@@ -44,12 +44,7 @@ def _segment(value: str, what: str) -> str:
 
 def arrival_log_path(common_dir: PathLike, session_id: str) -> Path:
     """Path of the session's arrival log under the git common dir."""
-    return (
-        Path(common_dir)
-        / _SESSIONS_DIR
-        / _segment(session_id, "session_id")
-        / _ARRIVALS_NAME
-    )
+    return session_dir_for(Path(common_dir), _segment(session_id, "session_id")) / _ARRIVALS_NAME
 
 
 def append_arrival(

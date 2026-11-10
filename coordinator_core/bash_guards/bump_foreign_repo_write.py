@@ -1785,7 +1785,7 @@ def _evaluate_foreign_repo_candidate(
     # cleared`'s `git_root=`, both `effective_session_id` calls, and
     # `resolve_agent_class`'s own internal `resolve_effective_types` lookup
     # below (FOUR call sites total): all of them resolve the EM-inheritance
-    # back-pointer at `<git_root>/.git/coordinator-sessions/.agents/
+    # back-pointer at `<git_root>/.coordinator-local/coordinator-sessions/.agents/
     # <agent_id>/em-session-id.txt`, which only ever exists in the SESSION's
     # own repo (written by `session-start-write-bump-anchor.py` against the
     # session's own anchor). Resolved against the target root instead (the

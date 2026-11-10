@@ -14,6 +14,7 @@ import time
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.dispatch_emit import land_run, review_edit_source
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
@@ -45,11 +46,11 @@ def _sha(text: str) -> str:
 
 
 def _session_sink(root):
-    return touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF)
+    return touch_record.sink_path(session_dir_for(root / ".git", SELF))
 
 
 def _agent_write(root, rel: str, text: str, at: float) -> None:
-    hub = root / ".git" / "coordinator-sessions"
+    hub = hub_for_common(root / ".git")
     (hub / SELF).mkdir(parents=True, exist_ok=True)
     (hub / SELF / "dispatched-agents.txt").write_text(
         f"{AGENT}\thost\tcoordinator:code-reviewer\t1\n", encoding="utf-8"

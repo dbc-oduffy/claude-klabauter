@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Report-only check: warns when an agent's frontmatter `tools:` names an `mcp__<server>__`
 namespace that no local config registers.
 

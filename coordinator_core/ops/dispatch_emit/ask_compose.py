@@ -308,7 +308,8 @@ _ROUTE_VERDICT_KEY = _route_pref.ROUTE_VERDICT_KEY
 _VERDICT_RETURN = f", {_ROUTE_VERDICT_KEY}"
 _OVERRIDE_SLOT ="<why your assembled route differs from route_preference; omit when it matches>"
 _ANCHOR_CLAUSE = (
-    "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first; every "
+    "Repo root: {root} -- run `cd {root}` as its own standalone Bash call first, "
+    "unless your working directory already is it or the platform note forbids cd; every "
     "repo-relative path below resolves against it."
 )
 #: Marker token a test asserts; other stage modules import the clause, never retype it.

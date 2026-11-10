@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Send a message to another agent through the unimatrix peer router.
 
 For Codex and agy peers: an agent's message in is answered with this command out, addressed to

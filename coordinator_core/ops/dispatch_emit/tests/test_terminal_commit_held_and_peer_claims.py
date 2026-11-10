@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import (
@@ -342,7 +343,7 @@ def _record_write(repo: Path, rel: str, text: str) -> None:
 
     from coordinator_core.session import touch_record
 
-    sink = touch_record.sink_path(repo / ".git" / "coordinator-sessions" / _SELF_UUID)
+    sink = touch_record.sink_path(session_dir_for(repo / ".git", _SELF_UUID))
     touch_record.append_event(
         sink, session_id=_SELF_UUID, agent_id=None, verb="T", path=rel,
         content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(), kind="w",

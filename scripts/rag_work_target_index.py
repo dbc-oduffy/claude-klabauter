@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Make example-retrieval-repo ready for a cloud session's work-target repos, and say whether it is.
 
 Usage:

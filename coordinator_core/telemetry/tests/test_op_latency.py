@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import coordinator_core.ipc as ipc
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry.op_latency import (
     _ERROR_KIND_MAX_CHARS,
     breach_summary,
@@ -98,7 +99,7 @@ def test_record_shape(tmp_path, monkeypatch):
         sid="sid-abc",
     )
 
-    sink = fake_common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
     assert sink.exists()
     lines = sink.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
@@ -119,7 +120,7 @@ def test_record_op_latency_rotates_oversized_sinks_at_default_arguments(tmp_path
     # Run the detached sweep inline so the rotate-then-append order is deterministic here.
     monkeypatch.setattr(log_rotation, "rotate_on_cadence_detached", log_rotation.rotate_on_cadence)
     fake_common_dir = tmp_path / ".git"
-    logs = fake_common_dir / "coordinator-sessions" / "logs"
+    logs = hub_for_common(fake_common_dir) / "logs"
     logs.mkdir(parents=True)
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
@@ -152,7 +153,7 @@ def test_kill_switch(tmp_path, monkeypatch):
         op="ping", t_start=1.0, elapsed_ms=1.0, outcome="ok", repo_root=tmp_path,
     )
 
-    sink = fake_common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
     assert not sink.exists()
 
 
@@ -188,7 +189,7 @@ def _fake_common_dir(tmp_path):
 
 
 def _sink_for(fake_common_dir):
-    return fake_common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    return hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
 
 
 def test_started_row_lands_before_handler_runs(tmp_path, monkeypatch):
@@ -388,7 +389,7 @@ def test_pairing_summary_repo_root_spans_rotated_generations(tmp_path, monkeypat
         "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
     )
 
-    logs_dir = fake_common_dir / "coordinator-sessions" / "logs"
+    logs_dir = hub_for_common(fake_common_dir) / "logs"
     logs_dir.mkdir(parents=True)
     live_sink = logs_dir / "op-latency.jsonl"
     rotated_sink = logs_dir / "op-latency.1.jsonl"
@@ -514,7 +515,7 @@ def test_concurrent_appends_do_not_interleave_corrupt_lines(tmp_path):
 
 
 def _composition_rows(repo_root: Path) -> list:
-    sink_dir = repo_root / ".git" / "coordinator-sessions" / "logs"
+    sink_dir = hub_for_common(repo_root / ".git") / "logs"
     rows = []
     for sink in sorted(sink_dir.glob("op-latency*.jsonl")):
         for line in sink.read_text(encoding="utf-8").splitlines():
@@ -840,7 +841,7 @@ class TestErrorKind:
 
 
 def _fact_span_rows(repo_root: Path) -> list:
-    sink_dir = repo_root / ".git" / "coordinator-sessions" / "logs"
+    sink_dir = hub_for_common(repo_root / ".git") / "logs"
     rows = []
     for sink in sorted(sink_dir.glob("op-latency*.jsonl")):
         for line in sink.read_text(encoding="utf-8").splitlines():
@@ -1031,7 +1032,7 @@ def test_blocked_sink_parent_makedirs_does_not_hold_the_handler(tmp_path, monkey
     from coordinator_core.telemetry import op_latency
 
     common_dir = tmp_path / ".git"
-    parent = common_dir / "coordinator-sessions" / "logs"
+    parent = hub_for_common(common_dir) / "logs"
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
     monkeypatch.setattr(op_latency, "_made_parents", set())
     monkeypatch.setattr(bounded_io, "_stalled", {})

@@ -927,7 +927,7 @@ def _classify_denied_path(
     THE LIVE SET IS PER-REPO, SO THE ORACLE MUST BE cwd-SCOPED (break-class
     fix, 2026-08-07 pass 2; cross-repo memo
     `2026-08-07-coordinator-content-repo-em-scoped-commit-calls-a-live-peer-dead-and-reapable`).
-    Session registries live at `<repo>/.git/coordinator-sessions/`, so
+    Session registries live at `.coordinator-local/coordinator-sessions/`, so
     "is <sid> live?" is only answerable relative to a repo. This function
     previously called the ZERO-ARG `coordinator_core.liveness.
     resolve_live_session_ids()`, which resolves its sessions dir from the

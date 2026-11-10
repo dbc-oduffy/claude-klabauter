@@ -46,7 +46,7 @@ def _no_touch_claim_recording(monkeypatch):
     `CWD` is the live repo deliberately -- these guards reason about the tree
     they are pointed at, and a tmp_path repo would not be the tree whose
     governed surfaces the cases name. Left live, the destructive-rm leg's
-    touch-claim flush mints `.git/coordinator-sessions/<_PROBE_SESSION_ID>/`
+    touch-claim flush mints `.coordinator-local/coordinator-sessions/<_PROBE_SESSION_ID>/`
     in that real hub, where a concurrent xdist worker's
     `_no_new_live_session_hub_entries` check (and every real session's
     liveness scan) sees it before any per-test cleanup can run. This sweep

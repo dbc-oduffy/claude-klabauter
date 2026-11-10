@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 coordinator-doc-new — scaffold a conformant coordinator document (handoff, spinoff, memo, plan, decision, audit-record, completion, sidecar, run-report [alias: flight-recorder], research-synthesis, review-findings) or delegate to a typed writer for queue/lesson/workflow types.
 # Module docstring updated to list all supported types.

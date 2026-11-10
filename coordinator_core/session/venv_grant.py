@@ -29,7 +29,7 @@ from coordinator_core.ops import baton_pm_turns
 from coordinator_core.session import core
 
 # Generator-provenance declaration (coordinator_core/ops/generator_census): writes only
-# `.git/coordinator-sessions/<sid>/venv-grant.json`, never a tracked repo artifact.
+# `.coordinator-local/coordinator-sessions/<sid>/venv-grant.json`, never a tracked repo artifact.
 GENERATES = []
 
 TTL_DEFAULT_MINUTES = 60

@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core import ipc
 from coordinator_core.session import core
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry.op_latency import record_op_started
 
 
@@ -28,7 +29,7 @@ def sink(tmp_path, monkeypatch):
     common = tmp_path / ".git"
     common.mkdir()
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common)
-    return common / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    return hub_for_common(common) / "logs" / "op-latency.jsonl"
 
 
 def _dispatch(tmp_path):

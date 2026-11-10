@@ -7,6 +7,7 @@ import sys
 import unittest
 import unittest.mock
 from pathlib import Path
+from coordinator_core.session_hub_path import hub_for_common
 
 import pytest
 
@@ -125,7 +126,7 @@ class TestSessionIdResolution(unittest.TestCase):
             os.environ.pop("COORDINATOR_SESSION_ID", None)
             os.environ.pop("CLAUDE_SESSION_ID", None)
             os.environ.pop("CLAUDE_CODE_SESSION_ID", None)
-            sentinel_dir = repo / ".git" / "coordinator-sessions"
+            sentinel_dir = hub_for_common(repo / ".git")
             sentinel_dir.mkdir(parents=True)
             (sentinel_dir / ".current-session-id").write_text("sentinel-sid\n")
             sid = wsc.resolve_session_id(repo)
@@ -731,7 +732,7 @@ class TestIsCoincidenceProneDetection(unittest.TestCase):
 class TestLedgerFirstClaimStateMigration(unittest.TestCase):
 
     def _write_ledger_claim(self, common_dir, handoff_name: str, session_id: str, claimed_at: str = "") -> None:
-        claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+        claim_dir = hub_for_common(common_dir) / "handoff-claims" / handoff_name
         claim_dir.mkdir(parents=True, exist_ok=True)
         (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
         if claimed_at:
@@ -1510,7 +1511,7 @@ class TestMemoPredecessorLeg(unittest.TestCase):
         common_dir = Path(common)
         if not common_dir.is_absolute():
             common_dir = repo / common_dir
-        claim_dir = common_dir / "coordinator-sessions" / sid
+        claim_dir = hub_for_common(common_dir) / sid
         claim_dir.mkdir(parents=True, exist_ok=True)
 
     def _write_memo(

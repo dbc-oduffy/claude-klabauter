@@ -7,6 +7,7 @@ import subprocess
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
@@ -40,7 +41,7 @@ def test_terminal_commit_handler_keys_the_close_to_its_own_run_not_the_stale_scr
     _git(["commit", "-q", "-m", "seed"], root)
     (root / "foo.py").write_text("seed\n# edit\n", encoding="utf-8", newline="")
     touch_record.append_event(
-        touch_record.sink_path(root / ".git" / "coordinator-sessions" / SESSION),
+        touch_record.sink_path(session_dir_for(root / ".git", SESSION)),
         session_id=SESSION, agent_id=None, verb="T", path="foo.py",
         content_hash=hashlib.sha256(b"seed\n# edit\n").hexdigest(), kind="w", timestamp=9.0,
     )

@@ -755,7 +755,7 @@ def test_append_touch_claims_batch_survives_writer_name_resolution_failure(tmp_p
 
     touch_record.append_touch_claims(["a.py", "b.py"], "sid-1", str(tmp_path))
 
-    sink = tmp_path / ".git" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
+    sink = tmp_path / ".coordinator-local" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
     lines = touch_record.iter_complete_lines(sink.read_bytes())
     assert len(lines) == 2
     assert all(decode_line(line).name is None for line in lines)
@@ -777,7 +777,7 @@ def test_append_touch_claims_threads_content_hashes_per_path(tmp_path, monkeypat
         content_hashes={"a.py": "deadbeef"},
     )
 
-    sink = tmp_path / ".git" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
+    sink = tmp_path / ".coordinator-local" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
     lines = touch_record.iter_complete_lines(sink.read_bytes())
     events = {decode_line(line).path: decode_line(line) for line in lines}
     assert events["a.py"].content_hash == "deadbeef"
@@ -793,7 +793,7 @@ def test_append_touch_claims_with_no_content_hashes_is_unchanged(tmp_path, monke
 
     touch_record.append_touch_claims(["a.py"], "sid-1", str(tmp_path))
 
-    sink = tmp_path / ".git" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
+    sink = tmp_path / ".coordinator-local" / "coordinator-sessions" / "sid-1" / touch_record.RECORD_FILENAME
     lines = touch_record.iter_complete_lines(sink.read_bytes())
     assert decode_line(lines[0]).content_hash is None
 

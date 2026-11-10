@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 from pathlib import Path
 
@@ -135,7 +137,7 @@ def test_no_claim_acquired_when_gate_fires_with_claim_at_brief(tmp_path: Path):
     d = result.decision_object
 
     assert d["gates"]["coast"]["verdict"] == "blocked"
-    claim_dir = repo / ".git" / "coordinator-sessions"
+    claim_dir = hub_for_common(repo / ".git")
     if claim_dir.exists():
         stamped = list(claim_dir.rglob("*predecessor*"))
         assert stamped == []
@@ -173,6 +175,6 @@ def test_a_successorless_terminal_baton_blocks_coast_and_takes_no_claim(tmp_path
     assert d["gates"]["coast"]["verdict"] == "blocked"
     assert "j-terminal" in [jp["id"] for jp in d["judgment_points"]]
     assert d["directives"] == []
-    claim_dir = repo / ".git" / "coordinator-sessions"
+    claim_dir = hub_for_common(repo / ".git")
     if claim_dir.exists():
         assert list(claim_dir.rglob("*finished*")) == []

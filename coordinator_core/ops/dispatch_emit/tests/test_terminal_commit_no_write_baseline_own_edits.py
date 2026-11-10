@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import hunk_provenance as hp
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
@@ -137,7 +138,7 @@ def _measure_own_write(root: Path) -> str:
 
     (root / DECLARED).write_text("a = 1\nb = 3\n", encoding="utf-8")
     touch_record.append_event(
-        touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF), session_id=SELF, agent_id=None,
+        touch_record.sink_path(session_dir_for(root / ".git", SELF)), session_id=SELF, agent_id=None,
         verb="T", path=DECLARED, content_hash=touch_record.compute_content_hash(root / DECLARED), kind="w",
     )
     return measured_rev.measured_rev(RUN, [DECLARED], root)["blobs"][DECLARED]

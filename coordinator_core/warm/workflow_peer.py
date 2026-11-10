@@ -15,6 +15,8 @@ import re
 import sys
 import uuid
 
+from coordinator_core.session_hub_path import hub_for_common
+
 PRIVATE_ROSTER_ENV = 'COORDINATOR_WARM_PRIVATE_ROSTER'
 MAX_ROSTER_BYTES = 128 * 1024
 MAX_WORKERS = 64
@@ -86,7 +88,7 @@ def load_roster(path):
     for name in ('repo_root', 'engine_root'):
         if not isinstance(row.get(name), str) or not Path(row[name]).is_absolute():
             _refuse('roster roots must be absolute')
-    expected_home = Path(row['repo_root']) / '.git/coordinator-sessions/workflow-fires/headless' / row['fire_id']
+    expected_home = hub_for_common(Path(row['repo_root']) / '.git') / 'workflow-fires' / 'headless' / row['fire_id']
     if not _same_path(path, expected_home / 'worker-bindings.json'):
         _refuse('roster is not the assigned fire binding record')
     if not isinstance(row.get('engine_token'), str) or not row['engine_token']:
@@ -147,7 +149,7 @@ def _validate_assignment(row):
     The normal operation and receipt validators still run after admission.
     """
     # Same canonical registry path and fields as workflow_fire.fire/authority.
-    record_path = Path(row['repo_root']) / '.git/coordinator-sessions/workflow-fires' / (row['fire_id'] + '.json')
+    record_path = hub_for_common(Path(row['repo_root']) / '.git') / 'workflow-fires' / (row['fire_id'] + '.json')
     with record_path.open('rb') as stream:
         data = stream.read(MAX_ROSTER_BYTES + 1)
     if len(data) > MAX_ROSTER_BYTES:

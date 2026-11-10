@@ -6,6 +6,8 @@ from pathlib import Path
 import re
 import stat
 
+from coordinator_core.session_hub_path import hub_for_common
+
 _FIELDS = {"schema_version", "fire_id", "engine_root", "engine_token", "settings_home", "repo_root", "bindings_path", "server_pid", "server_creation_time_ft", "source_sha", "script_sha256"}
 
 def _path(value: object, *, directory: bool) -> Path:
@@ -45,7 +47,7 @@ def validate_binding(value: dict, *, alias_directory: Path) -> dict:
     repo = _path(value["repo_root"],directory=True)
     _path(str(repo / ".git"),directory=True)
     bindings = _path(value["bindings_path"],directory=False)
-    expected = repo / ".git" / "coordinator-sessions" / "workflow-fires" / "headless" / value["fire_id"]
+    expected = hub_for_common(repo / ".git") / "workflow-fires" / "headless" / value["fire_id"]
     if bindings != expected / "worker-bindings.json" or _path(str(alias_directory),directory=True) != expected / "private-bin":
         raise ValueError("private binding is outside its exact fire directory")
     stamp = (root / "coordinator_core" / "_engine_stamp").read_bytes()

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """fast-tier-budget.py -- record and rank the fast tier's wall clock against its 15-minute budget.
 
 `record <junit.xml>` turns a fast-tier junit run into state/test-tiers/fast-tier-ledger.json;

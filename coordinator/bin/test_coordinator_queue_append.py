@@ -32,6 +32,8 @@ from __future__ import annotations
 import datetime
 import json
 import os
+from pathlib import Path
+from coordinator_core.session_hub_path import hub_for_common
 import re
 import shutil
 import subprocess
@@ -1421,7 +1423,7 @@ def test_sentinel_file_ignored_KS3() -> None:
             return
 
         git_dir = os.path.join(tmpdir, ".git")
-        sentinel_dir = os.path.join(git_dir, "coordinator-sessions")
+        sentinel_dir = str(hub_for_common(Path(git_dir)))
         os.makedirs(sentinel_dir, exist_ok=True)
         sentinel_path = os.path.join(sentinel_dir, ".current-session-id")
         with open(sentinel_path, "w", encoding="utf-8") as fh:

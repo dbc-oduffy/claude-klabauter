@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Codex lifecycle bridge: engine registration and audience-specific context.
 
 SubagentStart carries the parent's session ID; it never writes a host binding.

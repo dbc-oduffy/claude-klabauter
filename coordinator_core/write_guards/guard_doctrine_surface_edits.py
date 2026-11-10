@@ -72,7 +72,7 @@ Repo-identity recording
 `check()` also calls `coordinator_core.pickup_assemble.compute_repo_identity_gate`
 and logs its verdict (MATCH/MISMATCH/UNRESOLVED) via
 `_write_repo_identity_advisory_log`, best-effort, to
-`<repo-root>/.git/coordinator-sessions/<session_id>/repo-identity-gate.log`.
+`<repo-root>/.coordinator-local/coordinator-sessions/<session_id>/repo-identity-gate.log`.
 **READ-ONLY and ADVISORY ONLY — see DR-277
 (`docs/decisions/DR-277-guards-are-advisory-by-default-two-named.md`).** The
 verdict is never consulted by the decision below.
@@ -97,6 +97,7 @@ from coordinator_core.bounded_io import run_bounded
 from coordinator_core.content_root import read_content_root
 from coordinator_core.machine_profile import feature_enabled
 from coordinator_core.repo_identity_gate import compute_repo_identity_gate
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.bash_guards import _write_bump_applicability
 from coordinator_core.write_guards._case_fold_path import casefold_path
 from coordinator_core.write_guards._gem_doctrine_carve_out import (
@@ -464,7 +465,7 @@ def _write_repo_identity_advisory_log(
     """
     if not repo_root or not session_id:
         return
-    log_dir = Path(repo_root) / ".git" / "coordinator-sessions" / session_id
+    log_dir = session_dir_for(Path(repo_root) / ".git", session_id)
 
     def _write() -> None:
         # NEVER mkdir here: an advisory log line minting a session directory

@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import os
 import subprocess
 import time
@@ -27,7 +29,7 @@ def _make_archive_entry(archive_root: Path, name: str, *, age_seconds: float) ->
 
 
 def test_prunes_entries_older_than_retention_window(tmp_path):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     archive_root = sessions_dir / ".archive"
     archive_root.mkdir(parents=True)
 
@@ -49,7 +51,7 @@ def test_prunes_entries_older_than_retention_window(tmp_path):
 
 
 def test_never_touches_non_agents_archive_entries(tmp_path):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     archive_root = sessions_dir / ".archive"
     archive_root.mkdir(parents=True)
 
@@ -66,7 +68,7 @@ def test_never_touches_non_agents_archive_entries(tmp_path):
 
 
 def test_session_archive_pruned_after_its_own_window(tmp_path):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     archive_root = sessions_dir / ".archive"
     archive_root.mkdir(parents=True)
 
@@ -93,7 +95,7 @@ def test_session_archive_pruned_after_its_own_window(tmp_path):
 
 
 def test_missing_archive_dir_is_a_noop(tmp_path):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     sessions_dir.mkdir(parents=True)
 
     pruned, failed = reap._prune_stale_agent_archive(sessions_dir)
@@ -103,7 +105,7 @@ def test_missing_archive_dir_is_a_noop(tmp_path):
 
 
 def test_stat_failure_is_fail_open_skip_not_raise(tmp_path, monkeypatch):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     archive_root = sessions_dir / ".archive"
     archive_root.mkdir(parents=True)
 
@@ -132,7 +134,7 @@ def test_stat_failure_is_fail_open_skip_not_raise(tmp_path, monkeypatch):
 
 
 def test_rmtree_failure_is_fail_open_skip_not_raise(tmp_path, monkeypatch):
-    sessions_dir = tmp_path / "coordinator-sessions"
+    sessions_dir = tmp_path / HUB_NAME
     archive_root = sessions_dir / ".archive"
     archive_root.mkdir(parents=True)
 
@@ -289,7 +291,7 @@ class TestReapStaleSessionsLiveWitnessAbandonment:
 class TestPurgeTestResidue:
 
     def _hub(self, tmp_path):
-        hub = tmp_path / "coordinator-sessions"
+        hub = tmp_path / HUB_NAME
         for name in ("s1", "probe-x", "sess-ws", "decisions", "handoff-claims",
                      "logs", "plan-claims", "workday-start-runs", "other-dir",
                      _SID_DEAD):

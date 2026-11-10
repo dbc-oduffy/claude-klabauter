@@ -11,7 +11,7 @@ grant, not a remedy) — it records facts about every op invocation so they can 
 be joined against docs/wiki/machine-load-norm.md's ambient-load claim. It performs
 NO remediation: no timeout is read or changed here.
 
-Sink path: <git_common_dir>/coordinator-sessions/logs/op-latency.jsonl — the
+Sink path: <session hub>/logs/op-latency.jsonl — the
 established untracked-log home (logs/agent-audit.jsonl already lives there; see
 coordinator_core.hooks.agent_completion_log for the sibling writer this module's
 append discipline was checked against, tightened to a single atomic os.write of a
@@ -134,6 +134,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core import atomic_append
+from coordinator_core.session_hub_path import hub_for_common
 
 _DISABLE_ENV = "COORDINATOR_OP_LATENCY_DISABLE"
 
@@ -282,7 +283,7 @@ def _log():
 
 
 def _sink_path(git_common_dir_path: Path) -> Path:
-    return Path(git_common_dir_path) / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    return hub_for_common(Path(git_common_dir_path)) / "logs" / "op-latency.jsonl"
 
 
 def tail_entries(path, *, tail_bytes: int, max_rows: int):

@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.ops.workflow_fire import headless
+from coordinator_core.session_hub_path import hub_for_common
 
 
 pytestmark = pytest.mark.skipif(os.name != 'nt', reason='private native engine is Windows-only')
@@ -32,8 +33,9 @@ def make_record(tmp_path):
     from coordinator_core.ops.workflow_fire.finalizer import snapshot_contract
     script = tmp_path / 'run.mjs'
     script.write_text('export const meta={}; const value=await agent("fixture",{}); return {ok:true,value};')
-    artifact = tmp_path / '.git/coordinator-sessions/workflow-fires/headless' / ('a' * 32)
+    artifact = hub_for_common(tmp_path / '.git') / 'workflow-fires/headless' / ('a' * 32)
     artifact.mkdir(parents=True)
+    (tmp_path / '.git').mkdir(exist_ok=True)
     (artifact / 'start').touch()
     path = tmp_path / 'record.json'
     path.write_text(json.dumps({'fire_id': 'a' * 32, 'script_path': str(script),

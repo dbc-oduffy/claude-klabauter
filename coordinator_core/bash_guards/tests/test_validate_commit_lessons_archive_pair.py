@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.bash_guards import dispatch as bash_dispatch
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards.dispatch_checks import _lessons_archive_paired_paths
 from coordinator_core.session import core
 from coordinator_core.win_portability import no_console_creationflags
@@ -39,7 +40,7 @@ def _repo(tmp_path: Path) -> tuple[str, str]:
     _git(root, "commit", "-q", "-m", "init")
     sid = "my-sess"
     assert core.init(sid, cwd=root)
-    started = tmp_path / ".git" / "coordinator-sessions" / sid / "started_at"
+    started = hub_for_common(tmp_path / ".git") / sid / "started_at"
     future = datetime.fromtimestamp(datetime.now(timezone.utc).timestamp() + 3600, tz=timezone.utc)
     started.write_text(future.strftime("%Y-%m-%dT%H:%M:%SZ"), encoding="utf-8")
     return root, sid

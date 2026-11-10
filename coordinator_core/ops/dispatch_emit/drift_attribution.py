@@ -9,7 +9,7 @@ Hash-only: spawns nothing, writes nothing.
 
 Where the review/fix leg's writes are recorded today (diagnosis, for the dependants):
 the write hook appends a TOUCH event with an eol-folded sha256 `content_hash` to the writer's
-touch-record sink: the run session's `.git/coordinator-sessions/<sid>` sink and each fix-pass
+touch-record sink: the run session's `<sessions hub>/<sid>` sink and each fix-pass
 agent's `<sessions hub>/.agents/<agent_id>` sink. `terminal_commit_review._recorded_fingerprints`
 and `_review_write_events` read those sinks to build the commit's `expected_content_sha256`, anchored on the
 review sidecar's mtime, so a refire or a write after that anchor falls outside it. The measured-rev

@@ -14,6 +14,7 @@ from typing import Any, Optional
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workstream_complete import directives_commit_tail as tail
 from coordinator_core.workweek_complete import apply as wwc_apply
 
@@ -42,7 +43,7 @@ class _World:
         self.dispatched: list[str] = []
         self.dirty: dict[str, str] = {PRE_EXISTING: " M"}
         self.committed: list[list[str]] = []
-        sessions = str(root / ".git" / "coordinator-sessions")
+        sessions = str(hub_for_common(root / ".git"))
         from coordinator_core.ceremony_common import apply_checkpoint
         from coordinator_core.session import core
 

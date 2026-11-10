@@ -39,6 +39,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 import sys
 import tempfile
@@ -536,7 +537,7 @@ class PlanCarryPrefersCitedSizingOverHeldBatonTest(unittest.TestCase):
             "kind: roadmap-baton\n---\n# body\n",
             encoding="utf-8",
         )
-        claim = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+        claim = hub_for_common(repo / ".git") / "handoff-claims" / basename
         claim.mkdir(parents=True)
         (claim / "session_id").write_text(f"{self._SESSION}\n", encoding="utf-8")
         (claim / "pid").write_text("999999\n", encoding="utf-8")
@@ -666,7 +667,7 @@ class SizingReverseEdgeIsClaimedByTheInvokingSessionTest(unittest.TestCase):
         `touched.txt` is no longer written on this path, so reading it always
         yields an empty claim set.
         """
-        record = repo / ".git" / "coordinator-sessions" / sid / "touch-record.jsonl"
+        record = hub_for_common(repo / ".git") / sid / "touch-record.jsonl"
         if not record.is_file():
             return []
         held: dict[str, bool] = {}

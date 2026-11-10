@@ -5,6 +5,8 @@ docs/plans/2026-09-26-retire-review-integrator.md, row M2).
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import hashlib
 import json
 
@@ -313,7 +315,7 @@ def test_targets_add_dedupes_and_persists(tmp_path):
     assert merged == ["a/b.py", "c/d.py"]
     again = m.targets_add(tmp_path, "session-1", ["e/f.py"])
     assert again == ["a/b.py", "c/d.py", "e/f.py"]
-    target_file = tmp_path / ".git" / "coordinator-sessions" / "session-1" / "review-targets.txt"
+    target_file = session_dir_for(tmp_path / ".git", "session-1") / "review-targets.txt"
     assert target_file.read_text(encoding="utf-8").splitlines() == ["a/b.py", "c/d.py", "e/f.py"]
 
 
@@ -322,7 +324,7 @@ def test_targets_add_agent_key_writes_a_separate_per_dispatch_file(tmp_path):
     m.targets_add(tmp_path, "session-1", ["a.py"])
     merged = m.targets_add(tmp_path, "session-1", ["b.py"], agent_key="agent-x")
     assert merged == ["b.py"]
-    base = tmp_path / ".git" / "coordinator-sessions" / "session-1"
+    base = session_dir_for(tmp_path / ".git", "session-1")
     assert (base / "review-targets.agent-x.txt").read_text(encoding="utf-8") == "b.py\n"
     assert (base / "review-targets.txt").read_text(encoding="utf-8") == "a.py\n"
 
@@ -466,7 +468,7 @@ def test_cli_targets_add_accepts_multiple_paths_in_one_flag(tmp_path):
         )
         == 0
     )
-    target_file = tmp_path / ".git" / "coordinator-sessions" / "s1" / "review-targets.txt"
+    target_file = session_dir_for(tmp_path / ".git", "s1") / "review-targets.txt"
     assert target_file.read_text(encoding="utf-8").splitlines() == ["a.py", "b.py", "c.py"]
 
 
@@ -478,7 +480,7 @@ def test_cli_targets_add_defaults_session_id_from_hook_env(tmp_path, monkeypatch
 
     assert m.main(["--root", str(tmp_path), "targets", "--add", "x.py"]) == 0
 
-    target_file = tmp_path / ".git" / "coordinator-sessions" / "env-session-9" / "review-targets.txt"
+    target_file = session_dir_for(tmp_path / ".git", "env-session-9") / "review-targets.txt"
     assert target_file.is_file()
 
 
@@ -549,7 +551,7 @@ def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path, capsys):
     rc = m.main(["--root", str(tmp_path), "targets", "--from-plan", str(plan),
                  "--add", "z.py", "--session-id", "s1"])
     assert rc == 0
-    f = tmp_path / ".git" / "coordinator-sessions" / "s1" / "review-targets.txt"
+    f = session_dir_for(tmp_path / ".git", "s1") / "review-targets.txt"
     assert f.read_text(encoding="utf-8").split() == [
         "z.py", "plan.md", "x/a.py", "x/b.py", "y/c.py"]
 

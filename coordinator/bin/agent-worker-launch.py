@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Launch codex, grok or agy as an autonomous worker on its own branch.
 
 Usage: agent-worker-launch.py <codex|grok|agy> [--session-id ID] [--run RUN] [--allow-engine-repo] [-- cli args...]

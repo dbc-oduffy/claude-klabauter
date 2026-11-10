@@ -1,6 +1,8 @@
 """A 19-path ceremony.commit_v2 replies under the 500ms process budget or its phase row names the blocked leg."""
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import json
 import subprocess
 from pathlib import Path
@@ -81,7 +83,7 @@ def test_default_commit_of_19_paths_is_in_budget_or_names_its_leg(tmp_path, monk
     )
     assert result["committed"] is True
 
-    sink = root / ".git" / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(root / ".git") / "logs" / "op-latency.jsonl"
     rows = [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines() if x]
     (row,) = [r for r in rows if r.get("kind") == "phase_time"]
     assert row["paths"] == 19

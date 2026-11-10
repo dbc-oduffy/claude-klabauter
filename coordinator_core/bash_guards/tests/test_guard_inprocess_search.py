@@ -54,6 +54,7 @@ import pytest
 
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import guard_inprocess_search as guard
+from coordinator_core.session_hub_path import HUB_NAME
 from coordinator_core.guard_messages.testing import envelope_of
 
 
@@ -191,7 +192,7 @@ class TestHelpers:
     def test_latch_path_lands_under_coordinator_sessions_subtree(self, repo):
         path = guard._latch_path(str(repo), "sess-x")
         assert path is not None
-        assert path.parts[-3:] == ("coordinator-sessions", "sess-x", guard._LATCH_MARKER_NAME)
+        assert path.parts[-3:] == (HUB_NAME, "sess-x", guard._LATCH_MARKER_NAME)
 
 
 class TestPowerShellDialectStaysBashOnly:

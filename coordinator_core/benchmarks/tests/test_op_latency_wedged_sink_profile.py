@@ -38,8 +38,8 @@ def test_seams_are_restored_after_the_run(row):
 
 
 def test_sink_parent_predicate_matches_only_the_logs_dir():
-    assert prof._is_sink_parent("/r/.git/coordinator-sessions/logs")
-    assert not prof._is_sink_parent("/r/.git/coordinator-sessions")
+    assert prof._is_sink_parent("/r/.coordinator-local/coordinator-sessions/logs")
+    assert not prof._is_sink_parent("/r/.coordinator-local/coordinator-sessions")
     assert not prof._is_sink_parent("/r/other/logs")
 
 

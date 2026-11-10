@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from coordinator_core.session_hub_path import hub_for_common
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -296,7 +297,7 @@ def _put(repo: Path, rel: str, text: str, mtime: float) -> Path:
 
 
 def _ledger(repo: Path, handoff_name: str, sid: str) -> None:
-    d = repo / ".git" / "coordinator-sessions" / "handoff-claims" / handoff_name
+    d = hub_for_common(repo / ".git") / "handoff-claims" / handoff_name
     d.mkdir(parents=True, exist_ok=True)
     (d / "session_id").write_text(sid, encoding="utf-8")
     (d / "claimed_at").write_text("2026-08-07T10:00:00Z", encoding="utf-8")  # dr084: ledger filename fixture write, not a frontmatter read
@@ -405,7 +406,7 @@ def _init_repo(root: Path, *, seed_started_at: bool) -> Path:
         capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     )
-    sdir = root / ".git" / "coordinator-sessions" / SID
+    sdir = hub_for_common(root / ".git") / SID
     sdir.mkdir(parents=True, exist_ok=True)
     if seed_started_at:
         (sdir / "started_at").write_text(START_ISO, encoding="utf-8")

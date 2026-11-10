@@ -5,7 +5,7 @@ docs/plans/2026-09-18-doe-holds-no-scripts.md chunk W4-C3, verbatim: this
 module is self-contained (stdlib-only, no cross-repo/cross-plane reference),
 so no adaptation was needed.
 
-The hub is `<git common dir>/coordinator-sessions/`. A directory directly
+The hub is the session hub (`session_hub_path.hub_for_common`). A directory directly
 under it is either a per-session hub directory named for a live session's id,
 or one of the fixed store directories (`logs`, `decisions`, `memo-claims`,
 `no-session`, ...) that the engine and hooks share. Nothing else belongs

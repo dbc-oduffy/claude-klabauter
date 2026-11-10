@@ -15,6 +15,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import (  # noqa: F401 -- repo is a fixture
     RUN,
@@ -52,7 +53,7 @@ def _git_out(args, cwd: Path) -> str:
 
 def _read_event(root: Path, session: str, rel: str, text: str, at: float | None = None) -> None:
     """The EM session's own READ of the pre-run bytes: the newest session event for the path."""
-    sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / session)
+    sink = touch_record.sink_path(session_dir_for(root / ".git", session))
     touch_record.append_event(
         sink, session_id=session, agent_id=None, verb="T", path=rel, content_hash=_sha(text), kind="r",
         **({} if at is None else {"timestamp": at}),

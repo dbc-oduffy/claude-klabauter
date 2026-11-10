@@ -20,7 +20,7 @@ Negative-spec:
       classed-claim store: that store is an exclusive mutex.
     - No symptom or free-text matching and no fuzzy key equivalence; two
       sessions that choose different keys do not meet.
-    - Writes only under `<git-common-dir>/coordinator-sessions/incident-claims/`;
+    - Writes only under `<session hub>/incident-claims/` (`session_hub_path.hub_for_common`);
       nothing is committed to git and nothing is set automatically.
     - Does not call `claims._write_claim_meta`: its `stage` file has no
       meaning for an incident claim.

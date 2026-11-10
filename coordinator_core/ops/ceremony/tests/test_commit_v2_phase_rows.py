@@ -1,6 +1,8 @@
 """ceremony.commit_v2 writes one phase_time row per dispatch, abandoned or not."""
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import json
 import subprocess
 import threading
@@ -39,7 +41,7 @@ def repo(tmp_path, monkeypatch):
 
 
 def _rows(repo: Path) -> list:
-    sink = repo / ".git" / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(repo / ".git") / "logs" / "op-latency.jsonl"
     if not sink.exists():
         return []
     rows = [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines() if x]

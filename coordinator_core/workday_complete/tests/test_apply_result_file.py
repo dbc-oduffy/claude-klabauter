@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workday_complete import apply as wc_apply
 
 
@@ -24,7 +25,7 @@ def _directive(did: str) -> dict[str, Any]:
 @pytest.fixture
 def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
-    sessions = str(tmp_path / ".git" / "coordinator-sessions")
+    sessions = str(hub_for_common(tmp_path / ".git"))
     from coordinator_core.ceremony_common import apply_checkpoint
     from coordinator_core.session import core
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Register a local session on the far box through the unimatrix relay's `inbox` mode,
 and carry every message the far box delivers to it back into the local session.
 

@@ -18,6 +18,8 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import pytest
 
 from coordinator_core import deny_registry, machine_resolver
@@ -107,7 +109,7 @@ def world(tmp_path, monkeypatch):
     _git(repo, "remote", "add", "origin", _OWNED)
     _git(repo, "remote", "add", "upstream", _THEIRS)
     (repo / "docs" / "plans" / "p.md").write_text("load-bearing\n", encoding="utf-8")
-    (repo / ".git" / "coordinator-sessions" / "peer-session").mkdir(parents=True)
+    (hub_for_common(repo / ".git") / "peer-session").mkdir(parents=True)
     _git(other, "init", "-q")
     yield {"repo": repo, "other": other}
     machine_resolver._external_ws_cache.clear()

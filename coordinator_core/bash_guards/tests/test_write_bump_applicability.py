@@ -31,6 +31,7 @@ import pytest
 
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
 from coordinator_core.bash_guards import _write_bump_session_start as session_start
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
@@ -571,7 +572,7 @@ def test_ac18_record_applicability_event_appends_a_line(tmp_path):
         "sess-log-1", repo="my-repo", target="/some/target", agent_class="em", cwd=str(root)
     )
 
-    log_path = root / ".git" / "coordinator-sessions" / "sess-log-1" / "write_bump_applicability_log"
+    log_path = hub_for_common(root / ".git") / "sess-log-1" / "write_bump_applicability_log"
     assert log_path.is_file()
     content = log_path.read_text(encoding="utf-8")
     assert "repo=my-repo" in content
@@ -591,7 +592,7 @@ def test_ac18_record_applicability_event_appends_not_overwrites(tmp_path):
         "sess-log-2", repo="repo-b", target="t2", agent_class="executor", cwd=str(root)
     )
 
-    log_path = root / ".git" / "coordinator-sessions" / "sess-log-2" / "write_bump_applicability_log"
+    log_path = hub_for_common(root / ".git") / "sess-log-2" / "write_bump_applicability_log"
     lines = log_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 2
     assert "repo=repo-a" in lines[0]
@@ -605,7 +606,7 @@ def test_ac18_record_applicability_event_never_mints_a_session(tmp_path):
     applicability line is a bookkeeping loss, but never as a phantom session.
     The `session=` field in the line itself is what identifies it there."""
     root = _init_repo(tmp_path)
-    hub = root / ".git" / "coordinator-sessions"
+    hub = hub_for_common(root / ".git")
 
     applicability.record_applicability_event(
         "sess-never-born", repo="r", target="t", agent_class="em", cwd=str(root)
@@ -633,7 +634,7 @@ def test_ac18_record_applicability_event_never_raises_on_empty_session_id(tmp_pa
     applicability.record_applicability_event(
         "", repo="r", target="t", agent_class="em", cwd=str(root)
     )
-    assert not (root / ".git" / "coordinator-sessions").exists()
+    assert not (hub_for_common(root / ".git")).exists()
 
 
 #: A synthetic Windows drive letter, assembled at runtime rather than as a

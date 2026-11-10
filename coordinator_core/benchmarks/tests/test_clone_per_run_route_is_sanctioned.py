@@ -12,6 +12,7 @@ from coordinator_core.bash_guards import block_subagent_commit as commit_guard
 from coordinator_core.bash_guards import guard_post_executor_verification as verify_guard
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
+from coordinator_core.session_hub_path import session_dir_for
 
 SID = "sess-clone-route-1"
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -37,7 +38,7 @@ def armed_repo(monkeypatch, tmp_path):
     (repo / "pkg").mkdir()
     (repo / "pkg" / "__init__.py").write_text("")
     verify_guard._PKG_CACHE.clear()
-    session_dir = repo / ".git" / "coordinator-sessions" / SID
+    session_dir = session_dir_for(repo / ".git", SID)
     session_dir.mkdir(parents=True)
     (session_dir / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
     return repo

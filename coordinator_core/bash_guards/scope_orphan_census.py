@@ -11,13 +11,13 @@ corpus is not a gate; this module makes it a number, re-derivable on demand.
 
 What this module does NOT do: it does not fix any orphan, does not touch
 `relocate_touched_path`, and does not change Check 5's behaviour. It reads
-`.git/coordinator-sessions/*/scope-warnings.log`, classifies each
+`.coordinator-local/coordinator-sessions/*/scope-warnings.log`, classifies each
 `owner:orphan` event into exactly one of five causes, and emits counts by
 cause / path / session for a given day (or across all days if none is given).
 
 Coverage (state/bug-backlog/2026-08-28-the-scope-guard-s-instrument-is-absent
 -f-d1921a288f7b.yaml): every count above is drawn ONLY from sessions that
-happen to carry a `.git/coordinator-sessions/<id>/` directory, and nothing in
+happen to carry a `.coordinator-local/coordinator-sessions/<id>/` directory, and nothing in
 `coordinator_core` provisions that directory for a plain committing session --
 it exists only if `hooks.session_heartbeat` round-tripped the control-plane
 engine, or one of five unrelated DoE hooks happened to fire. A zero from the
@@ -29,7 +29,7 @@ number derived from `by_cause` etc. can be silently read as a population
 rate. `committing_sessions` is the count of distinct `Session-Id` git
 trailers reaching HEAD (scoped to `--since` when given, matching the
 `owner:orphan` window); `sessions_with_dir` is the count of directories
-actually present under `.git/coordinator-sessions/`. Remedy (a) --
+actually present under `.coordinator-local/coordinator-sessions/`. Remedy (a) --
 guaranteeing a directory for every committing session -- is a registrar-side
 design decision this module does not make.
 
@@ -99,9 +99,15 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional
 
 from coordinator_core.git.run import run_git
+from coordinator_core.session_hub_path import hub_for_common
+
+
+def _hub_dir(git_root: str) -> str:
+    return str(hub_for_common(Path(git_root) / ".git"))
 
 __all__ = [
     "OrphanEvent",
@@ -163,7 +169,7 @@ class CensusResult:
 
 
 def _iter_scope_warning_logs(git_root: str) -> Iterator[str]:
-    sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
+    sessions_root = _hub_dir(git_root)
     if not os.path.isdir(sessions_root):
         return
     for dirpath, _dirnames, filenames in os.walk(sessions_root):
@@ -301,7 +307,7 @@ def _exists_on_disk_or_tracked(git_root: str, path: str) -> bool:
 
 
 def _session_dir_for(git_root: str, session_id: str) -> str:
-    return os.path.join(git_root, ".git", "coordinator-sessions", session_id)
+    return os.path.join(_hub_dir(git_root), session_id)
 
 
 def _read_sink_claims(sink) -> Dict[str, object]:
@@ -348,7 +354,7 @@ _any_touch_claim_cache: Optional[Dict[str, bool]] = None
 
 def _has_any_touch_claim(git_root: str, path: str) -> bool:
     """True if ANY session's touch-record sink, anywhere under
-    `.git/coordinator-sessions/`, carries a raw (liveness-UNFILTERED) TOUCH
+    `.coordinator-local/coordinator-sessions/`, carries a raw (liveness-UNFILTERED) TOUCH
     claim for the exact `path` -- evidence the write went through the
     `session.scope.touch()` / `ipc.py :: _SCOPE_TOUCH_PATHS_KEY` seam at
     some point, as distinct from a write that never touched that seam at
@@ -360,7 +366,7 @@ def _has_any_touch_claim(git_root: str, path: str) -> bool:
     global _any_touch_claim_cache
     if _any_touch_claim_cache is None:
         touched: Dict[str, bool] = {}
-        sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
+        sessions_root = _hub_dir(git_root)
         if os.path.isdir(sessions_root):
             try:
                 from coordinator_core.session import touch_record as _touch_record
@@ -426,7 +432,7 @@ def classify_cause(git_root: str, event: OrphanEvent) -> str:
 
 
 def _count_session_dirs(git_root: str) -> int:
-    sessions_root = os.path.join(git_root, ".git", "coordinator-sessions")
+    sessions_root = _hub_dir(git_root)
     if not os.path.isdir(sessions_root):
         return 0
     count = 0

@@ -6,6 +6,7 @@ Run: python -m pytest coordinator_core/workstream_complete/test_apply_minted_bat
 from __future__ import annotations
 
 from coordinator_core.session import claims
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workstream_complete import apply as _apply
 from coordinator_core.workstream_complete import directives_commit_tail
 
@@ -87,7 +88,7 @@ def test_real_store_claim_is_visible_to_the_held_read_and_not_reclaimed(tmp_path
 
     init_repo(tmp_path)
     _baton(tmp_path, "mine.md", "sid-1")
-    cdir = tmp_path / ".git" / "coordinator-sessions" / "handoff-claims" / "mine.md"
+    cdir = hub_for_common(tmp_path / ".git") / "handoff-claims" / "mine.md"
     cdir.mkdir(parents=True)
     (cdir / "session_id").write_text("sid-1\n", encoding="utf-8")
     calls: list = []

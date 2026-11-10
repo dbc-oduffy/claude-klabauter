@@ -5,6 +5,7 @@ import json
 import time
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry import engine_report
 
 
@@ -31,7 +32,7 @@ def _patch_repo(monkeypatch, tmp_path: Path):
 
 def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch, tmp_path):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    sink = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     now = time.time()
     rows = [
         {"op": "op.a", "t_start": now - 10, "elapsed_ms": 100.0, "kind": "complete"},
@@ -62,7 +63,7 @@ def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch, tmp_p
 
 def test_iter_sink_entries_spans_rotated_generations(monkeypatch, tmp_path):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    logs_dir = common_dir / "coordinator-sessions" / "logs"
+    logs_dir = hub_for_common(common_dir) / "logs"
     now = time.time()
     _write_jsonl(
         logs_dir / "op-latency.jsonl",
@@ -90,7 +91,7 @@ def test_iter_sink_entries_spans_rotated_generations(monkeypatch, tmp_path):
 
 def test_iter_sink_entries_never_raises_on_malformed_lines(monkeypatch, tmp_path):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    sink = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     sink.parent.mkdir(parents=True, exist_ok=True)
     sink.write_text(
         '{"op": "ok.op", "t_start": 1.0, "elapsed_ms": 5.0, "kind": "complete"}\n'
@@ -284,7 +285,7 @@ def test_outcome_split_unknown_outcome_lands_in_other():
 
 def test_engine_telemetry_report_composes_every_section(monkeypatch, tmp_path):
     common_dir = _patch_repo(monkeypatch, tmp_path)
-    sink = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     now = time.time()
     rows = [
         {

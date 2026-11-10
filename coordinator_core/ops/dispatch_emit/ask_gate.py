@@ -1207,7 +1207,7 @@ def _spine_plan(repo_root: Path, sizing: dict, sizing_rel: str) -> tuple[Optiona
             )
         return rel.as_posix(), None
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
+    target.write_text(text, encoding="utf-8", newline="\n")
     return rel.as_posix(), None
 
 
@@ -1345,7 +1345,7 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
             try:
                 _dir = _run_dir(root, params["run_id"])
                 _dir.mkdir(parents=True, exist_ok=True)
-                (_dir / "declared_writes.json").write_text(_json.dumps(declared), encoding="utf-8")
+                (_dir / "declared_writes.json").write_text(_json.dumps(declared), encoding="utf-8", newline="\n")
             except (LedgerRefused, OSError):
                 pass
     if params.get("run_id") or record is not None:
@@ -1431,6 +1431,7 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
             and verdict.resume_rows is not None
         ):
             # An empty resume_rows stages no rows (all landed); None would re-stage every row.
+            # Trap: with no snapshot, stage() reads an empty set as the plan's open rows.
             plan_rel, ledger_resume, only_rows = verdict.resume_plan, False, list(verdict.resume_rows)
         else:
             if verdict.resume_plan and verdict.resume_rows:
@@ -1737,7 +1738,7 @@ def _mark_token_spent(root: Path, run_id: str) -> None:
     try:
         target = Path(root) / RECORD_DIR_ROOT / run_id
         target.mkdir(parents=True, exist_ok=True)
-        (target / TOKEN_SPENT_FILE).write_text("{}\n", encoding="utf-8")
+        (target / TOKEN_SPENT_FILE).write_text("{}\n", encoding="utf-8", newline="\n")
     except OSError:
         pass
 

@@ -1,6 +1,8 @@
 """The phase_time row carries the corr_id of the dispatch that ran the handler."""
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import asyncio
 import json
 from pathlib import Path
@@ -14,7 +16,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 def _phase_rows(root: Path) -> list:
-    sink = root / ".git" / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(root / ".git") / "logs" / "op-latency.jsonl"
     if not sink.exists():
         return []
     rows = [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines() if x]

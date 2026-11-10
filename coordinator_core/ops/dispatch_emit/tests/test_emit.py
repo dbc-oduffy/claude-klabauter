@@ -5,6 +5,7 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C4.
 """
 
 from __future__ import annotations
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError
 from .conftest import REVIEW_KW, execute_section, _V5_ROSTER_FRAGMENT, _V5_STAGE_SCHEMAS
 
@@ -1417,10 +1418,7 @@ def test_compose_script_registers_declared_paths_as_review_targets(tmp_path):
         session_id="11111111-1111-1111-1111-111111111111",
     )
     targets_file = (
-        tmp_path
-        / ".git"
-        / "coordinator-sessions"
-        / "11111111-1111-1111-1111-111111111111"
+        session_dir_for(tmp_path / ".git", "11111111-1111-1111-1111-111111111111")
         / "review-targets.txt"
     )
     assert targets_file.is_file(), (

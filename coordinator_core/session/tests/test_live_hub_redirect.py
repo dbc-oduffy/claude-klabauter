@@ -42,7 +42,7 @@ def test_real_home_marked_test_keeps_the_real_live_hub(monkeypatch):
 def test_non_live_repo_resolution_is_untouched(tmp_path):
     (tmp_path / ".git").mkdir()
     core.reset_sessions_dir_cache()
-    assert Path(core.sessions_dir(str(tmp_path))) == tmp_path / ".git" / "coordinator-sessions"
+    assert Path(core.sessions_dir(str(tmp_path))) == tmp_path / ".coordinator-local" / "coordinator-sessions"
 
 
 def test_live_resolution_is_redirected_without_an_ambient_session_id(monkeypatch):

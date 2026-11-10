@@ -7,6 +7,8 @@ Spec backlink: coordinator-content-repo:pln-push-side-write-discipline-for-05c30
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 from pathlib import Path
 
 import pytest
@@ -731,7 +733,7 @@ def _fake_common_dir(root: Path) -> Path:
 
 
 def _make_claim_dir(common_dir: Path, handoff_name: str, *, session_id: str) -> None:
-    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir = hub_for_common(common_dir) / "handoff-claims" / handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
 

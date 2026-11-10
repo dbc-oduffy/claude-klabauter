@@ -771,8 +771,8 @@ def _committed_paths_for_sids(
 def _enumerate_peer_session_ids(
     repo_root: Path, this_session_id: str
 ) -> "tuple[list[str], bool]":
-    """Lists the OTHER session ids with a claim dir under the git common
-    dir's `coordinator-sessions/` hub (`_session_core.sessions_dir`, the
+    """Lists the OTHER session ids with a claim dir under the
+    session hub (`_session_core.sessions_dir`, the
     same hub `resolve_session_start_time` and `liveness.live_session_ids`
     read). Returns `(sids, enumeration_reliable)` — `enumeration_reliable`
     is `False` only when the hub could not be walked at all (an `OSError`
@@ -830,7 +830,7 @@ def _session_live_conservative(repo_root: Path, sid: str) -> bool:
 
 def _scan_subagent_share_session_dirs(repo_root: Path, this_session_id: str) -> list[str]:
     """Filesystem-only fallback peer enumeration, independent of the
-    `coordinator-sessions/` claim-dir hub entirely: every subdirectory of
+    session claim-dir hub entirely: every subdirectory of
     `state/subagent-share/` except `this_session_id`'s own. Used ONLY when
     `_enumerate_peer_session_ids` reports the claim-dir hub itself could not
     be walked (`enumeration_reliable=False`) — see `resolve_known_
@@ -904,7 +904,7 @@ def resolve_known_concurrent_paths(
     exist anywhere in this codebase until this function (see
     `jp-stage-paths-missing`'s own docstring, `judgments.py`, which named
     the gap explicitly). Built from primitives that already exist: the
-    `coordinator-sessions/` claim-dir hub (`_session_core.sessions_dir`,
+    session claim-dir hub (`_session_core.sessions_dir`,
     the same hub `resolve_session_start_time`/`live_session_ids` already
     read), `liveness.session_live` for deciding which OTHER sessions are
     genuinely live right now, and `Session-Id` commit-trailer attribution
@@ -942,7 +942,7 @@ def resolve_known_concurrent_paths(
         path back after review. Failing to name it risks silently
         committing a live peer's in-progress work.
       - Degrades safely rather than empty-and-confident: when the
-        `coordinator-sessions/` hub itself cannot be walked
+        session hub itself cannot be walked
         (`_enumerate_peer_session_ids` reports `enumeration_reliable=
         False` — a permission error, a TOCTOU dir removal, anything short
         of "the hub is empty"), this function does NOT fall through to

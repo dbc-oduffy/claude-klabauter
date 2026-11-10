@@ -19,6 +19,8 @@ Spec backlink: `coordinator_core.pickup_assemble.route_baton_adoption`.
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 import subprocess
 from pathlib import Path
 
@@ -61,7 +63,7 @@ def _write_baton(repo: Path, name: str, *, deployment_state: str = "active") -> 
 
 
 def _seed_ledger_claim(repo: Path, basename: str, holder_sid: str) -> None:
-    claim_dir = repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    claim_dir = hub_for_common(repo / ".git") / "handoff-claims" / basename
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(f"{holder_sid}\n", encoding="utf-8")
     (claim_dir / "claimed_at").write_text("2026-01-01T00:00:00Z\n", encoding="utf-8")
@@ -91,7 +93,7 @@ def _as_self_session(monkeypatch):
 def repo(tmp_path):
     r = tmp_path / "repo"
     _init_repo(r)
-    (r / ".git" / "coordinator-sessions" / SELF_SID).mkdir(parents=True, exist_ok=True)
+    (session_dir_for(r / ".git", SELF_SID)).mkdir(parents=True, exist_ok=True)
     return r
 
 

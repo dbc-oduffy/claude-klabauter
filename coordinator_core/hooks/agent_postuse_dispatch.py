@@ -105,7 +105,7 @@ from coordinator_core.hooks import agent_completion_log, track_dispatched_agents
 
 
 #: Generator-provenance declaration: this op writes nothing itself. Its legs
-#: write only inside <git_common_dir>/coordinator-sessions/ — see their own
+#: write only inside the session hub (session_hub_path.hub_for_common) — see their own
 #: GENERATES declarations.
 GENERATES: list = []
 

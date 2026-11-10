@@ -4,7 +4,7 @@ Both override-logging call sites (`commit_tripwires._log_pathspec_divergence_
 override` and `dispatch_checks`'s `COORDINATOR_OVERRIDE_BLANKET_ADD` leg) used
 to `os.makedirs(<sessions>/<sid>, exist_ok=True)` for whatever `session_id`
 they were handed. `liveness.live_session_ids` enumerates every non-denylisted
-child of `.git/coordinator-sessions/` as a SESSION, so an audit write could
+child of `.coordinator-local/coordinator-sessions/` as a SESSION, so an audit write could
 manufacture a phantom session into the corpus claim attribution and scope
 computation read.
 
@@ -22,10 +22,11 @@ from coordinator_core.bash_guards._override_log_path import (
     NO_SESSION_BUCKET,
     _override_log_path,
 )
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _sessions_root(tmp_path):
-    return tmp_path / ".git" / "coordinator-sessions"
+    return hub_for_common(tmp_path / ".git")
 
 
 def test_unknown_session_lands_in_the_no_session_bucket(tmp_path):
@@ -41,6 +42,7 @@ def test_unknown_session_lands_in_the_no_session_bucket(tmp_path):
 
 
 def test_existing_session_dir_is_used_as_is(tmp_path):
+    (tmp_path / ".git").mkdir()
     own = _sessions_root(tmp_path) / "11111111-2222-3333-4444-555555555555"
     own.mkdir(parents=True)
 

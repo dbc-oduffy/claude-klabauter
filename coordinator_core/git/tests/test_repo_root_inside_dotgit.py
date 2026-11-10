@@ -25,7 +25,7 @@ def _gitdir(path: Path) -> None:
 def test_cwd_under_dotgit_resolves_parent_worktree(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _gitdir(repo / ".git")
-    session = repo / ".git" / "coordinator-sessions" / "sid"
+    session = repo / ".git" / "hooks" / "sid"
     session.mkdir(parents=True)
     assert repo_root.show_toplevel(str(session)) == str(repo.resolve())
     assert repo_root.git_common_dir(str(session)) == str((repo / ".git").resolve())

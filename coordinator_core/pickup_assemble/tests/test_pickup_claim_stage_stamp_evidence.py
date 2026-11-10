@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+
+from coordinator_core.session_hub_path import hub_for_common
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +66,7 @@ def _seed_handoff(repo: Path, name: str, *, claimed_by: str | None = None) -> Pa
 
 
 def _claim_dir(repo: Path, basename: str) -> Path:
-    return repo / ".git" / "coordinator-sessions" / "handoff-claims" / basename
+    return hub_for_common(repo / ".git") / "handoff-claims" / basename
 
 
 def _write_claim(

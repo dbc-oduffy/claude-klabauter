@@ -48,7 +48,7 @@ See coordinator/bin/coordinator-ceremony-hook.py for how the first three
 compose today; it owns none of them itself.
 
 Persisted-handle substrate: untracked, per-consuming-repo, mirrors the
-`.git/coordinator-sessions/` convention (coordinator_core/ops/session/reap.py)
+`.coordinator-local/coordinator-sessions/` convention (coordinator_core/ops/session/reap.py)
 rather than living under the repo's tracked `state/` tree — a launch handle
 is ephemeral process-liveness data, not durable substrate, and must never be
 committed. One JSON file per launch-target key under

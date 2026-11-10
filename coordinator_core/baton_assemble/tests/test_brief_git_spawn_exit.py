@@ -9,6 +9,8 @@ the tree sha it was captured at and is ignored by the comparison.
 from __future__ import annotations
 
 import json
+
+from coordinator_core.session_hub_path import session_dir_for
 import os
 import re
 import subprocess
@@ -54,7 +56,7 @@ def _seed_dirty_repo(tmp_path: Path) -> Path:
     _git(repo, "commit", "-m", "add h1.md")
     (repo / _CLAIMED).write_text("modified\n", encoding="utf-8")
     (repo / "untracked.txt").write_text("untracked\n", encoding="utf-8")
-    sink = git_common_dir(repo) / "coordinator-sessions" / _SESSION_ID / "touch-record.jsonl"
+    sink = session_dir_for(git_common_dir(repo), _SESSION_ID) / "touch-record.jsonl"
     append_event(sink, session_id=_SESSION_ID, agent_id=None, verb="T", path=_CLAIMED)
     return repo
 

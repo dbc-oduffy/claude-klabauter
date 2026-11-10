@@ -226,8 +226,8 @@ def revalidate(
 # The cache lives under the git common dir, not the worktree: it is derived,
 # per-checkout, and must never be committed -- an archive-index blob churning
 # on a shared `work/*` branch is noise every peer would pay for. This reuses
-# the `.git/coordinator-*` convention already established here by
-# `.git/coordinator-sessions/`.
+# the `.git/coordinator-*` convention (the session hub itself has since moved
+# to `.coordinator-local/coordinator-sessions/`; this cache stays under `.git`).
 
 import json
 import tempfile

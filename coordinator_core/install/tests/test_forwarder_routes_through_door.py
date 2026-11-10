@@ -27,6 +27,7 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.install import door_install, door_route_signal, substrate
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
@@ -328,7 +329,7 @@ def _git_common_dir(tmp_path: Path) -> Path:
 
 
 def _sink_path(common_dir: Path) -> Path:
-    return common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    return hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
 
 
 def _write_jsonl(path: Path, rows: list) -> None:

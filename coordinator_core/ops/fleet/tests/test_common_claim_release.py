@@ -25,6 +25,8 @@ already pins.
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import asyncio
 import subprocess
 from pathlib import Path
@@ -56,7 +58,7 @@ def _run(coro):
 
 
 def _sdir(repo: Path, sid: str) -> Path:
-    return Path(repo) / ".git" / "coordinator-sessions" / sid
+    return session_dir_for(Path(repo) / ".git", sid)
 
 
 @pytest.fixture

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import HUB_NAME
+
 import json
 import shutil
 from pathlib import Path
@@ -17,9 +19,9 @@ SID = "sid-turn20"
 
 @pytest.fixture
 def session(tmp_path, monkeypatch):
-    sdir = tmp_path / "coordinator-sessions" / SID
+    sdir = tmp_path / HUB_NAME / SID
     sdir.mkdir(parents=True)
-    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "coordinator-sessions" / s)
+    monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / HUB_NAME / s)
     shutil.copy(FIXTURE, sdir / PT.PM_TURNS_FILENAME)
     home = tmp_path / "home"
     home.mkdir()

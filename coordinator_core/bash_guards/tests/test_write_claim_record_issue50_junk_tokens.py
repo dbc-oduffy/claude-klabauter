@@ -22,8 +22,11 @@ marker as a separate following token -- see `_LEAKED_HEREDOC_OPENER_RE` and
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
+
+from coordinator_core.session_hub_path import hub_for_common
 
 from coordinator_core.bash_guards.write_claim_record import record_write_claims
 from coordinator_core.session.touch_record import VERB_TOUCH, decode_line, iter_complete_lines, sink_path
@@ -38,7 +41,7 @@ def _repo(tmp_path) -> str:
 
 
 def _touched_paths(root, session_id=_SESSION_ID) -> set:
-    sink = sink_path(os.path.join(root, ".git", "coordinator-sessions", session_id))
+    sink = sink_path(os.path.join(str(hub_for_common(Path(root) / ".git")), session_id))
     if not sink.exists():
         return set()
     raw = sink.read_bytes()

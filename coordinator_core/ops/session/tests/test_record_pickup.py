@@ -7,8 +7,8 @@ Coverage:
     git subprocess spawns for a normal write — the positive assertion behind
     the C5 seam-routing finding recorded in `record_pickup.py`'s module
     docstring: this op's own write target
-    (`<git_common_dir>/coordinator-sessions/<sid>/session-shape.json`) sits
-    under `.git/`, is untracked by construction, and is therefore never a
+    (`<hub>/<sid>/session-shape.json`, hub = `session_hub_path.hub_for_common`) sits
+    under `.coordinator-local/`, is untracked by construction, and is therefore never a
     candidate for `commit_pipeline :: commit`'s `commit_paths` — there is no
     git activity to fold in, so a spawn-count ratchet of exactly 0 is the
     test that stands behind that "cannot reach it" conclusion, mirroring the
@@ -26,6 +26,8 @@ repo is present and resolvable, not proving git itself is absent.
 """
 
 from __future__ import annotations
+
+from coordinator_core.session_hub_path import session_dir_for
 
 import asyncio
 import json
@@ -76,7 +78,7 @@ def _run(params: dict) -> dict:
 
 
 def _shape_path(repo: Path, sid: str) -> Path:
-    return repo / ".git" / "coordinator-sessions" / sid / "session-shape.json"
+    return session_dir_for(repo / ".git", sid) / "session-shape.json"
 
 
 def test_record_pickup_makes_zero_git_spawns(real_repo: Path) -> None:

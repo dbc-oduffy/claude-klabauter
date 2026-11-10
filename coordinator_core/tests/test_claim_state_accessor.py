@@ -8,10 +8,11 @@ from unittest import mock
 import pytest
 
 from coordinator_core import claim_state
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _write_claim_dir(common_dir: Path, handoff_name: str, session_id: str, claimed_at: str = "") -> Path:
-    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir = hub_for_common(common_dir) / "handoff-claims" /handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
     if claimed_at:
@@ -206,7 +207,7 @@ def test_handoff_claim_dir_path_shape(tmp_path):
     common_dir = tmp_path / "gitdir"
     handoff = Path("state/handoffs/example.md")
     got = claim_state.handoff_claim_dir(common_dir, handoff)
-    assert got == common_dir / "coordinator-sessions" / "handoff-claims" / "example.md"
+    assert got == hub_for_common(common_dir) / "handoff-claims" /"example.md"
 
 
 def test_no_subprocess_re_shelled_out_per_call(workspace, monkeypatch):
@@ -241,7 +242,7 @@ def test_git_common_dir_is_lru_cached_when_common_dir_omitted(workspace):
 
 def test_malformed_session_id_degrades_not_raises(workspace):
     common_dir, handoff = workspace
-    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff.name
+    claim_dir = hub_for_common(common_dir) / "handoff-claims" /handoff.name
     claim_dir.mkdir(parents=True)
     (claim_dir / "session_id").write_bytes(b"\xff\xfe\x00bad")
     _write_handoff(handoff, status="open")
@@ -255,7 +256,7 @@ def test_malformed_session_id_degrades_not_raises(workspace):
 
 def test_malformed_claimed_at_degrades_not_raises(workspace):
     common_dir, handoff = workspace
-    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff.name
+    claim_dir = hub_for_common(common_dir) / "handoff-claims" /handoff.name
     claim_dir.mkdir(parents=True)
     (claim_dir / "session_id").write_text("sess-h", encoding="utf-8")
     (claim_dir / "claimed_at").write_bytes(b"\xff\xfe\x00bad")

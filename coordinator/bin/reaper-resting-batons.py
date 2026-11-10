@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """reaper-resting-batons.py — read-only surfacing pass for `open`/`ready_to_fire`
 resting handoff batons.
 

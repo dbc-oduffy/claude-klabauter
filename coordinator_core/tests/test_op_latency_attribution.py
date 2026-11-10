@@ -36,6 +36,7 @@ import json
 
 import coordinator_core.ipc as ipc
 from coordinator_core.ipc import _REGISTRY, dispatch_message
+from coordinator_core.session_hub_path import hub_for_common
 
 
 def _run(coro):
@@ -69,7 +70,7 @@ _TEST_HANDLERS = {"test.attribution_sync": _sync_handler}
 
 
 def _sink_for(fake_common_dir):
-    return fake_common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    return hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
 
 
 def test_none_scoped_op_served_warm_attributes_to_caller_not_server(tmp_path, monkeypatch):

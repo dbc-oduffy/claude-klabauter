@@ -4,6 +4,7 @@ import json
 
 from coordinator_core.idle_compact import contract as c
 from coordinator_core.session import context_usage_sidecar as cus
+from coordinator_core.session_hub_path import session_dir_for
 
 
 def test_thresholds():
@@ -29,7 +30,7 @@ def test_marker_paths_in_hub(tmp_path):
     h = c.compact_hold_marker_path("sid1", str(tmp_path))
     assert o.name == "idle-compact-optout" and h.name == "compact-hold"
     assert o.parent == h.parent
-    assert o.parent.parts[-2:] == ("coordinator-sessions", "sid1")
+    assert o.parent == session_dir_for(tmp_path / ".git", "sid1")
 
 
 def test_marker_paths_none_outside_repo(tmp_path):

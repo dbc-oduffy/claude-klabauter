@@ -65,7 +65,7 @@ GIT DIR — resolve via `resolve_git_dir`, per this chunk's own dispatch brief.
 The sizing-object lookup (the PostToolUse leg's `coordinator:sizing`/`
 coordinator:plan` branch) needs to read the SAME session's touch-record to
 find "the sizing object this session most recently touched" — the source
-script reads that from `<git_dir>/coordinator-sessions/<session_id>/
+script reads that from `.coordinator-local/coordinator-sessions/<session_id>/
 touch-record.jsonl`. This op resolves that `git_dir` through `coordinator_core.
 git.git_dir.resolve_git_dir` (given an already-walked repo root), in-process
 and zero-spawn — never re-deriving the `.git`-file-vs-directory indirection
@@ -185,6 +185,7 @@ import re
 import tempfile
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from coordinator_core._hook_envelope import payload_of
@@ -198,6 +199,7 @@ from coordinator_core.hooks.support.touch_record import _touch_record_jsonl_path
 from coordinator_core.ipc import register_op
 from coordinator_core.machine_profile import apply_guard_level
 from coordinator_core.session import machinery_paths
+from coordinator_core.session_hub_path import session_dir_for
 
 GUARD_NAME = "watchdog-undischarged-next-move"
 
@@ -488,7 +490,7 @@ def _touched_txt_paths(session_dir: str) -> list:
 
 
 def _newest_touched_sizing_path(git_dir: str, session_id: str) -> Optional[str]:
-    session_dir = os.path.join(git_dir, "coordinator-sessions", session_id)
+    session_dir = str(session_dir_for(Path(git_dir), session_id))
 
     candidate = None
     for rel in _touch_record_jsonl_paths(session_dir):

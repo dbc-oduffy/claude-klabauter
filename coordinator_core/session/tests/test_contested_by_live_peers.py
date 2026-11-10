@@ -38,7 +38,7 @@ from coordinator_core.session import core, scope, touch_record
 
 
 def _claim(root: str, sid: str, path: str, verb: str = touch_record.VERB_TOUCH) -> None:
-    sdir = Path(root) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(root) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     touch_record.append_event(
         touch_record.sink_path(sdir),

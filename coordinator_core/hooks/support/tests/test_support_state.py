@@ -29,6 +29,7 @@ from coordinator_core.hooks.support import (
     touch_record,
     worktree_isolation_strip,
 )
+from coordinator_core.session_hub_path import session_dir_for
 
 
 def _init_git_dir(root, common_dir_name=".git"):
@@ -82,7 +83,7 @@ class TestGitCommonDir:
 class TestTouchRecord:
     def test_touch_lines_reads_new_file_before_legacy(self, tmp_path):
         git_dir = _init_git_dir(tmp_path)
-        session_dir = git_dir / "coordinator-sessions" / "sid1"
+        session_dir = session_dir_for(git_dir, "sid1")
         session_dir.mkdir(parents=True)
         (session_dir / "touch-record.jsonl").write_text(
             json.dumps({"verb": "T", "path": "new.py"}) + "\n", encoding="utf-8"
@@ -98,7 +99,7 @@ class TestTouchRecord:
 
     def test_touch_record_jsonl_skips_malformed_and_pathless_rows(self, tmp_path):
         git_dir = _init_git_dir(tmp_path)
-        session_dir = git_dir / "coordinator-sessions" / "sid2"
+        session_dir = session_dir_for(git_dir, "sid2")
         session_dir.mkdir(parents=True)
         (session_dir / "touch-record.jsonl").write_text(
             "not json\n" + json.dumps({"verb": "T"}) + "\n" + json.dumps({"path": "ok.py"}) + "\n",
@@ -397,7 +398,7 @@ class TestForegroundDispatchStrip:
     def test_foreground_ok_escape_hatch_suppresses_reroute(self, tmp_path):
         git_dir = _init_git_dir(tmp_path)
         sid = "sid-escape"
-        session_dir = git_dir / "coordinator-sessions" / sid
+        session_dir = session_dir_for(git_dir, sid)
         session_dir.mkdir(parents=True)
         (session_dir / foreground_dispatch_strip._FOREGROUND_OK_MARKER_NAME).write_text(
             "", encoding="utf-8"

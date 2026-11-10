@@ -10,6 +10,7 @@ import time
 import pytest
 import yaml
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
@@ -587,7 +588,7 @@ def test_workflow_revise_leaves_the_session_owning_a_current_requirements_md(run
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
     rel = f"{RECORD_DIR_ROOT}/{RUN}/requirements.md"
-    sink = repo / ".git" / "coordinator-sessions" / sid / "touch-record.jsonl"
+    sink = session_dir_for(repo / ".git", sid) / "touch-record.jsonl"
     sink.parent.mkdir(parents=True)
     touch_record.append_event(
         sink, session_id=sid, agent_id=None, verb=touch_record.VERB_TOUCH, path=rel,

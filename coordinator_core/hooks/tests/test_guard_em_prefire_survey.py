@@ -12,6 +12,7 @@ from coordinator_core import machine_profile, warp_fire
 from coordinator_core.hooks import guard_em_prefire_survey as g
 from coordinator_core.session import em_prefire_window as epw
 from coordinator_core.session import engine_route_state as ers
+from coordinator_core.session_hub_path import session_dir_for
 
 pytestmark = pytest.mark.complete
 
@@ -45,7 +46,7 @@ class Env:
         self.lines: list[str] = []
 
     def set_marker(self, on=True):
-        d = self.repo / ".git" / "coordinator-sessions" / SID
+        d = session_dir_for(self.repo / ".git", SID)
         d.mkdir(parents=True, exist_ok=True)
         marker = d / "em-role-asserted"
         if on:

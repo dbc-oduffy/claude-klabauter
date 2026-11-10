@@ -154,7 +154,9 @@ _NO_REPO_ROOT_RECEIPT_DIR = fleet_temp_root() / "no-repo-root"
 
 
 def _memo_sessions_dir(common_dir: Path) -> Path:
-    return common_dir / "coordinator-sessions"
+    from coordinator_core.session_hub_path import hub_for_common
+
+    return hub_for_common(common_dir)
 
 
 def _memo_claim_dir(common_dir: Path, memo_path: Path) -> Path:

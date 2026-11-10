@@ -21,6 +21,8 @@ git_common_dir`) — no fixture stands in for that. Follows the
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import asyncio
 import os
 import subprocess
@@ -100,7 +102,7 @@ def _setup(tmp_path: Path, monkeypatch, *, session_id: str | None) -> Path:
     repo = tmp_path / "repo"
     _init_repo(repo)
     monkeypatch.setattr(
-        session_core, "sessions_dir", lambda cwd=None: str(repo / ".git" / "coordinator-sessions")
+        session_core, "sessions_dir", lambda cwd=None: str(hub_for_common(repo / ".git"))
     )
     if session_id is not None:
         monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)

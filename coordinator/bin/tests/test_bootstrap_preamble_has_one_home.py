@@ -49,7 +49,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 # `.git/` and `.coordinator-local/` are machinery, not source. `.git/` earns its
 # place here twice over: the artifact-claim convention names each claim DIRECTORY
-# after the artifact it claims, so `.git/coordinator-sessions/artifact-claims/`
+# after the artifact it claims, so `.coordinator-local/coordinator-sessions/artifact-claims/`
 # holds real directories called `commit_v2.py` and `safe_commit_offer.py`. rglob
 # matches those, and opening a directory raises PermissionError on Windows — this
 # scan died on a peer's live claim rather than on anything in the repo.

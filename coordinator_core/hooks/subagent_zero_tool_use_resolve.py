@@ -9,6 +9,7 @@ from coordinator_core._hook_envelope import payload_of
 from coordinator_core.ipc import register_op
 from coordinator_core.hooks._payload import field
 from coordinator_core.lifecycle import git_common_dir
+from coordinator_core.session_hub_path import hub_for_common
 
 _RECORD_KIND = "zero-tool-use"
 
@@ -146,9 +147,9 @@ async def _handler(params: dict, repo_root=None) -> dict:
         )
 
     try:
-        _sessions_base = git_common_dir(repo_root) / "coordinator-sessions"
+        _sessions_base = hub_for_common(git_common_dir(repo_root))
     except RuntimeError:
-        _sessions_base = Path(str(repo_root)) / "coordinator-sessions"
+        _sessions_base = hub_for_common(Path(str(repo_root)))
     store_path = str(_sessions_base / session_id / "subagent-zero-tool-use.jsonl")
 
     return await asyncio.to_thread(_resolve_store_sync, store_path, agent_id)

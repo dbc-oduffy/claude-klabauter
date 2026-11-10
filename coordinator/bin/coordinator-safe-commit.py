@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """coordinator-safe-commit — Scoped safety commit helper (naked-Python port,
 Wave 2 of the coordinator-session-family-repoint-and-delete plan, chunk C2a).
 
@@ -932,7 +933,9 @@ def _holder_context(
             bits.append(SHARED_GHOST_MARKER)
     except Exception:
         pass
-    sessions_dir = os.path.join(worktree_root, ".git", "coordinator-sessions", sid)
+    from coordinator_core.session_hub_path import session_dir_for  # noqa: PLC0415
+
+    sessions_dir = str(session_dir_for(Path(worktree_root) / ".git", sid))
     try:
         import json  # noqa: PLC0415
 

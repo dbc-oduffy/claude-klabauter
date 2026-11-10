@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import land_run, terminal_commit
 from coordinator_core.session import core as session_core
 from coordinator_core.session import touch_record
@@ -36,7 +37,7 @@ def repo(tmp_path, monkeypatch):
 
 def _touch(repo: Path, text: str, at: float) -> None:
     touch_record.append_event(
-        touch_record.sink_path(repo / ".git" / "coordinator-sessions" / SELF),
+        touch_record.sink_path(session_dir_for(repo / ".git", SELF)),
         session_id=SELF, agent_id=None, verb="T", path=REL, content_hash=_sha(text), kind="w", timestamp=at,
     )
 

@@ -1,6 +1,8 @@
 
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import session_dir_for
+
 import subprocess
 from pathlib import Path
 
@@ -24,7 +26,7 @@ def _make_repo(tmp_path):
 
 
 def _ensure_session_dir(repo: Path, sid: str) -> Path:
-    sdir = repo / ".git" / "coordinator-sessions" / sid
+    sdir = session_dir_for(repo / ".git", sid)
     sdir.mkdir(parents=True, exist_ok=True)
     return sdir
 
@@ -44,7 +46,7 @@ def test_mint_creates_record_with_first_prompt(tmp_path):
     assert result["created"] is True
     assert result["first_prompt"] == "hello world"
     assert result["baton_path"] == str(
-        repo / ".git" / "coordinator-sessions" / "sid-1" / "baton.json"
+        session_dir_for(repo / ".git", "sid-1") / "baton.json"
     )
 
     on_disk = store.read_baton("sid-1", cwd=str(repo))
@@ -73,7 +75,7 @@ def test_second_call_same_session_updates_not_duplicates(tmp_path):
     assert second["session_id"] == "sid-idem"
 
     baton_files = list(
-        (repo / ".git" / "coordinator-sessions" / "sid-idem").glob("*.json")
+        (session_dir_for(repo / ".git", "sid-idem")).glob("*.json")
     )
     assert len(baton_files) == 1
 

@@ -100,12 +100,12 @@ def test_lane_path_routes_through_shared_sessions_dir_resolver(repo, tmp_path, m
     from coordinator_core.session import core as _core
 
     root, sha = repo
-    assert xb.lane_path(root, "s") == root / ".git" / "coordinator-sessions" / "s" / "xs-lane.json"
+    assert xb.lane_path(root, "s") == root / ".coordinator-local" / "coordinator-sessions" / "s" / "xs-lane.json"
     redirected = tmp_path / "elsewhere" / "coordinator-sessions"
     monkeypatch.setattr(_core, "_sessions_dir_resolve", lambda cwd: str(redirected))
     assert xb.open_xs_lane(root, "s", sha) is True
     assert (redirected / "s" / "xs-lane.json").is_file()
-    assert not (root / ".git" / "coordinator-sessions" / "s").exists()
+    assert not (root / ".coordinator-local" / "coordinator-sessions" / "s").exists()
 
 
 def test_corrupt_record_reads_spent_and_blocks_reopen(repo):

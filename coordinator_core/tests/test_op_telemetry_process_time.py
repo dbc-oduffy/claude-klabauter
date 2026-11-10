@@ -25,6 +25,8 @@ import os
 
 import pytest
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import coordinator_core.ipc as ipc
 
 
@@ -35,7 +37,7 @@ def _fake_common_dir(tmp_path):
 
 
 def _sink(common_dir):
-    return common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    return hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
 
 
 def _read_entries(sink):

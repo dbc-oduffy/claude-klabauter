@@ -50,7 +50,7 @@ nudge_em_code_dispatch, nudge_unauthorized_handoff,
 postuse_advisory_dispatch, nudge_named_agent_report_delivery. That prose
 grouping is the only boundary claude-klabauter's tree draws between "advisory" and
 the package's other two populations — bookkeeping ops that write
-`.git/coordinator-sessions/`, and the zero-tool-use/arrival-check detection
+`.coordinator-local/coordinator-sessions/`, and the zero-tool-use/arrival-check detection
 ops — there is no data structure encoding it anywhere in this tree, only
 that docstring. `_PORTED_ADVISORY_HOOK_OP_NAMES` below mirrors it as data
 rather than re-deriving it structurally — and that grouping is *originating*,

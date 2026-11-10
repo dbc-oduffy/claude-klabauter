@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """run-outcome-audit.py -- per-run verdict audit over state/warp, pure file reads.
 
 Prints one row per run directory: run id, terminal status, judge verdict with evidence, owed

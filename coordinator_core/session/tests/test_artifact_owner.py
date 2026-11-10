@@ -59,14 +59,14 @@ def _make_repo(tmp_path):
 
 
 def _write_session(repo, sid, meta: dict):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     (sdir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return sdir
 
 
 def _write_claim_dir(repo, class_, basename, sid, stage=claims.CLAIM_STAGE_APPLY, pid="123"):
-    cdir = Path(repo) / ".git" / "coordinator-sessions" / f"{class_}-claims" / basename
+    cdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / f"{class_}-claims" / basename
     cdir.mkdir(parents=True, exist_ok=True)
     (cdir / "session_id").write_text(f"{sid}\n", encoding="utf-8")
     (cdir / "pid").write_text(f"{pid}\n", encoding="utf-8")

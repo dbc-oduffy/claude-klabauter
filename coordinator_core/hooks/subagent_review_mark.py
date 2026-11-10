@@ -30,7 +30,7 @@ writes its store INSIDE ``.git/`` and declares ``GENERATES: []`` for it. This op
 writes into the commit ledger (``coordinator_core.commit_ledger.store``, also a
 ``.git/``-internal store) via a MARK, a different provenance class from a
 bookkeeping counter — ``GENERATES: []`` is carried forward here on the SAME
-reasoning (the ledger sits under ``<git_common_dir>/coordinator-sessions/
+reasoning (the ledger sits under ``.coordinator-local/coordinator-sessions/
 .commit-ledger/``, never a tracked artifact), not by unexamined copy.
 
 Spec backlink: state/dispatch-briefs/2026-08-20-the-refusal-dies-and-the-mark-falls-out/C4.md
@@ -152,8 +152,8 @@ from coordinator_core.hooks._payload import field
 from coordinator_core.ipc import register_op
 from coordinator_core.session.claimed_write import replace_text
 
-#: Written into .git/coordinator-sessions/.commit-ledger/<handoff_id>.jsonl —
-#: inside .git/, never a tracked artifact. Same reasoning as
+#: Written into .coordinator-local/coordinator-sessions/.commit-ledger/<handoff_id>.jsonl —
+#: gitignored, never a tracked artifact. Same reasoning as
 #: subagent_zero_tool_use's GENERATES: [] (see module docstring above), not
 #: an unexamined carry-over.
 GENERATES: list = []

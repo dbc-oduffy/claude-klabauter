@@ -35,7 +35,7 @@ def _set_me(monkeypatch, sid="em-sid"):
 
 
 def _claim(repo, sid, paths):
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     sink = sdir / scope._TOUCH_RECORD_FILENAME
     for p in paths:
@@ -133,7 +133,7 @@ def _claim_absolute(repo, sid, abs_paths):
     """Hand-write ``T`` lines with ABSOLUTE paths, the shape ``encode_line`` itself refuses."""
     import json
 
-    sdir = Path(repo) / ".git" / "coordinator-sessions" / sid
+    sdir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid
     sdir.mkdir(parents=True, exist_ok=True)
     with open(sdir / scope._TOUCH_RECORD_FILENAME, "ab") as fh:
         for p in abs_paths:
@@ -160,7 +160,7 @@ def _spy_spawns_and_appends(monkeypatch):
 
 
 def _sink_lines(repo, sid):
-    sink = Path(repo) / ".git" / "coordinator-sessions" / sid / scope._TOUCH_RECORD_FILENAME
+    sink = Path(repo) / ".coordinator-local" / "coordinator-sessions" / sid / scope._TOUCH_RECORD_FILENAME
     return sink.read_text().splitlines()
 
 
@@ -174,7 +174,7 @@ def test_full_release_of_many_claims_is_one_append_and_zero_spawns(tmp_path, mon
     spawns, appends = _spy_spawns_and_appends(monkeypatch)
     assert claims._release_path_claims_bulk(None, cwd=str(repo)) is True
 
-    own_sink = str(Path(repo) / ".git" / "coordinator-sessions" / "em-sid" / scope._TOUCH_RECORD_FILENAME)
+    own_sink = str(Path(repo) / ".coordinator-local" / "coordinator-sessions" / "em-sid" / scope._TOUCH_RECORD_FILENAME)
     assert [a for a in appends if a == own_sink] == [own_sink]
     assert spawns == []
     got = _holders(repo, paths[:50])
@@ -200,7 +200,7 @@ def test_absolute_claims_release_with_at_most_one_batched_spawn(tmp_path, monkey
 
     assert len(spawns) <= 1
     claimed, degraded = scope._read_touch_record_as_legacy_lines(
-        Path(repo) / ".git" / "coordinator-sessions" / "em-sid" / scope._TOUCH_RECORD_FILENAME
+        Path(repo) / ".coordinator-local" / "coordinator-sessions" / "em-sid" / scope._TOUCH_RECORD_FILENAME
     )
     still = scope.project_self_scope(claimed)
     assert not degraded
@@ -209,7 +209,7 @@ def test_absolute_claims_release_with_at_most_one_batched_spawn(tmp_path, monkey
 
 
 def _agent_sink(repo, aid, owner_sid):
-    adir = Path(repo) / ".git" / "coordinator-sessions" / ".agents" / aid
+    adir = Path(repo) / ".coordinator-local" / "coordinator-sessions" / ".agents" / aid
     adir.mkdir(parents=True, exist_ok=True)
     (adir / "em-session-id.txt").write_text(owner_sid + "\n", encoding="utf-8")
     return adir / scope._TOUCH_RECORD_FILENAME

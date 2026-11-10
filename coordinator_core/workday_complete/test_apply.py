@@ -33,6 +33,7 @@ from typing import Any, Callable, Optional
 import pytest
 
 from coordinator_core.ceremony_common.cli_rejection import CliExitClass
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workday_complete import apply as wc_apply
 
 
@@ -41,7 +42,7 @@ def _isolated_apply_checkpoint(tmp_path, monkeypatch):
     """`apply()` opens a day-keyed checkpoint under the git common dir; keep it under tmp_path."""
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
-    sessions = str(tmp_path / ".git" / "coordinator-sessions")
+    sessions = str(hub_for_common(tmp_path / ".git"))
     from coordinator_core.ceremony_common import apply_checkpoint
 
     monkeypatch.setattr(apply_checkpoint, "sessions_dir", lambda cwd=None: sessions)

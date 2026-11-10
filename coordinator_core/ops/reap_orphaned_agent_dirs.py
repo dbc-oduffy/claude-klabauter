@@ -1,7 +1,7 @@
 """
 coordinator_core.ops.reap_orphaned_agent_dirs — mechanical, rail-gated reaper
 for orphaned per-agent bookkeeping dirs under
-``.git/coordinator-sessions/.agents/<canonical-agent-id>/``.
+``.coordinator-local/coordinator-sessions/.agents/<canonical-agent-id>/``.
 
 Purpose: named-teammate-shaped agent dirs (``<name>@session-<short>``) whose
 owning EM session directory has been removed (SessionEnd archival/removal
@@ -23,7 +23,7 @@ closed on any ambiguity — unknown ownership is NOT candidate):
                  there is no code path where R2 "independently clears" a
                  missing/unreadable owner id — the missing-owner-id case is
                  fully fail-closed, no exception.
-  R2 sessiondir: ``.git/coordinator-sessions/<owner-id>/`` does not exist.
+  R2 sessiondir: ``.coordinator-local/coordinator-sessions/<owner-id>/`` does not exist.
   R3 clean     : no path named in ``touched.txt`` is currently dirty in the
                  calling repo's working tree (``git status --porcelain``) —
                  this claude-klabauter repo IS the working tree for this reaper's use
@@ -124,6 +124,7 @@ from coordinator_core.session.scope import (
     _TOUCH_RECORD_FILENAME,
     _read_agent_touch_record_as_legacy_lines,
 )
+from coordinator_core.session_hub_path import hub_for_common
 
 _AGE_THRESHOLD_SECONDS = 24 * 3600
 _DEFAULT_AUDIT_PATH = "state/audits/2026-08-14-orphan-agent-dir-reap.md"
@@ -365,8 +366,7 @@ def _classify(
 
 
 def _classify_all(repo_root: Path) -> List[Verdict]:
-    common_dir = git_common_dir(repo_root)
-    sessions_dir = common_dir / "coordinator-sessions"
+    sessions_dir = hub_for_common(git_common_dir(repo_root))
     agents_base = sessions_dir / ".agents"
     if not agents_base.is_dir():
         return []
@@ -475,8 +475,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     archived: List[str] = []
     failed: List[str] = []
     if applied:
-        common_dir = git_common_dir(repo_root)
-        sessions_dir = common_dir / "coordinator-sessions"
+        sessions_dir = hub_for_common(git_common_dir(repo_root))
         for v in candidates:
             err = _archive_candidate(v.agent_dir, sessions_dir)
             if err is None:

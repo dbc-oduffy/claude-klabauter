@@ -16,7 +16,7 @@ LEDGER_FILE = "ledger.jsonl"
 
 
 def run_dir(repo_root: "Path | str", ceremony: str, run_id: str) -> Path:
-    """`<git-common-dir>/coordinator-sessions/<ceremony>-runs/<run_id>`; raises outside a git repo."""
+    """`<session hub>/<ceremony>-runs/<run_id>`; raises outside a git repo."""
     base = sessions_dir(str(repo_root))
     if not base:
         raise RuntimeError(f"ledger: {repo_root} is not inside a git repository")

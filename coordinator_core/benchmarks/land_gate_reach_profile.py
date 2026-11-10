@@ -244,7 +244,9 @@ def build_land_clone(parent: Path, source: Path, stack: ExitStack, overlay=()) -
         if not done.ok:
             raise RuntimeError(f"git {args[0]} failed in {root}: {done.stderr.strip()}")
     _dirty_landing_set(root)
-    sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF)
+    from coordinator_core.session_hub_path import session_dir_for
+
+    sink = touch_record.sink_path(session_dir_for(root / ".git", SELF))
     for rel in LANDING_SET:
         session_scope.touch(SELF, rel, cwd=str(root))
         touch_record.append_event(

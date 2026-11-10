@@ -12,6 +12,7 @@ from coordinator_core.bash_guards import guard_post_executor_verification as g
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
 from coordinator_core.hooks.dispatch_escape import ESCAPE_LOG_NAME
+from coordinator_core.session_hub_path import session_dir_for
 
 pytestmark = pytest.mark.complete
 
@@ -38,7 +39,7 @@ def repo(tmp_path):
 
 
 def _executor_ran(repo, agent_type="coordinator:executor") -> None:
-    d = repo / ".git" / "coordinator-sessions" / SID
+    d = session_dir_for(repo / ".git", SID)
     d.mkdir(parents=True)
     (d / "dispatched-agents.txt").write_text(f"abcdef0123456789\tsonnet\t{agent_type}\t1\n")
 
@@ -501,7 +502,7 @@ def test_non_probe_forms_not_counted(repo, cmd) -> None:
 
 
 def _execute_plan_session(repo, status="executing") -> None:
-    d = repo / ".git" / "coordinator-sessions" / SID
+    d = session_dir_for(repo / ".git", SID)
     d.mkdir(parents=True, exist_ok=True)
     (d / "session-shape.json").write_text(json.dumps({"plan": {"path": "docs/plans/p.md"}}))
     (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
@@ -629,7 +630,7 @@ def test_payload_without_session_id_never_adopts_a_process_scoped_ledger(repo, m
     from coordinator_core.hooks import dispatch_escape
 
     fallback = dispatch_escape._resolve_session_id_op({})
-    d = repo / ".git" / "coordinator-sessions" / fallback
+    d = session_dir_for(repo / ".git", fallback)
     d.mkdir(parents=True)
     (d / "dispatched-agents.txt").write_text("abcdef0123456789\tsonnet\tcoordinator:executor\t1\n")
     anon = {"tool_name": "Bash", "cwd": str(repo), "tool_input": {"command": "pytest tests -q"}}
@@ -638,7 +639,7 @@ def test_payload_without_session_id_never_adopts_a_process_scoped_ledger(repo, m
 
 
 def _stamp(repo, executor_epoch: int, commit_epoch: int | None) -> None:
-    d = repo / ".git" / "coordinator-sessions" / SID
+    d = session_dir_for(repo / ".git", SID)
     d.mkdir(parents=True, exist_ok=True)
     (d / "dispatched-agents.txt").write_text(f"abcdef0123456789\tsonnet\tcoordinator:executor\t{executor_epoch}\n")
     if commit_epoch is not None:

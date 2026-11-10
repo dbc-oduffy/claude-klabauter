@@ -29,7 +29,7 @@ Negative-spec:
       identity. If a caller also needs to assert the resolved session is currently live,
       call ``resolve_live_session_ids()`` separately and check set membership.
     - Do NOT restore a sentinel-file tier (formerly tier 3: reading
-      ``{worktree_root}/.git/coordinator-sessions/.current-session-id``). It was removed
+      ``<hub>/.current-session-id``). It was removed
       (KS-2, 2026-08-07): the file is documented last-writer-wins
       (``coordinator_core/bash_guards/guard_inprocess_search.py`` ~L84), which is unsound
       under this fleet's ~18 concurrent sessions on one shared worktree — even a freshly

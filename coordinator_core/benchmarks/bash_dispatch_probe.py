@@ -93,7 +93,7 @@ def _sandbox_root() -> str:
     """A full-size shared clone of the live repo, checked out at its HEAD.
 
     Trap: the dispatcher's post-verdict recording leg appends a touch claim
-    under `<payload cwd>/.git/coordinator-sessions/<session_id>/`. Naming the
+    under `<payload cwd>/.coordinator-local/coordinator-sessions/<session_id>/`. Naming the
     live checkout there plants phantom `bash-dispatch-probe-*` sessions in its
     hub. Invariant: the clone is the live tree's size (objects shared via
     alternates, no worktree), so the gate still measures the real git cost.

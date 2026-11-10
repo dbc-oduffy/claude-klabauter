@@ -7,6 +7,8 @@ Oracle: test-dirty-tree-gate.sh (DoE 894d4bc6, 2026-07-22)
 """
 from __future__ import annotations
 
+from coordinator_core.session_hub_path import hub_for_common
+
 import os
 import subprocess
 from pathlib import Path
@@ -410,7 +412,7 @@ def _write_desynced_handoff(repo: Path, name: str) -> Path:
 
 def _write_ledger_claim(repo: Path, handoff_name: str, session_id: str = "peer-session-id") -> None:
     common_dir = repo / ".git"
-    claim_dir = common_dir / "coordinator-sessions" / "handoff-claims" / handoff_name
+    claim_dir = hub_for_common(common_dir) / "handoff-claims" / handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
     (claim_dir / "claimed_at").write_text("2026-08-07T10:00:00Z", encoding="utf-8")

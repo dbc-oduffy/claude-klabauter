@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from coordinator_core.session import identity as session_identity
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.subagent_sandbox import engine
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 
@@ -57,11 +58,11 @@ def _write_backpointer(
     em_session_id: str,
     subagent_type: str,
 ) -> None:
-    agents_dir = git_root / ".git" / "coordinator-sessions" / ".agents" / agent_id
+    agents_dir = hub_for_common(git_root / ".git") / ".agents" / agent_id
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "em-session-id.txt").write_text(em_session_id + "\n", encoding="utf-8")
 
-    session_dir = git_root / ".git" / "coordinator-sessions" / em_session_id
+    session_dir = hub_for_common(git_root / ".git") / em_session_id
     session_dir.mkdir(parents=True, exist_ok=True)
     dispatch_file = session_dir / "dispatched-agents.txt"
     row = f"{agent_id}\t2026-07-12T00:00:00Z\t{subagent_type}\n"
@@ -284,7 +285,7 @@ def test_read_backpointer_subagent_type_duplicate_full_rows_returns_empty(
 def test_read_backpointer_subagent_type_legacy_short_row_ignored(
     git_repo: Path,
 ) -> None:
-    session_dir = git_repo / ".git" / "coordinator-sessions" / "em-session-1"
+    session_dir = hub_for_common(git_repo / ".git") / "em-session-1"
     session_dir.mkdir(parents=True, exist_ok=True)
     dispatch_file = session_dir / "dispatched-agents.txt"
     dispatch_file.write_text(
@@ -292,7 +293,7 @@ def test_read_backpointer_subagent_type_legacy_short_row_ignored(
         f"{NAMED_AGENT_ID}\t2026-07-12T00:00:00Z\t{CONFINED_TYPE}\n",
         encoding="utf-8",
     )
-    agents_dir = git_repo / ".git" / "coordinator-sessions" / ".agents" / NAMED_AGENT_ID
+    agents_dir = hub_for_common(git_repo / ".git") / ".agents" / NAMED_AGENT_ID
     agents_dir.mkdir(parents=True, exist_ok=True)
     (agents_dir / "em-session-id.txt").write_text("em-session-1\n", encoding="utf-8")
 
@@ -301,7 +302,7 @@ def test_read_backpointer_subagent_type_legacy_short_row_ignored(
 
 
 def _archive_session(git_repo: Path, em_session_id: str, stamp: str = "2026-08-20") -> Path:
-    sessions_base = git_repo / ".git" / "coordinator-sessions"
+    sessions_base = hub_for_common(git_repo / ".git")
     dest = sessions_base / ".archive" / f"{em_session_id}-{stamp}"
     dest.parent.mkdir(parents=True, exist_ok=True)
     (sessions_base / em_session_id).rename(dest)
@@ -334,7 +335,7 @@ def test_read_backpointer_subagent_type_archive_of_another_session_not_read(
 ) -> None:
     _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
     _archive_session(git_repo, "em-session-1")
-    sessions_base = git_repo / ".git" / "coordinator-sessions"
+    sessions_base = hub_for_common(git_repo / ".git")
     other = sessions_base / ".archive" / "em-session-2-2026-08-20"
     other.mkdir(parents=True, exist_ok=True)
     (other / "dispatched-agents.txt").write_text(
@@ -351,7 +352,7 @@ def test_read_backpointer_subagent_type_prefix_collision_archive_not_read(
 ) -> None:
     _write_backpointer(git_repo, NAMED_AGENT_ID, "em-session-1", CONFINED_TYPE)
     _archive_session(git_repo, "em-session-1")
-    sibling = git_repo / ".git" / "coordinator-sessions" / ".archive" / "em-session-1a-2026-08-20"
+    sibling = hub_for_common(git_repo / ".git") / ".archive" / "em-session-1a-2026-08-20"
     sibling.mkdir(parents=True, exist_ok=True)
     (sibling / "dispatched-agents.txt").write_text(
         f"{NAMED_AGENT_ID}\t2026-07-12T00:00:00Z\t{REPORT_SIDECAR_TYPE}\n",

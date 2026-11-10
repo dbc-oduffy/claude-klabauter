@@ -14,6 +14,7 @@ from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.bug_blitz.contract import FailingTest, ParseResult, TargetSpec, run_tag
 from coordinator_core.contract.grind_vocab import DEFAULT_BUDGET_TOKENS
 from coordinator_core.hooks import submit_bug_blitz as mod
+from coordinator_core.session_hub_path import hub_for_common
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -198,7 +199,7 @@ def _seed_busy_box(root: Path, *, rows: int, agents: int, events: int) -> None:
         (queue / f"row-{i}.yaml").write_text(
             f"id: row-{i}\nstatus: open\nseverity: P1\ntags: [t-{i % 7}]\nsurface: pkg/mod_{i}.py\n", encoding="utf-8"
         )
-    agents_dir = root / ".git" / "coordinator-sessions" / ".agents"
+    agents_dir = hub_for_common(root / ".git") / ".agents"
     for a in range(agents):
         agent_dir = agents_dir / f"a{a:04d}"
         agent_dir.mkdir(parents=True)

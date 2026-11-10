@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """gem-triage-turn-intent -- the G-EM stamps its triage verdict onto a target EM's turn-intent.json.
 
 Compare-and-swap on turn_ended_at: the merge lands only if the target's turn has not moved on.

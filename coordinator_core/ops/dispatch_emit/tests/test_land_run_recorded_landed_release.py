@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import land_run, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
@@ -44,7 +45,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 def _author(root: Path, rel: str, text: str) -> None:
     _write(root, rel, text)
     session_scope.touch(SELF, rel, cwd=str(root))
-    sink = touch_record.sink_path(root / ".git" / "coordinator-sessions" / SELF)
+    sink = touch_record.sink_path(session_dir_for(root / ".git", SELF))
     touch_record.append_event(
         sink, session_id=SELF, agent_id=None, verb="T", path=rel,
         content_hash=touch_record.compute_content_hash(root / rel), kind="w",

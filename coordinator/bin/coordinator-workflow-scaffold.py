@@ -1,4 +1,4 @@
-# Unix shebang — was generator-owned by gen-launcher-shim.py --ensure-unix; that mode was retired 2026-07-28 (POSIX-EXEC-ASSUMPTION-GUARD, PM ruling) and no longer regenerates this line.
+#!/usr/bin/env python3
 # coordinator-workflow-scaffold.py — DoE-side veneer for the claude-klabauter workflow.scaffold op.
 #
 # Purpose: builds the workflow.scaffold params object from CLI flags, dispatches via

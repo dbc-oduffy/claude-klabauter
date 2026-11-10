@@ -16,6 +16,7 @@ pytestmark = pytest.mark.complete
 import coordinator_core.guard_advisory_counter as counter
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_em_post_fire_shell_write as guard
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.hooks import _em_post_fire
 from coordinator_core.hooks import _em_write_budget as hook
 from coordinator_core.hooks import flag_em_poll_in_flight
@@ -286,7 +287,7 @@ def _record_touch(repo, rel):
 
     from coordinator_core.session import touch_record
 
-    sink = touch_record.sink_path(Path(repo) / ".git" / "coordinator-sessions" / SID)
+    sink = touch_record.sink_path(hub_for_common(Path(repo) / ".git") / SID)
     touch_record.append_event(sink, session_id=SID, agent_id=None, verb=touch_record.VERB_TOUCH, path=rel)
 
 

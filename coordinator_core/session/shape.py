@@ -5,7 +5,7 @@ on-demand magnitude derivation.
 
 Port of: session-shape.sh (DoE e34f2484, 2026-07-22).
 
-Writes/reads ``.git/coordinator-sessions/<sid>/session-shape.json`` — the
+Writes/reads ``.coordinator-local/coordinator-sessions/<sid>/session-shape.json`` — the
 per-session observable that ceremonies read once instead of grep/inferring
 across the session substrate.
 
@@ -84,7 +84,7 @@ from coordinator_core.win_portability import no_console_creationflags
 #: ``_CS_SHAPE_LOCK_STALE_SEC`` environment variable (matching the bash
 #: ``${_CS_SHAPE_LOCK_STALE_SEC:-30}`` read).
 # Generator-provenance declaration (coordinator_core/ops/generator_census). session_shape_set/
-# producer_set write only `.git/coordinator-sessions/<sid>/session-shape.json` --
+# producer_set write only `.coordinator-local/coordinator-sessions/<sid>/session-shape.json` --
 # git-internal session-hub state, never a tracked repo artifact.
 GENERATES = []
 
@@ -184,7 +184,7 @@ def session_shape_set(
 ) -> bool:
     """Port of ``cs_session_shape_set <sid> <json-merge-fragment>``.
 
-    Merge ``fragment`` into ``.git/coordinator-sessions/<sid>/session-shape.json``
+    Merge ``fragment`` into ``.coordinator-local/coordinator-sessions/<sid>/session-shape.json``
     under an mkdir-based lock that spans the ENTIRE read->merge->write critical
     section. Returns True on success, False on lock-acquisition failure or any
     read/merge/write error.

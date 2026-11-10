@@ -204,7 +204,7 @@ def test_all_four_entry_points_write_but_declare_nothing_outside_a_collection(tm
 
 def test_no_session_directory_is_created_outside_a_collection(tmp_path):
     repo = _make_repo(tmp_path)
-    session_root = repo / ".git" / "coordinator-sessions"
+    session_root = repo / ".coordinator-local" / "coordinator-sessions"
     assert not session_root.exists()
 
     claimed_write.replace_text(repo / "state" / "outside.md", "x")

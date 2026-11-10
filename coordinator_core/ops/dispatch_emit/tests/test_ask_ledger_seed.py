@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit import op
@@ -126,7 +127,7 @@ def test_a_relayed_runs_sizing_takes_pm_verbatims_only_from_the_pm_turn_log(tmp_
 
     (tmp_path / ".git").mkdir()
     Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
-    sdir = tmp_path / ".git" / "coordinator-sessions" / "sid-rl"
+    sdir = session_dir_for(tmp_path / ".git", "sid-rl")
     sdir.mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: sdir.parent / s)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sid-rl")

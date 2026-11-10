@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.session.touch_record import (
     VERB_TOUCH,
     decode_line,
@@ -50,7 +52,7 @@ def _init_repo(tmp_path) -> str:
 
 
 def _touched_paths(root: str, session_id: str = _SESSION_ID) -> set:
-    sink = sink_path(os.path.join(root, ".git", "coordinator-sessions", session_id))
+    sink = sink_path(os.path.join(str(hub_for_common(Path(root) / ".git")), session_id))
     if not sink.exists():
         return set()
     raw = sink.read_bytes()

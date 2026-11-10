@@ -26,7 +26,7 @@ only product is the log line. Never raises. Malformed input or an
 unwritable log directory must never propagate.
 
 Where the record goes:
-`<git-common-dir>/coordinator-sessions/hook-observations/PostCompact.jsonl`
+`.coordinator-local/coordinator-sessions/hook-observations/PostCompact.jsonl`
 (one JSON object per line), same DR-091 rationale and same
 `coordinator_core.hooks.support.git_common_dir` resolution as
 `observe_config_change.py` (its sibling in the DoE source, ported alongside
@@ -45,6 +45,7 @@ from typing import Optional
 from coordinator_core.hooks._envelope import no_advisory, payload_of
 from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import hub_for_common
 
 _EVENT_NAME = "PostCompact"
 
@@ -72,7 +73,7 @@ def _find_git_common_dir(start: Path) -> Optional[Path]:
 
 def _append_record(git_common_dir: Path, record: dict) -> None:
     try:
-        log_dir = git_common_dir / "coordinator-sessions" / "hook-observations"
+        log_dir = hub_for_common(git_common_dir) / "hook-observations"
         log_dir.mkdir(parents=True, exist_ok=True)
         line = json.dumps(record, ensure_ascii=False)
         with (log_dir / f"{_EVENT_NAME}.jsonl").open("a", encoding="utf-8") as fh:

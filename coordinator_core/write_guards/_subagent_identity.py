@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
+
 _BARE_HEX_RE = re.compile(r"^[a-f0-9]{12,}$")
 
 _NAMED_TEAMMATE_RE = re.compile(r"^a(.+)-[a-f0-9]{16}$")
@@ -130,9 +132,7 @@ def _read_backpointer_subagent_type(
     posture is a separate decision, not made here.
     """
     backptr = (
-        Path(git_root)
-        / ".git"
-        / "coordinator-sessions"
+        hub_for_common(Path(git_root) / ".git")
         / ".agents"
         / agent_id
         / "em-session-id.txt"
@@ -147,9 +147,7 @@ def _read_backpointer_subagent_type(
     if expected_em_session_id and em_sid != expected_em_session_id:
         return ""
 
-    dispatch_file = (
-        Path(git_root) / ".git" / "coordinator-sessions" / em_sid / "dispatched-agents.txt"
-    )
+    dispatch_file = session_dir_for(Path(git_root) / ".git", em_sid) / "dispatched-agents.txt"
     try:
         rows = dispatch_file.read_text(encoding="utf-8").splitlines()
     except OSError:

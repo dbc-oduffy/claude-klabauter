@@ -58,6 +58,7 @@ from typing import Any
 import pytest
 
 from coordinator_core import quick_wrap_assemble as qwa
+from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.test_quick_wrap_assemble import _SID, _stub_facts_all_computed
 
 
@@ -102,7 +103,7 @@ def qw_repo(tmp_path: Path) -> Path:
     import json
 
     common = tmp_path / ".git"
-    path = common / "coordinator-sessions" / _SID / "session-shape.json"
+    path = session_dir_for(common, _SID) / "session-shape.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"schema_version": 1, "session_id": _SID}), encoding="utf-8")
     return tmp_path

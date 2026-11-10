@@ -1,7 +1,7 @@
 """
 Tests for coordinator_core.ops.session.reap._reap_stale_agents (sub-reap (ii)):
 the sweep that moves stale per-agent dirs under
-``.git/coordinator-sessions/.agents/<aid>/`` into ``.archive/``.
+``.coordinator-local/coordinator-sessions/.agents/<aid>/`` into ``.archive/``.
 
 WHY THIS MODULE EXISTS, and it is the whole point of it. Sub-reap (ii) had NO
 unit coverage — ``test_reap.py``'s negative-spec says so in as many words
@@ -37,6 +37,8 @@ error, and the only symptom a slow unrelated caller.
 """
 
 from __future__ import annotations
+
+from coordinator_core.session_hub_path import HUB_NAME
 
 import os
 import subprocess
@@ -87,7 +89,7 @@ def test_backpointer_only_dir_is_reaped_when_stale(tmp_path):
     predicate looked for ``touched.txt``, did not find it, tried to rmdir a
     dir that still held the back-pointer, and swallowed the OSError. 175 dirs
     on this box were in exactly this state."""
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     adir = _agent_dir(
         sessions, "agent-backptr-only", {"em-session-id.txt": "sid-dead\n"}, _STALE
     )
@@ -103,7 +105,7 @@ def test_future_record_name_is_reaped_when_stale(tmp_path):
     """PROSPECTIVE, not a current shape: zero ``touch-record.jsonl`` files
     exist on disk today. This pins that the cutover to that name cannot
     silently disable the sweep the way the missing-``touched.txt`` case did."""
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     adir = _agent_dir(
         sessions, "agent-future-name",
         {"touch-record.jsonl": '{"path":"a.py"}\n', "em-session-id.txt": "sid-dead\n"},
@@ -117,7 +119,7 @@ def test_future_record_name_is_reaped_when_stale(tmp_path):
 
 
 def test_rotated_only_record_is_reaped_when_stale(tmp_path):
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     _agent_dir(
         sessions, "agent-rotated",
         {"touch-record.jsonl.rotated-1755000000000-4242.jsonl": '{"path":"b.py"}\n'},
@@ -130,7 +132,7 @@ def test_rotated_only_record_is_reaped_when_stale(tmp_path):
 
 
 def test_legacy_only_touched_txt_is_now_deferred_not_reaped(tmp_path):
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     adir = _agent_dir(sessions, "agent-legacy", {"touched.txt": "a.py\n"}, _STALE)
 
     reaped, deferred, failed = reap._reap_stale_agents(sessions)
@@ -142,7 +144,7 @@ def test_legacy_only_touched_txt_is_now_deferred_not_reaped(tmp_path):
 
 
 def test_legacy_only_touched_txt_deferred_even_without_repo_root(tmp_path):
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     adir = _agent_dir(sessions, "agent-legacy-noroot", {"touched.txt": "a.py\n"}, _STALE)
 
     reaped, deferred, failed = reap._reap_stale_agents(sessions, None)
@@ -164,7 +166,7 @@ def test_dirty_touched_path_defers_reap(tmp_path):
     )
     dirty_file.write_text("dirty\n", encoding="utf-8")
 
-    sessions = repo / "coordinator-sessions"
+    sessions = repo / HUB_NAME
     adir = sessions / ".agents" / "agent-dirty"
     adir.mkdir(parents=True)
     (adir / "em-session-id.txt").write_text("sid-dead\n", encoding="utf-8")
@@ -192,7 +194,7 @@ def test_dirty_touched_path_defers_reap(tmp_path):
 def test_clean_touched_path_is_still_reaped(tmp_path):
     repo = _make_repo(tmp_path / "repo")
 
-    sessions = repo / "coordinator-sessions"
+    sessions = repo / HUB_NAME
     adir = sessions / ".agents" / "agent-clean"
     adir.mkdir(parents=True)
     (adir / "em-session-id.txt").write_text("sid-dead\n", encoding="utf-8")
@@ -215,7 +217,7 @@ def test_clean_touched_path_is_still_reaped(tmp_path):
 
 
 def test_fresh_agent_dir_is_kept(tmp_path):
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     adir = _agent_dir(
         sessions, "agent-fresh", {"touch-record.jsonl": '{"path":"c.py"}\n'}, _FRESH
     )
@@ -227,7 +229,7 @@ def test_fresh_agent_dir_is_kept(tmp_path):
 
 
 def test_newest_member_decides_not_oldest(tmp_path):
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     adir = _agent_dir(
         sessions, "agent-mixed", {"touch-record.jsonl": '{"path":"d.py"}\n'}, _STALE
     )
@@ -243,7 +245,7 @@ def test_newest_member_decides_not_oldest(tmp_path):
 
 
 def test_genuinely_empty_dir_is_removed(tmp_path):
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     adir = sessions / ".agents" / "agent-empty"
     adir.mkdir(parents=True)
 
@@ -254,7 +256,7 @@ def test_genuinely_empty_dir_is_removed(tmp_path):
 
 
 def test_missing_agents_base_is_a_noop(tmp_path):
-    sessions = tmp_path / "coordinator-sessions"
+    sessions = tmp_path / HUB_NAME
     sessions.mkdir()
 
     assert reap._reap_stale_agents(sessions) == ([], [], [])

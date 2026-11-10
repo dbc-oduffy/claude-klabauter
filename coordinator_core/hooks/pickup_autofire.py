@@ -89,6 +89,7 @@ from coordinator_core.hooks._envelope import context_only, no_advisory, payload_
 from coordinator_core.hooks.support.forwarder_resolve import forwarder_argv, resolve_forwarder
 from coordinator_core.hooks.support.skill_invocation import read_invocation
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.temp_layout import managed_tempdir
 
 
@@ -282,7 +283,7 @@ def _sanitize_for_filename(value: str) -> str:
 
 def _session_decision_file_path(repo_root: Path, session_id: str, artifact_path: str) -> Path:
     name = f"{_sanitize_for_filename(session_id)}__{_sanitize_for_filename(artifact_path)}.json"
-    return repo_root / ".git" / "coordinator-sessions" / "decisions" / name
+    return hub_for_common(repo_root / ".git") / "decisions" / name
 
 
 def _write_decision_files(decisions: List[dict], session_id: str) -> List[Path]:

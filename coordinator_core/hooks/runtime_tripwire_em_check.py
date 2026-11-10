@@ -119,14 +119,15 @@ from coordinator_core.hooks.postuse_advisory_dispatch import (
     _resolve_subagent_identity,
 )
 from coordinator_core.ipc import register_op
+from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.ops.push_failure_verdict import _handler as _push_failure_verdict_handler
 
 #: Generator-provenance declaration (coordinator_core/ops/generator_census reader):
 #: this module's only writes are `_check_push_failures`'s
 #: `push-failures-cursor.txt` and `_check_hooks_json_staleness`'s
 #: `hooks-json-boot-hash.txt`, both under
-#: `resolve_git_common_dir(...)/coordinator-sessions/<session_id>/` -- a
-#: per-session cursor inside the git COMMON dir, never a tracked repo path
+#: `.coordinator-local/coordinator-sessions/<session_id>/` (the session hub) -- a
+#: per-session cursor outside the git dir, never a tracked repo path
 #: (same standing as R5's `git_common_dir(...)` exclusion). No tracked
 #: artifact exists for `GENERATES` to name.
 GENERATES = []
@@ -342,7 +343,7 @@ def _check_push_failures(git_root: str, session_id: str) -> Optional[str]:
     if not session_id or not _ID_CHARSET_RE.match(session_id):
         return None
 
-    cursor_dir = os.path.join(common_dir, "coordinator-sessions", session_id)
+    cursor_dir = str(session_dir_for(Path(common_dir), session_id))
     cursor_path = os.path.join(cursor_dir, "push-failures-cursor.txt")
 
     baseline = None
@@ -448,7 +449,7 @@ def _check_hooks_json_staleness(git_root: str, session_id: str, common_dir: str)
     if current_hash is None:
         return None
 
-    cursor_dir = os.path.join(common_dir, "coordinator-sessions", session_id)
+    cursor_dir = str(session_dir_for(Path(common_dir), session_id))
     cursor_path = os.path.join(cursor_dir, "hooks-json-boot-hash.txt")
 
     baseline = None
@@ -518,7 +519,7 @@ def _handler(params: dict, repo_root=None) -> dict:
             return no_advisory()
 
         common_dir = str(_fail_open(resolve_git_common_dir, git_root, default="") or "")
-        sessions_dir = os.path.join(common_dir, "coordinator-sessions") if common_dir else ""
+        sessions_dir = str(hub_for_common(Path(common_dir))) if common_dir else ""
         agents_dir = os.path.join(sessions_dir, ".agents") if sessions_dir else ""
 
         # --- Subagent-detect inverse: primary path (SESSION_ID as an agent dir) ---

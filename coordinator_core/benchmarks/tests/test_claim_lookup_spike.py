@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.benchmarks import claim_lookup_spike as spike
 from coordinator_core.session import claim_index, touch_record
+from coordinator_core.session_hub_path import hub_for_common
 
 SID_A = "aaaaaaaa-1111-4222-8333-444444444444"
 SID_B = "bbbbbbbb-1111-4222-8333-444444444444"
@@ -191,7 +192,8 @@ def test_main_refuses_a_work_dir_outside_scratch(tmp_path):
 
 def test_main_prints_one_verdict_line_and_writes_only_scratch(tmp_path, capsys):
     root = tmp_path / "repo"
-    sessions = root / ".git" / "coordinator-sessions"
+    (root / ".git").mkdir(parents=True)
+    sessions = hub_for_common(root / ".git")
     for rel in PATHS:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text("x\n", encoding="utf-8")

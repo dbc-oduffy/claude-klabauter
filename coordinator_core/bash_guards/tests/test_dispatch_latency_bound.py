@@ -106,6 +106,7 @@ import pytest
 from coordinator_core.bash_guards import _command_tokenizer as _ct
 from coordinator_core.bash_guards import _dc_rm
 from coordinator_core.bash_guards import dispatch_checks as _dispatch_checks
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.subagent_sandbox import engine as _sandbox_engine
@@ -640,7 +641,7 @@ def _reap_probe_session_dir():
     live repo is the thing whose latency is being bounded, and a synthetic
     tmp_path repo would measure a different git tree. The cost is that the
     chain's write-claim leg then mints
-    `.git/coordinator-sessions/<_PROBE_SESSION_ID>/` for a session that never
+    `.coordinator-local/coordinator-sessions/<_PROBE_SESSION_ID>/` for a session that never
     existed, and `session.liveness.live_session_ids` enumerates every non-
     denylisted child of that directory as a session -- so the residue reads as
     a live phantom peer to every real session on the box, and
@@ -653,7 +654,7 @@ def _reap_probe_session_dir():
     case.
     """
     yield
-    probe_dir = _REPO_ROOT / ".git" / "coordinator-sessions" / _PROBE_SESSION_ID
+    probe_dir = hub_for_common(_REPO_ROOT / ".git") / _PROBE_SESSION_ID
     if probe_dir.is_dir():
         shutil.rmtree(probe_dir, ignore_errors=True)
 

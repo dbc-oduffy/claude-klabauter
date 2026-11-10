@@ -57,7 +57,7 @@ ALLOWED_CASES = [
 
 @pytest.fixture(scope="module")
 def _dirty_repo(tmp_path_factory: pytest.TempPathFactory) -> str:
-    # Trap: the guard records a touch claim under <cwd>/.git/coordinator-sessions/
+    # Trap: the guard records a touch claim under <cwd>/.coordinator-local/coordinator-sessions/
     # <sid>; pointing it at the real checkout leaks a phantom `test-session`.
     root = tmp_path_factory.mktemp("rm-split-verb")
     subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console_passthrough_kwargs())

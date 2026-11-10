@@ -4,6 +4,7 @@ import json
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2_phases as cp
+from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry import op_latency
 
 
@@ -17,7 +18,7 @@ def common_dir(tmp_path, monkeypatch):
 
 
 def _rows(common_dir):
-    sink = common_dir / "coordinator-sessions" / "logs" / "op-latency.jsonl"
+    sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     if not sink.exists():
         return []
     return [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines() if x]

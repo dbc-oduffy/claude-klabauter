@@ -12,7 +12,7 @@ ready to paste or pipe. Turn 0 is the default extract. The log verifies a
 pm-marked engine ask (``verify_pm_ask``); it never makes an unmarked one PM.
 
 WHY A SIBLING FILE, NOT A BATON FIELD. ``pm_turns.jsonl`` lives beside
-``baton.json`` in ``<git-common-dir>/coordinator-sessions/<sid>/``. The baton
+``baton.json`` in ``<session hub>/<sid>/`` (``session_hub_path.hub_for_common``). The baton
 record is rewritten wholesale by every ``merge_baton``, and a torn or corrupt
 read degrades to the all-defaults skeleton that the next merge writes back --
 both fine for advisory scalars, both able to silently erase an uncapped log.

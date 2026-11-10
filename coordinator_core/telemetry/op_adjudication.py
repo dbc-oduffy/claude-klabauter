@@ -5,7 +5,7 @@ kill/suspend/gravestone dispositions against DR-344's brightline (500ms kill,
 200ms per-process fix), and every figure it cites must trace to a single,
 reproducible measurement rather than a hand-derived number nobody can rerun.
 This module is that measurement: one pass over every `kind: "process_time"`
-row across all `.git/coordinator-sessions/logs/op-latency*.jsonl` shards,
+row across all `<session hub>/logs/op-latency*.jsonl` shards,
 emitting per-op-per-route p95/n/window/confidence — and nothing else feeds a
 brightline verdict. → state/handoffs/2026-08-29-readjudicate-the-op-budget-index.md
    state/dispatch-briefs/2026-08-29-a-zero-is-under-one-tick-not-unmeasured/C2.md
