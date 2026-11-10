@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import landing_export as le
@@ -12,12 +13,14 @@ RUN_ID = "run-base"
 PARAM = "test_a.py::test_x[## status: done]"
 PRE = "test_a.py::test_pre"
 CAUSED = "test_a.py::test_new"
+#: Landing checks the child records when the run base is HEAD and no owed id exists.
+MEASURED = {"head_red": [], "owed_cleared": [], "head_sha": "h" * 40}
 
 
 def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list[str], head_broken=False,
            head_counts=None, export_counts=None, extra_files=(), collect_rc=0, head_files=("test_a.py",),
            head_collect_error=False, head_ran_short=0, land=("src/own.py",), dirty_files=(),
-           foreign_reds_export=(), run_base_sha=None):
+           foreign_reds_export=(), run_base_sha=None, head2_red=None):
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     root = tmp_path / "repo"
     root.mkdir()
@@ -43,6 +46,7 @@ def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list
 
     def _build(worktree, out_dir, paths, sha=None):
         shas.append((Path(out_dir).name, sha))
+        shutil.rmtree(out_dir, ignore_errors=True)
         Path(out_dir).mkdir(parents=True)
         for f in head_files if Path(out_dir).name == "export-head" else ("test_a.py", *extra_files):
             (Path(out_dir) / f).write_text("", encoding="utf-8")
@@ -60,7 +64,8 @@ def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list
         if cwd.name == "export" and any((cwd / f).exists() for f in foreign_reds_export):
             red, code = [*export_red, CAUSED], 1
         elif cwd.name == "export-head":
-            red, code = head_red, (2 if head_broken else (1 if head_red else 0))
+            red = head2_red if head2_red is not None and [n for n, _ in shas].count("export-head") > 1 else head_red
+            code = 2 if head_broken else (1 if red else 0)
         elif cwd.name == "export":
             red, code = export_red, 1 if export_red else 0
         else:
@@ -94,6 +99,7 @@ def test_pre_existing_red_folds_to_pre_existing_only(tmp_path, monkeypatch):
     rc, record, built = _setup(tmp_path, monkeypatch, export_red=[PARAM, PRE], head_red=[PARAM, PRE])
     assert rc == 1 and record["baseline"] == {
         "method": "isolated-export", "base_sha": "h" * 40, "caused": [], "foreign": [PARAM, PRE], "evidence": sorted([PARAM, PRE]),
+        **MEASURED,
     }
     assert record["export"]["failed_tests"] == [PARAM, PRE]
     assert landing_targeted_tests.failed_targeted_tests(record) == ([], "pre-existing-only")
@@ -104,7 +110,7 @@ def test_baseline_measures_the_run_base_and_records_its_sha(tmp_path, monkeypatc
     base = "b" * 40
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE], head_red=[PRE], run_base_sha=base)
     assert record["baseline"]["base_sha"] == base
-    assert dict(_setup.shas)["export-head"] == base
+    assert [s for n, s in _setup.shas if n == "export-head"][0] == base
     assert dict(_setup.shas)["export"] is None
 
 
@@ -134,6 +140,7 @@ def test_file_new_at_head_counts_as_caused_and_baseline_is_written(tmp_path, mon
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, new_red], head_red=[PRE], extra_files=("test_new.py",))
     assert record["baseline"] == {
         "method": "isolated-export", "base_sha": "h" * 40, "caused": [new_red], "foreign": [PRE], "evidence": [PRE],
+        **MEASURED,
     }
     assert "baseline_skipped" not in record
 
@@ -162,6 +169,7 @@ def test_new_id_in_existing_file_is_caused_when_red_and_baseline_is_written(tmp_
     )
     assert record["baseline"] == {
         "method": "isolated-export", "base_sha": "h" * 40, "caused": [new], "foreign": [PRE], "evidence": [PRE],
+        **MEASURED,
     }
     assert "baseline_skipped" not in record
 
@@ -173,6 +181,7 @@ def test_removed_id_is_ignored_and_baseline_is_written(tmp_path, monkeypatch):
     )
     assert record["baseline"] == {
         "method": "isolated-export", "base_sha": "h" * 40, "caused": [CAUSED], "foreign": [PRE], "evidence": [PRE],
+        **MEASURED,
     }
 
 
@@ -306,12 +315,86 @@ def test_dirty_non_land_file_is_absent_from_export_and_cannot_cause_a_red(tmp_pa
     assert _setup.exported[0] == ["src/own.py"]
     assert record["baseline"] == {
         "method": "isolated-export", "base_sha": "h" * 40, "caused": [], "foreign": [PRE], "evidence": [PRE],
+        **MEASURED,
     }
 
 
 def test_record_lists_the_exported_set(tmp_path, monkeypatch):
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[], head_red=[], dirty_files=("peer/x.py",))
     assert record["isolated_export"]["files"] == ["src/own.py"]
+
+
+RED_ID = "test_a.py::t1"
+
+
+def test_caused_id_red_at_pure_head_is_recorded_when_the_run_base_differs(tmp_path, monkeypatch):
+    _, record, _ = _setup(
+        tmp_path, monkeypatch, export_red=[RED_ID], head_red=[], head2_red=[RED_ID], run_base_sha="b" * 40,
+    )
+    assert record["baseline"]["caused"] == [RED_ID]
+    assert record["baseline"]["head_red"] == [RED_ID]
+    assert record["baseline"]["head_sha"] == "h" * 40
+    assert [s for n, s in _setup.shas if n == "export-head"] == ["b" * 40, None]
+
+
+def test_caused_id_green_at_pure_head_stays_out_of_head_red(tmp_path, monkeypatch):
+    _, record, _ = _setup(
+        tmp_path, monkeypatch, export_red=[RED_ID], head_red=[], head2_red=[], run_base_sha="b" * 40,
+    )
+    assert record["baseline"]["caused"] == [RED_ID] and record["baseline"]["head_red"] == []
+
+
+def test_run_base_equal_to_head_reuses_the_base_export(tmp_path, monkeypatch):
+    monkeypatch.setattr("coordinator_core.git.git_state.head_sha", lambda *a, **k: "b" * 40)
+    _, record, _ = _setup(tmp_path, monkeypatch, export_red=[RED_ID], head_red=[], run_base_sha="b" * 40)
+    assert [n for n, _ in _setup.shas].count("export-head") == 1
+    assert record["baseline"]["head_red"] == [] and record["baseline"]["head_sha"] == "b" * 40
+
+
+def _checks(tmp_path, monkeypatch, *, ran: int, red: list[str], baseline: dict, base_sha=None, build=None):
+    monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
+    export = tmp_path / "export"
+    export.mkdir(exist_ok=True)
+    (export / "test_a.py").write_text("", encoding="utf-8")
+
+    def _run(argv, cwd, *, log=None, timeout=None, append=False):
+        text = "".join(f"{f}::t{k}\n" for f in ("test_a.py",) for k in range(2)) if "--collect-only" in argv else (
+            "".join(f"FAILED {n} - boom\n" for n in red) + f"{ran - len(red)} passed, {len(red)} failed in 0.1s\n"
+        )
+        Path(log).write_text(text, encoding="utf-8")
+        return 0 if "--collect-only" in argv else (1 if red else 0)
+
+    if build is not None:
+        monkeypatch.setattr(le, "build_head_export", build)
+    return retest_targeted._landing_checks(
+        tmp_path, _run, baseline, export, tmp_path / "export-head", tmp_path / "x.head.log",
+        retest_targeted.time.monotonic() + 60, "h" * 40, base_sha, "e" * 40,
+    )
+
+
+OWED = {"caused": [], "foreign": [], "evidence": [], "unverified": ["test_a.py::t0", "test_a.py::t1"]}
+
+
+def test_owed_ids_green_at_head_plus_landing_paths_are_cleared(tmp_path, monkeypatch):
+    out = _checks(tmp_path, monkeypatch, ran=2, red=[RED_ID], baseline=OWED)
+    assert out["owed_cleared"] == ["test_a.py::t0"] and out["head_sha"] == "h" * 40
+
+
+def test_owed_run_that_ran_fewer_than_named_records_no_owed_cleared(tmp_path, monkeypatch):
+    out = _checks(tmp_path, monkeypatch, ran=1, red=[], baseline=OWED)
+    assert "owed_cleared" not in out
+
+
+def test_head_export_failure_records_no_head_red_and_keeps_the_owed_check(tmp_path, monkeypatch):
+    def _boom(*a, **k):
+        raise le.LandingExportError("no space")
+
+    monkeypatch.setattr("coordinator_core.git.git_state.head_sha", lambda *a, **k: "z" * 40)
+    out = _checks(
+        tmp_path, monkeypatch, ran=2, red=[], base_sha="b" * 40, build=_boom,
+        baseline={"caused": [RED_ID], "foreign": [], "evidence": [], "unverified": ["test_a.py::t0"]},
+    )
+    assert "head_red" not in out and out["owed_cleared"] == ["test_a.py::t0"] and out["head_sha"] == "e" * 40
 
 
 def test_underivable_landing_set_writes_no_baseline_and_no_export(tmp_path, monkeypatch):

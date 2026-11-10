@@ -129,6 +129,14 @@ def test_child_env_has_no_api_key_and_keeps_path(env):
     assert "GEMINI_API_KEY" not in seen and "OPENAI_API_KEY" not in seen and "PATH" in seen
 
 
+def test_windows_env_keeps_essentials():
+    keys = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC")
+    src = {k: f"v-{k}" for k in keys} | {"GEMINI_API_KEY": "k"}
+    win = agy._build_env(src, windows=True)
+    assert all(win[k] == f"v-{k}" for k in keys) and "GEMINI_API_KEY" not in win
+    assert {"SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "COMSPEC"}.isdisjoint(agy._build_env(src, windows=False))
+
+
 def test_env_allowlist():
     src = {"PATH": "/p", "HOME": "/h", "GEMINI_API_KEY": "k", "SECRET": "x", "SYSTEMROOT": "S"}
     assert {k:v for k,v in agy._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "HOME": "/h"}

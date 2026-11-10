@@ -285,6 +285,93 @@ def test_native_child_facts_rejects_same_basename_different_binary(tmp_path,monk
         workflow._native_child_facts(SimpleNamespace(pid=73,poll=lambda:None),tmp_path,'parent','fire',4,[str(expected),'exec'])
 
 
+_SCHEMA = {'type': 'object', 'properties': {'a': {'type': 'integer'}}, 'required': ['a']}
+
+
+def _stub_family(monkeypatch, tmp_path, *, stdout_text, returncode=0):
+    calls = []
+
+    def fake_run(argv, prompt, *, stdout, stderr, **kwargs):
+        calls.append((list(argv), prompt))
+        stdout.write(stdout_text.encode())
+        return SimpleNamespace(pid=7, returncode=returncode)
+
+    monkeypatch.setattr(workflow, '_run_admitted', fake_run)
+    monkeypatch.setattr(workflow, 'resolve_grok', lambda: ['/bin/grok-x'])
+    monkeypatch.setattr(workflow, 'resolve_agy', lambda: ['/bin/agy-x'])
+    return calls
+
+
+def _run(tmp_path, backend, schema=_SCHEMA):
+    return workflow.run_agent('do it', {'schema': schema} if schema else {}, repo_root=tmp_path,
+                              artifact_dir=tmp_path / 'art', backend=backend, parent_session_id='sid')
+
+
+def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path, monkeypatch):
+    calls = _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': '{"a": 1}', 'stopReason': 'end_turn'}, indent=2))
+    assert _run(tmp_path, 'grok') == {'a': 1}
+    argv, stdin = calls[0]
+    assert argv[0] == '/bin/grok-x' and stdin == ''
+    assert argv[argv.index('--permission-mode') + 1] == 'acceptEdits'
+    assert not {'--always-approve', '--dangerously-skip-permissions', '--yolo'} & set(argv)
+    assert '"a"' in (tmp_path / 'art' / 'prompt.txt').read_text() and 'JSON Schema' in (tmp_path / 'art' / 'prompt.txt').read_text()
+
+
+def test_agy_stage_spawns_resolved_binary_and_parses_result_event(tmp_path, monkeypatch):
+    stream = '\n'.join(json.dumps(e) for e in [
+        {'event': 'step_update', 'step_update': {}},
+        {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '```json\n{"a": 2}\n```'}}])
+    calls = _stub_family(monkeypatch, tmp_path, stdout_text=stream)
+    assert _run(tmp_path, 'agy') == {'a': 2}
+    argv, stdin = calls[0]
+    assert argv[0] == '/bin/agy-x'
+    assert argv[argv.index('--mode') + 1] == 'accept-edits' and '--dangerously-skip-permissions' not in argv
+    assert json.loads(stdin)['event'] == 'user' and 'do it' in json.loads(stdin)['message']['content']
+
+
+def test_family_text_result_without_schema_and_empty_agy_response_fails(tmp_path, monkeypatch):
+    _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': 'plain'}))
+    assert _run(tmp_path, 'grok', schema=None) == 'plain'
+    _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': ''}}))
+    with pytest.raises(workflow.AgentFailed, match='no schema-valid result'):
+        _run(tmp_path, 'agy', schema=None)
+
+
+@pytest.mark.parametrize('backend', ['grok', 'agy'])
+def test_family_schema_violation_and_nonzero_exit_fail(tmp_path, monkeypatch, backend):
+    body = json.dumps({'text': '{"a": "x"}'}) if backend == 'grok' else json.dumps(
+        {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '{"a": "x"}'}})
+    _stub_family(monkeypatch, tmp_path, stdout_text=body)
+    with pytest.raises(workflow.AgentFailed, match='no schema-valid result'):
+        _run(tmp_path, backend)
+    _stub_family(monkeypatch, tmp_path, stdout_text=body, returncode=3)
+    with pytest.raises(workflow.AgentFailed, match='exited 3'):
+        _run(tmp_path, backend)
+
+
+@pytest.mark.parametrize('backend', ['grok', 'agy'])
+def test_family_missing_binary_raises_agent_failed(tmp_path, monkeypatch, backend):
+    from coordinator_core.codex_runner.agy import AgyUnavailable
+    from coordinator_core.codex_runner.grok import GrokUnavailable
+    _stub_family(monkeypatch, tmp_path, stdout_text='')
+    def gone(): raise (GrokUnavailable if backend == 'grok' else AgyUnavailable)('not on PATH')
+    monkeypatch.setattr(workflow, 'resolve_' + backend, gone)
+    with pytest.raises(workflow.AgentFailed, match='executable unavailable'):
+        _run(tmp_path, backend)
+
+
+def test_unknown_backend_still_refused(tmp_path):
+    with pytest.raises(workflow.AgentFailed, match='unknown agent backend: gemini'):
+        _run(tmp_path, 'gemini')
+
+
+def test_family_receipt_is_written_without_crashing_provenance(tmp_path, monkeypatch):
+    _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': '{"a": 1}'}))
+    _run(tmp_path, 'grok')
+    receipt = json.loads((tmp_path / 'art' / 'process.json').read_text())
+    assert receipt['backend'] == 'grok' and receipt['canonical_usage']['status'] == 'incomplete'
+
+
 def test_builtin_workspace_policy_has_no_custom_permission_selector():
     import inspect
     source=inspect.getsource(workflow.run_agent)

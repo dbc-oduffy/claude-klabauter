@@ -696,6 +696,8 @@ class Router:
         self.transport_targets = {}  # each infrastructure face is one source/destination conversation
         self.transport_lock = asyncio.Lock()
         self.lease = None  # open router.lock handle, locked for the router lifetime
+        self.stop_requested = asyncio.Event()  # set by the shutdown op and by stop signals; serve waits on it
+        self.pid_file = None  # router.pid.json path, set only while this router owns the lease
         self.bound_faces = set()  # face endpoints whose child registration reached ready
         self.dead_holders = set()  # Codex peers whose recorded holder is gone: no face, not listed
 
@@ -755,6 +757,9 @@ class Router:
                 self.lease.close()
                 self.lease = None
                 raise RuntimeError("peer router already owns the local endpoint")
+            self.pid_file = os.path.join(self.state_dir, "router.pid.json")
+            _roster().write_json_atomic(self.pid_file, {"pid": os.getpid(),
+                                                         "procStart": _roster().proc_start(os.getpid())})
             self.server = await self._bind_control()
             await asyncio.to_thread(self._reconcile_orphan_faces)
             await self._drop_dead_holders()
@@ -966,6 +971,9 @@ class Router:
         self.faces = {}
         if bound:
             _unlink(self.ctl)
+        if self.pid_file is not None:
+            _unlink(self.pid_file)
+            self.pid_file = None
         if self.lease is not None:
             _transport().unlock_file(self.lease)
             self.lease.close()
@@ -1074,6 +1082,10 @@ class Router:
             if not_delivered(reply):
                 return {"ok": False, "error": str(reply).strip()}
             return {"ok": True, "reply": _contract().label(peer, reply)}
+        if op == "shutdown":
+            # Reply first; the stop runs after the connection handler has flushed it.
+            asyncio.get_running_loop().call_soon(self.stop_requested.set)
+            return {"ok": True, "pid": os.getpid(), "stopping": True}
         return {"ok": False, "error": "unknown op"}
 
     def pick_peer(self, address):
@@ -1479,10 +1491,9 @@ def _unlink(path):
 
 async def serve(router):
     await router.start()
-    stop = asyncio.Event()
-    _transport().install_stop_handlers(stop)
+    _transport().install_stop_handlers(router.stop_requested)
     try:
-        await stop.wait()
+        await router.stop_requested.wait()
     finally:
         await router.stop()
 

@@ -921,7 +921,7 @@ def _isolated_body(
     if status == "fail" and export_log_used and 1 in codes and _failed_node_ids(export_log, export_root):
         baseline = _head_baseline(
             root, run, tests, export_root, export_log, path.with_suffix(".head.log"), deadline,
-            landing_retest.run_base_for(root, run_id, params) or None,
+            landing_retest.run_base_for(root, run_id, params) or None, meta["head"],
         )
     return _write_dual(
         root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
@@ -932,9 +932,10 @@ def _isolated_body(
 
 def _head_baseline(
     root: Path, run, tests: list[str], export_root: Path, export_log: Path, head_log: Path,
-    deadline: float, base_sha: Optional[str] = None,
+    deadline: float, base_sha: Optional[str] = None, export_sha: Optional[str] = None,
 ) -> dict:
-    """``{"baseline": {method, base_sha, caused, foreign, evidence}}``: ``base_sha`` is the sha measured
+    """``{"baseline": {method, base_sha, caused, foreign, evidence}}`` plus the ``_landing_checks`` keys
+    (``head_red``, ``owed_cleared``, ``head_sha``); ``export_sha`` the sha of ``export_root``. ``base_sha`` is the sha measured
     (the run base when given, else HEAD); the "HEAD" below reads as that sha. ``caused`` is the export
     pass's failed ids absent from a HEAD-only export run (classify's ``union - base``), per node id; ``foreign`` those
     also red there; ``evidence`` the sorted HEAD-red ids. An id new at HEAD is never HEAD-red, so it is caused when
@@ -990,18 +991,77 @@ def _head_baseline(
         if ran is None or ran < len(head_ids):
             return _skip(f"HEAD run did not run what it collected: ran {ran}, collected {len(head_ids)}")
         red_at_head = set(_failed_node_ids(head_log, head_root)) if used and 1 in codes else set()
+        export_reds = _failed_node_ids(export_log, export_root)
+        baseline = {
+            "method": "isolated-export",
+            "base_sha": measured_sha,
+            "caused": [n for n in export_reds if n not in red_at_head],
+            "foreign": [n for n in export_reds if n in red_at_head],
+            "evidence": sorted(red_at_head),
+        }
+        baseline.update(_landing_checks(
+            root, run, baseline, export_root, head_root, head_log, deadline, measured_sha, base_sha, export_sha,
+        ))
     except (le.LandingExportError, RuntimeError) as exc:
         return _skip(f"HEAD export failed: {exc}")
     finally:
         baseline_export.remove(head_root)
-    export_reds = _failed_node_ids(export_log, export_root)
-    return {"baseline": {
-        "method": "isolated-export",
-        "base_sha": measured_sha,
-        "caused": [n for n in export_reds if n not in red_at_head],
-        "foreign": [n for n in export_reds if n in red_at_head],
-        "evidence": sorted(red_at_head),
-    }}
+    return {"baseline": baseline}
+
+
+def _measure(run, root: Path, ids: Sequence[str], log: Path, deadline: float) -> Optional[tuple[set[str], set[str]]]:
+    """``(present, failed)``: of ``ids``, the ones ``--collect-only`` finds under ``root`` and the ones
+    red there. An id absent under ``root`` is in neither. None (unmeasured) when a collection or run is
+    broken or ran fewer tests than it named."""
+    files = list(dict.fromkeys(f for f in (i.split("::")[0] for i in ids) if (root / f).is_file()))
+    if not files:
+        return set(), set()
+    collected = _collect_ids(run, root, files, log.with_suffix(".collect.log"), deadline)
+    if isinstance(collected, str) or collected[1]:
+        return None
+    present = [i for i in dict.fromkeys(ids) if i in collected[0]]
+    if not present:
+        return set(), set()
+    status, _, codes, used = _run_pass(run, root, present, log, deadline)
+    if status not in ("pass", "fail") or not used or (_ran_total(log) or 0) < len(present):
+        return None
+    return set(present), (set(_failed_node_ids(log, root)) & set(present)) if 1 in codes else set()
+
+
+def _landing_checks(
+    root: Path, run, baseline: dict, export_root: Path, head_root: Path, head_log: Path, deadline: float,
+    measured_sha: str, base_sha: Optional[str], export_sha: Optional[str],
+) -> dict:
+    """The two landing base checks, so ``dispatch.land_run`` only reads them: ``head_red`` the ``caused``
+    ids red at a pure-HEAD export (``head_root`` itself when ``measured_sha`` is HEAD, where ``caused`` is
+    green by construction), ``owed_cleared`` the owed ids (``unevidenced_ids(baseline)``) green at
+    ``export_root`` (HEAD plus the landing paths), and ``head_sha`` the sha ``head_red`` was measured at.
+    A key whose measurement is broken or ran fewer tests than named is omitted: the landing keeps those
+    ids caused. Rebuilds ``head_root`` at HEAD when the run base differs; the caller removes it."""
+    from coordinator_core.git.git_state import head_sha as current_head
+    from coordinator_core.ops.dispatch_emit import landing_export as le
+
+    out: dict = {}
+    caused = baseline["caused"]
+    head, red = measured_sha, set()
+    try:
+        current = measured_sha if base_sha is None else current_head(root, fresh=True)
+        if caused and current != measured_sha:
+            head = le.build_head_export(root, head_root, [], None).head_sha
+            if head != measured_sha:
+                measured = _measure(run, head_root, caused, head_log.with_suffix(".red.log"), deadline)
+                red = None if measured is None else measured[1]
+    except (le.LandingExportError, RuntimeError):
+        red = None
+    if red is not None:
+        out[landing_targeted_tests.HEAD_RED_KEY] = sorted(red)
+        out[landing_targeted_tests.HEAD_SHA_KEY] = head
+    owed = landing_targeted_tests.unevidenced_ids(baseline)
+    owed_run = (set(), set()) if not owed else _measure(run, export_root, owed, head_log.with_suffix(".owed.log"), deadline)
+    if owed_run is not None:
+        out[landing_targeted_tests.OWED_CLEARED_KEY] = sorted(owed_run[0] - owed_run[1])
+        out.setdefault(landing_targeted_tests.HEAD_SHA_KEY, export_sha or measured_sha)
+    return out
 
 
 def _write_dual(

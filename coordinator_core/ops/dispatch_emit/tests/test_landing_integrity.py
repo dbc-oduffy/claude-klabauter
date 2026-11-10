@@ -518,6 +518,7 @@ def test_fresh_pass_naming_the_invariant_clears_it(tmp_path, monkeypatch):
     monkeypatch.setattr(li, "fresh_targeted_verdict", lambda *a, **k: None)
     (owed,) = li.invariant_findings(tmp_path, ["x.py"], "r1", spent)
     assert "no fresh retest verdict exists" in owed.detail
+    assert li.retest_remedy(spent, [node]) in owed.detail
 
 
 def _digest(tmp_path, deviations, wrap=True):

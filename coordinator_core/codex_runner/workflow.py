@@ -23,6 +23,8 @@ from typing import Any, Callable
 
 import jsonschema
 
+from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
+from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
 from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
 from coordinator_core.codex_runner.review import _unattended_env
 from coordinator_core.bash_guards import _heavy_command_class as capacity
@@ -656,6 +658,59 @@ def _append_canonical_usage(receipt: dict) -> dict:
         return {'status': 'failed', 'reason': f'{type(exc).__name__}: {exc}'}
 
 
+_FAMILY_BACKENDS = ("grok", "agy")
+_AGY_OK = frozenset({"success", "ok", "completed", "done"})
+_FENCE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
+# agy denies unlisted shell commands headlessly; this allow rule is the narrowest non-bypass grant.
+_AGY_SETTINGS = json.dumps({"permissions": {"allow": ["command(*)"]}})
+
+
+def _family_argv(backend: str, artifact_dir: Path) -> list[str]:
+    """Write-capable argv for a grok/agy stage (prompt via file for grok, stdin for agy).
+
+    Never carries grok.FORBIDDEN_FLAGS or agy --dangerously-skip-permissions; the
+    stage model is left to the CLI default because Workflow tiers do not map to
+    these families.
+    """
+    try:
+        if backend == "grok":
+            return [*resolve_grok(), "--prompt-file", str(artifact_dir / "prompt.txt"),
+                    "--output-format", "json", "--permission-mode", "acceptEdits",
+                    "--allow", "Bash", "--no-subagents", "--no-auto-update"]
+        return [*resolve_agy(), "--input-format", "stream-json", "--output-format", "stream-json",
+                "-p=", "--mode", "accept-edits", "--settings", _AGY_SETTINGS]
+    except (GrokUnavailable, AgyUnavailable) as exc:
+        raise AgentFailed(f"{backend} executable unavailable: {exc}") from exc
+
+
+def _family_text(backend: str, stdout: Path) -> str:
+    """Final response text of a grok (one json envelope) or agy (stream-json) run."""
+    raw = stdout.read_text(encoding="utf-8", errors="replace")
+    if backend == "grok":
+        envelope = json.loads(raw)
+        text = envelope.get("text") if isinstance(envelope, dict) else None
+        if not isinstance(text, str):
+            raise ValueError("grok envelope has no text")
+        return text
+    result = None
+    for line in raw.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("event") == "result" and isinstance(event.get("result"), dict):
+            result = event["result"]
+    if result is None:
+        raise ValueError("agy emitted no result event")
+    status = str(result.get("status", "")).lower()
+    if status not in _AGY_OK:
+        raise ValueError(f"agy result status {status or 'missing'}: {result.get('error') or result.get('response')}")
+    response = result.get("response")
+    if not isinstance(response, str) or not response.strip():
+        raise ValueError("agy result has no response (a tool permission was likely denied)")
+    return response
+
+
 def _save_process(artifact_dir: Path, proc, backend: str, options: dict, requested_model,
                   *, broker_root_session_id=None, broker_request_id=None, broker_fire_id=None) -> None:
     if broker_root_session_id is None:
@@ -727,7 +782,7 @@ def run_agent(
             'Use Python or native PowerShell for file operations. Preserve all operation arguments and JSON payloads.\n\n'
         ) + full_prompt
     native_schema = _codex_schema(schema) if schema is not None else None
-    if backend == "codex" and schema is not None and native_schema is None:
+    if schema is not None and (backend in _FAMILY_BACKENDS or (backend == "codex" and native_schema is None)):
         full_prompt += (
             "\n\nYour final response must be exactly one raw JSON value, with no Markdown fences or commentary. "
             "It must satisfy this exact JSON Schema. Preserve dynamic mapping entries and optional/nullable "
@@ -793,12 +848,19 @@ def run_agent(
             argv += ["--json-schema", json.dumps(schema)]
         if options.get("model"):
             argv += ["--model", str(options["model"])]
+    elif backend in _FAMILY_BACKENDS:
+        argv = _family_argv(backend, artifact_dir)
     else:
         raise AgentFailed(f"unknown agent backend: {backend}")
+    stdin_text = full_prompt
+    if backend == "agy":
+        stdin_text = json.dumps({"event": "user", "message": {"content": full_prompt}}) + "\n"
+    elif backend == "grok":
+        stdin_text = ""
     try:
         with (artifact_dir / "stdout.jsonl").open("wb") as out, (artifact_dir / "stderr.txt").open("wb") as err:
             proc = _run_admitted(
-                argv, full_prompt, env=env, repo_root=repo_root, artifact_dir=artifact_dir,
+                argv, stdin_text, env=env, repo_root=repo_root, artifact_dir=artifact_dir,
                 backend=backend, options=options, parent_session_id=parent_session_id,
                 timeout_s=timeout_s, on_spawn=on_spawn, stdout=out, stderr=err,
                 request_id=request_id, fire_id=fire_id, on_native_thread=on_native_thread,
@@ -820,6 +882,13 @@ def run_agent(
             value = envelope.get("structured_output") if schema is not None else envelope.get("result")
             if schema is not None and value is None:
                 value = json.loads(envelope["result"])
+        elif backend in _FAMILY_BACKENDS:
+            text = _family_text(backend, artifact_dir / "stdout.jsonl")
+            if schema is not None:
+                fence = _FENCE.match(text.strip())
+                value = json.loads(fence.group(1) if fence else text)
+            else:
+                value = text
         else:
             text = last.read_text(encoding="utf-8")
             value = json.loads(text) if schema is not None else text

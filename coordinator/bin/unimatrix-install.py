@@ -6,6 +6,7 @@ VENDORED_SCRIPTS into <settings home>/unimatrix. Outside the range the gate refu
 macOS, Windows and Linux.
 """
 import argparse
+import hashlib
 import importlib.util
 import json
 import ntpath
@@ -153,6 +154,60 @@ def script_closure(src_dir, root=AUTOLINK_SCRIPT):
 
 ROUTER_SCRIPT = "unimatrix-peer-router.py"
 PIPE_MARKER = "PipeServer"
+ROUTER_RESTART_REFUSED_RC = 8
+
+
+def router_closure_digest(src_dir):
+    """sha256 over the sorted (name, bytes) of the router's script closure in src_dir; None without the router script."""
+    root = Path(src_dir)
+    if not (root / ROUTER_SCRIPT).is_file():
+        return None
+    h = hashlib.sha256()
+    for name in sorted(script_closure(root, ROUTER_SCRIPT)):
+        try:
+            data = (root / name).read_bytes()
+        except OSError:
+            continue
+        h.update(name.encode("utf-8") + b"\0" + data + b"\0")
+    return h.hexdigest()
+
+
+def _installed_autolink(dest):
+    """The INSTALLED unimatrix-autolink module, so a restart spawns the installed router; None when absent."""
+    path = Path(dest) / AUTOLINK_SCRIPT
+    if not path.is_file():
+        return None
+    spec = importlib.util.spec_from_file_location("unimatrix_autolink_installed", path)
+    mod = importlib.util.module_from_spec(spec)
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = keep
+    return mod
+
+
+def router_is_live(dest):
+    """True while a router holds the lease under `dest` (the installed autolink's own check)."""
+    try:
+        mod = _installed_autolink(dest)
+        check = getattr(mod, "router_lock_held", None)
+        return bool(check and check(Path(dest)))
+    except Exception:
+        return False
+
+
+def restart_installed_router(dest, say):
+    """Hand the box over to the installed router through the installed autolink's `restart_router`."""
+    mod = _installed_autolink(dest)
+    restart = getattr(mod, "restart_router", None)
+    if restart is None:
+        raise RuntimeError(f"installed {AUTOLINK_SCRIPT} has no restart_router")
+    keep, sys.dont_write_bytecode = sys.dont_write_bytecode, True
+    try:
+        return restart(mod._roster(), Path(dest), say)
+    finally:
+        sys.dont_write_bytecode = keep
 
 
 class PipeCapabilityRefused(Exception):
@@ -935,6 +990,115 @@ def seed_codex_status_line(config_path, *, uninstall=False):
     return "updated"
 
 
+def agy_settings_path():
+    """agy's user settings file, where the `statusLine` command lives."""
+    return Path.home() / ".gemini" / "antigravity-cli" / "settings.json"
+
+
+def grok_config_path():
+    """Grok's user config: $GROK_HOME/config.toml, default ~/.grok."""
+    env = os.environ.get("GROK_HOME")
+    return (Path(env) if env else Path.home() / ".grok") / "config.toml"
+
+
+def _tui_status_command(host):
+    argv = [sys.executable, "-m", "coordinator_core.tui_status", host]
+    return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
+
+
+def _host_status_value(host, text, command):
+    """(current status-line value or None, the value we install) for one host's config text."""
+    if host == "agy":
+        data = json.loads(text or "{}")
+        if not isinstance(data, dict):
+            raise ValueError("agy settings must be a JSON object")
+        return data.get("statusLine"), {"command": command}
+    ui_table = tomllib.loads(text or "").get("ui", {})
+    if not isinstance(ui_table, dict):
+        raise ValueError("ui must be a table")
+    return ui_table.get("status_line"), {"type": "command", "command": command}
+
+
+def _host_status_apply(host, base, command):
+    if host == "agy":
+        data = json.loads(base or "{}")
+        data["statusLine"] = {"command": command}
+        return json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    head = base if not base or base.endswith("\n") else base + "\n"
+    sep = "\n" if head and not head.endswith("\n\n") else ""
+    return head + sep + "[ui.status_line]\ntype = \"command\"\ncommand = " + json.dumps(command, ensure_ascii=False) + "\n"
+
+
+def _host_status_state(path):
+    state = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(state, dict) or state.get("version") != 1 or type(state.get("existed")) is not bool or
+            not isinstance(state.get("before"), str) or not isinstance(state.get("after"), str) or
+            not isinstance(state.get("managed"), dict)):
+        raise ValueError("invalid status-line ownership record")
+    return state
+
+
+def seed_host_status_line(config_path, host, *, uninstall=False):
+    """Own only the agy `statusLine` / Grok `[ui.status_line]` value; restore only while it remains our exact value.
+
+    The ownership record keeps the pre-install text, so an untouched file returns byte for byte; a file
+    edited since is repaired structurally. A status line the user set is never overwritten.
+    """
+    path = Path(config_path)
+    state_path = path.with_name(f".coordinator-status-line-{host}.json")
+    text = path.read_bytes().decode("utf-8") if path.exists() else None
+    command = _tui_status_command(host)
+    if uninstall:
+        if not state_path.exists():
+            return "absent"
+        state = _host_status_state(state_path)
+        if text is None:
+            state_path.unlink()
+            return "absent"
+        if text == state["after"]:
+            if state["existed"]:
+                _footer_write(path, state["before"])
+            else:
+                path.unlink()
+        elif host == "agy":
+            data = json.loads(text)
+            if not isinstance(data, dict) or data.get("statusLine") != state["managed"]:
+                return "retained-customized"
+            original = json.loads(state["before"] or "{}").get("statusLine")
+            if original is None:
+                data.pop("statusLine")
+            else:
+                data["statusLine"] = original
+            _footer_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        else:
+            appended = state["after"][len(state["before"]):] if state["after"].startswith(state["before"]) else ""
+            if not appended or appended not in text:
+                return "retained-customized"
+            replacement = text.replace(appended, "", 1)
+            tomllib.loads(replacement)
+            _footer_write(path, replacement)
+        state_path.unlink()
+        return "restored"
+    current, wanted = _host_status_value(host, text, command)
+    if current == wanted:
+        return "present"
+    state = _host_status_state(state_path) if state_path.exists() else None
+    if current is not None:
+        if state is None or text != state["after"]:
+            return "retained-customized"
+        base, existed = state["before"], state["existed"]
+    else:
+        base, existed = text or "", text is not None
+    replacement = _host_status_apply(host, base, command)
+    if _host_status_value(host, replacement, command)[0] != wanted:
+        raise ValueError("status-line edit did not address the host's status line")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"version": 1, "host": host, "existed": existed, "before": base, "after": replacement, "managed": wanted}
+    _footer_write(state_path, json.dumps(record, ensure_ascii=False) + "\n")
+    _footer_write(path, replacement)
+    return "updated" if text is not None else "created"
+
+
 def codex_rules_path():
     """Codex's global instructions file: $CODEX_HOME/AGENTS.md, default ~/.codex."""
     return codex_hooks_path().with_name("AGENTS.md")
@@ -1326,8 +1490,10 @@ def trust_codex_hook(hooks_path, timeout=30):
 
 def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
          codex_hooks=None, codex_trust=None, codex_rules=None, agy_rules=None, codex_exec_rule=None,
-         agy_skills_json=None, codex_skills=None, agent_dir=None, schtasks=None, pair_run=None):
-    """`hooks_path` overrides agy's file. Codex's file defaults to codex_hooks_path(), or to a sibling
+         agy_skills_json=None, codex_skills=None, agent_dir=None, schtasks=None, pair_run=None,
+         router_live=None, restart_router=None):
+    """`router_live(dest) -> bool` and `restart_router(dest, say) -> dict` replace the installed autolink's
+    router check and restart. `hooks_path` overrides agy's file. Codex's file defaults to codex_hooks_path(), or to a sibling
     `codex-hooks.json` when only `hooks_path` is overridden; trust runs against the real Codex only for
     the default path, unless `codex_trust` (a callable taking the hooks path) is injected. The peer
     doctrine files follow the same rule: real home files by default, siblings `codex-AGENTS.md` and
@@ -1356,6 +1522,8 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         agy_rp = Path(agy_rules)
     else:
         agy_rp = agy_rules_path() if hooks_path is None else Path(hooks_path).with_name("agy-GEMINI.md")
+    agy_status = agy_settings_path() if hooks_path is None else Path(hooks_path).with_name("agy-settings.json")
+    grok_status = grok_config_path() if hooks_path is None else Path(hooks_path).with_name("grok-config.toml")
     if codex_trust is None and codex_default:
         codex_trust = trust_codex_hook
     agy_sj = Path(agy_skills_json) if agy_skills_json else (
@@ -1369,7 +1537,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     ap.add_argument("--install", action="store_true", help="copy the vendored scripts into the settings home")
     ap.add_argument("--uninstall", action="store_true", help="remove everything --install seeded for Codex and agy")
     ap.add_argument("--force", action="store_true", help="warn instead of refusing outside the verified range")
-    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs no hooks); default codex,agy with the Claude range gate. "
+    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs a status line, no hooks); default codex,agy,grok with the Claude range gate. "
                     "Naming no claude skips the gate when `claude` is not on PATH")
     ap.add_argument("--pair", metavar="ALIAS", help="mint or read the pair key for a far box and print its "
                     "authorized_keys line and ssh config block")
@@ -1437,11 +1605,15 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             return 2
     want_codex = hosts is None or "codex" in hosts
     want_agy = hosts is None or "agy" in hosts
+    want_grok = hosts is None or "grok" in hosts
 
     if args.uninstall:
         hp = Path(hooks_path) if hooks_path else agy_hooks_path()
         steps = []
+        if want_grok:
+            steps.append(("grok status line", grok_status, lambda: seed_host_status_line(grok_status, "grok", uninstall=True)))
         if want_agy:
+            steps.append(("agy status line", agy_status, lambda: seed_host_status_line(agy_status, "agy", uninstall=True)))
             steps.append(("agy hook", hp, lambda: unseed_agy_hook(hp)))
             steps.append(("agy plugin", agy_pj, lambda: unseed_agy_plugin(
                 agy_pj, (Path(dest_dir) if dest_dir else settings_home() / "unimatrix") / AGY_PLUGIN_TREE_DIR)))
@@ -1497,6 +1669,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
 
     print(NATIVE_RC_NOTICE, file=out)
     dest = Path(dest_dir) if dest_dir else settings_home() / "unimatrix"
+    digest_before = router_closure_digest(dest)
     try:
         copied = install_scripts(Path(__file__).resolve().parent, dest)
     except FileNotFoundError as exc:
@@ -1506,6 +1679,16 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         print(f"REFUSE: {exc}", file=out)
         return 5
     print(f"installed {len(copied)} scripts into {dest}", file=out)
+    restart_failed = False
+    router_live = router_live or router_is_live
+    if router_live(dest) and (digest_before != router_closure_digest(dest)
+                              or not (dest / "router" / "router.pid.json").is_file()):
+        try:
+            res = (restart_router or restart_installed_router)(dest, lambda s: print(s, file=out)) or {}
+            print(f"router restarted: {res.get('stopped')} old pid {res.get('old_pid')} new pid {res.get('new_pid')}", file=out)
+        except Exception as exc:
+            restart_failed = True
+            print(f"REFUSE: router restart failed: {exc}; scripts are installed, run `unimatrix-autolink.py restart`", file=out)
     print(f"authorized_keys line for the far side (paste verbatim, fill <key-body>): "
           f"{authorized_keys_line(dest)}", file=out)
     print(f"authorized_keys line for the far side's file key (fill <key-body> and <box>, this box's name): "
@@ -1548,6 +1731,14 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         except (OSError, ValueError) as exc:
             missing.append("codex status footer")
             print(f"WARN: codex status footer not installed: {exc}", file=out)
+    for label, host, config, wanted in (("agy", "agy", agy_status, want_agy), ("grok", "grok", grok_status, want_grok)):
+        if not wanted:
+            continue
+        try:
+            print(f"{label} status line {seed_host_status_line(config, host)} in {config}", file=out)
+        except (OSError, ValueError) as exc:
+            missing.append(f"{label} status line")
+            print(f"WARN: {label} status line not installed: {exc}", file=out)
     if want_agy:
         _seed_agy_config(hp.with_name("config.json"), out)
         if not _write_agy_plugin_tree(args, out, dest):
@@ -1606,7 +1797,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         print(f"governance DEGRADED: engine root unresolved ({provenance}); guards answer the neutral "
               "fallback (ask on agy, {} on Codex), never allow", file=out)
     print("governance scope: Codex local-tool PreToolUse (shell, projected edits, MCP, spawn briefs; native coverage limits apply); agy run_command", file=out)
-    return rc
+    return ROUTER_RESTART_REFUSED_RC if restart_failed else rc
 
 
 def _seed_standing_doctrine(out, want_codex, want_agy, codex_rp, agy_rp, codex_sd, agy_sj,

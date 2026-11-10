@@ -39,6 +39,7 @@ from coordinator_core.codex_runner.contract import (
     findings_schema_path,
 )
 from coordinator_core.codex_runner.resolve import CodexUnavailable, allow_api_key
+from coordinator_core.codex_runner.review import _ENV_ALLOW_WINDOWS as _REVIEW_ENV_ALLOW_WINDOWS
 
 AGY_TIMEOUT_S = 900
 CLOSE_GRACE_S = 10
@@ -63,7 +64,7 @@ KEYCHAIN_SERVICE = "gemini-use-api-key"
 EXHAUSTION_REMEDY = "add prepay credit at ai.studio/projects"
 
 _ENV_ALLOW = ("PATH", "HOME", "USERPROFILE", "LANG")
-_ENV_ALLOW_WINDOWS = ("SYSTEMROOT", "APPDATA", "LOCALAPPDATA")
+_ENV_ALLOW_WINDOWS = _REVIEW_ENV_ALLOW_WINDOWS
 
 _FENCE_RE = re.compile(r"^\s*```(?:json)?\s*\n(.*?)\n\s*```\s*$", re.DOTALL)
 

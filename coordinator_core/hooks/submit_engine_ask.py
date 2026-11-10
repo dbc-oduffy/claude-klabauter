@@ -598,6 +598,14 @@ def _note_root(root: Path) -> None:
         call["roots"].append(root)
 
 
+def _note_resume(run_id: str) -> None:
+    """Records the halted run this call resolved to refire: a spool of the same ask would drain into a
+    second launch of that run id, so an overrun answers a refusal instead (`_answer_overran`)."""
+    call = _CALL.get()
+    if call is not None:
+        call["resume"] = run_id
+
+
 def _note_minted(run_id: Any) -> None:
     call = _CALL.get()
     if call is not None and isinstance(run_id, str) and run_id not in call["minted"]:
@@ -685,6 +693,12 @@ def _answer_overran(call: dict) -> dict:
         return _refuse(f"The submission outran the hook budget as its run was minted. Do not re-submit. {_minted_remedy([])}")
     if gate_state == "writing":
         return _refuse(_STALLED_RECORD_WRITE)
+    resuming = call.get("resume")
+    if resuming:
+        return _refuse(
+            f"The refire of run {resuming} outran the hook budget; the engine is reachable and "
+            "nothing was spooled. Re-submit once: it resumes the same run."
+        )
     spooled = _spool_envelope(call.get("payload"), roots[0] if roots else None, "reach-budget-no-run")
     if spooled is not None:
         return spooled
@@ -1581,30 +1595,40 @@ def _rows_committed(root: Path, run_id: str) -> bool:
     return isinstance(data, dict) and data.get(ROWS_COMMITTED_KEY) is True
 
 
-def _read_parent(root: Path, parent_id: str):
+def _read_parent(root: Path, parent_id: str, *, run_id: Optional[str] = None):
+    """The parent record for `parent_id`; with `run_id`, a missing scratch record falls back to
+    that run's tracked copy, accepted only when it names the same parent."""
     import json
 
-    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ParentRecord, parent_record_rel
+    from coordinator_core.ops.dispatch_emit.ask_fanout_contract import (
+        ParentRecord, parent_record_rel, run_parent_copy_rel,
+    )
 
     try:
         return ParentRecord.from_json(json.loads((root / parent_record_rel(parent_id)).read_text(encoding="utf-8")))
     except (OSError, ValueError, KeyError, TypeError):
+        pass
+    if not run_id:
         return None
+    try:
+        copy = ParentRecord.from_json(json.loads((root / run_parent_copy_rel(run_id)).read_text(encoding="utf-8")))
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return copy if copy.parent_id == parent_id else None
 
 
 def _reserved_token_spent(root: Path, run_id: str) -> bool:
-    """Whether the gate already refused `run_id` for a spent token.
+    """Whether `run_id`'s token is spent: the gate refused it, or a landing attempt took it and it is not live.
 
-    TRAP: a fan-out slice's sizing pins its original run id via `ask_parent`; re-reserving it
-    after the gate marked the token spent re-emits the same id, the gate refuses the same way,
-    and the refusal's own remedy (this {sizing} call) loops forever. A spent reservation is
-    dropped so the emit mints a fresh run id.
+    TRAP: a fan-out slice's sizing pins its original run id via `ask_parent`; re-reserving a
+    spent one re-emits the same id, the gate refuses the same way, and the refusal's own
+    remedy (this {sizing} call) loops forever. A spent reservation is dropped on the first
+    refire so the emit mints a fresh run id; a never-fired one keeps its id.
     """
-    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
-    from coordinator_core.ops.dispatch_emit.ask_gate import TOKEN_SPENT_FILE
+    from coordinator_core.ops.dispatch_emit.ask_gate import token_retired
 
     try:
-        return (record_dir(root, run_id) / TOKEN_SPENT_FILE).is_file()
+        return token_retired(root, run_id)
     except (OSError, ValueError):
         return False
 
@@ -1622,7 +1646,7 @@ def _slice_deny(root: Path, marker: tuple[str, str]) -> Optional[str]:
     by = read_superseded_by(root, run_id)
     if by:
         return f"Run {run_id} is superseded by {by}; it does not start."
-    parent = _read_parent(root, parent_id)
+    parent = _read_parent(root, parent_id, run_id=run_id)
     mine = next((r for r in (parent.runs if parent else ()) if r.run_id == run_id), None)
     if mine is None:
         return f"Run {run_id} is not in parent {parent_id}'s record. Submit the ask as a fresh {{ask}}."
@@ -2857,6 +2881,7 @@ def _resume_route(
             _adopt_unmarked_run(root, halted_id, session_id)
     if not isinstance(halted_id, str):
         return None, None
+    _note_resume(halted_id)
     rd = record_dir(root, halted_id)
     filed_under = [i for i in (reserved_run_id, ask_parent_id) if isinstance(i, str) and i != halted_id]
     if filed_under:

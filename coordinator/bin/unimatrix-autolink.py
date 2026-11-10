@@ -2,6 +2,7 @@
 
 Usage:
   unimatrix-autolink.py
+  unimatrix-autolink.py restart   (stop the box router and its faces, then start the installed one)
 
 Far boxes are the members of the signed membership snapshot (verified offline against the pinned key,
 minus this box), dialled as `<user>@<host>` from the record. Only when no snapshot exists are they the
@@ -406,6 +407,97 @@ def supervise_router(roster, sdir, say, spawn=detached, lock_held_fn=None):
             pass
 
 
+class RouterRestartError(RuntimeError):
+    """The old router could not be stopped, or no new router was started."""
+
+
+def _router_request():
+    """Default shutdown requester: one `shutdown` line to the box router's private endpoint."""
+    spec = importlib.util.spec_from_file_location("unimatrix_peer_router", HERE / ROUTER_SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    ctl = mod.endpoint_path(mod.ROUTER_ENDPOINT_SEED)
+    return lambda req: mod.request_line(ctl, req, timeout=5)
+
+
+def router_pid_candidates(roster, sdir):
+    """(pid, procStart) the running router may be recorded under: its own record, autolink's, then face stamps."""
+    out = []
+    for rec in (read_record(sdir / "router" / "router.pid.json"), read_record(sdir / "autolink-router.json")):
+        out.append((rec.get("pid"), rec.get("procStart")))
+    try:
+        paths = sorted(Path(roster.sessions_dir()).glob("*.json"))
+    except OSError:
+        paths = []
+    for path in paths:
+        entry = read_record(path)
+        out.append((entry.get("unimatrixRouterPid"), entry.get("unimatrixRouterStart")))
+    seen, uniq = set(), []
+    for pid, stamp in out:
+        if type(pid) is int and pid > 0 and stamp and (pid, stamp) not in seen:
+            seen.add((pid, stamp))
+            uniq.append((pid, stamp))
+    return uniq
+
+
+def restart_router(roster, sdir, say, spawn=detached, request=None, kill=None, lock_held_fn=None, wait_seconds=10):
+    """Replace the box's peer router with the installed one: {"stopped", "old_pid", "new_pid"}.
+
+    A live router is asked to `shutdown` over its control endpoint; one that predates the op, or does not
+    answer, is tree-killed by a recorded pid whose process start still matches (that takes its faces with it).
+    Raises RouterRestartError when the old lease stays held or no new router record appears."""
+    lock_held_fn = lock_held_fn or router_lock_held
+    kill = kill or roster.tree_kill
+    lease = sdir / "router" / "router.lock"
+
+    def lease_freed():
+        deadline = time.monotonic() + wait_seconds
+        while lock_held_fn(sdir):
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(0.05)
+        return True
+
+    stopped, old_pid = "none", None
+    if lock_held_fn(sdir):
+        try:
+            reply = (request or _router_request())({"op": "shutdown"})
+        except (OSError, ValueError):
+            reply = {}
+        if reply.get("ok") is True:
+            stopped, old_pid = "handshake", reply.get("pid")
+            say(f"router pid {old_pid} acknowledged shutdown")
+        if stopped == "none" or not lease_freed():
+            verified = [pid for pid, stamp in router_pid_candidates(roster, sdir)
+                        if roster.pid_alive(pid) and roster.proc_start(pid) == stamp]
+            if not verified:
+                named = ", ".join(str(p) for p, _ in router_pid_candidates(roster, sdir)) or "none recorded"
+                raise RouterRestartError(
+                    f"router lease {lease} is held and no recorded router pid ({named}) matches its process start")
+            old_pid = verified[0]
+            say(f"router did not shut down by request; killing pid {old_pid} and its faces")
+            kill(old_pid)
+            stopped = "tree_kill"
+            if not lease_freed():
+                raise RouterRestartError(f"router pid {old_pid} still holds lease {lease} after {wait_seconds}s")
+    rec_path = sdir / "autolink-router.json"
+    if stopped != "none" or not supervisor_live(roster, read_record(rec_path)):
+        try:
+            os.remove(rec_path)
+        except OSError:
+            pass
+    saved = os.environ.pop(NO_ROUTER_ENV, None)
+    try:
+        supervise_router(roster, sdir, say, spawn=spawn, lock_held_fn=lock_held_fn)
+    finally:
+        if saved is not None:
+            os.environ[NO_ROUTER_ENV] = saved
+    new_pid = read_record(rec_path).get("pid")
+    if not isinstance(new_pid, int):
+        raise RouterRestartError(f"no router was started: {rec_path} was not written")
+    return {"stopped": stopped, "old_pid": old_pid, "new_pid": new_pid}
+
+
 def _epoch_moved(sdir, liveness):
     """True when a stored snapshot's epoch differs from the one the boxes cache was written at."""
     try:
@@ -517,7 +609,23 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
         link_all([a for a in names2 if a not in boxes])
 
 
-def main():
+def cmd_restart():
+    roster = _roster()
+    sdir = state_dir(roster)
+    sdir.mkdir(parents=True, exist_ok=True)
+    try:
+        res = restart_router(roster, sdir, print)
+    except (RouterRestartError, OSError) as ex:
+        print(f"router restart failed: {ex}", file=sys.stderr)
+        return 1
+    print(f"router restarted: {res['stopped']} old pid {res['old_pid']} new pid {res['new_pid']}")
+    return 0
+
+
+def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv == ["restart"]:
+        return cmd_restart()
     try:
         run()
     except Exception:

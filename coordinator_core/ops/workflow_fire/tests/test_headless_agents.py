@@ -9,7 +9,9 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.codex_runner import review
 from coordinator_core.codex_runner import workflow as agents
+from coordinator_core.ops.workflow_fire import headless_agents
 
 _REAL_ADMIT_BEFORE_SPAWN = agents.capacity.admit_before_spawn
 
@@ -542,6 +544,18 @@ def test_private_cli_contract_rejects_authority_or_path_changes(tmp_path,case):
     Path(contract['bindings_path']).write_text(json.dumps(roster))
     with pytest.raises(agents.AgentFailed,match='private CLI'):
         agents._private_cli_settings(contract,**kwargs)
+
+
+@pytest.mark.parametrize("environment", [agents._environment, headless_agents._environment])
+def test_windows_parent_env_reaches_headless_spawn_env(monkeypatch, environment):
+    keys = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC")
+    for k in keys:
+        monkeypatch.setenv(k, f"v-{k}")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk")
+    monkeypatch.setattr(review, "sys", SimpleNamespace(platform="win32"))
+    env = environment()
+    assert all(env[k] == f"v-{k}" for k in keys)
+    assert "OPENAI_API_KEY" not in env
 
 
 def test_model_options_cannot_select_private_cli(tmp_path,monkeypatch):

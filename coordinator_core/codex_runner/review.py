@@ -58,7 +58,9 @@ _LIMIT_MARKERS = (
 )
 
 _ENV_ALLOW = ("PATH", "HOME", "USERPROFILE", "CODEX_HOME", "LANG")
-_ENV_ALLOW_WINDOWS = ("SYSTEMROOT",)
+# A Windows child missing SystemDrive/windir expands %SystemDrive% relative to its cwd and writes junk there.
+# USERPROFILE rides in the base allowlist. Shared by the agy and grok spawn envs.
+_ENV_ALLOW_WINDOWS = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "APPDATA", "LOCALAPPDATA", "COMSPEC")
 
 _ABS_RE = re.compile(r"^(?:/|~|[A-Za-z]:[\\/]|\\\\)")
 _SHELL_FLAG_RE = re.compile(r"^-[A-Za-z]*c$")

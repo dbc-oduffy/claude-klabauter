@@ -614,10 +614,14 @@ def rows_landed_outside_executor(worktree_root: Path, plan_path: str, rows: list
     head = head_sha(worktree_root)
     if not head or not chunks:
         return {}
-    return {
-        cid: shas[0]
-        for cid, shas in outside_landings(
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import retry_past_stall
+
+    landings = retry_past_stall(
+        resolve_git_common_dir(worktree_root),
+        lambda: outside_landings(
             worktree_root, head, plan_path, chunks, include_start=True, after_creation=True,
             skip_foreign_runs=True, require_evidence=True,
-        ).items()
-    }
+        ),
+    )
+    return {cid: shas[0] for cid, shas in landings.items()}

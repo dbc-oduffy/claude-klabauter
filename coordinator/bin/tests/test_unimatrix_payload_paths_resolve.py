@@ -17,9 +17,23 @@ REPO = Path(__file__).resolve().parents[3]
 TARGETS = REPO / "setup" / "publish-targets.portable"
 BIN = REPO / "coordinator" / "bin"
 PUBLISH_DEST = "publish-mirror:claude_klabauter"
+
+
+def _has_klabauter_rows() -> bool:
+    """True only when publish-targets exists and carries rows naming the klabauter dest."""
+    if not TARGETS.exists():
+        return False
+    return any(
+        len(f) >= 7 and f[2] == PUBLISH_DEST
+        for f in ([x.strip() for x in line.rstrip("\r").split("|")]
+                  for line in TARGETS.read_text(encoding="utf-8").splitlines()
+                  if line.strip() and not line.lstrip().startswith("#"))
+    )
+
+
 needs_targets = pytest.mark.skipif(
-    not TARGETS.exists(),
-    reason="setup/publish-targets.portable is not shipped in the published tree",
+    not _has_klabauter_rows(),
+    reason="setup/publish-targets.portable has no publish-mirror:claude_klabauter rows (consumer mirror or published tree)",
 )
 
 
@@ -129,6 +143,17 @@ def test_every_parents_path_resolves_inside_payload():
             if not _shipped(target, rows):
                 missing.append(f"{script.name}: parents[{n}]/{'/'.join(segs)} -> {target}")
     assert not missing, "path read by a published unimatrix script is not in the payload: " + "; ".join(missing)
+
+
+def test_klabauter_rows_gate_keys_on_dest_not_file_existence(tmp_path, monkeypatch):
+    foreign = tmp_path / "foreign.portable"
+    foreign.write_text("a|flat-mirror|publish-mirror:other|x|y||\n", encoding="utf-8")
+    monkeypatch.setitem(globals(), "TARGETS", foreign)
+    assert not _has_klabauter_rows()
+    foreign.write_text("a|flat-mirror|publish-mirror:claude_klabauter|x|y||\n", encoding="utf-8")
+    assert _has_klabauter_rows()
+    monkeypatch.setitem(globals(), "TARGETS", tmp_path / "absent")
+    assert not _has_klabauter_rows()
 
 
 @needs_targets

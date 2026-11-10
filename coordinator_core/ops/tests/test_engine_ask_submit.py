@@ -153,6 +153,24 @@ def test_fire_hands_the_sha256_to_workflow_fire(params, script, seen, monkeypatc
     assert result["fire"] == {"fire_id": "f1"}
 
 
+@pytest.mark.parametrize("backend", ["claude", "grok", "agy"])
+def test_fire_carries_an_opt_in_backend_family(params, seen, monkeypatch, backend):
+    calls = []
+    monkeypatch.setattr(
+        "coordinator_core.ops.workflow_fire.op._workflow_fire",
+        lambda p, repo_root=None: calls.append(p) or {"fire_id": "f1"},
+    )
+    _dispatch({**params, "fire": True, "backend": backend})
+    assert [c["backend"] for c in calls] == [backend]
+
+
+@pytest.mark.parametrize("backend", ["gemini", "", None])
+def test_unknown_backend_is_refused_naming_the_set(params, seen, backend):
+    result = _dispatch({**params, "backend": backend})
+    assert result["refused"] == "bad-request" and "codex|claude|grok|agy" in result["reason"]
+    assert seen == []
+
+
 def test_fire_uses_explicit_notification_peer(params, seen, monkeypatch):
     calls = []
     monkeypatch.setattr(

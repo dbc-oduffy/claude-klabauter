@@ -157,6 +157,7 @@ import re
 from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
+from coordinator_core.git.git_objects import PackReadStalled
 from coordinator_core.git.git_state import head_branch
 from coordinator_core.git.machine_local_paths import machine_local_paths
 from coordinator_core.git import residue_classes
@@ -585,7 +586,7 @@ def _measured_blob_supply(
     import hashlib
 
     from coordinator_core.git import commit
-    from coordinator_core.git.git_objects import _read_object
+    from coordinator_core.git.git_objects import _read_object, retry_past_stall
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.ops.dispatch_emit import ask_contract
 
@@ -607,13 +608,33 @@ def _measured_blob_supply(
     common = resolve_git_common_dir(worktree_root)
     out: dict = {}
     for p in drifted:
-        stored = _read_object(common, blobs[p]) if p not in moved else None
+        stored = retry_past_stall(common, lambda p=p: _read_object(common, blobs[p])) if p not in moved else None
         if stored is not None and stored[0] == "blob" and hashlib.sha256(stored[1]).hexdigest() == expected[p]:
             out[p] = blobs[p]
     return out
 
 
 KEPT_BLOB_STALE = "kept-blob-stale"
+
+
+def _pack_read_stall_reply(stall: PackReadStalled) -> dict:
+    """The halted reply for an object read that stalled past its one retry. Valid only before any
+    ``ceremony.commit_v2`` dispatch: nothing is committed, so a refire cannot double-land."""
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import PACK_READ_STALL_HALT_KIND, remedy_or_halt
+
+    def attempt(n: int) -> dict:
+        raise stall
+
+    return remedy_or_halt(
+        PACK_READ_STALL_HALT_KIND, attempt,
+        lambda failures: _error(
+            f"{PACK_READ_STALL_HALT_KIND}: {stall} (read retried once); nothing committed. "
+            "Refire the terminal commit once the drive recovers.",
+            refused=PACK_READ_STALL_HALT_KIND,
+            halt={"kind": PACK_READ_STALL_HALT_KIND, "next_action": "refire dispatch.terminal_commit"},
+        ),
+        attempts=1,
+    )
 
 
 def _stale_kept_blobs(common_dir: Path, supplied: dict, expected: dict) -> list:
@@ -623,12 +644,12 @@ def _stale_kept_blobs(common_dir: Path, supplied: dict, expected: dict) -> list:
     object read: no git spawn."""
     import hashlib
 
-    from coordinator_core.git.git_objects import _read_object
+    from coordinator_core.git.git_objects import _read_object, retry_past_stall
 
     out = []
     for path, blob in supplied.items():
         want = expected.get(path)
-        stored = _read_object(common_dir, blob) if want else None
+        stored = retry_past_stall(common_dir, lambda blob=blob: _read_object(common_dir, blob)) if want else None
         if stored is not None and stored[0] == "blob" and hashlib.sha256(stored[1]).hexdigest() != want:
             out.append((path, blob))
     return out
@@ -3676,18 +3697,28 @@ def _terminal_commit_inner(
         worktree_root, art_run_id, _run_id_of(params, ask_run_dir, script_path_raw),
         [p for p in all_paths if p in carried], sorted(declared_writes), request.plan_path, own_seniority,
     )
-    measured_supplied = _measured_blob_supply(
-        worktree_root, art_run_id,
-        [p for p in all_paths if p in carried and p not in kept_supplied and p not in deleted_paths],
-        commit_params.get("expected_content_sha256") or {},
-    )
+    try:
+        measured_supplied = _measured_blob_supply(
+            worktree_root, art_run_id,
+            [p for p in all_paths if p in carried and p not in kept_supplied and p not in deleted_paths],
+            commit_params.get("expected_content_sha256") or {},
+        )
+    except PackReadStalled as stall:
+        _unstamp_landed()
+        _remove(worktree_root, receipt_paths)
+        return _pack_read_stall_reply(stall)
     kept_supplied = {**measured_supplied, **kept_supplied}
     if kept_supplied:
         # The run's own blob lands, not the worktree bytes a peer also edited: the gate's co-declared
         # arm skips these paths. The run's own-write sha256 is checked against the blob's bytes here
         # (the worktree carries the peer's hunk, and commit_paths refuses a supplied path's worktree
         # sha as unverifiable); a stale blob refuses.
-        stale = _stale_kept_blobs(repo_root, kept_supplied, commit_params.get("expected_content_sha256") or {})
+        try:
+            stale = _stale_kept_blobs(repo_root, kept_supplied, commit_params.get("expected_content_sha256") or {})
+        except PackReadStalled as stall:
+            _unstamp_landed()
+            _remove(worktree_root, receipt_paths)
+            return _pack_read_stall_reply(stall)
         if stale:
             _unstamp_landed()
             _remove(worktree_root, receipt_paths)

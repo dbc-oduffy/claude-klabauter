@@ -14,6 +14,8 @@ MECHANICAL = "mechanical"
 #: In-run tries before a mechanical remedy's failure is a real failure the EM sees.
 MAX_IN_RUN_REMEDY_ATTEMPTS = 2
 
+PACK_READ_STALL_HALT_KIND = "pack-read-stall"
+
 #: kind -> (class, in-run remedy name). A decision kind carries no remedy (None).
 #: Keys are the kind strings the halt sites emit; pseudo-kinds name a condition with no constant of its own.
 HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
@@ -74,6 +76,8 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "dry-refire-no-refireable-run": (MECHANICAL, "replay-built-in-sample"),
     # A halt kind with no constant of its own (orphan_adopt.ORPHAN_PENDING); the census classes it recoverable.
     "orphan_pending": (MECHANICAL, "adopt-orphan-pending-run"),
+    # A pack read still stalled after its one bounded retry: the storage stall is transient, a refire resumes.
+    PACK_READ_STALL_HALT_KIND: (MECHANICAL, "refire-after-pack-read-stall"),
     # DECISION: a refire alone re-halts; the answer is outside the engine (restore example-retrieval-repo, back the citations).
     "rag_corpus_down": (DECISION, None),
     "citation_unbacked": (DECISION, None),

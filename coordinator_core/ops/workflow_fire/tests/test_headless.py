@@ -216,6 +216,32 @@ def test_start_receipt_failure_releases_reserved_record(tmp_path, monkeypatch):
     assert value['outcome'] == 'failed' and 'receipt refused' in value['error']
 
 
+@pytest.mark.parametrize('backend', ['codex', 'claude', 'grok', 'agy'])
+def test_start_records_the_requested_backend_family(tmp_path, monkeypatch, backend):
+    source = tmp_path / 'workflow.mjs'
+    source.write_text('export const meta={}; return {};')
+    registry = tmp_path / 'registry'
+    monkeypatch.setattr(headless.fire, '_resolve_target_repo', lambda *a: str(tmp_path))
+    monkeypatch.setattr(headless.fire, '_assert_script_under_repo_root', lambda *a: None)
+    monkeypatch.setattr(headless.fire, '_registry_dir', lambda *a: registry)
+    monkeypatch.setattr(headless.fire, '_acquire_cap_lock', lambda *a: None)
+    monkeypatch.setattr(headless.fire, '_release_cap_lock', lambda *a: None)
+    monkeypatch.setattr(headless.fire, 'count_live_fires', lambda *a, **k: 0)
+    def stop(*a):
+        raise OSError('stop after record')
+    monkeypatch.setattr(headless, 'stamp_fire_ownership', stop)
+    with pytest.raises(OSError, match='stop after record'):
+        headless.start(str(source), backend=backend)
+    assert json.loads(next(registry.glob('*.json')).read_text())['backend'] == backend
+
+
+def test_start_refuses_an_unknown_backend_naming_the_set(tmp_path):
+    source = tmp_path / 'workflow.mjs'
+    source.write_text('export const meta={}; return {};')
+    with pytest.raises(ValueError, match=r'codex\|claude\|grok\|agy'):
+        headless.start(str(source), backend='gemini')
+
+
 def test_failed_gate_release_reaps_only_its_own_spawned_driver(tmp_path, monkeypatch):
     from types import SimpleNamespace
     source = tmp_path / 'workflow.mjs'

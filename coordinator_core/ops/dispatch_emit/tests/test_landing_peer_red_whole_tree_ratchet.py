@@ -36,13 +36,12 @@ def _dual_record(repo, *, export: dict, live: dict, baseline: dict | None = None
     return {"run_id": RUN}
 
 
-@pytest.fixture(autouse=True)
-def _no_real_base_check(monkeypatch):
-    monkeypatch.setattr(landing_targeted_tests, "_ran_in_export", lambda *a, **k: ({"unrelated::t"}, "0123456789abcdef"))
-
-
-def _caused() -> dict:
-    return {"method": "isolated-export", "caused": [RATCHET], "foreign": [], "evidence": []}
+def _caused(head_red: list[str] | None = (), head_sha: str = "0123456789abcdef") -> dict:
+    """A baseline with RATCHET caused; ``head_red`` the ids the child measured red at HEAD, None for unmeasured."""
+    base = {"method": "isolated-export", "caused": [RATCHET], "foreign": [], "evidence": []}
+    if head_red is None:
+        return base
+    return {**base, landing_targeted_tests.HEAD_RED_KEY: list(head_red), landing_targeted_tests.HEAD_SHA_KEY: head_sha}
 
 
 def test_a_peer_unregistered_raw_write_reding_only_the_live_tree_leaves_the_gate_clear(repo):
@@ -67,42 +66,41 @@ def test_a_ratchet_red_in_the_export_yields_a_finding_naming_the_node(repo):
     assert [(f.reason, RATCHET in f.detail) for f in findings] == [(landing_targeted_tests.TARGETED_TESTS_FAILED, True)]
 
 
-def _foreign() -> dict:
-    return {"method": "isolated-export", "caused": [], "foreign": [RATCHET], "evidence": []}
+def _foreign(owed_cleared: list[str] | None = None) -> dict:
+    base = {"method": "isolated-export", "caused": [], "foreign": [RATCHET], "evidence": []}
+    return base if owed_cleared is None else {**base, landing_targeted_tests.OWED_CLEARED_KEY: owed_cleared}
 
 
-def test_an_unevidenced_foreign_red_the_owed_export_check_passes_leaves_the_gate_clear(repo, monkeypatch):
+def test_an_unevidenced_foreign_red_the_recorded_owed_check_cleared_leaves_the_gate_clear(repo):
     params = _dual_record(
         repo, export={"status": "fail", "failed_tests": [RATCHET]},
-        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_foreign(),
+        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_foreign([RATCHET]),
     )
-    monkeypatch.setattr(landing_targeted_tests, "owed_check_cleared", lambda *a, **k: {RATCHET})
 
     findings, check = landing_integrity.landing_test_gate(repo, params, RUN, ["ok.py"])
 
     assert list(findings) == [] and check != "failed"
 
 
-def test_an_unevidenced_foreign_red_the_owed_export_check_does_not_clear_still_refuses(repo, monkeypatch):
+@pytest.mark.parametrize("owed_cleared", [None, []])
+def test_an_unevidenced_foreign_red_the_recorded_owed_check_does_not_clear_still_refuses(repo, owed_cleared):
     params = _dual_record(
         repo, export={"status": "fail", "failed_tests": [RATCHET]},
-        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_foreign(),
+        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_foreign(owed_cleared),
     )
-    monkeypatch.setattr(landing_targeted_tests, "owed_check_cleared", lambda *a, **k: set())
 
     findings, check = landing_integrity.landing_test_gate(repo, params, RUN, ["ok.py"])
 
     assert check == "failed"
     assert [f.reason for f in findings] == [landing_targeted_tests.TARGETED_TESTS_FAILED]
-    assert all("owed base check ran" in f.detail for f in findings)
+    assert all("owed base check" in f.detail and landing_integrity.retest_remedy(params) in f.detail for f in findings)
 
 
-def test_a_caused_red_also_red_at_the_base_is_attributed_pre_existing_and_leaves_the_gate_clear(repo, monkeypatch):
+def test_a_caused_red_also_red_at_the_base_is_attributed_pre_existing_and_leaves_the_gate_clear(repo):
     params = _dual_record(
         repo, export={"status": "fail", "failed_tests": [RATCHET]},
-        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_caused(),
+        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_caused([RATCHET]),
     )
-    monkeypatch.setattr(landing_targeted_tests, "_ran_in_export", lambda *a, **k: ({RATCHET}, "0123456789abcdef"))
 
     findings, check = landing_integrity.landing_test_gate(repo, params, RUN, ["ok.py"])
 
@@ -123,17 +121,17 @@ def test_a_caused_red_green_at_the_base_still_refuses_and_names_the_base_check(r
     assert "base check: ran 1 caused id(s) at HEAD 0123456789: 0 red there" in findings[0].detail
 
 
-def test_a_base_check_that_cannot_run_is_named_and_attributes_nothing(repo, monkeypatch):
+def test_an_unmeasured_caused_id_stays_caused_and_names_the_retest_remedy(repo):
     params = _dual_record(
         repo, export={"status": "fail", "failed_tests": [RATCHET]},
-        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_caused(),
+        live={"status": "fail", "failed_tests": [RATCHET]}, baseline=_caused(None),
     )
-    monkeypatch.setattr(landing_targeted_tests, "_ran_in_export", lambda *a, **k: None)
 
     findings, check = landing_integrity.landing_test_gate(repo, params, RUN, ["ok.py"])
 
     assert check == "failed"
     assert "base check not run at HEAD" in findings[0].detail
+    assert landing_integrity.retest_remedy(params) in findings[0].detail
 
 
 def test_a_dirty_registry_greening_the_live_tree_does_not_clear_an_export_red(repo):

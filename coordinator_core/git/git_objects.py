@@ -473,6 +473,10 @@ class PackReadDeadline(_GitReadModelError):
     means "object missing"."""
 
 
+class PackReadStalled(PackReadDeadline):
+    """`retry_past_stall` spent its one retry and the read still hit the wall: a persisting storage stall."""
+
+
 # One cumulative wall per outermost object read; it must stay below the warm server's
 # STALL_DUMP_SECS (10s), and git must not import coordinator_core.warm, so a test pins it.
 PACK_READ_DEADLINE_SECS = 4.0
@@ -483,6 +487,9 @@ _PACK_STALLED = object()
 PACK_READ_STALLED_ADVISORY = "pack_read_stalled"
 PACK_STALL_COOLDOWN_SECS = 15.0
 _PACK_STALL_UNTIL: "dict[str, float]" = {}
+_PACK_LATCH_BYPASS: "contextvars.ContextVar[frozenset[str]]" = contextvars.ContextVar(
+    "pack_latch_bypass", default=frozenset()
+)
 
 
 _PACK_TYPE_NAMES = {1: "commit", 2: "tree", 3: "blob", 4: "tag"}
@@ -1270,7 +1277,7 @@ def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
     if getattr(_PACK_WORKER, "inside", False):
         return fn()
     ckey = str(common_dir)
-    if _pack_clock() < _PACK_STALL_UNTIL.get(ckey, 0.0):
+    if ckey not in _PACK_LATCH_BYPASS.get() and _pack_clock() < _PACK_STALL_UNTIL.get(ckey, 0.0):
         raise PackReadDeadline(
             f"{PACK_READ_STALLED_ADVISORY}: pack reads under {common_dir} are failing fast after a stall"
         )
@@ -1294,6 +1301,27 @@ def _under_read_wall(kind: str, common_dir: Path, sha: str, fn):
             f"{PACK_READ_DEADLINE_SECS}s (storage stalled)"
         )
     return out
+
+
+def retry_past_stall(common_dir: Path, fn):
+    """Run read-only `fn()`; on `PackReadDeadline` run it once more with the stall latch bypassed for
+    `common_dir` (one fresh wall, no sleep). A second deadline raises `PackReadStalled`. The latch is
+    never cleared, so other callers keep failing fast. Never wrap a mutating call."""
+    try:
+        return fn()
+    except PackReadStalled:
+        raise
+    except PackReadDeadline:
+        pass
+    token = _PACK_LATCH_BYPASS.set(_PACK_LATCH_BYPASS.get() | {str(common_dir)})
+    try:
+        return fn()
+    except PackReadStalled:
+        raise
+    except PackReadDeadline as exc:
+        raise PackReadStalled(str(exc)) from exc
+    finally:
+        _PACK_LATCH_BYPASS.reset(token)
 
 
 def _search_packs_for_sha(

@@ -70,6 +70,58 @@ def test_a_finding_of_no_test_evidence_kind_yields_no_step():
     assert ltt.retest_step([ltt.Finding("p", "peer-contested", "d")], {}) is None
 
 
+def _fresh(**baseline):
+    return {"baseline": {"base_sha": "b" * 40, **baseline}}
+
+
+def test_base_check_red_reads_head_red_and_names_head_sha():
+    fresh = _fresh(head_red=["t.py::a"], head_sha="1234567890abcdef")
+    red, note = ltt.base_check_red(fresh, ["t.py::a", "t.py::b"])
+    assert red == {"t.py::a"}
+    assert note == "base check: ran 2 caused id(s) at HEAD 1234567890: 1 red there (pre_existing), 1 green (caused)"
+
+
+def test_base_check_red_measured_empty_means_all_green_caused():
+    red, note = ltt.base_check_red(_fresh(head_red=[], head_sha="abc"), ["t.py::a"])
+    assert red == set() and "0 red there" in note and "1 green (caused)" in note
+
+
+@pytest.mark.parametrize("fresh", [None, {}, {"baseline": None}, _fresh(), _fresh(head_red="t.py::a")])
+def test_base_check_red_unmeasured_id_stays_caused_and_names_retest(fresh):
+    red, note = ltt.base_check_red(fresh, ["t.py::a"])
+    assert red == set() and "retest owed" in note
+
+
+def test_base_check_red_no_ids_is_silent():
+    assert ltt.base_check_red(_fresh(head_red=["x"]), []) == (set(), "")
+
+
+def test_base_check_red_spawns_nothing(monkeypatch):
+    import subprocess
+
+    def boom(*a, **k):
+        raise AssertionError("spawn on the op path")
+
+    monkeypatch.setattr(subprocess, "Popen", boom)
+    assert ltt.base_check_red(_fresh(head_red=["t.py::a"], head_sha="s"), ["t.py::a"])[0] == {"t.py::a"}
+    assert ltt.owed_check_cleared(_fresh(owed_cleared=["t.py::a"]), ["t.py::a"]) == {"t.py::a"}
+
+
+def test_owed_check_cleared_returns_only_named_measured_ids():
+    fresh = _fresh(owed_cleared=["t.py::a", "t.py::z"])
+    assert ltt.owed_check_cleared(fresh, ["t.py::a", "t.py::b"]) == {"t.py::a"}
+
+
+@pytest.mark.parametrize("fresh", [None, {}, _fresh(), _fresh(owed_cleared=[])])
+def test_owed_check_cleared_unmeasured_is_empty(fresh):
+    assert ltt.owed_check_cleared(fresh, ["t.py::a"]) == set()
+
+
+def test_in_op_export_helpers_are_gone():
+    assert not hasattr(ltt, "_ran_in_export") and not hasattr(ltt, "OWED_CHECK_SECS")
+    assert (ltt.HEAD_RED_KEY, ltt.OWED_CLEARED_KEY) == ("head_red", "owed_cleared")
+
+
 def test_scope_clause_carries_the_tier_markers_only_when_it_runs_tests():
     clause = rd._scope_clause(["coordinator_core/tests/test_a.py"], "", "abc")
     assert '-m "not pending_fix and not designed_red"' in clause

@@ -308,6 +308,41 @@ def test_entry_of_a_sizing_an_earlier_drain_minted_coalesces_on_sizing_rel(tmp_p
     assert "spool_id" not in json.loads(sub.read_text())
 
 
+def _live_refire(root, run_id, sizing=SIZING, live=True):
+    """A refired run under an older run dir: its dir mtime is past the drain's lookback; a live token when `live`."""
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    subprocess.run(["git", "init", "-q", str(root)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    _write_submission(root, run_id, session_id="other", tool_use_id="zz", sizing_rel=sizing)
+    old = time.time() - 6 * 3600
+    os.utime(root / "scratch" / "warp" / run_id, (old, old))
+    if live:
+        run_token.mint(root, run_id, "scratch/warp/x.js", session_id="other", sizing_rel=sizing)
+
+
+def test_spool_of_a_sizing_whose_refired_run_is_live_coalesces_with_no_second_launch(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    run_id = "ask-20261104T150000-eeeeee"
+    _live_refire(tmp_path, run_id)
+    sid = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 0 and counts["coalesced"] == 1 and counts["minted"] == 0
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["coalesced_into"] == run_id
+
+
+def test_spool_of_a_sizing_whose_old_run_holds_no_live_token_still_mints(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    _live_refire(tmp_path, "ask-20261104T150000-eeeeee", live=False)
+    _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["coalesced"] == 0
+
+
 def test_bare_asks_do_not_coalesce(tmp_path):
     _spool(tmp_path, tuid="tuA")
     _spool(tmp_path, tuid="tuB")

@@ -740,3 +740,87 @@ class TestLockHolderCarriesAnAge:
         described = locked_write._describe_holder(self._metadata(tmp_path, stamp))
         assert "age unreadable" in described
         assert "ago" not in described
+
+
+class TestSidecarOpenRefusalNamesTheCause:
+    """A sidecar open that keeps failing names its cause; "filesystem stalled" is for an open that never returned.
+
+    The Windows EACCES branch is simulated (`_FCNTL_AVAILABLE` off, `os.open` raising on `.lock`
+    paths) so the cause-naming path runs on POSIX and Windows alike.
+    """
+
+    def _arrange(self, tmp_path, monkeypatch):
+        lock_dir = tmp_path / ".git" / "coordinator-locks"
+        monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: lock_dir)
+        monkeypatch.setattr(locked_write, "SIDECAR_OPEN_DEADLINE_SECS", 0.2)
+        target = tmp_path / "f.txt"
+        target.write_text("a", encoding="utf-8")
+        sidecar = lock_dir / f"{locked_write._lock_key(target)}.lock"
+        return target, sidecar
+
+    def _deny_sidecar_opens(self, monkeypatch):
+        monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", False)
+        real = os.open
+
+        def _fn(path, *a, **k):
+            if str(path).endswith(".lock"):
+                raise PermissionError(13, "Access is denied", str(path))
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(os, "open", _fn)
+
+    def test_access_denied_with_no_holder_names_the_denial_and_the_path(self, tmp_path, monkeypatch):
+        target, sidecar = self._arrange(tmp_path, monkeypatch)
+        self._deny_sidecar_opens(monkeypatch)
+        with pytest.raises(LockTimeout) as info:
+            locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
+        msg = str(info.value)
+        assert "access denied" in msg and str(sidecar) in msg
+        assert "filesystem stalled" not in msg
+        assert target.read_text(encoding="utf-8") == "a"
+
+    def test_a_recorded_holder_is_named_not_reported_as_a_stall(self, tmp_path, monkeypatch):
+        target, sidecar = self._arrange(tmp_path, monkeypatch)
+        sidecar.parent.mkdir(parents=True)
+        payload = json.dumps(
+            {"pid": 4242, "holder": "publisher", "acquired_at": "2026-11-10T00:00:00+00:00"}
+        ).encode("utf-8")
+        fd = os.open(str(sidecar), os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            os.lseek(fd, locked_write._METADATA_OFFSET, os.SEEK_SET)
+            os.write(fd, payload)
+        finally:
+            os.close(fd)
+        monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", False)
+        real = os.open
+
+        def _deny_writes_allow_describe_read(path, flags=0, *a, **k):
+            if str(path).endswith(".lock") and flags & (os.O_RDWR | os.O_WRONLY | os.O_CREAT):
+                raise PermissionError(13, "Access is denied", str(path))
+            return real(path, flags, *a, **k)
+
+        monkeypatch.setattr(os, "open", _deny_writes_allow_describe_read)
+        with pytest.raises(LockTimeout) as info:
+            locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
+        msg = str(info.value)
+        assert "pid=4242" in msg and "publisher" in msg and str(sidecar) in msg
+        assert "filesystem stalled" not in msg
+
+    def test_an_open_that_never_returns_is_the_only_stall(self, tmp_path, monkeypatch):
+        import threading
+
+        target, _ = self._arrange(tmp_path, monkeypatch)
+        release = threading.Event()
+        real = os.open
+
+        def _blocked(path, *a, **k):
+            if str(path).endswith(".lock"):
+                release.wait(5)
+            return real(path, *a, **k)
+
+        monkeypatch.setattr(os, "open", _blocked)
+        try:
+            with pytest.raises(LockTimeout, match="filesystem stalled"):
+                locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
+        finally:
+            release.set()

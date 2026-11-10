@@ -168,6 +168,20 @@ def test_env_allowlist_drops_api_key():
     assert "OPENAI_API_KEY" not in review._build_env(src, windows=True)
 
 
+WINDOWS_ESSENTIALS = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "USERPROFILE",
+                      "APPDATA", "LOCALAPPDATA", "COMSPEC")
+
+
+def test_windows_env_keeps_essentials_and_posix_does_not_gain_them():
+    src = {k: f"v-{k}" for k in WINDOWS_ESSENTIALS} | {"PATH": "/p", "OPENAI_API_KEY": "sk"}
+    win = review._build_env(src, windows=True)
+    assert all(win[k] == f"v-{k}" for k in WINDOWS_ESSENTIALS)
+    assert "OPENAI_API_KEY" not in win
+    assert all(k in review._unattended_env(src, windows=True) for k in WINDOWS_ESSENTIALS)
+    posix = review._build_env(src, windows=False)
+    assert {"SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "COMSPEC"}.isdisjoint(posix)
+
+
 def test_child_env_never_sees_api_key(env):
     tmp_path, run_dir, req, mp = env
     mp.setenv("OPENAI_API_KEY", "sk-leak")

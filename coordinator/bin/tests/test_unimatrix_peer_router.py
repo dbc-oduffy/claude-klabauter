@@ -1343,3 +1343,50 @@ def test_cmd_send_with_reply_field_prints_it_without_mismatch_notice(monkeypatch
     assert pr.cmd_send(["peer", "hi"]) == 0
     out, err = capsys.readouterr()
     assert out.strip() == "pong" and "mismatch" not in err
+
+
+@portable
+def test_shutdown_op_replies_then_serve_returns_with_lease_free_and_files_gone():
+    root = Path(tempfile.mkdtemp(prefix="pr-", dir="/tmp" if os.name != "nt" else None))
+    for sub in ("sessions", "eps", "state"):
+        (root / sub).mkdir()
+    state = root / "state"
+    try:
+        async def go():
+            r = pr.Router([], sessions_dir=root / "sessions", state_dir=state, endpoint_dir=root / "eps")
+            served = asyncio.create_task(pr.serve(r))
+            await until(lambda: (state / "router.pid.json").exists() and r.server is not None)
+            rec = json.loads((state / "router.pid.json").read_text())
+            assert rec == {"pid": os.getpid(), "procStart": pr._roster().proc_start(os.getpid())}
+            resp = await asyncio.to_thread(pr.request_line, r.ctl, {"op": "shutdown"})
+            assert resp == {"ok": True, "pid": os.getpid(), "stopping": True}
+            await asyncio.wait_for(served, 10)
+            assert not (state / "router.pid.json").exists()
+            probe = open(state / "router.lock", "a+b")
+            try:
+                assert pr._transport().lock_file(probe)
+            finally:
+                pr._transport().unlock_file(probe)
+                probe.close()
+            assert r.server is None and r.lease is None
+            if os.name != "nt":
+                assert list((root / "eps").iterdir()) == []
+        run(go())
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def test_losing_the_lease_leaves_the_owners_pid_file(box):
+    async def go():
+        r = make_router(box, echo_adapters())
+        await r.start()
+        try:
+            held = pr.Router([], sessions_dir=box / "sessions", state_dir=box / "state", endpoint_dir=box / "eps")
+            with pytest.raises(RuntimeError):
+                await held.start()
+            assert (box / "state" / "router.pid.json").exists()  # the owner's record survives the loser's stop
+            assert not r.stop_requested.is_set()
+        finally:
+            await r.stop()
+        assert not (box / "state" / "router.pid.json").exists()
+    run(go())

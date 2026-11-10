@@ -493,8 +493,8 @@ def invariant_findings(
     """One finding per repo-wide invariant a landing diff touches that no fresh passing retest
     ran. An invariant node red in a fresh ``fail`` retest and in its ``baseline.evidence`` (red on a
     pure-HEAD export) is credited foreign, not a finding; ``foreign_out`` receives ``{node: evidence}``.
-    Table lookup plus one record read; zero spawns, except when the in-run retest budget is spent with
-    no verdict: then one export and one pytest run over the owed nodes (``owed_check_cleared``). Paths other halted runs withhold
+    Table lookup plus one record read; zero spawns. With the in-run retest budget spent and no verdict,
+    nothing measured the node: it stays a finding naming the retest remedy. Paths other halted runs withhold
     (``halted_hold_release.residue_paths``) are residue at HEAD, not this run's diff: they select no
     invariant. Residue bytes are never touched."""
     owed = landing_invariant_nodes(worktree_root, landed_paths, run_id)
@@ -511,7 +511,6 @@ def invariant_findings(
         foreign = evidenced_clear_ids(fresh["baseline"], measured=True)
     red, only_base_red = _red_nodes(fresh, foreign)
     out = []
-    measured: Optional[set] = None
     for node in owed:
         if node in ran or node.split("::")[0] in ran:
             continue
@@ -531,15 +530,10 @@ def invariant_findings(
                 f"{', '.join(actual[:3])}"
             )
         elif spent and fresh is None:
-            if measured is None:
-                from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
-
-                # No verdict is not a failure: measure the owed nodes only, once, in an export of the landing.
-                missing = [n for n in owed if n not in ran and n.split("::")[0] not in ran]
-                measured = ltt.owed_check_cleared(worktree_root, params, run_id, missing)
-            if node in measured:
-                continue
-            detail = f"repo-wide invariant {node}: no fresh retest verdict exists and the landing's own run of it did not pass"
+            detail = (
+                f"repo-wide invariant {node}: no fresh retest verdict exists, so nothing measured it; "
+                f"re-run: {retest_remedy(params, [node])}"
+            )
         elif spent and fresh.get("status") == "pass":
             detail = f"repo-wide invariant {node}: the in-run retest passed without running it"
         elif spent and fresh.get("status") != "fail":
@@ -677,20 +671,23 @@ def _landing_test_gate(
     base = fresh.get("baseline")
     if check == "failed" and isinstance(base, Mapping) and not base.get("caused"):
         owed = ltt.unevidenced_ids(base, cleared)
-        passing = ltt.owed_check_cleared(worktree_root, params, run_id, owed) if owed else set()
+        passing = ltt.owed_check_cleared(fresh, owed) if owed else set()
         if passing:
             findings, check = failed_targeted_tests(fresh, retest_remedy(params), cleared=cleared | passing)
         if owed and check == "failed":
             left = len(owed) - len(passing)
             findings = [
-                replace(f, detail=f"{f.detail}; owed base check ran (HEAD + the run's landing paths): "
-                                  f"{left} of {len(owed)} id(s) not cleared there (red, not shown to run, or export failed)")
+                replace(f, detail=f"{f.detail}; owed base check (the retest record's HEAD + landing paths run): "
+                                  f"{left} of {len(owed)} id(s) not cleared there (red or unmeasured; "
+                                  f"re-run: {retest_remedy(params)})")
                 if f.detail else f for f in findings
             ]
     base_note = ""
     base_red: set[str] = set()
     if check == "failed" and isinstance(base, Mapping) and base.get("caused"):
-        base_red, base_note = ltt.base_check_red(worktree_root, run_id, [str(n) for n in base["caused"]])
+        base_red, base_note = ltt.base_check_red(fresh, [str(n) for n in base["caused"]])
+        if not isinstance(base.get(ltt.HEAD_RED_KEY), list):
+            base_note = f"{base_note}; re-run: {retest_remedy(params)}"
         if base_red:
             moved = {
                 **base, "caused": [n for n in base["caused"] if str(n) not in base_red],

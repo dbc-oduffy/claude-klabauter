@@ -155,6 +155,14 @@ def test_child_env_forwards_no_api_keys(env):
     assert "XAI_API_KEY" not in seen and "PATH" in seen
 
 
+def test_windows_env_keeps_essentials():
+    keys = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC")
+    src = {k: f"v-{k}" for k in keys} | {"XAI_API_KEY": "k"}
+    win = grok._build_env(src, windows=True)
+    assert all(win[k] == f"v-{k}" for k in keys) and "XAI_API_KEY" not in win
+    assert {"SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "COMSPEC"}.isdisjoint(grok._build_env(src, windows=False))
+
+
 def test_env_allowlist():
     src = {"PATH": "/p", "HOME": "/h", "XAI_API_KEY": "k", "GROK_HOME": "/g", "SYSTEMROOT": "S"}
     assert {k:v for k,v in grok._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "HOME": "/h", "GROK_HOME": "/g"}

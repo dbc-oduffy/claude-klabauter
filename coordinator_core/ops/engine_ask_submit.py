@@ -6,7 +6,7 @@ Wire params: `ask` xor `sizing`; `ask_source` ("pm" | "relayed", required with `
 `repo`, `agent_id`, `notify_to`, the hook's optional args (`em_context`, `context`, `brief`, `brief_file`, `route_preference`,
 `em_rationale`, `em_size`, `stop_after`, `chatty`, `cross_repo_approved`, `supersedes`, `writes`), and
 `fire` (bool: hand the run to `workflow.fire` with `expected=<sha256>`),
-`executor` (headless by default, or claude), and `backend` (codex by default, or claude).
+`executor` (headless by default, or claude), and `backend` (codex by default; claude, grok or agy opt-in).
 Completion defaults to the submitting session UUID; notify_to explicitly overrides it.
 
 Reply, never empty: `{run_id, script_path, sha256}` (plus `fire_args`, `detached_steps`, and `fire` when
@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.ipc import register_op
+from coordinator_core.ops.workflow_fire.backends import BACKENDS
 
 _EXTRA_KEYS = (
     "em_context", "context", "brief", "brief_file", "route_preference", "em_rationale", "em_size",
@@ -50,8 +51,8 @@ def _engine_ask_submit(params: dict, repo_root: Optional[Path] = None) -> dict:
     target = params.get("notify_to", params.get("session_id"))
     executor = params.get("executor", "headless")
     backend = params.get("backend", "codex")
-    if executor not in ("headless", "claude") or backend not in ("codex", "claude"):
-        return {"refused": "bad-request", "reason": "executor must be headless or claude; backend must be codex or claude."}
+    if executor not in ("headless", "claude") or backend not in BACKENDS:
+        return {"refused": "bad-request", "reason": f"executor must be headless or claude; backend must be {'|'.join(BACKENDS)}."}
     if target is not None and (not isinstance(target, str) or not target.strip()):
         return {"refused": "bad-request", "reason": "notify_to must be a non-empty peer name."}
     private_spec = None

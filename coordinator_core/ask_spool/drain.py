@@ -91,13 +91,38 @@ def _lone_token_run(root: Path, session: str, spooled_at: float, taken: set) -> 
     return found[0] if found else None
 
 
+def _live_token_run(root: Path, key: Optional[str], taken: set) -> Optional[str]:
+    """The run still holding a live token for the entry's sizing or `run:` key, whatever its dir age."""
+    if not key:
+        return None
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    kind, _, target = key.partition(":")
+    want = run_token.normalize_sizing_rel(root, target) if kind == "sizing" else target
+    try:
+        for rec in run_token.live_records(root):
+            rid = rec.get("run_id")
+            if rid in taken:
+                continue
+            if kind == "run" and rid == want:
+                return rid
+            named = rec.get("sizing_rel")
+            if kind == "sizing" and isinstance(named, str) and run_token.normalize_sizing_rel(root, named) == want:
+                return rid
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
 def _find_run(
     root: Path, header: dict, tool_use_id: Optional[str], taken: set, sizing_key: Optional[str] = None
 ) -> tuple[Optional[str], bool]:
     """(run_id, via_sizing): the run already minted for this entry, else (None, False).
 
     Stamp, then the original dispatch key, then a submission naming the same sizing
-    (`sizing_key` "sizing:<rel>" only; via_sizing True), then the session's lone token."""
+    (`sizing_key` "sizing:<rel>" only; via_sizing True), then a run whose live token names the
+    entry's sizing or resumed run id (a refire reuses an older run dir the mtime floor skips;
+    via_sizing True), then the session's lone token."""
     session = header.get("session_id") or ""
     spooled_at = float(header.get("spooled_at") or 0)
     sizing_rel = sizing_key[len("sizing:"):] if sizing_key and sizing_key.startswith("sizing:") else None
@@ -113,6 +138,9 @@ def _find_run(
             by_sizing = run_id
     if by_sizing:
         return by_sizing, True
+    live = _live_token_run(root, sizing_key, taken)
+    if live:
+        return live, True
     if session:
         return _lone_token_run(root, session, spooled_at, taken), False
     return None, False

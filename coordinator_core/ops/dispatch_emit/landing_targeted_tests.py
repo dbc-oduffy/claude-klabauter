@@ -540,74 +540,45 @@ def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = ()) -> list[st
     return [n for n in dict.fromkeys(_baseline_failing(baseline)) if n not in evidenced]
 
 
-OWED_CHECK_SECS = 300.0
+#: Keys inside a retest record's ``baseline`` mapping (beside ``base_sha``): the caused ids measured red
+#: at a pure-HEAD export, and the owed ids measured green at HEAD plus the run's landing paths. The
+#: detached retest child writes them; the landing only reads them.
+HEAD_RED_KEY = "head_red"
+OWED_CLEARED_KEY = "owed_cleared"
+HEAD_SHA_KEY = "head_sha"
 
 
-def owed_check_cleared(worktree_root: Path, params: Mapping, run_id: Optional[str], ids: Sequence[str]) -> set[str]:
-    """The owed base check: ``ids`` that pass in an export of HEAD plus only the run's own landing paths
-    (no peer's worktree dirt), so their red in the live tree came from a file the run never wrote. An id
-    still red there, or not shown to have run, stays unevidenced. Empty when ``ids`` is empty, the run's
-    landing set is not derivable, or the export or run fails. One export and one pytest run over ``ids`` only;
-    the export is always removed."""
-    from coordinator_core.ops.dispatch_emit import retest_targeted as rt
-
-    wanted = list(dict.fromkeys(str(n) for n in ids if n))
-    if not wanted or not run_id:
-        return set()
-    root = Path(worktree_root)
-    writes, _ = rt._landing_paths(root, run_id, dict(params))
-    if not writes:
-        return set()
-    ran = _ran_in_export(root, run_id, wanted, writes, "owed", require_pass=True)
-    return set() if ran is None else set(wanted) - ran[0]
+def _measured_ids(fresh: Optional[Mapping], key: str) -> Optional[set[str]]:
+    """The id set ``fresh.baseline[key]`` records, or None when ``fresh`` carries no such list (unmeasured)."""
+    baseline = fresh.get("baseline") if isinstance(fresh, Mapping) else None
+    raw = baseline.get(key) if isinstance(baseline, Mapping) else None
+    return {str(n) for n in raw if n} if isinstance(raw, (list, tuple, set, frozenset)) else None
 
 
-def _ran_in_export(
-    root: Path, run_id: str, wanted: Sequence[str], writes: Sequence[str], tag: str, require_pass: bool = False,
-) -> Optional[tuple[set[str], str]]:
-    """Run ``wanted`` in an export of HEAD plus ``writes``: ``(failed ids, head sha)``, or None when the
-    export or run fails or ran fewer tests than ``wanted`` (and, with ``require_pass``, any red). One
-    export and one pytest run; the export is always removed."""
-    import time
-
-    from coordinator_core.ops.dispatch_emit import landing_export as le, retest_targeted as rt
-    from coordinator_core.testing import baseline_export
-
-    out_dir = le.run_export_root(root, run_id).with_name(f"export-{tag}")
-    log = out_dir.with_name(f"{tag}.log")
-    try:
-        head = le.build_head_export(root, out_dir, list(writes)).head_sha
-        status, _, _, used = rt._run_pass(rt._run_argv, out_dir, list(wanted), log, time.monotonic() + OWED_CHECK_SECS)
-        if (require_pass and status != "pass") or status not in ("pass", "fail") or not used:
-            return None
-        if (rt._ran_total(log) or 0) < len(wanted):
-            return None
-        return set(rt._failed_node_ids(log, out_dir)), str(head)
-    except (le.LandingExportError, RuntimeError, OSError):
-        return None
-    finally:
-        baseline_export.remove(out_dir)
-        try:
-            log.unlink()
-        except OSError:
-            pass
+def owed_check_cleared(fresh: Optional[Mapping], ids: Sequence[str]) -> set[str]:
+    """The owed base check, read from the fresh retest record: ``ids`` in ``fresh.baseline.owed_cleared``
+    (measured green at HEAD plus only the run's landing paths, so their live-tree red came from a file the
+    run never wrote). Empty for no record, no key or no ``ids``: an unmeasured id stays unevidenced. Pure read."""
+    cleared = _measured_ids(fresh, OWED_CLEARED_KEY)
+    wanted = {str(n) for n in ids if n}
+    return wanted & cleared if cleared else set()
 
 
-def base_check_red(worktree_root: Path, run_id: Optional[str], ids: Sequence[str]) -> tuple[set[str], str]:
-    """The base check on caused ids: run ``ids`` in a pure-HEAD export (no run blobs, no peer dirt).
-    ``(red_at_base, note)``: ``red_at_base`` the ids still red there (not the run's doing, attributed
-    pre_existing), ``note`` the one-line receipt naming the check, or why it could not run (then no id
-    is red at base). One export and one pytest run over ``ids`` only; the export is always removed."""
+def base_check_red(fresh: Optional[Mapping], ids: Sequence[str]) -> tuple[set[str], str]:
+    """The base check on caused ids, read from the fresh retest record: ``(red_at_base, note)``.
+    ``red_at_base`` the ``ids`` in ``fresh.baseline.head_red`` (red at a pure-HEAD export, not the run's
+    doing, attributed pre_existing); ``note`` the one-line receipt naming ``baseline.head_sha``. With no
+    ``head_red`` measurement no id is red at base (stays caused) and the note names the owed retest.
+    Pure read: no export, no pytest."""
     wanted = list(dict.fromkeys(str(n) for n in ids if n))
     if not wanted:
         return set(), ""
-    if not run_id:
-        return set(), "base check not run (no run id)"
-    ran = _ran_in_export(Path(worktree_root), run_id, wanted, [], "base")
-    if ran is None:
-        return set(), "base check not run at HEAD (export or run failed, or ran fewer tests than named)"
-    failed, head = ran
-    red = set(wanted) & failed
+    measured = _measured_ids(fresh, HEAD_RED_KEY)
+    if measured is None:
+        return set(), "base check not run at HEAD (no head_red measurement in the retest record; retest owed)"
+    baseline = fresh["baseline"]
+    head = str(baseline.get(HEAD_SHA_KEY) or fresh.get(HEAD_SHA_KEY) or "unknown")
+    red = set(wanted) & measured
     return red, (
         f"base check: ran {len(wanted)} caused id(s) at HEAD {head[:10]}: "
         f"{len(red)} red there (pre_existing), {len(wanted) - len(red)} green (caused)"

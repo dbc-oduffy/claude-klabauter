@@ -16,6 +16,7 @@ import time
 import uuid
 
 from coordinator_core.ops.workflow_fire import fire
+from coordinator_core.ops.workflow_fire.backends import check as check_backend
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV, stamp_fire_ownership
 
 
@@ -65,8 +66,7 @@ def start(script_path: str, *, cwd: str | None = None, notify_to: str | None = N
           timeout_s: int = 7200, args: dict | None = None, run_id: str | None = None,
           caller_session_id: str | None = None, expected: str | None = None,
           private_engine: dict | None = None) -> dict:
-    if backend not in ('codex', 'claude'):
-        raise ValueError('headless backend must be codex or claude')
+    check_backend(backend)
     if type(concurrency_cap) is not int or concurrency_cap < 1:
         raise ValueError('concurrency_cap must be a positive integer')
     if type(timeout_s) is not int or not 1 <= timeout_s <= 86400:

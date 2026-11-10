@@ -1262,6 +1262,32 @@ def _write_record(repo_root: Path, sizing_rel: str, record: dict) -> dict:
 
 @register_op("dispatch.ask_gate")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
+    """JSON-RPC "dispatch.ask_gate": see `_gate_body`. A pack read that stalled past its one retry
+    replies a `pack-read-stall` halt naming a refire, never an uncaught `PackReadDeadline`."""
+    from coordinator_core.git.git_objects import PackReadStalled
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import PACK_READ_STALL_HALT_KIND
+
+    try:
+        return _gate_body(params, repo_root)
+    except PackReadStalled as stall:
+        sizing_rel = params.get("sizing_path")
+        reason = f"{stall} (read retried once)"
+
+        def attempt(n: int) -> dict:
+            raise stall
+
+        verdict = remedy_or_halt(
+            PACK_READ_STALL_HALT_KIND, attempt,
+            lambda failures: _halt(
+                PACK_READ_STALL_HALT_KIND, reason,
+                next_action=f"refire the ask once the drive recovers: {fire_command(sizing_rel)}",
+            ),
+            attempts=1,
+        )
+        return verdict.to_json()
+
+
+def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "dispatch.ask_gate": params `sizing_path` (str, required), `writes` (list[str]), `baton` (str),
     `record` (object: kind exit_criterion|xl_exit, apm_ruling, ruling_ref, statement?, xl_exit?; or kind
     design_approval, board_url, pm_ruling, ruling_ref: the canvas board link and the PM's verbatim approval,
@@ -1717,8 +1743,31 @@ def token_spent(root: Path, run_id: str) -> bool:
     return bool(safe_id(run_id)) and (Path(root) / RECORD_DIR_ROOT / run_id / TOKEN_SPENT_FILE).is_file()
 
 
+def token_retired(root: Path, run_id: str) -> bool:
+    """True when `run_id`'s run token is spent or stranded: the gate already refused it
+    (`token_spent`), or it is not live and a claim or spent receipt shows a landing attempt took it.
+
+    A run with no token record at all (never fired, or a halt that kept none) is not retired: its
+    refire resumes it.
+
+    A claim carrying a `deadline` still in the future is a lander in flight and is not retired; a
+    claim without one cannot be told from a stranded one and reads as retired.
+    """
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if token_spent(root, run_id):
+        return True
+    if not run_token._RUN_ID_RE.match(run_id or "") or run_token.is_live(root, run_id):
+        return False
+    claim = run_token._read_rec(root, run_id, claimed=True)
+    if claim is not None:
+        deadline = claim.get("deadline")
+        return not (isinstance(deadline, (int, float)) and time.time() <= deadline)
+    return run_token._present(root, run_id, spent=True)
+
+
 def retire_token_spent_halt(root: Path, sizing_rel: str) -> Optional[str]:
-    """Mark `resumed` the halted run of `sizing_rel` whose gate refused for a spent run token, so
+    """Mark `resumed` the halted run of `sizing_rel` whose run token is spent (`token_retired`), so
     the next emit takes a fresh run id and script. Returns the retired run id, else None.
 
     Without this a refire re-emits the same id, the gate refuses the same way, and the refusal's own
@@ -1731,7 +1780,7 @@ def retire_token_spent_halt(root: Path, sizing_rel: str) -> Optional[str]:
         if not run_id:
             continue
         rd = record_dir(root, run_id)
-        if (rd / TOKEN_SPENT_FILE).is_file() and mark_resumed(rd):
+        if token_retired(root, run_id) and mark_resumed(rd):
             return run_id
     return None
 

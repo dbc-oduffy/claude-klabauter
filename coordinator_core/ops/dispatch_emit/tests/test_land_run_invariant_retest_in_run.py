@@ -93,31 +93,18 @@ def test_a_failed_retest_past_the_attempt_budget_refuses_naming_the_invariant(ow
     assert _git(["rev-parse", "HEAD"], owed).strip() == head
 
 
-def test_no_retest_verdict_past_the_budget_lands_when_the_owed_nodes_pass_when_measured(owed, monkeypatch):
-    asked: list = []
+def test_no_retest_verdict_past_the_budget_refuses_naming_the_retest_remedy_and_measures_nothing(owed, monkeypatch):
+    def measured(*a, **k):
+        raise AssertionError("the no-verdict branch has no record to read a measurement from")
 
-    def measure(root, params, run_id, ids):
-        asked.append(list(ids))
-        return set(ids)
-
-    monkeypatch.setattr(ltt, "owed_check_cleared", measure)
-
-    out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
-
-    assert out["committed"] is True, out
-    assert asked == [[INV]]
-    assert "a.py" in _git(["show", "--name-only", "--format=", "HEAD"], owed).split()
-
-
-def test_no_retest_verdict_past_the_budget_still_refuses_when_the_measured_node_does_not_pass(owed, monkeypatch):
-    monkeypatch.setattr(ltt, "owed_check_cleared", lambda root, params, run_id, ids: set())
+    monkeypatch.setattr(ltt, "owed_check_cleared", measured)
     head = _git(["rev-parse", "HEAD"], owed).strip()
 
     out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
 
     assert out["committed"] is False and out["refused"] == "targeted-tests-failed", out
     details = [f["detail"] for f in out["integrity"] if INV in f["detail"]]
-    assert details and all("did not pass" in d for d in details), details
+    assert details and all("no fresh retest verdict exists" in d and "re-run: " in d for d in details), details
     assert _git(["rev-parse", "HEAD"], owed).strip() == head
 
 

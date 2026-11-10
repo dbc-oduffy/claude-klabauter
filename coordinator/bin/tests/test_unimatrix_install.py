@@ -788,7 +788,8 @@ def test_hosts_grok_ships_the_adapter_and_installs_no_hooks(monkeypatch, tmp_pat
     assert (dest / "unimatrix-peer-grok.py").is_file()
     assert not (home / ".codex" / "hooks.json").exists()
     assert not (home / ".gemini" / "config" / "hooks.json").exists()
-    assert not (home / ".grok").exists()
+    assert not (home / ".gemini").exists()
+    assert tomllib.loads((home / ".grok" / "config.toml").read_text())["ui"]["status_line"]["type"] == "command"
     buf = io.StringIO()
     assert ui.main(["--install", "--hosts", "grok,bogus"], dest_dir=dest, out=buf) == 2
 
@@ -2066,3 +2067,173 @@ def test_install_prints_a_separate_file_key_line(monkeypatch, tmp_path):
     rc, out = _run(["--install"], "2.1.316", dest, tmp_path / "gemini" / "hooks.json")
     assert rc == 0
     assert [l for l in out.splitlines() if "unimatrix-file-relay.py --peer <box>" in l and "restrict,command=" in l]
+
+
+def _tui_home(monkeypatch, tmp_path):
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GROK_HOME", raising=False)
+    _stub_src(monkeypatch, tmp_path)
+    return home, home / ".gemini" / "antigravity-cli" / "settings.json", home / ".grok" / "config.toml"
+
+
+def _tui_main(tmp_path, flag, hosts="agy,grok"):
+    buf = io.StringIO()
+    rc = ui.main([flag, "--hosts", hosts], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf)
+    return rc, buf.getvalue()
+
+
+def test_tui_status_lines_install_twice_noop_and_uninstall_restores_bytes(monkeypatch, tmp_path):
+    _, agy, grok = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    grok.parent.mkdir(parents=True)
+    agy_before = b'{\r\n "theme": "dark",\r\n "other": {"k": 1}\r\n}'
+    grok_before = b'# mine\r\nmodel = "x"\r\n[mcp.foreign]\r\nurl = "u"'
+    agy.write_bytes(agy_before)
+    grok.write_bytes(grok_before)
+    rc, out = _tui_main(tmp_path, "--install")
+    assert rc == 0 and "agy status line updated" in out and "grok status line updated" in out
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    assert data["theme"] == "dark" and data["other"] == {"k": 1}
+    assert data["statusLine"]["command"].endswith("-m coordinator_core.tui_status agy")
+    parsed = tomllib.loads(grok.read_text(encoding="utf-8"))
+    assert parsed["model"] == "x" and parsed["mcp"]["foreign"] == {"url": "u"}
+    assert parsed["ui"]["status_line"]["type"] == "command"
+    assert parsed["ui"]["status_line"]["command"].endswith("-m coordinator_core.tui_status grok")
+    once = (agy.read_bytes(), grok.read_bytes())
+    rc, out = _tui_main(tmp_path, "--install")
+    assert "agy status line present" in out and "grok status line present" in out
+    assert (agy.read_bytes(), grok.read_bytes()) == once
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and "agy status line restored" in out and "grok status line restored" in out
+    assert agy.read_bytes() == agy_before and grok.read_bytes() == grok_before
+    assert not list(agy.parent.glob(".coordinator-status-line-*")) and not list(grok.parent.glob(".coordinator-status-line-*"))
+
+
+def test_tui_status_lines_seed_absent_host_dirs_and_uninstall_removes_them(monkeypatch, tmp_path):
+    _, agy, grok = _tui_home(monkeypatch, tmp_path)
+    assert not agy.parent.exists() and not grok.parent.exists()
+    rc, _ = _tui_main(tmp_path, "--install")
+    assert rc == 0 and "statusLine" in json.loads(agy.read_text()) and "status_line" in tomllib.loads(grok.read_text())["ui"]
+    rc, _ = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and not agy.exists() and not grok.exists()
+
+
+def test_tui_status_default_hosts_include_grok_and_honour_grok_home(monkeypatch, tmp_path):
+    home, agy, _ = _tui_home(monkeypatch, tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grokhome"))
+    buf = io.StringIO()
+    assert ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
+    assert (tmp_path / "grokhome" / "config.toml").is_file() and agy.is_file() and not (home / ".grok").exists()
+
+
+def test_tui_status_lines_keep_user_customised_lines(monkeypatch, tmp_path):
+    _, agy, grok = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    grok.parent.mkdir(parents=True)
+    mine_agy = '{"statusLine": {"command": "my-line"}}\n'
+    mine_grok = '[ui.status_line]\ntype = "command"\ncommand = "my-line"\n'
+    agy.write_text(mine_agy)
+    grok.write_text(mine_grok)
+    rc, out = _tui_main(tmp_path, "--install")
+    assert rc == 0 and "agy status line retained-customized" in out and "grok status line retained-customized" in out
+    assert agy.read_text() == mine_agy and grok.read_text() == mine_grok
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert "agy status line absent" in out and agy.read_text() == mine_agy and grok.read_text() == mine_grok
+
+
+def test_tui_status_uninstall_after_user_edits_keeps_them_and_drops_only_ours(monkeypatch, tmp_path):
+    _, agy, grok = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    agy.write_text('{"theme": "dark"}\n')
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text())
+    data["added"] = 1
+    agy.write_text(json.dumps(data))
+    grok.write_bytes(grok.read_bytes() + b'added = 1\n')
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and "agy status line restored" in out and "grok status line restored" in out
+    assert json.loads(agy.read_text()) == {"theme": "dark", "added": 1}
+    assert tomllib.loads(grok.read_text()) == {"added": 1}
+    # customised after install: retained
+    agy.write_text('{"theme": "dark"}\n')
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text())
+    data["statusLine"] = {"command": "later"}
+    agy.write_text(json.dumps(data))
+    _, out = _tui_main(tmp_path, "--uninstall", "agy")
+    assert "agy status line retained-customized" in out and json.loads(agy.read_text())["statusLine"] == {"command": "later"}
+
+
+def test_tui_status_invalid_config_is_never_overwritten(tmp_path):
+    cfg = tmp_path / "settings.json"
+    cfg.write_text("{not json")
+    with pytest.raises(ValueError):
+        ui.seed_host_status_line(cfg, "agy")
+    assert cfg.read_text() == "{not json"
+    toml = tmp_path / "config.toml"
+    toml.write_text("[ui\n")
+    with pytest.raises(ValueError):
+        ui.seed_host_status_line(toml, "grok")
+    assert toml.read_text() == "[ui\n"
+
+
+def _handoff_install(monkeypatch, tmp_path, *, live=True, change=False, pid_json=False, boom=None):
+    """Install twice into one dest; the second install runs with a stub router seam. Returns (rc, out, calls)."""
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    dest = tmp_path / "d"
+    assert _run(["--install"], "2.1.316", dest)[0] == 0
+    if change:
+        (tmp_path / "src" / ui.ROUTER_SCRIPT).write_text("# stub PipeServer v2\n", encoding="utf-8")
+    if pid_json:
+        (dest / "router").mkdir(exist_ok=True)
+        (dest / "router" / "router.pid.json").write_text('{"pid": 1, "procStart": "x"}', encoding="utf-8")
+    calls = []
+
+    def restart(d, say):
+        calls.append(d)
+        if boom:
+            raise boom
+        return {"stopped": "handshake", "old_pid": 11, "new_pid": 22}
+
+    buf = io.StringIO()
+    rc = ui.main(["--install"], version_text="2.1.316", dest_dir=dest, out=buf, hooks_path=tmp_path / "h.json",
+                 router_live=lambda d: live, restart_router=restart)
+    return rc, buf.getvalue(), calls
+
+
+def test_changed_router_closure_with_live_router_restarts_once(monkeypatch, tmp_path):
+    rc, out, calls = _handoff_install(monkeypatch, tmp_path, change=True, pid_json=True)
+    assert rc == 0 and calls == [tmp_path / "d"]
+    assert "router restarted: handshake old pid 11 new pid 22" in out
+
+
+def test_unchanged_closure_leaves_a_handshake_router_alone(monkeypatch, tmp_path):
+    rc, out, calls = _handoff_install(monkeypatch, tmp_path, pid_json=True)
+    assert rc == 0 and calls == [] and "router restarted" not in out
+
+
+def test_unchanged_closure_restarts_a_live_router_without_pid_record(monkeypatch, tmp_path):
+    rc, out, calls = _handoff_install(monkeypatch, tmp_path)
+    assert rc == 0 and len(calls) == 1 and "router restarted" in out
+
+
+def test_changed_closure_without_a_live_router_never_restarts(monkeypatch, tmp_path):
+    rc, _, calls = _handoff_install(monkeypatch, tmp_path, live=False, change=True)
+    assert rc == 0 and calls == []
+
+
+def test_restart_refusal_exits_8_and_keeps_the_copy(monkeypatch, tmp_path):
+    rc, out, calls = _handoff_install(monkeypatch, tmp_path, change=True, boom=RuntimeError("lease pid 7 still held"))
+    assert rc == 8 and len(calls) == 1
+    assert "REFUSE: router restart failed: lease pid 7 still held" in out
+    assert (tmp_path / "d" / ui.ROUTER_SCRIPT).read_text(encoding="utf-8") == "# stub PipeServer v2\n"
+
+
+def test_router_closure_digest_tracks_closure_bytes(tmp_path):
+    assert ui.router_closure_digest(tmp_path) is None
+    (tmp_path / ui.ROUTER_SCRIPT).write_text("# a\n", encoding="utf-8")
+    first = ui.router_closure_digest(tmp_path)
+    assert first == ui.router_closure_digest(tmp_path)
+    (tmp_path / ui.ROUTER_SCRIPT).write_text("# b\n", encoding="utf-8")
+    assert ui.router_closure_digest(tmp_path) != first

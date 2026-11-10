@@ -543,13 +543,33 @@ def _plat_unlock(fd: int) -> None:
 SIDECAR_OPEN_DEADLINE_SECS: float = 1.0
 
 
+def _sidecar_denial_message(path: str, exc: BaseException) -> str:
+    """Name why the sidecar open kept failing with EACCES: a recorded holder, else access denied.
+
+    Windows reports both a competing handle and a denied create/write right as EACCES, and the
+    open alone cannot tell them apart; the holder metadata `held_lock` writes can.
+    """
+    holder = _describe_holder(path)  # type: ignore[arg-type]
+    if not holder.startswith("holder unknown"):
+        return (
+            f"Could not open coordinator lock sidecar {path} within "
+            f"{SIDECAR_OPEN_DEADLINE_SECS}s (held by: {holder}): {exc}"
+        )
+    return (
+        f"Could not open coordinator lock sidecar {path} within "
+        f"{SIDECAR_OPEN_DEADLINE_SECS}s: access denied, no holder recorded: {exc}"
+    )
+
+
 def _open_sidecar_bounded(
     make_dir: "Callable[[], Path]", filename: str, flags: int, timeout: float
 ) -> int:
     """mkdir + open the lock sidecar on a daemon thread; return the fd.
 
     Raises LockTimeout past ``SIDECAR_OPEN_DEADLINE_SECS``: nothing has been read,
-    mutated or written, so the refusal is exact. Any other error propagates unchanged. An fd
+    mutated or written, so the refusal is exact. "filesystem stalled" means the open itself never
+    returned; an open that kept returning EACCES is refused naming the holder or the denial
+    (`_sidecar_denial_message`). Any other error propagates unchanged. An fd
     opened after the caller gave up is closed by the worker, never leaked. Threading is imported
     here, not at module top, to keep the cold-start import ceiling.
     """
@@ -571,15 +591,15 @@ def _open_sidecar_bounded(
             except PermissionError as exc:
                 if _FCNTL_AVAILABLE or box.get("abandoned"):
                     box["err"] = exc
-                elif time.monotonic() >= retry_until:
-                    box["err"] = LockTimeout(
-                        f"Could not open coordinator lock sidecar within "
-                        f"{SIDECAR_OPEN_DEADLINE_SECS}s (held by another process): {exc}"
-                    )
                 else:
-                    time.sleep(sleep_for)
-                    sleep_for = min(sleep_for * 1.5, 0.1)
-                    continue
+                    # Recorded each pass so a caller that times out mid-retry names the cause.
+                    box["denied"] = (str(exc.filename or filename), exc)
+                    if time.monotonic() >= retry_until:
+                        box["err"] = LockTimeout(_sidecar_denial_message(*box["denied"]))
+                    else:
+                        time.sleep(sleep_for)
+                        sleep_for = min(sleep_for * 1.5, 0.1)
+                        continue
                 done.set()
                 return
             except BaseException as exc:  # noqa: BLE001 -- handed to the waiting caller
@@ -601,6 +621,8 @@ def _open_sidecar_bounded(
         with guard:
             if "fd" not in box and "err" not in box:
                 box["abandoned"] = True
+                if "denied" in box:
+                    raise LockTimeout(_sidecar_denial_message(*box["denied"]))
                 raise LockTimeout(
                     f"Could not open coordinator lock sidecar within {wait}s (filesystem stalled)"
                 )

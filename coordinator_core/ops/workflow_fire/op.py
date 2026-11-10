@@ -143,6 +143,7 @@ from typing import Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.workflow_fire import fire
+from coordinator_core.ops.workflow_fire.backends import check as check_backend
 
 
 @register_op("workflow.fire")
@@ -187,11 +188,11 @@ def _workflow_fire(params: dict, repo_root: Optional[Path] = None) -> dict:
         guard_against_fired_drift(Path(script_path), expected)
 
     backend = params.get("backend")
-    if backend not in (None, "codex", "claude"):
-        raise ValueError("backend must be codex or claude")
-    executor = params.get("executor", "headless" if backend == "codex" else "claude")
-    if executor == "claude" and backend == "codex":
-        raise ValueError("a Codex backend cannot use the Claude executor")
+    if backend is not None:
+        check_backend(backend)
+    executor = params.get("executor", "headless" if backend not in (None, "claude") else "claude")
+    if executor == "claude" and backend not in (None, "claude"):
+        raise ValueError(f"a {backend} backend cannot use the Claude executor")
     if params.get("private_engine") is not None and (backend != "codex" or executor != "headless"):
         raise ValueError("a private native engine requires an explicit Codex headless executor")
     from coordinator_core.ops.workflow_fire.authority import require_fire_authority

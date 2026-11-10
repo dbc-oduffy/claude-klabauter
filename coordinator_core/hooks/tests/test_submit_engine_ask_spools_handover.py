@@ -12,6 +12,8 @@ from pathlib import Path
 from coordinator_core.ask_spool import record
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests import test_submit_engine_ask_real_emit as real
+from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.requirements_ledger import HandoverPending
 
 repo = real.repo
@@ -129,6 +131,43 @@ def test_reach_budget_with_no_run_minted_spools_and_the_late_emit_mints_nothing(
     _assert_spooled_allow(env, repo)
     assert done.wait(10)
     assert not list((repo / "state" / "warp").glob("*/run-stage.json"))
+
+
+def test_refire_of_a_halted_run_that_outruns_the_budget_is_refused_not_spooled(tmp_path, monkeypatch):
+    # A spool of a refire drains into a second launch of the run the retry already resumes.
+    sizing_rel = "state/sizings/2026-10-29-resume-fixture.yaml"
+    plan_rel = "docs/plans/2026-10-29-resume-fixture.md"
+    halted_id = "warp-2026-10-29-resume-fixture-20261029T010101-abc123"
+    monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
+    root = tmp_path
+    (root / ".git").mkdir()
+    for rel, text in ((sizing_rel, "schema: sizing-object\n"), (plan_rel, "# plan\n")):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text, encoding="utf-8")
+    write_halt_marker(
+        root / RECORD_DIR_ROOT / halted_id, halted="ledger-check", sizing_rel=sizing_rel,
+        plan_rel=plan_rel, run_base_sha="a" * 40,
+    )
+    payload = {
+        "tool_name": "Workflow", "cwd": str(root), "session_id": "s1", "tool_use_id": "toolu_x",
+        "tool_input": {"name": mod.SUBMIT_WORKFLOW_NAME, "args": {"sizing": sizing_rel}},
+    }
+    release = threading.Event()
+
+    def stalled_spawn(_root, _run_id):
+        release.wait(30)
+        return True
+
+    monkeypatch.setattr(mod, "_spawn_recompose", stalled_spawn)
+    try:
+        env = mod.evaluate(payload, emit=lambda _p, _r: {})
+    finally:
+        release.set()
+    hso = env["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "deny", env
+    assert halted_id in hso["permissionDecisionReason"]
+    assert "spooled as" not in hso["permissionDecisionReason"]
+    assert _spooled(root) == []
 
 
 def test_unspoolable_disk_keeps_the_original_refusal(repo, monkeypatch):

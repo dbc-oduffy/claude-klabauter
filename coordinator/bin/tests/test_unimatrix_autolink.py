@@ -873,3 +873,166 @@ def test_roster_waits_on_a_locked_key_and_caches_a_loaded_verdict(env, tmp_path,
     env.roster.ensure_key_loaded("k", now=1002.0)
     env.roster.ensure_key_loaded("k", now=1003.0)
     assert Path(str(verdict) + ".calls").read_text() == "xxx"
+
+
+class Lease:
+    """lock_held_fn double: held until `release()`; `polls` counts checks."""
+
+    def __init__(self, held=True):
+        self.held, self.polls = held, 0
+
+    def __call__(self, sdir):
+        self.polls += 1
+        return self.held
+
+    def release(self):
+        self.held = False
+
+
+@pytest.fixture
+def restartable(router_on, tmp_path, monkeypatch):
+    e = router_on
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    monkeypatch.setattr(e.roster, "sessions_dir", lambda: str(sessions))
+    (e.sdir / "router").mkdir(parents=True)
+    e.sessions = sessions
+    e.say_lines = []
+    e.say = e.say_lines.append
+    return e
+
+
+def write_pid_json(e, pid, stamp=None):
+    (e.sdir / "router" / "router.pid.json").write_text(
+        json.dumps({"pid": pid, "procStart": stamp or f"start-{pid}"}))
+
+
+def test_restart_handshake_waits_for_the_lease_then_starts_the_installed_router(restartable):
+    e, sp, lease, asked = restartable, Spawner(), Lease(), []
+    write_pid_json(e, 4001)
+    e.live.add(4001)
+
+    def request(req):
+        asked.append(req)
+        lease.release()
+        return {"ok": True, "pid": 4001, "stopping": True}
+
+    def kill(pid):
+        raise AssertionError("handshake must not kill")
+
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, request=request, kill=kill, lock_held_fn=lease)
+    assert asked == [{"op": "shutdown"}]
+    assert res == {"stopped": "handshake", "old_pid": 4001, "new_pid": 1001}
+    assert len(router_cmds(sp)) == 1 and Path(router_cmds(sp)[0][1]).name == "unimatrix-peer-router.py"
+    assert json.loads((e.sdir / "autolink-router.json").read_text()) == {"pid": 1001, "procStart": "start-1001"}
+
+
+def test_restart_unknown_op_tree_kills_the_recorded_pid_only_when_its_start_matches(restartable):
+    e, sp, lease, killed = restartable, Spawner(), Lease(), []
+    write_pid_json(e, 4002)
+    e.live.add(4002)
+
+    def kill(pid):
+        killed.append(pid)
+        lease.release()
+
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, request=lambda r: {"ok": False, "error": "unknown op"},
+                              kill=kill, lock_held_fn=lease)
+    assert killed == [4002]
+    assert res == {"stopped": "tree_kill", "old_pid": 4002, "new_pid": 1001}
+
+
+def test_restart_falls_back_to_the_autolink_record_for_a_router_with_no_pid_file(restartable):
+    e, sp, lease, killed = restartable, Spawner(), Lease(), []
+    (e.sdir / "autolink-router.json").write_text(json.dumps({"pid": 4003, "procStart": "start-4003"}))
+    e.live.add(4003)
+    e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, request=lambda r: {"ok": False, "error": "unknown op"},
+                        kill=lambda pid: (killed.append(pid), lease.release()), lock_held_fn=lease)
+    assert killed == [4003]
+
+
+def test_restart_reads_the_router_stamp_off_a_face_registration(restartable):
+    e, sp, lease, killed = restartable, Spawner(), Lease(), []
+    (e.sessions / "5001.json").write_text(json.dumps({"pid": 5001, "unimatrixRouterPid": 4004,
+                                                      "unimatrixRouterStart": "start-4004"}))
+    e.live.add(4004)
+    e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, request=lambda r: {"ok": False, "error": "unknown op"},
+                        kill=lambda pid: (killed.append(pid), lease.release()), lock_held_fn=lease)
+    assert killed == [4004]
+
+
+def test_restart_unreachable_control_endpoint_takes_the_same_verified_kill(restartable):
+    e, sp, lease, killed = restartable, Spawner(), Lease(), []
+    write_pid_json(e, 4005)
+    e.live.add(4005)
+
+    def request(req):
+        raise ConnectionRefusedError("no endpoint")
+
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, request=request,
+                              kill=lambda pid: (killed.append(pid), lease.release()), lock_held_fn=lease)
+    assert killed == [4005] and res["stopped"] == "tree_kill"
+
+
+def test_restart_never_kills_a_pid_whose_process_start_differs_from_the_stamp(restartable):
+    e, sp, lease = restartable, Spawner(), Lease()
+    write_pid_json(e, 4006, stamp="a-different-birth")
+    e.live.add(4006)
+
+    def kill(pid):
+        raise AssertionError("recycled pid must not be killed")
+
+    with pytest.raises(e.al.RouterRestartError) as ei:
+        e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, request=lambda r: {"ok": False, "error": "unknown op"},
+                            kill=kill, lock_held_fn=lease)
+    assert "4006" in str(ei.value) and "router.lock" in str(ei.value)
+    assert sp.cmds == []
+
+
+def test_restart_raises_when_the_lease_stays_held_after_the_kill(restartable):
+    e, sp, lease = restartable, Spawner(), Lease()
+    write_pid_json(e, 4007)
+    e.live.add(4007)
+    with pytest.raises(e.al.RouterRestartError, match="4007.*router.lock"):
+        e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, request=lambda r: {"ok": False},
+                            kill=lambda pid: None, lock_held_fn=lease, wait_seconds=0.2)
+    assert sp.cmds == []
+
+
+def test_restart_with_no_live_router_just_starts_one_and_drops_a_stale_record(restartable):
+    e, sp = restartable, Spawner()
+    (e.sdir / "autolink-router.json").write_text(json.dumps({"pid": 4008, "procStart": "start-4008"}))  # not alive
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp,
+                              request=lambda r: (_ for _ in ()).throw(AssertionError("no router to ask")),
+                              kill=boom, lock_held_fn=Lease(held=False))
+    assert res == {"stopped": "none", "old_pid": None, "new_pid": 1001}
+
+
+def test_restart_starts_a_router_even_with_the_no_router_env_set_and_restores_it(restartable, monkeypatch):
+    e, sp = restartable, Spawner()
+    monkeypatch.setenv("UNIMATRIX_AUTOLINK_NO_ROUTER", "1")
+    res = e.al.restart_router(e.roster, e.sdir, e.say, spawn=sp, lock_held_fn=Lease(held=False))
+    assert res["new_pid"] == 1001 and os.environ["UNIMATRIX_AUTOLINK_NO_ROUTER"] == "1"
+
+
+def test_restart_raises_when_no_router_record_is_written(restartable):
+    e = restartable
+    (e.sdir / "autolink-router.lock").write_text("")  # another start holds the spawn lock
+    with pytest.raises(e.al.RouterRestartError, match="no router was started"):
+        e.al.restart_router(e.roster, e.sdir, e.say, spawn=Spawner(), lock_held_fn=Lease(held=False))
+
+
+def test_main_restart_prints_the_result_and_exits_zero_and_one_on_refusal(restartable, monkeypatch, capsys):
+    e = restartable
+    monkeypatch.setattr(e.al, "_roster", lambda: e.roster)
+    monkeypatch.setattr(e.al, "restart_router", lambda *a, **k: {"stopped": "handshake", "old_pid": 7, "new_pid": 8})
+    assert e.al.main(["restart"]) == 0
+    assert "router restarted: handshake old pid 7 new pid 8" in capsys.readouterr().out
+
+    def refuse(*a, **k):
+        raise e.al.RouterRestartError("lease held")
+
+    monkeypatch.setattr(e.al, "restart_router", refuse)
+    assert e.al.main(["restart"]) == 1
+    assert "lease held" in capsys.readouterr().err
+
