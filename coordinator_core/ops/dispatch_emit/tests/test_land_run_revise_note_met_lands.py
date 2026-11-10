@@ -1,4 +1,4 @@
-"""A workflow.revise note the checker judges met under its note id (N1) lands; unmet or foreign ids still refuse."""
+"""A workflow.revise note the checker judges met under its note id (N1) lands; an unmet note or a note id with no stored note refuses; a foreign id is an advisory."""
 
 from __future__ import annotations
 
@@ -66,14 +66,14 @@ def test_a_revise_note_judged_not_met_still_refuses(repo):  # noqa: F811
     assert "N1: " + rl.NOTE_NOT_MET_REASON in out["error"]
 
 
-def test_a_foreign_id_still_refuses_as_no_register_row(repo):  # noqa: F811
+def test_a_foreign_id_lands_with_an_advisory(repo):  # noqa: F811
     token = _stage(repo, CODE)
     _note(repo)
 
     out = _land(repo, token, [R1_MET, {"id": "N1", "status": "met"}, {"id": "N2", "status": "met"}])
 
-    assert out.get("committed") is False and out.get("refused") == "ledger-unmet", out
-    assert "N2: " + rl.NOT_A_ROW_REASON in out["error"] and "N1:" not in out["error"]
+    assert out.get("committed") is True and out.get("refused") is None, out
+    assert out["ledger_advisory"] == ["verdict ids that are not register rows were ignored: N2"]
 
 
 def test_a_note_id_with_no_note_stored_refuses(repo):  # noqa: F811

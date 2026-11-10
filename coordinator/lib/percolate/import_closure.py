@@ -767,6 +767,144 @@ def find_commit_from_import_name_violations(
     return _from_import_violations(sources, dirs, sorted(sources))
 
 
+def find_commit_module_attr_violations(
+    repo: Path, commit: str, roots: tuple[str, ...] = COMMIT_NAME_ROOTS
+) -> tuple[int, list[tuple[str, str]]]:
+    """Check every `<alias>.<attr>` read in a non-test `.py` under `roots`, where
+    `alias` is bound by an unguarded level-0 `from coordinator_core[.X] import
+    mod [as alias]` or `import coordinator_core.X.mod as alias` naming a module
+    of `commit`, against that module's blob in `commit` (never the worktree).
+    Returns `(examined_importer_count, violations)`; each violation is
+    `(importer_path, "coordinator_core.X.mod.attr")`.
+
+    `attr` resolves when the module's top-level namespace (or a `global`
+    declaration in it) defines it, or the module is a package holding submodule
+    `attr`. Dunder attrs, store/delete targets, `hasattr`/`getattr`-probed
+    attrs, aliases rebound by any non-import binding in the importer or bound
+    to two different modules in it, and modules defining `__getattr__` or
+    star-importing never flag. Raises `CommitReadError` on a failed git read.
+    Reads are one `ls-tree` plus batched `cat-file`."""
+    sources, dirs = _read_commit_py_blobs(repo, commit, roots)
+    parsed_cache: dict[str, ast.Module | None] = {}
+    namespace_cache: dict[str, tuple[set[str], bool]] = {}
+
+    def parsed(path: str) -> ast.Module | None:
+        if path not in parsed_cache:
+            try:
+                parsed_cache[path] = ast.parse(sources[path], filename=path)
+            except SyntaxError:
+                parsed_cache[path] = None
+        return parsed_cache[path]
+
+    def namespace_of(path: str) -> tuple[set[str], bool]:
+        if path not in namespace_cache:
+            tree = parsed(path)
+            if tree is None:
+                namespace_cache[path] = (set(), True)
+            else:
+                names, opaque = _module_defined_names(tree)
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Global):
+                        names.update(node.names)
+                namespace_cache[path] = (names, opaque)
+        return namespace_cache[path]
+
+    def module_file(dotted: str) -> tuple[str, bool] | None:
+        base = dotted.replace(".", "/")
+        if f"{base}/__init__.py" in sources:
+            return f"{base}/__init__.py", True
+        if f"{base}.py" in sources:
+            return f"{base}.py", False
+        return None
+
+    violations: set[tuple[str, str]] = set()
+    examined = 0
+    for importer in sorted(sources):
+        if _is_test_path(importer) or "coordinator_core" not in sources[importer]:
+            continue
+        tree = parsed(importer)
+        if tree is None:
+            continue
+        aliases: dict[str, str] = {}
+        ambiguous: set[str] = set()
+
+        def bind(name: str, dotted: str) -> None:
+            if aliases.setdefault(name, dotted) != dotted:
+                ambiguous.add(name)
+
+        for node in _unguarded_import_nodes(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.level or not node.module:
+                    continue
+                if node.module != PACKAGE_NAME and not node.module.startswith(PACKAGE_NAME + "."):
+                    continue
+                parent = module_file(node.module)
+                for alias in node.names:
+                    dotted = f"{node.module}.{alias.name}"
+                    if alias.name == "*" or module_file(dotted) is None:
+                        continue
+                    if parent is not None and alias.name in namespace_of(parent[0])[0]:
+                        continue
+                    bind(alias.asname or alias.name, dotted)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.asname and alias.name.startswith(PACKAGE_NAME + ".") and module_file(alias.name):
+                        bind(alias.asname, alias.name)
+        if not aliases:
+            continue
+        rebound: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+                rebound.add(node.id)
+            elif isinstance(node, ast.arg):
+                rebound.add(node.arg)
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                rebound.add(node.name)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                rebound.add(node.name)
+        probed: set[tuple[str, str]] = set()
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id in ("hasattr", "getattr")
+                and len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and isinstance(node.args[1], ast.Constant)
+                and isinstance(node.args[1].value, str)
+            ):
+                probed.add((node.args[0].id, node.args[1].value))
+        live = {a: d for a, d in aliases.items() if a not in rebound and a not in ambiguous}
+        if not live:
+            continue
+        examined += 1
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Attribute)
+                and isinstance(node.ctx, ast.Load)
+                and isinstance(node.value, ast.Name)
+                and node.value.id in live
+            ):
+                continue
+            attr = node.attr
+            if (attr.startswith("__") and attr.endswith("__")) or (node.value.id, attr) in probed:
+                continue
+            dotted = live[node.value.id]
+            module_path, is_package = module_file(dotted)
+            defined, opaque = namespace_of(module_path)
+            if opaque or attr in defined:
+                continue
+            base = dotted.replace(".", "/")
+            if is_package and (
+                f"{base}/{attr}.py" in sources
+                or f"{base}/{attr}/__init__.py" in sources
+                or f"{base}/{attr}" in dirs
+            ):
+                continue
+            violations.add((importer, f"{dotted}.{attr}"))
+    return examined, sorted(violations)
+
+
 class _OverlayBlobs:
     """Read-only mapping over a commit's `.py` entries with `overlay` bytes laid
     on top (`None` = deleted); a blob is read through `reader(sha)` only when

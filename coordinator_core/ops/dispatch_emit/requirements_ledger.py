@@ -1986,7 +1986,8 @@ def judge(
 
     `note_ids` are the run's live revise-note ids (`note_ids(run_dir)`): a verdict item under one is
     not a register row and is not `NOT_A_ROW_REASON`; it passes only as `met`, else fails
-    `NOTE_NOT_MET_REASON`. Any other unregistered id is ignored and listed in the result's `advisory`
+    `NOTE_NOT_MET_REASON`; an `N<k>` id when the run stores no note fails `NOT_A_ROW_REASON`.
+    Any other unregistered id is ignored and listed in the result's `advisory`
     (`[{id, reason}]`, present only when non-empty): it never fails the verdict."""
     floor = review_floor.floor_reason(list(code_paths), review_verdicts or 0)
     verdict = normalize_verdict(verdict)
@@ -2105,6 +2106,10 @@ def judge(
         {"id": rid, "reason": NOTE_NOT_MET_REASON}
         for rid in sorted(own_notes & set(by_id)) if by_id[rid].get("status") != "met"
     )
+    if not note_ids:
+        fabricated = [rid for rid in unknown if re.fullmatch(r"N\d+", rid)]
+        failures.extend({"id": rid, "reason": NOT_A_ROW_REASON} for rid in fabricated)
+        unknown = [rid for rid in unknown if rid not in fabricated]
     open_rows.extend(dict(w) for w in ledger.withheld)
     result = {"pass": not failures, "failures": failures, "open": open_rows}
     if unknown:

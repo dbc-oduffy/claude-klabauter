@@ -25,6 +25,43 @@ def test_add_read_remove(tmp_path):
     idx.remove_run(tmp_path, "run-a")
 
 
+def test_entries_and_fresh_entry_share_one_parse_per_run_file_within_a_scope(tmp_path, monkeypatch):
+    from coordinator_core.git import call_io_scope
+
+    _marker(tmp_path, "run-a", "halted", {"a.py": "x"})
+    idx.rebuild(tmp_path)
+    idx.add_run(tmp_path, "run-a", ["a.py"], at_ns=2**62)
+    parses = []
+    real = idx._parse_file
+    monkeypatch.setattr(idx, "_parse_file", lambda file: parses.append(str(file)) or real(file))
+    with call_io_scope.call_io_scope():
+        assert list(idx.entries(tmp_path)) == ["run-a"]
+        assert idx.fresh_entry(tmp_path, "run-a") is not None
+    assert len(parses) == 1
+
+
+def test_fresh_entry_is_decided_once_per_scope_until_a_marker_or_entry_is_rewritten(tmp_path, monkeypatch):
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops.dispatch_emit import halted_run
+
+    _marker(tmp_path, "run-a", "halted", {"a.py": "x"})
+    idx.rebuild(tmp_path)
+    idx.add_run(tmp_path, "run-a", ["a.py"], at_ns=2**62)
+    decided = []
+    real = idx._fresh_entry
+    monkeypatch.setattr(idx, "_fresh_entry", lambda root, run: decided.append(run) or real(root, run))
+    with call_io_scope.call_io_scope():
+        assert [idx.fresh_entry(tmp_path, "run-a") is not None for _ in range(3)] == [True] * 3
+        assert len(decided) == 1
+        halted_run._write(tmp_path / "state" / "warp" / "run-a", {"status": "landed"})
+        assert idx.fresh_entry(tmp_path, "run-a") is not None
+        assert len(decided) == 2
+        idx.remove_run(tmp_path, "run-a")
+        assert idx.fresh_entry(tmp_path, "run-a") is None
+        assert len(decided) == 3
+    assert idx.fresh_entry(tmp_path, "run-a") is None and len(decided) == 4  # outside a scope nothing is held
+
+
 def test_add_replaces_and_empty_removes(tmp_path):
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "r", ["old.py"])

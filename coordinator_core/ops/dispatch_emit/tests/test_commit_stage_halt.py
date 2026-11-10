@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
 
 import pytest
 
 from coordinator_core import workflow_watch
-from coordinator_core.ops.dispatch_emit import ask_contract, halted_run, halted_run_landed
+from coordinator_core.ops.dispatch_emit import ask_compose, ask_contract, halted_run, halted_run_landed
 from coordinator_core.ops.dispatch_emit.commit_stage_halt import (
     HALT_COMMIT_STAGE,
     commit_leg_outcome,
@@ -146,6 +148,68 @@ def test_writer_never_raises(tmp_path, monkeypatch):
     monkeypatch.setattr(halted_run, "write_halt_marker", lambda *a, **k: 1 / 0)
     assert _land(record_dir, journal) is None
     assert _land(record_dir, str(tmp_path / "missing.jsonl")) is None
+
+
+def _run_node(program: str):
+    from coordinator_core.ops.dispatch_emit.tests._node_support import payload_file
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    out = subprocess.run(
+        [node, "-e", "eval(require('fs').readFileSync(process.env.PROG_FILE,'utf8'))"],
+        env={**os.environ, "PROG_FILE": payload_file(program)},
+        capture_output=True, text=True, timeout=30, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+def _in_run_lines() -> str:
+    lines: list = []
+    ask_compose._append_docs_and_commit(
+        lines, head="h", anchor="a", repo_root="/r", run_id=RUN_ID, manifest_rel="m.json"
+    )
+    return "\n".join(lines)
+
+
+def _roadmap_lines() -> str:
+    return "\n".join(ask_compose.roadmap_commit_lines(head="h", anchor="a", repo_root="/r", run_id=RUN_ID))
+
+
+def _harness(stage: str, *, token: str, kind: str = "terminal_commit", halted: str = "null") -> str:
+    return (
+        "(async () => {\n"
+        f"let _halted = {halted}; const _closeable = true; const _runId = 'r'; const _sizingRel = 's';"
+        f"let _nextAction = {{ kind: '{kind}', params: {{}} }}; let _commit = null; const _RUN_TOKEN = {token};\n"
+        f"{stage}\nconsole.log(JSON.stringify({{ halted: _halted, commit: _commit }}));\n"
+        "})();"
+    )
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("stage", [_in_run_lines, _roadmap_lines], ids=["in_run", "roadmap"])
+def test_a_terminal_commit_run_with_no_run_token_halts_by_name_with_no_commit(stage):
+    out = _run_node(_harness(stage(), token="null"))
+    assert out["commit"] is None
+    assert out["halted"]["halted"] == "commit"
+    assert out["halted"]["reason"] == ask_compose.NO_RUN_TOKEN_COMMIT_REASON
+
+
+@pytest.mark.spawns_process
+@pytest.mark.parametrize("stage", [_in_run_lines, _roadmap_lines], ids=["in_run", "roadmap"])
+def test_the_skip_halt_never_fires_for_other_next_actions_or_an_existing_halt(stage):
+    other = _run_node(_harness(stage(), token="null", kind="close_job"))
+    assert other["halted"] is None
+    kept = _run_node(_harness(stage(), token="null", halted="{ halted: 'split' }"))
+    assert kept["halted"] == {"halted": "split"}
+
+
+@pytest.mark.parametrize("stage", [_in_run_lines, _roadmap_lines], ids=["in_run", "roadmap"])
+def test_a_run_token_keeps_the_live_commit_branch_and_no_skip_halt_condition(stage):
+    text = stage()
+    assert "_RUN_TOKEN) {" in text and "&& _RUN_TOKEN" in text
+    assert text.count(ask_compose.NO_RUN_TOKEN_COMMIT_REASON) == 1
 
 
 @pytest.mark.parametrize("status", ["failed", "killed", "stopped"])

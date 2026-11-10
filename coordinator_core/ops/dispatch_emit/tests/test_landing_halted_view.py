@@ -126,13 +126,64 @@ def test_dirty_withheld_decides_each_path_once_per_index_state(tmp_path, monkeyp
     real = commit_companion.own_left_behind
     monkeypatch.setattr(
         commit_companion, "own_left_behind",
-        lambda root, held, sid, spec, *a: (seen.append(tuple(held[sid])), real(root, held, sid, spec, *a))[1],
+        lambda root, held, sid, spec, *a, **k: (seen.append(tuple(held[sid])), real(root, held, sid, spec, *a, **k))[1],
     )
     with hr.release_scope():
         assert view.dirty_withheld(tmp_path, ["a.py", "b.py"]) == {"a.py"}
         assert view.dirty_withheld(tmp_path, ["b.py", "a.py"]) == {"a.py"}
         assert view.dirty_withheld(tmp_path, ["c.py", "a.py"]) == {"a.py"}
     assert seen == [("a.py", "b.py"), ("c.py",)]
+
+
+def test_dirty_status_and_dirty_withheld_hash_a_worktree_file_once(tmp_path, monkeypatch) -> None:
+    from coordinator_core.ops.ceremony import commit_companion
+
+    _repo(tmp_path)
+    _write(tmp_path / "a.py", KEPT_TEXT)  # differs from the index: the content test reads and hashes it
+    hashed: list = []
+    real = commit_companion._differs_from_index
+    monkeypatch.setattr(commit_companion, "_differs_from_index", lambda f, e: (hashed.append(f.name), real(f, e))[1])
+    with hr.release_scope():
+        assert view.dirty_status(tmp_path, ["a.py", "b.py"]) == {"a.py"}
+        assert view.dirty_withheld(tmp_path, ["a.py", "b.py"]) == {"a.py"}
+    assert hashed.count("a.py") == 1
+
+
+def test_differs_from_index_hashes_once_per_call_scope_without_a_release_scope(tmp_path, monkeypatch) -> None:
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops.ceremony import commit_companion
+
+    _repo(tmp_path)
+    _write(tmp_path / "a.py", KEPT_TEXT)
+    entry = git_index.parse_index_identity(tmp_path, wanted={"a.py"})["a.py"]
+    hashed: list = []
+    real = commit_companion._differs_from_index
+    monkeypatch.setattr(commit_companion, "_differs_from_index", lambda f, e: (hashed.append(f.name), real(f, e))[1])
+    with call_io_scope.call_io_scope():
+        assert view.differs_from_index(tmp_path / "a.py", entry) is True
+        assert view.differs_from_index(tmp_path / "a.py", entry) is True
+    assert hashed == ["a.py"]
+    view.differs_from_index(tmp_path / "a.py", entry)  # no scope of either kind: computed again
+    view.differs_from_index(tmp_path / "a.py", entry)
+    assert hashed == ["a.py"] * 3
+
+
+def test_scoped_dirty_withheld_answers_as_own_left_behind_under_a_resolver(tmp_path) -> None:
+    from coordinator_core.ops.ceremony import commit_companion
+
+    _repo(tmp_path)
+    for p in PATHS:
+        _write(tmp_path / p, KEPT_TEXT)
+    _write(tmp_path / "new.py", BASE_TEXT)
+    asked = ["a.py", "b.py", "c.py", "new.py", "gone.py"]
+    for claimed in (lambda paths: [p for p in paths if p == "b.py"], lambda paths: None):
+        with commit_companion.excluding_sibling_claims(claimed):
+            direct = frozenset(commit_companion.own_left_behind(tmp_path, {"-": sorted(asked)}, "-", ()))
+            with hr.release_scope():
+                assert view.dirty_withheld(tmp_path, asked) == direct
+    assert direct == frozenset()
+    with hr.release_scope():
+        assert view.dirty_withheld(tmp_path, asked) == {"a.py", "b.py", "c.py", "new.py"}
 
 
 def _porcelain(root: Path, paths) -> set:

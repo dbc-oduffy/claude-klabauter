@@ -130,6 +130,117 @@ def test_blob_scope_memoises_and_fetches_only_the_missing(tmp_path, monkeypatch)
     assert len(calls) == 3  # outside a scope nothing is memoised
 
 
+@pytest.fixture
+def walk_repo(tmp_path):
+    """A repo with a base commit then 5 commits, each rewriting a.py and b.py."""
+    hr._WALKS.clear()
+    hr._ENTRIES.clear()
+    _git(tmp_path, "init", "-q")
+    _write(tmp_path / "a.py", "a = 0\n")
+    _write(tmp_path / "b.py", "b = 0\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    for i in range(1, 6):
+        _write(tmp_path / "a.py", f"a = {i}\n")
+        _write(tmp_path / "b.py", f"b = {i}\n")
+        _git(tmp_path, "commit", "-aq", "-m", f"c{i}")
+    return tmp_path, base
+
+
+def _count_commit_reads(monkeypatch) -> list:
+    from coordinator_core.git import git_objects
+
+    calls: list = []
+    real = git_objects.read_object
+
+    def counting(common, sha):
+        got = real(common, sha)
+        if got is not None and got[0] == "commit":
+            calls.append(sha)
+        return got
+
+    monkeypatch.setattr(git_objects, "read_object", counting)
+    return calls
+
+
+def test_history_blobs_second_call_at_same_head_reads_no_commit(walk_repo, monkeypatch):
+    root, base = walk_repo
+    first = hr._history_blobs(root, base, ["a.py", "b.py"])
+    assert len(first["a.py"]) == 5
+    reads = _count_commit_reads(monkeypatch)
+    assert hr._history_blobs(root, base, ["a.py", "b.py"]) == first
+    assert reads == []
+
+
+def test_one_read_wall_runs_a_history_walk_on_one_worker_not_one_per_object(walk_repo, monkeypatch):
+    from coordinator_core.git import git_objects
+
+    root, base = walk_repo
+    starts: list = []
+    real = git_objects.run_bounded
+    monkeypatch.setattr(git_objects, "run_bounded", lambda *a, **k: starts.append(a[0]) or real(*a, **k))
+
+    git_objects._OBJECT_CACHE.clear()
+    hr._WALKS.clear()
+    hr._ENTRIES.clear()
+    walled = hr._one_read_wall(root, "t", lambda: hr._history_blobs(root, base, ["a.py", "b.py"]))
+    assert len(starts) == 1
+
+    # Other side: the same walk outside the wall starts a worker per object read.
+    starts.clear()
+    git_objects._OBJECT_CACHE.clear()
+    hr._WALKS.clear()
+    hr._ENTRIES.clear()
+    assert hr._history_blobs(root, base, ["a.py", "b.py"]) == walled
+    assert len(starts) > 6
+
+
+def test_history_blobs_other_record_paths_share_the_walk_without_leaking(walk_repo, monkeypatch):
+    root, base = walk_repo
+    only_a = hr._history_blobs(root, base, ["a.py"])
+    reads = _count_commit_reads(monkeypatch)
+    only_b = hr._history_blobs(root, base, ["b.py"])
+    assert list(only_a) == ["a.py"] and list(only_b) == ["b.py"]
+    assert only_b["b.py"] != only_a["a.py"]
+    assert len(only_b["b.py"]) == 5
+    assert len(reads) <= 6  # trees for the new path only; the spine is not walked again
+
+
+def test_history_blobs_walks_again_after_head_moves_and_per_base(walk_repo, monkeypatch):
+    root, base = walk_repo
+    before = hr._history_blobs(root, base, ["a.py"])
+    _write(root / "a.py", "a = 99\n")
+    _git(root, "commit", "-aq", "-m", "c6")
+    after = hr._history_blobs(root, base, ["a.py"])
+    assert len(after["a.py"]) == len(before["a.py"]) + 1
+    other_base = _git(root, "rev-parse", "HEAD~2")
+    assert len(hr._history_blobs(root, other_base, ["a.py"])["a.py"]) == 2
+
+
+def test_history_blobs_span_too_long_raises_for_every_caller_without_rewalking(walk_repo, monkeypatch):
+    root, base = walk_repo
+    monkeypatch.setattr(hr, "_HISTORY_COMMITS", 3)
+    with pytest.raises(ValueError, match="span too long"):
+        hr._history_blobs(root, base, ["a.py"])
+    reads = _count_commit_reads(monkeypatch)
+    with pytest.raises(ValueError, match="span too long"):
+        hr._history_blobs(root, base, ["b.py"])
+    assert reads == []
+
+
+def test_history_blobs_unreadable_commit_is_not_cached(walk_repo, monkeypatch):
+    from coordinator_core.git import git_objects
+
+    root, base = walk_repo
+    real = git_objects.read_object
+    monkeypatch.setattr(git_objects, "read_object", lambda common, sha: None)
+    with pytest.raises(ValueError, match="unreadable commit"):
+        hr._history_blobs(root, base, ["a.py"])
+    monkeypatch.setattr(git_objects, "read_object", real)
+    assert len(hr._history_blobs(root, base, ["a.py"])["a.py"]) == 5
+
+
 @pytest.mark.parametrize("count", [1, 6])
 def test_foreign_halted_withheld_fetches_only_blobs_of_runs_withholding_a_wanted_path(tmp_path, monkeypatch, count):
     """A landing whose paths no halted run withholds reads no blob; the one run that does is read alone."""

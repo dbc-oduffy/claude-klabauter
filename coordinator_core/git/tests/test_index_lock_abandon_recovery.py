@@ -126,11 +126,102 @@ def test_live_foreign_pid_owner_is_busy(repo):
         holder.wait(timeout=10)
 
 
-def test_ownerless_lock_is_never_reaped_by_acquire(repo):
+def test_fresh_ownerless_lock_is_not_reaped_by_acquire(repo):
     _lock(repo).write_bytes(b"git.exe's")
     with pytest.raises(index_write.IndexWriteLockBusy):
         index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
     assert _lock(repo).exists()
+
+
+def _backdate(path: Path, seconds: float = 60.0) -> None:
+    past = path.stat().st_mtime - seconds
+    os.utime(path, (past, past))
+
+
+def _reclaimed(repo) -> list:
+    return sorted((repo / ".git").glob("index.lock.reclaimed-*"))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="POSIX has no held-open probe; its lock reads as held")
+def test_ownerless_unheld_lock_past_floor_is_moved_aside_and_logged(repo):
+    _lock(repo).write_bytes(b"git.exe's stranded bytes")
+    _backdate(_lock(repo))
+    index_write.prepare_splice(repo, _updates(repo), stat_fallback=True).publish()
+    assert not _lock(repo).exists()
+    assert "new.txt" in _git(["ls-files"], repo)
+    moved = _reclaimed(repo)
+    assert len(moved) == 1 and moved[0].read_bytes() == b"git.exe's stranded bytes"
+    lines = (repo / ".git" / "lock-reap.log").read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 1 and "reclaimed ownerless unheld" in lines[0] and moved[0].name in lines[0]
+
+
+def test_ownerless_lock_younger_than_floor_is_left_alone(repo):
+    _lock(repo).write_bytes(b"fresh")
+    with pytest.raises(index_write.IndexWriteLockBusy):
+        index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+    assert _lock(repo).read_bytes() == b"fresh"
+    assert not _reclaimed(repo)
+
+
+def test_ownerless_lock_past_floor_is_left_alone_where_no_probe_exists(repo, monkeypatch):
+    monkeypatch.setattr(index_write, "_lock_held_open", lambda p: True)
+    _lock(repo).write_bytes(b"held")
+    _backdate(_lock(repo))
+    with pytest.raises(index_write.IndexWriteLockBusy):
+        index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+    assert _lock(repo).read_bytes() == b"held"
+    assert not _reclaimed(repo)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="no portable held-open probe off Windows")
+def test_ownerless_lock_held_open_by_child_is_left_alone(repo):
+    _lock(repo).write_bytes(b"held by child")
+    _backdate(_lock(repo))
+    code = (
+        "import sys,time\n"
+        "f=open(sys.argv[1],'rb'); print('ready',flush=True); time.sleep(60)\n"
+    )
+    child = subprocess.Popen(
+        [sys.executable, "-c", code, str(_lock(repo))],
+        stdout=subprocess.PIPE, text=True, **no_console_creationflags(),
+    )
+    try:
+        assert child.stdout.readline().strip() == "ready"
+        # Python opens with FILE_SHARE_READ|WRITE, which still conflicts with a share-mode-0 probe.
+        assert index_write._lock_held_open(_lock(repo))
+        with pytest.raises(index_write.IndexWriteLockBusy):
+            index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+        assert _lock(repo).read_bytes() == b"held by child"
+        assert not _reclaimed(repo)
+    finally:
+        child.kill()
+        child.wait(timeout=10)
+
+
+def test_live_owner_file_lock_past_floor_is_still_busy(repo):
+    holder = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(60)"], **no_console_creationflags()
+    )
+    try:
+        _lock(repo).write_bytes(b"owned")
+        _backdate(_lock(repo))
+        index_write._owner_path(_lock(repo)).write_text(
+            json.dumps({"pid": holder.pid, "token": "t"}), encoding="utf-8"
+        )
+        with pytest.raises(index_write.IndexWriteLockBusy):
+            index_write.prepare_splice(repo, _updates(repo), stat_fallback=True)
+        assert _lock(repo).exists() and not _reclaimed(repo)
+    finally:
+        holder.kill()
+        holder.wait(timeout=10)
+
+
+def test_reclaim_refuses_a_lock_that_has_an_owner_file(repo):
+    _lock(repo).write_bytes(b"owned")
+    _backdate(_lock(repo))
+    index_write._owner_path(_lock(repo)).write_text("{}", encoding="utf-8")
+    assert index_write._reclaim_ownerless_lock(_lock(repo)) is False
+    assert _lock(repo).exists() and not _reclaimed(repo)
 
 
 def _hold_in_thread(repo, event):

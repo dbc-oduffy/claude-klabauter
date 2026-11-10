@@ -885,3 +885,95 @@ def test_history_walk_reads_versions_in_process_and_refuses_a_span_past_the_cap(
     with pytest.raises(ValueError):
         hr._history_blobs(tmp_path, base, ["a.py"])
     assert hr._landed_in_history(tmp_path, base, {"a.py": ("v0\n", b"v1\n")}) == set()
+
+
+def test_a_span_known_too_long_starts_no_read_wall_but_a_walkable_span_still_does(tmp_path, monkeypatch):
+    _git(tmp_path, "init", "-q")
+    for n in range(4):
+        _write(tmp_path / "a.py", f"v{n}\n")
+        _git(tmp_path, "add", "a.py")
+        _git(tmp_path, "commit", "-q", "-m", f"c{n}")
+    base = _git(tmp_path, "rev-parse", "HEAD~3")
+    walls = []
+    real = hr._one_read_wall
+    monkeypatch.setattr(hr, "_one_read_wall", lambda root, token, fn: (walls.append(token) if token == "history" else None) or real(root, token, fn))
+    pending = {"a.py": ("v0\n", b"v1\n")}
+    hr._WALKS.clear()
+    assert hr._landed_in_history(tmp_path, base, pending) == {"a.py"}
+    assert walls == ["history"]
+    monkeypatch.setattr(hr, "_HISTORY_COMMITS", 2)
+    hr._WALKS.clear()
+    assert hr._landed_in_history(tmp_path, base, pending) == set()
+    assert walls == ["history", "history"]
+    assert hr._landed_in_history(tmp_path, base, pending) == set()
+    assert walls == ["history", "history"]
+
+
+def _base_reads(fetches, halted) -> int:
+    return sum(1 for _, specs in fetches if f"{halted['run_base_sha']}:b.py" in specs)
+
+
+def test_prefetch_reads_the_run_base_blobs_once_and_the_per_run_check_reuses_them(tmp_path, monkeypatch):
+    h, c, rec, halted = _two_path_run(tmp_path, "x = 2\n")
+    fetches = _count(monkeypatch, "_blob_fetch")
+    with hr.blob_scope(tmp_path):
+        hr.prefetch_kept_blobs(tmp_path, [(rec, halted)])
+        assert _base_reads(fetches, halted) == 1
+        assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py"}
+    assert _base_reads(fetches, halted) == 1
+
+
+def test_partial_base_prefetch_falls_back_to_the_runs_own_fetch(tmp_path, monkeypatch):
+    h, c, rec, halted = _two_path_run(tmp_path, "x = 2\n")
+    fetches = _count(monkeypatch, "_blob_fetch")
+    with hr.blob_scope(tmp_path) as state:
+        hr.prefetch_kept_blobs(tmp_path, [(rec, halted)])
+        state["base_blobs"].clear()  # the prefetch served none of this run's specs
+        assert hr.kept_at_head_paths(tmp_path, rec, halted) == {"a.py"}
+    assert _base_reads(fetches, halted) == 2
+
+
+def test_checkin_form_is_converted_once_per_scope_and_kept_spec(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    calls: list = []
+    monkeypatch.setattr(kept_work, "checkin_form", lambda root, rel, keep: calls.append(rel) or keep)
+    with hr.release_scope():
+        assert hr._checkin_form(tmp_path, "a.py", "s1", b"x\r") == b"x\r"
+        assert hr._checkin_form(tmp_path, "a.py", "s1", b"x\r") == b"x\r"
+        assert hr._checkin_form(tmp_path, "a.py", "s2", b"y\r") == b"y\r"
+    assert calls == ["a.py", "a.py"]
+    hr._checkin_form(tmp_path, "a.py", "s1", b"x\r")
+    assert len(calls) == 3
+
+
+def _git_root(tmp_path, attrs: str):
+    import subprocess
+
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    (tmp_path / ".gitattributes").write_text(attrs, encoding="utf-8", newline="\n")
+    return tmp_path
+
+
+@pytest.mark.parametrize("attrs,data,refused", [
+    ("", b"plain\n", False),
+    ("*.py text\n", b"plain\n", False),
+    ("*.py -text\n", b"plain\n", False),
+    ("*.py filter=lfs\n", b"plain\n", True),
+    ("[attr]m text\n", b"plain\n", True),
+])
+def test_checkin_of_matches_kept_work_for_cr_free_data(tmp_path, attrs, data, refused):
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    root = _git_root(tmp_path, attrs)
+    got = hr._checkin_of(root, "a.py", data)
+    assert got == kept_work.checkin_form(root, "a.py", data)
+    assert (got is None) is refused
+
+
+def test_checkin_of_cr_free_plain_data_never_reaches_the_commit_module(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    root = _git_root(tmp_path, "")
+    monkeypatch.setattr(kept_work, "checkin_form", lambda *a: pytest.fail("delegated"))
+    assert hr._checkin_of(root, "a.py", b"plain\n") == b"plain\n"

@@ -1,7 +1,7 @@
 """A landing never commits a test while the source it exercises stays out of the commit.
 
-A peer-held `m.py` stays out; the test that reads `m.note_ids` is dropped and named withheld, while a
-non-test importer of the same `m.py` still lands with its `import-closure-untracked` provenance entry.
+A peer-held `m.py` stays out; the test that reads `m.note_ids` is dropped and named withheld, and so is a
+non-test importer of it (`lost-definition`). A target a live run owns is dropped and named the same way.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ TEST_BASE = "def test_run():\n    assert True\n"
 TEST_NEW = "def test_run():\n    from pk import m\n\n    assert m.note_ids() == []\n"
 
 
-def _stage(repo, monkeypatch, *, hold_m: bool) -> dict:
+def _stage(repo, monkeypatch, *, hold_m: bool, declare_m: bool = False) -> dict:
     prod._write(repo, "pk/__init__.py", "")
     prod._write(repo, "pk/m.py", M_BASE)
     prod._write(repo, "pk/u.py", USER_BASE)
@@ -34,7 +34,7 @@ def _stage(repo, monkeypatch, *, hold_m: bool) -> dict:
     prod._author(repo, "pk/u.py", USER_NEW)
     prod._author(repo, "pk/test_u.py", TEST_NEW)
     prod._author(repo, "pk/m.py", M_NEW)
-    prod._declare(repo, "pk/u.py", "pk/test_u.py")
+    prod._declare(repo, "pk/u.py", "pk/test_u.py", *(["pk/m.py"] if declare_m else []))
     prod._record_dir(repo)
     if hold_m:
         real = land_run._peer_held
@@ -58,12 +58,12 @@ def test_test_importing_a_held_source_is_dropped_and_named(product_repo, monkeyp
     assert not [e for e in out.get("provenance") or [] if e["path"] == "pk/test_u.py"], out
 
 
-def test_non_test_importer_of_the_held_source_still_lands_with_provenance(product_repo, monkeypatch):
+def test_non_test_importer_of_the_held_source_is_dropped_as_lost_definition(product_repo, monkeypatch):
     out = _stage(product_repo, monkeypatch, hold_m=True)
 
-    assert "pk/u.py" in prod._tree(product_repo)
-    entries = [e for e in out.get("provenance") or [] if e["reason"] == REASON and e["path"] == "pk/u.py"]
-    assert len(entries) == 1 and "pk/m.py" in entries[0]["detail"], out
+    assert "pk/u.py" not in prod._tree(product_repo)
+    assert out["withheld"]["pk/u.py"] == f"{landing_integrity.LOST_DEFINITION}: pk/m.py", out
+    assert not [e for e in out.get("provenance") or [] if e["reason"] == REASON and e["path"] == "pk/u.py"], out
 
 
 def test_unheld_source_is_carried_so_the_test_lands(product_repo, monkeypatch):
@@ -73,6 +73,29 @@ def test_unheld_source_is_carried_so_the_test_lands(product_repo, monkeypatch):
     tree = prod._tree(product_repo)
     assert {"pk/test_u.py", "pk/m.py", "pk/u.py"} <= set(tree)
     assert "pk/test_u.py" not in (out.get("withheld") or {})
+
+
+def test_test_importing_a_source_a_live_run_owns_is_dropped_and_named(product_repo, monkeypatch):
+    from coordinator_core.authoring_leaks import run_owner
+
+    monkeypatch.setattr(run_owner, "owning_runs", lambda root, paths, **kw: {p: "run-other" for p in paths})
+    out = _stage(product_repo, monkeypatch, hold_m=True, declare_m=True)
+
+    assert out["committed"] is True and out.get("refused") is None, out
+    tree = prod._tree(product_repo)
+    assert "pk/test_u.py" not in tree and "pk/m.py" not in tree
+    assert out["withheld"]["pk/test_u.py"] == f"{land_run.TEST_WITHOUT_SOURCE}: pk/m.py", out
+    assert out["withheld"].get("pk/m.py"), out
+
+
+def test_owner_annotated_source_that_lands_keeps_its_test(product_repo, monkeypatch):
+    from coordinator_core.authoring_leaks import run_owner
+
+    monkeypatch.setattr(run_owner, "owning_runs", lambda root, paths, **kw: {p: "run-other" for p in paths})
+    out = _stage(product_repo, monkeypatch, hold_m=False)
+
+    assert out["committed"] is True, out
+    assert {"pk/test_u.py", "pk/m.py", "pk/u.py"} <= set(prod._tree(product_repo))
 
 
 @pytest.mark.parametrize("rel,expect", [

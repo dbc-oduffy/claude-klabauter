@@ -7109,6 +7109,18 @@ def _docs_prompt_parts(*, run_id: str, manifest_rel: str) -> tuple[str, ...]:
     )
 
 
+NO_RUN_TOKEN_COMMIT_REASON = "commit stage skipped: no run token"
+
+# Tail of an `else if (!_halted && ...)` arm: a terminal-commit `_nextAction` with no `_RUN_TOKEN`
+# cannot fire the commit stage, so the reply names the halt instead of carrying halted_by null.
+_NO_RUN_TOKEN_COMMIT_SKIPPED_JS = (
+    "_nextAction && _nextAction.kind === 'terminal_commit' && !_RUN_TOKEN) { "
+    "_halted = { halted: 'commit', refused: null, error: null, blob_drift: null, "
+    f"reason: {json.dumps(NO_RUN_TOKEN_COMMIT_REASON)}, "
+    "plan: (typeof _planRel === 'undefined' ? null : _planRel) ?? null, sizing: _sizingRel ?? null, run_id: _runId }; }"
+)
+
+
 def _append_docs_and_commit(
     b: list[str], *, head: str, anchor: str, repo_root: str, run_id: str, manifest_rel: str,
     script_path: Optional[str] = None,
@@ -7194,6 +7206,7 @@ def _append_docs_and_commit(
         f"else {{ _nextAction = {REVISE_NEXT_ACTION_JS}; _reviseAndRefire = _mkRevise(); }} }}"
     )
     b.append("  }")
+    b.append(f"  else if (!_halted && _closeable && {_NO_RUN_TOKEN_COMMIT_SKIPPED_JS}")
 
 
 def roadmap_commit_decls(*, head: str, anchor: str, repo_root: str, run_id: str) -> list[str]:
@@ -7226,6 +7239,7 @@ def roadmap_commit_lines(
         "refused: _commit?.refused ?? null, error: _commit?.error ?? null, "
         "blob_drift: _commit?.blob_drift ?? null, sizing: _sizingRel, run_id: _runId }; " + _NO_CHANGE_HALT_JS + _hijack_halt_js("_commit") + "}",
         "  }",
+        f"  else if (!_halted && {_NO_RUN_TOKEN_COMMIT_SKIPPED_JS}",
     ]
 
 

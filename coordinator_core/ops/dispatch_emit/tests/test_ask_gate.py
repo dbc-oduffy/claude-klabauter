@@ -188,6 +188,21 @@ def test_shape_keeps_the_room_halt_at_any_size(repo, tshirt):
     assert gate(repo, REL).halt["kind"] == "room"
 
 
+@pytest.mark.parametrize("research", [None, {}])
+def test_research_route_without_a_research_block_refuses_naming_the_block_remedy(repo, research):
+    _put(repo, tshirt="S", route="research", research=research)
+    v = gate(repo, REL)
+    assert v.halt["kind"] == "refusal"
+    assert "sizing-assemble --research-class" in v.halt["reason"]
+    assert "emit-dispatch-workflow" not in v.halt["reason"]
+
+
+def test_research_route_with_a_research_block_does_not_refuse_for_the_block(repo):
+    _put(repo, tshirt="S", route="research", research={"class": "survey", "targets": []})
+    v = gate(repo, REL)
+    assert "has no research block" not in str((v.halt or {}).get("reason", ""))
+
+
 def test_skipped_acceptance_verdict_carries_the_engine_stamp(repo):
     _put(repo, tshirt="XS", route="dispatch")
     v = gate(repo, REL, writes=["a.py"])

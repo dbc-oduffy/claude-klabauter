@@ -56,6 +56,8 @@ import os
 import stat
 import struct
 import threading
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from typing import IO, Collection, Dict, Mapping, Optional, Tuple, Union
@@ -305,7 +307,7 @@ def prepare_splice(
     try:
         fd = os.open(str(lock_path), flags, 0o644)
     except FileExistsError as exc:
-        if not _recover_dead_writer(lock_path):
+        if not (_recover_dead_writer(lock_path) or _reclaim_ownerless_lock(lock_path)):
             raise IndexWriteLockBusy(f"{lock_path} exists -- a peer holds the index") from exc
         try:
             fd = os.open(str(lock_path), flags, 0o644)
@@ -657,6 +659,70 @@ def _recover_dead_writer(lock_path: Path) -> bool:
         return True
     except OSError:
         return False
+    return True
+
+
+# A live writer closes its handle before renaming the lock into place, so for that instant a
+# live lock is ownerless AND unheld; the floor keeps the reclaim off that window. One stat, no sleep.
+_OWNERLESS_RECLAIM_FLOOR_SEC = 2.0
+
+
+def _lock_held_open(path: Path) -> bool:
+    """True when any process may hold `path` open. Windows: an exclusive-share open succeeds only
+    if nobody holds it. POSIX has no portable probe, so it reads as held. Any doubt is True."""
+    if os.name != "nt":
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        create = ctypes.windll.kernel32.CreateFileW
+        create.restype = wintypes.HANDLE
+        create.argtypes = [
+            wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+            wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE,
+        ]
+        handle = create(str(path), 0x80000000, 0, None, 3, 0x80, None)  # GENERIC_READ, share 0, OPEN_EXISTING
+        if handle is None or handle == wintypes.HANDLE(-1).value:
+            return True
+        ctypes.windll.kernel32.CloseHandle(handle)
+        return False
+    except Exception:  # noqa: BLE001 -- doubt reads as held
+        return True
+
+
+def _reclaim_ownerless_lock(lock_path: Path) -> bool:
+    """Move an ownerless, unheld, non-fresh `lock_path` aside and log it; False on any doubt.
+    Never deletes: the bytes stay at `index.lock.reclaimed-*` for diagnosis."""
+    if _owner_path(lock_path).exists():
+        return False
+    try:
+        st = lock_path.stat()
+        if time.time() - st.st_mtime < _OWNERLESS_RECLAIM_FLOOR_SEC:
+            return False
+        if _lock_held_open(lock_path):
+            return False
+        if _owner_path(lock_path).exists():
+            return False
+        now = datetime.now(timezone.utc)
+        dest = lock_path.with_name(
+            f"{lock_path.name}.reclaimed-{now.strftime('%Y%m%dT%H%M%SZ')}-{os.getpid()}"
+        )
+        os.replace(lock_path, dest)
+    except OSError:
+        return False
+    log = lock_path.with_name("lock-reap.log")
+    try:
+        with open(log, "a", encoding="utf-8", newline="\n") as f:
+            f.write(
+                f"[{now.strftime('%Y-%m-%dT%H:%M:%SZ')}] reclaimed ownerless unheld "
+                f"{lock_path} ({st.st_size} bytes) -> {dest}\n"
+            )
+        from coordinator_core.session.declared_writes import declare_write
+
+        declare_write(log)
+    except OSError:
+        pass  # the lock is already moved aside; a lost log line must not re-strand the commit
     return True
 
 

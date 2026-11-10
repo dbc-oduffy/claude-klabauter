@@ -65,6 +65,7 @@ def _run_file(repo_root: Path, run_id: str) -> Path:
 
 
 _PARSED = "halt-index-entry"
+_FRESH = "halt-index-fresh"
 
 
 def _parse(file) -> Optional[RunEntry]:
@@ -98,6 +99,7 @@ def _parse_file(file) -> Optional[RunEntry]:
 def _store(repo_root: Path, run_id: str, entry: RunEntry) -> None:
     """Write `entry`, or drop the file when it holds neither paths nor declared."""
     call_io_scope.invalidate(_PARSED)
+    forget_fresh()
     if not entry.paths and not entry.declared:
         remove_run(repo_root, run_id)
         return
@@ -165,6 +167,7 @@ def record_declared(
 def remove_run(repo_root: Path, run_id: str) -> None:
     """Drop the run's entry; absent is a no-op."""
     call_io_scope.invalidate(_PARSED)
+    forget_fresh()
     try:
         _run_file(repo_root, run_id).unlink()
     except OSError:
@@ -258,7 +261,16 @@ def fresh_entry(repo_root: Path, run_id: str) -> Optional[RunEntry]:
     if not safe_id(run_id):
         return None
     root = os.fspath(repo_root)
-    index = os.path.join(root, INDEX_DIR)
+    return call_io_scope.memo(_FRESH, (root, run_id), lambda: _fresh_entry(root, run_id))
+
+
+def forget_fresh() -> None:
+    """Drop the scope's `fresh_entry` answers: a run's marker or index entry was just rewritten."""
+    call_io_scope.invalidate(_FRESH)
+
+
+def _fresh_entry(root: str, run_id: str) -> Optional[RunEntry]:
+    index = os.fspath(_dir(Path(root)))  # same spelling as `entries`, so the memoised parse is shared
     try:
         if not call_io_scope.memo(_PARSED, "sentinel:" + index, lambda: os.path.exists(os.path.join(index, SENTINEL))):
             return None

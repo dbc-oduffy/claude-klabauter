@@ -685,6 +685,8 @@ def _arm_verdict(
             route=RESEARCH_HANDBACK_ROUTE,
             fire=[fire_command(sizing_rel)],
         )
+    if arm != ARM_ROADMAP and route == "research" and not (isinstance(research, dict) and research):
+        return _refuse(f"sizing {sizing_rel} has no research block; set one with sizing-assemble --research-class")
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
         extra = {}
         if route == "pm-decision":

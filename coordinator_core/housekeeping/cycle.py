@@ -295,7 +295,10 @@ def run(
     result), `emitted_pruned` (repo-relative paths of untracked emitted
     workflow output deleted this cycle), `emitted_retained_count` (int) and
     `emitted_prune_error` (str or None; the prune leg is non-fatal and never
-    changes `exit_code`), and `invariant` (every run, close or not): `archive_nonterminal`
+    changes `exit_code`), `cascade_redrive` (`redrive_terminal_divergences`
+    result; a raising redrive lands in its `errors`, never fails the cycle),
+    `landed_parked` (plans parked at landed past the day threshold), and
+    `invariant` (every run, close or not): `archive_nonterminal`
     (`{id, deployment_state}` for archived records not in a terminal state,
     read after this cycle's own moves) and `gate_dead_blockers` (`{id,
     blocker_id, reason}` for gated records that can never clear: no blocker

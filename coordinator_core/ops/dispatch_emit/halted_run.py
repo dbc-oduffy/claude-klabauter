@@ -120,6 +120,9 @@ def _write(record_dir: Path, payload: dict) -> Path:
     target = record_dir / HALTED_FILE
     atomic_write_bytes(target, (json.dumps(payload, indent=2) + "\n").encode("utf-8"))
     call_io_scope.invalidate(path=target)
+    from coordinator_core.ops.dispatch_emit import halted_withheld_index
+
+    halted_withheld_index.forget_fresh()
     _track_lookup(Path(record_dir), payload)
     return target
 

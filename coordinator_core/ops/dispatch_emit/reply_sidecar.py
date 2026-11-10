@@ -49,9 +49,16 @@ STAGE_REPLY_SCHEMA = {
         "error": {"type": "string"},
         "owed_em_ids": {"type": "array", "items": {"type": "string"}},
         "owed_plan": {"type": ["string", "null"]},
-        # Literal ask_contract.STOP_AFTER_PLAN, pinned equal by test_reply_sidecar.
-        "parked": {"const": "plan"},
+        # Literals ask_contract.STOP_AFTER_PLAN / ask_stage.STAGE_WAIT_PARKED, pinned equal by test_reply_sidecar.
+        "parked": {"enum": ["plan", "stage-wait"]},
         "plan_path": {"type": ["string", "null"]},
+        "waiting": {
+            "type": "object",
+            "properties": {
+                "blockers": {"type": "array", "items": {"type": "string"}},
+                "deadline": {"type": ["string", "number", "null"]},
+            },
+        },
         # Literals ask_stage_receipt.ALREADY_STAGED_KEY / STAGE_IN_FLIGHT_KEY, pinned equal by test_reply_sidecar.
         "already_staged": {"const": True},
         "stage_in_flight": {"type": "object"},

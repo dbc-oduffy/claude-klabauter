@@ -275,7 +275,8 @@ def main(argv: "list[str] | None" = None) -> int:
     print(f"closed {closed}, archived {len(archived)}")
     redrive = result.get("cascade_redrive") or {}
     parked = result.get("landed_parked") or []
-    print(f"redrove {len(redrive.get('advanced') or [])} baton(s); {len(parked)} plan(s) parked at landed > 14d")
+    from coordinator_core.ops.cascade_backstop_sweep import DEFAULT_LANDED_DAYS
+    print(f"redrove {len(redrive.get('advanced') or [])} baton(s); {len(parked)} plan(s) parked at landed > {DEFAULT_LANDED_DAYS}d")
     for entry in parked:
         print(f"  {entry.get('plan')}")
     for err in redrive.get("errors") or []:

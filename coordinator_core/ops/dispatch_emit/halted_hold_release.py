@@ -401,6 +401,7 @@ def prefetch_kept_blobs(root: Path, runs: list) -> None:
         return
     union: set = set()
     specs: list = []
+    planned: list = []
     for record, marker in runs:
         if irrelevant(root, record, marker):
             continue
@@ -410,6 +411,7 @@ def prefetch_kept_blobs(root: Path, runs: list) -> None:
             plan = _kept_plan(record)
             if plan is not None:
                 specs.extend(_kept_specs(plan[0], plan[1], ""))
+                planned.append((plan, _base_sha(marker)))
         except Exception:  # noqa: BLE001 -- planned again, and held, by kept_at_head_paths
             continue
     state["memo"][("withheld-union", str(root))] = frozenset(union)
@@ -419,7 +421,63 @@ def prefetch_kept_blobs(root: Path, runs: list) -> None:
 
         landing_halted_view.hint_index(root, union)
     if specs:
-        _blob_batch(root, specs)
+        blobs = _blob_batch(root, specs)
+        if blobs is not None:
+            with contextlib.suppress(Exception):  # unread: each run reads its own base blobs
+                _prefetch_base_blobs(root, state, planned, blobs)
+
+
+def _checkin_form(root: Path, rel: str, keep_spec: str, keep: bytes) -> Optional[bytes]:
+    """`kept_work.checkin_form`, memoised per release scope on the kept blob spec: the prefetch and the
+    per-run kept-at-head check ask for the same conversion."""
+    state = _SCOPE.get()
+    if state is None:
+        return _checkin_of(root, rel, keep)
+    key = ("checkin", str(root), rel, keep_spec)
+    if key not in state["memo"]:
+        state["memo"][key] = _checkin_of(root, rel, keep)
+    return state["memo"][key]
+
+
+def _checkin_of(root: Path, rel: str, data: bytes) -> Optional[bytes]:
+    """`kept_work.checkin_form`, answered without importing `git.commit` when `data` has no CR byte and
+    no clean filter or unresolved attribute macro governs `rel`: `_checkin_bytes` returns such data unchanged."""
+    if b"\r" not in data:
+        from coordinator_core.git import checkin_attrs
+
+        if checkin_attrs.clean_filter_may_apply(Path(root), rel) is None and \
+                checkin_attrs.checkin_disposition(Path(root), rel) != checkin_attrs.UNRESOLVED:
+            return data
+    from coordinator_core.ops.dispatch_emit import kept_work
+
+    return kept_work.checkin_form(root, rel, data)
+
+
+def _prefetch_base_blobs(root: Path, state: dict, planned: list, blobs: dict) -> None:
+    """One read of the run-base blobs of every planned path whose kept bytes differ from HEAD, into
+    `state["base_blobs"]`, so `_kept_at_head_paths` starts no object-read wall per run."""
+    wanted: list = []
+    for (paths, kept), base_sha in planned:
+        if not base_sha:
+            continue
+        for p in paths:
+            head, keep = blobs.get(f"HEAD:{p}"), blobs.get(kept[p])
+            if head is None or keep is None or head == keep or _checkin_form(root, p, kept[p], keep) == head:
+                continue
+            wanted.append(f"{base_sha}:{p}")
+    if wanted:
+        fetched = _blob_fetch(root, wanted)
+        if fetched is not None:
+            state.setdefault("base_blobs", {}).update({(str(root), s): b for s, b in fetched.items()})
+
+
+def _scoped_base_blobs(root: Path, specs: list) -> Optional[dict]:
+    """The prefetched run-base blobs when every spec was read by `_prefetch_base_blobs`, else None."""
+    state = _SCOPE.get()
+    have = state.get("base_blobs") if state is not None else None
+    if not have or any((str(root), s) not in have for s in specs):
+        return None
+    return {s: have[(str(root), s)] for s in specs}
 
 
 def _withheld_keys(record: Path) -> set:
@@ -1095,8 +1153,6 @@ def kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
 
 
 def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
-    from coordinator_core.ops.dispatch_emit import kept_work
-
     plan = _kept_plan(record)
     if plan is None:
         return set()
@@ -1117,7 +1173,7 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
         head, keep = blobs[f"HEAD:{p}"], blobs[kept[p]]
         if head is None or keep is None:
             continue
-        if head == keep or kept_work.checkin_form(root, p, keep) == head:
+        if head == keep or _checkin_form(root, p, kept[p], keep) == head:
             released.add(p)
         elif base_sha:
             differing.append(p)
@@ -1126,7 +1182,7 @@ def _kept_at_head_paths(root: Path, record: Path, marker: dict) -> set:
         from coordinator_core.ops.dispatch_emit import landing_halted_view
 
         specs = [f"{base_sha}:{p}" for p in differing]
-        base = landing_halted_view.shared("base_blob", (str(root), tuple(specs)), lambda: _blob_fetch(root, specs))
+        base = landing_halted_view.shared("base_blob", (str(root), tuple(specs)), lambda: _scoped_base_blobs(root, specs) or _blob_fetch(root, specs))
         for p, spec in zip(differing, specs):
             if base is None:
                 break
@@ -1197,8 +1253,6 @@ def _commit_spine(root: Path, head: str, base_sha: str) -> tuple:
     """The commit shas from `head` back toward `base_sha`, breadth first, walked once per `(root, head, base_sha)`.
     Raises `ValueError` "span too long" past `_HISTORY_COMMITS` for every caller of that key; that outcome is a
     fact of the immutable graph and is cached with the successes. "unreadable commit" may be transient and is never cached."""
-    from coordinator_core.git import git_state
-
     key = str(root)
     cached = _WALKS.get(key)
     if cached is None or cached[0] != head:
@@ -1209,7 +1263,7 @@ def _commit_spine(root: Path, head: str, base_sha: str) -> tuple:
     slot = (base_sha, _HISTORY_COMMITS)
     if slot not in bases:
         try:
-            walked: object = _walk_spine(root, head, base_sha, git_state)
+            walked: object = _walk_spine(root, head, base_sha)
         except ValueError as exc:
             if str(exc) != _SPAN_TOO_LONG:
                 raise
@@ -1223,20 +1277,40 @@ def _commit_spine(root: Path, head: str, base_sha: str) -> tuple:
     return spine
 
 
-def _walk_spine(root: Path, head: str, base_sha: str, git_state) -> tuple:
-    queue, seen, order = [head], {head, base_sha}, []
-    while queue:
-        sha = queue.pop(0)
+def _span_known_too_long(root: Path, base_sha: str) -> bool:
+    """Whether an earlier run's walk already showed HEAD is more than `_HISTORY_COMMITS` past `base_sha`: that
+    outcome is cached, so the hold stands without starting an object-read wall (a worker thread) per run."""
+    from coordinator_core.git import git_state
+
+    cached = _WALKS.get(str(root))
+    return cached is not None and cached[0] == git_state.head_sha(root) and cached[1].get((base_sha, _HISTORY_COMMITS)) == _SPAN_TOO_LONG
+
+
+def _walk_spine(root: Path, head: str, base_sha: str) -> tuple:
+    """Commit shas breadth first from `head` toward `base_sha`; reads each commit's parent lines only (the
+    tree and message the full parse builds are not needed to count a span)."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+
+    common = resolve_git_common_dir(root)
+    queue, seen, order, at = [head], {head, base_sha}, [], 0
+    while at < len(queue):
+        sha = queue[at]
+        at += 1
         if len(order) >= _HISTORY_COMMITS:
             raise ValueError(_SPAN_TOO_LONG)
-        commit = git_state.read_commit(root, sha)
-        if commit is None:
+        got = read_object(common, sha)
+        if got is None or got[0] != "commit":
             raise ValueError("unreadable commit")
         order.append(sha)
-        for parent in commit.parents:
-            if parent not in seen:
-                seen.add(parent)
-                queue.append(parent)
+        for line in got[1].partition(b"\n\n")[0].split(b"\n"):
+            if line.startswith(b"parent "):
+                parent = line[7:].decode("ascii", errors="replace").strip()
+                if not _SHA40.match(parent):
+                    raise ValueError("unreadable commit")
+                if parent not in seen:
+                    seen.add(parent)
+                    queue.append(parent)
     return tuple(order)
 
 
@@ -1249,6 +1323,8 @@ def _landed_in_history(root: Path, base_sha: str, pending: dict) -> set:
     from coordinator_core.ops.dispatch_emit import kept_work
 
     try:
+        if _span_known_too_long(root, base_sha):
+            return set()
         versions = _one_read_wall(root, "history", lambda: _history_blobs(root, base_sha, sorted(pending)))
         specs = list(dict.fromkeys(s for shas in versions.values() for s in shas[:_HISTORY_VERSIONS]))
         blobs = _blob_batch(root, specs) if specs else {}

@@ -4706,7 +4706,8 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             f"ledger rows not reported met: commit omits changed file(s) {withheld_product}"[:_UNDONE_CAP]
         )
     reply.update(recovery_reply)
-    foreign_named = {p: withhold_reason[p] for p in foreign_held if p in withhold_reason}
+    landed_now_set = {*paths, *deleted}
+    foreign_named = {p: why for p, why in withhold_reason.items() if p not in landed_now_set}
     foreign_named.update({
         p: f"withheld by {holder}" for p, (_h, holder, partial) in halted_clear.items()
         if partial and p in settled_stage
@@ -5092,7 +5093,10 @@ def _carry_withheld_symbol_targets(
     from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_integrity as li
 
     pairs = import_closure.withheld_symbol_pairs(
-        root, [(f.path, f.detail) for f in provenance if f.reason == li.IMPORT_CLOSURE_UNTRACKED],
+        root, [
+            (f.path, _OWNER_SUFFIX.sub("", f.detail))
+            for f in provenance if f.reason == li.IMPORT_CLOSURE_UNTRACKED
+        ],
     )
     if not pairs:
         return [], {}
@@ -5121,6 +5125,10 @@ def _carry_withheld_symbol_targets(
 
 
 TEST_WITHOUT_SOURCE = "test-without-source"
+
+# The detector suffixes a target another live run claims; the pair is the same, and that run's hold
+# is a reason the target stays out, never a reason the importer lands without it.
+_OWNER_SUFFIX = re.compile(r"; owned by live run \S+$")
 
 
 def _is_test_path(rel: str) -> bool:

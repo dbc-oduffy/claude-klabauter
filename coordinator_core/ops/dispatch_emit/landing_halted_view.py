@@ -5,7 +5,8 @@ Every leg of a landing asks it about the same in-window halted runs, so the answ
 on the asking leg are read once per `halted_hold_release.release_scope()` and shared: each record
 dir's stamp, each run's extra declarations, the git index (one walk grown to the union of the paths
 asked, re-walked only when `.git/index` changed), and which withheld paths are dirty. Outside a scope
-every function computes directly and caches nothing.
+every function computes directly and caches nothing, except `differs_from_index`, which falls back to an
+open `call_io_scope`.
 
 Invariants: a cached answer never outlives its scope; an index answer is keyed on the index file's
 `(mtime_ns, size)`, so a commit inside the scope re-reads it. Dirt is read once per landing: a file
@@ -155,6 +156,18 @@ def index_identity(root: Path, wanted: Collection[str]) -> dict:
     return {p: held[2][p] for p in ask if p in held[2]}
 
 
+def differs_from_index(f: Path, entry) -> bool:
+    """`commit_companion._differs_from_index(f, entry)`, hashed once per scope per file and index entry:
+    `dirty_status` and `dirty_withheld` ask it of the same worktree files."""
+    from coordinator_core.git import call_io_scope
+    from coordinator_core.ops.ceremony import commit_companion
+
+    key = (str(f), entry.sha, entry.mtime, entry.mtime_nsec, entry.size)
+    if _state() is None:  # no release scope: an open call scope still hashes each file once per call
+        return call_io_scope.memo("landing-differs", repr(key), lambda: commit_companion._differs_from_index(f, entry))
+    return shared("differs", key, lambda: commit_companion._differs_from_index(f, entry))
+
+
 def dirty_status(root: Path, wanted: Collection[str]) -> Optional[set]:
     """The `wanted` file paths `git status --porcelain` would list, decided in process from the index, HEAD's
     tree and the worktree: staged against HEAD, a worktree file differing from its index blob (or gone),
@@ -162,7 +175,6 @@ def dirty_status(root: Path, wanted: Collection[str]) -> Optional[set]:
     unmerged entry, an ignore verdict git alone knows, an unreadable HEAD or index): the caller asks git.
     A skip-worktree path reads as gone, so dirty: toward holding."""
     from coordinator_core.git import git_state
-    from coordinator_core.ops.ceremony import commit_companion
     from coordinator_core.session.claim_index import _normalize_key
 
     try:
@@ -196,7 +208,7 @@ def dirty_status(root: Path, wanted: Collection[str]) -> Optional[set]:
                         out.add(p)
             elif at_head is None or at_head[1] != entry.sha or at_head[0] != entry.mode:
                 out.add(p)
-            elif not f.is_file() or commit_companion._differs_from_index(f, entry):
+            elif not f.is_file() or differs_from_index(f, entry):
                 out.add(p)
         return out
     except Exception:  # noqa: BLE001 -- undecided here: git decides

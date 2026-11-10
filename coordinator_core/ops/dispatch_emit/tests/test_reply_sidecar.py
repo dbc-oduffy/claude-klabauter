@@ -165,15 +165,42 @@ def test_handle_for_refuses_an_over_cap_reader_and_writes_no_reader(tmp_path):
 
 def test_stage_reply_schema_carries_the_parked_reply():
     from coordinator_core.ops.dispatch_emit import ask_contract as ac
+    from coordinator_core.ops.dispatch_emit import ask_stage
 
-    assert rs.STAGE_REPLY_SCHEMA["properties"]["parked"]["const"] == ac.STOP_AFTER_PLAN
+    assert set(rs.STAGE_REPLY_SCHEMA["properties"]["parked"]["enum"]) == {ac.STOP_AFTER_PLAN, ask_stage.STAGE_WAIT_PARKED}
     assert ac.PARKED_REPLY_KEY in rs.STAGE_REPLY_SCHEMA["properties"]
+    waiting = {"blockers": ["ask-20261110T161823-979415"], "deadline": "2026-11-10T18:00:00+00:00"}
+    jsonschema.validate(
+        {ac.PARKED_REPLY_KEY: ask_stage.STAGE_WAIT_PARKED, "plan_path": "docs/plans/x.md", "waiting": waiting},
+        rs.STAGE_REPLY_SCHEMA,
+    )
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"parked": "stage-wait", "waiting": {"blockers": [3], "deadline": None}}, rs.STAGE_REPLY_SCHEMA)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate({"parked": "stage-waitt", "waiting": waiting}, rs.STAGE_REPLY_SCHEMA)
     for path in ("docs/plans/x.md", None):
         jsonschema.validate({ac.PARKED_REPLY_KEY: ac.STOP_AFTER_PLAN, "plan_path": path}, rs.STAGE_REPLY_SCHEMA)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"parked": "size", "plan_path": None}, rs.STAGE_REPLY_SCHEMA)
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"parked": "plan", "plan_path": 3}, rs.STAGE_REPLY_SCHEMA)
+
+
+from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: E402,F401
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_composed_script_ends_parked_on_a_stage_wait_reply(monkeypatch, stage_root):  # noqa: F811
+    from coordinator_core.ops.dispatch_emit import ask_contract as ac
+    from coordinator_core.ops.dispatch_emit import ask_stage
+    from coordinator_core.ops.dispatch_emit.tests import test_ask_compose_stage_handle as handle
+
+    reply = {ac.PARKED_REPLY_KEY: ask_stage.STAGE_WAIT_PARKED, "plan_path": handle._PLAN,
+             "waiting": {"blockers": ["ask-20261110T161823-979415"], "deadline": None}}
+    out = handle._run(handle._script(monkeypatch), reply)
+    assert out["result"]["halted_by"]["halted"] == ac.HALT_PARKED
+    assert out["workflowCalls"] == []
 
 
 def test_stage_reply_schema_accepts_already_staged_and_in_flight_replies(sidecar):

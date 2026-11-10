@@ -592,14 +592,9 @@ def _ledger_gate(
             if str(r.get("reason", "")).startswith("withheld_by ") else r
             for r in result.get("open") or []
         ]
-    foreign = [
-        str(f["id"]) for f in result["failures"] if f["reason"] == requirements_ledger.NOT_A_ROW_REASON
-    ]
     message = "the requirements are not met: " + "; ".join(
         (f"{f['id']}: {f['reason']}" if f["id"] is not None else f["reason"]) for f in result["failures"][:10]
     )
-    if foreign:
-        message += f". Verdict ids that are not register rows: {', '.join(foreign)}"
     landed = _since_halt_close(since_halt, result["failures"], verdict)
     if landed:
         return {
