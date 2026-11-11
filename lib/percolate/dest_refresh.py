@@ -62,12 +62,13 @@ in its history, keeps the refusal.
 
 from __future__ import annotations
 
+import os
 import re
 import io
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import List, Optional, TextIO
+from typing import List, Optional, Sequence, TextIO
 
 from coordinator_core.git.run import GitResult, run_git
 from percolate.interrupted_op import (
@@ -722,15 +723,66 @@ def refresh_dest_from_origin(
     return fast_forward_dest(fetched, out=out, err=err)
 
 
-def fast_forward_consumer(repo_root: Path) -> RefreshResult:
+def _dirt_split(porcelain: str, ignore: Sequence[str]) -> "tuple[int, List[str]]":
+    """(count of dirt outside `ignore`, ignored repo-relative paths that are dirty)."""
+    ignored_set = {p.replace("\\", "/") for p in ignore}
+    other = 0
+    ignored: List[str] = []
+    for line in porcelain.splitlines():
+        if not line.strip():
+            continue
+        path = line[3:].strip()
+        if path in ignored_set:
+            ignored.append(path)
+        else:
+            other += 1
+    return other, ignored
+
+
+def _handover_held(repo_root: Path) -> bool:
+    """Whether a publish marker or handover-pending hold is live for this clone; unreadable reads held."""
+    try:
+        from coordinator_core.warm import breadcrumb
+
+        return bool(
+            breadcrumb.publish_marker_held(breadcrumb.svc_dir(repo_root))
+            or breadcrumb.handover_pending_held(repo_root)
+        )
+    except Exception:  # noqa: BLE001 -- fail closed: skip the restore
+        return True
+
+
+def _put_back(repo_root: Path, saved: "dict[str, Optional[bytes]]") -> None:
+    """Atomically rewrite each saved path to its original bytes; best effort, never raises."""
+    for rel, data in saved.items():
+        if data is None:
+            continue
+        target = repo_root / rel
+        tmp = target.with_name(target.name + ".restore.tmp")
+        try:
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+        except OSError:
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def fast_forward_consumer(repo_root: Path, *, ignore_dirty: Sequence[str] = ()) -> RefreshResult:
     """Fetch, then fast-forward a clean mirror that is strictly behind its upstream.
 
     INVARIANT: a dirty or diverged checkout is reported, never merged; ahead-only is
     ok and left alone. After a fast-forward `behind` reads 0. Never raises.
+    `ignore_dirty` (repo-relative, forward-slash) names paths whose modification is not
+    dirt; when they are the only dirt and the clone is strictly behind they are restored
+    to HEAD so the ff cannot refuse on them.
 
     TRAP: do not route this through `refresh_dest_from_origin` -- its source-stamp
     refusal is publish semantics and would refuse exactly the stale-consumer case.
     A dirty tree still fetches and counts: a fetch never touches the worktree.
+    TRAP: an ignored path may be the live engine stamp (the client token); the restore
+    is skipped while a publish handover is held, and undone if the ff does not land.
     """
     repo_root = Path(repo_root)
     try:
@@ -744,7 +796,7 @@ def fast_forward_consumer(repo_root: Path) -> RefreshResult:
             return RefreshResult(repo_root, ok=False, reason=reason, branch=branch)
 
         status = _git(repo_root, ["status", "--porcelain", "--untracked-files=no"])
-        dirty_count = len([l for l in status.stdout.splitlines() if l.strip()])
+        dirty_count, ignored_dirty = _dirt_split(status.stdout, ignore_dirty)
         dirty = dirty_count > 0
 
         fetch = _git(repo_root, ["fetch", "--no-tags", "--prune", "origin"], remote=True)
@@ -782,8 +834,23 @@ def fast_forward_consumer(repo_root: Path) -> RefreshResult:
                 repo_root, branch, upstream, ahead, behind))
         if not behind:
             return result(True)
+        saved: "dict[str, Optional[bytes]]" = {}
+        if ignored_dirty:
+            if _handover_held(repo_root):
+                return result(False, "{0} holds a publish handover; not merged".format(repo_root))
+            for rel in ignored_dirty:
+                try:
+                    saved[rel] = (repo_root / rel).read_bytes()
+                except OSError:
+                    saved[rel] = None
+            restore = _git(repo_root, ["checkout", "--", *ignored_dirty])
+            if restore.returncode != 0:
+                _put_back(repo_root, saved)
+                return result(False, "could not restore {0} ({1})".format(
+                    ", ".join(ignored_dirty), _last_line(restore.stderr or restore.stdout, "checkout failed")))
         merge = _git(repo_root, ["merge", "--ff-only", upstream])
         if merge.returncode != 0:
+            _put_back(repo_root, saved)
             return result(False, "could not fast-forward ({0})".format(
                 _last_line(merge.stderr or merge.stdout, "ff-only merge failed")))
         return result(True, b=0, ff=True)

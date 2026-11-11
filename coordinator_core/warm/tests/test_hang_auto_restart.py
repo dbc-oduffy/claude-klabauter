@@ -85,7 +85,7 @@ def test_second_trigger_inside_rate_limit_is_suppressed_without_exit(tmp_path):
 
 
 def test_a_wedged_replacement_is_restarted_within_a_minute_not_held_for_minutes(tmp_path):
-    assert hang_restart.RESTART_MIN_INTERVAL_SECS <= 30.0
+    assert hang_restart.RESTART_MIN_INTERVAL_SECS <= 120.0
     _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
     _run(tmp_path)
     later = NOW + hang_restart.RESTART_MIN_INTERVAL_SECS + 5
@@ -243,3 +243,26 @@ def test_accept_stall_watcher_counts_before_it_touches_the_filesystem(tmp_path, 
     assert blocked.wait(5)
     disarm()
     assert seen == [tmp_path / "stall-dumps"]
+
+
+def test_a_replacement_survives_its_own_cold_start_import_stalls(tmp_path):
+    """The 2026-11-11 loop: a fresh server's workers stall importing under the backlog, 8 stalls
+    land within ~15s, and a 20s rate limit let it exit before it warmed."""
+    assert hang_restart.RESTART_MIN_INTERVAL_SECS >= 60.0
+    _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD)
+    _run(tmp_path)
+    later = NOW + 20
+    _dumps(tmp_path / "stall-dumps", hang_restart.HANG_DUMP_THRESHOLD, end=later, pid=55)
+    exits = []
+    out = hang_restart.maybe_restart(tmp_path / "stall-dumps", server_pid=55, now=later, exit_fn=exits.append)
+    assert out == "suppressed" and exits == []
+
+
+def test_stall_watchers_hold_no_lazy_hang_restart_import():
+    """A lazy import in a stall watcher blocks on the importlib module lock when the server is
+    imported-from-cold; the watchers must reach hang_restart through a module-level binding."""
+    import inspect
+
+    for fn in (server._write_stall_record, server._note_stall_in_memory):
+        assert "import hang_restart" not in inspect.getsource(fn)
+    assert server.hang_restart is hang_restart

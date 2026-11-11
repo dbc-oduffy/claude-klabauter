@@ -67,6 +67,7 @@ def clone_behind(tmp_path):
     peer = tmp_path / "peer"
     _git(tmp_path, "clone", "-q", str(origin), str(peer))
     _git(peer, "checkout", "-q", "-b", "candidate")
+    (peer / "seed.txt").write_text("seed", encoding="utf-8")
     _commit_stamp(peer, "aaaaaaa")
     _git(peer, "push", "-q", "-u", "origin", "candidate")
     clone = tmp_path / "clone"
@@ -117,6 +118,58 @@ def test_dirty_clone_is_refused_and_head_does_not_move(clone_behind, tmp_path):
     assert _git(clone, "rev-parse", "HEAD") == head
     assert _stamp(clone).read_text(encoding="utf-8") == "sha:handedit\n"
     assert json.loads(record.read_text(encoding="utf-8"))["outcome"] == "refused_dirty"
+
+
+def _default_ff(clone: Path):
+    if str(_REPO_LIB) not in sys.path:
+        sys.path.insert(0, str(_REPO_LIB))
+    return engine_converge._default_fast_forward(clone)
+
+
+def test_a_dirty_engine_stamp_alone_does_not_block_the_default_convergence(clone_behind, tmp_path):
+    clone, peer = clone_behind
+    _stamp(clone).write_text("sha:handedit\n", encoding="utf-8")
+
+    payload = engine_converge.run_convergence_pass(
+        clone=clone, fast_forward=_default_ff, record_to=tmp_path / "r.json"
+    )
+
+    assert payload["outcome"] == "fast_forwarded"
+    assert _git(clone, "rev-parse", "HEAD") == _git(peer, "rev-parse", "HEAD")
+    assert _stamp(clone).read_text(encoding="utf-8") == "sha:bbbbbbb\n"
+
+
+def test_other_dirt_beside_the_stamp_still_refuses_the_default_convergence(clone_behind, tmp_path):
+    clone, _peer = clone_behind
+    head = _git(clone, "rev-parse", "HEAD")
+    _stamp(clone).write_text("sha:handedit\n", encoding="utf-8")
+    (clone / "seed.txt").write_text("edited", encoding="utf-8")
+
+    payload = engine_converge.run_convergence_pass(
+        clone=clone, fast_forward=_default_ff, record_to=tmp_path / "r.json"
+    )
+
+    assert payload["outcome"] == "refused_dirty"
+    assert _stamp(clone).read_text(encoding="utf-8") == "sha:handedit\n"
+    assert _git(clone, "rev-parse", "HEAD") == head
+
+
+def test_a_held_publish_marker_leaves_the_dirty_stamp_untouched(clone_behind, tmp_path):
+    from coordinator_core.warm import breadcrumb
+
+    clone, _peer = clone_behind
+    head = _git(clone, "rev-parse", "HEAD")
+    _stamp(clone).write_text("sha:live-token\n", encoding="utf-8")
+    live = _stamp(clone).read_bytes()
+
+    with breadcrumb.hold_publish_marker(clone, holder="t"):
+        payload = engine_converge.run_convergence_pass(
+            clone=clone, fast_forward=_default_ff, record_to=tmp_path / "r.json"
+        )
+
+    assert payload["ok"] is False and payload["fast_forwarded"] is False
+    assert _stamp(clone).read_bytes() == live
+    assert _git(clone, "rev-parse", "HEAD") == head
 
 
 def test_diverged_clone_is_refused(clone_behind, tmp_path):

@@ -24,7 +24,10 @@ from coordinator_core.warm import breadcrumb
 
 HANG_DUMP_THRESHOLD = 8
 HANG_WINDOW_SECS = 60.0
-RESTART_MIN_INTERVAL_SECS = 20.0
+# A replacement server must outlive its own cold start: its pool workers import for ~10s under the
+# hook backlog that killed its predecessor, and that import stall alone reaches HANG_DUMP_THRESHOLD.
+# 20s made every replacement self-exit before it warmed (a restart loop, observed 2026-11-11).
+RESTART_MIN_INTERVAL_SECS = 90.0
 HANG_RESTART_LOG_FILENAME = "hang-restarts.log"
 _LOG_TAIL_BYTES = 16384
 _DUMPS_NAMED = 5

@@ -1151,6 +1151,9 @@ def endpoint_answers_request(endpoint: str, token: str, *, deadline_secs: float 
     Unlike `_breadcrumb_pair_answers` this proves the server can EVALUATE a request, not that its
     listener accepts. TRAP: `token` must be the generation the endpoint was bound with; a wrong
     token evicts the server it reaches. Never raises.
+
+    The exchange thread owns the handle and closes it: a buffered `close()` from this thread would
+    take the lock `readline` holds and block until the server replies, defeating `deadline_secs`.
     """
     try:
         from coordinator_core.warm import client
@@ -1168,17 +1171,18 @@ def endpoint_answers_request(endpoint: str, token: str, *, deadline_secs: float 
             result["line"] = fh.readline()
         except Exception:  # noqa: BLE001
             pass
+        finally:
+            try:
+                fh.close()
+            except Exception:  # noqa: BLE001
+                pass
 
     worker = threading.Thread(target=_exchange, name="successor-probe", daemon=True)
     worker.start()
     worker.join(max(0.0, deadline_secs))
-    line = result.get("line")
-    try:
-        fh.close()
-    except Exception:  # noqa: BLE001
-        pass
     if worker.is_alive():
         return False
+    line = result.get("line")
     try:
         reply = json.loads(line) if line else None
     except ValueError:

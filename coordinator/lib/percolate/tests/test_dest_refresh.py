@@ -530,6 +530,61 @@ def test_consumer_dirty_tracked_file_is_never_merged_but_behind_is_reported(orig
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
+def test_consumer_ignored_dirt_alone_is_restored_and_fast_forwarded(origin_and_clone):
+    origin, clone = origin_and_clone
+    _peer_lands(origin, "peer")
+    (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
+    result = fast_forward_consumer(clone, ignore_dirty=("candidate-seed",))
+    assert result.ok and result.fast_forwarded and not result.dirty
+    assert (clone / "candidate-seed").read_text(encoding="utf-8") == "candidate-seed"
+
+
+def test_consumer_ignored_dirt_beside_other_dirt_still_refuses(origin_and_clone):
+    origin, clone = origin_and_clone
+    _peer_lands(origin, "peer")
+    (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
+    (clone / "seed").write_text("other patch", encoding="utf-8")
+    result = fast_forward_consumer(clone, ignore_dirty=("candidate-seed",))
+    assert not result.ok and result.dirty and not result.fast_forwarded
+    assert (clone / "candidate-seed").read_text(encoding="utf-8") == "local patch"
+
+
+def test_consumer_ignored_dirt_level_is_left_alone(origin_and_clone):
+    clone = origin_and_clone[1]
+    (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
+    result = fast_forward_consumer(clone, ignore_dirty=("candidate-seed",))
+    assert result.ok and not result.fast_forwarded
+    assert (clone / "candidate-seed").read_text(encoding="utf-8") == "local patch"
+
+
+def test_consumer_held_handover_leaves_ignored_dirt_untouched(origin_and_clone, monkeypatch):
+    origin, clone = origin_and_clone
+    _peer_lands(origin, "peer")
+    (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
+    monkeypatch.setattr(dest_refresh, "_handover_held", lambda root: True)
+    result = fast_forward_consumer(clone, ignore_dirty=("candidate-seed",))
+    assert not result.ok and not result.fast_forwarded and "not merged" in result.reason
+    assert (clone / "candidate-seed").read_bytes() == b"local patch"
+
+
+def test_consumer_failed_ff_after_restore_puts_the_ignored_bytes_back(origin_and_clone, monkeypatch):
+    origin, clone = origin_and_clone
+    _peer_lands(origin, "peer")
+    (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
+    real = dest_refresh._git
+
+    def failing_merge(repo_root, args, **kw):
+        if args[:1] == ["merge"]:
+            return GitResult(1, "", "boom", False)
+        return real(repo_root, args, **kw)
+
+    monkeypatch.setattr(dest_refresh, "_handover_held", lambda root: False)
+    monkeypatch.setattr(dest_refresh, "_git", failing_merge)
+    result = fast_forward_consumer(clone, ignore_dirty=("candidate-seed",))
+    assert not result.ok and not result.fast_forwarded
+    assert (clone / "candidate-seed").read_bytes() == b"local patch"
+
+
 def test_consumer_diverged_refuses_and_does_not_move_head(origin_and_clone):
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")

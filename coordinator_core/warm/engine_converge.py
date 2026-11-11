@@ -66,7 +66,11 @@ def _default_fast_forward(clone: Path):
         sys.path.insert(0, lib)
     from percolate.dest_refresh import fast_forward_consumer
 
-    return fast_forward_consumer(clone)
+    from coordinator_core.warm import skew
+
+    return fast_forward_consumer(
+        clone, ignore_dirty=("coordinator_core/" + skew.ENGINE_STAMP_FILENAME,)
+    )
 
 
 def _outcome(result) -> str:

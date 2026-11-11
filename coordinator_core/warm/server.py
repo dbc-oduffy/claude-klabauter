@@ -211,6 +211,7 @@ from coordinator_core.warm import (
     caller_context,
     dispatch_fence,
     election,
+    hang_restart,
     hook_http,
     idle,
     lifecycle,
@@ -1634,8 +1635,6 @@ def _write_stall_record(
     except Exception:  # noqa: BLE001 -- diagnostics never stop an op
         return None
     try:
-        from coordinator_core.warm import hang_restart
-
         # A pool worker (`_WORKER_STALL_DIR` set) names its parent: the server is what restarts.
         hang_restart.maybe_restart(
             stall_dir, server_pid=os.getppid() if _WORKER_STALL_DIR is not None else os.getpid()
@@ -1648,8 +1647,6 @@ def _write_stall_record(
 def _note_stall_in_memory(stall_dir) -> None:
     """Count a detected stall toward the hang restart before any filesystem call. Never raises."""
     try:
-        from coordinator_core.warm import hang_restart
-
         hang_restart.note_stall(
             stall_dir, server_pid=os.getppid() if _WORKER_STALL_DIR is not None else os.getpid()
         )
