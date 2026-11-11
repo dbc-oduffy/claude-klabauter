@@ -139,6 +139,47 @@ def entry_live(d):
         return True
 
 
+def stamp_fresh(d, field, max_age_seconds, now=None):
+    """True when `d[field]` is an epoch-millisecond stamp no older than `max_age_seconds`.
+
+    A missing, non-integer or future-dated stamp is not fresh."""
+    stamp = d.get(field) if isinstance(d, dict) else None
+    if not isinstance(stamp, int) or isinstance(stamp, bool):
+        return False
+    clock_ms = int((time.time() if now is None else now) * 1000)
+    return 0 <= clock_ms - stamp <= max_age_seconds * 1000
+
+
+def agy_face_unbacked(d, home=None):
+    """True for a peer-router face of an agy session whose agy process is gone.
+
+    The face is a proxy registered for `peers.json`'s `target` conversation; the agent behind it is
+    the `agy_pid` its `agy-legs/<target>.json` record names. A face with no `peers.json` row has no
+    conversation behind it and is unbacked. Anything else (not an agy router face, unreadable peers
+    or leg record) is not provably unbacked and answers False."""
+    if not isinstance(d, dict) or d.get("vendor") != "agy" or not d.get("unimatrixRouterPid"):
+        return False
+    base = state_dir(home)
+    try:
+        peers = json.loads((base / "peers.json").read_text(encoding="utf-8"))
+        row = next((p for p in peers if isinstance(p, dict) and p.get("name") == d.get("name")), None)
+    except (OSError, ValueError, TypeError):
+        return False
+    if row is None:
+        return True
+    target = row.get("target")
+    if not isinstance(target, str) or not target or "/" in target or "\\" in target:
+        return False
+    try:
+        rec = json.loads((base / "agy-legs" / f"{target}.json").read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return True
+    except (OSError, ValueError):
+        return False
+    agy_pid = rec.get("agy_pid") if isinstance(rec, dict) else None
+    return not (isinstance(agy_pid, int) and not isinstance(agy_pid, bool) and pid_alive(agy_pid))
+
+
 def codex_holder_live(row):
     """Liveness of the Codex process a peer row recorded as `codexPid`/`codexProcStart`.
 

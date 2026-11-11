@@ -231,6 +231,9 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "ops/session/reap.py", "_reap_stale_sessions", "Path.rename", "sdir.rename(archive_dest)", 1): "source lives under the .git/ subtree, categorically outside claimable space (_reap_stale_sessions)",
     ("coordinator_core", "ops/session/reap.py", "_reap_stale_agents", "Path.rename", "adir.rename(archive_dest)", 1): "source lives under the .git/ subtree, categorically outside claimable space (_reap_stale_agents)",
     ("coordinator_core", "session/scope.py", "archive", "shutil.move", "shutil.move(sdir, archive_dir)", 1): "archive(): source lives under the .git/ subtree, categorically outside claimable space",
+    ("coordinator_core", "ops/repo_scratch_sweep.py", "_held_probe", "os.rename", "os.rename(path, tomb)", 1): "Windows hold probe: renames an unclaimable scratch path to a tombstone to see whether a handle holds it, then straight back; no net relocation",
+    ("coordinator_core", "ops/repo_scratch_sweep.py", "_held_probe", "os.rename", "os.rename(tomb, path)", 1): "the return leg of the hold probe above; same no-net-relocation reasoning",
+    ("coordinator_core", "warm/server.py", "_claim_stall_episode", "os.replace", "os.replace(marker, retired)", 1): "engine-state stall-episode marker retired before unlink; machinery path under the engine's own state dir, never claimable",
     ("coordinator_core", "publish/time_transform.py", "rename_codename_basenames", "Path.rename", "old_path.rename(new_path)", 1): "rename_codename_basenames operates on the meta-repo/publish-repo trees, neither of which is this worktree -- normalize_touch_path returns None, no claim expressible; also invoked out-of-process via a CLI trampoline",
 
     # --- C3's no-strand: pytest tmp_path fixtures resolve outside the real ---

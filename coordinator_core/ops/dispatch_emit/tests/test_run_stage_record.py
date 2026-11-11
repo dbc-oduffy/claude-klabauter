@@ -34,7 +34,7 @@ def test_start_then_staged_then_halted(tmp_path):
 
     c.write_run_stage(tmp_path, RUN, "staged", steps_planned=3)
     staged = c.read_run_stage(tmp_path, RUN)
-    assert set(staged) == KEYS | {"steps_planned"}
+    assert set(staged) == KEYS | {"steps_planned", "staged_at"}
     assert staged["steps_planned"] == 3 and staged["started_at"] == minted["started_at"]
 
     rec = c.record_dir(tmp_path, RUN)
@@ -42,6 +42,42 @@ def test_start_then_staged_then_halted(tmp_path):
     halted = c.read_run_stage(tmp_path, RUN)
     assert halted["stage"] == "halted" and halted["steps_planned"] == 3
     assert halted["session_id"] == "sess-1"
+
+
+def test_plan_phase_stamp_keeps_minted_and_is_idempotent_and_minted_only(tmp_path):
+    requirements_ledger.start(tmp_path, RUN)
+    assert c.stamp_plan_phase(tmp_path, RUN) is True
+    rec = c.read_run_stage(tmp_path, RUN)
+    assert rec["stage"] == "minted" and rec["plan_started_at"] == rec["last_activity_at"]
+    before = (c.record_dir(tmp_path, RUN) / c.RUN_STAGE_FILE).read_bytes()
+    assert c.stamp_plan_phase(tmp_path, RUN) is False
+    assert (c.record_dir(tmp_path, RUN) / c.RUN_STAGE_FILE).read_bytes() == before
+
+    c.write_run_stage(tmp_path, RUN, "staged", steps_planned=1)
+    assert c.stamp_plan_phase_at(c.record_dir(tmp_path, RUN)) is False
+
+
+def test_ask_stage_entry_stamps_the_plan_phase_on_a_minted_run(tmp_path):
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    (tmp_path / ".git").mkdir()
+    requirements_ledger.start(tmp_path, RUN)
+    out = ask_stage._handler({"run_id": RUN, "plan_path": "docs/plans/absent.md", "writes": []}, repo_root=tmp_path)
+    assert "error" in out
+    rec = c.read_run_stage(tmp_path, RUN)
+    assert rec["stage"] == "minted" and rec["plan_started_at"] == rec["last_activity_at"]
+
+
+def test_plan_phase_stamp_refuses_absent_record_and_unsafe_id(tmp_path):
+    assert c.stamp_plan_phase(tmp_path, RUN) is False
+    assert c.stamp_plan_phase(tmp_path, "../evil") is False
+
+
+def test_a_remint_clears_the_plan_phase_stamp(tmp_path):
+    requirements_ledger.start(tmp_path, RUN)
+    c.stamp_plan_phase(tmp_path, RUN)
+    requirements_ledger.start(tmp_path, RUN)
+    assert "plan_started_at" not in c.read_run_stage(tmp_path, RUN)
 
 
 @pytest.mark.spawns_process
@@ -97,7 +133,7 @@ def test_unresolvable_session_is_null(tmp_path, monkeypatch):
 def test_first_stamp_of_a_later_stage_still_sets_identity(tmp_path):
     c.write_run_stage(tmp_path, RUN, "staged", steps_planned=2)
     staged = c.read_run_stage(tmp_path, RUN)
-    assert set(staged) == KEYS | {"steps_planned"}
+    assert set(staged) == KEYS | {"steps_planned", "staged_at"}
     assert staged["session_id"] == "sess-1"
 
 

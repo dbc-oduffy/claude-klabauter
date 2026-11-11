@@ -129,6 +129,51 @@ def test_diffed_path_without_a_run_print_withholds_and_is_named(tmp_path, monkey
     assert reasons["f.txt"] == ch.NO_PRINT_REASON
 
 
+def test_credited_chunk_path_without_a_print_counts_as_the_runs_own(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_credit
+
+    root = _repo(tmp_path)
+    _stub(monkeypatch, lambda r, run, path, hunks, holders: HunkSplit(own=[h for h in hunks if h.old_start == 2]))
+    monkeypatch.setattr(run_write_prints, "read", lambda root, run_id: None)
+    monkeypatch.setattr(run_credit, "credited_writes", lambda root, run_id: frozenset({"f.txt"}))
+    reasons: dict = {}
+    blobs, withheld = ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG, reasons)
+    assert withheld == [] and "f.txt" in blobs and reasons == {}
+
+
+def test_uncredited_path_without_a_print_still_withholds(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import run_credit
+
+    root = _repo(tmp_path)
+    _stub(monkeypatch, lambda r, run, path, hunks, holders: HunkSplit(own=list(hunks)))
+    monkeypatch.setattr(run_write_prints, "read", lambda root, run_id: None)
+    monkeypatch.setattr(run_credit, "credited_writes", lambda root, run_id: frozenset({"other.txt"}))
+    reasons: dict = {}
+    assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG, reasons) == ({}, ["f.txt"])
+    assert reasons["f.txt"] == ch.NO_PRINT_REASON
+
+
+def test_credited_writes_reads_declared_writes_of_credited_rows(tmp_path):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import run_credit
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    plan = "docs/plans/p.md"
+    (tmp_path / "docs/plans").mkdir(parents=True)
+    (tmp_path / plan).write_text(
+        "# p\n\n## Tasks\n\n```yaml plan-tasks\n- id: C4\n  title: t\n  writes: [a/x.py]\n  disposition: open\n"
+        "- id: C5\n  title: u\n  writes: [a/y.py]\n  disposition: open\n```\n",
+        encoding="utf-8",
+    )
+    base = record_dir(tmp_path, "run1")
+    base.mkdir(parents=True)
+    (base / "manifest.json").write_text(json.dumps({"plan_rel": plan}), encoding="utf-8")
+    run_credit.record(base, [{"chunk": "C4", "evidence": "earlier pass wrote it"}], "2026-11-11T00:00:00Z")
+    assert run_credit.credited_writes(tmp_path, "run1") == frozenset({"a/x.py"})
+    assert run_credit.credited_writes(tmp_path, "no-such-run") == frozenset()
+
+
 def test_unresolved_run_reason_is_recorded(tmp_path):
     root = _repo(tmp_path)
     reasons: dict = {}

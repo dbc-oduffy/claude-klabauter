@@ -117,7 +117,7 @@ def _bind(root: Path, run_id: str, agent_id: str) -> None:
         merged = {a: True for a in _bound_agents(root, run_id)}
         merged[agent_id] = True
         tmp = target.with_name(f"{AGENT_RUNS_FILE}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8")
+        tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8", newline="\n")
         os.replace(tmp, target)
     finally:
         if held:
@@ -225,7 +225,7 @@ def drop(root: Path, run_id: str, rel: str) -> None:
         return
     target = _prints_path(root, run_id)
     tmp = target.with_name(f"{PRINTS_FILE}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8")
+    tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, target)
 
 
@@ -239,5 +239,5 @@ def record(root: Path, run_id: str, paths: Iterable[str]) -> None:
         merged[key] = _print_and_store(Path(root), key)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{PRINTS_FILE}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8")
+    tmp.write_text(json.dumps(merged, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, target)

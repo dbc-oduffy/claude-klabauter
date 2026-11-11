@@ -2997,6 +2997,9 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # groupem.box_hold -- MUTATING: writes or removes
     # <settings-home>/state/group-em/box/hold.json.
     "groupem.box_hold": OpClass.MUTATING,
+    # groupem.goal_board_refresh -- MUTATING: rewrites
+    # <group-em home>/the fleet goal board file atomically.
+    "groupem.goal_board_refresh": OpClass.MUTATING,
     # groupem.admission_post -- MUTATING: appends a line to
     # <settings-home>/state/group-em/box/admission.jsonl.
     "groupem.admission_post": OpClass.MUTATING,

@@ -368,15 +368,16 @@ def _result_names_run(session_id: str, transcript_path: Optional[str], tail: str
 
 
 def _stage_minted(root: Path, run_id: str) -> bool:
-    """True when `run-stage.json` reads `minted` (or no stage) or is absent. Any other stage, an
-    unreadable or malformed file, or an unsafe run id is False: unknown never shortens a grace."""
+    """True when `run-stage.json` reads `minted` (or no stage) or is absent and carries no
+    `plan_started_at`. Any other stage, a plan-phase stamp, an unreadable or malformed file, or an
+    unsafe run id is False: unknown never shortens a grace, and a run in plan has a runner."""
     try:
         path = _ask_record_dir(root, run_id) / "run-stage.json"
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except FileNotFoundError:
             return True
-        return isinstance(data, dict) and data.get("stage") in (None, "minted")
+        return isinstance(data, dict) and data.get("stage") in (None, "minted") and "plan_started_at" not in data
     except Exception:
         return False
 

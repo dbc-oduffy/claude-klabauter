@@ -349,6 +349,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "groupem.idle_report":                    "coordinator_core.ops.group_em_idle_report",
     "groupem.standing":                       "coordinator_core.ops.group_em_standing",
     "groupem.box_hold":                       "coordinator_core.ops.group_em_box_hold",
+    "groupem.goal_board_refresh":             "coordinator_core.ops.group_em_goal_board_refresh",
     "groupem.admission_post":                 "coordinator_core.ops.group_em_admission_post",
     "groupem.slot_grant":                     "coordinator_core.ops.group_em_slot_grant",
     "groupem.slot_check":                     "coordinator_core.ops.group_em_slot_grant",

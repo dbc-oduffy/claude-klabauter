@@ -475,3 +475,22 @@ def test_launcher_child_deferred_script_still_hands_the_emit_back(tmp_path):
     got = _run_deferred(tmp_path, {"ask": "x", "session_id": "", "launcher_child": True}, replies=[_reply()], results=[])
     assert got["out"]["deferred_emit_pending"]["run_id"] == "ask-1"
     assert not [c for c in got["calls"] if "workflow" in c]
+
+
+def test_sizing_refire_of_a_halted_run_emits_inside_the_bar_through_the_default_hook(tmp_path):
+    """The default `evaluate` of a `{sizing}` refire of a halted run (stranded claim, multi-row plan) mints a
+    fresh run and emits synchronously: neither the cold nor the warm call outruns the bar, none is deferred."""
+    from coordinator_core.benchmarks import fixture_settings_home
+    from coordinator_core.benchmarks import submit_engine_ask_process_budget as bench
+
+    root = tmp_path / "repo"
+    root.mkdir()
+    bench.build_fixture(root)
+    with fixture_settings_home(tmp_path):
+        res = bench.measure_shape(root, bench.HALTED_SHAPE, runs=1)
+    assert res["decision"] == "allow", res["reason"]
+    assert res["envelope"] == bench.ENVELOPE_SYNCHRONOUS, res["reason"]
+    assert bench.HALTED_RUN not in res["reason"] and "emitted" in res["reason"], res["reason"]
+    assert res["reached_emit_or_launch"] and "emit" in res["phases_ms"]
+    assert max(res["cold_process_ms"], res["warm_process_ms"]) < BAR_S * 1000.0, res
+    assert res["spawns"] == 0, res["spawn_argv"]

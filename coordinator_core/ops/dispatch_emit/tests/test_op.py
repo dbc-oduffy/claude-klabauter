@@ -649,3 +649,76 @@ def test_a_raw_ask_emit_mints_its_token_keyed_by_the_normalized_ask_hash(ask_rep
     assert cli.main(["--ask", "add a thing", "--repo-root", str(ask_repo)]) == 0
     (run_dir,) = (ask_repo / RECORD_DIR_ROOT).iterdir()
     assert run_token._read_rec(ask_repo, run_dir.name).get("ask_sha256") == normalized_ask_hash("add a thing")
+
+
+def test_record_file_write_raises_typed_timeout_within_bound_and_abandoned_write_leaves_nothing(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    from coordinator_core.ops.dispatch_emit import op as emit_op
+
+    gate = threading.Event()
+    real_write = Path.write_text
+
+    def _blocked_write(self, *a, **k):
+        if self.name == "ask.txt":
+            gate.wait(10)
+        return real_write(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", _blocked_write)
+    import shutil
+
+    parent = tmp_path / "rec"
+    parent.mkdir()
+    target = parent / "ask.txt"
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            emit_op._write_record_file_bounded(target, "body")
+        assert time.monotonic() - started < 1.0
+        assert not target.exists()
+        shutil.rmtree(parent)
+    finally:
+        gate.set()
+    time.sleep(0.3)
+    assert not parent.exists()
+
+
+def test_a_raw_ask_emit_fails_typed_within_bound_and_rolls_back_while_the_ask_file_write_is_blocked(ask_repo, monkeypatch):
+    import shutil
+    import threading
+    import time
+
+    from coordinator_core.ops.dispatch_emit import cli
+    from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RECORD_DIR_ROOT
+
+    gate = threading.Event()
+    real_write = Path.write_text
+
+    def _blocked_write(self, *a, **k):
+        if self.name == ASK_TEXT_FILE:
+            gate.wait(10)
+        return real_write(self, *a, **k)
+
+    monkeypatch.setattr(Path, "write_text", _blocked_write)
+    started = time.monotonic()
+    try:
+        with pytest.raises(TimeoutError):
+            cli.main(["--ask", "add a thing", "--ask-source", "pm", "--repo-root", str(ask_repo)])
+        assert time.monotonic() - started < 5.0
+    finally:
+        gate.set()
+    time.sleep(0.3)
+    root = ask_repo / RECORD_DIR_ROOT
+    assert not root.exists() or not any(root.iterdir())
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_record_file_write_lands_on_a_healthy_dir(tmp_path):
+    """The parent must pre-exist: the bounded write creates no directory."""
+    from coordinator_core.ops.dispatch_emit import op as emit_op
+
+    (tmp_path / "a" / "b").mkdir(parents=True)
+    target = tmp_path / "a" / "b" / "ask.txt"
+    emit_op._write_record_file_bounded(target, "x\ny")
+    assert target.read_bytes() == b"x\ny"

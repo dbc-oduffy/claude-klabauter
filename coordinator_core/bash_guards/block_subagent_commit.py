@@ -6670,6 +6670,13 @@ _LEG_PARAMS_PATH = "leg:run-token-params-path"
 _LEG_PARAMS_TOKEN = "leg:run-token-params-token"
 _LEG_PARAMS_WRITE = "leg:run-token-params-write"
 _LEG_PARAMS_FILE_WRITTEN_BY_COMMAND = "leg:run-token-params-command-writes"
+#: `terminal_commit_params_channel.materialize_from_prompt` refusal legs, mapped to the guard's legs.
+_CHANNEL_LEG_TO_PARAMS_LEG = {
+    "no-params-block": _LEG_PARAMS_PATH,
+    "params-path": _LEG_PARAMS_PATH,
+    "params-token": _LEG_PARAMS_TOKEN,
+    "params-write": _LEG_PARAMS_WRITE,
+}
 #: Prefixes: the typed path is appended, so the deny message can name it.
 _LEG_PARAMS_FILE_MISSING = "leg:run-token-params-file-missing:"
 _LEG_PARAMS_FILE_UNPARSEABLE = "leg:run-token-params-file-unparseable:"
@@ -7215,7 +7222,8 @@ def _prompt_sourced_params_admit_leg(
 
     from coordinator_core.ops.dispatch_emit import run_token, terminal_commit_params_channel as chan
 
-    params = chan.prompt_params(chan.read_spawn_prompt(transcript_path))
+    prompt = chan.read_spawn_prompt(transcript_path)
+    params = chan.prompt_params(prompt)
     from_file = params is None
     if from_file:
         params, file_leg = _params_from_existing_file(typed_path)
@@ -7229,12 +7237,13 @@ def _prompt_sourced_params_admit_leg(
             return _LEG_PARAMS_PATH
     except (OSError, ValueError):
         return _LEG_PARAMS_PATH
+    if not from_file:
+        _, refusal = chan.materialize_from_prompt(git_root, prompt)
+        return None if refusal is None else _CHANNEL_LEG_TO_PARAMS_LEG.get(refusal, _LEG_PARAMS_PATH)
     rid, tok, script = params["run_id"], params["run_token"], params["script_path"]
     if not (run_token.halt_admits(git_root, rid, tok, script) or run_token.spent_receipt(git_root, rid, tok, script) is not None):
         return _LEG_PARAMS_TOKEN
-    if from_file:
-        return None
-    return None if chan.materialize(canonical, params) else _LEG_PARAMS_WRITE
+    return None
 
 
 def _is_terminal_commit_params_file_cmd(cmd_for_scan: str) -> bool:

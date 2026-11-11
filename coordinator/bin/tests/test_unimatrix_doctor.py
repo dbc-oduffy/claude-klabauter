@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -165,6 +166,8 @@ def test_default_run_flags_unsigned_line_dead_alias_and_ip_pinned_alias_and_buil
     assert "deadbox: deadbox.lan does not resolve" in out
     assert "ipbox: far_boxes alias is pinned to IP 192.168.1.9" in out
     assert "no signed membership snapshot is stored" in out
+    assert "remedy: run unimatrix-pair.py approve <target>" in out
+    assert "remedy: point the alias at a hostname" in out
     assert all(line.startswith(("problem:", "info:")) for line in out.splitlines())
 
 
@@ -233,6 +236,43 @@ def test_peer_without_a_snapshot_and_dead_supervisors_are_named(box):
     assert rc == 1
     assert "machine-a: peer holds no membership snapshot" in out
     assert "machine-a: bridge supervisor is not alive" in out and "machine-a: inbox supervisor is not alive" in out
+
+
+def test_signed_member_with_no_live_link_is_named_and_a_live_one_is_not(box):
+    snap = box.adopt("me", "machine-a", "bishop")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap), "kim@bishop.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert rc == 1
+    assert "bishop: no live link path" in out
+    assert "machine-a: no live link path" not in out
+
+
+def test_signed_member_autolink_skips_is_named_as_having_no_path(box, monkeypatch):
+    snap = box.adopt("me", "machine-a", "bishop")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    monkeypatch.setattr(box.al, "ALIAS_RE", re.compile(r"[a-z@.]+machine-a\.local"))
+    rc, out = box.main()
+    assert rc == 1
+    assert "bishop: no live link path: dial name 'kim@bishop.local'" in out
+    assert "machine-a: no live link path" not in out
+
+
+def test_far_boxes_alias_is_not_checked_when_a_snapshot_is_stored_and_still_is_when_none(box):
+    far = "import sys\nprint('ghost' if sys.argv[-1] == 'unimatrix.far_boxes' else '')\nsys.exit(0 if sys.argv[-1] == 'unimatrix.far_boxes' else 1)\n"
+    (box.home / "bin" / "_machine_local.py").write_text(far)
+    box.net.alias_host = {}
+    box.ak.write_text("")
+    rc, out = box.main()
+    assert "ghost: far_boxes alias does not resolve" in out  # no snapshot: autolink dials it, so it is checked
+    snap = box.adopt("me", "machine-a")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert rc == 0 and "ghost" not in out  # a snapshot makes far_boxes inert, never a flagged member
 
 
 def test_windows_admin_authorized_keys_is_reported_never_read(box, tmp_path, monkeypatch):

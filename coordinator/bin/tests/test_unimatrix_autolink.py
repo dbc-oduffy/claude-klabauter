@@ -2,6 +2,7 @@
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -714,6 +715,19 @@ def test_no_snapshot_falls_back_to_far_boxes_and_logs_that_doctor_flags_it(env):
 
 
 @needs_keygen
+def test_a_verified_snapshot_links_its_members_and_never_the_far_boxes_key(env, snap):
+    add_key(env)
+    snap.adopt("me", "machine-a", "bishop")
+    (env.home / "bin" / "_machine_local.py").write_text(
+        "import sys\nk = sys.argv[-1]\nprint('fallbackbox' if k == 'unimatrix.far_boxes' else '')\n"
+        "sys.exit(0 if k == 'unimatrix.far_boxes' else 1)\n")
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names={"me"}, pull_fn=lambda *a: False,
+               key_fn=lambda r, a: str(env.key))
+    assert remotes(sp) == {"kim@machine-a.local", "kim@bishop.local"} and len(sp.cmds) == 4
+
+
+@needs_keygen
 def test_no_signer_is_constructed_by_a_snapshot_run(env, snap, monkeypatch):
     add_key(env)
     snap.adopt("machine-a")
@@ -796,6 +810,42 @@ def test_a_moved_epoch_defeats_the_healthy_cache_so_a_new_member_links(env, snap
     snap.adopt("bishop")
     env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
     assert remotes(sp) == {"kim@bishop.local"}
+
+
+@needs_keygen
+def test_a_member_whose_dial_name_fails_the_alias_check_is_surfaced_not_dropped_silently(env, snap, monkeypatch):
+    add_key(env)
+    snap.adopt("machine-a", "bishop")
+    monkeypatch.setattr(env.al, "ALIAS_RE", re.compile(r"[a-z@.]+machine-a\.local"))
+    status, targets, skipped, _, _ = env.al.split_members(env.roster, None, set())
+    assert status == "ok" and list(targets) == ["kim@machine-a.local"]
+    assert skipped == [("bishop", "kim@bishop.local")]
+    sp = Spawner()
+    env.al.run(roster=env.roster, spawn=sp, probe_fn=ok, self_names=set(), pull_fn=lambda *a: False)
+    assert remotes(sp) == {"kim@machine-a.local"}
+    assert any("bishop" in ln and "not linked" in ln for ln in log_lines(env))
+
+
+def test_an_ip_literal_member_host_is_skipped_never_dialled_and_a_hostname_member_is(env):
+    real = env.al._membership()
+
+    class Stub:
+        MembershipError = real.MembershipError
+        is_ip_literal = staticmethod(real.is_ip_literal)
+
+        @staticmethod
+        def load_snapshot(home):
+            return {"epoch": 3}, b""
+
+        @staticmethod
+        def verified_members(home, run=None):
+            return [{"box": "mini", "host": "mac-mini.local", "user": "kim"},
+                    {"box": "pinned", "host": "192.168.1.9", "user": "kim"}]
+
+    status, targets, skipped, epoch, _ = env.al.split_members(env.roster, Stub, set())
+    assert status == "ok" and epoch == 3
+    assert targets == {"kim@mac-mini.local": "mini"}
+    assert skipped == [("pinned", "kim@192.168.1.9")]
 
 
 def test_missing_membership_library_means_transition_fallback(env, monkeypatch):

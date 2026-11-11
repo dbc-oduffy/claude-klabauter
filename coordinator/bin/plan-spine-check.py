@@ -885,9 +885,96 @@ def abs_path_findings(text: str) -> list:
     ]
 
 
+#: Refused before resolve_agent_model so the verdict does not depend on that resolver's treatment of the EM role.
+_NEVER_DISPATCHABLE = frozenset({"coordinator:em"})
+
+
+def contradictory_read_findings(raw_rows: list, overlap_of) -> list:
+    """Rows naming a path in both `reads_at_head` (never orders) and `consumes`/`reads` (orders)."""
+    found: list = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        declared = [row.get("reads") or [], row.get("consumes") or []]
+        ordering = [p for field in declared if isinstance(field, list) for p in field]
+        head = row.get("reads_at_head")
+        overlap = overlap_of(ordering, head if isinstance(head, list) else [])
+        if overlap:
+            found.append({
+                "class": "contradictory-read-declaration",
+                "detail": f"row {row.get('id')}: {overlap!r} in both reads_at_head (never orders) and "
+                "consumes/reads (orders); a path goes in one, never both",
+            })
+    return found
+
+
+def executes_rows_flag(frontmatter: dict) -> "bool | None":
+    """The `executes-rows:` value of an agent definition's frontmatter, or None when absent or not true/false."""
+    value = frontmatter.get("executes-rows") if isinstance(frontmatter, dict) else None
+    if isinstance(value, bool):
+        return value
+    return {"true": True, "false": False}.get(str(value).strip().lower()) if value is not None else None
+
+
+def _non_executing(defs: dict) -> frozenset:
+    """Agent types whose definition declares `executes-rows: false`."""
+    return frozenset(key for key, fm in defs.items() if executes_rows_flag(fm) is False)
+
+
+def agent_type_findings(raw_rows: list, defs: dict, resolve_agent_model, malformed_error) -> list:
+    """Rows whose `agent_type` cannot be dispatched. `defs` is the installed plugin's agent-definition
+    frontmatters keyed by agent type; empty means the source is unresolvable and only the EM refusal applies."""
+    non_executing = _non_executing(defs)
+    has_coordinator_defs = any(k.startswith("coordinator:") for k in defs)
+    found: list = []
+    for row in raw_rows:
+        if not isinstance(row, dict):
+            continue
+        agent_type = row.get("agent_type")
+        if not agent_type or not isinstance(agent_type, str):
+            continue
+        rid = row.get("id")
+        if agent_type in _NEVER_DISPATCHABLE:
+            detail = f"row {rid}: agent_type {agent_type!r} is never dispatchable"
+        elif agent_type in non_executing:
+            detail = (
+                f"row {rid}: agent_type {agent_type!r} does not execute rows; "
+                f"set the row's agent_type to {_EXECUTOR!r}"
+            )
+        elif has_coordinator_defs and agent_type.startswith("coordinator:") and agent_type not in defs:
+            detail = f"row {rid}: agent_type {agent_type!r} has no agent definition"
+        elif defs:
+            try:
+                resolve_agent_model(agent_type, row.get("agent_model"))
+            except malformed_error as exc:
+                detail = f"row {rid}: {str(exc).splitlines()[0]}"
+            else:
+                continue
+        else:
+            continue
+        found.append({"class": "agent-type-undispatchable", "detail": detail})
+    return found
+
+
+def _agent_contract_findings(raw_rows: list) -> list:
+    """contradictory-read-declaration and agent-type-undispatchable findings; a source that cannot be
+    resolved or imported yields none."""
+    try:
+        from coordinator_core.hooks.block_unenumerated_agent_type import scan_agent_definitions
+        from coordinator_core.ops.dispatch_emit import spine_read
+        from coordinator_core.ops.dispatch_emit.emit import MalformedAgentOverrideError, resolve_agent_model
+
+        found = contradictory_read_findings(raw_rows, spine_read.contradictory_read_paths)
+        found.extend(agent_type_findings(raw_rows, scan_agent_definitions(), resolve_agent_model, MalformedAgentOverrideError))
+        return found
+    except Exception:  # noqa: BLE001 - an unresolvable source yields no finding, never a crash
+        return []
+
+
 def _extra_findings(path: Path, text: str) -> list:
-    """Structural rows for the micro-chunk, depends-on-plan-status, contributed-signal, research-layout
-    and absolute-path classes. Terminal (already-ran) plans owe nothing and yield none."""
+    """Structural rows for the micro-chunk, depends-on-plan-status, contributed-signal, research-layout,
+    absolute-path, contradictory-read and agent-type classes. Terminal (already-ran) plans owe nothing
+    and yield none."""
     _ensure_engine_on_path()
     from coordinator_core.roadmap import prep_gate
 
@@ -897,7 +984,8 @@ def _extra_findings(path: Path, text: str) -> list:
             return []
         fm = prep_gate.plan_frontmatter(text)
         raw_rows = prep_gate.raw_spine_rows(text)
-        found = micro_chunk_findings(raw_rows)
+        found = _agent_contract_findings(raw_rows)
+        found.extend(micro_chunk_findings(raw_rows))
         found.extend(contributed_signal_findings(fm, raw_rows, root))
         found.extend(research_layout_findings(raw_rows, root))
         found.extend(depends_on_plan_status_findings(text, raw_rows, root, prep_gate))

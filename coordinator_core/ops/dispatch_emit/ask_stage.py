@@ -47,6 +47,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     StageManifest,
     delivery_note_rel,
     record_dir,
+    stamp_plan_phase,
     stamp_run_stage,
     stop_after_plan_live,
     stop_after_source,
@@ -2476,6 +2477,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
     writes = params.get("writes") or []
     run_id = params["run_id"]
     root = main_worktree_root(Path(repo_root))
+    stamp_plan_phase(root, run_id)
     park_source = _consume_park_marker(root, run_id)
     if park_source is not None:
         stamp_run_stage(root, run_id, "halted")

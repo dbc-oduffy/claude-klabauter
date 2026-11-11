@@ -126,6 +126,12 @@ def _redirect_temp(rootpath: Path) -> _Redirect:
     return redirect
 
 
+def force_exit_status(session: pytest.Session, status, cause: str) -> None:
+    """Set `session.exitstatus` and name `cause` on stderr; the one door a hook forces a non-zero exit through."""
+    session.exitstatus = status
+    print(f"[forced-exit] rc={int(status)}: {cause}", file=sys.stderr, flush=True)
+
+
 def _end_redirect(session: pytest.Session, exitstatus) -> None:
     global _REDIRECT
     redirect, _REDIRECT = _REDIRECT, None
@@ -138,7 +144,9 @@ def _end_redirect(session: pytest.Session, exitstatus) -> None:
     for name in left[:_LEFT_REPORT_CAP]:
         print(f"fs_containment: left in run Temp: {name}", file=sys.stderr)
     if left and exitstatus == 0:
-        session.exitstatus = 1
+        force_exit_status(
+            session, 1, f"{len(left)} entr{'y' if len(left) == 1 else 'ies'} remain under run-temp root {redirect.root}: {', '.join(left[:3])}"
+        )
     for key, value in redirect.saved_env.items():
         if value is None:
             os.environ.pop(key, None)

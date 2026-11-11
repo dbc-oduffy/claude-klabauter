@@ -1243,6 +1243,8 @@ def write_run_stage_at(
     stage = _stage_after_mint_stamp(stage, prior)
     data["stage"] = stage
     data["last_activity_at"] = stamp
+    if stage == "minted":
+        data.pop("plan_started_at", None)
     if stage == "staged" and "staged_at" not in data:
         data["staged_at"] = stamp
     if steps_planned is not None:
@@ -1287,6 +1289,38 @@ def touch_run_activity(record_path: Path, *, now: "datetime | None" = None) -> b
     except OSError:
         return False
     return True
+
+
+PLAN_STARTED_FIELD = "plan_started_at"
+
+
+def stamp_plan_phase_at(record_path: Path, *, now: str | None = None) -> bool:
+    """Record that the run's Workflow began its plan stage: set `plan_started_at` (first stamp wins)
+    and advance `last_activity_at` on a `minted` run-stage record; `stage` stays `minted`. True when
+    it wrote. False for an absent or malformed record, any stage past minted, or an already-stamped
+    run. One read, at most one atomic write; never raises."""
+    from datetime import datetime, timezone
+
+    path = Path(record_path) / RUN_STAGE_FILE
+    try:
+        data = _read_json_object(path)
+        if not data or data.get("stage") != "minted" or PLAN_STARTED_FIELD in data:
+            return False
+        stamp = now or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        data[PLAN_STARTED_FIELD] = stamp
+        data["last_activity_at"] = stamp
+        atomic_write_bytes(path, (json.dumps(data, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    except (ValueError, OSError):
+        return False
+    return True
+
+
+def stamp_plan_phase(repo_root: Path, run_id: str) -> bool:
+    """`stamp_plan_phase_at` over the run's record dir; False on an unsafe run id."""
+    try:
+        return stamp_plan_phase_at(record_dir(repo_root, run_id))
+    except ValueError:
+        return False
 
 
 def adopt_run_stage_at(record_path: Path, session_id: str, *, now: str | None = None) -> Path:

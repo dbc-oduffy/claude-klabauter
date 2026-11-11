@@ -410,10 +410,40 @@ def test_probe_uses_which_and_windows_creationflags(monkeypatch, plat, expect_fl
     assert ("creationflags" in seen["kw"]) is expect_flag
 
 
-def test_probe_missing_claude(monkeypatch):
+def test_probe_missing_claude(monkeypatch, tmp_path):
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setattr(ui.shutil, "which", lambda name: None)
     with pytest.raises(RuntimeError, match="claude not found"):
         ui.probe_claude_version()
+
+
+@pytest.mark.parametrize("plat,name", [("linux", "claude"), ("darwin", "claude"), ("win32", "claude.exe")])
+def test_probe_finds_claude_in_local_bin_when_path_lacks_it(monkeypatch, tmp_path, plat, name):
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setattr(sys, "platform", plat)
+    monkeypatch.setattr(ui.shutil, "which", lambda n: None)
+    exe = home / ".local" / "bin" / name
+    exe.parent.mkdir(parents=True)
+    exe.write_text("#!/bin/sh\n")
+    exe.chmod(0o755)
+    seen = {}
+
+    class R:
+        stdout = "2.1.316 (Claude Code)\n"
+
+    monkeypatch.setattr(ui.subprocess, "run", lambda cmd, **kw: seen.setdefault("cmd", cmd) and R())
+    assert ui.probe_claude_version().startswith("2.1.316")
+    assert seen["cmd"] == [str(exe), "--version"]
+
+
+def test_path_hit_wins_over_local_bin(monkeypatch, tmp_path):
+    home = _home(monkeypatch, tmp_path)
+    (home / ".local" / "bin").mkdir(parents=True)
+    (home / ".local" / "bin" / "claude").write_text("x")
+    monkeypatch.setattr(ui.shutil, "which", lambda n: "/on/path/claude")
+    assert ui.resolve_claude() == "/on/path/claude"
 
 
 def test_script_name_constants_are_pinned():
@@ -2136,7 +2166,9 @@ def test_tui_status_lines_keep_user_customised_lines(monkeypatch, tmp_path):
     grok.write_text(mine_grok)
     rc, out = _tui_main(tmp_path, "--install")
     assert rc == 0 and "agy status line retained-customized" in out and "grok status line retained-customized" in out
-    assert agy.read_text() == mine_agy and grok.read_text() == mine_grok
+    agy_data = json.loads(agy.read_text())
+    assert agy_data["statusLine"] == {"command": "my-line"} and agy_data["permissions"]["allow"] == [ui.AGY_ALLOW_RULE]
+    assert grok.read_text() == mine_grok
     rc, out = _tui_main(tmp_path, "--uninstall")
     assert "agy status line absent" in out and agy.read_text() == mine_agy and grok.read_text() == mine_grok
 
@@ -2237,3 +2269,53 @@ def test_router_closure_digest_tracks_closure_bytes(tmp_path):
     assert first == ui.router_closure_digest(tmp_path)
     (tmp_path / ui.ROUTER_SCRIPT).write_text("# b\n", encoding="utf-8")
     assert ui.router_closure_digest(tmp_path) != first
+
+
+def test_agy_allow_rule_installs_once_keeps_operator_entries_and_uninstall_restores_bytes(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    mine = "command(Get-ChildItem ~/x)"
+    before = json.dumps({"permissions": {"allow": [mine]}, "theme": "dark"}).encode("utf-8")
+    agy.write_bytes(before)
+    rc, out = _tui_main(tmp_path, "--install")
+    assert rc == 0 and "agy allow rule updated" in out
+    allow = json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"]
+    assert allow == [mine, ui.AGY_ALLOW_RULE]
+    once = agy.read_bytes()
+    rc, out = _tui_main(tmp_path, "--install")
+    assert "agy allow rule present" in out and agy.read_bytes() == once
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and "agy allow rule restored" in out
+    assert agy.read_bytes() == before
+    assert not list(agy.parent.glob(".coordinator-*"))
+
+
+def test_agy_allow_rule_uninstall_after_edit_removes_only_our_entry(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    mine = "command(keep me)"
+    _tui_main(tmp_path, "--install")
+    data = json.loads(agy.read_text(encoding="utf-8"))
+    data["permissions"]["allow"].append(mine)
+    agy.write_text(json.dumps(data), encoding="utf-8")
+    rc, out = _tui_main(tmp_path, "--uninstall")
+    assert rc == 0 and "agy allow rule restored" in out
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"]["allow"] == [mine]
+
+
+def test_agy_allow_rule_refuses_a_non_list_allow_without_writing(monkeypatch, tmp_path):
+    _, agy, _ = _tui_home(monkeypatch, tmp_path)
+    agy.parent.mkdir(parents=True)
+    agy.write_text('{"permissions": {"allow": "x"}}', encoding="utf-8")
+    rc, out = _tui_main(tmp_path, "--install", hosts="agy")
+    assert "WARN: agy allow rule not installed" in out
+    assert json.loads(agy.read_text(encoding="utf-8"))["permissions"] == {"allow": "x"}
+
+
+@pytest.mark.parametrize("alias,host", [("mac-mini", "mac-mini.local"), ("me@mac-mini", "mac-mini.local"),
+                                        ("box.example.org", "box.example.org")])
+def test_ssh_config_block_names_the_peer_by_hostname_never_an_ip(alias, host):
+    block = ui.render_ssh_config_block(alias, Path("/k/key"))
+    assert f"    HostName {host}\n" in block
+    assert "    AddressFamily inet\n" in block
+    assert "<address" not in block
+    assert f"Host {alias}\n" in block

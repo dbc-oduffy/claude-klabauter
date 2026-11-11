@@ -7,6 +7,36 @@ import os
 from coordinator_core.ask_spool import notice
 
 
+def _stale_minted_run(tmp_path, run_id="run-1"):
+    import json
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE, record_dir
+
+    d = record_dir(tmp_path, run_id)
+    d.mkdir(parents=True, exist_ok=True)
+    (d / RUN_STAGE_FILE).write_text(json.dumps({"stage": "minted"}), encoding="utf-8")
+    return d
+
+
+def test_withdrawn_spool_entry_wins_over_stale_minted_stage(tmp_path):
+    from coordinator_core.ask_spool import record
+
+    _stale_minted_run(tmp_path)
+    notice.append_notice(str(tmp_path), "s1", "abc", "run-1")
+    open(record.entry_path(str(tmp_path), "abc", record.WITHDRAWN_SUFFIX), "w").close()
+    text = notice.advisory_text(str(tmp_path), "s1")
+    assert text == "Your spooled ask abc minted run run-1; it is now withdrawn, nothing to start."
+
+
+def test_halted_record_wins_over_stale_minted_stage_and_a_live_minted_run_still_reads_minted(tmp_path):
+    d = _stale_minted_run(tmp_path)
+    notice.append_notice(str(tmp_path), "s1", "abc", "run-1")
+    assert notice.advisory_text(str(tmp_path), "s1") == "Your spooled ask abc minted run run-1."
+    (d / "halted.json").write_text('{"halted": "x"}', encoding="utf-8")
+    notice.append_notice(str(tmp_path), "s1", "abc", "run-1")
+    assert notice.advisory_text(str(tmp_path), "s1") == "Your spooled ask abc minted run run-1; it is now halted, nothing to start."
+
+
 def test_roundtrip_text_and_consumed(tmp_path):
     notice.append_notice(str(tmp_path), "s1", "abc", "run-1")
     notice.append_notice(str(tmp_path), "s1", "def", "run-2")

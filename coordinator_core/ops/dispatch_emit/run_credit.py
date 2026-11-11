@@ -130,3 +130,18 @@ def credits_for_sizing(repo_root: Path, sizing_rel: str) -> dict[str, str]:
     candidates.sort(key=lambda c: c[0])
     bound = [d for _, d in candidates if (d / CREDIT_FILE).is_file() and _binds_sizing(d, sizing)]
     return read(bound)
+
+
+def credited_writes(repo_root: Path, run_id: str) -> frozenset[str]:
+    """Forward-slash declared writes of every chunk credited for ``run_id`` (its own credits plus any
+    run of the same sizing's records); empty when none or unreadable. Never raises."""
+    try:
+        from coordinator_core.ops.dispatch_emit import run_write_set as rws
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        root = Path(repo_root)
+        base = record_dir(root, run_id)
+        manifest = rws._json_object(base / "manifest.json") or {}
+        return frozenset(rws._norm(p) for p in rws._credited_writes(root, base, manifest, rws._sizing_rel(base)))
+    except Exception:  # noqa: BLE001 -- unknown credits: the checkpoint withholds
+        return frozenset()

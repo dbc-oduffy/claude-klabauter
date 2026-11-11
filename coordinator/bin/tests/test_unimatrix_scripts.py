@@ -77,11 +77,17 @@ def test_bridge_and_inbox_pick_the_lan_alias_through_the_vendored_roster(tmp_pat
     for name in ("bridge", "inbox", "roster"):
         (tmp_path / f"unimatrix-{name}.py").write_text((BIN / f"unimatrix-{name}.py").read_text(encoding="utf-8"),
                                                        encoding="utf-8")
-    for name in ("bridge", "inbox"):
-        spec = importlib.util.spec_from_file_location(f"inst_{name}", tmp_path / f"unimatrix-{name}.py")
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        assert mod.pick_remote("lan", None) == "lan"
+    held = sys.modules.pop("unimatrix_roster", None)
+    try:
+        for name in ("bridge", "inbox"):
+            spec = importlib.util.spec_from_file_location(f"inst_{name}", tmp_path / f"unimatrix-{name}.py")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            assert mod.pick_remote("lan", None) == "lan"
+    finally:
+        sys.modules.pop("unimatrix_roster", None)
+        if held is not None:
+            sys.modules["unimatrix_roster"] = held
 
 
 def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
@@ -90,7 +96,7 @@ def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
     bridge = load("bridge")
     sessions = tmp_path / "sessions"
     sessions.mkdir()
-    (sessions / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock"}))
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock", "unimatrixFarName": "far", "sessionId": "sid-far"}))
     monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote="wg", port=None)
@@ -127,7 +133,8 @@ def test_bridge_relay_send_reaches_subprocess_run_on_either_platform(monkeypatch
     sessions = tmp_path / "sessions"
     sessions.mkdir()
     (sessions / f"{os.getpid()}.json").write_text(json.dumps(
-        {"pid": os.getpid(), "messagingSocketPath": r"\\.\pipe\m", "farPid": 77, "macSocketPath": "/far/9.sock"}))
+        {"pid": os.getpid(), "messagingSocketPath": r"\\.\pipe\m", "farPid": 77, "macSocketPath": "/far/9.sock", "unimatrixFarName": "far",
+         "sessionId": "sid-far"}))
     monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
     monkeypatch.setattr(bridge, "IS_WIN", is_win)
     monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
@@ -154,7 +161,7 @@ def test_bridge_relay_send_reaches_subprocess_run_on_either_platform(monkeypatch
     bridge.log.close()
     assert len(calls) == 1
     argv, kw = calls[0]
-    assert argv[0] == "ssh" and argv[-2] == "lan" and re.fullmatch(r"send-to 77 [0-9a-f]{16}", argv[-1])
+    assert argv[0] == "ssh" and argv[-2] == "lan" and re.fullmatch(r"send-session 77 [0-9a-f]{16} [0-9a-f]{16} sid-far", argv[-1])
     assert ("ControlMaster=auto" in " ".join(argv)) is (not is_win)
 
 

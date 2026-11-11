@@ -10,7 +10,7 @@ Usage:
                       [--remote <lan-ssh-alias>] [--tunnel-remote <ssh-alias>] [--key <path>]
 
 <tcp-port> "relay" sends each message through the unimatrix key's forced-command
-relay (`send-to <remote-pid> <digest>`; an older relay fails the delivery) over `ssh <lan-ssh-alias>`; --remote is required then.
+relay (`send-session <remote-pid> <digest> <name-digest> <session-id>`; an older relay fails the delivery) over `ssh <lan-ssh-alias>`; --remote is required then.
 --tunnel-remote (or $UNIMATRIX_TUNNEL_REMOTE) is used only while --remote does not answer.
 --key defaults to <settings home>/.secrets/ssh/unimatrix-zero.
 
@@ -316,18 +316,39 @@ def relay_send(conn):
         return
     # A win32 peer's socket is a named pipe with no pid in its name; the roster records `farPid`.
     far_pid = str(mine.get("farPid") or os.path.basename(mine[FAR_SOCKET_FIELD]).removesuffix(".sock"))
-    target = f"{mine.get('name') or far_pid} (pid {far_pid})"
+    far_sid = mine.get("sessionId")
+    target = f"{mine.get('name') or far_pid} (pid {far_pid}, session {far_sid})"
     for line in lines:
         log.write(f"relay >> {line!r}\n")
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
+    far_name = mine.get("unimatrixFarName")
+    if not isinstance(far_name, str) or not far_name:
+        log.write("relay: mirror lacks far name; re-mirror\n")
+        for line in lines:
+            _record_outcome(line, target, ts, 0, "mirror lacks far name; re-mirror")
+        return
+    if not isinstance(far_sid, str) or not far_sid:
+        log.write("relay: mirror lacks far session id; re-mirror\n")
+        for line in lines:
+            _record_outcome(line, target, ts, 0, "mirror lacks far session id; re-mirror")
+        return
     started = time.monotonic()
     far_digest = hashlib.sha256(mine[FAR_SOCKET_FIELD].encode("utf-8")).hexdigest()[:16]
-    r = _ssh_relay(f"send-to {far_pid} {far_digest}", b"".join(l + b"\n" for l in lines))
+    name_digest = hashlib.sha256(far_name.encode("utf-8")).hexdigest()[:16]
+    r = _ssh_relay(f"send-session {far_pid} {far_digest} {name_digest} {far_sid}", b"".join(l + b"\n" for l in lines))
     ms = round((time.monotonic() - started) * 1000)
-    ts = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     if r.returncode and r.stderr.lstrip().startswith(b"usage:"):
-        log.write("relay: far relay lacks send-to; upgrade it\n")
+        log.write("relay: far relay lacks send-session; upgrade it\n")
         for line in lines:
-            _record_outcome(line, target, ts, ms, "far relay lacks send-to; upgrade it")
+            _record_outcome(line, target, ts, ms, "far relay lacks send-session; upgrade it")
+        return
+    stderr = r.stderr.decode(errors="replace").strip()
+    if r.returncode and stderr.startswith(("target mismatch", "ambiguous")):
+        log.write(f"relay refused: {stderr}\n")
+        for line in lines:
+            _record_outcome(line, target, ts, ms, stderr[-300:])
+        if stderr.startswith("target mismatch"):
+            _mark_misroute()
         return
     replies = _batch_replies(r.stdout)
     for i, line in enumerate(lines):
@@ -341,6 +362,17 @@ def relay_send(conn):
         else:
             error = "relay: no delivery reply for this message"
         _record_outcome(line, target, ts, ms, error)
+
+
+def _mark_misroute():
+    """Atomically create this bridge's empty `<pid>.misroute` in the sessions dir; the roster sync unmirrors the marked mirror."""
+    path = os.path.join(os.path.expanduser(SESSIONS), f"{os.getpid()}.misroute")
+    try:
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600))
+    except FileExistsError:
+        pass
+    except OSError as e:
+        log.write(f"relay: misroute marker failed: {e}\n")
 
 
 def _ssh_relay(command, data):

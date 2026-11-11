@@ -85,8 +85,36 @@ def consume_notices(repo_root: Optional[str], session_id: str) -> list[dict]:
 
 
 def advisory_text(repo_root: Optional[str], session_id: str) -> str:
-    """One line per minted spooled ask, or "" when none."""
+    """One line per spooled-ask notice (a terminal run reads terminal, never minted), or "" when none."""
     return "\n".join(_line(n, repo_root) for n in consume_notices(repo_root, session_id))
+
+
+def run_disposition(repo_root: str, run_id: str, spool_id: Optional[str] = None) -> Optional[str]:
+    """The run's current stage, with a terminal disposition winning over a stale `minted` (or absent) stage.
+
+    A run-stage file nothing advanced off `minted` still reads minted; the run's `halted.json` or a
+    `withdrawn` spool entry for `spool_id` is the terminal record. None on an unsafe run id or no record."""
+    if not run_id or _UNSAFE.search(run_id) is not None:
+        return None
+    from pathlib import Path
+
+    from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, record_dir
+
+    stage = (read_run_stage(Path(repo_root), run_id) or {}).get("stage")
+    if stage and stage != "minted":
+        return stage
+    if spool_id and any(
+        os.path.exists(record.entry_path(str(repo_root), spool_id, suffix))
+        for suffix in (record.WITHDRAWN_SUFFIX, record.LEGACY_WITHDRAWN_SUFFIX)
+    ):
+        return "withdrawn"
+    try:
+        with open(record_dir(Path(repo_root), run_id) / "halted.json", "r", encoding="utf-8") as fh:
+            if isinstance(json.load(fh), dict):
+                return "halted"
+    except (OSError, ValueError):
+        pass
+    return stage
 
 
 def _line(n: dict, repo_root: Optional[str] = None) -> str:
@@ -99,13 +127,7 @@ def _line(n: dict, repo_root: Optional[str] = None) -> str:
         return "Your spooled ask %s coalesced into run %s." % (n["spool_id"], n["run_id"])
     # TRAP: a notice can be read long after it was written (pre-r24 backlogs were never consumed); the run
     # may since be halted, landed or superseded, so its current stage decides, never the notice.
-    stage = None
-    if repo_root and _UNSAFE.search(n["run_id"]) is None:
-        from pathlib import Path
-
-        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
-
-        stage = (read_run_stage(Path(repo_root), n["run_id"]) or {}).get("stage")
+    stage = run_disposition(repo_root, n["run_id"], n.get("spool_id")) if repo_root else None
     if stage and stage != "minted":
         return "Your spooled ask %s minted run %s; it is now %s, nothing to start." % (n["spool_id"], n["run_id"], stage)
     # A drain-minted run has no launcher: left unstarted, it is halted abandoned_at_minted in 30 minutes.

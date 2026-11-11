@@ -94,6 +94,42 @@ def test_own_token_with_runner_not_disproven_stays_live(tmp_path, monkeypatch):
     assert _revise(root)["run_live"] is True
 
 
+def test_unproven_own_runner_note_never_says_finished(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _tokens(monkeypatch, own=True, sibling=False)
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, run_id: run_id == RUN)
+    out = _revise(root)
+    assert out["run_live"] is False
+    assert "run finished" not in out["note"]
+    assert "runner unproven" in out["note"] and "will not be applied" in out["note"]
+
+
+def test_unproven_own_runner_gets_a_recheck_next_never_a_refire(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _tokens(monkeypatch, own=True, sibling=False)
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, run_id: run_id == RUN)
+    out = _revise(root)
+    assert out["next"]["kind"] == "recheck" and out["next"]["run_id"] == RUN
+    assert "refire" not in out["note"].replace("no refire is offered", "")
+
+
+def test_a_finished_run_still_gets_a_refire_next(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _tokens(monkeypatch, own=False, sibling=False)
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: True)
+    assert _revise(root)["next"]["kind"] == "refire"
+
+
+def test_run_with_no_token_still_reads_finished(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    _tokens(monkeypatch, own=False, sibling=False)
+    monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: True)
+    out = _revise(root)
+    assert out["run_live"] is False
+    assert "run finished" in out["note"]
+    assert "runner unproven" not in out["note"]
+
+
 def test_a_read_failure_keeps_the_token_live(tmp_path, monkeypatch):
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=True, sibling=False)

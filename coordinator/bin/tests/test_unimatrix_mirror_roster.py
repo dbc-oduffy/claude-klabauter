@@ -5,6 +5,7 @@ import json
 import os
 import re
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -42,6 +43,19 @@ def sessions(tmp_path, monkeypatch):
     d = tmp_path / "sessions"
     d.mkdir()
     return d
+
+
+FAKE_DNS = {"farbox": "10.9.0.5", "other": "10.9.0.6"}
+
+
+@pytest.fixture(autouse=True)
+def stub_dns(monkeypatch):
+    def getaddrinfo(host, port, *args, **kwargs):
+        if host not in FAKE_DNS:
+            raise OSError("no such host")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (FAKE_DNS[host], 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
 
 
 def test_endpoint_is_harness_shaped_on_every_platform():
@@ -422,13 +436,115 @@ def test_a_mirror_needs_a_live_roster_supervisor_to_be_listed(sessions, monkeypa
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     me = os.getpid()
     sup = {"unimatrixRosterPid": me, "unimatrixRosterProcStart": roster.proc_start(me)}
-    far = {roster.FAR_SOCKET_FIELD: FAR_SOCK}
+    far = {roster.FAR_SOCKET_FIELD: FAR_SOCK, **roster.far_seen_fields()}
     _put(sessions, "live.json", name="live-sup", **_own(roster, **far, **sup))
     _put(sessions, "dead.json", name="dead-sup", **_own(roster, **far, unimatrixRosterPid=me,
                                                        unimatrixRosterProcStart="other"))
     _put(sessions, "legacy.json", name="legacy", **_own(roster, **far))
     _put(sessions, "local.json", name="local", **_own(roster))
     assert sorted(n for n, _ in roster.live_sessions()) == ["live-sup", "local"]
+
+
+def test_a_bridge_only_mirror_with_no_fresh_far_sighting_is_not_listed(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    me = os.getpid()
+    sup = {"unimatrixRosterPid": me, "unimatrixRosterProcStart": roster.proc_start(me)}
+    far = {roster.FAR_SOCKET_FIELD: FAR_SOCK, **sup}
+    stale = int(time.time() * 1000) - (roster.FAR_SEEN_MAX_AGE_SECONDS + 5) * 1000
+    _put(sessions, "backed.json", name="backed", **_own(roster, **far, **roster.far_seen_fields()))
+    _put(sessions, "unseen.json", name="unseen", **_own(roster, **far))
+    _put(sessions, "gone.json", name="gone", **_own(roster, **far, **{roster.FAR_SEEN_FIELD: stale}))
+    assert [n for n, _ in roster.live_sessions()] == ["backed"]
+    assert roster.entry_listed(_own(roster, **far, **roster.far_seen_fields()))
+    assert not roster.entry_listed(_own(roster, **far, **{roster.FAR_SEEN_FIELD: stale}))
+
+
+def test_an_agy_router_face_is_listed_only_while_its_agy_process_lives(tmp_path, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    base = tmp_path / "unimatrix"
+    (base / "agy-legs").mkdir(parents=True)
+    (base / "peers.json").write_text(json.dumps([{"name": "agy-x-on-box", "vendor": "agy", "target": "c1"}]))
+    face = _own(roster, name="agy-x-on-box", vendor="agy", unimatrixRouterPid=7)
+    (base / "agy-legs" / "c1.json").write_text(json.dumps({"agy_pid": os.getpid()}))
+    assert roster.entry_listed(face)
+    (base / "agy-legs" / "c1.json").write_text(json.dumps({"agy_pid": 2_000_000_000}))
+    assert not roster.entry_listed(face)
+
+
+def test_an_agy_router_face_with_no_peers_row_is_not_listed(tmp_path, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    base = tmp_path / "unimatrix"
+    base.mkdir()
+    (base / "peers.json").write_text(json.dumps([{"name": "agy-x-on-box", "vendor": "agy", "target": "c1"}]))
+    assert not roster.entry_listed(_own(roster, name="agy-Temp-bafde89c04-on-machine-a", vendor="agy",
+                                        unimatrixRouterPid=7))
+
+
+def test_a_hand_started_relay_row_with_no_far_socket_is_listed_only_on_a_fresh_far_sighting(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    relay = _own(roster, name="codex-hand", unimatrixRemote="farbox")
+    assert roster.FAR_SOCKET_FIELD not in relay
+    assert not roster.entry_listed(relay)
+    assert roster.entry_listed({**relay, **roster.far_seen_fields()})
+    assert roster.entry_listed(_own(roster, name="plain-local"))
+
+
+def test_supervisor_pass_reaps_unbacked_agy_faces_and_relay_rows_but_keeps_backed_ones(
+        tmp_path, sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    base = tmp_path / "unimatrix"
+    (base / "agy-legs").mkdir(parents=True)
+    (base / "peers.json").write_text(json.dumps([
+        {"name": "agy-dead-on-machine-a", "vendor": "agy", "target": "c1"},
+        {"name": "agy-live-on-machine-a", "vendor": "agy", "target": "c2"}]))
+    (base / "agy-legs" / "c1.json").write_text(json.dumps({"agy_pid": 2_000_000_000}))
+    (base / "agy-legs" / "c2.json").write_text(json.dumps({"agy_pid": os.getpid()}))
+    old = int(time.time() * 1000) - 10 * 60 * 1000
+    face = {"vendor": "agy", "unimatrixRouterPid": 1, "startedAt": old}
+    _put(sessions, "999971.json", pid=999971, name="agy-dead-on-machine-a", procStart="x", **face)
+    _put(sessions, "999972.json", pid=999972, name="agy-live-on-machine-a", procStart="x", **face)
+    _put(sessions, "999973.json", pid=999973, name="agy-Temp-bafde89c04-on-machine-a", procStart="x", **face)
+    _put(sessions, "999974.json", pid=999974, name="codex-hand", procStart="x", unimatrixRemote="farbox")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    monkeypatch.setattr(roster, "fetch_roster", lambda *a, **k: [])
+    monkeypatch.setattr(roster, "inbound_names", lambda: set())
+    monkeypatch.setattr(roster.signal, "signal", lambda *a: None)
+
+    class StopLoop(Exception):
+        pass
+
+    def stop(_seconds):
+        raise StopLoop
+
+    monkeypatch.setattr(roster.time, "sleep", stop)
+    with pytest.raises(StopLoop):
+        roster.main([str(tmp_path / "sup.log"), "--remote", "farbox", "--key", "k"])
+    assert sorted(p.name for p in sessions.iterdir()) == ["999972.json"]
+
+
+def test_sync_stamps_a_mirror_whose_far_row_is_present_and_stops_when_the_row_vanishes(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    roster._ABSENT.clear()
+    me = os.getpid()
+    sup = {"unimatrixRosterPid": me, "unimatrixRosterProcStart": "1"}
+    old = int(time.time() * 1000) - 10 * roster.POLL_SECONDS * 1000
+    path = _put_mirror(sessions, 55, "agy-peer", "/far/a.sock", 9)
+    d = json.loads(path.read_text())
+    d.update(sup, **{roster.FAR_SEEN_FIELD: old}, procStart="1")
+    path.write_text(json.dumps(d))
+    assert not roster.mirror_orphaned(d) and roster.mirror_unbacked({**d, roster.FAR_SOCKET_FIELD: FAR_SOCK})
+    row = {"entry": {"pid": 9, "name": "agy-peer", "messagingSocketPath": "/far/a.sock"}, "key": "k"}
+    roster.sync({"/far/a.sock": FakeProc(55)}, {"/far/a.sock": row}, cfg, lambda m: None)
+    stamped = json.loads(path.read_text())
+    assert stamped[roster.FAR_SEEN_FIELD] > old
+    assert roster._liveness().stamp_fresh(stamped, roster.FAR_SEEN_FIELD, roster.POLL_SECONDS)
 
 
 def test_bridge_cmd_names_its_supervisor_only_when_given():
@@ -486,6 +602,41 @@ def test_reap_removes_orphaned_mirrors_and_kills_only_a_bridge_that_is_still_its
     assert len(lines) == 2
 
 
+def test_reap_unbacked_removes_the_registry_row_of_an_unseen_mirror_but_never_a_kept_or_seen_one(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    me = os.getpid()
+    sup = {"unimatrixRosterPid": me, "unimatrixRosterProcStart": roster.proc_start(me)}
+    base = {roster.FAR_SOCKET_FIELD: FAR_SOCK, "unimatrixRemote": "farbox", **sup}
+    _put(sessions, "999994.json", pid=999994, procStart="x", **base)
+    _put(sessions, "999995.json", pid=999995, procStart="x", **base, **roster.far_seen_fields())
+    _put(sessions, "999996.json", pid=999996, procStart="x", **base)
+    roster.reap_orphaned_mirrors("farbox", lambda m: None)
+    assert sorted(p.name for p in sessions.iterdir()) == ["999994.json", "999995.json", "999996.json"]
+    roster.reap_orphaned_mirrors("farbox", lambda m: None, unbacked=True, keep={999996})
+    assert sorted(p.name for p in sessions.iterdir()) == ["999995.json", "999996.json"]
+
+
+def test_reap_unbacked_agy_faces_drops_a_dead_agent_face_but_spares_a_backed_or_new_one(sessions, monkeypatch):
+    roster = load("roster")
+    monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
+    monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
+    liveness = roster._liveness()
+    monkeypatch.setattr(liveness, "agy_face_unbacked", lambda d: d.get("name") != "agy-backed")
+    old = int(time.time() * 1000) - 10 * 60 * 1000
+    face = {"vendor": "agy", "unimatrixRouterPid": 1, "startedAt": old}
+    _put(sessions, "999981.json", pid=999981, name="agy-dead", procStart="x", **face)
+    _put(sessions, "999981.k.key", x=1)
+    _put(sessions, "999982.json", pid=999982, name="agy-backed", procStart="x", **face)
+    _put(sessions, "999983.json", pid=999983, name="agy-new", procStart="x",
+         **{**face, "startedAt": int(time.time() * 1000)})
+    lines = []
+    roster.reap_unbacked_agy_faces(lines.append)
+    assert sorted(p.name for p in sessions.iterdir()) == ["999982.json", "999983.json"]
+    assert len(lines) == 1 and "agy-dead" in lines[0]
+
+
 def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid=31339):
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "spawn", lambda cmd: FakeProc(pid))
@@ -496,6 +647,31 @@ def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid=313
              "messagingSocketPath": FAR_SOCK, **(entry_extra or {})}
     roster.mirror({"entry": entry, "key": "K"}, cfg, lambda m: None)
     return cfg, json.loads((sessions / f"{pid}.json").read_text())
+
+
+def test_mirror_records_the_far_boxs_resolved_ip_beside_its_label(sessions, monkeypatch):
+    _, entry = _mirror_one(load("roster"), sessions, monkeypatch, "me@farbox")
+    assert entry["unimatrixRemote"] == "me@farbox" and entry["unimatrixRemoteIp"] == "10.9.0.5"
+
+
+def test_mirror_omits_the_ip_when_the_remote_does_not_resolve(sessions, monkeypatch):
+    _, entry = _mirror_one(load("roster"), sessions, monkeypatch, "nowhere",
+                           entry_extra={"unimatrixRemoteIp": "6.6.6.6"})
+    assert "unimatrixRemoteIp" not in entry
+
+
+def test_rename_live_mirror_refreshes_the_ip_when_the_remote_changes(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, _ = _mirror_one(roster, sessions, monkeypatch, "farbox")
+    cfg.remote = "other"
+    row = {"entry": {"pid": 7, "name": "far-c", "messagingSocketPath": FAR_SOCK}}
+    roster.rename_live_mirror(31339, FAR_SOCK, row, cfg, lambda m: None, [])
+    after = json.loads((sessions / "31339.json").read_text())
+    assert after["unimatrixRemote"] == "other" and after["unimatrixRemoteIp"] == "10.9.0.6"
+    cfg.remote = "nowhere"
+    roster.rename_live_mirror(31339, FAR_SOCK, row, cfg, lambda m: None, [])
+    after = json.loads((sessions / "31339.json").read_text())
+    assert after["unimatrixRemote"] == "nowhere" and "unimatrixRemoteIp" not in after
 
 
 @pytest.mark.parametrize("remote", ["example-operator@Machine-b-LAN.local", "machine-b", "Machine-b.local", "u@machine-b-lan"])
@@ -552,7 +728,8 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
     spec.loader.exec_module(bridge)
     d = tmp_path / "sessions"
     d.mkdir()
-    entry = {"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": far_socket}
+    entry = {"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": far_socket, "unimatrixFarName": "far",
+             "sessionId": "sid-far"}
     if stored:
         entry["farPid"] = stored
     (d / f"{os.getpid()}.json").write_text(json.dumps(entry))
@@ -575,7 +752,8 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
 
     bridge.relay_send(Conn())
     digest = hashlib.sha256(far_socket.encode("utf-8")).hexdigest()[:16]
-    assert argvs[-1][-1] == f"send-to {expect} {digest}"
+    name_digest = hashlib.sha256(b"far").hexdigest()[:16]
+    assert argvs[-1][-1] == f"send-session {expect} {digest} {name_digest} sid-far"
 
 
 def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):
@@ -659,6 +837,37 @@ def test_sync_logs_misroute_and_unmirrors_a_mirror_whose_far_pid_is_not_its_rows
     assert f"MISROUTE far-c {FAR_SOCK}" in lines
     assert killed == [60] and bridges == {}
     assert not (sessions / "60.json").exists()
+
+
+def test_sync_unmirrors_a_misroute_marked_mirror_then_rebuilds_it_from_the_row(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    _put_mirror(sessions, 60, "far-c", FAR_SOCK, 9)
+    (sessions / "60.misroute").write_text("{}")
+    monkeypatch.setattr(roster, "rename_live_mirror", lambda *a, **kw: None)
+    lines = []
+    bridges = {FAR_SOCK: FakeProc(60)}
+    row = {"entry": {"pid": 9, "name": "far-c", "messagingSocketPath": FAR_SOCK}, "key": "K"}
+    roster.sync(bridges, {FAR_SOCK: row}, cfg, lines.append)
+    assert f"MISROUTE far-c {FAR_SOCK}" in lines
+    assert killed == [60] and bridges == {}
+    assert not (sessions / "60.json").exists() and not (sessions / "60.misroute").exists()
+    rebuilt = []
+    monkeypatch.setattr(roster, "mirror", lambda r, c, s, scan: rebuilt.append(r) or FakeProc(61))
+    roster.sync(bridges, {FAR_SOCK: row}, cfg, lines.append)
+    assert rebuilt == [row] and bridges[FAR_SOCK].pid == 61
+
+
+def test_sync_keeps_an_unmarked_mirror_whose_far_pid_matches(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    _put_mirror(sessions, 60, "far-c", FAR_SOCK, 9)
+    monkeypatch.setattr(roster, "rename_live_mirror", lambda *a, **kw: None)
+    lines = []
+    bridges = {FAR_SOCK: FakeProc(60)}
+    row = {"entry": {"pid": 9, "name": "far-c", "messagingSocketPath": FAR_SOCK}, "key": "K"}
+    roster.sync(bridges, {FAR_SOCK: row}, cfg, lines.append)
+    assert killed == [] and not any("MISROUTE" in m for m in lines)
 
 
 def test_sync_logs_misroute_for_two_mirrors_sharing_one_session_name(sessions, monkeypatch):
@@ -1050,7 +1259,7 @@ def test_a_client_refused_by_the_far_owner_parks_at_the_cap_and_other_exits_do_n
     assert dials("a") == 2
 
 
-def test_a_client_that_stayed_up_a_poll_resets_the_backoff(tmp_path, monkeypatch):
+def test_a_client_that_stayed_up_stable_seconds_resets_the_backoff(tmp_path, monkeypatch):
     mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [255])
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -1058,6 +1267,9 @@ def test_a_client_that_stayed_up_a_poll_resets_the_backoff(tmp_path, monkeypatch
     mirror_all.sync(clients, live, cfg, lambda m: None)
     assert mirror_all._STATE["fails"] == {"a": 1}
     clients["a"] = (1, FakeProc(5))
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert mirror_all._STATE["fails"] == {"a": 1}
+    clock[0] += mirror_all.STABLE_SECONDS
     mirror_all.sync(clients, live, cfg, lambda m: None)
     assert mirror_all._STATE["fails"] == {}
 
@@ -1070,3 +1282,22 @@ def test_relay_inbox_exits_3_on_a_pipe_host_and_the_code_matches_the_supervisor(
     with pytest.raises(SystemExit) as e:
         relay.inbox("x")
     assert e.value.code == 3
+
+
+def test_remote_ip_retries_a_failed_lookup_and_refreshes_a_stale_hit(monkeypatch):
+    roster = load("roster")
+    clock = [1000.0]
+    monkeypatch.setattr(roster.time, "monotonic", lambda: clock[0])
+    assert roster.remote_ip("u@flaky") == ""
+    clock[0] += 5
+    FAKE_DNS["flaky"] = "10.9.0.7"
+    try:
+        assert roster.remote_ip("u@flaky") == ""
+        clock[0] += roster.REMOTE_IP_FAIL_TTL_S
+        assert roster.remote_ip("u@flaky") == "10.9.0.7"
+        FAKE_DNS["flaky"] = "10.9.0.8"
+        assert roster.remote_ip("u@flaky") == "10.9.0.7"
+        clock[0] += roster.REMOTE_IP_TTL_S
+        assert roster.remote_ip("u@flaky") == "10.9.0.8"
+    finally:
+        FAKE_DNS.pop("flaky", None)

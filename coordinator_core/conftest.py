@@ -140,6 +140,9 @@ _assert_engine_under_repo_root(_REPO_ROOT)
 
 from coordinator_core import memo_corpus
 from coordinator_core.benchmarks.isolated_clone import CloneTeardownLeak, rmtree_or_raise
+# Marked before the import so the plugin registration in the repo-root conftest finds it already
+# loaded through the rewrite hook, not as an "already imported" PytestAssertRewriteWarning.
+pytest.register_assert_rewrite("coordinator_core.testing.fs_containment")
 from coordinator_core.testing.fs_containment import _install_counted_numbered_dir
 
 # Here as well as in the fs_containment plugin: under `coordinator_core/pytest.ini` the
@@ -1996,4 +1999,10 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus) -> None:
             file=out,
         )
         if int(session.exitstatus) == 0:
-            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+            from coordinator_core.testing.fs_containment import force_exit_status
+
+            force_exit_status(
+                session,
+                pytest.ExitCode.TESTS_FAILED,
+                f"engine-records tripwire: fixture run ids added to the real engine-records: {fixture}",
+            )

@@ -26,10 +26,18 @@ settle (workers' threaded registry preload finishing) = first..pool_ready; worke
 (optionally over a booted old pair with `--old-pair`) and adds `handover` (True iff the successor
 answered inside the one attempt's `NEW_PAIR_READY_BUDGET_SECS`) and `handover_wall_ms`.
 
+`--boot-phases [--runs N]` attributes the server's own boot clock instead: the `server_boot`
+telemetry row's `listener_secs` (spawn..endpoint bound) and `ready_secs` (spawn..answerable), each
+split into named phases with wall and process time. The server is started through a trace entry
+script written into the tmp engine root, which wraps each boot step in a timing stamp held in memory
+and flushed once, after the server stamped `ready_secs`: the engine itself gains no boot-path write.
+Output is one JSON object (`BOOT_PHASE_KEYS`) per run plus a `median` object.
+
 Usage: python coordinator_core/benchmarks/warm_pair_boot_process_time.py [--work-dir DIR]
-[--cold-pyc] [--handover [--old-pair]] [--assert-budget]. Exit 1 only under --assert-budget when
-`server_process_ms_to_first_answer` exceeds `FIRST_ANSWER_BUDGET_MS`, or with --handover when the
-successor did not answer first time.
+[--cold-pyc] [--handover [--old-pair]] [--assert-budget] [--boot-phases [--runs N]]. Exit 1 only
+under --assert-budget when `server_process_ms_to_first_answer` exceeds `FIRST_ANSWER_BUDGET_MS`, or
+with --handover when the successor did not answer first time; --boot-phases exits 1 when a run
+produced no trace or telemetry row.
 """
 
 from __future__ import annotations
@@ -52,6 +60,7 @@ if __package__ in (None, ""):
 
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.warm import breadcrumb, client, skew
+from coordinator_core.warm import telemetry
 from coordinator_core.warm.telemetry import SPAWN_EPOCH_ENV
 
 #: The brightline: a new warm server must reach its first answer within this much process time.
@@ -142,7 +151,7 @@ def build_engine_root(
         copy_function=shutil.copy2 if fresh_copy else _link_or_copy,
     )
     (dest / "coordinator_core" / skew.ENGINE_STAMP_FILENAME).write_text(
-        "sha:boot-process-time\n", encoding="utf-8"
+        "sha:boot-process-time\n", encoding="utf-8", newline="\n"
     )
     return dest
 
@@ -465,6 +474,265 @@ def _measure_handover_in_runtime(engine_root: Path, report: BootReport, old_pair
         stop_engine_root(engine_root)
 
 
+TRACE_ENTRY_NAME = "boot_phase_trace_entry.py"
+# The same literal is read inside `_TRACE_ENTRY_SOURCE` (a plain string, not interpolated): change both together.
+TRACE_FILE_ENV = "COORDINATOR_BOOT_PHASE_TRACE_FILE"
+TRACE_TIMEOUT_SECS = 60.0
+#: The keys every `--boot-phases` run object carries; a phase name is a key of `phases`.
+BOOT_PHASE_KEYS = ("listener_secs", "ready_secs", "spawn_to_listener", "listener_to_ready", "top_phase", "missing")
+#: Stamped by the trace entry but not a boot phase: it ends the window the telemetry row closes.
+_NON_PHASE_STAMPS = frozenset({"record_own_boot"})
+
+#: Runs as the server's script would: it wraps each named boot step of `warm/server.py` in a
+#: (name, wall_start, wall_end, cpu_start, cpu_end) stamp kept in memory, runs the production
+#: `_process_entry`, and writes the stamps once after `_record_own_boot` returned (that call
+#: stamps `ready_secs` first). The `__main__` guard keeps a spawn-started pool worker, which
+#: re-imports this file as `__mp_main__`, from booting a second server.
+_TRACE_ENTRY_SOURCE = '''\
+import json
+import os
+import sys
+import time
+
+
+def _main():
+    entry = [time.time(), time.process_time()]
+    stamps, seen, missing = [], set(), []
+
+    def wrap(owner, attr, name):
+        orig = getattr(owner, attr)
+
+        def traced(*args, **kwargs):
+            if name in seen:
+                return orig(*args, **kwargs)
+            seen.add(name)
+            w0, c0 = time.time(), time.process_time()
+            try:
+                return orig(*args, **kwargs)
+            finally:
+                stamps.append([name, w0, time.time(), c0, time.process_time()])
+
+        setattr(owner, attr, traced)
+
+    from coordinator_core.warm import server
+
+    imported = [time.time(), time.process_time(), len(sys.modules)]
+    elect = "_elect_windows_pipe" if sys.platform == "win32" else "_elect_unix_socket_endpoint"
+    steps = (
+        ("scrub_test_env", "", "scrub_test_env"),
+        ("raise_engine_priority", "", "_raise_engine_priority"),
+        ("ladder_gone_check", "idle", "ladder_gone_tombstoned"),
+        ("publish_marker_check", "breadcrumb", "publish_marker_blocks_boot"),
+        ("compute_client_token", "skew", "compute_client_token"),
+        ("election", "", elect),
+        ("boot_version_state", "_BootVersionState", "__init__"),
+        ("breadcrumb_write", "breadcrumb", "write_breadcrumb"),
+        ("declare_execution_route", "", "_declare_execution_route"),
+        ("scrub_test_harness_env", "", "_scrub_test_harness_env"),
+        ("pin_cwd", "", "_pin_cwd"),
+        ("register_stack_dump_signal", "", "_register_stack_dump_signal"),
+        ("start_dump_request_poll", "", "_start_dump_request_poll"),
+        ("suppress_pool_worker_consoles", "", "_suppress_pool_worker_consoles"),
+        ("not_ready_answerer_start", "_NotReadyAnswerer", "start"),
+    )
+    for name, owner, attr in steps:
+        try:
+            wrap(getattr(server, owner) if owner else server, attr, name)
+        except AttributeError:
+            missing.append(name)
+
+    def flush():
+        path = os.environ["COORDINATOR_BOOT_PHASE_TRACE_FILE"]
+        payload = {"pid": os.getpid(), "entry": entry, "imported": imported, "stamps": stamps,
+                   "missing_steps": missing}
+        with open(path + ".tmp", "w", encoding="utf-8") as fh:
+            json.dump(payload, fh)
+        os.replace(path + ".tmp", path)
+
+    record = server._record_own_boot
+
+    def record_then_flush(*args, **kwargs):
+        try:
+            return record(*args, **kwargs)
+        finally:
+            flush()
+
+    server._record_own_boot = record_then_flush
+    sys.exit(server._process_entry())
+
+
+if __name__ == "__main__":
+    _main()
+'''
+
+
+def _entry(wall_secs: float, cpu_secs: float) -> dict:
+    return {"wall_ms": round(wall_secs * 1000.0, 1), "process_ms": round(cpu_secs * 1000.0, 1)}
+
+
+def _window(phases: dict, total_secs: Optional[float], label: str) -> dict:
+    spent = sum(p["wall_ms"] for p in phases.values())
+    unattributed = None if total_secs is None else round(total_secs * 1000.0 - spent, 1)
+    return {"phases": phases, "unattributed_wall_ms": unattributed, "unattributed_name": label}
+
+
+def _top_phase(*windows: dict) -> Optional[str]:
+    ranked = []
+    for window in windows:
+        ranked.extend((p["wall_ms"], name) for name, p in window["phases"].items())
+        if window["unattributed_wall_ms"] is not None:
+            ranked.append((window["unattributed_wall_ms"], window["unattributed_name"]))
+    return max(ranked)[1] if ranked else None
+
+
+def attribute_boot(trace: dict, row: Optional[dict], spawn_epoch: float) -> dict:
+    """One boot's attribution: the telemetry `row`'s two clocks, each split into the trace's stamps.
+
+    `spawn_to_listener` = interpreter start (spawn..trace entry), the server import, then every step
+    stamped up to the election's end. `listener_to_ready` = every step stamped after it.
+    `unattributed_wall_ms` is the window's clock minus its named phases (boot code between them, an
+    import inside a step's caller, scheduler wait).
+    """
+    missing = list(trace.get("missing_steps", []))
+    listener_secs = None if row is None else row.get("listener_secs")
+    ready_secs = None if row is None else row.get("ready_secs")
+    if row is None:
+        missing.append("server_boot_row")
+    entry_wall, entry_cpu = trace["entry"]
+    imported_wall, imported_cpu, module_count = trace["imported"]
+    stamps = sorted(
+        (s for s in trace["stamps"] if s[0] not in _NON_PHASE_STAMPS), key=lambda s: s[1]
+    )
+    election = next((s for s in stamps if s[0] == "election"), None)
+    if election is None:
+        missing.append("election")
+    first: dict = {
+        "interpreter_startup": _entry(entry_wall - spawn_epoch, entry_cpu),
+        "server_import": _entry(imported_wall - entry_wall, imported_cpu - entry_cpu),
+    }
+    second: dict = {}
+    for name, w0, w1, c0, c1 in stamps:
+        target = first if election is not None and w1 <= election[2] else second
+        target[name] = _entry(w1 - w0, c1 - c0)
+    to_listener = _window(first, listener_secs, "unattributed_spawn_to_listener")
+    to_ready = _window(
+        second,
+        None if listener_secs is None or ready_secs is None else ready_secs - listener_secs,
+        "unattributed_listener_to_ready",
+    )
+    return {
+        "listener_secs": listener_secs,
+        "ready_secs": ready_secs,
+        "spawn_to_listener": to_listener,
+        "listener_to_ready": to_ready,
+        "top_phase": _top_phase(to_listener, to_ready),
+        "imported_modules": module_count,
+        "missing": missing,
+    }
+
+
+def median_attribution(runs: list) -> dict:
+    """Per-key medians over the runs that produced both clocks; `runs_used` says how many."""
+    import statistics
+
+    usable = [r for r in runs if r.get("listener_secs") is not None and r.get("ready_secs") is not None]
+    if not usable:
+        return {"runs_used": 0, "missing": ["no run produced a server_boot row"]}
+
+    def med(values: list) -> Optional[float]:
+        values = [v for v in values if v is not None]
+        return round(statistics.median(values), 3) if values else None
+
+    out: dict = {
+        "runs_used": len(usable),
+        "listener_secs": med([r["listener_secs"] for r in usable]),
+        "ready_secs": med([r["ready_secs"] for r in usable]),
+        "missing": sorted({m for r in runs for m in r.get("missing", [])}),
+    }
+    for window_key in ("spawn_to_listener", "listener_to_ready"):
+        names = []
+        for r in usable:
+            names.extend(n for n in r[window_key]["phases"] if n not in names)
+        phases = {
+            n: {
+                field_: med([r[window_key]["phases"][n][field_] for r in usable if n in r[window_key]["phases"]])
+                for field_ in ("wall_ms", "process_ms")
+            }
+            for n in names
+        }
+        out[window_key] = {
+            "phases": phases,
+            "unattributed_wall_ms": med([r[window_key]["unattributed_wall_ms"] for r in usable]),
+            "unattributed_name": usable[0][window_key]["unattributed_name"],
+        }
+    out["top_phase"] = _top_phase(out["spawn_to_listener"], out["listener_to_ready"])
+    return out
+
+
+def _read_trace(path: Path) -> Optional[dict]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _boot_with_trace(engine_root: Path, trace_path: Path) -> dict:
+    """Start one traced server under `engine_root`, wait for its trace, stop it, attribute it."""
+    import psutil
+
+    pid: Optional[int] = None
+    try:
+        spawn_epoch = time.time()
+        if not client.spawn_detached(
+            str(engine_root),
+            TRACE_ENTRY_NAME,
+            env_extra={SPAWN_EPOCH_ENV: repr(spawn_epoch), TRACE_FILE_ENV: str(trace_path)},
+        ):
+            return {"missing": ["spawn"]}
+        deadline = time.monotonic() + TRACE_TIMEOUT_SECS
+        trace = _read_trace(trace_path)
+        while trace is None and time.monotonic() < deadline:
+            time.sleep(SAMPLE_INTERVAL_SECS)
+            trace = _read_trace(trace_path)
+        if trace is None:
+            return {"missing": ["trace"]}
+        pid = trace.get("pid")
+        rows = [r for r in telemetry.server_boot_samples(engine_root) if r.get("pid") == pid]
+        return attribute_boot(trace, rows[-1] if rows else None, spawn_epoch)
+    finally:
+        stop_engine_root(engine_root)
+        if isinstance(pid, int):
+            try:
+                kill_tree(psutil.Process(pid))
+            except psutil.Error:
+                pass
+
+
+def run_boot_phases(
+    work_dir: Optional[Path] = None,
+    source_root: Optional[Path] = None,
+    *,
+    cold_pyc: bool = False,
+    runs: int = 1,
+) -> list:
+    """`runs` sequential traced boots of one tmp engine root built from `source_root`; one
+    `attribute_boot` object per boot."""
+    source = source_root if source_root is not None else Path(__file__).resolve().parents[2]
+    base = work_dir if work_dir is not None else source / "scratch"
+    base.mkdir(parents=True, exist_ok=True)
+    tmp = Path(tempfile.mkdtemp(prefix="warm-boot-phases-", dir=base))
+    try:
+        root = build_engine_root(tmp / "engine", source, cold_pyc=cold_pyc)
+        (root / TRACE_ENTRY_NAME).write_text(_TRACE_ENTRY_SOURCE, encoding="utf-8", newline="\n")
+        out = []
+        with isolated_runtime(tmp / "runtime"):
+            for index in range(runs):
+                out.append(_boot_with_trace(root, tmp / f"trace-{index}.json"))
+        return out
+    finally:
+        rmtree_or_raise(tmp, label="warm-pair-boot-phases")
+
+
 def run(
     work_dir: Optional[Path] = None,
     source_root: Optional[Path] = None,
@@ -499,9 +767,27 @@ def main(argv: Optional[list] = None) -> int:
     parser.add_argument(
         "--old-pair", action="store_true", help="with --handover: boot an old pair first and swap it"
     )
+    parser.add_argument(
+        "--boot-phases", action="store_true", help="attribute listener_secs/ready_secs to named boot phases"
+    )
+    parser.add_argument("--runs", type=int, default=1, help="with --boot-phases: number of boots")
     args = parser.parse_args(argv)
     if args.old_pair and not args.handover:
         parser.error("--old-pair needs --handover")
+    if args.boot_phases and (args.handover or args.assert_budget):
+        parser.error("--boot-phases excludes --handover and --assert-budget")
+    if args.runs != 1 and not args.boot_phases:
+        parser.error("--runs needs --boot-phases")
+    if args.runs < 1:
+        parser.error("--runs must be at least 1")
+    if args.boot_phases:
+        results = run_boot_phases(args.work_dir, cold_pyc=args.cold_pyc, runs=args.runs)
+        for result in results:
+            print(json.dumps(result, sort_keys=True))
+        median = median_attribution(results)
+        print(f"listener_secs={median.get('listener_secs')} ready_secs={median.get('ready_secs')}")
+        print("median=" + json.dumps(median, sort_keys=True))
+        return 0 if median["runs_used"] == len(results) else 1
     report = run(args.work_dir, cold_pyc=args.cold_pyc, handover=args.handover, old_pair=args.old_pair)
     if args.handover:
         print(f"handover={report.handover}")

@@ -862,6 +862,30 @@ def _save_process(artifact_dir: Path, proc, backend: str, options: dict, request
     (artifact_dir / "process.json").write_text(json.dumps(receipt), encoding="utf-8")
 
 
+def _write_commit_params(repo_root: Path, prompt: str) -> None:
+    """Write the run's terminal-commit params file from the raw prompt before a commit child spawns.
+
+    Trap: params come from the composed prompt this runner holds, never from the child's output,
+    and never from persona/schema text (callers pass the raw prompt). A backend whose tool hooks
+    never fire has no other writer. Never raises and never blocks the spawn.
+    """
+    if not (repo_root / ".git").exists():
+        return
+    try:
+        from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+
+        path, leg = chan.materialize_from_prompt(repo_root, prompt)
+        if path is None:
+            return
+        if leg is None:
+            chan.clear_refusal(str(path))
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        chan.note_refusal(str(path), "runner: " + leg)
+    except Exception:
+        return
+
+
 def run_agent(
     prompt: str,
     options: dict[str, Any] | None,
@@ -898,6 +922,8 @@ def run_agent(
             jsonschema.validators.validator_for(schema).check_schema(schema)
         except (jsonschema.SchemaError, TypeError, AttributeError) as exc:
             raise AgentFailed(f"invalid agent schema: {exc}") from exc
+    if options.get("agentType") == _COMMIT_AGENT_TYPE:
+        _write_commit_params(repo_root, prompt)
     persona = _persona(options.get("agentType"))
     full_prompt = (f"Agent definition ({options['agentType']}):\n{persona}\n\n" if persona else "") + prompt
     if os.name == 'nt':

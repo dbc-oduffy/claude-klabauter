@@ -122,11 +122,32 @@ def check_version(text, force=False):
     return "refuse", f"REFUSE: {msg}; pass --force to override"
 
 
+def resolve_claude():
+    """PATH first, then the default install dirs a non-login ssh PATH lacks; None if absent."""
+    exe = shutil.which("claude")
+    if exe:
+        return exe
+    home = Path.home()
+    names = ("claude.exe", "claude.cmd") if sys.platform == "win32" else ("claude",)
+    dirs = [home / ".local" / "bin", home / ".claude" / "local", home / ".npm-global" / "bin",
+            home / ".bun" / "bin", home / ".volta" / "bin"]
+    if sys.platform == "win32":
+        dirs.append(Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming") / "npm")
+    else:
+        dirs += [Path("/opt/homebrew/bin"), Path("/usr/local/bin")]
+    for d in dirs:
+        for n in names:
+            cand = d / n
+            if cand.is_file() and (sys.platform == "win32" or os.access(cand, os.X_OK)):
+                return str(cand)
+    return None
+
+
 def probe_claude_version():
     """Run `claude --version`; shutil.which resolves claude.cmd on Windows."""
-    exe = shutil.which("claude")
+    exe = resolve_claude()
     if not exe:
-        raise RuntimeError("claude not found on PATH; cannot read the harness version")
+        raise RuntimeError("claude not found on PATH or in default install dirs; cannot read the harness version")
     kwargs = {}
     if sys.platform == "win32":
         kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -442,9 +463,13 @@ def file_key(run=subprocess.run, unencrypted=False, remint=False, on_mint=None):
 
 
 def render_ssh_config_block(alias, key_path):
-    """The near-side `~/.ssh/config` block for the pair; printed, never written."""
+    """The near-side `~/.ssh/config` block for the pair; printed, never written. The peer is named by
+    hostname (`<name>.local` unless the name is already dotted), never an IP literal."""
+    name = alias.rsplit("@", 1)[-1]
+    host = name if "." in name else f"{name}.local"
     return (f"Host {alias}\n"
-            f"    # HostName <address of {alias}>\n"
+            f"    HostName {host}\n"
+            f"    AddressFamily inet\n"
             f"    IdentityFile {Path(key_path).as_posix()}\n"
             f"    IdentitiesOnly yes\n")
 
@@ -1100,6 +1125,66 @@ def seed_host_status_line(config_path, host, *, uninstall=False):
     return "updated" if text is not None else "created"
 
 
+AGY_ALLOW_RULE = "command(coordinator-invoke *)"
+
+
+def seed_agy_allow_rule(config_path, *, uninstall=False):
+    """Own one entry in agy's `permissions.allow`, so a headless `agy --print` can run the coordinator door.
+
+    Operator entries are never touched. The ownership record keeps the pre-install text: an untouched
+    file returns byte for byte; a file edited since is repaired structurally.
+    """
+    path = Path(config_path)
+    state_path = path.with_name(".coordinator-allow-rule-agy.json")
+    text = path.read_bytes().decode("utf-8") if path.exists() else None
+    if uninstall:
+        if not state_path.exists():
+            return "absent"
+        state = _host_status_state(state_path)
+        if text is None:
+            state_path.unlink()
+            return "absent"
+        if text == state["after"]:
+            if state["existed"]:
+                _footer_write(path, state["before"])
+            else:
+                path.unlink()
+        else:
+            data = json.loads(text)
+            perms = data.get("permissions") if isinstance(data, dict) else None
+            allow = perms.get("allow") if isinstance(perms, dict) else None
+            if not isinstance(allow, list) or AGY_ALLOW_RULE not in allow:
+                state_path.unlink()
+                return "absent"
+            allow.remove(AGY_ALLOW_RULE)
+            if not allow:
+                del perms["allow"]
+            if not perms:
+                del data["permissions"]
+            _footer_write(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+        state_path.unlink()
+        return "restored"
+    data = json.loads(text or "{}")
+    if not isinstance(data, dict):
+        raise ValueError("agy settings must be a JSON object")
+    perms = data.setdefault("permissions", {})
+    if not isinstance(perms, dict):
+        raise ValueError("agy settings permissions must be an object")
+    allow = perms.setdefault("allow", [])
+    if not isinstance(allow, list):
+        raise ValueError("agy settings permissions.allow must be a list")
+    if AGY_ALLOW_RULE in allow:
+        return "present"
+    allow.append(AGY_ALLOW_RULE)
+    replacement = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    record = {"version": 1, "host": "agy", "existed": text is not None, "before": text or "",
+              "after": replacement, "managed": {"allow": AGY_ALLOW_RULE}}
+    _footer_write(state_path, json.dumps(record, ensure_ascii=False) + "\n")
+    _footer_write(path, replacement)
+    return "updated" if text is not None else "created"
+
+
 def codex_rules_path():
     """Codex's global instructions file: $CODEX_HOME/AGENTS.md, default ~/.codex."""
     return codex_hooks_path().with_name("AGENTS.md")
@@ -1614,6 +1699,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         if want_grok:
             steps.append(("grok status line", grok_status, lambda: seed_host_status_line(grok_status, "grok", uninstall=True)))
         if want_agy:
+            steps.append(("agy allow rule", agy_status, lambda: seed_agy_allow_rule(agy_status, uninstall=True)))
             steps.append(("agy status line", agy_status, lambda: seed_host_status_line(agy_status, "agy", uninstall=True)))
             steps.append(("agy hook", hp, lambda: unseed_agy_hook(hp)))
             steps.append(("agy plugin", agy_pj, lambda: unseed_agy_plugin(
@@ -1741,6 +1827,11 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
             missing.append(f"{label} status line")
             print(f"WARN: {label} status line not installed: {exc}", file=out)
     if want_agy:
+        try:
+            print(f"agy allow rule {seed_agy_allow_rule(agy_status)} in {agy_status}", file=out)
+        except (OSError, ValueError) as exc:
+            missing.append("agy allow rule")
+            print(f"WARN: agy allow rule not installed: {exc}", file=out)
         _seed_agy_config(hp.with_name("config.json"), out)
         if not _write_agy_plugin_tree(args, out, dest):
             missing.append("agy plugin tree")

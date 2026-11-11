@@ -7,7 +7,8 @@ Usage:
 Prints one `problem:` line per fault and exits 1 when there is any, else 0. Never constructs a signer and
 never touches 1Password: the membership snapshot is verified offline against the pinned public key.
 
-Checks, per link target (every verified member except this box, plus each `unimatrix.far_boxes` alias):
+Checks, per link target (every verified member except this box; each `unimatrix.far_boxes` alias only when
+no snapshot is stored, the one case autolink dials them):
 the name resolves, TCP 22 connects, the relay key answers `roster`, the peer's own snapshot lists this box
 at the same epoch (members only), and both bridge supervisors are alive. Locally: every authorized_keys line
 that forces unimatrix-relay.py must carry a key that belongs to a verified member. The Windows
@@ -148,7 +149,7 @@ def diagnose(ctx):
     home = roster.settings_home()
     probs, notes, signed = [], [], set()
     names = ctx["self_names"] if ctx["self_names"] is not None else al.own_names()
-    status, targets, epoch, why = al.member_targets(roster, mem, names, run=ctx["run"])
+    status, targets, skipped, epoch, why = al.split_members(roster, mem, names, run=ctx["run"])
     pin = mem.load_pin(home)
     if pin:
         try:
@@ -158,7 +159,9 @@ def diagnose(ctx):
     if status == "bad":
         probs.append(why)
     elif status == "none":
-        probs.append("no signed membership snapshot is stored; every unimatrix authorized_keys line is unsigned")
+        probs.append("no signed membership snapshot is stored; every unimatrix authorized_keys line is unsigned; "
+                     "remedy: run unimatrix-pair.py approve <target> to sign and store one "
+                     "(add --self-cidr <cidr> on a fresh collective)")
     else:
         signed = key_bodies(mem.verified_members(home, run=ctx["run"]))
     ak = ctx["authorized_keys"]
@@ -172,11 +175,16 @@ def diagnose(ctx):
     mine = {"epoch": epoch}
     checker = peer_lists_us(ctx, mine, names) if status == "ok" else None
     seen = set()
+    for box, remote in skipped:
+        probs.append(f"{box}: no live link path: dial name {remote!r} is not a hostname alias (fails the alias check or is an IP literal), so autolink skips it")
     for remote, box in sorted(targets.items()):
         seen.add(remote)
         host = remote.rpartition("@")[2]
         probs.extend(check_target(remote, box, host, relay_key(ctx, box), ctx, checker))
-    aliases, _ = al.far_boxes_status(roster)
+        rec = al.read_record(al.state_dir(roster) / f"autolink-{al.slug(remote)}.json")
+        if not all(al.supervisor_live(roster, rec.get(role) or {}) for role, _ in al.SUPERVISORS):
+            probs.append(f"{box}: no live link path: this box holds no live link to a signed member")
+    aliases = al.far_boxes_status(roster)[0] if status == "none" else []
     for alias in aliases:
         if alias in seen:
             continue
@@ -185,7 +193,8 @@ def diagnose(ctx):
             probs.append(f"{alias}: far_boxes alias does not resolve in ssh config")
             continue
         if mem.is_ip_literal(host):
-            probs.append(f"{alias}: far_boxes alias is pinned to IP {host}; a DHCP change breaks it")
+            probs.append(f"{alias}: far_boxes alias is pinned to IP {host}; a DHCP change breaks it; "
+                         f"remedy: point the alias at a hostname (HostName <name>.local, AddressFamily inet)")
         probs.extend(check_target(alias, alias, host, relay_key(ctx, alias), ctx, None))
     return probs, notes
 

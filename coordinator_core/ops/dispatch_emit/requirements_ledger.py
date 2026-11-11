@@ -2326,6 +2326,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     halted_run.mark_revised(dir_, _now())
     halted = halted_run.revised_halt(dir_) is not None
     live = _run_driven(root, params["run_id"], ledger.sizing_rel, halted, run_token)
+    unproven = (
+        not live and not halted and _own_token_unproven(root, params["run_id"], run_token)
+    )
     out = {
         "ok": True,
         "run_id": params["run_id"],
@@ -2393,8 +2396,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not live and not landed_sha and not _sizing_shipped(root, ledger.sizing_rel):
         refire_claims = _unclaimed_rows(root, ledger.sizing_rel)
         if refire_claims[0] and not _rows_owe_work(root, ledger.sizing_rel, refire_claims[1]):
+            state_label = "runner unproven" if unproven else "run halted" if halted else "run finished"
             idle_refusal = (
-                f"run {'halted' if halted else 'finished'}: no refire offered, no register row is open "
+                f"{state_label}: no refire offered, no register row is open "
                 f"({', '.join(refire_claims[1])} met, waived or deferred), so a ledger re-plan would add no row."
             )
     if unclaimed:
@@ -2402,7 +2406,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         if not idle_refusal:
             warnings.append(
                 f"{unclaimed_plan}: no plan row claims register row(s) {', '.join(unclaimed)}"
-                + (": the refire's ledger re-plan leg adds rows serving them." if not live else
+                + ("" if unproven else
+                   ": the refire's ledger re-plan leg adds rows serving them." if not live else
                    ": add a row whose register_rows names them (next.call).")
             )
     refused: list[dict] = list(widen_refused)
@@ -2417,6 +2422,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["note"] = "run closes: the sizing is shipped, every row is credited, and no refire is owed."
     elif idle_refusal:
         out["note"] = idle_refusal
+    elif unproven:
+        out.update(_recheck_unproven(params["run_id"]))
     elif not live:
         out.update(_refire(ledger.sizing_rel, root, unclaimed=refire_claims, halted=halted))
     elif verify_staged(dir_):
@@ -2772,13 +2779,51 @@ def _rows_owe_work(root: Path, sizing_rel: Optional[str], ids: Sequence[str]) ->
     return False
 
 
+def _own_token_unproven(root: Path, run_id: str, run_token) -> bool:
+    """True when the run's own token is unredeemed and `warp_live.runner_unproven` says no runner is
+    proven, with no abandoned-at-minted halt marker: the run may still be live, so it is not finished."""
+    try:
+        from coordinator_core import warp_live
+        from coordinator_core.ops.dispatch_emit import halted_run
+        from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED
+
+        if not run_token.is_live(root, run_id):
+            return False
+        marker = halted_run.read_strict(record_dir(root, run_id))
+        if marker and ABANDONED_AT_MINTED in (marker.get("halted"), marker.get(halted_run.HALT_REASON_FIELD)):
+            return False
+        return bool(warp_live.runner_unproven(root, run_id))
+    except Exception:  # noqa: BLE001 -- unknown never words a run unproven
+        return False
+
+
+RECHECK_AFTER_SECONDS = 120
+
+
+def _recheck_unproven(run_id: str) -> dict:
+    """`{next, note}` for a run whose runner is unproven: no refire (it may still be live, and a
+    refire would run it twice), no application of the revision, and a re-check once the stage record settles."""
+    return {
+        "next": {
+            "kind": "recheck", "run_id": run_id, "after_seconds": RECHECK_AFTER_SECONDS,
+            "check": "run-stage.json: stage past minted or plan_started_at set means a runner is live; "
+                     "otherwise the run is dead and the revise refires it",
+        },
+        "note": (
+            "runner unproven: no runner is proven for this run and this revision will not be applied to it; "
+            f"no refire is offered (the run may still be live). Re-check in {RECHECK_AFTER_SECONDS}s."
+        ),
+    }
+
+
 def _refire(
     sizing_rel: Optional[str], root: Optional[Path] = None,
     unclaimed: Optional[tuple[Optional[str], list[str]]] = None, halted: bool = False,
 ) -> dict:
     """`{next, note}` for a revision no stage will read: the exact submit call that starts a run which
-    will. `halted` words the note for a halted run, whose resume would replay its stages. When the sizing's plan omits
-    register rows, `next.replans` names them: the refire's ledger re-plan leg claims them (any arm)."""
+    will. `halted` words the note for a halted run, whose resume would replay its stages. When the
+    sizing's plan omits register rows, `next.replans` names them: the refire's ledger re-plan leg claims
+    them (any arm)."""
     from coordinator_core.warp_fire import fire_command
 
     plan_rel, missing = unclaimed or (_unclaimed_rows(root, sizing_rel) if root is not None else (None, []))

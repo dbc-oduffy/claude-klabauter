@@ -109,6 +109,50 @@ def test_entry_live_proc_start_oserror_is_not_staleness(monkeypatch):
     assert not lv.entry_live({"pid": os.getpid(), "procStart": "anything"})
 
 
+def test_stamp_fresh_accepts_only_a_recent_integer_stamp():
+    now = 1_000_000.0
+    ms = int(now * 1000)
+    assert lv.stamp_fresh({"s": ms - 5000}, "s", 10, now=now) is True
+    assert lv.stamp_fresh({"s": ms - 11000}, "s", 10, now=now) is False
+    assert lv.stamp_fresh({"s": ms + 1000}, "s", 10, now=now) is False
+    for bad in ({}, {"s": "1"}, {"s": True}, {"s": None}, None):
+        assert lv.stamp_fresh(bad, "s", 10, now=now) is False
+
+
+def _agy_home(tmp_path, agy_pid):
+    base = tmp_path / "unimatrix"
+    (base / "agy-legs").mkdir(parents=True)
+    (base / "peers.json").write_text(json.dumps([{"name": "agy-x-on-box", "vendor": "agy", "target": "conv-1"}]))
+    if agy_pid is not None:
+        (base / "agy-legs" / "conv-1.json").write_text(json.dumps({"pid": 1, "agy_pid": agy_pid}))
+    return tmp_path
+
+
+def test_agy_face_unbacked_when_its_agy_process_is_gone(tmp_path):
+    face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
+    assert lv.agy_face_unbacked(face, _agy_home(tmp_path, 2_000_000_000)) is True
+
+
+def test_agy_face_backed_while_its_agy_process_lives(tmp_path):
+    face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
+    assert lv.agy_face_unbacked(face, _agy_home(tmp_path, os.getpid())) is False
+
+
+def test_agy_face_without_a_leg_record_is_unbacked_and_a_non_face_never_is(tmp_path):
+    home = _agy_home(tmp_path, None)
+    assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}, home) is True
+    assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "agy"}, home) is False
+    assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "codex", "unimatrixRouterPid": 7}, home) is False
+
+
+def test_agy_face_with_no_peers_row_is_unbacked_but_an_unreadable_peers_file_is_not(tmp_path):
+    home = _agy_home(tmp_path, os.getpid())
+    assert lv.agy_face_unbacked({"name": "agy-Temp-bafde89c04-on-machine-a", "vendor": "agy",
+                                 "unimatrixRouterPid": 7}, home) is True
+    (tmp_path / "unimatrix" / "peers.json").write_text("{not json")
+    assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}, home) is False
+
+
 def test_codex_holder_live_matching_start_is_live():
     me = _rec()
     assert lv.codex_holder_live({"codexPid": me["pid"], "codexProcStart": me["procStart"]}) is True

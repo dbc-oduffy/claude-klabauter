@@ -1524,7 +1524,7 @@
       "name": "dispatch__commit_merge"
     },
     {
-      "description": "Verdict for the docs-checker leg `label` of run `run_id`.\n\nParams: ``repo_root``, ``run_id``, ``label``, optional ``session_id`` (else the caller's\nsession), optional bool ``engine_queryable`` (False is a definite down). Returns ``{verdict: not_applicable|ok|degraded|rag_corpus_down|citation_unbacked,\nmessage?, reason?, rag_calls?, rag_failed?, rag_timeouts?, rag_refused?, unbacked?}``;\n``message`` is the restore text on ``rag_corpus_down``; ``degraded`` (timeout-only failures)\nhalts nothing and still runs the citation check; ``unbacked`` lists the citations no run\ncall backs.",
+      "description": "Verdict for the docs-checker leg `label` of run `run_id`.\n\nParams: ``repo_root``, ``run_id``, ``label``, optional ``session_id`` (else the caller's\nsession), optional bool ``engine_queryable`` (False is a definite down). Returns ``{verdict: not_applicable|ok|degraded|rag_not_used|transcript_unreadable|rag_corpus_down|citation_unbacked,\nmessage?, reason?, branch?, rag_calls?, rag_failed?, rag_timeouts?, rag_refused?, unbacked?}``;\n``message`` is the restore text on ``rag_corpus_down``; ``branch`` names which lookup or\ncount produced a down, unreadable or not-used verdict; ``degraded`` (timeout-only failures)\nhalts nothing and still runs the citation check; ``unbacked`` lists the citations no run\ncall backs.",
       "inputSchema": {
         "type": "object"
       },
@@ -2173,6 +2173,13 @@
         "type": "object"
       },
       "name": "groupem__enter"
+    },
+    {
+      "description": "JSON-RPC \"groupem.goal_board_refresh\" handler.\n\nParams: none.\n\nReturns:\n    {\"ok\": bool, \"path\": str | None, \"flags\": [{\"flag\", \"id\"}], \"errors\": [{\"field\", \"error\", \"hint\"}]}\n    `flags` names `stale`, `no-live-owner` and `unmapped-task` rows; `ok: False` leaves the file untouched.",
+      "inputSchema": {
+        "type": "object"
+      },
+      "name": "groupem__goal_board_refresh"
     },
     {
       "description": "JSON-RPC \"groupem.idle_report\" handler.\n\nParams:\n    repo_root (str, optional) -- the repo whose peer transcripts are\n        polled. Defaults to the CALLING process's own `os.getcwd()`\n        when omitted, matching `groupem.enter`'s own convention.\n    group_em_session_id (str, optional) -- the Group EM's session id;\n        excluded from the roster along with `caller_session_id`.\n    caller_session_id (str, optional) -- the process running the poll;\n        excluded from the roster.\n    peer (str, optional) -- filter to session ids starting with this\n        prefix.\n    now (number, optional).\n    projects_dir (str, optional).\n    observed_exits (list, optional) -- exit transitions the CALLER\n        actually saw (session ids or names); see\n        `build_report`'s own docstring for why this has no engine-side\n        lookup and must be caller-supplied. Elements must be hashable\n        (session id/name strings) -- an accepted-shape list containing\n        unhashable elements (e.g. dicts) raises a named `ValueError`,\n        never a bare `TypeError`.\n\nReturns: the `build_report` dict verbatim — see that function's own\ndocstring for the full shape (`repo-root`, `verdict`, `group-em-moved`,\n`peers`, `counts`, ...). No field is renamed, dropped, or added here.\n\nScope \"none\" (op_scopes.py): the engine-injected `repo_root` kwarg is\nnever resolved/injected for a \"none\"-scoped op — the `repo_root` WIRE\nPARAM above (read from `params`) is the only way a caller narrows the\ntarget, matching `groupem.enter`'s own convention exactly.",

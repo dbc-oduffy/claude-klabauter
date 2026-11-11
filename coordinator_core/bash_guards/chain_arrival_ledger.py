@@ -128,7 +128,8 @@ def record_chain_arrival(
 ) -> None:
     if not session_id:
         return
-    try:
+
+    def _write() -> None:
         path = (
             settings_home()
             / Path(*_LEDGER_RELPATH)
@@ -148,5 +149,11 @@ def record_chain_arrival(
         }
         with path.open("a", encoding="utf-8") as f:
             f.write(json.dumps(record) + "\n")
+
+    try:
+        # Deadline-bounded: a frozen filesystem drops this row instead of pinning the guard chain.
+        from coordinator_core.bounded_io import run_bounded
+
+        run_bounded(f"chain-arrival:{session_id}", _write, default=None)
     except Exception:  # noqa: BLE001 -- fail-silent contract; see module docstring
         pass

@@ -40,7 +40,8 @@ def env(tmp_path, monkeypatch):
     sessions = tmp_path / "sessions"
     sessions.mkdir()
     (sessions / f"{os.getpid()}.json").write_text(json.dumps(
-        {"pid": os.getpid(), "name": "far", "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock", "unimatrixRemote": "lan"}))
+        {"pid": os.getpid(), "name": "far", "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock", "unimatrixRemote": "lan",
+         "unimatrixFarName": "far", "sessionId": "sid-far"}))
     monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote=None, port=None)
@@ -94,7 +95,7 @@ def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch):
     bridge, deliveries = env
     monkeypatch.setattr(bridge, "IS_WIN", False)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
-    assert "ControlMaster=auto" in argvs[-1] and argvs[-1][-2] == "lan" and argvs[-1][-1].startswith("send-to 9 ")
+    assert "ControlMaster=auto" in argvs[-1] and argvs[-1][-2] == "lan" and argvs[-1][-1].startswith("send-session 9 ") and argvs[-1][-1].endswith(" sid-far")
     monkeypatch.setattr(bridge, "IS_WIN", True)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
     assert not any("Control" in a for a in argvs[-1])

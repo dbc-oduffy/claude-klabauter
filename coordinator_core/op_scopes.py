@@ -613,6 +613,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "groupem.idle_report":                    "none",
     "groupem.standing":                       "none",
     "groupem.box_hold":                       "none",
+    "groupem.goal_board_refresh":             "none",
     "groupem.admission_post":                 "none",
     "groupem.slot_grant":                     "none",
     "groupem.slot_check":                     "none",

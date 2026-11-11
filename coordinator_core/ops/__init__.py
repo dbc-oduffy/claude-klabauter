@@ -488,6 +488,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.group_em_idle_report", 'registers "groupem.idle_report"'),
     ("coordinator_core.ops.group_em_standing", 'registers "groupem.standing"'),
     ("coordinator_core.ops.group_em_box_hold", 'registers "groupem.box_hold"'),
+    ("coordinator_core.ops.group_em_goal_board_refresh", 'registers "groupem.goal_board_refresh"'),
     ("coordinator_core.ops.group_em_admission_post", 'registers "groupem.admission_post"'),
     ("coordinator_core.ops.group_em_slot_grant", 'registers "groupem.slot_grant", "groupem.slot_check"'),
     ("coordinator_core.ops.group_em_box_federation", 'registers "groupem.box_register", "groupem.box_place", "groupem.box_send", "groupem.box_roster"'),

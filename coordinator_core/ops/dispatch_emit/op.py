@@ -236,12 +236,12 @@ from __future__ import annotations
 
 import hashlib
 import json
-from coordinator_core.atomic_replace import atomic_write_bytes
 import os
 import re
 import shlex
 import stat
 import sys
+import threading
 import time
 import uuid
 from dataclasses import replace
@@ -250,6 +250,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Optional
 
 from coordinator_core._content_root_primitive import content_root_for
+from coordinator_core.atomic_replace import atomic_write_bytes
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.content_root import read_content_root
 from coordinator_core.git.commit_trailers import read_host_commit_trailers
@@ -2244,6 +2246,45 @@ def _emit_list(params: dict, repo_root: Optional[Path]) -> dict:
     return {"replies": replies}
 
 
+
+def _ensure_record_dir_bounded(directory: Path) -> None:
+    """Create ``directory`` (parents included); raise ``TimeoutError`` past the IO deadline.
+
+    Residual: a mkdir that itself times out can still land late and leave the dir behind.
+    """
+    abandoned = threading.Event()
+
+    def _mkdir() -> bool:
+        if abandoned.is_set():
+            return False
+        directory.mkdir(parents=True, exist_ok=True)
+        return True
+
+    if not run_bounded(f"dispatch-emit-record-dir:{directory}", _mkdir, default=False):
+        abandoned.set()
+        raise TimeoutError(f"dispatch.emit: record dir create degraded (filesystem stalled): {directory}")
+
+
+def _write_record_file_bounded(path: Path, text: str) -> None:
+    """Write ``text`` into ``path``'s existing parent; raise ``TimeoutError`` past the IO deadline.
+
+    The parent must already exist (``_ensure_record_dir_bounded``): the worker calls no mkdir, so a
+    write landing after the caller's rollback removed the record dir fails with
+    ``FileNotFoundError`` instead of recreating it as an orphan.
+    """
+    abandoned = threading.Event()
+
+    def _write() -> bool:
+        if abandoned.is_set():
+            return False
+        path.write_text(text, encoding="utf-8", newline="\n")
+        return True
+
+    if not run_bounded(f"dispatch-emit-record:{path}", _write, default=False):
+        abandoned.set()
+        raise TimeoutError(f"dispatch.emit: record file write degraded (filesystem stalled): {path}")
+
+
 @register_op("dispatch.emit")
 def _dispatch_emit(
     params: dict,
@@ -3197,8 +3238,8 @@ def _dispatch_emit_body(
                 # Verbatim, engine-written into the record dir: the stage reads it into every brief; no agent copies it.
                 ask_name = RELAYED_ASK_FILE if ask_ctx["ask_source"] == ASK_SOURCE_RELAYED else ASK_TEXT_FILE
                 ask_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / ask_name
-                ask_file.parent.mkdir(parents=True, exist_ok=True)
-                ask_file.write_text(ask_body, encoding="utf-8", newline="\n")
+                _ensure_record_dir_bounded(ask_file.parent)
+                _write_record_file_bounded(ask_file, ask_body)
             for staged_name, staged_text in staged_prompts.items():
                 staged_file = record_dir(Path(ask_ctx["root"]), ask_ctx["run_id"]) / PROMPTS_DIR / f"{staged_name}.md"
                 staged_file.parent.mkdir(parents=True, exist_ok=True)

@@ -80,6 +80,18 @@ def test_a_staged_run_is_never_unproven(repo, dirs):
     assert warp_live.runner_unproven(repo, "r1", now=_late(record)) is False
 
 
+def test_a_plan_phase_run_is_not_unproven_but_a_bare_minted_one_is(repo, dirs):
+    from coordinator_core.ops.dispatch_emit import ask_contract
+
+    record = _mint(repo)
+    _submit(repo, "r1")
+    ask_contract.write_run_stage(repo, "r1", "minted")
+    assert warp_live.runner_unproven(repo, "r1", now=_late(record)) is True
+    assert ask_contract.stamp_plan_phase(repo, "r1") is True
+    assert ask_contract.read_run_stage(repo, "r1")["stage"] == "minted"
+    assert warp_live.runner_unproven(repo, "r1", now=_late(record)) is False
+
+
 def test_a_malformed_stage_is_unknown_and_not_unproven(repo, dirs):
     record = _mint(repo)
     directory = record_dir(repo, "r1")

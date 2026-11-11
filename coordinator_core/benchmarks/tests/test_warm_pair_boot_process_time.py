@@ -169,6 +169,145 @@ def test_main_without_handover_prints_no_handover_lines(
     assert "handover=" not in capsys.readouterr().out
 
 
+def _trace(election_end: float = 100.5) -> dict:
+    return {
+        "pid": 7,
+        "entry": [100.1, 0.05],
+        "imported": [100.3, 0.20, 400],
+        "stamps": [
+            ["not_ready_answerer_start", 100.8, 100.85, 0.30, 0.31],
+            ["election", 100.4, election_end, 0.21, 0.22],
+            ["record_own_boot", 100.9, 100.95, 0.4, 0.4],
+            ["compute_client_token", 100.3, 100.4, 0.20, 0.21],
+        ],
+        "missing_steps": [],
+    }
+
+
+def test_attribute_boot_splits_each_clock_at_the_election_and_names_the_remainder() -> None:
+    row = {"listener_secs": 0.6, "ready_secs": 0.9, "pid": 7}
+
+    out = boot.attribute_boot(_trace(), row, spawn_epoch=100.0)
+
+    first, second = out["spawn_to_listener"], out["listener_to_ready"]
+    assert list(first["phases"]) == ["interpreter_startup", "server_import", "compute_client_token", "election"]
+    assert first["phases"]["interpreter_startup"] == {"wall_ms": 100.0, "process_ms": 50.0}
+    assert first["phases"]["server_import"] == {"wall_ms": 200.0, "process_ms": 150.0}
+    assert list(second["phases"]) == ["not_ready_answerer_start"]
+    assert first["unattributed_wall_ms"] == pytest.approx(600.0 - (100 + 200 + 100 + 100))
+    assert second["unattributed_wall_ms"] == pytest.approx(300.0 - 50.0)
+    assert out["top_phase"] == "unattributed_listener_to_ready"
+    assert set(boot.BOOT_PHASE_KEYS) <= set(out)
+    assert "record_own_boot" not in first["phases"] and "record_own_boot" not in second["phases"]
+
+
+def test_attribute_boot_without_a_telemetry_row_reports_it_missing_not_a_number() -> None:
+    out = boot.attribute_boot(_trace(), None, spawn_epoch=100.0)
+
+    assert out["listener_secs"] is None and "server_boot_row" in out["missing"]
+    assert out["spawn_to_listener"]["unattributed_wall_ms"] is None
+
+
+def test_attribute_boot_without_an_election_stamp_flags_it_and_keeps_every_step_before_ready() -> None:
+    trace = _trace()
+    trace["stamps"] = [s for s in trace["stamps"] if s[0] != "election"]
+
+    out = boot.attribute_boot(trace, {"listener_secs": 0.6, "ready_secs": 0.9}, spawn_epoch=100.0)
+
+    assert "election" in out["missing"]
+    assert "compute_client_token" in out["listener_to_ready"]["phases"]
+
+
+def test_median_attribution_takes_the_median_of_runs_that_have_both_clocks() -> None:
+    def run_(listener: float, token_ms: float) -> dict:
+        return {
+            "listener_secs": listener,
+            "ready_secs": listener + 0.1,
+            "spawn_to_listener": {
+                "phases": {"compute_client_token": {"wall_ms": token_ms, "process_ms": 1.0}},
+                "unattributed_wall_ms": 5.0,
+                "unattributed_name": "unattributed_spawn_to_listener",
+            },
+            "listener_to_ready": {"phases": {}, "unattributed_wall_ms": 1.0, "unattributed_name": "u2"},
+            "missing": [],
+        }
+
+    out = boot.median_attribution([run_(1.0, 10.0), run_(3.0, 30.0), run_(2.0, 20.0), {"missing": ["trace"]}])
+
+    assert out["runs_used"] == 3
+    assert out["listener_secs"] == 2.0 and out["ready_secs"] == 2.1
+    assert out["spawn_to_listener"]["phases"]["compute_client_token"]["wall_ms"] == 20.0
+    assert out["top_phase"] == "compute_client_token"
+    assert out["missing"] == ["trace"]
+
+
+def test_median_attribution_with_no_usable_run_says_so() -> None:
+    out = boot.median_attribution([{"missing": ["spawn"]}])
+
+    assert out["runs_used"] == 0 and out["missing"]
+
+
+def test_trace_entry_is_valid_python_and_boots_only_under_main() -> None:
+    compile(boot._TRACE_ENTRY_SOURCE, boot.TRACE_ENTRY_NAME, "exec")
+
+    namespace: dict = {"__name__": "__mp_main__"}
+    exec(compile(boot._TRACE_ENTRY_SOURCE, boot.TRACE_ENTRY_NAME, "exec"), namespace)
+
+    assert callable(namespace["_main"])
+
+
+def test_main_boot_phases_prints_run_objects_and_the_median(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: dict = {}
+    good = {
+        "listener_secs": 1.0,
+        "ready_secs": 1.2,
+        "spawn_to_listener": {"phases": {"election": {"wall_ms": 5.0, "process_ms": 1.0}}, "unattributed_wall_ms": 0.0, "unattributed_name": "u1"},
+        "listener_to_ready": {"phases": {}, "unattributed_wall_ms": 0.0, "unattributed_name": "u2"},
+        "missing": [],
+    }
+
+    def _fake(work_dir, source_root=None, **kw):  # noqa: ANN001
+        seen.update(kw)
+        return [good, good]
+
+    monkeypatch.setattr(boot, "run_boot_phases", _fake)
+
+    assert boot.main(["--boot-phases", "--runs", "2"]) == 0
+    out = capsys.readouterr().out
+    assert seen == {"cold_pyc": False, "runs": 2}
+    assert "listener_secs=1.0 ready_secs=1.2" in out and "median=" in out
+
+
+def test_main_boot_phases_exits_nonzero_when_a_run_produced_no_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(boot, "run_boot_phases", lambda *a, **kw: [{"missing": ["trace"]}])
+
+    assert boot.main(["--boot-phases"]) == 1
+
+
+def test_main_rejects_runs_without_boot_phases_and_boot_phases_with_handover() -> None:
+    with pytest.raises(SystemExit):
+        boot.main(["--runs", "3"])
+    with pytest.raises(SystemExit):
+        boot.main(["--boot-phases", "--handover"])
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_run_boot_phases_attributes_a_real_boot(tmp_path: Path) -> None:
+    (result,) = boot.run_boot_phases(work_dir=tmp_path)
+
+    assert result["missing"] == []
+    assert result["listener_secs"] > 0 and result["ready_secs"] >= result["listener_secs"]
+    first = result["spawn_to_listener"]["phases"]
+    assert {"interpreter_startup", "server_import", "compute_client_token", "election"} <= set(first)
+    assert {"breadcrumb_write", "register_stack_dump_signal"} <= set(result["listener_to_ready"]["phases"])
+    assert result["top_phase"]
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_run_handover_reports_the_single_attempt_verdict_and_phases_for_the_copied_root(

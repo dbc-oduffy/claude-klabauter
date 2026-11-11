@@ -99,7 +99,9 @@ _now = time.monotonic
 ABSENT_POLLS_BEFORE_UNMIRROR = 2  # a router or engine respawn re-registers a session within seconds
 # Per supervisor life: `unsupported` stops all dialing; `fails`, `retry_at` and `absent` (consecutive
 # polls a session was missing) are per session name.
-_STATE = {"unsupported": False, "fails": {}, "retry_at": {}, "absent": {}}
+# `up_since` is the monotonic time a client was spawned (or first seen alive).
+STABLE_SECONDS = 300  # a client must stay up this long before its death count resets
+_STATE = {"unsupported": False, "fails": {}, "retry_at": {}, "absent": {}, "up_since": {}}
 
 
 def backoff_seconds(fails):
@@ -129,6 +131,7 @@ def sync(clients, live, cfg, say):
     """One reconcile pass: `clients` is name -> (session pid, Popen)."""
     log_dir = os.path.dirname(os.path.abspath(cfg.log))
     fails, retry_at, absent = _STATE["fails"], _STATE["retry_at"], _STATE["absent"]
+    up_since = _STATE["up_since"]
     for name in live:
         absent.pop(name, None)
     for name, d in live.items():
@@ -138,7 +141,8 @@ def sync(clients, live, cfg, say):
         if c and c[0] == d["pid"]:
             rc = c[1].poll()
             if rc is None:
-                fails.pop(name, None)  # stayed up a poll: the next death starts the backoff over
+                if _now() - up_since.setdefault(name, _now()) >= STABLE_SECONDS:
+                    fails.pop(name, None)  # up for STABLE_SECONDS: the next death starts the backoff over
                 continue
             if rc == UNSUPPORTED_HOST_RC:
                 _STATE["unsupported"] = True
@@ -162,6 +166,7 @@ def sync(clients, live, cfg, say):
             fails.pop(name, None)
         p = _roster().spawn(inbox_cmd(d, name, log_dir, cfg.remote, cfg.key, cfg.tunnel_remote))
         clients[name] = (d["pid"], p)
+        up_since[name] = _now()
         say(f"mirror {name} pid {d['pid']} -> client {p.pid}")
     for name in [n for n in clients if n not in live]:
         missed = absent[name] = absent.get(name, 0) + 1
@@ -169,6 +174,7 @@ def sync(clients, live, cfg, say):
             say(f"session {name} absent ({missed}/{ABSENT_POLLS_BEFORE_UNMIRROR}); client kept")
             continue
         absent.pop(name, None)
+        up_since.pop(name, None)
         # The client's ssh child holds the far inbox open; killing python alone orphans it.
         _roster().tree_kill(clients.pop(name)[1].pid)
         say(f"unmirror {name}")

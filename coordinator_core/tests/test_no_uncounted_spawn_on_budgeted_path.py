@@ -711,6 +711,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/group_em_box_hold.py",
         ("_groupem_box_hold",),
     ),
+    "groupem.goal_board_refresh": (
+        "coordinator_core/ops/group_em_goal_board_refresh.py",
+        ("_groupem_goal_board_refresh",),
+    ),
     "groupem.admission_post": (
         "coordinator_core/ops/group_em_admission_post.py",
         ("_groupem_admission_post",),

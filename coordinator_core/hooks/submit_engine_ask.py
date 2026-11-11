@@ -663,7 +663,7 @@ def _log_fail_open(cause: str, call: Optional[dict] = None) -> None:
         elapsed = int((time.monotonic() - started) * 1000) if isinstance(started, float) else 0
         line = (
             f"ts={datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')} deadline_ms={int(_caller_budget_s() * _ANSWER_SHARE * 1000)} "
-            f"elapsed_ms={elapsed} op=hooks.submit_engine_ask door_pid=- engine_pid={os.getpid()} engine_start=- "
+            f"elapsed_ms={elapsed} op=hooks.submit_engine_ask door_pid=- leg=evaluate leg_ms={elapsed} "
             f"cause={cause[:160]}\n"
         )
         append_line(state / "door-fail-open.log", line.encode("utf-8"))
@@ -1133,8 +1133,7 @@ def _spool_envelope(payload: Any, root: Optional[Path], reason: str) -> Optional
         return None
     script = root / "scratch" / "warp" / f"spooled-{spool_id}.workflow.mjs"
     try:
-        script.parent.mkdir(parents=True, exist_ok=True)
-        script.write_text(_SPOOLED_JS.replace("__SPOOL_ID__", json.dumps(spool_id)), encoding="utf-8")
+        _write_receipted_script(script, _SPOOLED_JS.replace("__SPOOL_ID__", json.dumps(spool_id)))
     except OSError:
         return _refuse(
             f"The engine is unavailable ({reason}); the ask is spooled as {spool_id} and mints once the "
@@ -1201,6 +1200,17 @@ const first = await _startLoop(ASK_SCRIPT_PATH);
 """ + _CHAIN_FOLLOW_JS
 
 
+def _write_receipted_script(script: Path, body: str) -> Path:
+    """Write `body` to `script` and its emission receipt, so a script the engine minted is never read as hand-rolled."""
+    from coordinator_core.ops.workflow_fire.receipt import write_fire_receipt
+
+    script.parent.mkdir(parents=True, exist_ok=True)
+    script_bytes = body.encode("utf-8")
+    script.write_bytes(script_bytes)
+    write_fire_receipt(script, script_bytes=script_bytes)
+    return script
+
+
 def _write_minted_start_script(root: Path, run_ids: Sequence[str]) -> Path:
     """A script under `scratch/warp/` that starts each minted run through `dispatch.minted_run`."""
     import json
@@ -1216,9 +1226,7 @@ def _write_minted_start_script(root: Path, run_ids: Sequence[str]) -> Path:
         **_stage_loop_values(),
     }
     script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(re.sub("|".join(values), lambda m: values[m.group(0)], _MINTED_START_JS), encoding="utf-8")
-    return script
+    return _write_receipted_script(script, re.sub("|".join(values), lambda m: values[m.group(0)], _MINTED_START_JS))
 
 
 def write_direct_start_script(root: Path, run_id: str, script_path: str, fire_args: Optional[dict]) -> Path:
@@ -1233,9 +1241,7 @@ def write_direct_start_script(root: Path, run_id: str, script_path: str, fire_ar
         **_chain_follow_values(),
     }
     script = root / "scratch" / "warp" / f"defer-{uuid.uuid4().hex[:12]}.workflow.mjs"
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(re.sub("|".join(values), lambda m: values[m.group(0)], _DIRECT_START_JS), encoding="utf-8")
-    return script
+    return _write_receipted_script(script, re.sub("|".join(values), lambda m: values[m.group(0)], _DIRECT_START_JS))
 
 
 def _premintable(params: dict, sizing_rel: Optional[str], asks: Optional[list], supersedes: Optional[str]) -> bool:
@@ -1263,7 +1269,31 @@ def _premint_marker(params: dict, root: Path, run_id: Optional[str] = None) -> d
         session_id=params.get("session_id") or None, marker=True,
         ask_sha256=normalized_ask_hash(raw) if isinstance(raw, str) and raw.strip() else None,
     )
+    if isinstance(raw, str) and raw.strip():
+        _write_ask_holder_pointer(root, raw, run_id)
     return {"run_id": run_id}
+
+
+def _ask_holder_pointer(root: Path, ask: str) -> Path:
+    """The one-file pointer a premint leaves for its ask, under the managed Temp dir (never the repo volume).
+    Its presence is the only thing that sends a later submission of the same ask to the refire-join listing."""
+    import hashlib
+
+    from coordinator_core import warp_live
+
+    key = hashlib.sha256(os.path.normcase(os.path.abspath(root)).encode("utf-8")).hexdigest()[:12]
+    return warp_live.managed_tempdir() / "ask-holders" / f"{key}-{normalized_ask_hash(ask)[:32]}"
+
+
+def _write_ask_holder_pointer(root: Path, ask: str, run_id: str) -> None:
+    """Trap: only a premint writes a pointer, so a refire of an ask whose run came by another route skips the join;
+    a pointer is unlinked only by a refire that finds no holder, so none is reaped otherwise."""
+    try:
+        pointer = _ask_holder_pointer(root, ask)
+        pointer.parent.mkdir(parents=True, exist_ok=True)
+        pointer.write_text(run_id, encoding="utf-8")
+    except OSError:
+        pass  # no pointer: a refire of this ask mints beside the run until its own emit joins
 
 
 def _premint_deferred_envelope(root: Path, params: dict, run_id: str) -> dict:
@@ -2436,9 +2466,7 @@ def _write_multi_root_script(root: Path, launchers: Sequence[Path]) -> Path:
 
     body = _MULTI_ROOT_JS.replace("__LAUNCHERS__", json.dumps([Path(p).as_posix() for p in launchers]))
     script = root / "scratch" / "warp" / f"multi-repo-{uuid.uuid4().hex[:12]}.workflow.mjs"
-    script.parent.mkdir(parents=True, exist_ok=True)
-    script.write_text(body, encoding="utf-8")
-    return script
+    return _write_receipted_script(script, body)
 
 
 def _entry_roots(
@@ -3345,10 +3373,19 @@ def _evaluate(
         sizing_rel, reserved_run_id = first.slice_sizing, first.run_id
 
     if not sizing_rel and ask and asks is None:
-        with warp_live.listing_scope():
-            held = warp_live.run_for_ask(
-                root, normalized_ask_hash(ask), session_id=session_id, transcript_path=transcript
-            )
+        pointer = (
+            _ask_holder_pointer(root, ask)
+            if emit is None and _premintable({"ask": ask, **brief}, None, None, supersedes)
+            else None
+        )
+        held = None
+        if pointer is None or pointer.is_file():  # a premintable ask no premint holds has no run to join: no listing
+            with warp_live.listing_scope():
+                held = warp_live.run_for_ask(
+                    root, normalized_ask_hash(ask), session_id=session_id, transcript_path=transcript
+                )
+            if held is None and pointer is not None:
+                pointer.unlink(missing_ok=True)
         if held is not None:
             held_state, held_run, held_sizing = held
             if held_state == "live":

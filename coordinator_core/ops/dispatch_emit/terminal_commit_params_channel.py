@@ -143,13 +143,16 @@ def missing_file_diagnosis(path: str, cwd: object = None) -> Optional[str]:
         if leg
         else (
             "No refusal note exists, so `block_subagent_commit`'s run-token writer was not "
-            "reached on this Bash call: that leg did not run or refused this command."
+            "reached on this Bash call: that leg did not run or refused this command. "
+            "On a hookless backend the headless runner writes it before the git-commit-agent "
+            "spawns, and that write did not run either."
         )
     )
     return (
         f"terminal_commit params file for run {run_id} was never written. Its writer is the "
         "commit stage's `block_subagent_commit` run-token leg, which writes it from the spawn "
-        f"prompt's params block on the git-commit-agent's Bash call. {cause} "
+        "prompt's params block on the git-commit-agent's Bash call, or the headless runner "
+        f"before a git-commit-agent child spawns. {cause} "
         "Not dispatched; nothing committed."
     )
 
@@ -293,6 +296,29 @@ def materialize(path: Path, params: dict) -> bool:
     if "halted_by" not in params and isinstance(params.get("inline_review"), dict):
         _write_atomic(path.with_name(LAND_PARAMS_FILE_NAME), data)
     return True
+
+
+def materialize_from_prompt(repo_root: object, prompt: object) -> tuple[Optional[Path], Optional[str]]:
+    """Write the run's params file from `prompt`'s params block; (written_path, None) or (canonical_or_None, leg).
+
+    Trap: params come only from the prompt's single block, never from agent-typed text and never
+    from a file at a typed path (reading one would let any file authorize a commit). The run
+    token is checked read-only. Refusal legs: `no-params-block`, `params-path`, `params-token`,
+    `params-write`. Never raises.
+    """
+    params = prompt_params(prompt)
+    if params is None:
+        return None, "no-params-block"
+    canonical = params_path(repo_root, params["run_id"])
+    if canonical is None:
+        return None, "params-path"
+    rid, tok, script = params["run_id"], params["run_token"], params["script_path"]
+    root = str(repo_root)
+    if not (run_token.halt_admits(root, rid, tok, script) or run_token.spent_receipt(root, rid, tok, script) is not None):
+        return canonical, "params-token"
+    if not materialize(canonical, params):
+        return canonical, "params-write"
+    return canonical, None
 
 
 def recorded_land_params(repo_root: object, run_id: object) -> Optional[dict]:

@@ -1228,7 +1228,7 @@ def test_asks_launch_every_ready_run(tmp_path):
     assert parent_id == PARENT and session_id == "sess-1"
     assert [c.run_id for c in children] == ["r1", "r2"]
     assert children[1].emit_params == {
-        "session_id": "sess-1", "target_root": str(root), "ask": True,
+        "session_id": "sess-1", "target_root": Path(root).as_posix(), "ask": True,
         "sizing_path": "state/sizings/r2.yaml", "reserved_run_id": "r2",
     }
     assert hso["updatedInput"] == {"scriptPath": str(launch.script)}
@@ -1883,3 +1883,38 @@ def test_launcher_run_token_mint_is_skipped_once_hook_budget_is_spent(tmp_path, 
     monkeypatch.setattr(mod, "_BUDGET", [0.0])
     mod._ensure_launcher_run_token(_repo(tmp_path), "ask-r1", "state/sizings/x.yaml", "sess-1")
     assert minted == []
+
+
+def _refire_listings(monkeypatch, tmp_path) -> list:
+    calls: list = []
+    monkeypatch.setattr(warp_live, "managed_tempdir", lambda *a: tmp_path / "managed")
+    monkeypatch.setattr(warp_live, "run_for_ask", lambda *a, **k: calls.append(a) or None)
+    return calls
+
+
+def test_a_premintable_ask_no_premint_holds_lists_no_run_tokens_before_the_answer(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    calls = _refire_listings(monkeypatch, tmp_path)
+    env = mod.evaluate(_payload(root, {"ask": "build the thing", "source": "relayed"}))
+    assert _hso(env)["permissionDecision"] == "allow"
+    assert calls == []
+    assert mod._ask_holder_pointer(root, "build the thing").read_text(encoding="utf-8").startswith("ask-")
+
+
+def test_a_refire_of_a_premint_held_ask_still_runs_the_refire_join_and_a_stale_pointer_is_dropped(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    calls = _refire_listings(monkeypatch, tmp_path)
+    mod.evaluate(_payload(root, {"ask": "build the thing", "source": "relayed"}))
+    pointer = mod._ask_holder_pointer(root, "build the thing")
+    first = pointer.read_text(encoding="utf-8")
+    mod.evaluate(_payload(root, {"ask": "Build  the THING", "source": "relayed"}))
+    assert len(calls) == 1
+    assert pointer.read_text(encoding="utf-8") != first  # no holder was found: the stale pointer went, the new premint wrote its own
+
+
+def test_an_ask_with_a_brief_file_keeps_the_refire_join_listing(tmp_path, monkeypatch):
+    root = _repo(tmp_path)
+    (root / "brief.md").write_text("B", encoding="utf-8")
+    calls = _refire_listings(monkeypatch, tmp_path)
+    mod.evaluate(_payload(root, {"ask": "build the thing", "source": "relayed", "brief_file": "brief.md"}))
+    assert len(calls) == 1

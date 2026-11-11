@@ -189,7 +189,7 @@ def test_refused_options_stay_refused_for_an_empty_dest(repo, source, tmp_path, 
 @pytest.mark.parametrize("spelling", ["F:/dev/example-game-repo/clones/x", "F:\\dev\\example-game-repo\\clones\\x", "'F:\\dev\\x'"])
 def test_drive_letter_dest_is_absolute_not_joined_onto_cwd(repo, source, spelling):
     assert _run(f"git clone {_p(source)} {spelling}", repo) is None
-    assert not (repo / "F:").exists()
+    assert "F:" not in {entry.name for entry in repo.iterdir()}
 
 
 def test_drive_letter_classifier_is_host_independent():

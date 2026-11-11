@@ -800,3 +800,43 @@ def test_a_launcher_refire_records_the_launcher_and_a_stale_record_names_no_comp
     (entry,) = _log(rd)
     assert entry["kind"] == "launcher" and entry["script_path"] == launcher.as_posix()
     assert entry["composed_by_engine_sha"] is None and entry["script_sha256"]
+
+
+# Every start script the hook writes carries an emission receipt, so the DoE fire hook never reads it as hand-rolled.
+
+
+def _assert_receipted(script: Path) -> None:
+    import hashlib
+
+    receipt = script.with_name(script.name + ".emitted.json")
+    assert receipt.is_file(), receipt
+    assert json.loads(receipt.read_text(encoding="utf-8"))["sha256"] == hashlib.sha256(script.read_bytes()).hexdigest()
+
+
+def test_the_overrun_start_script_the_hook_answers_with_has_a_receipt(tmp_path):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    ids = ["ask-20261111T070706-7fffa2", "ask-20261111T070707-7fffa3"]
+    envelope = hook._minted_start_envelope(tmp_path, ids, time.monotonic() + 5.0)
+    hso = envelope["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow", envelope
+    _assert_receipted(Path(hso["updatedInput"]["scriptPath"]))
+
+
+def test_the_direct_start_and_multi_root_scripts_have_receipts(tmp_path):
+    from coordinator_core.hooks import submit_engine_ask as hook
+
+    _assert_receipted(hook.write_direct_start_script(tmp_path, "ask-20261111T070706-7fffa2", "scratch/warp/r.mjs", None))
+    _assert_receipted(hook._write_multi_root_script(tmp_path, [tmp_path / "a.mjs"]))
+
+
+def test_an_unwritable_receipt_never_fails_the_script_write(tmp_path, monkeypatch):
+    from coordinator_core.hooks import submit_engine_ask as hook
+    from coordinator_core.ops.dispatch_emit import emission_receipt
+
+    def boom(*args, **kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(emission_receipt, "_write_emission_receipt", boom)
+    script = hook._write_minted_start_script(tmp_path, ["ask-20261111T070706-7fffa2"])
+    assert script.is_file() and not script.with_name(script.name + ".emitted.json").exists()

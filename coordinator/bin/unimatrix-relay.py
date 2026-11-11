@@ -18,6 +18,13 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     send-batch, but only when the pid's live endpoint hashes to <digest>
                     (first 16 hex of sha256 of the socket path); else exits `target mismatch`
                     before reading any line.
+  send-named <pid> <digest> <name-digest>
+                    send-to, and also refuses (`target mismatch`, `ambiguous`) unless the pid's
+                    exported name hashes to <name-digest> and no other live local session
+                    exports that name; checked before reading any line.
+  send-session <pid> <digest> <name-digest> <session-id>
+                    send-named, and also refuses (`target mismatch`) unless the pid's entry
+                    carries exactly that sessionId; checked before reading any line.
   inbox <name>      register <name> as a session living on this box (entry + key on
                     stdin, two lines), listen on /tmp/cc-socks/unimatrix-<name>.sock, and
                     write each message delivered there to stdout as one line, so the
@@ -65,11 +72,17 @@ INBOX_NAME_RE = re.compile(r"[A-Za-z0-9_-](?:[A-Za-z0-9_.-]{0,62}[A-Za-z0-9_-])?
 
 
 DIGEST_RE = re.compile(r"[0-9a-f]{16}")
+SESSION_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
 
 
 def socket_digest(path):
     """First 16 hex chars of the sha256 of a session endpoint path: the identity `send-to` verifies."""
     return hashlib.sha256(path.encode("utf-8")).hexdigest()[:16]
+
+
+def name_digest(name):
+    """First 16 hex chars of the sha256 of a session name: the identity `send-named` verifies."""
+    return hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
 
 
 def valid_inbox_name(name):
@@ -89,12 +102,21 @@ def parse_mode(original_command):
         return "roster", None
     if cmd == ["source"]:
         return "source", None
+    if cmd == ["specs"]:
+        return "specs", None
     if len(cmd) == 2 and cmd[0] == "send" and cmd[1].isdigit():
         return "send", int(cmd[1])
     if len(cmd) == 2 and cmd[0] == "send-batch" and cmd[1].isdigit():
         return "send-batch", int(cmd[1])
     if len(cmd) == 3 and cmd[0] == "send-to" and cmd[1].isdigit() and DIGEST_RE.fullmatch(cmd[2]):
         return "send-to", (int(cmd[1]), cmd[2])
+    if (len(cmd) == 4 and cmd[0] == "send-named" and cmd[1].isdigit()
+            and DIGEST_RE.fullmatch(cmd[2]) and DIGEST_RE.fullmatch(cmd[3])):
+        return "send-named", (int(cmd[1]), cmd[2], cmd[3])
+    if (len(cmd) == 5 and cmd[0] == "send-session" and cmd[1].isdigit()
+            and DIGEST_RE.fullmatch(cmd[2]) and DIGEST_RE.fullmatch(cmd[3])
+            and SESSION_ID_RE.fullmatch(cmd[4])):
+        return "send-session", (int(cmd[1]), cmd[2], cmd[3], cmd[4])
     if (len(cmd) == 2 and cmd[0] in ("inbox", "reply-inbox") and valid_inbox_name(cmd[1])
             and original_command == f"{cmd[0]} {cmd[1]}"):
         return cmd[0], cmd[1]
@@ -299,6 +321,7 @@ def roster():
     fields = engine_fields()
     helpers = load_roster()
     codex_cache = {}
+    rows = []
     for pid, d, key in entries():
         reply_inbox = d.get("unimatrixMirror") is True and d.get("unimatrixReplyInbox") is True
         if d.get("macSocketPath") or (d.get("unimatrixMirror") and not reply_inbox):
@@ -314,11 +337,45 @@ def roster():
             for field in ("unimatrixMirror", "unimatrixRemoteSocket", "unimatrixClient"):
                 exported.pop(field, None)
             exported.update(vendor="transport", box=socket.gethostname().lower())
-        print(json.dumps({"entry": exported, "key_name": key, "key": body, **fields}))
+        rows.append((pid, exported, {"entry": exported, "key_name": key, "key": body, **fields}))
+    holders = {}
+    for pid, exported, _ in rows:
+        if exported.get("messagingSocketPath") is not None:
+            holders.setdefault(exported["messagingSocketPath"], []).append(pid)
+    for sock_path, pids in holders.items():
+        if len(pids) > 1:
+            print(f"ambiguous socket {sock_path}: pids {','.join(map(str, pids))}", file=sys.stderr)
+    for _, exported, line in rows:
+        if len(holders.get(exported.get("messagingSocketPath"), ())) <= 1:
+            print(json.dumps(line))
+
+
+_BOX_FIELDS = ("unimatrixClient", "unimatrixRemote", "unimatrixBox", "box")
+
+
+def _row_names_a_box(d):
+    return any(d.get(f) for f in _BOX_FIELDS)
+
+
+def _row_is_from(d, client):
+    """Does this roster row's far box identify the ssh client the frame came from?
+
+    A pure string compare of the client address: the row's recorded client, else the IP the roster
+    mirror recorded for the far box (`unimatrixRemoteIp`), else a remote that is itself that address.
+    No name resolution happens here.
+    """
+    if d.get("unimatrixClient"):
+        return d["unimatrixClient"] == client
+    remote = str(d.get("unimatrixRemote") or "")
+    return client in (d.get("unimatrixRemoteIp"), remote.rpartition("@")[2])
 
 
 def local_reply_address(line):
     """Swap a far sender's `from` for the local mirror socket that reaches it.
+
+    Relay-inbox mirrors match by unimatrixRemoteSocket; with none, a roster mirror matches by
+    macSocketPath and the sending box (the client address against the row's box fields). Anything
+    but exactly one candidate leaves the frame unchanged.
 
     A notify_when_idle frame names its sender's reply address in `from`; the receiver drops
     any address outside its own namespace. A message frame also repeats it as a `from="..."`
@@ -338,6 +395,15 @@ def local_reply_address(line):
     if client:
         qualified = [d for d in candidates if d.get("unimatrixClient") == client]
         candidates = qualified or [d for d in candidates if not d.get("unimatrixClient")]
+    if not candidates:
+        # A roster mirror holds the far socket in macSocketPath; its messagingSocketPath is key-vouched locally.
+        # Another far box can hold the same socket path: a row naming its box (unimatrixRemote / unimatrixBox,
+        # as roster mirrors carry) or client address matches only the sending client; a row naming none is the
+        # legacy fallback.
+        by_socket = [d for _, d, _ in entries()
+                     if d.get("macSocketPath") == addr[len(scheme):] and d.get("messagingSocketPath")]
+        candidates = [d for d in by_socket if client and _row_is_from(d, client)] \
+            or [d for d in by_socket if not _row_names_a_box(d)]
     if len(candidates) == 1:
         d = candidates[0]
         frame["from"] = scheme + d["messagingSocketPath"]
@@ -360,11 +426,18 @@ def load_roster():
     return mod
 
 
-def _session_path(pid, expected_digest=None):
+def _exported_name(d):
+    return {**d, **load_roster().session_identity(d)}.get("name")
+
+
+def _session_path(pid, expected_digest=None, expected_name_digest=None, expected_session_id=None):
     """The live session's messaging endpoint for `pid`; exits when it is absent or not a session endpoint.
 
     With `expected_digest`, the endpoint must hash to it: a pid that now holds another session
-    exits `target mismatch` before any message is read.
+    exits `target mismatch` before any message is read. With `expected_session_id`, the entry's
+    sessionId must equal it (an absent sessionId is a mismatch). With `expected_name_digest`, the exported
+    name must hash to it (else `target mismatch`) and no other live non-mirror session may
+    export that name (else `ambiguous`).
     """
     target = {p: d for p, d, _ in entries()}.get(pid)
     if not target:
@@ -372,6 +445,22 @@ def _session_path(pid, expected_digest=None):
     path = target["messagingSocketPath"]
     if expected_digest is not None and socket_digest(path) != expected_digest:
         sys.exit(f"target mismatch: pid {pid} holds {target.get('name')}")
+    if expected_session_id is not None and target.get("sessionId") != expected_session_id:
+        found = target.get("sessionId")
+        sys.exit(f"target mismatch: pid {pid} holds session {found} ({target.get('name')}), "
+                 f"not addressed session {expected_session_id}")
+    if expected_name_digest is not None:
+        name = _exported_name(target)
+        if name_digest(name if isinstance(name, str) else "") != expected_name_digest:
+            sys.exit(f"target mismatch: pid {pid} holds {name}, not the addressed session")
+        same = []
+        for p, d, _ in entries():
+            n = _exported_name(d)
+            if (not (d.get("macSocketPath") or d.get("unimatrixMirror"))
+                    and isinstance(n, str) and name_digest(n) == expected_name_digest):
+                same.append(p)
+        if len(same) > 1:
+            sys.exit(f"ambiguous: {len(same)} live sessions named {name} (pids {','.join(map(str, same))})")
     if endpoint_kind() == "pipe":
         if not path.lower().startswith(PIPE_PREFIX.lower()):
             sys.exit(f"refusing non-session pipe {path}")
@@ -406,14 +495,14 @@ def send(pid):
     _write_line(path, sys.stdin.buffer.readline())
 
 
-def send_batch(pid, expected_digest=None):
+def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_session_id=None):
     """Deliver every stdin line to `pid`, replying one JSON result line per message line.
 
     A per-line fault (a blank line included, so replies stay index-aligned with the input) is
     that line's error reply and the loop continues; only a target-level refusal exits, before
     any line is read.
     """
-    path = _session_path(pid, expected_digest)
+    path = _session_path(pid, expected_digest, expected_name_digest, expected_session_id)
     for line in sys.stdin.buffer:
         try:
             if not line.strip():
@@ -963,10 +1052,105 @@ def membership_put(home, snapshot_line, sig_line, membership, authorized_keys, n
     return {"ok": True, "epoch": snap["epoch"], "authorized_keys": result}
 
 
+GIB = 1024 ** 3
+
+
+def _ram_windows():
+    import ctypes
+
+    class MemoryStatus(ctypes.Structure):
+        _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+    status = MemoryStatus()
+    status.dwLength = ctypes.sizeof(MemoryStatus)
+    if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+        return None, None
+    return status.ullTotalPhys, status.ullAvailPhys
+
+
+def _ram_linux():
+    fields = {}
+    for line in Path("/proc/meminfo").read_text().splitlines():
+        key, _, rest = line.partition(":")
+        parts = rest.split()
+        if parts and parts[0].isdigit():
+            fields[key] = int(parts[0]) * 1024
+    total = fields.get("MemTotal")
+    return total, fields.get("MemAvailable", fields.get("MemFree"))
+
+
+def _ram_darwin():
+    total = int(subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True,
+                               timeout=3).stdout.strip())
+    vm = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=3).stdout
+    page = re.search(r"page size of (\d+) bytes", vm)
+    size = int(page.group(1)) if page else 4096
+    pages = 0
+    for label in ("Pages free", "Pages inactive", "Pages speculative"):
+        match = re.search(rf"{label}:\s+(\d+)", vm)
+        pages += int(match.group(1)) if match else 0
+    return total, pages * size
+
+
+def _gpu_cmd(argv):
+    out = subprocess.run(argv, capture_output=True, text=True, timeout=3,
+                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return out.stdout if out.returncode == 0 else ""
+
+
+def _gpu_windows():
+    out = _gpu_cmd(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+    return out.splitlines()[0].strip() if out.strip() else None
+
+
+def _gpu_darwin():
+    for line in _gpu_cmd(["system_profiler", "SPDisplaysDataType"]).splitlines():
+        if "Chipset Model:" in line:
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def _gpu_linux():
+    out = _gpu_cmd(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"])
+    if out.strip():
+        return out.splitlines()[0].strip()
+    for line in _gpu_cmd(["lspci"]).splitlines():
+        if re.search(r"VGA compatible|3D controller|Display controller", line):
+            return line.split(": ", 1)[-1].strip()
+    return None
+
+
+def _safe(probe):
+    try:
+        return probe()
+    except Exception:
+        return None
+
+
+def probe_specs(platform=None):
+    """This box's RAM, CPU and GPU as one record; any field the OS will not give is None."""
+    platform = platform or sys.platform
+    ram = {"win32": _ram_windows, "darwin": _ram_darwin}.get(platform, _ram_linux)
+    gpu = {"win32": _gpu_windows, "darwin": _gpu_darwin}.get(platform, _gpu_linux)
+    total, available = _safe(ram) or (None, None)
+    return {
+        "box": socket.gethostname(),
+        "ram_gb": round(total / GIB, 1) if total else None,
+        "ram_available_gb": round(available / GIB, 1) if available else None,
+        "cpu_cores": os.cpu_count(),
+        "gpu": _safe(gpu),
+        "sampled_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+
+
 def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
-        sys.exit("usage: roster | send <pid> | send-batch <pid> | send-to <pid> <digest> | inbox <name> | reply-inbox <name> | source | "
+        sys.exit("usage: roster | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | inbox <name> | reply-inbox <name> | source | "
                  "grant <grantee> <note> <ttl> <repo> | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
@@ -991,11 +1175,13 @@ def main():
         sys.exit(0 if reply.get("ok") is True else 1)
     if mode == "roster":
         roster()
+    elif mode == "specs":
+        print(json.dumps(probe_specs()))
     elif mode == "send":
         send(arg)
     elif mode == "send-batch":
         send_batch(arg)
-    elif mode == "send-to":
+    elif mode in ("send-to", "send-named", "send-session"):
         send_batch(*arg)
     elif mode == "source":
         # Far boxes vendor this relay; serving our own text keeps syncs off the full-shell key.

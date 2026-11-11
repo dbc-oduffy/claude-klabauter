@@ -44,6 +44,12 @@ def _quiet_host_memory(monkeypatch):
     monkeypatch.setattr(watch.box_load, "read_load5", lambda: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_goal_board(monkeypatch):
+    """A tick never reads this box's goal board; the DRIFT cases below patch the board home themselves."""
+    monkeypatch.setattr(watch, "_goal_board_flags", lambda now: None)
+
+
 def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
     """The ARMED label tracks --repo-root, and a hardcoded repo name is the defect.
 
@@ -3034,3 +3040,104 @@ def test_kick_remote_refresh_is_a_noop_without_refresh_support(monkeypatch):
     monkeypatch.setattr(watch, "_refresh_thread", None)
     monkeypatch.delattr(watch.remote_roster, "refresh", raising=False)
     assert watch.kick_remote_refresh("dir") is None
+
+
+_SEED_BOARD = pathlib.Path(__file__).parent / "fixtures" / "fleet-goal-board-seed.json"
+_BOARD_NOW = datetime(2026, 11, 11, 10, 0, 0, tzinfo=timezone.utc)
+_REAL_GOAL_BOARD_FLAGS = watch._goal_board_flags
+
+
+@pytest.fixture
+def board_home(tmp_path, monkeypatch):
+    """A tmp group-EM home with the real board reader live and every owner live."""
+    from coordinator_core.group_em import gem_home, goal_board
+
+    home = tmp_path / "group-em"
+    home.mkdir()
+    monkeypatch.setattr(gem_home, "resolve_home", lambda: home)
+    monkeypatch.setattr(goal_board, "_registry_is_live", lambda sid: True)
+    monkeypatch.setattr(watch, "_goal_board_flags", _REAL_GOAL_BOARD_FLAGS)
+    return home
+
+
+def _write_board(home, mutate=None):
+    board = json.loads(_SEED_BOARD.read_text(encoding="utf-8"))
+    if mutate:
+        mutate(board)
+    (home / "fleet-goal-board.json").write_text(json.dumps(board), encoding="utf-8")
+
+
+def _drift_tick(prev_names, now=_BOARD_NOW):
+    emitted: list[str] = []
+    with mock.patch.object(watch, "_current_agents", return_value=[]), mock.patch.object(
+        watch, "_classify_all", return_value={}
+    ), mock.patch.object(watch, "_inbox_counts", return_value=(0, 0, 0.0)):
+        _p, _d, notes, _i = watch.poll_once(
+            REPO_ROOT, "caller-1", {}, now=now, emit=emitted.append, prev_names=prev_names
+        )
+    return [line for line in emitted if line.startswith("DRIFT ")], notes
+
+
+def test_drift_emits_one_line_per_flag_then_none_when_unchanged(board_home):
+    def mutate(board):
+        board["goals"][0]["last_updated"] = "2026-11-01T00:00:00Z"
+        board["task_map"] = [{"em": "e1", "task_id": "t1", "goal": None}]
+
+    _write_board(board_home, mutate)
+    lines, notes = _drift_tick(None)
+    assert lines == ["DRIFT goal-board stale 1a", "DRIFT goal-board unmapped-task e1/t1"]
+    again, notes2 = _drift_tick(notes)
+    assert again == []
+    assert notes2["goal-board"] == notes["goal-board"]
+
+
+def test_drift_emits_only_the_new_flag_and_a_cleared_flag_can_return(board_home):
+    _write_board(board_home)
+    lines, notes = _drift_tick(None)
+    assert lines == []
+    _write_board(board_home, lambda b: b["task_map"].append({"em": "e1", "task_id": "t9", "goal": "nope"}))
+    lines, notes = _drift_tick(notes)
+    assert lines == ["DRIFT goal-board unmapped-task e1/t9"]
+    _write_board(board_home)
+    lines, notes = _drift_tick(notes)
+    assert lines == [] and notes["goal-board"] == {"flags": []}
+    _write_board(board_home, lambda b: b["task_map"].append({"em": "e1", "task_id": "t9", "goal": "nope"}))
+    lines, _ = _drift_tick(notes)
+    assert lines == ["DRIFT goal-board unmapped-task e1/t9"]
+
+
+def test_drift_never_writes_the_board(board_home):
+    _write_board(board_home, lambda b: b["goals"][0].update(last_updated="2026-11-01T00:00:00Z"))
+    path = board_home / "fleet-goal-board.json"
+    before = path.read_bytes()
+    _drift_tick(None)
+    assert path.read_bytes() == before
+    assert [p.name for p in board_home.iterdir()] == ["fleet-goal-board.json"]
+
+
+def test_unreadable_or_invalid_board_is_no_news_and_carries_the_prior_set(board_home):
+    prior = {"goal-board": {"flags": ["stale 1a"]}}
+    lines, notes = _drift_tick(prior)  # board absent
+    assert lines == [] and notes["goal-board"] == prior["goal-board"]
+    (board_home / "fleet-goal-board.json").write_text("{not json", encoding="utf-8")
+    lines, notes = _drift_tick(prior)
+    assert lines == [] and notes["goal-board"] == prior["goal-board"]
+    _write_board(board_home, lambda b: b.update(bogus=1))  # schema-invalid
+    lines, notes = _drift_tick(prior)
+    assert lines == [] and notes["goal-board"] == prior["goal-board"]
+
+
+def test_no_board_and_no_prior_adds_no_note(board_home):
+    lines, notes = _drift_tick(None)
+    assert lines == [] and "goal-board" not in notes
+
+
+def test_home_refused_is_no_news(monkeypatch, board_home):
+    from coordinator_core.group_em import gem_home
+
+    def refuse():
+        raise gem_home.HomeRefused("/x/home", "/x")
+
+    monkeypatch.setattr(gem_home, "resolve_home", refuse)
+    lines, notes = _drift_tick(None)
+    assert lines == [] and "goal-board" not in notes

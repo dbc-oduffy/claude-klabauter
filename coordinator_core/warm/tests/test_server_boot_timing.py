@@ -122,7 +122,11 @@ def _stub_version_inputs(monkeypatch, tmp_path, stamps, digests):
     from coordinator_core.warm import skew
 
     stamp_iter = iter(stamps)
-    monkeypatch.setattr(engine_version, "resolve_engine_sha", lambda: "sha")
+    monkeypatch.setattr(
+        engine_version,
+        "resolve_engine_source_head",
+        lambda *a, **k: engine_version.SourceHead("sha", "source-tree", "sha"),
+    )
     monkeypatch.setattr(skew, "_source_pkg_dir", lambda: tmp_path)
     monkeypatch.setattr(skew, "_source_stamp", lambda _dir: next(stamp_iter))
     monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: digests.pop(0))
@@ -204,6 +208,31 @@ def test_an_answered_pool_future_releases_boot_housekeeping(monkeypatch) -> None
 
         assert server._await_pool_result(future, 1.0, repo_root) == {"result": 1}
         assert server._first_pool_answer.is_set()
+
+
+def _called_attrs(fn) -> set:
+    tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+    return {
+        node.func.attr
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+    }
+
+
+def test_boot_version_state_spawns_no_git_process_before_the_first_answer() -> None:
+    """`resolve_engine_sha` runs `git rev-parse` (64-260ms, the dominant boot phase under load);
+    the pre-ready constructor reads HEAD from the git dir in-process."""
+    called = _called_attrs(server._BootVersionState.__init__)
+    assert "resolve_engine_sha" not in called
+    assert "resolve_engine_source_head" in called
+    assert "resolve_engine_sha" not in _called_attrs(server._run_guarded)
+
+
+def test_the_pre_ready_disk_writes_keep_their_stall_bounds() -> None:
+    assert server._BOOT_BREADCRUMB_DEADLINE_SECS <= 0.2
+    assert server._BOOT_TIMING_DEADLINE_SECS <= 0.25
+    assert "_BOOT_BREADCRUMB_DEADLINE_SECS" in inspect.getsource(server._run_guarded)
+    assert "_BOOT_TIMING_DEADLINE_SECS" in inspect.getsource(server._record_own_boot)
 
 
 def test_boot_defers_the_http_listener_behind_the_first_answer_and_hashes_no_source() -> None:

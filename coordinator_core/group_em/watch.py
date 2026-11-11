@@ -290,6 +290,43 @@ def _inbox_line(open_count: int, total_count: int, taken_at_epoch: float) -> str
     )
 
 
+#: Reserved `peer_notes` key carrying the last tick's goal-board flag set (`{"flags": ["<flag> <id>", ...]}`),
+#: so the set rides the same carried record as `parked_sig` and survives a watch restart.
+_GOAL_BOARD_NOTE_KEY = "goal-board"
+
+
+def _goal_board_flags(now: datetime) -> Optional[list[str]]:
+    """The board's current drift flags as `"<flag> <id>"`, read-only; `None` when no board can be read.
+
+    Never writes: `goal_board.refresh` is the board's only writer. An absent, unreadable or
+    schema-invalid board is `None`, which the caller treats as "no news", never as "all clear".
+    """
+    from coordinator_core.group_em import gem_home, goal_board
+
+    try:
+        board = json.loads(goal_board.board_path().read_text(encoding="utf-8"))
+        if goal_board.validate(board):
+            return None
+        return [f"{f['flag']} {f['id']}" for f in goal_board.compute_flags(board, now)]
+    except (OSError, ValueError, TypeError, KeyError, gem_home.HomeRefused):
+        return None
+
+
+def _goal_board_drift(
+    now: datetime, prev_names: Optional[Mapping[str, Any]], emit: Callable[[str], None]
+) -> Optional[dict[str, Any]]:
+    """Emit `DRIFT goal-board <flag> <id>` for each flag absent from the prior tick's set; return the note to carry."""
+    prior_note = (prev_names or {}).get(_GOAL_BOARD_NOTE_KEY)
+    current = _goal_board_flags(now)
+    if current is None:
+        return prior_note if isinstance(prior_note, dict) else None
+    prior = set((prior_note or {}).get("flags") or [])
+    for key in current:
+        if key not in prior:
+            emit(f"DRIFT goal-board {key}")
+    return {"flags": current}
+
+
 _PARKED_STATE_RELATIVE_PATH = os.path.join("state", "group-em-watch-parked.json")
 
 _CRON_FLOOR_INTERVAL_SECONDS = 23 * 60.0
@@ -1021,6 +1058,9 @@ def poll_once(
     defaults to `caller_session_id`, the case where the Group-EM holds the watch
     itself.
 
+    A `DRIFT goal-board <flag> <id>` line is emitted per goal-board flag absent from the prior
+    tick's set, which rides in `peer_notes["goal-board"]` (see `_goal_board_drift`).
+
     The declination rows carry the `{session_id, name, gate, reason}` shape the
     heartbeat record wants: one row per peer this tick looked at and did NOT
     emit a line for, with the gate that stopped it -- which is what lets a
@@ -1170,6 +1210,10 @@ def poll_once(
     cur_inbox_open, inbox_total, inbox_taken_at = _inbox_counts(repo_root)
     if prev_inbox_open is not None and cur_inbox_open > prev_inbox_open:
         emit(_inbox_line(cur_inbox_open, inbox_total, inbox_taken_at))
+
+    board_note = _goal_board_drift(now, prev_names, emit)
+    if board_note is not None:
+        peer_notes[_GOAL_BOARD_NOTE_KEY] = board_note
 
     return cur_parked, declinations, peer_notes, cur_inbox_open
 

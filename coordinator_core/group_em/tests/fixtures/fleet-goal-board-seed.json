@@ -1,0 +1,72 @@
+{
+  "schema": "fleet-goal-board",
+  "board_as_of": "2026-11-11T09:45:00Z",
+  "source_ref": "group-em fleet-goal-board.md @ ecabf17, roll call 2026-11-11 ~09:45Z",
+  "stale_after_hours": 24,
+  "goals": [
+    {
+      "id": "1a",
+      "title": "Codex/Agy/Grok fire workflows like Claudes",
+      "owners": ["coordinator-content-repo-50", "claude-klabauter-c6"],
+      "distance": {"figure": "0/3 fire engine-ask unaided", "ref": "7ccaeb"},
+      "next": "r25 cut, then doe-50 probes; codex 49f9e5 has no fix yet; rag-70 #19 install/doctor/SCIP/LSP parity not started",
+      "blocked_on": "r25: 30b759, then 7fffa2, then cut",
+      "last_updated": "2026-11-11T09:45:00Z"
+    },
+    {
+      "id": "1b",
+      "title": "Fold non-Claude CLIs into workflows",
+      "owners": ["coordinator-content-repo-50"],
+      "distance": {"figure": "works; per-family stage benchmark 24 cells, n=2, research discriminates, review saturates", "ref": "cf6695dddd"},
+      "next": "Fix agy read-only allow-rule and codex Windows sandbox; harder review fixture; research n=4; re-run",
+      "blocked_on": "none",
+      "last_updated": "2026-11-11T09:45:00Z"
+    },
+    {
+      "id": "2a",
+      "title": "Agent-free likeness pipeline, <15 min/head, validated",
+      "owners": ["example-game-workbench-repo-19"],
+      "distance": "unmeasured",
+      "next": "9 open code rows incl. 745647, dd1ba4, 097ac0, fcd894; re-tally is report-only until claude-klabauter's back-fill op",
+      "blocked_on": "addon-88 lockstep commit for the map",
+      "last_updated": "2026-11-11T09:45:00Z"
+    },
+    {
+      "id": "2b",
+      "title": "\"That is Harry Kane\" render",
+      "owners": ["example-game-workbench-repo-19"],
+      "distance": "unmeasured",
+      "next": "n/a; PM sees renders first",
+      "blocked_on": "2a",
+      "last_updated": "2026-11-11T09:45:00Z"
+    },
+    {
+      "id": "3a",
+      "title": "10/10 MetaHuman slices, extending to narrow corpus slices",
+      "owners": ["addon-88", "rag-70", "rag-82", "addon-5e"],
+      "distance": {"figure": "MetaHuman held-out 5.27/10; Character/CMC slice 6.5/10", "ref": "hd-grade-20261111T0945Z-heldout-mh"},
+      "next": "Grade ask to example-game-repo-58; 384c81 doc comments onto definition chunks, then rag-70 reruns c3 with --diagnostics; rag-82 supervisor fix lifts the restart freeze",
+      "blocked_on": "384c81 review; dd63d0 holds the supervisor files",
+      "last_updated": "2026-11-11T09:45:00Z"
+    },
+    {
+      "id": "3b",
+      "title": "RunPod ready for the PM to press go",
+      "owners": ["addon-88", "rag-70", "rag-82"],
+      "distance": "unmeasured",
+      "next": "addon runpod-missing-items list rows Q1-2, A1-7, D1-5; rag-70 host rows owed",
+      "blocked_on": "3a = 10",
+      "last_updated": "2026-11-11T09:45:00Z"
+    },
+    {
+      "id": "FIFA",
+      "title": "FIFA (#25)",
+      "owners": ["example-stats-repo-dc", "example-stats-repo-f3", "example-stats-repo-c5"],
+      "distance": {"figure": "10,133 pairs ready, 0 served until the bundled deploy", "ref": "48056df4b7"},
+      "next": "#23 prod grant + per-role rerun; #14 queue to site in the next bundled deploy; #8 Commons originals to the JXL store; bundled deploy of HEAD 6da908299e",
+      "blocked_on": "#23 prod grant, then the bundled deploy",
+      "last_updated": "2026-11-11T09:45:00Z"
+    }
+  ],
+  "task_map": []
+}

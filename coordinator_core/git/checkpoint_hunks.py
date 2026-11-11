@@ -161,7 +161,8 @@ def checkpoint_own_blobs(
     foreign hunks beside the run's own (the blob is HEAD plus the own hunks only), and the paths
     held whole off the commit. A path with no diff, absent from HEAD, or wholly the run's own
     appears in neither. A diffed path the run has no write-time print for (`run_write_prints`) is
-    withheld whole and named: its hunks cannot be told from a peer's. `message` supplies the
+    withheld whole and named: its hunks cannot be told from a peer's, unless a chunk credited for the
+    run declares the path (an earlier pass wrote it; claims alone attribute it). `message` supplies the
     `Checkpoint-Plan:` value that scopes the peer-hold read. A `reasons` dict, when given, receives
     `{path: why}` for each withheld path, naming the foreign hunk where one is known. Never raises;
     unknown (no run, unreadable diff, unattributed or overlapping hunk) withholds."""
@@ -172,7 +173,7 @@ def checkpoint_own_blobs(
     withheld: list[str] = []
     try:
         from coordinator_core.ops.dispatch_emit import (
-            own_hunk_stage, peer_hunk_gate, run_hunk_claims, run_write_prints,
+            own_hunk_stage, peer_hunk_gate, run_credit, run_hunk_claims, run_write_prints,
         )
 
         try:
@@ -187,10 +188,12 @@ def checkpoint_own_blobs(
             why.update({p: "run unresolved: no live run of this session works the Checkpoint-Plan" for p in pending})
             return {}, sorted(set(pending))
         prints = run_write_prints.read(root, run_id) or {}
-        for path in [p for p in dict.fromkeys(pending) if p not in prints]:
+        unprinted = [p for p in dict.fromkeys(pending) if p not in prints]
+        credited = run_credit.credited_writes(root, run_id) if unprinted else frozenset()
+        for path in [p for p in unprinted if p not in credited]:
             withheld.append(path)
             why[path] = NO_PRINT_REASON
-        pending = [p for p in pending if p in prints]
+        pending = [p for p in pending if p in prints or p in credited]
         if not pending:
             return {}, sorted(set(withheld))
         pairs = peer_hunk_gate.co_declared_peer_holds(

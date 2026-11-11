@@ -104,3 +104,168 @@ def test_main_dispatches_send_to_with_the_digest(monkeypatch):
     monkeypatch.setenv("SSH_ORIGINAL_COMMAND", f"send-to 7 {digest(PIPE_A)}")
     R.main()
     assert seen == [(7, digest(PIPE_A))]
+
+
+def ndigest(name):
+    return hashlib.sha256(name.encode("utf-8")).hexdigest()[:16]
+
+
+def serve_many(monkeypatch, kind, rows, tmp_path):
+    """Live sessions `rows` = [(pid, entry)]; sockets are created under tmp_path."""
+    monkeypatch.setattr(R, "entries", lambda: iter([(p, d, f"{p}.k.key") for p, d in rows]))
+    monkeypatch.setattr(R, "endpoint_kind", lambda platform=None: kind)
+    if kind == "socket":
+        monkeypatch.setattr(R, "SOCKS", str(tmp_path))
+        monkeypatch.setattr(R.stat, "S_ISSOCK", lambda mode: True)
+
+
+def paths(kind, tmp_path):
+    if kind == "pipe":
+        return PIPE_A, PIPE_B
+    a, b = tmp_path / "a.sock", tmp_path / "b.sock"
+    a.write_bytes(b"")
+    b.write_bytes(b"")
+    return str(a), str(b)
+
+
+def test_name_digest_and_parse_mode_send_named():
+    assert R.name_digest("group-em-ad") == ndigest("group-em-ad")
+    d, n = digest(PIPE_A), ndigest("x")
+    assert R.parse_mode(f"send-named 12 {d} {n}") == ("send-named", (12, d, n))
+    assert R.parse_mode(f"send-named 12 {d}") is None
+    assert R.parse_mode(f"send-named 12 {d} {n.upper()}") is None
+    assert R.parse_mode(f"send-named x {d} {n}") is None
+    assert R.parse_mode(f"send-to 12 {d}") == ("send-to", (12, d))
+
+
+@pytest.mark.parametrize("kind", ["pipe", "socket"])
+def test_send_named_matching_name_delivers(monkeypatch, tmp_path, capsys, written, kind):
+    a, b = paths(kind, tmp_path)
+    serve_many(monkeypatch, kind, [(7, {"messagingSocketPath": a, "name": "g"}),
+                                   (8, {"messagingSocketPath": b, "name": "other"})], tmp_path)
+    monkeypatch.setattr(R.sys, "stdin", _Stdin(b'{"a":1}\n'))
+    R.send_batch(7, digest(a), ndigest("g"))
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert [p for p, _ in written] == [a]
+
+
+@pytest.mark.parametrize("kind", ["pipe", "socket"])
+def test_send_named_wrong_name_is_refused_before_reading(monkeypatch, tmp_path, written, kind):
+    a, b = paths(kind, tmp_path)
+    serve_many(monkeypatch, kind, [(7, {"messagingSocketPath": a, "name": "claude-klabauter-c6"})], tmp_path)
+    stdin = _Stdin(b'{"a":1}\n')
+    monkeypatch.setattr(R.sys, "stdin", stdin)
+    with pytest.raises(SystemExit) as exc:
+        R.send_batch(7, digest(a), ndigest("group-em-ad"))
+    assert str(exc.value) == "target mismatch: pid 7 holds claude-klabauter-c6, not the addressed session"
+    assert stdin.buffer.tell() == 0
+    assert written == []
+
+
+@pytest.mark.parametrize("kind", ["pipe", "socket"])
+def test_send_named_ambiguous_name_is_refused_but_mirrors_do_not_count(monkeypatch, tmp_path, written, kind):
+    a, b = paths(kind, tmp_path)
+    rows = [(7, {"messagingSocketPath": a, "name": "dup"}),
+            (8, {"messagingSocketPath": b, "name": "dup"}),
+            (9, {"messagingSocketPath": a + "m", "name": "dup", "unimatrixMirror": True})]
+    serve_many(monkeypatch, kind, rows, tmp_path)
+    stdin = _Stdin(b'{"a":1}\n')
+    monkeypatch.setattr(R.sys, "stdin", stdin)
+    with pytest.raises(SystemExit) as exc:
+        R.send_batch(7, digest(a), ndigest("dup"))
+    assert str(exc.value) == "ambiguous: 2 live sessions named dup (pids 7,8)"
+    assert stdin.buffer.tell() == 0
+    assert written == []
+    serve_many(monkeypatch, kind, [rows[0], rows[2]], tmp_path)
+    monkeypatch.setattr(R.sys, "stdin", _Stdin(b'{"a":1}\n'))
+    R.send_batch(7, digest(a), ndigest("dup"))
+    assert [p for p, _ in written] == [a]
+
+
+def test_main_dispatches_send_named(monkeypatch):
+    seen = []
+    monkeypatch.setattr(R, "send_batch", lambda *a: seen.append(a))
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", f"send-named 7 {digest(PIPE_A)} {ndigest('g')}")
+    R.main()
+    assert seen == [(7, digest(PIPE_A), ndigest("g"))]
+
+
+@pytest.mark.parametrize("kind", ["pipe", "socket"])
+def test_roster_drops_entries_sharing_a_socket(monkeypatch, tmp_path, capsys, kind):
+    a, b = paths(kind, tmp_path)
+    rows = [(7, {"messagingSocketPath": a, "name": "one"}),
+            (8, {"messagingSocketPath": a, "name": "two"}),
+            (9, {"messagingSocketPath": b, "name": "three"})]
+    serve_many(monkeypatch, kind, rows, tmp_path)
+    monkeypatch.setattr(R, "SESS", str(tmp_path))
+    for p, _ in rows:
+        (tmp_path / f"{p}.k.key").write_text("key", encoding="utf-8")
+    monkeypatch.setattr(R, "engine_fields", lambda: {})
+    monkeypatch.setattr(R, "codex_export_refused", lambda d, cache: False)
+    R.roster()
+    out, err = capsys.readouterr()
+    assert [json.loads(x)["entry"]["name"] for x in out.splitlines()] == ["three"]
+    assert err.strip() == f"ambiguous socket {a}: pids 7,8"
+
+
+def test_parse_mode_send_session():
+    d, n = digest(PIPE_A), ndigest("x")
+    sid = "82b1c37f-51df-4c61-a71d-fa0644eccbb9"
+    assert R.parse_mode(f"send-session 12 {d} {n} {sid}") == ("send-session", (12, d, n, sid))
+    assert R.parse_mode(f"send-session 12 {d} {n}") is None
+    assert R.parse_mode(f"send-session 12 {d} {n} bad/sid") is None
+    assert R.parse_mode(f"send-session 12 {d} {n} {'a' * 129}") is None
+    assert R.parse_mode(f"send-session 12 {d} {n} {'a' * 128}") is not None
+    assert R.parse_mode(f"send-session x {d} {n} {sid}") is None
+
+
+@pytest.mark.parametrize("kind", ["pipe", "socket"])
+def test_send_session_matching_session_delivers(monkeypatch, tmp_path, capsys, written, kind):
+    a, b = paths(kind, tmp_path)
+    serve_many(monkeypatch, kind, [(7, {"messagingSocketPath": a, "name": "g", "sessionId": "sid-g"})], tmp_path)
+    monkeypatch.setattr(R.sys, "stdin", _Stdin(b'{"a":1}\n'))
+    R.send_batch(7, digest(a), ndigest("g"), "sid-g")
+    assert json.loads(capsys.readouterr().out) == {"ok": True}
+    assert [p for p, _ in written] == [a]
+
+
+@pytest.mark.parametrize("kind", ["pipe", "socket"])
+@pytest.mark.parametrize("held", ["sid-other", None])
+def test_send_session_mismatch_or_absent_session_is_refused_before_reading(
+        monkeypatch, tmp_path, written, kind, held):
+    a, b = paths(kind, tmp_path)
+    entry = {"messagingSocketPath": a, "name": "g"}
+    if held is not None:
+        entry["sessionId"] = held
+    serve_many(monkeypatch, kind, [(7, entry)], tmp_path)
+    stdin = _Stdin(b'{"a":1}\n')
+    monkeypatch.setattr(R.sys, "stdin", stdin)
+    with pytest.raises(SystemExit) as exc:
+        R.send_batch(7, digest(a), ndigest("g"), "sid-g")
+    assert str(exc.value) == f"target mismatch: pid 7 holds session {held} (g), not addressed session sid-g"
+    assert stdin.buffer.tell() == 0
+    assert written == []
+
+
+@pytest.mark.parametrize("kind", ["pipe", "socket"])
+def test_send_session_still_refuses_wrong_name_and_ambiguity(monkeypatch, tmp_path, written, kind):
+    a, b = paths(kind, tmp_path)
+    serve_many(monkeypatch, kind, [(7, {"messagingSocketPath": a, "name": "claude-klabauter-c6", "sessionId": "s"})], tmp_path)
+    monkeypatch.setattr(R.sys, "stdin", _Stdin(b'{"a":1}\n'))
+    with pytest.raises(SystemExit) as exc:
+        R.send_batch(7, digest(a), ndigest("group-em-ad"), "s")
+    assert str(exc.value) == "target mismatch: pid 7 holds claude-klabauter-c6, not the addressed session"
+    serve_many(monkeypatch, kind, [(7, {"messagingSocketPath": a, "name": "dup", "sessionId": "s"}),
+                                   (8, {"messagingSocketPath": b, "name": "dup", "sessionId": "t"})], tmp_path)
+    with pytest.raises(SystemExit) as exc:
+        R.send_batch(7, digest(a), ndigest("dup"), "s")
+    assert str(exc.value) == "ambiguous: 2 live sessions named dup (pids 7,8)"
+    assert written == []
+
+
+def test_main_dispatches_send_session(monkeypatch):
+    seen = []
+    monkeypatch.setattr(R, "send_batch", lambda *a: seen.append(a))
+    monkeypatch.setenv("SSH_ORIGINAL_COMMAND", f"send-session 7 {digest(PIPE_A)} {ndigest('g')} sid-g")
+    R.main()
+    assert seen == [(7, digest(PIPE_A), ndigest("g"), "sid-g")]

@@ -110,32 +110,42 @@ def own_names():
     return {socket.gethostname().split(".")[0].lower()}
 
 
-def member_targets(roster, mem=None, self_names=None, run=subprocess.run):
-    """(status, {remote: box}, epoch, reason) for the stored membership snapshot.
+def split_members(roster, mem=None, self_names=None, run=subprocess.run):
+    """(status, {remote: box}, skipped, epoch, reason) for the stored membership snapshot.
 
     status is "none" (no snapshot stored), "bad" (stored but not verifiable; reason says why) or "ok".
-    Members are dialled as `<user>@<host>` from the record; this box is dropped by hostname."""
+    Members are dialled as `<user>@<host>` from the record, a DNS or .local hostname (ssh matches its
+    `Host <hostname>` alias block, never an IP pin); this box is dropped by hostname.
+    `skipped` is [(box, remote)] for each verified member whose dial name fails ALIAS_RE or is an IP literal."""
     try:
         mem = mem or _membership()
     except OSError:  # membership library not vendored on this box yet: the transition fallback applies
-        return "none", {}, None, None
+        return "none", {}, [], None, None
     home = roster.settings_home()
     try:
         snap, _ = mem.load_snapshot(home)
         if snap is None:
-            return "none", {}, None, None
+            return "none", {}, [], None, None
         members = mem.verified_members(home, run=run)
     except mem.MembershipError as ex:
-        return "bad", {}, None, f"membership snapshot not usable, nothing linked from it: {str(ex)[:120]}"
+        return "bad", {}, [], None, f"membership snapshot not usable, nothing linked from it: {str(ex)[:120]}"
     me = {n.lower() for n in (self_names if self_names is not None else own_names())}
-    targets = {}
+    targets, skipped = {}, []
     for m in members:
         if m["box"].lower() in me or m["host"].split(".")[0].lower() in me:
             continue
         remote = f"{m['user']}@{m['host']}"
-        if ALIAS_RE.fullmatch(remote):
+        if ALIAS_RE.fullmatch(remote) and not mem.is_ip_literal(m["host"]):
             targets[remote] = m["box"]
-    return "ok", targets, snap["epoch"], None
+        else:
+            skipped.append((m["box"], remote))
+    return "ok", targets, skipped, snap["epoch"], None
+
+
+def member_targets(roster, mem=None, self_names=None, run=subprocess.run):
+    """(status, {remote: box}, epoch, reason): `split_members` without the skipped list."""
+    status, targets, _, epoch, why = split_members(roster, mem, self_names, run=run)
+    return status, targets, epoch, why
 
 
 def pull_membership(roster, remote, key, run=subprocess.run):
@@ -537,11 +547,13 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
     reason = NO_ALIAS_REASON
     names, epoch, snapshot_mode = {}, None, False
     if boxes is None:
-        status, names, epoch, why = member_targets(roster, membership, self_names)
+        status, names, skipped, epoch, why = split_members(roster, membership, self_names)
         if status == "bad":
             say(why)
             return
         if status == "ok":
+            for box, remote in skipped:
+                say(f"member {box}: dial name {remote!r} is not a hostname alias (fails the alias check or is an IP literal); not linked")
             snapshot_mode, boxes = True, list(names)
             reason = "membership snapshot lists no other member; no supervisors started"
         else:

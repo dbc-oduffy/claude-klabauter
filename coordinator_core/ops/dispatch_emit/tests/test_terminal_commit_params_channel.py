@@ -299,6 +299,54 @@ def test_missing_file_diagnosis_refuses_other_paths(path):
     assert ch.missing_file_diagnosis(path) is None
 
 
+_SCRIPT = "scratch/warp/a.workflow.mjs"
+
+
+def _minted_prompt(repo, run_id="ask-1", extra_block=False):
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    (repo / ".git").mkdir(exist_ok=True)
+    token = run_token.mint(repo, run_id, _SCRIPT)
+    block = ch.render_params_block({"run_id": run_id, "run_token": token, "script_path": _SCRIPT})
+    return "Commit.\n" + block + ("\n" + block if extra_block else "")
+
+
+def test_materialize_from_prompt_admits_a_minted_token_and_writes(tmp_path):
+    prompt = _minted_prompt(tmp_path)
+    written, leg = ch.materialize_from_prompt(tmp_path, prompt)
+    assert leg is None
+    assert written == ch.params_path(tmp_path, "ask-1")
+    assert json.loads(written.read_text(encoding="utf-8")) == ch.prompt_params(prompt)
+
+
+@pytest.mark.parametrize("extra_block", [False, True])
+def test_materialize_from_prompt_refuses_zero_or_two_blocks(tmp_path, extra_block):
+    prompt = "Commit." if not extra_block else _minted_prompt(tmp_path, extra_block=True)
+    assert ch.materialize_from_prompt(tmp_path, prompt) == (None, "no-params-block")
+    assert not (tmp_path / "scratch").exists() or not list((tmp_path / "scratch").rglob(ch.PARAMS_FILE_NAME))
+
+
+def test_materialize_from_prompt_refuses_a_bad_run_id(tmp_path):
+    block = ch.render_params_block({"run_id": "../x", "run_token": "t", "script_path": _SCRIPT})
+    assert ch.materialize_from_prompt(tmp_path, block) == (None, "params-path")
+
+
+def test_materialize_from_prompt_refuses_an_unminted_token_and_writes_nothing(tmp_path):
+    block = ch.render_params_block({"run_id": "ask-1", "run_token": "f" * 32, "script_path": _SCRIPT})
+    canonical, leg = ch.materialize_from_prompt(tmp_path, block)
+    assert leg == "params-token"
+    assert canonical == ch.params_path(tmp_path, "ask-1")
+    assert not canonical.exists()
+
+
+def test_materialize_from_prompt_reports_a_failed_write(tmp_path, monkeypatch):
+    prompt = _minted_prompt(tmp_path)
+    monkeypatch.setattr(ch, "materialize", lambda path, params: False)
+    canonical, leg = ch.materialize_from_prompt(tmp_path, prompt)
+    assert leg == "params-write"
+    assert canonical == ch.params_path(tmp_path, "ask-1")
+
+
 @pytest.mark.spawns_process
 def test_js_and_python_block_agree():
     node = shutil.which("node")

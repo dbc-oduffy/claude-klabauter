@@ -46,7 +46,8 @@ def test_bridge_uses_own_registry_pid_even_with_same_endpoint_decoy(tmp_path, mo
     (tmp_path / "1.json").write_text(json.dumps({"pid": 1, "messagingSocketPath": endpoint,
         "macSocketPath": FAR, "farPid": 80954, "unimatrixRemote": "user@192.168.0.175"}))
     (tmp_path / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "messagingSocketPath": endpoint,
-        "macSocketPath": FAR, "farPid": 62725, "unimatrixRemote": "user@192.168.0.116"}))
+        "macSocketPath": FAR, "farPid": 62725, "unimatrixRemote": "user@192.168.0.116",
+        "unimatrixFarName": "far", "sessionId": "sid-62725"}))
     monkeypatch.setattr(bridge, "SESSIONS", str(tmp_path))
     bridge.cfg = SimpleNamespace(endpoint=endpoint, key="key", remote="user@192.168.0.116", tunnel_remote=None)
     bridge.log = io.StringIO()
@@ -57,7 +58,7 @@ def test_bridge_uses_own_registry_pid_even_with_same_endpoint_decoy(tmp_path, mo
     connection = SimpleNamespace(read=iter([b'{"type":"user"}\n', b""]).__next__, close=lambda: None)
     bridge.relay_send(connection)
     assert sent[0][-2] == "user@192.168.0.116"
-    assert re.fullmatch(r"send-to 62725 [0-9a-f]{16}", sent[0][-1])
+    assert re.fullmatch(r"send-session 62725 [0-9a-f]{16} [0-9a-f]{16} sid-62725", sent[0][-1])
 
 
 def mirror(remote, endpoint, port):

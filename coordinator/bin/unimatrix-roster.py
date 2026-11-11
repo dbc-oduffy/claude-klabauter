@@ -180,9 +180,33 @@ def mirror_orphaned(d):
         {"pid": d.get("unimatrixRosterPid"), "procStart": d.get("unimatrixRosterProcStart")})
 
 
+FAR_SEEN_FIELD = "unimatrixFarSeen"
+FAR_SEEN_MAX_AGE_SECONDS = 5 * POLL_SECONDS
+AGY_FACE_GRACE_SECONDS = 5 * POLL_SECONDS
+
+
+def mirror_unbacked(d):
+    """True for a bridge-relay mirror whose far row the roster supervisor has not confirmed lately.
+
+    The bridge process alone proves nothing about the far session: each poll that still sees the far
+    row stamps `unimatrixFarSeen`, and a mirror without a fresh stamp has no session behind it. A
+    hand-started relay row (it names its far box in `unimatrixRemote` but has no far-socket field) is
+    held to the same stamp: only a roster poll can vouch for the session behind it."""
+    if not isinstance(d, dict) or not (d.get(FAR_SOCKET_FIELD) or d.get("unimatrixRemote")):
+        return False
+    return not _liveness().stamp_fresh(d, FAR_SEEN_FIELD, FAR_SEEN_MAX_AGE_SECONDS)
+
+
 def entry_listed(d):
-    """A session entry worth listing: its pid is still its process and no dead roster owns it."""
-    return entry_live(d) and not mirror_orphaned(d)
+    """A session entry worth listing: its pid is still its process, no dead roster owns it and,
+    for a mirror, its far session was seen on a recent poll and, for an agy router face, its agy
+    process is still alive."""
+    return (entry_live(d) and not mirror_orphaned(d) and not mirror_unbacked(d)
+            and not _liveness().agy_face_unbacked(d))
+
+
+def far_seen_fields():
+    return {FAR_SEEN_FIELD: int(time.time() * 1000)}
 
 
 def supervisor_fields():
@@ -644,9 +668,12 @@ def unmirror(pid):
     drop_session_files(pid)
 
 
-def reap_orphaned_mirrors(remote, say):
+def reap_orphaned_mirrors(remote, say, unbacked=False, keep=()):
     """Remove this far box's mirrors whose roster supervisor is gone, stopping a bridge that is still its process.
 
+    With `unbacked`, a mirror whose far row went unconfirmed (`mirror_unbacked`) is reaped too: the
+    session registry lists a file by its live bridge pid, so an unlisted-but-present mirror still shows.
+    Pids in `keep` (the caller's own bridges) are never reaped.
     A bridge is killed only when its entry records a procStart it still matches: a recycled pid is never signalled."""
     try:
         files = os.listdir(sessions_dir())
@@ -663,7 +690,8 @@ def reap_orphaned_mirrors(remote, say):
         except (OSError, ValueError):
             continue
         pid = int(m.group(1))
-        if (not isinstance(d, dict) or d.get("pid") != pid or not mirror_orphaned(d)
+        if (not isinstance(d, dict) or d.get("pid") != pid or pid in keep
+                or not (mirror_orphaned(d) or (unbacked and mirror_unbacked(d)))
                 or box_label(d.get("unimatrixRemote") or "") != box_label(remote)):
             continue
         if isinstance(d.get("procStart"), str) and d["procStart"] and entry_live(d):
@@ -673,6 +701,40 @@ def reap_orphaned_mirrors(remote, say):
     for pid, name in reaped:
         drop_session_files(pid)
         say(f"reaped orphaned mirror {name} bridge {pid}")
+
+
+def reap_unbacked_agy_faces(say):
+    """Remove the local registry rows of agy router faces whose agy process is gone.
+
+    The registry lists a file by its live face pid, so an unlisted-but-present face still shows in
+    ListAgents. A face younger than `AGY_FACE_GRACE_SECONDS` is spared (its leg record may not exist
+    yet); the face process is signalled only while it is still the process its entry recorded."""
+    try:
+        files = os.listdir(sessions_dir())
+    except OSError:
+        return
+    liveness = _liveness()
+    reaped, to_kill = [], []
+    for f in files:
+        m = re.fullmatch(r"(\d+)\.json", f)
+        if not m:
+            continue
+        try:
+            with open(os.path.join(sessions_dir(), f), encoding="utf-8") as fh:
+                d = json.load(fh)
+        except (OSError, ValueError):
+            continue
+        pid = int(m.group(1))
+        if (not isinstance(d, dict) or d.get("pid") != pid or not liveness.agy_face_unbacked(d)
+                or liveness.stamp_fresh(d, "startedAt", AGY_FACE_GRACE_SECONDS)):
+            continue
+        if isinstance(d.get("procStart"), str) and d["procStart"] and entry_live(d):
+            to_kill.append(pid)
+        reaped.append((pid, d.get("name")))
+    tree_kill_many(to_kill)
+    for pid, name in reaped:
+        drop_session_files(pid)
+        say(f"reaped unbacked agy face {name} pid {pid}")
 
 
 def log_label(entry):
@@ -747,6 +809,32 @@ def mirror_entry_name(entry, remote, far_sock=None, scan=None):
     return mirror_name(name, remote, mirror_scan_key(remote, far_sock), scan)
 
 
+REMOTE_IP_FIELD = "unimatrixRemoteIp"
+_remote_ips = {}
+REMOTE_IP_TTL_S = 300.0
+REMOTE_IP_FAIL_TTL_S = 30.0
+
+
+def remote_ip(remote):
+    """The far box's IP, cached per remote (300s; a failed lookup 30s); '' when it does not resolve.
+
+    The relay matches ssh client addresses against this recorded value and never resolves names itself.
+    """
+    host = str(remote or "").rpartition("@")[2]
+    now = time.monotonic()
+    hit = _remote_ips.get(host)
+    if hit is not None and now < hit[1]:
+        return hit[0]
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+        infos.sort(key=lambda i: i[0] != socket.AF_INET)
+        ip, ttl = infos[0][4][0], REMOTE_IP_TTL_S
+    except (OSError, IndexError, UnicodeError):
+        ip, ttl = "", REMOTE_IP_FAIL_TTL_S
+    _remote_ips[host] = (ip, now + ttl)
+    return ip
+
+
 def mirror(row, cfg, say, scan=None):
     e = row["entry"]
     far_sock = e["messagingSocketPath"]
@@ -764,9 +852,13 @@ def mirror(row, cfg, say, scan=None):
     d.update(mirror_identity(e, cfg.remote))
     c = _contract()
     d[c.BOX_FIELD] = d.get(c.BOX_FIELD) or c.box_id(cfg.remote)
+    d.pop(REMOTE_IP_FIELD, None)
+    ip = remote_ip(cfg.remote)
+    if ip:
+        d[REMOTE_IP_FIELD] = ip
     d.update(pid=b.pid, procStart=proc_start(b.pid), pidDomain=pid_domain(),
              messagingSocketPath=endpoint, farPid=e["pid"], unimatrixRemote=cfg.remote,
-             **{FAR_SOCKET_FIELD: far_sock}, **supervisor_fields(), **engine_fields(row))
+             **{FAR_SOCKET_FIELD: far_sock}, **supervisor_fields(), **far_seen_fields(), **engine_fields(row))
     sess = sessions_dir()
     write_json_atomic(os.path.join(sess, f"{b.pid}.json"), d)
     write_peer_key(os.path.join(sess, key_name(b.pid, endpoint)),
@@ -780,6 +872,7 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
 
     The bridge's local pid/process identity stays its own. The relay destination must
     follow the remote process, which may restart without changing its socket or name.
+    Never writes `sessionId`: a changed far session is crossed (`crossed_mirrors`) and rebuilt.
     """
     name = row["entry"].get("name")
     path = os.path.join(sessions_dir(), f"{pid}.json")
@@ -794,6 +887,11 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
     updates = {}
     if d.get("unimatrixRemote") != cfg.remote:
         updates["unimatrixRemote"] = cfg.remote
+    ip = remote_ip(cfg.remote)
+    if ip and d.get(REMOTE_IP_FIELD) != ip:
+        updates[REMOTE_IP_FIELD] = ip
+    elif not ip and REMOTE_IP_FIELD in d and "unimatrixRemote" in updates:
+        d.pop(REMOTE_IP_FIELD)
     for field, value in mirror_identity(row["entry"], cfg.remote).items():
         if field == "cwd" and not value:
             continue
@@ -808,6 +906,8 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
     for field, value in supervisor_fields().items():
         if d.get(field) != value:
             updates[field] = value
+    if not _liveness().stamp_fresh(d, FAR_SEEN_FIELD, POLL_SECONDS):
+        updates.update(far_seen_fields())
     if isinstance(name, str) and name:
         want = mirror_entry_name(row["entry"], cfg.remote, sock, scan)
         if d.get("unimatrixFarName") != name:
@@ -817,13 +917,16 @@ def rename_live_mirror(pid, sock, row, cfg, say, scan=None):
     if updates:
         d.update(updates)
         write_json_atomic(path, d)
-        say(f"refresh mirror {sock} -> {d.get('name')} far pid {d.get('farPid')}")
+        if set(updates) != {FAR_SEEN_FIELD}:
+            say(f"refresh mirror {sock} -> {d.get('name')} far pid {d.get('farPid')}")
 
 
 def crossed_mirrors(bridges, rows):
     """Far sockets whose live mirror can reach the wrong session: (mirror name, far socket) pairs.
 
-    Crossed means the mirror's `farPid` is not its row's pid (checked after the refresh), or another
+    Crossed means the bridge left a `<pid>.misroute` marker (the far end answered as another session),
+    the mirror's `farPid` is not its row's pid (checked after the refresh), the mirror's `sessionId`
+    differs from (or, for a legacy mirror, is missing against) its row's non-empty one, or another
     live mirror of this remote carries the identical session name for a different far socket. Names
     compare in full: a box-labelled twin of a bare name is the intended disambiguation, not a crossing."""
     seen, by_name, crossed = {}, {}, set()
@@ -842,6 +945,11 @@ def crossed_mirrors(bridges, rows):
         seen[sock] = name
         far_pid = row["entry"].get("pid")
         if isinstance(far_pid, int) and far_pid > 0 and d.get("farPid") != far_pid:
+            crossed.add(sock)
+        far_sid = row["entry"].get("sessionId")
+        if isinstance(far_sid, str) and far_sid and d.get("sessionId") != far_sid:
+            crossed.add(sock)
+        if os.path.exists(os.path.join(sessions_dir(), f"{b.pid}.misroute")):
             crossed.add(sock)
         if isinstance(d.get("name"), str) and d["name"]:
             by_name.setdefault(d["name"], []).append(sock)
@@ -956,6 +1064,8 @@ def main(argv=None):
                 continue
             link = note_link(link, True, cfg.remote, "", say, link_path)
             sync(bridges, rows, cfg, say)
+            reap_orphaned_mirrors(cfg.remote, say, unbacked=True, keep={b.pid for b in bridges.values()})
+            reap_unbacked_agy_faces(say)
             time.sleep(POLL_SECONDS)
     finally:
         tree_kill_many([b.pid for b in bridges.values()])

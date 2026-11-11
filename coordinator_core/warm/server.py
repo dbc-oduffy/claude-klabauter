@@ -267,7 +267,9 @@ class _BootVersionState(skew.ServerVersionState):
     The base constructor reads and hashes every engine source file (~3200) before the server can
     answer. Here axis 2 is the stat stamp alone: any added, removed or rewritten source file
     reads as stale (sticky, fail-loud), so a content-identical rewrite costs one respawn that
-    the base state would have proven benign. `_boot_hash` stays None.
+    the base state would have proven benign. `_boot_hash` stays None. `server_sha` is read from
+    the git dir in-process: `resolve_engine_sha`'s `git rev-parse` spawn was the dominant,
+    load-sensitive cost of this constructor.
     """
 
     def __init__(self, repo_root: Optional[Path] = None, *, clock: Callable[[], float] = time.monotonic):
@@ -275,7 +277,7 @@ class _BootVersionState(skew.ServerVersionState):
 
         self._root = Path(repo_root) if repo_root is not None else skew._default_engine_clone()
         self._clock = clock
-        self.server_sha = engine_version.resolve_engine_sha()
+        self.server_sha = engine_version.resolve_engine_source_head().engine_head
         self._last_stamp = skew._source_stamp(skew._source_pkg_dir())
         self._boot_stamp = self._last_stamp
         self._boot_hash: Optional[str] = None
@@ -1146,6 +1148,9 @@ def _pool_dispatch_worker(
         disarm()
 
 
+_JOURNAL_DROPPED = object()
+
+
 def _journal_landed(msg: Any, claim_dir: Optional[str], dispatch_key: Optional[str], out: Any) -> None:
     """Journal a mutating keyed op's outcome the moment its handler returns, so a worker killed
     before the accept process stamps it still leaves the landed result readable. Never raises."""
@@ -1155,13 +1160,29 @@ def _journal_landed(msg: Any, claim_dir: Optional[str], dispatch_key: Optional[s
             return
         if not _op_may_mutate(_effective_method(msg)):
             return
+        # Bounded, not retried or pool-enlarged: a frozen C: would otherwise pin this
+        # pool worker inside the journal write; the abandoned write still lands late.
+        from coordinator_core.bounded_io import run_bounded
+
         if "result" in out:
-            dispatch_ack.record_outcome(journal, dispatch_key, dispatch_ack.OUTCOME_RESULT, result=out["result"])
+            kind = dispatch_ack.OUTCOME_RESULT
+            record = lambda: dispatch_ack.record_outcome(  # noqa: E731
+                journal, dispatch_key, dispatch_ack.OUTCOME_RESULT, result=out["result"]
+            )
         elif isinstance(out.get("error"), dict):
             err = out["error"]
-            dispatch_ack.record_outcome(
+            kind = dispatch_ack.OUTCOME_ERROR
+            record = lambda: dispatch_ack.record_outcome(  # noqa: E731
                 journal, dispatch_key, dispatch_ack.OUTCOME_ERROR,
                 error_code=err.get("code"), error_message=err.get("message"),
+            )
+        else:
+            return
+        if run_bounded(f"journal-outcome:{journal}", record, default=_JOURNAL_DROPPED) is _JOURNAL_DROPPED:
+            # bounded_io names only the first stall of a key; every later drop is named here.
+            sys.stderr.write(
+                f"warm: journal outcome dropped (journal stalled): journal={journal} "
+                f"dispatch_key={dispatch_key} kind={kind}\n"
             )
     except Exception:  # noqa: BLE001 -- journaling never fails an op
         pass
@@ -1326,13 +1347,19 @@ def _fs_probe_ms(stall_dir) -> str:
     stalled process, the one place a box-wide measurement from outside cannot see.
     """
     path = Path(stall_dir) / f".probe-{os.getpid()}-{threading.get_ident()}"
-    t0 = time.perf_counter()
-    try:
-        os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600))
-        os.unlink(path)
-    except OSError as exc:
-        return f"error:{exc.errno}"
-    return f"{(time.perf_counter() - t0) * 1000:.2f}"
+
+    def _probe() -> str:
+        t0 = time.perf_counter()
+        try:
+            os.close(os.open(path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600))
+            os.unlink(path)
+        except OSError as exc:
+            return f"error:{exc.errno}"
+        return f"{(time.perf_counter() - t0) * 1000:.2f}"
+
+    from coordinator_core.bounded_io import run_bounded
+
+    return run_bounded(f"fs-probe:{stall_dir}", _probe, default="error:timeout")
 
 
 def _op_repo_root(msg) -> Optional[Path]:
@@ -1466,6 +1493,9 @@ _first_pool_answer = threading.Event()
 
 #: Boot housekeeping starts after this long even if no pool answer has arrived.
 _BOOT_HOUSEKEEPING_MAX_WAIT_SECS = 5.0
+# Pre-ready disk writes (breadcrumb, boot-timing row): each stalls the first answer by at most this.
+_BOOT_BREADCRUMB_DEADLINE_SECS = 0.2
+_BOOT_TIMING_DEADLINE_SECS = 0.25
 
 
 def _after_first_pool_answer(work: Callable[[], None], name: str) -> None:
@@ -1582,6 +1612,42 @@ def _render_all_thread_stacks() -> str:
     return "".join(out)
 
 
+#: One full-stack dump per stall episode: later stalls in the window write a stub record that
+#: `hang_restart` still counts (stubs are `<stamp>-<pid>-<key>.txt` like full records).
+STALL_EPISODE_WINDOW_SECS = 30.0
+_STALL_EPISODE_MARKER = ".episode"
+
+
+def _claim_stall_episode(stall_dir, window: float = STALL_EPISODE_WINDOW_SECS) -> bool:
+    """True for the one caller (across threads and processes sharing `stall_dir`) that owns the
+    full dump of this episode: an `O_CREAT|O_EXCL` marker, taken over from a marker older than
+    `window` by renaming it away first (only one renamer wins). Never raises; an unusable marker
+    claims, so the diagnostic is never lost."""
+    try:
+        Path(stall_dir).mkdir(parents=True, exist_ok=True)
+        marker = Path(stall_dir) / _STALL_EPISODE_MARKER
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        for _ in range(2):
+            try:
+                os.close(os.open(marker, flags, 0o600))
+                return True
+            except FileExistsError:
+                pass
+            try:
+                if time.time() - marker.stat().st_mtime < window:
+                    return False
+                retired = marker.with_name(f"{_STALL_EPISODE_MARKER}.{os.getpid()}-{threading.get_ident()}.old")
+                os.replace(marker, retired)
+                retired.unlink(missing_ok=True)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+        return False
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _write_stall_record(
     stall_dir,
     claim: Optional[Path],
@@ -1592,13 +1658,24 @@ def _write_stall_record(
     elapsed: Optional[float] = None,
     cpu_delta: Optional[float] = None,
     repo_root=None,
+    full: Optional[bool] = None,
 ) -> Optional[Path]:
     """One file per stall: sink line, blocked leg json, fs probe, repo-drive probe
     (`repo_root`, the op's repo), op timing, every
     thread's stack (temp + `os.replace`), then keep the newest `STALL_DUMP_KEEP`.
-    `key`/`leg` name a record that has no claim (an accept-side hang). Returns the
-    record path, or None when nothing was written. Never raises."""
+    `key`/`leg` name a record that has no claim (an accept-side hang). `full` is the caller's
+    `_claim_stall_episode` verdict (None claims here); False writes a stub with no stacks or
+    probes. Returns the record path, or None when nothing was written. Never raises."""
     try:
+        if full is None:
+            full = _claim_stall_episode(stall_dir)
+        if not full:
+            try:
+                stub = _write_stall_stub(stall_dir, claim, key=key, leg=leg)
+            except Exception:  # noqa: BLE001 -- diagnostics never stop an op
+                stub = None
+            _restart_check(stall_dir)
+            return stub
         sinks = "unavailable"
         try:
             from coordinator_core import atomic_append
@@ -1630,10 +1707,19 @@ def _write_stall_record(
             newline="\n",
         )
         os.replace(tmp, final)
+        try:
+            (stall_dir / _STALL_EPISODE_MARKER).write_text(str(final), encoding="utf-8", newline="\n")
+        except OSError:
+            pass
         for old in sorted(stall_dir.glob("*.txt"), reverse=True)[STALL_DUMP_KEEP:]:
             old.unlink(missing_ok=True)
     except Exception:  # noqa: BLE001 -- diagnostics never stop an op
         return None
+    _restart_check(stall_dir)
+    return final
+
+
+def _restart_check(stall_dir) -> None:
     try:
         # A pool worker (`_WORKER_STALL_DIR` set) names its parent: the server is what restarts.
         hang_restart.maybe_restart(
@@ -1641,6 +1727,29 @@ def _write_stall_record(
         )
     except Exception:  # noqa: BLE001
         pass
+
+
+def _write_stall_stub(stall_dir, claim: Optional[Path], *, key: Optional[str], leg: Optional[str]) -> Optional[Path]:
+    """Light record for a stall inside an episode whose full dump exists: names the episode's
+    full record and this stall's key/leg. Counts toward the hang restart like a full record."""
+    stall_dir = Path(stall_dir)
+    stall_dir.mkdir(parents=True, exist_ok=True)
+    if key is None:
+        key = claim.name if claim is not None else "nokey"
+    try:
+        episode = (stall_dir / _STALL_EPISODE_MARKER).read_text(encoding="utf-8").strip()
+    except OSError:
+        episode = ""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    final = stall_dir / f"{stamp}-{os.getpid()}-{key}.txt"
+    tmp = final.with_name(final.name + ".tmp")
+    tmp.write_text(
+        f"stub: full dump written by the episode's first stall\nepisode-full-dump: {episode or 'pending'}\n"
+        f"leg: {leg or ''}\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    os.replace(tmp, final)
     return final
 
 
@@ -1700,7 +1809,9 @@ def _arm_stall_dump(
             _write_blocked_leg(
                 claim, op_ident, time.process_time() - cpu0, time.monotonic() - t0
             )
+        full = True
         if stall_dir is not None:
+            full = _claim_stall_episode(stall_dir)
             record = _write_stall_record(
                 stall_dir,
                 claim,
@@ -1708,8 +1819,9 @@ def _arm_stall_dump(
                 elapsed=time.monotonic() - t0,
                 cpu_delta=time.process_time() - cpu0,
                 repo_root=repo_root,
+                full=full,
             )
-        if stderr is None:
+        if stderr is None or not full:
             return record
         try:
             try:
@@ -2056,6 +2168,9 @@ _MAX_RETIRED_WORKERS = DISPATCH_PROCESS_POOL_SIZE + _LIGHT_RESERVE_WORKERS
 #: replacement pool's first frames meet booted workers, not a cold `_worker_process_init`.
 _HEAL_PREWARM_WORKERS = 2
 
+#: Guard-pool workers started at engine boot: one per request of a three-run-start burst plus its refire.
+_BOOT_PREWARM_GUARD_WORKERS = 4
+
 #: Ceiling on the background prewarm of a replacement pool.
 _HEAL_PREWARM_WAIT_SECS = 30.0
 
@@ -2064,9 +2179,48 @@ _HEAL_PREWARM_WAIT_SECS = 30.0
 _HEAL_RETRY_WAIT_SECS = 4.0
 
 
+#: Modules the submit op imports inside function bodies, so importing its package does not load them.
+_PREWARM_SUBMIT_MODULES = (
+    "coordinator_core.sizing_assemble",
+    "coordinator_core.roadmap.plan_gate",
+    "coordinator_core.roadmap.gate_v2",
+    "coordinator_core.roadmap.blitz_land",
+    "coordinator_core.roadmap.authoring_constraints",
+    "coordinator_core.bash_guards.guard_heavy_command_admission",
+    "coordinator_core.install.write_surface",
+    "coordinator_core.ops.invoke_from_argv",
+    "coordinator_core.hooks._engine_ask_gates",
+    "coordinator_core.warm.serve_classifier",
+    "coordinator_core.bash_guards._rag_serving",
+    "coordinator_core.engine_provenance_counter",
+    "coordinator_core.telemetry.log_rotation",
+    "coordinator_core.install.provisioned_interpreter",
+    "tomllib",
+)
+
+
 def _prewarm_noop() -> None:
-    """Submitted to a fresh pool so `_worker_process_init` runs before a real frame needs it."""
-    return None
+    """Submitted to a fresh pool so `_worker_process_init` runs, and the dispatch core and the submit op are
+    imported, before a real frame needs them."""
+    import importlib
+
+    from coordinator_core import ipc
+    from coordinator_core.ops._registry_map import OP_MODULE_MAP
+
+    ipc.resolve_request_repo  # noqa: B018 -- the import is the warmth
+    module = OP_MODULE_MAP.get("hooks.submit_engine_ask")
+    if module:
+        importlib.import_module(module)
+        from coordinator_core.hooks import _eager_import_all as _hooks_eager_import_all
+
+        _hooks_eager_import_all()
+        import pkgutil
+
+        package = importlib.import_module("coordinator_core.ops.dispatch_emit")
+        for info in pkgutil.iter_modules(package.__path__):
+            importlib.import_module(f"{package.__name__}.{info.name}")
+        for name in _PREWARM_SUBMIT_MODULES:
+            importlib.import_module(name)
 
 
 def _is_light_mutating(method: Any) -> bool:
@@ -2656,7 +2810,7 @@ def _poll_dump_requests(svc: Path, stall_dir: Path, stop: "threading.Event") -> 
         try:
             if not request.exists():
                 continue
-            _write_stall_record(stall_dir, None, key="operator-stop")
+            _write_stall_record(stall_dir, None, key="operator-stop", full=True)
             request.unlink(missing_ok=True)
         except Exception:  # noqa: BLE001 -- diagnostics never stop the server
             pass
@@ -3925,7 +4079,15 @@ class _ServerContext:
                     _prune_dispatch_claims(self._claim_dir)
                     if _ack_store._journal_dir is None:
                         _ack_store._journal_dir = dispatch_ack.journal_dir_beside(self._claim_dir)
-                        dispatch_ack.prune_journal(_ack_store._journal_dir)
+                        # Off-thread: prune_journal stats every journal entry (six-figure
+                        # counts take minutes); inline it would hold _dispatch_pool_lock and
+                        # stall all dispatch.
+                        threading.Thread(
+                            target=dispatch_ack.prune_journal,
+                            args=(_ack_store._journal_dir,),
+                            name="ack-journal-prune",
+                            daemon=True,
+                        ).start()
                     old_stop = self.__dict__.get("_telemetry_drain_stop")
                     if old_stop is not None:
                         old_stop.set()
@@ -3994,17 +4156,34 @@ class _ServerContext:
         ).start()
         return done
 
+    def _prewarm_pool(self, guard: bool, guard_workers: int = _HEAL_PREWARM_WORKERS) -> "list[concurrent.futures.Future]":
+        """Build the guard or dispatch pool if absent and start its first workers; the futures resolve
+        once each worker has finished `_worker_process_init`."""
+        pool = self._ensure_guard_pool() if guard else self._ensure_dispatch_pool()
+        return [pool.submit(_prewarm_noop) for _ in range(guard_workers if guard else 1)]
+
     def _heal_run(self, guard: bool, done: threading.Event) -> None:
         try:
-            pool = self._ensure_guard_pool() if guard else self._ensure_dispatch_pool()
-            futures = [
-                pool.submit(_prewarm_noop) for _ in range(_HEAL_PREWARM_WORKERS if guard else 1)
-            ]
-            concurrent.futures.wait(futures, timeout=_HEAL_PREWARM_WAIT_SECS)
+            concurrent.futures.wait(self._prewarm_pool(guard), timeout=_HEAL_PREWARM_WAIT_SECS)
         except Exception:  # noqa: BLE001 -- the next request rebuilds the pool lazily
             pass
         finally:
             done.set()
+
+    def start_boot_prewarm(self) -> threading.Thread:
+        """Warm the guard and dispatch pools on a daemon thread so the first hook request after boot
+        meets booted workers instead of paying `_ensure_*_pool` plus a cold worker spawn on its own
+        connection thread. Returns at once; the accept loop never waits on it."""
+        thread = threading.Thread(target=self._boot_prewarm_run, name="warm-pool-boot-prewarm", daemon=True)
+        thread.start()
+        return thread
+
+    def _boot_prewarm_run(self) -> None:
+        try:
+            futures = self._prewarm_pool(True, _BOOT_PREWARM_GUARD_WORKERS) + self._prewarm_pool(False)
+            concurrent.futures.wait(futures, timeout=_HEAL_PREWARM_WAIT_SECS)
+        except Exception:  # noqa: BLE001 -- the first request builds the pools lazily
+            pass
 
     def _admission_gate(self) -> "_AdmissionGate":
         """Per-context slot gate sized `DISPATCH_PROCESS_POOL_SIZE`, built on first use."""
@@ -5255,13 +5434,21 @@ def _run_guarded() -> int:
     version_state = _BootVersionState(repo_root)
 
     try:
-        breadcrumb.write_breadcrumb(
-            pipe=elected.endpoint,
-            pid=os.getpid(),
-            stable_pid_start_epoch=_self_stable_pid_start_epoch() or 0,
-            engine_sha=version_state.server_sha,
-            engine_root=repo_root,
-            transport=breadcrumb.TRANSPORT_PIPE if on_windows else breadcrumb.TRANSPORT_UNIX,
+        from coordinator_core.bounded_io import run_bounded
+
+        # Bounded: a frozen C: must not hold the boot ahead of the first answer.
+        run_bounded(
+            f"boot-breadcrumb:{repo_root}",
+            lambda: breadcrumb.write_breadcrumb(
+                pipe=elected.endpoint,
+                pid=os.getpid(),
+                stable_pid_start_epoch=_self_stable_pid_start_epoch() or 0,
+                engine_sha=version_state.server_sha,
+                engine_root=repo_root,
+                transport=breadcrumb.TRANSPORT_PIPE if on_windows else breadcrumb.TRANSPORT_UNIX,
+            ),
+            deadline=_BOOT_BREADCRUMB_DEADLINE_SECS,
+            default=None,
         )
     except Exception as exc:  # noqa: BLE001 -- a HINT writer failing must not stop the server
         print(f"[warm-server] failed to write breadcrumb: {exc!r}", file=sys.stderr)
@@ -5363,6 +5550,8 @@ def _run_guarded() -> int:
     if not_ready is not None:
         not_ready.stop()
 
+    ctx.start_boot_prewarm()
+
     # Dispatch on WHICH ENDPOINT WAS WON, not on the platform read again.
     # The value that decides is the value that gets passed, so the
     # not-None check IS the narrowing -- there is no path on which
@@ -5397,12 +5586,20 @@ def _record_own_boot(
     if spawn_epoch is None:
         return
     try:
+        from coordinator_core.bounded_io import run_bounded
+
         now = time.time()
-        telemetry.record_server_boot(
-            listener_secs=listener_at - spawn_epoch,
-            ready_secs=now - spawn_epoch,
-            pid=os.getpid(),
-            engine_root=repo_root,
+        # Bounded: a frozen C: must not hold the first answer behind a telemetry row.
+        run_bounded(
+            f"boot-timing:{repo_root}",
+            lambda: telemetry.record_server_boot(
+                listener_secs=listener_at - spawn_epoch,
+                ready_secs=now - spawn_epoch,
+                pid=os.getpid(),
+                engine_root=repo_root,
+            ),
+            deadline=_BOOT_TIMING_DEADLINE_SECS,
+            default=None,
         )
     except Exception as exc:  # noqa: BLE001 -- see docstring
         print(f"[warm-server] failed to record boot timing: {exc!r}", file=sys.stderr)

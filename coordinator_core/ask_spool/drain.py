@@ -17,6 +17,7 @@ Traps:
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import re
@@ -377,16 +378,52 @@ def _drain_remote_failover() -> None:
 _MAX_PASSES = 3
 
 
-def _pending_passes(repo_root: str) -> Iterator[str]:
-    """Pending ids not yet yielded, re-listed after each batch is consumed, until a listing finds none
+def _pending_passes(repo_root: str, seen: set) -> Iterator[str]:
+    """Pending ids not yet in `seen`, re-listed after each batch is consumed, until a listing finds none
     new or `_MAX_PASSES` listings are taken. An entry that failed and went back to pending is not re-yielded."""
-    seen: set = set()
     for _ in range(_MAX_PASSES):
         fresh = [sid for sid in record.list_pending(repo_root) if sid not in seen]
         if not fresh:
             return
         seen.update(fresh)
         yield from fresh
+
+
+def _joins_a_live_run(root: Path, header: dict, parsed: dict, by_key: dict) -> bool:
+    """True when `run` would coalesce the entry into a run that already exists: its key is held by this drain, a live
+    token names its sizing or run (any spelling; the run may predate the drain), or a bare ask matches a session run."""
+    key = record.coalesce_key(parsed)
+    if key:
+        return key in by_key or _live_token_run(root, key, set()) is not None
+    session = header.get("session_id") or ""
+    spooled_at = float(header.get("spooled_at") or 0)
+    return _same_ask_run(root, session, _raw_ask_text(parsed), spooled_at, set()) is not None
+
+
+def _late_duplicates(repo_root: str, seen: set, by_key: dict) -> Iterator[str]:
+    """The drain's last act: run the remote failover tail, then list pending ids not in `seen` that join a live run
+    (`_joins_a_live_run`), re-listing after each batch (at most `_MAX_PASSES` listings).
+    The tail runs first so no work sits between the final listing and the drain's exit.
+    Entries are read unclaimed; a concurrent claimer winning the race is handled by `record.claim` returning None in `run`."""
+    root = Path(repo_root)
+    _drain_remote_failover()
+    for _ in range(_MAX_PASSES):
+        found = False
+        for sid in record.list_pending(repo_root):
+            if sid in seen:
+                continue
+            try:
+                header, payload = record.read_entry(record.entry_path(repo_root, sid))
+                parsed = json.loads(payload)
+                joins = isinstance(parsed, dict) and _joins_a_live_run(root, header, parsed, by_key)
+            except (OSError, ValueError, TypeError):
+                continue
+            if joins:
+                seen.add(sid)
+                found = True
+                yield sid
+        if not found:
+            return
 
 
 def run(
@@ -396,8 +433,8 @@ def run(
     stale_after_s: float = STALE_CLAIM_S,
     now: Optional[float] = None,
 ) -> dict:
-    """Drain every pending entry once, re-listing pending after each batch (at most `_MAX_PASSES` listings) so a
-    duplicate spooled mid-drain coalesces into the run this drain holds; counts `{minted, skipped, failed, notified, coalesced, withdrawn}`.
+    """Drain every pending entry once, re-listing pending after each batch (at most `_MAX_PASSES` listings) and, after the
+    remote failover tail, for a duplicate of a run this drain holds, so a refire spooled mid-drain or during the tail coalesces in that drain; counts `{minted, skipped, failed, notified, coalesced, withdrawn}`.
 
     `minted` made a new run, `skipped` found its run already minted, `failed` stays pending,
     `coalesced` joined the run another entry of the same sizing or run key holds, `withdrawn`
@@ -409,7 +446,8 @@ def run(
     _reclaim_stale(repo_root, stale_after_s, time.time() if now is None else now)
     taken: set = set()
     by_key: dict = {}
-    for sid in _pending_passes(repo_root):
+    seen: set = set()
+    for sid in itertools.chain(_pending_passes(repo_root, seen), _late_duplicates(repo_root, seen, by_key)):
         path = record.claim(repo_root, sid)
         if path is None:
             continue
@@ -460,12 +498,11 @@ def run(
         except OSError:
             pass
         fields = {"status": "coalesced" if coalesced else "minted", "run_id": run_id}
-        if minted_now:
-            fields["unstarted"] = True  # minted here, so no session holds a launcher for it
+        if minted_now and notice.run_disposition(repo_root, run_id, sid) in (None, "minted"):
+            fields["unstarted"] = True  # minted here, so no session holds a launcher for it; a terminal run has nothing to start
         if _notify(repo_root, header, fields):
             counts["notified"] += 1
         record.mark_minted(repo_root, sid)
         counts["coalesced" if coalesced else "minted" if minted_now else "skipped"] += 1
-    _drain_remote_failover()
     return counts
 

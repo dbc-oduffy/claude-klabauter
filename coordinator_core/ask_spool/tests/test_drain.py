@@ -91,6 +91,28 @@ def test_notice_names_spool_id_and_run_id_for_the_submitting_session(tmp_path):
     assert header["run_id"] == notice["run_id"]
 
 
+def test_unstarted_flag_set_for_a_fresh_mint_and_not_for_a_terminal_run(tmp_path):
+    _spool(tmp_path, tuid="tuA")
+    drain.run(str(tmp_path), evaluate=Engine(tmp_path))
+    assert _notices(tmp_path)[0].get("unstarted") is True
+
+    other = tmp_path / "other"
+    other.mkdir()
+    _spool(other, tuid="tuB")
+
+    class HaltedEngine(Engine):
+        def __call__(self, payload):
+            out = super().__call__(payload)
+            run_id = f"ask-20261104T14{self.calls:04d}-{self.calls:06x}"
+            run_dir = self.root / "scratch" / "warp" / run_id
+            (run_dir / "run.json").write_text("{}", encoding="utf-8")
+            (run_dir / "halted.json").write_text('{"halted": "x"}', encoding="utf-8")
+            return out
+
+    drain.run(str(other), evaluate=HaltedEngine(other))
+    assert "unstarted" not in _notices(other)[0]
+
+
 def test_run_stamped_with_spool_id_is_found_not_reminted(tmp_path):
     sid = _spool(tmp_path)
     _write_submission(tmp_path, "ask-20261104T140000-aaaaaa", session_id="other", tool_use_id="zz", spool_id=sid)
@@ -326,6 +348,105 @@ def test_entries_spooled_while_draining_are_taken_in_at_most_max_passes(tmp_path
     assert len(record.list_pending(str(tmp_path))) == 1
     drain.run(str(tmp_path), evaluate=engine)
     assert record.list_pending(str(tmp_path)) == []
+
+
+def test_a_duplicate_refire_spooled_during_the_last_pass_coalesces_in_that_drain(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    _write_plan(tmp_path, ["open"])
+    others = []
+    for n in range(drain._MAX_PASSES):
+        path = f"state/sizings/2026-11/late{n}.yaml"
+        (tmp_path / path).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
+        others.append(path)
+    first = _spool_sizing(tmp_path, "tu0")
+    engine = Engine(tmp_path)
+    refire: list = []
+
+    def mint_then_spool(payload):
+        envelope = engine(payload)
+        if engine.calls < drain._MAX_PASSES:
+            _spool_sizing(tmp_path, f"tu{engine.calls}", sizing=others[engine.calls - 1])
+        else:
+            refire.append(_spool_sizing(tmp_path, "tuRefire"))
+            _spool_sizing(tmp_path, "tuOther", sizing=others[-1])
+        return envelope
+
+    counts = drain.run(str(tmp_path), evaluate=mint_then_spool)
+    assert counts["minted"] == drain._MAX_PASSES and counts["coalesced"] == 1
+    a, _ = record.read_entry(record.entry_path(str(tmp_path), first, record.MINTED_SUFFIX))
+    b, _ = record.read_entry(record.entry_path(str(tmp_path), refire[0], record.MINTED_SUFFIX))
+    assert b["coalesced_into"] == a["run_id"]
+    assert len(record.list_pending(str(tmp_path))) == 1
+
+
+def test_a_refire_spooled_after_the_last_pending_listing_coalesces_in_that_drain(tmp_path, monkeypatch):
+    _write_sizing(tmp_path, plan=None)
+    _write_plan(tmp_path, ["open"])
+    first = _spool_sizing(tmp_path, "tu0")
+    refire: list = []
+    listings: list = []
+    real_list = record.list_pending
+
+    def counting_list(root):
+        listings.append(len(refire))
+        return real_list(root)
+
+    def tail_spools_refire():
+        refire.append(_spool_sizing(tmp_path, "tuRefire"))
+
+    monkeypatch.setattr(record, "list_pending", counting_list)
+    monkeypatch.setattr(drain, "_drain_remote_failover", tail_spools_refire)
+    counts = drain.run(str(tmp_path), evaluate=Engine(tmp_path))
+    assert counts["minted"] == 1 and counts["coalesced"] == 1
+    a, _ = record.read_entry(record.entry_path(str(tmp_path), first, record.MINTED_SUFFIX))
+    b, _ = record.read_entry(record.entry_path(str(tmp_path), refire[0], record.MINTED_SUFFIX))
+    assert b["coalesced_into"] == a["run_id"]
+    assert real_list(str(tmp_path)) == []
+    assert listings[-1] == 1  # the last listing came after the tail spooled the refire
+
+
+def test_a_refire_spooled_after_the_last_listing_of_another_key_stays_pending(tmp_path, monkeypatch):
+    _write_sizing(tmp_path, plan=None)
+    _write_plan(tmp_path, ["open"])
+    other = "state/sizings/2026-11/unheld.yaml"
+    (tmp_path / other).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
+    _spool_sizing(tmp_path, "tu0")
+    monkeypatch.setattr(drain, "_drain_remote_failover", lambda: _spool_sizing(tmp_path, "tuOther", sizing=other))
+    counts = drain.run(str(tmp_path), evaluate=Engine(tmp_path))
+    assert counts["minted"] == 1 and counts["coalesced"] == 0
+    assert len(record.list_pending(str(tmp_path))) == 1
+
+
+def test_a_late_refire_of_a_sizing_whose_live_run_this_drain_never_minted_coalesces_in_that_drain(tmp_path, monkeypatch):
+    _write_sizing(tmp_path, plan=None)
+    other = "state/sizings/2026-11/other.yaml"
+    (tmp_path / other).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
+    _spool_sizing(tmp_path, "tu0", sizing=other)
+    run_id = "ask-20261104T150000-eeeeee"
+    refire: list = []
+
+    def tail_launches_the_run_and_spools_the_refire():
+        _live_refire(tmp_path, run_id)
+        refire.append(_spool_sizing(tmp_path, "tuRefire", sizing=str(tmp_path / SIZING)))
+
+    monkeypatch.setattr(drain, "_drain_remote_failover", tail_launches_the_run_and_spools_the_refire)
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 1 and counts["minted"] == 1 and counts["coalesced"] == 1
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), refire[0], record.MINTED_SUFFIX))
+    assert header["coalesced_into"] == run_id
+    assert record.list_pending(str(tmp_path)) == []
+
+
+def test_a_late_refire_of_a_sizing_with_no_live_run_stays_pending(tmp_path, monkeypatch):
+    _write_sizing(tmp_path, plan=None)
+    other = "state/sizings/2026-11/other.yaml"
+    (tmp_path / other).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
+    _spool_sizing(tmp_path, "tu0", sizing=other)
+    monkeypatch.setattr(drain, "_drain_remote_failover", lambda: _spool_sizing(tmp_path, "tuRefire", sizing=str(tmp_path / SIZING)))
+    counts = drain.run(str(tmp_path), evaluate=Engine(tmp_path))
+    assert counts["minted"] == 1 and counts["coalesced"] == 0
+    assert len(record.list_pending(str(tmp_path))) == 1
 
 
 def test_entries_of_different_sizings_each_mint(tmp_path):

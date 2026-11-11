@@ -1269,15 +1269,25 @@ def _workflow_run_record_path(tmpdir: str, session_id: str, task_id: str) -> str
 
 
 def _write_workflow_run_record(path: str, record: dict) -> None:
-    """Best-effort, fail-open write of one run record; overwrites in place."""
+    """Best-effort, fail-open write of one run record; overwrites in place.
+
+    The write is deadline-bounded per record directory: a frozen filesystem drops it
+    (stderr names the stall) instead of pinning the hook's worker.
+    """
     try:
+        from coordinator_core.bounded_io import run_bounded
+
         args = record.get("args")
         if isinstance(args, dict) and "runToken" in args:
             # A warp run's commit token lives in no file a peer can read; a run resumed
             # without it hands its terminal commit back to the EM.
             record = {**record, "args": {k: v for k, v in args.items() if k != "runToken"}}
-        with open(path, "w", encoding="utf-8", newline="\n") as fh:
-            json.dump(record, fh)
+
+        def _write() -> None:
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump(record, fh)
+
+        run_bounded(f"workflow-run-record:{os.path.dirname(path)}", _write, default=None)
     except Exception:
         pass
 
