@@ -11,7 +11,7 @@ export const meta = {
 };
 
 
-const QUEUE_GRIND_MANIFEST = {"declined": [], "digest": "deadbeef", "entries": [{"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000000", "path": "state/bug-backlog/row0.yaml", "row_id": "row0"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000001", "path": "state/bug-backlog/row1.yaml", "row_id": "row1"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000002", "path": "state/bug-backlog/row2.yaml", "row_id": "row2"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000003", "path": "state/bug-backlog/row3.yaml", "row_id": "row3"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000004", "path": "state/bug-backlog/row4.yaml", "row_id": "row4"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000005", "path": "state/bug-backlog/row5.yaml", "row_id": "row5"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000006", "path": "state/bug-backlog/row6.yaml", "row_id": "row6"}]};
+const QUEUE_GRIND_MANIFEST = {"declined": [], "digest": "deadbeef", "entries": [{"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000000", "path": "state/bug-backlog/row0.yaml", "row_id": "row0"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000001", "path": "state/bug-backlog/row1.yaml", "row_id": "row1"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000002", "path": "state/bug-backlog/row2.yaml", "row_id": "row2"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000003", "path": "state/bug-backlog/row3.yaml", "row_id": "row3"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000004", "path": "state/bug-backlog/row4.yaml", "row_id": "row4"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000005", "path": "state/bug-backlog/row5.yaml", "row_id": "row5"}, {"batch_key": "P0", "digest": "0000000000000000000000000000000000000000000000000000000000000006", "path": "state/bug-backlog/row6.yaml", "row_id": "row6"}], "not_admitted": []};
 
 const BATCHES = [{"batch_key": "P0", "id": "P0-b0", "rows": ["row0", "row1", "row2", "row3"]}, {"batch_key": "P0", "id": "P0-b1", "rows": ["row4", "row5", "row6"]}];
 
@@ -957,6 +957,7 @@ const HANDBACK = {
   appetite: APPETITE_NAME,
   handed_back: _handedBack,
   declined: QUEUE_GRIND_MANIFEST.declined,
+  not_admitted: QUEUE_GRIND_MANIFEST.not_admitted,
   settled: _settled,
   counts: _counts(),
   spend: _spend(),

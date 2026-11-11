@@ -2191,9 +2191,16 @@ def _em_turn_budget_sync(params: dict) -> str:
 _TOUCH_RECORDING_TOOLS = frozenset({"Write", "Edit", "MultiEdit", "NotebookEdit"})
 
 
-def _ask_spool_notice_sync(session_id: str, repo_root) -> str:
+def _ask_spool_notice_sync(session_id: str, repo_root, cwd: str = "") -> str:
     from coordinator_core.ask_spool import notice
 
+    # TRAP: this op is keyed scope "none", so dispatch always hands repo_root=None; the spool sits
+    # in the session's own worktree, so without the event's cwd no notice is ever consumed and a
+    # drain-minted run is never started (the stale-minted reaper halts it 30 minutes later).
+    if repo_root is None and cwd:
+        from coordinator_core.git.repo_root import show_toplevel
+
+        repo_root = show_toplevel(cwd)
     return notice.advisory_text(None if repo_root is None else str(repo_root), session_id)
 
 
@@ -2476,7 +2483,7 @@ async def _handler(params: dict, repo_root=None) -> dict:
 
     # One stat when no notice is pending, so it runs inline rather than on a thread.
     try:
-        spool_text = _ask_spool_notice_sync(session_id, repo_root)
+        spool_text = _ask_spool_notice_sync(session_id, repo_root, field(params, "cwd"))
     except Exception as exc:  # noqa: BLE001 -- advisory legs fail open
         spool_text = _text_or_breadcrumb("ask_spool_notice", exc)
 

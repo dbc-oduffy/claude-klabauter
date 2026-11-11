@@ -622,12 +622,15 @@ def memo_draft_fields(raw: dict) -> tuple[Optional[dict], str]:
     return {"slug": slug, "to": to.strip(), "title": title, "kind": kind}, ""
 
 
-def em_discharge_eligible(raw: dict, extra_gates: tuple = ()) -> bool:
-    """True when an em-discharge entry would close `raw`: an open, undeferred em-performed row (declared,
-    or derived by em_only_act) that is neither a memo-send nor an operator row and carries no uncleared
-    execution gate. Shared by `read_spine` and the refire gate so the two cannot drift."""
+def em_discharge_eligible(raw: dict, extra_gates: tuple = (), entry: object = None) -> bool:
+    """True when an em-discharge entry would close `raw`: an open, undeferred row that is neither a
+    memo-send nor an operator row and carries no uncleared execution gate, and that is em-performed
+    (declared, or derived by em_only_act) or whose `entry` cites a commit and evidence
+    (`em_discharge_closes`). Shared by `read_spine` and the refire gate so the two cannot drift."""
+    from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
+
     return (
-        row_is_em_performed(raw)
+        em_discharge_closes(raw, entry)
         and raw.get("disposition") not in NON_DISPATCHABLE_DISPOSITIONS
         and not (raw.get("deferred") is True or bool(raw.get("deferred_until")))
         and not _is_memo_send_row(raw)
@@ -639,19 +642,24 @@ def em_discharge_eligible(raw: dict, extra_gates: tuple = ()) -> bool:
 def drop_em_discharged(plan, plan_text: str, rows, open_ids: list) -> list:
     """`open_ids` less every row an `em-discharge` entry satisfies: the one predicate shared by
     `read_spine`'s rule, `sizing_fire` and `close_out_and_stamp`. The evidence sidecar is read once,
-    and only when an open row is eligible for discharge."""
+    and only when an open row exists."""
     open_set = set(open_ids)
-    eligible = [r for r in rows if isinstance(r, dict) and r.get("id") in open_set and row_is_em_performed(r)]
-    if not eligible:
-        return open_ids
-    gates = _frontmatter_external_gates(plan_text, open_set)
-    candidates = [r["id"] for r in eligible if em_discharge_eligible(r, tuple(gates.get(r["id"], ())))]
-    if not candidates:
+    open_rows = [r for r in rows if isinstance(r, dict) and r.get("id") in open_set]
+    if not open_rows:
         return open_ids
     from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 
     discharged = read_em_discharges(Path(plan))
-    return [i for i in open_ids if not (i in candidates and i in discharged)]
+    if not discharged:
+        return open_ids
+    gates = _frontmatter_external_gates(plan_text, open_set)
+    closed = {
+        r["id"]
+        for r in open_rows
+        if r["id"] in discharged
+        and em_discharge_eligible(r, tuple(gates.get(r["id"], ())), discharged[r["id"]])
+    }
+    return [i for i in open_ids if i not in closed]
 
 
 def _has_uncleared_execution_gate(raw: dict, extra_gates: tuple = ()) -> bool:
@@ -1670,13 +1678,13 @@ def read_spine(
             memo_slug = None
             memo_delivered = False
         em_discharged = None
-        if em_discharge_eligible(raw, tuple(frontmatter_gates.get(raw.get("id"), ()))):
-            if discharges is None:
-                from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
+        if discharges is None:
+            from coordinator_core.ops.plan_tasks_mutate import read_em_discharges
 
-                discharges = read_em_discharges(Path(plan_path))
-            entry = discharges.get(raw.get("id"))
-            if entry is not None:
+            discharges = read_em_discharges(Path(plan_path))
+        entry = discharges.get(raw.get("id"))
+        if entry is not None:
+            if em_discharge_eligible(raw, tuple(frontmatter_gates.get(raw.get("id"), ())), entry):
                 em_discharged = (
                     entry.get("recorded_at") if isinstance(entry, dict) else None
                 ) or "(no timestamp)"

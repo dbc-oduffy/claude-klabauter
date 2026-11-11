@@ -170,7 +170,7 @@ from coordinator_core.session.record_homes import home_dir
 from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispatch
 from coordinator_core.ops.dispatch_emit import bug_close, cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy, review_floor  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
-    _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
+    _credit_absent_siblings, _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
     foreign_halted_withheld, held_revision_refusal,
 )
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix  # noqa: E402
@@ -2595,6 +2595,10 @@ def _terminal_commit_inner(
     obliged_dirs = [p for p in commit_obliged if (worktree_root / p).is_dir()]
     obliged_files = [p for p in commit_obliged if p not in obliged_dirs]
 
+    _prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
+    _slice = _prep.get("slice_files") if isinstance(_prep, dict) else None
+    if isinstance(_slice, list):
+        request = _credit_absent_siblings(worktree_root, request, _slice)
     requirement_named = _requirement_named_undeclared(worktree_root, ask_run_dir, request)
     snapshot = _worktree_snapshot(
         worktree_root,

@@ -86,6 +86,18 @@ def _contains(parent: Path, child: Path) -> bool:
     return child == parent or parent in child.parents
 
 
+def _in_enclosing_repo_scratch(root: Path) -> bool:
+    """True when `root` sits at or under a `scratch/` directory directly inside a git repo.
+
+    A gate clone placed there shares that scratch/ with every other process of the enclosing
+    repo, so a gain in it cannot be attributed to the test tearing down.
+    """
+    for parent in (root, *root.parents):
+        if parent.name == "scratch" and (parent.parent / ".git").exists():
+            return True
+    return False
+
+
 def _coordinator_temp() -> Path:
     # Mirrors coordinator_core.temp_layout; inlined because this file loads by path.
     return Path(tempfile.gettempdir()) / "coordinator"
@@ -251,7 +263,11 @@ def pytest_configure(config: pytest.Config) -> None:
             root = _resolve(candidate)
         except (OSError, RuntimeError):
             continue
-        if root not in roots and not any(_contains(s, root) for s in _SANCTIONED):
+        if (
+            root not in roots
+            and not any(_contains(s, root) for s in _SANCTIONED)
+            and not _in_enclosing_repo_scratch(root)
+        ):
             roots.append(root)
     _WATCHED[:] = roots
     _arm_index_guard(repo)

@@ -47,6 +47,7 @@ DR-208 five-question affirmation (MUTATING):
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -1858,6 +1859,48 @@ def _undone_summary(text: str) -> str:
     return " | ".join(picked)[:_UNDONE_CAP]
 
 
+_TESTS_NOT_RUN_RE = re.compile(
+    r"\b(?:tests?|pytest|test suite|verification)\b.{0,80}\b(?:not run|not been run|never run|denied|barred|fenced|forbidden|unable to run|could not run|cannot run|did not run)\b"
+    r"|\b(?:not run|could not run|cannot run|unable to run|did not run)\b.{0,40}\b(?:tests?|pytest|test suite)\b"
+    r"|\b(?:pytest|tests?) fence\b",
+    re.IGNORECASE,
+)
+
+
+def _undone_blocks(text: str) -> list:
+    """Each ``not done`` / ``undone`` / ``remaining`` line with the lines continuing it up to a blank line
+    or heading."""
+    lines = text.splitlines()
+    out: list = []
+    for i, ln in enumerate(lines):
+        if not _UNDONE_LINE_RE.match(ln):
+            continue
+        block = [ln.strip()]
+        for nxt in lines[i + 1:]:
+            if not nxt.strip() or nxt.lstrip().startswith("#"):
+                break
+            block.append(nxt.strip())
+        out.append(" ".join(block))
+    return out
+
+
+def _partial_for_no_tests(text: str) -> bool:
+    """A PARTIAL report whose every undone item says only that tests were not run."""
+    blocks = _undone_blocks(text)
+    clauses = [c for b in blocks for c in re.split(r"[;.](?:\s+|$)", b) if c.strip()]
+    return bool(clauses) and all(_TESTS_NOT_RUN_RE.search(c) for c in clauses)
+
+
+def _reverify_passed(record: object) -> bool:
+    """The run's re-verify record reads pass with nothing red, indeterminate or errored."""
+    if not isinstance(record, dict) or str(record.get("reverify_error") or "").strip():
+        return False
+    after = record.get("status_after")
+    if (after if after is not None else record.get("status_before")) != "pass":
+        return False
+    return not any(record.get(k) for k in ("failing", "pre_existing", "unattributed", "foreign", "foreign_unverified"))
+
+
 def _is_delivered(text: str) -> bool:
     return bool(_DELIVERED_REPORT_RE.search(text)) and not _UNDELIVERED_REPORT_RE.search(text)
 
@@ -1891,7 +1934,9 @@ def _grade(
     """``{chunk id: reason}`` for incomplete chunks the run's own evidence clears: ``outside-footprint``
     (the executor's ``gate-blocker: outside-footprint`` line, every file in a passed review's slices),
     ``ledger-met`` (a passed ledger plus a clean review, report readable and not BLOCKED) and
-    ``credited:`` (the EM's ``workflow.revise credit_chunks``; a hold still bars it)."""
+    ``credited:`` (the EM's ``workflow.revise credit_chunks``; a hold still bars it) and
+    ``reverify-covered`` (PARTIAL only because tests were not run, a passing re-verify, a clean review
+    covering the chunk's files)."""
     from coordinator_core.ops.dispatch_emit import credit_gate, gate_owed
 
     out: dict = {}
@@ -1912,6 +1957,15 @@ def _grade(
             if blocker is not None and files and files <= reviewed:
                 out[chunk.id] = f"outside-footprint{blocker[1].rstrip()}"[:_UNDONE_CAP]
                 continue
+        if (
+            clean is not None and text is not None and prefix_files is not None and chunk.id not in held
+            and _PARTIAL_REPORT_RE.search(text) and not _BLOCKED_REPORT_RE.search(text)
+            and _partial_for_no_tests(text) and _reverify_passed(inline_review.get("reverify"))
+            and (set(chunk.paths) | set(prefix_files)) <= clean
+            and (chunk.paths or prefix_files)
+        ):
+            out[chunk.id] = "reverify-covered: tests not run by the executor"[:_UNDONE_CAP]
+            continue
         if ledger is None or (text is not None and _is_delivered(text)):
             continue
         ledger_ids.append(chunk.id)
@@ -1996,6 +2050,45 @@ def _read_credits(root: Path, artifacts, record_dir_rel: Optional[str], run_dir:
     if sizing_rel:
         credits = {**run_credit.credits_for_sizing(root, sizing_rel), **credits}
     return credits
+
+
+def _credit_absent_siblings(root: Path, request, edited) -> object:
+    """``request`` with each declared write that is absent from the worktree and HEAD respelled to
+    the one ``edited`` path sharing its basename under the declared directory's parent. Zero or
+    several matches, a sibling another chunk declares, or an unreadable HEAD tree leave it as is."""
+    declared_all = {p for c in request.chunks for p in c.paths}
+    absent = [p for p in sorted(declared_all) if not (root / p).exists()]
+    if not absent or not edited:
+        return request
+    from coordinator_core.git.commit import partition_declared_deletions
+
+    split = partition_declared_deletions(root, absent)
+    if split is None:
+        return request
+    edited_files = [
+        e for e in {str(p).replace("\\", "/") for p in edited if isinstance(p, str)}
+        if e not in declared_all and (root / e).is_file()
+    ]
+    found: dict = {}
+    for p in split[1]:
+        pp = PurePosixPath(p)
+        pkg = pp.parent.parent
+        if str(pp.parent) == "." or str(pkg) == ".":
+            continue
+        found[p] = [e for e in edited_files if PurePosixPath(e).name == pp.name and PurePosixPath(e).is_relative_to(pkg)]
+    taken = [c[0] for c in found.values() if len(c) == 1]
+    credit = {p: c[0] for p, c in found.items() if len(c) == 1 and taken.count(c[0]) == 1}
+    if not credit:
+        return request
+
+    def _swap(paths):
+        return None if paths is None else tuple(credit.get(p, p) for p in paths)
+
+    chunks = tuple(
+        dataclasses.replace(c, paths=_swap(c.paths), declared=_swap(c.declared), optional=_swap(c.optional))
+        for c in request.chunks
+    )
+    return dataclasses.replace(request, chunks=chunks)
 
 
 def _credited_absent_chunks(
@@ -3370,6 +3463,10 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         else PurePosixPath(script_path.replace("\\", "/")).stem
     )
     from coordinator_core.ops.workflow_fire.finalizer import review_owner as _review_owner
+    _prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
+    _slice = _prep.get("slice_files") if isinstance(_prep, dict) else None
+    if isinstance(_slice, list):
+        request = _credit_absent_siblings(root, request, _slice)
     reviewed_bytes, reviewed_at, prep_from_disk = _reconcile_prep(root, _review_owner(session_id), sibling_run_id, request, inline_review)
     product_only = ask_run_dir is not None
     record_dir_rel: Optional[str] = None

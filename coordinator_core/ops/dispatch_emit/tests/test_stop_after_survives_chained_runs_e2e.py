@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose, ask_stage, fan_launc
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PARKED,
     OP_ASK_STAGE,
+    PARK_SOURCE_REPLY_KEY,
     PARKED_REPLY_KEY,
     RUN_DIR_ROOT,
     STOP_AFTER_FILE,
@@ -93,6 +94,10 @@ def _halt(repo: Path, run_id: str) -> None:
     halted_run.write_halt_marker(record_dir(repo, run_id), halted="criterion", sizing_rel=REL, run_base_sha=_BASE)
 
 
+def _without_source(reply: dict) -> dict:
+    return {k: v for k, v in reply.items() if k != PARK_SOURCE_REPLY_KEY}
+
+
 def test_stop_after_plan_survives_chain_resume_launcher_child_and_stage(repo):
     before = _product_files(repo)
 
@@ -133,7 +138,8 @@ def test_stop_after_plan_survives_chain_resume_launcher_child_and_stage(repo):
 
     for run_id in (warp_id, bare["run_id"], child["run_id"]):
         reply = ask_stage._handler({"run_id": run_id, "plan_path": STAGEABLE_REL, "writes": []}, repo_root=repo)
-        assert reply == {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": STAGEABLE_REL}, (run_id, reply)
+        assert _without_source(reply) == {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": STAGEABLE_REL}, (run_id, reply)
+        assert reply[PARK_SOURCE_REPLY_KEY]["inherited"] in (True, False), reply
 
     assert _manifests(repo) == []
     assert _product_files(repo) == before
@@ -165,7 +171,7 @@ def test_resuming_a_parked_chained_run_does_not_park_again_but_a_fresh_successor
     stage_params = {"plan_path": STAGEABLE_REL, "writes": []}
 
     first = ask_stage._handler({"run_id": warp_id, **stage_params}, repo_root=repo)
-    assert first == {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": STAGEABLE_REL}
+    assert _without_source(first) == {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": STAGEABLE_REL}
 
     fresh = _dispatch_emit({"ask": True, "sizing_path": REL, "target_root": str(repo), "chain_parent": warp_id})["run_id"]
     assert fresh != warp_id
@@ -175,4 +181,4 @@ def test_resuming_a_parked_chained_run_does_not_park_again_but_a_fresh_successor
     assert PARKED_REPLY_KEY not in resumed, resumed
 
     again = ask_stage._handler({"run_id": fresh, **stage_params}, repo_root=repo)
-    assert again == {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": STAGEABLE_REL}
+    assert _without_source(again) == {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": STAGEABLE_REL}

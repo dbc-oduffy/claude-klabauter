@@ -99,6 +99,48 @@ def test_changed_opcodes_match_the_untrimmed_differ_on_a_small_file():
     assert run_hunk_claims.changed_opcodes(old, old) == []
 
 
+def _grade_partial(tmp_path, report_text, reverify, held=frozenset(), review_ok=True):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit
+
+    (tmp_path / "r.md").write_text(report_text, encoding="utf-8")
+    chunk = ChunkCommit(id="C1", title="t", paths=("a.py",), report="r.md")
+    review = {
+        "prep": {"slice_files": ["a.py"]}, "integration": {"unresolved": [], "confinement_violations": []},
+        "reverify": reverify,
+    } if review_ok else {"reverify": reverify}
+    return land_run._grade(
+        tmp_path, SimpleNamespace(chunks=(chunk,)), {"C1"}, review, None, None, set(held), None, None, None, None, {},
+    )
+
+
+_PASS = {"status_before": "pass", "status_after": "pass", "failing": []}
+_NO_TESTS = "PARTIAL: C1\nNot done: pytest not run; the likeness pytest fence bars the executor from running tests.\n"
+
+
+def test_partial_for_no_tests_is_credited_when_a_passing_reverify_covers_its_paths(tmp_path):
+    out = _grade_partial(tmp_path, _NO_TESTS, _PASS)
+    assert out["C1"].startswith("reverify-covered")
+
+
+def test_partial_with_real_unfinished_work_is_still_withheld(tmp_path):
+    work = _NO_TESTS + "Not done: the retry branch of land() is unimplemented.\n"
+    assert _grade_partial(tmp_path, work, _PASS) == {}
+    assert _grade_partial(tmp_path, "PARTIAL: C1\nNot done: parser rewrite.\n", _PASS) == {}
+    mixed = "PARTIAL: C1\nNot done: the retry branch is unimplemented; pytest not run.\n"
+    assert _grade_partial(tmp_path, mixed, _PASS) == {}
+
+
+def test_no_tests_partial_stays_withheld_without_a_clean_passing_reverify_or_when_held(tmp_path):
+    assert _grade_partial(tmp_path, _NO_TESTS, {"status_after": "fail", "failing": ["t.py::x"]}) == {}
+    assert _grade_partial(tmp_path, _NO_TESTS, {"status_after": "pass", "failing": ["t.py::x"]}) == {}
+    assert _grade_partial(tmp_path, _NO_TESTS, {"status_after": "indeterminate"}) == {}
+    assert _grade_partial(tmp_path, _NO_TESTS, None) == {}
+    assert _grade_partial(tmp_path, _NO_TESTS, _PASS, review_ok=False) == {}
+    assert _grade_partial(tmp_path, _NO_TESTS, _PASS, held={"C1"}) == {}
+
+
 def test_foreign_halted_withheld_unreadable_record_dir_holds_every_wanted_path(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit import sibling_claims
 

@@ -142,3 +142,88 @@ def test_every_commit_stage_agent_names_its_model():
     js = "\n".join(lines)
     opts = [seg.split("})", 1)[0] for seg in js.split("agentType: ")[1:]]
     assert opts and all("model: '" in o for o in opts), [o[:120] for o in opts if "model: '" not in o]
+
+
+def _base_red_record(root, **extra):
+    _record(
+        root, "fail", tests_failed=1, failed_tests=[INV],
+        baseline={"method": "isolated-export", "caused": [], "pre_existing": [], "unverified": [],
+                  "foreign": [INV], "evidence": [INV]},
+        **extra,
+    )
+
+
+def test_an_invariant_red_at_base_lands_as_pre_existing_not_a_refusal(owed):
+    _base_red_record(owed)
+
+    out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
+
+    assert out["committed"] is True, out
+    assert "a.py" in _git(["show", "--name-only", "--format=", "HEAD"], owed).split()
+
+
+def test_an_invariant_red_in_the_export_only_still_refuses(owed):
+    _record(
+        owed, "fail", tests_failed=1, failed_tests=[INV],
+        baseline={"method": "isolated-export", "caused": [INV], "pre_existing": [], "unverified": [],
+                  "foreign": [], "evidence": []},
+    )
+
+    out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
+
+    assert out["committed"] is False and out["refused"] == "targeted-tests-failed", out
+
+
+def test_a_testless_retest_attempt_never_replaces_a_measured_verdict(owed, monkeypatch, tmp_path):
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+
+    _base_red_record(owed)
+    path = landing_retest.fresh_verdict_path(owed, RUN)
+    before = path.read_text(encoding="utf-8")
+    monkeypatch.setattr(retest_targeted, "_with_invariants", lambda root, tests, *a, **k: tests)
+    params = tmp_path / "params.json"
+    params.write_text(json.dumps({"run_id": RUN, "script_path": ""}), encoding="utf-8")
+
+    rc = retest_targeted.main(["--params-file", str(params), "--repo-root", str(owed)], dirty=lambda r: [])
+
+    assert rc == 0 and path.read_text(encoding="utf-8") == before
+
+
+def test_a_testless_retest_attempt_runs_the_owed_invariants_instead_of_writing_stale(owed, monkeypatch, tmp_path):
+    from coordinator_core.ops.dispatch_emit import landing_integrity, retest_targeted
+
+    monkeypatch.setattr(landing_integrity, "landing_invariant_nodes", lambda root, paths, rid: [INV])
+    params = tmp_path / "params.json"
+    params.write_text(json.dumps({"run_id": RUN, "script_path": ""}), encoding="utf-8")
+    spawned: list = []
+    inv_file = owed / INV.split("::")[0]
+    inv_file.parent.mkdir(parents=True, exist_ok=True)
+    inv_file.write_text("def test_x():\n    pass\n", encoding="utf-8")
+
+    rc = retest_targeted.main(
+        ["--params-file", str(params), "--repo-root", str(owed)],
+        dirty=lambda r: ["a.py"], spawn=lambda *a, **k: spawned.append(a) or True,
+    )
+
+    assert rc == 0 and spawned, spawned
+    record = landing_retest._retest_record(owed, RUN)
+    assert record is not None and record["status"] == landing_retest.RETEST_RUNNING
+    assert INV in record["tests"]
+
+
+def test_an_isolated_record_covers_only_the_export_inputs_so_a_peer_edit_never_stales_it(owed):
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+
+    test_file = INV.split("::")[0]
+    path = landing_retest.fresh_verdict_path(owed, RUN)
+    meta = {"root": str(owed / "export"), "write_set": ["a.py"], "files": ["a.py"]}
+    retest_targeted._write_dual(
+        owed, path, path.with_suffix(".log"), path.with_suffix(".export.log"), RUN, [test_file], [], "", meta,
+        lambda r: [], head_sha, ("pass", "", [0], False), ("pass", "", [0], False), None,
+    )
+    record = json.loads(path.read_text(encoding="utf-8"))
+    (owed / "peer_dep.py").write_text("x = 2\n", encoding="utf-8")
+
+    assert list(record["covered"]) == ["a.py"]
+    assert landing_retest.fresh_targeted_verdict(owed, RUN) is not None

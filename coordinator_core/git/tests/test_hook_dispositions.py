@@ -213,6 +213,48 @@ def test_walk_spawns_nothing(repo, table, monkeypatch):
     assert hd.apply_repo(root, check_only=False)[0][2] == "removed"
 
 
+DOE_STUB = (
+    "#!/usr/bin/env python3\n"
+    "# engine-owned; forwards to the resolved engine root. Edit in claude-klabauter.\n"
+    "import os, sys\n"
+    "sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'lib'))\n"
+    "from _engine_forward import forward\n"
+    "forward('pre_commit_corpus_artifact_guard')\n"
+)
+
+
+def _stub_verdict(verdicts):
+    return [v for v in verdicts if v[0] == "forwarder-stub-pre-commit"]
+
+
+def test_forwarder_stub_pre_commit_is_replaced_with_self_resolving_body(repo):
+    from coordinator_core.git.corpus_guard_hook import STAMP, is_forwarder_stub
+
+    root, hooks = repo
+    _put(hooks / "pre-commit", DOE_STUB)
+    assert _stub_verdict(hd.apply_repo(root, check_only=True)) == [
+        ("forwarder-stub-pre-commit", "pre-commit", "stale")
+    ]
+    assert (hooks / "pre-commit").read_bytes() == DOE_STUB.encode()
+    assert _stub_verdict(hd.apply_repo(root, check_only=False)) == [
+        ("forwarder-stub-pre-commit", "pre-commit", "replaced")
+    ]
+    body = (hooks / "pre-commit").read_text(encoding="utf-8")
+    assert STAMP in body and not is_forwarder_stub(body)
+    assert (hooks / "pre-commit.retired").read_bytes() == DOE_STUB.encode()
+    assert _stub_verdict(hd.apply_repo(root, check_only=False)) == [
+        ("forwarder-stub-pre-commit", "pre-commit", "current")
+    ]
+
+
+def test_foreign_pre_commit_survives_stub_entry(repo):
+    root, hooks = repo
+    _put(hooks / "pre-commit", FOREIGN)
+    assert _stub_verdict(hd.apply_repo(root, check_only=False))[0][2] == "unidentified-left-alone"
+    assert (hooks / "pre-commit").read_bytes() == FOREIGN.encode()
+    assert not (hooks / "pre-commit.retired").exists()
+
+
 def test_repo_without_git_is_absent(tmp_path, table):
     table(REMOVE)
     assert hd.apply_repo(tmp_path, check_only=False) == [("t-remove", "post-commit", "absent")]

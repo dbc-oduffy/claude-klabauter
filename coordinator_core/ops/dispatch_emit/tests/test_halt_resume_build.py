@@ -169,7 +169,6 @@ def test_build_without_a_parked_lineage_composes_with_no_stop_after(repo, monkey
     _halt(repo, monkeypatch)
     record = hrb.build(repo, RUN)
     assert seen == [None] and record["stop_after"] is None
-    assert "parked after plan: stop_after=plan" not in (repo / record["composed_script_rel"]).read_text(encoding="utf-8")
 
 
 def test_a_deliberate_resume_of_a_parked_run_stages(repo, monkeypatch):

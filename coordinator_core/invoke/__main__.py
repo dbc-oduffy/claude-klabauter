@@ -358,6 +358,12 @@ Sending a mid-run revision to a warp run:
   closes a halted run as landed); halted (dict), inline_review (dict), objective_loop (dict):
   run-close payloads carried from the ask outcome.
   Full contract: coordinator-invoke workflow.revise --describe
+
+Withdrawing a spooled ask (the refusal says "spooled as <spool_id>"):
+  coordinator-invoke ask_spool.withdraw '{"spool_id": "<16 hex chars>", "reason": "<why>"}'
+  params: spool_id (required); reason (required); repo_root (default: the caller's worktree).
+  Only a pending entry is withdrawn; a claimed or minted one is reported by state.
+  Full contract: coordinator-invoke ask_spool.withdraw --describe
 """
 
 

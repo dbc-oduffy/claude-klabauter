@@ -86,10 +86,10 @@ def consume_notices(repo_root: Optional[str], session_id: str) -> list[dict]:
 
 def advisory_text(repo_root: Optional[str], session_id: str) -> str:
     """One line per minted spooled ask, or "" when none."""
-    return "\n".join(_line(n) for n in consume_notices(repo_root, session_id))
+    return "\n".join(_line(n, repo_root) for n in consume_notices(repo_root, session_id))
 
 
-def _line(n: dict) -> str:
+def _line(n: dict, repo_root: Optional[str] = None) -> str:
     status = n.get("status")
     if status == "failed":
         return "Your spooled ask %s could not be minted yet (attempt %s): %s" % (n["spool_id"], n.get("attempts"), n.get("error"))
@@ -97,4 +97,24 @@ def _line(n: dict) -> str:
         return "Your spooled ask %s was withdrawn: %s" % (n["spool_id"], n.get("reason"))
     if status == "coalesced":
         return "Your spooled ask %s coalesced into run %s." % (n["spool_id"], n["run_id"])
+    # TRAP: a notice can be read long after it was written (pre-r24 backlogs were never consumed); the run
+    # may since be halted, landed or superseded, so its current stage decides, never the notice.
+    stage = None
+    if repo_root and _UNSAFE.search(n["run_id"]) is None:
+        from pathlib import Path
+
+        from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage
+
+        stage = (read_run_stage(Path(repo_root), n["run_id"]) or {}).get("stage")
+    if stage and stage != "minted":
+        return "Your spooled ask %s minted run %s; it is now %s, nothing to start." % (n["spool_id"], n["run_id"], stage)
+    # A drain-minted run has no launcher: left unstarted, it is halted abandoned_at_minted in 30 minutes.
+    if n.get("unstarted") and repo_root and stage == "minted":
+        from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+
+        script = os.path.join(repo_root, RUN_DIR_ROOT, n["run_id"] + ".workflow.mjs")
+        if os.path.isfile(script):
+            return "Your spooled ask %s minted run %s, not started. Start it: Workflow({scriptPath: %s})" % (
+                n["spool_id"], n["run_id"], json.dumps(script.replace("\\", "/")),
+            )
     return "Your spooled ask %s minted run %s." % (n["spool_id"], n["run_id"])

@@ -734,6 +734,12 @@ def _run_entrypoint(entrypoint: str, argv: list, cwd: str, stdin: str = "") -> d
             # off its guard would reveal that.
             sys.argv = [str(script)] + list(call_argv)
             sys.stdin = io.StringIO(stdin)
+            # TRAP: `import lib` puts <bin>/lib on sys.path only the first time a worker imports it,
+            # and the finally below restores sys.path, so a later call in the same worker finds
+            # `lib` cached and its bare `from entry_point_shim import` fails. Re-bind per call.
+            lib_dir = str(script.parent / "lib")
+            if lib_dir not in sys.path and os.path.isdir(lib_dir):
+                sys.path.insert(0, lib_dir)
             with contextlib.redirect_stdout(stdout_buf), contextlib.redirect_stderr(
                 stderr_buf
             ):

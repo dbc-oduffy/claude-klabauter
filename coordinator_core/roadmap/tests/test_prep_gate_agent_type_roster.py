@@ -33,6 +33,13 @@ def test_wrong_plugin_prefix_is_refused_naming_the_installed_type(installed):
     assert f"example-game-repo-control:{_STEM}" in str(first)
 
 
+def test_uninstalled_plugin_prefix_is_refused_naming_the_installed_type(installed):
+    ids, first = _unroutable_rows([[_row(f"example-game-repo:{_STEM}")]])
+    assert ids == ["C1"]
+    assert isinstance(first, emit.UnresolvableQualifiedAgentTypeError)
+    assert f"example-game-repo-control:{_STEM}" in str(first)
+
+
 def test_installed_qualified_type_passes(installed):
     assert _unroutable_rows([[_row(f"example-game-repo-control:{_STEM}")]]) == ([], None)
 

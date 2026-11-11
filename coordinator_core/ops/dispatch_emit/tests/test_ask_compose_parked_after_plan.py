@@ -13,7 +13,9 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
-from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, HALT_REFUSAL, PARKED_REPLY_KEY, STOP_AFTER_PLAN, parked_next_action
+from coordinator_core.ops.dispatch_emit.ask_contract import (
+    HALT_PARKED, HALT_REFUSAL, PARK_SOURCE_REPLY_KEY, PARKED_REPLY_KEY, STOP_AFTER_PLAN, parked_next_action,
+)
 from coordinator_core.ops.dispatch_emit.tests import test_size_then_plan_e2e as e2e
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests import test_ask_compose_plan_blitz_ready_restage as blitz
@@ -23,13 +25,14 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
-_PARKED_REPLY = {PARKED_REPLY_KEY: "plan", "plan_path": handle._PLAN}
+_PARK_SOURCE = {"run_id": "ask-old-1", "from": "claude-em-3", "inherited": True}
+_PARKED_REPLY = {PARKED_REPLY_KEY: "plan", "plan_path": handle._PLAN, PARK_SOURCE_REPLY_KEY: _PARK_SOURCE}
 
 
 def _assert_parked(out: dict) -> None:
     halt = out["result"]["halted_by"]
     assert halt["halted"] == HALT_PARKED, halt
-    assert halt["reason"] == "parked after plan: workflow.revise stop_after=plan"
+    assert halt["reason"] == "parked after plan: stop_after=plan marker inherited from run ask-old-1, from claude-em-3"
     assert halt["run_id"] == "run-1" and halt["sizing"] == handle._SIZING
     assert "not whole" not in str(halt)
     assert halt["next_action"] == parked_next_action(halt["plan"])
@@ -41,6 +44,20 @@ def test_a_parked_stage_reply_halts_as_a_parked_terminal_and_commits_the_halt_re
     out = handle._run(handle._script(monkeypatch), _PARKED_REPLY)
     _assert_parked(out)
     assert out["workflowCalls"] == []
+
+
+def test_the_parked_reason_names_an_own_marker_and_never_the_workflow_revise_text(monkeypatch):
+    own = {"run_id": "run-1", "from": "", "inherited": False}
+    out = handle._run(handle._script(monkeypatch), {**_PARKED_REPLY, PARK_SOURCE_REPLY_KEY: own})
+    reason = out["result"]["halted_by"]["reason"]
+    assert reason == "parked after plan: stop_after=plan marker on this run (run-1), from no recorded sender"
+    assert "workflow.revise" not in reason
+
+
+def test_a_parked_reply_without_a_source_says_so(monkeypatch):
+    bare = {PARKED_REPLY_KEY: "plan", "plan_path": handle._PLAN}
+    out = handle._run(handle._script(monkeypatch), bare)
+    assert out["result"]["halted_by"]["reason"] == "parked after plan: stop_after=plan marker of unreported source"
 
 
 def test_a_parked_stage_reply_dispatches_no_executor_or_review(monkeypatch):

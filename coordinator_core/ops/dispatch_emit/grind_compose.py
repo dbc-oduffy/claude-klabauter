@@ -1530,7 +1530,7 @@ _TERMINAL_COMMIT_JS = (
 )
 
 
-def _manifest_const(manifest: Manifest) -> str:
+def _manifest_const(manifest: Manifest, not_admitted: Sequence[Mapping[str, str]] = ()) -> str:
     entries = [
         {"row_id": e.row_id, "path": e.path, "digest": e.digest, "batch_key": e.batch_key,
          **({"pm_ruling": e.pm_ruling} if e.pm_ruling else {})}
@@ -1542,7 +1542,13 @@ def _manifest_const(manifest: Manifest) -> str:
     return (
         "const QUEUE_GRIND_MANIFEST = "
         + json.dumps(
-            {"entries": entries, "digest": manifest.digest, "declined": declined}, sort_keys=True
+            {
+                "entries": entries,
+                "digest": manifest.digest,
+                "declined": declined,
+                "not_admitted": [dict(n) for n in not_admitted],
+            },
+            sort_keys=True,
         )
         + ";"
     )
@@ -1796,6 +1802,7 @@ def compose_grind_script(
     review_run_base_sha: str = "",
     stage_models: Optional[Mapping[str, str]] = None,
     targeted_runner: bool = False,
+    not_admitted: Sequence[Mapping[str, str]] = (),
 ) -> str:
     """Compose one top-level `.mjs` Workflow script implementing § Design §
     Composer over ``manifest``/``profile``/``knobs``. Pure function of its
@@ -1909,7 +1916,7 @@ def compose_grind_script(
     meta_index = len(lines)
     lines.append(meta_text)
     once_per_run_legs: list[str] = []
-    lines.append(_manifest_const(manifest))
+    lines.append(_manifest_const(manifest, not_admitted))
     lines.append(
         "const BATCHES = " + json.dumps(batches_const, sort_keys=True) + ";"
     )
@@ -2655,6 +2662,7 @@ def compose_grind_script(
         "  appetite: APPETITE_NAME,\n"
         "  handed_back: _handedBack,\n"
         "  declined: QUEUE_GRIND_MANIFEST.declined,\n"
+        "  not_admitted: QUEUE_GRIND_MANIFEST.not_admitted,\n"
         "  settled: _settled,\n"
         "  counts: _counts(),\n"
         "  spend: _spend(),\n"

@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_PARKED,
     HALTED_RECORD_PARAM,
+    PARK_SOURCE_REPLY_KEY,
     PARKED_REPLY_KEY,
     STOP_AFTER_FILE,
     record_dir,
@@ -89,7 +90,10 @@ def test_revised_run_parks_at_stage_halts_parked_and_commits_its_artifacts(repo,
     assert (rec / STOP_AFTER_FILE).is_file()
 
     stage_reply = ask_stage._handler({"run_id": RUN, "plan_path": PLAN, "writes": []}, repo_root=repo)
+    park_source = stage_reply.pop(PARK_SOURCE_REPLY_KEY)
+    assert park_source["run_id"] == RUN and park_source["inherited"] is False, park_source
     assert stage_reply == {PARKED_REPLY_KEY: "plan", "plan_path": PLAN}
+    stage_reply[PARK_SOURCE_REPLY_KEY] = park_source
     assert not (rec / "manifest.json").exists()
 
     out = handle._run(_script(monkeypatch), stage_reply)

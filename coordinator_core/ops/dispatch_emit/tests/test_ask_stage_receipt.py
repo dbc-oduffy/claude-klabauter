@@ -193,7 +193,7 @@ def test_handler_answers_a_stalled_claim_with_error(tmp_path, monkeypatch):
     monkeypatch.setattr(r, "claim", stalled)
     monkeypatch.setattr(ask_stage, "main_worktree_root", lambda p: tmp_path)
     monkeypatch.setattr(ask_stage, "validate_params", lambda *a, **k: None)
-    monkeypatch.setattr(ask_stage, "_consume_park_marker", lambda *a: False)
+    monkeypatch.setattr(ask_stage, "_consume_park_marker", lambda *a: None)
     monkeypatch.setattr(ask_stage, "_escaping_write_refusal", lambda *a, **k: None)
     monkeypatch.setattr(ask_stage, "record_dir", lambda root, run_id: tmp_path / run_id)
     reply = ask_stage._handler({"run_id": "r1", "plan_path": "p.md"}, repo_root=tmp_path)

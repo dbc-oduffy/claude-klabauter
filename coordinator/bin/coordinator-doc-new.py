@@ -260,9 +260,15 @@ def _ensure_bin_lib_bootstrapped() -> None:
     """
     import importlib.util
 
-    if "lib" in sys.modules and getattr(sys.modules["lib"], "__file__", None):
-        return
     _bin_lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
+    if "lib" in sys.modules and getattr(sys.modules["lib"], "__file__", None):
+        # TRAP: a warm pool worker restores sys.path after each served call, so a cached `lib` no longer
+        # implies its directory is on sys.path; the sibling imports below would then fail
+        # (`ModuleNotFoundError: python_interp` via dispatch.emit -> mint_baton_from_sizing, 2026-11-11).
+        # Re-assert exactly what `lib/__init__.py` asserted on first import.
+        if _bin_lib not in sys.path:
+            sys.path.insert(0, _bin_lib)
+        return
     _spec = importlib.util.spec_from_file_location(
         "lib", os.path.join(_bin_lib, "__init__.py"), submodule_search_locations=[_bin_lib]
     )

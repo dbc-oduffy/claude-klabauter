@@ -363,12 +363,15 @@ def path_tokens(text: str) -> list[str]:
 
 
 def _paths_named(repo_root: Path, notes: Iterable[str]) -> list[str]:
+    """Repo files the notes name; a token with no word character ("-", "...") is never a path."""
     from coordinator_core.ops.dispatch_emit.design_conformance import _contained_file
 
     root = Path(repo_root).resolve()
     out: list[str] = []
     for note in notes:
         for token in path_tokens(note):
+            if not any(ch.isalnum() or ch == "_" for ch in token):
+                continue
             found = _contained_file(root, token)
             if found is None:
                 continue

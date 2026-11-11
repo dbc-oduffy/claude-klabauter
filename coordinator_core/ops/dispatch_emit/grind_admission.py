@@ -69,3 +69,23 @@ def receipt_block(admission: Admission) -> dict:
         "row_ids": list(admission.not_admitted),
         "arithmetic": dict(admission.arithmetic),
     }
+
+
+def not_admitted_entries(admission: Admission) -> list[dict]:
+    """One `{row_id, reason}` per not-admitted row, the reason naming the cap that cut it."""
+    caps = []
+    if admission.arithmetic.get("bound_by_calls") is not None:
+        caps.append(f"max_agent_calls={admission.arithmetic['max_agent_calls']}")
+    if admission.arithmetic.get("bound_by_tokens") is not None:
+        caps.append(f"budget_tokens={admission.arithmetic['budget_tokens']}")
+    count = admission.arithmetic["admitted_count"]
+    reason = f"not-admitted: run budget cap ({', '.join(caps)}) covers {count} rows"
+    return [{"row_id": row_id, "reason": reason} for row_id in admission.not_admitted]
+
+
+def claimed_entries(claimed: Sequence) -> list[dict]:
+    """One `{row_id, reason}` per row skipped for a live peer row claim."""
+    return [
+        {"row_id": c.row_id, "reason": f"not-admitted: claimed by live session {c.holder_session}"}
+        for c in claimed
+    ]

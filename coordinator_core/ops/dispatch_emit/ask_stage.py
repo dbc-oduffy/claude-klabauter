@@ -30,6 +30,7 @@ from coordinator_core.ops.dispatch_emit import ask_stage_receipt, design_route, 
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     HALT_PARKED,
+    PARK_SOURCE_REPLY_KEY,
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
     REGISTER_ROWS_UNCLAIMED_REFUSAL,
@@ -45,10 +46,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     OwedRow,
     StageManifest,
     delivery_note_rel,
-    lineage_stop_after,
     record_dir,
     stamp_run_stage,
     stop_after_plan_live,
+    stop_after_source,
     rulable_ids,
 )
 from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError, RouteTableError, route_rows
@@ -2287,34 +2288,35 @@ def manifest_payload(root: Path, manifest: StageManifest) -> dict:
     return payload
 
 
-def _consume_park_marker(root: Path, run_id: str) -> bool:
-    """True when the run, or an ancestor in its lineage (`lineage_stop_after`), holds a
-    `stop_after == "plan"` marker the run has not yet parked on. The run's own marker is unlinked only
+def _consume_park_marker(root: Path, run_id: str) -> Optional[dict]:
+    """The `stop_after_source` dict (`{run_id, from, inherited}`) when the run, or an ancestor in its lineage,
+    holds a `stop_after == "plan"` marker the run has not yet parked on; None otherwise. The run's own marker is unlinked only
     once `halted.json` records the park, so a parked reply lost in relay parks again rather than staging
     past the revise. An ancestor's marker is never unlinked here: a successor with no park recorded
     parks, and one whose `halted.json` records the park has discharged it. A marker written after its
     pass staged (`stop_after_plan_live`) is stale and never counts. An absent, unreadable or
-    malformed marker and a lineage without one is False."""
+    malformed marker and a lineage without one is None. An ancestor reached through a resume edge that
+    already recorded its park is discharged (`stop_after_source`), so a refire never re-parks on it."""
     try:
         dir_ = record_dir(root, run_id)
     except ValueError:
-        return False
+        return None
     marker = dir_ / STOP_AFTER_FILE
-    own = stop_after_plan_live(dir_)
-    if not own and lineage_stop_after(root, run_id) != STOP_AFTER_PLAN:
-        return False
+    source = stop_after_source(root, run_id)
+    if source is None:
+        return None
     try:
         halted = json.loads((dir_ / "halted.json").read_text(encoding="utf-8"))
     except (ValueError, OSError):
         halted = None
     if not (isinstance(halted, dict) and halted.get("halted") == HALT_PARKED):
-        return True
-    if own:
+        return source
+    if stop_after_plan_live(dir_):
         try:
             marker.unlink()
         except OSError:
             pass
-    return False
+    return None
 
 
 PLAN_EXECUTING_STAMP_KEY = "plan_executing_stamp"
@@ -2474,9 +2476,10 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
     writes = params.get("writes") or []
     run_id = params["run_id"]
     root = main_worktree_root(Path(repo_root))
-    if _consume_park_marker(root, run_id):
+    park_source = _consume_park_marker(root, run_id)
+    if park_source is not None:
         stamp_run_stage(root, run_id, "halted")
-        return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None}
+        return {PARKED_REPLY_KEY: STOP_AFTER_PLAN, "plan_path": params.get("plan_path") or None, PARK_SOURCE_REPLY_KEY: park_source}
     digest = ask_stage_receipt.params_digest(params)
     plan_parse: Optional[_PlanParse] = None
     with leg("preflight"):

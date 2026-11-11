@@ -1695,12 +1695,13 @@ def test_a_review_halt_over_base_reds_lands_its_finished_rows_without_a_refusal(
     assert "b.py" not in _show(repo, "--name-only", "--format=", "HEAD").split()
 
 
-def test_a_review_halt_over_an_own_red_still_lands_nothing(repo):
+def test_a_review_halt_over_an_own_red_lands_its_finished_rows_listing_the_red_introduced(repo):
     (repo / "a.py").write_text("a\n", encoding="utf-8")
     path = _review_halt_task_output(repo, ["tests/test_a.py::t"], [])
     before = _head(repo)
 
     out = terminal_commit._handler({"task_output_path": path}, repo_root=repo / ".git")
 
-    assert out.get("committed") is not True, out
-    assert _head(repo) == before
+    assert out["committed"] is True, out
+    assert _head(repo) != before
+    assert "red: tests/test_a.py::t (introduced)" in _show(repo, "--format=%B", "-s", "HEAD")

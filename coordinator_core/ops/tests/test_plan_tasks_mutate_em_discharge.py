@@ -291,6 +291,74 @@ status: ready
 """
 
 
+def _rev(repo: Path, rev: str) -> str:
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    return subprocess.run(
+        ["git", "rev-parse", rev],
+        cwd=str(repo),
+        capture_output=True,
+        text=True,
+        check=True,
+        **no_console_creationflags(),
+    ).stdout.strip()
+
+
+def test_executor_row_discharged_with_commit_and_evidence(tmp_path):
+    from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
+
+    repo, plan = _plan(tmp_path)
+    sha = _rev(repo, "HEAD")
+    result = _call(repo, plan, id="X1", commit=sha, evidence="vitest 69/69")
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    entry = read_em_discharges(plan)["X1"]
+    assert entry["commit"] == sha and entry["evidence"] == "vitest 69/69"
+    assert em_discharge_closes({"id": "X1"}, entry) is True
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"evidence": "ok"},
+        {"commit": "HEAD", "evidence": "ok"},
+        {"commit": "ab" * 20, "evidence": "ok"},
+        {"commit": "{head}", "evidence": "  "},
+        {"commit": "{head}"},
+        {"commit": "{tree}", "evidence": "ok"},
+        {"commit": "{head7}", "evidence": "ok"},
+    ],
+)
+def test_executor_row_refused_without_a_resolving_commit_and_evidence(tmp_path, extra):
+    repo, plan = _plan(tmp_path)
+    subs = {"{head}": _rev(repo, "HEAD"), "{tree}": _rev(repo, "HEAD^{tree}"), "{head7}": _rev(repo, "HEAD")[:7]}
+    extra = {k: subs.get(v, v) for k, v in extra.items()}
+    result = _call(repo, plan, id="X1", **extra)
+    assert result["exit_code"] == 1 and result["applied"] is False, result
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_executor_citation_never_widens_memo_operator_or_closed_rows(tmp_path):
+    repo, plan = _plan(tmp_path)
+    cite = {"commit": _rev(repo, "HEAD"), "evidence": "ok"}
+    for row_id in ("M1", "O1", "D1"):
+        assert _call(repo, plan, id=row_id, **cite)["exit_code"] == 1
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_executor_closes_predicate_needs_both_fields():
+    from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
+
+    row = {"id": "X1"}
+    assert em_discharge_closes(row, None) is False
+    assert em_discharge_closes(row, {"text": "t"}) is False
+    assert em_discharge_closes(row, {"commit": "a" * 40}) is False
+    assert em_discharge_closes(row, {"commit": "a" * 40, "evidence": " "}) is False
+    assert em_discharge_closes(row, {"commit": "a" * 40, "evidence": "e"}) is True
+    assert em_discharge_closes({"id": "E1", "performer": "em"}, None) is True
+
+
 def test_discharged_row_no_longer_counts_as_open_for_stamp_and_gate(tmp_path):
     """em-discharge leaves disposition open by contract; the close oracles must read the sidecar."""
     from coordinator_core.archive_stamp import _open_spine_row_ids

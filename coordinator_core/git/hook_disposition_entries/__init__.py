@@ -12,6 +12,7 @@ from typing import Tuple
 
 def load_entries() -> Tuple:
     from . import (
+        forwarder_stub_pre_commit,
         retired_auto_push_post_commit,
         retired_engine_pre_commit,
         retired_lfs_pre_push_gate,
@@ -19,6 +20,7 @@ def load_entries() -> Tuple:
     )
 
     return (
+        forwarder_stub_pre_commit.ENTRY,
         retired_auto_push_post_commit.ENTRY,
         retired_engine_pre_commit.ENTRY,
         retired_lfs_pre_push_gate.ENTRY,

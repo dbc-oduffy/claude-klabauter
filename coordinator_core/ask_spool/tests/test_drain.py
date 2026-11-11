@@ -284,6 +284,50 @@ def test_two_entries_of_one_sizing_mint_once_and_the_second_coalesces(tmp_path):
     assert json.loads(sub.read_text())["spool_id"] == a["spool_id"]
 
 
+def test_a_duplicate_spooled_during_the_mint_coalesces_in_the_same_drain(tmp_path):
+    _write_sizing(tmp_path)
+    _write_plan(tmp_path, ["open"])
+    first = _spool_sizing(tmp_path, "tuA")
+    engine = Engine(tmp_path)
+    late: list = []
+
+    def mint_then_spool_the_refire(payload):
+        envelope = engine(payload)
+        if not late:
+            late.append(_spool_sizing(tmp_path, "tuB"))
+        return envelope
+
+    counts = drain.run(str(tmp_path), evaluate=mint_then_spool_the_refire)
+    assert engine.calls == 1
+    assert counts["minted"] == 1 and counts["coalesced"] == 1
+    a, _ = record.read_entry(record.entry_path(str(tmp_path), first, record.MINTED_SUFFIX))
+    b, _ = record.read_entry(record.entry_path(str(tmp_path), late[0], record.MINTED_SUFFIX))
+    assert b["coalesced_into"] == a["run_id"] == b["run_id"] and "coalesced_into" not in a
+    assert record.list_pending(str(tmp_path)) == []
+
+
+def test_entries_spooled_while_draining_are_taken_in_at_most_max_passes(tmp_path):
+    _write_sizing(tmp_path, plan=None)
+    others = []
+    for n in range(drain._MAX_PASSES + 2):
+        path = f"state/sizings/2026-11/late{n}.yaml"
+        (tmp_path / path).write_text(json.dumps({"schema": "sizing-object"}), encoding="utf-8")
+        others.append(path)
+    _spool_sizing(tmp_path, "tu0")
+    engine = Engine(tmp_path)
+
+    def mint_then_spool_another(payload):
+        envelope = engine(payload)
+        _spool_sizing(tmp_path, f"tu{engine.calls}", sizing=others[engine.calls - 1])
+        return envelope
+
+    counts = drain.run(str(tmp_path), evaluate=mint_then_spool_another)
+    assert counts["minted"] == drain._MAX_PASSES
+    assert len(record.list_pending(str(tmp_path))) == 1
+    drain.run(str(tmp_path), evaluate=engine)
+    assert record.list_pending(str(tmp_path)) == []
+
+
 def test_entries_of_different_sizings_each_mint(tmp_path):
     _write_sizing(tmp_path, plan=None)
     other = "state/sizings/2026-11/s2.yaml"

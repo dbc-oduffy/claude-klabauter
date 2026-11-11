@@ -1070,9 +1070,17 @@ def _resume_stage_waiter(repo_root: Path, waiter: dict) -> bool:
     if not (isinstance(sizing_rel, str) and sizing_rel):
         logging.getLogger(__name__).warning("stage-wait %s has no sizing to refire; its token is retired", run_id)
         return False
+    if _run_landed(repo_root, run_id):
+        logging.getLogger(__name__).warning("stage-wait %s already landed; no refire spooled", run_id)
+        return False
+    # An absolute `repo` pins the drain to the run's own root; without it the drain launches
+    # against the waiting session's anchor repo.
     payload = {
         "tool_name": "Workflow",
-        "tool_input": {"name": "coordinator:engine-ask", "args": {"sizing": sizing_rel, RESUME_RUN_ID_ARG: run_id}},
+        "tool_input": {
+            "name": "coordinator:engine-ask",
+            "args": {"sizing": sizing_rel, RESUME_RUN_ID_ARG: run_id, "repo": str(Path(repo_root).resolve())},
+        },
     }
     session = waiter.get("session_id") or "stage-wait"
     tool_use_id = f"stage-wait-{run_id}-{int(waiter.get('started_at') or 0)}"
@@ -1085,6 +1093,18 @@ def _resume_stage_waiter(repo_root: Path, waiter: dict) -> bool:
         reason="stage-wait: blocker ended",
     )
     return True
+
+
+def _run_landed(repo_root: Path, run_id: str) -> bool:
+    """True when the run's `halted.json` marker reads `landed`; an unreadable marker is not landed."""
+    from coordinator_core.ops.dispatch_emit import halted_run
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+    try:
+        marker = halted_run.read_strict(record_dir(Path(repo_root), run_id))
+    except (OSError, ValueError):
+        return False
+    return bool(marker) and marker.get("status") == halted_run.STATUS_LANDED
 
 
 def discard(repo_root: Path, run_id: str) -> Optional[dict]:

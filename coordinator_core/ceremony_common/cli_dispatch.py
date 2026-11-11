@@ -217,6 +217,7 @@ import importlib.machinery
 import importlib.util
 import inspect
 import io
+import os
 import sys
 import threading
 from pathlib import Path
@@ -458,6 +459,13 @@ def invoke_cli_main(
     except (TypeError, ValueError):
         params = {}
 
+    # TRAP: a bin CLI's `import lib` puts <bin>/lib on sys.path only on the first import in a process,
+    # and a warm worker's served calls restore sys.path after each one, so a later in-process call finds
+    # `lib` cached and its bare sibling imports (`python_interp`, `memo_compose`) fail. Re-bind per call.
+    lib_dir = os.path.join(os.path.dirname(os.path.abspath(getattr(module, "__file__", "") or ".")), "lib")
+    bound = lib_dir not in sys.path and os.path.isfile(os.path.join(lib_dir, "__init__.py"))
+    if bound:
+        sys.path.insert(0, lib_dir)
     stdout_buf = io.StringIO()
     stderr_buf = io.StringIO()
     saved_stdin = sys.stdin
@@ -482,6 +490,8 @@ def invoke_cli_main(
                 result = int(code) if isinstance(code, int) else (0 if code is None else 1)
     finally:
         sys.stdin = saved_stdin
+        if bound and lib_dir in sys.path:
+            sys.path.remove(lib_dir)
 
     exit_code = int(result) if isinstance(result, int) else 0
     stderr_text = stderr_buf.getvalue()

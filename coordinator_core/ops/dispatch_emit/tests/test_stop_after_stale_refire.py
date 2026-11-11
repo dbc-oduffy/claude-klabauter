@@ -9,7 +9,11 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_contract as ac, ask_stage
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN as STAGEABLE_PLAN, PLAN_REL as STAGEABLE_REL
 
-_PARKED = {ac.PARKED_REPLY_KEY: ac.STOP_AFTER_PLAN, "plan_path": STAGEABLE_REL}
+
+
+def _is_parked(reply, *, run_id, inherited):
+    assert reply[ac.PARKED_REPLY_KEY] == ac.STOP_AFTER_PLAN and reply["plan_path"] == STAGEABLE_REL
+    assert reply[ac.PARK_SOURCE_REPLY_KEY] == {"from": "em", "inherited": inherited, "run_id": run_id}
 
 
 @pytest.fixture
@@ -49,12 +53,12 @@ def test_staged_stamp_is_first_stage_time(tmp_path):
 def test_marker_set_before_pass_staged_still_parks(repo):
     _run(repo, "r1", marker_at="2026-11-05T15:00:00Z", staged_at="2026-11-05T15:30:00Z")
     assert ac.stop_after_plan_live(ac.record_dir(repo, "r1"))
-    assert _stage(repo, "r1") == _PARKED
+    _is_parked(_stage(repo, "r1"), run_id="r1", inherited=False)
 
 
 def test_unstaged_pass_marker_parks(repo):
     _run(repo, "r1", marker_at="2026-11-05T15:00:00Z")
-    assert _stage(repo, "r1") == _PARKED
+    _is_parked(_stage(repo, "r1"), run_id="r1", inherited=False)
 
 
 def test_marker_set_after_pass_staged_is_stale_for_own_refire(repo):
@@ -69,13 +73,13 @@ def test_ancestor_stale_marker_does_not_park_descendant_refire(repo):
     _run(repo, "ask-14f577", resumes_ask="ask-58f49d")
     assert ac.lineage_stop_after(repo, "ask-14f577") is None
     assert not ask_stage._consume_park_marker(repo, "ask-14f577")
-    assert _stage(repo, "ask-14f577") != _PARKED
+    assert ac.PARKED_REPLY_KEY not in _stage(repo, "ask-14f577")
 
 
 def test_ancestor_live_marker_still_parks_descendant(repo):
     _run(repo, "ask-58f49d", marker_at="2026-11-05T15:00:00Z", staged_at="2026-11-05T15:30:00Z")
     _run(repo, "ask-14f577", resumes_ask="ask-58f49d")
-    assert _stage(repo, "ask-14f577") == _PARKED
+    _is_parked(_stage(repo, "ask-14f577"), run_id="ask-58f49d", inherited=True)
 
 
 def test_stale_ancestor_does_not_mask_live_marker_further_up(repo):

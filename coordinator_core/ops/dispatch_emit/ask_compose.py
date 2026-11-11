@@ -80,6 +80,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     parked_next_action_js,
     HALT_PLAN_FIELD,
     HALTED_RECORD_PARAM,
+    PARK_SOURCE_REPLY_KEY,
     PARKED_REPLY_KEY,
     PM_INTENT_FILE,
     RESUME_LEDGER_CREDITED_FIELD,
@@ -418,7 +419,9 @@ ASK_GATE_RECONCILE_CLAUSE = (
 )
 
 #: Markers of a gate agent's refusal reason that is a -32004 the gate's one refire did not clear.
-GATE_INDETERMINATE_RE = r"/-32004|hung_past_ceiling/i"
+#: TRAP: halt reasons are agent prose; "Not a -32004" names a NON-timeout and must not match, or a plain
+#: gate refusal is relabelled a timed-out gate (example-game-repo-19, 2026-11-11). Fixed-width lookbehind only.
+GATE_INDETERMINATE_RE = r"/(?<!not a )(?<!not an )-32004|hung_past_ceiling/i"
 
 
 #: Output markers of a warm-dispatch indeterminate reply from `sizing-assemble`; the composed scout halt matches them.
@@ -1199,6 +1202,7 @@ _ADMIT_MANIFEST_JS = (
     "  let _relayGap = null;\n"
     "  let _parked = null;\n"
     "  let _parkedWaiting = null;\n"
+    "  let _parkSource = null;\n"
     "  let _diskHalt = null;\n"
     "  const _wholeManifestGap = (m) => {\n"
     "    const ne = (v) => typeof v === 'string' && v.trim() !== '';\n"
@@ -1261,7 +1265,7 @@ _ADOPT_STAGE_REPLY_HEAD_JS = (
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; "
     "if (Array.isArray(r.criterion_blocking_drops) && r.criterion_blocking_drops.length) _stageBlockingDrops = "
     "{ rows: r.criterion_blocking_drops, plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
-    f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) {{ _parked = String(r.{PARKED_REPLY_KEY}); _parkedWaiting = r.waiting ?? null; }} return; }}\n"
+    f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) {{ _parked = String(r.{PARKED_REPLY_KEY}); _parkedWaiting = r.waiting ?? null; _parkSource = r.{PARK_SOURCE_REPLY_KEY} ?? null; }} return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
     "    let got;\n"
 )
@@ -1423,7 +1427,7 @@ _STAGE_WAIT_HOLD_JS = (
     "    if (_hr && typeof _hr === 'object' && !Array.isArray(_hr)) {\n"
     f"      if (_hr.{PARKED_REPLY_KEY} === {_lit(_STAGE_WAIT_PARKED)} && !_hr.manifest_handle && !_hr.error) "
     "{ _parkedWaiting = _hr.waiting ?? _parkedWaiting; }\n"
-    "      else { _parked = null; _parkedWaiting = null; _stageRecovered = true; await _adoptStageReply(_hr); }\n"
+    "      else { _parked = null; _parkedWaiting = null; _parkSource = null; _stageRecovered = true; await _adoptStageReply(_hr); }\n"
     "    }\n"
     "  }"
 )
@@ -5005,7 +5009,8 @@ def compose_ask_script(
                 f"&& !_diskHalt && !_relayGap && !_parked) {{\n"
                 f"{indent}  if ({entry}.readyOpReply?.{PARKED_REPLY_KEY} && !{entry}.readyOpReply.manifest_handle "
                 f"&& !{entry}.readyOpReply.error) {{ _parked = String({entry}.readyOpReply.{PARKED_REPLY_KEY}); "
-                f"_parkedWaiting = {entry}.readyOpReply.waiting ?? null; }}\n"
+                f"_parkedWaiting = {entry}.readyOpReply.waiting ?? null; "
+                f"_parkSource = {entry}.readyOpReply.{PARK_SOURCE_REPLY_KEY} ?? null; }}\n"
                 f"{indent}  else if ({entry}.readyOpReply?.error && !{entry}.readyOpReply.manifest_handle) "
                 f"{{ await _adoptStageReply({entry}.readyOpReply, false); }}\n"
                 f"{indent}  else if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}\n"
@@ -5572,7 +5577,9 @@ def compose_ask_script(
         "+ ((_parkedWaiting?.blockers ?? []).length ? ' A blocker known dead: ' + (_parkedWaiting.blockers).slice().sort()"
         ".map(function (b) { return 'dispatch.release_run_token {\"run_id\": \"' + b + '\"}'; }).join('; ') + '.' : '') "
         f"}} : {{ halted: {_lit(HALT_PARKED)}, "
-        "reason: 'parked after plan: workflow.revise stop_after=plan', "
+        "reason: 'parked after plan: stop_after=plan marker ' + (_parkSource && _parkSource.run_id "
+        "? (_parkSource.inherited ? 'inherited from run ' + _parkSource.run_id : 'on this run (' + _parkSource.run_id + ')') "
+        "+ ', from ' + (_parkSource.from || 'no recorded sender') : 'of unreported source'), "
         f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} }};"
     )
     b.append(

@@ -89,6 +89,8 @@ from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.grind_admission import (
     NOT_ADMITTED_EXTRA_KEY,
     admit,
+    claimed_entries,
+    not_admitted_entries,
     receipt_block,
 )
 from coordinator_core.ops.dispatch_emit.grind_profile import (
@@ -237,6 +239,7 @@ def emit_queue_script(
         review_run_base_sha=head_sha(repo_root) or "",
         queue_dirs=[Path(os.path.relpath(q, repo_root)).as_posix() for q in guarded_queue_dirs],
         stage_models=stage_models,
+        not_admitted=not_admitted_entries(admission) + claimed_entries(manifest.claimed),
     )
 
     profile_digest = hashlib.sha256(loaded_profile.source_path.read_bytes()).hexdigest()

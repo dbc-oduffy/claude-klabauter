@@ -42,6 +42,49 @@ def test_configure_does_not_watch_a_root_inside_the_repo():
     assert not fc._contains(repo / "sub", repo)
 
 
+def _watched_for(monkeypatch, tmp_path, repo):
+    import tempfile
+
+    temp = tmp_path / "Temp"
+    temp.mkdir(exist_ok=True)
+    monkeypatch.setattr(tempfile, "gettempdir", lambda: str(temp))
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: repo))
+    monkeypatch.setattr(fc, "_SANCTIONED", [])
+    monkeypatch.setattr(fc, "_WATCHED", [])
+    fc.pytest_configure(_Cfg(repo, basetemp=str(tmp_path / "bt")))
+    return list(fc._WATCHED)
+
+
+def test_clone_under_another_repos_scratch_does_not_watch_that_scratch(tmp_path, monkeypatch):
+    live = tmp_path / "live"
+    (live / ".git").mkdir(parents=True)
+    clone = live / "scratch" / "gate" / "clone"
+    clone.mkdir(parents=True)
+    assert _watched_for(monkeypatch, tmp_path, clone) == []
+
+
+def test_clone_directly_in_another_repos_scratch_is_not_watched(tmp_path, monkeypatch):
+    live = tmp_path / "live"
+    (live / ".git").mkdir(parents=True)
+    clone = live / "scratch" / "clone"
+    clone.mkdir(parents=True)
+    assert _watched_for(monkeypatch, tmp_path, clone) == []
+
+
+def test_clone_beside_a_repo_not_under_scratch_is_still_watched(tmp_path, monkeypatch):
+    holder = tmp_path / "holder"
+    (holder / ".git").mkdir(parents=True)
+    clone = holder / "work" / "clone"
+    clone.mkdir(parents=True)
+    assert _watched_for(monkeypatch, tmp_path, clone) == [(holder / "work").resolve()]
+
+
+def test_scratch_dir_outside_any_repo_is_still_watched(tmp_path, monkeypatch):
+    clone = tmp_path / "scratch" / "clone"
+    clone.mkdir(parents=True)
+    assert _watched_for(monkeypatch, tmp_path, clone) == [(tmp_path / "scratch").resolve()]
+
+
 def test_ambient_markers_match_only_their_own_shapes():
     import fnmatch
 

@@ -186,15 +186,22 @@ def stop_after_plan_live(dir_: Path) -> bool:
     return not (isinstance(at, str) and isinstance(staged_at, str) and at > staged_at)
 
 
-def lineage_stop_after(root: Path, run_id: str) -> Optional[str]:
-    """`STOP_AFTER_PLAN` when `run_id`'s record dir or any ancestor's (`LINEAGE_KEYS` in run.json,
-    nearest first, depth-bounded, cycle-safe) holds a marker with stop_after=plan; else None. An
-    unsafe or unknown run id contributes nothing."""
+#: Edges that continue a run's own work (a refire, a reserved-id bind): an ancestor reached through one that
+#: already recorded its park has discharged its marker. `chain_parent` is a handoff and never discharges.
+_RESUME_KEYS = ("resumes_ask", "resumed_from", "reserved_parent")
+
+
+def stop_after_source(root: Path, run_id: str) -> Optional[dict]:
+    """The nearest live `stop_after=plan` marker on `run_id` or an ancestor (`LINEAGE_KEYS` in run.json,
+    depth-bounded, cycle-safe), as `{run_id, from, inherited}`; None when none arms a park. `from` is the
+    marker's recorded sender ("" when none); `inherited` is False only for the run's own marker. An ancestor
+    reached through a resume edge whose `halted.json` records `HALT_PARKED` has discharged its marker and
+    contributes neither it nor its own ancestry. An unsafe or unknown run id contributes nothing."""
     seen: set[str] = set()
-    frontier = [run_id]
-    for _ in range(_LINEAGE_MAX_DEPTH):
-        nxt: list[str] = []
-        for rid in frontier:
+    frontier: list[tuple[str, bool]] = [(run_id, False)]
+    for depth in range(_LINEAGE_MAX_DEPTH):
+        nxt: list[tuple[str, bool]] = []
+        for rid, via_resume in frontier:
             if not isinstance(rid, str) or not rid or rid in seen:
                 continue
             seen.add(rid)
@@ -202,14 +209,26 @@ def lineage_stop_after(root: Path, run_id: str) -> Optional[str]:
                 dir_ = record_dir(root, rid)
             except ValueError:
                 continue
+            if via_resume and (_read_json_object(dir_ / "halted.json") or {}).get("halted") == HALT_PARKED:
+                continue
             if stop_after_plan_live(dir_):
-                return STOP_AFTER_PLAN
+                sender = (_read_json_object(dir_ / STOP_AFTER_FILE) or {}).get("from")
+                return {"run_id": rid, "from": sender if isinstance(sender, str) else "", "inherited": depth > 0}
             run = _read_json_object(dir_ / "run.json") or {}
-            nxt.extend(v for k in LINEAGE_KEYS if isinstance(v := run.get(k), str))
+            nxt.extend((v, k in _RESUME_KEYS) for k in LINEAGE_KEYS if isinstance(v := run.get(k), str))
         if not nxt:
             return None
         frontier = nxt
     return None
+
+
+def lineage_stop_after(root: Path, run_id: str) -> Optional[str]:
+    """`STOP_AFTER_PLAN` when `stop_after_source` finds a live marker for `run_id`; else None."""
+    return STOP_AFTER_PLAN if stop_after_source(root, run_id) else None
+
+
+#: `dispatch.ask_stage` reply key of a `stop_after=plan` park: the `stop_after_source` dict.
+PARK_SOURCE_REPLY_KEY = "park_source"
 #: `workflow.late_rows`: the live ledger ids the run's staged manifest holds no work for.
 OP_LATE_ROWS = "workflow.late_rows"
 LATE_ROWS_FIELD = "late_rows"

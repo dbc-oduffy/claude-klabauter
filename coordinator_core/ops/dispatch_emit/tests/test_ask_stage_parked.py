@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from coordinator_core.ops.dispatch_emit import ask_stage
-from coordinator_core.ops.dispatch_emit.ask_contract import PARKED_REPLY_KEY, STOP_AFTER_FILE, record_dir
+from coordinator_core.ops.dispatch_emit.ask_contract import PARK_SOURCE_REPLY_KEY, PARKED_REPLY_KEY, STOP_AFTER_FILE, record_dir
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL, read_stage_reply
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
@@ -38,7 +38,10 @@ def test_marker_parks_without_staging(tmp_path, monkeypatch):
 
     reply = _handler(_params(), repo_root=tmp_path)
 
-    assert reply == {PARKED_REPLY_KEY: "plan", "plan_path": PLAN_REL}
+    assert reply == {
+        PARKED_REPLY_KEY: "plan", "plan_path": PLAN_REL,
+        PARK_SOURCE_REPLY_KEY: {"run_id": _RUN, "from": "", "inherited": False},
+    }
     assert not (record_dir(tmp_path, _RUN) / "manifest.json").exists()
 
 
@@ -68,7 +71,8 @@ def test_parked_reply_plan_path_none_when_absent(tmp_path):
 
     reply = _handler({"run_id": _RUN, "sizing_path": "x.yaml"}, repo_root=tmp_path)
 
-    assert reply == {PARKED_REPLY_KEY: "plan", "plan_path": None}
+    assert reply[PARKED_REPLY_KEY] == "plan" and reply["plan_path"] is None
+    assert reply[PARK_SOURCE_REPLY_KEY] == {"run_id": _RUN, "from": "", "inherited": False}
 
 
 def test_absent_marker_stages_as_today(tmp_path):
@@ -138,7 +142,10 @@ def test_ancestor_marker_parks_a_markerless_successor(tmp_path, monkeypatch):
 
     reply = _handler(_params(), repo_root=tmp_path)
 
-    assert reply == {PARKED_REPLY_KEY: "plan", "plan_path": PLAN_REL}
+    assert reply == {
+        PARKED_REPLY_KEY: "plan", "plan_path": PLAN_REL,
+        PARK_SOURCE_REPLY_KEY: {"run_id": _ANCESTOR, "from": "", "inherited": True},
+    }
     assert not (rdir / "manifest.json").exists()
     assert (record_dir(tmp_path, _ANCESTOR) / STOP_AFTER_FILE).exists()
 

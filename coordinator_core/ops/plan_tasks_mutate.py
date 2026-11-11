@@ -1252,11 +1252,47 @@ def read_em_discharges(plan_file: Path) -> dict:
     return entries if isinstance(entries, dict) else {}
 
 
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def em_discharge_closes(row: dict, entry: object) -> bool:
+    """True when a recorded discharge closes ``row``: the row is em-performed, or ``entry`` is a
+    dict carrying a non-empty ``commit`` and a non-empty ``evidence``."""
+    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
+
+    if row_is_em_performed(row):
+        return True
+    return (
+        isinstance(entry, dict)
+        and isinstance(entry.get("commit"), str)
+        and bool(entry["commit"].strip())
+        and isinstance(entry.get("evidence"), str)
+        and bool(entry["evidence"].strip())
+    )
+
+
+def _commit_resolves(common_dir: Path, commit: str) -> bool:
+    from coordinator_core.git.git_objects import read_object_header
+
+    try:
+        header = read_object_header(common_dir, commit)
+    except Exception:
+        return False
+    return header is not None and header[0] == "commit"
+
+
 def _em_discharge(
-    plan_path: str, row_id: str, text: str, worktree: Path, repo_root: Path
+    plan_path: str,
+    row_id: str,
+    text: str,
+    worktree: Path,
+    repo_root: Path,
+    commit: object = None,
+    evidence: object = None,
 ) -> dict:
     """Apply the em-discharge verb: record that the EM performed em-performed row ``row_id``
-    (declared ``performer: em``, or derived by ``em_only_act``).
+    (declared ``performer: em``, or derived by ``em_only_act``), or that an executor row is
+    satisfied by ``commit`` (a full 40-hex sha resolving to a commit) and ``evidence``.
 
     Writes only the evidence sidecar; the row's disposition and the plan body are untouched.
     A second discharge of the same row is a no-op, never an overwrite.
@@ -1287,8 +1323,14 @@ def _em_discharge(
         return _err(f"em-discharge: task id not found: {row_id!r}")
     from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
 
-    if not row_is_em_performed(row):
-        return _err(f"em-discharge: row {row_id!r} is not performer: em")
+    commit_s = commit.strip().lower() if isinstance(commit, str) else ""
+    evidence_s = evidence.strip() if isinstance(evidence, str) else ""
+    executor_row = not row_is_em_performed(row)
+    if executor_row and not (commit_s and evidence_s):
+        return _err(
+            f"em-discharge: row {row_id!r} is not performer: em; "
+            "an executor row needs both 'commit' and 'evidence'"
+        )
 
     from coordinator_core.ops.dispatch_emit.spine_read import (
         _is_memo_send_row,
@@ -1306,6 +1348,11 @@ def _em_discharge(
         return _err(f"em-discharge: row {row_id!r} is execution_mode: operator; the operator releases it")
     if (row.get("disposition") or "open") != "open":
         return _err(f"em-discharge: row {row_id!r} disposition is {row.get('disposition')!r}, not open")
+    if executor_row and not (_FULL_SHA.fullmatch(commit_s) and _commit_resolves(repo_root, commit_s)):
+        return _err(
+            f"em-discharge: 'commit' {commit_s!r} is not a commit in this repo "
+            "(give the full 40-hex sha)"
+        )
 
     import datetime
 
@@ -1315,6 +1362,10 @@ def _em_discharge(
         "recorded_at": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "text": relativize_text(text, [(str(worktree), "")]),
     }
+    if commit_s:
+        entry["commit"] = commit_s
+    if evidence_s:
+        entry["evidence"] = relativize_text(evidence_s, [(str(worktree), "")])
     state = {"applied": False}
 
     def mutate(old_text: str) -> str:
@@ -2801,11 +2852,15 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
                    frontmatter with row: id); condition (exact or unique
                    prefix) or gate_index picks among same-owner_repo gates.
                    Unknown parameters are refused by name.
-        em-discharge : id (str), text (str, non-empty) — records that the EM
-                   performed `performer: em` row `id` under `em_discharged` in
-                   the evidence sidecar; read back with `read_em_discharges`.
-                   Refuses unknown, non-em, memo-send, operator and non-open
-                   rows; a repeat is a no-op (applied false).
+        em-discharge : id (str), text (str, non-empty), commit (str, optional),
+                   evidence (str, optional) — records that the EM performed
+                   `performer: em` row `id` under `em_discharged` in the
+                   evidence sidecar; read back with `read_em_discharges`. An
+                   executor row is discharged only with both `commit` (a full
+                   40-hex sha resolving to a commit) and non-empty `evidence`;
+                   the entry carries both. Refuses unknown, uncited executor,
+                   memo-send, operator and non-open rows; a repeat is a no-op
+                   (applied false).
         premise-record : id (str), verdict ('yes'|'no'), ref (str, non-empty) —
                    writes `premises.<id>` {verdict, ref, recorded_at} to the
                    evidence sidecar; a repeat replaces. Refuses unknown id and
@@ -2955,6 +3010,8 @@ async def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             params.get("text"),
             worktree,
             repo_root,
+            params.get("commit"),
+            params.get("evidence"),
         )
 
     if verb == "premise-record":

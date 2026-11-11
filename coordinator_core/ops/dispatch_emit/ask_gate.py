@@ -990,12 +990,13 @@ def _without_gate_verdicts(row_id: str, record):
 
 
 def _discharged_em_items(blocking: Sequence[str], discharged: Mapping, plan_path: Path) -> set[str]:
-    """Blocking items whose serving plan rows are all em-performed and em-discharged: the EM's
-    recorded discharge is the evidence, so such an item owes no re-plan. An unreadable plan, or an
-    item with no serving row, is never discharged."""
+    """Blocking items whose serving plan rows are all em-discharged (an em-performed row, or an
+    executor row whose entry cites a commit and evidence): the EM's recorded discharge is the
+    evidence, so such an item owes no re-plan. An unreadable plan, or an item with no serving row,
+    is never discharged."""
     if not discharged or not blocking:
         return set()
-    from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
+    from coordinator_core.ops.plan_tasks_mutate import em_discharge_closes
     from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import PlanRowsUnreadable, serving_rows
 
     out: set[str] = set()
@@ -1004,7 +1005,9 @@ def _discharged_em_items(blocking: Sequence[str], discharged: Mapping, plan_path
             rows = serving_rows(plan_path, [item])
         except PlanRowsUnreadable:
             return set()
-        if rows and all(row_is_em_performed(r) and str(r.get("id")) in discharged for r in rows):
+        if rows and all(
+            str(r.get("id")) in discharged and em_discharge_closes(r, discharged[str(r.get("id"))]) for r in rows
+        ):
             out.add(item)
     return out
 

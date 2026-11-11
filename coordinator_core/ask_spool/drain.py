@@ -373,6 +373,22 @@ def _drain_remote_failover() -> None:
         pass
 
 
+#: Pending listings one drain takes: the first, then a re-list for entries spooled while it ran.
+_MAX_PASSES = 3
+
+
+def _pending_passes(repo_root: str) -> Iterator[str]:
+    """Pending ids not yet yielded, re-listed after each batch is consumed, until a listing finds none
+    new or `_MAX_PASSES` listings are taken. An entry that failed and went back to pending is not re-yielded."""
+    seen: set = set()
+    for _ in range(_MAX_PASSES):
+        fresh = [sid for sid in record.list_pending(repo_root) if sid not in seen]
+        if not fresh:
+            return
+        seen.update(fresh)
+        yield from fresh
+
+
 def run(
     repo_root: str,
     *,
@@ -380,7 +396,8 @@ def run(
     stale_after_s: float = STALE_CLAIM_S,
     now: Optional[float] = None,
 ) -> dict:
-    """Drain every pending entry once; counts `{minted, skipped, failed, notified, coalesced, withdrawn}`.
+    """Drain every pending entry once, re-listing pending after each batch (at most `_MAX_PASSES` listings) so a
+    duplicate spooled mid-drain coalesces into the run this drain holds; counts `{minted, skipped, failed, notified, coalesced, withdrawn}`.
 
     `minted` made a new run, `skipped` found its run already minted, `failed` stays pending,
     `coalesced` joined the run another entry of the same sizing or run key holds, `withdrawn`
@@ -392,7 +409,7 @@ def run(
     _reclaim_stale(repo_root, stale_after_s, time.time() if now is None else now)
     taken: set = set()
     by_key: dict = {}
-    for sid in record.list_pending(repo_root):
+    for sid in _pending_passes(repo_root):
         path = record.claim(repo_root, sid)
         if path is None:
             continue
@@ -442,7 +459,10 @@ def run(
             _rewrite(path, stamped, payload)
         except OSError:
             pass
-        if _notify(repo_root, header, {"status": "coalesced" if coalesced else "minted", "run_id": run_id}):
+        fields = {"status": "coalesced" if coalesced else "minted", "run_id": run_id}
+        if minted_now:
+            fields["unstarted"] = True  # minted here, so no session holds a launcher for it
+        if _notify(repo_root, header, fields):
             counts["notified"] += 1
         record.mark_minted(repo_root, sid)
         counts["coalesced" if coalesced else "minted" if minted_now else "skipped"] += 1

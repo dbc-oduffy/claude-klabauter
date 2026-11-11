@@ -459,8 +459,12 @@ def _write_stale(
         "at": datetime.now(timezone.utc).isoformat(),
     }
     path = landing_retest.fresh_verdict_path(root, run_id)
+    kept = _read_record(path)
+    if kept and kept.get("status") in ("pass", "fail", NO_TESTS_STATUS):
+        print(f"{path} {kept['status']}: kept; a stale verdict never replaces a measured one")
+        return 0
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8", newline="\n")
     print(f"{path} stale: {note}")
     return 0
 
@@ -604,7 +608,7 @@ def _past_deadline(record: dict) -> bool:
 
 def _write_record(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8", newline="\n")
 
 
 def _input_pair(args: argparse.Namespace) -> tuple[str, str]:
@@ -1078,8 +1082,7 @@ def _write_dual(
     export_failed = _failed_node_ids(export_log, Path(meta["root"])) if export_log_used and 1 in codes else []
     live_failed = _failed_node_ids(log_path, root) if live_log_used and 1 in live_codes else []
 
-    test_files = [t.split("::")[0] for t in tests]
-    covered_paths = list(dict.fromkeys([*landing_retest._import_closure(root, test_files), *meta["write_set"]]))
+    covered_paths = list(dict.fromkeys(meta["write_set"]))
     record = {
         "run_id": run_id,
         "head": head_sha(root),
@@ -1148,10 +1151,9 @@ def main(
     if args.poll:
         return _poll(path, *_input_pair(args))
 
-    tests = _tests_to_run(args.tests, params)
+    tests = _with_invariants(root, _tests_to_run(args.tests, params), dirty, run_id, params)
     if not tests:
         return _write_stale(root, run_id, dirty, head_sha, params)
-    tests = _with_invariants(root, tests, dirty, run_id, params)
 
     escaping = [t for t in tests if contained_path(root / t.split("::")[0], [root]) is None]
     if escaping:
