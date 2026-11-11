@@ -288,7 +288,7 @@ def _claim_markers(
         body = json.dumps({"run": run_id, "path": rel}).encode("utf-8")
         for attempt in (0, 1):
             try:
-                fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             except FileExistsError:
                 holder = _read_marker(target)
                 dead = _marker_is_abandoned(target) if holder is None else holder[0] != run_id and over(holder[0])

@@ -7,6 +7,8 @@ import json
 import os
 import time
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import ask_stage_receipt as r
 
 
@@ -153,6 +155,7 @@ def test_staleness_ceiling_clears_observed_stall():
     assert r.CLAIM_STALE_SECS > _POOL_RESULT_DEADLINE_SECS
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled claim create that must raise at its deadline")
 def test_stalled_create_raises_within_deadline_and_late_winner_leaves_no_claim(tmp_path, monkeypatch):
     import threading
 

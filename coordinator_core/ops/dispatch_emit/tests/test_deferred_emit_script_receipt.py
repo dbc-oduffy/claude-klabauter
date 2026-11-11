@@ -68,6 +68,19 @@ def test_a_named_twin_of_another_run_or_shape_is_refused_by_name():
         assert len(calls) == 1
 
 
+def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    sha = "2d" * 32
+    first = "/r/scratch/warp/warp-plan-20261031T120809-5a6216.workflow.mjs"
+    own = staged_twin_rel("warp-plan-20261030T010101-aaaaaa", sha)
+    out, calls = _run_stage_loop({"handle": {"sha256": sha}, "twin_path": own}, first=first)
+    assert out["ok"] is True and calls[1] == "/r/" + own
+    other = staged_twin_rel("warp-other-20261030T010101-aaaaaa", sha)
+    out, calls = _run_stage_loop({"handle": {"sha256": sha}, "twin_path": other}, first=first)
+    assert out["ok"] is False and "twin_path is not a staged twin of this run" in out["error"] and len(calls) == 1
+
+
 def test_receipt_failure_never_fails_the_emit(tmp_path, monkeypatch):
     from coordinator_core.ops.dispatch_emit import emission_receipt
 

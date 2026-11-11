@@ -22,7 +22,7 @@ def draft_path(tmp_path):
     path = tmp_path / "draft.md"
 
     def _write_op(params, ctx=None, repo_root=None):
-        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL)
+        fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
         with os.fdopen(fd, "w") as fh:
             fh.write("draft")
         return {"written": True}

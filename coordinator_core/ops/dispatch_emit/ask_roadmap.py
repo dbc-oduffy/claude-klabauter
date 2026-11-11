@@ -226,11 +226,7 @@ def _staged_from_disk_lines(repo_root: str, run_id: str, trail_dir: str) -> list
         f"'{ac._repo_flag(repo_root)}` once and return its JSON reply verbatim "
         '(or {"error": ...} when it refuses). Commit nothing.',
     )
-    call = ac._agent(
-        prompt, label="staged-from-disk", phase="roadmap-blitz", agent_type=ac._OP_RELAY_AGENT_TYPE,
-        agent_model=ac._MECHANICAL_MODEL, schema=_STAGED_SCHEMA, effort=ac._MECHANICAL_EFFORT,
-        run_id=run_id,
-    )
+    call = ac._stage_read_agent(prompt, schema=_STAGED_SCHEMA, phase="roadmap-blitz", run_id=run_id, arm="disk")
     return [
         "  if (!_rb?.gate_report_path && typeof _rb?.roadmapId === 'string' && _rb.roadmapId) {",
         f"    const _disk = await {call};",

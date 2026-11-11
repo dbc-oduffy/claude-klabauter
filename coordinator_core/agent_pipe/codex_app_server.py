@@ -33,6 +33,8 @@ from coordinator_core.agent_pipe.session_driver import (
     SessionHandle,
     Update,
 )
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _CLIENT_INFO = {"name": "coordinator-agent-pipe", "version": "1"}
@@ -192,11 +194,12 @@ class _Conn:
 def _connect(argv: list[str], *, experimental: bool = False, timeout: float = _HANDSHAKE_TIMEOUT_S) -> Iterator[_Conn]:
     """Spawn the proxy, upgrade, `initialize`/`initialized`; always kills the child."""
     try:
+        env = shape_codex_child(stamped_env(KIND_CODEX), writable_root=None)
         proc = subprocess.Popen(
             argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            bufsize=0, creationflags=_NO_WINDOW, env=stamped_env(KIND_CODEX),
+            bufsize=0, creationflags=_NO_WINDOW, env=env,
         )
-    except OSError as exc:
+    except (OSError, SandboxSetupRefused) as exc:
         raise AppServerUnreachable(-1, f"cannot spawn proxy: {exc}") from exc
     try:
         conn = _Conn(proc)

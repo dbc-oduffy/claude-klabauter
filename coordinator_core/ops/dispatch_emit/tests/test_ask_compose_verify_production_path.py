@@ -60,7 +60,7 @@ def test_composed_script_carries_the_clause():
     _assert_clauses(_compose())
 
 
-_OVERLAY_CMD = "python -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id run-1"
+_OVERLAY_CMD = "-m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id run-1"
 
 
 def test_default_workflow_runs_the_overlay_producer_as_its_own_leg():

@@ -13,6 +13,7 @@ from typing import Optional
 
 from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_REASON_MAX_CHARS
+from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
 from coordinator_core.workflow_watch import stall
 
 HALT_COMMIT_STAGE = "commit_stage"
@@ -109,8 +110,12 @@ def halt_run_on_commit_stage_end(
         reason = f"commit stage: {label} leg {state}, task {terminal_status}"
         if leg_reason:
             reason = f"{reason}: {leg_reason}"
-        return halted_run.write_halt_marker(
-            Path(record_dir), halted=HALT_COMMIT_STAGE, sizing_rel=sizing_rel, reason=reason[:HALT_REASON_MAX_CHARS],
+        return remedy_or_halt(
+            HALT_COMMIT_STAGE,
+            lambda _n: halted_run.write_halt_marker(
+                Path(record_dir), halted=HALT_COMMIT_STAGE, sizing_rel=sizing_rel, reason=reason[:HALT_REASON_MAX_CHARS],
+            ),
+            lambda _failures: None,
         )
     except Exception:
         return None

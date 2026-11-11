@@ -172,7 +172,7 @@ def test_adopt_of_a_whole_inline_carries_no_spill_mark():
     assert "spill" not in got["manifest"]
 
 
-def _run_chain_loop(pending: dict) -> dict:
+def _run_chain_loop(pending: dict, chain_path: str = "/r/scratch/warp/ask-r1.workflow.mjs") -> dict:
     """Run the chain resume loop in node against a stubbed workflow(); returns {chained, why, calls}."""
     import json
     import shutil
@@ -186,7 +186,8 @@ def _run_chain_loop(pending: dict) -> dict:
         "const calls = [];\n"
         f"const PENDING = {json.dumps({'stage_pending': pending})};\n"
         "const workflow = async (o) => { calls.push(o.scriptPath); return { done: true }; };\n"
-        "(async () => {\n  let _why = null; let _chained = PENDING; const _chainPath = '/r/scratch/warp/ask-r1.workflow.mjs';\n"
+        "(async () => {\n  let _why = null; let _chained = PENDING;\n"
+        f"  const _chainPath = {json.dumps(chain_path)};\n"
         + ask_compose._chain_stage_loop_js()
         + "\n  console.log(JSON.stringify({ chained: _chained, why: _why, calls }));\n})();\n"
     )
@@ -265,6 +266,18 @@ def test_a_reply_that_names_its_twin_path_is_still_replaced_by_the_fresh_stage_o
 def test_a_recover_reply_that_names_no_twin_leaves_the_replayed_handle():
     got = _adopt_launcher_reply({"manifest_handle": _H_OLD}, {"manifest_handle": _H_NEW})
     assert got["pending"] == {"handle": _H_OLD} and got["calls"] == 1
+
+
+def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused():
+    from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
+
+    path = "/r/scratch/warp/warp-plan-20261031T120809-5a6216.workflow.mjs"
+    own = staged_twin_rel("warp-plan-20261030T010101-aaaaaa", "2d" * 32)
+    got = _run_chain_loop({"handle": {"sha256": "2d" * 32}, "twin_path": own}, path)
+    assert got["why"] is None and got["calls"] == ["/r/" + own]
+    other = staged_twin_rel("warp-other-20261030T010101-aaaaaa", "2d" * 32)
+    got = _run_chain_loop({"handle": {"sha256": "2d" * 32}, "twin_path": other}, path)
+    assert "twin_path is not a staged twin of this run" in got["why"] and got["calls"] == []
 
 
 def test_a_named_twin_of_another_run_is_refused_and_nothing_starts():

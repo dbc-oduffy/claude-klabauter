@@ -127,6 +127,7 @@ def test_door_deadline_is_the_hook_constant():
     assert pp._door_deadline_s() == _DOOR_HOOK_READ_DEADLINE_S
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the door deadline a blocked phase must not outwait; blocked time burns no CPU")
 def test_blocked_phase_returns_by_deadline_and_chain_stops_after(monkeypatch):
     release = threading.Event()
     after = []

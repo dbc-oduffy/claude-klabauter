@@ -92,7 +92,9 @@ def _scout_line(script):
 
 def test_new_sizing_path_spawns_no_assemble_and_no_gate_agent():
     script = _compose()
-    assert "label: 'assemble'" not in script and "label: 'gate'" not in script
+    # The only gate agent is the no-arm-recovery fallback (REFUSED-verdict safety); the happy path has none.
+    happy = re.sub(r"// no-arm-recovery:begin.*?// no-arm-recovery:end", "", script, flags=re.S)
+    assert "label: 'assemble'" not in script and "label: 'gate'" not in happy
     assert "_assembleCmd" not in script and "_assembled" not in script
     assert "agent(" in _scout_line(script)
 

@@ -91,11 +91,10 @@ def test_row_output_tokens_emitted_only_when_set():
     assert f.FanoutCost(4, 9, "expected", row_output_tokens=0).meta_dict()["rowOutputTokensTotal"] == 0
 
 
-def test_default_budget_tokens_is_a_positive_int_outside_the_frozen_vocab():
+def test_grind_vocab_carries_no_default_token_ceiling():
     from coordinator_core.contract import grind_vocab as gv
 
-    assert isinstance(gv.DEFAULT_BUDGET_TOKENS, int) and gv.DEFAULT_BUDGET_TOKENS == 2_000_000
-    assert "DEFAULT_BUDGET_TOKENS" not in gv.KNOB_NAMES
+    assert not hasattr(gv, "DEFAULT_BUDGET_TOKENS")
 
 
 def test_with_fanout_is_a_pure_literal_and_reads_back():

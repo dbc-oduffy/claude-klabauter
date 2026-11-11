@@ -102,7 +102,7 @@ def test_no_retest_verdict_past_the_budget_refuses_naming_the_retest_remedy_and_
 
     out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
 
-    assert out["committed"] is False and out["refused"] == "targeted-tests-failed", out
+    assert out["committed"] is False and out["refused"] == "invariant-unmeasured", out
     details = [f["detail"] for f in out["integrity"] if INV in f["detail"]]
     assert details and all("no fresh retest verdict exists" in d and "re-run: " in d for d in details), details
     assert _git(["rev-parse", "HEAD"], owed).strip() == head

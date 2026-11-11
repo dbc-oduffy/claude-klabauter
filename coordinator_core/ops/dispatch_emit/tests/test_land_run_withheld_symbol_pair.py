@@ -1,7 +1,7 @@
 """A landing reading `m.note_ids` while only an uncommitted `m.py` defines it.
 
-A product landing carries `m.py` into the commit unless another run or a peer holds it; a halted
-landing whose `m.py` a peer holds lands `u.py` with an `import-closure-untracked` provenance entry.
+A product landing carries `m.py` into the commit unless another run or a peer holds it, and then drops
+`u.py` as `lost-definition`; a halted landing commits only run docs and withholds both as `halt-record-only`.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
-from coordinator_core.ops.dispatch_emit import landing_integrity
+from coordinator_core.ops.dispatch_emit import land_run_halt, landing_integrity
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_halt_record as halt
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
@@ -54,7 +54,7 @@ def test_product_landing_carries_the_withheld_symbol_file(product_repo):
     assert "pk/m.py" in prod._tree(product_repo) and "pk/u.py" in prod._tree(product_repo)
 
 
-def test_halted_record_landing_records_the_pair_naming_both_paths(halt_repo, monkeypatch):
+def test_halted_record_landing_withholds_the_pair_and_lands_only_run_docs(halt_repo, monkeypatch):
     repo = halt_repo
     _seed(repo, halt._write, halt._git)
     halt._record(repo)
@@ -72,9 +72,10 @@ def test_halted_record_landing_records_the_pair_naming_both_paths(halt_repo, mon
 
     assert out["committed"] is True, out
     names = halt._names(repo, out["sha"])
-    assert "pk/u.py" in names and "pk/m.py" not in names, out
-    entry = _pair_entry(out)
-    assert "note_ids" in entry["detail"] and "pk/m.py" in entry["detail"], entry
+    assert "pk/u.py" not in names and "pk/m.py" not in names, out
+    assert any(n.endswith("/halted.json") for n in names), names
+    assert out["withheld"]["pk/m.py"] == "peer-held", out
+    assert out["withheld"]["pk/u.py"] == land_run_halt.HALT_RECORD_ONLY, out
 
 
 def test_product_landing_does_not_carry_a_peer_held_symbol_file(product_repo, monkeypatch):
@@ -83,7 +84,8 @@ def test_product_landing_does_not_carry_a_peer_held_symbol_file(product_repo, mo
     _seed(product_repo, prod._write, lambda r, *a: prod._git(list(a), r))
     prod._author(product_repo, "pk/u.py", U_NEW)
     prod._author(product_repo, "pk/m.py", M_NEW)
-    prod._declare(product_repo, "pk/u.py")
+    prod._author(product_repo, "pk/other.py", "X = 1\n")
+    prod._declare(product_repo, "pk/u.py", "pk/other.py")
     prod._record_dir(product_repo)
     real = land_run._peer_held
 
@@ -97,5 +99,6 @@ def test_product_landing_does_not_carry_a_peer_held_symbol_file(product_repo, mo
     out = prod._land(product_repo, inline_review=reviewed())
 
     assert out["committed"] is True, out
-    assert "pk/m.py" not in prod._tree(product_repo)
-    _pair_entry(out)
+    tree = prod._tree(product_repo)
+    assert "pk/m.py" not in tree and "pk/u.py" not in tree and "pk/other.py" in tree
+    assert out["withheld"]["pk/u.py"] == f"{landing_integrity.LOST_DEFINITION}: pk/m.py", out

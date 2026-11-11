@@ -462,3 +462,55 @@ def test_withheld_clean_outside_a_prefetch_tests_the_run_alone(repo, monkeypatch
         assert hr._withheld_clean(repo, rec) is False
     monkeypatch.setattr(commit_companion, "own_left_behind", lambda *a, **k: [])
     assert hr._withheld_clean(repo, rec) is True
+
+
+def _stub_unproduced(monkeypatch, details: dict) -> None:
+    from coordinator_core.ops.dispatch_emit import hunk_provenance
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import Finding
+
+    monkeypatch.setattr(
+        hunk_provenance, "unproduced_hunks",
+        lambda root, run_id, paths, **k: [Finding(p, "foreign-hunk-unproduced", details[p]) for p in paths if p in details],
+    )
+
+
+def _landing(repo: Path, paths: list, declared: list) -> dict:
+    return peer_hunk_gate.landing_holds(repo, SELF, OWN, None, paths, [], declared, declared, None)
+
+
+def test_a_live_foreign_hunk_no_sibling_declares_is_held_under_the_unknown_owner(repo, monkeypatch):
+    _stub_unproduced(monkeypatch, {PATH: "committed lines 3-4 were not produced by run ask-own; probable owner unknown"})
+    assert peer_hunk_gate._live_sibling_holds(repo, OWN, None, [PATH], [PATH], None) == {PATH: "unknown"}
+
+
+def test_a_foreign_hunk_attributed_to_a_halted_owner_is_not_a_live_hold(repo, monkeypatch):
+    _declare(repo, "run-b", PATH)
+    _halt(repo / "state" / "warp" / "run-b")
+    _stub_unproduced(monkeypatch, {PATH: "committed lines 3 were not produced by run ask-own; probable owner run-b"})
+    assert peer_hunk_gate._live_sibling_holds(repo, OWN, None, [PATH], [PATH], None) == {}
+
+
+def test_unreadable_provenance_and_a_clean_path_hold_nothing_live(repo, monkeypatch):
+    _stub_unproduced(monkeypatch, {PATH: "provenance unreadable: NoWriteBaseline: run has no write_baseline for the path"})
+    assert peer_hunk_gate._live_sibling_holds(repo, OWN, None, [PATH, "src/a.py"], [PATH], None) == {}
+
+
+def test_an_out_of_ask_path_no_peer_declares_is_held_under_the_reviewer_stem(repo, monkeypatch):
+    _record(repo, OWN, "rev-1")
+    _sidecar(repo, "rev-1", FINDING, None)
+    _stub_unproduced(monkeypatch, {})
+    assert _landing(repo, [PATH], [PATH]) == {PATH: "rev-1"}
+
+
+def test_an_out_of_ask_path_with_an_attributed_owner_is_held_under_that_owner(repo, monkeypatch):
+    _record(repo, OWN, "rev-1")
+    _sidecar(repo, "rev-1", FINDING, None)
+    _stub_unproduced(monkeypatch, {PATH: "committed lines 3 were not produced by run ask-own; probable owner run-z"})
+    assert peer_hunk_gate._attributed_owners(repo, OWN, None, [PATH]) == {PATH: "run-z"}
+
+
+def test_a_resolved_out_of_ask_row_and_a_clean_path_hold_nothing(repo, monkeypatch):
+    _record(repo, OWN, "rev-1")
+    _sidecar(repo, "rev-1", FINDING, "applied")
+    _stub_unproduced(monkeypatch, {})
+    assert _landing(repo, [PATH], [PATH]) == {}

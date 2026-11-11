@@ -30,7 +30,8 @@ def query_own_priority() -> dict:
     return {"mem_ok": bool(ok), "memory": mem.value, "io_status": st, "io": io.value}
 
 
-def test_worker_init_lowers_priority_before_registry_preload(monkeypatch) -> None:
+def test_worker_init_lowers_priority_and_preloads_nothing(monkeypatch) -> None:
+    # Worker init stays off the boot budget: ops import on first use, never here.
     calls: list[str] = []
     from coordinator_core.warm import polite_io
 
@@ -49,7 +50,7 @@ def test_worker_init_lowers_priority_before_registry_preload(monkeypatch) -> Non
     monkeypatch.setattr(server.threading, "Thread", _StubThread)
     server._worker_process_init()
 
-    assert calls == ["lower", "preload"]
+    assert calls == ["lower"]
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows priority readback only")

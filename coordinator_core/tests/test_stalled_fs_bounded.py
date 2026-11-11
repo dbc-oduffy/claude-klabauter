@@ -31,6 +31,7 @@ def _blocking(release, real):
     return _fn
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked mkdir holds mark_advised, a wait CPU time cannot see")
 def test_mark_advised_returns_at_deadline_when_mkdir_blocks(tmp_path, monkeypatch, release):
     monkeypatch.setattr(_advisory_dedupe, "_FS_DEADLINE_SECS", 0.1)
     real = type(tmp_path).mkdir
@@ -40,6 +41,7 @@ def test_mark_advised_returns_at_deadline_when_mkdir_blocks(tmp_path, monkeypatc
     assert time.monotonic() - t0 < _BUDGET
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked stat holds already_advised, a wait CPU time cannot see")
 def test_already_advised_fails_open_when_stat_blocks(tmp_path, monkeypatch, release):
     monkeypatch.setattr(_advisory_dedupe, "_FS_DEADLINE_SECS", 0.1)
     real = type(tmp_path).exists
@@ -54,6 +56,7 @@ def test_mark_advised_still_writes_when_fs_is_healthy(tmp_path):
     assert _advisory_dedupe.already_advised(tmp_path, "sess-c", "guard__abc") is True
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked open holds the inbox create, a wait CPU time cannot see")
 def test_inbox_create_refuses_with_oserror_when_open_blocks(tmp_path, monkeypatch, release):
     monkeypatch.setattr(memo_send, "_INBOX_CREATE_DEADLINE_SECS", 0.1)
     monkeypatch.setattr(os, "open", _blocking(release, os.open))
@@ -89,6 +92,7 @@ def test_late_inbox_create_leaves_no_orphan(tmp_path, monkeypatch, release):
     assert not target.exists()
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked sidecar open holds locked_rmw, a wait CPU time cannot see")
 def test_locked_rmw_raises_lock_timeout_when_sidecar_open_blocks(tmp_path, monkeypatch, release):
     monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
     monkeypatch.setattr(locked_write, "SIDECAR_OPEN_DEADLINE_SECS", 0.1)
@@ -129,6 +133,7 @@ def test_windows_eacces_on_sidecar_open_is_retried_then_succeeds(tmp_path, monke
     assert target.read_text(encoding="utf-8") == "ab"
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the retry deadline on a persistent EACCES sidecar open, a wait CPU time cannot see")
 def test_windows_persistent_eacces_raises_lock_timeout_past_the_bound(tmp_path, monkeypatch):
     monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", False)
     monkeypatch.setattr(locked_write, "SIDECAR_OPEN_DEADLINE_SECS", 0.2)
@@ -170,6 +175,7 @@ def test_locked_rmw_propagates_real_errors_unchanged(tmp_path, monkeypatch):
         locked_write.locked_rmw(tmp_path / "absent.txt", lambda s: s, repo_root=tmp_path)
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked placement holds write_object, a wait CPU time cannot see")
 def test_write_object_raises_timeout_when_placement_blocks(tmp_path, monkeypatch, release):
     monkeypatch.setattr(git_objects, "_WRITE_OBJECT_DEADLINE_SECS", 0.1)
     real = type(tmp_path).mkdir

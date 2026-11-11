@@ -513,7 +513,12 @@ def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path,monk
         on_spawn=lambda _:None,on_native_thread=lambda _:None,private_cli=contract)=={'ok':True}
     wire=json.loads(capture.read_text());audit=json.loads((kwargs['artifact_dir']/'private-cli.json').read_text())
     assert resolve_env[0]['PATH']!=contract['env']['PATH']
-    for key,value in contract['env'].items():assert wire['env'][key]==value
+    for key,value in contract['env'].items():
+        if key=='PATH':
+            # The final-env shaper may insert PowerShell 7 ahead of a WindowsApps pwsh; private-bin stays first.
+            assert wire['env'][key].split(os.pathsep)[0]==contract['private_bin']
+            assert set(value.split(os.pathsep))<=set(wire['env'][key].split(os.pathsep))
+        else:assert wire['env'][key]==value
     assert 'COORDINATOR_SESSION_ID' not in wire['env'] and 'CODEX_THREAD_ID' not in wire['env']
     assert wire['env']['COORDINATOR_PARENT_SESSION_ID']==kwargs['parent_session_id']
     assert wire['argv'][wire['argv'].index('--sandbox')+1]=='workspace-write'
@@ -563,3 +568,51 @@ def test_model_options_cannot_select_private_cli(tmp_path,monkeypatch):
     agents.run_agent('x',{'schema':SCHEMA,'private_cli':{'env':{'COORDINATOR_WARM':'1'}}},repo_root=tmp_path,artifact_dir=tmp_path/'agent')
     assert not (tmp_path/'agent/private-cli.json').exists()
     assert json.loads(capture.read_text())['env']['COORDINATOR_WARM']=='0'
+
+
+class _Spawned(Exception):
+    pass
+
+
+def _headless_shape_rig(tmp_path, monkeypatch, *, ps7):
+    import functools
+    from coordinator_core.codex_runner import codex_spawn_env, sandbox_preflight
+    pf = tmp_path / "ProgramFiles"
+    apps = tmp_path / "WindowsApps"
+    apps.mkdir()
+    (apps / "pwsh.exe").write_text("")
+    if ps7:
+        (pf / "PowerShell" / "7").mkdir(parents=True)
+        (pf / "PowerShell" / "7" / "pwsh.exe").write_text("")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    seen = {}
+    def spawn(argv, prompt, *, env, **_kw):
+        seen["env"] = dict(env)
+        raise _Spawned
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: True)
+    monkeypatch.setattr(headless_agents, "shape_codex_child", functools.partial(
+        codex_spawn_env.shape_codex_child, environ={"ProgramFiles": str(pf)}, windows=True))
+    monkeypatch.setattr(headless_agents, "preflight_auth", lambda **_kw: None)
+    monkeypatch.setattr(headless_agents, "resolve_codex", lambda **_kw: ["codex"])
+    monkeypatch.setattr(headless_agents, "_environment",
+                        lambda: {"PATH": str(apps), "TEMP": "denied-temp", "TMP": "denied-temp"})
+    monkeypatch.setattr(headless_agents, "_run_admitted", spawn)
+    return repo, seen, str(pf / "PowerShell" / "7"), str(apps)
+
+
+def test_headless_codex_spawn_env_has_ps7_ahead_of_windowsapps_and_writable_temp(tmp_path, monkeypatch):
+    repo, seen, ps7, apps = _headless_shape_rig(tmp_path, monkeypatch, ps7=True)
+    with pytest.raises(_Spawned):
+        headless_agents.run_agent("x", {}, repo_root=repo, artifact_dir=tmp_path / "agent")
+    env = seen["env"]
+    assert env["PATH"].split(os.pathsep)[:2] == [ps7, apps]
+    expected = repo.resolve() / "scratch" / "codex-tmp"
+    assert expected.is_dir() and env["TEMP"] == env["TMP"] == str(expected)
+
+
+def test_headless_codex_windowsapps_only_path_refuses_before_admission(tmp_path, monkeypatch):
+    repo, seen, _, _ = _headless_shape_rig(tmp_path, monkeypatch, ps7=False)
+    with pytest.raises(headless_agents.AgentFailed, match="WindowsApps|pwsh"):
+        headless_agents.run_agent("x", {}, repo_root=repo, artifact_dir=tmp_path / "agent")
+    assert "env" not in seen

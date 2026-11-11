@@ -2824,6 +2824,7 @@ def test_inherited_root_does_not_deadlock(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_process
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a contended lock acquire waits before LockTimeout, a wait CPU time cannot see")
 def test_non_inherited_root_still_locked(tmp_path, monkeypatch):
     """AC2, half 2 -- a root NOT named in the inheritance env var must still
     go through real lock acquisition. Root A is inherited (parent holds it,

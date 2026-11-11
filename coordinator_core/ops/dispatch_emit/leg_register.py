@@ -161,8 +161,10 @@ REGISTER: tuple[LegDecl, ...] = (
     _earns("ask", "retest-invariant", "re-runs the invariant's scoped test command and reports its status"),
     _floor(
         "ask", "blitz-stage-read",
-        "arm: the plan-blitz arm whose readyOp never ran; the only agents before it are plan-blitz's own, which "
-        "return inside the plugin-owned planBlitz, so none can carry the stage op",
+        "arms: the plan-blitz arm whose readyOp never ran, and the stage-recover re-ask of a fold-site return that "
+        "carried no stage_reply; the agents before the first are plan-blitz's own, which return inside the "
+        "plugin-owned planBlitz, and the second exists because the preceding agent's reply was lost; the "
+        "roadmap staged-from-disk read rides the same key for the same reason",
     ),
     _floor(
         "ask", "already-delivered-close",
@@ -289,7 +291,7 @@ _NON_JUDGMENT: dict[tuple[str, str], tuple[Disposition, str]] = {
         "when nothing is owed the whole leg is skipped; otherwise the agent stays",
     ),
     ("ask", "gate"): (Disposition.FLOOR, "the gate op where no agent precedes it, and the values arm of size-retry"),
-    ("ask", "blitz-stage-read"): (Disposition.FLOOR, "stage op relay with no preceding judgment agent"),
+    ("ask", "blitz-stage-read"): (Disposition.FLOOR, "stage op relay: plan-blitz readyOp-miss, stage-recover re-ask and roadmap staged-from-disk, none with a judgment agent to carry it"),
     ("ask", "commit"): (Disposition.FLOOR, _COMMIT_FLOOR),
     ("ask", "halt-commit"): (Disposition.FLOOR, _COMMIT_FLOOR),
     ("ask", "commit:wave-"): (Disposition.FLOOR, _COMMIT_FLOOR),

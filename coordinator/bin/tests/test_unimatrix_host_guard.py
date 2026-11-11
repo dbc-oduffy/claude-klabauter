@@ -72,6 +72,7 @@ def test_malformed_stdin_is_neutral(tmp_path, host, stdin):
     assert hg.guard(host, stdin, root) == (NEUTRAL[host], "degraded")
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocking shim holds the guard before the budget deadline answers neutral, a wait CPU time cannot see")
 @pytest.mark.parametrize("src", ["import time\ntime.sleep(60)\n", None])
 @pytest.mark.parametrize("host", ["agy", "codex"])
 def test_blocking_shim_returns_neutral_within_budget(tmp_path, host, src):

@@ -1044,6 +1044,26 @@ def plugin_agent_model(
     return None, plugins_root / plugin / "agents" / f"{stem}.md"
 
 
+def plugin_qualified_candidates(stem: str, *, home: Any = _UNSET) -> "list[str]":
+    """Every installed `<plugin>:<stem>` agent type whose definition stem is `stem`, sorted.
+
+    Keys-only walk of the same four plugin layouts the roster reads (no frontmatter
+    parse); a plugin cached at several versions yields one key. A `stem` carrying `:`
+    or a path separator, or an unresolved home, gives `[]`. Never raises, spawns nothing.
+    """
+    if home is _UNSET:
+        home = _home_dir()
+    if not (home and stem) or ":" in stem or "/" in stem or "\\" in stem:
+        return []
+    suffix = f":{stem}"
+    return sorted(key for key in _load_plugin_roster(home) if key.endswith(suffix))
+
+
+def is_harness_builtin_type(agent_type: str) -> bool:
+    """Whether `agent_type` is an Anthropic-owned harness built-in (`general-purpose`, `Explore`, ...)."""
+    return agent_type in _HARNESS_BUILTIN_TYPES
+
+
 def _has_override_marker(prompt_text: str) -> bool:
     for match in _OVERRIDE_MARKER_RE.finditer(prompt_text):
         reason = match.group(1)

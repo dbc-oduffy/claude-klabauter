@@ -7,7 +7,7 @@ from coordinator_core.ops.plan_tasks_mutate import _em_discharge
 
 _BODY = (
     "- id: O1\n  title: t\n  surface: s\n  performer: em\n"
-    "  execution_mode: operator\n  writes:\n    - a.py\n"
+    "  execution_mode: operator\n  writes:\n    - a.md\n"
 )
 
 

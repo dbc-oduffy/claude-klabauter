@@ -14,7 +14,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import rep
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _SIBLING = "_halted.split.research.sizing"
-_START = "await workflow({ scriptPath: _chainPath })"
+_EMIT = f"await _chain_emit({_SIBLING})"
+_START = "await _chain_start(_chainPath, _chainRunId, _runId)"
 
 
 def _script(sizing_rel, **over) -> str:
@@ -50,9 +51,12 @@ def script(request) -> str:
 
 def test_leg_chains_the_split_research_sizing_and_carries_the_split(script):
     leg = _leg(script)
-    assert f"from_sizing: {_SIBLING}" in leg
+    assert _EMIT in leg
     assert "sizing_path" not in leg and "ask: true" not in leg
     assert _START in leg
+    # The shared emit helper takes the sibling sizing as `from_sizing` (research route), never the ask door.
+    emit_def = script[script.index("_chain_emit = (_sz)") :].splitlines()[0]
+    assert "from_sizing: _sz" in emit_def and "sizing_path" not in emit_def and "ask: true" not in emit_def
     assert "chained_from: _runId, split: _halted.split" in leg
 
 
@@ -91,7 +95,7 @@ def test_leg_sits_after_the_gate_halt_assignment_and_before_the_terminal_return(
 def test_the_build_sibling_is_never_chained(script):
     leg = _leg(script)
     assert "split.build" not in leg
-    assert leg.count(_START) == 1
+    assert leg.count(_START) == 1 and leg.count(_EMIT) == 1
 
 
 def test_a_launcher_child_hands_the_research_sibling_off_and_holds_no_start():
@@ -112,7 +116,7 @@ def test_leg_params_reach_the_research_route_and_the_ask_door_is_refused(repo):
     rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "web")
     rendered = _chain_emit_params_js("SIB", research=True)
     keys = set(re.findall(r"(?:^|[{,]\s*)(\w+):", rendered))
-    assert keys == {"from_sizing", "session_id", "target_root", "cross_repo_approved"}
+    assert keys == {"from_sizing", "session_id", "target_root", "chain_parent", "cross_repo_approved"}
     reply = _dispatch_emit({"from_sizing": rel, "session_id": "sess", "target_root": str(repo)}, repo)
     assert reply["path"] and "research" in reply["run_id"]
     with pytest.raises(Exception):

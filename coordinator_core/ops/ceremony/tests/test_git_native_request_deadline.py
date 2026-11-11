@@ -6,11 +6,14 @@ import sys
 import time
 from types import SimpleNamespace
 
+import pytest
+
 from coordinator_core import dispatch_abandon
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.ops.ceremony import git_native
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a hung git child that must be killed at the request deadline")
 def test_child_killed_when_request_deadline_nearly_spent(monkeypatch, tmp_path):
     real_run = subprocess.run
 
@@ -63,6 +66,7 @@ def _locked():
     return SimpleNamespace(returncode=1, stderr="fatal: Unable to create index.lock")
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a lock retry that must not sleep past the request deadline")
 def test_retry_starts_no_attempt_past_deadline():
     calls = []
 

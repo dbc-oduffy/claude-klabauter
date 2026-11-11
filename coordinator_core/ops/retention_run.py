@@ -50,13 +50,13 @@ def due(claude_home: "Optional[Path]" = None, now: "Optional[float]" = None) -> 
 def _acquire(lock: Path, now: float) -> bool:
     try:
         lock.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
     except FileExistsError:
         try:
             if now - lock.stat().st_mtime < LOCK_STALE_SECONDS:
                 return False
             lock.unlink()
-            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except OSError:
             return False
     except OSError:

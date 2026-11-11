@@ -851,15 +851,26 @@ def crossed_mirrors(bridges, rows):
     return [(seen[s], s) for s in rows if s in crossed]
 
 
+ABSENT_POLLS_BEFORE_UNMIRROR = 2
+_ABSENT = {}  # far socket -> consecutive polls its row was missing from the far roster
+
+
 def sync(bridges, rows, cfg, say):
-    """One reconcile pass: `rows` is far socket -> roster row; `bridges` far socket -> Popen."""
+    """One reconcile pass: `rows` is far socket -> roster row; `bridges` far socket -> Popen.
+
+    A live bridge whose row is missing is kept for `ABSENT_POLLS_BEFORE_UNMIRROR` polls in a row: a far
+    router or engine respawn re-registers its sessions within seconds, and one poll landing in that gap
+    must not drop a peer's mirror."""
     scan = live_sessions()
+    for sock in rows:
+        _ABSENT.pop(sock, None)
     for sock, row in rows.items():
         b = bridges.get(sock)
         if b and b.poll() is None:
             rename_live_mirror(b.pid, sock, row, cfg, say, scan)
             continue
         if b:
+            say(f"bridge {b.pid} for {sock} exited rc={b.poll()}; re-mirror")
             unmirror(b.pid)
             scan = [(n, s) for n, s in scan if not same_scan_target(s, mirror_scan_key(cfg.remote, sock))]
         bridges[sock] = mirror(row, cfg, say, scan)
@@ -870,8 +881,15 @@ def sync(bridges, rows, cfg, say):
         say(f"MISROUTE {name} {sock}")
         unmirror(bridges.pop(sock).pid)
     for sock in [s for s in bridges if s not in rows]:
+        missed = _ABSENT[sock] = _ABSENT.get(sock, 0) + 1
+        if missed < ABSENT_POLLS_BEFORE_UNMIRROR and bridges[sock].poll() is None:
+            say(f"row for {sock} absent ({missed}/{ABSENT_POLLS_BEFORE_UNMIRROR}); mirror kept")
+            continue
+        _ABSENT.pop(sock, None)
         unmirror(bridges.pop(sock).pid)
         say(f"unmirror {sock}")
+    for sock in [s for s in _ABSENT if s not in bridges]:
+        del _ABSENT[sock]
 
 
 def link_state_path(alias, home=None):

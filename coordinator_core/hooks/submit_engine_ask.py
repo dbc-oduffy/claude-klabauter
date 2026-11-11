@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import dataclasses
 import os
 import re
 import threading
@@ -1758,13 +1759,16 @@ def _default_launch(root: Path, parent_id: str, children: Sequence[Any], session
     # Every child is a deferred-emit script: the launcher child runs `dispatch.emit` and starts the run, so the hook
     # pays no per-child emit. A refusal inside that emit is named by the launcher as the child's `emit_refused`.
     emitted: list = []
+    # The defer marker is hook-internal: it must reach neither the deferred script nor the launcher's per-child emit literal.
+    clean: list = []
     for child in children:
         params = {**child.emit_params, LAUNCHER_CHILD_EMIT_PARAM: True}
         params.setdefault("session_id", session_id or "")
         params.pop(_DEFER_EMIT_KEY, False)
         note = "Not emitted in the hook: the launcher child emits and starts it."
         emitted.append(_deferred_child_reply(root, child, params, note))
-    return write_launcher(root, parent_id, children, session_id, emitted)
+        clean.append(dataclasses.replace(child, emit_params={k: v for k, v in child.emit_params.items() if k != _DEFER_EMIT_KEY}))
+    return write_launcher(root, parent_id, clean, session_id, emitted)
 
 
 def _deferred_child_reply(root: Path, child: Any, params: dict, note: str) -> dict:
@@ -2273,7 +2277,7 @@ def _child_params(
     `sizing_doc` is the already-read sizing; None reads it here (and a stalled read raises `_SizingStalled`)."""
     # `dispatch.emit` is repo-unkeyed over the CLI: without target_root a relative sizing_path
     # resolves against the engine's own root, not the submitting repo.
-    params: dict = {"session_id": session_id or "", "target_root": str(root)}
+    params: dict = {"session_id": session_id or "", "target_root": Path(root).as_posix()}
     if _has_research_block(_load_sizing_doc(root, run.slice_sizing) if sizing_doc is None else sizing_doc):
         params["from_sizing"] = run.slice_sizing
     else:

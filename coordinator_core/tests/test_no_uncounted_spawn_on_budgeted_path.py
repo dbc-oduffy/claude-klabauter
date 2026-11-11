@@ -412,6 +412,15 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/release_run_token.py",
         ("_handler",),
     ),
+    "dispatch.release_halted_path": (
+        "coordinator_core/ops/dispatch_emit/release_halted_path.py",
+        ("_handler",),
+    ),
+    # Spawn-free (stdlib + yaml, no git).
+    "dispatch.checkpoint_reds": (
+        "coordinator_core/ops/dispatch_emit/checkpoint_reds.py",
+        ("_handler",),
+    ),
     "dispatch.measured_rev": (
         "coordinator_core/ops/dispatch_emit/measured_rev.py",
         ("_handler",),
@@ -435,6 +444,11 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "hooks.postuse_advisory_dispatch": (
         "coordinator_core/hooks/postuse_advisory_dispatch.py",
+        ("_handler",),
+    ),
+    # Spawn-free: reaches no spawn site.
+    "hooks.group_em_home_autoclaim": (
+        "coordinator_core/hooks/group_em_home_autoclaim.py",
         ("_handler",),
     ),
     # Re-enrolled 2026-10-02 with the one spawn each reaches legitimized in `_LEGITIMIZED_SITES`

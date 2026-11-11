@@ -223,5 +223,5 @@ def test_denial_simulation_refuses_a_sidecar_under_git(tmp_path, monkeypatch):
     with pytest.raises(PermissionError):
         os.mkdir(repo / ".git" / "coordinator-locks")
     with pytest.raises(PermissionError):
-        os.open(str(repo / ".git" / "x.lock"), os.O_CREAT | os.O_WRONLY)
+        os.open(str(repo / ".git" / "x.lock"), os.O_CREAT | os.O_WRONLY, 0o644)
     (repo / "state").mkdir()

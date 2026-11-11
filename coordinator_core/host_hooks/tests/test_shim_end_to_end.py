@@ -271,6 +271,7 @@ def test_engine_down_irreversible_command_is_denied_by_the_backstop(world, host,
         assert answer["decision"] == "deny"
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the shim dial budget against a delayed engine reply; the delay burns no CPU")
 def test_slow_engine_past_budget_gets_the_neutral_fallback_inside_the_wall(world):
     tree, env, sock_path = world
     engine = _StubEngine(sock_path, {}, delay=1.5)

@@ -47,6 +47,7 @@ def _deny_reason(env: dict) -> str:
     return hso["additionalContext"]
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook timeout against a slow emit; blocked time burns no CPU")
 def test_overrun_after_mint_names_the_run(repo, monkeypatch):
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "2.5")
     release = threading.Event()
@@ -152,6 +153,7 @@ def test_in_budget_emit_still_allows(repo, monkeypatch):
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook timeout against a stall plus a slow emit; blocked time burns no CPU")
 def test_stall_before_the_emit_and_a_slow_emit_together_still_name_the_run(repo, monkeypatch):
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "2.5")
     real_missing = mod._missing_context
@@ -172,6 +174,7 @@ def test_stall_before_the_emit_and_a_slow_emit_together_still_name_the_run(repo,
     assert RUN_ID in reason and "Do not re-submit" in reason and "not taken" not in reason
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook timeout against a stall after the emit; blocked time burns no CPU")
 def test_stall_after_the_emit_returns_names_the_run(repo, monkeypatch):
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "2.5")
     release = threading.Event()
@@ -193,6 +196,7 @@ def test_stall_after_the_emit_returns_names_the_run(repo, monkeypatch):
     assert RUN_ID in reason and "Do not re-submit" in reason
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook budget against a stall before any mint; blocked time burns no CPU")
 def test_stall_before_any_mint_answers_inside_the_budget_and_says_nothing_was_taken(repo, monkeypatch):
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "2.5")
     release = threading.Event()

@@ -303,6 +303,7 @@ def test_read_handle_rejects_traversal_and_missing():
     assert background.read_handle("nope") is None
 
 
+@pytest.mark.deliberate_wall_clock(reason="fail-open bound: a hook context must not wait on a remote boot")
 def test_hook_context_makes_no_remote_call_and_fails_open_fast(monkeypatch, tmp_path, runner):
     t0 = time.monotonic()
     stdout, _stderr, code = _run(

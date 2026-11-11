@@ -132,6 +132,7 @@ def test_missing_and_corrupt(tmp_path):
     assert hrr.read(tmp_path, 1000) is hrr.MISSING
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled record read that must return the sentinel at its deadline")
 def test_stalled_read_returns_sentinel_without_raising_and_one_in_flight(tmp_path, monkeypatch):
     (tmp_path / "f.bin").write_bytes(b"x")
     gate = threading.Event()

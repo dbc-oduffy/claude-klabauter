@@ -9,6 +9,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.ask_spool import record
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests import test_submit_engine_ask_real_emit as real
@@ -38,6 +40,7 @@ def _assert_spooled_allow(env: dict, root: Path) -> str:
     return spool_id
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook window so a handover-pending emit spools instead of waiting")
 def test_handover_pending_raised_by_the_emit_spools_a_0600_entry_holding_the_ask(repo):
     def emit(_p, _r):
         raise HandoverPending(5)

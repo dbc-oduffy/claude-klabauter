@@ -13,6 +13,8 @@ def test_start_projects_caller_then_scrubs_at_both_boundaries(tmp_path, monkeypa
              "COORDINATOR_AGENT_ROLE": "em", "COORDINATOR_AGENT_MODEL": "parent-model", "PATH": "preserved"}
     monkeypatch.setattr(core, "subprocess_identity_env", lambda **kw: {**dirty, "CODEX_THREAD_ID": "actual-caller"})
     monkeypatch.setattr(core, "attributable_session_id", lambda: "actual-caller")
+    from coordinator_core.codex_runner import codex_spawn_env
+    monkeypatch.setattr(codex_spawn_env, "shape_codex_child", lambda env, **kw: env)
     monkeypatch.setattr(ops.contract, "run_dir", lambda _: tmp_path / "run")
     monkeypatch.setattr(ops.contract, "mailbox_path", lambda _: tmp_path / "mailbox")
     captured = []
@@ -39,6 +41,8 @@ def test_start_projects_caller_then_scrubs_at_both_boundaries(tmp_path, monkeypa
 def test_existing_resume_keeps_identity_semantics(tmp_path, monkeypatch):
     current = {"CODEX_THREAD_ID": "existing-thread", "COORDINATOR_AGENT_ROLE": "em"}
     monkeypatch.setattr(relay.os, "environ", current)
+    from coordinator_core.codex_runner import codex_spawn_env
+    monkeypatch.setattr(codex_spawn_env, "shape_codex_child", lambda env, **kw: env)
     captured = []
     child = SimpleNamespace(stdout=[], wait=lambda: 0, poll=lambda: 0)
     monkeypatch.setattr(relay.subprocess, "Popen", lambda *a, **kw: captured.append(kw) or child)

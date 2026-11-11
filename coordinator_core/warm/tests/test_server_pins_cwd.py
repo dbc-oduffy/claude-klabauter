@@ -38,4 +38,5 @@ def test_pin_cwd_failure_is_reported_not_raised(tmp_path, monkeypatch, capsys):
 def test_boot_pins_cwd_after_winning_the_election():
     boot = inspect.getsource(server._run_guarded)
     assert "_pin_cwd(repo_root)" in boot
-    assert boot.index("ElectionLost") < boot.index("_pin_cwd(repo_root)") < boot.index("_preload_op_registry()")
+    # Boot no longer preloads the op registry (6cbfcca093); the pool-console step is the next boot call.
+    assert boot.index("ElectionLost") < boot.index("_pin_cwd(repo_root)") < boot.index("_suppress_pool_worker_consoles()")

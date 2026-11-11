@@ -24,7 +24,7 @@ def _append_lock(path: Path):
         return
     import msvcrt
 
-    fd = os.open(str(path.with_suffix(".lock")), os.O_RDWR | os.O_CREAT)
+    fd = os.open(str(path.with_suffix(".lock")), os.O_RDWR | os.O_CREAT, 0o644)
     try:
         os.lseek(fd, 0, os.SEEK_SET)
         while True:

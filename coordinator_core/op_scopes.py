@@ -167,6 +167,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "hooks.mise_autofire":                    "none",
     "hooks.handoff_segment_inject":           "none",
     "hooks.group_em_autofire":                "none",
+    "hooks.group_em_home_autoclaim":          "none",
     "hooks.nudge_initiative_goals_ladder":    "none",
     "hooks.offer_exploration_tier_dispatch":  "none",
     "hooks.observe_config_change":            "none",
@@ -859,6 +860,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.close_halted_run_rejected":       "common_dir",
     "dispatch.land_combined_index":             "common_dir",
     "dispatch.release_run_token":               "common_dir",
+    "dispatch.release_halted_path":             "common_dir",
+    # dispatch.checkpoint_reds — MUTATING: writes state/bug-backlog rows under the caller's own worktree.
+    "dispatch.checkpoint_reds":                 "common_dir",
     # dispatch.adopt_orphaned_run — MUTATING: re-homes a dead session's run dir under the caller.
     "dispatch.adopt_orphaned_run":              "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.

@@ -350,6 +350,62 @@ def test_bare_asks_do_not_coalesce(tmp_path):
     assert drain.run(str(tmp_path), evaluate=engine)["minted"] == 2
 
 
+def _spool_ask(root, tuid, text, sid="sess1"):
+    payload = json.dumps(
+        {"tool_name": "Workflow", "session_id": sid, "tool_use_id": tuid, "tool_input": {"name": "ask", "args": text}}
+    ).encode()
+    spool_id, created = record.spool_ask(
+        str(root), payload, session_id=sid, tool_use_id=tuid, reason="engine_unreachable"
+    )
+    assert created
+    return spool_id
+
+
+def _token_of_ask(root, run_id, text, session="sess1", minted_at=None):
+    """A live run token recording `text`'s normalized ask hash, as the submit hook's marker mint writes it."""
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit import run_token
+    from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
+
+    subprocess.run(["git", "init", "-q", str(root)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    run_token.mint(
+        root, run_id, f"scratch/warp/{run_id}.workflow.mjs", session_id=session, marker=True,
+        ask_sha256=normalized_ask_hash(text),
+    )
+    if minted_at is not None:
+        path = run_token._record_path(root, run_id)
+        rec = json.loads(path.read_text(encoding="utf-8"))
+        rec["minted_at"] = minted_at
+        path.write_text(json.dumps(rec, sort_keys=True), encoding="utf-8")
+
+
+def test_bare_ask_whose_session_already_holds_the_same_normalized_ask_coalesces_with_no_mint(tmp_path):
+    run_id = "ask-20261104T160000-ffffff"
+    _token_of_ask(tmp_path, run_id, "Fix the  drain  bug")
+    sid = _spool_ask(tmp_path, "tuRetry", "fix the drain BUG")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 0 and counts["coalesced"] == 1 and counts["minted"] == 0
+    header, _ = record.read_entry(record.entry_path(str(tmp_path), sid, record.MINTED_SUFFIX))
+    assert header["coalesced_into"] == run_id == header["run_id"]
+    assert [n["status"] for n in _notices(tmp_path)] == ["coalesced"]
+
+
+def test_bare_ask_of_another_session_or_another_text_or_outside_the_window_still_mints(tmp_path):
+    _token_of_ask(tmp_path, "ask-20261104T160001-aaaaaa", "fix the drain bug", session="other")
+    _token_of_ask(tmp_path, "ask-20261104T160002-bbbbbb", "a different ask")
+    _token_of_ask(tmp_path, "ask-20261104T160003-cccccc", "stale ask", minted_at=time.time() - 3600)
+    for rid in ("ask-20261104T160002-bbbbbb", "ask-20261104T160003-cccccc"):
+        _write_submission(tmp_path, rid, session_id="sess1", tool_use_id="old-" + rid)
+    _spool_ask(tmp_path, "tuA", "fix the drain bug")
+    _spool_ask(tmp_path, "tuB", "fix the drain bug now")
+    _spool_ask(tmp_path, "tuC", "stale ask")
+    engine = Engine(tmp_path)
+    counts = drain.run(str(tmp_path), evaluate=engine)
+    assert engine.calls == 3 and counts["minted"] == 3 and counts["coalesced"] == 0
+
+
 def _withdrawn(root, sid):
     header, _ = record.read_entry(record.entry_path(str(root), sid, record.WITHDRAWN_SUFFIX))
     return header

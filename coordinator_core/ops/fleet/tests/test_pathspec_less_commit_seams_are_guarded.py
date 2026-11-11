@@ -205,7 +205,13 @@ def test_the_known_fleet_seams_are_still_pathspec_less_and_guarded():
             )
             assert guarded, f"{name} no longer calls {GUARD_NAME}()"
         else:
-            assert _calls_any(fn_by_name[name], COMMIT_LANDING_HELPERS), (
+            # `archive_and_commit` is an async wrapper that hands the work to
+            # `archive_and_commit_sync` via `asyncio.to_thread`; the landing
+            # call lives in the `_sync` body, so check both.
+            bodies = [fn_by_name[name]]
+            if f"{name}_sync" in fn_by_name:
+                bodies.append(fn_by_name[f"{name}_sync"])
+            assert any(_calls_any(b, COMMIT_LANDING_HELPERS) for b in bodies), (
                 f"{name} contains neither a spawned `git commit`/`commit-tree` "
                 f"seam nor a call to {sorted(COMMIT_LANDING_HELPERS)} — its "
                 f"commit landing has silently disappeared rather than moved to "

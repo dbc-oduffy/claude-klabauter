@@ -19,7 +19,9 @@ from typing import Any, Callable
 
 import jsonschema
 
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
+from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.codex_runner.review import _unattended_env
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
@@ -269,6 +271,10 @@ def run_agent(
                 raise AgentFailed("codexModel must be a non-empty native model ID")
             argv += ["--model", model]
         argv += ["-"]
+        try:
+            shape_codex_child(env, writable_root=repo_root)
+        except SandboxSetupRefused as exc:
+            raise AgentFailed(str(exc)) from exc
     elif backend == "claude":
         executable = shutil.which("claude", path=env.get("PATH"))
         if not executable:

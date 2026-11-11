@@ -114,15 +114,55 @@ def _live_token_run(root: Path, key: Optional[str], taken: set) -> Optional[str]
     return None
 
 
+def _raw_ask_text(payload: dict) -> Optional[str]:
+    """The free-text ask a bare entry carries: a string `args`, or a dict `args["ask"]`."""
+    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
+    args = tool_input.get("args") if isinstance(tool_input, dict) else None
+    if isinstance(args, dict):
+        args = args.get("ask")
+    return args if isinstance(args, str) and args.strip() else None
+
+
+def _same_ask_run(root: Path, session: str, ask: Optional[str], spooled_at: float, taken: set) -> Optional[str]:
+    """The session's live token run recording the same normalized ask hash near the spool time.
+
+    The submission record carries no ask text; the run token's `ask_sha256` does."""
+    if not ask or not session:
+        return None
+    from coordinator_core.ops.dispatch_emit.extant_work import normalized_ask_hash
+    from coordinator_core.ops.dispatch_emit.run_token import live_records
+
+    want = normalized_ask_hash(ask)
+    try:
+        for rec in live_records(root):
+            minted = float(rec.get("minted_at") or 0)
+            if (
+                rec.get("ask_sha256") == want
+                and rec.get("session_id") == session
+                and rec.get("run_id") not in taken
+                and spooled_at - _LOOKBACK_S <= minted <= spooled_at + _LOOKAHEAD_S
+            ):
+                return rec["run_id"]
+    except (OSError, ValueError, TypeError):
+        return None
+    return None
+
+
 def _find_run(
-    root: Path, header: dict, tool_use_id: Optional[str], taken: set, sizing_key: Optional[str] = None
+    root: Path,
+    header: dict,
+    tool_use_id: Optional[str],
+    taken: set,
+    sizing_key: Optional[str] = None,
+    ask: Optional[str] = None,
 ) -> tuple[Optional[str], bool]:
-    """(run_id, via_sizing): the run already minted for this entry, else (None, False).
+    """(run_id, coalesced): the run already minted for this entry, else (None, False).
 
     Stamp, then the original dispatch key, then a submission naming the same sizing
-    (`sizing_key` "sizing:<rel>" only; via_sizing True), then a run whose live token names the
+    (`sizing_key` "sizing:<rel>" only; coalesced True), then a run whose live token names the
     entry's sizing or resumed run id (a refire reuses an older run dir the mtime floor skips;
-    via_sizing True), then the session's lone token."""
+    coalesced True), then, for a bare entry, a same-session run whose token records the same
+    normalized `ask` (a retry under a new tool_use_id; coalesced True), then the session's lone token."""
     session = header.get("session_id") or ""
     spooled_at = float(header.get("spooled_at") or 0)
     sizing_rel = sizing_key[len("sizing:"):] if sizing_key and sizing_key.startswith("sizing:") else None
@@ -141,6 +181,10 @@ def _find_run(
     live = _live_token_run(root, sizing_key, taken)
     if live:
         return live, True
+    if not sizing_key:
+        same = _same_ask_run(root, session, ask, spooled_at, taken)
+        if same:
+            return same, True
     if session:
         return _lone_token_run(root, session, spooled_at, taken), False
     return None, False
@@ -372,7 +416,9 @@ def run(
                 run_id = by_key.get(key) if key else None
                 coalesced = run_id is not None
                 if run_id is None:
-                    run_id, coalesced = _find_run(root, header, parsed.get("tool_use_id"), taken, key)
+                    run_id, coalesced = _find_run(
+                        root, header, parsed.get("tool_use_id"), taken, key, None if key else _raw_ask_text(parsed)
+                    )
                 minted_now = run_id is None
                 if run_id is None:
                     run_id = _mint(root, header, parsed, evaluate, taken)

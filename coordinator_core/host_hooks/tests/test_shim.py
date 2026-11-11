@@ -84,6 +84,7 @@ def test_engine_down_or_error_is_neutral_fallback_with_degrade_row(monkeypatch, 
     assert all(r["cause"] for r in rows)
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the shim dial budget against a sleeping engine; sleep burns no CPU")
 def test_slow_engine_past_budget_falls_back_within_wall(monkeypatch, rows):
     monkeypatch.setattr(shim, "DIAL_BUDGET_SECS", 0.05)
     monkeypatch.setattr(shim, "_dial", lambda request: time.sleep(2) or {"result": {}})

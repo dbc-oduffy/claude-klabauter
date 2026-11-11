@@ -562,6 +562,7 @@ def test_late_result_after_reconcile_still_lands():
     assert store.status(key)["state"] == dispatch_ack.STATE_FINISHED
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: a reconciled key must return, not block for the 5s wait")
 def test_wait_on_reconciled_key_returns_immediately():
     store = _store()
     key = _key(1, 1_000_100)

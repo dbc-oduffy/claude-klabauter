@@ -10,7 +10,7 @@ MIGRATED (declaration + assertion below):
   3. `concurrency_probe.default_usable_ram_gb` -- RAISE.
 
 DECLARED AS-IS, deliberately not migrated:
-  4. `concurrency_probe.compute_parallelism_cap` and `validate_levels` raise on
+  4. `concurrency_probe.compute_measured_cap` and `validate_levels` raise on
      INVALID ARGUMENTS, which is a different thing from an undeterminable
      precondition: the caller supplied the wrong value and can see that it did.
      Decorating them would stretch the vocabulary to cover ordinary argument

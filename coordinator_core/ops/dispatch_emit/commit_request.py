@@ -31,6 +31,7 @@ cannot drift apart. ``emit.py`` currently carries its own copy
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -114,6 +115,38 @@ def plan_trailer_deliverable_ids(plan_text: str) -> list[str]:
 # declared prefix surface — the terminal commit (D3) trusts only files a
 # DONE chunk's own report lists under its OWN prefix.
 PREFIX_CLAIM_LABEL = "created-under-prefix:"
+
+# A block of claims (bare label, one path per line) ends at the next ``word:`` field or status line.
+_CLAIM_BLOCK_END_RE = re.compile(r"^(?:[A-Za-z][\w -]*:(?:\s|$)|(?:DONE|BLOCKED|PARTIAL)\b|#)")
+
+
+def parse_prefix_claims(text: str) -> Optional[list]:
+    """Paths a report claims under ``PREFIX_CLAIM_LABEL``; None when it carries no such line.
+
+    ``label: <path>`` claims one path; ``label: none`` claims nothing; a bare ``label:`` opens a
+    block whose following lines are claims until a blank line, the next ``word:`` field or a
+    ``DONE``/``BLOCKED``/``PARTIAL`` status line."""
+    claims: list = []
+    saw_label = False
+    in_block = False
+    for raw in text.splitlines():
+        line = raw.strip().lstrip("-*").strip()
+        if line.startswith(PREFIX_CLAIM_LABEL):
+            saw_label = True
+            rest = line[len(PREFIX_CLAIM_LABEL) :].strip().strip("`'\"")
+            in_block = not rest
+            if rest and rest.lower() != "none":
+                claims.append(rest)
+            continue
+        if not in_block:
+            continue
+        if not line or _CLAIM_BLOCK_END_RE.match(line):
+            in_block = False
+            continue
+        entry = line.strip("`'\"").strip()
+        if entry and entry.lower() != "none":
+            claims.append(entry)
+    return claims if saw_label else None
 
 # One-line sentinel a script carries at most once. The trailing space
 # means the JSON payload starts immediately after the prefix, on the same

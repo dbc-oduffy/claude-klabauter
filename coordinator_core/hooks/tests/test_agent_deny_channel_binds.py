@@ -106,16 +106,17 @@ def test_deny_channel_binds_exit_zero_with_deny_envelope(monkeypatch: pytest.Mon
     exit_code, stdout_text = _run_main_via_stdin(monkeypatch, payload)
 
     assert exit_code == 0, (
-        "deny must be communicated via the hookSpecificOutput envelope, "
-        "not via process exit status -- an exit-1/exit-2 regression here "
-        "means a harness wiring that only checks exit status would fail "
-        "OPEN on this guard"
+        "the verdict is communicated via the hookSpecificOutput envelope, "
+        "never via process exit status"
     )
     envelope = json.loads(stdout_text)
     hook_output = envelope["hookSpecificOutput"]
-    assert hook_output["permissionDecision"] == "deny"
-    reason = hook_output.get("permissionDecisionReason")
-    assert isinstance(reason, str) and reason.strip()
+    # block-unenumerated-agent-type is ruled advisory (deny_registry.ADVISORY_BY_RULING):
+    # the would-be deny arrives as an allow carrying one Advisory line.
+    assert hook_output["permissionDecision"] == "allow"
+    context = hook_output.get("additionalContext")
+    assert isinstance(context, str) and context.startswith("Advisory: ")
+    assert "permissionDecisionReason" not in hook_output
 
 
 def test_deny_channel_binds_regardless_of_name_presence(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -134,15 +135,16 @@ def test_deny_channel_binds_regardless_of_name_presence(monkeypatch: pytest.Monk
     }
 
     unnamed_exit, unnamed_stdout = _run_main_via_stdin(monkeypatch, unnamed_payload)
-    unnamed_decision = json.loads(unnamed_stdout)["hookSpecificOutput"]["permissionDecision"]
+    unnamed_hso = json.loads(unnamed_stdout)["hookSpecificOutput"]
 
     named_exit, named_stdout = _run_main_via_stdin(monkeypatch, named_payload)
-    named_decision = json.loads(named_stdout)["hookSpecificOutput"]["permissionDecision"]
+    named_hso = json.loads(named_stdout)["hookSpecificOutput"]
 
     assert unnamed_exit == 0
     assert named_exit == 0
-    assert unnamed_decision == "deny"
-    assert named_decision == "deny"
+    for hso in (unnamed_hso, named_hso):
+        assert hso["permissionDecision"] == "allow"
+        assert hso["additionalContext"].startswith("Advisory: ")
 
 
 def test_enumerated_type_channel_emits_nothing_and_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:

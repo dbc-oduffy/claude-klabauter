@@ -63,8 +63,9 @@ def run_id_mint_epoch(run_id: str) -> Optional[float]:
     except (ValueError, OverflowError):
         return None
 
-#: Marker field `{path: {reason, at}}`: the halted run no longer holds those paths. Written only by
-#: `declared_hold_release._release_path`; read by `released_path_reasons` and its consumers.
+#: Marker field `{path: {reason, at}}`: the halted run no longer holds those paths. Written by
+#: `declared_hold_release._release_path` and `release_halted_path.release_path`; read by
+#: `released_path_reasons` and its consumers.
 RELEASED_PATHS_FIELD = "released_paths"
 
 

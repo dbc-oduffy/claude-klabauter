@@ -15,13 +15,16 @@ from .test_ask_compose import _JUDGE_KW, _compose
 
 _SIZING = "state/sizings/x.yaml"
 _HALT = ask_compose._review_blocked_halt_js(None)
+_HALT_DECL = "const _reviewBlockedHalt = () => {"
 
 
 def test_halt_sits_between_the_review_and_the_test_ledger_and_commit_stages():
     script = _compose(**_JUDGE_KW)
 
-    assert script.count(_HALT) == 1
-    halt_at = script.index(_HALT)
+    # The composer's sharing passes rewrite the halt's body, so locate it by its declaration.
+    assert _HALT_DECL in _HALT
+    assert script.count(_HALT_DECL) == 1
+    halt_at = script.index(_HALT_DECL)
     assert script.index("phase('Review wave')") < halt_at
     assert halt_at < script.index("phase('Verify')")
     assert halt_at < script.index("label: 'verify'")

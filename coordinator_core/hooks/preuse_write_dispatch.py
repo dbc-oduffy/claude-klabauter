@@ -87,6 +87,7 @@ def _compose_skipped_guard_breadcrumb(skipped: "list[str]") -> str:
 def _handler(params: dict, repo_root=None) -> dict:
     """Run `_run_chain` under `run_phased`: phases and guards are named on the request row and
     a dispatch past the hook deadline answers `no_advisory()`."""
+    params = payload_of(params)
     return run_phased("hooks.preuse_write_dispatch", params, _run_chain)
 
 

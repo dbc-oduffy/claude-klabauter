@@ -15,6 +15,7 @@ without any message while no resume child runs.
 from __future__ import annotations
 
 import json
+import os
 import queue
 import re
 import shutil
@@ -29,12 +30,19 @@ from typing import Callable, Dict, List, Mapping, Optional
 
 from coordinator_core.agent_pipe import mailbox
 from coordinator_core.agent_pipe.contract import Adapter, PipeMessage
+from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.win_portability import no_console_creationflags
 
 STDIN = "stdin"
 RESUME = "resume"
 
 _ADDRESS = re.compile(r"^@([A-Za-z0-9_.-]+)[\s:]+(.*)$", re.DOTALL)
+# Named vars a codex peer needs to reach the engine and the network; the reviewer allowlist drops them.
+_ENGINE_REACH_ENV = frozenset({
+    "COORDINATOR_SETTINGS_HOME", "COORDINATOR_ENGINE_ROOT", "COORDINATOR_ENGINE_SOURCE_ROOT", "CLAUDE_KLABAUTER_ROOT",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS",
+})
 _POLL_SECONDS = 0.02
 _REAP_SECONDS = 5.0
 
@@ -165,10 +173,35 @@ class _Relay:
     def _touch(self) -> None:
         self.last_activity = time.monotonic()
 
-    def _spawn(self, argv, stdin) -> subprocess.Popen:
+    @staticmethod
+    def _codex_env(p: Participant) -> Optional[Dict[str, str]]:
+        """Shaped env for a codex participant; None keeps the inherited env for every other provider."""
+        from coordinator_core.agent_pipe.codex import CodexAdapter
+        if not isinstance(p.adapter, CodexAdapter):
+            return None
+        from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+        from coordinator_core.codex_runner.review import _unattended_env
+        env = _unattended_env()
+        held = {k.upper() for k in env}
+        for key, value in os.environ.items():
+            if key.upper() in _ENGINE_REACH_ENV and key.upper() not in held and value:
+                env[key] = value
+        return shape_codex_child(env, writable_root=None)
+
+    def _try_spawn(self, p: Participant, argv, stdin) -> Optional[subprocess.Popen]:
+        """Spawn `argv` for `p`; None (exit 127, error printed) when the binary or the sandbox setup is refused."""
+        try:
+            return self._spawn(argv, stdin, self._codex_env(p))
+        except (OSError, SandboxSetupRefused) as exc:
+            print(f"peer {p.name}: {exc}", file=sys.stderr)
+            self.exit_codes[p.name] = 127
+            return None
+
+    def _spawn(self, argv, stdin, env: Optional[Mapping[str, str]] = None) -> subprocess.Popen:
         proc = subprocess.Popen(
             argv,
             stdin=stdin,
+            env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             encoding="utf-8",
@@ -253,10 +286,8 @@ class _Relay:
             pass
 
     def _run_once(self, p: Participant, argv: List[str]) -> None:
-        try:
-            proc = self._spawn(argv, subprocess.DEVNULL)
-        except OSError:
-            self.exit_codes[p.name] = 127
+        proc = self._try_spawn(p, argv, subprocess.DEVNULL)
+        if proc is None:
             return
         self._read(p, proc)
         self.exit_codes[p.name] = proc.returncode
@@ -289,10 +320,8 @@ class _Relay:
         threads: List[threading.Thread] = []
         for p in self.by_name.values():
             if p.mode == STDIN:
-                try:
-                    proc = self._spawn(p.argv or p.adapter.spawn_argv(p.prompt, p.conversation or None), subprocess.PIPE)
-                except OSError:
-                    self.exit_codes[p.name] = 127
+                proc = self._try_spawn(p, p.argv or p.adapter.spawn_argv(p.prompt, p.conversation or None), subprocess.PIPE)
+                if proc is None:
                     continue
                 self.stdin_procs[p.name] = proc
                 self.stdin_alive += 1

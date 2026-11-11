@@ -1,10 +1,18 @@
 """host_targets.plan: path derivation per OS, detection, purity."""
 from __future__ import annotations
 
+import os
+import sys
+
 import pytest
 
 from coordinator_core.install import host_targets
 from coordinator_core.install.host_targets import HOSTS, HostPlan, plan, resolve_home
+
+
+def _exe_name(name):
+    # shutil.which on Windows only matches PATHEXT suffixes, never a bare name.
+    return name + ".exe" if sys.platform == "win32" else name
 
 
 def _env(tmp_path, **extra):
@@ -70,10 +78,10 @@ def test_binary_absent_is_none(tmp_path):
 def test_agy_binary_found_on_path(tmp_path):
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    exe = bindir / "agy"
+    exe = bindir / _exe_name("agy")
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
-    assert plan("agy", tmp_path, {"PATH": str(bindir)}).binary == str(exe)
+    assert os.path.normcase(plan("agy", tmp_path, {"PATH": str(bindir)}).binary) == os.path.normcase(str(exe))
 
 
 def test_codex_binary_via_resolve_codex(tmp_path, monkeypatch):
@@ -93,7 +101,7 @@ def test_codex_single_element_argv_reports_that_codex(tmp_path, monkeypatch):
 def test_codex_falls_back_to_which_when_resolver_misses(tmp_path, monkeypatch):
     bindir = tmp_path / "bin"
     bindir.mkdir()
-    exe = bindir / "codex"
+    exe = bindir / _exe_name("codex")
     exe.write_text("#!/bin/sh\n")
     exe.chmod(0o755)
 
@@ -101,7 +109,7 @@ def test_codex_falls_back_to_which_when_resolver_misses(tmp_path, monkeypatch):
         raise host_targets.CodexUnavailable("none")
 
     monkeypatch.setattr(host_targets, "resolve_codex", miss)
-    assert plan("codex", tmp_path, {"PATH": str(bindir)}).binary == str(exe)
+    assert os.path.normcase(plan("codex", tmp_path, {"PATH": str(bindir)}).binary) == os.path.normcase(str(exe))
 
 
 def test_plan_writes_nothing(tmp_path):

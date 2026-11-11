@@ -34,6 +34,32 @@ def test_own_session_stalled_run_is_closed_and_token_released(tmp_path):
     assert not run_token.is_live(tmp_path, RUN)
 
 
+def test_stalled_run_holding_kept_chunks_stays_open(tmp_path):
+    rdir = _stalled(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (rdir / "kept.json").write_text(json.dumps({"chunks": {"C1": {"files": {}}}}), encoding="utf-8")
+    out = _abandon(tmp_path, session_id="s1")
+    assert out["abandoned"] is False
+    assert not (rdir / halted_run.HALTED_FILE).exists()
+    assert run_token.is_live(tmp_path, RUN)
+
+
+def test_stalled_run_holding_post_checkpoint_stays_open(tmp_path):
+    rdir = _stalled(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (rdir / "kept.json").write_text(json.dumps({"post_checkpoint": {"a.py": "abc"}}), encoding="utf-8")
+    assert _abandon(tmp_path, session_id="s1")["abandoned"] is False
+    assert run_token.is_live(tmp_path, RUN)
+
+
+def test_stalled_run_with_empty_kept_json_is_closed(tmp_path):
+    rdir = _stalled(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (rdir / "kept.json").write_text(json.dumps({"chunks": {}}), encoding="utf-8")
+    assert _abandon(tmp_path, session_id="s1")["abandoned"] is True
+    assert not run_token.is_live(tmp_path, RUN)
+
+
 def test_foreign_session_run_is_untouched(tmp_path):
     rdir = _stalled(tmp_path, session="other")
     (tmp_path / "sub").mkdir()

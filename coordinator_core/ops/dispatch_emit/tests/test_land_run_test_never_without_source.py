@@ -104,3 +104,55 @@ def test_owner_annotated_source_that_lands_keeps_its_test(product_repo, monkeypa
 ])
 def test_is_test_path(rel, expect):
     assert land_run._is_test_path(rel) is expect
+
+
+OLD_TEST_NEW = "def test_run():\n    from pk import m\n\n    assert m.old() is None\n"
+
+
+def _stage_behavioural(repo, monkeypatch, *, hold_m: bool, declare_m: bool = True) -> dict:
+    """The test reads only `old`, a name HEAD already defines; the declared m.py carries own hunks."""
+    prod._write(repo, "pk/__init__.py", "")
+    prod._write(repo, "pk/m.py", M_BASE)
+    prod._write(repo, "pk/test_u.py", TEST_BASE)
+    prod._git(["add", "."], repo)
+    prod._git(["commit", "-q", "-m", "seed pk"], repo)
+    prod._author(repo, "pk/test_u.py", OLD_TEST_NEW)
+    prod._author(repo, "pk/m.py", M_NEW.replace("pass", "return None"))
+    prod._declare(repo, "pk/test_u.py", *(["pk/m.py"] if declare_m else []))
+    prod._record_dir(repo)
+    if hold_m:
+        real = land_run._peer_held
+
+        def held(root, paths, *a, **kw):
+            out = real(root, paths, *a, **kw)
+            out.update({p: ["peer-sid"] for p in paths if p == "pk/m.py"})
+            return out
+
+        monkeypatch.setattr(land_run, "_peer_held", held)
+    return prod._land(repo, inline_review=reviewed())
+
+
+def test_test_of_a_dropped_mixed_hunk_product_file_is_withheld_with_the_file_named(product_repo, monkeypatch):
+    out = _stage_behavioural(product_repo, monkeypatch, hold_m=True)
+
+    assert out["committed"] is True and out.get("refused") is None, out
+    tree = prod._tree(product_repo)
+    assert "pk/m.py" not in tree and "pk/test_u.py" not in tree
+    assert out["withheld"]["pk/m.py"] == "peer-held", out
+    assert out["withheld"]["pk/test_u.py"] == f"{land_run.TEST_WITHOUT_SOURCE}: pk/m.py", out
+
+
+def test_test_of_a_product_file_that_lands_stays_landed(product_repo, monkeypatch):
+    out = _stage_behavioural(product_repo, monkeypatch, hold_m=False)
+
+    assert out["committed"] is True, out
+    assert {"pk/m.py", "pk/test_u.py"} <= set(prod._tree(product_repo))
+    assert "pk/test_u.py" not in (out.get("withheld") or {})
+
+
+def test_test_of_a_file_the_run_did_not_declare_stays_landed(product_repo, monkeypatch):
+    out = _stage_behavioural(product_repo, monkeypatch, hold_m=True, declare_m=False)
+
+    assert out["committed"] is True, out
+    assert "pk/test_u.py" in prod._tree(product_repo)
+    assert "pk/test_u.py" not in (out.get("withheld") or {})

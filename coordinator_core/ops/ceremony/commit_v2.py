@@ -663,9 +663,8 @@ def _checkpoint_symbol_refusal(
 def _checkpoint_import_refusal(
     worktree_root: Path, paths: list, deleted: list, untracked: list, blobs: dict
 ) -> Optional[str]:
-    """Refusal text when a staged `.py` from-imports a `coordinator_core` name the would-be
-    tree (HEAD overlaid with the staged bytes) does not define. Fails open when the percolate
-    resolver is not on disk or HEAD is unresolvable."""
+    """Refusal text when a staged `.py` from-imports a `coordinator_core` name the would-be tree
+    does not define; fails open when the resolver is absent or HEAD unresolvable."""
     staged_py = [p for p in [*paths, *untracked] if p.endswith(".py")]
     if not staged_py:
         return None
@@ -977,11 +976,9 @@ def _record_ledger(worktree_root: Path, paths: list, sha: str, message: str) -> 
     from coordinator_core.contract.apply_base import record_ledger_entry
     from coordinator_core.git.commit_trailers import extract_closure_facts_from_text
 
-    # Line-anchored read of the raw message that became the commit object, so a demoted
-    # `Closes:` still records (C1's contract).
+    # Line-anchored read of the committed message, so a demoted `Closes:` still records (C1).
     closes, reverts_sha = extract_closure_facts_from_text(message)
-    # The message is the committed fact. An explicit session_id supplied to commit_v2
-    # has already been applied here, even when no ambient session environment exists.
+    # The message is the committed fact: an explicit session_id is already applied here.
     from coordinator_core.git.commit_trailers import _extract_trailer_block
 
     committer = next((line.partition(":")[2].strip() for line in _extract_trailer_block(message)
@@ -1467,9 +1464,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
     if gate_refusal is not None:
         return _error(gate_refusal)
 
-    # Declared-vs-actual EOL repair for the executables this commit touches (`docs/reference/eol-drift-detection.md`).
-    # Filter-first: no `.cmd`/`.ps1`/`.sh`/`.bat` means no spawn and no read. Runs BEFORE the commit; not a
-    # refusal. Wrapped: a repair-side exception is worse than the drift. `prefer_staged` paths are excluded.
+    # EOL repair (`docs/reference/eol-drift-detection.md`) runs BEFORE the commit and never refuses; a
+    # repair-side exception is worse than the drift. `prefer_staged` paths are excluded.
     with ledger.phase("eol_drift"):
         try:
             prefer_staged_set = set(raw_prefer_staged)
@@ -1482,11 +1478,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             eol_drifts = []
             eol_repaired = []
 
-    # Attach Session-Id / Deliverable-Id via the shared applier: this route's object-write
-    # plumbing fires no git hooks, so this is its only attach point. Never blocks.
-    #
-    # `commit_paths` honours `commit.gpgsign`; a signing failure lands the commit unsigned and
-    # `outcome.sign_warning` is surfaced into `warnings` below.
+    # Session-Id / Deliverable-Id attach here: this route's object-write plumbing fires no git hooks.
+    # Never blocks. A `commit_paths` signing failure lands unsigned; `outcome.sign_warning` surfaces below.
     message = _disclose_peer_holds(message, peer_holds + abandoned_holds)
     message = _disclose_gone_deletions(message, reclassified)
     with ledger.phase("apply_missing_trailers"):

@@ -472,6 +472,12 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     "hooks.mise_autofire": OpClass.MUTATING,
     "hooks.handoff_segment_inject": OpClass.MUTATING,
     "hooks.group_em_autofire": OpClass.MUTATING,
+    # hooks.group_em_home_autoclaim — MUTATING: on a SessionStart inside the group-em home it calls
+    # groupem.enter (entry_evidence="home-start"), which writes the pending Group EM claim
+    # (coordinator_core/hooks/group_em_home_autoclaim.py).
+    # DR-208 five-question affirmation: 1 YES (claim record write via groupem.enter); 2 No; 5 YES (persisted on disk).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "hooks.group_em_home_autoclaim": OpClass.MUTATING,
     "hooks.nudge_initiative_goals_ladder": OpClass.MUTATING,
     "hooks.offer_exploration_tier_dispatch": OpClass.MUTATING,
     "hooks.observe_config_change": OpClass.MUTATING,
@@ -2580,6 +2586,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # DR-208 five-question affirmation: 1 YES (marker rewrite, index entry removal); 2 No; 5 YES (persisted on disk).
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.close_halted_run_rejected": OpClass.MUTATING,
+    # dispatch.checkpoint_reds — MUTATING: writes state/bug-backlog fix rows for introduced reds
+    # (ops/dispatch_emit/checkpoint_reds.py).
+    # DR-208 five-question affirmation: 1 YES (bug-backlog yaml write); 2 No; 5 YES (persisted on disk).
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.checkpoint_reds": OpClass.MUTATING,
     # dispatch.run_terminality — COMPUTE_ONLY: reads one run dir's halted.json and run-outcome.json and returns
     # terminal/resumable/reason; writes no file and spawns no process (ops/dispatch_emit/run_terminality.py).
     # DR-208 five-question affirmation: 1 No (reads only); 2 No; 3 No; 4 No; 5 No.
@@ -2623,6 +2634,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The record's absence.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "dispatch.release_run_token": OpClass.MUTATING,
+    # dispatch.release_halted_path — MUTATING: moves one path of a halted run's marker from
+    # run_artifacts.withheld into released_paths (ops/dispatch_emit/release_halted_path.py).
+    # DR-208 five-question affirmation (citing dispatch.release_halted_path handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      Rewrites one halted.json under state/warp/<run_id>/.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      The atomic halted.json replace through halted_run._write.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      The marker every landing hold computation reads.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The released_paths entry.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "dispatch.release_halted_path": OpClass.MUTATING,
     # dispatch.measured_rev — MUTATING: writes blob and commit objects into the object store and the run's
     # measured-rev.json record under state/warp/<run_id>/ (ops/dispatch_emit/measured_rev.py); moves no ref, writes no index.
     # DR-208 five-question affirmation (citing dispatch.measured_rev handler):

@@ -8,11 +8,12 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_r
 PLAN_REL = "docs/plans/2026-10-15-withheld-owner.md"
 
 
-def _row(row_id: str, extra: str = "", dep: str | None = None) -> str:
+def _row(row_id: str, extra: str = "", dep: str | None = None, ext: str = "py") -> str:
+    # A `performer: em` row that writes code routes to an executor, so EM roots write a non-code file.
     deps = f"  depends_on:\n    - chunk: {dep}\n      gate_kind: output-consumption-runtime\n" if dep else ""
     return (
         f"- id: {row_id}\n  title: row {row_id}\n  change_kind: code-edit\n"
-        f"  surface: pkg/{row_id}.py\n  writes:\n    - pkg/{row_id}.py\n{extra}{deps}"
+        f"  surface: pkg/{row_id}.{ext}\n  writes:\n    - pkg/{row_id}.{ext}\n{extra}{deps}"
     )
 
 
@@ -40,7 +41,7 @@ def test_transitive_row_inherits_root_gate_owner(tmp_path):
 
 
 def test_em_rooted_dependent_is_owed_not_gated(tmp_path):
-    reply = _stage(tmp_path, _row("U1"), _row("E1", "  performer: em\n"), _row("T1", dep="E1"))
+    reply = _stage(tmp_path, _row("U1"), _row("E1", "  performer: em\n", ext="md"), _row("T1", dep="E1"))
     assert ("T1", "withheld_by_owed_dependency") in [(o["id"], o["reason"]) for o in reply["owed"]]
     assert "T1" not in [g["id"] for g in reply["gated"]]
 
@@ -58,7 +59,7 @@ def test_no_gated_entry_has_empty_owner(tmp_path):
         _row("U1"),
         _row("G1", _GATE),
         _row("TG", dep="G1"),
-        _row("E1", "  performer: em\n"),
+        _row("E1", "  performer: em\n", ext="md"),
         _row("TE", dep="E1"),
         _row("O1", "  execution_mode: operator\n"),
         _row("TO", dep="O1"),

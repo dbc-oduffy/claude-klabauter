@@ -3,6 +3,7 @@ from __future__ import annotations
 import filecmp
 from pathlib import Path
 
+from coordinator_core.install import substrate
 from coordinator_core.install.substrate import (
     _CH_FAMILY_FILES,
     _RM_FAMILY_FILES,
@@ -51,6 +52,9 @@ def test_every_static_family_member_is_byte_identical_to_its_source(monkeypatch,
     # advisory.
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    # The env var only answers for a stamped published engine; a claude-klabauter checkout
+    # carries no stamp, so resolve the root directly for this same-repo test.
+    monkeypatch.setattr(substrate, "_engine_root_or_raise", lambda: (str(_REPO_ROOT), "test"))
 
     _install_bin_resolvers(
         ml_bin, ch_bin, bin_dst,

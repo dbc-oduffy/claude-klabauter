@@ -26,7 +26,7 @@ def _script() -> str:
 
 def test_return_object_falls_back_to_the_halt_text():
     script = _script()
-    owed = ask_compose._owed_handback_js(None)
+    owed = ask_compose._owed_handback_js(None).replace(ask_compose._refire_js(None), f"{ask_compose._REFIRE_FN}()")
     assert f"owed_next_action: {owed} || _haltNextActionText() || null, " in script
 
 

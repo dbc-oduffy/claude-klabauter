@@ -113,6 +113,7 @@ def test_missing_record_spawns_recompose_and_starts_via_launcher(tmp_path, seams
     assert spawned == [HALTED_ID] and emitted == []
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline against a stalled record read; blocked time burns no CPU")
 def test_stalled_record_read_starts_the_run_within_the_deadline(tmp_path, seams, monkeypatch):
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
@@ -237,6 +238,7 @@ def _sleeping(calls: list, label: str, seconds: float = 1.5):
     return slow
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the spent hook budget across sleeping reads; sleep burns no CPU")
 def test_a_spent_budget_short_circuits_every_later_read(tmp_path, seams, monkeypatch):
     """The record read returns a real record but spends the whole hook budget doing so; the fingerprint
     read, which a returned record would otherwise trigger, then never starts, and the run still starts
@@ -297,6 +299,7 @@ def test_distinct_keys_stalling_after_the_sizing_read_share_one_budget(tmp_path,
     assert spawned == [HALTED_ID] and emitted == []
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline across stalled reads; blocked time burns no CPU")
 def test_every_read_stalled_never_composes_inline_and_stays_under_the_bar(tmp_path, seams, monkeypatch):
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
@@ -346,6 +349,7 @@ def test_a_stalled_halted_lookup_defers_instead_of_refusing_or_composing_inline(
     assert emitted == [] and spawned == []
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline while a lookup is in flight; blocked time burns no CPU")
 def test_a_lookup_already_in_flight_defers_not_the_plain_emit(tmp_path, seams, monkeypatch):
     """A second hook call while the first's lookup is still stuck returns STALLED at once."""
     spawned, emitted, emit = seams
@@ -423,6 +427,7 @@ def _stall_every_read_but_the_hint(monkeypatch, calls):
     )
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline across stalled reads with a halt hint; blocked time burns no CPU")
 def test_every_read_stalled_with_a_halt_hint_resumes_through_the_launcher(tmp_path, seams, monkeypatch):
     spawned, emitted, emit = seams
     root = _repo(tmp_path)

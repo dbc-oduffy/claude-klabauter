@@ -193,6 +193,7 @@ def test_note_stall_below_threshold_never_exits_and_touches_no_disk(tmp_path, mo
     assert exits == []
 
 
+@pytest.mark.deliberate_wall_clock(reason="hang bound: the restart must not wait on a disk leg that never returns")
 def test_note_stall_exits_at_threshold_even_when_the_disk_leg_never_returns(tmp_path, monkeypatch):
     _fresh_marks(monkeypatch)
     release = threading.Event()

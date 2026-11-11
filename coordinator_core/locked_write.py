@@ -421,9 +421,16 @@ def _legacy_lock_dir_path(anchor_root: Path) -> "Path | None":
     from coordinator_core.lifecycle import git_common_dir  # local import avoids cycles
 
     common = git_common_dir(anchor_root)
-    # The primary dir for a ``.git`` common dir is outside it, so the two never coincide
-    # (one sidecar through two fds would self-deadlock under msvcrt).
-    return common / "coordinator-locks" if common.name == ".git" else None
+    if common.name != ".git":
+        return None
+    legacy = common / "coordinator-locks"
+    # One sidecar through two fds self-deadlocks under msvcrt, so a primary dir that
+    # resolves to the legacy one (a pinned or overridden _lock_dir_path) has no legacy.
+    if os.path.normcase(os.path.abspath(legacy)) == os.path.normcase(
+        os.path.abspath(_lock_dir_path(anchor_root))
+    ):
+        return None
+    return legacy
 
 
 def _acquire_legacy_sidecar(

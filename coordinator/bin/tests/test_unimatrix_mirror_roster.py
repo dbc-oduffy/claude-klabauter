@@ -587,9 +587,37 @@ def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):
     (sessions / "55.deadbeef.key").write_text("k")
     (sessions / "56.json").write_text("{}")
     bridges = {"/far/a.sock": FakeProc(55)}
-    roster.sync(bridges, {}, None, lambda m: None)
+    roster._ABSENT.clear()
+    for _ in range(roster.ABSENT_POLLS_BEFORE_UNMIRROR):
+        roster.sync(bridges, {}, None, lambda m: None)
     assert bridges == {} and killed == [55]
     assert sorted(p.name for p in sessions.iterdir()) == ["56.json"]
+
+
+def test_roster_sync_keeps_a_live_peer_mirror_across_one_missed_poll_and_a_respawn(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    roster._ABSENT.clear()
+    log = []
+    bridges = {"/far/a.sock": FakeProc(55)}
+    roster.sync(bridges, {}, cfg, log.append)  # far router/engine respawn: the row is missing for one poll
+    assert list(bridges) == ["/far/a.sock"] and killed == []
+    row = {"entry": {"pid": 9, "name": "agy-peer", "messagingSocketPath": "/far/a.sock"}, "key": "k"}
+    roster.sync(bridges, {"/far/a.sock": row}, cfg, log.append)  # re-registered: the miss count restarts
+    assert roster._ABSENT == {} and killed == []
+    roster.sync(bridges, {}, cfg, log.append)
+    assert killed == [] and "/far/a.sock" in bridges
+
+
+def test_roster_sync_unmirrors_a_row_missing_past_the_grace_and_a_dead_bridge_at_once(sessions, monkeypatch):
+    roster = load("roster")
+    cfg, killed = _sync_setup(roster, sessions, monkeypatch)
+    roster._ABSENT.clear()
+    bridges = {"/far/a.sock": FakeProc(55), "/far/b.sock": FakeProc(56, alive=False)}
+    roster.sync(bridges, {}, cfg, lambda m: None)
+    assert killed == [56] and list(bridges) == ["/far/a.sock"]
+    roster.sync(bridges, {}, cfg, lambda m: None)
+    assert killed == [56, 55] and bridges == {}
 
 
 def _sync_setup(roster, sessions, monkeypatch):
@@ -706,8 +734,32 @@ def test_mirror_all_starts_client_with_deliver_endpoint_and_kills_it_on_exit(tmp
     assert cmd[2:4] == ["11", "local-a"] and cmd[5] == "ep11" and cmd[-4:] == ["--remote", "farbox", "--key", "k"]
     mirror_all.sync(clients, live, cfg, lambda m: None)
     assert len(started) == 1
-    mirror_all.sync(clients, {}, cfg, lambda m: None)
+    for _ in range(mirror_all.ABSENT_POLLS_BEFORE_UNMIRROR):
+        mirror_all.sync(clients, {}, cfg, lambda m: None)
     assert clients == {} and killed == [901]
+
+
+def test_mirror_all_keeps_a_client_across_one_missed_poll_of_its_session(tmp_path, monkeypatch):
+    mirror_all = load("mirror-all")
+    started, killed = [], []
+
+    def fake_spawn(cmd):
+        started.append(cmd)
+        return FakeProc(900 + len(started))
+
+    monkeypatch.setattr(mirror_all.R, "spawn", fake_spawn)
+    monkeypatch.setattr(mirror_all.R, "tree_kill", killed.append)
+    cfg = mirror_all.parse_args([str(tmp_path / "m.log"), "--remote", "farbox", "--key", "k"])
+    clients = {}
+    live = {"agy-peer": {"pid": 11, "messagingSocketPath": "ep11"}}
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    mirror_all.sync(clients, {}, cfg, lambda m: None)  # router/engine respawn: one poll without the session
+    assert killed == [] and list(clients) == ["agy-peer"]
+    mirror_all.sync(clients, live, cfg, lambda m: None)  # same pid back: no redial, miss count restarts
+    assert len(started) == 1 and mirror_all._STATE["absent"] == {}
+    mirror_all.sync(clients, {}, cfg, lambda m: None)
+    mirror_all.sync(clients, {}, cfg, lambda m: None)
+    assert killed == [901] and clients == {}
 
 
 def test_mirror_all_restarts_a_client_whose_session_pid_changed(tmp_path, monkeypatch):
@@ -978,6 +1030,24 @@ def test_other_exit_waits_a_doubling_capped_backoff_before_respawn(tmp_path, mon
     mirror_all.sync(clients, live, cfg, lambda m: None)
     assert len(started) == 3
     assert [mirror_all.backoff_seconds(n) for n in (0, 1, 4, 5, 9)] == [30, 60, 480, 600, 600]
+
+
+def test_a_client_refused_by_the_far_owner_parks_at_the_cap_and_other_exits_do_not(tmp_path, monkeypatch):
+    mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [1])
+    live = {"a": {"pid": 1, "messagingSocketPath": "e"}, "b": {"pid": 2, "messagingSocketPath": "e"}}
+    (tmp_path / "unimatrix-inbox-a.log").write_text("far: name a belongs to a live local session\n", encoding="utf-8")
+    (tmp_path / "unimatrix-inbox-b.log").write_text("ssh: connection reset\n", encoding="utf-8")
+    clients = {}
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert mirror_all._STATE["fails"] == {"b": 1}
+    clock[0] += 31
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    dials = lambda n: sum(1 for c in started if c[3] == n)
+    assert (dials("a"), dials("b")) == (1, 2)  # b redialed after 30s, a stays parked
+    clock[0] += mirror_all.BACKOFF_CAP_SECONDS
+    mirror_all.sync(clients, live, cfg, lambda m: None)
+    assert dials("a") == 2
 
 
 def test_a_client_that_stayed_up_a_poll_resets_the_backoff(tmp_path, monkeypatch):

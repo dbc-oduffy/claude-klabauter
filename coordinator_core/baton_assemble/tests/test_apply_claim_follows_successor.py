@@ -69,6 +69,9 @@ def run_claim_directives(monkeypatch):
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.syspath_prepend(str(_CLI.parent))
     cli = _claim_cli()
+    # The dispatch ladder refuses a source checkout (claude-klabauter is never an engine),
+    # so the CLI imports claims from this checkout directly.
+    monkeypatch.setattr(cli, "_dispatch_import", importlib.import_module)
     ran: list[list[str]] = []
 
     def _execute(directives, judgment_points, repo_root, *, decisions=None, composition_budget=None):

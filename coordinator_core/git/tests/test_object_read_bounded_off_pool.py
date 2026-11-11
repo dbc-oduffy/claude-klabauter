@@ -122,6 +122,7 @@ def test_pack_listing_stall_shim_is_reached_by_packed_contains(fx) -> None:
     assert stall.entered.is_set()
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds that unstalled reads never wait on the stall shim's hold, a wait CPU time cannot see")
 def test_unstalled_reads_return_without_the_shim_blocking(fx) -> None:
     t0 = time.monotonic()
     assert go.read_object(fx.common_dir, fx.pack_sha)[1] == fx.pack_payload

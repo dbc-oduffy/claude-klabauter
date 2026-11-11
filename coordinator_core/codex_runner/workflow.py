@@ -26,10 +26,10 @@ import jsonschema
 
 from coordinator_core.codex_runner.agy import AgyUnavailable, resolve_agy
 from coordinator_core.codex_runner.grok import GrokUnavailable, resolve_grok
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
-    check_pwsh_launchable,
     check_workspace_write,
 )
 from coordinator_core.codex_runner.review import _unattended_env
@@ -953,7 +953,6 @@ def run_agent(
     if backend == "codex":
         preflight_auth(env=env, requested=False)
         try:
-            check_pwsh_launchable(env)
             try:
                 probe_argv = resolve_codex(env=env)
             except Exception:
@@ -971,6 +970,10 @@ def run_agent(
         if private_settings is not None:
             env.update(private_settings[0])
             (artifact_dir / 'private-cli.json').write_text(json.dumps(private_settings[2]), encoding='utf-8')
+        try:
+            shape_codex_child(env, writable_root=repo_root)
+        except SandboxSetupRefused as exc:
+            raise AgentFailed(str(exc)) from exc
         argv = [*native_cli, "exec", "--json", "--sandbox", "workspace-write",
                 "--ephemeral", "-o", str(last)]
         if schema is not None:

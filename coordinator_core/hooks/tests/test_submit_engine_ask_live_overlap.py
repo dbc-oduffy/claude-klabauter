@@ -8,6 +8,8 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops.dispatch_emit import halt_resume_record, live_run_index
 
@@ -116,6 +118,7 @@ def test_absent_index_denies_nothing(tmp_path):
     assert mod._live_write_overlap_deny(tmp_path, {"args": {"writes": ["pkg/mod.py"]}}, {}) is None
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline against a stalled index read; blocked time burns no CPU")
 def test_stalled_index_read_denies_nothing_and_returns_within_the_deadline(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     _live(tmp_path, {"run-a": {"pkg/mod.py"}})

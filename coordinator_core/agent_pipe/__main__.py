@@ -143,6 +143,20 @@ def _relay(run_dir: Path, req: dict, adapter: Adapter) -> dict:
         from coordinator_core.codex_runner.identity_env import independent_child_env
         child_env = independent_child_env(child_env, provider={"antigravity": "agy"}.get(agent, agent),
                                            role="worker", parent=req.get("caller_session_id"))
+    if agent == "codex":
+        from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+        from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
+        try:
+            child_env = shape_codex_child(child_env, writable_root=os.getcwd())
+        except SandboxSetupRefused as exc:
+            return {
+                "run_id": run_dir.name,
+                "status": STATUS_FAILED,
+                "exit_code": None,
+                "conversation": conversation,
+                "messages": 0,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
     with open(run_dir / AGENT_LOG_FILENAME, "wb") as err:
         child = subprocess.Popen(
             argv,

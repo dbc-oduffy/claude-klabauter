@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-import time
 
 import pytest
 
+from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.hooks import sessionstart_dispatch as sd
 from coordinator_core.ops.dispatch_emit.owed_leg_queue import write_owed_legs
 
@@ -76,7 +76,11 @@ def test_unmatched_source_still_returns_only_breadcrumb(repo):
 
 def test_hundred_rows_read_under_budget(repo):
     _owe(repo, *[f"R{i}" for i in range(100)])
-    start = time.perf_counter()
-    text = sd._leg_owed_legs({"cwd": str(repo)})
-    assert time.perf_counter() - start < 0.5
-    assert text.count("OWED run1") == 100
+    out: dict = {}
+
+    def _call():
+        out["text"] = sd._leg_owed_legs({"cwd": str(repo)})
+
+    timing = in_process_time_ms(_call)
+    assert timing["process_time_ms"] < 500.0, timing["process_time_ms"]
+    assert out["text"].count("OWED run1") == 100

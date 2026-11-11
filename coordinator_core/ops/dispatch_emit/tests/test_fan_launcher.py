@@ -385,6 +385,24 @@ def test_a_named_twin_of_another_run_or_shape_is_refused_by_name(tmp_path, bad):
 
 
 @pytest.mark.spawns_process
+def test_a_refire_resumes_the_twin_the_halted_run_staged_under_an_earlier_stamp(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    halted = staged_twin_rel("warp-plan-20261030T010101-aaaaaa", "2d" * 32)
+    result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="warp-plan-20261031T120809-5a6216", twin_path=halted)
+    assert result["status"] == "ok"
+    assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{halted}"}
+
+
+@pytest.mark.spawns_process
+def test_a_twin_of_another_warp_run_is_refused_on_a_refire(tmp_path):
+    _, script = _write(tmp_path, ids=("ask-r1",))
+    other = staged_twin_rel("warp-other-20261030T010101-aaaaaa", "2d" * 32)
+    result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="warp-plan-20261031T120809-5a6216", twin_path=other)
+    assert result["status"] == "failed" and "twin_path is not a staged twin of this run" in result["error"]
+    assert len(calls) == 1
+
+
+@pytest.mark.spawns_process
 def test_the_twin_is_named_from_the_started_script_stem_not_the_reply_run_id(tmp_path):
     _, script = _write(tmp_path, ids=("ask-r1",))
     sha = "ab" * 32
@@ -988,3 +1006,8 @@ def test_chain_hop_keeps_the_hand_off_run_id_when_its_path_is_not_a_run_script(t
     _, script = _write(tmp_path)
     assert "_pathRunId(_rp) || (named(_rr) ? _rr : '')" in script
     assert "emitted = _handoffScript(emitted);" in script
+
+
+@pytest.mark.parametrize("kind", ["warp", "handoffs"])
+def test_home_prefix_is_repo_relative_state_home_slash_terminated(kind: str) -> None:
+    assert fl._home_prefix(kind) == f"state/{kind}/"

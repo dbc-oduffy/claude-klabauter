@@ -180,16 +180,17 @@ def _read_head_sha(repo: Path) -> Optional[str]:
 def _box(cap: Optional[int]) -> dict:
     sys.path.insert(0, str(_REPO))
     from coordinator_core.benchmarks.concurrency_probe import (
-        compute_parallelism_cap,
+        compute_measured_cap,
         default_physical_cores,
         default_usable_ram_gb,
+        read_measured_headroom,
     )
 
     cores, ram = default_physical_cores(), default_usable_ram_gb()
     return {
         "physical_cores": cores,
         "ram_gb": round(ram, 1),
-        "cap": cap if cap is not None else compute_parallelism_cap(cores, ram),
+        "cap": cap if cap is not None else compute_measured_cap(*read_measured_headroom()),
     }
 
 

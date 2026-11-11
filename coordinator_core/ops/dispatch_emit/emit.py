@@ -801,9 +801,90 @@ class UnverifiableEnricherRowError(ValueError):
     """
 
 
+class UnresolvableBareAgentTypeError(ValueError):
+    """Raised when a row's bare ``agent_type`` (no ``plugin:`` prefix) names no installed
+    plugin agent, or names agents in several plugins, so no single qualified type exists
+    to dispatch. The message names the stem and, when ambiguous, every candidate.
+    """
+
+
+class UnresolvableQualifiedAgentTypeError(ValueError):
+    """Raised when a row's plugin-qualified ``agent_type`` is absent from the installed
+    plugin roster. The message names the closest installed qualified type.
+    """
+
+
+def _refuse_uninstalled_qualified_type(row_id: str, agent_type: str) -> None:
+    """Raise ``UnresolvableQualifiedAgentTypeError`` when ``agent_type`` is not installed.
+
+    An unresolvable home or an empty roster means the roster cannot be read, and passes.
+    """
+    import difflib
+
+    from coordinator_core.hooks.block_unenumerated_agent_type import (
+        _home_dir,
+        _load_plugin_roster,
+        plugin_qualified_candidates,
+        resolve_roster,
+    )
+
+    roster = _load_plugin_roster(_home_dir())
+    if not roster or agent_type in roster:
+        return
+    full, _reason = resolve_roster()
+    if full and agent_type in full:
+        return
+    stem = agent_type.partition(":")[2]
+    near = plugin_qualified_candidates(stem) or difflib.get_close_matches(
+        agent_type, sorted(roster), n=1, cutoff=0.0
+    )
+    raise UnresolvableQualifiedAgentTypeError(
+        f"row {row_id!r} declares agent_type {agent_type!r}, which is not an installed "
+        f"plugin agent -- closest installed type: {near[0]}"
+    )
+
+
+def _qualify_bare_agent_type(row_id: str, agent_type: str) -> str:
+    """``agent_type`` plugin-qualified when it is bare and names exactly one installed plugin agent.
+
+    ``_AGENT_MODELS`` entries and harness built-ins pass through unchanged. A qualified
+    type absent from the installed roster raises ``UnresolvableQualifiedAgentTypeError``;
+    a bare name matching zero or several installed definitions raises
+    ``UnresolvableBareAgentTypeError``.
+    """
+    if agent_type in _AGENT_MODELS:
+        return agent_type
+    if ":" in agent_type:
+        _refuse_uninstalled_qualified_type(row_id, agent_type)
+        return agent_type
+    from coordinator_core.hooks.block_unenumerated_agent_type import (
+        is_harness_builtin_type,
+        plugin_qualified_candidates,
+    )
+
+    if is_harness_builtin_type(agent_type):
+        return agent_type
+    found = plugin_qualified_candidates(agent_type)
+    if len(found) == 1:
+        return found[0]
+    if found:
+        raise UnresolvableBareAgentTypeError(
+            f"row {row_id!r} declares bare agent_type {agent_type!r}, which matches "
+            f"{len(found)} installed plugin agents: {', '.join(found)} -- "
+            "write the plugin-qualified type"
+        )
+    raise UnresolvableBareAgentTypeError(
+        f"row {row_id!r} declares bare agent_type {agent_type!r}, which matches no "
+        "installed plugin agent -- write the plugin-qualified type "
+        "(<plugin>:<agent>) of an installed agent"
+    )
+
+
 #: Every refusal ``_row_agent_type`` can raise -- one list, read by
 #: ``roadmap.prep_gate`` so the gate certifies exactly what this emitter routes.
 ROW_ROUTING_ERRORS = (
+    UnresolvableBareAgentTypeError,
+    UnresolvableQualifiedAgentTypeError,
     MalformedAgentOverrideError,
     UnroutableWorkKindRowError,
     MixedAgentTypeRowError,
@@ -1394,7 +1475,11 @@ def _row_agent_type(row: WaveRow) -> str:
                 f"row {row.id!r} declares agent_type 'em', which names no agent; "
                 "an EM-performed row declares `performer: em`"
             )
-        return row.agent_type
+        from coordinator_core.ops.dispatch_emit.em_only_act import EM_OWNED_AGENT_TYPES
+
+        # An EM-owned type names no agent; a row reaching here writes code, which routes by its writes.
+        if row.agent_type not in EM_OWNED_AGENT_TYPES:
+            return _qualify_bare_agent_type(row.id, row.agent_type)
 
     if getattr(row, "memo_send", None):
         return _EXECUTOR_AGENT_TYPE
@@ -5762,6 +5847,7 @@ def _checkpoint_commit_js(
     sidecar_run_key: Optional[str] = None,
     pre_commit_gate_js: Optional[str] = None,
     commit_retry: Optional[Mapping[int, str]] = None,
+    reds_var: Optional[str] = None,
 ) -> str:
     """The script-scope checkpoint machinery: ``_runRow`` records each DONE
     row's declared paths in ``_landed``; ``_waveCommit`` waits for a wave's
@@ -5780,7 +5866,13 @@ def _checkpoint_commit_js(
     ``commit_retry`` ({wave number: the prior run's verbatim refusal}) appends a re-attempt clause
     to those waves' commit prompts. The Workflow resume cache keys on the resolved prompt, so the
     changed prompt makes the leg re-run instead of replaying the cached ``commit-failed``; a wave
-    absent from the map keeps its prompt byte-identical. None or empty emits nothing."""
+    absent from the map keeps its prompt byte-identical. None or empty emits nothing.
+
+    ``reds_var`` names a script object ``{wave number: {ids, status}}`` the gate fills for a wave
+    whose scoped tests were red. A wave with an entry commits anyway: its committer runs
+    ``dispatch.checkpoint_reds`` first, adds the fix-row paths to the pathspec, appends the reply's
+    commit block to the message and returns ``fix_ids``, which accumulate in ``_checkpointFixIds``.
+    None emits the machinery byte-identically."""
     root_clause = (
         "Your repo is `\0`: `cd` there before any command and resolve every "
         "relative path against it. "
@@ -5821,6 +5913,38 @@ def _checkpoint_commit_js(
     )
     commit_type = _js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))
     phase = _js_string_literal(_EXECUTE_PHASE_TITLE)
+    reds_prompt_js = ""
+    reds_lines: list[str] = []
+    commit_schema_js = "_CHECKPOINT_COMMIT_SCHEMA"
+    if reds_var:
+        reds_clause = (
+            " This wave's scoped tests were red and the checkpoint commits anyway. BEFORE committing, run `\"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}"
+            f"/bin/coordinator-invoke\" dispatch.checkpoint_reds{repo_flag} '<params>'` with this JSON as `<params>`: "
+        )
+        reds_clause_2 = (
+            " It replies {ok, classified, fix_ids, fix_paths, commit_block}. The one exception to the no-added-entry rule: "
+            "append every `fix_paths` entry to the `paths` list. Append `commit_block` verbatim to the message as its last paragraph "
+            "(a blank line first). Return `fix_ids` verbatim as `fix_ids`. When the op replies not ok, commit without them and put its error in `reason`."
+        )
+        reds_prompt_js = (
+            f" + ({reds_var}[n] ? {_js(reds_clause)} + JSON.stringify({{ run_id: _runId, failing: {reds_var}[n].ids, base_red: [] }}) "
+            f"+ {_js(reds_clause_2)} : '')"
+        )
+        commit_schema_js = "_CHECKPOINT_COMMIT_SCHEMA_REDS"
+        reds_lines = [
+            "  const _CHECKPOINT_COMMIT_SCHEMA_REDS = "
+            + json.dumps(
+                {
+                    **_CHECKPOINT_COMMIT_SCHEMA,
+                    "properties": {
+                        **_CHECKPOINT_COMMIT_SCHEMA["properties"],
+                        "fix_ids": {"type": "array", "items": {"type": "string"}},
+                    },
+                }
+            )
+            + ";",
+            "  const _checkpointFixIds = [];",
+        ]
     retry_prompt_js = ""
     retry_lines: list[str] = []
     if commit_retry:
@@ -5844,6 +5968,7 @@ def _checkpoint_commit_js(
         )
     lines = [
         f"  const _CHECKPOINT_COMMIT_SCHEMA = {json.dumps(_CHECKPOINT_COMMIT_SCHEMA)};",
+        *reds_lines,
         *retry_lines,
         "  const _commitFailures = [];",
         "  const _landed = {};",
@@ -5908,9 +6033,9 @@ def _checkpoint_commit_js(
         "'). Commit message, verbatim as the `message` param with its newlines "
         "JSON-escaped: `' + message + '`.' + "
         f"{_js_string_literal(commit_tail)} + paths.join(', ') + "
-        f"{_js(route)}{retry_prompt_js} + {_emit_sidecar_clause_js(plan_path, _COMMIT_LABEL_JS, **sidecar_key)},",
+        f"{_js(route)}{reds_prompt_js}{retry_prompt_js} + {_emit_sidecar_clause_js(plan_path, _COMMIT_LABEL_JS, **sidecar_key)},",
         f"        {{ label: 'commit:wave-' + n, phase: {phase}, agentType: {commit_type}, "
-        f"{_model_opt(_COMMIT_AGENT_TYPE)}, effort: 'low', schema: _CHECKPOINT_COMMIT_SCHEMA }}",
+        f"{_model_opt(_COMMIT_AGENT_TYPE)}, effort: 'low', schema: {commit_schema_js} }}",
         "      );",
         "    } catch (e) {",
         "      r = null;",
@@ -5934,6 +6059,14 @@ def _checkpoint_commit_js(
         "    const _heldBack = _pending.filter((i) => [..._landed[i].paths, ..._landed[i].declared].some((p) => _withheld.has(p)));",
         "    _heldBack.forEach((i) => _carried.push(i));",
         "    if (typeof r.sha === 'string' && r.sha) _checkpointShas.push(r.sha);",
+        *(
+            [
+                "    (Array.isArray(r.fix_ids) ? r.fix_ids : []).forEach((f) => { "
+                "if (typeof f === 'string' && f && !_checkpointFixIds.includes(f)) _checkpointFixIds.push(f); });"
+            ]
+            if reds_var
+            else []
+        ),
     ]
     if seam is not None:
         lines.append("    if (!r.sha) return;")

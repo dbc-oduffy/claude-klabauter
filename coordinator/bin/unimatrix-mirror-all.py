@@ -96,8 +96,10 @@ BACKOFF_BASE_SECONDS = 30
 BACKOFF_CAP_SECONDS = 600
 
 _now = time.monotonic
-# Per supervisor life: `unsupported` stops all dialing; `fails` and `retry_at` are per session name.
-_STATE = {"unsupported": False, "fails": {}, "retry_at": {}}
+ABSENT_POLLS_BEFORE_UNMIRROR = 2  # a router or engine respawn re-registers a session within seconds
+# Per supervisor life: `unsupported` stops all dialing; `fails`, `retry_at` and `absent` (consecutive
+# polls a session was missing) are per session name.
+_STATE = {"unsupported": False, "fails": {}, "retry_at": {}, "absent": {}}
 
 
 def backoff_seconds(fails):
@@ -105,10 +107,30 @@ def backoff_seconds(fails):
     return min(BACKOFF_BASE_SECONDS * 2 ** fails, BACKOFF_CAP_SECONDS)
 
 
+FAR_OWNER_REFUSALS = ("belongs to a live local session", "already mirrored by live relay")
+
+
+def refused_by_far_owner(log_dir, name):
+    """True when the client's last attempt was refused because the far box already holds `name`.
+
+    The far box's pull supervisor owns such a name: one owner per name, so this push side parks it
+    instead of redialing every poll and flipping the owner."""
+    try:
+        with open(os.path.join(log_dir, f"unimatrix-inbox-{name}.log"), "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 4096))
+            tail = fh.read().decode("utf-8", "replace")
+    except OSError:
+        return False
+    return any(m in tail for m in FAR_OWNER_REFUSALS)
+
+
 def sync(clients, live, cfg, say):
     """One reconcile pass: `clients` is name -> (session pid, Popen)."""
     log_dir = os.path.dirname(os.path.abspath(cfg.log))
-    fails, retry_at = _STATE["fails"], _STATE["retry_at"]
+    fails, retry_at, absent = _STATE["fails"], _STATE["retry_at"], _STATE["absent"]
+    for name in live:
+        absent.pop(name, None)
     for name, d in live.items():
         if _STATE["unsupported"]:
             break
@@ -123,10 +145,14 @@ def sync(clients, live, cfg, say):
                 say(f"far box hosts no mirror inboxes (rc={rc}); no client is dialed again")
                 break
             if name not in retry_at:
-                wait = backoff_seconds(fails.get(name, 0))
-                fails[name] = fails.get(name, 0) + 1
+                if refused_by_far_owner(log_dir, name):
+                    wait = BACKOFF_CAP_SECONDS
+                    say(f"client {c[1].pid} for {name} refused: the far box's own mirror holds the name; retry in {wait}s")
+                else:
+                    wait = backoff_seconds(fails.get(name, 0))
+                    fails[name] = fails.get(name, 0) + 1
+                    say(f"client {c[1].pid} for {name} exited rc={rc}; retry in {wait}s")
                 retry_at[name] = _now() + wait
-                say(f"client {c[1].pid} for {name} exited rc={rc}; retry in {wait}s")
             if _now() < retry_at[name]:
                 continue
         if c:
@@ -138,9 +164,16 @@ def sync(clients, live, cfg, say):
         clients[name] = (d["pid"], p)
         say(f"mirror {name} pid {d['pid']} -> client {p.pid}")
     for name in [n for n in clients if n not in live]:
+        missed = absent[name] = absent.get(name, 0) + 1
+        if missed < ABSENT_POLLS_BEFORE_UNMIRROR and clients[name][1].poll() is None:
+            say(f"session {name} absent ({missed}/{ABSENT_POLLS_BEFORE_UNMIRROR}); client kept")
+            continue
+        absent.pop(name, None)
         # The client's ssh child holds the far inbox open; killing python alone orphans it.
         _roster().tree_kill(clients.pop(name)[1].pid)
         say(f"unmirror {name}")
+    for name in [n for n in absent if n not in clients]:
+        del absent[name]
 
 
 _ROUTER_MODULE = None

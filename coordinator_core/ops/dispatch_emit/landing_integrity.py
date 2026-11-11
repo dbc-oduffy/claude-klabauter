@@ -62,8 +62,10 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     TARGETED_TESTS_PARAM,
     ZERO_FAIL_CHECK,
     ZERO_FAIL_UNATTRIBUTED,
+    INVARIANT_UNMEASURED,
     Finding,
     tests_failed_finding,
+    unmeasured_finding,
     zero_run_cause_note,
     _FILE_LIKE,
     _GATE_BLOCKER,
@@ -129,19 +131,16 @@ def provenance_entries(provenance: Sequence) -> list[dict]:
 def unparseable_py(worktree_root: Path, paths: Sequence[str]) -> list[Finding]:
     """A Finding(PY_UNPARSEABLE) per existing ``.py`` path whose worktree bytes fail ``ast.parse``.
     Non-``.py`` and missing paths are skipped."""
-    out: list[Finding] = []
+    items: list[tuple[str, bytes]] = []
     for rel in paths:
         if not rel.endswith(".py"):
             continue
         land_deadline.check("landing_integrity.unparseable_py")
         try:
-            source = (Path(worktree_root) / rel).read_bytes()
+            items.append((rel, (Path(worktree_root) / rel).read_bytes()))
         except OSError:
             continue
-        found = _cached_parse_finding(worktree_root, rel, source)
-        if found:
-            out.append(found)
-    return out
+    return [f for f in _cached_parse_findings(worktree_root, items) if f]
 
 
 _VERDICT_DIR = "coordinator-parse-verdicts"
@@ -169,12 +168,14 @@ def _git_common_dir(worktree_root: Path) -> Optional[Path]:
         return None
 
 
-def _verdict_path(worktree_root: Path, source: bytes) -> Optional[Path]:
-    """Verdict file for ``(sha256(source), python major.minor)``: the grammar is part of the verdict."""
+def _verdict_path(worktree_root: Path, source: bytes, common: Optional[Path] = None) -> Optional[Path]:
+    """Verdict file for ``(sha256(source), python major.minor)``: the grammar is part of the verdict.
+    ``common`` is the already-resolved git common dir (resolved here when omitted)."""
     import hashlib
     import sys
 
-    common = _git_common_dir(worktree_root)
+    if common is None:
+        common = _git_common_dir(worktree_root)
     if common is None:
         return None
     key = f"{hashlib.sha256(source).hexdigest()}-py{sys.version_info[0]}{sys.version_info[1]}"
@@ -237,7 +238,7 @@ def _store_verdict(path: Path, found: Optional[Finding]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         body = {"ok": True} if found is None else {"ok": False, "detail": found.detail}
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(body), encoding="utf-8")
+        tmp.write_text(json.dumps(body), encoding="utf-8", newline="\n")
         os.replace(tmp, path)
         names = os.listdir(path.parent)
         if len(names) > _VERDICT_MAX:
@@ -260,15 +261,33 @@ def _store_verdict(path: Path, found: Optional[Finding]) -> None:
 def _cached_parse_finding(worktree_root: Path, rel: str, source: bytes) -> Optional[Finding]:
     """``_parse_finding`` memoised on disk by sha256(bytes)+interpreter version under the git common dir,
     so a later process parses nothing a producer already parsed. A missing or malformed entry is a miss."""
-    path = _verdict_path(worktree_root, source)
-    if path is None:
-        return _parse_finding(rel, source)
-    hit = _read_verdict(path)
-    if hit is not None:
-        return None if hit[0] == "ok" else Finding(rel, PY_UNPARSEABLE, hit[1])
-    found = _parse_finding(rel, source)
-    _write_verdict(path, found)
-    return found
+    return _cached_parse_findings(worktree_root, [(rel, source)])[0]
+
+
+def _cached_parse_findings(worktree_root: Path, items: Sequence[tuple[str, bytes]]) -> list[Optional[Finding]]:
+    """``_cached_parse_finding`` over ``(rel, source)`` pairs, one finding (or None) per pair in order.
+    The common dir is resolved once; each distinct verdict is read once, and a miss is parsed and
+    recorded through the never-blocking ``_write_verdict``."""
+    common = _git_common_dir(worktree_root) if items else None
+    out: list[Optional[Finding]] = []
+    seen: dict[Path, Optional[tuple]] = {}
+    for rel, source in items:
+        path = _verdict_path(worktree_root, source, common) if common is not None else None
+        if path is None:
+            out.append(_parse_finding(rel, source))
+            continue
+        if path in seen:
+            hit = seen[path]
+        else:
+            hit = seen[path] = _read_verdict(path)
+        if hit is not None:
+            out.append(None if hit[0] == "ok" else Finding(rel, PY_UNPARSEABLE, hit[1]))
+            continue
+        found = _parse_finding(rel, source)
+        _write_verdict(path, found)
+        seen[path] = ("ok", "") if found is None else ("bad", found.detail)
+        out.append(found)
+    return out
 
 
 def _parse_finding(rel: str, source: bytes) -> Optional[Finding]:
@@ -296,7 +315,7 @@ def unparseable_py_at(worktree_root: Path, rev: str, paths: Sequence[str]) -> li
     )
     if proc.returncode != 0:
         return []
-    data, pos, out = proc.stdout_bytes, 0, []
+    data, pos, items = proc.stdout_bytes, 0, []
     for rel in wanted:
         eol = data.find(b"\n", pos)
         if eol < 0:
@@ -306,11 +325,9 @@ def unparseable_py_at(worktree_root: Path, rev: str, paths: Sequence[str]) -> li
         if len(header) != 3 or header[1] != b"blob":
             continue
         size = int(header[2])
-        found = _cached_parse_finding(worktree_root, rel, data[pos : pos + size])
+        items.append((rel, data[pos : pos + size]))
         pos += size + 1
-        if found:
-            out.append(found)
-    return out
+    return [f for f in _cached_parse_findings(worktree_root, items) if f]
 
 
 def closing_bases(worktree_root: Path, run_id: Optional[str], params: Mapping) -> tuple:
@@ -494,7 +511,8 @@ def invariant_findings(
     ran. An invariant node red in a fresh ``fail`` retest and in its ``baseline.evidence`` (red on a
     pure-HEAD export) is credited foreign, not a finding; ``foreign_out`` receives ``{node: evidence}``.
     Table lookup plus one record read; zero spawns. With the in-run retest budget spent and no verdict,
-    nothing measured the node: it stays a finding naming the retest remedy. Paths other halted runs withhold
+    nothing measured the node: it is an ``INVARIANT_UNMEASURED`` finding naming the retest remedy, never
+    ``TARGETED_TESTS_FAILED`` (reserved for a measured failure). Paths other halted runs withhold
     (``halted_hold_release.residue_paths``) are residue at HEAD, not this run's diff: they select no
     invariant. Residue bytes are never touched."""
     owed = landing_invariant_nodes(worktree_root, landed_paths, run_id)
@@ -548,7 +566,8 @@ def invariant_findings(
                 f"repo-wide invariant {node} measures a path this landing touches and no fresh passing "
                 f"retest ran it; re-run: {retest_remedy(params, [node])}"
             )
-        out.append(tests_failed_finding(node.split("::")[0], detail))
+        make = unmeasured_finding if spent and fresh is None and not actual else tests_failed_finding
+        out.append(make(node.split("::")[0], detail))
     return out
 
 

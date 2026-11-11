@@ -117,6 +117,7 @@ def test_closing_the_job_handle_kills_a_live_member(tmp_path):
         proc.wait()
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a hung child blocks the measurement before it raises, a wait CPU time cannot see")
 @pytest.mark.parametrize("entry", ["batched", "single_invocation"])
 def test_hung_child_raises_within_bound_and_is_killed(entry, tmp_path, monkeypatch):
     monkeypatch.setattr(process_time, "SPAWN_WAIT_TIMEOUT_S", _TIMEOUT_S)

@@ -915,6 +915,42 @@ def _session_writes_outside_scope(
         return set()
 
 
+def _requirement_named_undeclared(
+    worktree_root: Path, ask_run_dir: Optional[Path], request: CommitRequest
+) -> list:
+    """Existing files the run's requirements ledger names (test node ids, bare test stems, paths)
+    that no chunk declares and that are not claude-md-class gated; [] without a readable ledger."""
+    if ask_run_dir is None:
+        return []
+    from coordinator_core.ops.dispatch_emit import requirements_ledger
+    from coordinator_core.ops.dispatch_emit.ask_named_files import named_test_files
+    from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import gated_paths, named_paths
+
+    try:
+        ledger = requirements_ledger.read_ledger(worktree_root, ask_run_dir)
+    except requirements_ledger.LedgerRefused:
+        return []
+    if ledger is None:
+        return []
+    texts = [item.text for item in ledger.items]
+    declared = {p for c in request.chunks for p in c.paths}
+    named = dict.fromkeys([*named_test_files(texts, worktree_root), *named_paths(texts, worktree_root)])
+    gated = set(gated_paths(list(named)))
+    out = [p for p in named if p not in declared and p not in gated]
+    sizing_rel = getattr(ledger, "sizing_rel", None)
+    raw = _read_rel(worktree_root, sizing_rel) if sizing_rel else None
+    if raw and out:
+        try:
+            from coordinator_core.ops.dispatch_emit.ask_exclusions import drop_excluded, excluded_paths
+
+            doc = _yaml_load(raw)
+            if isinstance(doc, dict):
+                out = drop_excluded(out, excluded_paths(doc))
+        except Exception:  # noqa: BLE001 -- an unreadable sizing carries no exclusions to apply
+            pass
+    return out
+
+
 def _undeclared_dirty(
     worktree_root: Path, request: CommitRequest,
     snapshot: Optional[_Snapshot] = None, landed: frozenset = frozenset(),
@@ -2000,8 +2036,12 @@ def _terminal_commit_inner(
 
     task_output_raw = params.get("task_output_path") if isinstance(params, dict) else None
     if isinstance(params, dict) and isinstance(params.get("task_output_path"), str):
+        from coordinator_core.lifecycle import main_worktree_root
+
         try:
-            params = {**_params_from_task_output(params["task_output_path"], params.get("run_id")), **{
+            params = {**_params_from_task_output(
+                params["task_output_path"], params.get("run_id"), main_worktree_root(repo_root)
+            ), **{
                 k: v for k, v in params.items() if k != "task_output_path"}}
         except ValueError as exc:
             return _error(str(exc))
@@ -2555,9 +2595,11 @@ def _terminal_commit_inner(
     obliged_dirs = [p for p in commit_obliged if (worktree_root / p).is_dir()]
     obliged_files = [p for p in commit_obliged if p not in obliged_dirs]
 
+    requirement_named = _requirement_named_undeclared(worktree_root, ask_run_dir, request)
     snapshot = _worktree_snapshot(
         worktree_root,
         [p for c in request.chunks for p in c.paths]
+        + requirement_named
         + sorted(recorded_pc)
         + obliged_files
         + list(met_cited)
@@ -3260,6 +3302,34 @@ def _terminal_commit_inner(
         )
     sibling_set = {p for ps in sibling_paths.values() for p in ps}
     landing_now = set(all_paths) | set(deleted_paths) | sibling_set
+
+    def _lands_under_prefix(c) -> bool:
+        bounds = [p.rstrip("/") + "/" for p in c.prefixes]
+        return any(p.startswith(under) for p in landing_now for under in bounds)
+
+    zero_prefixes = {
+        c.id: list(c.prefixes) for c in done_chunks + contributing_partial
+        if c.prefixes and not credited[c.id] and not _lands_under_prefix(c)
+    }
+    # No snapshot means the dirty set is unknowable: the zero-path refusal cannot fire.
+    if zero_prefixes and snapshot is not None:
+        wanted = sorted({p for ps in zero_prefixes.values() for p in ps})
+        dirty = snapshot.changed_among(wanted) - landing_now
+        dirty -= set(snapshot.ignored_among(sorted(dirty)))
+        zero_path = credit_gate.zero_path_prefix_credit(
+            zero_prefixes, credited, {p for p in dirty if (worktree_root / p).is_file()}
+        )
+        if zero_path:
+            if close_ctx is not None:
+                close_ctx.clear()
+            shown = "; ".join(f"{cid}: {', '.join(paths)}" for cid, paths in sorted(zero_path.items()))
+            return _error(
+                f"credited chunk(s) landed no path while files sit under their prefix: {shown}. "
+                "List them under `created-under-prefix:` in the report, or list the chunk in "
+                "params.incomplete_chunks, then re-fire",
+                refused=credit_gate.REFUSED_CREDITED_PREFIX_ZERO_PATHS,
+                unlanded=zero_path,
+            )
     unprobed = sorted({p for ps in credited.values() for p in ps} - landing_now)
     credit_changed = changed
     if changed is not None and unprobed:
@@ -3451,8 +3521,21 @@ def _terminal_commit_inner(
         own_declared.update(
             p for p in (*all_paths, *deleted_paths) if p == record_dir_rel or p.startswith(record_dir_rel.rstrip("/") + "/")
         )
-    from coordinator_core.ops.dispatch_emit.in_run_widen import widened_paths
+    from coordinator_core.ops.dispatch_emit.in_run_widen import record_widens, widened_paths
 
+    if ask_run_dir is not None and requirement_named and snapshot is not None:
+        pending = [
+            p for p in requirement_named
+            if p in snapshot.changed and p not in held_paths and (worktree_root / p).exists()
+        ]
+        peer = _peer_held(worktree_root, session_id, pending, run_id=sibling_run_id)
+        claimed = claims_over(pending)
+        pending = [p for p in pending if p not in peer and p not in claimed]
+        serving = next((c.id for c in done_chunks + partial_chunks), None)
+        if pending and serving:
+            record_widens(ask_run_dir, [{"row": serving, "path": p} for p in pending])
+            declared_writes.update(pending)
+            all_paths.extend(p for p in pending if p not in all_paths)
     widened = list(widened_paths(ask_run_dir)) if ask_run_dir is not None else []
     own_declared.update(widened)
     all_paths, sibling_withheld = _sc.filter_own(

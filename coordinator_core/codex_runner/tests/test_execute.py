@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.codex_runner import execute
+from coordinator_core.codex_runner import codex_spawn_env, execute
 from coordinator_core.codex_runner.contract import RunRequest
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -241,7 +241,7 @@ def test_unelevated_unproven_root_runs_with_advisory(env):
     root, plan, argv_out, tmp_path, mp = env
     (tmp_path / "chome" / "config.toml").write_text('[windows]\nsandbox = "unelevated"\n', encoding="utf-8")
     mp.setattr(sp, "_is_windows", lambda: True)
-    mp.setattr(execute, "check_pwsh_launchable", lambda env: None)
+    mp.setattr(codex_spawn_env, "check_pwsh_launchable", lambda env: None)
     seen = {}
 
     def fake_check(root_, **kw):
@@ -262,7 +262,7 @@ def test_unelevated_proven_root_still_runs(env):
     root, plan, argv_out, tmp_path, mp = env
     (tmp_path / "chome" / "config.toml").write_text('[windows]\nsandbox = "unelevated"\n', encoding="utf-8")
     mp.setattr(sp, "_is_windows", lambda: True)
-    mp.setattr(execute, "check_pwsh_launchable", lambda env: None)
+    mp.setattr(codex_spawn_env, "check_pwsh_launchable", lambda env: None)
     rec = root / sp.PROVEN_ROOTS_RELPATH
     rec.parent.mkdir(parents=True)
     rec.write_text(_json.dumps([str(root)]), encoding="utf-8")
@@ -279,9 +279,61 @@ def test_windowsapps_pwsh_refused_before_spawn(env):
     store.mkdir(parents=True)
     (store / "pwsh.exe").write_text("", encoding="utf-8")
     mp.setattr(sp, "_is_windows", lambda: True)
+    mp.setenv("ProgramFiles", str(tmp_path))
     mp.setattr(execute, "_child_env", lambda requested: {"Path": str(store), "ProgramFiles": str(tmp_path)})
     mp.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
     res, pids = _run(root, plan, "C1", tmp_path)
     assert res.status == execute.STATUS_FAILED
     assert "WindowsApps" in res.error and str(tmp_path / "PowerShell" / "7") in res.error
     assert pids == []
+
+
+def test_popen_receives_the_helper_env_with_writable_temp(env):
+    import subprocess
+    root, plan, argv_out, tmp_path, mp = env
+    built = []
+
+    def fake_shape(child, *, writable_root, **kw):
+        child["SHAPED"] = "1"
+        built.append(child)
+        return child
+
+    calls = []
+
+    def counting_child_env(requested):
+        calls.append(requested)
+        return {"PATH": os.environ.get("PATH", "")}
+
+    mp.setattr(execute, "shape_codex_child", fake_shape)
+    mp.setattr(execute, "_child_env", counting_child_env)
+    real_popen = subprocess.Popen
+    seen = []
+
+    def spy(*a, **k):
+        seen.append(k["env"])
+        return real_popen(*a, **k)
+
+    mp.setattr(subprocess, "Popen", spy)
+    _jsonl(tmp_path, mp, [str(root / "src" / "a.py")])
+    _run(root, plan, "C1", tmp_path)
+    assert len(calls) == 1 and len(built) == 1
+    assert seen and seen[0] is built[0]
+
+
+def test_real_shape_sets_temp_under_repo_scratch(env):
+    import subprocess
+    root, plan, argv_out, tmp_path, mp = env
+    real_popen = subprocess.Popen
+    seen = []
+
+    def spy(*a, **k):
+        seen.append(k["env"])
+        return real_popen(*a, **k)
+
+    mp.setattr(subprocess, "Popen", spy)
+    mp.setattr(codex_spawn_env, "check_pwsh_launchable", lambda env: None)
+    _jsonl(tmp_path, mp, [str(root / "src" / "a.py")])
+    _run(root, plan, "C1", tmp_path)
+    want = str(root / "scratch" / "codex-tmp")
+    assert seen and seen[0]["TEMP"] == want and seen[0]["TMP"] == want
+    assert (root / "scratch" / "codex-tmp").is_dir()

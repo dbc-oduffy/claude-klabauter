@@ -186,7 +186,7 @@ def test_the_same_landing_without_a_co_declaring_sibling_commits(repo):
     assert out["committed"] is True, out
 
 
-def test_an_unresolved_out_of_ask_finding_on_the_path_lands_and_is_provenance(repo):
+def test_an_unresolved_out_of_ask_finding_on_the_path_withholds_it_naming_the_reviewer_sidecar(repo):
     share = repo / ".coordinator-local" / "subagent-share" / SELF
     share.mkdir(parents=True)
     (share / "run.review-wave-bookkeeping.md").write_text(
@@ -200,11 +200,14 @@ def test_an_unresolved_out_of_ask_finding_on_the_path_lands_and_is_provenance(re
         encoding="utf-8",
     )
 
+    seed = _git(["rev-parse", "HEAD"], repo)
+
     out = _fire(repo)
 
-    assert out["committed"] is True, out
-    (entry,) = _provenance(out, peer_hunk_gate.OUT_OF_ASK_HUNKS)
-    assert "rev-1" in entry["detail"]
+    assert out["committed"] is False, out
+    assert out["sibling_withheld"] == {PATH: "rev-1"}
+    assert _git(["rev-parse", "HEAD"], repo) == seed
+    assert (repo / PATH).read_text(encoding="utf-8") == "x = 2\n"
 
 
 def _seed_many_lines(repo: Path) -> list:

@@ -89,7 +89,12 @@ def test_disjoint_parallel_absent_defaults_false(tmp_path):
 
 
 def test_em_run_with_needs_slot_is_a_known_key_and_reads_without_warning(tmp_path, caplog):
-    _plan(tmp_path, "  em_run: true\n  needs_slot: true\n")
+    # em_run withholds only a non-code row; a code deliverable routes to an executor regardless.
+    path = _plan(tmp_path, "  em_run: true\n  needs_slot: true\n")
+    path.write_text(
+        path.read_text(encoding="utf-8").replace("pkg/a.py", "docs/a.md").replace("code-edit", "doc-edit"),
+        encoding="utf-8", newline="\n",
+    )
     with caplog.at_level(logging.WARNING):
         rows = read_spine(tmp_path / PLAN_REL)
     assert rows == []  # an em_run row is the EM's, so it is withheld from the dispatched rows

@@ -70,6 +70,7 @@ def _claim_once(run_dir: str, agent_id: str) -> bool:
 
 @register_op("hooks.preuse_sendmessage_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     return run_phased("hooks.preuse_sendmessage_dispatch", params, _chain)
 
 

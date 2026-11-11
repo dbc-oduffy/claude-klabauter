@@ -169,5 +169,91 @@ def test_grok_adapter_reads_text_events_and_result_only_as_fallback(home):
     assert b.parse_line('{"type":"result","result":"only"}') == ("s", "only")
 
 
+def _windowsapps(tmp_path, monkeypatch, *, ps7):
+    from coordinator_core.codex_runner import review, sandbox_preflight
+    apps = tmp_path / "WindowsApps"
+    apps.mkdir()
+    (apps / "pwsh.exe").write_text("")
+    pf = tmp_path / "ProgramFiles"
+    ps7_dir = pf / "PowerShell" / "7"
+    if ps7:
+        ps7_dir.mkdir(parents=True)
+        (ps7_dir / "pwsh.exe").write_text("")
+    monkeypatch.setenv("ProgramFiles", str(pf))
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: True)
+    monkeypatch.setattr(review, "_unattended_env", lambda *a, **k: {"PATH": str(apps)})
+    return str(apps), str(ps7_dir)
+
+
+def _codex_peer(name="cx"):
+    from coordinator_core.agent_pipe.codex import CodexAdapter
+    return peer.Participant(name, CodexAdapter(), "hi", peer.RESUME)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PATH shaping is Windows-only")
+def test_codex_peer_refused_before_spawn_on_windowsapps_only_path(home, tmp_path, monkeypatch):
+    _windowsapps(tmp_path, monkeypatch, ps7=False)
+    monkeypatch.setattr("coordinator_core.agent_pipe.codex.resolve_codex", lambda: ["codex"])
+    monkeypatch.setattr(peer.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    result = peer.relay([_codex_peer()], idle=0.2)
+    assert result.exit_codes["cx"] == 127
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="PATH shaping is Windows-only")
+def test_codex_peer_spawns_with_ps7_ahead_and_other_providers_inherit(home, tmp_path, monkeypatch):
+    import os
+    apps, ps7 = _windowsapps(tmp_path, monkeypatch, ps7=True)
+    monkeypatch.setattr("coordinator_core.agent_pipe.codex.resolve_codex", lambda: ["codex"])
+    envs = {}
+
+    def spy(argv, **kw):
+        envs[argv[0]] = kw.get("env")
+        raise OSError("stop")
+
+    monkeypatch.setattr(peer.subprocess, "Popen", spy)
+    peer.relay([_codex_peer(), resume_peer("other")], idle=0.2)
+    entries = envs["codex"]["PATH"].split(os.pathsep)
+    assert entries.index(ps7) < entries.index(apps)
+    assert envs[sys.executable] is None
+
+
+def test_codex_peer_env_is_the_unattended_allowlist_not_the_inherited_env(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-inherited-secret")
+    monkeypatch.setenv("COORDINATOR_PEER_PROBE_VAR", "inherited")
+    env = peer._Relay._codex_env(_codex_peer())
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert "COORDINATOR_PEER_PROBE_VAR" not in env
+    assert "sk-inherited-secret" not in env.values()
+
+
+def test_codex_peer_env_carries_engine_reach_vars_and_never_overrides_the_allowlist(monkeypatch):
+    for name, value in {
+        "COORDINATOR_SETTINGS_HOME": "/h", "COORDINATOR_ENGINE_ROOT": "/e", "HTTPS_PROXY": "http://p",
+        "SSL_CERT_FILE": "/c.pem", "OPENAI_API_KEY": "sk-inherited-secret",
+    }.items():
+        monkeypatch.setenv(name, value)
+    env = peer._Relay._codex_env(_codex_peer())
+    assert {k: env[k] for k in ("COORDINATOR_SETTINGS_HOME", "COORDINATOR_ENGINE_ROOT", "HTTPS_PROXY", "SSL_CERT_FILE")} == {
+        "COORDINATOR_SETTINGS_HOME": "/h", "COORDINATOR_ENGINE_ROOT": "/e", "HTTPS_PROXY": "http://p", "SSL_CERT_FILE": "/c.pem"}
+    assert "sk-inherited-secret" not in env.values()
+
+
+@pytest.mark.parametrize("mode", [peer.STDIN, peer.RESUME])
+def test_refused_codex_spawn_prints_the_peer_error_and_exits_127(home, monkeypatch, capsys, mode):
+    from coordinator_core.agent_pipe.codex import CodexAdapter
+    from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
+
+    def refuse(p):
+        raise SandboxSetupRefused("pwsh alias")
+
+    monkeypatch.setattr(peer._Relay, "_codex_env", staticmethod(refuse))
+    monkeypatch.setattr(peer.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    p = peer.Participant("cx", CodexAdapter(), "hi", mode, ["codex"] if mode == peer.STDIN else None)
+    monkeypatch.setattr(CodexAdapter, "spawn_argv", lambda self, *a, **k: ["codex"])
+    result = peer.relay([p], idle=0.2)
+    assert result.exit_codes["cx"] == 127
+    assert "peer cx: pwsh alias" in capsys.readouterr().err
+
+
 def test_json_turn_is_the_agy_user_event_schema():
     assert json.loads(peer.json_turn("hi\nthere")) == {"event": "user", "message": {"content": "hi\nthere"}}

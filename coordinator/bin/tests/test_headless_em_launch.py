@@ -134,7 +134,10 @@ def test_windows_codex_cmd_shim_maps_to_native_exe(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("family", hel.FAMILIES)
-def test_windows_shim_without_native_package_refused_naming_flag(family, tmp_path, capsys, home):
+def test_windows_shim_without_native_package_refused_naming_flag(family, tmp_path, capsys, home, monkeypatch):
+    # resolve_native_cli falls back to the real <home>/.<family>/bin exe; point home at an empty dir.
+    for var in ("USERPROFILE", "HOME"):
+        monkeypatch.setenv(var, str(tmp_path / "nohome"))
     rc, out = _win_prepare(family, lambda n: str(tmp_path / f"{family}.cmd") if n == family else None, capsys)
     assert rc == hel.REFUSED and out.out == "" and "--native-executable" in out.err
     assert not (home / "state").exists()

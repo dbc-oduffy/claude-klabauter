@@ -126,7 +126,7 @@ def test_registered_start_worker_request_runs_shared_launch_and_returns_result(t
     result = run_worker(Path(started["run_dir"]))
     assert result.status == "ok" and result.codex_pid > 0
     assert "Produce the assigned evidence." in result.output
-    assert worker.POLICY in result.output
+    assert worker.POLICY in result.output.replace("\r\n", "\n")
     assert operations._codex_runner_result({"run_id": started["run_id"]})["output"] == result.output
     with pytest.raises(ValueError, match="installed Codex defaults"):
         RunRequest.from_dict({**params, "provider": "google"})

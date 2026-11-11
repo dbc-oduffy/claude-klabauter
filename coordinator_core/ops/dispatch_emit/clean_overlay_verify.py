@@ -19,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Sequence
 
-from coordinator_core.git.run import run_git
+from coordinator_core.git.run import _git_exe, run_git
 from coordinator_core.ops._path_guard import safe_id
 from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 from coordinator_core.ops.dispatch_emit.test_interpreter import resolve_targeted_test_python
@@ -103,6 +103,17 @@ def _gate_python(root: Path) -> str:
     return pin.command if pin.command and pin.defect is None else sys.executable
 
 
+def engine_python_command(root: Path) -> str:
+    """`_gate_python(root)` as a token safe to paste into a Bash command: an absolute path is posix-slashed
+    and double-quoted when it holds whitespace; a pinned bare name or launcher clause is returned as declared.
+    Never a bare `python`: an agent's PATH `python` can lack `coordinator_core`."""
+    py = _gate_python(root)
+    if Path(py).is_absolute():
+        py = Path(py).as_posix()
+        return f'"{py}"' if any(c.isspace() for c in py) else py
+    return py
+
+
 def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) -> OverlayVerdict:
     """Clone `root` shared into the run's overlay dir, check out `candidate_sha` detached, run pytest over
     `seeds` there, and reap the overlay on every exit path. Never raises: a setup failure, a timeout or a
@@ -118,8 +129,11 @@ def verify(root: Path, run_id: str, candidate_sha: str, seeds: Sequence[str]) ->
         holder.mkdir(parents=True, exist_ok=True)
         clone = run_git(["clone", "--shared", "--no-checkout", "-q", str(root), str(dest)], cwd=str(root))
         if clone.returncode:
-            return OverlayVerdict("inconclusive", f"overlay clone failed: {clone.stderr.strip()[-_OUTPUT_TAIL:]}", seeds)
-        out = run_git(["checkout", "--detach", "-q", candidate_sha], cwd=str(dest))
+            why = "timed out" if clone.timed_out else clone.stderr.strip()[-_OUTPUT_TAIL:]
+            return OverlayVerdict("inconclusive", f"overlay clone failed: {why}", seeds)
+        # A full-tree checkout is bulk transfer, not local plumbing: under run_git's 2s budget it timed out
+        # on this repo and came back rc -1 with empty stderr. It runs under the overlay's pytest bound.
+        out = _run([_git_exe(), "checkout", "--detach", "-q", candidate_sha], dest, TEST_TIMEOUT_S)
         if out.returncode:
             return OverlayVerdict("inconclusive", f"overlay checkout failed: {out.stderr.strip()[-_OUTPUT_TAIL:]}", seeds)
         ran = _run([_gate_python(root), "-m", "pytest", "-q", "-p", "no:cacheprovider", *seeds], dest, TEST_TIMEOUT_S)
@@ -161,6 +175,7 @@ def write_verdict(root: Path, run_id: str, measured: dict, outcome: OverlayVerdi
             indent=2, sort_keys=True,
         ),
         encoding="utf-8",
+        newline="\n",
     )
     return path
 
@@ -190,8 +205,9 @@ def check_verdict(root: Path, run_id: str, measured: dict) -> OverlayVerdict:
     return OverlayVerdict(verdict, str(data.get("detail", "")), seeds)
 
 
-def remedy_call(run_id: Optional[str]) -> str:
-    return f"{Path(sys.executable).name} -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id {run_id or '<run_id>'} --repo-root <repo_root>"
+def remedy_call(run_id: Optional[str], root: Optional[Path] = None) -> str:
+    py = engine_python_command(root) if root is not None else Path(sys.executable).as_posix()
+    return f"{py} -m coordinator_core.ops.dispatch_emit.clean_overlay_verify --run-id {run_id or '<run_id>'} --repo-root <repo_root>"
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

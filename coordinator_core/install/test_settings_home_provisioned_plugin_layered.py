@@ -35,6 +35,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core._settings_home import settings_home
+from coordinator_core.install import substrate
 from coordinator_core.install.substrate import (
     _CH_FAMILY_FILES,
     _install_bin_resolvers,
@@ -43,6 +44,20 @@ from coordinator_core.install.substrate import (
 )
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _use_checkout_as_engine_root(monkeypatch) -> None:
+    """Point the installer at this checkout as its engine tree.
+
+    Engine-root resolution refuses an unstamped tree (a claude-klabauter checkout is never
+    an engine), so `COORDINATOR_ENGINE_ROOT=<checkout>` no longer resolves. The
+    installer only reads templates and manifests from the root, so the seam is
+    stubbed rather than copying a stamped engine into tmp_path.
+    """
+    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
+    monkeypatch.setattr(
+        substrate, "_engine_root_or_raise", lambda: (str(_REPO_ROOT), "test-checkout")
+    )
 
 
 def _write(path: Path, content: str) -> None:
@@ -106,10 +121,7 @@ def test_settings_home_resolves_independently_of_the_plugin_layout(monkeypatch, 
 def test_plugin_layered_install_provisions_the_settings_home_bin(monkeypatch, tmp_path):
     settings_home_dir = tmp_path / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    # tree via COORDINATOR_ENGINE_ROOT rather than a fixture. The assertions
-    # C14 retired CLAUDE_KLABAUTER_ROOT from Rung 1; deleted rather than left alone so an
-    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    _use_checkout_as_engine_root(monkeypatch)
 
     ml_bin, ch_bin = _plugin_layered_sources(tmp_path)
     bin_dst = settings_home() / "bin"
@@ -137,10 +149,7 @@ def test_plugin_layered_install_provisions_the_settings_home_bin(monkeypatch, tm
 def test_provisioning_is_idempotent_across_a_reinstall(monkeypatch, tmp_path):
     settings_home_dir = tmp_path / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
-    # tree via COORDINATOR_ENGINE_ROOT rather than a fixture. The assertions
-    # C14 retired CLAUDE_KLABAUTER_ROOT from Rung 1; deleted rather than left alone so an
-    monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    _use_checkout_as_engine_root(monkeypatch)
 
     ml_bin, ch_bin = _plugin_layered_sources(tmp_path)
     bin_dst = settings_home() / "bin"

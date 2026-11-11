@@ -20,6 +20,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = [
@@ -73,12 +74,12 @@ def runtime_base():
     base = Path(os.path.realpath(tempfile.mkdtemp(prefix="rs-", dir=roots[0])))
     projected = len(os.fsencode(str(base))) + len("/coordinator/warm/") + 16 + 1 + 16 + 5
     if projected > SUN_PATH_MAX_BYTES:
-        shutil.rmtree(base, ignore_errors=True)
+        rmtree_or_raise(base, label="replay-safe-runtime-base")
         pytest.skip(f"runtime base {str(base)!r} leaves no room under the sun_path budget (projected {projected})")
     try:
         yield base
     finally:
-        shutil.rmtree(base, ignore_errors=True)
+        rmtree_or_raise(base, label="replay-safe-runtime-base")
 
 
 def _stub_engine_root(tmp_path: Path) -> Path:

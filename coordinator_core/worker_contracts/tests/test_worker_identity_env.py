@@ -1,4 +1,5 @@
 """Inspect the actual supervised spawn environment without launching a child."""
+import os
 from types import SimpleNamespace
 import pytest
 from coordinator_core.worker_contracts import worker
@@ -37,4 +38,4 @@ def test_supervised_worker_spawn_has_actual_role_vendor_and_no_parent_identity(t
     assert captured['COORDINATOR_AGENT_ROLE']=='worker'
     assert captured['COORDINATOR_AGENT_PROVIDER']==captured['COORDINATOR_AGENT_VENDOR']=='codex'
     assert captured.get('COORDINATOR_AGENT_MODEL')==model
-    assert captured['PATH']=='keep' and base['COORDINATOR_AGENT_ROLE']=='em'
+    assert captured['PATH'].split(os.pathsep)[0]=='keep' and base['COORDINATOR_AGENT_ROLE']=='em'

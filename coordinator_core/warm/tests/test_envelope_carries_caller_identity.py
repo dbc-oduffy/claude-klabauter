@@ -54,7 +54,7 @@ def test_empty_string_session_id_also_carries_no_identity():
     assert _caller_of(frame)["session_id"] is None
 
 
-#: The two `CallerContext` fields that do NOT ride inside the `_caller`
+#: The `CallerContext` fields that do NOT ride inside the `_caller`
 #: object `hook_http.build_request` serialises, per that dataclass's own
 #: docstring: `settings_home` rides its own top-level `_settings_home` wire
 #: field (`warm/settings_home_claim.py`), and `env` is joined onto the
@@ -62,7 +62,12 @@ def test_empty_string_session_id_also_carries_no_identity():
 #: after `resolve_caller_context` already ran -- neither producer leg
 #: (`hook_http.build_request`, `client.py`) has a value to put there at
 #: build time, so both stay unset on the wire object this test reads.
-_CALLER_CONTEXT_FIELDS_NOT_ON_THE_WIRE_OBJECT = frozenset({"settings_home", "env"})
+#: `verified_native_actor` is a trusted server-side attachment
+#: (`with_verified_native_actor`: never parsed from wire/env claims), so it
+#: must never ride the wire either.
+_CALLER_CONTEXT_FIELDS_NOT_ON_THE_WIRE_OBJECT = frozenset(
+    {"settings_home", "env", "verified_native_actor"}
+)
 
 
 def test_caller_object_mirrors_the_caller_context_dataclass():

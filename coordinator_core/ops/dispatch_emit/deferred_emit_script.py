@@ -11,6 +11,26 @@ from pathlib import Path
 from typing import Optional
 
 # The emit-relay constants and helper shared by the deferred and direct-start scripts, which both relay a chain emit.
+# Shared by the deferred-emit stage loop and the fan launcher: one copy, so the twin check cannot drift.
+TWIN_CHECK_JS = r"""// A refire recomposes `warp-<sizing stem>-<stamp>-<hex>` under a fresh stamp, so the twin the halted run staged names the same run under another stamp: the family is the id without its stamp.
+function _runFamily(id) {
+  const m = /^(warp-.+)-[0-9]{8}T[0-9]{6}-[0-9a-f]{6}$/.exec(id);
+  return m ? m[1] : id;
+}
+// A stage reply that names its staged twin wins over a path derived from the handle sha, which a restage leaves stale. null: none named; false: named but not this run's twin.
+function _replyTwinRel(pending, stem) {
+  const t = pending.twin_path;
+  if (t === undefined || t === null) return null;
+  if (typeof t !== 'string' || !t.startsWith(TWIN_PREFIX) || !t.endsWith(TWIN_SUFFIX)) return false;
+  const shaAt = t.length - TWIN_SUFFIX.length - 64;
+  const midAt = shaAt - TWIN_MIDDLE.length;
+  if (midAt <= TWIN_PREFIX.length || t.slice(midAt, shaAt) !== TWIN_MIDDLE || !/^[0-9a-f]{64}$/.test(t.slice(shaAt, shaAt + 64))) return false;
+  const own = t.slice(TWIN_PREFIX.length, midAt);
+  return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(own) && _runFamily(own) === _runFamily(stem) ? t : false;
+}
+"""
+
+
 _EMIT_RELAY_JS = r"""const INVOKE = __INVOKE__;
 const EMIT_OP = __EMIT_OP__;
 const EMIT_SCHEMA = {
@@ -78,16 +98,7 @@ function _normPath(p) {
   const s = p.replace(/\\/g, '/').replace(/\/{2,}/g, '/');
   return (s[0] === '/' || /^[A-Za-z]:\//.test(s)) ? s : REPO_ROOT + '/' + s.replace(/^\.\//, '');
 }
-// A stage reply that names its staged twin wins over a path derived from the handle sha, which a restage leaves stale. null: none named; false: named but not this run's twin.
-function _replyTwinRel(pending, stem) {
-  const t = pending.twin_path;
-  if (t === undefined || t === null) return null;
-  const pre = TWIN_PREFIX + stem + TWIN_MIDDLE;
-  const ok = typeof t === 'string' && t.length === pre.length + 64 + TWIN_SUFFIX.length && t.startsWith(pre)
-    && t.endsWith(TWIN_SUFFIX) && /^[0-9a-f]{64}$/.test(t.slice(pre.length, pre.length + 64));
-  return ok ? t : false;
-}
-async function _startLoop(firstPath) {
+""" + TWIN_CHECK_JS + r"""async function _startLoop(firstPath) {
   let path = firstPath;
   let lastSha = null;
   if (typeof firstPath !== 'string' || !firstPath.endsWith('.mjs')) return { ok: false, error: 'refusing to start a non-script path: ' + String(firstPath) };

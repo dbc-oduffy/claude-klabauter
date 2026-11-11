@@ -410,9 +410,15 @@ ASK_GATE_RECONCILE_CLAUSE = (
     f"If the {OP_ASK_GATE} command replies with error code -32004 and its error.data carries "
     "reconcile_command, run reconcile_command once: a status whose state is finished with outcome "
     "result is the gate's reply. In every other -32004 case, run the same "
-    f"{OP_ASK_GATE} command exactly once more and return its reply verbatim. "
+    f"{OP_ASK_GATE} command exactly once more (the gate is idempotent; error.data retry_safe true and no "
+    "reconcile_command is the same case) and return its reply verbatim. If that second run also replies "
+    "with error code -32004, return halt {kind: 'refusal', reason: <its error text, naming -32004>}, never "
+    "arm and halt both null. "
     "A -32004 is never itself the gate's failure."
 )
+
+#: Markers of a gate agent's refusal reason that is a -32004 the gate's one refire did not clear.
+GATE_INDETERMINATE_RE = r"/-32004|hung_past_ceiling/i"
 
 
 #: Output markers of a warm-dispatch indeterminate reply from `sizing-assemble`; the composed scout halt matches them.
@@ -456,8 +462,17 @@ def _agent(
     effort: Optional[str] = None,
     stage_as: Optional[str] = None,
     stager: Optional[Stager] = None,
+    agent_type_host: Optional[str] = None,
+    sidecar_label: Optional[str] = None,
+    sidecar_label_js: Optional[str] = None,
 ) -> str:
     """One `agent(...)` call expression; the prompt ends with the sidecar clause keyed by ``run_id`` and ``label``.
+
+    ``sidecar_label`` keys the sidecar dir by a static name other than ``label``; ``sidecar_label_js`` by a JS
+    expression evaluated at fire time. Both leave ``label`` (the leg-register key) as is.
+
+    ``agent_type_host`` swaps only the emitted ``agentType`` literal (`emit._degrade_agent_type`); the model
+    and effort still resolve from ``agent_type``.
 
     With ``stager`` and ``stage_as``, each large static run of ``prompt_expr`` leaves the script as a
     pointer to a staged file (`ask_staged_prompts`); the sidecar clause and dynamic operands stay inline.
@@ -470,7 +485,10 @@ def _agent(
     effort = effort or (None if label.startswith("objective-") else _declared_effort(label, agent_type, agent_model))
     effort_opt = f"effort: {_lit(effort)}, " if effort else ""
     model_opt = f"{_emit._model_opt(agent_type, agent_model)}, "
-    clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, label)))
+    if sidecar_label_js:
+        clause = _sidecar.sidecar_clause_js("ask", run_id, sidecar_label_js)
+    else:
+        clause = _lit(_sidecar.sidecar_clause(_sidecar.sidecar_dir("ask", run_id, sidecar_label or label)))
     if "coordinator-invoke" in prompt_expr:
         if LAND_RUN_OP in prompt_expr:
             reconcile = LAND_RUN_RECONCILE_CLAUSE
@@ -494,7 +512,7 @@ def _agent(
         schema_js = schema_js.replace(json.dumps(judge, sort_keys=True), _JUDGE_SCHEMA_VAR, 1)
     return (
         f"agent(({prompt_expr}) + {clause}, {{ label: {_lit(label)}, phase: {_lit(phase)}, "
-        f"agentType: {_lit(agent_type)}, {model_opt}{effort_opt}"
+        f"agentType: {_lit(_emit._degrade_agent_type(agent_type, agent_type_host))}, {model_opt}{effort_opt}"
         f"schema: {schema_js} }})"
     )
 
@@ -652,10 +670,21 @@ def _ue_docs_checker(repo_root: str) -> tuple[bool, Optional[str]]:
         raise AskComposeRefused(f"stage agent routing refused: {exc}") from exc
 
 
+def _docs_gate_clause(label: str, repo_root: str) -> tuple[str, ...]:
+    """`_cat` parts closing a docs-checker prompt: the checker runs `dispatch.docs_check_rag_gate` as its last act, reply in `gate`."""
+    return (
+        " Write your findings, each claim with its [rag:]/[live:] citation, as text first. Then, as your last act, run `"
+        f"{_INVOKE} {_OP_DOCS_CHECK_RAG_GATE} '",
+        "js:JSON.stringify({ run_id: _runId, label: " + _lit(label) + ", session_id: _SESSION_ID })",
+        f"'{_repo_flag(repo_root)}` once and return its JSON reply as `gate` (verdict, message, reason, unbacked, "
+        "rag_calls, rag_failed, rag_timeouts, rag_refused). Do not retry or repair it.",
+    )
+
+
 def _docs_check_gate_js(
-    *, check_call: str, label: str, repo_root: str, run_id: str, check_var: str, gate_var: str, indent: str, plan_js: str
+    *, check_call: str, label: str, check_var: str, gate_var: str, indent: str, plan_js: str
 ) -> list[str]:
-    """JS lines running one docs-check leg, its `dispatch.docs_check_rag_gate` relay, and the halt they decide.
+    """JS lines running one docs-check leg and the halt its own `gate` reply (`_docs_gate_clause`) decides.
 
     A checker verdict `rag_down` (unless the gate verdict is `degraded`, timeout-only failures, or
     `not_applicable`, where the gate saw no UE/example-retrieval-repo surface to judge),
@@ -667,17 +696,6 @@ def _docs_check_gate_js(
     `degraded_bands` when the gate did not already record the leg as degraded. Declares
     `check_var` and `gate_var` in the caller's scope.
     """
-    gate_prompt = _cat(
-        f"Run `{_INVOKE} {_OP_DOCS_CHECK_RAG_GATE} '",
-        "js:JSON.stringify({ run_id: _runId, label: " + _lit(label) + ", session_id: _SESSION_ID })",
-        f"'{_repo_flag(repo_root)}` once and return its JSON reply as verdict, message, reason, unbacked, rag_calls, rag_failed, rag_timeouts and rag_refused. "
-        "Do not edit, retry or repair anything.",
-    )
-    gate_call = _agent(
-        gate_prompt, label=f"{label}-gate", phase="plan" if label.startswith("plan") else "review",
-        agent_type=_OP_RELAY_AGENT_TYPE, agent_model=_MECHANICAL_MODEL, schema=_DOCS_GATE_SCHEMA,
-        effort=_MECHANICAL_EFFORT, run_id=run_id,
-    )
     down = (
         f"({check_var}?.verdict === 'rag_down' && {gate_var}?.verdict !== {_lit(RAG_DEGRADED)} && {gate_var}?.verdict !== 'not_applicable') "
         f"|| typeof {gate_var}?.verdict !== 'string' "
@@ -685,7 +703,7 @@ def _docs_check_gate_js(
     )
     return [
         f"{indent}const {check_var} = await {check_call};",
-        f"{indent}const {gate_var} = await {gate_call};",
+        f"{indent}const {gate_var} = {check_var}?.gate ?? null;",
         f"{indent}if ({down}) _halted = {{ halted: {_lit(HALT_RAG_CORPUS_DOWN)}, reason: {_lit(RESTORE_MESSAGE)}, "
         f"next_action: {_lit(RESTORE_MESSAGE)}, leg: {_lit(label)}, run_id: _runId, sizing: _sizingRel, plan: {plan_js} }};",
         f"{indent}else if ({gate_var}.verdict === {_lit(HALT_CITATION_UNBACKED)}) _halted = {{ halted: {_lit(HALT_CITATION_UNBACKED)}, "
@@ -854,19 +872,19 @@ _FALSIFIER_PROP = {"falsifier": {"type": ["object", "null"]}}
 _SPINE_REVIEW_SCHEMA = _obj(
     ["plan_rel"], {"plan_rel": _STR, "pull_class": _STR, "verdict": _STR, **_REVIEW_SIGNALS_PROP}
 )
-_DOCS_CHECK_SCHEMA = _obj(
-    ["verdict"],
-    {
-        "verdict": {"type": "string", "enum": ["ok", "corrected", "rag_down", "degraded"]}, "plan_rel": _STR,
-        "degraded_bands": {"type": "array", "items": _STR}, "reason": _STR,
-    },
-)
 _DOCS_GATE_SCHEMA = _obj(
     ["verdict"],
     {
         "verdict": _STR, "message": _STR, "reason": _STR, "unbacked": {"type": "array", "items": _STR},
         "rag_calls": {"type": "number"}, "rag_failed": {"type": "number"},
         "rag_timeouts": {"type": "number"}, "rag_refused": {"type": "number"},
+    },
+)
+_DOCS_CHECK_SCHEMA = _obj(
+    ["verdict"],
+    {
+        "verdict": {"type": "string", "enum": ["ok", "corrected", "rag_down", "degraded"]}, "plan_rel": _STR,
+        "degraded_bands": {"type": "array", "items": _STR}, "reason": _STR, "gate": _DOCS_GATE_SCHEMA,
     },
 )
 _XL_SCHEMA = _obj(
@@ -1180,6 +1198,7 @@ _ADMIT_MANIFEST_JS = (
     "  let _stageBlockingDrops = null;\n"
     "  let _relayGap = null;\n"
     "  let _parked = null;\n"
+    "  let _parkedWaiting = null;\n"
     "  let _diskHalt = null;\n"
     "  const _wholeManifestGap = (m) => {\n"
     "    const ne = (v) => typeof v === 'string' && v.trim() !== '';\n"
@@ -1206,12 +1225,18 @@ _ADMIT_MANIFEST_JS = (
     "    if (!_stagedManifest && !_stageRefusal && _re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;\n"
     "  };"
 )
+#: Literal of `ask_stage.STAGE_WAIT_PARKED`, pinned equal by test_ask_compose_parked_after_plan.
+#: The script holds on it (`_stageHold`, one agent that polls the stage op until the blockers land or
+#: `waiting.deadline` passes) and ends the run as a parked halt naming the blocker only when the hold times out.
+_STAGE_WAIT_PARKED = "stage-wait"
 _STAGE_SIDECAR_HALT = "stage reply sidecar does not match its handle: "
 _ADOPT_STAGE_REPLY_HEAD_JS = (
     "  let _stagePending = null;\n"
     "  let _noFoldCause = null;\n"
     "  let _stageRecover = null;\n"
+    "  let _stageHold = null;\n"
     "  let _stageRecovered = false;\n"
+    "  let _stageReadSeq = 0;\n"
     # A cached pre-ship-5 fold-site return carries the handle at its top level and no `stage_reply`.
     "  const _legacyStageReply = (x) => {\n"
     "    if (x && typeof x === 'object' && !Array.isArray(x) && (x.stage_reply === undefined || x.stage_reply === null) "
@@ -1236,7 +1261,7 @@ _ADOPT_STAGE_REPLY_HEAD_JS = (
     "plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; "
     "if (Array.isArray(r.criterion_blocking_drops) && r.criterion_blocking_drops.length) _stageBlockingDrops = "
     "{ rows: r.criterion_blocking_drops, plan: typeof r.owed_plan === 'string' ? r.owed_plan : null }; } return; }\n"
-    f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) _parked = String(r.{PARKED_REPLY_KEY}); return; }}\n"
+    f"    if (r.{PARKED_REPLY_KEY} && !r.manifest_handle) {{ if (!_parked) {{ _parked = String(r.{PARKED_REPLY_KEY}); _parkedWaiting = r.waiting ?? null; }} return; }}\n"
     "    if (!r.manifest_handle) { if (!soft && !_relayGap) _relayGap = 'manifest_handle'; return; }\n"
     "    let got;\n"
 )
@@ -1337,6 +1362,22 @@ _STAGE_RECOVER_PARAMS_JS = (
 )
 
 
+def _stage_read_agent(
+    prompt: str, *, schema: dict, phase: str, run_id: str, arm: str = "", label_js: str = ""
+) -> str:
+    """The `_agent(...)` call of the stage-op relay leg: label `blitz-stage-read`, op-relay on the mechanical model.
+    Every stage-read arm composes through it so they share the one floor key; each arm's prompt stays its own.
+    The sidecar dir is keyed per read, never by the shared label: ``arm`` names a read that fires at most once
+    (`blitz-stage-read-<arm>`), ``label_js`` a fire-time expression for a read that can fire again."""
+    if bool(arm) == bool(label_js):
+        raise ValueError("a stage-read agent names exactly one of arm and label_js")
+    return _agent(
+        prompt, label="blitz-stage-read", phase=phase, agent_type=_OP_RELAY_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=schema, effort=_MECHANICAL_EFFORT, run_id=run_id,
+        sidecar_label=f"blitz-stage-read-{arm}" if arm else None, sidecar_label_js=label_js or None,
+    )
+
+
 def _stage_recover_js(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
     """The script block that sets `_stageRecover`: a fresh stage-recover agent runs the stage op once and returns
     its reply, for a fold-site return that carries no `stage_reply` (a result cached under an engine that did not
@@ -1348,12 +1389,44 @@ def _stage_recover_js(*, head: str, anchor: str, repo_root: str, run_id: str) ->
         f"'{_repo_flag(repo_root)}` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
         "{\"error\": ...} refusal). Commit nothing.",
     )
-    call = _agent(
-        prompt, label="stage-recover", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
-        run_id=run_id,
+    hold_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n",
+        "The stage op parked `stage-wait`: its writes overlap live run(s) ",
+        "js:((w?.blockers ?? []).join(', ') || 'unnamed')",
+        ". Hold until they land. Run the stage op as its own Bash call, no wrapper: ",
+        f"`{_INVOKE} {OP_ASK_STAGE} '",
+        "js:JSON.stringify(_stageRecoverParams())",
+        f"'{_repo_flag(repo_root)}`. While its reply carries parked `stage-wait` and `date -u +%s` is before the "
+        "deadline ",
+        "js:String(w?.deadline ?? 'none')",
+        " (epoch seconds), run `sleep 60` as its own Bash call and re-run the op. Never re-run it at or after the "
+        "deadline. Return the last reply verbatim as stage_reply (a manifest_handle, the {\"error\": ...} refusal, "
+        "or the parked reply). Commit nothing.",
     )
-    return _STAGE_RECOVER_PARAMS_JS + f"  _stageRecover = async () => {call};"
+    call = _stage_read_agent(
+        f"(w ? ({hold_prompt}) : ({prompt}))", schema=_BLITZ_STAGE_READ_SCHEMA, phase="plan", run_id=run_id,
+        label_js="'blitz-stage-read-' + (w ? 'hold-' : 'recover-') + (++_stageReadSeq)",
+    )
+    return (
+        _STAGE_RECOVER_PARAMS_JS
+        + f"  _stageRecover = async (w) => {call};\n"
+        + "  _stageHold = (w) => _stageRecover(w);"
+    )
+
+
+#: JS: runs before the parked halt. A `stage-wait` park holds on `_stageHold`; a reply that is no longer that park
+#: is adopted as the stage's own, and a hold that returns nothing or the park again falls through to the parked halt.
+_STAGE_WAIT_HOLD_JS = (
+    f"  if (_parked === {_lit(_STAGE_WAIT_PARKED)} && !_halted && typeof _stageHold === 'function') {{\n"
+    "    const _held = await _stageHold(_parkedWaiting);\n"
+    "    const _hr = (_held && typeof _held === 'object') ? _held.stage_reply : null;\n"
+    "    if (_hr && typeof _hr === 'object' && !Array.isArray(_hr)) {\n"
+    f"      if (_hr.{PARKED_REPLY_KEY} === {_lit(_STAGE_WAIT_PARKED)} && !_hr.manifest_handle && !_hr.error) "
+    "{ _parkedWaiting = _hr.waiting ?? _parkedWaiting; }\n"
+    "      else { _parked = null; _parkedWaiting = null; _stageRecovered = true; await _adoptStageReply(_hr); }\n"
+    "    }\n"
+    "  }"
+)
 
 
 #: The run reads its commit token from the Workflow `args` the emit's fire args carry, so the
@@ -1492,8 +1565,10 @@ def _test_blockers_js(
         own = (
             "    const " + p + "Norm = (s) => String(s).replace(/\\\\/g, '/').replace(/^(\\.\\/)+/, '');\n"
             "    const " + p + "Own = new Set((" + own_paths_expr + " || []).map(" + p + "Norm));\n"
+            "    const " + p + "Base = new Set((Array.isArray(" + p + "Src?.passed_at_base) ? " + p
+            + "Src.passed_at_base : []).map((s) => " + p + "Norm(String(s))));\n"
         )
-    in_own = f"{p}Own.has({p}Norm(n.split('::')[0]))"
+    in_own = f"({p}Own.has({p}Norm(n.split('::')[0])) || {p}Base.has({p}Norm(n)))"
     if unscoped_when_no_own:
         in_own = f"({p}Own.size === 0 || {in_own})"
     own_filter = f".filter((n) => {in_own})" if own_paths_expr else ""
@@ -1618,7 +1693,7 @@ _REVIEW_RECOVER_JS = r"""
         for (const f of found) if (!flaky.some((x) => x.node_id === f.node_id)) flaky.push(f);
         failing = failing.filter((n) => !fids.has(_hfPosix(n)));
       }
-      const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { pre_existing: rv?.pre_existing ?? [], passed_at_base: rv?.passed_at_base ?? [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
+      const split = classifyReds(failing, _manifest?.review_declared_paths ?? [], { pre_existing: rv?.pre_existing ?? [], passed_at_base: rv?.passed_at_base ?? [], diff_named: Array.isArray(rv?.diff_named) ? rv.diff_named : [], reverted: Array.isArray(rv?.reverted) ? rv.reverted : [] });
       const detail = new Map();
       for (const d of (Array.isArray(rv?.failing_detail) ? rv.failing_detail : [])) if (d && d.node_id) detail.set(_hfPosix(d.node_id), String(d.message ?? ''));
       const ownedTxt = split.owned.map((n) => n + ': ' + ((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300));
@@ -1702,7 +1777,8 @@ _REVIEW_RECOVER_JS = r"""
 
 def _review_recover_js(
     *, head: str, anchor: str, session_tail: str, record_dir: str, run_id: str, stager: Optional[Stager] = None,
-    run_dir: Optional[str] = None, notes_block: str = "",
+    run_dir: Optional[str] = None, notes_block: str = "", repo_root: Optional[str] = None,
+    agent_type_host: Optional[str] = None,
 ) -> str:
     """`_reviewRecover()` and its one call, composed between the review wave and `_review_blocked_halt_js`.
 
@@ -1738,17 +1814,19 @@ def _review_recover_js(
         " and ",
         "js:fpText",
         ". An id that also fails at base is listed in `pre_existing`. Return `test` for that run (status_after pass|fail, failing, failing_detail, pre_existing, reverted, "
-        "passed_alone, passed_at_base): `passed_alone` lists each failing id that passes when run alone, `passed_at_base` each that passes at the base checkout. "
+        "passed_alone, passed_at_base, diff_named): `passed_alone` lists each failing id that passes when run alone, `passed_at_base` each that passes at the base checkout, "
+        "`diff_named` each failing id whose test file names or monkeypatches a function, class or module-level name the run's diff against run_base added, removed or changed. "
         "Then, for each blocked slice below, read its review sidecar and judge each finding against the current tree: "
         "return `slices` entries with `findings` (the findings that still stand; empty when all are closed) and "
         "`applied` (true when none stand). Blocked slices: ",
         "js:slicesText",
-        ". Edit nothing.",
+        f". Edit nothing. {_emit._test_runner_clause(repo_root)}",
         f" {session_tail}",
     )
     reverify_call = _agent(
-        reverify_prompt, label=HALT_REVERIFY_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._EXECUTOR_AGENT_TYPE,
+        reverify_prompt, label=HALT_REVERIFY_LABEL, phase=HALT_FIX_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
         schema=HALT_REVERIFY_SCHEMA, run_id=run_id, stage_as="halt-reverify", stager=stager,
+        agent_type_host=agent_type_host,
     )
     return (
         _REVIEW_RECOVER_JS.replace("__CLASSIFY__", CLASSIFY_REDS_JS)
@@ -1836,6 +1914,10 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
 
 
 _WAVE_TESTS_GATE_FN = "_waveTestsGreen"
+WAVE_REDS_VAR = "_waveReds"
+_WAVE_FAILING_IDS_CLAUSE = (
+    " When the status is fail, return `failing_ids`: the node id of each failing test, one string each."
+)
 
 
 def _wave_tests_green_js(
@@ -1849,9 +1931,12 @@ def _wave_tests_green_js(
 
     An empty scope passes. Otherwise one test-runner leg runs the scope, and only the returned
     `status` gates (`pass` / `pass-with-skips` land); a throw, a missing sidecar or any other
-    status records `_checkpointWithheld` and withholds. Trap: the runner reports, the script gates.
-    `_checkpointWithheld` is read only by the run log line and the node regression test; no result
-    field carries it. With `em_brief` the runner prompt opens with `_EM_BRIEF`, like the row verify leg.
+    status records the wave's reds in `_checkpointWithheld` and `_waveReds[n]` and the checkpoint
+    still commits: the gate returns true, and the commit leg lists each red through
+    `dispatch.checkpoint_reds`. Only a usage-limit throw halts. Base-red evidence does not exist at
+    wave time, so the commit leg passes an empty `base_red` and every red classifies introduced; a
+    verdict with no `failing_ids` becomes one `<unnamed wave n>` red.
+    With `em_brief` the runner prompt opens with `_EM_BRIEF`, like the row verify leg.
     """
     brief = f"{EM_BRIEF_VAR} + " if em_brief else ""
     agent_type = _js_string_literal(_emit._degrade_agent_type(_emit._TEST_AGENT_TYPE, agent_type_host))
@@ -1859,6 +1944,7 @@ def _wave_tests_green_js(
     phase = _js_string_literal(_emit._EXECUTE_PHASE_TITLE)
     return (
         "  const _checkpointWithheld = [];\n"
+        f"  const {WAVE_REDS_VAR} = {{}};\n"
         f"  async function {_WAVE_TESTS_GATE_FN}(n, ids) {{\n"
         + ("    await _objectiveWaveCheck(n);\n" if objective else "")
         + "    const scope = ((_manifest && _manifest.wave_test_targets) ?? {})[String(n)] ?? [];\n"
@@ -1868,20 +1954,23 @@ def _wave_tests_green_js(
         "      r = await agent(\n"
         f"        {_js_string_literal(_emit._BRIEF_PRECEDENCE_CLAUSE + chr(10) * 2)} + {brief}'Run and report on the scoped test target(s) for the wave ' + n + ' checkpoint: ' + "
         "scope.join(', ') + '. ' + "
-        f"{_js_string_literal(_emit._test_runner_clause(repo_root))} + {sidecar},\n"
+        f"{_js_string_literal(_emit._test_runner_clause(repo_root) + _emit._wave_verify_bound_clause())} + "
+        f"{_js_string_literal(_WAVE_FAILING_IDS_CLAUSE)} + {sidecar},\n"
         f"        {{ label: 'verify:wave-' + n, phase: {phase}, agentType: {agent_type}, "
         f"{_emit._model_opt(_emit._TEST_AGENT_TYPE)}, effort: {_js_string_literal(_MECHANICAL_EFFORT)}, schema: _ROW_VERIFY_SCHEMA }}\n"
         "      );\n"
         "    } catch (e) {\n"
-        "      if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) _haltOnUsageLimit(e);\n"
+        "      if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) { _haltOnUsageLimit(e); return false; }\n"
         "      r = null;\n"
         "    }\n"
         "    const status = (r && r.status) || null;\n"
         "    if ((status === 'pass' || status === 'pass-with-skips') "
         "&& typeof r.sidecar_path === 'string' && r.sidecar_path.trim()) return true;\n"
+        "    const _failing = (r && Array.isArray(r.failing_ids) ? r.failing_ids : []).filter((x) => typeof x === 'string' && x);\n"
+        f"    {WAVE_REDS_VAR}[n] = {{ ids: _failing.length ? _failing : ['<unnamed wave ' + n + '>'], status }};\n"
         "    _checkpointWithheld.push({ wave: n, ids, status });\n"
-        "    log('checkpoint of wave ' + n + ' withheld: scoped tests ' + (status || 'returned no verdict'));\n"
-        "    return false;\n"
+        "    log('checkpoint of wave ' + n + ' commits with reds: scoped tests ' + (status || 'returned no verdict') + ((r && r.summary) ? ': ' + r.summary : ''));\n"
+        "    return true;\n"
         "  }"
     )
 
@@ -2043,6 +2132,31 @@ _VERIFY_INTRO = (
 )
 _VERIFY_NO_TESTS = "Run no tests: this run has no scoped test target to run. Omit `test`."
 _VERIFY_NO_DOCS = "Write no docs on this run: omit doc_paths, note_path and stale_docs."
+_VERIFY_TESTS_RAN = (
+    "The scoped tests already ran in a separate test-runner leg; run nothing. Its result (JSON, raw evidence "
+    "to rule on): "
+)
+VERIFY_TESTS_LABEL = "verify-tests"
+_VERIFY_TEST_RESULT_VAR = "_verifyTest"
+
+
+def _verify_tests_call(
+    *, head: str, anchor: str, test_js: str, run_id: str, stager: Optional[Stager] = None,
+    agent_type_host: Optional[str] = None,
+) -> str:
+    """The verify stage's scoped-test leg: one haiku test-runner `agent(...)` call EXPRESSION, awaited before
+    the verify agent, which receives its result inline. Carries the verify deadline and hang report."""
+    prompt = _cat(
+        f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nYou run this run's scoped tests and report; you edit, "
+        "stage and commit nothing. ",
+        f"js:({test_js})",
+        _emit._wave_verify_bound_clause(),
+    )
+    return _agent(
+        prompt, label=VERIFY_TESTS_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
+        schema=json.loads(_emit.stage_schema_literal("test_result")), run_id=run_id, stage_as="verify-tests",
+        stager=stager, agent_type_host=agent_type_host,
+    )
 
 
 def _verify_call(
@@ -2056,22 +2170,38 @@ def _verify_call(
     schema: dict,
     run_id: str,
     stager: Optional[Stager] = None,
+    test_result_var: Optional[str] = None,
 ) -> str:
     """The merged tail's one `agent(...)` call EXPRESSION: scoped tests, declared docs, then the
     criterion and ledger verdict, in that order inside one coordinator:executor agent.
 
-    Trap: the verdict follows the agent's own test run, and its write set is bounded in the prompt
+    With ``test_result_var`` the scoped tests ran in the `verify-tests` leg (`_verify_tests_call`) and
+    step (1) hands the agent that JS variable's result inline; the agent runs and returns no `test`.
+
+    Trap: the verdict follows the test run, and the agent's write set is bounded in the prompt
     to `_manifest.doc_writes` plus the delivery note; the engine's reconcile (not this prompt) is
     what keeps a path outside that set from clearing a ledger item.
     """
     docs_js = (
         f"js:(_docsWanted ? ({_cat(*docs_parts)}) : {_lit(_VERIFY_NO_DOCS)})" if docs_parts else _VERIFY_NO_DOCS
     )
+    if test_result_var is None:
+        tests_step = (
+            "(1) TESTS. Start the scoped tests first and let them run in the background while you do step 2. ",
+            f"js:(_testWanted ? ({test_js}) : {_lit(_VERIFY_NO_TESTS)})",
+        )
+        return_test = "`test` (step 1's result, status and summary included; omit it when no tests ran), "
+    else:
+        tests_step = (
+            "(1) TESTS. ",
+            f"js:(_testWanted ? ({_lit(_VERIFY_TESTS_RAN)} + JSON.stringify({test_result_var} ?? null)) : "
+            f"{_lit(_VERIFY_NO_TESTS)})",
+        )
+        return_test = ""
     prompt = _cat(
         f"{head}\n\n{anchor}\n\n",
-        _VERIFY_INTRO + "(1) TESTS. Start the scoped tests first and let them run in the background while "
-        "you do step 2. ",
-        f"js:(_testWanted ? ({test_js}) : {_lit(_VERIFY_NO_TESTS)})",
+        _VERIFY_INTRO + tests_step[0],
+        tests_step[1],
         "\n\n(2) DOCS. ",
         docs_js,
         "js:(_verdictReports.length ? ' Also write each of these files with the Write tool (create its directory "
@@ -2079,8 +2209,8 @@ def _verify_call(
         "\n\n(3) VERDICT. Once the test result is in, read it before you rule: a failing or degraded "
         "result is evidence for the verdict, never the verdict itself. ",
         *verdict_parts,
-        "\n\nReturn one object: `test` (step 1's result, status and summary included; omit it when no "
-        "tests ran), "
+        "\n\nReturn one object: "
+        + return_test
         + ("`judge` (the criterion verdict fields the judge brief above names, its status included), " if judged else "")
         + "`items`, `all_of_pm_ask` and `conflicts` (the ledger verdict), and `doc_paths`, `note_path` and "
         "`stale_docs` (step 2).",
@@ -2096,6 +2226,15 @@ _OVERLAY_VERIFY_MODULE = "coordinator_core.ops.dispatch_emit.clean_overlay_verif
 _OVERLAY_SCHEMA = _obj(["exit_code"], {"exit_code": {"type": "integer"}, "detail": {"type": ["string", "null"]}})
 
 
+def engine_module_command(module: str, repo_root: str, args: str = "") -> str:
+    """`<engine interpreter> -m <module> <args>` for a command an agent runs to reach `coordinator_core`.
+    The interpreter is the repo's resolvable pin, else this process's own absolute `sys.executable`; never a
+    bare `python`, which on a host whose PATH python lacks `coordinator_core` fails before the module runs."""
+    from coordinator_core.ops.dispatch_emit.clean_overlay_verify import engine_python_command
+
+    return f"{engine_python_command(Path(repo_root))} -m {module}" + (f" {args}" if args else "")
+
+
 def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str) -> str:
     """The verify stage's deterministic overlay step: one mechanical leg that runs the producer, which
     writes `overlay-verdict.json` beside the run's `measured-rev.json` for `dispatch.land_run` to read.
@@ -2106,8 +2245,10 @@ def _overlay_verify_call(*, head: str, anchor: str, repo_root: str, run_id: str)
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: {ASK_VERIFY_PHASE}\n\nRun exactly this one command as its own Bash call, "
         "no wrapper, no edit to it, and do not retry it:\n\n"
-        f"python -m {_OVERLAY_VERIFY_MODULE} --run-id {run_id} --repo-root {Path(repo_root).as_posix()}"
-        "\n\nReturn its exit code as `exit_code` and the last output line as `detail`. Run nothing else.",
+        + engine_module_command(
+            _OVERLAY_VERIFY_MODULE, repo_root, f"--run-id {run_id} --repo-root {Path(repo_root).as_posix()}"
+        )
+        + "\n\nReturn its exit code as `exit_code` and the last output line as `detail`. Run nothing else.",
     )
     return _agent(
         prompt, label=OVERLAY_VERIFY_LABEL, phase=ASK_VERIFY_PHASE, agent_type=_emit._TEST_AGENT_TYPE,
@@ -2120,8 +2261,8 @@ _OVERLAY_FOLD_JS = (
     "      let _ov = null;\n"
     "      try { _ov = await __OVERLAY__; } catch (e) { const _m = String((e && e.message) ?? e); "
     "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('overlay-verify leg threw: ' + _m); } }\n"
-    "      if (_ov && _ov.exit_code === 1) {\n"
-    "        const _t = _verify.test;\n"
+    "      if (_ov && _ov.exit_code === 1 && !/No module named .?coordinator_core/.test(String(_ov.detail ?? ''))) {\n"
+    "        const _t = _verify.test ?? {};\n"
     "        _verify.test = { ..._t, status: 'fail', tests_failed: Math.max(1, Number(_t.tests_failed) || 0), "
     "summary: String('clean-overlay verdict red: ' + (_ov.detail ?? '') + ' | ' + (_t.summary ?? '')).slice(0, 300) };\n"
     "      } else if (_ov && _ov.exit_code !== 0) {\n"
@@ -3889,7 +4030,8 @@ def compose_ask_script(
     b.append("  let _stagedManifest = null;")
     b.append(_ADMIT_MANIFEST_JS)
     b.append(_stage_reply_js(launcher_child))
-    b.append(_stage_recover_js(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id))
+    if not stop_after:  # a stop_after script never stages; `_stageRecover` stays null (guarded by typeof)
+        b.append(_stage_recover_js(head=head, anchor=anchor, repo_root=repo_root, run_id=run_id))
     b.append(f"  let {_OWNER_ROWS_JS} = [];")
     b.append("  let _viaRoadmap = false;")
     b.append("  let _splitExit = null;")
@@ -3950,7 +4092,7 @@ def compose_ask_script(
     b.append("  let _deliveryNotes = '';")
     b.append(_emit._checkpoint_commit_js(
         agent_type_host, repo_root=repo_root, session_id=session_id, seam=None,
-        runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN,
+        runtime_plan_js=_RUNTIME_PLAN_PATH_JS, pre_commit_gate_js=_WAVE_TESTS_GATE_FN, reds_var=WAVE_REDS_VAR,
     ))
     b.append(_wave_tests_green_js(
         agent_type_host, repo_root=repo_root, run_id=run_id, em_brief=bool(em_brief), objective=objective_cfg is not None,
@@ -4688,6 +4830,13 @@ def compose_ask_script(
             f"{_lit(HALT_REFUSAL)}, ..._gate.halt, {_gate_reason_js}, sizing: _sizingRel, run_id: _runId"
             f", ...(_pmExit ? {{ {PM_EXIT_QUESTION_KEY}: _pmExit }} : {{}}) }}; }}"
         )
+    b.append(
+        "  if (_halted && _halted.halted === "
+        f"{_lit(HALT_REFUSAL)} && !_halted.next_action && {GATE_INDETERMINATE_RE}.test(String(_halted.reason ?? ''))) {{ "
+        f"_halted = {{ ..._halted, halted: {_lit(REVERIFY_INDETERMINATE)}, "
+        "next_action: 'The gate timed out (-32004) and its one refire did not clear it; the gate is retry-safe, refire: ' + "
+        f"{_refire_js(sizing_rel)} }}; }}"
+    )
     b.append(_research_split_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after))
     b.append(_pure_research_chain_js(head=head, anchor=anchor, run_id=run_id, launcher_child=launcher_child, stop_after=stop_after))
     # A ledger resume re-judges the blocking rows of a run whose executors already landed. It
@@ -4834,16 +4983,16 @@ def compose_ask_script(
                 f"'{_repo_flag(repo_root)}` once and return its JSON reply verbatim as stage_reply (a manifest_handle, or the "
                 "{\"error\": ...} refusal). Commit nothing.",
             )
-            blitz_read_call = _agent(
-                blitz_read_prompt, label="blitz-stage-read", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
-                agent_model=_MECHANICAL_MODEL, schema=_BLITZ_STAGE_READ_SCHEMA, effort=_MECHANICAL_EFFORT,
-                run_id=run_id,
+            blitz_read_call = _stage_read_agent(
+                blitz_read_prompt, schema=_BLITZ_STAGE_READ_SCHEMA, phase="plan", run_id=run_id, arm="ready",
             )
             b.append("  const _blitzStageRead = async () => {")
             b.append(f"    const _r = await {blitz_read_call};")
             b.append(
                 f"    if (!_r?.stage_reply) {{ _diskHalt = 'no stage manifest on disk: ' + {_lit(manifest_rel)}; return; }}"
             )
+            # This read already is the fresh re-ask, so `_stageRecover` does not run a second one.
+            b.append("    _stageRecovered = true;")
             b.append("    await _adoptStageReply(_r.stage_reply);")
             b.append("  };")
 
@@ -4855,7 +5004,8 @@ def compose_ask_script(
                 f"{indent}if ({entry} && typeof {entry} === 'object' && _planRel && !_resumeLedger && !_stagedManifest && !_stageRefusal "
                 f"&& !_diskHalt && !_relayGap && !_parked) {{\n"
                 f"{indent}  if ({entry}.readyOpReply?.{PARKED_REPLY_KEY} && !{entry}.readyOpReply.manifest_handle "
-                f"&& !{entry}.readyOpReply.error) {{ _parked = String({entry}.readyOpReply.{PARKED_REPLY_KEY}); }}\n"
+                f"&& !{entry}.readyOpReply.error) {{ _parked = String({entry}.readyOpReply.{PARKED_REPLY_KEY}); "
+                f"_parkedWaiting = {entry}.readyOpReply.waiting ?? null; }}\n"
                 f"{indent}  else if ({entry}.readyOpReply?.error && !{entry}.readyOpReply.manifest_handle) "
                 f"{{ await _adoptStageReply({entry}.readyOpReply, false); }}\n"
                 f"{indent}  else if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}\n"
@@ -4867,6 +5017,7 @@ def compose_ask_script(
     if xl_possible:
         _append_split_stage(b)
 
+    launcher_relay_declared = False
     fold_stage = not stop_after
 
     def stage_fold(lead: str) -> tuple[str, ...]:
@@ -4986,6 +5137,7 @@ def compose_ask_script(
                 "Edit -- never scaffold a new plan, never change its path. Return its repo-relative path as "
                 "plan_rel and `verdict` ok or corrected."
                 " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
+                *_docs_gate_clause("plan-docs-check", repo_root),
             )
             docs_call = _agent(
                 docs_check_prompt, label="plan-docs-check", phase="plan", agent_type=_DOCS_CHECKER_AGENT_TYPE,
@@ -4993,7 +5145,7 @@ def compose_ask_script(
             )
             b.extend(
                 _docs_check_gate_js(
-                    check_call=docs_call, label="plan-docs-check", repo_root=repo_root, run_id=run_id,
+                    check_call=docs_call, label="plan-docs-check",
                     check_var="_planDocsCheck", gate_var="_planDocsGate", indent="      ",
                     plan_js="(_gate.spine_plan ?? null)",
                 )
@@ -5327,6 +5479,8 @@ def compose_ask_script(
         b.append("  }")
         _append_split_stage(b)
     elif launcher_child:
+        b.append(_launcher_relay_decl_js(head=head, anchor=anchor, run_id=run_id, stop_after=stop_after))
+        launcher_relay_declared = True
         b.append(
             f"  if (!_halted && _gate.arm === {_lit(ARM_M_PLUS)}) {{ return {{ {CHAIN_HANDOFF_KEY}: "
             f"{_chain_emit_params_js('_sizingRel', tail_js=_LAUNCHER_RELAY_TAIL_JS, stop_after=stop_after)}, "
@@ -5383,6 +5537,8 @@ def compose_ask_script(
                 )
             )
         elif launcher_child:
+            if not launcher_relay_declared:
+                b.append(_launcher_relay_decl_js(head=head, anchor=anchor, run_id=run_id, stop_after=stop_after))
             b.append(
                 f"    return {{ {CHAIN_HANDOFF_KEY}: "
                 f"{_chain_emit_params_js('_sizingRel', tail_js=_LAUNCHER_RELAY_TAIL_JS, stop_after=stop_after)}, "
@@ -5405,8 +5561,17 @@ def compose_ask_script(
     # pages that match the handle and pass `_wholeManifestGap`, and a mismatch halts by name. The
     # plan-blitz arm alone stages through `_blitzStageRead`, and only when readyOp never ran. The
     # falsifier is authored by the scout or the plan legs, never a leg of its own.
+    b.append(_STAGE_WAIT_HOLD_JS)
     b.append(
-        f"  if (_parked && !_halted) _halted = {{ halted: {_lit(HALT_PARKED)}, "
+        f"  if (_parked && !_halted) _halted = _parked ==={_lit(_STAGE_WAIT_PARKED)} ? {{ halted: {_lit(HALT_PARKED)}, "
+        "reason: 'parked: stage-wait: writes overlap live run ' + (_parkedWaiting?.blockers ?? []).join(', ') "
+        "+ '; parked until it lands', "
+        "plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: 'Refire engine-ask with resume_run_id ' + _runId "
+        "+ ' once ' + ((_parkedWaiting?.blockers ?? []).join(', ') || 'the blocking run') + ' lands'"
+        f" + (_parkedWaiting?.deadline ? ' (deadline ' + _parkedWaiting.deadline + ')' : '') + '; the stage re-runs then.' "
+        "+ ((_parkedWaiting?.blockers ?? []).length ? ' A blocker known dead: ' + (_parkedWaiting.blockers).slice().sort()"
+        ".map(function (b) { return 'dispatch.release_run_token {\"run_id\": \"' + b + '\"}'; }).join('; ') + '.' : '') "
+        f"}} : {{ halted: {_lit(HALT_PARKED)}, "
         "reason: 'parked after plan: workflow.revise stop_after=plan', "
         f"plan: _planRel, sizing: _sizingRel, run_id: _runId, next_action: {parked_next_action_js('_planRel')} }};"
     )
@@ -5701,6 +5866,7 @@ def compose_ask_script(
             ", against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
             "with Edit. Return `verdict` ok or corrected."
             " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
+            *_docs_gate_clause("diff-docs-check", repo_root),
         )
         diff_docs_call = _agent(
             diff_docs_prompt, label="diff-docs-check", phase="review", agent_type=_DOCS_CHECKER_AGENT_TYPE,
@@ -5712,7 +5878,7 @@ def compose_ask_script(
         )
         b.extend(
             _docs_check_gate_js(
-                check_call=diff_docs_call, label="diff-docs-check", repo_root=repo_root, run_id=run_id,
+                check_call=diff_docs_call, label="diff-docs-check",
                 check_var="_diffDocsCheck", gate_var="_diffDocsGate", indent="    ",
                 plan_js="(typeof _planRel !== 'undefined' ? _planRel : null)",
             )
@@ -5748,7 +5914,7 @@ def compose_ask_script(
     b.append(
         _review_recover_js(
             head=head, anchor=anchor, session_tail=session_tail, record_dir=record_dir, run_id=run_id, stager=stager,
-            run_dir=run_dir, notes_block=notes_block,
+            run_dir=run_dir, notes_block=notes_block, repo_root=repo_root, agent_type_host=agent_type_host,
         )
     )
     b.append(_review_blocked_halt_js(sizing_rel))
@@ -5836,6 +6002,11 @@ def compose_ask_script(
         schema=_verify_schema(judge_brief[1] if judged else None),
         run_id=run_id,
         stager=stager,
+        test_result_var=_VERIFY_TEST_RESULT_VAR,
+    )
+    verify_tests_call = _verify_tests_call(
+        head=head, anchor=anchor, test_js=_test_instruction_js(run_base_sha or "HEAD", repo_root), run_id=run_id,
+        stager=stager, agent_type_host=agent_type_host,
     )
     unjudged = (
         "{ status: 'indeterminate', differs_from_baseline: null, observation: 'unjudged: verify leg returned "
@@ -5858,7 +6029,16 @@ def compose_ask_script(
         f"    const _testWanted = !!({test_guard});",
         *([f"    const _docsWanted = !!({_DOCS_PRE_TAIL_GUARD});"] if in_run_commit else []),
         "    let _verify = null;",
-        f"    const _runVerify = async () => {{ try {{ _verify = await {verify_call}; }} catch (e) {{ const _m = String((e && e.message) ?? e); "
+        f"    let {_VERIFY_TEST_RESULT_VAR} = null;",
+        # The tests leg runs first and its result rides the verify prompt; a throw there that is not a usage
+        # limit leaves the result null, so the empty-verdict halt below owns it.
+        f"    const _runVerify = async () => {{ try {{ {_VERIFY_TEST_RESULT_VAR} = null; "
+        f"if (_testWanted) {{ try {{ {_VERIFY_TEST_RESULT_VAR} = await {verify_tests_call}; }} catch (e) {{ "
+        f"if (_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) throw e; log('verify-tests leg threw: ' + String((e && e.message) ?? e)); "
+        f"{_VERIFY_TEST_RESULT_VAR} = null; }} }} "
+        f"_verify = await {verify_call}; "
+        f"if (_verify && {_VERIFY_TEST_RESULT_VAR} && typeof {_VERIFY_TEST_RESULT_VAR}.status === 'string') _verify.test = {_VERIFY_TEST_RESULT_VAR}; "
+        "} catch (e) { const _m = String((e && e.message) ?? e); "
         "if (_USAGE_LIMIT_RE.test(_m)) { _haltOnUsageLimit(e); } else { log('verify leg threw: ' + _m); } _verify = null; } return _verify; };",
         # A self-correction leg may have replaced the joined result; never rejoin the stale promise.
         "    [_verify, _reviewReverify] = await Promise.all([!_halted ? _runVerify() : Promise.resolve(null), _reverifyJoined ? Promise.resolve(_reviewReverify) : _joinReverify()]);",
@@ -6095,6 +6275,14 @@ def compose_ask_script(
     # halt-record commit and `_mkRevise` read it as the typed `{halted, ...}` shape.
     # A stop-rule halt names its row and that row's reply (or "returned nothing") in the reason, and
     # `stopped_rows` lets the record writer keep a stopped row's returns.json entry out of `finished`.
+    # A plan-scoped stop rule records only `_haltedPlans` and leaves `_halted` unset: lift the first
+    # stop-rule plan reason (seam reasons excluded) so the same typed halt and halt record follow.
+    b.append(
+        "  if (!_halted && _stoppedBy.length) {\n"
+        "    const _stopWhy = [..._haltedPlanReasons.values()].find((r) => typeof r === 'string' && !r.startsWith('seam ')) || _stoppedBy[0];\n"
+        "    _halted = _stopWhy;\n"
+        "  }"
+    )
     b.append(
         "  let _stoppedRows = [];\n"
         "  if (_halted && typeof _halted !== 'object' && !_haltedByHold) {\n"
@@ -6159,6 +6347,17 @@ def compose_ask_script(
         f"? {{ kind: {na_kind}, op: {na_op}, params: {na_params} }} "
         f": (_halted?.next_action?.kind === 'repin_register' ? _halted.next_action : {stopped_na});"
     )
+    if in_run_commit:
+        b.append(
+            f"  if (_halted && _halted.halted === {_lit(HALT_REVIEW_BLOCKED)} && _halted.blocker === {_lit(TEST_BLOCKER)} "
+            "&& Array.isArray(_halted.failing) && _halted.failing.length && typeof _reviewReverify !== 'undefined' "
+            "&& _reviewReverify && Array.isArray(_reviewReverify.pre_existing)) { "
+            "const _hcPx = (p) => { let s = String(p).replace(/\\\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; }; "
+            "const _hcBase = new Set(_reviewReverify.pre_existing.map(_hcPx)); "
+            "if (_halted.failing.every((n) => _hcBase.has(_hcPx(n)))) { "
+            "_nextAction = { kind: 'terminal_commit', op: 'dispatch.terminal_commit', "
+            "params: { incomplete_chunks: _incompleteChunks, held: [] } }; } }"
+        )
     # Landed in-run: nothing is left to commit, so the terminal commit would only refuse as no-change.
     b.append(
         "  if (_alreadyDelivered && _closeable) { _nextAction = { kind: 'none', op: null, "
@@ -6272,6 +6471,7 @@ def compose_ask_script(
             if rb_fn else ""
         )
         + "already_delivered: _alreadyDelivered, ledger: _ledger, docs: _docs, commit: _commit, next_action: _nextAction, revise_and_refire: _reviseAndRefire, "
+        "checkpoint_fix_ids: _checkpointFixIds, "
         + (
             "get terminal_commit_cli() { return this.next_action.kind === 'terminal_commit' "
             "? _terminalCommitCli(this.next_action.params) : null; }, };"
@@ -6327,12 +6527,8 @@ def _chain_emit_params_js(
 
 _CHAIN_EMIT_PARAMS_JS = _chain_emit_params_js("_sizingRel")
 
-# Launcher hand-off tail: the launcher fails a hand-off carrying `error` without emitting, so an errored or absent
-# gate relay is dropped here and the launcher's own `chain-emit` leg runs instead.
-_LAUNCHER_RELAY_TAIL_JS = (
-    ", ...((_gate.chain_emit && typeof _gate.chain_emit === 'object' && !Array.isArray(_gate.chain_emit) && "
-    "!(typeof _gate.chain_emit.error === 'string' && _gate.chain_emit.error !== '')) ? _gate.chain_emit : {})"
-)
+# Launcher hand-off tail: `_launcherRelayTail` (see `_launcher_relay_decl_js`) yields path or `emit_error`, never `error`.
+_LAUNCHER_RELAY_TAIL_JS = ", ...(await _launcherRelayTail())"
 
 
 _CHAIN_STAGE_FN = "_chain_stage_pending_loop"
@@ -6365,8 +6561,12 @@ def _chain_stage_loop_js() -> str:
         f"        const _pre = {_lit(prefix)} + _bn.slice(0, _bn.length - _rs.length) + {_lit(middle)}; const _suf = {_lit(suffix)}; const _tw = _sp.twin_path;",
         "        let _rel;",
         "        if (_tw !== undefined && _tw !== null) {",
-        "          if (typeof _tw !== 'string' || _tw.length !== _pre.length + 64 + _suf.length || !_tw.startsWith(_pre) || !_tw.endsWith(_suf) "
-        "|| !/^[0-9a-f]{64}$/.test(_tw.slice(_pre.length, _pre.length + 64))) { _why = 'stage_pending twin_path is not a staged twin of this run'; break; }",
+        f"          const _fam = (_i) => {{ const _m = /^(warp-.+)-[0-9]{{8}}T[0-9]{{6}}-[0-9a-f]{{6}}$/.exec(_i); return _m ? _m[1] : _i; }};",
+        f"          const _pfx = {_lit(prefix)}; const _sa = _tw.length - _suf.length - 64; const _ma = _sa - {_lit(middle)}.length;",
+        f"          const _own = (typeof _tw === 'string' && _tw.startsWith(_pfx) && _tw.endsWith(_suf) && _ma > _pfx.length && _tw.slice(_ma, _sa) === {_lit(middle)} "
+        "&& /^[0-9a-f]{64}$/.test(_tw.slice(_sa, _sa + 64))) ? _tw.slice(_pfx.length, _ma) : null;",
+        "          if (_own === null || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(_own) || _fam(_own) !== _fam(_bn.slice(0, _bn.length - _rs.length))) "
+        "{ _why = 'stage_pending twin_path is not a staged twin of this run'; break; }",
         "          _rel = _tw;",
         "        } else {",
         "          if (typeof _sh !== 'string' || !/^[0-9a-f]{64}$/.test(_sh)) { _why = 'stage_pending was not resumable'; break; }",
@@ -6529,6 +6729,53 @@ def _share_chain_start(script: str) -> tuple[str, list[str]]:
     return script, decls
 
 
+def _chain_emit_agent_call(
+    *, sizing_js: str, head: str, anchor: str, run_id: str, research: bool = False, stop_after: Optional[str] = None,
+) -> str:
+    """The `chain-emit` agent call expression that runs `dispatch.emit` over the chain params for `sizing_js`."""
+    params = (
+        f"JSON.stringify({_chain_emit_params_js(sizing_js, research=research, stop_after=stop_after)})"
+        ".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")"
+    )
+    emit_prompt = _cat(
+        f"{head}\n\n{anchor}\n\n{EMIT_RELAY_AUTHORITY} ",
+        f"Run `{_INVOKE} dispatch.emit '",
+        "js:" + params,
+        f"'` once and return path and run_id from its JSON reply verbatim. When the command "
+        "is denied or fails, return its error text in error, with path and run_id as empty strings. Commit nothing.",
+    )
+    return _agent(
+        emit_prompt, label="chain-emit", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
+        agent_model=_MECHANICAL_MODEL, schema=_CHAIN_EMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+    )
+
+
+def _launcher_relay_decl_js(*, head: str, anchor: str, run_id: str, stop_after: Optional[str] = None) -> str:
+    """Declare `_launcherRelayTail`, the async tail a launcher child's chain hand-off spreads. A gate relay with a
+    non-empty `path` is spread as is (its `error` key dropped: `_chainHop` fails on one without emitting). Otherwise
+    the chain-emit agent runs once (`dispatch.emit` is idempotent on these params) and its reply is spread when it
+    carries a path; a failure is carried as `emit_error`, which `_chainHop` never treats as an emit param or fatal."""
+    call = _chain_emit_agent_call(
+        sizing_js="_sizingRel", head=head, anchor=anchor, run_id=run_id, stop_after=stop_after,
+    )
+    return "\n".join([
+        "  const _launcherRelayTail = async () => {",
+        "    const _obj = (x) => !!x && typeof x === 'object' && !Array.isArray(x);",
+        "    const _good = (x) => _obj(x) && typeof x.path === 'string' && x.path !== '';",
+        "    const _err = (x) => (_obj(x) && typeof x.error === 'string' && x.error !== '') ? x.error : '';",
+        "    const _keep = (x) => { const { error: _dropped, ...rest } = x; return rest; };",
+        "    if (_good(_gate.chain_emit)) return _keep(_gate.chain_emit);",
+        "    let _why = _err(_gate.chain_emit);",
+        "    try {",
+        f"      const _retry = await {call};",
+        "      if (_good(_retry)) return _keep(_retry);",
+        "      _why = _err(_retry) || _why;",
+        "    } catch (e) { _why = 'emit retry threw: ' + String(e && e.message ? e.message : e); }",
+        "    return { emit_error: _why || 'the gate agent returned no emit reply for the chained run' };",
+        "  };",
+    ])
+
+
 def _chain_emit_start_lines(
     *, sizing_js: str, head: str, anchor: str, run_id: str, return_extra_js: str = "", fallback_extra_js: str = "",
     research: bool = False, emitted_js: Optional[str] = None, stop_after: Optional[str] = None,
@@ -6541,20 +6788,8 @@ def _chain_emit_start_lines(
     `research` emits on the research route (`from_sizing`), which `dispatch.emit` refuses to combine with `ask`/`sizing_path`.
     `emitted_js` is a JS expression for an emit reply an earlier agent already produced: no emit leg is composed.
     """
-    params = (
-        f"JSON.stringify({_chain_emit_params_js(sizing_js, research=research, stop_after=stop_after)})"
-        ".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")"
-    )
-    emit_prompt = _cat(
-        f"{head}\n\n{anchor}\n\n{EMIT_RELAY_AUTHORITY} ",
-        f"Run `{_INVOKE} dispatch.emit '",
-        "js:" + params,
-        f"'` once and return path and run_id from its JSON reply verbatim. When the command "
-        "is denied or fails, return its error text in error, with path and run_id as empty strings. Commit nothing.",
-    )
-    emit_agent_call = _agent(
-        emit_prompt, label="chain-emit", phase="plan", agent_type=_OP_RELAY_AGENT_TYPE,
-        agent_model=_MECHANICAL_MODEL, schema=_CHAIN_EMIT_SCHEMA, effort=_MECHANICAL_EFFORT, run_id=run_id,
+    emit_agent_call = _chain_emit_agent_call(
+        sizing_js=sizing_js, head=head, anchor=anchor, run_id=run_id, research=research, stop_after=stop_after,
     )
     abandon_params = (
         "JSON.stringify({ abandon_run: _chainRunId, chained_from: _runId })"
@@ -7259,8 +7494,13 @@ def _invariant_retest_call(*, head: str, anchor: str, repo_root: str, run_id: st
     if params_file is None:
         raise AskComposeRefused(f"run id {run_id!r} has no terminal-commit params path")
     start = (
-        f"'python -m coordinator_core.ops.dispatch_emit.retest_targeted --isolated-export --params-file {params_file.as_posix()}' "
-        f"+ {_RETEST_FILES_JS}"
+        json.dumps(
+            engine_module_command(
+                "coordinator_core.ops.dispatch_emit.retest_targeted", repo_root,
+                f"--isolated-export --params-file {params_file.as_posix()}",
+            )
+        )
+        + f" + {_RETEST_FILES_JS}"
     )
     prompt = _cat(
         f"{head}\n\n{anchor}\n\nphase: commit\n\nThe landing refused on a repo-wide invariant with no fresh passing "

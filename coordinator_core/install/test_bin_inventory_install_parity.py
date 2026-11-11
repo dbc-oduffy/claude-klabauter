@@ -42,6 +42,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from coordinator_core.install import substrate
 from coordinator_core.install.substrate import (
     _derive_agent_helper_target_map,
     _install_bin_resolvers,
@@ -82,6 +83,9 @@ def test_every_live_bin_inventory_entry_lands_in_a_real_install(monkeypatch, tmp
     # retired-name advisory.
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    # The env var only answers for a stamped published engine; a claude-klabauter checkout
+    # carries no stamp, so resolve the root directly for this same-repo test.
+    monkeypatch.setattr(substrate, "_engine_root_or_raise", lambda: (str(_REPO_ROOT), "test"))
 
     forwarder_candidates = set(_derive_agent_helper_target_map(_REPO_ROOT / "coordinator" / "bin"))
     assert forwarder_candidates, (

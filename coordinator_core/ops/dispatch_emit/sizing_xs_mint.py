@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.inventory_mint import (
 )
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit.ask_exclusions import drop_excluded, excluded_paths, is_excluded
+from coordinator_core.ops.dispatch_emit.ask_named_files import named_test_files
 from coordinator_core.git.tracked_case import tracked_spelling
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import gated_paths, named_paths
 from coordinator_core.ops.dispatch_emit.source_memo_ref import sizing_source_memo
@@ -144,18 +145,32 @@ def _ledger_named_paths(sizing: Mapping, repo_root: Path | None) -> list[str]:
     provenance and carry "Fix"/"Add" in another sentence."""
     if repo_root is None:
         return []
-    register = sizing.get("requirement_register")
-    rows = register.get("rows") if isinstance(register, Mapping) else None
-    texts = [
-        str(r.get(rr.ROW_TEXT) or "")
-        for r in rows or ()
-        if isinstance(r, Mapping) and r.get(rr.ROW_STATUS) not in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED)
-    ]
+    texts = _open_row_texts(sizing)
     governed = [c for t in texts for c in _CLAUSE_SPLIT.split(t) if _EDIT_VERB.search(c)]
     found = named_paths(governed, Path(repo_root), spelling=functools.partial(tracked_spelling, Path(repo_root)))
     # Trap: a CLAUDE.md-class file named only as something to detect is not an edit surface, and it
     # would otherwise mint an EM row nothing performs.
-    return [p for p in found if not (gated_paths([p]) and _named_only_as_target(p, texts))]
+    plain = [p for p in found if not (gated_paths([p]) and _named_only_as_target(p, texts))]
+    # A named failing test is an edit surface with no edit verb, so test files skip the verb gate.
+    return list(dict.fromkeys([*plain, *named_test_files(texts, Path(repo_root))]))
+
+
+def _open_row_texts(sizing: Mapping) -> list[str]:
+    register = sizing.get("requirement_register")
+    rows = register.get("rows") if isinstance(register, Mapping) else None
+    return [
+        str(r.get(rr.ROW_TEXT) or "")
+        for r in rows or ()
+        if isinstance(r, Mapping) and r.get(rr.ROW_STATUS) not in (rr.STATUS_DEFERRED, rr.STATUS_WAIVED)
+    ]
+
+
+def ledger_named_test_files(sizing: Mapping, repo_root: Path) -> list[str]:
+    """Test files the sizing's open register rows name by node id or bare `test_*` stem, minus the
+    ask's exclusions and CLAUDE.md-class paths: the files a run's declared writes must cover."""
+    found = named_test_files(_open_row_texts(sizing), Path(repo_root))
+    found = drop_excluded(found, excluded_paths(sizing))
+    return [p for p in found if not gated_paths([p])]
 
 
 def _named_only_as_target(path: str, texts: Sequence[str]) -> bool:

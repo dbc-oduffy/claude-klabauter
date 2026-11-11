@@ -249,6 +249,7 @@ _EAGER_HOOK_MODULES: list[str] = [
     "coordinator_core.hooks.mise_autofire",
     "coordinator_core.hooks.handoff_segment_inject",
     "coordinator_core.hooks.group_em_autofire",
+    "coordinator_core.hooks.group_em_home_autoclaim",
     "coordinator_core.hooks.nudge_initiative_goals_ladder",
     "coordinator_core.hooks.offer_exploration_tier_dispatch",
     "coordinator_core.hooks.observe_config_change",

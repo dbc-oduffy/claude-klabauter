@@ -135,6 +135,33 @@ def test_overlay_falls_back_to_sys_executable_when_no_pin_or_the_pin_is_unresolv
     assert _pytest_argv_head(monkeypatch, root, head, tmp_path / "missing" / "python3.99") == sys.executable
 
 
+def test_the_overlay_checkout_runs_under_the_overlay_bound_not_the_2s_plumbing_budget(tmp_path, monkeypatch):
+    """A full-tree checkout under run_git's 2s budget timed out on the live repo: rc -1, empty stderr."""
+    root, head = _repo(tmp_path)
+    seen = []
+    real = cov._run
+
+    def spy(argv, cwd, timeout):
+        seen.append((argv[1:2], timeout))
+        return real(argv, cwd, timeout)
+
+    monkeypatch.setattr(cov, "_run", spy)
+    assert cov.verify(root, "run1", head, [READER]).verdict == "green"
+    assert (["checkout"], cov.TEST_TIMEOUT_S) in seen
+
+
+def test_a_timed_out_overlay_checkout_is_named_with_its_budget_never_silent(tmp_path, monkeypatch):
+    root, head = _repo(tmp_path)
+
+    def slow(argv, cwd, timeout):
+        raise subprocess.TimeoutExpired(argv, timeout)
+
+    monkeypatch.setattr(cov, "_run", slow)
+    out = cov.verify(root, "run1", head, [READER])
+    assert out.verdict == "inconclusive"
+    assert "TimeoutExpired" in out.detail and f"{cov.TEST_TIMEOUT_S} seconds" in out.detail, out.detail
+
+
 def _clone_dests(monkeypatch):
     dests = []
     real = cov.run_git
@@ -243,6 +270,7 @@ def test_land_run_lands_on_an_inconclusive_verdict_with_an_advisory(halted, monk
     assert result["committed"] is True, result
     assert result["clean_overlay_verify"]["verdict"] == "inconclusive"
     assert "inconclusive" in result["clean_overlay_verify"]["advisory"]
+    assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("inconclusive"), _git(halted, "log", "-1", "--format=%B")
     assert FIXTURE in result["reach_dirt_foreign"]
 
 
@@ -255,6 +283,7 @@ def test_land_run_lands_a_missing_verdict_with_an_advisory(halted, monkeypatch):
     assert not result.get("refused")
     assert result["clean_overlay_verify"]["verdict"] == "missing"
     assert "missing" in result["clean_overlay_verify"]["advisory"]
+    assert _git(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("missing"), _git(halted, "log", "-1", "--format=%B")
     assert FIXTURE in result["reach_dirt_foreign"]
 
 

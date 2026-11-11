@@ -33,6 +33,7 @@ from coordinator_core.ops._path_guard import contained_path, safe_id
 from coordinator_core.ops.ceremony.detached_spawn import spawn_detached
 from coordinator_core.ops.dispatch_emit import landing_retest
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests
+from coordinator_core.telemetry import host_sampler
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -360,7 +361,8 @@ def worker_cap() -> int:
     import psutil
 
     cores = (psutil.cpu_count(logical=False) or 2) // 2
-    ram = int(psutil.virtual_memory().available / 2**20 / 150)
+    avail = host_sampler.avail_mb()[0]
+    ram = int(avail / 150) if avail is not None else RETEST_MAX_WORKERS
     return max(1, min(cores, ram, RETEST_MAX_WORKERS))
 
 

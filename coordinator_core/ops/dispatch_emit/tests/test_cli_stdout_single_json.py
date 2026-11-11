@@ -40,7 +40,7 @@ def test_plan_fire_prints_one_document_with_the_fire_record_nested(repo, monkeyp
     plan = _plan(repo)
     monkeypatch.setattr(
         "coordinator_core.ops.workflow_fire.fire.fire_workflow",
-        lambda path, cwd=None: {"fire_id": "f1"},
+        lambda path, cwd=None, run_id=None: {"fire_id": "f1"},
     )
     out = repo / "p.workflow.mjs"
     assert cli.main(["--plan", str(plan), "--out", str(out), "--fire"]) == cli.EXIT_OK
@@ -54,7 +54,7 @@ def test_plan_fire_prints_one_document_with_the_fire_record_nested(repo, monkeyp
 def test_a_fire_failure_still_leaves_one_document_on_stdout(repo, monkeypatch, capsys):
     plan = _plan(repo)
 
-    def _boom(path, cwd=None):
+    def _boom(path, cwd=None, run_id=None):
         raise RuntimeError("fire refused")
 
     monkeypatch.setattr("coordinator_core.ops.workflow_fire.fire.fire_workflow", _boom)

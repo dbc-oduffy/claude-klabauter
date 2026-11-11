@@ -154,6 +154,49 @@ def test_array_wrapped_verdict_is_not_a_top_level_result():
     assert reviewer_run._verdict_from('[{"verdict":"OK","findings":[]}]') is None
 
 
+def _codex_windowsapps(tmp_path, monkeypatch, *, ps7):
+    import os
+
+    from coordinator_core.codex_runner import review, sandbox_preflight
+    apps = tmp_path / "WindowsApps"
+    apps.mkdir()
+    (apps / "pwsh.exe").write_text("")
+    pf = tmp_path / "ProgramFiles"
+    ps7_dir = pf / "PowerShell" / "7"
+    if ps7:
+        ps7_dir.mkdir(parents=True)
+        (ps7_dir / "pwsh.exe").write_text("")
+    monkeypatch.setenv("ProgramFiles", str(pf))
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: True)
+    monkeypatch.setattr(review, "_unattended_env", lambda *a, **k: {"PATH": str(apps)})
+    monkeypatch.setattr(reviewer_run, "_definition_body", lambda *a, **k: "body")
+    monkeypatch.setitem(reviewer_run._PROVIDERS, "codex", (lambda prompt, model: ["codex"], CodexAdapter))
+    return str(apps), str(ps7_dir), os
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="PATH shaping is Windows-only")
+def test_codex_windowsapps_only_path_refused_before_popen(tmp_path, monkeypatch):
+    _codex_windowsapps(tmp_path, monkeypatch, ps7=False)
+    monkeypatch.setattr(reviewer_run.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    out = run_reviewer("agent", "brief", ProviderChoice("codex", "m"))
+    assert out["verdict"] == FAILED and "WindowsApps" in out["error"]
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="PATH shaping is Windows-only")
+def test_codex_ps7_placed_ahead_of_windowsapps_at_popen(tmp_path, monkeypatch):
+    apps, ps7, os = _codex_windowsapps(tmp_path, monkeypatch, ps7=True)
+    seen = {}
+
+    def spy(argv, **kw):
+        seen.update(kw["env"])
+        raise OSError("stop")
+
+    monkeypatch.setattr(reviewer_run.subprocess, "Popen", spy)
+    run_reviewer("agent", "brief", ProviderChoice("codex", "m"))
+    entries = seen["PATH"].split(os.pathsep)
+    assert entries.index(ps7) < entries.index(apps)
+
+
 @pytest.mark.parametrize("provider,secret", [("codex","OPENAI_API_KEY"), ("agy","GEMINI_API_KEY"), ("grok","XAI_API_KEY")])
 def test_named_review_uses_local_account_env_not_ambient_paid_key(monkeypatch, provider, secret):
     monkeypatch.setenv(secret, "do-not-forward")

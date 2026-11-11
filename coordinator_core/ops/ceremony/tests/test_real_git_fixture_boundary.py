@@ -79,6 +79,8 @@ _TESTS_DIR = Path(__file__).resolve().parent
 # committed -- which a mocked git cannot fail.
 # test_publish_allowlist_admission.py: the drift leg fires only on a path
 # git reports as newly added; that status comes from a real index.
+# test_commit_scoped_agent_provenance.py: the oracle is the trailers on a really
+# landed commit, which a mocked git cannot exhibit.
 _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_admission.py",
     "test_commit_authored_content_edges.py",
@@ -88,6 +90,7 @@ _ALLOWED_REAL_GIT_IMPORTERS: frozenset[str] = frozenset({
     "test_commit_leaves_index_agreeing_with_head.py",
     "test_commit_path_legality.py",
     "test_commit_scoped.py",
+    "test_commit_scoped_agent_provenance.py",
     "test_commit_scoped_edges.py",
     "test_commit_scoped_in_process.py",
     "test_commit_scoped_trailer_replay.py",

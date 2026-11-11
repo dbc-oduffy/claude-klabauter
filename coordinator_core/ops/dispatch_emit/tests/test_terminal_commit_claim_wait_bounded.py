@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import time
 
+import pytest
+
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 
@@ -19,6 +21,7 @@ def _held(monkeypatch, pending: bool):
     )
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a held run-token claim that must reply within the budget instead of waiting")
 def test_held_claim_replies_within_budget_naming_leg(monkeypatch, tmp_path):
     _held(monkeypatch, True)
     monkeypatch.setattr(dispatch_abandon, "remaining", lambda: 3600.0)

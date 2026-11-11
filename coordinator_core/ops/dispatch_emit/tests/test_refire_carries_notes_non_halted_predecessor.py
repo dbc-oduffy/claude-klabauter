@@ -54,7 +54,12 @@ def test_a_warp_predecessor_superseded_by_a_newer_non_halted_run_carries_its_not
     _prior(repo, WARP, status="resumed")
     _seed_notes(repo, WARP)
     _prior(repo, NEWER_WARP)
-    (record_dir(repo, NEWER_WARP) / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")
+    # A staged run with a live owner is no orphan (`orphan_verdict` "owner-live"): the gate never adopts it,
+    # so the refire mints fresh and carries WARP's notes. An ownerless staged run is adopted instead.
+    (record_dir(repo, NEWER_WARP) / "run-stage.json").write_text(
+        json.dumps({"stage": "staged", "session_id": "live-owner-session"}), encoding="utf-8"
+    )
+    monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid: sid == "live-owner-session")
     assert halted_run.halted_run_to_resume(repo, REL) is None
     reply = _fire(repo)
     assert reply["run_id"] not in (WARP, NEWER_WARP)

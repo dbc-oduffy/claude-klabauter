@@ -37,7 +37,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     RUN_DIR_ROOT,
     RECORD_DIR_ROOT,
 )
-from coordinator_core.ops.dispatch_emit.commit_request import PREFIX_CLAIM_LABEL, CommitRequest
+from coordinator_core.ops.dispatch_emit.commit_request import CommitRequest, parse_prefix_claims
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import Snapshot as _Snapshot, read_rel as _read_rel
 
 from coordinator_core.ops.dispatch_emit.terminal_commit_closeout import _EVIDENCE_SIDECAR_SUFFIX
@@ -55,30 +55,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import (
 )
 
 
-def _parse_prefix_claims(report_text: str) -> Optional[list]:
-    """Parse a DONE-report's ``created-under-prefix:`` claim list.
-
-    Mirrors the executor contract emit.py's ``_prefix_claim_field`` states:
-    one claim per line, each line ``created-under-prefix: <path>`` (or
-    ``created-under-prefix: none`` for an explicit empty claim). Returns the
-    (possibly empty) list of claimed paths, or ``None`` when the report
-    carries NO ``created-under-prefix:`` line at all -- the "report has no
-    list" refusal case D3 names.
-    """
-    claims: list = []
-    saw_label = False
-    for raw_line in report_text.splitlines():
-        line = raw_line.strip().lstrip("-*").strip()
-        if not line.startswith(PREFIX_CLAIM_LABEL):
-            continue
-        saw_label = True
-        rest = line[len(PREFIX_CLAIM_LABEL) :].strip().strip("`'\"")
-        if not rest or rest.lower() == "none":
-            continue
-        claims.append(rest)
-    if not saw_label:
-        return None
-    return claims
+_parse_prefix_claims = parse_prefix_claims
 
 
 def _own_prefix_files(worktree_root: Path, chunk, report_cache: dict) -> Optional[list]:

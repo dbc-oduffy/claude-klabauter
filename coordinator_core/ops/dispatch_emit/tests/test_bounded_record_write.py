@@ -34,6 +34,7 @@ def test_success_returns_none_and_writes(tmp_path):
     assert not hrr.write_outstanding(p)
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a blocked write that must report stalled at its deadline")
 def test_blocked_write_returns_stalled_within_deadline(tmp_path, monkeypatch):
     gate, _ = _blocker(monkeypatch)
     p = tmp_path / "a.bin"
@@ -46,6 +47,7 @@ def test_blocked_write_returns_stalled_within_deadline(tmp_path, monkeypatch):
         gate.set()
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a write to a path with a blocked write outstanding that must not wait")
 def test_second_write_to_outstanding_path_stalls_at_once(tmp_path, monkeypatch):
     gate, calls = _blocker(monkeypatch)
     p = tmp_path / "a.bin"
@@ -85,6 +87,7 @@ def test_oserror_on_worker_is_reraised_not_stalled(tmp_path, monkeypatch):
     assert not hrr.write_outstanding(p)
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a blocked index write that must return false at its deadline")
 def test_live_run_index_add_returns_false_when_write_blocks(tmp_path, monkeypatch):
     (tmp_path / ".git").mkdir()
     gate, _ = _blocker(monkeypatch)

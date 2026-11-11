@@ -212,10 +212,8 @@ def _read_index_bytes_with_retry(index_path: Path) -> Optional[bytes]:
     reader on this surface. A per-module copy is what left `git_state`'s
     reader bare while this one was covered.
 
-    Before the retry, a single transient `OSError` became `IndexParseError`,
-    and `IndexParseError` is what `diverging_paths` collapses to `[]` -- so a
-    momentary read failure DISABLED the staged-content guard rather than
-    pausing it.
+    Before the retry, a transient `OSError` became `IndexParseError`, which
+    `diverging_paths` collapses to `[]` -- DISABLING the staged-content guard.
     """
     try:
         return _retry_transient_read(index_path.read_bytes)

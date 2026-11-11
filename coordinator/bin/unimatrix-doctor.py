@@ -198,7 +198,7 @@ def main(argv=None, run=subprocess.run, resolve=socket.getaddrinfo, connect=sock
     roster = roster or al._roster()
     mem = al._membership()
     plat = platform or sys.platform
-    admin = Path(os.environ.get("ProgramData", "C:/ProgramData")) / "ssh" / "administrators_authorized_keys" \
+    admin = Path(os.environ.get("ProgramData") or Path(os.environ.get("SystemDrive", "C:") + os.sep) / "ProgramData") / "ssh" / "administrators_authorized_keys" \
         if plat == "win32" else None
     ctx = {"autolink": al, "roster": roster, "membership": mem, "run": run, "resolve": resolve, "connect": connect,
            "authorized_keys": Path(authorized_keys) if authorized_keys else Path.home() / ".ssh" / "authorized_keys",

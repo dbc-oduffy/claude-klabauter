@@ -99,6 +99,7 @@ def test_quota_text_in_a_message_event_is_not_a_cause(env, tmp_path):
     assert res.status == "ok" and res.verdict == "OK"
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the idle-timeout deadline on a silent agent, a wait CPU time cannot see")
 def test_silent_agent_fails_turn_timeout_within_deadline(env):
     env[3].setenv("FAKE_GROK_HANG", "1")
     t0 = time.monotonic()

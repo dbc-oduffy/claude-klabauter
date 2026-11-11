@@ -265,6 +265,7 @@ def test_overlap_with_only_live_engine_runs_parks_and_keeps_the_token(repo):
     with pytest.raises(StageWaiting, match=r"stage-wait.*peer") as parked:
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
     assert parked.value.wait["blockers"] == ["peer"]
+    assert 'dispatch.release_run_token {"run_id": "peer"}' in str(parked.value)
     assert _live(repo, "mine")
     assert _waits(repo) == ["mine.json"]
     record = stage_wait.read(repo, "mine")
@@ -281,6 +282,7 @@ def test_handler_replies_parked_not_error_and_keeps_the_token(repo):
     assert "error" not in reply
     assert reply["parked"] == ask_stage.STAGE_WAIT_PARKED
     assert reply["waiting"]["blockers"] == ["peer"]
+    assert 'dispatch.release_run_token {"run_id": "peer"}' in reply["remedy"]
     assert _live(repo, "mine")
 
 

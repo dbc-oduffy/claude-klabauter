@@ -51,7 +51,8 @@ class TestNoRecordBranchIsUnchanged:
     def test_absent_record_routes_to_the_group_em(self) -> None:
         rendered = _render(ungranted_record=None)
         assert "Tier-U suite run without an authorization grant" in rendered
-        assert ctsi._GROUP_EM_GRANT_LINE in rendered
+        assert ctsi._group_em_grant_line() in rendered
+        assert "tier-u-grant-cli group-em-grant" in rendered
         assert "Ask the PM" not in rendered
         assert "tier-u-grant-cli grant pm" not in rendered
 

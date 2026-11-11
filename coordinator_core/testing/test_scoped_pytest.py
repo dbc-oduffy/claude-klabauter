@@ -147,6 +147,7 @@ def test_watch_parent_fires_on_mismatched_create_time_and_not_on_matching():
 
 
 @pytest.mark.spawns_process
+@pytest.mark.deliberate_wall_clock(reason="bounds that the watcher kills a sleeping pytest tree instead of waiting out its sleep, a wait CPU time cannot see")
 def test_pid_reuse_of_an_ancestor_kills_the_pytest_tree(tmp_path, monkeypatch):
     (tmp_path / "test_sleep.py").write_text("import time\n\ndef test_sleep():\n    time.sleep(120)\n")
     monkeypatch.chdir(tmp_path)

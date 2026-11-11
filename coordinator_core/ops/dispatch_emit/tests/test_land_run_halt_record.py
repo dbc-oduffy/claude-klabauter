@@ -250,6 +250,7 @@ def test_nothing_changed_commits_nothing(repo):
     assert _git(repo, "rev-parse", "HEAD") == head
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled sibling status write that must not hold the landing past its deadline")
 def test_stalled_sibling_status_write_lands_with_a_named_reconcilable_outcome(repo, monkeypatch):
     import threading
     import time

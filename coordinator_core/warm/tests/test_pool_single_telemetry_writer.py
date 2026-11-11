@@ -61,6 +61,7 @@ def test_worker_init_without_a_queue_keeps_in_process_writes(monkeypatch, tmp_pa
     assert sink.read_bytes() == b"x\n"
 
 
+@pytest.mark.deliberate_wall_clock(reason="block bound: a full forward queue must drop, never block the writer")
 def test_full_forward_queue_drops_and_counts_never_blocks(monkeypatch, tmp_path):
     _stub_heavy_init(monkeypatch)
 

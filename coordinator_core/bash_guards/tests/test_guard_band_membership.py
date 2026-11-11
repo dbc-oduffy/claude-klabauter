@@ -46,6 +46,7 @@ CONFINEMENT_DENY_NAMES = [
     "destructive-git-clean",
     "destructive-git-revert",
     "blanket-git-add",
+    "stale-temp-index-base",
     "runaway-find",
     "block-worktree-creation",
     "block-stash-destruction",

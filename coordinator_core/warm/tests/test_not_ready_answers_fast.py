@@ -30,6 +30,7 @@ def _ask(path, frame):
     return json.loads(data)
 
 
+@pytest.mark.deliberate_wall_clock(reason="deadline bound: a not-ready engine answers a connection instead of leaving it waiting")
 def test_not_ready_connection_gets_determinate_answer_fast(tmp_path):
     sock, path = _listener(tmp_path)
     answerer = server._NotReadyAnswerer(sock, server_sha="a" * 40)

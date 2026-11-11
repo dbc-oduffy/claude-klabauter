@@ -216,7 +216,7 @@ def acquire_lock(path):
     """Exclusive per-peer lock so two session starts never both spawn; a stale lock is taken over."""
     for _ in range(2):
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             os.close(fd)
             return True
         except FileExistsError:

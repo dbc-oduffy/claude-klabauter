@@ -5,9 +5,12 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled cache write that must not block the caller")
 def test_a_stalled_cache_write_does_not_block_the_caller(tmp_path, monkeypatch):
     release = threading.Event()
     stored = threading.Event()
@@ -26,6 +29,7 @@ def test_a_stalled_cache_write_does_not_block_the_caller(tmp_path, monkeypatch):
     assert stored.wait(5)
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a full queue behind a stalled write that must drop instead of blocking")
 def test_a_full_queue_drops_the_record(tmp_path, monkeypatch):
     release = threading.Event()
     monkeypatch.setattr(li, "_store_verdict", lambda path, found: release.wait(10))

@@ -97,7 +97,7 @@ def test_note_naming_an_outside_file_writes_a_row_and_is_stored(repo):
     (row,) = [r for r in _spine(repo) if r["id"] != "C1"]
     assert row["writes"] == [OUTSIDE] and row["disposition"] == "open"
     assert reply["footprint_widened"] == [{"row": row["id"], "paths": [OUTSIDE]}]
-    assert [n["note"] for n in rl.read_notes(rl.run_dir(repo, RUN))] == [f"also fix {OUTSIDE}"]
+    assert rl.read_notes(rl.run_dir(repo, RUN)) == [f"also fix {OUTSIDE}"]
     assert OUTSIDE in _footprint(repo)[0]
 
 

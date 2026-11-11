@@ -56,12 +56,7 @@ def test_probe_reports_tool_presence(no_spawn, monkeypatch, tmp_path):
 
 
 def test_ram_unknown_is_none(monkeypatch):
-    monkeypatch.setattr(box_probe.os, "name", "posix")
-
-    def _raise(_name):
-        raise ValueError("no such conf")
-
-    monkeypatch.setattr(box_probe.os, "sysconf", _raise, raising=False)
+    monkeypatch.setattr(box_probe.host_sampler, "avail_mb", lambda: (None, None))
     assert box_probe._ram_mb() is None
 
 

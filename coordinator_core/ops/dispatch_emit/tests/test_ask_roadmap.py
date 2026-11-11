@@ -112,7 +112,7 @@ def test_a_stage_reply_that_lost_its_waves_refills_them_from_the_frozen_report_b
 def test_a_truncated_stage_reply_is_recovered_from_disk_before_the_no_gate_report_halt(repo):
     _put(repo)
     script = _compose(repo)
-    recover = script.index("label: 'staged-from-disk'")
+    recover = script.index("label: 'blitz-stage-read'", script.index("read_staged: { roadmap_id"))
     halt = script.index("'roadmap-blitz returned no gate_report_path'")
     assert script.index("_rb = await roadmapBlitz(") < recover < halt
     assert "read_staged: { roadmap_id: _rb.roadmapId, trail_dir: 'scratch/warp/r1/roadmap-blitz' }" in script

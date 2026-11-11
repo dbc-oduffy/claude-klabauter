@@ -1019,6 +1019,12 @@ class StageWaiting(AskStageError):
         self.wait = wait
 
 
+def release_remedy(run_ids: Sequence[str]) -> str:
+    """The `dispatch.release_run_token` call per run id, `; `-joined: what the EM runs for a blocker it
+    knows is dead (a TaskStop-killed run keeps its token live for the full TTL)."""
+    return "; ".join(f'dispatch.release_run_token {{"run_id": "{rid}"}}' for rid in sorted(run_ids))
+
+
 def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -> Optional[dict]:
     """Return None when no other live run's staged footprint intersects `writes`. When every
     intersecting run is a live run of this engine (`run_token.is_live`) and this run has no expired
@@ -1076,7 +1082,7 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
         stage_wait.clear(root, run_id)
         return None
     named = "; ".join(f"{rid}: {', '.join(paths)}" for rid, paths in sorted(hits.items()))
-    release = "; ".join(f'dispatch.release_run_token {{"run_id": "{rid}"}}' for rid in sorted(hits))
+    release = release_remedy(list(hits))
     if all(run_token.is_live(root, rid) for rid in hits) and not stage_wait.expired(root, run_id):
         prior = stage_wait.read(root, run_id)
         if prior is not None and prior.get("started"):
@@ -1630,7 +1636,7 @@ def stage(
     if waiting is not None:
         raise StageWaiting(
             f"{STAGE_WAIT_PARKED}: writes overlap live run {', '.join(waiting['blockers'])}; parked until it lands "
-            "or is released.",
+            f"or is released; a blocker known dead: {release_remedy(waiting['blockers'])}.",
             waiting,
         )
     # The docs stage writes only these; terminal_commit holds them to the chunk test code rows get.
@@ -2541,6 +2547,7 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
             PARKED_REPLY_KEY: STAGE_WAIT_PARKED,
             "plan_path": params.get("plan_path") or None,
             "waiting": {"blockers": wait["blockers"], "deadline": wait["deadline"]},
+            "remedy": f"A blocker known dead: {release_remedy(wait['blockers'])}.",
         }
     except (AskStageError, SizingFireRefused, reply_sidecar.ReplySidecarError) as exc:
         reply = {"error": str(exc)}

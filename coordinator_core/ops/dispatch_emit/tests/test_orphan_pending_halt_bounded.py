@@ -5,9 +5,12 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import ask_gate, halt_resume_record, orphan_adopt
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled binding scan that must answer none at its wall bound")
 def test_stalled_binding_scan_answers_none_under_500ms(tmp_path, monkeypatch):
     release = threading.Event()
 
@@ -25,6 +28,7 @@ def test_stalled_binding_scan_answers_none_under_500ms(tmp_path, monkeypatch):
     assert time.monotonic() - t0 < 0.5
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled record read that must answer none at its wall bound")
 def test_stalled_record_read_answers_none_under_500ms(tmp_path, monkeypatch):
     run = tmp_path / "state" / "warp" / "ask-20261104T110309-625d2d"
     run.mkdir(parents=True)

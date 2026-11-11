@@ -10,6 +10,8 @@ import uuid
 from coordinator_core.codex_runner import roster
 from coordinator_core.codex_runner.resolve import resolve_codex, preflight_auth
 from coordinator_core.codex_runner.execute import _child_env
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant
 from coordinator_core.session import peer_roster
@@ -100,6 +102,11 @@ def supervise(repo: Path, prompt: str, assignment: dict, argv: list[str], *,
         if not slot_grant.check_slot_grant(sid, run, peak_mb=admitted.peak_gib * 1024)[0]:
             raise ValueError("Group EM grant does not cover recorded worker peak")
         env = _launch_identity_env(settings_home_child_env(_child_env(False)), provider, sid, argv)
+        if provider == "codex":
+            try:
+                env = shape_codex_child(env, writable_root=repo)
+            except SandboxSetupRefused as exc:
+                raise ValueError(str(exc)) from exc
         proc = factory(argv, cwd=repo, env=env, stdin=subprocess.PIPE, stdout=stdout,
                        text=True, encoding="utf-8", errors="replace", shell=False,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))

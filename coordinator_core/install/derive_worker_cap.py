@@ -7,9 +7,8 @@ import sys
 from typing import Optional, Tuple
 
 from coordinator_core.benchmarks.concurrency_probe import (
-    compute_parallelism_cap,
-    default_physical_cores,
-    default_usable_ram_gb,
+    compute_measured_cap,
+    read_measured_headroom,
 )
 from coordinator_core.conservatism import SafeDirection, declares_safe_direction
 
@@ -43,13 +42,9 @@ def _first_real_match(pattern: "re.Pattern", s: str):
     return None
 
 
-def derive_cap(
-    physical_cores: Optional[int] = None,
-    usable_ram_gb: Optional[float] = None,
-) -> int:
-    cores = physical_cores if physical_cores is not None else default_physical_cores()
-    ram = usable_ram_gb if usable_ram_gb is not None else default_usable_ram_gb()
-    return compute_parallelism_cap(cores, ram)
+def derive_cap() -> int:
+    """Worker count this box admits right now: available memory and current CPU load."""
+    return compute_measured_cap(*read_measured_headroom())
 
 
 def apply_cap_to_command(command: str, cap: int) -> str:
@@ -114,7 +109,8 @@ def main(argv: Optional[list] = None) -> int:
     parser.parse_args(argv)
 
     try:
-        cap = derive_cap()
+        ram, load, cpus = read_measured_headroom()
+        cap = compute_measured_cap(ram, load, cpus)
     except Exception as exc:
         print(f"derive-worker-cap: cannot derive a cap on this box: {exc}", file=sys.stderr)
         print(
@@ -123,9 +119,9 @@ def main(argv: Optional[list] = None) -> int:
         )
         return 2
 
-    print(f"physical cores: {default_physical_cores()}")
-    print(f"usable RAM GB:  {default_usable_ram_gb():.1f}")
-    print(f"derived cap:    {cap}")
+    print(f"available RAM GB: {ram:.1f}")
+    print(f"CPU load:         {load:.2f} of {cpus} logical CPUs")
+    print(f"derived cap:      {cap}")
     return 0
 
 

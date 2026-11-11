@@ -422,7 +422,8 @@ def test_codex_stage_runs_when_unelevated_root_unproven_and_probes_once(tmp_path
     monkeypatch.setattr(sp, '_is_windows', lambda: True)
     monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
     monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
-    monkeypatch.setattr(workflow, 'check_pwsh_launchable', lambda env: None)
+    from coordinator_core.codex_runner import codex_spawn_env
+    monkeypatch.setattr(codex_spawn_env, 'check_pwsh_launchable', lambda env: None)
     seen = {}
     monkeypatch.setattr(workflow, 'check_workspace_write', lambda root, **kw: seen.update(kw) or 'advisory: warming')
     calls = _stub_codex(monkeypatch, tmp_path)
@@ -436,7 +437,8 @@ def test_codex_stage_argv_unchanged_without_unelevated_config(tmp_path, monkeypa
     monkeypatch.setattr(sp, '_is_windows', lambda: True)
     monkeypatch.setattr(workflow, 'preflight_auth', lambda **kw: None)
     monkeypatch.setattr(workflow, 'resolve_codex', lambda **kw: ['/bin/codex-x'])
-    monkeypatch.setattr(workflow, 'check_pwsh_launchable', lambda env: None)
+    from coordinator_core.codex_runner import codex_spawn_env
+    monkeypatch.setattr(codex_spawn_env, 'check_pwsh_launchable', lambda env: None)
     probes = []
     monkeypatch.setattr(workflow, 'check_workspace_write', lambda root, **kw: probes.append(kw) or None)
     assert _run(tmp_path, 'codex') == {'a': 1}

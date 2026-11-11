@@ -703,3 +703,31 @@ def test_composed_check_rewrites_unmodeled_builtin_on_opus_parent(
 
     assert "permissionDecision" not in hso
     assert hso["updatedInput"] == {**tool_input, "model": "sonnet"}
+
+
+def _plugin_stem_agent(home: Path, plugin: str, stem: str) -> None:
+    agents = home / ".claude" / "plugins" / plugin / "agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / f"{stem}.md").write_text("---\nname: x\n---\n", encoding="utf-8")
+
+
+def test_plugin_qualified_candidates_lists_every_plugin_holding_the_stem(tmp_path):
+    _plugin_stem_agent(tmp_path, "zeta", "likeness")
+    _plugin_stem_agent(tmp_path, "alpha", "likeness")
+    _plugin_stem_agent(tmp_path, "alpha", "other")
+    assert mod.plugin_qualified_candidates("likeness", home=str(tmp_path)) == [
+        "alpha:likeness",
+        "zeta:likeness",
+    ]
+
+
+def test_plugin_qualified_candidates_is_empty_for_unknown_qualified_or_homeless(tmp_path):
+    _plugin_stem_agent(tmp_path, "alpha", "likeness")
+    assert mod.plugin_qualified_candidates("missing", home=str(tmp_path)) == []
+    assert mod.plugin_qualified_candidates("alpha:likeness", home=str(tmp_path)) == []
+    assert mod.plugin_qualified_candidates("likeness", home=None) == []
+
+
+def test_is_harness_builtin_type():
+    assert mod.is_harness_builtin_type("general-purpose")
+    assert not mod.is_harness_builtin_type("likeness")

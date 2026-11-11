@@ -387,6 +387,22 @@ EXPECTED: Dict[str, _Expected] = {
         "dialect` call anywhere in the check, so a PowerShell-dialect "
         "redirect is chain-eligible but not actually detected.",
     ),
+    # stale-temp-index-base: registers full-universe inline in dispatch.py
+    # (matchers=COMMAND_TOOL_NAMES) but `_check_stale_temp_index_base`
+    # tokenizes via the POSIX-shaped `_bt_tokenize_full_command` and keys on
+    # a leading `GIT_INDEX_FILE=` assignment before `git commit` -- no
+    # `_dialect` call, so a PowerShell `$env:GIT_INDEX_FILE` form is
+    # chain-eligible but not detected. Same signature as `stale-write`.
+    "stale-temp-index-base": _Expected(
+        ("Bash", "PowerShell"),
+        DUAL_DECLARING_BASH_DETECTING,
+        "Registers full-universe (matchers=COMMAND_TOOL_NAMES) but its "
+        "check tokenizes via the generic POSIX-shaped "
+        "`_bt_tokenize_full_command` and matches only a leading "
+        "`GIT_INDEX_FILE=<tmp>` env-prefix on `git commit` -- no "
+        "`_dialect`/`resolve_segments_for_dialect` call, so a PowerShell "
+        "`$env:GIT_INDEX_FILE` commit is chain-eligible but not detected.",
+    ),
 }
 
 
@@ -518,9 +534,9 @@ def test_every_registered_guard_is_classified():
     `block_drive_root_new_dir_bash_write`; 74 -> 75 with
     `block-external-workspace-vcs-write`; 75 -> 76 with `xs-lane-shell-write`; 76 -> 78 with
     `block-em-post-fire-product-write` and `block-em-halted-withheld-commit`; 78 -> 77 retiring
-    `block-em-halted-withheld-commit`; 77 -> 78 with `guard-disk-fill`; 69 after the DR-475 (307ea22403) reclassification; 71 -> 72 with `block-empty-source-push`."""
+    `block-em-halted-withheld-commit`; 77 -> 78 with `guard-disk-fill`; 69 after the DR-475 (307ea22403) reclassification; 71 -> 72 with `block-empty-source-push`; 72 -> 73 with `stale-temp-index-base`."""
     actual = _actual_matchers()
-    assert len(actual) == 72, sorted(actual)
+    assert len(actual) == 73, sorted(actual)
     assert set(actual) == set(EXPECTED)
 
 
@@ -561,9 +577,10 @@ def test_every_entry_is_in_exactly_one_partition_bucket():
             bucket3 += 1
         else:
             raise AssertionError("%r has an unrecognised kind %r" % (guard_id, exp.kind))
-    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 72
-    assert bucket3 == 1, (
-        "expected 1 dual-declaring-but-Bash-detecting entry (`stale-write`, "
+    assert bucket1 + bucket2 + bucket3 == len(EXPECTED) == 73
+    assert bucket3 == 2, (
+        "expected 2 dual-declaring-but-Bash-detecting entries (`stale-write`, "
+        "`stale-temp-index-base`; `stale-write` "
         "merged in from origin/main 2026-09-20 -- see EXPECTED's own "
         "comment) -- C8's second pass converted all 9 recensus-era members "
         "(Finding 7), leaving the bucket empty until this arrival, "
@@ -630,7 +647,7 @@ def test_dual_declaring_bash_detecting_kind_is_pinned():
         for gid, exp in EXPECTED.items()
         if exp.kind == DUAL_DECLARING_BASH_DETECTING
     }
-    assert members == {"stale-write"}
+    assert members == {"stale-write", "stale-temp-index-base"}
     assert EXPECTED["stale-write"].matchers == ("Bash", "PowerShell")
     assert EXPECTED["stale-write"].kind == DUAL_DECLARING_BASH_DETECTING
     for gid in (

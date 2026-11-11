@@ -9,7 +9,7 @@ from typing import Callable, Sequence, Optional
 from coordinator_core.git.run import run_git
 from coordinator_core.ops.review_test_blocker import TEST_BLOCKER
 from coordinator_core.ops.dispatch_emit import review_floor
-from coordinator_core.ops.dispatch_emit.land_run import foreign_halted_withheld, _recovery_backing
+from coordinator_core.ops.dispatch_emit.land_run import _recovery_backing
 from coordinator_core.ops.dispatch_emit.ledger_recovery import RECOVERY_WITHHELD_PARAM
 from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
 from coordinator_core.ops.dispatch_emit.write_baseline import (
@@ -142,14 +142,16 @@ def _posix_id(node_id: object) -> str:
     return s
 
 
-def _review_halt_commit_params(digest: dict) -> Optional[dict]:
-    """The `dispatch.terminal_commit` params of a digest halted `review_blocked`/`failing_test` whose every
-    failing id is red at run_base, else ``None``.
+def _review_halt_commit_params(digest: dict, repo_root: Optional[Path] = None) -> Optional[dict]:
+    """The `dispatch.terminal_commit` params of a digest halted `review_blocked`/`failing_test`, else ``None``.
 
-    Red at run_base is membership in the review `test` return's `pre_existing` list
-    (`digest.review.reverify`), the list `_reviewRecover` excludes from its own gaps. An unfinished row
-    stays in `incomplete_chunks`, so it is not landed. The inline review mirrors the wave-bookkeeping
-    form `wake_digest` emits, from the review stage returns the digest carries.
+    Every failing id is classified through `checkpoint_reds`: red at run_base is membership in the
+    review `test` return's `pre_existing` list (`digest.review.reverify`), anything else is
+    `introduced` and mints a fix row under ``repo_root``. The commit proceeds either way: `message`
+    carries the commit-lines block and `doc_paths` the minted rows, so the committed ref holds them.
+    With an introduced red and no ``repo_root`` there is nowhere to mint, so the result is ``None``.
+    An unfinished row stays in `incomplete_chunks`, so it is not landed. The inline review mirrors
+    the wave-bookkeeping form `wake_digest` emits, from the review stage returns the digest carries.
     """
     halted = digest.get("halted_by")
     run_id = digest.get("run_id")
@@ -173,9 +175,20 @@ def _review_halt_commit_params(digest: dict) -> Optional[dict]:
     pre_existing = reverify.get("pre_existing")
     if not isinstance(pre_existing, list):
         return None
-    at_base = {_posix_id(n) for n in pre_existing}
-    if any(_posix_id(n) not in at_base for n in failing):
-        return None
+    from coordinator_core.ops.dispatch_emit import checkpoint_reds
+
+    classified = checkpoint_reds.classify(
+        [_posix_id(n) for n in failing], [_posix_id(n) for n in pre_existing]
+    )
+    introduced = [c["id"] for c in classified if c["class"] == checkpoint_reds.INTRODUCED]
+    rows: list = []
+    if introduced:
+        if repo_root is None:
+            return None
+        try:
+            rows = checkpoint_reds.mint_fix_rows(repo_root, run_id, introduced)
+        except OSError:
+            return None
     from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_KEY
     from coordinator_core.ops.review_mint.wave_bookkeeping import review_wave_bookkeeping_stem
 
@@ -225,10 +238,16 @@ def _review_halt_commit_params(digest: dict) -> Optional[dict]:
             ],
         },
     }
-    return {**_halt_commit_base(digest, items), "inline_review": inline_review}
+    block = checkpoint_reds.commit_lines(classified, [r["id"] for r in rows])
+    return {
+        **_halt_commit_base(digest, items),
+        "inline_review": inline_review,
+        "message": block,
+        **({"doc_paths": [r["path"] for r in rows]} if rows else {}),
+    }
 
 
-def _params_from_task_output(path_raw: str, run_id: Optional[str] = None) -> dict:
+def _params_from_task_output(path_raw: str, run_id: Optional[str] = None, repo_root: Optional[Path] = None) -> dict:
     """`next_action.params` out of a Workflow task-output file, bare or `{summary, logs, result}`-wrapped.
 
     Same envelope unwrap as `land-wave.py :: _wave_result`: a dict `result` is the digest. A
@@ -257,7 +276,7 @@ def _params_from_task_output(path_raw: str, run_id: Optional[str] = None) -> dic
         if recovered is not None:
             return recovered
     if action.get("kind") in ("revise_and_refire", "terminal_commit"):
-        recovered = _review_halt_commit_params(data)
+        recovered = _review_halt_commit_params(data, repo_root)
         if recovered is not None:
             return recovered
     if found.get("inline_review") is None and action.get("kind") == "terminal_commit":
@@ -743,6 +762,9 @@ def _landing_integrity_gate(
             extra["retested_tests"] = fresh_record.get("tests")
     red = landing_targeted_tests.reverify_red_findings(worktree_root, params, paths)
     record = landing_targeted_tests.reverify_record(params)
+    unverified = landing_targeted_tests.reverify_unverified_reds(params)
+    if unverified:
+        extra["reverify_unverified"] = unverified
     if record is None:
         extra["reverify_check"] = "absent"
     elif landing_targeted_tests.reverify_verdict(record) != "fail":
@@ -794,6 +816,7 @@ def _freed_import_targets(
     from coordinator_core.authoring_leaks import import_closure
     from coordinator_core.ops.dispatch_emit import halted_withheld_index, landing_integrity as li
     from coordinator_core.ops.dispatch_emit.land_run import _peer_held
+    from coordinator_core.ops.dispatch_emit import terminal_commit as _tc
 
     pairs = import_closure.withheld_symbol_pairs(
         worktree_root, [(f["path"], f["detail"]) for f in integrity if f["reason"] == li.LOST_DEFINITION],
@@ -804,7 +827,7 @@ def _freed_import_targets(
     targets = [t for t in candidates if t in indexed]
     if not targets:
         return []
-    targets = [t for t in targets if t not in foreign_halted_withheld(worktree_root, run_id, plan, targets)]
+    targets = [t for t in targets if t not in _tc.foreign_halted_withheld(worktree_root, run_id, plan, targets)]
     held = _peer_held(
         worktree_root, targets, session_id, run_id, script_path, plan_rel=plan, run_base=run_base,
         minted_before=minted_before,

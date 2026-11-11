@@ -150,17 +150,21 @@ def classify_reds(
     pre_existing: Iterable[str] | None = None,
     reverted: Iterable[Mapping[str, Any]] | None = None,
     passed_at_base: Iterable[str] | None = None,
+    diff_named: Iterable[str] | None = None,
 ) -> RedSplit:
     """Split failing node ids into the run's own and foreign reds.
 
     Red at base is foreign even in the write set: an id in `pre_existing`, or (outside
-    `own_paths`) absent from a non-empty `passed_at_base`, unless `reverted[].tests` lists it. Otherwise owned: the id's file is
+    `own_paths`) absent from a non-empty `passed_at_base`, unless `reverted[].tests` lists it or
+    `diff_named` does (only `pre_existing` outranks `diff_named`). Otherwise owned: the id's file is
     in `own_paths`, or it is in `reverted[].tests`, or in `caused` and not in `foreign`, or in
-    `passed_at_base` and not in `pre_existing` (green at base, red with the diff). Everything else is
+    `passed_at_base` and not in `pre_existing` (green at base, red with the diff), or in `diff_named`
+    and not in `pre_existing` (its test names a symbol the run's diff changed). Everything else is
     foreign; `unverified` are the foreign ids that no list proves foreign. With `caused` and
     `reverted` both None only write-set membership counts.
     """
     base_s = {_posix(i) for i in passed_at_base or ()}
+    diff_s = {_posix(i) for i in diff_named or ()}
     own = {_posix(p) for p in own_paths or ()}
     caused_s = None if caused is None else {_posix(i) for i in caused}
     foreign_s = {_posix(i) for i in foreign or ()}
@@ -173,7 +177,8 @@ def classify_reds(
         # A test the run itself added never ran at base, so absence from passed_at_base proves
         # nothing for an own-path id; only an explicit pre_existing entry does.
         red_at_base = not in_reverted and (
-            nid in pre_s or (bool(base_s) and nid not in base_s and _file_of(nid) not in own)
+            nid in pre_s
+            or (bool(base_s) and nid not in base_s and nid not in diff_s and _file_of(nid) not in own)
         )
         if red_at_base:
             foreign_out.add(nid)
@@ -182,6 +187,8 @@ def classify_reds(
         elif _file_of(nid) in own or in_reverted:
             owned.add(nid)
         elif nid in base_s and nid not in pre_s:
+            owned.add(nid)
+        elif nid in diff_s and nid not in pre_s:
             owned.add(nid)
         elif caused_s is not None and nid in caused_s and nid not in foreign_s:
             owned.add(nid)
@@ -239,16 +246,18 @@ const classifyReds = (failing, ownPaths, opts) => {
   const preS = new Set((o.pre_existing || []).map(px));
   const revertedS = o.reverted == null ? null : new Set(o.reverted.flatMap((r) => (r.tests || []).map(px)));
   const baseS = new Set((o.passed_at_base || []).map(px));
+  const diffS = new Set((o.diff_named || []).map(px));
   const owned = new Set(), foreign = new Set(), unverified = new Set();
   for (const raw of failing || []) {
     const id = px(raw);
     const inRev = revertedS !== null && revertedS.has(id);
-    const redAtBase = !inRev && (preS.has(id) || (baseS.size > 0 && !baseS.has(id) && !own.has(id.split('::')[0])));
+    const redAtBase = !inRev && (preS.has(id) || (baseS.size > 0 && !baseS.has(id) && !diffS.has(id) && !own.has(id.split('::')[0])));
     if (redAtBase) {
       foreign.add(id);
       if (!foreignS.has(id) && !preS.has(id)) unverified.add(id);
     } else if (own.has(id.split('::')[0]) || inRev) owned.add(id);
     else if (baseS.has(id) && !preS.has(id)) owned.add(id);
+    else if (diffS.has(id) && !preS.has(id)) owned.add(id);
     else if (causedS !== null && causedS.has(id) && !foreignS.has(id)) owned.add(id);
     else {
       foreign.add(id);

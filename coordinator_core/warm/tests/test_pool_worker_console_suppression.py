@@ -129,7 +129,7 @@ def test_worker_init_calls_the_binder_before_anything_else(monkeypatch) -> None:
     server._worker_process_init()
 
     assert calls[0] == "bind", f"binder did not run first: {calls}"
-    assert "preload" in calls
+    assert "preload" not in calls, f"worker init preloads the op registry: {calls}"
 
 
 def test_fleet_setup_error_still_returns_its_envelope_with_no_stdio(monkeypatch) -> None:

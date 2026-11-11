@@ -7,6 +7,8 @@ import concurrent.futures
 import threading
 import time
 
+import pytest
+
 from coordinator_core.warm import server
 
 _RELEASE = threading.Event()
@@ -34,6 +36,7 @@ def _msg(method, i=1):
     return {"jsonrpc": "2.0", "id": i, "method": method, "params": {}}
 
 
+@pytest.mark.deliberate_wall_clock(reason="stall bound: light ops answer while heavy slots block forever, which burns no CPU")
 def test_light_ops_answer_while_every_heavy_slot_is_wedged(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 2)
     monkeypatch.setattr(server, "_pool_dispatch_worker_body", _body)

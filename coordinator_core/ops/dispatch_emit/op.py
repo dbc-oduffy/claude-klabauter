@@ -2075,12 +2075,15 @@ class _EmitWrites:
         self._prior: dict = {}
         self._made_dirs: list = []
 
-    def write(self, path: Path, text: str) -> None:
+    def track(self, path: Path) -> None:
+        """Ledger a file a callee will write, so a refusal after it restores the tree."""
         if path not in self._prior:
             self._prior[path] = path.read_bytes() if path.is_file() else None
-        missing = [d for d in reversed(path.parents) if not d.exists()]
+        self._made_dirs.extend(d for d in reversed(path.parents) if not d.exists())
+
+    def write(self, path: Path, text: str) -> None:
+        self.track(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        self._made_dirs.extend(missing)
         path.write_text(text, encoding="utf-8", newline="\n")
 
     def rollback(self) -> None:
@@ -2179,8 +2182,17 @@ def _abandon_run(params: dict, repo_root: Optional[Path]) -> dict:
     minted_only = (
         not shell and not chained and rdir.is_dir() and _hr._is_shell(rdir) and not _rt.is_live(root, run_id)
     )
+    from coordinator_core.ops.dispatch_emit import kept_work as _kw
+
+    def _holds_kept_work() -> bool:
+        kept = _kw.read(rdir)
+        return bool(kept["chunks"] or kept[_kw.POST_CHECKPOINT_KEY])
+
     live = shell or chained or minted_only or (
-        owned and rdir.is_dir() and (_hr.read_strict_run(rdir) or {}).get("status") != _hr.STATUS_CLOSED
+        owned
+        and rdir.is_dir()
+        and (_hr.read_strict_run(rdir) or {}).get("status") != _hr.STATUS_CLOSED
+        and not _holds_kept_work()
     )
     if live:
         _hr._write(rdir, {
@@ -3232,6 +3244,12 @@ def _dispatch_emit_body(
         if params.get("hold_reason") and not hold_rows:
             raise ValueError("dispatch.emit hold_reason requires hold_rows")
         held_out: dict = {}
+        targets_root = repo_root or _repo_root_for_plan(plan_path)
+        if emitting_session_id and targets_root is not None:
+            # emit_script registers review targets for this session; a refusal after it must undo them.
+            from coordinator_core.ops.review_findings_ledger import _session_targets_path
+
+            _writes.track(_session_targets_path(Path(targets_root), emitting_session_id))
         try:
             script = emit_script(
                 plan_path,

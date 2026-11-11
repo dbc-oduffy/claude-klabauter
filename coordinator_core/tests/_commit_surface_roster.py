@@ -56,6 +56,12 @@ EXCLUDED_MODULES = {
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/store_hygiene.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
+    "coordinator_core/git/agent_provenance.py":
+        "env-mapping vendor/model/session provenance reader, no subprocess, no git narration.",
+    "coordinator_core/git/corpus_guard_hook.py":
+        "self-resolving corpus-guard pre-commit hook body and stub predicate, spawn-free.",
+    "coordinator_core/git/provider_attribution.py":
+        "model-free commit attribution table and context var; not a narration holder.",
     "coordinator_core/git/argv_batch.py":
         "non-roster module under coordinator_core/git/; unsized by this plan's scope:.",
     "coordinator_core/git/checkpoint_hunks.py":

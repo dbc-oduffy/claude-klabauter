@@ -214,7 +214,6 @@ from coordinator_core.warm import (
     hook_http,
     idle,
     lifecycle,
-    push_cadence,
     settings_home_claim,
     skew,
     telemetry,
@@ -240,6 +239,57 @@ from coordinator_core.warm.client import (
     scrub_test_env,
 )
 from coordinator_core.warm import dispatch_ack
+
+
+def _push_cadence() -> Any:
+    """`warm.push_cadence`, imported on first use.
+
+    Its import closure (git, ceremony, push ops: ~60 modules) is idle-tick and exit-sweep work,
+    so it stays off the boot path; a cold-bytecode successor compiles every module it imports
+    before its first answer.
+    """
+    from coordinator_core.warm import push_cadence
+
+    return push_cadence
+
+
+def __getattr__(name: str) -> Any:
+    # `server.push_cadence` stays reachable (tests patch through it) without importing at load.
+    if name == "push_cadence":
+        return _push_cadence()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+class _BootVersionState(skew.ServerVersionState):
+    """`ServerVersionState` with no boot content hash.
+
+    The base constructor reads and hashes every engine source file (~3200) before the server can
+    answer. Here axis 2 is the stat stamp alone: any added, removed or rewritten source file
+    reads as stale (sticky, fail-loud), so a content-identical rewrite costs one respawn that
+    the base state would have proven benign. `_boot_hash` stays None.
+    """
+
+    def __init__(self, repo_root: Optional[Path] = None, *, clock: Callable[[], float] = time.monotonic):
+        from coordinator_core import engine_version
+
+        self._root = Path(repo_root) if repo_root is not None else skew._default_engine_clone()
+        self._clock = clock
+        self.server_sha = engine_version.resolve_engine_sha()
+        self._last_stamp = skew._source_stamp(skew._source_pkg_dir())
+        self._boot_stamp = self._last_stamp
+        self._boot_hash: Optional[str] = None
+        self._last_refresh = self._clock()
+        self._source_stale = False
+        self._last_skew_axes: tuple = ()
+
+    def refresh(self, *, force: bool = False) -> None:
+        now = self._clock()
+        if not force and (now - self._last_refresh) < skew._REFRESH_INTERVAL_SECS:
+            return
+        self._last_refresh = now
+        if skew._source_stamp(skew._source_pkg_dir()) != self._boot_stamp:
+            self._source_stale = True
+
 
 __all__ = [
     "InFlightCounter",
@@ -1410,19 +1460,41 @@ def _drive_verdict(repo_root) -> Optional[dict]:
         return None
 
 
+#: Set when the accept process has first received a pool worker's answer; releases boot housekeeping.
+_first_pool_answer = threading.Event()
+
+#: Boot housekeeping starts after this long even if no pool answer has arrived.
+_BOOT_HOUSEKEEPING_MAX_WAIT_SECS = 5.0
+
+
+def _after_first_pool_answer(work: Callable[[], None], name: str) -> None:
+    """Run `work` on a daemon thread once the first pool answer is out (or the wait cap passes):
+    housekeeping the first answer does not need stays off its CPU."""
+
+    def _run() -> None:
+        _first_pool_answer.wait(_BOOT_HOUSEKEEPING_MAX_WAIT_SECS)
+        work()
+
+    threading.Thread(target=_run, daemon=True, name=name).start()
+
+
 def _await_pool_result(future: "concurrent.futures.Future", wait_left: float, repo_root) -> dict:
     """`future.result(timeout=wait_left)`, cut into `_DRIVE_WAIT_SLICE_SECS` slices when `repo_root`
     is known: after each slice the op's drive is checked and a full or stalled one raises
     `_DriveFault`, so a blocked disk write fails its one op long before the result deadline."""
     if not repo_root:
-        return future.result(timeout=wait_left)
+        result = future.result(timeout=wait_left)
+        _first_pool_answer.set()
+        return result
     end = time.monotonic() + wait_left
     while True:
         left = end - time.monotonic()
         step = min(_DRIVE_WAIT_SLICE_SECS, max(left, 0.0))
         done, _pending = concurrent.futures.wait([future], timeout=step)
         if done:
-            return future.result()
+            result = future.result()
+            _first_pool_answer.set()
+            return result
         if left <= step:
             raise concurrent.futures.TimeoutError()
         verdict = _drive_verdict(repo_root)
@@ -2848,10 +2920,7 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) ->
         name="warm-pool-parent-watchdog",
         daemon=True,
     ).start()
-    _preload_op_registry()
     _worker_pristine_environ = dict(os.environ)
-    # After the pristine capture: an import that touches os.environ must not race into it.
-    threading.Thread(target=_prewarm_emit_chain, name="warm-pool-emit-prewarm", daemon=True).start()
 
 
 def _strip_ambient_pid(
@@ -4526,6 +4595,7 @@ class _ServerContext:
         """
         from coordinator_core.ops.workflow_fire import completion
 
+        push_cadence = _push_cadence()
         if completion.on_idle_tick(push_cadence.registry_sweep_repos(self.served_repos())):
             # Completion delivery is engine work, even when no caller invokes an op.
             # Supersession and vanished-ladder retirement remain independent arms.
@@ -4580,6 +4650,7 @@ class _ServerContext:
         idle-tick sweep's own ceiling -- see that constant's docstring for
         why an unbounded exit sweep is worse than an unbounded idle-tick one.
         """
+        push_cadence = _push_cadence()
         push_cadence.sweep_repos(
             push_cadence.registry_sweep_repos(self.served_repos()),
             total_ceiling_secs=push_cadence.EXIT_SWEEP_CEILING_SECS,
@@ -5184,7 +5255,7 @@ def _run_guarded() -> int:
     # from here on, so this is where "spawn -> connectable" stops running.
     listener_at = time.time()
 
-    version_state = skew.ServerVersionState(repo_root)
+    version_state = _BootVersionState(repo_root)
 
     try:
         breadcrumb.write_breadcrumb(
@@ -5216,8 +5287,8 @@ def _run_guarded() -> int:
     _suppress_pool_worker_consoles()
 
     # No op registry import here: this process runs no op. Dispatch happens in
-    # pool workers, whose initializer calls `_preload_op_registry()`; the one
-    # in-process fallback (`_run_dispatch` after a broken pool) imports lazily.
+    # pool workers, which import each op on first use; the one in-process
+    # fallback (`_run_dispatch` after a broken pool) does the same.
     # Preloading here put ~0.6-2.8s of CPU ahead of the first answer.
 
     not_ready = (
@@ -5277,9 +5348,8 @@ def _run_guarded() -> int:
         except Exception as exc:  # noqa: BLE001 -- fail-open by construction
             print(f"[warm-server] http listener ensure_listener() failed: {exc!r}", file=sys.stderr)
 
-    threading.Thread(
-        target=_ensure_http_listener, daemon=True, name="warm-http-ensure-listener"
-    ).start()
+    # Not needed to answer: runs after the first pool answer (or the wait cap).
+    _after_first_pool_answer(_ensure_http_listener, "warm-http-ensure-listener")
 
     ctx = _ServerContext(
         name=elected.endpoint,
@@ -5342,7 +5412,12 @@ def _record_own_boot(
 
 
 def _preload_op_registry() -> None:
-    """Import the op registry at BOOT, so the first caller does not pay for it.
+    """Import the whole op registry in this process.
+
+    NO BOOT CALLER: the pool worker's initializer does not call it, because a full registry is
+    ~1.0s of CPU warm and several seconds on cold bytecode in EACH worker, against ~50-80ms for
+    the op a first dispatch actually needs (`ipc.get_op_handler`'s targeted lookup). Kept for the
+    callers and tests that want a fully populated registry.
 
     `_run_dispatch` imports `coordinator_core.ipc.dispatch_message`
     function-locally, and the registry populates through it on first

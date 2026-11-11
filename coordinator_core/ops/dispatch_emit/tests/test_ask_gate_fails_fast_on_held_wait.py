@@ -37,6 +37,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a held sizing lock that must refuse at the budget instead of waiting")
 def test_held_sizing_lock_refuses_under_budget_naming_holder(repo):
     with held_lock(repo / REL, anchor_root=repo, holder_label="abandoned-run-thread"):
         start = time.monotonic()
@@ -53,6 +54,7 @@ def test_free_sizing_lock_does_not_refuse(repo):
     assert "lock held" not in str((out.get("halt") or {}).get("reason", ""))
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a held spine lock that must not stall the gate past its budget")
 def test_gate_waits_no_longer_than_the_budget_on_a_held_spine_lock(repo):
     plan = repo / "state" / "plans" / "spine.md"
     plan.parent.mkdir(parents=True)

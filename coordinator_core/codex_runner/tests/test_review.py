@@ -292,6 +292,49 @@ def test_request_flag_allows_api_key_login_and_env(env):
     assert review.run(off, tmp_path / "runs" / "run2", lambda pid: None).status == "failed"
 
 
+def _windowsapps_layout(tmp_path, monkeypatch, *, ps7):
+    from coordinator_core.codex_runner import sandbox_preflight
+    apps = tmp_path / "WindowsApps"
+    apps.mkdir()
+    (apps / "pwsh.exe").write_text("")
+    pf = tmp_path / "ProgramFiles"
+    ps7_dir = pf / "PowerShell" / "7"
+    if ps7:
+        ps7_dir.mkdir(parents=True)
+        (ps7_dir / "pwsh.exe").write_text("")
+    monkeypatch.setenv("ProgramFiles", str(pf))
+    monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: True)
+    return str(apps), str(ps7_dir)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PATH shaping is Windows-only")
+def test_windowsapps_only_path_refused_before_popen(env):
+    tmp_path, run_dir, req, mp = env
+    apps, _ = _windowsapps_layout(tmp_path, mp, ps7=False)
+    mp.setattr(review, "_unattended_env", lambda **kw: {"PATH": apps})
+    mp.setattr(review.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    res = review.run(req, run_dir, lambda pid: None)
+    assert res.status == "failed" and "WindowsApps" in res.error
+
+
+@pytest.mark.skipif(os.name != "nt", reason="PATH shaping is Windows-only")
+def test_ps7_placed_ahead_of_windowsapps_at_popen(env):
+    tmp_path, run_dir, req, mp = env
+    apps, ps7 = _windowsapps_layout(tmp_path, mp, ps7=True)
+    mp.setattr(review, "_unattended_env", lambda **kw: {"PATH": apps})
+    seen = {}
+
+    def spy(argv, **kw):
+        seen.update(kw["env"])
+        raise OSError("stop")
+
+    mp.setattr(review.subprocess, "Popen", spy)
+    review.run(req, run_dir, lambda pid: None)
+    entries = seen["PATH"].split(os.pathsep)
+    assert entries.index(ps7) < entries.index(apps)
+    assert not (tmp_path / "scratch").exists()
+
+
 def test_env_allowlist_flag_unset_drops_and_set_keeps_keys():
     src = {"PATH": "/p", "OPENAI_API_KEY": "sk", "CODEX_API_KEY": "ck"}
     assert {k:v for k,v in review._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p"}

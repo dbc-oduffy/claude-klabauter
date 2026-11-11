@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import halted_withheld_index, terminal_commit, terminal_commit_refusals
+from coordinator_core.ops.dispatch_emit import halted_withheld_index, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
@@ -66,7 +66,7 @@ def _committed_files(repo: Path) -> set:
 
 def test_a_target_a_halted_sibling_stopped_holding_lands_with_its_importer(repo, monkeypatch):
     monkeypatch.setattr(halted_withheld_index, "withheld_by_path", lambda _root: {_INPUT: "206de0"})
-    monkeypatch.setattr(terminal_commit_refusals, "foreign_halted_withheld", lambda *_a, **_k: {})
+    monkeypatch.setattr(terminal_commit, "foreign_halted_withheld", lambda *_a, **_k: {})
 
     out = _fire(repo)
 
@@ -76,7 +76,7 @@ def test_a_target_a_halted_sibling_stopped_holding_lands_with_its_importer(repo,
 
 def test_a_target_a_halted_sibling_still_holds_keeps_refusing(repo, monkeypatch):
     monkeypatch.setattr(halted_withheld_index, "withheld_by_path", lambda _root: {_INPUT: "206de0"})
-    monkeypatch.setattr(terminal_commit_refusals, "foreign_halted_withheld", lambda *_a, **_k: {_INPUT: "206de0"})
+    monkeypatch.setattr(terminal_commit, "foreign_halted_withheld", lambda *_a, **_k: {_INPUT: "206de0"})
     head = _git(["rev-parse", "HEAD"], repo)
 
     out = _fire(repo)

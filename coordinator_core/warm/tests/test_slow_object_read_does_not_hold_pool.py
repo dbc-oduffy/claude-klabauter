@@ -60,6 +60,7 @@ def _handler(fx, outcome):
     return body
 
 
+@pytest.mark.deliberate_wall_clock(reason="stall bound: a stalled pack read raises within one wall and peers answer meanwhile")
 def test_stalled_pack_read_raises_within_one_wall_and_peers_answer(tmp_path, monkeypatch):
     fx = bench.build_fixtures(go, tmp_path / "fixtures")
     outcome: dict = {}

@@ -32,6 +32,8 @@ from coordinator_core.codex_runner.contract import (
     RunResult,
     findings_schema_path,
 )
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.codex_runner.resolve import (
     API_KEY_ENV,
     ApiKeyRefused,
@@ -280,10 +282,14 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
         _prompt(staged, run_dir),
     ]
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform.startswith("win") else 0
+    try:
+        child_env = shape_codex_child(_unattended_env(requested=req.allow_api_key), writable_root=None)
+    except SandboxSetupRefused as exc:
+        return _failed(run_id, str(exc))
     with open(events_path, "wb") as out, open(stderr_path, "wb") as err:
         try:
             proc = subprocess.Popen(
-                argv, cwd=str(run_dir), env=_unattended_env(requested=req.allow_api_key), shell=False,
+                argv, cwd=str(run_dir), env=child_env, shell=False,
                 stdin=subprocess.DEVNULL, stdout=out, stderr=err, creationflags=flags,
             )
         except OSError as exc:

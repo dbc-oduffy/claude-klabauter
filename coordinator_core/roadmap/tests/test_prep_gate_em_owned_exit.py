@@ -21,12 +21,14 @@ _CODE_ROW = """- id: C1
   disposition: open
 """
 
+# A code-file `writes` makes a row a code deliverable, which routes to an executor even with
+# `performer: em` (em_only_act.row_is_em_performed); the EM-owned row must write a non-code file.
 _EM_ROW = """- id: C2
   title: merge row
   body: The EM merges.
   change_kind: code-edit
-  surface: coordinator_core/b.py
-  writes: [coordinator_core/b.py]
+  surface: docs/b.md
+  writes: [docs/b.md]
   performer: em
   queue_scope: project
   disposition: open

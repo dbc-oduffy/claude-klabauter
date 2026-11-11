@@ -19,6 +19,7 @@ def _short_wall(monkeypatch):
     go._PACK_STALL_UNTIL.clear()
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked pack read holds the caller before the deadline raises, a wait CPU time cannot see")
 def test_blocked_pack_read_raises_named_deadline_within_wall(monkeypatch, tmp_path: Path) -> None:
     release = threading.Event()
     monkeypatch.setattr(go, "_search_packs_for_sha_unbounded", lambda *a, **k: release.wait(30))
@@ -31,6 +32,7 @@ def test_blocked_pack_read_raises_named_deadline_within_wall(monkeypatch, tmp_pa
         release.set()
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds that a read after a stall fails fast instead of waiting a second deadline, a wait CPU time cannot see")
 def test_second_read_after_stall_fails_fast_without_new_wait(monkeypatch, tmp_path: Path) -> None:
     release = threading.Event()
     monkeypatch.setattr(go, "_search_packs_for_sha_unbounded", lambda *a, **k: release.wait(30))

@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 from types import SimpleNamespace
@@ -55,7 +56,8 @@ def test_bridge_uses_own_registry_pid_even_with_same_endpoint_decoy(tmp_path, mo
     monkeypatch.setattr(bridge.subprocess, "run", lambda argv, **kw: sent.append(argv) or subprocess.CompletedProcess(argv, 0, b"", b""))
     connection = SimpleNamespace(read=iter([b'{"type":"user"}\n', b""]).__next__, close=lambda: None)
     bridge.relay_send(connection)
-    assert sent[0][-2:] == ["user@192.168.0.116", "send 62725"]
+    assert sent[0][-2] == "user@192.168.0.116"
+    assert re.fullmatch(r"send-to 62725 [0-9a-f]{16}", sent[0][-1])
 
 
 def mirror(remote, endpoint, port):

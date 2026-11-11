@@ -68,6 +68,7 @@ def _shutdown(ctx, release):
     ctx._guard_pool.shutdown(wait=False, cancel_futures=True)
 
 
+@pytest.mark.deliberate_wall_clock(reason="stall bound: a blocked drive write fails the one op while the guard lane keeps answering")
 def test_op_blocked_in_a_full_drive_write_fails_named_enospc_and_guard_stays_fast(tmp_path, monkeypatch):
     release = threading.Event()
     blocked = threading.Event()
@@ -113,6 +114,7 @@ def test_op_blocked_in_a_full_drive_write_fails_named_enospc_and_guard_stays_fas
         _shutdown(ctx, release)
 
 
+@pytest.mark.deliberate_wall_clock(reason="stall bound: a stalled drive probe must refuse fast, not wait on the probe")
 def test_stalled_drive_fails_named_drive_stall_then_recovers(tmp_path, monkeypatch):
     release = threading.Event()
     monkeypatch.setattr(server, "_probe_drive", lambda root, box: (release.wait(10), box.update(done=True)))

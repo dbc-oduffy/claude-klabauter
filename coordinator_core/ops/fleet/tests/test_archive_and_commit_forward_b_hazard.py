@@ -60,7 +60,8 @@ def test_archive_and_commit_never_shells_a_pathspecd_git_commit():
     instead; asserting the source calls that helper, and does not itself
     spawn `git commit`, is the cheapest structural proxy for "the worktree
     re-read window this module pinned does not exist"."""
-    src = inspect.getsource(_common.archive_and_commit)
+    # archive_and_commit is an async wrapper; the commit logic lives in the sync body.
+    src = inspect.getsource(_common.archive_and_commit_sync)
 
     assert "_commit_via_head_spine(" in src, (
         "archive_and_commit must land its batch commit via the in-process "

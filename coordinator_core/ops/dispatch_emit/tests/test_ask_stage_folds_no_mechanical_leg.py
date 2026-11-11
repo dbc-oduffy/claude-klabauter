@@ -34,13 +34,17 @@ def test_no_ask_script_composes_a_retired_mechanical_leg(tmp_path):
 
 def test_the_blitz_stage_read_leg_composes_only_with_the_plan_blitz_fold(tmp_path):  # noqa: D103
     scripts = _ask_scripts(tmp_path)
-    with_leg = [s for s in scripts if _BLITZ_LEG in _labels(s)]
-    assert with_leg, "no composed ask script carries the plan-blitz arm's leg"
+    # Every ask script composes the stage-recover re-ask under this label; the plan-blitz arm adds the readyOp-miss read.
+    assert any("const _blitzStageRead" in s for s in scripts), "no composed ask script carries the plan-blitz arm's leg"
     for script in scripts:
-        has_leg = _BLITZ_LEG in _labels(script)
-        assert has_leg == ("const _blitzStageRead" in script)
-        assert script.count(f"label: '{_BLITZ_LEG}'") == (1 if has_leg else 0)
-    assert _BLITZ_LEG not in _labels(_ask(stop_after=STOP_AFTER_PLAN))
+        has_fold = "const _blitzStageRead" in script
+        recovers = script.count("_stageRecover = async")
+        assert recovers in (0, 1)
+        # recovers == 0: the roadmap arm composes its own single stage-read leg; a stop_after script never stages.
+        roadmap = recovers == 0 and "phase: 'roadmap-blitz'" in script
+        if recovers == 0:
+            assert (roadmap or f"stop_after: '{STOP_AFTER_PLAN}'" in script) and not has_fold
+        assert script.count(f"label: '{_BLITZ_LEG}'") == recovers + int(roadmap) + int(has_fold)
 
 
 def test_the_leg_is_called_only_when_readyop_never_ran(tmp_path):
@@ -61,7 +65,7 @@ def test_every_engine_owned_fold_site_returns_the_stage_reply_under_the_stage_re
     schema_of = ask_compose.STAGE_REPLY_SCHEMA
     assert set(schema_of["properties"]) == {
         "manifest_handle", "error", "owed_em_ids", "owed_plan", "parked", "plan_path",
-        "already_staged", "stage_in_flight", "twin_path",
+        "already_staged", "stage_in_flight", "twin_path", "waiting",
     }
     for schema in (ask_compose._GATE_STAGED_SCHEMA, ask_compose._REWORD_SCHEMA, ask_compose._REVISE_STAGED_SCHEMA,
                    ask_compose._SPINE_REVIEW_STAGED_SCHEMA, ask_compose._REPLAN_STAGED_SCHEMA,

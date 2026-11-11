@@ -3,6 +3,8 @@
 import json
 import time
 
+import pytest
+
 from coordinator_core.session import em_turn_count as etc
 
 
@@ -116,6 +118,7 @@ def test_absent_state_starts_at_zero_and_round_trips(tmp_path):
     assert etc.load_state(sp, t) == s
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the save_state deadline against a stalled write; blocked time burns no CPU")
 def test_save_state_returns_within_deadline_under_stalled_write(tmp_path, monkeypatch):
     import threading
     from pathlib import Path

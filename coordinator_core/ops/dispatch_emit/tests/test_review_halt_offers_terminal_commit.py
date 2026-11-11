@@ -1,5 +1,5 @@
-"""A review_blocked/failing_test halt over base reds offers a terminal commit that lands its finished rows;
-an own-red halt offers none."""
+"""A review_blocked/failing_test halt offers a terminal commit that lands its finished rows: base reds are
+listed red_at_base; an own red is listed introduced and mints a fix row the commit carries."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import terminal_commit
+from coordinator_core.ops.dispatch_emit import checkpoint_reds, terminal_commit, terminal_commit_refusals
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.wake_digest import TERMINAL_COMMIT_CLI_HELPER_JS
 from coordinator_core.win_portability import no_console_creationflags
@@ -109,22 +109,59 @@ def test_a_base_red_halt_offers_the_commit_and_running_it_lands_the_finished_row
     assert "a.py" in landed and "b.py" not in landed
 
 
-def test_an_own_red_halt_offers_no_commit_and_lands_nothing(repo):
+def _params(repo: Path, failing: list, pre_existing: list) -> dict:
+    path = _halted_run(repo, failing, pre_existing, _REFIRE)
+    return terminal_commit_refusals._params_from_task_output(path, None, repo)
+
+
+def test_an_own_red_halt_still_offers_params_listing_it_introduced_with_its_fix_row(repo):
+    params = _params(repo, [OWN_RED], [])
+
+    rows = checkpoint_reds.open_introduced_fix_rows(repo)
+    assert [r["test_id"] for r in rows] == [OWN_RED]
+    assert params["incomplete_chunks"] == ["C2"]
+    assert f"red: {OWN_RED} (introduced)" in params["message"]
+    assert rows[0]["id"] in params["message"]
+    assert params["doc_paths"] == [rows[0]["path"]]
+    assert (repo / rows[0]["path"]).is_file()
+
+
+def test_a_mixed_halt_lists_each_red_with_its_class_and_mints_only_the_introduced_one(repo):
+    params = _params(repo, [BASE_RED, OWN_RED], [BASE_RED])
+
+    assert f"red: {BASE_RED} (red_at_base)" in params["message"]
+    assert f"red: {OWN_RED} (introduced)" in params["message"]
+    assert [r["test_id"] for r in checkpoint_reds.open_introduced_fix_rows(repo)] == [OWN_RED]
+    assert len(params["doc_paths"]) == 1
+
+
+def test_a_base_red_only_halt_lists_it_and_mints_no_fix_row(repo):
+    params = _params(repo, [BASE_RED], [BASE_RED])
+
+    assert f"red: {BASE_RED} (red_at_base)" in params["message"]
+    assert "doc_paths" not in params
+    assert checkpoint_reds.open_introduced_fix_rows(repo) == []
+
+
+def test_a_second_pass_over_the_same_own_red_reuses_the_open_fix_row(repo):
     path = _halted_run(repo, [OWN_RED], [], _REFIRE)
-    head = _git(["rev-parse", "HEAD"], repo).strip()
-    assert _cli(_REFIRE) is None
+    digest = json.loads(Path(path).read_text(encoding="utf-8"))
+    first = terminal_commit_refusals._review_halt_commit_params(digest, repo)
+    second = terminal_commit_refusals._review_halt_commit_params(digest, repo)
 
-    out = terminal_commit._handler({"task_output_path": path}, repo_root=repo / ".git")
-
-    assert out.get("committed") is not True, out
-    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+    assert second["doc_paths"] == first["doc_paths"]
+    assert len(checkpoint_reds.open_introduced_fix_rows(repo)) == 1
 
 
-def test_a_mixed_halt_with_one_own_red_still_lands_nothing(repo):
-    path = _halted_run(repo, [BASE_RED, OWN_RED], [BASE_RED], _PROMOTED)
-    head = _git(["rev-parse", "HEAD"], repo).strip()
+def test_handler_over_an_own_red_halt_mints_the_fix_row_in_the_worktree(repo):
+    path = _halted_run(repo, [OWN_RED], [], _REFIRE)
 
-    out = terminal_commit._handler({"task_output_path": path}, repo_root=repo / ".git")
+    terminal_commit._handler({"task_output_path": path}, repo_root=repo / ".git")
 
-    assert out.get("committed") is not True, out
-    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+    assert [r["test_id"] for r in checkpoint_reds.open_introduced_fix_rows(repo)] == [OWN_RED]
+
+
+def test_an_introduced_red_with_no_repo_root_to_mint_into_offers_no_params(repo):
+    digest = json.loads(Path(_halted_run(repo, [OWN_RED], [], _REFIRE)).read_text(encoding="utf-8"))
+    assert terminal_commit_refusals._review_halt_commit_params(digest, None) is None
+    assert checkpoint_reds.open_introduced_fix_rows(repo) == []

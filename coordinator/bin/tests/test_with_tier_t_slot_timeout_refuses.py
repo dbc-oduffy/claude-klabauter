@@ -91,6 +91,7 @@ def test_stale_suite_mutex_lock_does_not_empty_the_pool(tmp_path, monkeypatch):
     assert child.returncode is not None
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds that a live foreign slot holder is refused at once instead of waited out, a wait CPU time cannot see")
 def test_live_foreign_suite_holder_refuses_fast_and_is_named(tmp_path, monkeypatch):
     child = _suite_lock(tmp_path, monkeypatch, child_alive=True)
     try:

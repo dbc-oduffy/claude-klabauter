@@ -12,7 +12,6 @@ import pytest
 from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.bug_blitz.contract import FailingTest, ParseResult, TargetSpec, run_tag
-from coordinator_core.contract.grind_vocab import DEFAULT_BUDGET_TOKENS
 from coordinator_core.hooks import submit_bug_blitz as mod
 from coordinator_core.session_hub_path import hub_for_common
 
@@ -331,7 +330,6 @@ def test_emit_params_carry_run_tag_where_and_sweep_appetite(repo):
     assert seen["overrides"] == {
         "where": [[["status", "==", "open"], ["tags", "contains", run_tag(RUN_ID)]]],
         "limit": 5,
-        "budget_tokens": DEFAULT_BUDGET_TOKENS,
     }
 
 
@@ -343,15 +341,15 @@ def _seen_overrides(repo, args) -> dict:
         return {"ok": False}
 
     _call(repo, args, emit=emit)
-    return seen["overrides"]
+    return seen.get("overrides", {})
 
 
-def test_submission_without_budget_tokens_forwards_the_default(repo):
-    assert _seen_overrides(repo, {"targets": "red-set"})["budget_tokens"] == DEFAULT_BUDGET_TOKENS
-    assert _seen_overrides(repo, {"targets": "backlog"})["budget_tokens"] == DEFAULT_BUDGET_TOKENS
+def test_submission_without_budget_tokens_carries_no_ceiling(repo):
+    assert "budget_tokens" not in _seen_overrides(repo, {"targets": "red-set"})
+    assert "budget_tokens" not in _seen_overrides(repo, {"targets": "backlog"})
 
 
-def test_caller_budget_tokens_wins_over_the_default(repo):
+def test_caller_budget_tokens_is_forwarded(repo):
     assert _seen_overrides(repo, {"targets": "red-set", "budget_tokens": 5_000_000})["budget_tokens"] == 5_000_000
 
 
@@ -367,7 +365,7 @@ def test_backlog_target_neither_parses_nor_mints_and_keeps_the_profile_where(rep
 
     _call(repo, {"targets": "backlog", "appetite": "hunt"}, emit=emit, parse=boom, mint=boom)
     assert seen["appetite"] == "hunt"
-    assert seen["overrides"] == {"budget_tokens": DEFAULT_BUDGET_TOKENS}
+    assert "overrides" not in seen
 
 
 def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo):
@@ -387,7 +385,7 @@ def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo):
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"  # the stub emit refused after resolve
     assert "no failing" not in _reason(env)
     assert seen["queue"] == ["state/bug-backlog"]
-    assert seen["overrides"] == {"budget_tokens": DEFAULT_BUDGET_TOKENS}
+    assert "overrides" not in seen
 
 
 def test_backlog_dir_target_allows_through_the_real_emit(repo):
@@ -541,3 +539,11 @@ def test_real_parser_mints_a_bare_test_file_target_as_a_file_level_row(repo):
 
     _call(repo, {"targets": "red.txt"}, resolve=None, parse=None, mint=mint)
     assert ("pkg/tests/test_b.py", "") in {(t.file, t.name) for t in minted}, minted
+
+def test_a_target_refusal_leads_with_its_cause_not_the_target_path(repo):
+    """The harness shows ~80 chars of a deny; a long targets path ahead of the cause hid it."""
+    def parse(spec):
+        raise ValueError("2 target(s) could not be parsed")
+
+    env = _call(repo, {"targets": "scratch/" + "r" * 60 + ".txt"}, parse=parse)
+    assert _reason(env).split("] ", 1)[1].startswith("2 target(s) could not be parsed"), _reason(env)

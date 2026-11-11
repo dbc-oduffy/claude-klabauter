@@ -426,12 +426,52 @@ def _gone_or_reused(pid: int, born: Optional[float], psutil_module=None) -> bool
     return now is not None and now != born
 
 
+_POOL_HELPER_MARKERS = ("spawn_main", "resource_tracker")
+
+
+def _is_pair_role_child(proc, parent_pid: Optional[int] = None) -> bool:
+    """A multiprocessing pool worker/tracker or a pair entry script; anything else a server's op
+    launched (an agy/codex peer session, an app session) is not the pair's to end.
+
+    With `parent_pid`, a pool-helper match must be that pid's direct child: a pool of a session
+    an op launched is a grandchild and stays."""
+    try:
+        name = (proc.info.get("name") if getattr(proc, "info", None) else None) or proc.name()
+        if not name.lower().startswith("python"):
+            return False
+        argv = proc.cmdline()
+    except Exception:  # noqa: BLE001 -- unreadable means not provably a pair process
+        return False
+    if any(m in a for a in argv for m in _POOL_HELPER_MARKERS):
+        if parent_pid is None:
+            return True
+        try:
+            return proc.ppid() == parent_pid
+        except Exception:  # noqa: BLE001 -- unreadable parent keeps the helper match
+            return True
+    tails = {tuple(parts) for parts in _ROLE_SCRIPTS.values()}
+    for a in argv:
+        if a.lower().endswith(".py"):
+            segs = tuple(os.path.normpath(a).replace("\\", "/").split("/")[-3:])
+            if segs in tails:
+                return True
+    return False
+
+
 def _live_descendants(pid: int, *, psutil_module=None) -> list[int]:
+    """Live descendants of `pid` that are pair-role processes; never an op's launched session.
+
+    Trap: a server's ops launch long-lived children (agent_pipe peers, app sessions) that are
+    its Windows descendants; ending every descendant on a stop or reap ends those sessions."""
     psutil = psutil_module
     if psutil is None:
         import psutil
     try:
-        return [c.pid for c in psutil.Process(pid).children(recursive=True)]
+        return [
+            c.pid
+            for c in psutil.Process(pid).children(recursive=True)
+            if _is_pair_role_child(c, pid)
+        ]
     except (psutil.NoSuchProcess, psutil.AccessDenied, AttributeError):
         return []
 

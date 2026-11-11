@@ -69,6 +69,7 @@ def _blocker(release: threading.Event):
     return block
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook window against a blocked mint write; blocked time burns no CPU")
 def test_blocked_mint_detaches_the_resume_token_within_the_window(tmp_path, monkeypatch, release):
     monkeypatch.setattr(run_token, "mint", _blocker(release))
     started = time.monotonic()
@@ -91,6 +92,7 @@ def test_landed_mint_hands_the_token_over(tmp_path, monkeypatch):
     assert out == {"fire_args": {"repoRoot": root.as_posix(), "runToken": "tok"}}
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook window against a blocked live-record write; blocked time burns no CPU")
 def test_blocked_live_record_write_answers_an_allow_naming_the_detached_write(tmp_path, monkeypatch, release):
     monkeypatch.setattr(warp_live, "record_submission", _blocker(release))
     root = _repo(tmp_path)
@@ -116,6 +118,7 @@ def test_raised_live_record_write_is_not_reported_detached(tmp_path, monkeypatch
     assert "detached" not in hso
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook window against a mint blocked forever; blocked time burns no CPU")
 def test_default_entry_with_mint_blocked_forever_answers_inside_the_bound_without_claiming_a_run(
     tmp_path, monkeypatch, release
 ):

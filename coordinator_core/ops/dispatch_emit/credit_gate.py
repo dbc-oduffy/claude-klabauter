@@ -10,6 +10,7 @@ from typing import AbstractSet, Iterable, Mapping, Optional, Sequence
 
 REFUSED_CREDITED_UNCOMMITTED = "credited-chunk-uncommitted"
 REFUSED_NO_CREDITED_LANDING = "no-credited-chunk-landed"
+REFUSED_CREDITED_PREFIX_ZERO_PATHS = "credited-prefix-row-zero-paths"
 
 DOCS_CHUNK_ID = "docs"
 SIZING_CHUNK_ID = "sizing"
@@ -55,6 +56,27 @@ def uncommitted_credited(
         )
         if missing:
             out[cid] = missing
+    return out
+
+
+def zero_path_prefix_credit(
+    chunks_prefixes: Mapping[str, Sequence[str]],
+    landed: Mapping[str, Sequence[str]],
+    dirty: AbstractSet[str],
+) -> dict[str, list[str]]:
+    """Per credited chunk that declares prefixes yet landed no path, the ``dirty`` paths under a prefix.
+
+    ``dirty`` is the caller's set of existing, non-ignored files that differ from HEAD. A prefix
+    matches whole path segments. A chunk with landed paths or no prefixes is never listed.
+    """
+    out: dict[str, list[str]] = {}
+    for cid, prefixes in chunks_prefixes.items():
+        if not prefixes or landed.get(cid):
+            continue
+        bounds = [(p.rstrip("/"), p.rstrip("/") + "/") for p in prefixes]
+        hit = sorted(f for f in dirty if any(f == p or f.startswith(under) for p, under in bounds))
+        if hit:
+            out[cid] = hit
     return out
 
 

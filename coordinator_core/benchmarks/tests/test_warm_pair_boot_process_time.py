@@ -44,6 +44,13 @@ def test_report_budget_is_the_server_process_time_at_first_answer() -> None:
     assert not boot.BootReport().within_budget()
 
 
+def test_handover_report_budget_is_the_first_attempt_answering() -> None:
+    slow = boot.FIRST_ANSWER_BUDGET_MS + 900
+    assert boot.BootReport(handover=True, server_process_ms_to_first_answer=slow).within_budget()
+    assert not boot.BootReport(handover=False, server_process_ms_to_first_answer=1.0).within_budget()
+    assert not boot.BootReport(handover=True, missing=["accept"]).within_budget()
+
+
 def _fake_source(root: Path) -> Path:
     pkg = root / "coordinator_core"
     (pkg / "warm").mkdir(parents=True)
@@ -96,6 +103,90 @@ def test_snapshot_reads_cumulative_cpu_of_a_live_process() -> None:
 
     assert after.server_ms >= before.server_ms > 0
     assert after.tree_ms == after.server_ms + after.pool_ms
+
+
+def test_handover_report_defaults_to_not_a_handover_run() -> None:
+    report = boot.BootReport()
+    assert report.handover is None and report.handover_wall_ms is None
+
+
+def test_accept_milestone_retries_a_pipe_that_refused_the_first_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    attempts: list = []
+
+    class _FlakyProbe:
+        def __init__(self, endpoint: str, method: str, token: str) -> None:
+            attempts.append(method)
+            self.error = "OSError(22)" if len(attempts) == 1 and method == boot.REQUEST_STATUS_METHOD else None
+
+        def start(self) -> None: ...
+
+    def _fake_answered(probe, proc, t0, deadline):  # noqa: ANN001
+        return None if probe.error else _snap(100.0)
+
+    monkeypatch.setattr(boot, "Probe", _FlakyProbe)
+    monkeypatch.setattr(boot, "_answered", _fake_answered)
+    monkeypatch.setattr(boot, "snapshot", lambda proc, t0: _snap(10.0))
+    monkeypatch.setattr(boot, "_settle", lambda proc, t0: _snap(200.0, 0.0, 1))
+    report = boot.BootReport()
+
+    boot._sample_milestones(object(), "pipe", "tok", time.monotonic(), report)
+
+    assert attempts.count(boot.REQUEST_STATUS_METHOD) == 2
+    assert report.accept_answer_process_ms == 100.0 and report.missing == []
+
+
+def test_main_rejects_old_pair_without_handover() -> None:
+    with pytest.raises(SystemExit):
+        boot.main(["--old-pair"])
+
+
+def test_main_handover_flags_reach_run_and_print_the_verdict(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    seen: dict = {}
+
+    def _fake_run(work_dir, source_root=None, **kw):  # noqa: ANN001
+        seen.update(kw)
+        return boot.BootReport(
+            handover=False, handover_wall_ms=10_050, handover_budget_ms=10_000, phase_process_ms={"a": 1.0}
+        )
+
+    monkeypatch.setattr(boot, "run", _fake_run)
+
+    assert boot.main(["--handover", "--old-pair", "--cold-pyc"]) == 0
+    out = capsys.readouterr().out
+    assert seen == {"cold_pyc": True, "handover": True, "old_pair": True}
+    assert "handover=False" in out and "handover_wall_ms=10050 budget_ms=10000" in out
+
+
+def test_main_without_handover_prints_no_handover_lines(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(boot, "run", lambda *a, **kw: boot.BootReport())
+
+    boot.main([])
+
+    assert "handover=" not in capsys.readouterr().out
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_run_handover_reports_the_single_attempt_verdict_and_phases_for_the_copied_root(
+    tmp_path: Path,
+) -> None:
+    """Pins the mode, not the pass: a successor that misses the window is the baseline this
+    benchmark exists to expose, so a False verdict must come back as a report, never an error."""
+    report = boot.run(work_dir=tmp_path, handover=True)
+
+    assert isinstance(report.handover, bool)
+    assert report.handover_budget_ms == 10_000
+    assert report.handover_wall_ms is not None and report.handover_wall_ms > 0
+    if report.handover:
+        assert report.missing == []
+        assert report.handover_wall_ms <= report.handover_budget_ms + 1_000
+        assert "boot_imports_election" in report.phase_process_ms
+    else:
+        assert "unanswered successor" in report.handover_message or report.missing
 
 
 @pytest.mark.spawns_process

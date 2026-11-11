@@ -35,7 +35,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     write_ledger_halt,
     write_run_outcome,
 )
-from coordinator_core.ops.dispatch_emit.commit_request import PREFIX_CLAIM_LABEL
+from coordinator_core.ops.dispatch_emit.commit_request import parse_prefix_claims
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
 from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM
 from coordinator_core.ops.review_test_blocker import TEST_BLOCKER
@@ -185,13 +185,7 @@ def _own_prefix_files(worktree_root: Path, chunk, cache: dict) -> list:
     text = _report_text(worktree_root, chunk.report, cache)
     if text is None:
         return []
-    claims: list = []
-    for raw in text.splitlines():
-        line = raw.strip().lstrip("-*").strip()
-        if line.startswith(PREFIX_CLAIM_LABEL):
-            rest = line[len(PREFIX_CLAIM_LABEL):].strip().strip("`'\"")
-            if rest and rest.lower() != "none":
-                claims.append(rest)
+    claims = parse_prefix_claims(text) or []
     bounded = [(p, p if p.endswith("/") else p + "/") for p in chunk.prefixes]
     return [c for c in claims if any(c == p or c.startswith(under) for p, under in bounded)]
 
@@ -544,6 +538,32 @@ def _run_left_nothing(root: Path, run_id: str, paths: list) -> set:
         return set()
 
 
+def _measured_own_paths(root: Path, run_id: str, record_dir_rel: str) -> list:
+    """Paths ``measured-rev.json`` records as this run's change (written and removed), minus a path
+    whose tree bytes still equal the run's write baseline (a peer's dirt) and any record-dir, scratch
+    or out-of-worktree path. Unreadable evidence names nothing."""
+    import json
+
+    from coordinator_core.ops.dispatch_emit import halt_product_gates, review_edits
+    from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
+
+    try:
+        doc = json.loads(measured_rev_record_path(root, run_id).read_text(encoding="utf-8"))
+        raw = [*(doc.get("paths") or ()), *(doc.get("removed") or ())]
+        rels = []
+        for p in raw:
+            rel = review_edits.norm(p) if isinstance(p, str) else ""
+            if (
+                rel and rel not in rels and not review_edits.out_of_worktree(rel)
+                and not halt_product_gates.is_scratch(rel) and not rel.startswith(record_dir_rel + "/")
+            ):
+                rels.append(rel)
+        idle = _run_left_nothing(root, run_id, rels)
+        return [p for p in rels if p not in idle]
+    except Exception:  # noqa: BLE001 -- unknown names no path
+        return []
+
+
 def _peer_only_after_checkpoint(
     root: Path, run_id: str, plan_rel: object, run_base: Optional[str], paths: list
 ) -> set:
@@ -780,6 +800,7 @@ def _land(
     from coordinator_core.ops.dispatch_emit.halted_record_commit import _run_written, _withhold_run_dirt
 
     run_written = [p for p in _run_written(root, session_id, run_id) if p not in peer_only]
+    run_written += [p for p in _measured_own_paths(root, run_id, record_dir_rel) if p not in run_written and p not in peer_only]
     written_entries = _entries_at(root, None, run_written) if run_written else {}
     if written_entries is None:
         own_changed = {p for p in run_written if (root / p).exists()}

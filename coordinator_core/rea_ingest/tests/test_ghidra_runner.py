@@ -3,6 +3,7 @@ import copy
 import json
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,8 @@ from coordinator_core.rea_ingest import ghidra_runner as gr
 SAMPLE = json.loads((Path(__file__).resolve().parent / "fixtures" / "sample-export.json").read_text(encoding="utf-8"))
 
 
-def _install(tmp_path, version="11.2.1", windows=False):
+def _install(tmp_path, version="11.2.1", windows=None):
+    windows = (sys.platform == "win32") if windows is None else windows
     root = tmp_path / "ghidra"
     (root / "Ghidra").mkdir(parents=True)
     (root / "Ghidra" / "application.properties").write_text(f"application.version={version}\n", encoding="utf-8")
@@ -99,7 +101,7 @@ def test_resolution_refusals(tmp_path):
     with pytest.raises(gr.GhidraRefusal, match="not a directory"):
         gr.resolve_install(None, env={"GHIDRA_INSTALL_DIR": str(tmp_path / "nope")})
     assert gr.resolve_install(None, env={"GHIDRA_INSTALL_DIR": str(tmp_path)}) == tmp_path
-    assert gr.read_version(_install(tmp_path)) == "11.2.1"
+    assert gr.read_version(_install(tmp_path, windows=False)) == "11.2.1"
     assert gr.read_version(_install(tmp_path / "new", version="12.2")) == "12.2"
     with pytest.raises(gr.GhidraRefusal, match="need 11.x or later"):
         gr.read_version(_install(tmp_path / "old", version="10.4"))
@@ -132,7 +134,7 @@ def test_confine_posix_new_session_and_group_kill_on_timeout():
     with pytest.raises(gr.GhidraRefusal, match="timeout"):
         gr._spawn_headless(["x"], 1, confine=True, popen=popen, windows=False,
                            killpg=lambda pid, sig: (killed.append((pid, sig)), setattr(proc, "killed", True)))
-    assert killed == [(4242, signal.SIGKILL)]
+    assert killed == [(4242, getattr(signal, "SIGKILL", 9))]
 
 
 def test_confine_windows_job_object_assigned_and_closed():

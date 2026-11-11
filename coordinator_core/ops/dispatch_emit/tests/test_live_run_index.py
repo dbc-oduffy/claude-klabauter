@@ -94,6 +94,7 @@ def test_overlap_equals_live_run_writes(tmp_path):
     assert idx.overlaps(["src/a.py"], index) == {"r1": ["src/a.py"], "r3": ["src"]}
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled index read that must degrade at its deadline")
 def test_stalled_index_read(tmp_path, monkeypatch):
     root = _root(tmp_path)
     idx.add(root, "r1", 1.0)
@@ -106,6 +107,7 @@ def test_stalled_index_read(tmp_path, monkeypatch):
     time.sleep(0.1)
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled index write that must degrade instead of hanging")
 def test_stalled_index_write_degrades_instead_of_hanging(tmp_path, monkeypatch):
     """A write outliving the deadline returns False at the deadline; a second write while it is
     outstanding returns False at once; after the stall clears, writes land again."""

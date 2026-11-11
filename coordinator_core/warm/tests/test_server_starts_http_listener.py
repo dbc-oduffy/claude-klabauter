@@ -102,6 +102,9 @@ def _patch_boot_seams(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(election, "elect_unix_socket", lambda path: object())
     monkeypatch.setattr(server._ServerContext, "serve_forever", lambda self, handle: None)
     monkeypatch.setattr(server._ServerContext, "serve_forever_unix", lambda self, sock: None)
+    # Boot defers housekeeping to a daemon thread released by the first pool answer, which
+    # never comes in-process; run it inline so the assertion does not race the thread.
+    monkeypatch.setattr(server, "_after_first_pool_answer", lambda work, name: work())
 
 
 def test_main_boot_path_calls_ensure_listener(tmp_path, monkeypatch):

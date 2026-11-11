@@ -454,6 +454,7 @@ def test_an_undeclared_leg_fails_by_name():
 
 
 _FOLDED_ASK_LEGS = ("plan-prep-gate", "sizing-probe", "xs-plan-stage")
+_STAGE_READ_RIDERS = ("stage-recover", "staged-from-disk")
 
 
 def test_a_folded_ask_floor_leg_is_neither_composed_nor_declared(tmp_path):
@@ -462,6 +463,9 @@ def test_a_folded_ask_floor_leg_is_neither_composed_nor_declared(tmp_path):
     for label in _FOLDED_ASK_LEGS:
         assert ("ask", label) not in emitted, f"ask/{label} is composed again: its op belongs in the preceding agent's tail"
         assert ("ask", label) not in declared, f"ask/{label} is declared again"
+    for label in _STAGE_READ_RIDERS:
+        assert ("ask", label) not in emitted, f"ask/{label} is composed again: the leg rides the blitz-stage-read floor key"
+        assert ("ask", label) not in declared, f"ask/{label} is declared again: the leg rides the blitz-stage-read floor key"
 
 
 def test_the_floor_only_shrinks():

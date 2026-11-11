@@ -441,15 +441,20 @@ def landing_holds(
     from coordinator_core.session.core import resolve_session_id
 
     held = foreign_halted_withheld(worktree_root, run_id, plan_path, [*all_paths, *deleted_paths])
-    oa_paths = sorted({
-        p for p, _stem, _label in out_of_ask_holds(
-            worktree_root, review_owner(session_id) or resolve_session_id(), run_id, all_paths,
-        )
-    } - set(held))
+    oa_stems: dict = {}
+    for p, stem, _label in out_of_ask_holds(
+        worktree_root, review_owner(session_id) or resolve_session_id(), run_id, all_paths,
+    ):
+        oa_stems.setdefault(p, stem)
+    oa_paths = sorted(set(oa_stems) - set(held))
     if oa_paths:
         held.update(co_declared_peer_holds(
             worktree_root, run_id, oa_paths, own_declared, own_plan=plan_path, minted_before=own_seniority,
         ))
+        unheld = [p for p in oa_paths if p not in held]
+        attributed = _attributed_owners(worktree_root, run_id, plan_path, unheld)
+        for p in unheld:
+            held[p] = attributed.get(p) or oa_stems[p]
     declared = set(chunk_declared)
     live_held = _live_sibling_holds(
         worktree_root, run_id, plan_path,
@@ -477,9 +482,10 @@ def _live_sibling_holds(
     """`{path: live sibling run id}` for each of `paths` a live sibling declares (stage manifest, index
     or plan-spine `writes`, read by `co_declared_peer_holds`) while the path's worktree bytes carry a
     hunk this run did not produce (`unproduced_hunks` attributed it; unreadable provenance holds
-    nothing here). A path with no foreign hunk is not held. A halted or launcher-gone sibling
-    (`hunk_provenance._non_live`) holds nothing here: halted holders are `foreign_halted_withheld`'s.
-    Never raises."""
+    nothing here). A path with no foreign hunk is not held. A foreign hunk no sibling declares is held
+    under the owner `unproduced_hunks` names (`hunk_provenance.UNKNOWN_OWNER` for an undeclared peer).
+    A halted or launcher-gone owner (`hunk_provenance._non_live`) holds nothing here: halted holders
+    are `foreign_halted_withheld`'s. Never raises."""
     if not paths:
         return {}
     try:
@@ -491,16 +497,41 @@ def _live_sibling_holds(
         ):
             if holder != UNREADABLE_PEER_CLAIMS and not hunk_provenance._non_live(root, holder):
                 candidates.setdefault(path, holder)
-        if not candidates:
-            return {}
-        foreign = {
-            f.path for f in hunk_provenance.unproduced_hunks(
-                root, run_id, sorted(candidates), own_plan=plan_path, advisories=[],
+        found = {
+            f.path: _detail_owner(f.detail) for f in hunk_provenance.unproduced_hunks(
+                root, run_id, list(paths), own_plan=plan_path, advisories=[],
             )
             if f.detail.startswith("committed lines")  # attributed foreign hunks; unreadable provenance is the integrity gate's
         }
-        return {p: h for p, h in candidates.items() if p in foreign}
+        held = {p: h for p, h in candidates.items() if p in found}
+        for path, owner in found.items():
+            if path not in held and path not in candidates and owner and not hunk_provenance._non_live(root, owner):
+                held[path] = owner
+        return held
     except Exception:  # noqa: BLE001 -- a hold that cannot be computed adds none
+        return {}
+
+
+def _detail_owner(detail: str) -> str:
+    """The run named by an `unproduced_hunks` "committed lines ...; probable owner X" detail, else ''."""
+    return detail.rpartition("probable owner ")[2].strip() if "probable owner " in detail else ""
+
+
+def _attributed_owners(root: Path, run_id: str, plan_path: Optional[str], paths: Sequence[str]) -> dict:
+    """`{path: owner}` for each of `paths` whose foreign hunk `unproduced_hunks` attributes to a named run
+    (never `UNKNOWN_OWNER`). Never raises; unattributable paths are absent."""
+    if not paths:
+        return {}
+    try:
+        from coordinator_core.ops.dispatch_emit import hunk_provenance
+
+        out: dict = {}
+        for f in hunk_provenance.unproduced_hunks(root, run_id, list(paths), own_plan=plan_path, advisories=[]):
+            owner = _detail_owner(f.detail) if f.detail.startswith("committed lines") else ""
+            if owner and owner != hunk_provenance.UNKNOWN_OWNER:
+                out[f.path] = owner
+        return out
+    except Exception:  # noqa: BLE001 -- no attribution: the reviewer stem names the hold
         return {}
 
 

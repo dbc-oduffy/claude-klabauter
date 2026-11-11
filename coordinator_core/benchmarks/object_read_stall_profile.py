@@ -21,7 +21,6 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -36,6 +35,7 @@ _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
     sys.path.insert(0, str(_REPO))
 
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.git import git_objects as _default_go  # noqa: E402
 
 BATCH_READS = 500
@@ -485,7 +485,7 @@ def main(argv: list[str] | None = None) -> int:
         report = profile(go, args.deadline, tmp)
     finally:
         go.PACK_READ_DEADLINE_SECS = saved
-        shutil.rmtree(tmp, ignore_errors=True)
+        rmtree_or_raise(tmp, label="object-read-stall")
     if args.json:
         print(json.dumps(report, indent=2))
     else:

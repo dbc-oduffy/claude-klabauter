@@ -1343,7 +1343,12 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
         if params.get("run_id"):
             import json as _json
             from coordinator_core.ops.dispatch_emit.requirements_ledger import LedgerRefused, run_dir as _run_dir
+            from coordinator_core.ops.dispatch_emit.sizing_xs_mint import ledger_named_test_files
 
+            try:
+                declared = list(dict.fromkeys([*declared, *ledger_named_test_files(load_sizing_effective(root, sizing_rel), root)]))
+            except (SizingFireRefused, OSError):
+                pass
             try:
                 _dir = _run_dir(root, params["run_id"])
                 _dir.mkdir(parents=True, exist_ok=True)

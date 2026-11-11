@@ -1,12 +1,15 @@
 """Stalled or oversize engine reads fail fast to a safe default on the peer-held and orphan-gate paths."""
 import time
 
+import pytest
+
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import _read_json_object
 from coordinator_core.session import claim_index, touch_record
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled claim lookup that must answer no-hold at its deadline")
 def test_peer_held_answers_no_hold_when_claim_lookup_stalls(tmp_path, monkeypatch):
     monkeypatch.setattr(land_run, "PEER_CLAIM_LOOKUP_DEADLINE_S", 0.1)
     monkeypatch.setattr(claim_index, "lookup", lambda *a, **k: time.sleep(2) or {})
@@ -21,6 +24,7 @@ def test_bounded_claim_lookup_passes_a_fast_answer_through(monkeypatch):
     assert land_run._bounded_claim_lookup(claim_index, ["a"], "x") == {"a": ["s"]}
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled JSON read that must give up at the read deadline")
 def test_read_json_object_refuses_oversize_and_stalled(tmp_path, monkeypatch):
     big = tmp_path / "run.json"
     big.write_text('{"k": "' + "x" * 200 + '"}', encoding="utf-8")
@@ -57,6 +61,7 @@ def test_agent_owner_sid_caps_first_line(tmp_path):
     assert ok and len(sid) == touch_record._AGENT_OWNER_MAX_CHARS
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled open that must return the default at the read deadline")
 def test_hook_state_reads_return_default_when_open_stalls(tmp_path, monkeypatch):
     from coordinator_core.hooks import postuse_advisory_dispatch as pad
 

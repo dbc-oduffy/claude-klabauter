@@ -10,7 +10,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_requirements_ledger_design_ro
 
 
 def _item(item_id, **extra):
-    return {"id": item_id, "status": "met", "wired": True, **extra}
+    return {"id": item_id, "status": "met", "wired": True, "command": "consumer --run", "observed": "ok", **extra}
 
 
 def _verdict(ledger, target, **extra):

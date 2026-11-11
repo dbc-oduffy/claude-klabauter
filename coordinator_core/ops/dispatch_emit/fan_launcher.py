@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Sequence
 
 from coordinator_core.ops.dispatch_emit import emission_receipt
+from coordinator_core.ops.dispatch_emit.deferred_emit_script import TWIN_CHECK_JS
 from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY, STOP_AFTER_KEY, lineage_stop_after
 from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     CHAIN_HANDOFF_KEY,
@@ -22,7 +23,7 @@ from coordinator_core.ops.dispatch_emit.nested_run_contract import (
     STAGE_PENDING_KEY,
     staged_twin_rel,
 )
-from coordinator_core.session import claimed_write
+from coordinator_core.session import claimed_write, record_homes
 from coordinator_core.warp_fire import fire_command
 
 # Generator-provenance: writes only the caller-named launcher script and its receipt, under scratch/warp/.
@@ -147,7 +148,7 @@ function _normEmitPath(p) {
 
 // A reply naming the run's own state/warp/<run> directory names the run whose script is scratch/warp/<run>.workflow.mjs; a deeper path stays as given.
 function _runDirScript(p) {
-  const dir = WARP_PREFIX.slice(0, -'scratch/warp/'.length) + 'state/warp/';
+  const dir = WARP_PREFIX.slice(0, -'scratch/warp/'.length) + __WARP_STATE_HOME__;
   if (p.slice(0, dir.length).toLowerCase() !== dir.toLowerCase()) return p;
   const run = p.slice(dir.length).replace(/\/$/, '');
   return /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(run) ? WARP_PREFIX + run + RUN_SCRIPT_SUFFIX : p;
@@ -158,7 +159,7 @@ function _handoffScript(e) {
   if (!e || typeof e.path !== 'string' || e.path === '' || _pathRunId(e.path) !== '') return e;
   if (typeof e.run_id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(e.run_id)) return e;
   const p = _normEmitPath(e.path);
-  const dir = WARP_PREFIX.slice(0, -'scratch/warp/'.length) + 'state/handoffs/';
+  const dir = WARP_PREFIX.slice(0, -'scratch/warp/'.length) + __HANDOFFS_STATE_HOME__;
   if (p.slice(0, dir.length).toLowerCase() !== dir.toLowerCase() || !p.endsWith('.md') || p.split('/').indexOf('..') !== -1) return e;
   return { ...e, path: WARP_PREFIX + e.run_id + RUN_SCRIPT_SUFFIX };
 }
@@ -170,16 +171,7 @@ function _pathRunId(p) {
   return (b.endsWith(RUN_SCRIPT_SUFFIX) && b.indexOf('.staged-') === -1) ? b.slice(0, b.length - RUN_SCRIPT_SUFFIX.length) : '';
 }
 
-// A stage reply that names its staged twin wins over a path derived from the handle sha, which a restage leaves stale. null: none named; false: named but not this run's twin.
-function _replyTwinRel(pending, stem) {
-  const t = pending.twin_path;
-  if (t === undefined || t === null) return null;
-  const pre = TWIN_PREFIX + stem + TWIN_MIDDLE;
-  const ok = typeof t === 'string' && t.length === pre.length + 64 + TWIN_SUFFIX.length && t.startsWith(pre)
-    && t.endsWith(TWIN_SUFFIX) && /^[0-9a-f]{64}$/.test(t.slice(pre.length, pre.length + 64));
-  return ok ? t : false;
-}
-
+__TWIN_CHECK_JS__
 // The only foreign run id accepted: the one this emit minted as the redirect for this child's halted run.
 function _isOwnRedirect(child, e) {
   const r = e.__REDIRECT_KEY__;
@@ -338,8 +330,8 @@ async function _chainHop(child, handoff) {
     status: 'failed',
     error: hop + ' did not complete (' + why + '): resubmit ' + refire,
   });
-  // Trap: a gate agent that already ran dispatch.emit leaves its reply (path, run_id, ok, error) in the hand-off; those keys are never emit params.
-  const { path: _rp, run_id: _rr, ok: _rk, error: _re, fire_args: _rf, ...params } = handoff;
+  // Trap: a gate agent that already ran dispatch.emit leaves its reply (path, run_id, ok, error) in the hand-off; those keys are never emit params. emit_error is the child's own failed retry: not fatal, the launcher emits.
+  const { path: _rp, run_id: _rr, ok: _rk, error: _re, emit_error: _ee, fire_args: _rf, ...params } = handoff;
   let emitted;
   if (typeof _re === 'string' && _re !== '') return fail('emit failed: ' + _re);
   if (named(_rp)) {
@@ -428,6 +420,11 @@ def _launcher_literal_reply(reply: Any) -> Any:
     return {**reply, "fire_args": fire_args}
 
 
+def _home_prefix(kind: str) -> str:
+    """Repo-relative, slash-terminated home of a record kind, as the launcher script compares paths."""
+    return Path(record_homes.home_dir("", kind)).as_posix() + "/"
+
+
 def _render(root: Path, parent_id: str, children: Sequence[LaunchChild], emitted: Sequence[Mapping[str, Any]]) -> str:
     lit = lambda value: json.dumps(value, ensure_ascii=True)  # noqa: E731
     prefix, middle, suffix = _twin_affixes()
@@ -450,10 +447,13 @@ def _render(root: Path, parent_id: str, children: Sequence[LaunchChild], emitted
         "__DEFERRED_KEY__": DEFERRED_EMIT_KEY,
         "__REFIRE_HEAD__": lit(refire_head),
         "__REFIRE_TAIL__": lit(refire_tail),
+        "__TWIN_CHECK_JS__": TWIN_CHECK_JS,
         "__TWIN_PREFIX__": lit(prefix),
         "__TWIN_MIDDLE__": lit(middle),
         "__TWIN_SUFFIX__": lit(suffix),
         "__RUN_SCRIPT_SUFFIX__": lit(RUN_SCRIPT_SUFFIX),
+        "__WARP_STATE_HOME__": lit(_home_prefix("warp")),
+        "__HANDOFFS_STATE_HOME__": lit(_home_prefix("handoffs")),
     }
     # One pass: a placeholder-shaped string inside a child's emit_params must stay literal.
     body = re.sub("|".join(values), lambda m: values[m.group(0)], _BODY_JS)

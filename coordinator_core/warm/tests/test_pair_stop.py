@@ -693,7 +693,7 @@ def test_kill_exit_wait_uses_the_process_handle(monkeypatch):
 def _child_world(root, born_after_kill):
     w = _World()
     server = w.add(80, "python.exe", [sys.executable, _script(root, SRV)])
-    child = w.add(81, "python.exe", [], stubborn=True)
+    child = w.add(81, "python.exe", _spawn_argv(80), stubborn=True)
     server.children = lambda recursive=True: [child]
     born = {"t": 5.0}
     child.create_time = lambda: born["t"]
@@ -757,6 +757,34 @@ def test_reap_pairs_outside_ends_only_the_unlisted_pair_processes(tmp_path):
     assert w.Process(10).alive
 
 
+def _session_child_world(root):
+    w = _World()
+    server = w.add(10, "python.exe", [sys.executable, _script(root, SRV)])
+    worker = w.add(11, "python.exe", _spawn_argv(10))
+    session = w.add(12, "agy.exe", ["agy", "--input-format", "stream-json"])
+    py_session = w.add(13, "python.exe", [sys.executable, "-m", "coordinator_core.agent_pipe"])
+    server.children = lambda recursive=True: [worker, session, py_session]
+    return w, session, py_session
+
+
+def test_stop_warm_pair_spares_a_session_launched_under_the_server(tmp_path):
+    root = tmp_path / "mirror"
+    w, session, py_session = _session_child_world(root)
+    result = pair_stop.stop_warm_pair(root, psutil_module=w)
+    assert result.ok()
+    assert ("terminate", 11) in w.log and ("terminate", 10) in w.log
+    assert session.alive and py_session.alive
+    assert not {12, 13} & {pid for kind, pid in w.log if kind in ("terminate", "kill")}
+
+
+def test_reap_pairs_outside_spares_a_session_launched_under_the_successor(tmp_path):
+    root = tmp_path / "mirror"
+    w, session, py_session = _session_child_world(root)
+    reaped = pair_stop.reap_pairs_outside(root, frozenset(), psutil_module=w)
+    assert sorted(reaped) == [10, 11]
+    assert session.alive and py_session.alive
+
+
 def test_reap_pairs_outside_never_raises(tmp_path):
     class _Broken:
         NoSuchProcess = _NoSuchProcess
@@ -766,3 +794,17 @@ def test_reap_pairs_outside_never_raises(tmp_path):
             raise RuntimeError("boom")
 
     assert pair_stop.reap_pairs_outside(tmp_path / "m", frozenset(), psutil_module=_Broken()) == ()
+
+
+def test_live_descendants_takes_a_direct_pool_child_and_spares_a_session_pool(tmp_path):
+    root = tmp_path / "mirror"
+    w = _World()
+    server = w.add(10, "python.exe", [sys.executable, _script(root, SRV)])
+    own_worker = w.add(11, "python.exe", _spawn_argv(10))
+    session = w.add(13, "python.exe", [sys.executable, "-m", "coordinator_core.agent_pipe"])
+    session_pool = w.add(14, "python.exe", _spawn_argv(13))
+    own_worker.ppid = lambda: 10
+    session.ppid = lambda: 10
+    session_pool.ppid = lambda: 13
+    server.children = lambda recursive=True: [own_worker, session, session_pool]
+    assert pair_stop._live_descendants(10, psutil_module=w) == [11]

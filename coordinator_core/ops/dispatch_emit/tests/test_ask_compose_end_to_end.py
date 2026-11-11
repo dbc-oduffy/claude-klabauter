@@ -172,7 +172,7 @@ def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger():
 def test_the_verdict_is_ruled_after_the_tests_inside_the_one_prompt():
     call, _ = _tail(_compose(in_run_commit=True, **_JUDGE_KW))
     assert call.index("(1) TESTS.") < call.index("(2) DOCS.") < call.index("(3) VERDICT.")
-    assert "Start the scoped tests first and let them run in the background" in call
+    assert "The scoped tests already ran in a separate test-runner leg; run nothing" in call
     assert "Once the test result is in, read it before you rule" in call
 
 

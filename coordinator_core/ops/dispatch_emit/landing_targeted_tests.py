@@ -19,6 +19,7 @@ REVERIFY_KEY = "reverify"
 TARGETED_TESTS_PARAM = "targeted_tests"
 NOT_RUN_CHECK = "not-run"
 ZERO_FAIL_UNATTRIBUTED = "test-verdict-names-no-failure"
+INVARIANT_UNMEASURED = "invariant-unmeasured"
 ZERO_FAIL_CHECK = "zero-fail-unattributed"
 
 #: Retest-record key naming why a verify run executed zero tests, and its values.
@@ -52,6 +53,11 @@ def tests_failed_finding(path: str, detail: str) -> Finding:
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import remedy_or_halt
 
     return remedy_or_halt(TARGETED_TESTS_FAILED, _in_leg_attempt, lambda _f: Finding(path, TARGETED_TESTS_FAILED, detail), attempts=1)
+
+
+def unmeasured_finding(path: str, detail: str) -> Finding:
+    """The ``invariant-unmeasured`` finding: no test ran or failed, so nothing was measured; ``detail`` keeps the retest remedy."""
+    return Finding(path, INVARIANT_UNMEASURED, detail)
 
 
 def zero_run_cause_note(record: Optional[Mapping], remedy: str) -> str:
@@ -262,6 +268,7 @@ def retest_step(findings: Sequence[Finding], params: Optional[Mapping]) -> Optio
 
 TEST_EVIDENCE_REASONS = (
     TARGETED_TESTS_FAILED, REVIEW_REVERIFY_FAILED, REVIEW_REVERIFY_INDETERMINATE, ZERO_FAIL_UNATTRIBUTED,
+    INVARIANT_UNMEASURED,
 )
 
 
@@ -589,6 +596,24 @@ def reverify_verdict(record: Mapping) -> object:
     """``status_after``, else ``status_before`` when after is null."""
     after = record.get("status_after")
     return after if after is not None else record.get("status_before")
+
+
+def reverify_unverified_reds(params: Mapping) -> list[str]:
+    """The review re-verify record's ``foreign_unverified`` ids when it reads ``fail``: posix-normalised,
+    deduped, sorted, minus any id also in ``pre_existing`` (proven red at the run base). Never refuses:
+    the caller lists them. Absent or non-fail record yields []."""
+    record = reverify_record(params)
+    if record is None or reverify_verdict(record) != "fail":
+        return []
+
+    def norm(n: object) -> str:
+        s = str(n).replace("\\", "/")
+        while s.startswith("./"):
+            s = s[2:]
+        return s
+
+    proven = {norm(n) for n in (record.get("pre_existing") or []) if n}
+    return sorted({norm(n) for n in (record.get("foreign_unverified") or []) if n} - proven)
 
 
 def reverify_red_findings(

@@ -253,6 +253,7 @@ def _prefire_deny(params: dict) -> Optional[dict]:
 
 @register_op("hooks.preuse_search_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     return run_phased("hooks.preuse_search_dispatch", params, _chain)
 
 

@@ -160,6 +160,7 @@ async def _run_leg(leg: SkillLeg, params: dict) -> Optional[str]:
 
 @register_op("hooks.preuse_skill_dispatch")
 async def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     # Async twin of `_preuse_phases.run_phased`: legs may await, so the wrapper must too.
     attr_token = leg_attribution.begin()
     deadline_token = _preuse_phases._HOOK_DEADLINE.set(

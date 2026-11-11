@@ -35,7 +35,7 @@ def test_test_call_is_guarded_by_the_limit_catch(monkeypatch):
     script = _script(monkeypatch)
     assert HALT_USAGE_LIMIT in script
     assert re.search(
-        r"try \{ _verify = await .*?\} catch \(e\) \{[^}]*_USAGE_LIMIT_RE\.test\(_m\)\) \{ _haltOnUsageLimit\(e\); \}",
+        r"try \{ .*?_verify = await .*?\} catch \(e\) \{[^}]*_USAGE_LIMIT_RE\.test\(_m\)\) \{ _haltOnUsageLimit\(e\); \}",
         script,
         re.S,
     )

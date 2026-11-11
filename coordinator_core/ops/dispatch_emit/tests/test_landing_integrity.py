@@ -69,6 +69,36 @@ def test_verdict_cache_cold_and_warm_still_find_and_second_call_parses_nothing(t
     assert [f.reason for f in warm] == [li.PY_UNPARSEABLE]
 
 
+def test_a_batch_resolves_the_common_dir_once_and_reads_each_verdict_once(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    names = [f"m{i}.py" for i in range(6)]
+    for n in names:
+        _w(tmp_path, n, "x = 1\n")  # identical bytes: one verdict file
+    _w(tmp_path, "bad.py", "def (\n")
+    _w(tmp_path, "other.py", "y = 2\n")
+    paths = [*names, "bad.py", "other.py", "note.txt", "gone.py"]
+    cold = li.unparseable_py(tmp_path, paths)
+    commons: list = []
+    reads: list = []
+    real_common, real_read = li._git_common_dir, li._read_verdict
+    monkeypatch.setattr(li, "_git_common_dir", lambda r: (commons.append(r), real_common(r))[1])
+    monkeypatch.setattr(li, "_read_verdict", lambda p: (reads.append(p), real_read(p))[1])
+    monkeypatch.setattr(li, "_parse_finding", lambda rel, src: pytest.fail("parsed"))
+    warm = li.unparseable_py(tmp_path, paths)
+    assert len(commons) == 1
+    assert len(reads) == 3 == len(set(reads))
+    assert [(f.path, f.detail) for f in warm] == [(f.path, f.detail) for f in cold] == [("bad.py", cold[0].detail)]
+
+
+def test_batched_verdict_write_still_never_blocks_the_caller(tmp_path, monkeypatch):
+    _repo(tmp_path)
+    _w(tmp_path, "bad.py", "def (\n")
+    stored: list = []
+    monkeypatch.setattr(li, "_write_verdict", lambda path, found: stored.append((path, found)))
+    assert [f.path for f in li.unparseable_py(tmp_path, ["bad.py", "bad.py"])] == ["bad.py", "bad.py"]
+    assert len(stored) == 1  # the second occurrence reads the in-batch verdict
+
+
 def test_verdict_cache_hit_serves_a_bad_verdict_without_parsing(tmp_path, monkeypatch):
     _repo(tmp_path)
     _w(tmp_path, "bad.py", "def (\n")
@@ -518,7 +548,21 @@ def test_fresh_pass_naming_the_invariant_clears_it(tmp_path, monkeypatch):
     monkeypatch.setattr(li, "fresh_targeted_verdict", lambda *a, **k: None)
     (owed,) = li.invariant_findings(tmp_path, ["x.py"], "r1", spent)
     assert "no fresh retest verdict exists" in owed.detail
+    assert owed.reason == li.INVARIANT_UNMEASURED != li.TARGETED_TESTS_FAILED
     assert li.retest_remedy(spent, [node]) in owed.detail
+
+
+def test_a_red_invariant_still_refuses_targeted_tests_failed(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import RETEST_ATTEMPTS_PARAM
+
+    node = "pkg/tests/test_inv.py::test_invariant"
+    monkeypatch.setattr(li, "landing_invariant_nodes", lambda *a, **k: [node])
+    monkeypatch.setattr(li, "fresh_targeted_verdict", lambda *a, **k: {"status": "fail"})
+    (owed,) = li.invariant_findings(
+        tmp_path, ["x.py"], "r1", {RETEST_ATTEMPTS_PARAM: MAX_IN_RUN_REMEDY_ATTEMPTS},
+    )
+    assert owed.reason == li.TARGETED_TESTS_FAILED
 
 
 def _digest(tmp_path, deviations, wrap=True):

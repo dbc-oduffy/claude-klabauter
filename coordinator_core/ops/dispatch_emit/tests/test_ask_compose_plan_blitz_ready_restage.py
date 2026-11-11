@@ -206,7 +206,12 @@ def test_a_not_whole_staged_manifest_halts_naming_the_field(monkeypatch):
 
 def test_the_leg_composes_only_in_the_plan_blitz_arm_behind_the_readyop_did_not_run_predicate(monkeypatch):
     script = _script(monkeypatch, {"planPath": _PLAN})
-    assert script.count("label: 'blitz-stage-read'") == 1
+    # Two arms share the label: the readyOp-miss read and the stage-recover re-ask; only the first is `_blitzStageRead`.
+    assert script.count("label: 'blitz-stage-read'") == 2
+    assert script.count("const _blitzStageRead") == 1
+    assert script.count("_stageRecover = async") == 1
+    read_at = script.index("const _blitzStageRead")
+    assert read_at < script.index("_stageRecovered = true;", read_at) < script.index("await _adoptStageReply(_r.stage_reply)", read_at)
     assert script.count("await _blitzStageRead()") == 2
     for entry in ("_ready", "_reready"):
         assert f"if ({entry}.readyOpReply != null) {{ _relayGap = 'manifest_handle'; }}" in script

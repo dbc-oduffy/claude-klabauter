@@ -40,9 +40,16 @@ def _research_errors(research: dict) -> list[dict]:
 
 
 def test_vendored_versions():
+    # plan-tasks pin is forward-only: claude-klabauter-authored bumps are live engine inputs, never re-vendored down.
+    # 3.20 -> 3.21: pinned forward per PM ruling; no re-vendor of 3.20.0.
+    # 3.21 -> 3.22: pinned forward per PM ruling.
+    # 3.22 -> 3.23: pinned forward per PM ruling.
+    # 3.23 -> 3.24: claude-klabauter-first bump adding optional `expect_partial`; pinned at 3.24.0.
+    # test_register_rows_shape tracks 3.24.0 too (minItems dropped).
+    # DoE re-sync is out of scope here.
     assert _version(_SIZING) == "1.52.0"
     assert _version(_HANDOFF) == "11.5.0"
-    assert _version(_PLAN_TASKS) == "3.23.0"
+    assert _version(_PLAN_TASKS) == "3.24.0"
 
 
 def _find_key(node, key):
@@ -57,8 +64,9 @@ def _find_key(node, key):
 
 
 def test_register_rows_shape():
+    # 3.24.0 dropped minItems: an empty list declares a row resting on no register row.
     spec = json.loads(_PLAN_TASKS.read_text(encoding="utf-8"))["properties"]["register_rows"]
-    assert spec["minItems"] == 1 and spec["uniqueItems"] is True
+    assert "minItems" not in spec and spec["uniqueItems"] is True
     pattern = re.compile(spec["items"]["pattern"])
     assert pattern.fullmatch("R1.a-b_c")
     assert not any(pattern.fullmatch(s) for s in ("../x", "", "R1\n"))

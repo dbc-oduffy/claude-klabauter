@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from coordinator_core.contract.grind_vocab import DEFAULT_BUDGET_TOKENS
 from coordinator_core.ops import _workflow_contract as wc
 from coordinator_core.ops.dispatch_emit.grind_admission import ROW_OUTPUT_TOKENS
 from coordinator_core.ops.dispatch_emit import fanout_cost
@@ -76,10 +75,10 @@ def test_per_row_legs_scale_with_entry_count():
     assert large["rowOutputTokensTotal"] > small["rowOutputTokensTotal"]
 
 
-def test_default_budget_tokens_renders_the_ceiling_const():
-    script = _compose(6, budget_tokens=DEFAULT_BUDGET_TOKENS)
-    assert f"const BUDGET_TOKENS = {DEFAULT_BUDGET_TOKENS};" in script
+def test_a_named_budget_renders_the_ceiling_const_and_none_renders_null():
+    script = _compose(6, budget_tokens=2_000_000)
     assert "const BUDGET_TOKENS = 2000000;" in script
+    assert "const BUDGET_TOKENS = null;" in _compose(6)
 
 
 def test_meta_stays_a_pure_literal_with_phases_declared():

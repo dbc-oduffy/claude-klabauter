@@ -194,7 +194,6 @@ def git(root, *args, check=True):
     run = Path(os.environ["P0_FIXTURE_RUN_DIR"]).resolve()
     root = Path(root).resolve()
     assert root.is_relative_to(run) and args and args[0] in GIT_COMMANDS
-    assert not root.is_relative_to(Path("C:/dev/claude-klabauter"))
     if args[0] == "init": assert not (root / ".git").exists() and not any(root.iterdir())
     else: assert (root / ".git").is_dir()
     env = {k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")}

@@ -59,7 +59,7 @@ def _fold(gate: dict, *, recovered: dict | None) -> dict:
         "const _seen = [];\n"
         "const _agentDefsClause = () => '';\n"
         "const agent = async (p, opts) => { _seen.push({ label: opts.label, prompt: p }); "
-        "if (opts.label !== 'stage-recover') throw new Error('unstubbed ' + opts.label); return cfg.recovered; };\n"
+        "if (opts.label !== 'blitz-stage-read') throw new Error('unstubbed ' + opts.label); return cfg.recovered; };\n"
         "(async () => {\n"
         "let _halted = null, _gate = cfg.gate, _sizingRel = null, _planRel = null, _runId = 'run-1';\n"
         "let _writes = ['a.py'], _gated = [], _SESSION_ID = 's', _crossRepoApproved = false;\n"
@@ -86,7 +86,8 @@ def _fold(gate: dict, *, recovered: dict | None) -> dict:
 
 def test_a_cached_gate_without_stage_reply_re_runs_one_stage_and_folds_its_manifest():
     out = _fold(dict(_CACHED_GATE), recovered={"stage_reply": stage_reply(_WHOLE)})
-    assert [s["label"] for s in out["seen"]] == ["stage-recover"]
+    assert [s["label"] for s in out["seen"]] == ["blitz-stage-read"]
+    assert "dispatch.ask_stage" in out["seen"][0]["prompt"]
     assert out["manifest"] == _WHOLE
     assert out["cause"] is None and out["refusal"] is None
 
@@ -120,13 +121,13 @@ def test_a_genuine_stage_refusal_still_refuses_and_re_runs_nothing():
 
 def test_a_recovery_stage_that_refuses_surfaces_its_refusal():
     out = _fold(dict(_CACHED_GATE), recovered={"stage_reply": {"error": "plan not ready"}})
-    assert [s["label"] for s in out["seen"]] == ["stage-recover"]
+    assert [s["label"] for s in out["seen"]] == ["blitz-stage-read"]
     assert out["refusal"] == "plan not ready"
 
 
 def test_a_recovery_that_returns_no_stage_reply_keeps_the_no_fold_cause_and_re_runs_only_once():
     out = _fold(dict(_CACHED_GATE), recovered={})
-    assert [s["label"] for s in out["seen"]] == ["stage-recover"]
+    assert [s["label"] for s in out["seen"]] == ["blitz-stage-read"]
     assert out["manifest"] is None
     assert out["cause"] == "stage_reply absent from the agent return"
 
@@ -157,6 +158,6 @@ def test_a_live_resume_gate_that_omits_stage_reply_re_runs_one_stage_over_its_re
     out = _fold(dict(_LIVE_RESUME_GATE), recovered={"stage_reply": stage_reply(_WHOLE)})
     assert out["refusal"] is None and out["cause"] is None, out
     assert out["manifest"] == _WHOLE
-    assert [s["label"] for s in out["seen"]] == ["stage-recover"]
+    assert [s["label"] for s in out["seen"]] == ["blitz-stage-read"]
     prompt = out["seen"][0]["prompt"]
     assert "2026-11-04-photo-face-record-neutrality-rank-44e645.md" in prompt and '"only_rows":["C2"]' in prompt

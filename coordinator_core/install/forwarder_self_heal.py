@@ -90,6 +90,7 @@ drift incident, 2026-08-14).
 from __future__ import annotations
 
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
@@ -284,6 +285,8 @@ def _self_heal_forwarders_inner() -> None:
 
 _FORWARDER_SECOND_LINE = b"# coordinator-claude bin forwarder for "
 _ENV_SHEBANG = b"#!/usr/bin/env python3"
+# Windows renders a drive-letter pin, an absolute path too.
+_DRIVE_SHEBANG = re.compile(rb"#![A-Za-z]:[\\/]")
 
 
 def _shebang_is_stale(actual: bytes, expected: bytes) -> bool:
@@ -294,7 +297,7 @@ def _shebang_is_stale(actual: bytes, expected: bytes) -> bool:
         return False
     if actual == _ENV_SHEBANG:
         return expected != _ENV_SHEBANG
-    if not actual.startswith(b"#!/"):
+    if not (actual.startswith(b"#!/") or _DRIVE_SHEBANG.match(actual)):
         return True
     try:
         return not Path(os.fsdecode(actual[2:])).exists()

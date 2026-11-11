@@ -4,8 +4,10 @@ from coordinator_core.bash_guards import leg_attribution as la
 
 
 def _burn(ms: float) -> None:
+    # Wall must also reach `ms`: thread_time is coarse on Windows, so cpu alone can end early.
     end = time.thread_time() + ms / 1000.0
-    while time.thread_time() < end:
+    wall_end = time.perf_counter() + ms / 1000.0
+    while time.thread_time() < end or time.perf_counter() < wall_end:
         pass
 
 
@@ -31,7 +33,10 @@ def test_active_names_legs_over_floor_sorted_and_capped():
         la.end(token)
     assert [r["name"] for r in s] == ["slower", "slow"]
     assert all(set(r) == {"name", "ms", "cpu_ms", "wall_ms"} for r in s)
-    assert all(r["ms"] == r["cpu_ms"] and r["wall_ms"] >= r["cpu_ms"] for r in s)
+    assert all(r["ms"] == r["cpu_ms"] for r in s)
+    # thread_time and perf_counter tick on different clocks (thread_time is ~15.6ms-granular on
+    # Windows), so cpu can read a tick above wall; only a gross excess is a defect.
+    assert all(r["wall_ms"] >= r["cpu_ms"] - 20.0 for r in s)
 
 
 def test_blocked_leg_ranks_by_wall_with_near_zero_cpu():
@@ -53,7 +58,7 @@ def test_same_name_accumulates():
     try:
         for _ in range(2):
             with la.leg("x"):
-                _burn(30)
+                _burn(60)
         assert la.summary(floor_ms=50.0)[0]["name"] == "x"
     finally:
         la.end(token)

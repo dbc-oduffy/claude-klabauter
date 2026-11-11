@@ -356,6 +356,7 @@ def _other_halts(root: Path, count: int) -> None:
 
 
 def test_a_sizing_with_no_halt_among_many_halts_resumes_nothing_in_one_listing(tmp_path, monkeypatch):
+    from coordinator_core.benchmarks.process_time import in_process_time_ms
     from coordinator_core.hooks import submit_engine_ask as hook
     from coordinator_core.ops.dispatch_emit import halted_run
 
@@ -364,11 +365,15 @@ def test_a_sizing_with_no_halt_among_many_halts_resumes_nothing_in_one_listing(t
     reads: list = []
     real = halted_run._read
     monkeypatch.setattr(halted_run, "_read", lambda d: reads.append(d) or real(d))
-    started = time.perf_counter()
-    route = hook._resume_route(tmp_path, "state/sizings/2026-10-28-none.yaml", {"tool_input": {}}, {}, None, None)
-    assert route == (None, None)
+    routes: list = []
+
+    def _call():
+        routes.append(hook._resume_route(tmp_path, "state/sizings/2026-10-28-none.yaml", {"tool_input": {}}, {}, None, None))
+
+    timing = in_process_time_ms(_call)
+    assert set(routes) == {(None, None)}
     assert reads == []
-    assert time.perf_counter() - started < 0.5
+    assert timing["process_time_ms"] < 500.0, timing["process_time_ms"]
 
 
 def test_a_sizing_with_no_halt_among_many_halts_and_no_index_defers_never_refuses(tmp_path):

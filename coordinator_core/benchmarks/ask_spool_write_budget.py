@@ -17,6 +17,7 @@ Scratch lives in a managed temp dir this script removes.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import shutil
@@ -30,7 +31,7 @@ import time
 from pathlib import Path
 from typing import Callable, Optional
 
-from coordinator_core.benchmarks import declare_benchmark_origin
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
 from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.win_portability import no_console_creationflags
 
@@ -246,6 +247,9 @@ def measure(runs: int = DEFAULT_RUNS) -> dict:
     from coordinator_core.temp_layout import managed_tempdir
 
     scratch = Path(tempfile.mkdtemp(prefix="ask-spool-bench-", dir=str(managed_tempdir())))
+    # The drains mint run tokens under the settings home; script mode has no pytest quarantine.
+    home_scope = contextlib.ExitStack()
+    home_scope.enter_context(fixture_settings_home(scratch))
     # AF_UNIX paths cap near 104 bytes on macOS: the socket base must be short, so /tmp not the managed tempdir.
     short = Path(os.path.realpath(tempfile.mkdtemp(prefix="asb-", dir="/tmp")))
     server: Optional[_ReplyingServer] = None
@@ -285,6 +289,7 @@ def measure(runs: int = DEFAULT_RUNS) -> dict:
         report["handover_pending"]["drain"] = _drain_twice(repo)
         return report
     finally:
+        home_scope.close()
         if server is not None:
             server.close()
         if old_session is None:

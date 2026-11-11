@@ -301,7 +301,7 @@ def _claim_chain(root: PathLike, run_id: str) -> bool:
     try:
         path = record_dir(Path(root), run_id) / CLAIM_FILE
         path.parent.mkdir(parents=True, exist_ok=True)
-        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+        os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644))
     except FileExistsError:
         return _take_over_stale_claim(path)
     except (ValueError, OSError):

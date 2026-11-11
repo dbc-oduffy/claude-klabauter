@@ -113,6 +113,35 @@ def test_child_is_killed_even_when_generator_is_abandoned(monkeypatch):
     assert procs and procs[0].poll() is not None
 
 
+def test_proxy_spawn_env_is_the_shaped_env(monkeypatch):
+    seen = []
+
+    def shape(env, *, writable_root, **kw):
+        seen.append(writable_root)
+        env["SHAPED"] = "1"
+        return env
+
+    envs = []
+    real = cas.subprocess.Popen
+    monkeypatch.setattr(cas, "shape_codex_child", shape)
+    monkeypatch.setattr(cas.subprocess, "Popen", lambda *a, **k: envs.append(k["env"]) or real(*a, **k))
+    assert cas.loaded_threads(_argv("owner"))
+    assert seen == [None]
+    assert envs[0]["SHAPED"] == "1"
+
+
+def test_refused_shape_is_unreachable_and_never_spawns(monkeypatch):
+    from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
+
+    def refuse(env, **kw):
+        raise SandboxSetupRefused("pwsh alias")
+
+    monkeypatch.setattr(cas, "shape_codex_child", refuse)
+    monkeypatch.setattr(cas.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
+    with pytest.raises(cas.AppServerUnreachable, match="pwsh alias"):
+        cas.loaded_threads(_argv("owner"))
+
+
 def test_frame_roundtrip_masks_client_frames():
     for size in (5, 300, 70000):
         frame = cas._frame(b"a" * size)
@@ -190,6 +219,8 @@ def test_module_is_marked_prototype_and_import_surface_is_plain():
         "coordinator_core.agent_pipe.acp",
         "coordinator_core.agent_pipe.contract",
         "coordinator_core.agent_pipe.session_driver",
+        "coordinator_core.codex_runner.codex_spawn_env",
+        "coordinator_core.codex_runner.sandbox_preflight",
     }
 
 

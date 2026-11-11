@@ -53,27 +53,11 @@ partially-loaded box concentrates in the low slots and ``free_slots()`` reads
 as a simple count. Order is not fairness: under contention, which waiter wins
 which slot is unspecified, exactly as in ``suite_mutex``.
 
-K comes from ``coordinator_core.install.derive_worker_cap.derive_cap`` — an
-existing implementation of CLAUDE.md's two-term ``min(physical_cores/2,
-usable_RAM_GB*1024/150MB)`` formula, which is also what bounds xdist workers.
-
-Which of the repo's TWO implementations of that formula is load-bearing here:
-``diagnostics.contained_run.derive_worker_cap`` computes the same number and
-was the first choice, but ``coordinator_core/diagnostics`` is NOT in the
-published engine's restricted tree, and the published mirror is where this
-guard actually runs. Importing it there would raise, hit the fallback below and
-silently pin K at 1 -- serializing every dispatched scoped run on the box while
-the semaphore looked healthy. The publish import-closure gate caught it before
-it shipped. ``install`` ships, so ``derive_cap`` is the one that can be
-depended on from here. Verify a module ships before importing it into anything
-on the guard path. That reuse is deliberate and load-bearing: a whole scoped
-pytest process and an xdist worker are the same unit of cost on this box, so
-they must not be bounded by two numbers that can drift apart. K is resolved
-FRESH on every call, never cached at import: the RAM term reads *available*
-memory, so K legitimately falls as the box fills, which is the adaptive
-behaviour a fixed constant cannot have. On the machine this was written on
-(15 logical cores, 25.8GB) K resolves to 7; on the 24-core workstation it
-resolves higher. Never replace this with a literal.
+K is fixed for the box: ``compute_measured_cap`` over TOTAL RAM and half the
+logical CPUs, never live load. A semaphore whose size moves between calls
+shifts under its holders; measured admission (live load) belongs to the xdist
+width in ``derive_worker_cap``, not here. Both modules ship in the published
+engine (``coordinator_core/diagnostics`` does not). Never replace K with a literal.
 
 TTL: a scoped run is short by construction. `SLOT_STALE_TTL_SECS` is therefore
 far tighter than the suite mutex's ceiling — a scoped run still holding a slot
@@ -119,10 +103,18 @@ _OWNER_PREFIX = "tier-t"
 
 
 def slot_cap() -> int:
+    """Semaphore size, fixed for the box: total RAM and half the logical CPUs,
+    never live load -- a size that moves between calls shifts under its holders."""
     try:
-        from coordinator_core.install.derive_worker_cap import derive_cap
+        import os
 
-        return max(1, int(derive_cap()))
+        from coordinator_core.benchmarks.concurrency_probe import compute_measured_cap
+        from coordinator_core.telemetry import host_sampler
+
+        total_mb = host_sampler.read_load().get("mem_total_mb")
+        if total_mb is None:
+            raise RuntimeError("total memory unreadable")
+        return compute_measured_cap(total_mb / 1024.0, 0.5, os.cpu_count() or 1)
     except Exception as exc:  # pragma: no cover — defensive, see docstring
         _LOG.warning("tier_t_slots: worker-cap derivation failed, falling back to 1: %s", exc)
         return 1

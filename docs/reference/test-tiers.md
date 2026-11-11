@@ -875,47 +875,37 @@ changed files and re-run only the failing set. Derive current runtime and suite 
 Parallelism is load-bearing, not an optimization: serial cannot complete the fast-tier gate in
 reasonable time. **But bare `-n auto` is unbounded and has killed a session.**
 
-`-n auto` takes the host's core count with no ceiling — **physical only when psutil is importable**.
-pytest-xdist 3.8.0 (`xdist/plugin.py::auto_detect_cpus`) tries `psutil.cpu_count(logical=False)`
-first and falls through to `sched_getaffinity`/`os.cpu_count()` when psutil is absent, and both of
-those are *logical*. An earlier revision of this section stated the physical count unconditionally;
-on a psutil-less host that reads about 2x low. Cap it at:
+`-n auto` takes the host's core count with no ceiling — **physical only when psutil is importable**
+(pytest-xdist 3.8.0 `xdist/plugin.py::auto_detect_cpus`; logical otherwise). Admit workers against
+what the box has free at the moment of the call, not against a core fraction:
 
 ```
-min(physical_cores / 2, usable_RAM_GB * 1024 / 150MB)
+max(1, min(available_RAM_GB * 1024 / 150MB, logical_cpus * (1 - cpu_load)))
 ```
 
-**That ceiling now resolves per box, at read time.** `cs_resolve_fast_test_cmd`
+`available_RAM_GB` is *available* memory, never total; `cpu_load` is the current busy fraction in
+[0, 1]. Both come from `host_sampler.read_load` (`coordinator_core/telemetry/host_sampler.py`),
+which needs no psutil: Windows reads `GlobalMemoryStatusEx` and a `GetSystemTimes` delta, POSIX
+reads `MemAvailable` and the load average over logical CPUs. A busier or fuller box admits fewer
+workers; a quiet one admits more.
+
+**That ceiling resolves per box, at read time.** `cs_resolve_fast_test_cmd`
 (`coordinator_core/resolve_validation_cmd.py`) hands every `-n auto`/`-n logical` command to
 `derive_worker_cap.cap_command_for_this_box`, which sets `--maxprocesses` from
-`compute_parallelism_cap` against the host that is about to run it. `python -m
-coordinator_core.install.derive_worker_cap` prints what this box derives; do not hand-edit the
+`concurrency_probe.compute_measured_cap` against the host that is about to run it. `python -m
+coordinator_core.install.derive_worker_cap` prints the figures and the cap; do not hand-edit the
 number.
 
 The reason it resolves at read time rather than being written down: **`coordinator.local.md` is
 tracked, not per-box.** `git ls-files` finds it and `.gitignore` does not, so its `fast_test_cmd` is
-one committed constant every clone shares — and no single constant is safe across a fleet whose
-derived caps are 12 (24c/96GB workstation), 6 (12c/24GB floor) and 2 (4c/15GB container). Writing
-one box's answer there hands the smaller boxes a 2x–3.5x over-subscription. The committed
-`--maxprocesses` survives as an inert fallback for anything reading the frontmatter raw, and for a
-host whose hardware cannot be read at all.
+one committed constant every clone shares, and no single constant is safe across a fleet whose
+free memory and load differ by box and by minute. The committed `--maxprocesses` survives as an
+inert fallback for anything reading the frontmatter raw, and for a host whose memory or load cannot
+be read (`read_measured_headroom` raises; the resolver keeps the committed command and names why on
+stderr).
 
-The psutil condition applies to the ceiling as well as the request: `default_physical_cores()`
-(`coordinator_core/benchmarks/concurrency_probe.py`) has the same import and the same fallback, so
-both halves move together. With psutil, a 4-core/15GB container asks for 4 and is capped to 2. With
-it absent, the same container asks for 8 and is capped to 4 — over-subscribed 2x, and the residual
-is the fallback's, not the ceiling's.
-
-**Measured on the cloud image:** psutil 7.2.2 imports (Python 3.11.15, pytest-xdist 3.8.0), reporting
-`psutil.cpu_count(logical=False)` = 4 and `psutil.cpu_count()` = 4 — no SMT, so physical equals
-logical — on 15.7 GB. `derive_worker_cap` derives 2. The psutil-absent branch is not the live case
-there; if a future image drops psutil, `default_physical_cores()`'s logical fallback is
-`cloud-em-01`'s to fix, not the ceiling's.
-
-The halving is not a fudge factor: this tier spawns subprocesses per worker (several live
-processes per xdist worker), so one worker per core oversubscribes the CPU several-fold — the
-suite's own behaviour, and therefore true on every platform. `--maxprocesses` is a `min()`, so
-`=12` binds only above 12 physical cores and is inert on smaller machines.
+A cap is a point-in-time admission, not a reservation: a box already near its memory or CPU limit
+derives a small number (never below 1), and the same box derives a larger one once peers finish.
 
 **Recompute it for your box rather than inheriting any cached figure, and if the tier is
 unstable, lower the cap before reaching for serial.**

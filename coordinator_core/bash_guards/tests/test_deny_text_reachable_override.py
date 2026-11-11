@@ -170,7 +170,7 @@ def test_deny_reason_grant_render_never_names_an_override_route(is_tie: bool) ->
     else:
         assert "Tier-U suite run without an authorization grant" in rendered
     assert "tier-u-grant-cli grant pm" not in rendered
-    assert _ctsi._GROUP_EM_GRANT_LINE in rendered
+    assert "tier-u-grant-cli group-em-grant" in rendered
 
 
 def test_deny_reason_grant_tie_branch_stays_within_word_budget() -> None:

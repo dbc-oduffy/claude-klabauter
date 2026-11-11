@@ -184,6 +184,14 @@ def run_reviewer(
     build_argv, make_adapter = spec
     try:
         argv = build_argv(f"{body}\n\n---\n{brief}{RETURN_INSTRUCTION}", choice.model)
+        child_env = _provider_env(choice.provider)
+        if choice.provider == "codex":
+            from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+            from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
+            try:
+                child_env = shape_codex_child(child_env, writable_root=None)
+            except SandboxSetupRefused as exc:
+                return _failed(choice, str(exc))
         proc = subprocess.Popen(
             argv,
             text=True,
@@ -191,7 +199,7 @@ def run_reviewer(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             cwd=cwd,
-            env=_provider_env(choice.provider),
+            env=child_env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         try:

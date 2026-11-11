@@ -117,8 +117,8 @@ DEFAULT_MAX_PROCESS_COUNT = 900
 concurrent LLMs, each with its own agent/tool-process tree."""
 
 _MB_PER_WORKER = 150
-"""Doctrine constant (docs/wiki/machine-load-norm.md, docs/reference/
-test-tiers.md): parallelism cap = min(physical_cores/2, usable_RAM_GB*1024/150MB)."""
+"""Per-worker memory cost (docs/reference/test-tiers.md): the divisor of
+available RAM in `compute_measured_cap`."""
 
 
 class MutatingOpRefusal(RuntimeError):
@@ -207,14 +207,35 @@ def evaluate_escape_hatch(
     return True, "ok"
 
 
-def compute_parallelism_cap(physical_cores: int, usable_ram_gb: float) -> int:
-    if physical_cores < 1:
-        raise ValueError(f"compute_parallelism_cap: physical_cores must be >= 1, got {physical_cores!r}")
-    if usable_ram_gb <= 0:
-        raise ValueError(f"compute_parallelism_cap: usable_ram_gb must be > 0, got {usable_ram_gb!r}")
-    by_cores = physical_cores / 2.0
-    by_ram = (usable_ram_gb * 1024.0) / _MB_PER_WORKER
-    return max(1, int(min(by_cores, by_ram)))
+def compute_measured_cap(available_ram_gb: float, cpu_load: float, logical_cpus: int) -> int:
+    """Admit workers against what the box has free right now: the smaller of
+    available RAM at `_MB_PER_WORKER` each and the idle CPU slots
+    (`logical_cpus * (1 - cpu_load)`, load clamped to [0, 1]); never below 1."""
+    if logical_cpus < 1:
+        raise ValueError(f"compute_measured_cap: logical_cpus must be >= 1, got {logical_cpus!r}")
+    if available_ram_gb < 0:
+        raise ValueError(f"compute_measured_cap: available_ram_gb must be >= 0, got {available_ram_gb!r}")
+    if cpu_load < 0:
+        raise ValueError(f"compute_measured_cap: cpu_load must be >= 0, got {cpu_load!r}")
+    by_ram = (available_ram_gb * 1024.0) / _MB_PER_WORKER
+    by_idle_cpu = logical_cpus * (1.0 - min(cpu_load, 1.0))
+    return max(1, int(min(by_ram, by_idle_cpu)))
+
+
+def read_measured_headroom() -> tuple[float, float, int]:
+    """(available_ram_gb, cpu_load, logical_cpus) read now through
+    `host_sampler.read_load` -- no psutil, Windows via GetSystemTimes, POSIX via
+    load average. Raises RuntimeError when either figure is unreadable."""
+    from coordinator_core.telemetry import host_sampler
+
+    load = host_sampler.read_load()
+    avail_mb, cpu_load = load.get("mem_avail_mb"), load.get("cpu_load")
+    if avail_mb is None or cpu_load is None:
+        raise RuntimeError(
+            f"host load unreadable on platform {load.get('platform')!r}: "
+            f"mem_avail_mb={avail_mb!r}, cpu_load={cpu_load!r}"
+        )
+    return avail_mb / 1024.0, float(cpu_load), os.cpu_count() or 1
 
 
 @declares_safe_direction(
@@ -348,8 +369,9 @@ def run_probe(
     max_process_count: int = DEFAULT_MAX_PROCESS_COUNT,
     override_cap: bool = False,
     machine_state_reader: Callable[[], MachineState] = read_machine_state,
-    physical_cores: Optional[int] = None,
-    usable_ram_gb: Optional[float] = None,
+    available_ram_gb: Optional[float] = None,
+    cpu_load: Optional[float] = None,
+    logical_cpus: Optional[int] = None,
 ) -> dict:
     """Run the concurrency-dial probe over `levels` for one COMPUTE_ONLY op.
 
@@ -370,9 +392,12 @@ def run_probe(
 
     refuse_if_not_compute_only(op)
 
-    physical_cores = physical_cores if physical_cores is not None else default_physical_cores()
-    usable_ram_gb = usable_ram_gb if usable_ram_gb is not None else default_usable_ram_gb()
-    cap = compute_parallelism_cap(physical_cores, usable_ram_gb)
+    if available_ram_gb is None or cpu_load is None or logical_cpus is None:
+        measured = read_measured_headroom()
+        available_ram_gb = measured[0] if available_ram_gb is None else available_ram_gb
+        cpu_load = measured[1] if cpu_load is None else cpu_load
+        logical_cpus = measured[2] if logical_cpus is None else logical_cpus
+    cap = compute_measured_cap(available_ram_gb, cpu_load, logical_cpus)
     validate_levels(levels, cap, override_cap)
 
     run_started = time.monotonic()

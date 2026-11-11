@@ -132,6 +132,7 @@ HOMES = frozenset({
     "symbol-knowledge",
     "tasks",
     "test-red",
+    "test-tiers",
     "tests",
     "warm",
     "warp",

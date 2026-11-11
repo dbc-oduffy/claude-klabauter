@@ -208,17 +208,19 @@ _MACHINE_MUTATION_DISABLE_ENV = "COORDINATOR_DISABLE_MACHINE_MUTATION"
 #: installer's own settings-home write sites, checked per function.
 SETTINGS_HOME_WRITER_CARVE_OUT = (
     "dep_check",
-    "door_install",
     "door_uninstall",
+    "engine_interpreter",
     "ensure_venv",
     "first_run",
     "forwarder_self_heal",
     "gen_settings_hooks",
+    "klabauter_freshness_apply",
     "plugin_cache_sessions",
     "uninstall_legs",
     "scripts/setup.py::_record_homebrew_removal",
     "scripts/setup.py::ensure_percolate_identity",
     "scripts/setup.py::install_write_hook_plane_verdict",
+    "scripts/setup.py::write_rag_state_dir_pointer",
     "scripts/setup.py::write_rule_surface",
 )
 
@@ -256,9 +258,13 @@ MACHINE_MUTATION_SWITCH_CARVE_OUTS: dict[str, tuple[str, str]] = {
         CARVE_OUT_INSTALL_PLANE,
         "generates settings.json hook wiring and the positive marker in the install's settings home",
     ),
-    "door_install.py": (
+    "engine_interpreter.py": (
         CARVE_OUT_INSTALL_PLANE,
-        "installs the door binary and named forwarders into the settings-home bin dir",
+        "provisions the engine-site dependency directory under the settings home",
+    ),
+    "klabauter_freshness_apply.py": (
+        CARVE_OUT_INSTALL_PLANE,
+        "fast-forwards the klabauter checkout and re-runs mapped installers into the settings home",
     ),
     "door_uninstall.py": (
         CARVE_OUT_INSTALL_PLANE,

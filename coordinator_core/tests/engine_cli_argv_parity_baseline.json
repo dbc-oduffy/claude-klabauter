@@ -84,6 +84,14 @@
     },
     {
       "module": "coordinator_core/baton_assemble/__init__.py",
+      "directive_id": "",
+      "cli": "session-claim-cli",
+      "unresolved": true,
+      "unaccepted": [],
+      "undeclared_required": []
+    },
+    {
+      "module": "coordinator_core/baton_assemble/__init__.py",
       "directive_id": "d1",
       "cli": "coordinator-doc-new",
       "unresolved": true,
@@ -213,7 +221,7 @@
     {
       "module": "coordinator_core/consolidate_assemble/__init__.py",
       "directive_id": "",
-      "cli": "delete-only",
+      "cli": "merge-ours",
       "unresolved": true,
       "unaccepted": [],
       "undeclared_required": []

@@ -277,9 +277,12 @@ def test_a_reply_carrying_both_an_error_and_a_handle_is_not_adopted(monkeypatch)
     assert _halt_reason(out) == "stage manifest relay is not whole: stage reply carries both error and manifest_handle"
 
 
-def test_a_reply_carrying_neither_is_not_whole(monkeypatch):
+def test_a_reply_carrying_neither_is_reread_then_halts_as_no_folded_manifest(monkeypatch):
     out = _run(_script(monkeypatch), {})
-    assert _halt_reason(out) == "stage manifest relay is not whole: manifest_handle"
+    reason = _halt_reason(out)
+    assert reason.startswith("no folded stage manifest")
+    assert "stage_reply absent from the agent return" in reason
+    assert "relay is not whole" not in reason
 
 
 def _slotted(script: str, handle: dict, text: str) -> str:

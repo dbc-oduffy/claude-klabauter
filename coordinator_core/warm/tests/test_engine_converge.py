@@ -38,6 +38,27 @@ def _commit_stamp(root: Path, sha: str) -> None:
     _git(root, "commit", "-q", "-m", f"stamp {sha}")
 
 
+def test_a_convergence_pass_signals_no_process(tmp_path, monkeypatch):
+    from coordinator_core.warm import pair_stop
+
+    def _forbidden(*a, **k):
+        raise AssertionError("convergence must not stop or reap any process")
+
+    for name in ("stop_warm_pair", "reap_pairs_outside", "_terminate_pid", "_terminate_with_reason"):
+        monkeypatch.setattr(pair_stop, name, _forbidden)
+    clone = tmp_path / "clone"
+    (clone / ".git").mkdir(parents=True)
+
+    class _Result:
+        ok = True
+        fast_forwarded = True
+
+    payload = engine_converge.run_convergence_pass(
+        clone=clone, fast_forward=lambda c: _Result(), record_to=tmp_path / "rec.json"
+    )
+    assert payload["outcome"] == "fast_forwarded"
+
+
 @pytest.fixture
 def clone_behind(tmp_path):
     """(clone, peer): clone sits one publish behind origin."""

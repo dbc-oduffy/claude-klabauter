@@ -9,6 +9,7 @@ reported, since phase CPU scales with the row set) or a log has no timing lines.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -106,6 +107,14 @@ def run(after_path: Path, baseline_path: Path) -> tuple[int, str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # In-process callers (pytest) must not inherit the origin stamp; restore on exit.
+    from unittest import mock
+
+    with mock.patch.dict(os.environ):
+        return _main(argv)
+
+
+def _main(argv: list[str] | None) -> int:
     from coordinator_core.benchmarks import declare_benchmark_origin
 
     declare_benchmark_origin()

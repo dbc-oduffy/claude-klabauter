@@ -3,18 +3,29 @@
 from __future__ import annotations
 
 import json
+import subprocess
+from datetime import datetime, timezone
+
+import pytest
 
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.dispatch_emit import halted_hold_release, release_halted_path
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from coordinator_core.win_portability import no_console_creationflags
 
-RUN = "ask-20261027T000000-aaaaaa"
+pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
+
+_STAMP = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
+RUN = f"ask-{_STAMP}-aaaaaa"
+COMMITTING = f"ask-{_STAMP}-bbbbbb"
 HELD = "src/held.py"
 OTHER = "src/other.py"
 
 
 def _repo(tmp_path, *, status="halted", manifest=None):
-    (tmp_path / ".git").mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_creationflags())
+    (tmp_path / OTHER).parent.mkdir(parents=True)
+    (tmp_path / OTHER).write_text("wip\n", encoding="utf-8")  # dirty: a clean withheld path frees the run
     rdir = record_dir(tmp_path, RUN)
     rdir.mkdir(parents=True)
     marker = {"status": status, "run_artifacts": {"withheld": {HELD: "peer-held", OTHER: "peer-held"}}}
@@ -46,7 +57,7 @@ def test_release_drops_only_that_path_and_records_the_reason(tmp_path):
     assert marker["status"] == "halted"
     assert marker["run_artifacts"]["withheld"] == {OTHER: "peer-held"}
     assert marker["released_paths"][HELD]["reason"] == "criterion met at HEAD"
-    assert halted_hold_release.held_paths(root, RUN, "ask-20261027T000001-bbbbbb") == frozenset({OTHER})
+    assert halted_hold_release.held_paths(root, RUN, COMMITTING) == frozenset({OTHER})
 
 
 def test_a_repeat_release_is_a_no_op_reply(tmp_path):

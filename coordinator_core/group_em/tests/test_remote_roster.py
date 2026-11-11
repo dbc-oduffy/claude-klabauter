@@ -69,6 +69,30 @@ def test_read_snapshot_never_spawns(tmp_path, monkeypatch):
 import subprocess  # noqa: E402
 
 from coordinator_core.group_em import box_registry  # noqa: E402
+from coordinator_core.group_em import box_transport  # noqa: E402
+import pytest  # noqa: E402
+
+
+_SSH_BOXES = [
+    {"box_id": bid, "transport": {"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"}}
+    for bid in ("box-s", "box-ssh")
+]
+
+
+@pytest.fixture(autouse=True)
+def _ssh_registration(monkeypatch, tmp_path):
+    """box_transport admits only boxes found in the box registry, and takes locks and rate tokens."""
+    monkeypatch.setattr(box_registry, "lock_dir", lambda home=None: tmp_path / "box-locks")
+    real_read = box_registry.read_boxes
+
+    def read_boxes(directory=None):
+        # Only box_transport's registration check passes no directory; every other caller keeps the real read.
+        return real_read(directory) if directory is not None else [dict(b) for b in _SSH_BOXES]
+
+    monkeypatch.setattr(box_registry, "read_boxes", read_boxes)
+    box_transport._reset_limits()
+    yield
+    box_transport._reset_limits()
 
 
 def _primary(tmp_path):
@@ -124,7 +148,7 @@ def test_fs_box_without_fresh_publish_is_unreachable_and_keeps_prior(tmp_path):
 
 def test_ssh_box_through_injected_runner(tmp_path):
     d = _primary(tmp_path)
-    box = {"box_id": "box-s", "transport": {"kind": "ssh", "host": "h", "invoke": "/x/ci"}}
+    box = {"box_id": "box-s", "transport": {"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"}}
     calls = []
 
     def runner(argv, timeout):
@@ -141,7 +165,7 @@ def test_ssh_box_through_injected_runner(tmp_path):
 
 def test_failing_ssh_box_writes_ok_false_without_raising(tmp_path):
     d = _primary(tmp_path)
-    box = {"box_id": "box-s", "transport": {"kind": "ssh", "host": "h", "invoke": "/x/ci"}}
+    box = {"box_id": "box-s", "transport": {"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"}}
 
     def good(argv, timeout):
         return subprocess.CompletedProcess(argv, 0, stdout=json.dumps({"rows": [_row("r1")]}), stderr="")
@@ -195,7 +219,7 @@ def test_refresh_on_node_without_primary_role_fetches_every_peer(tmp_path):
         {},
         d,
         box_id="box-ssh",
-        transport={"kind": "ssh", "host": "h", "invoke": "/x/ci"},
+        transport={"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"},
     )
 
     def runner(argv, timeout):

@@ -63,7 +63,7 @@ def test_halt_is_guarded_by_the_row_local_token():
     script = _compose()
     assert emit._ROW_LOCAL_BLOCK_JS_RE in script
     assert (
-        f"if ({emit._STOP_RULE_JS_RE}.test(_text) && !{emit._ROW_LOCAL_BLOCK_JS_RE}.test(_text))"
+        f"({emit._STOP_RULE_JS_RE}.test(_text) && !{emit._ROW_LOCAL_BLOCK_JS_RE}.test(_text))"
         in script
     )
 

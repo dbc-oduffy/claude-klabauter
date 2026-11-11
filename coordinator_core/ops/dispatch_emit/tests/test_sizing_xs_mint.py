@@ -374,3 +374,31 @@ def test_plans_only_ledger_body_stays_in_x1(tmp_path):
     _, rows = _rows_by_id(tmp_path, _ledger_sizing(("docs/plans/p.md", "open")), ["docs/plans/p.md"], repo)
     assert list(rows) == ["X1"]
     assert rows["X1"]["writes"] == ["docs/plans/p.md"]
+
+
+def test_verbless_failing_node_id_file_joins_x1_writes(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "src/x.py", "pkg/tests/test_k.py")
+    sizing = _ledger_sizing(("pkg/tests/test_k.py::TestA::test_one is red", "open"))
+    _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
+    assert rows["X1"]["writes"] == ["src/x.py", "pkg/tests/test_k.py"]
+
+
+def test_node_id_in_deferred_row_or_missing_file_adds_nothing(tmp_path):
+    repo = _repo_with(tmp_path / "repo", "src/x.py", "pkg/tests/test_k.py")
+    sizing = _ledger_sizing(
+        ("pkg/tests/test_k.py::test_one is red", "deferred"),
+        ("nodir/test_gone.py::test_two is red", "open"),
+    )
+    _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
+    assert rows["X1"]["writes"] == ["src/x.py"]
+
+
+def test_ledger_named_test_files_drops_excluded(tmp_path):
+    from coordinator_core.ops.dispatch_emit.sizing_xs_mint import ledger_named_test_files
+
+    repo = _repo_with(tmp_path / "repo", "pkg/tests/test_k.py", "keep/tests/test_j.py")
+    sizing = _ledger_sizing(
+        ("pkg/tests/test_k.py::t and keep/tests/test_j.py::t are red, do not touch pkg", "open")
+    )
+    assert ledger_named_test_files(sizing, repo) == ["keep/tests/test_j.py"]
+

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit import halted_run_route as route
 
 SHA = "a" * 40
@@ -79,6 +80,8 @@ def test_halted_route_for_sizing(tmp_path):
     sizing = "state/sizings/2026-10-23-x.yaml"
     assert route.halted_route_for_sizing(tmp_path, sizing) is None
     _marker(tmp_path, "ask-20261023T121013-e7c4ae", "halted", sizing)
+    # The first lookup built the sentinel; a marker written behind it is indexed only by a rebuild.
+    halted_run.rebuild_lookup_index(tmp_path)
     assert route.halted_route_for_sizing(tmp_path, sizing, SHA) == route.route_line(
         "ask-20261023T121013-e7c4ae", SHA
     )

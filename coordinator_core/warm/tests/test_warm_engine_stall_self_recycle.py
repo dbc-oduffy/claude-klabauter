@@ -157,6 +157,7 @@ class _RunningPool(_FakePool):
         return fut
 
 
+@pytest.mark.deliberate_wall_clock(reason="stall bound: a blocked handler must not hold up hooks or memo.send")
 def test_blocked_handler_does_not_hold_up_hooks_or_memo_send_and_its_32004_names_a_dump(
     rig, monkeypatch
 ):

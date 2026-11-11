@@ -11,6 +11,7 @@ def test_deadline_is_well_inside_the_brightline():
     assert land_run.PEER_CLAIM_LOOKUP_DEADLINE_S <= 0.35
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds a stalled lookup that must answer no-hold within its deadline")
 def test_stalled_lookup_answers_no_hold_within_the_deadline(tmp_path, monkeypatch):
     monkeypatch.setattr(claim_index, "lookup", lambda *a, **k: time.sleep(3) or {})
     t0 = time.monotonic()

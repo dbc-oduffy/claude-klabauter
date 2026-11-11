@@ -184,7 +184,7 @@ def _spawn_headless(
     popen: Callable = subprocess.Popen,
     windows: Optional[bool] = None,
     job_factory: Callable = _KillOnCloseJob,
-    killpg: Callable = os.killpg,
+    killpg: Optional[Callable] = None,
 ) -> tuple[int, str]:
     """Run analyzeHeadless and return (returncode, output tail). The sole spawn site.
 
@@ -207,7 +207,8 @@ def _spawn_headless(
             output, _ = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
             if confine and not windows:
-                killpg(proc.pid, signal.SIGKILL)
+                # os.killpg and signal.SIGKILL are POSIX-only: resolve them here, never at import.
+                (killpg or os.killpg)(proc.pid, getattr(signal, "SIGKILL", 9))
             else:
                 proc.kill()
             proc.communicate()

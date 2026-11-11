@@ -284,7 +284,20 @@ def _probe(n: int, interval: float, engine_root: Path | None) -> dict:
         from coordinator_core.warm import client  # noqa: PLC0415 -- optional, engine checkout only
     except Exception as exc:  # noqa: BLE001
         return {"error": f"engine not importable: {type(exc).__name__}: {exc}"}
-    os.environ.setdefault("COORDINATOR_INVOCATION_ORIGIN", "benchmark")
+    # Scoped: a bare setdefault leaks the origin into the caller (pytest, importers).
+    _origin_key = "COORDINATOR_INVOCATION_ORIGIN"
+    _origin_prior = os.environ.get(_origin_key)
+    os.environ.setdefault(_origin_key, "benchmark")
+    try:
+        return _probe_loop(n, interval, client)
+    finally:
+        if _origin_prior is None:
+            os.environ.pop(_origin_key, None)
+        else:
+            os.environ[_origin_key] = _origin_prior
+
+
+def _probe_loop(n: int, interval: float, client) -> dict:
     samples = []
     for i in range(n):
         msg = {"jsonrpc": "2.0", "id": i + 1, "method": "session.whoami_live", "params": {}}

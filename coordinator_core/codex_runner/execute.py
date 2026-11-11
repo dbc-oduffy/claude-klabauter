@@ -29,9 +29,9 @@ from coordinator_core.codex_runner.contract import (
 from coordinator_core.codex_runner.resolve import ApiKeyRefused, CodexUnavailable, preflight_auth, resolve_codex
 from coordinator_core.codex_runner.sandbox_preflight import (
     SandboxSetupRefused,
-    check_pwsh_launchable,
     check_workspace_write,
 )
+from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.review import _LIMIT_MARKERS, _build_env, _usage
 
 EXECUTE_TIMEOUT_S = 3600
@@ -149,8 +149,7 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
         return RunResult(run_id=run_id, status=STATUS_FAILED, error=f"refused: {exc}")
     advisory = None
     try:
-        child_env = _child_env(req.allow_api_key)
-        check_pwsh_launchable(child_env)
+        child_env = shape_codex_child(_child_env(req.allow_api_key), writable_root=req.repo_root)
         try:
             probe_argv = resolve_codex()
         except CodexUnavailable:
@@ -184,7 +183,7 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
             proc = subprocess.Popen(
                 argv,
                 cwd=req.repo_root,
-                env=_child_env(req.allow_api_key),
+                env=child_env,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=err_file,

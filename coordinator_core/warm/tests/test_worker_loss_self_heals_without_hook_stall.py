@@ -88,6 +88,7 @@ def test_lost_worker_is_replaced_and_prewarmed_without_another_request(ctx, tmp_
     assert _live(ctx._guard_pool) >= server._HEAL_PREWARM_WORKERS
 
 
+@pytest.mark.deliberate_wall_clock(reason="stall bound: a frame after worker loss must not wait on a cold worker start")
 def test_frame_after_the_loss_is_answered_by_a_booted_worker(ctx, tmp_path):
     ctx._pool_dispatch(_frame(["hooks.preuse_write_dispatch"], 1, die_marker=str(tmp_path / "died")))
     assert ctx.__dict__["_pool_healing"][True].wait(_HEAL_WAIT_SECS)

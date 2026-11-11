@@ -28,7 +28,7 @@ def test_a_native_image_outside_the_allowlist_survives_its_own_install(tmp_path,
         (ml_bin / entry.name).write_text(f"ml::{entry.name}\n", encoding="utf-8")
     for f, _exec_bit in _CH_FAMILY_FILES:
         (ch_bin / f).write_text(f"ch::{f}\n", encoding="utf-8")
-    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(_REPO_ROOT))
+    monkeypatch.setattr(substrate, "_engine_root_or_raise", lambda: (str(_REPO_ROOT), "test"))
 
     image = door_install.named_forwarder_path(bin_dst, _NAME)
 

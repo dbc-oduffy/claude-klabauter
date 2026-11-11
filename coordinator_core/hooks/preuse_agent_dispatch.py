@@ -116,6 +116,7 @@ def _call_enforce_dispatch_mode_leg(params: dict) -> dict:
 
 @register_op("hooks.preuse_agent_dispatch")
 def _handler(params: dict, repo_root=None) -> dict:
+    params = payload_of(params)
     return run_phased("hooks.preuse_agent_dispatch", params, _chain)
 
 

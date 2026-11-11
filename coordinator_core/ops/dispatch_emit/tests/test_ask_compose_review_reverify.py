@@ -247,3 +247,57 @@ def test_recorded_edits_an_absent_diff_or_a_reused_wave_leave_applied_standing(r
 def test_unapplied_reverify_reruns_verify_once():
     script = _compose()
     assert "_reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }" in script
+
+
+_R1_IDS = [
+    "coordinator_core/tests/test_pool_worker_console_suppression.py::test_worker_init_calls_the_binder_before_anything_else",
+    "coordinator_core/tests/test_pool_worker_low_priority.py::test_worker_init_lowers_priority_before_registry_preload",
+]
+
+
+def _recover_drive(rv: dict) -> dict:
+    from .test_ask_compose_halt_self_correction import _drive
+
+    return _drive(reverify=rv, replies={}, own=("pkg/mod.py",))
+
+
+def _r1_red(**kw) -> dict:
+    rec = {"status_after": "fail", "failing": list(_R1_IDS), "pre_existing": [], "passed_at_base": []}
+    rec.update(kw)
+    return rec
+
+
+def test_halt_reverify_prompt_asks_for_diff_named():
+    js = ask_compose._review_recover_js(
+        head="H", anchor="A", session_tail="", record_dir="state/warp/r1", run_id="r1"
+    )
+    assert "passed_at_base, diff_named)" in js and "`diff_named` each failing id" in js
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_diff_named_reds_are_owned_and_not_foreign_unverified():
+    out = _recover_drive(_r1_red(diff_named=list(_R1_IDS)))
+
+    assert "foreign_unverified" not in out["reverify"]
+    assert out["foreign"] == []
+    fix = [c for c in out["calls"] if c["label"] == ask_compose.HALT_FIX_LABEL]
+    assert fix and all(i in fix[0]["prompt"] for i in _R1_IDS)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_without_diff_named_the_same_reds_stay_foreign_unverified():
+    out = _recover_drive(_r1_red())
+
+    assert sorted(out["reverify"]["foreign_unverified"]) == sorted(_R1_IDS)
+    assert not [c for c in out["calls"] if c["label"] == ask_compose.HALT_FIX_LABEL]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_diff_named_id_that_is_pre_existing_stays_foreign():
+    out = _recover_drive(_r1_red(diff_named=list(_R1_IDS), pre_existing=list(_R1_IDS)))
+
+    assert "foreign_unverified" not in out["reverify"]
+    assert not [c for c in out["calls"] if c["label"] == ask_compose.HALT_FIX_LABEL]

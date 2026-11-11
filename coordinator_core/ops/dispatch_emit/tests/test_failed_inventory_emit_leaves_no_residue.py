@@ -76,3 +76,13 @@ def test_refused_emits_then_success_keep_script_and_spine_tranche_numbers_equal(
     script_n = re.search(r"-t(\d+)\.workflow\.mjs$", out.name).group(1)
     assert spine_n == script_n == "1"
     assert not list(inventory.parent.glob("*-t[2-9].md"))
+
+
+def test_session_bearing_emit_with_no_resolvable_git_root_does_not_raise_type_error(tmp_path, monkeypatch):
+    inventory = _inventory(tmp_path)
+    out = inventory.parent / "20261008T000000-tr-t1.workflow.mjs"
+    out.write_text("// someone else's script\n", encoding="utf-8")
+    monkeypatch.setattr(op_mod, "_repo_root_for_plan", lambda _p: None)
+
+    with pytest.raises(ForeignEmissionError):
+        _dispatch_emit(_refuse_params(tmp_path, inventory, out))

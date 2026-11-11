@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+from datetime import datetime, timezone
 
 import pytest
 
@@ -20,7 +21,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 FIRST = "ask-20261027T000000-aaaaaa"
 SECOND = "ask-20261027T000000-bbbbbb"
 DELIVERY = "DELIVERY.md"
-HALTED = "ask-20261027T000000-8f2097"
+HALTED = f"ask-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-8f2097"  # a stale mint stamp frees the hold
 
 
 def _git(root, *args):
@@ -56,7 +57,7 @@ def world(tmp_path, monkeypatch):
 def test_two_siblings_co_declaring_delivery_md_both_land_their_own_hunks(world):
     repo = world.root
     first_lines, second_lines = "first1\nfirst2\n", "second1\n"
-    (repo / DELIVERY).write_text("head\n" + first_lines + second_lines)
+    (repo / DELIVERY).write_bytes(("head\n" + first_lines + second_lines).encode())
     world.baseline(FIRST, "head\n")
     world.baseline(SECOND, "head\n" + first_lines)
 
@@ -76,7 +77,7 @@ def test_two_siblings_co_declaring_delivery_md_both_land_their_own_hunks(world):
 
 def test_a_line_both_siblings_edit_still_holds_the_landing(world):
     repo = world.root
-    (repo / DELIVERY).write_text("both\n")
+    (repo / DELIVERY).write_bytes(("both\n").encode())
     world.baseline(FIRST, "head\n")
     world.baseline(SECOND, "head\n")
     holds = [(DELIVERY, SECOND)]
@@ -90,7 +91,7 @@ def test_a_halted_hold_lands_through_a_per_path_release_with_a_reason(world):
     (rdir / "halted.json").write_text(
         json.dumps({"status": "halted", "run_artifacts": {"withheld": {DELIVERY: "peer-held"}}}),
     )
-    (repo / DELIVERY).write_text("head\nmine\n")
+    (repo / DELIVERY).write_bytes(("head\nmine\n").encode())
     holds = [(DELIVERY, HALTED)]
     world.baseline(FIRST, "head\n")
     world.baseline(HALTED, "head\n")
@@ -141,11 +142,14 @@ def test_land_run_lands_a_halted_hold_only_after_a_per_path_release_with_a_reaso
         **prod.REVIEWED,
         "wave_reviews": [{"verdict": "approve", "sidecar_path": "scratch/review.md"}],
     }
-    head = prod._git(["rev-parse", "HEAD"], repo).strip()
 
     held = prod._land(repo, inline_review=review)
-    assert held.get("refused") == peer_hunk_gate.PEER_HUNKS_CO_DECLARED, held
-    assert prod._git(["rev-parse", "HEAD"], repo).strip() == head
+    assert held.get("refused") is None, held
+    assert held["withheld"] == {LANDED_PATH: f"withheld by {HALTED}"}, held
+    assert [(f["path"], f["reason"]) for f in held["provenance"]] == [
+        (LANDED_PATH, peer_hunk_gate.PEER_HUNKS_CO_DECLARED),
+    ]
+    assert prod._git(["ls-tree", "-r", "--name-only", "HEAD"], repo).count(LANDED_PATH) == 0
 
     blank = rhp._handler({"run_id": HALTED, "path": LANDED_PATH, "reason": " "}, repo_root=repo / ".git")
     assert blank["ok"] is False

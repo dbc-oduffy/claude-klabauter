@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from pathlib import Path, PurePosixPath
 from typing import Collection, Mapping, Optional, Sequence
@@ -992,23 +993,6 @@ def _dirty_among(root: Path, paths: Sequence[str]) -> tuple[set, set, dict]:
 # ---- the marker -------------------------------------------------------------------------------
 
 
-def _parse_prefix_claims(report_text: str) -> Optional[list]:
-    """Paths a report claims under ``created-under-prefix:``; None when it carries no such line."""
-    from coordinator_core.ops.dispatch_emit.commit_request import PREFIX_CLAIM_LABEL
-
-    claims: list = []
-    saw_label = False
-    for raw in report_text.splitlines():
-        line = raw.strip().lstrip("-*").strip()
-        if not line.startswith(PREFIX_CLAIM_LABEL):
-            continue
-        saw_label = True
-        rest = line[len(PREFIX_CLAIM_LABEL):].strip().strip("`'\"")
-        if rest and rest.lower() != "none":
-            claims.append(rest)
-    return claims if saw_label else None
-
-
 def _own_prefix_files(root: Path, chunk, cache: dict) -> Optional[list]:
     """Files ``chunk``'s own report claims under its own declared prefixes (whole path segments).
 
@@ -1018,11 +1002,42 @@ def _own_prefix_files(root: Path, chunk, cache: dict) -> Optional[list]:
     if chunk.report not in cache:
         cache[chunk.report] = _read_rel(root, chunk.report)
     text = cache[chunk.report]
-    claims = _parse_prefix_claims(text) if text is not None else None
+    from coordinator_core.ops.dispatch_emit.commit_request import parse_prefix_claims
+
+    claims = parse_prefix_claims(text) if text is not None else None
     if claims is None:
         return None
     bounded = [(p, p if p.endswith("/") else p + "/") for p in chunk.prefixes]
     return [c for c in claims if any(c == p or c.startswith(under) for p, under in bounded)]
+
+
+def _zero_path_prefix_dirty(root: Path, chunks: Sequence, landing: Collection[str], cache: dict) -> dict:
+    """``{chunk id: dirty files under its prefixes}`` for a credited chunk that declares prefixes yet lands nothing.
+
+    Only such chunks pay for one scoped status read over their prefixes; ignored files are dropped.
+    A status read that cannot answer leaves the refusal unfired (the dirty set is unknowable)."""
+    from coordinator_core.ops.dispatch_emit import credit_gate
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import worktree_snapshot
+
+    landing = set(landing)
+    zero: dict = {}
+    for chunk in chunks:
+        if not chunk.prefixes:
+            continue
+        bounds = [p.rstrip("/") + "/" for p in chunk.prefixes]
+        own = [*chunk.paths, *(_own_prefix_files(root, chunk, cache) or [])]
+        if any(p in landing for p in own) or any(p.startswith(u) for p in landing for u in bounds):
+            continue
+        zero[chunk.id] = list(chunk.prefixes)
+    if not zero:
+        return {}
+    prefixes = sorted({p.rstrip("/") for ps in zero.values() for p in ps})
+    snap = worktree_snapshot(root, [], prefixes, [])
+    if snap is None:
+        return {}
+    found = sorted(p for p in snap.changed - landing if (root / p).is_file())
+    dirty = set(found) - set(snap.ignored_among(found))
+    return credit_gate.zero_path_prefix_credit(zero, {}, dirty)
 
 
 def _manifest_declared(manifest_abs: Optional[Path]) -> tuple[list, Optional[str]]:
@@ -2789,6 +2804,7 @@ def _with_peer_drift(root: Path, reply: dict) -> dict:
 LANDING_TREE_DIFFERS = "landing-tree-differs-from-measured"
 VERIFY_OVERLAY_RED = "verify-overlay-red"
 VERIFY_OVERLAY_UNVERIFIED = "verify-overlay-unverified"
+_TRAILER_LINE = re.compile(r"^[A-Za-z][A-Za-z0-9-]*: ")
 
 
 def _verify_reach_dirt(root: Path, record: dict, product: Sequence[str], deleted: Sequence[str]) -> dict:
@@ -3992,6 +4008,19 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
                    if recorded_reason else {}),
             }
 
+    zero_path = _zero_path_prefix_dirty(
+        root, [c for c in credited_chunks if c.id not in unlanded_rows], landing_now | set(paths) | set(deleted), cache,
+    )
+    if zero_path:
+        shown = "; ".join(f"{cid}: {', '.join(ps)}" for cid, ps in sorted(zero_path.items()))
+        return _error(
+            f"credited chunk(s) landed no path while files sit under their prefix: {shown}. "
+            "List them under `created-under-prefix:` in the report, or list the chunk in "
+            "params.incomplete_chunks, then re-fire",
+            refused=credit_gate.REFUSED_CREDITED_PREFIX_ZERO_PATHS,
+            unlanded=zero_path,
+        )
+
     # ---- receipts, integrity, drift expectations
     land_deadline.mark("land_run.receipts")
     from datetime import datetime, timezone
@@ -4103,6 +4132,17 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
         run_base=run_base, minted_before=own_seniority, own_run_ids=(rid, sibling_run_id),
     )
     paths.extend(carried_targets)
+    tests_without_source = {
+        **_tests_importing_dropped_modules(
+            root, [p for p in paths if p not in tests_without_source],
+            {
+                p for p in [*declared_changed, *art_withheld, *art_dropped]
+                if p.endswith(".py") and not _is_test_path(p) and p not in paths and p not in deleted
+                and (root / p).is_file()
+            },
+        ),
+        **tests_without_source,
+    }
     if tests_without_source:
         paths[:] = [p for p in paths if p not in tests_without_source]
         claim_provenance = [
@@ -4470,6 +4510,14 @@ def _land_inner(root: Path, repo_root: Path, params: dict, stranded: dict, token
             reach_dirt_overlay = {"verdict": overlay.verdict, "seeds": list(overlay.seeds)}
             if overlay.verdict in ("inconclusive", "missing"):
                 reach_dirt_overlay["advisory"] = f"clean-overlay verdict {overlay.verdict}: {overlay.detail}"
+                # The landing is recoverable so it proceeds, but unverified: the trailer is what a release
+                # gate reads to list the commits the full-tree regate alone covers.
+                why = " ".join(str(overlay.detail).split())[:200]
+                body = message.rstrip("\n")
+                last = body.rsplit("\n\n", 1)[-1].splitlines()
+                # Join an existing trailer block: git parses trailers from the last paragraph only.
+                sep = "\n" if last and all(_TRAILER_LINE.match(ln) for ln in last) else "\n\n"
+                message = f"{body}{sep}Overlay: {overlay.verdict} — {why}\n"
             elif overlay.verdict != "green":
                 _remove(root, receipt_paths)
                 _reap_measured_export(root, measured_run)
@@ -5125,6 +5173,45 @@ def _carry_withheld_symbol_targets(
 
 
 TEST_WITHOUT_SOURCE = "test-without-source"
+
+
+def _tests_importing_dropped_modules(root: Path, paths: Sequence[str], dropped: Collection[str]) -> dict:
+    """``{test: TEST_WITHOUT_SOURCE: <module file>}`` for each landing test that imports a module file in
+    ``dropped`` (a declared product ``.py`` the landing leaves out whole, mixed hunks included). The
+    symbol-level carry misses a test that reads only names HEAD already defines but runs the dropped
+    file's new behaviour."""
+    if not dropped:
+        return {}
+    import ast
+
+    from coordinator_core.authoring_leaks import import_closure as ic
+    from coordinator_core.pyimports import collect_imports
+
+    out: dict = {}
+    for rel in paths:
+        if not _is_test_path(rel):
+            continue
+        text = ic.read_text(root / rel)
+        try:
+            tree = ast.parse(text) if text else None
+        except SyntaxError:
+            tree = None
+        if tree is None:
+            continue
+        for rec in collect_imports(tree)[0]:
+            base = ic._absolute_base(rec, rel)
+            if not base:
+                continue
+            pfx = ic.prefixes(rel)
+            files = [*ic.module_files(base, pfx)]
+            for name in rec.names:
+                if name != "*":
+                    files += ic.module_files(f"{base}.{name}", pfx)
+            hit = next((f for f in files if f in dropped), None)
+            if hit:
+                out[rel] = f"{TEST_WITHOUT_SOURCE}: {hit}"
+                break
+    return out
 
 # The detector suffixes a target another live run claims; the pair is the same, and that run's hold
 # is a reason the target stays out, never a reason the importer lands without it.

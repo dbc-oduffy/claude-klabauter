@@ -31,7 +31,6 @@ import argparse
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,6 +44,7 @@ from typing import Callable, Optional
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
 from coordinator_core.benchmarks import warm_pair_boot_process_time as boot
 from coordinator_core.warm import breadcrumb, client, pair_stop, skew
 from coordinator_core.warm.telemetry import SPAWN_EPOCH_ENV
@@ -468,7 +468,7 @@ def run_production_swap(
     finally:
         if pair is not None:
             pair.stop()
-        shutil.rmtree(tmp, ignore_errors=True)
+        rmtree_or_raise(tmp, label="land-swap-hook-window")
 
 
 @dataclass(frozen=True)
@@ -569,7 +569,7 @@ def run_old_pair_spike(
     finally:
         if pair is not None:
             pair.stop()
-        shutil.rmtree(tmp, ignore_errors=True)
+        rmtree_or_raise(tmp, label="land-swap-hook-window")
 
 
 ENGINE_SKEW_CODE = -32002

@@ -80,9 +80,9 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     PACK_READ_STALL_HALT_KIND: (MECHANICAL, "refire-after-pack-read-stall"),
     # DECISION: a refire alone re-halts; the answer is outside the engine (restore example-retrieval-repo, back the citations).
     "rag_corpus_down": (DECISION, None),
-    # commit_stage_halt: the commit agent was cancelled or failed (e.g. a headless approval prompt); the cause is
-    # outside the run, so the watcher's record is for the EM to close or refire.
-    "commit_stage": (DECISION, None),
+    # commit_stage_halt: the commit agent was cancelled or failed; the watcher lands the marker through
+    # remedy_or_halt and a refire resumes the kept work.
+    "commit_stage": (MECHANICAL, "refire-resumes-kept-work"),
     "citation_unbacked": (DECISION, None),
 }
 

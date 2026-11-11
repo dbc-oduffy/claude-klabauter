@@ -24,6 +24,7 @@ def test_deadline_constant_is_a_sub_second_ish_bound():
     assert 0 < git_objects.REFLOG_APPEND_DEADLINE_SECS <= 2.0
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a hung reflog write blocks the caller, a wait CPU time cannot see")
 def test_hung_write_returns_false_within_the_deadline_not_the_hang(tmp_path, monkeypatch):
     release = threading.Event()
     monkeypatch.setattr(git_objects, "REFLOG_APPEND_DEADLINE_SECS", 0.2)

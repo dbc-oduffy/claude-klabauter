@@ -7,6 +7,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.hooks.tests import test_submit_engine_ask_real_emit as real
 
@@ -47,6 +49,7 @@ def test_budget_is_the_lesser_of_the_env_and_the_door_deadline(monkeypatch):
     assert mod._caller_budget_s() == mod._DOOR_HOOK_READ_DEADLINE_S
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline against a blocked fan-out; blocked time burns no CPU")
 def test_multi_ask_fanout_slower_than_the_budget_denies_naming_the_hook_budget(repo, monkeypatch):
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1")
     release = threading.Event()

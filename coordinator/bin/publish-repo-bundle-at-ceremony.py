@@ -365,7 +365,7 @@ def _claim_lease(path: Path) -> str | None:
     body = json.dumps({"sequencer_pid": os.getpid(), "child_pid": None, "child_started": None})
     for _attempt in range(2):
         try:
-            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         except FileExistsError:
             held = _read_lease(path) or {}
             owner = held.get("sequencer_pid")

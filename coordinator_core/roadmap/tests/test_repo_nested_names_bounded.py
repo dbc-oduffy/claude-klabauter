@@ -35,6 +35,7 @@ def test_healthy_scan_unchanged(tmp_path: Path) -> None:
     assert prep_gate.repo_nested_names(tmp_path, names) == {"cross-repo": ("state",)}
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a stalled directory listing holds the nested scan, a wait CPU time cannot see")
 def test_stalled_nested_scan_returns_empty_within_wall_and_names_advisory(
     monkeypatch, tmp_path: Path, capsys
 ) -> None:
@@ -51,6 +52,7 @@ def test_stalled_nested_scan_returns_empty_within_wall_and_names_advisory(
     assert prep_gate.REPO_SCAN_STALLED_ADVISORY in capsys.readouterr().err
 
 
+@pytest.mark.deliberate_wall_clock(reason="bounds how long a stalled root listing holds the scan, a wait CPU time cannot see")
 def test_stalled_root_listing_returns_empty_within_wall(monkeypatch, tmp_path: Path, capsys) -> None:
     release = threading.Event()
     _block_iterdir(monkeypatch, tmp_path, release)

@@ -166,6 +166,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     """Run `_run_chain` under `run_phased` (`slow_phase` / `spans`, deadline stop) and attach
     `legs` / `handler_thread_ms` to this call's process_time row (`op_row_fields`; a no-op
     when no row is bound)."""
+    params = payload_of(params)
     return run_phased("hooks.preuse_bash_dispatch", params, _timed_chain)
 
 

@@ -31,10 +31,13 @@ def test_start_cold_describe_covers_all_existing_modes_and_real_wire_fields(desc
     schema = descriptions["codex_runner.start"]["params_schema"]
     assert schema["properties"]["mode"]["enum"] == list(MODES)
     assert set(schema["properties"]) == {"mode", "repo_root", "artifact", "plan", "chunk",
-                                         "parent_session_id", "persona", "task_file", "tier_map", "provider", "assignment"}
+                                         "parent_session_id", "persona", "task_file", "tier_map", "provider", "assignment",
+                                         "agent_type", "model", "brief", "verdicts"}
     validate = jsonschema.Draft202012Validator(schema).validate
     for mode in ("review", "agy-review"):
         validate({"mode": mode, "repo_root": "/checkout", "artifact": "review.md"})
+    validate({"mode": "named-review", "repo_root": "/checkout", "agent_type": "reviewer",
+              "provider": "codex", "model": "m", "brief": "brief.md", "verdicts": ["APPROVED"]})
     validate({"mode": "execute", "repo_root": "/checkout", "plan": "plan.md", "chunk": "C1"})
     grant = {"session_id": "caller", "run": "review", "declared_peak_mb": 128}
     validate({"mode": "persona", "repo_root": "/checkout", "persona": "shared-role.md",

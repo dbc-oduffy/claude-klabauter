@@ -27,6 +27,7 @@ _mod = _load_module()
 def _fake_session_loe_module(*, git_root, ad, od, em_tokens, tshirt):
     fake = types.ModuleType("fake_coordinator_session_loe")
     fake._resolve_git_root = lambda: git_root
+    fake._session_hub = lambda root: root
     fake._count_session = lambda sessions_base, sid: (ad, od)
     fake._sum_children = lambda sessions_base, sid, a, o: (a, o)
     fake._resolve_em_tokens = lambda: em_tokens

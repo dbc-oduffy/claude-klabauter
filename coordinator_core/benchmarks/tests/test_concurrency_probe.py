@@ -22,7 +22,7 @@ from coordinator_core.benchmarks.concurrency_probe import (
     LevelExceedsCapError,
     MachineState,
     MutatingOpRefusal,
-    compute_parallelism_cap,
+    compute_measured_cap,
     evaluate_escape_hatch,
     refuse_if_not_compute_only,
     run_probe,
@@ -95,23 +95,34 @@ def test_validate_levels_allows_above_cap_with_override():
     validate_levels([1, 16], cap=8, override_cap=True)
 
 
-def test_compute_parallelism_cap_core_bound():
-    assert compute_parallelism_cap(physical_cores=4, usable_ram_gb=100.0) == 2
+def test_measured_cap_is_idle_cpu_bound():
+    assert compute_measured_cap(available_ram_gb=100.0, cpu_load=0.5, logical_cpus=4) == 2
 
 
-def test_compute_parallelism_cap_ram_bound():
-    assert compute_parallelism_cap(physical_cores=32, usable_ram_gb=1.0) == 6
+def test_measured_cap_is_available_ram_bound():
+    assert compute_measured_cap(available_ram_gb=1.0, cpu_load=0.0, logical_cpus=32) == 6
 
 
-def test_compute_parallelism_cap_minimum_one():
-    assert compute_parallelism_cap(physical_cores=1, usable_ram_gb=0.01) == 1
+def test_measured_cap_rises_with_free_memory_and_falls_with_load():
+    assert compute_measured_cap(2.0, 0.0, 32) < compute_measured_cap(8.0, 0.0, 32)
+    assert compute_measured_cap(64.0, 0.75, 32) < compute_measured_cap(64.0, 0.25, 32)
 
 
-def test_compute_parallelism_cap_rejects_bad_input():
+def test_measured_cap_has_no_core_fraction_term():
+    assert compute_measured_cap(available_ram_gb=100.0, cpu_load=0.0, logical_cpus=24) == 24
+
+
+def test_measured_cap_minimum_one():
+    assert compute_measured_cap(available_ram_gb=0.0, cpu_load=2.0, logical_cpus=1) == 1
+
+
+def test_measured_cap_rejects_bad_input():
     with pytest.raises(ValueError):
-        compute_parallelism_cap(physical_cores=0, usable_ram_gb=8.0)
+        compute_measured_cap(available_ram_gb=8.0, cpu_load=0.0, logical_cpus=0)
     with pytest.raises(ValueError):
-        compute_parallelism_cap(physical_cores=4, usable_ram_gb=0.0)
+        compute_measured_cap(available_ram_gb=-1.0, cpu_load=0.0, logical_cpus=4)
+    with pytest.raises(ValueError):
+        compute_measured_cap(available_ram_gb=8.0, cpu_load=-0.1, logical_cpus=4)
 
 
 #: A live MUTATING op, used as the specimen for the refusal tests below. Held in
@@ -178,8 +189,9 @@ def test_run_probe_refuses_before_any_spawn(monkeypatch):
             repo=None,
             levels=[1],
             machine_state_reader=_reader,
-            physical_cores=8,
-            usable_ram_gb=16.0,
+            available_ram_gb=16.0,
+            cpu_load=0.5,
+            logical_cpus=8,
         )
     assert spawn_calls == []
 
@@ -230,8 +242,9 @@ def test_run_probe_aborts_on_unreadable_machine_state(mock_time_invocation):
         levels=[1],
         n_per_level=3,
         machine_state_reader=reader,
-        physical_cores=8,
-        usable_ram_gb=16.0,
+        available_ram_gb=16.0,
+        cpu_load=0.5,
+        logical_cpus=8,
     )
 
     assert result["aborted"] is True
@@ -253,8 +266,9 @@ def test_run_probe_collects_samples_and_stamps_conditions(mock_time_invocation):
         levels=[1, 2],
         n_per_level=2,
         machine_state_reader=reader,
-        physical_cores=8,
-        usable_ram_gb=16.0,
+        available_ram_gb=16.0,
+        cpu_load=0.5,
+        logical_cpus=8,
     )
 
     assert result["aborted"] is False
@@ -283,8 +297,9 @@ def test_run_probe_invalid_samples_counted_not_raised(mock_time_invocation):
         levels=[1],
         n_per_level=2,
         machine_state_reader=reader,
-        physical_cores=8,
-        usable_ram_gb=16.0,
+        available_ram_gb=16.0,
+        cpu_load=0.5,
+        logical_cpus=8,
     )
 
     assert result["aborted"] is False
@@ -309,8 +324,9 @@ def test_run_probe_valid_level_carries_no_no_valid_samples_flag(mock_time_invoca
         levels=[1],
         n_per_level=2,
         machine_state_reader=reader,
-        physical_cores=8,
-        usable_ram_gb=16.0,
+        available_ram_gb=16.0,
+        cpu_load=0.5,
+        logical_cpus=8,
     )
 
     level1 = result["level_results"][0]
@@ -343,8 +359,9 @@ def test_run_probe_mixed_level_still_surfaces_the_invalid_reason(mock_time_invoc
         levels=[1],
         n_per_level=3,
         machine_state_reader=reader,
-        physical_cores=8,
-        usable_ram_gb=16.0,
+        available_ram_gb=16.0,
+        cpu_load=0.5,
+        logical_cpus=8,
     )
 
     level1 = result["level_results"][0]
