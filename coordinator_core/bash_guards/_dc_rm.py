@@ -213,6 +213,27 @@ def _is_within(path: str, root: str) -> bool:
     return p == r or p.startswith(r.rstrip(os.sep) + os.sep)
 
 
+def _resolves_under_repo_scratch(resolved: str) -> bool:
+    """True when `resolved` (already symlink/junction/`..`-resolved) lies strictly
+    below a `<repo>/scratch` directory, `<repo>` being a directory holding a `.git`
+    entry. Filesystem stats only, no spawn. A scratch dir that is itself a link
+    resolves elsewhere and never matches. A nested repo (a `.git` entry on the way
+    up, e.g. a clone inside scratch) holds its own uncommitted work and is not
+    exempt."""
+    cur = os.path.dirname(resolved.replace("/", os.sep))
+    while True:
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            return False
+        if os.path.normcase(os.path.basename(cur)) == "scratch" and os.path.exists(
+            os.path.join(parent, ".git")
+        ):
+            return True
+        if os.path.exists(os.path.join(cur, ".git")):
+            return False
+        cur = parent
+
+
 def _attribute_porcelain(
     out: str, root: str, targets: List[str]
 ) -> Optional[Dict[str, str]]:
@@ -1125,6 +1146,11 @@ def check_destructive_rm(
                             % (tgt, store_desc, loss_desc, failed_note, tgt_abs, tgt_abs, tgt_abs, tgt_abs)
                         ),
                     )
+
+            # `<repo>/scratch` is the sanctioned disposal area: nothing resolving
+            # under it is guarded. After the git-store and repo-root denies above.
+            if _resolves_under_repo_scratch(tgt_abs):
+                continue
 
             # Scratch allowlist.
             scratch_bn = os.path.basename(tgt_abs)

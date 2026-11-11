@@ -1,8 +1,8 @@
 """In-process evaluator for an anchor premise's check. No spawn, no walk: it streams only the
 files the command names (any size), under the repo root it is handed.
 
-Grammar (shlex, posix): stage := grep FLAGS (PATTERN | (-e PATTERN)+) FILE, FLAGS = c plus at most
-one of E or F (a line counts when any -e pattern matches);
+Grammar (shlex, posix): stage := grep FLAGS (PATTERN | (-e PATTERN)+) FILE, FLAGS = c (or n, which
+implies c) plus at most one of E or F (a line counts when any -e pattern matches);
 command := stage ("&&" stage)*; expect := N | >=N | <=N | >N | <N | "N then M [then K ...]".
 Anything else is NOT_EVALUABLE."""
 
@@ -88,9 +88,16 @@ def _parse_stage(words: List[str]) -> Tuple[str, List[str], str]:
             patterns.append(rest.pop(0))
             continue
         body = flag[1:]
-        if not body or not set(body) <= set("cEF"):
+        if not body or not set(body) <= set("cEFn"):
             raise _NotEvaluable(f"unsupported grep flag {flag!r}")
         flags.extend(body)
+    if flags.count("n") > 1:
+        raise _NotEvaluable("flags must include c once, with at most one of E or F")
+    if "n" in flags:
+        # Line numbers change no match: -n alone counts the printed lines, -cn is -c.
+        flags = [f for f in flags if f != "n"]
+        if "c" not in flags:
+            flags.append("c")
     if len(flags) != len(set(flags)) or "c" not in flags:
         raise _NotEvaluable("flags must include c once, with at most one of E or F")
     if "E" in flags and "F" in flags:

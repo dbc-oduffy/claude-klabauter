@@ -39,6 +39,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+from coordinator_core.bounded_io import run_bounded
 from coordinator_core.git.git_state import IndexParseError, read_index_paths
 from coordinator_core.roadmap import plan_gate as pg
 from coordinator_core.session.record_homes import home_dir
@@ -271,6 +272,8 @@ def _list_md(directory: str, recursive: bool) -> List[Tuple[str, str]]:
 # The fourth slot memoises the baton-field parse of the same text.
 _HEAD_CACHE: Dict[str, list] = {}
 _HEAD_CACHE_MAX = 20000
+HEAD_READ_DEADLINE_SECS = 4.0
+_HEAD_STALLED = object()
 _PLAN_CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
 
 
@@ -397,6 +400,13 @@ class _Gate:
                 names.extend(found)
         except OSError as exc:
             raise GateReadRefused(f"live handoff dir unreadable: {exc}") from exc
+        misses: List[str] = []
+        for dp, fn, key in names:
+            full = dp + "/" + fn
+            hit = _HEAD_CACHE.get(full)
+            if hit is None or hit[0] != key:
+                misses.append(full)
+        fresh = self._read_misses(live_dir, misses) if misses else {}
         for dp, fn, key in names:
             full = dp + "/" + fn
             path = Path(full)
@@ -404,11 +414,11 @@ class _Gate:
             hit = _HEAD_CACHE.get(full)
             if hit is not None and hit[0] == key:
                 text, head = hit[1], hit[2]
+            elif fresh is None:
+                # Wall overrun: serve the stale head; the cache keeps the old stat key so the next call re-reads.
+                text, head = hit[1], hit[2]
             else:
-                try:
-                    text = _read_head(full, _HEAD_BYTES)
-                except OSError as exc:
-                    raise GateReadRefused(f"live handoff unreadable: {rel}: {exc}") from exc
+                text = fresh[full]
                 head = _fields_from_text(full, text, _HEAD_WANT)
                 if len(_HEAD_CACHE) > _HEAD_CACHE_MAX:
                     _HEAD_CACHE.clear()
@@ -425,6 +435,33 @@ class _Gate:
             src = _s(head.get("replan_of"))
             if src:
                 self.replan_sources.add(src.replace("\\", "/").rsplit("/", 1)[-1].removesuffix(".md"))
+
+    def _read_misses(self, live_dir: str, misses: List[str]) -> Optional[Dict[str, str]]:
+        """Heads of every cache-missed live handoff, read under one wall; None when the wall
+        overran and every miss has a stale cache entry to serve instead."""
+
+        current: List[str] = []
+
+        def _work() -> Dict[str, str]:
+            out: Dict[str, str] = {}
+            for full in misses:
+                current[:] = [full]
+                try:
+                    out[full] = _read_head(full, _HEAD_BYTES)
+                except OSError as exc:
+                    raise GateReadRefused(f"live handoff unreadable: {full[len(self.base):]}: {exc}") from exc
+            return out
+
+        got = run_bounded(f"gate-head-read:{live_dir}", _work, deadline=HEAD_READ_DEADLINE_SECS, default=_HEAD_STALLED)
+        if got is not _HEAD_STALLED:
+            return got  # type: ignore[return-value]
+        if any(full not in _HEAD_CACHE for full in misses):
+            # `current` is diagnostic only: it names the open the worker is blocked in.
+            blocked = current[0] if current else next(f for f in misses if f not in _HEAD_CACHE)
+            raise GateReadRefused(
+                f"live handoff read stalled past {HEAD_READ_DEADLINE_SECS}s: {blocked[len(self.base):]}"
+            )
+        return None
 
     def _scan_archive_names(self) -> None:
         target = self.base + "archive/handoffs"

@@ -111,6 +111,7 @@ from coordinator_core.ops.fleet import archive_actioned_memos
 from coordinator_core.ops.fleet._common import Move, archive_and_commit, handoff_archive_dest
 from coordinator_core.ops.fleet.archive_terminal_handoffs import _dirty_handoff_relpaths
 from coordinator_core.ops.fleet.prune_emitted import prune_emitted_output
+from coordinator_core.ops.repo_scratch_sweep import sweep_repo_scratch
 from coordinator_core.wire_paths import rel_id
 
 _LOG = logging.getLogger(__name__)
@@ -295,7 +296,10 @@ def run(
     result), `emitted_pruned` (repo-relative paths of untracked emitted
     workflow output deleted this cycle), `emitted_retained_count` (int) and
     `emitted_prune_error` (str or None; the prune leg is non-fatal and never
-    changes `exit_code`), `cascade_redrive` (`redrive_terminal_divergences`
+    changes `exit_code`), `scratch_swept` (`sweep_repo_scratch` result dict, or
+    None) and `scratch_sweep_error` (str or None; non-fatal like the prune leg;
+    schedule: every housekeeping cycle, one bounded batch of DEFAULT_BATCH
+    removals), `cascade_redrive` (`redrive_terminal_divergences`
     result; a raising redrive lands in its `errors`, never fails the cycle),
     `landed_parked` (plans parked at landed past the day threshold), and
     `invariant` (every run, close or not): `archive_nonterminal`
@@ -542,6 +546,13 @@ def run(
     except Exception as exc:  # noqa: BLE001 -- the prune leg never fails the cycle
         emitted_prune_error = f"{type(exc).__name__}: {exc}"
 
+    scratch_swept: Optional[dict] = None
+    scratch_sweep_error: Optional[str] = None
+    try:
+        scratch_swept = sweep_repo_scratch(worktree_root)
+    except Exception as exc:  # noqa: BLE001 -- the scratch sweep never fails the cycle
+        scratch_sweep_error = f"{type(exc).__name__}: {exc}"
+
     # Persist for the next cycle, ONLY when the on-disk cache would differ.
     # Best-effort by construction: a cache that cannot be written costs the
     # next cycle a rebuild, nothing else.
@@ -578,6 +589,8 @@ def run(
         "emitted_pruned": emitted_pruned,
         "emitted_retained_count": emitted_retained_count,
         "emitted_prune_error": emitted_prune_error,
+        "scratch_swept": scratch_swept,
+        "scratch_sweep_error": scratch_sweep_error,
         "live_read_count": live_result.read_count,
         "scan_gaps": live_result.scan_gaps,
         "index_rebuilt": index_rebuilt,

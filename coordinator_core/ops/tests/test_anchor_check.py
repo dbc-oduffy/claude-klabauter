@@ -35,6 +35,23 @@ def test_flag_forms_match(root, cmd):
     assert r["state"] == "MATCH" and r["observed"] == "3"
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    ["grep -n foo a.txt", "grep -cn foo a.txt", "grep -nc foo a.txt", "grep -c -n foo a.txt",
+     "grep -nE 'foo' a.txt", "grep -n -e foo a.txt"],
+)
+def test_line_number_flag_is_evaluated_not_skipped(root, cmd):
+    r = evaluate(cmd, "3", root)
+    assert r["state"] == "MATCH" and r["observed"] == "3"
+    assert evaluate(cmd, "2", root)["state"] == "MISMATCH"
+
+
+def test_line_number_flag_does_not_admit_other_flags(root):
+    assert _state(root, "grep -ni foo a.txt", "3") == "NOT_EVALUABLE"
+    assert _state(root, "grep -nn foo a.txt", "3") == "NOT_EVALUABLE"
+    assert _state(root, "grep foo a.txt", "3") == "NOT_EVALUABLE"
+
+
 def test_multiple_e_patterns_count_lines_matching_any(root):
     r = evaluate("grep -c -e foo -e Baz a.txt", "4", root)
     assert r["state"] == "MATCH" and r["observed"] == "4"

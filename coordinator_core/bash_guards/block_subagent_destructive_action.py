@@ -2579,6 +2579,8 @@ _UNRECOGNIZED_VERBS: "contextvars.ContextVar[Optional[List[str]]]" = contextvars
     "_subagent_unrecognized_verbs", default=None
 )
 _RAW_SEGMENT_SPLIT_RE = re.compile(r"[;&|\n]+")
+#: The payload cwd for the running `check()`; `rm` operands under `<repo>/scratch/` resolve against it.
+_RM_CWD: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("_subagent_rm_cwd", default=None)
 
 
 def _with_backslashes_restored(remaining: List[str]) -> List[str]:
@@ -4236,14 +4238,38 @@ def _operand_is_private_temp_index(operand: str) -> bool:
     return _PRIVATE_TEMP_INDEX_RE.fullmatch(parts[-1]) is not None
 
 
+def _operand_is_in_repo_scratch(operand: str) -> bool:
+    """`operand`, resolved through `..`, symlinks and junctions against the payload cwd, lies
+    strictly below a `<repo>/scratch` directory. A glob is accepted in the last component only,
+    judged by the directory it expands in. A `cd`, `$`, backtick or `~` leaves it unresolvable."""
+    cwd = _RM_CWD.get()
+    if not cwd or operand.startswith("-") or any(c in operand for c in "$`~"):
+        return False
+    if any(c in operand for c in "*?[]"):
+        head, tail = os.path.split(operand.replace("\\", "/").rstrip("/"))
+        if any(c in head for c in "*?[]") or not tail or tail in (".", ".."):
+            return False
+        operand = (head + "/" if head else "") + "x"
+    if _cd_precedes_delete(_RAW_CMD.get()):
+        return False
+    try:
+        from coordinator_core.bash_guards._dc_rm import _resolves_under_repo_scratch
+    except ImportError:
+        return False
+    full = operand if os.path.isabs(operand) else os.path.join(cwd, operand)
+    return _resolves_under_repo_scratch(os.path.realpath(full))
+
+
 def _rm_only_regenerable(cmd: str) -> bool:
     """True when every `rm` in `cmd` is a plain segment whose operands are all regenerable
-    build/cache dirs, private temp indexes, or the scratch export of a same-command
-    `git checkout-index --prefix`, and no other segment hides an `rm` (xargs, a `-c` payload)."""
+    build/cache dirs, private temp indexes, targets resolving under `<repo>/scratch/`, or the
+    scratch export of a same-command `git checkout-index --prefix`, and no other segment hides an
+    `rm` (xargs, a `-c` payload)."""
     return (
         _rm_operands_all(cmd, _operand_is_regenerable)
         or _rm_operands_all(cmd, _operand_is_landing_export)
         or _rm_operands_all(cmd, _operand_is_private_temp_index)
+        or _rm_operands_all(cmd, _operand_is_in_repo_scratch)
     )
 
 
@@ -5216,6 +5242,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         (payload.get("agent_type") or payload.get("subagent_type") or "") == "coordinator:git-commit-agent"
     )
     raw_token = _RAW_CMD.set(flat)
+    rm_cwd_token = _RM_CWD.set(cwd if isinstance(cwd, str) and cwd else None)
     unrec_token = _UNRECOGNIZED_VERBS.set([])
     decl_token = _DECL_CTX.set(
         {"cmd": flat, "cwd": cwd, "session_id": payload.get("session_id") or "", "license": {}}
@@ -5230,6 +5257,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     finally:
         _DECL_CTX.reset(decl_token)
         _UNRECOGNIZED_VERBS.reset(unrec_token)
+        _RM_CWD.reset(rm_cwd_token)
         _RAW_CMD.reset(raw_token)
         _COMMIT_AGENT.reset(commit_agent_token)
         _SP_MEMO.reset(memo_token)
