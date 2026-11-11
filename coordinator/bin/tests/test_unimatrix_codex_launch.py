@@ -22,7 +22,7 @@ launch = _load("unimatrix-codex-launch.py", "unimatrix_codex_launch")
 hook = _load("unimatrix-codex-hook-sessionstart.py", "unimatrix_codex_hook")
 contract = _load("unimatrix-peer-contract.py", "unimatrix_peer_contract_t")
 
-SOCK = "/home/u/.codex/app-server-control/app-server-control.sock"
+SOCK = "/home/u/.codex/app-server-control/app-server-control.sock"  # abs-path-ok: synthetic socket path fixture, never opened
 
 
 def test_tui_argv_attaches_remote_unix_socket_and_passes_args():

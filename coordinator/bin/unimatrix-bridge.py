@@ -284,18 +284,6 @@ def delivery_status(limit=10):
             for r in rows[-limit:]]
 
 
-def ssh_mux_options():
-    """ssh options that reuse one warm connection per remote, shortening the send leg the sender waits on.
-
-    Win32 OpenSSH has no ControlMaster; the ControlPath is kept short (unix socket path limit).
-    """
-    if IS_WIN:
-        return []
-    uid = os.getuid() if hasattr(os, "getuid") else 0
-    return ["-o", "ControlMaster=auto", "-o", "ControlPersist=120", "-o", f"ControlPath=/tmp/unimatrix-cm-{uid}-%C",
-            "-o", "ConnectTimeout=10"]
-
-
 def relay_send(conn):
     # The relay forwards one message line and authenticates for its local recipient;
     # the near recipient's auth header must not cross the box boundary.
@@ -331,6 +319,14 @@ def relay_send(conn):
         log.write("relay: mirror lacks far session id; re-mirror\n")
         for line in lines:
             _record_outcome(line, target, ts, 0, "mirror lacks far session id; re-mirror")
+        return
+    addressed = mine.get("name")
+    if addressed != far_name:
+        error = f"addressed {addressed}, endpoint is {far_name}; re-mirror"
+        log.write(f"relay refused: {error}\n")
+        for line in lines:
+            _record_outcome(line, target, ts, 0, error)
+        _mark_misroute()
         return
     started = time.monotonic()
     far_digest = hashlib.sha256(mine[FAR_SOCKET_FIELD].encode("utf-8")).hexdigest()[:16]
@@ -375,13 +371,22 @@ def _mark_misroute():
         log.write(f"relay: misroute marker failed: {e}\n")
 
 
+def _box_mux():
+    path = Path(__file__).resolve().parent / "lib" / "unimatrix_box_mux.py"
+    mod = sys.modules.get("unimatrix_box_mux")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("unimatrix_box_mux", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["unimatrix_box_mux"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
 def _ssh_relay(command, data):
-    """One ssh to the far relay running `command` with `data` on stdin; any fault is a 255 result."""
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WIN else 0
+    """The far relay running `command` with `data` on stdin, through the far box's one channel; any fault is a 255 result."""
     try:
         remote = pick_remote(cfg.remote, getattr(cfg, "tunnel_remote", None))
-        return subprocess.run(["ssh", "-i", cfg.key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", *ssh_mux_options(), remote, command],
-                              input=data, capture_output=True, timeout=30, creationflags=flags)
+        return _box_mux().for_remote(remote, key=cfg.key, extra=["-o", "ConnectTimeout=10"]).run(command, data, timeout=30)
     except Exception as e:  # any send-leg fault is a failed delivery, never a silent one
         return subprocess.CompletedProcess([], 255, b"", f"{type(e).__name__}: {e}".encode())
 
@@ -401,10 +406,10 @@ def _batch_replies(stdout):
 
 def _record_outcome(line, target, ts, ms, error):
     if error:
-        record_delivery({"ts": ts, "target": target, "ok": False, "error": error, "ms": ms})
+        record_delivery({"ts": ts, "at": time.time(), "target": target, "ok": False, "error": error, "ms": ms})
         notify_sender(line, target, error)
     else:
-        record_delivery({"ts": ts, "target": target, "ok": True, "ms": ms})
+        record_delivery({"ts": ts, "at": time.time(), "target": target, "ok": True, "ms": ms})
 
 
 def pump_local_to_sock(conn, s):

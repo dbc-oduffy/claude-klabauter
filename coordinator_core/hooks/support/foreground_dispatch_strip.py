@@ -73,7 +73,9 @@ reference op):
                            shape); the durable calibration marker is still
                            written, because presence of the param -- either
                            value -- is what proves the build exposes it.
-    - present-and-false -> reroute (or deny, if no safe rewrite target).
+    - present-and-false -> reroute (or deny, if no safe rewrite target); the
+                           key's presence is itself the calibration proof (PM
+                           ruling #64 reverses klab-71 F5).
     - absent            -> reroute only if calibrated (this session was
                            previously seen sending the param, proven by the
                            durable `.harness-bg-capable` marker); otherwise
@@ -279,10 +281,7 @@ def compute_foreground_reroute(
     if bg_true:
         return None
 
-    if has_bg:
-        return None
-
-    if not _is_bg_capable(git_dir, sid):
+    if not has_bg and not _is_bg_capable(git_dir, sid):
         return None
 
     if isinstance(tool_input, dict):

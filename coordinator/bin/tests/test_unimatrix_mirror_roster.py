@@ -102,7 +102,7 @@ def test_proc_start_of_a_live_pid_spawns_nothing(monkeypatch):
     monkeypatch.setattr(roster.subprocess, "run", no_spawn)
     monkeypatch.setattr(roster.subprocess, "Popen", no_spawn)
     stamp = roster.proc_start(os.getpid())
-    assert re.fullmatch(r"[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}", stamp)
+    assert re.fullmatch(r"[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}", stamp)  # abs-path-ok: timestamp regex, not a path
 
 
 def test_roster_has_no_private_filetime_reader():
@@ -312,6 +312,8 @@ def test_fetch_roster_dials_the_lan_alias_by_default_and_the_tunnel_when_the_lan
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
     monkeypatch.setattr(roster.subprocess, "run", run)
+    monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
+    monkeypatch.setattr(roster, "mux_options", lambda remote: [])
     monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
     roster.fetch_roster("lan", "k", "wg")
     assert "lan" in argvs[-1] and "wg" not in argvs[-1]
@@ -693,7 +695,7 @@ def test_rename_live_mirror_preserves_box_and_vendor(sessions, monkeypatch):
     scan = [("far-c", "/other.sock")]
     roster.rename_live_mirror(31339, FAR_SOCK, row, cfg, lambda m: None, scan)
     after = json.loads((sessions / "31339.json").read_text())
-    assert after["name"] != entry["name"]
+    assert after["name"] == entry["name"] == "far-c.Machine-b-LAN"
     assert after["unimatrixBox"] == "machine-b" and after["unimatrixVendor"] == "codex"
 
 
@@ -729,12 +731,13 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
     d = tmp_path / "sessions"
     d.mkdir()
     entry = {"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": far_socket, "unimatrixFarName": "far",
-             "sessionId": "sid-far"}
+             "name": "far", "sessionId": "sid-far"}
     if stored:
         entry["farPid"] = stored
     (d / f"{os.getpid()}.json").write_text(json.dumps(entry))
     monkeypatch.setattr(bridge, "SESSIONS", str(d))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setattr(bridge._box_mux(), "IS_WIN", False)  # the stubbed subprocess.run is the direct channel's spawn
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote=None, port=None)
     bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
     argvs = []
@@ -1072,6 +1075,8 @@ def test_publish_targets_ship_every_unimatrix_script_and_test():
 
 def test_roster_failure_names_the_ssh_reason(monkeypatch):
     roster = load("roster")
+    monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
+    monkeypatch.setattr(roster, "mux_options", lambda remote: [])
     monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
     monkeypatch.setattr(roster.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
         argv, 255, b"", b"debug\nssh: connect to host lan port 22: Operation timed out\n"))
@@ -1105,6 +1110,8 @@ def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path, name):
 
 def test_fetch_roster_retries_one_transient_stall_but_not_a_persistent_failure(monkeypatch):
     roster = load("roster")
+    monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
+    monkeypatch.setattr(roster, "mux_options", lambda remote: [])
     monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
     calls = []
 

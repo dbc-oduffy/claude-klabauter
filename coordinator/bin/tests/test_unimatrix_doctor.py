@@ -38,6 +38,8 @@ class Net:
         self.alias_host = {}
         self.peer_snapshot = {}  # remote -> bytes returned by `membership get`
         self.cmds = []
+        self.kex, self.scan_ok, self.timeout = set(), set(), set()
+        self.far_log = {}  # remote -> bytes the unprivileged far-log read returns
 
     def run(self, cmd, **kw):
         self.cmds.append(cmd)
@@ -46,7 +48,16 @@ class Net:
         if cmd[1] == "-G":
             host = self.alias_host.get(cmd[-1])
             return subprocess.CompletedProcess(cmd, 0 if host else 255, f"hostname {host}\n" if host else "", "")
+        if "ssh-keyscan" in cmd:
+            ok = cmd[-7] in self.scan_ok
+            return subprocess.CompletedProcess(cmd, 0 if ok else 1, b"host ssh-ed25519 AAAA\n" if ok else b"", b"")
+        if cmd[-1].startswith("journalctl"):
+            log = self.far_log.get(cmd[-2])
+            return subprocess.CompletedProcess(cmd, 0 if log else 1, log or b"", b"")
         remote = cmd[-3] if cmd[-2:] == ["membership", "get"] else cmd[-2]
+        if remote in self.kex:
+            return subprocess.CompletedProcess(
+                cmd, 255, b"", b"kex_exchange_identification: Connection closed by remote host")
         if cmd[-2:] == ["membership", "get"]:
             remote = cmd[-3]
             blob = self.peer_snapshot.get(remote)
@@ -60,6 +71,8 @@ class Net:
         return [("addr",)]
 
     def connect(self, ep, timeout):
+        if ep[0] in self.timeout:
+            raise TimeoutError("timed out")
         if ep[0] in self.refuse:
             raise ConnectionRefusedError("refused")
 
@@ -214,6 +227,65 @@ def test_each_failed_leg_of_a_link_is_named_and_stops_the_later_legs(box):
     assert "norefuse: norefuse.local refuses TCP 22" in out
     assert "noroster: relay key does not answer `roster`" in out and "rc=255" in out
     assert "nodns: " in out and "nodns: bridge" not in out
+
+
+def _link_lines(out):
+    return [ln for ln in out.splitlines() if ln.startswith("problem: mac:")]
+
+
+def test_kex_closed_with_no_other_source_reaching_is_probable_unreachable_upstream(box):
+    box.adopt("me", "mac")
+    box.net.kex = {"kim@mac.local"}
+    rc, out = box.main()
+    line = _link_lines(out)[0]
+    assert rc == 1 and "unreachable-upstream (probable)" in line
+    assert "remedy: check that box's network link and prefer wired" in line
+    assert "refusing-one-source" not in out and "sshd-refusing-all-sources" not in out
+
+
+def test_tcp_timeout_with_readable_far_log_showing_no_spawn_is_definite_unreachable_upstream(box):
+    box.adopt("me", "mac")
+    box.net.timeout = {"mac.local"}
+    rc, out = box.main(far_sshd_log=lambda remote, host: "sshd started\n")
+    line = _link_lines(out)[0]
+    assert "unreachable-upstream (definite)" in line and "prefer wired" in line
+
+
+def test_kex_closed_while_far_log_shows_spawns_is_sshd_refusing_all_sources(box):
+    box.adopt("me", "mac")
+    box.net.kex = {"kim@mac.local"}
+    rc, out = box.main(far_sshd_log=lambda remote, host: "Connection from 10.0.0.2 port 5\nConnection closed by 10.0.0.2\n")
+    line = _link_lines(out)[0]
+    assert "sshd-refusing-all-sources" in line and "restart sshd on that box" in line
+    assert "unreachable-upstream" not in line and "prefer wired" not in line
+
+
+def test_default_far_log_reader_uses_the_tunnel_route_when_the_direct_link_fails(box, monkeypatch):
+    box.adopt("me", "mac")
+    monkeypatch.setenv("UNIMATRIX_TUNNEL_REMOTE", "mac-tun")
+    box.net.kex = {"kim@mac.local"}
+    box.net.far_log = {"mac-tun": b"kex_exchange_identification: Connection closed by 10.0.0.2 port 5\n"}
+    line = _link_lines(box.main()[1])[0]
+    assert "sshd-refusing-all-sources" in line and "unreachable-upstream" not in line
+    box.net.far_log = {"mac-tun": b"sshd started\nAccepted publickey for kim from 10.77.0.2\n"}
+    assert "unreachable-upstream (definite)" in _link_lines(box.main()[1])[0]
+
+
+def test_default_far_log_reader_direct_only_is_probable_since_the_failing_link_cannot_read_its_own_log(box):
+    box.adopt("me", "mac")
+    box.net.kex = {"kim@mac.local"}
+    box.net.far_log = {}
+    assert "unreachable-upstream (probable)" in _link_lines(box.main()[1])[0]
+
+
+def test_kex_closed_while_another_source_reaches_port_22_is_refusing_one_source(box):
+    box.adopt("me", "mac", "rook")
+    box.net.kex = {"kim@mac.local"}
+    box.net.scan_ok = {"kim@rook.local"}
+    rc, out = box.main()
+    line = _link_lines(out)[0]
+    assert "refusing-one-source" in line and "another source reaches it" in line
+    assert "unreachable-upstream" not in line and "sshd-refusing-all-sources" not in line
 
 
 def test_peer_that_does_not_list_us_or_holds_another_epoch_is_flagged(box):

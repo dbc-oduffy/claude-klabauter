@@ -72,6 +72,9 @@ class Box:
         names = set(ui.VENDORED_SCRIPTS) | set(ui.OPTIONAL_SCRIPTS) | {p.name for p in BIN.glob("unimatrix-*.py")}
         for name in sorted(names):
             (self.src / name).write_bytes((BIN / name).read_bytes())
+        (self.src / "lib").mkdir()
+        for name in ui.VENDORED_LIB:
+            (self.src / "lib" / name).write_bytes((BIN / "lib" / name).read_bytes())
         _swap(self.src / "unimatrix-roster.py", ENDPOINT_ANCHOR, ENDPOINT_NAMESPACED)
         self.dest.mkdir(parents=True)
         (self.dest / "peers.json").write_text(
@@ -81,6 +84,11 @@ class Box:
         self.router = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.router)
         self.roster = self.router._roster()
+        legs = self.dest / "agy-legs"
+        legs.mkdir()
+        (legs / "conversation-handoff.json").write_text(
+            json.dumps({"conversation": "conversation-handoff", "pid": os.getpid(),
+                        "procStart": self.roster.proc_start(os.getpid())}), encoding="utf-8")
 
     def install(self):
         """Run the real `--install` at default arguments from the tmp source tree; (rc, output)."""

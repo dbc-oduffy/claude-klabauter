@@ -404,6 +404,12 @@ def local_reply_address(line):
                      if d.get("macSocketPath") == addr[len(scheme):] and d.get("messagingSocketPath")]
         candidates = [d for d in by_socket if client and _row_is_from(d, client)] \
             or [d for d in by_socket if not _row_names_a_box(d)]
+    if not candidates and client:
+        # The sender has no mirror here (its socket is another box's local pipe): hand the receiver
+        # the sending box's reply-inbox endpoint, the one address that routes back to that box.
+        candidates = [d for _, d, _ in entries()
+                      if d.get("unimatrixReplyInbox") is True and d.get("unimatrixMirror")
+                      and d.get("messagingSocketPath") and d.get("unimatrixClient") == client]
     if len(candidates) == 1:
         d = candidates[0]
         frame["from"] = scheme + d["messagingSocketPath"]

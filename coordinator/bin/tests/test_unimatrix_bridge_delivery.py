@@ -40,6 +40,7 @@ def bridge(tmp_path, monkeypatch):
          "unimatrixFarName": "far-session", "sessionId": FAR_SID}))
     monkeypatch.setattr(mod, "SESSIONS", str(sessions))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.setattr(mod._box_mux(), "IS_WIN", False)  # these tests stub subprocess.run, the direct channel's spawn
     mod.cfg = types.SimpleNamespace(endpoint=MIRROR, key="k", remote="farbox", port=None)
     mod.log = open(tmp_path / "bridge.log", "a", encoding="utf-8")
     mod.written = []
@@ -284,6 +285,31 @@ def test_a_mirror_without_far_session_id_sends_nothing_and_records_each_line(bri
     assert [s.split()[0] for s in status] == ["FAILED", "FAILED"] and "mirror lacks far session id; re-mirror" in status[0]
     assert len(bridge.written) == 2
     assert not (Path(bridge.SESSIONS) / f"{os.getpid()}.misroute").exists()
+
+
+@pytest.mark.parametrize("name", ["group-em-56", None])
+def test_an_addressed_name_that_differs_from_the_endpoint_identity_writes_nothing(bridge, monkeypatch, name):
+    path = Path(bridge.SESSIONS) / f"{os.getpid()}.json"
+    entry = json.loads(path.read_text())
+    entry.pop("name")
+    if name:
+        entry["name"] = name
+    path.write_text(json.dumps(entry))
+    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess([], 0, b'{"ok": true}\n', b""))
+    send_many(bridge, 2)
+    assert calls == []
+    status = bridge.delivery_status()
+    assert [s.split()[0] for s in status] == ["FAILED", "FAILED"]
+    assert f"addressed {name}, endpoint is far-session" in status[0]
+    assert len(bridge.written) == 2
+    assert (Path(bridge.SESSIONS) / f"{os.getpid()}.misroute").exists()
+
+
+def test_a_matching_addressed_name_still_delivers(bridge, monkeypatch):
+    calls = record_ssh(monkeypatch, lambda cmd, data: subprocess.CompletedProcess([], 0, b'{"ok": true}\n', b""))
+    send_many(bridge, 1)
+    assert len(calls) == 1
+    assert [s.split()[0] for s in bridge.delivery_status()] == ["delivered"]
 
 
 def test_bridge_name_digest_equals_the_relays(bridge, monkeypatch):

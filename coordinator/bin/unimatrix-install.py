@@ -21,6 +21,7 @@ import sys
 import threading
 import tomllib
 import tempfile
+import types
 from pathlib import Path
 
 INSTALL_CLASS = True  # copies vendored scripts into the settings home; see door_install.declared_install_class
@@ -269,10 +270,17 @@ def install_scripts(src_dir, dest_dir):
     dest.mkdir(parents=True, exist_ok=True)
     for name in wanted:
         shutil.copy2(Path(src_dir) / name, dest / name)
+    for name in VENDORED_LIB:
+        if (Path(src_dir) / "lib" / name).is_file():
+            (dest / "lib").mkdir(exist_ok=True)
+            shutil.copy2(Path(src_dir) / "lib" / name, dest / "lib" / name)
     extra = [n for n in OPTIONAL_SCRIPTS if n not in wanted and (Path(src_dir) / n).is_file()]
     for name in extra:
         shutil.copy2(Path(src_dir) / name, dest / name)
     return wanted + extra
+
+
+VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py")  # sibling lib/ modules the installed scripts load by path
 
 
 HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")
@@ -1276,6 +1284,7 @@ def _windows_run_command(dest_dir):
 def _delete_run_value():
     """Delete the HKCU Run value; True when one was there."""
     wr = _winreg()
+    _refuse_real_run_key(wr)
     try:
         with wr.OpenKey(wr.HKEY_CURRENT_USER, RUN_KEY, 0, wr.KEY_SET_VALUE) as key:
             wr.DeleteValue(key, LOGIN_TASK_NAME)
@@ -1318,6 +1327,49 @@ def _login_agent_paths(agent_dir):
     return Path(agent_dir) / name, Path(agent_dir) / "default.target.wants" / LOGIN_UNIT
 
 
+_TEST_HOME = []
+try:
+    _REAL_HOME = Path.home()
+except RuntimeError:
+    _REAL_HOME = None
+
+
+def _test_home():
+    """The test-home guard module (lib/unimatrix_test_home.py), loaded once; None when it is not shipped."""
+    if not _TEST_HOME:
+        path = _BIN_DIR / "lib" / "unimatrix_test_home.py"
+        if not path.is_file():
+            return None
+        spec = importlib.util.spec_from_file_location("unimatrix_test_home", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _TEST_HOME.append(mod)
+    return _TEST_HOME[0]
+
+
+def _refuse_real_run_key(wr):
+    """Under a test settings home, refuse a registry module that is the real `winreg`; a stand-in object passes."""
+    guard = _test_home() if os.environ.get("UNIMATRIX_TEST_HOME") else None
+    if guard is not None and isinstance(wr, types.ModuleType):
+        guard.refuse_real("run_key", f"HKCU\\{RUN_KEY}\\{LOGIN_TASK_NAME}")
+
+
+def _refuse_real_agent_dir(root):
+    """Under a test settings home, refuse the default plist/systemd dir of the account home captured at
+    import (a test that redirects HOME afterwards resolves elsewhere) unless it is inside the settings home."""
+    guard = _test_home() if os.environ.get("UNIMATRIX_TEST_HOME") else None
+    if guard is None or _REAL_HOME is None:
+        return
+    here = os.path.normcase(os.path.abspath(os.fspath(root)))
+    real_dirs = (_REAL_HOME / "Library" / "LaunchAgents", _REAL_HOME / ".config" / "systemd" / "user")
+    if here not in {os.path.normcase(os.path.abspath(os.fspath(d))) for d in real_dirs}:
+        return
+    try:
+        guard.refuse_real("key_path", root)
+    except guard.TestHomeRefusal:
+        raise guard.TestHomeRefusal("login_agent_dir", root) from None
+
+
 def register_login_agent(dest_dir, agent_dir=None, schtasks=None):
     """Register one run-once-at-login agent for the installed autolink; return (state, where).
 
@@ -1327,8 +1379,9 @@ def register_login_agent(dest_dir, agent_dir=None, schtasks=None):
     Plain file writes on macOS and Linux: picked up at next login, no process spawned.
     """
     if sys.platform == "win32":
+        wr = _winreg()
+        _refuse_real_run_key(wr)
         try:
-            wr = _winreg()
             with wr.CreateKeyEx(wr.HKEY_CURRENT_USER, RUN_KEY, 0, wr.KEY_SET_VALUE) as key:
                 wr.SetValueEx(key, LOGIN_TASK_NAME, 0, wr.REG_SZ, _windows_run_command(dest_dir))
         except OSError as exc:
@@ -1338,6 +1391,8 @@ def register_login_agent(dest_dir, agent_dir=None, schtasks=None):
     root = Path(agent_dir) if agent_dir else login_agent_dir()
     if root is None:
         return "skipped", f"no login agent for platform {sys.platform!r}"
+    if not agent_dir:
+        _refuse_real_agent_dir(root)
     target, link = _login_agent_paths(root)
     data = _login_agent_text(dest_dir)
     state = "created"

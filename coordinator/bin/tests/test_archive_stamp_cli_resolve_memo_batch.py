@@ -104,6 +104,76 @@ def test_batch_of_three_memos_lands_one_commit(tmp_path, monkeypatch):
     assert all(c["defer_commit"] and c["decision"] == "accepted" for c in transition_calls)
 
 
+def _patch_batch(monkeypatch, tmp_path, commits):
+    monkeypatch.setattr(
+        archive_stamp, "_call_memo_transition", lambda p, params: {"exit_code": 0, "applied": True}
+    )
+    monkeypatch.setattr(archive_stamp, "_worktree_root", lambda p: tmp_path)
+    monkeypatch.setattr(archive_stamp, "resolve_current_session_id", lambda worktree_root=None: "sess-1")
+    monkeypatch.setattr(
+        git_native,
+        "commit_scoped",
+        lambda paths, msg, cwd, **kw: (
+            commits.append(list(paths)) or SimpleNamespace(ok=True, stdout="deadbeef\n", stderr="")
+        ),
+    )
+    monkeypatch.setattr(
+        "coordinator_core.session.scope.release_committed_claims_or_retain", lambda *a, **k: None
+    )
+    monkeypatch.setattr("coordinator_core.session.scope.relocate_touched_path", _move)
+
+
+def _move(sid, src, dst, cwd=None):
+    Path(src).replace(dst)
+
+
+def test_batch_moves_inbox_memos_to_archive_in_one_commit(tmp_path, monkeypatch):
+    inbox = tmp_path / "state" / "inbox"
+    inbox.mkdir(parents=True)
+    memos = [inbox / f"m{i}.md" for i in range(3)]
+    for m in memos:
+        m.write_text("x", encoding="utf-8")
+    commits: list[list[str]] = []
+    _patch_batch(monkeypatch, tmp_path, commits)
+
+    rc = archive_stamp.cs_resolve_memos([str(m) for m in memos], "--realized-by", "abc1234")
+
+    assert rc == 0
+    assert len(commits) == 1
+    expected = [f"state/inbox/m{i}.md" for i in range(3)] + [f"state/archive/m{i}.md" for i in range(3)]
+    assert sorted(commits[0]) == sorted(expected)
+    assert not any(m.exists() for m in memos)
+    assert all((tmp_path / "state" / "archive" / m.name).exists() for m in memos)
+
+
+def test_batch_refuses_a_memo_whose_archive_target_exists(tmp_path, monkeypatch):
+    inbox = tmp_path / "state" / "inbox"
+    archive = tmp_path / "state" / "archive"
+    inbox.mkdir(parents=True)
+    archive.mkdir()
+    a, b = inbox / "a.md", inbox / "b.md"
+    a.write_text("x", encoding="utf-8")
+    b.write_text("x", encoding="utf-8")
+    (archive / "a.md").write_text("old", encoding="utf-8")
+    commits: list[list[str]] = []
+    _patch_batch(monkeypatch, tmp_path, commits)
+
+    rc = archive_stamp.cs_resolve_memos([str(a), str(b)], "--realized-by", "abc1234")
+
+    assert rc == 1
+    assert a.exists() and (archive / "a.md").read_text(encoding="utf-8") == "old"
+    assert sorted(commits[0]) == ["state/archive/b.md", "state/inbox/b.md"]
+
+
+def test_single_memo_form_still_routes_to_cs_resolve_memo(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        archive_stamp, "cs_resolve_memo", lambda p, *a, **k: calls.append((p, a)) or 0
+    )
+    assert archive_stamp.cs_resolve_memos(["only.md"], "--realized-by", "abc1234") == 0
+    assert calls == [("only.md", ("--realized-by", "abc1234"))]
+
+
 def test_cli_routes_multiple_paths_to_the_batch_function():
     mock_mod = unittest.mock.Mock()
     mock_mod.cs_resolve_memos.return_value = 0

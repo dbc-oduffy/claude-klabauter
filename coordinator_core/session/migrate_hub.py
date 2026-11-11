@@ -54,6 +54,7 @@ def migrate_common(common: Path) -> Dict[str, int]:
     common = Path(common)
     if common.name != ".git":
         return counts
+    # Deliberate old-location read: this op exists to carry the pre-migration hub under .git forward.
     legacy = common / HUB_NAME
     if not legacy.is_dir():
         return counts

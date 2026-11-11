@@ -163,10 +163,13 @@ def main(argv: list[str]) -> int:
                 active_handoff_refs += "\n" + _read_full(hfile)
 
     live_plan_refs = ""
-    for name in sorted(os.listdir(plans_dir)):
-        lfile = os.path.join(plans_dir, name)
-        if not os.path.isfile(lfile) or not name.endswith(".md"):
-            continue
+    if os.path.join(_SCRIPT_DIR, "..", "lib") not in sys.path:
+        sys.path.insert(0, os.path.join(_SCRIPT_DIR, "..", "lib"))
+    import output_tree_layout  # noqa: E402  (sys.path-dependent)
+
+    for entry in output_tree_layout.iter_tree_entries(root, "docs/plans", "*.md"):
+        name = entry.name
+        lfile = str(entry)
         stem = name[: -len(".md")]
         if "." in stem:
             continue

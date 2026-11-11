@@ -76,7 +76,8 @@ def _git_common_dir(repo: Path) -> Path | None:
 
 
 def _session_dirs(git_dir: Path) -> List[Path]:
-    # Inline twin of session_hub_path.hub_for_common: this stdlib-only reader imports no engine.
+    # Inline twin of session_hub_path.hub_for_common, built here on purpose: this stdlib-only reader
+    # imports no engine. The else branch is the bare-repo hub, identical to the resolver.
     hub = (
         git_dir.parent / ".coordinator-local" / "coordinator-sessions"
         if git_dir.name == ".git"

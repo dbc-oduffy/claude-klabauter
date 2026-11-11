@@ -150,6 +150,23 @@ def test_existing_ref_refused_unless_replace_and_old_value_passed(repo, tmp_path
     assert [c for c in calls if c[0] == "update-ref"][0][-1] == first
 
 
+def test_root_derived_from_cwd_without_repo_root_flag(repo, tmp_path, monkeypatch):
+    m = _manifest(tmp_path, picks=[repo["c2"]])
+    sub = repo["root"] / "docs"
+    monkeypatch.chdir(sub)
+    assert rc.main([str(m)]) == 0
+    assert _ref_exists(repo["root"])
+
+
+def test_no_repo_root_outside_repo_refuses(tmp_path, monkeypatch, capsys):
+    m = _manifest(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    monkeypatch.chdir(outside)
+    assert rc.main([str(m)]) == 1
+    assert "not inside a git repo; pass --repo-root" in capsys.readouterr().err
+
+
 def test_default_invocation_as_subprocess(repo, tmp_path):
     import os
     m = _manifest(tmp_path, picks=[repo["c2"]])

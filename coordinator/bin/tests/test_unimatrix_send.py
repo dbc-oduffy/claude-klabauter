@@ -19,6 +19,18 @@ def _rows(out):
     return [ln.split("\t") for ln in out.strip().split("\n")[1:-1]]
 
 
+def test_list_names_a_far_box_by_member_host_never_an_ip_octet(monkeypatch, capsys):
+    entries = [{"name": "far-1", "pid": 4, "sessionId": "s4", "unimatrixBox": "192.168.1.20"},
+               {"name": "far-2", "pid": 5, "sessionId": "s5", "unimatrixBox": "10.9.9.9"}]
+    monkeypatch.setattr(us, "_session_entries", lambda: entries)
+    monkeypatch.setattr(us, "_member_ip_hosts", lambda: {"192.168.1.20": "machine-b.local"})
+    with tempfile.TemporaryDirectory() as d:
+        assert us.main(["--list", "--endpoint-dir", d]) == 0
+    rows = _rows(capsys.readouterr().out)
+    assert rows[0][1] == "machine-b"
+    assert rows[1][1] == "10.9.9.9"
+
+
 def test_list_without_router_lists_sessions_dir_and_succeeds(monkeypatch, capsys):
     monkeypatch.setattr(us, "_session_entries", lambda: _ENTRIES)
     with tempfile.TemporaryDirectory() as d:
@@ -182,3 +194,67 @@ def test_send_without_router_names_sendmessage_and_fails(capsys):
     err = capsys.readouterr().err
     assert rc != 0
     assert "SendMessage" in err
+
+
+def test_send_to_a_mirror_whose_far_relay_failed_is_undelivered_not_sent(monkeypatch, capsys):
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": False, "error": "far relay lacks send-session; upgrade it"})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    cap = capsys.readouterr()
+    assert rc == 1 and "sent to" not in cap.out
+    assert "undelivered: fe: far relay lacks send-session" in cap.err
+
+
+def test_send_to_a_mirror_the_relay_delivered_is_sent(monkeypatch, capsys):
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: {"ok": True})
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    assert rc == 0 and "sent to fe" in capsys.readouterr().out
+
+
+def test_send_to_a_mirror_with_no_recorded_outcome_is_unconfirmed_never_sent(monkeypatch, capsys):
+    monkeypatch.setattr(us, "_is_mirror", lambda n: True)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: None)
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "fe", "hi"])
+    cap = capsys.readouterr()
+    assert rc == 0 and "sent to" not in cap.out and "unconfirmed" in cap.err
+
+
+def test_send_to_a_non_mirror_never_waits_for_a_relay_outcome(monkeypatch, capsys):
+    monkeypatch.setattr(us, "_is_mirror", lambda n: False)
+    monkeypatch.setattr(us, "relay_outcome", lambda n, since: (_ for _ in ()).throw(AssertionError("waited")))
+    rc, _ = _run(monkeypatch, {"ok": True, "msg_id": "m", "written": True}, ["--to", "x", "hi"])
+    assert rc == 0 and "sent to x" in capsys.readouterr().out
+
+
+def _deliveries(tmp_path, monkeypatch, rows):
+    import json
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
+    p = tmp_path / "unimatrix" / "deliveries.jsonl"
+    p.parent.mkdir(parents=True)
+    p.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
+
+
+def test_relay_outcome_reads_the_named_targets_row_after_the_send_only(monkeypatch, tmp_path):
+    _deliveries(tmp_path, monkeypatch, [
+        {"at": 50, "target": "fe (pid 9, session s)", "ok": True},
+        {"at": 150, "target": "other (pid 9, session s)", "ok": False, "error": "x"},
+        {"at": 150, "target": "fe (pid 9, session s)", "ok": False, "error": "far relay lacks send-session; upgrade it"},
+    ])
+    out = us.relay_outcome("fe", 100, wait=0)
+    assert out["ok"] is False and "send-session" in out["error"]
+    assert us.relay_outcome("fe", 200, wait=0) is None
+
+
+def test_relay_outcome_waits_for_a_row_the_bridge_has_not_written_yet(monkeypatch, tmp_path):
+    _deliveries(tmp_path, monkeypatch, [])
+    clock = {"t": 0.0}
+    p = tmp_path / "unimatrix" / "deliveries.jsonl"
+
+    def sleep(s):
+        clock["t"] += s
+        if clock["t"] >= 1:
+            p.write_text('{"at": 5, "target": "fe (pid 9, session s)", "ok": true}\n', encoding="utf-8")
+
+    out = us.relay_outcome("fe", 1, wait=10, sleep=sleep, now=lambda: clock["t"])
+    assert out == {"at": 5, "target": "fe (pid 9, session s)", "ok": True}

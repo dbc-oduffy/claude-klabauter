@@ -145,7 +145,8 @@ def request_file(w, which, box):
 def test_doctor_names_the_unsigned_line_and_the_dead_alias(world, monkeypatch):
     w = world
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(w.home_a))
-    (w.home_a / "bin" / "_machine_local.py").write_text("print('deadbox')\n")
+    (w.home_a / "bin" / "_machine_local.py").write_text(
+        "import sys\nprint('deadbox' if sys.argv[-1] == 'unimatrix.far_boxes' else '')\n")
     stranger = f'restrict,command="python {BIN / "unimatrix-relay.py"}" {w.keys["stranger"][1].rsplit(" ", 1)[0]} unimatrix\n'
     w.ak_a.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPERSONAL personal\n" + stranger)
 

@@ -167,14 +167,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.repo_root:
             root = Path(args.repo_root).resolve()
         else:
-            cp = subprocess.run(
-                ["git", "rev-parse", "--show-toplevel"],
-                capture_output=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
-            if cp.returncode:
+            engine_root = str(Path(__file__).resolve().parents[2])
+            if engine_root not in sys.path:
+                sys.path.insert(0, engine_root)
+            from coordinator_core.git.repo_root import show_toplevel
+
+            top = show_toplevel()
+            if top is None:
                 raise CutError("release-cut: not inside a git repo; pass --repo-root")
-            root = Path(cp.stdout.decode().strip())
+            root = Path(top)
         manifest = load_manifest(Path(args.manifest))
         ref, commit = cut(root, manifest, replace=args.replace)
     except CutError as exc:

@@ -53,8 +53,9 @@ Port of: nudge-foreground-agent-dispatch.sh (DoE d39ab164, 2026-07-16)
 
 Three-state run_in_background logic:
     - present-and-true  → silent pass (already backgrounded — correct shape).
-    - present-and-false → silent pass (an explicit false is the caller's choice, e.g. a
-                          blocking ceremony step; calibration is still recorded).
+    - present-and-false → reroute, same as a calibrated absent key (PM ruling #64 reverses
+                          the klab-71 F5 honour-explicit-false rule); the key's presence is
+                          itself the calibration proof. Deny only when no rewrite can bind.
     - absent            → reroute only if calibrated (session previously seen with param
                           present), deny-fallback rule as above; otherwise PASS.
 
@@ -293,10 +294,7 @@ def _handler(params: dict, repo_root=None) -> dict:
     if bg_true:
         return no_advisory()
 
-    if has_bg:
-        return no_advisory()
-
-    if not _is_bg_capable(git_root, session_id):
+    if not has_bg and not _is_bg_capable(git_root, session_id):
         return no_advisory()
 
     if session_id and git_root:

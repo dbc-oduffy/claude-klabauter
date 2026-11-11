@@ -90,6 +90,17 @@ def test_clear_removes_record_and_marker(repo):
     assert [w["run_id"] for w in stage_wait.wake_on_end(repo, "b2")] == ["waiter"]
 
 
+def test_stage_hold_prompt_names_no_standalone_sleep_and_keeps_deadline_bound():
+    from coordinator_core.ops.dispatch_emit import ask_compose
+
+    js = ask_compose._stage_recover_js(head="H", anchor="A", repo_root="/r", run_id="r1")
+    assert "run `sleep 60`" not in js
+    assert "as its own Bash call and re-run" not in js
+    assert "until [" in js and "do sleep 2; done" in js
+    assert "Never re-run it at or after the deadline" in js
+    assert "Return the last reply verbatim" in js
+
+
 def test_wake_without_record_home_is_empty(tmp_path):
     assert stage_wait.wake_on_end(tmp_path / "no-git", "b1") == []
 

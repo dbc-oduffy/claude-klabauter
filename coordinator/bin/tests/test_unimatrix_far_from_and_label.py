@@ -113,7 +113,7 @@ def test_mirror_session_name_is_bare_without_a_collision_and_boxed_with_one(rost
     row = {"entry": {"pid": 4242, "name": "far-1", "messagingSocketPath": FAR_SOCK}, "key": "K"}
     roster.mirror(row, cfg, lambda m: None)
     entry = json.loads((sessions / "31337.json").read_text())
-    assert entry["name"] == "far-1"
+    assert entry["name"] == f"far-1.{box}"
     assert entry["macSocketPath"] == FAR_SOCK
 
     (sessions / "31337.json").unlink()
@@ -141,7 +141,7 @@ def test_a_stale_mirror_of_the_same_far_session_is_not_a_collision(roster_env, m
     roster, sessions = roster_env
     (sessions / "88.json").write_text(json.dumps({"pid": 88, "name": "far-1", "macSocketPath": FAR_SOCK}))
     _mirror_once(roster, monkeypatch, tmp_path, "far-1")
-    assert json.loads((sessions / "31337.json").read_text())["name"] == "far-1"
+    assert json.loads((sessions / "31337.json").read_text())["name"] == "far-1.boxlan"
 
 
 def test_a_dead_session_with_the_same_name_is_not_a_collision(roster_env, monkeypatch, tmp_path):
@@ -152,7 +152,7 @@ def test_a_dead_session_with_the_same_name_is_not_a_collision(roster_env, monkey
     monkeypatch.setattr(roster, "pid_alive", lambda pid: pid != 99)
     cfg = roster.parse_args([str(tmp_path / "b.log"), "--remote", "boxlan", "--key", "k"])
     roster.mirror({"entry": {"pid": 4242, "name": "far-1", "messagingSocketPath": FAR_SOCK}, "key": "K"}, cfg, lambda m: None)
-    assert json.loads((sessions / "31337.json").read_text())["name"] == "far-1"
+    assert json.loads((sessions / "31337.json").read_text())["name"] == "far-1.boxlan"
 
 
 def test_a_mirror_on_another_box_with_the_same_name_forces_labels(roster_env, monkeypatch, tmp_path):
@@ -167,7 +167,8 @@ def test_labelled_mirror_still_suppresses_a_duplicate_of_its_session(roster_env,
     roster, sessions = roster_env
     monkeypatch.setattr(roster, "pid_alive", lambda pid: True)
     (sessions / "50.json").write_text(json.dumps(
-        {"pid": 50, "name": "far-1.boxlan", "unimatrixMirror": True, "macSocketPath": FAR_SOCK}))
+        {"pid": 50, "name": "far-1.boxlan", "unimatrixMirror": True, "macSocketPath": FAR_SOCK,
+         **roster.supervisor_fields(), **roster.far_seen_fields()}))
     assert roster.inbound_names() == {"far-1"}
     rows = [{"entry": {"pid": 1, "name": "far-1", "messagingSocketPath": "/tmp/cc-socks/1.sock"}},
             {"entry": {"pid": 2, "name": "far-2", "messagingSocketPath": "/tmp/cc-socks/2.sock"}}]
@@ -194,13 +195,13 @@ def test_sync_relabels_a_live_mirror_when_a_local_session_takes_its_bare_name_an
     name = lambda: json.loads((sessions / "31337.json").read_text())["name"]
 
     roster.sync(bridges, rows, cfg, lambda m: None)
-    assert name() == "far-1"
+    assert name() == "far-1.boxlan"
     (sessions / "77.json").write_text(json.dumps({"pid": 77, "name": "far-1"}))
     roster.sync(bridges, rows, cfg, lambda m: None)
     assert name() == "far-1.boxlan"
     (sessions / "77.json").write_text(json.dumps({"pid": 99, "name": "far-1"}))
     roster.sync(bridges, rows, cfg, lambda m: None)
-    assert name() == "far-1"
+    assert name() == "far-1.boxlan"
 
 
 def test_a_far_name_with_a_foreign_dot_is_hyphenated_and_this_boxs_label_is_kept(roster_env, monkeypatch):

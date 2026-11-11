@@ -138,6 +138,39 @@ def test_remote_naming_the_client_address_matches(monkeypatch):
     assert out["from"] == "uds:\\\\.\\pipe\\cc-a"
 
 
+PIPE = "\\\\.\\pipe\\LOCAL\\cc-msg-e14fb8bec27ee43ee73204939557fa1a"
+
+
+def reply_inbox(client, local="/tmp/cc-socks/unimatrix-transport-on-machine-a.sock"):
+    return {"unimatrixMirror": True, "unimatrixReplyInbox": True, "unimatrixClient": client,
+            "unimatrixRemoteSocket": "\\\\.\\pipe\\LOCAL\\transport", "messagingSocketPath": local}
+
+
+def test_unmirrored_far_pipe_sender_gets_the_sending_boxs_reply_inbox(monkeypatch):
+    serve(monkeypatch, [reply_inbox("10.0.0.1"), reply_inbox("10.0.0.2", "/tmp/cc-socks/other.sock")], client="10.0.0.1")
+    out = json.loads(R.local_reply_address(frame(PIPE)))
+    assert out["from"] == "/tmp/cc-socks/unimatrix-transport-on-machine-a.sock"
+    assert PIPE not in out["message"]["content"]
+
+
+def test_unmirrored_sender_from_an_unknown_box_stays_unchanged(monkeypatch):
+    serve(monkeypatch, [reply_inbox("10.0.0.1")], client="10.0.0.9")
+    line = frame(PIPE)
+    assert R.local_reply_address(line) == line
+
+
+def test_unmirrored_sender_with_no_client_stays_unchanged(monkeypatch):
+    serve(monkeypatch, [reply_inbox("10.0.0.1")])
+    line = frame(PIPE)
+    assert R.local_reply_address(line) == line
+
+
+def test_two_reply_inboxes_from_one_box_leave_the_frame_unchanged(monkeypatch):
+    serve(monkeypatch, [reply_inbox("10.0.0.1"), reply_inbox("10.0.0.1", "/tmp/cc-socks/b.sock")], client="10.0.0.1")
+    line = frame(PIPE)
+    assert R.local_reply_address(line) == line
+
+
 def test_relay_inbox_mirror_is_still_preferred(monkeypatch):
     inbox = {"unimatrixMirror": True, "unimatrixRemoteSocket": FAR, "messagingSocketPath": "\\\\.\\pipe\\cc-inbox"}
     serve(monkeypatch, [roster_mirror(), inbox])

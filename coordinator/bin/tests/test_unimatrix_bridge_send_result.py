@@ -47,6 +47,8 @@ def env(tmp_path, monkeypatch):
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote=None, port=None)
     bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
     monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
+    mux = bridge._box_mux()
+    monkeypatch.setattr(mux, "IS_WIN", False)  # one ssh per send; the Windows broker leg is not under test here
     bridge.notices = []
     monkeypatch.setattr(bridge, "notify_sender", lambda line, target, error: bridge.notices.append(error))
     yield bridge, bridge.deliveries_path()
@@ -93,9 +95,26 @@ def test_sender_is_released_before_the_ssh_leg_runs(env, monkeypatch):
 
 def test_ssh_argv_multiplexes_off_windows_only(env, monkeypatch):
     bridge, deliveries = env
-    monkeypatch.setattr(bridge, "IS_WIN", False)
+    mux = bridge._box_mux()
+    roster = mux._roster()
+    monkeypatch.setattr(roster, "_is_win", lambda: False)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
     assert "ControlMaster=auto" in argvs[-1] and argvs[-1][-2] == "lan" and argvs[-1][-1].startswith("send-session 9 ") and argvs[-1][-1].endswith(" sid-far")
-    monkeypatch.setattr(bridge, "IS_WIN", True)
+    monkeypatch.setattr(roster, "_is_win", lambda: True)
     _, _, argvs = drive(bridge, deliveries, monkeypatch, 0)
     assert not any("Control" in a for a in argvs[-1])
+
+
+def test_far_relay_lacking_send_session_is_a_failed_outcome_the_sender_can_read(env, monkeypatch):
+    bridge, deliveries = env
+
+    def run(argv, **kw):
+        return subprocess.CompletedProcess(argv, 2, b"", b"usage: unimatrix-relay.py ...")
+
+    monkeypatch.setattr(subprocess, "run", run)
+    bridge.serve_one(Conn([], deliveries))
+    rows = [json.loads(l) for l in deliveries.read_text().splitlines()]
+    assert [r["ok"] for r in rows] == [False]
+    assert rows[0]["error"] == "far relay lacks send-session; upgrade it"
+    assert rows[0]["target"].startswith("far (pid ") and isinstance(rows[0]["at"], float)
+    assert bridge.notices == ["far relay lacks send-session; upgrade it"]

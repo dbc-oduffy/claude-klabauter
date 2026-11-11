@@ -846,6 +846,26 @@ _REASON_PMB_FIXTURE_CHMOD = (
     "is portable."
 )
 
+_REASON_PMB_DIR_RWX_ARRANGEMENT = (
+    "Admission test: the posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), carve-out side, "
+    "platform semantic gap. The 0o7xx mask or chmod is a directory "
+    "owner-rwx traversal arrangement or check, not an executable-file decision: "
+    "NTFS reports and accepts directory modes without enforcing them, so "
+    "the call is a harmless no-op or reads the same degenerate value on both "
+    "sides of the comparison, and no code change can make it meaningful there."
+)
+
+_REASON_PMB_ATOMIC_MODE_COPY = (
+    "Admission test: the posix_mode_bits two-way discriminator "
+    "(docs/reference/posix-portability-fix-vs-carveout.md), carve-out side, "
+    "platform semantic gap. `_footer_write` copies the existing config's own "
+    "`st_mode & 0o777` onto its temp file before `os.replace` -- a relative "
+    "copy of whatever mode the file already has, never an executable-bit "
+    "decision. NTFS reports the same degenerate mode on both sides, so the "
+    "copy is a harmless no-op there and no code change can make it meaningful."
+)
+
 _GEN_SHIM_TWIN_PATHS = (
     "coordinator/bin/chunk-commits",
     "coordinator/bin/claim-neighbours",
@@ -1239,29 +1259,12 @@ REPO_CLAUDE_UNREAL_HOLODECK = "claude_unreal_holodeck"
 
 
 _REASON_PRE_COMMIT_HOOK_COPY = (
-    "Admission test: byte-copied POSIX exec target. repo-setup copies this file verbatim to "
-    ".git/hooks/pre-commit and checks line 1 is `#!/usr/bin/env python3` "
-    "(DoE coordinator/skills/repo-setup/residue/mechanics.md). git execs the "
-    "hook by its shebang, so stripping it breaks the hook on every platform."
+    "Admission test: direct POSIX exec target. `--install-hook` generates "
+    ".git/hooks/pre-commit as a sh hook that execs this file, so the "
+    "`#!/usr/bin/env python3` shebang stays load-bearing for direct exec; "
+    "stripping it breaks that exec on every platform."
 )
 
-
-_REASON_BYTE_COPIED_POSIX_TARGET = (
-    "Admission test: byte-copied POSIX exec target. coordinator/bin/claude-author.py "
-    "is installed by byte copy as an extensionless exec target "
-    "(substrate.BYTE_COPIED_BIN_SOURCES); the shebang is the POSIX "
-    "invocation mechanism (the installer chmods +x the copy), guarded by "
-    "coordinator_core/install/tests/test_installed_posix_targets_have_shebang.py. "
-    "Dropping the shebang breaks the POSIX leg. Two-leg pair: the Windows leg is "
-    "coordinator/bin/claude-author.cmd (and claude-author.ps1)."
-)
-
-_REASON_SETUP_DIRECT_EXEC = (
-    "Admission test: directly-executable installer. scripts/setup.py is invoked "
-    "as ./scripts/setup.py on POSIX; shebang + exec bit are pinned by "
-    "scripts/test_setup.py::test_setup_is_directly_executable. Two-leg pair: "
-    "the Windows leg is scripts/setup.cmd."
-)
 
 EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     "env_shebang": {
@@ -1273,8 +1276,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
-            "coordinator/bin/claude-author.py": _REASON_BYTE_COPIED_POSIX_TARGET,
-            "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
             **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
@@ -1293,7 +1294,6 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
         },
         REPO_PROJECT_MAKIMA: {
             "coordinator/bin/plan-tasks-resolve": _PLAN_TASKS_RESOLVE_REASON,
-            "scripts/setup.py": _REASON_SETUP_DIRECT_EXEC,
             **{p: _GEN_SHIM_TWIN_REASON for p in _GEN_SHIM_TWIN_PATHS},
         },
     },
@@ -1323,6 +1323,11 @@ EXEMPTIONS: Dict[str, Dict[str, Dict[str, str]]] = {
     },
     "posix_mode_bits": {
         REPO_PROJECT_MAKIMA: {
+            "coordinator/bin/unimatrix-install.py": _REASON_PMB_ATOMIC_MODE_COPY,
+            "coordinator/lib/tests/test_lib_disk_budget_cache.py": _REASON_PMB_DIR_RWX_ARRANGEMENT,
+            "coordinator_core/benchmarks/door_hook_read_latency.py": _REASON_PMB_DIR_RWX_ARRANGEMENT,
+            "coordinator_core/tests/test_owner_safe_rmtree.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
+            "coordinator_core/warm/door/tests/test_replay_safe_post_delivery_goes_cold.py": _REASON_PYTEST_SKIPIF_DECORATOR_GAP,
             "coordinator_core/hooks/test_em_report_altitude.py": _REASON_CHMOD_DIR_GAP,
             "coordinator_core/ops/test_install_meta_repo_precommit_hook_install_all.py": _REASON_CHMOD_EXEC_FOR_SH,
             "coordinator_core/bash_guards/tests/test_write_bump_session_start.py": _REASON_INSTALL_ONE_EXEC_BIT_SKIPIF_GAP,

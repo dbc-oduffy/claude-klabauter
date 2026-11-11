@@ -101,10 +101,23 @@ def test_mirror_stamps_box_and_sync_restamps_older_box_none_mirror(tmp_path, mon
     assert roster.remote_mirrors([healed], "me@other") != [healed]
 
 
-def test_explicit_peer_and_native_names_are_not_rewritten():
-    assert roster.mirror_entry_name({"name": "friendly-codex"}, "macmini", scan=[]) == "friendly-codex"
+def test_explicit_peer_and_native_names_keep_their_stem_and_gain_the_box():
+    assert roster.mirror_entry_name({"name": "friendly-codex"}, "macmini", scan=[]) == "friendly-codex.macmini"
     entry = {"name": "codex-" + UUID, "sessionId": UUID, "version": "2.1.319"}
-    assert roster.mirror_entry_name(entry, "macmini", scan=[]) == entry["name"]
+    assert roster.mirror_entry_name(entry, "macmini", scan=[]) == f"{entry['name']}.macmini"
+
+
+def test_far_claude_entry_name_carries_its_box_with_or_without_a_local_namesake(tmp_path, monkeypatch):
+    entry = {"name": "example-game-repo-em", "sessionId": UUID, "version": "2.1.319"}
+    assert roster.mirror_entry_name(entry, "me@machine-a", scan=[]) == "example-game-repo-em.machine-a"
+    assert roster.mirror_entry_name(entry, "me@machine-a", scan=[("example-game-repo-em", "/local.sock")]) == "example-game-repo-em.machine-a"
+    assert roster.mirror_entry_name(dict(entry, name="example-game-repo-em.machine-a"), "me@machine-a", scan=[]) == "example-game-repo-em.machine-a"
+
+
+def test_legacy_agy_alias_keeps_its_single_on_box_label():
+    entry = {"name": "agy-" + UUID, "sessionId": "peer-agy-repo-12", "cwd": "/work/repo"}
+    name = roster.mirror_entry_name(entry, "me@Machine-a", scan=[])
+    assert name.endswith("-on-machine-a") and name.count("-on-") == 1 and roster.LABEL_SEP not in name
 
 
 def test_two_boxes_with_identical_far_socket_and_name_get_distinct_display_routes(tmp_path, monkeypatch):

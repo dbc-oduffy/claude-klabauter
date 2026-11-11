@@ -7,7 +7,11 @@ from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
 _ROOTS = (_REPO / "coordinator_core", _REPO / "coordinator" / "bin")
-_ALLOWED = "coordinator_core/telemetry/host_sampler.py"
+# unimatrix-relay.py's specs probe runs over ssh under a system python with no
+# coordinator_core, so it cannot call avail_mb(); it emits a one-shot informational
+# ram_available_gb snapshot, not a load gate. Any other reader still fails.
+_SAMPLER = "coordinator_core/telemetry/host_sampler.py"
+_ALLOWED = {_SAMPLER, "coordinator/bin/unimatrix-relay.py"}
 _PATTERN = re.compile(
     r"ullAvailPhys|MemAvailable|vm\.available|virtual_memory\(\)\.available|memorystatus_level|vm_stat|SC_PHYS_PAGES"
 )
@@ -55,7 +59,7 @@ def _offenders() -> list[str]:
             if _is_test_path(path.relative_to(_REPO)):
                 continue
             rel = path.relative_to(_REPO).as_posix()
-            if rel != _ALLOWED and _reads_memory(path):
+            if rel not in _ALLOWED and _reads_memory(path):
                 found.append(rel)
     return sorted(found)
 
@@ -69,4 +73,4 @@ def test_only_host_sampler_reads_available_memory():
 
 
 def test_host_sampler_still_reads_it():
-    assert _reads_memory(_REPO / _ALLOWED)
+    assert _reads_memory(_REPO / _SAMPLER)

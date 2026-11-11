@@ -44,9 +44,11 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
     monkeypatch.delenv("UNIMATRIX_TUNNEL_REMOTE", raising=False)
     monkeypatch.setenv("UNIMATRIX_AUTOLINK_NO_ROUTER", "1")
+    monkeypatch.setenv("UNIMATRIX_TEST_ALLOWED_BOXES", "machine-a a@b fallbackbox")
     al = load("unimatrix-autolink")
     real_ssh = al.ssh_identity_file
     monkeypatch.setattr(al, "ssh_identity_file", lambda roster, alias, run=None: None)
+    monkeypatch.setattr(al, "pin_key_value", lambda roster, run=None: None)
     roster = al._roster()
     live = set()
     monkeypatch.setattr(roster, "pid_alive", lambda pid: pid in live)
@@ -379,12 +381,91 @@ def test_each_alias_gets_its_own_key_in_probe_and_both_supervisors(env, tmp_path
 
 
 def test_resolution_order_machine_local_then_ssh_config_then_default(env, tmp_path):
-    local, ssh = write_key(tmp_path / "local"), write_key(tmp_path / "ssh")
+    local, ssh = write_key(env.home / "local"), write_key(env.home / "ssh")
     add_key(env)
     r = env.roster
     assert env.al.resolve_key(r, "a", lambda r, a: local, lambda r, a: ssh) == local
     assert env.al.resolve_key(r, "a", lambda r, a: None, lambda r, a: ssh) == ssh
     assert env.al.resolve_key(r, "a", lambda r, a: None, lambda r, a: None) == str(env.key)
+
+
+def test_test_home_refuses_a_machine_local_key_outside_the_home_and_spawns_no_ssh(env, tmp_path):
+    outside = write_key(tmp_path / "real-key")
+    ssh_calls = []
+    with pytest.raises(RuntimeError, match="test home refuses real key_path"):
+        env.al.resolve_key(env.roster, "a", lambda r, a: outside, lambda r, a: ssh_calls.append(a))
+    assert ssh_calls == []
+
+
+def test_test_home_refuses_an_ssh_config_key_outside_the_home(env, tmp_path):
+    outside = write_key(tmp_path / "real-ssh-key")
+    with pytest.raises(RuntimeError, match="test home refuses real key_path"):
+        env.al.resolve_key(env.roster, "a", lambda r, a: None, lambda r, a: outside)
+
+
+def test_test_home_refuses_the_default_key_when_the_settings_home_is_unset(env, monkeypatch):
+    monkeypatch.delenv("COORDINATOR_SETTINGS_HOME")
+    with pytest.raises(RuntimeError, match="test home refuses real key_path"):
+        env.roster.default_key()
+
+
+def test_keys_outside_a_test_home_resolve_when_the_marker_is_absent(env, monkeypatch, tmp_path):
+    monkeypatch.delenv("UNIMATRIX_TEST_HOME")
+    outside = write_key(tmp_path / "real-key")
+    assert env.al.resolve_key(env.roster, "a", lambda r, a: outside, lambda r, a: None) == outside
+
+
+def test_test_home_refuses_a_real_far_box_and_keeps_an_allowlisted_one(env, monkeypatch):
+    reader = env.home / "bin" / "_machine_local.py"
+    reader.write_text("print('machine-b')\n")
+    with pytest.raises(RuntimeError, match="test home refuses real far_box: 'machine-b'"):
+        env.al.far_boxes_status(env.roster, guard=True)
+    assert env.al.far_boxes_status(env.roster) == (["machine-b"], None)
+    reader.write_text("print('machine-a')\n")
+    assert env.al.far_boxes_status(env.roster, guard=True) == (["machine-a"], None)
+
+
+def test_pin_key_set_to_an_existing_interpreter_is_used_at_every_spawn_site(env, tmp_path, monkeypatch):
+    pin = tmp_path / "pinned-python"
+    pin.write_text("")
+    monkeypatch.setattr(env.al, "pin_key_value", lambda roster, run=None: str(pin))
+    add_key(env)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok)
+    assert len(sp.cmds) == 2 and all(c[0] == str(pin) for c in sp.cmds)
+
+
+def test_pin_key_naming_a_missing_interpreter_refuses_naming_the_key_and_spawns_nothing(env, tmp_path, monkeypatch):
+    monkeypatch.setattr(env.al, "pin_key_value", lambda roster, run=None: str(tmp_path / "gone"))
+    add_key(env)
+    sp = Spawner()
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok)
+    assert sp.cmds == []
+    assert "unimatrix.python names a missing interpreter" in "\n".join(log_lines(env))
+    with pytest.raises(env.al.InterpreterPinError, match="unimatrix.python"):
+        env.al.pinned_python(env.roster)
+
+
+def test_unset_pin_resolves_the_console_interpreter_not_a_pythonw_or_shim(env, monkeypatch):
+    monkeypatch.setattr(env.al, "console_python", lambda: "C:/py/python.exe")
+    assert env.al.pinned_python(env.roster) == "C:/py/python.exe"
+    sp = Spawner()
+    add_key(env)
+    env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok)
+    assert all(c[0] == "C:/py/python.exe" for c in sp.cmds)
+
+
+def test_pin_value_is_read_from_the_machine_local_key(env):
+    seen = []
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, "~/py\n", "")
+
+    (env.home / "bin" / "_machine_local.py").write_text("")
+    real = load("unimatrix-autolink")
+    assert real.pin_key_value(env.roster, run=fake_run) == os.path.expanduser("~/py")
+    assert seen[0][-2:] == ["get", "unimatrix.python"]
 
 
 def test_machine_local_key_reads_the_per_alias_registry_key(env, tmp_path):

@@ -122,11 +122,32 @@ def default_legs_dir():
     return _roster().settings_home() / "unimatrix" / "agy-legs"
 
 
+def leg_record_live(rec):
+    """True only when the record's leg pid is alive and still the process that stamped `procStart`.
+
+    A record with no procStart is not shown live: a recycled pid must never revive a dead leg.
+    """
+    try:
+        pid, stamp = int(rec["pid"]), rec.get("procStart")
+        return stamp is not None and _roster().pid_alive(pid) and _roster().proc_start(pid) == stamp
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def leg_target_live(legs_dir, target):
+    """True when `legs_dir` holds a live leg record for conversation `target`."""
+    try:
+        with open(os.path.join(legs_dir, f"{target}.json"), encoding="utf-8") as fh:
+            return leg_record_live(json.load(fh))
+    except (OSError, ValueError, TypeError):
+        return False
+
+
 def load_leg_peers(legs_dir, taken_names=(), taken_targets=()):
     """Peers for every live agy leg record in `legs_dir`: name agy-<conversation>, target the conversation.
 
-    A record whose leg pid is dead, whose name or conversation is already `taken_*` (peers.json
-    wins), or that is unreadable is skipped.
+    A record whose leg is not live (`leg_record_live`), whose name or conversation is already
+    `taken_*` (peers.json wins), or that is unreadable is skipped.
     """
     peers = []
     try:
@@ -139,10 +160,10 @@ def load_leg_peers(legs_dir, taken_names=(), taken_targets=()):
         try:
             with open(os.path.join(legs_dir, f), encoding="utf-8") as fh:
                 rec = json.load(fh)
-            conv, pid = rec["conversation"], int(rec["pid"])
+            conv = rec["conversation"]
         except (OSError, ValueError, KeyError, TypeError):
             continue
-        if not isinstance(conv, str) or not conv or conv in taken_targets or not _roster().pid_alive(pid):
+        if not isinstance(conv, str) or not conv or conv in taken_targets or not leg_record_live(rec):
             continue
         name = readable_peer_name("agy", conv, rec.get("cwd"))
         if name in taken_names:
@@ -716,6 +737,17 @@ class Router:
         never rewritten. A row with no recorded holder is unknown, not dead, and keeps its face.
         """
         for name, peer in list(self.peers.items()):
+            if peer.get("vendor") == "agy" and self.legs_dir and name not in self.discovered:
+                if leg_target_live(self.legs_dir, peer.get("target")):
+                    self.dead_holders.discard(name)
+                    continue
+                if name in self.dead_holders:
+                    continue
+                self.dead_holders.add(name)
+                if name in self.faces:
+                    await self._stop_face(name)
+                self.log("leg-gone", name)
+                continue
             if (peer.get("vendor") != "codex" or name in self.discovered or name in self.dead_holders
                     or _liveness().codex_holder_live(peer) is not False):
                 continue

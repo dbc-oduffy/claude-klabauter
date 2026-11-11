@@ -220,7 +220,7 @@ Pure functions behind `fanout.compose` / `fanout.census` / `fanout.reconcile`; n
 | `transport.py` | Channel seam (`for_channel`); `pr` transport: child prompt block, check-in parser, broadcast target |
 
 ### `ops/session/` — Class-B session-substrate ops
-Ops mutating untracked `.git/coordinator-sessions/` substrate — do NOT use `git commit` /
+Ops mutating untracked `.coordinator-local/coordinator-sessions/` substrate — do NOT use `git commit` /
 `archive_and_commit`; carry their own safety spec.
 
 | File | Op | Purpose |

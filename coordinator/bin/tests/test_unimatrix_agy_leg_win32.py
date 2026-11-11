@@ -187,6 +187,19 @@ def test_discover_ls_address_on_nt_takes_the_lowest_port_without_lsof(monkeypatc
     assert launch.discover_ls_address(0) is None
 
 
+def test_leg_stamps_its_proc_start_into_its_own_record_only(tmp_path, monkeypatch):
+    rec = tmp_path / f"{CONV}.json"
+    monkeypatch.setenv("AGY_LEG_LOG", str(tmp_path / f"{CONV}.log"))
+    leg.stamp_proc_start()  # no record yet: nothing written
+    assert not rec.exists()
+    rec.write_text(json.dumps({"pid": os.getpid() + 1, "conversation": CONV}))
+    leg.stamp_proc_start()  # another process's record is never stamped
+    assert "procStart" not in json.loads(rec.read_text())
+    rec.write_text(json.dumps({"pid": os.getpid(), "conversation": CONV}))
+    leg.stamp_proc_start()
+    assert json.loads(rec.read_text())["procStart"] == leg._roster().proc_start(os.getpid())
+
+
 def test_sessionstart_register_upserts_an_agy_peer_row(tmp_path, monkeypatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.delenv("ANTIGRAVITY_CSRF_TOKEN", raising=False)

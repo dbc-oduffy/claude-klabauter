@@ -50,6 +50,55 @@ ROUTER_SCRIPT = "unimatrix-peer-router.py"
 NO_ROUTER_ENV = "UNIMATRIX_AUTOLINK_NO_ROUTER"
 
 
+PYTHON_KEY = "unimatrix.python"
+_PINNED = {}
+
+
+class InterpreterPinError(RuntimeError):
+    """The `unimatrix.python` key names an interpreter that is not a file, or no console interpreter resolves."""
+
+
+def console_python():
+    """A real console CPython (never a pythonw or forwarder exe), or None."""
+    spec = importlib.util.spec_from_file_location("unimatrix_python_interp", HERE / "lib" / "python_interp.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.resolve_console_python()
+
+
+def pin_key_value(roster, run=subprocess.run):
+    """The machine-local `unimatrix.python` value, or None when unset or unreadable."""
+    reader = roster.settings_home() / "bin" / "_machine_local.py"
+    exe = console_python()
+    if not reader.is_file() or not exe:
+        return None
+    try:
+        r = run([exe, str(reader), "get", PYTHON_KEY], capture_output=True, text=True, timeout=30,
+                creationflags=roster.no_window())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    val = r.stdout.strip() if not r.returncode else ""
+    return os.path.expanduser(val) if val else None
+
+
+def pinned_python(roster):
+    """The one interpreter every supervisor and reader spawn uses: the `unimatrix.python` key when set (a
+    missing file is an InterpreterPinError naming the key), else the resolved console interpreter."""
+    home = str(roster.settings_home())
+    if home not in _PINNED:
+        val = pin_key_value(roster)
+        if val:
+            if not os.path.isfile(val):
+                raise InterpreterPinError(f"{PYTHON_KEY} names a missing interpreter: {val}")
+            _PINNED[home] = val
+        else:
+            exe = console_python()
+            if not exe:
+                raise InterpreterPinError(f"no console python resolves; set {PYTHON_KEY}")
+            _PINNED[home] = exe
+    return _PINNED[home]
+
+
 def _roster():
     spec = importlib.util.spec_from_file_location("unimatrix_roster", HERE / "unimatrix-roster.py")
     mod = importlib.util.module_from_spec(spec)
@@ -171,15 +220,16 @@ def pull_membership(roster, remote, key, run=subprocess.run):
 NO_ALIAS_REASON = "no unimatrix.far_boxes configured; no supervisors started"
 
 
-def far_boxes_status(roster):
-    """(aliases, reason): reason names why `aliases` is empty, and is None when it is not."""
+def far_boxes_status(roster, guard=False):
+    """(aliases, reason): reason names why `aliases` is empty, and is None when it is not.
+    `guard` refuses a real alias under a test home; the read-only doctor diagnosis leaves it off."""
     reader = roster.settings_home() / "bin" / "_machine_local.py"
     if not reader.is_file():
         return [], f"{REGISTRY_KEY} unreadable (machine-local reader missing: {reader}); no supervisors started"
     try:
-        r = subprocess.run([sys.executable, str(reader), "get", REGISTRY_KEY],
+        r = subprocess.run([pinned_python(roster), str(reader), "get", REGISTRY_KEY],
                            capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
-    except (OSError, subprocess.SubprocessError) as ex:
+    except (OSError, subprocess.SubprocessError, InterpreterPinError) as ex:
         return [], f"{REGISTRY_KEY} unreadable ({type(ex).__name__}); no supervisors started"
     raw = r.stdout.strip() if not r.returncode else ""
     if not raw:
@@ -190,12 +240,15 @@ def far_boxes_status(roster):
             seen.append(tok)
     if not seen:
         return [], f"{REGISTRY_KEY} lists no valid alias ({raw[:80]!r}); no supervisors started"
+    if guard:
+        for alias in seen:
+            roster.refuse_real("far_box", alias)
     return seen, None
 
 
 def read_far_boxes(roster):
     """Configured ssh aliases; empty when the key, the reader, or any valid alias is absent."""
-    return far_boxes_status(roster)[0]
+    return far_boxes_status(roster, guard=True)[0]
 
 
 def slug(alias):
@@ -265,8 +318,8 @@ def detached(cmd):
     return subprocess.Popen(cmd, start_new_session=True, **kw)
 
 
-def supervisor_cmd(script, log, alias, key, tunnel):
-    cmd = [sys.executable, str(HERE / script), str(log), "--remote", alias, "--key", key]
+def supervisor_cmd(script, log, alias, key, tunnel, python):
+    cmd = [python, str(HERE / script), str(log), "--remote", alias, "--key", key]
     return cmd + ["--tunnel-remote", tunnel] if tunnel else cmd
 
 
@@ -317,7 +370,8 @@ def link_peer(roster, alias, key, say, spawn=detached, probe_fn=probe, stable_fn
         for role, script in SUPERVISORS:
             if role not in missing:
                 continue
-            p = spawn(supervisor_cmd(script, sdir / f"{role}-{slug(alias)}.log", remote, key, tunnel))
+            p = spawn(supervisor_cmd(script, sdir / f"{role}-{slug(alias)}.log", remote, key, tunnel,
+                                      pinned_python(roster)))
             try:
                 stamp = roster.proc_start(p.pid)
             except (OSError, subprocess.SubprocessError):
@@ -337,9 +391,9 @@ def machine_local_key(roster, alias, run=subprocess.run):
     if not reader.is_file():
         return None
     try:
-        r = run([sys.executable, str(reader), "get", f"{KEYS_PREFIX}{alias}"],
+        r = run([pinned_python(roster), str(reader), "get", f"{KEYS_PREFIX}{alias}"],
                 capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
-    except (OSError, subprocess.SubprocessError):
+    except (OSError, subprocess.SubprocessError, InterpreterPinError):
         return None
     val = r.stdout.strip() if not r.returncode else ""
     return os.path.expanduser(val) if val else None
@@ -354,7 +408,8 @@ def ssh_identity_file(roster, alias, run=subprocess.run):
         return None
     if r.returncode:
         return None
-    for line in r.stdout.splitlines():
+    out = r.stdout.decode("utf-8", "replace") if isinstance(r.stdout, bytes) else (r.stdout or "")
+    for line in out.splitlines():
         name, _, val = line.partition(" ")
         if name.lower() != "identityfile":
             continue
@@ -367,7 +422,13 @@ def ssh_identity_file(roster, alias, run=subprocess.run):
 def resolve_key(roster, alias, local_fn=None, ssh_fn=None):
     """The relay key for one alias: machine-local, else ssh-config IdentityFile, else the shared default."""
     local_fn, ssh_fn = local_fn or machine_local_key, ssh_fn or ssh_identity_file
-    return local_fn(roster, alias) or ssh_fn(roster, alias) or roster.default_key()
+    key = local_fn(roster, alias)
+    if not key:
+        key = ssh_fn(roster, alias)
+    if key:
+        roster.refuse_real("key_path", key)
+        return key
+    return roster.default_key()
 
 
 def router_lock_held(sdir):
@@ -403,7 +464,7 @@ def supervise_router(roster, sdir, say, spawn=detached, lock_held_fn=None):
         rec = read_record(rec_path)
         if supervisor_live(roster, rec) or (lock_held_fn or router_lock_held)(sdir):
             return
-        p = spawn([sys.executable, str(HERE / ROUTER_SCRIPT)])
+        p = spawn([pinned_python(roster), str(HERE / ROUTER_SCRIPT)])
         try:
             stamp = roster.proc_start(p.pid)
         except (OSError, subprocess.SubprocessError):
@@ -557,7 +618,7 @@ def run(roster=None, boxes=None, spawn=detached, probe_fn=probe, key_fn=None, st
             snapshot_mode, boxes = True, list(names)
             reason = "membership snapshot lists no other member; no supervisors started"
         else:
-            boxes, reason = far_boxes_status(roster)
+            boxes, reason = far_boxes_status(roster, guard=True)
             if boxes:
                 say("linking from unimatrix.far_boxes: no membership snapshot is stored; unimatrix doctor will flag it")
 

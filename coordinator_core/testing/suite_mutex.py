@@ -317,10 +317,34 @@ def _read_meta(path: Path) -> Optional[dict]:
     return meta
 
 
+_REPLACE_ATTEMPTS = 6
+_REPLACE_RETRY_SECS = 0.02
+
+
 def _replace_meta(path: Path, payload: dict) -> None:
+    """Atomically replace meta.json; retries a transient PermissionError (<=300ms total backoff)."""
     tmp_path = path / f".{_META_FILENAME}.{uuid.uuid4().hex}.tmp"
     tmp_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
-    os.replace(str(tmp_path), str(path / _META_FILENAME))
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            os.replace(str(tmp_path), str(path / _META_FILENAME))
+            return
+        except PermissionError:
+            # Windows denies the rename while a reader holds meta.json open; the denial is transient.
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                _unlink_quiet(tmp_path)
+                raise
+            time.sleep(_REPLACE_RETRY_SECS * (attempt + 1))
+        except BaseException:
+            _unlink_quiet(tmp_path)
+            raise
+
+
+def _unlink_quiet(tmp_path: Path) -> None:
+    try:
+        tmp_path.unlink()
+    except OSError:
+        pass
 
 
 def _write_meta(path: Path, *, pid: int, owner: str, cmd: str) -> None:

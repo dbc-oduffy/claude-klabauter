@@ -230,15 +230,23 @@ def _calibrated(sid: str) -> str:
     return sid
 
 
-def test_foreground_dispatch_explicit_false_passes() -> None:
-    """present-and-false is the caller's choice (blocking ceremony step) → silent pass,
-    with or without tool_input, and calibration is still recorded."""
+def test_foreground_dispatch_explicit_false_reroutes() -> None:
+    """present-and-false reroutes like an absent key (PM ruling #64): a forwardable
+    tool_input is rewritten to background; none → advisory fallback."""
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
-    for ti in (None, {}, {"prompt": "go", "run_in_background": False}):
+    for value in ("false", "False"):
+        result = _run(_handler({
+            "tool_name": "Agent", "run_in_background": value,
+            "session_id": "test-explicit-false-01",
+            "tool_input": {"prompt": "go", "run_in_background": False},
+        }))
+        assert _hso(result)["updatedInput"] == {"prompt": "go", "run_in_background": True}
+        assert "AUTO-REROUTED" in _hso(result)["additionalContext"]
+    for ti in (None, {}):
         params = {"tool_name": "Agent", "run_in_background": "false", "session_id": "test-explicit-false-01"}
         if ti is not None:
             params["tool_input"] = ti
-        assert _run(_handler(params)) == {}
+        assert "updatedInput" not in _hso(_run(_handler(params)))
 
 
 def test_foreground_dispatch_background_false_without_tool_input_advises() -> None:
@@ -393,7 +401,9 @@ def test_present_and_false_calibrates_for_later_absent_call(tmp_path) -> None:
          "tool_input": {"prompt": "go"}},
         repo_root=str(git_root),
     ))
-    assert result1 == {}, "present-and-false passes (explicit choice honoured)"
+    assert _hso(result1)["updatedInput"]["run_in_background"] is True, (
+        "present-and-false is rerouted to background"
+    )
     assert (session_dir_for(git_root, sid) / ".harness-bg-capable").exists(), (
         "presence (even false) must write the durable calibration marker"
     )

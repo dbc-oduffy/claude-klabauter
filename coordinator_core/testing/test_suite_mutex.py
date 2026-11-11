@@ -316,6 +316,58 @@ def test_touch_heartbeat_stamps_only_the_owners_lock() -> None:
     assert current["owner"] == "session-a" and current["cmd"] == "pytest"
 
 
+def _deny_replace(monkeypatch: pytest.MonkeyPatch, denials: int) -> list:
+    real = os.replace
+    calls: list = []
+
+    def flaky(src, dst):
+        calls.append(src)
+        if len(calls) <= denials:
+            raise PermissionError(13, "Access is denied")
+        real(src, dst)
+
+    monkeypatch.setattr(suite_mutex.os, "replace", flaky)
+    monkeypatch.setattr(suite_mutex.time, "sleep", lambda _s: None)
+    return calls
+
+
+def test_touch_heartbeat_survives_a_transient_replace_denial(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert suite_mutex.acquire("session-a", "pytest") is True
+    calls = _deny_replace(monkeypatch, denials=2)
+
+    assert suite_mutex.touch_heartbeat("session-a") is True
+
+    assert len(calls) == 3
+    assert suite_mutex.holder()["heartbeat_at"].endswith("Z")
+
+
+def test_touch_heartbeat_persistent_replace_denial_returns_false_and_leaves_no_tmp(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert suite_mutex.acquire("session-a", "pytest") is True
+    calls = _deny_replace(monkeypatch, denials=10_000)
+
+    assert suite_mutex.touch_heartbeat("session-a") is False
+
+    assert len(calls) == suite_mutex._REPLACE_ATTEMPTS
+    assert "heartbeat_at" not in suite_mutex.holder()
+    assert list(suite_mutex.lock_path().glob(".*.tmp")) == []
+
+
+def test_replace_denial_other_than_permission_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert suite_mutex.acquire("session-a", "pytest") is True
+    calls: list = []
+
+    def boom(src, dst):
+        calls.append(src)
+        raise OSError(5, "io")
+
+    monkeypatch.setattr(suite_mutex.os, "replace", boom)
+
+    assert suite_mutex.touch_heartbeat("session-a") is False
+    assert len(calls) == 1
+
+
 def test_touch_heartbeat_on_a_freed_lock_does_not_recreate_it() -> None:
     assert suite_mutex.touch_heartbeat("session-a") is False
     assert not suite_mutex.lock_path().exists()

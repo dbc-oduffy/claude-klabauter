@@ -1035,6 +1035,69 @@ def test_ceiling_dumps_the_tree_before_it_kills(tmp_path):
     assert order == ["dump", "kill"]
 
 
+def _declare_ceiling(repo: Path, body: str) -> None:
+    (repo / ".git").mkdir(parents=True, exist_ok=True)
+    (repo / ".coordinator").mkdir(exist_ok=True)
+    (repo / ".coordinator" / "suite-mutex.json").write_text(body, encoding="utf-8")
+
+
+def test_repo_declared_ceiling_is_the_default_and_walks_up_from_a_subdir(tmp_path):
+    wrapper = _load_wrapper_module()
+    repo = tmp_path / "repo"
+    sub = repo / "a" / "b"
+    sub.mkdir(parents=True)
+    _declare_ceiling(repo, '{"max_runtime_secs": 7200}')
+    assert wrapper._repo_default_max_runtime(str(sub)) == 7200.0
+    _declare_ceiling(repo, '{"max_runtime_secs": 0}')
+    assert wrapper._repo_default_max_runtime(str(sub)) == 0.0
+
+
+def test_undeclared_or_malformed_repo_config_keeps_the_global_default(tmp_path):
+    wrapper = _load_wrapper_module()
+    bare = tmp_path / "bare"
+    (bare / ".git").mkdir(parents=True)
+    assert wrapper._repo_default_max_runtime(str(bare)) == wrapper._DEFAULT_MAX_RUNTIME_SECS
+    bodies = ("not json", '{"max_runtime_secs": -5}', '{"max_runtime_secs": "x"}', "[]")
+    for index, body in enumerate(bodies):
+        broken = tmp_path / f"broken{index}"
+        _declare_ceiling(broken, body)
+        assert wrapper._repo_default_max_runtime(str(broken)) == wrapper._DEFAULT_MAX_RUNTIME_SECS
+
+
+def test_parse_args_uses_repo_ceiling_and_max_runtime_overrides_it(tmp_path, monkeypatch):
+    wrapper = _load_wrapper_module()
+    repo = tmp_path / "repo"
+    _declare_ceiling(repo, '{"max_runtime_secs": 7200}')
+    monkeypatch.chdir(repo)
+    assert wrapper._parse_args(["--", "x"])[2] == 7200.0
+    assert wrapper._parse_args(["--max-runtime", "10", "--", "x"])[2] == 10.0
+    assert wrapper._parse_args(["--max-runtime", "0", "--", "x"])[2] == 0.0
+
+
+def test_kill_message_says_advancing_when_tree_cpu_grew(capsys):
+    wrapper = _load_wrapper_module()
+    proc = mock.Mock()
+    proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
+    cpu = iter([1.0, 9.0])
+    with mock.patch.object(wrapper, "_tree_cpu_secs", lambda p: next(cpu)), \
+         mock.patch.object(wrapper, "_dump_process_tree", lambda p: None), \
+         mock.patch.object(wrapper, "_kill_process_tree", lambda p: 1):
+        assert wrapper._wait_interruptible(proc, max_runtime=0.3) == 124
+    err = capsys.readouterr().err
+    assert "STILL ADVANCING" in err and "cannot tell" not in err
+
+
+def test_kill_message_says_not_advancing_when_tree_cpu_flat(capsys):
+    wrapper = _load_wrapper_module()
+    proc = mock.Mock()
+    proc.wait.side_effect = subprocess.TimeoutExpired("x", 0.25)
+    with mock.patch.object(wrapper, "_tree_cpu_secs", lambda p: 3.0), \
+         mock.patch.object(wrapper, "_dump_process_tree", lambda p: None), \
+         mock.patch.object(wrapper, "_kill_process_tree", lambda p: 1):
+        assert wrapper._wait_interruptible(proc, max_runtime=0.3) == 124
+    assert "NOT advancing" in capsys.readouterr().err
+
+
 def test_dump_without_py_spy_reports_and_does_not_raise(tmp_path, capsys):
     wrapper = _load_wrapper_module()
     with mock.patch.object(wrapper.shutil, "which", return_value=None):

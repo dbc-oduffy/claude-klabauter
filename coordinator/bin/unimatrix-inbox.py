@@ -69,6 +69,17 @@ def _roster():
 
 
 
+def _box_mux():
+    path = Path(__file__).resolve().parent / "lib" / "unimatrix_box_mux.py"
+    mod = sys.modules.get("unimatrix_box_mux")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("unimatrix_box_mux", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["unimatrix_box_mux"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
 def pick_remote(lan, tunnel):
     return _roster().pick_remote(lan, tunnel)
 
@@ -185,16 +196,12 @@ def main(argv=None):
     (key_path,) = glob.glob(os.path.join(os.path.expanduser(SESSIONS), f"{a.pid}.*.key"))
     with open(key_path, encoding="utf-8") as fh:
         key = fh.read().strip()
-    flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if IS_WIN else 0
     remote = pick_remote(a.remote, a.tunnel_remote)
-    p = subprocess.Popen(["ssh", "-i", a.key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=30",
-                          remote, f"{'reply-inbox' if a.reply_inbox else 'inbox'} {a.name}"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.PIPE, creationflags=flags)
+    # The key goes over ssh stdin only, never argv or the log.
+    p = _box_mux().for_remote(remote, key=a.key).subscribe(
+        f"{'reply-inbox' if a.reply_inbox else 'inbox'} {a.name}", registration_payload(entry, key))
     far_err = threading.Thread(target=log_far_stderr, args=(p.stderr,), daemon=True)
     far_err.start()
-    # The key goes over ssh stdin only, never argv or the log.
-    p.stdin.write(registration_payload(entry, key))
-    p.stdin.flush()
     log.write(f"inbox {a.name} up, ssh pid {p.pid}\n")
 
     auth = b""

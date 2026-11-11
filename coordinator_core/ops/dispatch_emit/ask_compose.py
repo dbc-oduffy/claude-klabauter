@@ -1403,7 +1403,9 @@ def _stage_recover_js(*, head: str, anchor: str, repo_root: str, run_id: str) ->
         f"'{_repo_flag(repo_root)}`. While its reply carries parked `stage-wait` and `date -u +%s` is before the "
         "deadline ",
         "js:String(w?.deadline ?? 'none')",
-        " (epoch seconds), run `sleep 60` as its own Bash call and re-run the op. Never re-run it at or after the "
+        " (epoch seconds), wait about a minute with one Bash call running "
+        "`t=$(( $(date -u +%s) + 60 )); until [ \"$(date -u +%s)\" -ge \"$t\" ]; do sleep 2; done` (never a bare "
+        "`sleep N` call; the Bash tool refuses it), then re-run the op. Never re-run it at or after the "
         "deadline. Return the last reply verbatim as stage_reply (a manifest_handle, the {\"error\": ...} refusal, "
         "or the parked reply). Commit nothing.",
     )

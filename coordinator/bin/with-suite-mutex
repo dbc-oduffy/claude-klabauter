@@ -128,6 +128,8 @@ Negative-spec — what this wrapper is NOT:
 
 from __future__ import annotations
 
+import collections
+import json
 import os
 import re
 import shutil
@@ -210,6 +212,40 @@ _MUTEX_HELD_EXIT_CODE = 75
 #: Only a bound OUTSIDE pytest closes that, which is what this is.
 _DEFAULT_MAX_RUNTIME_SECS = suite_mutex.STALE_TTL_SECS
 
+#: A repo declares its own default ceiling in this checked-in file (found by
+#: walking up from the wrapped command's cwd to the repo root) as
+#: ``{"max_runtime_secs": <number>}``. ``--max-runtime`` still overrides it.
+_REPO_CONFIG_RELPATH = os.path.join(".coordinator", "suite-mutex.json")
+_REPO_CONFIG_KEY = "max_runtime_secs"
+
+
+def _repo_default_max_runtime(start: Optional[str] = None) -> float:
+    """The wrapped repo's declared default ceiling, else ``_DEFAULT_MAX_RUNTIME_SECS``.
+
+    Walks up from ``start`` (default cwd) and stops at the first directory
+    holding ``.git`` (the repo root). A missing, unreadable, malformed or
+    negative declaration falls back to the global default; ``0`` is a valid
+    declaration (unbounded). Pure file reads, no subprocess.
+    """
+    current = os.path.abspath(start or os.getcwd())
+    while True:
+        candidate = os.path.join(current, _REPO_CONFIG_RELPATH)
+        if os.path.isfile(candidate):
+            try:
+                with open(candidate, "r", encoding="utf-8") as handle:
+                    value = json.load(handle).get(_REPO_CONFIG_KEY)
+                if isinstance(value, (int, float)) and not isinstance(value, bool) and value >= 0:
+                    return float(value)
+            except (OSError, ValueError, AttributeError):
+                pass
+            return float(_DEFAULT_MAX_RUNTIME_SECS)
+        if os.path.exists(os.path.join(current, ".git")):
+            return float(_DEFAULT_MAX_RUNTIME_SECS)
+        parent = os.path.dirname(current)
+        if parent == current:
+            return float(_DEFAULT_MAX_RUNTIME_SECS)
+        current = parent
+
 #: Seconds between holder() reads in ``--wait`` mode. holder() is one stat plus
 #: at most one small read, and also reclaims a dead holder's lock.
 _WAIT_POLL_SECS = 1.0
@@ -262,7 +298,8 @@ def _parse_args(argv: List[str]) -> _ParsedArgs:
     MUST appear before the ``--`` separator; nothing after it is
     interpreted, matching ``scoped-git-commit``'s own hard split.
 
-    ``--max-runtime SECS`` overrides ``_DEFAULT_MAX_RUNTIME_SECS``; ``0``
+    ``--max-runtime SECS`` overrides the repo's declared default
+    (``_repo_default_max_runtime``); ``0``
     disables the ceiling for a caller that genuinely needs an unbounded run.
     This is NOT runner-specific flag parsing (see the negative-spec above) —
     it is a bound on the wrapped child whatever that child is.
@@ -289,7 +326,7 @@ def _parse_args(argv: List[str]) -> _ParsedArgs:
 
     owner_label: Optional[str] = None
     collection: Optional[str] = None
-    max_runtime: float = _DEFAULT_MAX_RUNTIME_SECS
+    max_runtime: float = _repo_default_max_runtime()
     reuse_fresh = False
 
     def _parse_collection(raw: str) -> Optional[str]:
@@ -628,6 +665,53 @@ def _dump_process_tree(process: "subprocess.Popen[bytes]") -> None:
         print(f"with-suite-mutex: pre-kill dump pid {pid}:\n{body}", file=sys.stderr, flush=True)
 
 
+#: Progress sampling for the ceiling-kill message: tree CPU seconds every
+#: ``_PROGRESS_SAMPLE_SECS`` over a trailing ``_PROGRESS_WINDOW_SECS`` window.
+_PROGRESS_SAMPLE_SECS = 5.0
+_PROGRESS_WINDOW_SECS = 60.0
+#: Tree CPU seconds across the window above which the tree counts as advancing.
+_PROGRESS_MIN_CPU_SECS = 0.5
+
+
+def _tree_cpu_secs(process: "subprocess.Popen[bytes]") -> Optional[float]:
+    """User+system CPU seconds summed over the child and its live descendants, None if unreadable."""
+    try:
+        parent = psutil.Process(process.pid)
+        total = 0.0
+        for proc in [parent] + parent.children(recursive=True):
+            try:
+                times = proc.cpu_times()
+                total += times.user + times.system
+            except psutil.Error:
+                continue
+        return total
+    except Exception:  # noqa: BLE001 - a measurement must never block the kill
+        return None
+
+
+def _progress_verdict(
+    samples: "collections.deque[Tuple[float, float]]", final_cpu: Optional[float]
+) -> str:
+    """One sentence on whether the child tree was still advancing at the kill.
+
+    Compares tree CPU at the kill with the oldest sample in the trailing
+    window: a healthy xdist run burns CPU in its workers, a wedged one idles.
+    """
+    if final_cpu is None or not samples:
+        return "Progress at the kill could not be measured (process tree unreadable)."
+    window = max(time.monotonic() - samples[0][0], 0.0)
+    delta = final_cpu - samples[0][1]
+    if delta >= _PROGRESS_MIN_CPU_SECS:
+        return (
+            f"The child tree was STILL ADVANCING at the kill ({delta:.1f}s of CPU in the "
+            f"last {int(window)}s): likely a healthy run past the ceiling, not a hang."
+        )
+    return (
+        f"The child tree was NOT advancing at the kill ({delta:.1f}s of CPU in the "
+        f"last {int(window)}s): likely wedged."
+    )
+
+
 def _wait_interruptible(
     process: "subprocess.Popen[bytes]", max_runtime: float = 0.0
 ) -> int:
@@ -649,19 +733,31 @@ def _wait_interruptible(
     making progress while still holding a machine-wide mutex, which converts
     one session's wedge into every peer's.
     """
-    deadline = (time.monotonic() + max_runtime) if max_runtime > 0 else None
+    now = time.monotonic()
+    deadline = (now + max_runtime) if max_runtime > 0 else None
+    samples: "collections.deque[Tuple[float, float]]" = collections.deque()
+    next_sample = now
     while True:
         try:
             return process.wait(timeout=0.25)
         except subprocess.TimeoutExpired:
-            if deadline is not None and time.monotonic() >= deadline:
+            now = time.monotonic()
+            if deadline is not None and now >= next_sample:
+                cpu = _tree_cpu_secs(process)
+                if cpu is not None:
+                    samples.append((now, cpu))
+                    while samples and now - samples[0][0] > _PROGRESS_WINDOW_SECS:
+                        samples.popleft()
+                next_sample = now + _PROGRESS_SAMPLE_SECS
+            if deadline is not None and now >= deadline:
+                progress = _progress_verdict(samples, _tree_cpu_secs(process))
                 _dump_process_tree(process)
                 killed = _kill_process_tree(process)
                 print(
                     "with-suite-mutex: killed the command after "
                     f"{int(max_runtime)}s ({killed} process(es)) and released the "
-                    "suite mutex. The ceiling cannot tell a wedged run from a long "
-                    "serial one; output above is unbuffered. Bound workers via "
+                    f"suite mutex. {progress} "
+                    "Output above is unbuffered. Bound workers via "
                     "coordinator-resolve-validation-cmd --full, or if wedged: "
                     "py-spy dump --pid <controller-pid>. "
                     "Raise or disable this ceiling with --max-runtime SECS (0 = unbounded).",

@@ -155,7 +155,7 @@ def test_agent_row_unstamped_peer_face_is_peer():
 
 
 @pytest.mark.parametrize("raw,want", [("example-operator@Machine-b.local", "machine-b"), ("Mac-mini-lan", "mac-mini"),
-                                      ("machine-a", "machine-a"), ("10.0.0.5", "10")])
+                                      ("machine-a", "machine-a"), ("10.0.0.5", "10.0.0.5")])
 def test_box_id_normalises(raw, want):
     assert pc.box_id(raw) == want
 

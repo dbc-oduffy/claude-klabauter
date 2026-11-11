@@ -3093,7 +3093,7 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      Returns {"artifact_path", "owners": [...], "file_error"} only.
     "session.artifact_owner": OpClass.COMPUTE_ONLY,
     # session.incident_claim — MUTATING: writes (or, with release, removes) a
-    # holder directory under the git common dir's coordinator-sessions hub.
+    # holder directory under the session hub (`.coordinator-local/coordinator-sessions`).
     # Untracked; never commits.
     "session.incident_claim": OpClass.MUTATING,
     # session.incident_peers — COMPUTE_ONLY: scandir + liveness reads only.

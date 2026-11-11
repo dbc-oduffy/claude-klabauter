@@ -214,7 +214,7 @@ def test_authorized_keys_line_windows_form(monkeypatch):
 
 
 def test_authorized_keys_line_escapes_quotes_for_paths_with_spaces():
-    line = ui.authorized_keys_line("/home/a b/unimatrix", interpreter="/usr/bin/python3")
+    line = ui.authorized_keys_line("/home/a b/unimatrix", interpreter="/usr/bin/python3")  # abs-path-ok: synthetic unimatrix path with a space, never opened
     assert line.startswith('restrict,command="/usr/bin/python3 \\"')
     assert 'unimatrix-relay.py\\"" ssh-ed25519' in line
 
@@ -1113,6 +1113,49 @@ def test_login_agent_uninstall_removes_it_and_tolerates_absence(monkeypatch, tmp
     assert list(agents.iterdir()) == [] and ui.unregister_login_agent(agents) == "absent"
 
 
+def test_test_home_refuses_the_real_hkcu_run_write_and_touches_no_registry(monkeypatch, tmp_path):
+    import types
+
+    touched = []
+
+    class _Real(types.ModuleType):
+        def __getattr__(self, name):
+            touched.append(name)
+            raise AssertionError(name)
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(ui, "_winreg", lambda: _Real("winreg"))
+    with pytest.raises(RuntimeError, match="test home refuses real run_key"):
+        ui.register_login_agent(tmp_path / "u", schtasks=_scheduler(task_exists=False)[0])
+    with pytest.raises(RuntimeError, match="test home refuses real run_key"):
+        ui.unregister_login_agent(schtasks=_scheduler(task_exists=False)[0])
+    assert touched == []
+
+
+def test_test_home_refuses_the_default_login_agent_dir_under_the_real_home(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    real_dir = ui.login_agent_dir()
+    before = real_dir.exists()
+    with pytest.raises(RuntimeError, match="test home refuses real login_agent_dir"):
+        ui.register_login_agent(tmp_path / "u")
+    assert real_dir.exists() == before
+
+
+def test_a_default_login_agent_dir_under_the_test_home_still_resolves(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    home = Path(os.environ["COORDINATOR_SETTINGS_HOME"])
+    monkeypatch.setattr(ui.Path, "home", classmethod(lambda cls: home))
+    assert ui.register_login_agent(tmp_path / "u")[0] == "created"
+    assert (home / "Library" / "LaunchAgents" / f"{ui.LOGIN_AGENT_LABEL}.plist").is_file()
+
+
+def test_login_agent_guard_is_off_without_the_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.delenv("UNIMATRIX_TEST_HOME")
+    monkeypatch.setattr(ui.Path, "home", classmethod(lambda cls: tmp_path / "h"))
+    assert ui.register_login_agent(tmp_path / "u")[0] == "created"
+
+
 def test_linux_login_agent_is_a_oneshot_user_unit_enabled_by_symlink(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "linux")
     units = tmp_path / "systemd" / "user"
@@ -1686,7 +1729,7 @@ def test_pair_windows_admin_far_box_is_not_written(monkeypatch, tmp_path):
         return done(f"win32\tC:{bs}Python312{bs}python.exe\t{win_home}\n")
 
     status, line = ui.install_over_link("x", "B", run=run)
-    assert status == "admin" and seen and "C:\\Python312\\python.exe" in line
+    assert status == "admin" and seen and "C:\\Python312\\python.exe" in line  # abs-path-ok: synthetic Windows interpreter path fixture
     buf = io.StringIO()
     assert ui.main(["--pair", "x"], out=buf, pair_run=run) == 0 and "administrators_authorized_keys" in buf.getvalue()
 
@@ -2067,10 +2110,10 @@ def test_codex_install_scope_reports_local_tools_with_native_limits(monkeypatch,
 
 
 def test_file_peer_line_names_the_file_relay_script_and_the_peer_pin():
-    line = ui.authorized_keys_line("/home/a/unimatrix", interpreter="/usr/bin/python3", key_body="AAAAk", file_peer="alpha")
+    line = ui.authorized_keys_line("/home/a/unimatrix", interpreter="/usr/bin/python3", key_body="AAAAk", file_peer="alpha")  # abs-path-ok: synthetic unimatrix path, never opened
     assert line.startswith('restrict,command="/usr/bin/python3 ')
     assert line.endswith('unimatrix-file-relay.py --peer alpha" ssh-ed25519 AAAAk unimatrix')
-    plain = ui.authorized_keys_line("/home/a/unimatrix", interpreter="/usr/bin/python3")
+    plain = ui.authorized_keys_line("/home/a/unimatrix", interpreter="/usr/bin/python3")  # abs-path-ok: synthetic unimatrix path, never opened
     assert "unimatrix-file-relay.py" not in plain and "unimatrix-relay.py" in plain
 
 

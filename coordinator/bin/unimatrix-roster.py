@@ -17,7 +17,9 @@ This module also carries the process and registry helpers that unimatrix-mirror-
 and unimatrix-reshape.py share; they are importable without side effects.
 """
 import argparse
+import copy
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -53,7 +55,28 @@ def default_key():
     """The Unimatrix-Zero key: the settings home's, else the group-em home's; first candidate when neither exists."""
     home = settings_home()
     cands = [home / ".secrets" / "ssh" / "unimatrix-zero", home / "group-em" / ".secrets" / "ssh" / "unimatrix-zero"]
-    return str(next((c for c in cands if c.is_file()), cands[0]))
+    key = str(next((c for c in cands if c.is_file()), cands[0]))
+    refuse_real("key_path", key)
+    return key
+
+
+_TEST_HOME = []
+
+
+def refuse_real(kind, value):
+    """Raise unimatrix_test_home.TestHomeRefusal when a test settings home would reach a real `kind`
+    (key_path, far_box, run_key); a no-op outside the test-home marker or without the guard module."""
+    if not os.environ.get("UNIMATRIX_TEST_HOME"):
+        return
+    if not _TEST_HOME:
+        path = HERE / "lib" / "unimatrix_test_home.py"
+        if not path.is_file():
+            return
+        spec = importlib.util.spec_from_file_location("unimatrix_test_home", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _TEST_HOME.append(mod)
+    _TEST_HOME[0].refuse_real(kind, value)
 
 
 def _is_win(platform=None):
@@ -563,8 +586,9 @@ def live_bare_names(except_far_sock=None, scan=None):
 
 
 def mirror_name(name, remote, far_sock=None, scan=None):
-    """The session name a mirror carries: bare, so SendMessage can address it, unless a live session
-    already holds that bare name, then the box-labelled form keeps the two distinct.
+    """The mirror's name before listing: the bare name, or the box-labelled form when a live session
+    already holds that bare name. Its sole caller, mirror_entry_name, labels the result (or uses the
+    `-on-<box>` alias), so the bare form never reaches a listing.
 
     A far name with a dot that is not this box's label is dotted-to-hyphen first: the dot is the
     label separator, so a raw dotted name would be cut at its first dot and collide."""
@@ -634,13 +658,51 @@ def ensure_key_loaded(key, now=None):
     _AGENT_OK[key] = clock
 
 
+CONTROL_PERSIST_SECONDS = 4 * POLL_SECONDS
+# Windows OpenSSH has no ControlMaster: the poll dials at most once per this many seconds per far box.
+WINDOWS_DIAL_MIN_SECONDS = 2 * POLL_SECONDS
+_DIALS = {}
+
+
+def _now():
+    return time.monotonic()
+
+
+def control_path(remote, home=None):
+    """Mux socket path for far `remote`, under <settings home>/unimatrix/ctl; short, since unix socket paths cap near 104 bytes."""
+    tag = hashlib.sha1(remote.encode("utf-8")).hexdigest()[:10]
+    return (Path(home) if home else settings_home()) / "unimatrix" / "ctl" / f"r-{tag}"
+
+
+def mux_options(remote):
+    """ssh options that reuse one master connection across poll ticks; empty off POSIX or when the socket dir cannot be made."""
+    if _is_win():
+        return []
+    path = control_path(remote)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    except OSError:
+        return []
+    return ["-o", "ControlMaster=auto", "-o", f"ControlPath={path}", "-o", f"ControlPersist={CONTROL_PERSIST_SECONDS}"]
+
+
+def _box_mux():
+    mod = sys.modules.get("unimatrix_box_mux")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("unimatrix_box_mux", HERE / "lib" / "unimatrix_box_mux.py")
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["unimatrix_box_mux"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
 def _roster_once(remote, key, tunnel_remote):
     ensure_key_loaded(key)
     remote = pick_remote(remote, tunnel_remote)
-    r = subprocess.run(["ssh", "-i", key, "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes",
-                        "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=2",
-                        remote, "roster"],
-                       capture_output=True, timeout=20, creationflags=no_window())
+    # Direct: the poll keeps its own Windows redial cap (`_capped_fetch`); POSIX shares the box's ControlMaster.
+    r = _box_mux().for_remote(remote, key=key, direct=True, mux_options=lambda h: mux_options(h),
+                              extra=["-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=5",
+                                     "-o", "ServerAliveCountMax=2"]).run("roster", timeout=20)
     if r.returncode:
         err = r.stderr.decode("utf-8", "replace").strip().splitlines()
         raise OSError(f"roster rc={r.returncode}" + (f": {err[-1][:200]}" if err else ""))
@@ -649,11 +711,30 @@ def _roster_once(remote, key, tunnel_remote):
 
 def fetch_roster(remote, key, tunnel_remote=None):
     """The far roster rows. A transient LAN stall (connect timeout, hung session) is retried once
-    with the endpoint re-picked, so one dropped SYN is not a LINK-DOWN; a second failure raises."""
+    with the endpoint re-picked, so one dropped SYN is not a LINK-DOWN; a second failure raises.
+    Off POSIX there is no mux: a dial inside WINDOWS_DIAL_MIN_SECONDS of the last one replays that
+    outcome (rows or error) instead of dialling, and a failure is not retried."""
+    if _is_win():
+        return _capped_fetch(remote, key, tunnel_remote)
     try:
         return _roster_once(remote, key, tunnel_remote)
     except (OSError, subprocess.TimeoutExpired):
         return _roster_once(remote, key, tunnel_remote)
+
+
+def _capped_fetch(remote, key, tunnel_remote):
+    last = _DIALS.get(remote)
+    if last and _now() - last[0] < WINDOWS_DIAL_MIN_SECONDS:
+        if last[2]:
+            raise OSError(last[2])
+        return copy.deepcopy(last[1])
+    try:
+        rows = _roster_once(remote, key, tunnel_remote)
+    except (OSError, subprocess.TimeoutExpired) as ex:
+        _DIALS[remote] = (_now(), None, str(ex) or type(ex).__name__)
+        raise
+    _DIALS[remote] = (_now(), rows, "")
+    return copy.deepcopy(rows)
 
 
 def drop_session_files(pid):
@@ -796,17 +877,22 @@ def remote_mirrors(entries, remote=None):
 
 
 def mirror_entry_name(entry, remote, far_sock=None, scan=None):
-    """Give strict legacy UUID peers a readable local alias; retain explicit source names."""
+    """A far session's local name: always carrying its box, so no peer listing hides which host it runs on.
+
+    Strict legacy UUID peers get a readable alias already ending `-on-<box>`; every other name takes
+    the `labelled()` form."""
     name = entry.get("name")
     legacy = re.fullmatch(r"(codex|agy)-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})", str(name), re.I)
-    if legacy and session_identity(entry)["vendor"] != "claude":
+    aliased = bool(legacy) and session_identity(entry)["vendor"] != "claude"
+    if aliased:
         vendor, target = legacy.groups()
         cwd = str(entry.get("cwd") or "").replace("\\", "/").rstrip("/")
         repo = re.sub(r"[^A-Za-z0-9_-]+", "-", cwd.rsplit("/", 1)[-1]).strip("-") or "session"
         box = re.sub(r"[^A-Za-z0-9_-]+", "-", str(entry.get("box") or box_label(remote))).strip("-").lower()
         short = hashlib.sha256(target.lower().encode()).hexdigest()[:10]
         name = f"{vendor.lower()}-{repo}-{short}-on-{box or 'unknown'}"
-    return mirror_name(name, remote, mirror_scan_key(remote, far_sock), scan)
+    name = mirror_name(name, remote, mirror_scan_key(remote, far_sock), scan)
+    return name if aliased else labelled(name, remote)
 
 
 REMOTE_IP_FIELD = "unimatrixRemoteIp"

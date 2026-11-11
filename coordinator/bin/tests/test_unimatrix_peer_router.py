@@ -327,11 +327,57 @@ def test_default_invocation_reads_settings_home_peers_json(tmp_path, monkeypatch
     assert str(tmp_path / "unimatrix" / "peers.json") in capsys.readouterr().err
 
 
-def write_leg(legs, conv, pid=None):
+def write_leg(legs, conv, pid=None, proc_start="stamp", **extra):
     legs.mkdir(parents=True, exist_ok=True)
-    (legs / f"{conv}.json").write_text(json.dumps(
-        {"pid": os.getpid() if pid is None else pid, "conversation": conv, "endpoint": "x",
-         "ls_address": "y", "agy_pid": 1}))
+    pid = os.getpid() if pid is None else pid
+    rec = {"pid": pid, "conversation": conv, "endpoint": "x", "ls_address": "y", "agy_pid": 1, **extra}
+    if proc_start == "stamp":
+        try:
+            rec["procStart"] = pr._roster().proc_start(pid)
+        except OSError:
+            pass
+    elif proc_start is not None:
+        rec["procStart"] = proc_start
+    (legs / f"{conv}.json").write_text(json.dumps(rec))
+
+
+@portable
+def test_leg_with_live_pid_and_mismatched_proc_start_is_skipped(tmp_path):
+    write_leg(tmp_path, "conv-reused", proc_start="not-this-process-start")
+    assert pr.load_leg_peers(tmp_path) == []
+
+
+@portable
+def test_leg_record_without_proc_start_is_skipped(tmp_path):
+    write_leg(tmp_path, "conv-unstamped", proc_start=None)
+    assert pr.load_leg_peers(tmp_path) == []
+    write_leg(tmp_path, "conv-stamped")
+    assert [p["target"] for p in pr.load_leg_peers(tmp_path)] == ["conv-stamped"]
+
+
+def test_static_agy_row_is_served_only_while_its_leg_is_live(box):
+    async def go():
+        legs = box / "legs"
+        static = {"name": "agy-static", "vendor": "agy", "target": "conv-static"}
+        r = pr.Router([static], sessions_dir=box / "sessions", state_dir=box / "state",
+                      endpoint_dir=box / "eps", adapters=echo_adapters([]), legs_dir=legs)
+        await r.start()
+        try:
+            assert "agy-static" in r.dead_holders and "agy-static" not in r.faces  # no leg record
+            write_leg(legs, "conv-static", proc_start="stale-boot")
+            await r.refresh_discovered()
+            assert "agy-static" in r.dead_holders
+            write_leg(legs, "conv-static")
+            await r.refresh_discovered()
+            assert "agy-static" not in r.dead_holders
+            await r._repair_faces()
+            assert "agy-static" in r.faces
+            write_leg(legs, "conv-static", proc_start="stale-boot")
+            await r.refresh_discovered()
+            assert "agy-static" in r.dead_holders and "agy-static" not in r.faces
+        finally:
+            await r.stop()
+    run(go())
 
 
 def test_leg_records_become_peers_and_peers_json_wins(tmp_path):

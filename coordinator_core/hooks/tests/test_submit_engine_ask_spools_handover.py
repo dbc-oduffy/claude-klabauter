@@ -185,7 +185,7 @@ def test_unspoolable_disk_keeps_the_original_refusal(repo, monkeypatch):
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_unwritable_placeholder_script_denies_but_names_the_spooled_entry(repo, monkeypatch):
+def test_unwritable_placeholder_script_allows_and_names_the_spooled_entry(repo, monkeypatch):
     def emit(_p, _r):
         raise HandoverPending(5)
 
@@ -200,9 +200,9 @@ def test_unwritable_placeholder_script_denies_but_names_the_spooled_entry(repo, 
     env = mod.evaluate(_ask(repo), emit=emit)
     (spool_id,) = _spooled(repo)
     hso = env["hookSpecificOutput"]
-    assert hso["permissionDecision"] == "deny"
-    assert f"spooled as {spool_id}" in hso["permissionDecisionReason"]
-    assert f"coordinator-invoke ask_spool.withdraw '{{\"spool_id\":\"{spool_id}\"" in hso["permissionDecisionReason"]
+    assert hso["permissionDecision"] == "allow", env
+    assert f"spooled as {spool_id}" in hso["additionalContext"]
+    assert f"coordinator-invoke ask_spool.withdraw '{{\"spool_id\":\"{spool_id}\"" in hso["additionalContext"]
 
 
 def test_allow_envelope_names_the_withdraw_verb_with_the_spool_id(repo):

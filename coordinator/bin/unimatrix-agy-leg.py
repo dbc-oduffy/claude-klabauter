@@ -204,6 +204,18 @@ def _rewrite_spool(path, data, keep):
 PARENT_POLL_SECS = 5
 
 
+def _roster():
+    """The unimatrix-roster module, loaded on first use."""
+    roster = sys.modules.get("unimatrix_roster")
+    if roster is None:
+        spec = importlib.util.spec_from_file_location(
+            "unimatrix_roster", os.path.join(os.path.dirname(os.path.abspath(__file__)), "unimatrix-roster.py"))
+        roster = importlib.util.module_from_spec(spec)
+        sys.modules["unimatrix_roster"] = roster
+        spec.loader.exec_module(roster)
+    return roster
+
+
 def parent_gone():
     """True when $AGY_LEG_PARENT_PID names a process that no longer exists."""
     try:
@@ -211,14 +223,7 @@ def parent_gone():
     except ValueError:
         return False
     if sys.platform == "win32":  # os.kill(pid, 0) terminates the process on Windows
-        roster = sys.modules.get("unimatrix_roster")
-        if roster is None:
-            spec = importlib.util.spec_from_file_location(
-                "unimatrix_roster", os.path.join(os.path.dirname(os.path.abspath(__file__)), "unimatrix-roster.py"))
-            roster = importlib.util.module_from_spec(spec)
-            sys.modules["unimatrix_roster"] = roster
-            spec.loader.exec_module(roster)
-        return not roster.pid_alive(pid)
+        return not _roster().pid_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -226,6 +231,28 @@ def parent_gone():
     except OSError:
         return False  # EPERM: alive under another user
     return False
+
+
+def stamp_proc_start():
+    """Record this leg's process start in its leg record (`<AGY_LEG_LOG stem>.json`) once the hook has written it.
+
+    The router shows a leg live only when pid and procStart both match. Best effort and idempotent:
+    a record not yet written, or rewritten by the hook without the stamp, is retried by the poll loop.
+    """
+    log_file = os.environ.get("AGY_LEG_LOG")
+    if not log_file:
+        return
+    path = os.path.splitext(log_file)[0] + ".json"
+    try:
+        with open(path, encoding="utf-8") as fh:
+            rec = json.load(fh)
+        if rec.get("pid") != os.getpid() or rec.get("procStart") is not None:
+            return
+        roster = _roster()
+        rec["procStart"] = roster.proc_start(os.getpid())
+        roster.write_json_atomic(path, rec)
+    except (OSError, ValueError, TypeError, AttributeError):
+        pass
 
 
 def respond(buf, pending):
@@ -336,6 +363,7 @@ def main(sock):
         if not pending:
             drain()  # second pass: lines a client queued while the pipe was still binding
         while t.is_alive():
+            stamp_proc_start()
             time.sleep(PARENT_POLL_SECS)
             if parent_gone():
                 log("exit", {"reason": "agy parent gone"})
@@ -355,6 +383,7 @@ def main(sock):
         try:
             c, _ = srv.accept()
         except socket.timeout:
+            stamp_proc_start()
             if parent_gone():
                 log("exit", {"reason": "agy parent gone"})
                 srv.close()

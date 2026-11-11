@@ -213,7 +213,8 @@ _SUBCOMMAND_USAGE = {
     "resolve-memo": (
         "archive-stamp-cli resolve-memo <memo_path>... [disposition-flags...]\n"
         "  Several <memo_path> args stamp every memo with the same disposition in\n"
-        "  ONE commit; a single path behaves as before.\n"
+        "  ONE commit and move each inbox/ memo to archive/; a single path behaves\n"
+        "  as before.\n"
         "  NOTE — same prose file siblings as action-memo.\n" + _DISPOSITION_HELP
     ),
     "resolve-move-memos": (

@@ -892,9 +892,7 @@ def _assert_no_archived_handoff_twin(out_path: str, handoff_id: str | None, repo
     if not repo_root:
         return
     _dest = os.path.dirname(out_path)
-    if re.fullmatch(r"\d{4}-\d{2}", os.path.basename(_dest)):
-        _dest = os.path.dirname(_dest)
-    if os.path.basename(_dest) != "handoffs":
+    if "handoffs" not in (os.path.basename(_dest), os.path.basename(os.path.dirname(_dest))):
         return
     try:
         _ensure_engine_on_path()
@@ -902,7 +900,12 @@ def _assert_no_archived_handoff_twin(out_path: str, handoff_id: str | None, repo
             HandoffArchivedTwinError,
             assert_no_archived_twin,
         )
+        from coordinator_core.session.output_tree_layout import is_month_dir
     except Exception:  # noqa: BLE001 -- best-effort import; unresolvable seam degrades to no-check
+        return
+    if is_month_dir(os.path.basename(_dest)):
+        _dest = os.path.dirname(_dest)
+    if os.path.basename(_dest) != "handoffs":
         return
     try:
         assert_no_archived_twin(out_path, repo_root, handoff_id=handoff_id)

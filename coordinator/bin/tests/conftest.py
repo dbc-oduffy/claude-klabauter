@@ -66,6 +66,119 @@ def _no_desktop_notifier(monkeypatch):
 
     real_which = shutil.which
     monkeypatch.setattr(shutil, "which", lambda cmd, *a, **k: None if os.path.basename(str(cmd)) in _DESKTOP_NOTIFIERS else real_which(cmd, *a, **k))
+
+
+class _ChildReaper:
+    """Owns every process a test spawns through `subprocess.Popen` and kills the tree at teardown.
+    Windows: one kill-on-close Job object per test. POSIX: each child leads its own process group,
+    killed whole. A child that detaches itself (double fork, CREATE_BREAKAWAY) escapes."""
+
+    def __init__(self) -> None:
+        self._procs: list = []
+        self._job = None
+
+    def _windows_job(self):
+        if self._job is None:
+            import ctypes
+            from ctypes import wintypes
+
+            class _Basic(ctypes.Structure):
+                _fields_ = [
+                    ("PerProcessUserTimeLimit", ctypes.c_int64),
+                    ("PerJobUserTimeLimit", ctypes.c_int64),
+                    ("LimitFlags", wintypes.DWORD),
+                    ("MinimumWorkingSetSize", ctypes.c_size_t),
+                    ("MaximumWorkingSetSize", ctypes.c_size_t),
+                    ("ActiveProcessLimit", wintypes.DWORD),
+                    ("Affinity", ctypes.c_size_t),
+                    ("PriorityClass", wintypes.DWORD),
+                    ("SchedulingClass", wintypes.DWORD),
+                ]
+
+            class _IoCounters(ctypes.Structure):
+                _fields_ = [(n, ctypes.c_uint64) for n in (
+                    "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                    "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+            class _Extended(ctypes.Structure):
+                _fields_ = [
+                    ("BasicLimitInformation", _Basic),
+                    ("IoInfo", _IoCounters),
+                    ("ProcessMemoryLimit", ctypes.c_size_t),
+                    ("JobMemoryLimit", ctypes.c_size_t),
+                    ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                    ("PeakJobMemoryUsed", ctypes.c_size_t),
+                ]
+
+            k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            k32.CreateJobObjectW.restype = wintypes.HANDLE
+            k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
+            k32.SetInformationJobObject.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
+            k32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
+            k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+            k32.CloseHandle.argtypes = [wintypes.HANDLE]
+            handle = k32.CreateJobObjectW(None, None)
+            info = _Extended()
+            info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not handle or not k32.SetInformationJobObject(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                return None
+            self._job = (k32, handle)
+        return self._job
+
+    def adopt(self, proc) -> None:
+        self._procs.append(proc)
+        if sys.platform == "win32":
+            job = self._windows_job()
+            if job is not None:
+                job[0].AssignProcessToJobObject(job[1], int(proc._handle))
+
+    def reap(self) -> None:
+        if sys.platform == "win32":
+            if self._job is not None:
+                k32, handle = self._job
+                k32.TerminateJobObject(handle, 1)
+                k32.CloseHandle(handle)
+                self._job = None
+        else:
+            import signal
+
+            for proc in self._procs:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        for proc in self._procs:
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+        self._procs.clear()
+
+    def install(self, monkeypatch) -> None:
+        reaper = self
+        real_popen = subprocess.Popen
+
+        class _Reaped(real_popen):
+            def __init__(self, *args, **kwargs):
+                if sys.platform != "win32" and not any(
+                    kwargs.get(k) for k in ("start_new_session", "process_group", "preexec_fn")
+                ):
+                    kwargs["start_new_session"] = True
+                super().__init__(*args, **kwargs)
+                reaper.adopt(self)
+
+        monkeypatch.setattr(subprocess, "Popen", _Reaped)
+
+
+@pytest.fixture(autouse=True)
+def _reap_test_spawned_children(monkeypatch):
+    """A process a test starts (a unimatrix bridge, an autolink) never outlives the test."""
+    reaper = _ChildReaper()
+    reaper.install(monkeypatch)
+    yield
+    reaper.reap()
+
+
 def _published_module_absent(name):
     parts = name.split(".")
     if any(sys.modules.get(".".join(parts[:i]), False) is None for i in range(1, len(parts) + 1)):

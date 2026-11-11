@@ -2869,7 +2869,10 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
 
     A single path takes the unchanged ``cs_resolve_memo`` route. Each memo's
     write goes to disk with ``defer_commit``; memos that fail leave the others
-    stamped and committed, and the return is 1 if any failed."""
+    stamped and committed, and the return is 1 if any failed. A memo under an
+    ``inbox/`` directory is also moved to the sibling ``archive/`` in the same
+    apply and commit (inbox deletion + archive addition); one whose archive
+    target exists is refused before any write."""
     if len(memo_paths) == 1:
         return int(cs_resolve_memo(memo_paths[0], *disposition_args))
 
@@ -2888,6 +2891,12 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
             print(f"cs_resolve_memos: {memo_path}: could not resolve a session id or git root", file=sys.stderr)
             failed += 1
             continue
+        src = Path(memo_path).resolve()
+        dest = src.parent.parent / "archive" / src.name if src.parent.name == "inbox" else None
+        if dest is not None and dest.exists():
+            print(f"cs_resolve_memos: {memo_path}: {dest} already exists", file=sys.stderr)
+            failed += 1
+            continue
         result = _call_memo_transition(
             memo_path,
             {"verb": "resolve", "session_id": sid, "at": _now_iso(), "defer_commit": True, **disposition_params},
@@ -2898,16 +2907,29 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
             failed += 1
             continue
         if result.get("applied"):
+            specs: list[str] = []
             try:
-                pathspec = rel_id(Path(memo_path).resolve(), worktree)
+                specs.append(rel_id(src, worktree))
             except ValueError:
-                pathspec = str(Path(memo_path).resolve())
-            landed.setdefault(worktree, []).append((memo_path, pathspec))
+                specs.append(str(src))
+            if dest is not None:
+                try:
+                    from coordinator_core.session.scope import relocate_touched_path
+
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    relocate_touched_path(sid, str(src), str(dest), cwd=str(worktree))
+                    specs.append(rel_id(dest, worktree))
+                except (OSError, ValueError) as exc:
+                    print(f"cs_resolve_memos: {memo_path}: stamped but move failed: {exc}", file=sys.stderr)
+                    failed += 1
+            for spec in specs:
+                landed.setdefault(worktree, []).append((memo_path, spec))
             sid_by_root[worktree] = sid
 
     for root, entries in landed.items():
         pathspecs = [p for _, p in entries]
-        subject = f"memo.transition resolve: {len(pathspecs)} memos\n\n" + "\n".join(f"- {p}" for p in pathspecs) + "\n"
+        n_memos = len({m for m, _ in entries})
+        subject = f"memo.transition resolve: {n_memos} memos\n\n" + "\n".join(f"- {p}" for p in pathspecs) + "\n"
         with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8", dir=managed_tempdir(root)) as fh:
             fh.write(subject)
             msg_path = fh.name
@@ -2925,12 +2947,12 @@ def cs_resolve_memos(memo_paths: Sequence[str], *disposition_args: str) -> int:
                 f"cs_resolve_memos: frontmatter writes applied but the batch commit failed: {commit.stderr}",
                 file=sys.stderr,
             )
-            failed += len(pathspecs)
+            failed += n_memos
             continue
         session_scope.release_committed_claims_or_retain(
             root, pathspecs, sid_by_root[root], "memo.transition"
         )
-        print(f"cs_resolve_memos: resolved {len(pathspecs)} memos in commit {commit.stdout.strip()}")
+        print(f"cs_resolve_memos: resolved {n_memos} memos in commit {commit.stdout.strip()}")
     return 1 if failed else 0
 
 
