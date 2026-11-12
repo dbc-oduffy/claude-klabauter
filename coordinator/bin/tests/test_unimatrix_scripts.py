@@ -4,6 +4,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -90,79 +91,73 @@ def test_bridge_and_inbox_pick_the_lan_alias_through_the_vendored_roster(tmp_pat
             sys.modules["unimatrix_roster"] = held
 
 
-def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
-    import subprocess
+class _FakeMux:
+    """Stands in for lib/unimatrix_box_mux.py at the bridge's `_box_mux` seam: the bridge's job ends at
+    picking the remote and composing the far command; the channel's ssh argv is box_mux's and roster's tests'."""
+
+    def __init__(self):
+        self.calls = []
+
+    def for_remote(self, remote, *, key, **kw):
+        mux = self
+
+        class _Channel:
+            def run(self, command, data=b"", timeout=30):
+                mux.calls.append((remote, key, command))
+                return subprocess.CompletedProcess([], 0, b'{"ok": true}\n', b"")
+
+        return _Channel()
+
+
+class _Conn:
+    def __init__(self):
+        self.chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
+
+    def read(self):
+        return self.chunks.pop(0)
+
+    def close(self):
+        pass
+
+
+def _bridge_with_far_mirror(monkeypatch, tmp_path, far_pid=None):
     import types
     bridge = load("bridge")
     sessions = tmp_path / "sessions"
     sessions.mkdir()
-    (sessions / f"{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock", "unimatrixFarName": "far", "sessionId": "sid-far"}))
+    row = {"pid": os.getpid(), "messagingSocketPath": "/m.sock", "macSocketPath": "/far/9.sock",
+           "unimatrixFarName": "far", "name": "far", "sessionId": "sid-far"}
+    if far_pid is not None:
+        row["farPid"] = far_pid
+    (sessions / f"{os.getpid()}.json").write_text(json.dumps(row))
     monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
-    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     bridge.cfg = types.SimpleNamespace(endpoint="/m.sock", key="k", remote="lan", tunnel_remote="wg", port=None)
     bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
-    argvs = []
+    mux = _FakeMux()
+    monkeypatch.setattr(bridge, "_box_mux", lambda: mux)
+    return bridge, mux
 
-    def run(argv, **kw):
-        argvs.append(argv)
-        return subprocess.CompletedProcess(argv, 0, b'{"ok": true}\n', b"")
 
-    monkeypatch.setattr(subprocess, "run", run)
-
-    class Conn:
-        chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
-
-        def read(self):
-            return self.chunks.pop(0)
-
-        def close(self):
-            pass
-
+def test_bridge_relay_dials_the_picked_alias(monkeypatch, tmp_path):
+    bridge, mux = _bridge_with_far_mirror(monkeypatch, tmp_path)
     for lan_up, expect in ((True, "lan"), (False, "wg")):
-        Conn.chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
         monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun, up=lan_up: lan if up else tun)
-        bridge.relay_send(Conn())
-        assert expect in argvs[-1] and ({"lan", "wg"} - {expect}).isdisjoint(argvs[-1])
+        bridge.relay_send(_Conn())
+        assert mux.calls[-1][0] == expect
+    bridge.log.close()
 
 
 @pytest.mark.parametrize("is_win", [True, False])
-def test_bridge_relay_send_reaches_subprocess_run_on_either_platform(monkeypatch, tmp_path, is_win):
-    import subprocess
-    import types
-    bridge = load("bridge")
-    sessions = tmp_path / "sessions"
-    sessions.mkdir()
-    (sessions / f"{os.getpid()}.json").write_text(json.dumps(
-        {"pid": os.getpid(), "messagingSocketPath": r"\\.\pipe\m", "farPid": 77, "macSocketPath": "/far/9.sock", "unimatrixFarName": "far",
-         "sessionId": "sid-far"}))
-    monkeypatch.setattr(bridge, "SESSIONS", str(sessions))
+def test_bridge_relay_send_reaches_the_far_relay_on_either_platform(monkeypatch, tmp_path, is_win):
+    bridge, mux = _bridge_with_far_mirror(monkeypatch, tmp_path, far_pid=77)
     monkeypatch.setattr(bridge, "IS_WIN", is_win)
     monkeypatch.setattr(bridge, "pick_remote", lambda lan, tun: lan)
-    bridge.cfg = types.SimpleNamespace(endpoint=r"\\.\pipe\m", key="k", remote="lan", tunnel_remote=None, port=None)
-    bridge.log = open(tmp_path / "b.log", "a", encoding="utf-8")
-    calls = []
-
-    def run(argv, **kw):
-        calls.append((argv, kw))
-        return subprocess.CompletedProcess(argv, 0, b'{"ok": true}\n', b"")
-
-    monkeypatch.setattr(subprocess, "run", run)
-
-    class Conn:
-        chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
-
-        def read(self):
-            return self.chunks.pop(0)
-
-        def close(self):
-            pass
-
-    bridge.relay_send(Conn())
+    bridge.relay_send(_Conn())
     bridge.log.close()
-    assert len(calls) == 1
-    argv, kw = calls[0]
-    assert argv[0] == "ssh" and argv[-2] == "lan" and re.fullmatch(r"send-session 77 [0-9a-f]{16} [0-9a-f]{16} sid-far", argv[-1])
-    assert ("ControlMaster=auto" in " ".join(argv)) is (not is_win)
+    assert len(mux.calls) == 1
+    remote, key, command = mux.calls[0]
+    assert remote == "lan" and key == "k"
+    assert re.fullmatch(r"send-session 77 [0-9a-f]{16} [0-9a-f]{16} sid-far", command)
 
 
 def test_bridge_and_inbox_take_a_tunnel_alias_from_flag_or_environment(monkeypatch):
@@ -458,6 +453,10 @@ def test_no_ip_literal_or_user_at_host(name):
 @pytest.mark.parametrize("name", ("bridge", "inbox", "roster"))
 def test_every_ssh_argv_pins_identities_only(name):
     src = (BIN / f"unimatrix-{name}.py").read_text(encoding="utf-8")
+    if name in ("bridge", "inbox"):
+        # These dial through the per-box carrier; its argv is the one every send uses.
+        assert "unimatrix_box_mux" in src
+        src = (BIN / "lib" / "unimatrix_box_mux.py").read_text(encoding="utf-8")
     argvs = re.findall(r'\[\s*"ssh"[^\]]*\]', src)
     assert argvs, "no ssh argv found; the pin would be vacuous"
     for argv in argvs:
