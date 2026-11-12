@@ -2733,3 +2733,25 @@ def test_rewrite_keeps_a_symlinked_authorized_keys_a_symlink(tmp_path):
     link.symlink_to(real)
     assert ui.rewrite_forced_interpreters(link, "/x/python3") == 1  # abs-path-ok: synthetic interpreter, never opened
     assert link.is_symlink() and "/x/python3" in real.read_text(encoding="utf-8")  # abs-path-ok: synthetic, never opened
+
+
+def test_every_lib_module_an_installed_script_loads_by_path_is_vendored():
+    # A lib/ module missing from VENDORED_LIB installs fine and dies at first use on the far box
+    # (r25.14: unimatrix-mirror-all.py's pair contract, the Mini inbox supervisor never started).
+    import re
+    pat = re.compile(r'"lib"\s*/\s*"([A-Za-z0-9_]+\.py)"')
+    installed = set(ui.VENDORED_SCRIPTS) | set(ui.script_closure(ui._BIN_DIR)) | set(ui.OPTIONAL_SCRIPTS)
+    loaded = {}
+    for name in sorted(installed):
+        path = ui._BIN_DIR / name
+        if path.is_file():
+            for mod in pat.findall(path.read_text(encoding="utf-8")):
+                loaded.setdefault(mod, name)
+    assert "unimatrix_pair_contract.py" in loaded, "the scan no longer sees the mirror-all load; fix the pattern"
+    missing = {m: s for m, s in loaded.items() if m not in ui.VENDORED_LIB and m not in ui.UNSHIPPED_LIB}
+    assert not missing, f"lib modules loaded by installed scripts but not vendored: {missing}"
+
+
+def test_install_scripts_copies_the_pair_contract(tmp_path):
+    ui.install_scripts(ui._BIN_DIR, tmp_path)
+    assert (tmp_path / "lib" / "unimatrix_pair_contract.py").is_file()

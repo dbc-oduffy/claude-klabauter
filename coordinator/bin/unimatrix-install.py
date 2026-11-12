@@ -302,7 +302,9 @@ def _copy_if_changed(src, dst):
     shutil.copy2(src, dst)
 
 
-VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py", "unimatrix_relay_sessions.py", "session_detach.py")  # sibling lib/ modules the installed scripts load by path
+VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py", "unimatrix_relay_sessions.py", "session_detach.py",
+                "unimatrix_pair_contract.py")  # sibling lib/ modules the installed scripts load by path
+UNSHIPPED_LIB = ("unimatrix_test_home.py",)  # loaded by path only under UNIMATRIX_TEST_HOME; absent from installs by design
 
 
 def _lib(name):
