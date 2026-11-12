@@ -74,6 +74,19 @@ def _fresh(**baseline):
     return {"baseline": {"base_sha": "b" * 40, **baseline}}
 
 
+def test_unattributed_refusal_detail_carries_the_node_id():
+    findings, _ = ltt.failed_targeted_tests({"status": "fail", "tests_failed": 1}, nodes=["t/test_x.py::test_a"])
+    assert "failing: t/test_x.py::test_a" in findings[0].detail and ltt.NO_NODE_RECORDED not in findings[0].detail
+
+
+def test_reverify_helpers_split_clean_pass_from_named_failure():
+    clean = {"inline_review": {ltt.REVERIFY_KEY: {"status_after": "pass", "failing": []}}}
+    red = {"inline_review": {ltt.REVERIFY_KEY: {"status_after": "fail", "failing": ["a.py::t"]}}}
+    assert ltt.reverify_passed_clean(clean) and ltt.reverify_failing_nodes(clean) == []
+    assert not ltt.reverify_passed_clean(red) and ltt.reverify_failing_nodes(red) == ["a.py::t"]
+    assert not ltt.reverify_passed_clean({})
+
+
 def test_base_check_red_reads_head_red_and_names_head_sha():
     fresh = _fresh(head_red=["t.py::a"], head_sha="1234567890abcdef")
     red, note = ltt.base_check_red(fresh, ["t.py::a", "t.py::b"])

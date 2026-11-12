@@ -627,6 +627,10 @@ def _git_bytes(repo: Path, args: list[str], stdin: bytes | None = None) -> bytes
     from coordinator_core.git.run import run_git
 
     r = run_git(args, cwd=str(repo), input=stdin, binary=True)
+    # One transient stall (pack contention mid-publish) must not refuse the whole row: these reads are
+    # read-only, so re-run once on a timeout. A second timeout, or any non-timeout failure, fails closed.
+    if r.timed_out:
+        r = run_git(args, cwd=str(repo), input=stdin, binary=True)
     if not r.ok:
         why = "timed out" if r.timed_out else f"({r.returncode}): {r.stderr.strip()}"
         raise CommitReadError(f"git {' '.join(args[:2])} failed {why}")

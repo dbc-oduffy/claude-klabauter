@@ -60,7 +60,7 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     # A hand re-emit is run by the EM, not a launcher: keeping the flag would render the hand-back-only script.
     emit_params = {k: v for k, v in emit_params.items() if k != LAUNCHER_CHILD_EMIT_PARAM}
     try:
-        script = Path(write_deferred_script(root, emit_params))
+        script = Path(write_deferred_script(root, emit_params, branch="reemit"))
     except OSError as exc:
         return _refuse(f"write-failed: cannot write the deferred script: {type(exc).__name__}")
     try:

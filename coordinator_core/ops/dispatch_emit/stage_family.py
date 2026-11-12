@@ -9,8 +9,12 @@ from __future__ import annotations
 from typing import Optional, Sequence
 
 FAMILIES = ("claude", "codex", "grok", "agy")
-STAGES = ("size", "plan", "review", "write", "other")
+STAGES = ("size", "plan", "review", "write", "scout", "research", "other")
+ROLES = ("scout", "research", "review")
+FALLBACK = "claude"
+FALLBACK_VERDICTS = ("BLOCKED", "FAILED")
 RUNNER_AGENT = "coordinator:family-stage-runner"
+_RESULT_KEYS = ("family", "stage", "exit_code", "output_path", "verdict")
 
 
 def resolve(value: Optional[str]) -> str:
@@ -41,7 +45,7 @@ def runner_brief(
 ) -> str:
     """Return the stage brief naming the fields family-stage-runner reads.
 
-    `stage` is one of size|plan|review|write|other. `scratch_dir` must sit under
+    `stage` is one of `STAGES`. `scratch_dir` must sit under
     `scratch/`. A write stage must declare at least one write path.
     """
     fam = resolve(family)
@@ -65,3 +69,54 @@ def runner_brief(
         lines.append("writes:")
         lines.extend(f"  - {p}" for p in paths)
     return "\n".join(lines) + "\n"
+
+
+def _checked(label: str, result: dict) -> dict:
+    if not isinstance(result, dict):
+        raise ValueError(f"{label} result must be a dict")
+    missing = [k for k in _RESULT_KEYS if k not in result]
+    if missing:
+        raise ValueError(f"{label} result lacks required keys: {', '.join(missing)}")
+    return result
+
+
+def stage_record(
+    role: str,
+    family_result: dict,
+    fallback_result: Optional[dict] = None,
+) -> dict:
+    """Return the stage record keeping the family attempt and any claude fallback.
+
+    Each result carries the family-stage-result required keys. A BLOCKED or
+    FAILED family result must carry `blocked_reason`. The fallback result is
+    appended as its own entry tagged `fallback_for: <family>`; `reported_family`
+    is then claude, never the family that failed. A fallback beside an OK or
+    WARN family result is refused.
+    """
+    if role not in ROLES:
+        raise ValueError(f"unknown stage role {role!r}; expected one of {'|'.join(ROLES)}")
+    fam = _checked("family", family_result)
+    failed = fam["verdict"] in FALLBACK_VERDICTS
+    if failed and not fam.get("blocked_reason"):
+        raise ValueError(
+            f"a {fam['verdict']} family result must carry blocked_reason"
+        )
+    if fallback_result is None:
+        return {
+            "stage_role": role,
+            "attempts": [dict(fam)],
+            "reported_family": fam["family"],
+        }
+    if not failed:
+        raise ValueError(
+            f"fallback result given beside a {fam['verdict']} family result; "
+            f"fallback runs only on {'|'.join(FALLBACK_VERDICTS)}"
+        )
+    fb = _checked("fallback", fallback_result)
+    if fb["family"] != FALLBACK:
+        raise ValueError(f"fallback result family must be {FALLBACK}, got {fb['family']!r}")
+    return {
+        "stage_role": role,
+        "attempts": [dict(fam), {**fb, "fallback_for": fam["family"]}],
+        "reported_family": FALLBACK,
+    }

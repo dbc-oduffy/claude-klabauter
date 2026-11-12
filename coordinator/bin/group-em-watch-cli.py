@@ -33,6 +33,9 @@ from typing import Optional
 
 
 def _resolve_module():
+    _bin_dir = os.path.dirname(os.path.abspath(__file__))
+    if _bin_dir not in sys.path:
+        sys.path.insert(0, _bin_dir)
     import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
     from cc_invoke import require_dispatch_engine_on_path
 

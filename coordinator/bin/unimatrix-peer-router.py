@@ -700,6 +700,9 @@ def default_adapters():
 class Router:
     """Owns one face child per peer, the control endpoint and the turn locks."""
 
+    last_refusal = ""
+    last_resolved_far = False
+
     def __init__(self, peers, sessions_dir=None, state_dir=None, endpoint_dir=None,
                  adapters=None, ready_seconds=READY_SECONDS, legs_dir=None,
                  codex_locks_dir=None, presence_dir=None, grok_home=None):
@@ -1341,10 +1344,40 @@ class Router:
                     raise
         return name
 
+    def _refusal_suffix(self):
+        return f" ({self.last_refusal})" if self.last_refusal else ""
+
+    def relay_route(self, endpoint, to):
+        """(endpoint, error): where a frame for the session at `endpoint` may be written on this box.
+
+        A pipe address is never opened off Windows; the frame goes to a live local mirror row carrying
+        the same far session id (its bridge relays by session id), else the send is refused."""
+        if not _off_windows() or not _transport().is_pipe(endpoint):
+            return endpoint, ""
+        rows = []
+        try:
+            for f in os.listdir(self.sessions_dir):
+                if f.endswith(".json"):
+                    with open(os.path.join(self.sessions_dir, f), encoding="utf-8") as fh:
+                        rows.append(json.load(fh))
+        except (OSError, ValueError):
+            pass
+        rows = [r for r in rows if isinstance(r, dict)]
+        sid = next((r.get("sessionId") for r in rows if r.get("messagingSocketPath") == endpoint), None)
+        for r in rows:
+            ep, pid = r.get("messagingSocketPath"), r.get("pid")
+            if (sid and r.get("sessionId") == sid and r.get("unimatrixRemote") and ep and not _transport().is_pipe(ep)
+                    and isinstance(pid, int) and _roster().pid_alive(pid)):
+                return ep, ""
+        return "", f"{to} is a Windows pipe endpoint and this box has no relay route to it"
+
     async def _transport_send_to_session(self, source, to, text):
         endpoint = self.resolve_sender(to)
         if not endpoint:
-            return {"ok": False, "error": f"no unique live session named {to}", "peers": sorted(self.peers)}
+            return {"ok": False, "error": f"no unique live session named {to}" + self._refusal_suffix(), "peers": sorted(self.peers)}
+        endpoint, refusal = self.relay_route(endpoint, to)
+        if refusal:
+            return {"ok": False, "error": refusal}
         try:
             transport = await self._transport_face(source, to)
             content = f"[{source} via Unimatrix transport] {text}"
@@ -1391,7 +1424,10 @@ class Router:
         """A peer's own addressed send to a Claude session `to`; marks the peer's open turn as answered."""
         ep = self.resolve_sender(to)
         if not ep:
-            return {"ok": False, "error": f"no session named {to}", "peers": sorted(self.peers)}
+            return {"ok": False, "error": f"no session named {to}" + self._refusal_suffix(), "peers": sorted(self.peers)}
+        ep, refusal = self.relay_route(ep, to)
+        if refusal:
+            return {"ok": False, "error": refusal}
         p = self.peers[peer]
         frame = _contract().build_frame(self.endpoint_of(peer), peer, _contract().label(peer, text))
         frame = _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid())
@@ -1459,9 +1495,10 @@ class Router:
         Re-read on every reply, so a sender that restarted under a new pid/endpoint keeps its
         name as its address. The router's own faces never match a Claude sender.
         """
-        exact, aliases, owners = set(), set(), set()
+        exact, aliases, owners, far_eps = set(), set(), set(), set()
         owned_alias = False
         refused_identity = False
+        self.last_refusal, self.last_resolved_far = "", False
         try:
             names = os.listdir(self.sessions_dir)
         except FileNotFoundError:
@@ -1489,13 +1526,19 @@ class Router:
             owned_alias = owned_alias or name in _contract().projected_addresses(e)
             owners.add((e.get('vendor'), e.get('target') or ep))
             (exact if e.get("name") == name else aliases).add(ep)
+            if e.get("unimatrixFarName") or e.get("unimatrixRemote"):
+                far_eps.add(ep)
         if refused_identity:
+            self.last_refusal = "refused identity"
             return ''  # Never retarget a refused local identity to another matching row/fallback.
         if owned_alias and len(owners) > 1:
+            self.last_refusal = "ambiguous: owned alias collides with another target"
             return ''  # A projected alias cannot override another target's exact name.
-        matches = exact or aliases
+        matches = exact | aliases
         if len(matches) > 1:
-            return ""  # Never choose an arbitrary box when roster names collide.
+            self.last_refusal = f"ambiguous: {len(matches)} live sessions carry this name"
+            return ""  # An exact name never beats a far alias: both are live carriers of the address.
+        self.last_resolved_far = bool(matches) and matches <= far_eps
         return next(iter(matches)) if matches else fallback
 
     async def handle_inbound(self, peer, frame):
@@ -1519,7 +1562,14 @@ class Router:
         if sender_ep in self.peer_endpoints() or sender_name in self.peers:
             self.log("NO-REPLY-TO-PEER", peer, "->", sender_name)
             return
-        sender_ep = self.resolve_sender(sender_name, sender_ep)
+        resolved = self.resolve_sender(sender_name, sender_ep)
+        if not resolved:
+            self.log("NO-REPLY-UNRESOLVED", peer, "->", sender_name, self.last_refusal)
+            return
+        if resolved != sender_ep and not self.last_resolved_far:
+            self.log("REPLY-KEEPS-FRAME-ENDPOINT", peer, "->", sender_name)  # a local row sharing a far sender's name is not that sender
+        else:
+            sender_ep = resolved
         p = self.peers[peer]
         frame = _contract().build_frame(self.endpoint_of(peer), peer, f"[reply] {peer}: {str(reply).strip()}")
         frame = _contract().stamp(frame, peer, p["vendor"], p["target"], os.getpid())
@@ -1530,6 +1580,10 @@ class Router:
             return
         resp = {"ok": True, "msg_id": frame["msg_id"]}
         self.log("REPLIED", peer, "->", sender_name, resp)
+
+
+def _off_windows():
+    return os.name != "nt"
 
 
 def deliver(endpoint, data, sessions_dir=None):

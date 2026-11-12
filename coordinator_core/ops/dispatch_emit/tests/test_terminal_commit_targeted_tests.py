@@ -37,7 +37,9 @@ def _write(repo) -> str:
 
 
 def test_caused_failure_is_refused_naming_the_test_file(repo):
-    head = _write(repo)
+    """Ruling 594963 R1 (``targeted-tests-failed`` is a provenance kind): the caused red lists as an
+    advisory naming the test file, ``targeted_tests_check`` is "failed", and the commit proceeds."""
+    _write(repo)
     verdict = {
         "status": "fail", "tests_failed": 2,
         "baseline": {"caused": ["pkg/tests/test_a.py::test_x"], "pre_existing": [], "unverified": []},
@@ -45,11 +47,11 @@ def test_caused_failure_is_refused_naming_the_test_file(repo):
 
     out = _fire(repo, "ok.py", targeted_tests=verdict)
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
-    assert out["integrity"][0]["path"] == "pkg/tests/test_a.py"
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.TARGETED_TESTS_FAILED
+    assert out["advisory"][0]["path"] == "pkg/tests/test_a.py"
     assert out["targeted_tests_check"] == "failed"
-    assert _git(["rev-parse", "HEAD"], repo) == head
 
 
 def test_pass_verdict_commits(repo):
@@ -62,15 +64,16 @@ def test_pass_verdict_commits(repo):
 
 
 def test_inline_review_fail_without_targeted_tests_is_refused_unattributed(repo):
-    head = _write(repo)
+    """Ruling 594963 R1: an unattributed review fail lists as an advisory with an empty path."""
+    _write(repo)
     inline = {**_reviewed(repo), "tests": {"status": "fail", "failed": 3}}
 
     out = _fire(repo, "ok.py", inline_review=inline)
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
-    assert out["integrity"][0]["path"] == ""
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.TARGETED_TESTS_FAILED
+    assert out["advisory"][0]["path"] == ""
 
 
 def _run_deleted_target(repo, rel: str = "test_gone.py", dropped=None) -> dict:
@@ -123,14 +126,16 @@ def test_nested_directory_and_node_targets_are_named(repo, target):
 
 
 def test_a_typo_target_beside_the_deleted_one_refuses_and_carries_no_note(repo):
+    """Ruling 594963 R1: the typo target keeps the verdict an advisory (never "not-run") and no note."""
     _write(repo)
     params = _run_deleted_target(repo, dropped=["test_gone.py", "test_typo.py"])
     params["targeted_tests"] = {"status": "error", "tests_run": 0, "tests_failed": 0, "baseline": None}
 
     out = _fire(repo, "ok.py", **params)
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.TARGETED_TESTS_FAILED
     assert "targeted_tests_note" not in out
 
 

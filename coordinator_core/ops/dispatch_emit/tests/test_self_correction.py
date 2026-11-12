@@ -21,6 +21,9 @@ _CASES = [
     {"failing": ["a/t.py::1", "b/t.py::2", "c/t.py::3"], "own": [], "kw": {"caused": [], "reverted": [{"tests": ["b/t.py::2"]}], "pre_existing": ["c/t.py::3"]}},
     {"failing": [".\\win\\t.py::x", "./win/u.py::y"], "own": ["win/t.py"], "kw": {}},
     {"failing": [], "own": ["a"], "kw": {}},
+    {"failing": ["g/t.py::1", "o/t.py::2", "r/t.py::3"], "own": [],
+     "kw": {"passed_at_base": ["g/t.py::1", "r/t.py::3"], "foreign_red": {"g/t.py::1": ["x.py"], "r/t.py::3": ["y.py"]},
+            "reverted": [{"tests": ["r/t.py::3"]}]}},
 ]
 
 
@@ -62,6 +65,21 @@ def test_unverified_outside_write_set_is_foreign_and_listed():
     r = sc.classify_reds(["u/t.py::1", "p/t.py::2"], [], caused=[], pre_existing=["p/t.py::2"])
     assert r.foreign == ("p/t.py::2", "u/t.py::1")
     assert r.unverified == ("u/t.py::1",)
+
+
+def test_foreign_red_outranks_passed_at_base_owned_and_is_never_unverified():
+    nid = "g/t.py::1"
+    assert sc.classify_reds([nid], [], passed_at_base=[nid]).owned == (nid,)
+    r = sc.classify_reds([nid], [], passed_at_base=[nid], foreign_red={nid: ["x.py"]})
+    assert r.owned == () and r.foreign == (nid,) and r.unverified == ()
+
+
+def test_foreign_red_does_not_outrank_a_reverted_red_or_claim_other_ids():
+    r = sc.classify_reds(["a/t.py::1", "b/t.py::2"], [], passed_at_base=["a/t.py::1", "b/t.py::2"],
+                         foreign_red=["a/t.py::1", "b/t.py::2"], reverted=[{"tests": ["a/t.py::1"]}])
+    assert r.owned == ("a/t.py::1",) and r.foreign == ("b/t.py::2",)
+    r = sc.classify_reds(["o/t.py::2"], [], passed_at_base=["o/t.py::2"], foreign_red={"other::x": []})
+    assert r.owned == ("o/t.py::2",)
 
 
 def test_separators_and_dot_slash_normalise_and_output_is_sorted_unique():

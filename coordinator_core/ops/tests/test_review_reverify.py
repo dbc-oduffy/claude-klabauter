@@ -494,3 +494,47 @@ def test_tripwire_failing_node_naming_only_unedited_file_is_unattributed(world):
     out = _revert(root, ["tests/test_tripwire.py::test_t"])
     assert out["reverted"] == []
     assert out["unattributed"] == ["tests/test_tripwire.py::test_t"]
+
+
+_PEER_NODE = "tests/test_plain.py::test_gate"
+_PEER_FILE = "benchmarks/peer_untracked.py"
+
+
+def _untracked_peer(root, monkeypatch, *, text_paths):
+    """A peer's untracked file the node's failure names; HEAD holds every other path."""
+    f = root / _PEER_FILE
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(b"import threading\n")
+    monkeypatch.setattr(rr, "_head_readable", lambda _r: True)
+    monkeypatch.setattr(rr.git_state, "head_blobs", lambda r, paths: {
+        p: (0o100644, _sha1(r / p)) for p in paths if p != _PEER_FILE
+    })
+    monkeypatch.setattr(
+        "coordinator_core.ops.dispatch_emit.land_run.foreign_halted_withheld", lambda *_a, **_k: {},
+    )
+    return {_PEER_NODE: "AmpSite(path='" + "', path='".join(text_paths) + "')"}
+
+
+def _sha1(path):
+    data = path.read_bytes()
+    return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
+
+
+def test_base_green_red_raised_only_by_an_untracked_out_of_footprint_file_is_foreign_red(world, monkeypatch):
+    root, _orig, _ = world
+    out_text = _untracked_peer(root, monkeypatch, text_paths=[_PEER_FILE])
+    out = _revert(root, [_PEER_NODE], failing_at_base=[], run_id="me", failing_output=out_text)
+    assert out["foreign_red"] == {_PEER_NODE: [_PEER_FILE]}
+    assert out["unattributed"] == [] and out["sibling_owned"] == []
+    assert _PEER_NODE not in out["passed_at_base"]
+
+
+def test_base_green_red_whose_cause_is_in_the_declared_writes_stays_owned(world, monkeypatch):
+    root, _orig, _ = world
+    out_text = _untracked_peer(root, monkeypatch, text_paths=[_PEER_FILE, "pkg/other.py"])
+    (root / "pkg/other.py").write_bytes(b"OTHER = 2\n")
+    monkeypatch.setattr(rr.git_state, "head_blobs", lambda r, paths: {
+        p: (0o100644, "0" * 40 if p == "pkg/other.py" else _sha1(r / p)) for p in paths if p != _PEER_FILE
+    })
+    out = _revert(root, [_PEER_NODE], failing_at_base=[], run_id="me", failing_output=out_text)
+    assert out["foreign_red"] == {} and out["unattributed"] == [_PEER_NODE]

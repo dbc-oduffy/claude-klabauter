@@ -1,7 +1,7 @@
 """The deferred-emit workflow script: renders a run script that emits one `dispatch.emit` params set through an
 op-relay agent, then follows the launcher chain hand-off and answers every `stage_pending` with the staged twin.
 
-Shared by the submit hook (an emit that outran its budget) and the EM-facing re-emit op."""
+Shared by the submit hook (a premint deferral, an emit that outran its budget, a fan child) and the EM-facing re-emit op."""
 
 from __future__ import annotations
 
@@ -45,7 +45,7 @@ function _blankPath(p) {
 """
 
 
-_DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: 'Emits and starts one submission whose emit outran the hook budget' }
+_DEFERRED_JS = r"""export const meta = { name: 'engine-ask-deferred-emit', description: __DESCRIPTION__ }
 const REPO_ROOT = __REPO_ROOT__;
 const PARAMS_FILE = __PARAMS_FILE__;
 """ + _EMIT_RELAY_JS + r"""// Trap: ask text carries quotes and `$(`; the command names a params file and never inlines the payload. Trap: a subagent relay is denied recursive or forced removal, so the prompt carries no removal and the file is left in scratch/warp.
@@ -243,9 +243,36 @@ def _chain_follow_values(brief_carry: Optional[dict] = None) -> dict:
     }
 
 
-def write_deferred_script(root: Path, params: dict) -> Path:
-    """A script under `scratch/warp/` that re-runs `dispatch.emit(params)` through an op-relay agent and starts what it emits."""
+#: The launcher meta description per deferral branch, shown to the EM as the workflow's title.
+BRANCH_DESCRIPTIONS = {
+    "premint": "Emits and starts one submission whose run id the hook minted; the emit runs here by design",
+    "overrun": "Emits and starts one submission whose emit outran the hook budget",
+    "fan_child": "Emits and starts one fan child; the launcher defers each child's emit",
+    "reemit": "Re-emits and starts one submission by hand through dispatch.reemit",
+}
+
+
+def _deferral_branch(params: dict, branch: Optional[str]) -> str:
+    """The deferral branch of `params`: `branch` when the caller names it, else read from the params themselves.
+    Trap: params cannot tell a re-emit from an unminted overrun, so only the re-emit op passes `branch`."""
+    from coordinator_core.ops.dispatch_emit.fan_launcher import LAUNCHER_CHILD_EMIT_PARAM
+
+    if branch is not None:
+        return branch
+    if params.get(LAUNCHER_CHILD_EMIT_PARAM) is True:
+        return "fan_child"
+    return "premint" if params.get("preminted_run_id") else "overrun"
+
+
+def write_deferred_script(root: Path, params: dict, *, branch: Optional[str] = None) -> Path:
+    """A script under `scratch/warp/` that re-runs `dispatch.emit(params)` through an op-relay agent and starts what it emits.
+
+    `branch` (a `BRANCH_DESCRIPTIONS` key) picks the launcher's meta description; None derives it from `params`."""
     import json
+
+    branch = _deferral_branch(params, branch)
+    if branch not in BRANCH_DESCRIPTIONS:
+        raise ValueError(f"unknown deferral branch {branch!r}")
 
     from coordinator_core.ops.dispatch_emit.fan_launcher import (
         _EMIT_OP, _INVOKE, DEFERRED_EMIT_KEY, EMIT_RELAY_AUTHORITY, LAUNCHER_CHILD_EMIT_PARAM,
@@ -272,6 +299,7 @@ def write_deferred_script(root: Path, params: dict) -> Path:
     spill.write_text(params_json, encoding="utf-8", newline="\n")
     params_file = spill.as_posix()
     values = {
+        "__DESCRIPTION__": json.dumps(BRANCH_DESCRIPTIONS[branch]),
         "__START__": start,
         "__REPO_ROOT__": json.dumps(Path(root).as_posix()),
         "__PARAMS_FILE__": json.dumps(params_file),

@@ -121,9 +121,21 @@ def _unknown_liveness(reason: str) -> dict:
     return {"verdict": "unknown", "reason": reason}
 
 
+def _remote_holder() -> Optional[dict]:
+    """The live Group EM on another box per the remote-roster snapshots, else None. Never raises."""
+    try:
+        holder = nomination.fleet_holder()
+    except Exception:  # noqa: BLE001
+        return None
+    return holder if isinstance(holder, dict) and holder.get("remote") else None
+
+
 def resolve_watch_liveness(repo_root: str, now: float) -> Optional[dict]:
     """The watch liveness for the box's Group EM, read from the G-EM home's heartbeat
     (`nomination.box_holder`'s record `repo_root`) whatever the session's cwd.
+
+    When the local holder is absent or not live and `nomination.fleet_holder` finds a live Group EM
+    on another box, that holder is named with verdict `unknown` (its heartbeat is per-box).
 
     Only a fresh heartbeat stamped by the live box holder reads `armed`; a missing, expired,
     foreign-holder or dead-holder heartbeat reads `unknown`. With no box holder on record the
@@ -132,6 +144,15 @@ def resolve_watch_liveness(repo_root: str, now: float) -> Optional[dict]:
         box = nomination.box_holder()
     except Exception:  # noqa: BLE001
         box = None
+    if not (isinstance(box, dict) and box.get("live")):
+        remote = _remote_holder()
+        if remote is not None:
+            return {
+                "verdict": "unknown",
+                "reason": f"holder is on box {remote.get('box_id')}; its heartbeat is not read here",
+                "holder_session_id": remote.get("session_id"),
+                "holder_name": remote.get("peer_name"),
+            }
     root = repo_root
     if isinstance(box, dict) and isinstance(box.get("repo_root"), str) and box["repo_root"]:
         root = box["repo_root"]

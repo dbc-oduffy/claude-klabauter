@@ -10,7 +10,7 @@ import pytest
 
 from coordinator_core.git import checkpoint_hunks
 from coordinator_core.ops.ceremony import commit_v2
-from coordinator_core.ops.dispatch_emit import peer_hunk_gate, run_hunk_claims
+from coordinator_core.ops.dispatch_emit import peer_hunk_gate, run_hunk_claims, run_write_prints
 from coordinator_core.ops.dispatch_emit.run_hunk_claims import HunkSplit
 from coordinator_core.session import core as session_core
 from coordinator_core.win_portability import no_console_creationflags
@@ -69,6 +69,11 @@ def repo(tmp_path, monkeypatch):
     session_core.init(SELF, cwd=str(root))
     monkeypatch.setattr(checkpoint_hunks, "checkpoint_run_id", lambda root, message, sid: "run1")
     monkeypatch.setattr(peer_hunk_gate, "co_declared_peer_holds", lambda *a, **k: [])
+    # The run's write-time prints attribute a path to the run: record them through the production
+    # recorder the way the executor's write hook does, never a stub of the reader.
+    run_write_prints.record(
+        root, "run1", ("pkg/code.py", "pkg/tests/test_code.py", "pkg/other.py", "pkg/tests/test_other.py"),
+    )
     return root
 
 

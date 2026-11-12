@@ -825,8 +825,8 @@ def _research_layout():
 
 def research_layout_findings(raw_rows: list, repo_root: Path, today: "str | None" = None) -> list:
     """One finding per row `writes`/`writes_under`/`surface` path under docs/research/ that the write guard
-    would deny: `research_layout.classify` says nonconforming and the path's top-level entry does not
-    already exist on disk (existing legacy entries are grandfathered, as in the guard)."""
+    would deny: `research_layout.classify` says nonconforming and neither the exact path nor an existing
+    nonconforming top-level legacy entry covers it (an existing valid topic dir grandfathers nothing)."""
     import datetime
 
     layout = _research_layout()
@@ -847,9 +847,11 @@ def research_layout_findings(raw_rows: list, repo_root: Path, today: "str | None
                 continue
             rel = posix[len(marker):]
             parts = [p for p in rel.split("/") if p not in ("", ".")]
-            if not parts or (repo_root / "docs" / "research" / parts[0]).exists():
+            if not parts or layout.classify(rel) != layout.NONCONFORMING:
                 continue
-            if layout.classify(rel) != layout.NONCONFORMING:
+            top = repo_root / "docs" / "research" / parts[0]
+            legacy_top = top.exists() and layout.classify(parts[0]) == layout.NONCONFORMING
+            if legacy_top or (repo_root / "docs" / "research" / "/".join(parts)).exists():
                 continue
             hint = "docs/research/<topic>/<date>-<run-slug>/synthesis.md"
             if len(parts) == 1:

@@ -71,6 +71,45 @@ def test_hand_landed_predecessor_does_not_hold_dependent(repo):
     assert resolve_plan_edge("row 'D1'", _EDGE, repo, cache).hold is None
 
 
+def test_hold_text_names_both_satisfying_conditions(repo):
+    hold = resolve_plan_edge("row 'D1'", _EDGE, repo, {}).hold
+    assert "predecessor not yet coded" in hold
+    assert "disposition: coded" in hold and "writes matching HEAD" in hold
+
+
+@pytest.fixture
+def predated_repo(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _write(tmp_path, "seed.txt", "seed")
+    _commit(tmp_path, "seed", "seed.txt")
+    _write(tmp_path, "src/a.py", "new\n")
+    _write(tmp_path, "src/tests/test_a.py", "def test_a(): pass\n")
+    _commit(tmp_path, "delivered before the plan", "src/a.py", "src/tests/test_a.py")
+    _write(tmp_path, "docs/plans/pred.md", _PLAN)
+    _commit(tmp_path, "plan", "docs/plans/pred.md")
+    return tmp_path
+
+
+def test_writes_delivered_before_plan_commit_do_not_hold(predated_repo):
+    assert resolve_plan_edge("row 'D1'", _EDGE, predated_repo, {}).hold is None
+
+
+def test_predated_writes_with_one_path_absent_at_head_still_hold(predated_repo):
+    (predated_repo / "src/tests/test_a.py").unlink()
+    _commit(predated_repo, "remove one write", "src/tests/test_a.py")
+    assert "not yet coded" in resolve_plan_edge("row 'D1'", _EDGE, predated_repo, {}).hold
+
+
+def test_edit_only_row_over_preexisting_files_still_holds(tmp_path):
+    _git(tmp_path, "init", "-q")
+    _write(tmp_path, "src/a.py", "old\n")
+    _write(tmp_path, "src/tests/test_a.py", "old\n")
+    _commit(tmp_path, "seed", "src/a.py", "src/tests/test_a.py")
+    _write(tmp_path, "docs/plans/pred.md", _PLAN)
+    _commit(tmp_path, "plan", "docs/plans/pred.md")
+    assert "not yet coded" in resolve_plan_edge("row 'D1'", _EDGE, tmp_path, {}).hold
+
+
 def test_uncommitted_writes_are_not_delivery(repo):
     _write(repo, "src/a.py", "new\n")
     _write(repo, "src/tests/test_a.py", "def test_a(): pass\n")

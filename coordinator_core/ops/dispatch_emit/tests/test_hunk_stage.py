@@ -331,3 +331,38 @@ def test_a_foreign_hunk_sharing_a_coarse_block_refuses_rather_than_line_matching
 
     assert got.staged_blob is None
     assert got.overlaps
+
+
+def _splice(text: str, at: int, new: list[str]) -> str:
+    rows = text.splitlines(keepends=True)
+    return "".join(rows[:at] + new + rows[at:])
+
+
+def test_a_pure_addition_after_the_runs_shifting_hunks_stages_beside_pre_run_inserted_dirt(repo):
+    head = _rows({})
+    dirt = ["dirt_1 = 1\n", "dirt_2 = 2\n"]
+    _put(repo, _splice(head, 100, dirt))
+    base_b = wb.capture(repo, [P])[P]
+    shifted = _splice(_splice(head, 100, dirt), 30, ["early_1 = 1\n", "early_2 = 2\n"])
+    own = [f"own_{i} = {i}\n" for i in range(5)]
+    _put(repo, _splice(shifted, 102, own))
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
+
+    assert got.overlaps == []
+    assert got.staged_blob is not None
+    want = _splice(_splice(head, 100, own), 30, ["early_1 = 1\n", "early_2 = 2\n"])
+    assert _staged_text(repo, got.staged_blob) == want
+    assert any(h.startswith("@@ -100,0 ") for h in got.own_headers)
+
+
+def test_a_pure_addition_beside_pre_run_dirt_that_rewrites_a_line_still_refuses(repo):
+    _put(repo, _rows({101: "DIRT"}))
+    base_b = wb.capture(repo, [P])[P]
+    text = _rows({101: "DIRT"}).replace("x_100 = 100\n", "x_100 = 100\nown_1 = 1\nown_2 = 2\n")
+    _put(repo, text)
+
+    got = hunk_stage.split(repo, P, own_run_id=RUN_B, own_baseline_blob=base_b, foreign=[])
+
+    assert got.staged_blob is None
+    assert [run for run, _ in got.overlaps] == [None]

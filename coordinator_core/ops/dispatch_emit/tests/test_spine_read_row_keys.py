@@ -115,6 +115,14 @@ def test_em_run_passes_the_mise_prep_spine_check():
     assert "em_run" in KNOWN_ROW_KEYS
 
 
+def test_stage_role_is_a_known_key_and_does_not_warn(tmp_path, caplog):
+    _plan(tmp_path, "  stage_role: scout\n")
+    with caplog.at_level(logging.WARNING):
+        rows = read_spine(tmp_path / PLAN_REL)
+    assert rows[0].stage_role == "scout"
+    assert not any("does not read" in r.getMessage() for r in caplog.records)
+
+
 def test_exports_for_readiness_consumers():
     assert ROW_KEY_ALIASES["model"] == "agent_model"
     assert {"model", "agent_model", "effort"} <= KNOWN_ROW_KEYS

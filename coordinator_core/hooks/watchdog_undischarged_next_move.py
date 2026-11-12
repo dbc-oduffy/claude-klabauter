@@ -724,6 +724,11 @@ def _handle_post_tool_use(payload: Mapping) -> None:
         return
 
     if route == "plan":
+        if _has_research_block(repo_root, rel_path):
+            _open_obligation(
+                repo_root, session_id, _SEAM_SIZING_ROUTED, _SEAM_SIZING_ROUTED, _RESEARCH_TERMINAL
+            )
+            return
         _open_obligation(repo_root, session_id, _SEAM_PLAN_REVIEW, _SEAM_PLAN_REVIEW, _REVIEW_TERMINAL)
 
 

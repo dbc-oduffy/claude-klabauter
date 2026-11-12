@@ -91,7 +91,9 @@ def main(argv=None):
     if os.name == "nt":
         print("unimatrix-codex-launch: unix-socket attach is unavailable on Windows; "
               "starting codex without --remote", file=sys.stderr)
-        return subprocess.call([codex, *args])
+        sys.path.insert(0, str(HERE.parents[1]))
+        from coordinator_core.codex_runner.codex_spawn_env import place_installed_pwsh
+        return subprocess.call([codex, *args], env=place_installed_pwsh(dict(os.environ), os.environ, windows=True))
     pc = load_sibling("unimatrix-peer-codex")
     sock = pc.socket_path()
     default_sock = os.path.expanduser(pc.DEFAULT_SOCK)

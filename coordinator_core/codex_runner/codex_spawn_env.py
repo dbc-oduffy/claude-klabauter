@@ -10,7 +10,7 @@ import os
 from collections.abc import Mapping
 from pathlib import Path
 
-from coordinator_core.codex_runner.sandbox_preflight import check_pwsh_launchable
+from coordinator_core.codex_runner.sandbox_preflight import check_pwsh_launchable, is_windowsapps_path
 
 WRITABLE_TEMP_RELPATH = Path("scratch") / "codex-tmp"
 
@@ -23,28 +23,41 @@ def _same_dir(a: str, b: str) -> bool:
     return os.path.normcase(os.path.normpath(a.strip('"'))) == os.path.normcase(os.path.normpath(b.strip('"')))
 
 
-def _place_installed_pwsh(env: dict[str, str], environ: Mapping[str, str]) -> None:
+def _holds_pwsh(entry: str) -> bool:
+    return bool(entry) and os.path.isfile(os.path.join(entry.strip('"'), "pwsh.exe"))
+
+
+def place_installed_pwsh(
+    env: dict[str, str], environ: Mapping[str, str], *, windows: bool | None = None
+) -> dict[str, str]:
+    """Put the installed PowerShell 7 dir first among pwsh holders and drop WindowsApps pwsh alias dirs.
+
+    No-op unless Windows and `%ProgramFiles%\\PowerShell\\7\\pwsh.exe` exists. Mutates and returns `env`.
+    """
+    if windows is None:
+        windows = os.name == "nt"
+    if not windows:
+        return env
     root = next((v for k, v in environ.items() if k.upper() == "PROGRAMFILES" and v), None)
     if not root:
-        return
+        return env
     pwsh_dir = os.path.join(root, "PowerShell", "7")
     if not os.path.isfile(os.path.join(pwsh_dir, "pwsh.exe")):
-        return
+        return env
     path_key = _key(env, "PATH")
     entries = env[path_key].split(os.pathsep) if path_key else []
-    first = next(
-        (i for i, e in enumerate(entries) if e and os.path.isfile(os.path.join(e.strip('"'), "pwsh.exe"))),
-        None,
-    )
-    if first is not None and _same_dir(entries[first], pwsh_dir):
-        return
+    first = next((i for i, e in enumerate(entries) if _holds_pwsh(e)), None)
     rest = [e for e in entries if not (e and _same_dir(e, pwsh_dir))]
     if first is None:
         shaped = [*rest, pwsh_dir]
     else:
         at = sum(1 for e in entries[:first] if not (e and _same_dir(e, pwsh_dir)))
         shaped = [*rest[:at], pwsh_dir, *rest[at:]]
-    env[path_key or "PATH"] = os.pathsep.join(shaped)
+    shaped = [e for e in shaped if not (is_windowsapps_path(e) and _holds_pwsh(e))]
+    joined = os.pathsep.join(shaped)
+    if joined != (env[path_key] if path_key else None):
+        env[path_key or "PATH"] = joined
+    return env
 
 
 def shape_codex_child(
@@ -58,14 +71,14 @@ def shape_codex_child(
 
     Mutates and returns `env`. On Windows, inserts the installed PowerShell 7 dir immediately before
     the first PATH entry holding a pwsh.exe (appended when none does), so a leading private-bin stays
-    first while the WindowsApps alias is outranked. With `writable_root`, TEMP and TMP become the
-    existing `<writable_root>/scratch/codex-tmp`; with None they are left as inherited. Ends with
+    first, and drops every WindowsApps PATH entry holding a pwsh.exe alias once the installed pwsh
+    exists. With `writable_root`, TEMP and TMP become the existing `<writable_root>/scratch/codex-tmp`;
+    with None they are left as inherited. Ends with
     `check_pwsh_launchable(env)`, whose `SandboxSetupRefused` propagates. Stat and mkdir only; no spawn.
     """
     if windows is None:
         windows = os.name == "nt"
-    if windows:
-        _place_installed_pwsh(env, os.environ if environ is None else environ)
+    place_installed_pwsh(env, os.environ if environ is None else environ, windows=windows)
     if writable_root is not None:
         tmp = Path(writable_root) / WRITABLE_TEMP_RELPATH
         tmp.mkdir(parents=True, exist_ok=True)

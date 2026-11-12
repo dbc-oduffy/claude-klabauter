@@ -221,7 +221,7 @@ KNOWN_ROW_KEYS = frozenset({
     "memo_kind", "delivered_via", "case_against", "kind", "pm_approved", "pm_approved_by",
     "pm_disposition", "receipt", "blocked_on", "host", "appends", "falsifier_review_of",
     "satisfies", "verification_runs", "done_when", "disjoint_parallel", "premise_close",
-    "em_run", "family",
+    "em_run", "family", "stage_role",
 })
 
 def _premise_close_for(raw: dict, rows_by_id: dict, verdicts: dict, opted_in: bool) -> Optional[dict]:
@@ -440,6 +440,7 @@ def resolve_plan_edge(
         None
         if disposition == "coded"
         else f"depends_on_plan {label}: predecessor not yet coded"
+        " (satisfied by `disposition: coded` on the row, or its writes matching HEAD)"
     )
     if hold is not None and (plan_cache.get(_LANDED_PLAN_CHUNKS_KEY) or {}).get((rel, chunk)) is not None:
         hold = None
@@ -942,6 +943,31 @@ def _row_family_dispatch(raw: dict, row_id: str, writes, plan_path) -> tuple:
     return stage_family.RUNNER_AGENT, brief + "\n"
 
 
+_STAGE_ROLES = ("scout", "research", "review")
+
+
+def _row_stage_role(raw: dict, row_id: str) -> Optional[str]:
+    """Return the row's ``stage_role`` (scout|research|review) or None when absent.
+
+    An unknown role, or one beside ``family``, is refused. Routing waits for the
+    run's opt-in, so the role changes neither ``agent_type`` nor ``body`` here.
+    """
+    role = raw.get("stage_role")
+    if role is None or role == "":
+        return None
+    if not isinstance(role, str) or role not in _STAGE_ROLES:
+        raise InvalidFieldTypeError(
+            f"row {row_id!r}: unknown stage_role {role!r}; expected one of "
+            f"{'|'.join(_STAGE_ROLES)}"
+        )
+    if raw.get("family") not in (None, ""):
+        raise InvalidFieldTypeError(
+            f"row {row_id!r} declares stage_role {role!r} and family {raw['family']!r}; "
+            "the family names the runner, so keep one"
+        )
+    return role
+
+
 class EmitterRow(NamedTuple):
     """One normalized task-spine row for the dispatch-emit pipeline.
 
@@ -1017,6 +1043,7 @@ class EmitterRow(NamedTuple):
     memo_send: Optional[Mapping] = None
     disjoint_parallel: bool = False
     blocked_on: bool = False
+    stage_role: Optional[str] = None
 
 
 _YAML_LOADER = SAFE_LOADER
@@ -1584,6 +1611,7 @@ def read_spine(
                 memo_send=memo_draft_fields(raw)[0] if memo_row_dispatchable(raw) else None,
                 disjoint_parallel=raw.get("disjoint_parallel") is True,
                 blocked_on=bool(raw.get("blocked_on")),
+                stage_role=_row_stage_role(raw, row_id),
             )
         )
 

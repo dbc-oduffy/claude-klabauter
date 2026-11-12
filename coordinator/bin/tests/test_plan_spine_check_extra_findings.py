@@ -147,6 +147,39 @@ def test_existing_legacy_entry_is_grandfathered(tmp_path):
     assert psc.research_layout_findings(rows, tmp_path, today="2026-11-05") == []
 
 
+def _topic(tmp_path, name="topic"):
+    (tmp_path / "docs" / "research" / name).mkdir(parents=True)
+
+
+def test_unknown_run_children_flagged_under_existing_topic(tmp_path):
+    _topic(tmp_path)
+    for child in ("facts.md", "notes.md", "data/x.json", "README.md"):
+        rows = [{"id": "C1", "writes": [f"docs/research/topic/2026-11-05-run/{child}"]}]
+        found = psc.research_layout_findings(rows, tmp_path, today="2026-11-05")
+        assert [f["class"] for f in found] == ["research-layout"], child
+
+
+def test_unknown_run_child_flagged_under_fresh_topic(tmp_path):
+    rows = [{"id": "C1", "writes": ["docs/research/fresh/2026-11-05-run/facts.md"]}]
+    found = psc.research_layout_findings(rows, tmp_path, today="2026-11-05")
+    assert [f["class"] for f in found] == ["research-layout"]
+
+
+def test_conforming_children_pass_under_existing_topic(tmp_path):
+    _topic(tmp_path)
+    for child in ("synthesis.md", "trail.yaml", "verdict.md", "outputs/a.txt", "workdir/b/c.txt"):
+        rows = [{"id": "C1", "writes": [f"docs/research/topic/2026-11-05-run/{child}"]}]
+        assert psc.research_layout_findings(rows, tmp_path, today="2026-11-05") == [], child
+
+
+def test_existing_nonconforming_file_under_existing_topic_is_grandfathered(tmp_path):
+    run = tmp_path / "docs" / "research" / "topic" / "2026-11-05-run"
+    run.mkdir(parents=True)
+    (run / "facts.md").write_text("x", encoding="utf-8")
+    rows = [{"id": "C1", "writes": ["docs/research/topic/2026-11-05-run/facts.md"]}]
+    assert psc.research_layout_findings(rows, tmp_path, today="2026-11-05") == []
+
+
 def test_non_research_path_ignored(tmp_path):
     assert psc.research_layout_findings([{"id": "C1", "writes": ["docs/plans/x.md"]}], tmp_path) == []
 

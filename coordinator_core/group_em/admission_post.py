@@ -89,6 +89,7 @@ def post(
     (``write_failed:*``, ``short_write``, ``not_found_at_path``) and a stderr line is printed.
     ``declared_peak_mb`` (MB the run expects its process tree to reach) is written on START
     and REQUEST lines only, as ``declared_peak_mb``; an absent or invalid value omits the field.
+    The holder is the fleet's live Group EM (a remote-roster hit counts), else the local box record.
     A non-live holder still receives the line: it is tailed once the holder is back.
     With ``require_holder=False`` a holderless box is still written (``holder_session`` null,
     ``holder_live`` False) so a governor reading the file sees the line.
@@ -99,7 +100,7 @@ def post(
     peak = valid_peak_mb(declared_peak_mb)
     if phase == "REQUEST" and peak is None:
         return {"posted": False, "reason": "bad_peak"}
-    holder = nomination.box_holder(directory, now)
+    holder = nomination.fleet_holder(directory, now) or nomination.box_holder(directory, now)
     if holder is None:
         if require_holder:
             return {"posted": False, "reason": "no_box_holder"}

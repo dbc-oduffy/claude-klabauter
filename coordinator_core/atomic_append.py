@@ -58,7 +58,22 @@ RECORD_WAIT_SECS = 0.25
 _DEFAULT_WAIT: "object" = object()
 _WRITER_IDLE_SECS = 5.0
 _registry_lock = threading.Lock()
+#: Steady-state live writer threads never exceed this, however many distinct sinks are appended to.
+#: A worker inside one write for longer than APPEND_DEADLINE_SECS is wedged and stops counting against it,
+#: so wedged sinks never starve the others; ``_OVERFLOW_MAX`` caps how many wedged workers are discounted.
+_POOL_MAX = 8
+_OVERFLOW_MAX = 32
+#: Sink -> ``time.monotonic()`` when its worker entered the current write.
+_busy_since: "dict[str, float]" = {}
+#: ``time.monotonic()`` the earliest pending rescue timer fires; ``inf`` when none.
+_rescue_due = float("inf")
+_WRITER_NAME_PREFIX = "atomic-append-writer:"
+#: Sink -> its pending jobs; present exactly while one worker owns or is queued to own the sink, which is what serialises a sink.
 _writers: "dict[str, queue.SimpleQueue]" = {}
+_ready: "queue.SimpleQueue[str]" = queue.SimpleQueue()
+_pending_ready = 0
+_idle_workers = 0
+_worker_count = 0
 _in_flight: "dict[str, int]" = {}
 _stalled: "dict[str, float]" = {}
 #: Max retained lines held in memory across all stalled sinks; past it a line is dropped and counted.
@@ -195,7 +210,7 @@ def append_line(
     concurrency test can observe a real failure if the atomicity guarantee
     is ever violated.
 
-    The write runs on a per-sink daemon writer thread. A record line (a run note, a
+    The write runs on a bounded pool of daemon writer threads, one at a time per sink. A record line (a run note, a
     ledger row) is never dropped: the caller waits ``RECORD_WAIT_SECS`` by default,
     then gets ``False`` and the job stays queued to land, in order, once the sink's
     writer returns. A failure raised after that wait is not seen by the caller.
@@ -215,6 +230,7 @@ def append_line(
     still lands, in order, once the sink's writer returns. ``True`` means it landed.
     Omitted it is ``RECORD_WAIT_SECS``; ``None`` waits indefinitely.
     """
+    global _pending_ready
     sink_str = str(sink)
     if droppable and _forward(sink_str, encoded, hold):
         return
@@ -227,11 +243,12 @@ def append_line(
         w = _writers.get(sink_str)
         if w is None:
             w = _writers[sink_str] = queue.SimpleQueue()
-            threading.Thread(
-                target=_writer_loop, args=(sink_str, w), daemon=True,
-                name=f"atomic-append-writer:{sink_str}",
-            ).start()
-        w.put(job)
+            w.put(job)
+            _pending_ready += 1
+            _ready.put(sink_str)
+            _ensure_worker_locked()
+        else:
+            w.put(job)
         budget = APPEND_DEADLINE_SECS
         if _stalled:
             budget = max(0.0, APPEND_DEADLINE_SECS - (time.monotonic() - min(_stalled.values())))
@@ -288,21 +305,109 @@ def _write_once(sink_str: str, encoded: bytes) -> None:
         os.close(fd)
 
 
-def _writer_loop(sink_str: str, w: "queue.SimpleQueue") -> None:
-    """Drain ``w``; however this thread ends, its registry entry is removed and any job
-    still queued is failed, so ``append_line`` never leaves a job without a consumer."""
+def _pool_capacity_locked() -> int:
+    """Workers that may still start: the pool bound, plus one per worker wedged past the deadline."""
+    now = time.monotonic()
+    wedged = sum(1 for t in _busy_since.values() if now - t > APPEND_DEADLINE_SECS)
+    return _POOL_MAX + min(wedged, _OVERFLOW_MAX) - _worker_count
+
+
+def _start_worker_locked() -> None:
+    global _worker_count
+    _worker_count += 1
+    threading.Thread(
+        target=_pool_worker, daemon=True, name=f"{_WRITER_NAME_PREFIX}pool-{_worker_count}",
+    ).start()
+
+
+def _ensure_worker_locked() -> None:
+    """Start a pool worker when a ready sink has no idle worker and capacity allows; caller holds ``_registry_lock``.
+
+    A saturated pool whose writers are not yet past the deadline arms a one-shot rescue, so a sink queued
+    behind wedged writers is picked up once they cross it.
+    """
+    global _rescue_due
+    if _pending_ready <= _idle_workers:
+        return
+    if _pool_capacity_locked() > 0:
+        _start_worker_locked()
+    else:
+        # Only writers not yet past the deadline can still free capacity; already-wedged ones would re-arm at 10ms.
+        now = time.monotonic()
+        remaining = [APPEND_DEADLINE_SECS - (now - t) for t in _busy_since.values() if now - t <= APPEND_DEADLINE_SECS]
+        if not remaining:
+            return
+        delay = min(remaining) + 0.01
+        if now + delay >= _rescue_due:
+            return
+        _rescue_due = now + delay
+        timer = threading.Timer(delay, _rescue)
+        timer.daemon = True
+        timer.name = "atomic-append-rescue"
+        timer.start()
+
+
+def _rescue() -> None:
+    global _rescue_due
+    with _registry_lock:
+        _rescue_due = float("inf")
+        spawn = min(_pending_ready - _idle_workers, _pool_capacity_locked())
+        for _ in range(max(0, spawn)):
+            _start_worker_locked()
+        if _pending_ready > _idle_workers:
+            _ensure_worker_locked()
+
+
+def _pool_worker() -> None:
+    """Take ready sinks and drain each to empty; exits after ``_WRITER_IDLE_SECS`` with nothing ready.
+
+    The thread is named for the sink it is writing, so a wedged write is attributable.
+    """
+    global _worker_count, _idle_workers, _pending_ready
+    thread = threading.current_thread()
+    pool_name = thread.name
     try:
         while True:
+            with _registry_lock:
+                if _pool_capacity_locked() < 0:
+                    _worker_count -= 1
+                    return
+                _idle_workers += 1
             try:
-                job = w.get(timeout=_WRITER_IDLE_SECS)
+                sink_str = _ready.get(timeout=_WRITER_IDLE_SECS)
             except queue.Empty:
                 with _registry_lock:
-                    if w.empty():
-                        _writers.pop(sink_str, None)
+                    _idle_workers -= 1
+                    if _pending_ready == 0:
+                        _worker_count -= 1
                         return
                 continue
             with _registry_lock:
+                _idle_workers -= 1
+                _pending_ready -= 1
+                q = _writers.get(sink_str)
+            if q is not None:
+                thread.name = f"{_WRITER_NAME_PREFIX}{sink_str}"
+                try:
+                    _writer_loop(sink_str, q)
+                finally:
+                    thread.name = pool_name
+    except BaseException:
+        with _registry_lock:
+            _worker_count -= 1
+        raise
+
+
+def _writer_loop(sink_str: str, q: "queue.SimpleQueue") -> None:
+    """Write ``q``'s jobs in order until empty; this worker owns the sink meanwhile. However it ends,
+    the registry entry is removed and any job still queued is failed, so ``append_line`` never
+    leaves a job without a consumer."""
+    try:
+        while True:
+            with _registry_lock:
+                job = q.get_nowait()
                 _in_flight[sink_str] = _in_flight.get(sink_str, 0) + 1
+                _busy_since[sink_str] = time.monotonic()
             held: "list[bytes]" = []
             dropped = 0
             try:
@@ -312,30 +417,35 @@ def _writer_loop(sink_str: str, w: "queue.SimpleQueue") -> None:
             finally:
                 try:
                     with _registry_lock:
+                        _busy_since.pop(sink_str, None)
                         if _in_flight[sink_str] <= 1:
                             del _in_flight[sink_str]
                         else:
                             _in_flight[sink_str] -= 1
-                        if w.empty():
+                        emptied = q.empty()
+                        if emptied:
                             _stalled.pop(sink_str, None)
                             held = _held.pop(sink_str, [])
                             dropped = _held_dropped.pop(sink_str, 0)
+                            if _writers.get(sink_str) is q:
+                                del _writers[sink_str]
                 finally:
                     job.done.set()
             if held or dropped:
                 _release_held(sink_str, held, dropped)
+            if emptied:
+                return
     except BaseException as exc:
         try:
             sys.stderr.write(f"atomic_append: writer for {sink_str} died: {exc!r}\n")
         except Exception:
             pass
-    finally:
         with _registry_lock:
-            if _writers.get(sink_str) is w:
+            if _writers.get(sink_str) is q:
                 del _writers[sink_str]
         while True:
             try:
-                orphan = w.get_nowait()
+                orphan = q.get_nowait()
             except queue.Empty:
                 break
             orphan.error = RuntimeError(f"atomic_append writer for {sink_str} died before this line was written")

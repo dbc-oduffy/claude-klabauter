@@ -173,9 +173,16 @@ from coordinator_core.ops.dispatch_emit.self_correction import (
 #: Pull or re-plan attempts on one plan before the run dispatches research instead of another round. The only place n is written.
 REPLAN_ATTEMPT_CAP = 2
 from coordinator_core.ops.dispatch_emit import agent_route as _agent_route
+from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
+from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
 from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_source
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
-from coordinator_core.ops.dispatch_emit.rag_use import DEGRADED as RAG_DEGRADED, RESTORE_MESSAGE
+from coordinator_core.ops.dispatch_emit.rag_use import (
+    DEGRADED as RAG_DEGRADED,
+    RAG_NOT_USED,
+    RESTORE_MESSAGE,
+    TRANSCRIPT_UNREADABLE,
+)
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
 from coordinator_core.ops.dispatch_emit import route_preference as _route_pref
@@ -680,35 +687,48 @@ def _docs_gate_clause(label: str, repo_root: str) -> tuple[str, ...]:
         f"{_INVOKE} {_OP_DOCS_CHECK_RAG_GATE} '",
         "js:JSON.stringify({ run_id: _runId, label: " + _lit(label) + ", session_id: _SESSION_ID })",
         f"'{_repo_flag(repo_root)}` once and return its JSON reply as `gate` (verdict, message, reason, unbacked, "
-        "rag_calls, rag_failed, rag_timeouts, rag_refused). Do not retry or repair it.",
+        "rag_calls, rag_failed, rag_timeouts, rag_refused, branch). Do not retry or repair it.",
     )
 
 
 def _docs_check_gate_js(
-    *, check_call: str, label: str, check_var: str, gate_var: str, indent: str, plan_js: str
+    *, check_call: str, retry_call: str, label: str, check_var: str, gate_var: str, indent: str, plan_js: str
 ) -> list[str]:
-    """JS lines running one docs-check leg and the halt its own `gate` reply (`_docs_gate_clause`) decides.
+    """JS lines running one docs-check leg and the outcome its own `gate` reply (`_docs_gate_clause`) decides.
 
-    A checker verdict `rag_down` (unless the gate verdict is `degraded`, timeout-only failures, or
-    `not_applicable`, where the gate saw no UE/example-retrieval-repo surface to judge),
-    a gate verdict `rag_corpus_down` or a gate reply carrying no verdict sets `_halted` to
-    `rag_corpus_down` with the restore message; a gate verdict `citation_unbacked` sets it to
-    `citation_unbacked` naming the unbacked citations; a gate verdict `degraded` halts nothing and
-    is pushed onto `_ragDegraded`, which the run's return carries as `rag_degraded`; a checker verdict
-    `degraded` (example-retrieval-repo answered, some bands degraded) halts nothing either and is pushed with its
-    `degraded_bands` when the gate did not already record the leg as degraded. Declares
-    `check_var` and `gate_var` in the caller's scope.
+    `retry_call` is the same leg under a distinct label (the gate locates its checker by label, so a
+    second agent under the first label would match two); it runs once, only when the first reply reads
+    as a corpus outage: gate verdict `rag_corpus_down`, a gate reply carrying no verdict, or a checker
+    verdict `rag_down` (unless the gate verdict is `degraded`, timeout-only failures, or `not_applicable`).
+    An outage that survives the retry halts nothing: `_ragDegraded` gets an entry with
+    `gap: rag_corpus_down` and `attempts`. A gate verdict `rag_not_used` or `transcript_unreadable` is
+    no outage: it is pushed as a named `gap` and `branch`, no retry. A gate verdict `citation_unbacked`
+    halts as `citation_unbacked` naming the unbacked citations; a gate verdict `degraded` is pushed
+    onto `_ragDegraded`, which the run's return carries as `rag_degraded`; a checker verdict
+    `degraded` (example-retrieval-repo answered, some bands degraded) is pushed with its `degraded_bands` when
+    the gate did not already record the leg as degraded. Declares `check_var` and `gate_var` in the
+    caller's scope.
     """
+    c, g = check_var, gate_var
+    gap = " || ".join(f"{g}?.verdict === {_lit(v)}" for v in (RAG_NOT_USED, TRANSCRIPT_UNREADABLE))
     down = (
-        f"({check_var}?.verdict === 'rag_down' && {gate_var}?.verdict !== {_lit(RAG_DEGRADED)} && {gate_var}?.verdict !== 'not_applicable') "
-        f"|| typeof {gate_var}?.verdict !== 'string' "
-        f"|| {gate_var}.verdict === {_lit(HALT_RAG_CORPUS_DOWN)}"
+        f"!({gap}) && (({c}?.verdict === 'rag_down' && {g}?.verdict !== {_lit(RAG_DEGRADED)} && {g}?.verdict !== 'not_applicable') "
+        f"|| typeof {g}?.verdict !== 'string' "
+        f"|| {g}.verdict === {_lit(HALT_RAG_CORPUS_DOWN)})"
     )
     return [
-        f"{indent}const {check_var} = await {check_call};",
-        f"{indent}const {gate_var} = {check_var}?.gate ?? null;",
-        f"{indent}if ({down}) _halted = {{ halted: {_lit(HALT_RAG_CORPUS_DOWN)}, reason: {_lit(RESTORE_MESSAGE)}, "
-        f"next_action: {_lit(RESTORE_MESSAGE)}, leg: {_lit(label)}, run_id: _runId, sizing: _sizingRel, plan: {plan_js} }};",
+        f"{indent}let {c} = await {check_call};",
+        f"{indent}let {g} = {c}?.gate ?? null;",
+        f"{indent}const {c}Gap = () => {gap};",
+        f"{indent}const {c}Down = () => {down};",
+        f"{indent}const {c}Retry = () => {retry_call};",
+        f"{indent}let {c}Attempts = 1;",
+        f"{indent}if ({c}Down()) {{ {c}Attempts = 2; {c} = await {c}Retry(); {g} = {c}?.gate ?? null; }}",
+        f"{indent}if ({c}Gap()) _ragDegraded.push({{ leg: {_lit(label)}, gap: {g}.verdict, branch: {g}.branch ?? null, "
+        f"reason: {g}.reason ?? null, rag_calls: {g}.rag_calls ?? null }});",
+        f"{indent}else if ({c}Down()) _ragDegraded.push({{ leg: {_lit(label)}, gap: {_lit(HALT_RAG_CORPUS_DOWN)}, "
+        f"attempts: {c}Attempts, branch: {g}?.branch ?? null, reason: {g}?.reason ?? {c}?.reason ?? null, "
+        f"next_action: {_lit(RESTORE_MESSAGE)} }});",
         f"{indent}else if ({gate_var}.verdict === {_lit(HALT_CITATION_UNBACKED)}) _halted = {{ halted: {_lit(HALT_CITATION_UNBACKED)}, "
         f"reason: 'docs-check citations the run does not back: ' + (Array.isArray({gate_var}.unbacked) ? {gate_var}.unbacked : [])"
         f".map(String).join('; ').slice(0, 280), unbacked: {gate_var}.unbacked ?? [], leg: {_lit(label)}, "
@@ -878,7 +898,7 @@ _SPINE_REVIEW_SCHEMA = _obj(
 _DOCS_GATE_SCHEMA = _obj(
     ["verdict"],
     {
-        "verdict": _STR, "message": _STR, "reason": _STR, "unbacked": {"type": "array", "items": _STR},
+        "verdict": _STR, "message": _STR, "reason": _STR, "branch": _STR, "unbacked": {"type": "array", "items": _STR},
         "rag_calls": {"type": "number"}, "rag_failed": {"type": "number"},
         "rag_timeouts": {"type": "number"}, "rag_refused": {"type": "number"},
     },
@@ -1693,6 +1713,9 @@ _REVIEW_RECOVER_JS = r"""
       const raw = rv?.failing;
       let failing = (rv && rv.status_after !== 'pass')
         ? [...new Set((Array.isArray(raw) ? raw : (typeof raw === 'string' ? [raw] : [])).map(String))].filter((n) => !excluded.has(n)) : [];
+      const fr = (rv && rv.foreign_red && typeof rv.foreign_red === 'object' && !Array.isArray(rv.foreign_red)) ? new Set(Object.keys(rv.foreign_red).map(_hfPosix)) : new Set();
+      const reverifyForeign = failing.filter((n) => fr.has(_hfPosix(n)));
+      failing = failing.filter((n) => !fr.has(_hfPosix(n)));
       if (rv && failing.length) {
         const [, found] = classifyFlakes({ ...rv, failing }, _runId);
         const fids = new Set(found.map((f) => f.node_id));
@@ -1705,7 +1728,7 @@ _REVIEW_RECOVER_JS = r"""
       const ownedTxt = split.owned.map((n) => n + ': ' + ((detail.get(n) ?? '').trim().split('\n')[0] ?? '').trim().slice(0, 300));
       const slices = (Array.isArray(_reviewWave) ? _reviewWave : []).filter((w) => w && (w.verdict === 'WARN' || __BLOCKED__) && (w.findings ?? 0) > (w.applied ?? 0))
         .map((w) => ({ slice_id: w.slice_id ?? null, findings: w.findings, applied: w.applied ?? 0, sidecar_path: w.sidecar_path ?? null }));
-      const foreign = failing.filter((n) => split.foreign.includes(_hfPosix(n)));
+      const foreign = [...reverifyForeign, ...failing.filter((n) => split.foreign.includes(_hfPosix(n)))];
       return { owned: split.owned, ownedTxt, foreign, unverified: split.unverified, slices,
         keys: [...split.owned, ...slices.map((s) => 'slice:' + s.slice_id)] };
     };
@@ -3311,6 +3334,77 @@ def _routed_row_js(work_label: str, exec_phase: str) -> str:
         "_routedRun(_routeOf(r), (t, extra) => agent(_rowPrompt(r) + extra, "
         f"{{ label: {work_label} + r.id, phase: {exec_phase}, agentType: t, "
         f"model: r.route.targets[t] ?? (r.route.triage && r.route.triage.agent_type === t ? r.route.triage.model : r.model), effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS} }}))"
+    )
+
+
+def _family_enabled(repo_root: str, sizing_rel: Optional[str]) -> bool:
+    """True unless the run's sizing is readable now and does not name the stage-family binding.
+    The manifest is staged at run time, so the script cannot see a row's `family` at compose time;
+    a sizing minted at run time (bare prompt, or a path not yet written) is opted in by `ask_stage.stage`
+    after this script is composed, so it gets the inert-without-`r.family` leg rather than none."""
+    if not sizing_rel:
+        return True
+    try:
+        return _stage_family_binding.opted_in(load_sizing(Path(repo_root), sizing_rel))
+    except (SizingFireRefused, OSError, ValueError, KeyError):
+        return True
+
+
+def _family_run_js(work_label: str, exec_phase: str) -> str:
+    """JS for `_familyRun(r)`: one family attempt, then one claude fallback when that attempt is
+    BLOCKED, FAILED or unresolved. The returned row result is a status line plus the stage record
+    (`stage_family.stage_record`'s shape), the family attempt first and the fallback tagged
+    `fallback_for`; the fallback is never reported as the family's result."""
+    schema = json.dumps(
+        {
+            "type": "object",
+            "required": list(_stage_family._RESULT_KEYS),
+            "properties": {
+                "family": {"type": "string", "enum": list(_stage_family.FAMILIES)},
+                "stage": {"type": "string"},
+                "exit_code": {"type": "integer"},
+                "output_path": {"type": "string"},
+                "verdict": {"type": "string", "enum": ["OK", "WARN", *_stage_family.FALLBACK_VERDICTS]},
+                "blocked_reason": {"type": "string"},
+            },
+        },
+        sort_keys=True,
+    )
+    opts = (
+        f"{{ label: {work_label} + r.id + __SUFFIX__, phase: {exec_phase}, agentType: __AGENT__, "
+        f"model: r.model, effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS}"
+    )
+    fam_opts = opts.replace("__SUFFIX__", "''").replace("__AGENT__", "r.agent_type") + f", schema: _FAMILY_RESULT_SCHEMA }}"
+    fb_opts = opts.replace("__SUFFIX__", "':fallback'").replace("__AGENT__", "r.fallback_agent_type") + " }"
+    failed = " || ".join(f"_fam.verdict === {_lit(v)}" for v in _stage_family.FALLBACK_VERDICTS)
+    return (
+        f"  const _FAMILY_RESULT_SCHEMA = {schema};\n"
+        "  async function _familyRun(r) {\n"
+        "    let _fam = null;\n"
+        f"    try {{ const _fr = await agent(_rowPrompt(r), {fam_opts});\n"
+        "      if (_fr && typeof _fr === 'object' && typeof _fr.verdict === 'string' && typeof _fr.family === 'string') _fam = _fr;\n"
+        "    } catch (e) { _fam = null; }\n"
+        "    if (!_fam) _fam = { family: r.family, stage: r.stage_role, exit_code: -1, output_path: '', "
+        "verdict: 'FAILED', blocked_reason: 'family-stage-runner reply missing or unparseable' };\n"
+        f"    if (!({failed})) {{\n"
+        "      const _rec = { stage_role: r.stage_role, attempts: [_fam], reported_family: _fam.family };\n"
+        "      log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict);\n"
+        "      return 'DONE: ' + r.id + ' via ' + _fam.family + ' ' + JSON.stringify(_rec);\n"
+        "    }\n"
+        "    if (!_fam.blocked_reason) _fam = { ..._fam, blocked_reason: 'family-stage-runner reported ' + _fam.verdict + ' without a reason' };\n"
+        "    log(r.id + ': ' + _fam.family + ' attempt ' + _fam.verdict + ' (' + _fam.blocked_reason + '); rerunning on '"
+        f" + {_lit(_stage_family.FALLBACK)});\n"
+        "    let _fbText = null;\n"
+        f"    try {{ _fbText = await agent(_rowPrompt({{ ...r, brief_path: r.fallback_brief_path }}), {fb_opts}); }} catch (e) {{ _fbText = null; }}\n"
+        "    const _fbOk = typeof _fbText === 'string' && _fbText.trim() !== '' && "
+        "!/(^|\\n)\\s*[*_`]{0,2}(PARTIAL|BLOCKED)[*_`]{0,2}:/.test(_fbText);\n"
+        f"    const _fb = {{ family: {_lit(_stage_family.FALLBACK)}, stage: r.stage_role, exit_code: _fbOk ? 0 : 1, output_path: '', "
+        "verdict: _fbOk ? 'OK' : 'FAILED' };\n"
+        f"    if (!_fbOk) _fb.blocked_reason = {_lit(_stage_family.FALLBACK + ' fallback reply missing or not DONE')};\n"
+        "    const _rec = { stage_role: r.stage_role, attempts: [_fam, { ..._fb, fallback_for: _fam.family }], "
+        f"reported_family: {_lit(_stage_family.FALLBACK)} }};\n"
+        f"    return (_fbOk ? 'DONE: ' : 'BLOCKED: ') + r.id + ' via {_stage_family.FALLBACK} fallback after ' + _fam.family + ' ' + _fam.verdict + ' ' + JSON.stringify(_rec);\n"
+        "  }"
     )
 
 
@@ -5135,24 +5229,27 @@ def compose_ask_script(
         b.append("    let _spineFallback = null;")
         b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
         if ue_repo:
-            docs_check_prompt = _cat(
-                f"{head}\n\n{anchor}\n\n",
-                "Docs-check the spine plan at ",
-                "js:_gate.spine_plan",
-                ": verify every Unreal Engine API, class, module and behavior claim it makes against the "
-                "engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE with "
-                "Edit -- never scaffold a new plan, never change its path. Return its repo-relative path as "
-                "plan_rel and `verdict` ok or corrected."
-                " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
-                *_docs_gate_clause("plan-docs-check", repo_root),
-            )
-            docs_call = _agent(
-                docs_check_prompt, label="plan-docs-check", phase="plan", agent_type=_DOCS_CHECKER_AGENT_TYPE,
-                agent_model=docs_checker_model, schema=_DOCS_CHECK_SCHEMA, run_id=run_id,
-            )
+            def docs_call_for(docs_label: str) -> str:
+                docs_check_prompt = _cat(
+                    f"{head}\n\n{anchor}\n\n",
+                    "Docs-check the spine plan at ",
+                    "js:_gate.spine_plan",
+                    ": verify every Unreal Engine API, class, module and behavior claim it makes against the "
+                    "engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE with "
+                    "Edit -- never scaffold a new plan, never change its path. Return its repo-relative path as "
+                    "plan_rel and `verdict` ok or corrected."
+                    " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
+                    *_docs_gate_clause(docs_label, repo_root),
+                )
+                return _agent(
+                    docs_check_prompt, label=docs_label, phase="plan", agent_type=_DOCS_CHECKER_AGENT_TYPE,
+                    agent_model=docs_checker_model, schema=_DOCS_CHECK_SCHEMA, run_id=run_id,
+                )
+
             b.extend(
                 _docs_check_gate_js(
-                    check_call=docs_call, label="plan-docs-check",
+                    check_call=docs_call_for("plan-docs-check"), retry_call=docs_call_for("plan-docs-check-retry"),
+                    label="plan-docs-check",
                     check_var="_planDocsCheck", gate_var="_planDocsGate", indent="      ",
                     plan_js="(_gate.spine_plan ?? null)",
                 )
@@ -5730,6 +5827,10 @@ def compose_ask_script(
         "  }"
     )
     routed = _routing_enabled(repo_root)
+    family_on = _family_enabled(repo_root, sizing_rel)
+    family_arm = "r.family ? _familyRun(r) : " if family_on else ""
+    if family_on:
+        b.append(_family_run_js(work_label, exec_phase))
     if routed:
         b.append(_route_js.routed_run_js())
         b.append(_ROUTE_ADAPTER_JS)
@@ -5738,7 +5839,7 @@ def compose_ask_script(
     b.extend(_reviewer_row_js(anchor, work_label, run_id))
     routed_arm = f"r.route ? {_routed_row_js(work_label, exec_phase)} : " if routed else ""
     b.append(
-        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.kept_from ? _keptRun(r) : {routed_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
+        f"      else _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.kept_from ? _keptRun(r) : {routed_arm}{family_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
         f"{{ label: {work_label} + r.id, phase: {exec_phase}, "
         f"agentType: r.agent_type, model: r.model, effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
         "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });"
@@ -5786,7 +5887,7 @@ def compose_ask_script(
             "test_targets: _u(_manifest.test_targets, _lateM.test_targets), "
             "gated: _u(_manifest.gated, _lateM.gated), owed: _u(_manifest.owed, _lateM.owed) };\n"
             "      for (const r of _lateRows) {\n"
-            "        _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => r.group ? _groupRun(r) : agent(_rowPrompt(r), "
+            f"        _rows[r.id] = _runRow(r.id, (r.deps ?? []).map((d) => _rows[d]), null, async () => {family_arm}r.group ? _groupRun(r) : agent(_rowPrompt(r), "
             f"{{ label: {work_label} + r.id, phase: {exec_phase}, "
             f"agentType: r.agent_type, model: r.model, effort: {_js_string_literal(_ROW_EFFORT)}, stallMs: {_emit._EXECUTOR_STALL_MS} }}), "
             "{ title: r.id, paths: r.writes ?? [], declared: r.writes ?? [] });\n"
@@ -5867,27 +5968,30 @@ def compose_ask_script(
         "? _phaseVerdict('review').wave.filter((w) => w && !(" + _BLOCKED_UNAPPLIED_JS + ")) : [];"
     )
     if ue_repo:
-        diff_docs_prompt = _cat(
-            f"{head}\n\n{anchor}\n\n",
-            "Docs-check this run's diff: verify every Unreal Engine API, class, module and behavior claim in "
-            f"the changes since {run_base_sha or 'the run base'} to ",
-            "js:_reviewPaths.join(', ')",
-            ", against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
-            "with Edit. Return `verdict` ok or corrected."
-            " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
-            *_docs_gate_clause("diff-docs-check", repo_root),
-        )
-        diff_docs_call = _agent(
-            diff_docs_prompt, label="diff-docs-check", phase="review", agent_type=_DOCS_CHECKER_AGENT_TYPE,
-            agent_model=docs_checker_model, schema=_DOCS_CHECK_SCHEMA, run_id=run_id,
-        )
+        def diff_docs_call_for(docs_label: str) -> str:
+            diff_docs_prompt = _cat(
+                f"{head}\n\n{anchor}\n\n",
+                "Docs-check this run's diff: verify every Unreal Engine API, class, module and behavior claim in "
+                f"the changes since {run_base_sha or 'the run base'} to ",
+                "js:_reviewPaths.join(', ')",
+                ", against the engine docs and source (example-retrieval-repo engine tools), and apply each correction IN PLACE "
+                "with Edit. Return `verdict` ok or corrected."
+                " If example-retrieval-repo answered but some results were degraded, return `verdict` degraded with `degraded_bands` naming them; return rag_down only when example-retrieval-repo did not answer at all.",
+                *_docs_gate_clause(docs_label, repo_root),
+            )
+            return _agent(
+                diff_docs_prompt, label=docs_label, phase="review", agent_type=_DOCS_CHECKER_AGENT_TYPE,
+                agent_model=docs_checker_model, schema=_DOCS_CHECK_SCHEMA, run_id=run_id,
+            )
+
         b.append(
             "  if (!_halted && !_reviewReused && !_noReviewPaths && "
             f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{"
         )
         b.extend(
             _docs_check_gate_js(
-                check_call=diff_docs_call, label="diff-docs-check",
+                check_call=diff_docs_call_for("diff-docs-check"), retry_call=diff_docs_call_for("diff-docs-check-retry"),
+                label="diff-docs-check",
                 check_var="_diffDocsCheck", gate_var="_diffDocsGate", indent="    ",
                 plan_js="(typeof _planRel !== 'undefined' ? _planRel : null)",
             )

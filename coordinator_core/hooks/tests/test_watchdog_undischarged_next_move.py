@@ -413,6 +413,42 @@ def test_plan_skill_plan_route_opens_plan_review(tmp_path) -> None:
     assert record["next_action"] == "Skill(coordinator:review)"
 
 
+def _plan_skill_ledger(tmp_path, session_id, sizing_text):
+    from coordinator_core.hooks.watchdog_undischarged_next_move import _handler
+
+    repo_root = _make_repo(tmp_path)
+    rel_path = "state/sizings/thing.yaml"
+    full = os.path.join(repo_root, rel_path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as fh:
+        fh.write(sizing_text)
+    _write_touch_record(repo_root, session_id, rel_path)
+    payload = {
+        "session_id": session_id,
+        "cwd": repo_root,
+        "tool_name": "Skill",
+        "tool_input": {"skill": "coordinator:plan"},
+    }
+    assert _handler({"payload": payload}) == {}
+    with open(_ledger_path(repo_root, session_id), "r", encoding="utf-8") as fh:
+        return repo_root, [json.loads(line) for line in fh if line.strip()]
+
+
+def test_plan_skill_legacy_plan_route_with_research_block_opens_research_terminal_not_plan_review(
+    tmp_path,
+) -> None:
+    repo_root, rows = _plan_skill_ledger(tmp_path, "sid-legacy-res", "route: plan\n" + _RESEARCH_BLOCK)
+    assert [r["seam"] for r in rows] == ["sizing-routed"]
+    assert rows[0]["next_action"] == "Skill|Workflow(coordinator:research|pipeline-research-*.workflow.mjs)"
+    _post(repo_root, "sid-legacy-res", "Workflow", {"scriptPath": "scratch/pipeline-research-x.workflow.mjs"})
+    assert not _sizing_open(repo_root, "sid-legacy-res")
+
+
+def test_plan_skill_plan_route_with_empty_research_block_still_opens_plan_review(tmp_path) -> None:
+    _, rows = _plan_skill_ledger(tmp_path, "sid-legacy-empty", "route: plan\nresearch: {}\n")
+    assert [r["seam"] for r in rows] == ["plan->review"]
+
+
 def _intake_path(repo_root: str, session_id: str) -> str:
     return machinery_paths.intake_path(repo_root, session_id)
 

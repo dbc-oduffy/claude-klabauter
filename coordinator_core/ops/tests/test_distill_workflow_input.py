@@ -171,6 +171,71 @@ def test_oversize_slug_entry_gets_its_own_shard():
     assert [list(files[n]["entries"]) for n in manifest["slugShardFiles"]] == [["a"], ["huge"], ["b"]]
 
 
+def test_handler_emits_relevant_guides_per_batch_additively(tmp_path):
+    (tmp_path / "docs" / "wiki").mkdir(parents=True)
+    (tmp_path / "docs" / "wiki" / "foo.md").write_text("# Quartz relay\nquartz relay shards\n", encoding="utf-8")
+    (tmp_path / "docs" / "wiki" / "bar.md").write_text("# Other\nnothing\n", encoding="utf-8")
+    (tmp_path / "a.md").write_text("quartz relay notes", encoding="utf-8")
+    manifest = make_scope_manifest(
+        run_id="r",
+        batches=[["a.md"], ["c.md"]],
+        wiki_dirs=["docs/wiki"],
+        wiki_slugs=[
+            {"slug": "foo", "path": "docs/wiki/foo.md"},
+            {"slug": "bar", "path": "docs/wiki/bar.md"},
+        ],
+        cohorts={"harvest": ["a.md", "c.md"]},
+    )
+    payload = _handler({"manifest": manifest, "repo_root": str(tmp_path)}, repo_root=None)
+    assert payload["batches"][0]["relevantGuides"][0]["slug"] == "foo"
+    assert payload["batches"][1]["relevantGuides"] == []
+    assert payload["wikiSlugCount"] == 2 and payload["batch_count"] == 2
+    assert validate_workflow_input(payload) == []
+
+
+def test_relevant_guides_drop_outlines_before_the_batch_cap_refuses():
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
+
+    big = [{"slug": f"g{i}", "path": "p", "outline": ["# " + "x" * 400]} for i in range(60)]
+    payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r", relevant_guides=[big, []])
+    kept = payload["batches"][0]["relevantGuides"]
+    assert len(kept) == len(big) and all("outline" not in g for g in kept)
+    shard_workflow_input(payload)  # does not raise: the hint yielded, the batch fit
+
+
+def test_attach_relevant_guides_after_digests_degrades_to_paths_and_fits():
+    from coordinator_core.ops.distill_workflow_input import (
+        SLUG_SHARD_MAX_BYTES,
+        attach_relevant_guides,
+        shard_workflow_input,
+    )
+
+    payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
+    batch = payload["batches"][0]
+    batch["digests"] = {f: f"d/{'y' * 100}/{f}" for f in batch["files"]}
+    guides = [{"slug": f"g{i}", "path": f"w/g{i}.md", "outline": ["# " + "x" * 300]} for i in range(60)]
+    attach_relevant_guides(payload, [guides, []])
+    kept = payload["batches"][0]["relevantGuides"]
+    assert kept and all("outline" not in g for g in kept)
+    assert [g["slug"] for g in kept] == [g["slug"] for g in guides[: len(kept)]]
+    assert payload["batches"][1]["relevantGuides"] == []
+    shard_workflow_input(payload)  # does not raise
+    assert SLUG_SHARD_MAX_BYTES == 12_000
+
+
+def test_relevant_guides_yield_entries_when_even_paths_do_not_fit():
+    huge = [{"slug": f"g{i}", "path": "p" * 500, "outline": []} for i in range(60)]
+    payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r", relevant_guides=[huge, []])
+    kept = payload["batches"][0]["relevantGuides"]
+    assert 0 < len(kept) < len(huge) and kept == huge[: len(kept)]
+
+
+def test_validate_catches_relevant_guides_wrong_type():
+    payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
+    payload["batches"][0]["relevantGuides"] = "foo"
+    assert any("relevantGuides" in e for e in validate_workflow_input(payload))
+
+
 def test_batch_over_relay_cap_refuses():
     import pytest
 

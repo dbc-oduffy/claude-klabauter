@@ -927,7 +927,7 @@ def _isolated_body(
     if status == "fail" and export_log_used and 1 in codes and _failed_node_ids(export_log, export_root):
         baseline = _head_baseline(
             root, run, tests, export_root, export_log, path.with_suffix(".head.log"), deadline,
-            landing_retest.run_base_for(root, run_id, params) or None, meta["head"],
+            landing_retest.run_base_for(root, run_id, params) or None, meta["head"], write_set,
         )
     return _write_dual(
         root, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
@@ -939,6 +939,7 @@ def _isolated_body(
 def _head_baseline(
     root: Path, run, tests: list[str], export_root: Path, export_log: Path, head_log: Path,
     deadline: float, base_sha: Optional[str] = None, export_sha: Optional[str] = None,
+    write_set: Sequence[str] = (),
 ) -> dict:
     """``{"baseline": {method, base_sha, caused, foreign, evidence}}`` plus the ``_landing_checks`` keys
     (``head_red``, ``owed_cleared``, ``head_sha``); ``export_sha`` the sha of ``export_root``. ``base_sha`` is the sha measured
@@ -970,6 +971,28 @@ def _head_baseline(
     def _skip(reason: str) -> dict:
         return {"baseline_skipped": {"reason": reason, "files": files}}
 
+    def _node_or_skip(reason: str) -> dict:
+        """Whole-file HEAD pass unusable: measure only the export-red ids at HEAD. Unmeasured, or no id
+        collectable at HEAD, keeps the fail-closed skip."""
+        export_reds = _failed_node_ids(export_log, export_root)
+        measured = _measure(run, head_root, export_reds, head_log.with_suffix(".node.log"), deadline)
+        if measured is None or not measured[0]:
+            return _skip(reason)
+        _, failed = measured
+        baseline = {
+            "method": "head-node-measure",
+            "base_sha": measured_sha,
+            "caused": [n for n in export_reds if n not in failed],
+            "foreign": [n for n in export_reds if n in failed],
+            "evidence": sorted(failed),
+            "skipped_whole_file": reason,
+        }
+        baseline.update(_landing_checks(
+            root, run, baseline, export_root, head_root, head_log, deadline, measured_sha, base_sha, export_sha,
+            write_set,
+        ))
+        return {"baseline": baseline}
+
     try:
         measured_sha = le.build_head_export(root, head_root, [], base_sha).head_sha
         head_tests = list(dict.fromkeys(f for f in (t.split("::")[0] for t in tests) if (head_root / f).exists()))
@@ -984,18 +1007,18 @@ def _head_baseline(
         if errored:
             for f in errored:
                 files[f] = {**files.get(f, {"head": 0}), "collection_error": True}
-            return _skip("HEAD collection error in: " + ", ".join(errored))
+            return _node_or_skip("HEAD collection error in: " + ", ".join(errored))
         if not head_ids:
-            return _skip("HEAD pass collected 0 items")
+            return _node_or_skip("HEAD pass collected 0 items")
         empty = [f for f, c in files.items() if not c["head"]]
         if empty:
-            return _skip("HEAD pass collected 0 items in: " + ", ".join(empty))
+            return _node_or_skip("HEAD pass collected 0 items in: " + ", ".join(empty))
         status, _, codes, used = _run_pass(run, head_root, head_tests, head_log, deadline)
         if status not in ("pass", "fail", NO_TESTS_STATUS):
-            return _skip(f"HEAD pass {status}")
+            return _node_or_skip(f"HEAD pass {status}")
         ran = _ran_total(head_log) if used else None
         if ran is None or ran < len(head_ids):
-            return _skip(f"HEAD run did not run what it collected: ran {ran}, collected {len(head_ids)}")
+            return _node_or_skip(f"HEAD run did not run what it collected: ran {ran}, collected {len(head_ids)}")
         red_at_head = set(_failed_node_ids(head_log, head_root)) if used and 1 in codes else set()
         export_reds = _failed_node_ids(export_log, export_root)
         baseline = {
@@ -1007,6 +1030,7 @@ def _head_baseline(
         }
         baseline.update(_landing_checks(
             root, run, baseline, export_root, head_root, head_log, deadline, measured_sha, base_sha, export_sha,
+            write_set,
         ))
     except (le.LandingExportError, RuntimeError) as exc:
         return _skip(f"HEAD export failed: {exc}")
@@ -1034,15 +1058,34 @@ def _measure(run, root: Path, ids: Sequence[str], log: Path, deadline: float) ->
     return set(present), (set(_failed_node_ids(log, root)) & set(present)) if 1 in codes else set()
 
 
+def _head_red_not_the_runs(
+    root: Path, base_sha: Optional[str], head: str, write_set: Sequence[str], red: set[str],
+) -> Optional[set[str]]:
+    """``red`` (the caused ids red at pure HEAD) minus what the run's own commits could have made red,
+    or None when HEAD cannot be told from the run's work. A checkpoint commit leaves the run's blobs in
+    HEAD, so a path of ``write_set`` changed between ``base_sha`` and ``head`` taints every id (None); an
+    id whose test file changed in that range stays caused. A range git cannot read (an unresolvable sha)
+    taints nothing: there is no run commit to find. Zero-spawn."""
+    from coordinator_core.git.git_state import diff_commit_trees
+
+    changes = diff_commit_trees(root, base_sha, head) if base_sha else None
+    if changes is None:
+        return red
+    changed = {c.path for c in changes}
+    if changed & {str(w).replace("\\", "/") for w in write_set}:
+        return None
+    return {i for i in red if i.split("::")[0].replace("\\", "/") not in changed}
+
+
 def _landing_checks(
     root: Path, run, baseline: dict, export_root: Path, head_root: Path, head_log: Path, deadline: float,
-    measured_sha: str, base_sha: Optional[str], export_sha: Optional[str],
+    measured_sha: str, base_sha: Optional[str], export_sha: Optional[str], write_set: Sequence[str] = (),
 ) -> dict:
     """The two landing base checks, so ``dispatch.land_run`` only reads them: ``head_red`` the ``caused``
     ids red at a pure-HEAD export (``head_root`` itself when ``measured_sha`` is HEAD, where ``caused`` is
     green by construction), ``owed_cleared`` the owed ids (``unevidenced_ids(baseline)``) green at
     ``export_root`` (HEAD plus the landing paths), and ``head_sha`` the sha ``head_red`` was measured at.
-    A key whose measurement is broken or ran fewer tests than named is omitted: the landing keeps those
+    ``head_red`` drops what ``_head_red_not_the_runs`` taints. A key whose measurement is broken or ran fewer tests than named is omitted: the landing keeps those
     ids caused. Rebuilds ``head_root`` at HEAD when the run base differs; the caller removes it."""
     from coordinator_core.git.git_state import head_sha as current_head
     from coordinator_core.ops.dispatch_emit import landing_export as le
@@ -1057,6 +1100,8 @@ def _landing_checks(
             if head != measured_sha:
                 measured = _measure(run, head_root, caused, head_log.with_suffix(".red.log"), deadline)
                 red = None if measured is None else measured[1]
+                if red:
+                    red = _head_red_not_the_runs(root, base_sha, head, write_set, red)
     except (le.LandingExportError, RuntimeError):
         red = None
     if red is not None:
@@ -1095,6 +1140,14 @@ def _write_dual(
         "live": {"status": live_status, "failed_tests": live_failed},
     }
     record.update(baseline or {})
+    measured_baseline = record.get("baseline")
+    if isinstance(measured_baseline, dict) and export_log_used and _ran_total(export_log) is not None:
+        dirt = [n for n in live_failed if n not in export_failed and n not in measured_baseline.get("foreign", [])]
+        if dirt:
+            measured_baseline["foreign"] = [*measured_baseline.get("foreign", []), *dirt]
+            measured_baseline["foreign_reason"] = {
+                **measured_baseline.get("foreign_reason", {}), **{n: landing_targeted_tests.UNDECLARED_DIRT for n in dirt},
+            }
     if live_reason:
         record["live"]["reason"] = live_reason
     if reason:

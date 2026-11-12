@@ -51,8 +51,10 @@ documented fail-open choice on this leg.
 
 Eviction, not refusal, at the count caps. A write that lands at a cap lands
 as written and the OLDEST body file (by mtime, any memory type) is evicted
-with every ``MEMORY.md`` row linking it, one ``memory-evictions.jsonl`` line
-per eviction (``_memory_evict.evict_oldest``). A new body file at
+into a ``state/lessons/`` record with every ``MEMORY.md`` row linking it, one
+``memory-evictions.jsonl`` line per eviction (``_memory_evict.evict_oldest``);
+it runs before the oversize-body verdict, since a leveled deny lets the body
+land. Every allowed save carries ``RAM_WARNING``. A new body file at
 ``MAX_MEMORY_FILES`` evicts one; an ``Edit``/``MultiEdit`` of ``MEMORY.md``
 that breaches the row or byte cap evicts until the re-simulated edit fits.
 Stays a plain deny: a ``Write`` of ``MEMORY.md`` over cap, a row over
@@ -454,16 +456,20 @@ def _check_new_body_file_count(resolved: Path, display: str) -> "Optional[str]":
     return _deny_reason_file_count(dir_display, count, oldest_name)
 
 
-def _evict_for_new_file(resolved: Path, refusal: str) -> "Optional[str]":
+def _evict_for_new_file(
+    resolved: Path, refusal: str, who: "Dict[str, Any]"
+) -> "Optional[str]":
     """Evict the oldest memory to make room; ``None`` on success, else the deny reason."""
     try:
-        evict_oldest(resolved.parent)
+        evict_oldest(resolved.parent, **who)
     except OSError:
         return refusal
     return None
 
 
-def memory_cap_verdict(store_dir: Path, filename: str) -> "Optional[str]":
+def memory_cap_verdict(
+    store_dir: Path, filename: str, *, cwd: "Optional[str]" = None, session_id: str = ""
+) -> "Optional[str]":
     """Evict the oldest memory when creating ``filename`` in the project
     ``memory/`` dir ``store_dir`` breaches the file-count cap and return
     ``None``; return the deny reason only when the eviction fails. A Bash
@@ -473,12 +479,15 @@ def memory_cap_verdict(store_dir: Path, filename: str) -> "Optional[str]":
         return None
     display = f"{store_dir.parent.name}/{store_dir.name}/{filename}"
     refusal = _check_new_body_file_count(store_dir / filename, display)
-    return _evict_for_new_file(store_dir / filename, refusal) if refusal else None
+    who = {"cwd": cwd, "session_id": session_id}
+    return _evict_for_new_file(store_dir / filename, refusal, who) if refusal else None
 
 
 def bash_write_verdict(target: str) -> "Optional[str]":
     """``memory_cap_verdict`` for a Bash write target path; ``None`` unless
-    ``target`` is a direct child of a project ``memory/`` dir. Never raises."""
+    ``target`` is a direct child of a project ``memory/`` dir. Never raises.
+    Carries no payload ``cwd``/``session_id``: an eviction here writes its lesson
+    under the hook process's cwd repo and claims it for no session."""
     try:
         match = _memory_target(os.path.abspath(target))
         if match is None:
@@ -490,7 +499,11 @@ def bash_write_verdict(target: str) -> "Optional[str]":
 
 
 def _evict_index_until_fits(
-    tool_name: str, tool_input: Dict[str, Any], resolved: Path, display: str
+    tool_name: str,
+    tool_input: Dict[str, Any],
+    resolved: Path,
+    display: str,
+    who: "Dict[str, Any]",
 ) -> bool:
     """Pick victims oldest-first against an in-memory copy of ``MEMORY.md`` until
     the ``Edit``/``MultiEdit`` re-simulated against it passes
@@ -521,12 +534,37 @@ def _evict_index_until_fits(
                 return False
             if _check_memory_md(content, len(content.encode("utf-8")), display) is None:
                 for _ in range(count):
-                    if evict_oldest(mem_dir) is None:
+                    if evict_oldest(mem_dir, **who) is None:
                         return False
                 return True
     except Exception:
         return False
     return False
+
+
+RAM_WARNING = (
+    "[memory cap] Memory is RAM, not durable: past "
+    f"{MAX_MEMORY_FILES} files the oldest is evicted to a lesson. "
+    "Saving this to memory is likely misplaced; durable facts belong in a lesson or the wiki."
+)
+
+
+def _with_ram_warning(result: "Optional[Dict[str, Any]]") -> "Optional[Dict[str, Any]]":
+    """``result`` carrying ``RAM_WARNING`` in ``additionalContext`` (merged after any
+    advisory already there); a deny passes through unchanged."""
+    if result is None:
+        return {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "additionalContext": RAM_WARNING,
+            }
+        }
+    hso = result.get("hookSpecificOutput")
+    if not isinstance(hso, dict) or hso.get("permissionDecision") == "deny":
+        return result
+    prior = hso.get("additionalContext")
+    hso["additionalContext"] = f"{prior} {RAM_WARNING}" if prior else RAM_WARNING
+    return result
 
 
 def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -552,6 +590,24 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         match = _memory_target(abs_file_path)
         if match is None:
             return None
+        cwd = payload.get("cwd")
+        who = {
+            "cwd": cwd if isinstance(cwd, str) and cwd else None,
+            "session_id": str(payload.get("session_id") or ""),
+        }
+        return _with_ram_warning(_decide(tool_name, tool_input, match, who))
+    except Exception:
+        return None
+
+
+def _decide(
+    tool_name: str,
+    tool_input: Dict[str, Any],
+    match: "Tuple[Path, str, str]",
+    who: "Dict[str, Any]",
+) -> Optional[Dict[str, Any]]:
+    """The cap verdict for a write already matched to a project memory path."""
+    try:
         resolved, filename, display = match
 
         is_index = filename.casefold() == _MEMORY_MD_FILENAME.casefold()
@@ -564,16 +620,18 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if new_content is None:
             if count_refusal is None:
                 return None
-            reason = _evict_for_new_file(resolved, count_refusal)
+            reason = _evict_for_new_file(resolved, count_refusal, who)
             return _deny(reason) if reason else None
 
         new_size = len(new_content.encode("utf-8"))
 
         if count_refusal is not None:
+            # Evict before the size verdict: a deny at the log level lets the
+            # oversize body land, and a store that never evicts grows unbounded.
+            reason = _evict_for_new_file(resolved, count_refusal, who)
             body_refusal = _check_body_file(new_size, display)
             if body_refusal is not None:
                 return _deny(body_refusal)
-            reason = _evict_for_new_file(resolved, count_refusal)
             return _deny(reason) if reason else None
 
         try:
@@ -608,7 +666,7 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             is_index
             and tool_name != "Write"
             and not _overlong_rows(new_content)
-            and _evict_index_until_fits(tool_name, tool_input, resolved, display)
+            and _evict_index_until_fits(tool_name, tool_input, resolved, display, who)
         ):
             return None
         return _deny(refusal)

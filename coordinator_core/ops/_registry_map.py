@@ -240,6 +240,7 @@ OP_MODULE_MAP: Dict[str, str] = {
     "roadmap.plan_gate":                      "coordinator_core.ops.roadmap_plan_gate",
     "roadmap.wiring_seams":                   "coordinator_core.ops.roadmap_wiring_seams",
     "roadmap.blitz_land":                     "coordinator_core.ops.roadmap_blitz_land",
+    "roadmap.baton_backfill":                 "coordinator_core.ops.roadmap_baton_backfill",
     "roadmap.blitz_stage":                    "coordinator_core.ops.roadmap_blitz_stage",
     # plan.prep_gate — the mise-prep authoring bar, REPORTED per class. Read twin
     # of plan.stamp_prepped; the DoE-side runnable half is

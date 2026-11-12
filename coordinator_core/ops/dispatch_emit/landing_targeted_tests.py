@@ -370,7 +370,7 @@ def failed_targeted_tests(
     caused = [str(n) for n in (baseline.get("caused") or [])]
     if not caused:
         failing = _baseline_failing(baseline)
-        unevidenced = unevidenced_ids(baseline, cleared) if measured else list(dict.fromkeys(failing))
+        unevidenced = unevidenced_ids(baseline, cleared, measured)
         if failing and not unevidenced:
             return [], "pre-existing-only"
         if not failing:
@@ -538,12 +538,28 @@ def _baseline_failing(baseline: Mapping) -> list[str]:
     ]
 
 
-def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = ()) -> list[str]:
-    """The failing ids of an engine-written ``baseline`` with no baseline evidence and not in ``cleared``:
-    the ids ``failed_targeted_tests`` would count caused, base check owed."""
+UNDECLARED_DIRT = "undeclared-dirt"
+
+
+def _dirt_ids(baseline: Mapping) -> set[str]:
+    """``foreign`` ids the retest child recorded red only on the live tree (``foreign_reason`` ``undeclared-dirt``)."""
+    reasons = baseline.get("foreign_reason")
+    if not isinstance(reasons, Mapping):
+        return set()
+    foreign = {str(i.get("id") if isinstance(i, Mapping) else i) for i in (baseline.get("foreign") or [])}
+    return {str(n) for n, why in reasons.items() if why == UNDECLARED_DIRT and str(n) in foreign}
+
+
+def unevidenced_ids(baseline: Mapping, cleared: Collection[str] = (), measured: bool = True) -> list[str]:
+    """The failing ids of a ``baseline`` with no baseline evidence and not in ``cleared``: the ids
+    ``failed_targeted_tests`` would count caused, base check owed. ``baseline.evidence`` ids and
+    ``undeclared-dirt`` foreign ids are evidenced only when ``measured`` (an engine retest record wrote
+    them); an unmeasured baseline evidences nothing."""
     from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
 
-    evidenced = evidenced_clear_ids(baseline, measured=True) | {str(n) for n in cleared}
+    if not measured:
+        return list(dict.fromkeys(_baseline_failing(baseline)))
+    evidenced = evidenced_clear_ids(baseline, measured=True) | _dirt_ids(baseline) | {str(n) for n in cleared}
     return [n for n in dict.fromkeys(_baseline_failing(baseline)) if n not in evidenced]
 
 
@@ -596,6 +612,25 @@ def reverify_verdict(record: Mapping) -> object:
     """``status_after``, else ``status_before`` when after is null."""
     after = record.get("status_after")
     return after if after is not None else record.get("status_before")
+
+
+def reverify_passed_clean(params: Mapping) -> bool:
+    """True when the re-verify record reads ``pass`` (``reverify_verdict``), names no failing node and
+    carries no ``reverify_error``: a measured pass that outranks an unattributed carried ``fail``."""
+    record = reverify_record(params)
+    if record is None or reverify_verdict(record) != "pass" or record.get("reverify_error"):
+        return False
+    return not record.get("failing")
+
+
+def reverify_failing_nodes(params: Mapping) -> list[str]:
+    """The ``failing`` node ids of a re-verify record that reads ``fail``, for naming in a refusal;
+    [] for an absent or non-fail record."""
+    record = reverify_record(params)
+    if record is None or reverify_verdict(record) != "fail":
+        return []
+    raw = record.get("failing")
+    return [str(n).strip() for n in raw if n] if isinstance(raw, list) else []
 
 
 def reverify_unverified_reds(params: Mapping) -> list[str]:

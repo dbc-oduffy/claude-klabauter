@@ -1,4 +1,10 @@
-"""The terminal-commit landing gate counts a red caused unless a baseline leg measured it red pre-change."""
+"""The terminal-commit landing gate counts a red caused unless a baseline leg measured it red pre-change.
+
+Contract per docs/delivery/2026-11/warp-2026-11-10-commit-on-red-lists-reds-gates-publish-594963-20261110T205651-e71dc3.md
+R1 and the claim-model ruling 88252271a8: ``targeted-tests-failed`` is a provenance kind
+(``landing_refusal_kinds.PROVENANCE_KINDS``), so a caused red lists as an ``advisory`` entry with
+``targeted_tests_check == "failed"`` and the commit proceeds; publish gates on it. An unmeasured id is
+never credited pre-existing (docs/plans/2026-10-27-l79-landing-never-credits-red-from-head.md)."""
 
 from __future__ import annotations
 
@@ -39,29 +45,30 @@ def _carried(baseline: dict) -> dict:
     return {"status": "fail", "tests_failed": 1, "baseline_method": "export", "baseline": baseline}
 
 
-def test_carried_foreign_red_without_evidence_is_refused_naming_the_id(repo):
-    head = _git(["rev-parse", "HEAD"], repo)
+def _listed_as_failed(out: dict, ident: str) -> None:
+    """The red is advised by name under the failing reason and never credited pre-existing."""
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.TARGETED_TESTS_FAILED
+    assert ident in out["advisory"][0]["detail"]
+    assert out["targeted_tests_check"] == "failed"
 
+
+def test_carried_foreign_red_without_evidence_is_refused_naming_the_id(repo):
+    """Ruling 594963 R1: the unevidenced red is listed (advisory, check "failed"), not refused at commit."""
     out = _fire(repo, targeted_tests=_carried(
         {"caused": [], "pre_existing": [], "foreign": [RED], "unverified": []}))
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
-    assert RED in out["integrity"][0]["detail"]
-    assert out["targeted_tests_check"] == "failed"
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert out["committed"] is True, out
+    _listed_as_failed(out, RED)
 
 
 def test_self_written_evidence_without_a_measured_base_log_is_refused_naming_the_id(repo):
-    head = _git(["rev-parse", "HEAD"], repo)
-
+    """Ruling 594963 R1: self-written evidence still does not credit the red; it is listed as failed."""
     out = _fire(repo, targeted_tests=_carried(
         {"caused": [], "pre_existing": [], "foreign": [RED], "unverified": [], "evidence": [RED]}))
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
-    assert RED in out["integrity"][0]["detail"]
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert out["committed"] is True, out
+    _listed_as_failed(out, RED)
 
 
 def _write_retest(repo, baseline: dict) -> dict:
@@ -101,12 +108,12 @@ def test_retest_whose_only_red_is_head_red_is_admitted_as_foreign_with_evidence(
 
 
 def test_retest_red_without_head_evidence_is_refused_naming_the_invariant(repo, monkeypatch):
+    """Ruling 594963 R1: a retest red with no head evidence is listed as failed naming the invariant."""
     _owe_invariant(monkeypatch)
     (repo / "ok.py").write_text("x = 1\n", encoding="utf-8")
     params = _write_retest(repo, {"caused": [], "foreign": [INV], "evidence": []})
 
     out = _fire(repo, **params)
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.TARGETED_TESTS_FAILED
-    assert INV in out["integrity"][0]["detail"]
+    assert out["committed"] is True, out
+    _listed_as_failed(out, INV)

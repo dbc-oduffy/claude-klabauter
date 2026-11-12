@@ -45,6 +45,54 @@ def test_unscoped_close_runs_in_run_and_returns_next_action_on_refusal(tmp_path)
     assert "...(closed?.committed === true ? {} : { next_action: NEXT_ACTION })" in script
 
 
+def _run_close_in_run(reply_text):
+    """Execute the composed closeInRun JS under node with a stubbed agent returning `reply_text`."""
+    import json
+    import shutil
+    import subprocess
+
+    from coordinator_core.ops.dispatch_emit.pipeline_compose import _close_agent_options, _close_in_run_js
+
+    node = shutil.which("node")
+    if node is None:
+        import pytest
+
+        pytest.skip("node not installed")
+    js = (
+        f"const agent = async () => ({{ exit_code: 0, reply: {json.dumps(reply_text)} }});\n"
+        + "\n".join(_close_in_run_js(_close_agent_options(None)))
+        + "\nconsole.log(JSON.stringify(await closeInRun({op:'research.close', params:{}})));"
+    )
+    out = subprocess.run(
+        [node, "--input-type=module", "-e", js], capture_output=True, text=True, timeout=30,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout)
+
+
+def test_closed_committed_follows_the_wrapped_close_reply():
+    import json
+
+    inner = {"committed": True, "sha": "604c181bca"}
+    for text in (
+        json.dumps(inner),
+        json.dumps({"ok": True, "result": inner}),
+        json.dumps({"result": json.dumps(inner)}),
+        "note: done\n" + json.dumps(inner) + "\n",
+    ):
+        assert _run_close_in_run(text)["committed"] is True, text
+    assert _run_close_in_run("garbled " + '"committed": true' + " no braces")["committed"] is True
+
+
+def test_closed_committed_stays_false_when_the_close_did_not_commit():
+    import json
+
+    assert _run_close_in_run(json.dumps({"committed": False}))["committed"] is False
+    assert _run_close_in_run(json.dumps({"ok": True, "result": {"committed": False}}))["committed"] is False
+    assert _run_close_in_run("not json at all")["committed"] is False
+
+
 def test_other_next_action_ops_keep_the_plain_tail(tmp_path):
     script = _chain(tmp_path, {"op": "other.op", "params": {"a": 1}})
     assert "closeInRun" not in script and "research-close" not in script

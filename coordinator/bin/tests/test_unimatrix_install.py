@@ -55,6 +55,13 @@ def _no_real_scheduler(monkeypatch):
     monkeypatch.setattr(ui, "_winreg", lambda: fake)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_launchctl_ps_or_pin(monkeypatch):
+    monkeypatch.setattr(ui, "run_launchctl", lambda *a: None)
+    monkeypatch.setattr(ui._lib("unimatrix_relay_sessions"), "ps_snapshot", lambda *a, **k: "")
+    monkeypatch.setattr(ui, "_pin_value", lambda: None)
+
+
 def _run(argv, text, dest=None, hooks=None):
     buf = io.StringIO()
     rc = ui.main(argv, version_text=text, dest_dir=dest, out=buf, hooks_path=hooks)
@@ -670,6 +677,44 @@ def test_main_uninstall_strips_doctrine_from_default_files(monkeypatch, tmp_path
     assert "codex peer doctrine removed" in buf.getvalue()
 
 
+def test_grok_install_seeds_peer_doctrine_into_grok_home_rules_and_uninstall_removes_it(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    monkeypatch.setenv("GROK_HOME", str(tmp_path / "grokhome"))
+    rules = tmp_path / "grokhome" / "rules" / "unimatrix-peer-doctrine.md"
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
+    assert "grok peer doctrine created" in buf.getvalue()
+    text = rules.read_text(encoding="utf-8")
+    assert "engine_ask.submit" in text and ui.DOCTRINE_BEGIN in text and "{SEND}" not in text
+    assert str(tmp_path / "dest" / ui.SEND_SCRIPT) in text
+    buf = io.StringIO()
+    assert ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf) == 0
+    assert "grok peer doctrine present" in buf.getvalue() and rules.read_text(encoding="utf-8") == text
+    buf = io.StringIO()
+    assert ui.main(["--uninstall", "--hosts", "grok"], dest_dir=tmp_path / "dest", out=buf) == 0
+    assert "grok peer doctrine removed" in buf.getvalue() and not rules.exists()
+
+
+def test_default_install_seeds_grok_peer_doctrine_under_home_grok(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    home = _home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GROK_HOME", raising=False)
+    rc, out = _run(["--install"], "2.1.316", tmp_path / "dest")
+    assert rc == 0 and "grok peer doctrine created" in out
+    assert "engine_ask.submit" in (home / ".grok" / "rules" / "unimatrix-peer-doctrine.md").read_text(encoding="utf-8")
+
+
+def test_missing_peer_doctrine_template_flags_grok_partial(monkeypatch, tmp_path):
+    monkeypatch.setattr(ui, "PEER_DOCTRINE_TEMPLATE", tmp_path / "absent-peer-doctrine.md")
+    _home(monkeypatch, tmp_path)
+    monkeypatch.delenv("GROK_HOME", raising=False)
+    _stub_src(monkeypatch, tmp_path)
+    buf = io.StringIO()
+    rc = ui.main(["--install", "--hosts", "grok"], version_text="2.1.316", dest_dir=tmp_path / "dest", out=buf)
+    assert rc == 7 and "not installed: grok peer doctrine" in buf.getvalue()
+
+
 def test_install_copies_send_script_when_present(monkeypatch, tmp_path):
     _stub_src(monkeypatch, tmp_path)
     _home(monkeypatch, tmp_path)
@@ -1083,7 +1128,7 @@ def _scheduler(task_exists=True):
     return run, calls
 
 
-def test_macos_login_agent_is_run_at_load_once_with_no_restart(monkeypatch, tmp_path):
+def test_macos_login_agent_reruns_autolink_on_an_interval_without_keepalive(monkeypatch, tmp_path):
     monkeypatch.setattr(sys, "platform", "darwin")
     dest, agents = tmp_path / "unimatrix", tmp_path / "LaunchAgents"
     assert ui.register_login_agent(dest, agents)[0] == "created"
@@ -1092,9 +1137,17 @@ def test_macos_login_agent_is_run_at_load_once_with_no_restart(monkeypatch, tmp_
     spec = plistlib.loads(plist.read_bytes())
     assert plist.name == f"{ui.LOGIN_AGENT_LABEL}.plist" and spec["Label"] == ui.LOGIN_AGENT_LABEL
     assert spec["RunAtLoad"] is True
-    assert not {"KeepAlive", "StartInterval", "StartCalendarInterval", "WatchPaths"} & set(spec)
+    assert spec["StartInterval"] == 60 and spec["AbandonProcessGroup"] is True
+    assert "KeepAlive" not in spec
     assert spec["ProgramArguments"] == [sys.executable, str(dest / ui.AUTOLINK_SCRIPT)]
     assert spec["ProgramArguments"][1].startswith(str(tmp_path))
+
+
+def test_linux_login_unit_carries_no_interval_or_restart(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "linux")
+    text = ui._login_agent_text(tmp_path / "unimatrix").decode("utf-8")
+    assert "Type=oneshot" in text
+    assert not any(k in text for k in ("StartInterval", "Restart=", "OnUnitActiveSec"))
 
 
 def test_login_agent_reinstall_leaves_one_registration_and_heals_a_stale_one(monkeypatch, tmp_path):
@@ -1286,6 +1339,182 @@ def test_main_default_install_writes_the_agent_under_home_and_never_the_real_one
     monkeypatch.setattr(sys, "platform", "darwin")
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 0 and (home / "Library" / "LaunchAgents" / f"{ui.LOGIN_AGENT_LABEL}.plist").is_file()
+
+
+class _Launchctl:
+    """A fake launchctl: `print` succeeds for a loaded label, `bootout` unloads it."""
+
+    def __init__(self, loaded):
+        self.loaded, self.calls = set(loaded), []
+
+    def __call__(self, *args):
+        self.calls.append(args)
+        label = args[1].rsplit("/", 1)[-1]
+        rc = 0 if label in self.loaded else 113
+        if args[0] == "bootout":
+            self.loaded.discard(label)
+        return subprocess.CompletedProcess(["launchctl", *args], rc, "", "")
+
+
+LEGACY = "com.coordinator.unimatrix-autolink"
+
+
+def _plist(agents, label):
+    agents.mkdir(parents=True, exist_ok=True)
+    (agents / f"{label}.plist").write_bytes(b"<plist/>")
+
+
+def test_legacy_login_agent_is_booted_out_and_unlinked_then_a_rerun_is_a_noop(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    agents = tmp_path / "LaunchAgents"
+    _plist(agents, LEGACY)
+    _plist(agents, ui.LOGIN_AGENT_LABEL)
+    lc = _Launchctl({LEGACY})
+    assert ui.remove_legacy_login_agents(agents, lc, uid=501) == [LEGACY]
+    assert ("bootout", f"gui/501/{LEGACY}") in lc.calls
+    assert [p.name for p in agents.iterdir()] == [f"{ui.LOGIN_AGENT_LABEL}.plist"]
+    calls_before = len(lc.calls)
+    assert ui.remove_legacy_login_agents(agents, lc, uid=501) == []
+    assert not any(c[0] == "bootout" for c in lc.calls[calls_before:])
+
+
+def test_legacy_label_loaded_without_a_plist_is_still_booted_out(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    lc = _Launchctl({LEGACY})
+    assert ui.remove_legacy_login_agents(tmp_path / "LaunchAgents", lc, uid=7) == [LEGACY]
+    assert ("bootout", f"gui/7/{LEGACY}") in lc.calls
+
+
+def test_a_failed_bootout_is_not_reported_removed(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    def lc(*args):
+        return subprocess.CompletedProcess(["launchctl", *args], 0 if args[0] == "print" else 5, "", "")
+
+    assert ui.remove_legacy_login_agents(tmp_path / "LaunchAgents", lc, uid=7) == []
+
+
+def test_the_doctors_label_pair_is_the_installers_current_and_legacy_labels():
+    spec = importlib.util.spec_from_file_location("unimatrix_doctor_label_sync", Path(ui.__file__).parent / "unimatrix-doctor.py")
+    dr = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dr)
+    assert dr.AUTOLINK_LABELS == (ui.LOGIN_AGENT_LABEL, *ui.LEGACY_LOGIN_AGENT_LABELS)
+
+
+def test_legacy_removal_touches_nothing_off_macos(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "linux")
+    agents = tmp_path / "LaunchAgents"
+    _plist(agents, LEGACY)
+    lc = _Launchctl({LEGACY})
+    assert ui.remove_legacy_login_agents(agents, lc) == [] and lc.calls == []
+    assert (agents / f"{LEGACY}.plist").exists()
+
+
+def test_main_install_leaves_one_autolink_label_and_a_rerun_removes_nothing(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(os, "getuid", lambda: 501, raising=False)
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    hooks = tmp_path / "g" / "hooks.json"
+    agents = tmp_path / "g" / "login-agent"
+    _plist(agents, LEGACY)
+    lc = _Launchctl({LEGACY})
+    buf = io.StringIO()
+    rc = ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf, hooks_path=hooks,
+                 launchctl=lc, relay_ps=lambda: "", relay_kill=lambda pid: None)
+    assert rc == 0 and f"legacy login agent removed: {LEGACY}" in buf.getvalue()
+    assert [p.name for p in agents.iterdir()] == [f"{ui.LOGIN_AGENT_LABEL}.plist"]
+    buf = io.StringIO()
+    ui.main(["--install"], version_text="2.1.316", dest_dir=tmp_path / "d", out=buf, hooks_path=hooks,
+            launchctl=lc, relay_ps=lambda: "", relay_kill=lambda pid: None)
+    assert "legacy login agent removed" not in buf.getvalue()
+    assert [p.name for p in agents.iterdir()] == [f"{ui.LOGIN_AGENT_LABEL}.plist"]
+
+
+def _lstart(epoch):
+    t = __import__("time").localtime(epoch)
+    months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+    return f"Mon {months[t.tm_mon - 1]} {t.tm_mday:2d} {t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d} {t.tm_year}"
+
+
+def _ps_row(pid, ppid, epoch, dest, script="unimatrix-relay.py"):
+    return f"{pid} {ppid} {_lstart(epoch)} /usr/bin/python3 {dest / script}"
+
+
+def test_reap_kills_orphaned_and_replaced_code_relays_and_keeps_the_live_one(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    dest = tmp_path / "unimatrix"
+    dest.mkdir()
+    (dest / "unimatrix-relay.py").write_text("# new\n", encoding="utf-8")
+    stamp = (dest / "unimatrix-relay.py").stat().st_ctime
+    ps = "\n".join([
+        _ps_row(201, 1, stamp + 50, dest),
+        _ps_row(202, 100, stamp - 5000, dest),
+        _ps_row(203, 100, stamp + 50, dest),
+        f"204 100 {_lstart(stamp - 5000)} /usr/sbin/sshd-session -R",
+    ])
+    monkeypatch.setattr(ui, "_pid_alive", lambda pid: pid == 100)
+    killed = []
+    stale, mismatched, failed = ui.reap_stale_relays(dest, lambda: ps, killed.append)
+    assert (stale, mismatched, failed) == ([201], [202], [])
+    assert sorted(killed) == [201, 202]
+
+
+def test_reap_reports_a_pid_it_cannot_signal(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    dest = tmp_path / "u"
+    dest.mkdir()
+    (dest / "unimatrix-relay.py").write_text("#\n", encoding="utf-8")
+    ps = _ps_row(301, 1, 1_000_000_000, dest)
+
+    def deny(pid):
+        raise PermissionError(pid)
+
+    assert ui.reap_stale_relays(dest, lambda: ps, deny) == ([301], [], [301])
+
+
+def test_reap_is_skipped_on_windows(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "win32")
+    assert ui.reap_stale_relays(tmp_path, lambda: pytest.fail("ps ran"), lambda p: pytest.fail("kill ran")) == ([], [], [])
+
+
+def test_main_install_reaps_with_the_injected_ps_and_kill(monkeypatch, tmp_path):
+    monkeypatch.setattr(sys, "platform", "darwin")
+    _stub_src(monkeypatch, tmp_path)
+    _home(monkeypatch, tmp_path)
+    dest = tmp_path / "d"
+    monkeypatch.setattr(ui, "_pid_alive", lambda pid: False)
+    killed = []
+    buf = io.StringIO()
+    rc = ui.main(["--install"], version_text="2.1.316", dest_dir=dest, out=buf, hooks_path=tmp_path / "g" / "hooks.json",
+                 launchctl=_Launchctl(()), relay_ps=lambda: _ps_row(401, 1, 1_000_000_000, dest), relay_kill=killed.append)
+    assert rc == 0 and killed == [401] and "relay sessions reaped: 1 orphaned, 0 on replaced code" in buf.getvalue()
+
+
+def test_an_unchanged_script_is_not_recopied_so_its_ctime_marks_the_last_code_change(monkeypatch, tmp_path):
+    _stub_src(monkeypatch, tmp_path)
+    src, dest = tmp_path / "src", tmp_path / "dest"
+    ui.install_scripts(src, dest)
+    copies = []
+    real = ui.shutil.copy2
+    monkeypatch.setattr(ui.shutil, "copy2", lambda a, b: (copies.append(b), real(a, b)))
+    ui.install_scripts(src, dest)
+    assert copies == []
+    (src / "unimatrix-relay.py").write_text("# changed\n", encoding="utf-8")
+    ui.install_scripts(src, dest)
+    assert [Path(c).name for c in copies] == ["unimatrix-relay.py"]
+
+
+def test_forced_command_interpreter_honours_the_pin_then_homebrew_then_console(monkeypatch, tmp_path):
+    brew = tmp_path / "brew-python3"
+    brew.write_text("#!/bin/sh\n")
+    brew.chmod(0o755)
+    monkeypatch.setattr(ui, "HOMEBREW_PYTHONS", (str(brew),))
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert ui.forced_command_interpreter("/pinned/python3") == "/pinned/python3"  # abs-path-ok: synthetic pin, never opened
+    assert ui.forced_command_interpreter(None) == str(brew)
+    monkeypatch.setattr(ui, "_pin_value", lambda: "/read/python3")  # abs-path-ok: synthetic pin, never opened
+    assert ui.forced_command_interpreter() == "/read/python3"  # abs-path-ok: synthetic pin, never opened
 
 
 def test_main_windows_install_registers_the_run_value_and_migrates_the_task(winreg_fake, monkeypatch, tmp_path):

@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -42,6 +43,10 @@ def env(tmp_path, monkeypatch):
     home = tmp_path / "settings"
     (home / "bin").mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
+    engine = tmp_path / "engine"
+    (engine / "coordinator_core").mkdir(parents=True)
+    (engine / "pyproject.toml").write_text("", encoding="utf-8")
+    monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(engine))
     monkeypatch.delenv("UNIMATRIX_TUNNEL_REMOTE", raising=False)
     monkeypatch.setenv("UNIMATRIX_AUTOLINK_NO_ROUTER", "1")
     monkeypatch.setenv("UNIMATRIX_TEST_ALLOWED_BOXES", "machine-a a@b fallbackbox")
@@ -96,6 +101,48 @@ def test_registry_key_unset_logs_the_no_alias_line(env):
     env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
     lines = log_lines(env)
     assert len(lines) == 1 and lines[0].endswith(" no unimatrix.far_boxes configured; no supervisors started")
+    assert json.loads((env.sdir / "autolink-boxes.json").read_text()) == {"aliases": []}
+
+
+def test_real_reader_not_found_message_still_writes_the_empty_cache(env):
+    reader = env.home / "bin" / "_machine_local.py"
+    reader.write_text("import sys\nsys.stderr.write(\"machine-local: key 'unimatrix.far_boxes' not found in registry\\n\")\nsys.exit(1)\n")
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
+    assert json.loads((env.sdir / "autolink-boxes.json").read_text()) == {"aliases": []}
+
+
+def test_reader_crash_exiting_1_with_traceback_writes_no_cache(env):
+    reader = env.home / "bin" / "_machine_local.py"
+    reader.write_text("import sys\nsys.stderr.write('Traceback: boom')\nsys.exit(1)\n")
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
+    assert "rc=1" in log_lines(env)[0] and "boom" in log_lines(env)[0]
+    assert not (env.sdir / "autolink-boxes.json").exists()
+
+
+def test_reader_failure_logs_rc_and_stderr_and_writes_no_cache(env):
+    reader = env.home / "bin" / "_machine_local.py"
+    reader.write_text("import sys\nsys.stderr.write('registry boom')\nsys.exit(2)\n")
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
+    lines = log_lines(env)
+    assert len(lines) == 1 and "rc=2" in lines[0] and "registry boom" in lines[0]
+    assert not (env.sdir / "autolink-boxes.json").exists()
+
+
+def test_reader_timeout_writes_no_cache(env, monkeypatch):
+    (env.home / "bin" / "_machine_local.py").write_text("")
+
+    def slow(*a, **kw):
+        raise subprocess.TimeoutExpired("reader", 30)
+
+    monkeypatch.setattr(env.al.subprocess, "run", slow)
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
+    assert "unreadable (TimeoutExpired)" in log_lines(env)[0]
+    assert not (env.sdir / "autolink-boxes.json").exists()
+
+
+def test_missing_reader_writes_no_cache(env):
+    env.al.run(roster=env.roster, spawn=Spawner(), probe_fn=ok)
+    assert not (env.sdir / "autolink-boxes.json").exists()
 
 
 def test_registry_value_with_only_unsafe_aliases_logs_it(env):
@@ -447,12 +494,33 @@ def test_pin_key_naming_a_missing_interpreter_refuses_naming_the_key_and_spawns_
 
 
 def test_unset_pin_resolves_the_console_interpreter_not_a_pythonw_or_shim(env, monkeypatch):
-    monkeypatch.setattr(env.al, "console_python", lambda: "C:/py/python.exe")  # abs-path-ok: synthetic interpreter path fixture, never opened
+    fake = types.SimpleNamespace(unimatrix_python=lambda pin=None: pin or "C:/py/python.exe")  # abs-path-ok: synthetic interpreter path fixture, never opened
+    monkeypatch.setattr(env.al, "_interp", lambda: fake)
     assert env.al.pinned_python(env.roster) == "C:/py/python.exe"  # abs-path-ok: synthetic interpreter path fixture, never opened
     sp = Spawner()
     add_key(env)
     env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok)
     assert all(c[0] == "C:/py/python.exe" for c in sp.cmds)  # abs-path-ok: synthetic interpreter path fixture, never opened
+
+
+def test_unset_pin_on_darwin_equals_the_installers_forced_command_interpreter(env, monkeypatch):
+    brew = "/opt/homebrew/bin/python3"  # abs-path-ok: synthetic fake-filesystem path, never opened
+    fake_os = types.SimpleNamespace(
+        name="posix",
+        path=types.SimpleNamespace(isfile=lambda p: p == brew),
+        access=lambda p, mode: p == brew,
+        X_OK=os.X_OK,
+    )
+    fake_sys = types.SimpleNamespace(platform="darwin", executable="/usr/bin/python3")  # abs-path-ok: synthetic fixture
+    inst = load("unimatrix-install")
+    interp = env.al._interp()
+    for mod in (inst, interp):
+        monkeypatch.setattr(mod, "os", fake_os)
+        monkeypatch.setattr(mod, "sys", fake_sys)
+    monkeypatch.setattr(env.al, "_interp", lambda: interp)
+    monkeypatch.setattr(inst, "_pin_value", lambda: None)
+    monkeypatch.setattr(inst, "_lib", lambda name: interp)
+    assert env.al.pinned_python(env.roster) == inst.forced_command_interpreter() == brew
 
 
 def test_pin_value_is_read_from_the_machine_local_key(env):
@@ -538,7 +606,8 @@ def router_on(env, monkeypatch):
 def test_dead_router_record_spawns_exactly_one_router_with_no_aliases_configured(router_on):
     e, sp = router_on, Spawner()
     e.al.run(roster=e.roster, boxes=[], spawn=sp, probe_fn=ok)
-    assert len(sp.cmds) == 1 and len(router_cmds(sp)) == 1 and sp.cmds[0][0] == sys.executable
+    # The router runs the one unimatrix interpreter (c6bb93e2b3), not the test's own sys.executable.
+    assert len(sp.cmds) == 1 and len(router_cmds(sp)) == 1 and sp.cmds[0][0] == e.al.pinned_python(e.roster)
     rec = json.loads((e.sdir / "autolink-router.json").read_text())
     assert rec == {"pid": 1001, "procStart": "start-1001"}
 
@@ -1167,3 +1236,15 @@ def test_main_restart_prints_the_result_and_exits_zero_and_one_on_refusal(restar
     assert e.al.main(["restart"]) == 1
     assert "lease held" in capsys.readouterr().err
 
+
+
+@pytest.mark.parametrize("flag", ["--help", "-h"])
+def test_main_help_flag_prints_usage_and_runs_no_link_pass(flag, monkeypatch, capsys):
+    al = load("unimatrix-autolink")
+
+    def boom(*a, **k):
+        raise AssertionError("a link pass ran")
+
+    monkeypatch.setattr(al, "run", boom)
+    assert al.main([flag]) == 0
+    assert "unimatrix-autolink.py" in capsys.readouterr().out

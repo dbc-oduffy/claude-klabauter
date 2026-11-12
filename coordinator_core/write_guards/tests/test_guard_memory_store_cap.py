@@ -51,6 +51,14 @@ def _rows(n: int, prefix: str = "x") -> str:
     return "\n".join(f"- [{prefix}{i}](slug{i}.md) short" for i in range(n))
 
 
+def _ram_only(result) -> bool:
+    """True when ``result`` is an allow carrying exactly the memory-is-RAM warning."""
+    if result is None:
+        return False
+    out = result["hookSpecificOutput"]
+    return "permissionDecision" not in out and out["additionalContext"] == guard.RAM_WARNING
+
+
 class TestUnrelatedPathPassesUntouched:
     def test_unrelated_write_allowed(self, tmp_path):
         target = str(tmp_path / "some" / "other" / "file.py")
@@ -82,7 +90,7 @@ class TestBytesLimit:
         content = "# Memory Index\n\n" + _rows(5)
         assert len(content.encode("utf-8")) <= guard.MAX_MEMORY_MD_BYTES
         result = guard.check(_write_payload(target, content))
-        assert result is None
+        assert _ram_only(result)
 
 
 class TestRowCountLimit:
@@ -97,7 +105,7 @@ class TestRowCountLimit:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(5)
         result = guard.check(_write_payload(target, content))
-        assert result is None
+        assert _ram_only(result)
 
 
 class TestRowLengthLimit:
@@ -116,7 +124,7 @@ class TestRowLengthLimit:
         assert len(row) == guard.MAX_ROW_CHARS
         content = "# Memory Index\n\n" + row
         result = guard.check(_write_payload(target, content))
-        assert result is None
+        assert _ram_only(result)
 
 
 class TestBodyFileLimit:
@@ -131,7 +139,7 @@ class TestBodyFileLimit:
         target = str(memory_dir / "some-lesson.md")
         content = "x" * 800
         result = guard.check(_write_payload(target, content))
-        assert result is None
+        assert _ram_only(result)
 
 
 class TestShrinkTowardComplianceCarveOut:
@@ -148,7 +156,7 @@ class TestShrinkTowardComplianceCarveOut:
         result = guard.check(
             _edit_payload(str(target), old="y" * 3000, new="y" * 2500)
         )
-        assert result is None
+        assert _ram_only(result)
 
     def test_growing_edit_on_over_cap_file_still_denied(self, memory_dir):
         target = memory_dir / "MEMORY.md"
@@ -295,9 +303,44 @@ class TestFileCountCap:
     def test_at_cap_plus_new_filename_allowed_and_oldest_evicted(self, memory_dir):
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         target = str(memory_dir / "new-one.md")
-        assert guard.check(_write_payload(target, "y")) is None
+        assert _ram_only(guard.check(_write_payload(target, "y")))
         assert not (memory_dir / "body-0.md").exists()
         assert (memory_dir / "body-1.md").exists()
+
+    def test_sixth_save_lands_oldest_content_as_a_lesson(self, memory_dir, tmp_path):
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
+        (memory_dir / "body-0.md").write_text("OLDEST-CONTENT-MARKER", encoding="utf-8")
+        import os
+        import time
+
+        stamp = time.time() - 10_000
+        os.utime(memory_dir / "body-0.md", (stamp, stamp))
+        result = guard.check(_write_payload(str(memory_dir / "new-one.md"), "y"))
+        assert "permissionDecision" not in result["hookSpecificOutput"]
+        lessons = list((tmp_path / "lessons-root").rglob("*.yaml"))
+        assert len(lessons) == 1
+        text = lessons[0].read_text(encoding="utf-8")
+        assert "OLDEST-CONTENT-MARKER" in text and "evicted-from-memory" in text
+
+    def test_oversize_new_body_at_cap_still_evicts_and_denies_the_size(self, memory_dir):
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
+        result = guard.check(_write_payload(str(memory_dir / "fat.md"), "z" * 900))
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "800" in result["hookSpecificOutput"]["permissionDecisionReason"]
+        assert not (memory_dir / "body-0.md").exists()
+
+    def test_failed_lesson_write_keeps_the_memory_and_denies(self, memory_dir, monkeypatch):
+        from coordinator_core.write_guards import _memory_evict
+
+        self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
+
+        def boom(*_a, **_k):
+            raise OSError("no lessons root")
+
+        monkeypatch.setattr(_memory_evict, "_write_lesson", boom)
+        result = guard.check(_write_payload(str(memory_dir / "new-one.md"), "y"))
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert (memory_dir / "body-0.md").exists()
 
     def test_bash_verdict_evicts_and_returns_none(self, memory_dir):
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
@@ -309,7 +352,7 @@ class TestFileCountCap:
     def test_eviction_oserror_is_a_deny_naming_the_oldest(self, memory_dir, monkeypatch):
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
 
-        def boom(_d):
+        def boom(_d, **_kw):
             raise OSError("locked")
 
         monkeypatch.setattr(guard, "evict_oldest", boom)
@@ -322,20 +365,42 @@ class TestFileCountCap:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         target = str(memory_dir / "body-0.md")
         result = guard.check(_write_payload(target, "y" * 5))
-        assert result is None
+        assert _ram_only(result)
 
     def test_19_existing_plus_new_filename_allowed(self, memory_dir):
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES - 1)
         target = str(memory_dir / "new-one.md")
         result = guard.check(_write_payload(target, "y"))
-        assert result is None
+        assert _ram_only(result)
+        assert (memory_dir / "body-0.md").exists()
 
     def test_memory_md_never_counted_as_body_file(self, memory_dir):
         (memory_dir / "MEMORY.md").write_text("# Memory Index\n", encoding="utf-8")
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES - 1)
         target = str(memory_dir / "new-one.md")
         result = guard.check(_write_payload(target, "y"))
-        assert result is None
+        assert _ram_only(result)
+
+
+class TestRamWarning:
+    def test_warning_names_ram_and_misplaced(self):
+        assert "RAM" in guard.RAM_WARNING and "misplaced" in guard.RAM_WARNING
+
+    def test_warning_merges_after_an_existing_advisory(self, memory_dir):
+        target = memory_dir / "fat.md"
+        target.write_text("y" * 1000, encoding="utf-8")
+        result = guard.check(_edit_payload(str(target), old="y" * 10, new="z" * 10))
+        ctx = result["hookSpecificOutput"]["additionalContext"]
+        assert ctx.startswith("[memory cap] ") and "200B over" in ctx
+        assert ctx.endswith(guard.RAM_WARNING)
+
+    def test_a_deny_carries_no_warning(self, memory_dir):
+        result = guard.check(_write_payload(str(memory_dir / "x.md"), "x" * 900))
+        assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
+        assert "additionalContext" not in result["hookSpecificOutput"]
+
+    def test_unrelated_path_carries_no_warning(self, tmp_path):
+        assert guard.check(_write_payload(str(tmp_path / "f.py"), "1")) is None
 
 
 class TestRowLengthDenyNamesWhatItCounted:
@@ -450,7 +515,7 @@ class TestOverCapStoreCanShrink:
         target = memory_dir / "MEMORY.md"
         target.write_text("# Memory Index\n\n" + _rows(9), encoding="utf-8")
         smaller = "# Memory Index\n\n" + _rows(8)
-        assert guard.check(_write_payload(str(target), smaller)) is None
+        assert _ram_only(guard.check(_write_payload(str(target), smaller)))
 
     def test_growing_an_over_cap_index_is_still_denied(self, memory_dir):
         target = memory_dir / "MEMORY.md"
@@ -514,7 +579,7 @@ class TestMemoryMdBreachEvictsOldest:
         result = guard.check(
             _edit_index_payload(index, "- [b4](b4.md) note\n", "- [b4](b4.md) note\n- [n](n.md) new\n")
         )
-        assert result is None
+        assert _ram_only(result)
         assert not (memory_dir / "b0.md").exists()
         assert "b0.md" not in index.read_text(encoding="utf-8")
         assert (memory_dir.parent / "memory-evictions.jsonl").exists()
@@ -530,7 +595,7 @@ class TestMemoryMdBreachEvictsOldest:
                 "edits": [{"old_string": "- [b4]", "new_string": "# " + "h" * 560 + "\n- [b4]"}],
             },
         }
-        assert guard.check(payload) is None
+        assert _ram_only(guard.check(payload))
         assert not (memory_dir / "b0.md").exists()
         assert (memory_dir / "b1.md").exists()
         assert len(index.read_bytes()) <= guard.MAX_MEMORY_MD_BYTES

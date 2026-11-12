@@ -45,6 +45,58 @@ def test_write_stage_lists_paths_and_requires_them():
         sf.runner_brief("agy", "write", "p.md", "scratch/x", [])
 
 
+def _res(family, verdict="OK", stage="research", **extra):
+    return {
+        "family": family, "stage": stage, "exit_code": 0 if verdict == "OK" else 1,
+        "output_path": "scratch/x/out.md", "verdict": verdict, **extra,
+    }
+
+
+def test_scout_and_research_are_stages_and_roles():
+    assert {"scout", "research"} <= set(sf.STAGES)
+    assert sf.ROLES == ("scout", "research", "review")
+    assert sf.FALLBACK == "claude" and sf.FALLBACK_VERDICTS == ("BLOCKED", "FAILED")
+    assert "stage: scout" in sf.runner_brief("grok", "scout", "p.md", "scratch/x")
+
+
+def test_record_keeps_failed_family_then_fallback():
+    agy = _res("agy", "FAILED", blocked_reason="vendor 429")
+    rec = sf.stage_record("research", agy, _res("claude"))
+    assert rec["stage_role"] == "research"
+    assert [a["family"] for a in rec["attempts"]] == ["agy", "claude"]
+    assert rec["attempts"][0]["blocked_reason"] == "vendor 429"
+    assert "fallback_for" not in rec["attempts"][0]
+    assert rec["attempts"][1]["fallback_for"] == "agy"
+    assert rec["reported_family"] == "claude"
+
+
+def test_record_without_fallback_reports_family():
+    rec = sf.stage_record("review", _res("codex", stage="review"))
+    assert rec["attempts"] == [_res("codex", stage="review")]
+    assert rec["reported_family"] == "codex"
+    blocked = sf.stage_record("review", _res("codex", "BLOCKED", blocked_reason="auth"))
+    assert blocked["reported_family"] == "codex"
+
+
+def test_record_refusals():
+    with pytest.raises(ValueError, match="blocked_reason"):
+        sf.stage_record("research", _res("agy", "FAILED"))
+    with pytest.raises(ValueError, match="fallback result given"):
+        sf.stage_record("research", _res("agy", "OK"), _res("claude"))
+    with pytest.raises(ValueError, match="fallback result given"):
+        sf.stage_record("research", _res("agy", "WARN"), _res("claude"))
+    bad = _res("agy", "FAILED", blocked_reason="x")
+    del bad["exit_code"]
+    with pytest.raises(ValueError, match="exit_code"):
+        sf.stage_record("research", bad)
+    fb = _res("claude")
+    del fb["output_path"]
+    with pytest.raises(ValueError, match="output_path"):
+        sf.stage_record("research", _res("agy", "FAILED", blocked_reason="x"), fb)
+    with pytest.raises(ValueError, match="stage role"):
+        sf.stage_record("size", _res("agy"))
+
+
 def test_brief_refuses_bad_stage_family_and_scratch():
     with pytest.raises(ValueError, match="size|plan|review|write|other"):
         sf.runner_brief("codex", "build", "p.md", "scratch/x")

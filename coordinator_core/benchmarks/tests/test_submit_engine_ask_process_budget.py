@@ -6,6 +6,7 @@ import types
 
 import pytest
 
+from coordinator_core.benchmarks import fixture_settings_home
 from coordinator_core.benchmarks import submit_engine_ask_process_budget as B
 
 
@@ -45,6 +46,22 @@ def test_asks_flag_reports_process_ms_spawns_and_counted_durable_writes():
         assert key in res
     assert res["durable_writes"] == sum(res["writes_by_primitive"].values()) >= 1
     assert "asks:3" not in B.SHAPES
+
+
+#: Raw-ask premint leg's spawn ceiling: baseline.json (docs/research/emit-outran-hook-budget/2026-11-12-emit-budget/outputs/baseline.json), `ask` shape, spawns 0.
+RAW_ASK_SPAWN_CEILING = 0
+
+
+def test_raw_ask_premint_leg_is_premint_deferred_under_the_bar_and_the_spawn_ceiling(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    B.build_fixture(repo)
+    with fixture_settings_home(tmp_path):
+        res = B.measure_shape(repo, "ask", runs=3)
+    assert res["decision"] == "allow", res["reason"]
+    assert res["envelope"] == B.ENVELOPE_PREMINT_DEFERRED, res["reason"]
+    assert res["warm_process_ms"] < B.BAR_MS
+    assert res["spawns"] <= RAW_ASK_SPAWN_CEILING
 
 
 def test_a_phase_function_the_hook_lacks_is_skipped_not_fatal():

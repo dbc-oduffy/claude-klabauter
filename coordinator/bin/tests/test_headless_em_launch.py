@@ -1,6 +1,7 @@
 """headless-em-launch: an EM launch writes a grant that passes require_fire_authority; refusals write none."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -158,3 +159,68 @@ def test_main_parses_family_session_and_passthrough(monkeypatch):
 
 def test_main_without_args_refuses():
     assert hel.main([]) == hel.REFUSED
+
+
+def _pwsh_env(tmp_path, *, real=True, path_key="Path"):
+    """A Windows-shaped caller env: WindowsApps alias dir first, real pwsh dir (when `real`) later."""
+    alias = tmp_path / "WindowsApps"
+    alias.mkdir()
+    (alias / "pwsh.exe").write_text("")
+    bin_dir = tmp_path / "private-bin"
+    bin_dir.mkdir()
+    pf = tmp_path / "ProgramFiles"
+    real_dir = pf / "PowerShell" / "7"
+    real_dir.mkdir(parents=True)
+    if real:
+        (real_dir / "pwsh.exe").write_text("")
+    inherited = os.pathsep.join([str(bin_dir), str(alias), str(real_dir)])
+    return {path_key: inherited, "ProgramFiles": str(pf)}, inherited, alias, real_dir, bin_dir
+
+
+def _prepare(env, capsys, family="codex", platform="win32"):
+    rc = hel.launch(family, [], which=lambda n: None, execv=lambda *a: None, environ=env, platform=platform,
+                    prepare_only=True, native_executable=f"{family}.exe")
+    assert rc == 0
+    return json.loads(capsys.readouterr().out)["environment"]
+
+
+def test_windows_codex_prepare_carries_shaped_path_real_pwsh_first_alias_dropped(tmp_path, capsys):
+    env, inherited, alias, real_dir, bin_dir = _pwsh_env(tmp_path)
+    shaped = _prepare(env, capsys)["PATH"].split(os.pathsep)
+    assert shaped == [str(bin_dir), str(real_dir)]
+    assert str(alias) not in shaped
+
+
+@pytest.mark.parametrize("path_key", ["Path", "PATH"])
+def test_windows_codex_prepare_reads_path_by_case_insensitive_key(tmp_path, capsys, path_key):
+    env, *_ = _pwsh_env(tmp_path, path_key=path_key)
+    assert "PATH" in _prepare(env, capsys)
+
+
+def test_windows_codex_prepare_without_real_pwsh_emits_no_path(tmp_path, capsys):
+    env, *_ = _pwsh_env(tmp_path, real=False)
+    assert "PATH" not in _prepare(env, capsys)
+
+
+def test_windows_codex_prepare_with_no_caller_path_emits_no_path(tmp_path, capsys):
+    env, *_ = _pwsh_env(tmp_path)
+    del env["Path"]
+    assert "PATH" not in _prepare(env, capsys)
+
+
+def test_windows_codex_prepare_with_already_shaped_path_emits_no_path(tmp_path, capsys):
+    env, _, _, real_dir, bin_dir = _pwsh_env(tmp_path)
+    env["Path"] = os.pathsep.join([str(bin_dir), str(real_dir)])
+    assert "PATH" not in _prepare(env, capsys)
+
+
+@pytest.mark.parametrize("family", ["agy", "grok"])
+def test_windows_non_codex_families_never_get_a_path(family, tmp_path, capsys):
+    env, *_ = _pwsh_env(tmp_path)
+    assert "PATH" not in _prepare(env, capsys, family=family)
+
+
+def test_non_windows_codex_launch_leaves_the_env_without_a_path_change(tmp_path):
+    env, inherited, *_ = _pwsh_env(tmp_path)
+    rc, calls, env = _run("codex", env=env)
+    assert rc == 0 and env["Path"] == inherited and "PATH" not in env

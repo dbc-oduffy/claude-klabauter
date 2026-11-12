@@ -534,7 +534,90 @@ def _write_fake_machine_local(bin_dir: Path, store: Path) -> Path:
     return script
 
 
-def test_register_repo_success(tmp_path, monkeypatch):
+@pytest.fixture
+def _not_scratch(monkeypatch):
+    """pytest's tmp_path is itself under the temp root; the registration-path tests need a non-scratch target."""
+    monkeypatch.setattr(new_project_scaffold, "_is_scratch_target", lambda p: False)
+
+
+def _run_register_with_spy(monkeypatch, target):
+    import subprocess as _sp
+
+    calls = []
+
+    def _spy(cmd, **kwargs):
+        calls.append(cmd)
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(new_project_scaffold, "_resolve_machine_local", lambda: "machine-local")
+    monkeypatch.setattr(new_project_scaffold.subprocess, "run", _spy)
+    return _REAL_REGISTER_REPO("probe", str(target)), calls
+
+
+def test_register_repo_skips_target_under_temp_dir(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(new_project_scaffold.tempfile, "gettempdir", lambda: str(tmp_path))
+    target = tmp_path / "probe"
+    target.mkdir()
+
+    rc, calls = _run_register_with_spy(monkeypatch, target)
+
+    assert rc == 0
+    assert calls == []
+    err = capsys.readouterr().err
+    assert "not registering repos.probe" in err
+
+
+def test_register_repo_skips_target_under_scratch_dir(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(new_project_scaffold.tempfile, "gettempdir", lambda: str(tmp_path / "elsewhere"))
+    target = tmp_path / "repo" / "scratch" / "tmp.abc" / "probe"
+    target.mkdir(parents=True)
+
+    rc, calls = _run_register_with_spy(monkeypatch, target)
+
+    assert rc == 0
+    assert calls == []
+    assert "not registering repos.probe" in capsys.readouterr().err
+
+
+def test_register_repo_still_registers_non_scratch_target(tmp_path, monkeypatch):
+    monkeypatch.setattr(new_project_scaffold.tempfile, "gettempdir", lambda: str(tmp_path / "elsewhere"))
+    target = tmp_path / "Code_Projects" / "realapp"
+    target.mkdir(parents=True)
+    monkeypatch.setattr(new_project_scaffold, "_registry_get", lambda key: str(target).replace(os.sep, "/"))
+
+    rc, calls = _run_register_with_spy(monkeypatch, target)
+
+    assert rc == 0
+    assert [c[1:3] for c in calls] == [["set", "repos.probe"]]
+
+
+def test_main_scaffold_into_temp_parent_writes_no_registry_key(tmp_path, monkeypatch, capsys):
+    import subprocess as _sp
+
+    calls = []
+    monkeypatch.setattr(new_project_scaffold, "_register_repo", _REAL_REGISTER_REPO)
+    monkeypatch.setattr(new_project_scaffold, "_resolve_machine_local", lambda: "machine-local")
+    real_run = _sp.run
+
+    def _spy(cmd, **kwargs):
+        if cmd and cmd[0] == "machine-local":
+            calls.append(cmd)
+            return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(new_project_scaffold.subprocess, "run", _spy)
+    monkeypatch.setattr(new_project_scaffold.tempfile, "gettempdir", lambda: str(tmp_path))
+    parent = tmp_path / "p"
+    parent.mkdir()
+
+    rc = main(["--name", "zzprobe", "--parent", str(parent), "--template", "empty", "--no-smoke"])
+
+    assert rc == 0
+    assert calls == []
+    assert "not registering repos.zzprobe" in capsys.readouterr().err
+
+
+def test_register_repo_success(tmp_path, monkeypatch, _not_scratch):
     bin_dir = tmp_path / "fakebin"
     bin_dir.mkdir()
     store = tmp_path / "store.tsv"
@@ -560,7 +643,7 @@ def test_register_repo_success(tmp_path, monkeypatch):
     assert store.read_text() == f"repos.my_cool_app\t{os.path.abspath(str(target))}\n"
 
 
-def test_register_repo_missing_machine_local_fails(tmp_path, monkeypatch):
+def test_register_repo_missing_machine_local_fails(tmp_path, monkeypatch, _not_scratch):
     monkeypatch.setenv("PATH", "")
     target = tmp_path / "target-dir" / "app"
     target.mkdir(parents=True)
@@ -570,7 +653,7 @@ def test_register_repo_missing_machine_local_fails(tmp_path, monkeypatch):
     assert rc == 1
 
 
-def test_register_repo_verify_mismatch_fails(tmp_path, monkeypatch):
+def test_register_repo_verify_mismatch_fails(tmp_path, monkeypatch, _not_scratch):
     bin_dir = tmp_path / "fakebin2"
     bin_dir.mkdir()
     store = tmp_path / "store2.tsv"

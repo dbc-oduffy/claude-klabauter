@@ -712,17 +712,38 @@ def _environment_fault_ids(tests: dict, pre_raw: List[Any]) -> set:
     return found
 
 
+NODE_MEASURED_METHOD = "head-node-measure"
+from coordinator_core.ops.dispatch_emit.landing_targeted_tests import UNDECLARED_DIRT as UNDECLARED_DIRT_REASON
+
+
+def _node_measured_foreign(baseline: dict) -> List[Any]:
+    """`baseline.foreign` entries a node-measured baseline evidences: ids in `baseline.evidence` (red at a
+    HEAD export) or recorded `undeclared-dirt` (red only on the live tree). An unevidenced foreign id stays charged."""
+    reasons = baseline.get("foreign_reason")
+    reasons = reasons if isinstance(reasons, dict) else {}
+    evidence = {_entry_id(e) for e in baseline.get("evidence") or []}
+    return [
+        e for e in baseline.get("foreign") or []
+        if _entry_id(e) in evidence or reasons.get(_entry_id(e)) == UNDECLARED_DIRT_REASON
+    ]
+
+
 def charged_status(tests: Optional[dict]) -> Optional[str]:
     """The tests status after pre_existing reds are set aside. A `fail` is `pass` only when
     every failing id is export-measured red at the run base (`baseline.pre_existing`): any
     `caused` or `unverified` id, any listed failing id outside that baseline, and a failed
     count above the baseline's size each keep it charged. A record naming neither a `failed`
-    count nor any `failing` id measured nothing, so it stays charged."""
+    count nor any `failing` id measured nothing, so it stays charged. A baseline whose `method` is
+    `head-node-measure` (node ids re-run at a HEAD export) also sets aside its `foreign` ids that are
+    `evidence` or `undeclared-dirt`; its `caused` and `unverified` ids stay charged."""
     status = (tests or {}).get("status")
     baseline = (tests or {}).get("baseline")
-    if status != "fail" or not isinstance(baseline, dict) or tests.get("baseline_method") != "export":
+    node_measured = isinstance(baseline, dict) and baseline.get("method") == NODE_MEASURED_METHOD
+    if status != "fail" or not isinstance(baseline, dict) or (tests.get("baseline_method") != "export" and not node_measured):
         return status
-    pre_raw = baseline.get("pre_existing") or []
+    pre_raw = list(baseline.get("pre_existing") or [])
+    if node_measured:
+        pre_raw += _node_measured_foreign(baseline)
     pre = {_entry_id(i) for i in pre_raw}
     env_faulted = _environment_fault_ids(tests, pre_raw)
     pre -= env_faulted

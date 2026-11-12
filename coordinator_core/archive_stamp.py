@@ -3012,7 +3012,9 @@ def cs_resolve_move_memos(entries: Sequence[tuple[str, Sequence[str]]]) -> int:
             continue
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(src, dest)
+            from coordinator_core.session.scope import relocate_touched_path
+
+            relocate_touched_path(sid, str(src), str(dest), cwd=str(worktree))
         except OSError as exc:
             print(f"cs_resolve_move_memos: {memo_path}: stamped but move failed: {exc}", file=sys.stderr)
             failed += 1

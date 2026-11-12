@@ -63,9 +63,13 @@ from coordinator_core.ops.dispatch_emit.fanout_cost import (
 from coordinator_core.ops import _research_contract as _rc
 from coordinator_core.ops.dispatch_emit.chatty import EM_MAILBOX
 from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER, finished_rel, revisions_rel, run_name
+from coordinator_core.ops.dispatch_emit import stage_family as _stage_family
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
 
 __all__ = ["compose_pipeline_script", "compose_chain_script", "compose_chain_parts", "ChainPart"]
+
+#: `(manifest.pipeline, stage.id)` -> family, for the stages routed to `coordinator:family-stage-runner`.
+StageFamilies = Mapping[tuple[str, str], str]
 
 _FAN_TRAILER = (
     "const fanTrailer = (item, i, n, out) => "
@@ -256,23 +260,112 @@ def _agent_options(stage: Stage, manifest: Manifest, agent_type: str, agent_type
     return ", ".join(options)
 
 
+def _family_role(stage_id: str) -> str:
+    """The binding role a family-routed stage runs as: a scout stage is `scout`, any other mapped stage `research`. Must agree with `pipeline_stage_roles.ROLE_BY_STAGE`, which resolves the family from the same role."""
+    return "scout" if "scout" in stage_id else "research"
+
+
+def _family_of(stage_families: StageFamilies | None, manifest: Manifest, stage: Stage) -> str | None:
+    """The non-claude family `stage` is routed to, or None when it stays an ordinary `agent(` call."""
+    if not stage_families:
+        return None
+    family = _stage_family.resolve(stage_families.get((manifest.pipeline, stage.id)))
+    return None if family == _stage_family.FALLBACK else family
+
+
+def _family_stage_js(stage_families: StageFamilies) -> str:
+    """JS declaring `_familyStage(family, role, prompt, label, opts)`: one family attempt through the runner agent, then one claude fallback when that attempt is BLOCKED, FAILED or unresolved.
+
+    `opts` are the stage's own claude agent options, used by the fallback only. The stage record
+    (`stage_family.stage_record`'s shape: attempts, reported_family, the fallback tagged
+    `fallback_for`) is logged; the fallback is never reported as the family's result.
+    """
+    schema = json.dumps(
+        {
+            "type": "object",
+            "required": list(_stage_family._RESULT_KEYS),
+            "properties": {
+                "family": {"type": "string", "enum": list(_stage_family.FAMILIES)},
+                "stage": {"type": "string"},
+                "exit_code": {"type": "integer"},
+                "output_path": {"type": "string"},
+                "verdict": {"type": "string", "enum": ["OK", "WARN", *_stage_family.FALLBACK_VERDICTS]},
+                "blocked_reason": {"type": "string"},
+            },
+        },
+        sort_keys=True,
+    )
+    pairs = sorted({(fam, _family_role(sid)) for (_, sid), fam in stage_families.items() if fam != _stage_family.FALLBACK})
+    briefs = {
+        f"{fam}:{role}": _stage_family.runner_brief(fam, role, "inline, below this header", "scratch/family-stage")
+        for fam, role in pairs
+    }
+    runner = _stage_family.RUNNER_AGENT
+    model = resolve_agent_model(runner if runner in _AGENT_MODELS else _EXECUTOR_AGENT_TYPE)
+    failed = " || ".join(f"fam.verdict === {_js_string_literal(v)}" for v in _stage_family.FALLBACK_VERDICTS)
+    fallback = _js_string_literal(_stage_family.FALLBACK)
+    return (
+        f"const _FAMILY_BRIEFS = {json.dumps(briefs, sort_keys=True)};\n"
+        f"const _FAMILY_RESULT_SCHEMA = {schema};\n"
+        "async function _familyStage(family, role, prompt, label, opts) {\n"
+        "  let fam = null;\n"
+        f"  try {{ const fr = await agent(_FAMILY_BRIEFS[family + ':' + role] + '\\n' + prompt, "
+        f"{{ label: label, agentType: {_js_string_literal(runner)}, model: {_js_string_literal(model)}, "
+        "schema: _FAMILY_RESULT_SCHEMA });\n"
+        "    if (fr && typeof fr === 'object' && typeof fr.verdict === 'string' && typeof fr.family === 'string') fam = fr;\n"
+        "  } catch (e) { fam = null; }\n"
+        "  if (!fam) fam = { family: family, stage: role, exit_code: -1, output_path: '', "
+        "verdict: 'FAILED', blocked_reason: 'family-stage-runner reply missing or unparseable' };\n"
+        f"  if (!({failed})) {{\n"
+        "    log(label + ': ' + fam.family + ' attempt ' + fam.verdict + ' ' + "
+        "JSON.stringify({ stage_role: role, attempts: [fam], reported_family: fam.family }));\n"
+        "    return 'DONE: ' + label + ' via ' + fam.family + ' (output ' + (fam.output_path || 'unrecorded') + ')';\n"
+        "  }\n"
+        "  if (!fam.blocked_reason) fam = { ...fam, blocked_reason: 'family-stage-runner reported ' + fam.verdict + ' without a reason' };\n"
+        "  let fbValue = null;\n"
+        "  try { fbValue = await agent(prompt, { ...opts, label: label + ':fallback' }); } catch (e) { fbValue = null; }\n"
+        "  const fbOk = typeof fbValue === 'string' ? fbValue.trim() !== '' && "
+        "!/(^|\\n)\\s*[*_`]{0,2}(PARTIAL|BLOCKED)[*_`]{0,2}:/.test(fbValue) : fbValue != null;\n"
+        f"  const fb = {{ family: {fallback}, stage: role, exit_code: fbOk ? 0 : 1, output_path: '', "
+        "verdict: fbOk ? 'OK' : 'FAILED' };\n"
+        f"  if (!fbOk) fb.blocked_reason = {_js_string_literal(_stage_family.FALLBACK + ' fallback reply missing or not DONE')};\n"
+        "  const rec = { stage_role: role, attempts: [fam, { ...fb, fallback_for: fam.family }], "
+        f"reported_family: {fallback} }};\n"
+        "  log(label + ': ' + fam.family + ' attempt ' + fam.verdict + ' (' + fam.blocked_reason + '); rerunning on ' + "
+        f"{fallback} + ' ' + JSON.stringify(rec));\n"
+        "  if (!fbOk) throw new Error('stage ' + label + ' BLOCKED after ' + fam.family + ' ' + fam.verdict + ' and a failed '"
+        f" + {fallback} + ' fallback');\n"
+        "  return fbValue;\n"
+        "}"
+    )
+
+
 def _agent_call(
     stage: Stage, manifest: Manifest, inputs: PipelineInputs, agent_type_host: str | None,
     prompt: str, label: str, slug: str, finish: str = "",
+    stage_families: StageFamilies | None = None,
 ) -> str:
-    """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type. Every prompt resolves to the script's `RELAY` clause plus its template."""
+    """One `produced(` expression, which rejects an empty return; a roster-typed stage gets one literal call site per roster agent type. Every prompt resolves to the script's `RELAY` clause plus its template.
+
+    A stage `stage_families` routes to a non-claude family wraps `_familyStage(...)` in the same `produced(` instead of `agent(`.
+    """
     sidecar = sidecar_clause_js("pipeline", manifest.pipeline, label)
     prompt = f"(RELAY + REVISIONS + '\\n\\n' + {prompt} + {sidecar}{finish})"
+    family = _family_of(stage_families, manifest, stage)
+
+    def call(p: str, l: str, options: str) -> str:
+        if family is None:
+            return f"agent({p}, {{ label: {l}, {options} }})"
+        return f"_familyStage({_js_string_literal(family)}, {_js_string_literal(_family_role(stage.id))}, {p}, {l}, {{ {options} }})"
+
     if stage.agent_type_from is None:
-        call = f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, stage.agent_type, agent_type_host)} }})"
-        return f"produced({label}, {call})"
+        return f"produced({label}, {call(prompt, label, _agent_options(stage, manifest, stage.agent_type, agent_type_host))})"
     name = stage.agent_type_from.split(".", 1)[1]
     types = list(dict.fromkeys(entry["agent_type"] for entry in inputs.lists[name]))
     if stage.fan_out.kind == FAN_OUT_PER_SUBJECT:
-        call = f"agent({prompt}, {{ label: {label}, {_agent_options(stage, manifest, types[0], agent_type_host)} }})"
-        return f"produced({label}, {call})"
+        return f"produced({label}, {call(prompt, label, _agent_options(stage, manifest, types[0], agent_type_host))})"
     chain = "".join(
-        f"t === {_js_string_literal(t)} ? agent(p, {{ label: l, {_agent_options(stage, manifest, t, agent_type_host)} }}) : "
+        f"t === {_js_string_literal(t)} ? {call('p', 'l', _agent_options(stage, manifest, t, agent_type_host))} : "
         for t in types
     )
     chain += "Promise.reject(new Error(`no roster agent type for ${l}`))"
@@ -335,6 +428,7 @@ def _stage_expression(
     group_sizes: Sequence[int] = (),
     final: bool = False,
     runtime_group: bool = False,
+    stage_families: StageFamilies | None = None,
 ) -> str:
     finish = ""
     if final:
@@ -354,12 +448,12 @@ def _stage_expression(
         else f"{_js_string_literal(f'{stage.id}:')} + (i + 1)"
     )
     if not fanned:
-        expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item", finish)
+        expr = _agent_call(stage, manifest, inputs, agent_type_host, prompt, label, "item", finish, stage_families)
     elif stage.fan_out.emit_time:
         item_prompt = f"(item.prompt ?? withItem({prompt}, item.slug))"
         if group_sizes:
             item_prompt = f"(item.members ? {_member_prompt_chain(prompt, group_sizes)} : {item_prompt})"
-        call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug", finish)
+        call = _agent_call(stage, manifest, inputs, agent_type_host, item_prompt, item_label, "item.slug", finish, stage_families)
         expr = (
             "(async () => {\n"
             f"      const items = {holder}.items[{_js_string_literal(stage.id)}];\n"
@@ -382,7 +476,7 @@ def _stage_expression(
             members = f"chunk.map((item, j) => {fill_at('(i + j)')})"
             ids = f"chunk.map((_, j) => {stage_id} + (i + j + 1))"
             both = f"(chunk.length === 1 ? {fill_at('i')} : groupPromptOf({ids}, {members}))"
-            call = _agent_call(stage, manifest, inputs, agent_type_host, both, item_label, "item", finish)
+            call = _agent_call(stage, manifest, inputs, agent_type_host, both, item_label, "item", finish, stage_families)
             expr = (
                 "(async () => {\n"
                 f"      const items = {items};\n"
@@ -397,7 +491,7 @@ def _stage_expression(
                 "    })()"
             )
         else:
-            call = _agent_call(stage, manifest, inputs, agent_type_host, fill_at("i"), item_label, "item", finish)
+            call = _agent_call(stage, manifest, inputs, agent_type_host, fill_at("i"), item_label, "item", finish, stage_families)
             expr = (
                 "(async () => {\n"
                 f"      {'let' if stage.agent_type_from else 'const'} items = {items};\n"
@@ -437,6 +531,7 @@ def _level_lines(
     group_sizes: Mapping[str, Sequence[int]] | None = None,
     final_stage: tuple[str, str] | None = None,
     fanout_group: str = "auto",
+    stage_families: StageFamilies | None = None,
 ) -> list[str]:
     target = _RETURN_NAME[scope]
     lines: list[str] = []
@@ -448,6 +543,7 @@ def _level_lines(
                 stages[i], scope, manifest, inputs, stages, schedule, agent_type_host, (group_sizes or {}).get(i, ()),
                 final_stage == (scope, i),
                 _runtime_grouped(stages[i], manifest, fanout_group),
+                stage_families,
             )
             for i in level
         ]
@@ -652,6 +748,7 @@ def _segment(
     fanout_group: str = "auto",
     tally: list | None = None,
     final: bool = False,
+    stage_families: StageFamilies | None = None,
 ) -> tuple[list[str], list[str], list[Stage]]:
     """A segment's data consts, its body lines and its active stages; a chained segment leaves `results` to the chain and tags its result entries with the pipeline.
 
@@ -791,9 +888,9 @@ def _segment(
     if not chained:
         body.append("const results = [];")
     body.append("")
-    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group)
+    body += _level_lines(SCOPE_PRE, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families)
     body += ["for (const s of subjects) {", "  const ret = {};", "  subjRets.push(ret);", "  try {"]
-    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group)
+    body += _level_lines(SCOPE_SUBJECT, manifest, inputs, schedule, stages, agent_type_host, "    ", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families)
     body += [
         f"    results.push({{ subject: s.subject, returns: ret{tag} }});",
         "  } catch (err) {",
@@ -802,7 +899,7 @@ def _segment(
         "}",
         "",
     ]
-    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group)
+    body += _level_lines(SCOPE_POST, manifest, inputs, schedule, stages, agent_type_host, "", tag, segment, group_sizes=group_sizes, final_stage=final_stage, fanout_group=fanout_group, stage_families=stage_families)
     for scope in (SCOPE_PRE, SCOPE_POST):
         if schedule.levels.get(scope):
             body.append(f"results.push({{ scope: {_js_string_literal(scope)}, returns: {_RETURN_NAME[scope]}{tag} }});")
@@ -835,9 +932,20 @@ def _close_in_run_js(options: str) -> list[str]:
     const r = await agent('Run this single command and return its exit code and its stdout verbatim as reply. Run nothing else.\n\n' + cmd, { label: 'research-close', """
         + options
         + r""" });
-    let parsed = null;
-    try { parsed = JSON.parse(String(r?.reply ?? '')); } catch (e) { parsed = null; }
-    return parsed ?? { committed: false, exit_code: r?.exit_code ?? null, reply: r?.reply ?? null };
+    const text = String(r?.reply ?? '');
+    const tryParse = (s) => { try { return JSON.parse(s); } catch (e) { return null; } };
+    let parsed = tryParse(text);
+    if (parsed === null) {
+      const a = text.indexOf('{'), b = text.lastIndexOf('}');
+      if (a >= 0 && b > a) parsed = tryParse(text.slice(a, b + 1));
+    }
+    let reply = parsed;
+    for (let i = 0; i < 3 && reply && typeof reply === 'object' && typeof reply.committed !== 'boolean'; i++) {
+      const inner = reply.result ?? reply.reply;
+      reply = typeof inner === 'string' ? tryParse(inner) : inner;
+    }
+    if (reply && typeof reply === 'object' && typeof reply.committed === 'boolean') return reply;
+    return { committed: /"committed"\s*:\s*true/.test(text), exit_code: r?.exit_code ?? null, reply: r?.reply ?? null };
   } catch (e) {
     return null;
   }
@@ -854,6 +962,7 @@ def compose_chain_script(
     legs: Mapping[str, str] | None = None,
     nest_scratch: bool = True,
     fanout_group: str = "auto",
+    stage_families: StageFamilies | None = None,
 ) -> str:
     """One Workflow script running `segments` in order; each segment keeps its own stores in its own block, and every segment after the first, and every keyed segment, writes under `{{scratch_dir}}/<segment name>/`.
 
@@ -881,6 +990,7 @@ def compose_chain_script(
             manifest, inputs, schedule, agent_type_host, errors, chained=scoped,
             segment=label, skip_guard=scoped and leg_of[index] in leg_of[:index],
             fanout_group=fanout_group, tally=tally, final=index == len(segments) - 1,
+            stage_families=stage_families,
         )))
     if errors:
         raise PipelineEmitRefused(sorted(set(errors)))
@@ -923,6 +1033,8 @@ def compose_chain_script(
     if any(_runtime_grouped(s, m, fanout_group) for m, s in fanned):
         out += ["", RUNTIME_GROUP_JS.rstrip("\n")]
     out += ["", _PRODUCED, "", _FAN_TRAILER, ""]
+    if stage_families:
+        out += [_family_stage_js(stage_families), ""]
     if scoped:
         out += ["const results = [];", "const segment_halts = [];", ""]
         for index, (_, _, (data, body, _)) in enumerate(parts):
@@ -1039,6 +1151,7 @@ def compose_chain_parts(
     next_action: Mapping | None = None,
     legs: Mapping[str, str] | None = None,
     fanout_group: str = "auto",
+    stage_families: StageFamilies | None = None,
 ) -> tuple[ChainPart, ...]:
     """The chain as one script when it fits the cap, else one script per leg, ordered by each leg's first segment.
 
@@ -1051,7 +1164,7 @@ def compose_chain_parts(
     try:
         script = compose_chain_script(
             segments, run_id=run_id, agent_type_host=agent_type_host, next_action=next_action, legs=legs,
-            fanout_group=fanout_group,
+            fanout_group=fanout_group, stage_families=stage_families,
         )
     except _ScriptCapRefused:
         if len(segments) < 2:
@@ -1072,7 +1185,7 @@ def compose_chain_parts(
         ChainPart(tuple(segment_name(m, i) for m, i, _ in group), compose_chain_script(
             group, run_id=run_id, agent_type_host=agent_type_host,
             next_action=next_action if index == len(groups) - 1 else None,
-            legs=legs or {}, nest_scratch=False, fanout_group=fanout_group,
+            legs=legs or {}, nest_scratch=False, fanout_group=fanout_group, stage_families=stage_families,
         ))
         for index, group in enumerate(groups)
     )
@@ -1086,9 +1199,10 @@ def compose_pipeline_script(
     run_id: str,
     agent_type_host: str | None,
     fanout_group: str = "auto",
+    stage_families: StageFamilies | None = None,
 ) -> str:
     """The Workflow script text for `manifest` run over `inputs` on `schedule`; deterministic for fixed arguments."""
     return compose_chain_script(
         [(manifest, inputs, schedule)], run_id=run_id, agent_type_host=agent_type_host,
-        fanout_group=fanout_group,
+        fanout_group=fanout_group, stage_families=stage_families,
     )

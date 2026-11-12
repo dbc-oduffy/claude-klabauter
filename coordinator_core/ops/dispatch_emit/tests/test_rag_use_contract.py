@@ -80,8 +80,13 @@ def _verdict(**kw):
     return rag_use.docs_check_rag_verdict(**base)
 
 
-def test_verdict_down_when_no_calls_or_all_failed():
-    assert _verdict(rag_calls=0) == "rag_corpus_down"
+def test_verdict_zero_calls_is_rag_not_used_never_down():
+    assert _verdict(rag_calls=0) == "rag_not_used"
+    assert _verdict(rag_calls=0, engine_queryable=True) == "rag_not_used"
+    assert rag_use.RAG_NOT_USED != rag_use.HALT_RAG_CORPUS_DOWN
+
+
+def test_verdict_down_when_all_refused_else_degraded():
     assert _verdict(rag_calls=4, rag_failed=4, rag_refused=4) == "rag_corpus_down"
     assert _verdict(rag_calls=4, rag_failed=4) == "degraded"
 
@@ -99,7 +104,7 @@ def test_verdict_definite_down_still_halts():
     assert _verdict(rag_calls=3, rag_failed=3, rag_refused=3) == "rag_corpus_down"
     assert _verdict(rag_calls=3, rag_failed=3, rag_timeouts=2, rag_refused=1) == "rag_corpus_down"
     assert _verdict(rag_calls=3, rag_failed=1, rag_timeouts=1, engine_queryable=False) == "rag_corpus_down"
-    assert _verdict(rag_calls=0, engine_queryable=True) == "rag_corpus_down"
+    assert _verdict(rag_calls=0, engine_queryable=False) == "rag_corpus_down"
 
 
 def test_verdict_ok_on_any_success():

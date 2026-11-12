@@ -258,3 +258,34 @@ def test_relay_outcome_waits_for_a_row_the_bridge_has_not_written_yet(monkeypatc
 
     out = us.relay_outcome("fe", 1, wait=10, sleep=sleep, now=lambda: clock["t"])
     assert out == {"at": 5, "target": "fe (pid 9, session s)", "ok": True}
+
+
+def _mirror_unmirrored_by_the_send(monkeypatch, tmp_path, row):
+    """A live labelled mirror that the roster sync drops (misroute) as the router answers; the bridge's row is `row`."""
+    import time
+    state = {"sent": False}
+    entry = {"name": "grp.farbox", "unimatrixFarName": "grp", "unimatrixRemote": "farbox", "pid": 7}
+    monkeypatch.setattr(us, "_session_entries", lambda: [] if state["sent"] else [entry])
+    _deliveries(tmp_path, monkeypatch, [{"at": time.time() + 60, "target": "grp.farbox (pid 9, session s)", **row}])
+
+    class Router(_FakeRouter):
+        def request_line(self, ctl, req):
+            state["sent"] = True
+            return super().request_line(ctl, req)
+
+    router = Router({"ok": True, "msg_id": "m", "written": True})
+    monkeypatch.setattr(us, "_router", lambda: router)
+    monkeypatch.setattr(us, "RELAY_SETTLE_SECONDS", 0)
+
+
+def test_a_mirror_unmirrored_during_the_send_still_reports_the_bridges_failed_row(monkeypatch, tmp_path, capsys):
+    _mirror_unmirrored_by_the_send(monkeypatch, tmp_path, {"ok": False, "error": "addressed grp.farbox, endpoint is grp; re-mirror"})
+    assert us.main(["--to", "grp", "hi"]) == 1
+    cap = capsys.readouterr()
+    assert "sent to" not in cap.out and "undelivered: grp: addressed grp.farbox" in cap.err
+
+
+def test_a_mirror_unmirrored_during_the_send_still_confirms_the_bridges_ok_row(monkeypatch, tmp_path, capsys):
+    _mirror_unmirrored_by_the_send(monkeypatch, tmp_path, {"ok": True})
+    assert us.main(["--to", "grp", "hi"]) == 0
+    assert "sent to grp" in capsys.readouterr().out

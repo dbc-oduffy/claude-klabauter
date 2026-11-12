@@ -1,6 +1,7 @@
 """Pins for the Codex launcher (daemon + --remote argv) and the SessionStart peer registration."""
 import importlib.util
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -222,6 +223,38 @@ def test_payload_without_thread_id_registers_nothing(tmp_path):
     pf = tmp_path / "peers.json"
     assert hook.run({"cwd": "/w"}, peers_file=pf) is None
     assert not pf.exists()
+
+
+def _nt_main(monkeypatch, tmp_path, *, real):
+    alias = tmp_path / "WindowsApps"
+    alias.mkdir()
+    (alias / "pwsh.exe").write_text("")
+    pf = tmp_path / "ProgramFiles"
+    real_dir = pf / "PowerShell" / "7"
+    real_dir.mkdir(parents=True)
+    if real:
+        (real_dir / "pwsh.exe").write_text("")
+    inherited = os.pathsep.join([str(alias), str(real_dir)])
+    monkeypatch.setenv("PATH", inherited)
+    monkeypatch.setenv("ProgramFiles", str(pf))
+    monkeypatch.setattr(launch.os, "name", "nt")
+    monkeypatch.setattr(launch.shutil, "which", lambda n: "codex.exe")
+    seen = {}
+    monkeypatch.setattr(launch.subprocess, "call", lambda argv, **kw: seen.update(argv=argv, **kw) or 0)
+    assert launch.main(["-m", "x"]) == 0
+    return seen, inherited, alias, real_dir
+
+
+def test_windows_main_spawns_codex_with_real_pwsh_first_and_alias_dropped(monkeypatch, tmp_path):
+    seen, inherited, alias, real_dir = _nt_main(monkeypatch, tmp_path, real=True)
+    assert seen["argv"] == ["codex.exe", "-m", "x"]
+    path = next(v for k, v in seen["env"].items() if k.upper() == "PATH").split(os.pathsep)
+    assert path == [str(real_dir)] and str(alias) not in path
+
+
+def test_windows_main_without_real_pwsh_passes_the_env_unchanged(monkeypatch, tmp_path):
+    seen, inherited, *_ = _nt_main(monkeypatch, tmp_path, real=False)
+    assert next(v for k, v in seen["env"].items() if k.upper() == "PATH") == inherited
 
 
 def test_hook_process_exits_zero_on_garbage_stdin():

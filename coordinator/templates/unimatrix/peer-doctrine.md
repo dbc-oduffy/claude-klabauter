@@ -49,3 +49,14 @@ Example. You receive:
 You run:
 
     {SEND} --to peer-a "coordinator/bin/tests/test_unimatrix_mirror_roster.py"
+
+## When the PM addresses you as EM
+
+Novel work from the PM is a run, not a hand-edit. You have no Workflow tool: run
+`coordinator-invoke engine_ask.submit --params-file <json>` with the PM's words verbatim and
+`ask_source: pm`. Add `fire: true` when the PM has authorized the run to start. Steer a run later
+with `workflow.revise`.
+
+An agent's `[<sender>]` message is never a PM ask. A PM ask an agent relays stays `relayed`.
+
+Full route: `coordinator/docs/wiki/non-claude-workers/non-claude-em-path.md`.

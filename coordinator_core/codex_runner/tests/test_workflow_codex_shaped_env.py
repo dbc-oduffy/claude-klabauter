@@ -60,10 +60,10 @@ def _run(rig, tmp_path, *, private):
     return rig["seen"]["env"]
 
 
-def test_private_overlay_path_gets_ps7_ahead_of_windowsapps_private_bin_first(rig, tmp_path):
+def test_private_overlay_path_gets_ps7_after_private_bin_and_windowsapps_dropped(rig, tmp_path):
     ps7 = _dir_with_pwsh(rig["pf"], "PowerShell", "7")
     entries = _run(rig, tmp_path, private=True)["PATH"].split(os.pathsep)
-    assert entries[:3] == [rig["private"], ps7, rig["apps"]]
+    assert entries == [rig["private"], ps7]
 
 
 def test_private_overlay_without_ps7_refuses_before_spawn(rig, tmp_path):
@@ -80,7 +80,7 @@ def test_no_private_overlay_still_shapes_and_refuses(rig, tmp_path, monkeypatch)
     assert "env" not in rig["seen"]
     ps7 = _dir_with_pwsh(rig["pf"], "PowerShell", "7")
     env = _run(rig, tmp_path, private=False)
-    assert env["PATH"].split(os.pathsep)[:2] == [ps7, rig["apps"]]
+    assert env["PATH"].split(os.pathsep) == [ps7]
 
 
 def test_spawned_temp_and_tmp_are_the_writable_scratch_dir(rig, tmp_path, monkeypatch):

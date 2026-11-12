@@ -536,7 +536,7 @@ def _log_probe_event(payload: dict) -> None:
             "hook_event_name": payload.get("hook_event_name"),
         }
         log_path = _probe_log_path()
-        with log_path.open("a", encoding="utf-8") as fh:
+        with log_path.open("a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
     except OSError:
         pass
@@ -552,7 +552,7 @@ def _log_producer_capture_failure(session_id: str, typed_command: Optional[str],
             "reason": reason,
         }
         log_path = _probe_log_path()
-        with log_path.open("a", encoding="utf-8") as fh:
+        with log_path.open("a", encoding="utf-8", newline="\n") as fh:
             fh.write(json.dumps(record, sort_keys=True) + "\n")
     except Exception:
         pass

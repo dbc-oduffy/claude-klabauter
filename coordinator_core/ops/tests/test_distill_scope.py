@@ -58,6 +58,7 @@ from coordinator_core.ops.distill_scope import (
     compute_scope,
     dr146_normalize,
     empty_wiki_warning,
+    pack_batches,
     render_summary,
     slugify_stem,
     wiki_slugs_as_dict,
@@ -289,6 +290,113 @@ def test_compute_scope_batching_chronological_order(fixture_repo):
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", batch_size=100)
     flat = [p for batch in result.manifest["batches"] for p in batch]
     assert flat == sorted(flat, key=_date_sort_key)
+
+
+def test_pack_batches_closes_batch_at_byte_budget_and_keeps_order():
+    sizes = {"a": 40, "b": 40, "c": 40, "d": 10}
+    batches = pack_batches(list(sizes), size_of=sizes.__getitem__, byte_budget=100, max_files=50)
+    assert batches == [["a", "b"], ["c", "d"]]
+
+
+def test_pack_batches_oversize_file_gets_own_batch_never_dropped():
+    sizes = {"a": 10, "huge": 1000, "b": 10}
+    batches = pack_batches(list(sizes), size_of=sizes.__getitem__, byte_budget=100, max_files=50)
+    assert batches == [["a"], ["huge"], ["b"]]
+
+
+def test_pack_batches_max_files_is_hard_cap_under_budget():
+    paths = [f"p{i}" for i in range(5)]
+    batches = pack_batches(paths, size_of=lambda _p: 1, byte_budget=10**9, max_files=2)
+    assert batches == [["p0", "p1"], ["p2", "p3"], ["p4"]]
+
+
+def test_pack_batches_empty_input_yields_no_batches():
+    assert pack_batches([], size_of=lambda _p: 1, byte_budget=10, max_files=3) == []
+
+
+def test_compute_scope_byte_budget_splits_by_on_disk_size(fixture_repo):
+    _write(fixture_repo / "cross-repo" / "archive" / "2026-07-01-memo-one.md", "x" * 500)
+    _write(fixture_repo / "cross-repo" / "archive" / "2026-07-02-memo-two.md", "y" * 500)
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", byte_budget=600)
+    batches = result.manifest["batches"]
+    assert result.counts["batches"] == len(batches)
+    assert sum(len(b) for b in batches) == result.counts["scannable"]
+    for b in batches:
+        assert "cross-repo/archive/2026-07-01-memo-one.md" not in b or "cross-repo/archive/2026-07-02-memo-two.md" not in b
+
+
+def test_compute_scope_size_of_hook_replaces_on_disk_size(fixture_repo):
+    solo = compute_scope(fixture_repo, run_id="2026-07-23-01h00", size_of=lambda _p: 10**9)
+    assert all(len(b) == 1 for b in solo.manifest["batches"])
+    assert solo.counts["batches"] == solo.counts["scannable"]
+
+
+def test_pack_batches_entry_budget_is_a_third_axis():
+    batches = pack_batches(
+        ["a", "b", "c"], size_of=lambda _p: 1, byte_budget=10**9, max_files=50,
+        entry_cost_of=lambda _p: 60, entry_budget=100,
+    )
+    assert batches == [["a"], ["b"], ["c"]]
+
+
+def test_compute_scope_write_digests_packs_by_digest_bytes_and_maps_paths(fixture_repo):
+    big = "---\nstatus: draft\n---\nprose\n```yaml plan-tasks\n- id: C0\n  title: T\n" + "  body: x\n" * 500 + "```\n"
+    _write(fixture_repo / "cross-repo" / "archive" / "2026-07-01-memo-one.md", big)
+    plain = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
+    assert plain.digests == {}
+    digested = compute_scope(fixture_repo, run_id="2026-07-23-01h00", write_digests=True)
+    assert set(digested.digests) == {p for b in digested.manifest["batches"] for p in b}
+    for rel, digest_rel in digested.digests.items():
+        assert digest_rel.startswith("state/scratch/artifact-distillation/2026-07-23-01h00/digest/")
+        assert (fixture_repo / digest_rel).stat().st_size <= (fixture_repo / rel).stat().st_size
+    # the original path stays the join key: manifest batches are unchanged by digesting
+    assert digested.manifest["batches"] == plain.manifest["batches"]
+
+
+def test_compute_scope_size_of_hook_overrides_digest_sizes(fixture_repo):
+    result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", write_digests=True, size_of=lambda _p: 10**9)
+    assert all(len(b) == 1 for b in result.manifest["batches"])
+
+
+def test_handler_batch_files_carry_digests_and_stay_under_relay_cap(fixture_repo):
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES
+
+    for i in range(60):
+        _write(
+            fixture_repo / "cross-repo" / "archive" / f"2026-07-{i % 28 + 1:02d}-memo-{i:03d}-{'x' * 40}.md",
+            "---\nstatus: implemented\n---\nbody\n",
+        )
+    result = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
+    manifest = json.loads((fixture_repo / result["workflow_input_path"]).read_text(encoding="utf-8"))
+    assert manifest["batchFiles"]
+    for name in manifest["batchFiles"]:
+        batch_path = (fixture_repo / result["workflow_input_path"]).parent / name
+        raw = batch_path.read_text(encoding="utf-8")
+        batch = json.loads(raw)
+        assert len(json.dumps(batch, separators=(",", ":")).encode()) <= SLUG_SHARD_MAX_BYTES
+        assert set(batch["digests"]) == set(batch["files"])
+        for digest_rel in batch["digests"].values():
+            assert (fixture_repo / digest_rel).is_file()
+
+
+def test_handler_batch_files_carry_relevant_guides_within_cap(fixture_repo):
+    from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES
+
+    _write(
+        fixture_repo / "archive" / "specs" / "2026-07-06-percolation-engine-notes.md",
+        "---\nstatus: implemented\n---\npercolation engine notes\n",
+    )
+    _write(fixture_repo / "docs" / "wiki" / "unrelated-topic.md", "# Unrelated Topic\n")
+    result = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
+    run_dir = (fixture_repo / result["workflow_input_path"]).parent
+    manifest = json.loads((fixture_repo / result["workflow_input_path"]).read_text(encoding="utf-8"))
+    assert manifest["batchFiles"]
+    guide_paths: set[str] = set()
+    for name in manifest["batchFiles"]:
+        batch = json.loads((run_dir / name).read_text(encoding="utf-8"))
+        assert len(json.dumps(batch, separators=(",", ":")).encode()) <= SLUG_SHARD_MAX_BYTES
+        guide_paths |= {g["path"] for g in batch["relevantGuides"]}
+    assert "docs/wiki/percolation-engine.md" in guide_paths
 
 
 # ---------------------------------------------------------------------------

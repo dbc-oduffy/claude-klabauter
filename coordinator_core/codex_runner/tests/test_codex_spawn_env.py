@@ -7,7 +7,7 @@ import os
 import pytest
 
 from coordinator_core.codex_runner import sandbox_preflight
-from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
+from coordinator_core.codex_runner.codex_spawn_env import place_installed_pwsh, shape_codex_child
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 
 
@@ -36,34 +36,56 @@ def _path(env):
     return env["PATH"].split(os.pathsep)
 
 
-def test_windowsapps_first_gets_ps7_inserted_before_it(tmp_path, win):
+def test_windowsapps_first_gets_ps7_first_and_alias_dropped(tmp_path, win):
     environ, ps7, apps, _ = _layout(tmp_path)
     env = {"PATH": os.pathsep.join([apps, "other"])}
     out = shape_codex_child(env, writable_root=None, environ=environ, windows=True)
     assert out is env
-    assert _path(env) == [ps7, apps, "other"]
+    assert _path(env) == [ps7, "other"]
 
 
 def test_leading_private_bin_stays_first(tmp_path, win):
     environ, ps7, apps, private = _layout(tmp_path)
     env = {"PATH": os.pathsep.join([private, apps, "other"])}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
-    assert _path(env) == [private, ps7, apps, "other"]
+    assert _path(env) == [private, ps7, "other"]
 
 
 def test_later_ps7_duplicate_dropped(tmp_path, win):
     environ, ps7, apps, private = _layout(tmp_path)
     env = {"PATH": os.pathsep.join([private, apps, ps7])}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
-    assert _path(env) == [private, ps7, apps]
+    assert _path(env) == [private, ps7]
 
 
-def test_ps7_already_first_holder_unchanged(tmp_path, win):
+def test_ps7_already_first_holder_alias_still_dropped(tmp_path, win):
     environ, ps7, apps, private = _layout(tmp_path)
-    original = os.pathsep.join([private, ps7, apps])
-    env = {"PATH": original}
+    env = {"PATH": os.pathsep.join([private, ps7, apps])}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
-    assert env["PATH"] == original
+    assert _path(env) == [private, ps7]
+
+
+def test_windowsapps_dir_without_pwsh_kept(tmp_path, win):
+    environ, ps7, _, _ = _layout(tmp_path)
+    bare = tmp_path / "WindowsApps2" / "WindowsApps"
+    bare.mkdir(parents=True)
+    env = {"PATH": os.pathsep.join([str(bare), ps7])}
+    shape_codex_child(env, writable_root=None, environ=environ, windows=True)
+    assert _path(env) == [str(bare), ps7]
+
+
+def test_place_installed_pwsh_no_real_pwsh_leaves_env(tmp_path):
+    environ, _, apps, _ = _layout(tmp_path, ps7=False)
+    env = {"PATH": apps}
+    assert place_installed_pwsh(env, environ, windows=True) is env
+    assert env == {"PATH": apps}
+
+
+def test_place_installed_pwsh_non_windows_leaves_env(tmp_path):
+    environ, _, apps, _ = _layout(tmp_path)
+    env = {"PATH": apps}
+    assert place_installed_pwsh(env, environ, windows=False) is env
+    assert env == {"PATH": apps}
 
 
 def test_ps7_appended_when_no_entry_holds_pwsh(tmp_path, win):
@@ -77,7 +99,7 @@ def test_path_key_case_preserved(tmp_path, win):
     environ, ps7, apps, _ = _layout(tmp_path)
     env = {"Path": apps}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
-    assert env["Path"].split(os.pathsep) == [ps7, apps] and "PATH" not in env
+    assert env["Path"].split(os.pathsep) == [ps7] and "PATH" not in env
 
 
 def test_no_ps7_with_windowsapps_only_refuses(tmp_path, win):

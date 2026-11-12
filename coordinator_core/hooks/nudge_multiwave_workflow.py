@@ -211,7 +211,7 @@ def _handler(params: dict, repo_root=None) -> dict:
 
     now = int(time.time())
     try:
-        with dispatch_log.open("a", encoding="utf-8") as fh:
+        with dispatch_log.open("a", encoding="utf-8", newline="\n") as fh:
             fh.write(f"{now}\n")
     except Exception:
         pass

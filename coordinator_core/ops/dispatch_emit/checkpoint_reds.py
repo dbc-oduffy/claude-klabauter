@@ -20,6 +20,7 @@ from typing import Iterable, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.dispatch_emit.bug_close import BUG_HOME
+from coordinator_core.session import record_homes
 
 OP_NAME = "dispatch.checkpoint_reds"
 RED_AT_BASE = "red_at_base"
@@ -108,7 +109,8 @@ def mint_fix_rows(repo_root, run_id: str, introduced: Iterable[str]) -> list[dic
             continue
         row_id = _row_id(run_id, tid)
         today = datetime.date.today().isoformat()
-        rel = f"{BUG_HOME}/{today}{_NAME_MARK}{_slug(tid)}-{row_id}.yaml"
+        name = f"{today}{_NAME_MARK}{_slug(tid)}-{row_id}.yaml"
+        rel = f"{BUG_HOME}/{name}"
         data = {
             "created": today,
             "title": f"introduced red: {tid}",
@@ -123,7 +125,7 @@ def mint_fix_rows(repo_root, run_id: str, introduced: Iterable[str]) -> list[dic
             "test_id": tid,
             "run_id": run_id,
         }
-        target = root / rel
+        target = Path(record_homes.record_path(str(root), "bug-backlog", name))
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8", newline="\n")
         out.append({"id": row_id, "path": rel, "test_id": tid})

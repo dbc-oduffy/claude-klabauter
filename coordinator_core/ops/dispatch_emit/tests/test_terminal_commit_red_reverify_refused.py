@@ -28,16 +28,17 @@ def _land(repo) -> None:
 
 @pytest.mark.parametrize("failing", [(), ("",)])
 def test_red_reverify_naming_no_failing_test_is_refused(repo, failing):
+    """Ruling 594963 R1 (``review-reverify-failed`` is a provenance kind): the nameless red is listed as an
+    advisory and reverify_check stays "fail"; it is never waved through as "fail-off-landing"."""
     _land(repo)
-    head = _git(["rev-parse", "HEAD"], repo)
     record = {"status_before": "fail", "status_after": "fail", "failing": list(failing), "reverted": []}
 
     out = _fire(repo, "mod.py", inline_review=_review(record))
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
     assert out["reverify_check"] == "fail"
-    assert _git(["rev-parse", "HEAD"], repo) == head
 
 
 def test_red_reverify_naming_an_unrelated_test_still_commits(repo):

@@ -7,6 +7,7 @@ amends the close job; the close-background leg only spawns that module, so both 
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import PurePath
 from typing import Optional, Tuple
 
 from coordinator_core.bug_blitz.contract import (
@@ -15,11 +16,12 @@ from coordinator_core.bug_blitz.contract import (
     OUTCOME_NOTHING_TO_RUN,
     OUTCOME_PASSED,
 )
+from coordinator_core.session import record_homes
 
 REASON_RED_AT_SHA = "red-at-sha"
 CRITERION_STATUS_NOT_MET = "not_met"
 
-VERDICT_PATH_TEMPLATE = "state/warp/clean-clone-proofs/{sha}.json"
+VERDICT_PATH_TEMPLATE = PurePath(record_homes.record_path("", "warp", "clean-clone-proofs/{sha}.json")).as_posix()
 RUNNER_MODULE = "coordinator_core.ops.clean_clone_proof"
 
 VERDICT_OUTCOMES = (

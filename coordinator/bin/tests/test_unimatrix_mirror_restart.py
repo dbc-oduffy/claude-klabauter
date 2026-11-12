@@ -77,6 +77,8 @@ def _mirror_all_rig(tmp_path, monkeypatch):
     monkeypatch.setitem(mod._STATE, "rc", {})
     monkeypatch.setitem(mod._STATE, "state_sig", None)
     monkeypatch.setitem(mod._STATE, "unsupported", False)
+    monkeypatch.setitem(mod._STATE, "mux_off", True)  # these cases pin the per-name fallback clients
+    monkeypatch.setitem(mod._STATE, "mux", {})
     monkeypatch.setattr(mod, "_PUBLISHED", {})
     mod.sent = []
     monkeypatch.setattr(mod, "_start_publish", lambda cfg, cmds, say: mod.sent.extend(cmds))

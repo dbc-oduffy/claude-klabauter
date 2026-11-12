@@ -124,18 +124,21 @@ def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
 # rungs, and losing either must still be caught.
 # ---------------------------------------------------------------------------
 
-_EXPECTED_BODY_SHAPE_CHECKSUM = "a19eef05ead20fa30ba7654d1520b6e88cd0b6cf49b9686490521a2962612167"
+_EXPECTED_BODY_SHAPE_CHECKSUM = "ba20e893980a576cce1f4266aba493da490e33258c3d592356332e43eef10b3c"
 
 _BAKED_PY_PLACEHOLDER = "<BAKED-INTERPRETER>"
 
 
 def _normalize_baked_py(body: str) -> str:
-    return re.sub(
+    """Blank the machine path and the publish-rewritten names so one checksum holds on every mirror."""
+    body = re.sub(
         r'^(_PY=")[^"]*(")$',
         r"\1" + _BAKED_PY_PLACEHOLDER + r"\2",
         body,
         flags=re.M,
     )
+    body = re.sub(r"(?<=machine-local )repos\.[a-z_]+", "repos.<ENGINE-REPO>", body)
+    return re.sub(r"(?<=/)\.[a-z]+(?:-[a-z]+)*-root\b", ".<ROOT-POINTER>", body)
 
 
 def test_hook_gen_stamp_bump_is_required_for_shape_changes(monkeypatch):
@@ -635,8 +638,9 @@ def test_no_commit_path_caller_reaches_the_repairing_disposition_walk():
 
     bin_dir = lib.parent.parent
     for name in ("coordinator-ensure-prepare-commit-msg-hook.py",):
-        text = (bin_dir / name).read_text(encoding="utf-8")
-        assert "apply_repo" not in text and "ensure_hooks_fleet" not in text, name
+        if (bin_dir / name).is_file():
+            text = (bin_dir / name).read_text(encoding="utf-8")
+            assert "apply_repo" not in text and "ensure_hooks_fleet" not in text, name
 
     root = bin_dir.parent.parent
     for rel in ("coordinator_core/ops/ceremony/git_native.py", "coordinator_core/install/substrate.py"):

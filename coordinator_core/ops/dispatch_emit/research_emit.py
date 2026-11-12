@@ -39,6 +39,7 @@ ASK_FILE = "ask.md"
 BRIEF_FILE = "brief.md"
 _CONTEXT_HEADING = "## Context files"
 _OUTPUT_PREFIX = "Output paths:"
+_ROSTER_HEADING = "## Notebooks roster"
 MAX_SLUG_LEN = 48
 DIGEST_LEN = 6
 SCRIPT_SUFFIX = ".workflow.mjs"
@@ -89,10 +90,16 @@ def list_key_refusals(pipeline: str, lists: Mapping[str, Sequence[str]]) -> list
 
 
 def corpus_default_lists(pipeline: str, questions: Sequence[str] = ()) -> dict[str, tuple[str, ...]]:
-    """`CORPUS_DEFAULT_LISTS[pipeline]`, with web topics seeded one letter per research question text."""
+    """`CORPUS_DEFAULT_LISTS[pipeline]`, seeded one letter per research question text.
+
+    Web topics are lowercase letters; notebooklm notebooks are uppercase letters, so a sizing that
+    names no notebook still fans out one notebook per question (at most 26).
+    """
     lists = dict(CORPUS_DEFAULT_LISTS.get(pipeline, {}))
-    if pipeline == "web" and questions:
+    if questions and pipeline == "web":
         lists["topics"] = tuple("abcdefghijklmnopqrstuvwxyz"[: len(questions)])
+    elif questions and pipeline == _NOTEBOOKLM_PIPELINE:
+        lists[_NOTEBOOKS_LIST] = tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ"[: len(questions)])
     return lists
 
 
@@ -502,6 +509,49 @@ def bind_output_paths(root: Path, scratch_rel: str, brief_rel: str) -> str:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8", newline="\n")
     return brief_rel if brief_rel in own else f"{base}/{BRIEF_FILE}"
+
+
+def notebooks_roster(
+    targets: Sequence[Mapping[str, str]], given: Sequence[str], questions: Sequence[str]
+) -> tuple[str, ...]:
+    """The notebooks the notebooklm segment will fan out over, by the precedence the emit binds them.
+
+    `given` (a `--list notebooks=` override) wins, then the `targets` whose source is notebooklm,
+    then the per-question defaults.
+    """
+    if given:
+        return tuple(given)
+    refs = tuple(t["ref"] for t in targets if t.get("source") == _NOTEBOOKLM_PIPELINE)
+    return refs or corpus_default_lists(_NOTEBOOKLM_PIPELINE, questions).get(_NOTEBOOKS_LIST, ())
+
+
+def bind_notebooks_roster(root: Path, scratch_rel: str, brief_rel: str, roster: Sequence[str]) -> str:
+    """State the notebooks roster as a hard constraint on the scope stage; return the brief members read.
+
+    The scope stage's `worker_count` and `notebooks` must equal the roster or the run halts, so the
+    brief says so. An empty roster leaves the brief unchanged. An ask or brief file under `scratch_rel`
+    gains the section in place; any other brief (a sizing) is never edited: `<scratch>/brief.md`
+    points at it and carries the section.
+    """
+    if not roster:
+        return brief_rel
+    base = scratch_rel.rstrip("/")
+    section = (
+        f"{_ROSTER_HEADING}\n\nThis run's notebooks roster has {len(roster)} "
+        f"{'entry' if len(roster) == 1 else 'entries'}: {', '.join(f'`{n}`' for n in roster)}. "
+        f"The scope stage must return `worker_count` = {len(roster)} and `notebooks` listing exactly "
+        "these entries; do not merge, drop or add notebooks. A scope reply that disagrees halts the run.\n"
+    )
+    own = {f"{base}/{ASK_FILE}", f"{base}/{BRIEF_FILE}"}
+    if brief_rel in own:
+        target = root / brief_rel
+        target.write_text(target.read_text(encoding="utf-8").rstrip("\n") + "\n\n" + section, encoding="utf-8", newline="\n")
+        return brief_rel
+    rel = f"{base}/{BRIEF_FILE}"
+    target = root / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(f"The brief is `{brief_rel}`; read it first.\n\n{section}", encoding="utf-8", newline="\n")
+    return rel
 
 
 _GATED_STAGES = ("scope", "scout", "workers", "sweep")

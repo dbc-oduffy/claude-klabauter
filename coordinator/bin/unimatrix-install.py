@@ -170,10 +170,12 @@ def settings_home():
 
 def script_closure(src_dir, root=AUTOLINK_SCRIPT):
     """Every unimatrix-*.py script named, transitively, from `root` in src_dir (root included)."""
+    # Trap: the scan is textual, so any vendored script whose prose names this installer would drag the
+    # installer and everything it names (plugin-gen) into the runtime closure; the installer is never one.
     seen, todo = set(), [root]
     while todo:
         name = todo.pop()
-        if name in seen:
+        if name in seen or name == Path(__file__).name:
             continue
         seen.add(name)
         path = Path(src_dir) / name
@@ -276,31 +278,66 @@ def install_scripts(src_dir, dest_dir):
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
     for name in wanted:
-        shutil.copy2(Path(src_dir) / name, dest / name)
+        _copy_if_changed(Path(src_dir) / name, dest / name)
     for name in VENDORED_LIB:
         if (Path(src_dir) / "lib" / name).is_file():
             (dest / "lib").mkdir(exist_ok=True)
-            shutil.copy2(Path(src_dir) / "lib" / name, dest / "lib" / name)
+            _copy_if_changed(Path(src_dir) / "lib" / name, dest / "lib" / name)
     extra = [n for n in OPTIONAL_SCRIPTS if n not in wanted and (Path(src_dir) / n).is_file()]
     for name in extra:
-        shutil.copy2(Path(src_dir) / name, dest / name)
+        _copy_if_changed(Path(src_dir) / name, dest / name)
     return wanted + extra
 
 
-VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py")  # sibling lib/ modules the installed scripts load by path
+def _copy_if_changed(src, dst):
+    """copy2 unless dst already holds the same bytes: an unchanged script keeps its st_ctime, which the
+    relay reap reads as the moment the code last changed."""
+    try:
+        if dst.read_bytes() == src.read_bytes():
+            return
+    except OSError:
+        pass
+    shutil.copy2(src, dst)
 
 
-HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")
+VENDORED_LIB = ("python_interp.py", "unimatrix_box_mux.py", "unimatrix_relay_sessions.py")  # sibling lib/ modules the installed scripts load by path
 
 
-def forced_command_interpreter():
-    """Absolute interpreter for the forced command. On macOS sshd's PATH python3 is the CLT stub, so a
-    Homebrew python3 wins over sys.executable when one exists."""
-    if sys.platform == "darwin":
-        for cand in HOMEBREW_PYTHONS:
-            if os.path.isfile(cand) and os.name == "posix" and os.access(cand, os.X_OK):
-                return cand
-    return sys.executable
+def _lib(name):
+    """A sibling lib/ module loaded once by path (the installed layout has no package)."""
+    if name not in _LIBS:
+        spec = importlib.util.spec_from_file_location(f"unimatrix_lib_{name}", _BIN_DIR / "lib" / f"{name}.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _LIBS[name] = mod
+    return _LIBS[name]
+
+
+_LIBS = {}
+HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")  # literal: the installer must import without lib/ beside it
+_PIN_UNREAD = object()
+_PIN_CACHE = {}
+
+
+def _pin_value():
+    """The machine-local `unimatrix.python` value autolink reads, when it names a file; else None. One read per settings home."""
+    roster = _sibling("unimatrix-roster.py")
+    home = str(roster.settings_home())
+    if home not in _PIN_CACHE:
+        try:
+            val = _sibling(AUTOLINK_SCRIPT).pin_key_value(roster)
+        except (OSError, subprocess.SubprocessError):
+            val = None
+        _PIN_CACHE[home] = val if val and os.path.isfile(val) else None
+    return _PIN_CACHE[home]
+
+
+def forced_command_interpreter(pin_value=_PIN_UNREAD):
+    """Absolute interpreter for the forced command: the one autolink's mirror-all runs (`unimatrix.python`
+    pin, else a Homebrew python3 on macOS where sshd's PATH python3 is the CLT stub, else the console python)."""
+    if pin_value is _PIN_UNREAD:
+        pin_value = _pin_value()
+    return _lib("python_interp").unimatrix_python(pin_value, homebrew=HOMEBREW_PYTHONS) or sys.executable
 
 
 def authorized_keys_line(dest_dir, interpreter=None, key_body="<key-body>", file_peer=None):
@@ -1042,6 +1079,11 @@ def grok_config_path():
     return (Path(env) if env else Path.home() / ".grok") / "config.toml"
 
 
+def grok_rules_path():
+    """Grok's managed peer-doctrine file: $GROK_HOME/rules/unimatrix-peer-doctrine.md (grok loads every *.md there)."""
+    return grok_config_path().parent / "rules" / "unimatrix-peer-doctrine.md"
+
+
 def _tui_status_command(host):
     argv = [sys.executable, "-m", "coordinator_core.tui_status", host]
     return subprocess.list2cmdline(argv) if os.name == "nt" else " ".join(shlex.quote(a) for a in argv)
@@ -1245,6 +1287,7 @@ def unseed_file(path):
 
 
 LOGIN_AGENT_LABEL = "com.unimatrix.autolink"
+LOGIN_AGENT_INTERVAL_S = 60
 LOGIN_TASK_NAME = "UnimatrixAutolink"
 LOGIN_UNIT = "unimatrix-autolink.service"
 
@@ -1318,11 +1361,15 @@ def _delete_login_task(schtasks=None, strict=False):
 
 
 def _login_agent_text(dest_dir):
-    """Bytes of the login-agent file for this OS: a RunAtLoad plist or a oneshot systemd unit. No restart, no interval."""
+    """Bytes of the login-agent file for this OS: a RunAtLoad plist that launchd re-runs every
+    LOGIN_AGENT_INTERVAL_S (autolink's healthy path reads records and spawns nothing; a dead supervisor is
+    relinked), or a oneshot systemd unit. AbandonProcessGroup keeps launchd's job-exit cleanup from reaping
+    the supervisors autolink spawned."""
     argv = _autolink_argv(dest_dir)
     if sys.platform == "darwin":
         import plistlib
         return plistlib.dumps({"Label": LOGIN_AGENT_LABEL, "ProgramArguments": argv, "RunAtLoad": True,
+                               "StartInterval": LOGIN_AGENT_INTERVAL_S, "AbandonProcessGroup": True,
                                "ProcessType": "Background", "LowPriorityIO": True})
     return ("[Unit]\nDescription=Unimatrix autolink at login\n\n[Service]\nType=oneshot\n"
             f"ExecStart={' '.join(shlex.quote(a) for a in argv)}\n\n[Install]\nWantedBy=default.target\n"
@@ -1431,6 +1478,77 @@ def unregister_login_agent(agent_dir=None, schtasks=None):
     return "removed" if removed else "absent"
 
 
+LEGACY_LOGIN_AGENT_LABELS = ("com.coordinator.unimatrix-autolink",)
+
+
+def run_launchctl(*args):
+    """Run launchctl; None when it cannot launch."""
+    try:
+        return subprocess.run(["launchctl", *args], capture_output=True, text=True, timeout=30,
+                              creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def remove_legacy_login_agents(agent_dir=None, launchctl=None, uid=None):
+    """Boot out and delete the prior-era autolink labels so one supervisor remains; macOS only.
+
+    Returns the labels removed: a loaded label is booted out of `gui/<uid>`, its plist unlinked.
+    A label neither loaded nor on disk is a no-op, so a rerun returns [].
+    """
+    if sys.platform != "darwin":
+        return []
+    run = launchctl or run_launchctl
+    root = Path(agent_dir) if agent_dir else login_agent_dir()
+    if not agent_dir:
+        _refuse_real_agent_dir(root)
+    domain = f"gui/{uid if uid is not None else os.getuid()}"
+    removed = []
+    for label in LEGACY_LOGIN_AGENT_LABELS:
+        plist = root / f"{label}.plist"
+        loaded = run("print", f"{domain}/{label}")
+        did = False
+        if loaded is not None and loaded.returncode == 0:
+            booted = run("bootout", f"{domain}/{label}")
+            did = booted is not None and booted.returncode == 0
+        if plist.is_symlink() or plist.exists():
+            plist.unlink()
+            did = True
+        if did:
+            removed.append(label)
+    return removed
+
+
+def _pid_alive(pid):
+    """True when `pid` exists (a pid we may not signal still exists)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
+def reap_stale_relays(dest_dir, ps=None, kill=None):
+    """SIGTERM relay sessions that are orphaned (sshd parent gone) or older than the installed relay
+    script's st_ctime; a live current session is kept. POSIX only. Returns (stale, mismatched, failed) pid lists."""
+    if sys.platform == "win32":
+        return [], [], []
+    rs = _lib("unimatrix_relay_sessions")
+    sessions = rs.list_relay_sessions((ps or rs.ps_snapshot)())
+    stamps = {}
+    for name in rs.RELAY_SCRIPTS:
+        try:
+            stamps[name] = (Path(dest_dir) / name).stat().st_ctime
+        except OSError:
+            continue
+    groups = rs.classify_relay_sessions(sessions, stamps, _pid_alive)
+    victims = groups[rs.STALE] + groups[rs.MISMATCHED]
+    _, failed = rs.reap(victims, kill)
+    return [s.pid for s in groups[rs.STALE]], [s.pid for s in groups[rs.MISMATCHED]], failed
+
+
 def render_peer_doctrine(dest_dir, template=None):
     """Return the managed block: the doctrine template with {SEND} bound to the installed send command."""
     body = Path(template or PEER_DOCTRINE_TEMPLATE).read_text(encoding="utf-8").strip("\n")
@@ -1499,17 +1617,43 @@ def unseed_peer_doctrine(path):
     return _seed().unseed_block(path, DOCTRINE_BEGIN, DOCTRINE_END)
 
 
-def doctrine_root(plugin_root=None):
-    """The directory holding global-doctrine/, or None when this install does not carry it.
+def _content_root_pointer():
+    """(pointer value or "", the pointer files consulted), read by the shared spawn-free resolver."""
+    try:
+        mod = _lib("machine_local_impl_resolve")
+        value = mod.read_content_root_pointer()
+        names = (mod._CONTENT_ROOT_POINTER, mod._LEGACY_ROOT_POINTER)
+        dirs = (os.path.join(mod.settings_home(), "machine-local"), mod.claude_home())
+    except (OSError, AttributeError):
+        return "", ["<content-root pointer unreadable: lib/machine_local_impl_resolve.py missing>"]
+    return value, [os.path.join(d, n) for n in names for d in dirs]
 
-    A named `plugin_root` replaces this script's own location as the search base. A flat published
-    checkout keeps the tree under `templates/`, beside or inside the base.
+
+def resolve_doctrine(plugin_root=None):
+    """Return (root or None, rung, detail): where global-doctrine/ resolved, which rung, what was read.
+
+    Rungs in order: the DoE content-root pointer, then the base beside this install, where a flat
+    published checkout keeps the tree under `templates/`. A named `plugin_root` is an explicit override:
+    it replaces both the pointer and this script's location. On a miss `rung` is None and `detail`
+    names the pointer files read and the beside-install candidates.
     """
+    pointer, pointer_files = ("", []) if plugin_root else _content_root_pointer()
+    if pointer and (Path(pointer) / "global-doctrine" / "CLAUDE.md").is_file():
+        return Path(pointer), "DoE root pointer", pointer
     base = Path(plugin_root) if plugin_root else PLUGIN_ROOT
     for root in (base.parent, base, base.parent / "templates", base / "templates"):
         if (root / "global-doctrine" / "CLAUDE.md").is_file():
-            return root
-    return None
+            return root, "beside install" if not plugin_root else "--plugin-root", str(root)
+    if plugin_root:
+        return None, None, f"--plugin-root named, pointer not consulted; searched beside {base}"
+    state = f"pointer value '{pointer}' has no global-doctrine/CLAUDE.md" if pointer else "no pointer value"
+    return None, None, (f"{state}; pointer files read: {', '.join(pointer_files)}; "
+                        f"also searched beside {base}")
+
+
+def doctrine_root(plugin_root=None):
+    """The directory holding global-doctrine/, or None when neither the DoE root pointer nor this install carries it."""
+    return resolve_doctrine(plugin_root)[0]
 
 
 def resolve_engine_root():
@@ -1639,8 +1783,10 @@ def trust_codex_hook(hooks_path, timeout=30):
 def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
          codex_hooks=None, codex_trust=None, codex_rules=None, agy_rules=None, codex_exec_rule=None,
          agy_skills_json=None, codex_skills=None, agent_dir=None, schtasks=None, pair_run=None,
-         router_live=None, restart_router=None):
-    """`router_live(dest) -> bool` and `restart_router(dest, say) -> dict` replace the installed autolink's
+         router_live=None, restart_router=None, launchctl=None, relay_ps=None, relay_kill=None):
+    """`launchctl` (argv tail -> CompletedProcess), `relay_ps` (() -> ps text) and `relay_kill` (pid -> None)
+    replace the real launchctl, `ps` and SIGTERM, which an overridden `hooks_path` otherwise skips.
+    `router_live(dest) -> bool` and `restart_router(dest, say) -> dict` replace the installed autolink's
     router check and restart. `hooks_path` overrides agy's file. Codex's file defaults to codex_hooks_path(), or to a sibling
     `codex-hooks.json` when only `hooks_path` is overridden; trust runs against the real Codex only for
     the default path, unless `codex_trust` (a callable taking the hooks path) is injected. The peer
@@ -1654,6 +1800,9 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         agent_dir = Path(hooks_path).with_name("login-agent")
     if schtasks is None and hooks_path is not None:
         schtasks = lambda *a: None
+    if hooks_path is not None:
+        launchctl = launchctl or (lambda *a: None)
+        relay_ps = relay_ps or (lambda: "")
     codex_default = codex_hooks is None and hooks_path is None
     codex_hp = Path(codex_hooks) if codex_hooks else (
         codex_hooks_path() if hooks_path is None else Path(hooks_path).with_name("codex-hooks.json")
@@ -1672,6 +1821,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         agy_rp = agy_rules_path() if hooks_path is None else Path(hooks_path).with_name("agy-GEMINI.md")
     agy_status = agy_settings_path() if hooks_path is None else Path(hooks_path).with_name("agy-settings.json")
     grok_status = grok_config_path() if hooks_path is None else Path(hooks_path).with_name("grok-config.toml")
+    grok_rp = grok_rules_path() if hooks_path is None else Path(hooks_path).with_name("grok-peer-doctrine.md")
     if codex_trust is None and codex_default:
         codex_trust = trust_codex_hook
     agy_sj = Path(agy_skills_json) if agy_skills_json else (
@@ -1685,7 +1835,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     ap.add_argument("--install", action="store_true", help="copy the vendored scripts into the settings home")
     ap.add_argument("--uninstall", action="store_true", help="remove everything --install seeded for Codex and agy")
     ap.add_argument("--force", action="store_true", help="warn instead of refusing outside the verified range")
-    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs a status line, no hooks); default codex,agy,grok with the Claude range gate. "
+    ap.add_argument("--hosts", help="comma list of claude,codex,agy,grok (grok installs a status line and the peer doctrine rules file, no hooks); default codex,agy,grok with the Claude range gate. "
                     "Naming no claude skips the gate when `claude` is not on PATH")
     ap.add_argument("--pair", metavar="ALIAS", help="mint or read the pair key for a far box and print its "
                     "authorized_keys line and ssh config block")
@@ -1760,6 +1910,7 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         steps = []
         if want_grok:
             steps.append(("grok status line", grok_status, lambda: seed_host_status_line(grok_status, "grok", uninstall=True)))
+            steps.append(("grok peer doctrine", grok_rp, lambda: unseed_peer_doctrine(grok_rp)))
         if want_agy:
             steps.append(("agy allow rule", agy_status, lambda: seed_agy_allow_rule(agy_status, uninstall=True)))
             steps.append(("agy status line", agy_status, lambda: seed_host_status_line(agy_status, "agy", uninstall=True)))
@@ -1828,6 +1979,10 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         print(f"REFUSE: {exc}", file=out)
         return 5
     print(f"installed {len(copied)} scripts into {dest}", file=out)
+    stale, mismatched, failed = reap_stale_relays(dest, relay_ps, relay_kill)
+    if stale or mismatched or failed:
+        print(f"relay sessions reaped: {len(stale)} orphaned, {len(mismatched)} on replaced code"
+              + (f"; could not signal pid {', '.join(map(str, failed))}" if failed else ""), file=out)
     restart_failed = False
     router_live = router_live or router_is_live
     if router_live(dest) and (digest_before != router_closure_digest(dest)
@@ -1910,7 +2065,8 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
     except (OSError, ValueError) as exc:
         block = None
         print(f"WARN: peer doctrine not installed: {exc}", file=out)
-    for label, rp, wanted in (("codex", codex_rp, want_codex), ("agy", agy_rp, want_agy)):
+    for label, rp, wanted in (("codex", codex_rp, want_codex), ("agy", agy_rp, want_agy),
+                             ("grok", grok_rp, want_grok)):
         if not wanted:
             continue
         try:
@@ -1937,6 +2093,11 @@ def main(argv=None, version_text=None, dest_dir=None, out=None, hooks_path=None,
         print(f"login agent {state}: {where}" if state != "skipped" else f"WARN: login agent not registered: {where}", file=out)
     except OSError as exc:
         print(f"WARN: login agent not registered: {exc}", file=out)
+    try:
+        for label in remove_legacy_login_agents(agent_dir, launchctl):
+            print(f"legacy login agent removed: {label}", file=out)
+    except Exception as exc:
+        print(f"WARN: legacy login agent not removed: {exc}", file=out)
     if engine_root:
         print(f"governance engine root: {engine_root} ({provenance})", file=out)
         if verified and lifecycle_ready:
@@ -1963,16 +2124,16 @@ def _seed_standing_doctrine(out, want_codex, want_agy, codex_rp, agy_rp, codex_s
     seed = _seed()
     missing = []
     skills_root = skills_root or SKILLS_ROOT
-    root = doctrine_root(plugin_root) if plugin_root else doctrine_root()
+    root, rung, detail = resolve_doctrine(plugin_root)
     for label, rp, wanted, cap in (("codex", codex_rp, want_codex, seed.CODEX_CAP_BYTES),
                                    ("agy", agy_rp, want_agy, seed.AGY_CAP_BYTES)):
         if not wanted:
             continue
         try:
             if root is None:
-                raise OSError("global-doctrine/ not found beside this install")
+                raise OSError(f"global-doctrine/ not found: {detail}")
             res = seed.seed_block(rp, seed.render_coordinator_doctrine(root, cap), seed.DOCTRINE_BEGIN, seed.DOCTRINE_END)
-            print(f"{label} coordinator doctrine {res} in {rp}", file=out)
+            print(f"{label} coordinator doctrine {res} in {rp} (doctrine from {rung}: {detail})", file=out)
         except (OSError, ValueError) as exc:
             missing.append(f"{label} coordinator doctrine")
             print(f"WARN: {label} coordinator doctrine not installed: {exc}", file=out)

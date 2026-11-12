@@ -1504,6 +1504,12 @@ class ManifestRow:
     route_source: str = "default"
     #: Code-index (RAG) calls the row made; `None` until measured. Always serialised.
     rag_calls: Optional[int] = None
+    #: Binding-resolved family and role for a stage-role row, with the claude fallback brief it
+    #: reruns on; each serialised only when non-empty.
+    family: str = ""
+    stage_role: str = ""
+    fallback_brief_path: str = ""
+    fallback_agent_type: str = ""
 
     def __post_init__(self) -> None:
         if self.route_source not in ROUTE_SOURCES:
@@ -1533,6 +1539,9 @@ class ManifestRow:
             out["kept_from"] = self.kept_from
         if self.adopts_stranded:
             out["adopts_stranded"] = True
+        for key in ("family", "stage_role", "fallback_brief_path", "fallback_agent_type"):
+            if getattr(self, key):
+                out[key] = getattr(self, key)
         return out
 
     @classmethod
@@ -1552,6 +1561,10 @@ class ManifestRow:
             adopts_stranded=bool(data.get("adopts_stranded")),
             route_source=str(data.get("route_source") or "default"),
             rag_calls=data.get("rag_calls"),
+            family=str(data.get("family") or ""),
+            stage_role=str(data.get("stage_role") or ""),
+            fallback_brief_path=str(data.get("fallback_brief_path") or ""),
+            fallback_agent_type=str(data.get("fallback_agent_type") or ""),
         )
 
 

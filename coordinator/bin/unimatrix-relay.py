@@ -39,6 +39,10 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     mark the sending box's mirror of <name> stale until that epoch; the router's
                     agent listing shows it as stale. `inbox <name>` clears the mark.
   source            print this file, so far boxes can vendor the current relay.
+  receipts <session-id> <since>
+                    print {"ok": true, "rows": [...]}: this box's delivery receipts (session, sha256
+                    digest of the line, at/ts) for the session since that epoch. `send-session` appends one
+                    per line it wrote; the message text is never stored.
   grant <grantee> <note> <ttl> <repo>
                     read the issuer's signed grant envelope (one JSON line on stdin) and hand
                     it to suite_grant.receive_relayed_grant; prints its JSON reply, exit 0 only
@@ -142,6 +146,11 @@ def parse_mode(original_command):
             and DIGEST_RE.fullmatch(cmd[2]) and DIGEST_RE.fullmatch(cmd[3])
             and SESSION_ID_RE.fullmatch(cmd[4])):
         return "send-session", (int(cmd[1]), cmd[2], cmd[3], cmd[4])
+    if (len(cmd) == 3 and cmd[0] == "receipts" and SESSION_ID_RE.fullmatch(cmd[1])
+            and RECEIPT_SINCE_RE.fullmatch(cmd[2])):
+        return "receipts", (cmd[1], float(cmd[2]))
+    if cmd == ["inbox-mux"]:
+        return "inbox-mux", None
     if (len(cmd) == 2 and cmd[0] in ("inbox", "reply-inbox") and valid_inbox_name(cmd[1])
             and original_command == f"{cmd[0]} {cmd[1]}"):
         return cmd[0], cmd[1]
@@ -240,10 +249,11 @@ def codex_holder_dead(d, holders):
 def entries():
     holders = []
     for f in os.listdir(os.path.expanduser(SESS)):
-        m = re.fullmatch(r"(\d+)\.json", f)
+        m = re.fullmatch(r"(\d+)(?:\.([0-9a-f]{16}))?\.json", f)
         if not m:
             continue
         pid = int(m.group(1))
+        tag = m.group(2)
         try:
             with open(os.path.join(os.path.expanduser(SESS), f), encoding="utf-8") as fh:
                 d = json.load(fh)
@@ -252,6 +262,15 @@ def entries():
         if not isinstance(d, dict) or d.get("pid") != pid or not _liveness().entry_live(d) or mirror_orphaned(d):
             continue
         if codex_holder_dead(d, holders):
+            continue
+        if tag is not None:
+            # An inbox-mux entry: one process owns many names, so the key is the one for this socket.
+            sock = d.get("messagingSocketPath")
+            key = key_file_name(pid, sock) if isinstance(sock, str) else ""
+            if tag != name_digest(str(d.get("name"))) or not os.path.isfile(
+                    os.path.join(os.path.expanduser(SESS), key)):
+                continue
+            yield pid, d, key
             continue
         keys = [k for k in os.listdir(os.path.expanduser(SESS)) if k.startswith(f"{pid}.") and k.endswith(".key")]
         if len(keys) != 1:
@@ -554,7 +573,55 @@ def send_batch(pid, expected_digest=None, expected_name_digest=None, expected_se
             reply = {"ok": True}
         except Exception as e:  # pywintypes.error is not an OSError subclass
             reply = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        if reply["ok"] and expected_session_id:
+            record_receipt(expected_session_id, line)
         print(json.dumps(reply), flush=True)
+
+
+RECEIPT_KEEP = 500
+RECEIPT_SINCE_RE = re.compile(r"\d{1,12}(?:\.\d{1,6})?")
+
+
+def receipts_path():
+    return settings_home() / "unimatrix" / "receipts.jsonl"
+
+
+def record_receipt(session_id, line, now=None):
+    """Append one receipt (session id, sha256 of the line sans newline; never the text), trimmed to RECEIPT_KEEP.
+
+    Advisory: a failed write never fails the delivery it records, and relays racing the
+    read-trim-write can drop a row."""
+    import time
+    stamp = time.time() if now is None else now
+    row = {"session": session_id, "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest(), "at": stamp,
+           "ts": datetime.fromtimestamp(stamp).astimezone().isoformat(timespec="seconds")}
+    path = receipts_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        rows = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        rows = (rows + [json.dumps(row)])[-RECEIPT_KEEP:]
+        tmp = path.with_name(f"{path.name}.tmp{os.getpid()}")
+        tmp.write_text("\n".join(rows) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
+def receipts(session_id, since):
+    """`receipts <session-id> <since>`: this box's receipt rows for the session at or after epoch `since`."""
+    try:
+        lines = receipts_path().read_text(encoding="utf-8").splitlines()
+    except OSError:
+        lines = []
+    rows = []
+    for raw in lines:
+        try:
+            row = json.loads(raw)
+        except ValueError:
+            continue
+        if isinstance(row, dict) and row.get("session") == session_id and (row.get("at") or 0) >= since:
+            rows.append(row)
+    return {"ok": True, "rows": rows}
 
 
 def pid_domain():
@@ -602,19 +669,20 @@ def superseded_holder(d, client):
     return bool(client) and isinstance(recorded, str) and recorded == client
 
 
-def check_name_free(name, client=""):
+def check_name_free(name, client="", own_pid=None):
     """Exit unless `name` is neither a live local session nor held by a live mirror relay.
 
     Returns (pid, key file, kill) for each mirror holder of `name` that does not count as a
     holder: a recycled-pid corpse (kill False) or a live relay superseded by `client`'s own
-    reconnect (kill True).
+    reconnect (kill True). `own_pid` (the inbox-mux process) never counts as another holder.
     """
     live = list(entries())
     if any(d.get("name") == name and not d.get("unimatrixMirror") for _, d, _ in live):
         sys.exit(f"name {name} belongs to a live local session")
     # A second live mirror would duplicate the name, and its bind would orphan the older
     # relay on an unlinked socket; the caller stops the old one first.
-    mirrors = [(p, d, k) for p, d, k in live if d.get("name") == name and d.get("unimatrixMirror")]
+    mirrors = [(p, d, k) for p, d, k in live
+               if d.get("name") == name and d.get("unimatrixMirror") and p != own_pid]
     freed = [(p, k, False) for p, d, k in mirrors if stale_holder(p, d)]
     freed += [(p, k, True) for p, d, k in mirrors
               if p not in {f[0] for f in freed} and superseded_holder(d, client)]
@@ -633,7 +701,8 @@ def drop_stale(freed):
                 os.kill(pid, signal.SIGTERM)
             except OSError:
                 pass
-        for f in (f"{pid}.json", key):
+        mux_entries = [f for f in os.listdir(base) if re.fullmatch(rf"{pid}\.[0-9a-f]{{16}}\.json", f)]
+        for f in (f"{pid}.json", key, *mux_entries):
             try:
                 os.unlink(os.path.join(base, f))
             except OSError:
@@ -675,39 +744,64 @@ def serve(srv, stdin_fd, out):
             if not os.read(stdin_fd, 4096):
                 return
             continue
-        c, _ = srv.accept()
-        buf = b""
-        while chunk := c.recv(65536):
-            buf += chunk
-        c.close()
-        if buf.strip():
-            out.write(buf.rstrip(b"\n") + b"\n")
-            out.flush()
+        forward_one(srv, lambda buf: (out.write(buf), out.flush()))
+
+
+def forward_one(srv, emit):
+    """Accept one connection on `srv`, drain it, and pass the newline-terminated payload to `emit`."""
+    c, _ = srv.accept()
+    buf = b""
+    while chunk := c.recv(65536):
+        buf += chunk
+    c.close()
+    if buf.strip():
+        emit(buf.rstrip(b"\n") + b"\n")
 
 
 UNSUPPORTED_HOST_RC = 3  # unimatrix-inbox.py and unimatrix-mirror-all.py match this exit code
 
 
-def inbox(name, export_reply=False):
-    if not valid_inbox_name(name):
-        sys.exit("inbox: name must use 1-64 ASCII letters, digits, '_', '-', or interior single dots")
+def check_inbox_host(mode):
+    """Exit UNSUPPORTED_HOST_RC where mirror sessions cannot be hosted (pipe endpoints)."""
     if endpoint_kind() == "pipe":
-        print("inbox: mirror sessions are hosted on macOS/Linux boxes only", file=sys.stderr)
+        print(f"{mode}: mirror sessions are hosted on macOS/Linux boxes only", file=sys.stderr)
         sys.exit(UNSUPPORTED_HOST_RC)
-    raw = json.loads(sys.stdin.readline())
+
+
+class Mirror:
+    """One registered inbox name: its bound socket and the registry files it owns."""
+
+    def __init__(self, srv, path, our_ino, entry_path, key_path):
+        self.srv, self.path, self.our_ino = srv, path, our_ino
+        self.entry_path, self.key_path = entry_path, key_path
+
+    def release(self):
+        release(self.path, self.our_ino, [self.entry_path, self.key_path])
+
+    def retire(self):
+        """Release, and close the listening socket: a mux process outlives each name it hosts."""
+        self.release()
+        self.srv.close()
+
+
+def register_name(name, raw, key_body, export_reply=False, mux=False):
+    """Register mirror `name`: free-check, stale-marker clear, socket, registry entry and peer key.
+
+    Both `inbox` (one name per process) and `inbox-mux` (many) run exactly this. `mux` names the
+    entry `{pid}.{name digest}.json` so several entries can share the process pid.
+    """
     if not isinstance(raw, dict):
         sys.exit("inbox: refused: entry is not a JSON object")
     if raw.get("name") not in (None, name):
         sys.exit(f"inbox: refused: entry names {raw.get('name')!r} not {name!r}")
+    pid = os.getpid()
     client = client_address()
-    drop_stale(check_name_free(name, client))
+    drop_stale(check_name_free(name, client, own_pid=pid) if mux else check_name_free(name, client))
     try:
         os.unlink(stale_marker_path(name))
     except OSError:
         pass
     entry = mirror_entry(raw, name)
-    key_body = sys.stdin.readline().rstrip("\n")
-    pid = os.getpid()
     os.makedirs(SOCKS, mode=0o700, exist_ok=True)
     path = f"{SOCKS}/unimatrix-{name}.sock"
     if os.path.exists(path):
@@ -715,28 +809,122 @@ def inbox(name, export_reply=False):
     srv = socket.socket(socket.AF_UNIX)
     srv.bind(path)
     os.chmod(path, 0o600)  # bind honours umask; other local users must not reach the far session
-    our_ino = os.stat(path).st_ino
-    srv.listen(8)
-    # Raw ps output: the harness compares it byte for byte, padded one-digit day included.
-    ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
-                        capture_output=True, text=True, check=True).stdout.strip()
-    entry.update(pid=pid, procStart=ps, pidDomain=pid_domain(),
-                 messagingSocketPath=path, unimatrixMirror=True, unimatrixClient=client)
-    if export_reply:
-        # This field is intentionally absent from MIRROR_FIELDS: only explicit mode
-        # selection can opt in, never an untrusted registration payload.
-        entry["unimatrixReplyInbox"] = True
-    entry_path = os.path.join(os.path.expanduser(SESS), f"{pid}.json")
-    key_path = os.path.join(os.path.expanduser(SESS), key_file_name(pid, path))
-    with open(entry_path, "w", encoding="utf-8") as fh:
-        json.dump(entry, fh)
-    helpers = load_roster()
-    helpers.write_peer_key(key_path, helpers.local_peer_key(
-        key_body, entry["procStart"], entry["pidDomain"]))
+    entry_path = key_path = None
     try:
-        serve(srv, sys.stdin.fileno(), sys.stdout.buffer)
+        our_ino = os.stat(path).st_ino
+        srv.listen(8)
+        # Raw ps output: the harness compares it byte for byte, padded one-digit day included.
+        ps = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                            capture_output=True, text=True, check=True).stdout.strip()
+        entry.update(pid=pid, procStart=ps, pidDomain=pid_domain(),
+                     messagingSocketPath=path, unimatrixMirror=True, unimatrixClient=client)
+        if export_reply:
+            # This field is intentionally absent from MIRROR_FIELDS: only explicit mode
+            # selection can opt in, never an untrusted registration payload.
+            entry["unimatrixReplyInbox"] = True
+        base = os.path.expanduser(SESS)
+        entry_path = os.path.join(base, f"{pid}.{name_digest(name)}.json" if mux else f"{pid}.json")
+        key_path = os.path.join(base, key_file_name(pid, path))
+        with open(entry_path, "w", encoding="utf-8") as fh:
+            json.dump(entry, fh)
+        helpers = load_roster()
+        helpers.write_peer_key(key_path, helpers.local_peer_key(
+            key_body, entry["procStart"], entry["pidDomain"]))
+    except BaseException:
+        srv.close()
+        for leaked in (path, entry_path, key_path):
+            try:
+                if leaked:
+                    os.unlink(leaked)
+            except OSError:
+                pass
+        raise
+    return Mirror(srv, path, our_ino, entry_path, key_path)
+
+
+def inbox(name, export_reply=False):
+    if not valid_inbox_name(name):
+        sys.exit("inbox: name must use 1-64 ASCII letters, digits, '_', '-', or interior single dots")
+    check_inbox_host("inbox")
+    raw = json.loads(sys.stdin.readline())
+    key_body = sys.stdin.readline().rstrip("\n")
+    m = register_name(name, raw, key_body, export_reply=export_reply)
+    try:
+        serve(m.srv, sys.stdin.fileno(), sys.stdout.buffer)
     finally:
-        release(path, our_ino, [entry_path, key_path])
+        m.release()
+
+
+def _emit_frame(out, name, frame=None, error=None):
+    obj = {"name": name, "frame": frame} if error is None else {"name": name, "error": error}
+    out.write(json.dumps(obj).encode() + b"\n")
+    out.flush()
+
+
+def _mux_apply(frame, mirrors, out):
+    """Apply one add/drop/data frame from the near client to the `mirrors` table."""
+    if not isinstance(frame, dict):
+        return
+    op, name = frame.get("op"), frame.get("name")
+    if op not in ("add", "drop", "data") or not valid_inbox_name(name):
+        return
+    if op == "data":
+        return  # the near side has nothing to deliver to a mirror; inbox ignores stdin the same way
+    if name in mirrors:
+        mirrors.pop(name).retire()
+    if op == "drop":
+        return
+    try:
+        mirrors[name] = register_name(name, frame.get("entry"), str(frame.get("key") or ""), mux=True)
+    except SystemExit as e:
+        _emit_frame(out, name, error=str(e.code))
+    except Exception as e:  # one name's bind/ps/write failure must not end the process hosting every name
+        _emit_frame(out, name, error=f"{type(e).__name__}: {e}")
+
+
+def _wrap_line(name, out):
+    def emit(buf):
+        for line in buf.splitlines():
+            try:
+                frame = json.loads(line)
+            except ValueError:
+                frame = line.decode("utf-8", "replace")
+            _emit_frame(out, name, frame=frame)
+    return emit
+
+
+def serve_mux(stdin_fd, out):
+    """Serve every registered name's socket and the add/drop frame stream; return at stdin EOF.
+
+    Single-threaded: a sender that holds a connection open stalls every name and the frame stream."""
+    mirrors, pending = {}, b""
+    try:
+        while True:
+            socks = {m.srv: n for n, m in mirrors.items()}
+            ready, _, _ = select.select([*socks, stdin_fd], [], [])
+            if stdin_fd in ready:
+                chunk = os.read(stdin_fd, 65536)
+                if not chunk:
+                    return
+                pending += chunk
+                *lines, pending = pending.split(b"\n")
+                for line in lines:
+                    try:
+                        _mux_apply(json.loads(line), mirrors, out)
+                    except ValueError:
+                        continue
+                continue
+            for srv in ready:
+                if srv in socks:
+                    forward_one(srv, _wrap_line(socks[srv], out))
+    finally:
+        for m in mirrors.values():
+            m.retire()
+
+
+def inbox_mux():
+    check_inbox_host("inbox-mux")
+    serve_mux(sys.stdin.fileno(), sys.stdout.buffer)
 
 
 def receive_grant():
@@ -987,11 +1175,53 @@ def managed_key_body(line):
     return key.group(1) if key else None
 
 
-def relay_line(key_body, box):
+HOMEBREW_PYTHONS = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3")  # literal: the relay must run without lib/ beside it
+PIN_KEY = "unimatrix.python"
+_PIN_UNREAD = object()
+_PIN_CACHE = {}
+
+
+def _pin_value():
+    """The machine-local `unimatrix.python` value when it names a file, else None; one read per settings home."""
+    home = str(settings_home())
+    if home not in _PIN_CACHE:
+        reader = settings_home() / "bin" / "_machine_local.py"
+        val = None
+        if reader.is_file():
+            try:
+                r = subprocess.run([sys.executable, str(reader), "get", PIN_KEY], capture_output=True, text=True,
+                                   timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                val = os.path.expanduser(r.stdout.strip()) if not r.returncode and r.stdout.strip() else None
+            except (OSError, subprocess.SubprocessError):
+                val = None
+        _PIN_CACHE[home] = val if val and os.path.isfile(val) else None
+    return _PIN_CACHE[home]
+
+
+def forced_command_interpreter(pin_value=_PIN_UNREAD):
+    """The interpreter the forced command runs: the `unimatrix.python` pin, else a Homebrew python3 on
+    darwin (sshd's PATH python3 there is the CLT stub), else the console python; `sys.executable` last."""
+    if pin_value is _PIN_UNREAD:
+        pin_value = _pin_value()
+    lib = Path(__file__).resolve().parent / "lib" / "python_interp.py"
+    if lib.is_file():
+        found = _load_sibling("lib/python_interp.py", "unimatrix_relay_python_interp").unimatrix_python(
+            pin_value, homebrew=HOMEBREW_PYTHONS)
+    elif pin_value:
+        found = pin_value
+    elif sys.platform == "darwin":
+        found = next((p for p in HOMEBREW_PYTHONS if os.path.isfile(p) and os.access(p, os.X_OK)), None)
+    else:
+        found = None
+    return found or sys.executable
+
+
+def relay_line(key_body, box, pin_value=_PIN_UNREAD):
     """The restrict line for `key_body` with this copy's interpreter and path, quoted as the installer does.
 
     `--peer <box>` pins the calling member into the forced command."""
-    parts = [f'\\"{p}\\"' if " " in p else p for p in (sys.executable, str(Path(__file__).resolve()))]
+    interp = forced_command_interpreter(pin_value)
+    parts = [f'\\"{p}\\"' if " " in p else p for p in (interp, str(Path(__file__).resolve()))]
     parts += ["--peer", box]
     return f'restrict,command="{" ".join(parts)}" ssh-ed25519 {key_body} unimatrix'
 
@@ -1202,7 +1432,7 @@ def probe_specs(platform=None):
 def main():
     parsed = parse_mode(os.environ.get("SSH_ORIGINAL_COMMAND", ""))
     if parsed is None:
-        sys.exit("usage: roster | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | inbox <name> | reply-inbox <name> | source | "
+        sys.exit("usage: roster | specs | send <pid> | send-batch <pid> | send-to <pid> <digest> | send-named <pid> <digest> <name-digest> | send-session <pid> <digest> <name-digest> <session-id> | receipts <session-id> <since> | inbox <name> | inbox-mux | reply-inbox <name> | source | "
                  "grant <grantee> <note> <ttl> <repo> | membership get | membership put")
     mode, arg = parsed
     if mode == "membership":
@@ -1231,6 +1461,8 @@ def main():
         roster()
     elif mode == "specs":
         print(json.dumps(probe_specs()))
+    elif mode == "receipts":
+        print(json.dumps(receipts(*arg)))
     elif mode == "send":
         send(arg)
     elif mode == "send-batch":
@@ -1240,6 +1472,8 @@ def main():
     elif mode == "source":
         # Far boxes vendor this relay; serving our own text keeps syncs off the full-shell key.
         sys.stdout.buffer.write(Path(__file__).read_bytes())
+    elif mode == "inbox-mux":
+        inbox_mux()
     else:
         inbox(arg, export_reply=mode == "reply-inbox")
 

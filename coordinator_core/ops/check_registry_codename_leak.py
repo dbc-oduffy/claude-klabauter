@@ -45,6 +45,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import List, Optional, Sequence
 
@@ -167,7 +168,51 @@ def _resolve_registry_keys(env: dict) -> List[str]:
     if override:
         return [tok for tok in re.split(r"[ \t\n]+", override.strip()) if tok]
 
-    return sorted(key for key in _merged_flat_registry() if key.startswith("repos."))
+    return sorted(
+        key
+        for key, value in _merged_flat_registry().items()
+        if key.startswith("repos.")
+        and not _is_throwaway_path(value)
+        and not _is_common_word(key[len("repos."):])
+    )
+
+
+# Path components that mark a throwaway location, whatever the OS or drive.
+_THROWAWAY_COMPONENTS = frozenset({"scratch", "scratchpad"})
+
+# Ordinary English / generic scaffold words: a registry slug equal to one of
+# these would match prose in any tree, so it is never a private codename.
+# Whole-slug match only (`_`/`-` normalised); `probe_pkg` is not listed.
+_COMMON_WORD_SLUGS = frozenset(
+    {
+        "probe", "test", "tests", "demo", "sample", "example", "foo", "bar", "baz",
+        "tmp", "temp", "scratch", "sandbox", "playground", "app", "lib", "tool",
+        "tools", "project", "repo", "work", "build", "data", "docs", "src",
+    }
+)
+
+
+def _norm_path(value: str) -> str:
+    return value.replace("\\", "/").rstrip("/").lower()
+
+
+def _is_throwaway_path(value: object) -> bool:
+    """True when a registry value is a path under a temp or scratch root:
+    the OS temp dir (`tempfile.gettempdir`) or any `scratch`/`scratchpad`
+    path component. Non-string values are never throwaway."""
+    if not isinstance(value, str) or not value:
+        return False
+    norm = _norm_path(value)
+    if any(part in _THROWAWAY_COMPONENTS for part in norm.split("/")):
+        return True
+    raw = tempfile.gettempdir()
+    # The registry may hold the long form of a temp path whose gettempdir() is an 8.3 short name.
+    roots = {_norm_path(raw), _norm_path(os.path.realpath(raw))}
+    return any(norm == root or norm.startswith(root + "/") for root in roots)
+
+
+def _is_common_word(slug: str) -> bool:
+    return slug.replace("-", "_").lower() in _COMMON_WORD_SLUGS
 
 
 def _is_probably_binary(path: Path) -> bool:
@@ -275,7 +320,7 @@ def main(argv: Optional[List[str]] = None, env: Optional[dict] = None) -> int:
     leak_slugs: List[str] = []
     for key in registry_keys:
         slug = key[len("repos."):] if key.startswith("repos.") else key
-        if _is_kept(slug, no_exempt=no_exempt):
+        if _is_kept(slug, no_exempt=no_exempt) or _is_common_word(slug):
             continue
         leak_slugs.append(slug)
 

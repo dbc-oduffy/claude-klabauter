@@ -75,6 +75,18 @@ def _first_pwsh(env: Mapping[str, str]) -> str | None:
     return None
 
 
+def is_windowsapps_path(path: str | os.PathLike[str]) -> bool:
+    """True when `path` has a `WindowsApps` component, case-insensitively and on any host."""
+    parts = os.path.normcase(os.fspath(path)).lower().replace("\\", "/").split("/")
+    return "windowsapps" in parts
+
+
+def alias_first_pwsh(env: Mapping[str, str]) -> str | None:
+    """Return the first-resolving pwsh.exe path when it sits under a WindowsApps component, else None."""
+    found = _first_pwsh(env)
+    return found if found is not None and is_windowsapps_path(found) else None
+
+
 def check_pwsh_launchable(env: Mapping[str, str]) -> None:
     """Raise SandboxSetupRefused when the child PATH resolves no launchable pwsh.exe on Windows.
 
@@ -85,7 +97,7 @@ def check_pwsh_launchable(env: Mapping[str, str]) -> None:
     if not _is_windows():
         return
     found = _first_pwsh(env)
-    if found is not None and "windowsapps" not in os.path.normcase(found).split(os.sep):
+    if found is not None and not is_windowsapps_path(found):
         return
     root = next((v for k, v in env.items() if k.upper() == "PROGRAMFILES" and v), "%ProgramFiles%")
     install = os.path.join(root, "PowerShell", "7")
@@ -100,7 +112,7 @@ def _atomic_write_json(path: Path, data: object) -> None:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.write_text(json.dumps(data), encoding="utf-8", newline="\n")
         os.replace(tmp, path)
     except OSError:
         pass

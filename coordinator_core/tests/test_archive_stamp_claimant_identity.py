@@ -61,8 +61,15 @@ import coordinator_core.ops.session.record_pickup  # noqa: F401 — @register_op
 
 import coordinator_core.archive_stamp as arstamp
 from coordinator_core.session import harness_registry
-from coordinator_core.tests._fixtures import init_repo as _init_repo
+from coordinator_core.tests._fixtures import init_repo as _shared_init_repo
 from coordinator_core.tests._fixtures import run_git as _git
+
+
+def _init_repo(repo):
+    """Fixture repo on a work branch: memo.transition refuses a default-branch HEAD."""
+    _shared_init_repo(repo)
+    _git(repo, "checkout", "-b", "work/test/2026-01-01")
+
 
 pytestmark = [
     pytest.mark.spawns_process,

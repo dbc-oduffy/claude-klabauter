@@ -157,6 +157,41 @@ def test_reverted_tests_and_landed_test_file_itself_are_implicated(tmp_path):
     assert len(landing_targeted_tests.reverify_red_findings(tmp_path, p, [TEST])) == 1
 
 
+def _stale_zero_run_tree(root: Path) -> None:
+    import json
+
+    (root / ".git").mkdir()
+    (root / ".git" / "HEAD").write_text("a" * 40 + "\n", encoding="utf-8")
+    path = li.fresh_verdict_path(root, "r1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_id": "r1", "status": "stale", "note": "no targeted set recorded"}), encoding="utf-8")
+
+
+def _gate_params(**reverify) -> dict:
+    return {"targeted_tests": {"status": "fail", "tests_failed": 1, "baseline": None},
+            "inline_review": {landing_targeted_tests.REVERIFY_KEY: reverify}}
+
+
+def test_stale_zero_run_record_does_not_outvote_a_clean_passing_reverify(tmp_path):
+    _stale_zero_run_tree(tmp_path)
+    params = _gate_params(status_before="fail", status_after="pass", failing=[])
+    assert li.landing_test_gate(tmp_path, params, "r1") == ([], "pass-on-retest")
+
+
+def test_stale_zero_run_record_with_failing_reverify_refuses_naming_the_node(tmp_path):
+    _stale_zero_run_tree(tmp_path)
+    params = _gate_params(status_before="fail", status_after="fail", failing=[f"{TEST}::test_a"])
+    findings, check = li.landing_test_gate(tmp_path, params, "r1")
+    assert check == "failed" and f"{TEST}::test_a" in findings[0].detail
+
+
+def test_stale_zero_run_record_with_no_reverify_still_refuses_unattributed(tmp_path):
+    _stale_zero_run_tree(tmp_path)
+    params = {"targeted_tests": {"status": "fail", "tests_failed": 1, "baseline": None}}
+    findings, check = li.landing_test_gate(tmp_path, params, "r1")
+    assert check == "failed" and "(stale) ran no tests" in findings[0].detail
+
+
 _INV = "coordinator_core/tests/test_inv.py::test_inv"
 _BASE_RED = "coordinator_core/tests/test_other.py::test_other"
 

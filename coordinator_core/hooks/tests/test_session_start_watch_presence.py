@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from coordinator_core.hooks import session_start_watch_presence as mod
 from coordinator_core.ipc import _REGISTRY
 
@@ -55,6 +57,56 @@ def _stamp_heartbeat(root, sid, now, ahead=300):
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_real_roster(monkeypatch):
+    monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: None)
+
+
+_REMOTE = {
+    "session_id": "64ee648d-remote",
+    "peer_name": "group-em-56",
+    "live": True,
+    "remote": True,
+    "box_id": "box-win",
+}
+
+
+def test_stale_local_holder_with_live_remote_gem_names_the_remote_gem(monkeypatch, tmp_path):
+    home = tmp_path / "home"
+    home.mkdir()
+    stale = "1152426d-cb66-46bb-9a41-6de53e4f3a70"
+    _box(monkeypatch, home, sid=stale, live=False)
+    monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: dict(_REMOTE))
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "group-em-56" in out and "box-win" in out
+    assert "vacant" not in out.lower() and stale not in out
+
+
+def test_no_local_holder_with_live_remote_gem_names_the_remote_gem(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
+    monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: dict(_REMOTE))
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "group-em-56" in out and "GROUP EM WATCH: UNKNOWN" in out
+
+
+def test_live_local_holder_is_not_overridden_by_the_roster(monkeypatch, tmp_path):
+    import time
+
+    home = tmp_path / "home"
+    _stamp_heartbeat(home, "sid-live", time.time())
+    _box(monkeypatch, home)
+    monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: dict(_REMOTE))
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "group-em-ad" in out and "GROUP EM WATCH: armed" in out and "group-em-56" not in out
+
+
+def test_local_fleet_holder_hit_is_not_treated_as_remote(monkeypatch, tmp_path):
+    monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
+    monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: {**_REMOTE, "remote": False})
+    out = mod.compute_context({"cwd": str(tmp_path)})
+    assert "no live holder on record" in out and "group-em-56" not in out
+
+
 def _box(monkeypatch, root, sid="sid-live", live=True):
     monkeypatch.setattr(
         mod.nomination,
@@ -102,6 +154,19 @@ def test_heartbeat_of_another_holder_is_unknown(monkeypatch, tmp_path):
     _box(monkeypatch, home)
     out = mod.compute_context({"cwd": str(tmp_path)})
     assert "UNKNOWN" in out and "armed" not in out
+
+
+def test_stale_record_holder_names_live_box_holder_never_vacant(monkeypatch, tmp_path):
+    import time
+
+    home = tmp_path / "home"
+    stale = "1152426d-cb66-46bb-9a41-6de53e4f3a70"
+    _stamp_heartbeat(home, stale, time.time() - 99999, ahead=60)
+    _box(monkeypatch, home, sid="41d000-live")
+    result = mod._handler({"cwd": str(tmp_path)})
+    out = result["hookSpecificOutput"]["additionalContext"]
+    assert "group-em-ad" in out and "vacant" not in out.lower()
+    assert stale not in out
 
 
 def test_dead_holder_is_unknown_and_unnamed(monkeypatch, tmp_path):

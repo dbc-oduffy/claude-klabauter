@@ -20,7 +20,7 @@ permission decision), both fail open to `no_advisory()`:
 "Answers for this repo" means a `.project-rag/graph.db` found walking up from
 the search root (`tool_input.path`, else `cwd`), via the same walk
 `example_retrieval_repo_detect` uses, or a `graph.db` under the settings home's
-`example-retrieval-repo/indexes/<repo-name>/root/` for the enclosing git repo. An MCP server
+`project-rag/indexes/<repo-name>/root/` for the enclosing git repo. An MCP server
 being configured is not enough; a repo without an index adds nothing to the call.
 
 Hot path: fires on every Grep/Glob, so the budget is file stats only — no git
@@ -182,7 +182,7 @@ _REPO_WALK_LEVELS = 8
 
 def _settings_indexed_repo_root(search_root: str) -> Optional[str]:
     """Repo root whose index lives under the settings home
-    (`example-retrieval-repo/indexes/<repo-name, '-'->'_'>/root/graph.db`, the layout
+    (`project-rag/indexes/<repo-name, '-'->'_'>/root/graph.db`, the layout
     `symbol_knowledge.leg.index_graph_db` reads). Stats only: the walk stops at the
     first `.git` entry."""
     from coordinator_core._settings_home import settings_home

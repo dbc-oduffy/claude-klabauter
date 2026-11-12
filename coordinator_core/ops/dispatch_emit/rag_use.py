@@ -20,6 +20,10 @@ DEBOUNCE_SECONDS = 180
 PROBE_INTERVAL_SECONDS = 60
 HALT_RAG_CORPUS_DOWN = "rag_corpus_down"
 DEGRADED = "degraded"
+# The checker made no example-retrieval-repo call: a checker-behaviour gap, not an outage.
+RAG_NOT_USED = "rag_not_used"
+# The checker transcript could not be located or read: unknown, not an outage.
+TRANSCRIPT_UNREADABLE = "transcript_unreadable"
 RESTORE_MESSAGE = (
     "example-retrieval-repo engine corpus is down: UE work will not succeed without it. "
     "Restore example-retrieval-repo, then refire this run."
@@ -150,17 +154,20 @@ def docs_check_rag_verdict(
     rag_refused: int = 0,
     engine_queryable: Optional[bool] = None,
 ) -> str:
-    """Gate verdict: "not_applicable", "ok", DEGRADED or HALT_RAG_CORPUS_DOWN.
+    """Gate verdict: "not_applicable", "ok", DEGRADED, RAG_NOT_USED or HALT_RAG_CORPUS_DOWN.
 
-    Down is definite only: no example-retrieval-repo call at all, engine_queryable False, or every call
-    failed with a refused connection. Any other failure set (timeouts, unclassified errors, or
-    any failure while engine_queryable is True) is DEGRADED; a partial failure that includes a
-    timeout is DEGRADED too. The gate op passes its `engine_queryable` param.
+    Down is definite only: engine_queryable False, or every call failed with a refused
+    connection. No example-retrieval-repo call at all is RAG_NOT_USED, never down. Any other failure set
+    (timeouts, unclassified errors, or any failure while engine_queryable is True) is DEGRADED;
+    a partial failure that includes a timeout is DEGRADED too. The gate op passes its
+    `engine_queryable` param.
     """
     if not ue or not rag_installed:
         return "not_applicable"
-    if rag_calls <= 0 or engine_queryable is False:
+    if engine_queryable is False:
         return HALT_RAG_CORPUS_DOWN
+    if rag_calls <= 0:
+        return RAG_NOT_USED
     if rag_failed >= rag_calls:
         if rag_refused > 0:
             return HALT_RAG_CORPUS_DOWN

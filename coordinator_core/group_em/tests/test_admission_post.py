@@ -26,6 +26,33 @@ def test_start_appends_one_line_with_live_pid(tmp_path, monkeypatch):
     assert line["run"] == "probe" and line["holder_session"] == "gem" and line["ts"] == 5.0
 
 
+_REMOTE = {"session_id": "remote-gem", "peer_name": "group-em-56", "live": True, "remote": True}
+
+
+def test_start_stamps_the_remote_live_gem_over_a_stale_local_holder(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "stale-local", "live": False})
+    monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: dict(_REMOTE))
+    r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
+    assert r["posted"] and r["holder_live"] is True
+    (line,) = _lines(tmp_path)
+    assert line["holder_session"] == "remote-gem"
+
+
+def test_start_keeps_the_stale_local_holder_when_no_live_gem_is_found(tmp_path, monkeypatch):
+    _holder(monkeypatch, {"session_id": "stale-local", "live": False})
+    monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: None)
+    r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
+    assert r["posted"] and r["holder_live"] is False
+    (line,) = _lines(tmp_path)
+    assert line["holder_session"] == "stale-local"
+
+
+def test_remote_gem_satisfies_require_holder_when_no_local_record(tmp_path, monkeypatch):
+    _holder(monkeypatch, None)
+    monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: dict(_REMOTE))
+    assert admission_post.post("START", "s1", [], directory=tmp_path)["posted"] is True
+
+
 def test_end_appends_second_line(tmp_path, monkeypatch):
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)

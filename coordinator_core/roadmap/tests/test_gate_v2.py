@@ -454,6 +454,7 @@ def test_baton_with_archived_plan_is_shipped_unstamped_not_a_candidate(root):
     assert report["shipped_unstamped"] == [{
         "id": "a", "path": "state/handoffs/a.md",
         "plan_path": "archive/specs/2026-10/p.md", "plan_status": "superseded",
+        "basis": "plan_terminal",
     }]
     assert report["waves"] == [["b"]] and report["counts"]["candidates"] == 1
 

@@ -633,3 +633,75 @@ def test_claim_with_a_known_session_id_is_accepted(known, repo_root, record_dir,
     monkeypatch.setattr(nomination.human_entry, "transcript_paths", lambda sid: paths)
     _REAL_CLAIM(repo_root, "sid-known", directory=record_dir, prompt_id="p-1")
     assert nomination.read_record(repo_root, record_dir)["session_id"] == "sid-known"
+
+
+_NOW = 1_800_000_000.0
+
+
+def _publish(record_dir, box_id, sessions, ok=True, fetched_at=_NOW):
+    nomination.remote_roster._write_snapshot(record_dir, box_id, ok, sessions, fetched_at)
+
+
+def _gem_row(sid="sid-remote", name="group-em-56", status="busy"):
+    return {"session_id": sid, "name": name, "cwd": "/x", "status": status, "address": "addr"}
+
+
+def _claim_local(repo_root, record_dir, monkeypatch, live):
+    _no_registry_name(monkeypatch)
+    _stub_live(monkeypatch, live, "live" if live else "pid_not_running")
+    nomination.claim(repo_root, "sid-local", peer_name="gem", directory=record_dir)
+
+
+def _fleet(record_dir):
+    return nomination.fleet_holder(record_dir, now=_NOW, local_id="box-me")
+
+
+def test_fleet_holder_names_the_remote_gem_when_the_local_holder_is_not_live(
+    repo_root, record_dir, monkeypatch
+):
+    _claim_local(repo_root, record_dir, monkeypatch, live=False)
+    _publish(record_dir, "box-win", [_gem_row(), _gem_row("sid-peer", "coordinator-content-repo-em")])
+    out = _fleet(record_dir)
+    assert out["session_id"] == "sid-remote" and out["peer_name"] == "group-em-56"
+    assert out["box_id"] == "box-win" and out["remote"] is True and out["live"] is True
+    assert nomination.box_holder(record_dir)["live"] is False
+
+
+def test_fleet_holder_prefers_the_live_local_holder(repo_root, record_dir, monkeypatch):
+    _claim_local(repo_root, record_dir, monkeypatch, live=True)
+    _publish(record_dir, "box-win", [_gem_row()])
+    out = _fleet(record_dir)
+    assert out["session_id"] == "sid-local" and out["remote"] is False
+
+
+def test_fleet_holder_is_none_when_no_box_shows_a_live_gem(repo_root, record_dir, monkeypatch):
+    _claim_local(repo_root, record_dir, monkeypatch, live=False)
+    assert _fleet(record_dir) is None
+    _publish(record_dir, "box-win", [_gem_row("sid-peer", "coordinator-content-repo-em")])
+    _publish(record_dir, "box-ended", [_gem_row(status="ended")])
+    assert _fleet(record_dir) is None
+
+
+def test_fleet_holder_ignores_an_unreachable_or_stale_snapshot(record_dir):
+    _publish(record_dir, "box-down", [_gem_row()], ok=False)
+    _publish(record_dir, "box-old", [_gem_row()], fetched_at=_NOW - 10_000)
+    assert _fleet(record_dir) is None
+
+
+def test_fleet_holder_with_no_local_record_still_finds_the_remote_gem(record_dir):
+    _publish(record_dir, "box-win", [_gem_row()])
+    assert _fleet(record_dir)["peer_name"] == "group-em-56"
+
+
+def test_fleet_holder_never_reports_this_boxs_own_snapshot_as_remote(record_dir):
+    _publish(record_dir, "box-me", [_gem_row()])
+    assert _fleet(record_dir) is None
+
+
+def test_fleet_holder_remote_tie_goes_to_the_session_the_local_holder_names(
+    repo_root, record_dir, monkeypatch
+):
+    _claim_local(repo_root, record_dir, monkeypatch, live=False)
+    _publish(record_dir, "box-a", [_gem_row("sid-other", "group-em-01")])
+    _publish(record_dir, "box-b", [_gem_row("sid-local", "group-em-02")])
+    assert _fleet(record_dir)["session_id"] == "sid-local"

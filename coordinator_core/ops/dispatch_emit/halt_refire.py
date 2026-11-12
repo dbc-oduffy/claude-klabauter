@@ -67,6 +67,8 @@ HAND_REPAIR_MARKERS = (
 )
 
 ALL_OWED_PREFIX = "Everything left is EM or operator work:"
+# A PARTIAL holder whose needed row waits on the holder's own dependents: only an EM discharge ends the hold.
+NEEDS_DOWNSTREAM_PREFIX = "Held rows need a row downstream of them:"
 
 EM_RULE_KEY = "em_rule"
 # The one rule for when the EM may act after a halt; the halt next_action emits it verbatim (same text, no paraphrase).
@@ -309,7 +311,7 @@ def refire_next_action_js(
             "  let _detail = null;",
             "  if (typeof _legacy === 'string') {",
             "    _detail = _legacy;",
-            f"    if (_legacy.startsWith({j(ALL_OWED_PREFIX)})) _input = {{ kind: 'em-discharge' }};",
+            f"    if ({j([ALL_OWED_PREFIX, NEEDS_DOWNSTREAM_PREFIX])}.some((_p) => _legacy.startsWith(_p))) _input = {{ kind: 'em-discharge' }};",
             "  } else if (_legacy && typeof _legacy === 'object') {",
             "    _input = Object.assign({}, _legacy, { kind: _legacyKind[_legacy.kind] || _legacy.kind, legacy_kind: _legacy.kind });",
             f"    _detail = {detail_js};",

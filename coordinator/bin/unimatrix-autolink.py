@@ -58,12 +58,16 @@ class InterpreterPinError(RuntimeError):
     """The `unimatrix.python` key names an interpreter that is not a file, or no console interpreter resolves."""
 
 
-def console_python():
-    """A real console CPython (never a pythonw or forwarder exe), or None."""
+def _interp():
     spec = importlib.util.spec_from_file_location("unimatrix_python_interp", HERE / "lib" / "python_interp.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    return mod.resolve_console_python()
+    return mod
+
+
+def console_python():
+    """A real console CPython (never a pythonw or forwarder exe), or None."""
+    return _interp().resolve_console_python()
 
 
 def pin_key_value(roster, run=subprocess.run):
@@ -83,19 +87,16 @@ def pin_key_value(roster, run=subprocess.run):
 
 def pinned_python(roster):
     """The one interpreter every supervisor and reader spawn uses: the `unimatrix.python` key when set (a
-    missing file is an InterpreterPinError naming the key), else the resolved console interpreter."""
+    missing file is an InterpreterPinError naming the key), else the shared `unimatrix_python` resolution."""
     home = str(roster.settings_home())
     if home not in _PINNED:
         val = pin_key_value(roster)
-        if val:
-            if not os.path.isfile(val):
-                raise InterpreterPinError(f"{PYTHON_KEY} names a missing interpreter: {val}")
-            _PINNED[home] = val
-        else:
-            exe = console_python()
-            if not exe:
-                raise InterpreterPinError(f"no console python resolves; set {PYTHON_KEY}")
-            _PINNED[home] = exe
+        if val and not os.path.isfile(val):
+            raise InterpreterPinError(f"{PYTHON_KEY} names a missing interpreter: {val}")
+        exe = _interp().unimatrix_python(val)
+        if not exe:
+            raise InterpreterPinError(f"no console python resolves; set {PYTHON_KEY}")
+        _PINNED[home] = exe
     return _PINNED[home]
 
 
@@ -231,6 +232,10 @@ def far_boxes_status(roster, guard=False):
                            capture_output=True, text=True, timeout=30, creationflags=roster.no_window())
     except (OSError, subprocess.SubprocessError, InterpreterPinError) as ex:
         return [], f"{REGISTRY_KEY} unreadable ({type(ex).__name__}); no supervisors started"
+    unset = r.returncode == 1 and (not (r.stderr or "").strip() or "not found in registry" in r.stderr)
+    if r.returncode and not unset:  # an uncaught reader crash also exits 1, hence the stderr check above
+        err = " ".join((r.stderr or "").split())[:200] or "none"
+        return [], f"{REGISTRY_KEY} read failed (reader rc={r.returncode}, stderr: {err}); no supervisors started"
     raw = r.stdout.strip() if not r.returncode else ""
     if not raw:
         return [], NO_ALIAS_REASON
@@ -697,6 +702,9 @@ def cmd_restart():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] in ("--help", "-h"):
+        print(__doc__)
+        return 0
     if argv == ["restart"]:
         return cmd_restart()
     try:

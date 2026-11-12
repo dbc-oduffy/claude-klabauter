@@ -1,4 +1,5 @@
 """Per-far-box single ssh carrier: one spawn for concurrent sends, HostKeyAlias + host-name argv, IP refusal."""
+import base64
 import importlib.util
 import json
 import subprocess
@@ -125,12 +126,11 @@ def test_every_ssh_argv_carries_the_host_key_alias_and_a_host_name(mux):
     assert "HostKeyAlias=farbox" in seen[0] and seen[0][-2] == "farbox" and seen[0][-1] == "roster"
 
 
-def test_an_ip_literal_remote_with_no_member_name_is_refused_naming_the_box(mux):
-    with pytest.raises(mux.IpLiteralRemote) as ex:
-        mux.for_remote("me@192.168.4.7", key="k", ip_hosts={})
-    assert ex.value.box == "192.168.4.7"
-    with pytest.raises(mux.IpLiteralRemote):
-        mux.channel("192", key="k", host="192.168.4.7")
+def test_an_ip_literal_remote_with_no_member_name_stays_on_the_ip_with_the_ip_as_host_key_alias(mux):
+    ch = mux.for_remote("me@192.168.4.7", key="k", ip_hosts={}, direct=True, mux_options=lambda h: [])
+    assert ch.host == "me@192.168.4.7" and ch.box == "192.168.4.7"
+    assert "HostKeyAlias=192.168.4.7" in mux.ssh_argv(ch.box, "k", ch.host, [])
+    assert mux.box_of("fe80::1") == "fe80--1"
 
 
 def test_an_ip_remote_with_a_member_name_is_addressed_by_that_name(mux):
@@ -159,3 +159,62 @@ def test_the_roster_poll_dials_by_name_with_the_host_key_alias(monkeypatch):
     monkeypatch.setattr(roster, "mux_options", lambda remote: [])
     roster._roster_once("example-fleet-pro", "k", None)
     assert "HostKeyAlias=example-fleet-pro" in seen[0] and seen[0][-2:] == ["example-fleet-pro", "roster"]
+
+
+def _inbox_client():
+    return _load(BIN / "unimatrix-inbox.py", "unimatrix_inbox_under_test")
+
+
+def _inbox_sessions(tmp_path, client, monkeypatch):
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    (sessions / "1.json").write_text('{"pid":1}')
+    (sessions / "1.test.key").write_text("test-token")
+    monkeypatch.setattr(client, "SESSIONS", str(sessions))
+
+
+def test_an_inbox_client_given_an_unmapped_ip_remote_with_no_membership_connects_on_the_ip(tmp_path, monkeypatch):
+    import io
+    from types import SimpleNamespace
+
+    client = _inbox_client()
+    _inbox_sessions(tmp_path, client, monkeypatch)
+    client._box_mux()
+    monkeypatch.setattr(sys.modules["unimatrix_box_mux"], "member_ip_hosts", lambda: {})
+    monkeypatch.setattr(client, "pick_remote", lambda *a: "me@192.168.0.116")
+    argv = []
+    proc = SimpleNamespace(stdin=io.BytesIO(), stdout=io.BytesIO(), stderr=io.BytesIO(), pid=7, wait=lambda: 0)
+    monkeypatch.setattr(client.subprocess, "Popen", lambda cmd, **kw: argv.append(cmd) or proc)
+    try:
+        client.main(["1", "temporary", str(tmp_path / "log"), "--remote", "me@192.168.0.116"])
+    finally:
+        client.log.close()
+    assert "HostKeyAlias=192.168.0.116" in argv[0] and "me@192.168.0.116" in argv[0]
+    assert "up, ssh pid 7" in (tmp_path / "log").read_text()
+
+
+def test_an_inbox_startup_exception_is_logged_before_it_propagates(tmp_path, monkeypatch):
+    client = _inbox_client()
+    _inbox_sessions(tmp_path, client, monkeypatch)
+
+    def boom(*a):
+        raise OSError("no route to far box")
+
+    monkeypatch.setattr(client, "pick_remote", boom)
+    try:
+        with pytest.raises(OSError):
+            client.main(["1", "temporary", str(tmp_path / "log"), "--remote", "me@192.168.0.116"])
+    finally:
+        client.log.close()
+    text = (tmp_path / "log").read_text()
+    assert "inbox failed" in text and "no route to far box" in text
+
+
+def test_a_crlf_signer_pin_has_the_same_fingerprint_as_the_lf_pin():
+    membership = _load(BIN / "unimatrix-membership.py", "unimatrix_membership_crlf")
+    body = base64.b64encode(b"\x00" * 32).decode()
+    line = f"ssh-ed25519 {body} signer"
+    lf = membership.fingerprint(line + "\n")
+    assert membership.fingerprint(line + "\r\n") == lf
+    with pytest.raises(membership.MembershipError):
+        membership.fingerprint(line + "\r\n" + line + "\r\n")

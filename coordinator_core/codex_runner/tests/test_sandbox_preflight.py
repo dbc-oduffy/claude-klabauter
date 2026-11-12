@@ -187,6 +187,31 @@ def test_no_pwsh_on_path_is_refused(tmp_path):
         sp.check_pwsh_launchable({"PATH": str(tmp_path / "empty")})
 
 
+def test_alias_first_pwsh_returns_alias_path_for_alias_first_path(tmp_path):
+    store = _pwsh_dir(tmp_path, "Microsoft", "WindowsApps")
+    good = _pwsh_dir(tmp_path, "pf", "PowerShell", "7")
+    env = {"PATH": os.pathsep.join([str(store), str(good)])}
+    assert sp.alias_first_pwsh(env) == os.path.join(str(store), "pwsh.exe")
+
+
+def test_alias_first_pwsh_none_when_real_first_or_absent(tmp_path):
+    store = _pwsh_dir(tmp_path, "Microsoft", "WindowsApps")
+    good = _pwsh_dir(tmp_path, "pf", "PowerShell", "7")
+    assert sp.alias_first_pwsh({"Path": os.pathsep.join([str(good), str(store)])}) is None
+    (tmp_path / "empty").mkdir()
+    assert sp.alias_first_pwsh({"PATH": str(tmp_path / "empty")}) is None
+
+
+@pytest.mark.parametrize("p", ["Users\\x\\AppData\\Local\\Microsoft\\WindowsApps", "/a/windowsapps/b", "x/WINDOWSAPPS"])
+def test_is_windowsapps_path_matches_component_on_any_host(p):
+    assert sp.is_windowsapps_path(p)
+
+
+@pytest.mark.parametrize("p", ["Program Files\\PowerShell\\7", "/a/windowsapps2/b", ""])
+def test_is_windowsapps_path_rejects_non_component(p):
+    assert not sp.is_windowsapps_path(p)
+
+
 def test_pwsh_check_is_noop_off_windows(tmp_path, monkeypatch):
     monkeypatch.setattr(sp, "_is_windows", lambda: False)
     sp.check_pwsh_launchable({"PATH": str(_pwsh_dir(tmp_path, "WindowsApps"))})

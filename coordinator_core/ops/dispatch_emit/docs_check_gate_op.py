@@ -1,11 +1,13 @@
 """`dispatch.docs_check_rag_gate`: did the docs-checker leg use example-retrieval-repo when it had to.
 
 Reads the docs-checker child's own transcript (no subprocess): a UE repo with
-Example-retrieval-repo installed whose docs-checker made no successful example-retrieval-repo call is `rag_corpus_down`; failures that were only timeouts yield `degraded`.
-An unlocatable or unreadable transcript on such a repo is also `rag_corpus_down`: unknown never
-passes a UE fact stage. Otherwise every `[rag:]`/`[live:]` citation in the checker's final text
+Example-retrieval-repo installed whose docs-checker had every call refused (or engine_queryable False) is
+`rag_corpus_down`; failures that were only timeouts yield `degraded`; a checker that made no
+Example-retrieval-repo call yields `rag_not_used`, and an unlocatable or unreadable transcript yields
+`transcript_unreadable`: neither is an outage, and each reply carries `branch` naming which fired.
+Otherwise every `[rag:]`/`[live:]` citation in the checker's final text
 must be backed by a tool call in any agent transcript of the run (`citation_unbacked` if not).
-Precedence: rag_corpus_down > citation_unbacked > degraded > ok.
+Precedence: rag_corpus_down > transcript_unreadable > citation_unbacked > rag_not_used > degraded > ok.
 """
 
 from __future__ import annotations
@@ -103,9 +105,15 @@ def _unbacked_citations(run_dir: Path, agent_id: str) -> list:
     return docs_check_citations.unbacked(cites, calls)
 
 
-def _down(reason: str, **extra: Any) -> dict:
-    return {"verdict": rag_use.HALT_RAG_CORPUS_DOWN, "message": rag_use.RESTORE_MESSAGE,
-            "reason": reason, **extra}
+def _unreadable(branch: str, reason: str, queryable: Any) -> dict:
+    """Verdict for a checker transcript that cannot be read: `branch` names which lookup missed.
+
+    Unknown is never an outage; only an explicit engine_queryable False is a definite down.
+    """
+    if queryable is False:
+        return {"verdict": rag_use.HALT_RAG_CORPUS_DOWN, "message": rag_use.RESTORE_MESSAGE,
+                "reason": reason, "branch": "engine_queryable_false"}
+    return {"verdict": rag_use.TRANSCRIPT_UNREADABLE, "reason": reason, "branch": branch}
 
 
 @register_op(OP_NAME)
@@ -113,9 +121,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """Verdict for the docs-checker leg `label` of run `run_id`.
 
     Params: ``repo_root``, ``run_id``, ``label``, optional ``session_id`` (else the caller's
-    session), optional bool ``engine_queryable`` (False is a definite down). Returns ``{verdict: not_applicable|ok|degraded|rag_corpus_down|citation_unbacked,
-    message?, reason?, rag_calls?, rag_failed?, rag_timeouts?, rag_refused?, unbacked?}``;
-    ``message`` is the restore text on ``rag_corpus_down``; ``degraded`` (timeout-only failures)
+    session), optional bool ``engine_queryable`` (False is a definite down). Returns ``{verdict: not_applicable|ok|degraded|rag_not_used|transcript_unreadable|rag_corpus_down|citation_unbacked,
+    message?, reason?, branch?, rag_calls?, rag_failed?, rag_timeouts?, rag_refused?, unbacked?}``;
+    ``message`` is the restore text on ``rag_corpus_down``; ``branch`` names which lookup or
+    count produced a down, unreadable or not-used verdict; ``degraded`` (timeout-only failures)
     halts nothing and still runs the citation check; ``unbacked`` lists the citations no run
     call backs.
     """
@@ -123,8 +132,9 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if not (rag_use.is_ue_repo(root) and rag_use.rag_installed(root)):
         return {"verdict": "not_applicable"}
     run_id, label = str(params.get("run_id") or ""), str(params.get("label") or "")
+    queryable = params.get("engine_queryable")
     if not run_id or not label:
-        return _down("run_id and label are required")
+        return _unreadable("params_missing", "run_id and label are required", queryable)
     try:
         from coordinator_core.session import core
         from coordinator_core.usage import agent_usage, run_locate
@@ -132,17 +142,26 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         session_id = str(params.get("session_id") or core.resolve_session_id(root) or "")
         session_dir = run_locate.session_dir_for(session_id) if session_id else None
         if session_dir is None:
-            return _down("session dir not located")
+            return _unreadable("session_dir_not_located", "session dir not located", queryable)
         located = _locate_agent(session_dir, run_id, label)
         if located is None:
-            return _down(f"no unique agent labelled {label!r} in a run naming {run_id!r}")
+            return _unreadable(
+                "agent_not_located",
+                f"no unique agent labelled {label!r} in a run naming {run_id!r}", queryable)
         run_dir, agent_id = located
+        from coordinator_core.workflow_watch.stall import _transcript_path
+
+        transcript = _transcript_path(run_dir, agent_id)
+        if transcript is None or os.path.getsize(transcript) == 0:
+            return _unreadable(
+                "transcript_missing", f"no transcript content for agent {agent_id!r}", queryable)
         row = agent_usage._agent_row(run_dir, agent_id, label)
-    except Exception as exc:  # noqa: BLE001 -- unknown never passes a UE fact stage
-        return _down(f"transcript unreadable: {type(exc).__name__}: {exc}")
+    except Exception as exc:  # noqa: BLE001 -- unknown is never an outage and never passes silently
+        return _unreadable(
+            "transcript_unreadable",
+            f"transcript unreadable: {type(exc).__name__}: {exc}", queryable)
     calls, failed = int(row.get("rag_calls") or 0), int(row.get("rag_failed") or 0)
     timeouts, refused = int(row.get("rag_timeouts") or 0), int(row.get("rag_refused") or 0)
-    queryable = params.get("engine_queryable")
     verdict = rag_use.docs_check_rag_verdict(
         ue=True, rag_installed=True, rag_calls=calls, rag_failed=failed,
         rag_timeouts=timeouts, rag_refused=refused,
@@ -154,7 +173,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     }
     if verdict == rag_use.HALT_RAG_CORPUS_DOWN:
         out["message"] = rag_use.RESTORE_MESSAGE
+        out["branch"] = "engine_queryable_false" if queryable is False else "all_calls_refused"
         return out
+    if verdict == rag_use.RAG_NOT_USED:
+        out["branch"] = "zero_rag_calls"
     missing = _unbacked_citations(Path(run_dir), agent_id)
     if missing:
         out["verdict"] = HALT_CITATION_UNBACKED

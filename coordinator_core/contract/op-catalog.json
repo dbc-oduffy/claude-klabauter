@@ -3999,7 +3999,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "coordinator_core.hooks.preuse_search_dispatch — PreToolUse(Read, Grep, Glob)\ndoor: the pre-fire survey deny, then advisories steering structural questions\nto example-retrieval-repo where it answers.\n\nFirst leg: `guard_em_prefire_survey.evaluate` may return a deny envelope for\nany of Read/Grep/Glob; it runs before the advisories so a denied call spends\nnone of them, and any failure in it is silence. Read gets no example-retrieval-repo\nadvice, only the turn-budget advisory.\n\nTwo kinds of advisory fire for Grep/Glob, both `context_only` (never a\npermission decision), both fail open to `no_advisory()`:\n\n  1. General — the first Grep/Glob per (session, agent) against a repo that\n     example-retrieval-repo answers for names the structural tools once.\n  2. Shape — a Grep whose pattern matches a `SHAPES` row (file outline,\n     definition, config key, call site, bare identifier) names the exact\n     tool for that shape, once per (session, agent, shape). The table is the\n     extension point: add a row, not a branch.\n\n\"Answers for this repo\" means a `.project-rag/graph.db` found walking up from\nthe search root (`tool_input.path`, else `cwd`), via the same walk\n`example_retrieval_repo_detect` uses, or a `graph.db` under the settings home's\n`example-retrieval-repo/indexes/<repo-name>/root/` for the enclosing git repo. An MCP server\nbeing configured is not enough; a repo without an index adds nothing to the call.\n\nHot path: fires on every Grep/Glob, so the budget is file stats only — no git\nspawn, no staleness probe (the advisory names `project_staleness_check`\ninstead of computing it). Sentinels live in the indexed repo's git common dir\nunder `.coordinator-local/coordinator-sessions/<session_id>/`; when that cannot be resolved the\nop stays silent rather than firing on every call.\n\nKill-switch: env COORDINATOR_HOOK_PREUSE_SEARCH_DISPATCH_DISABLED=1.\n\nOp contract: `params` is the flat PreToolUse payload dict (`tool_name`,\n`tool_input`, `session_id`, `cwd`, `agent_id`, …).\n\nSpec backlink: state/cross-repo/inbox/2026-09-25-coordinator-content-repo-em-example-retrieval-repo-adoption-hooks.md",
+      "description": "coordinator_core.hooks.preuse_search_dispatch — PreToolUse(Read, Grep, Glob)\ndoor: the pre-fire survey deny, then advisories steering structural questions\nto example-retrieval-repo where it answers.\n\nFirst leg: `guard_em_prefire_survey.evaluate` may return a deny envelope for\nany of Read/Grep/Glob; it runs before the advisories so a denied call spends\nnone of them, and any failure in it is silence. Read gets no example-retrieval-repo\nadvice, only the turn-budget advisory.\n\nTwo kinds of advisory fire for Grep/Glob, both `context_only` (never a\npermission decision), both fail open to `no_advisory()`:\n\n  1. General — the first Grep/Glob per (session, agent) against a repo that\n     example-retrieval-repo answers for names the structural tools once.\n  2. Shape — a Grep whose pattern matches a `SHAPES` row (file outline,\n     definition, config key, call site, bare identifier) names the exact\n     tool for that shape, once per (session, agent, shape). The table is the\n     extension point: add a row, not a branch.\n\n\"Answers for this repo\" means a `.project-rag/graph.db` found walking up from\nthe search root (`tool_input.path`, else `cwd`), via the same walk\n`example_retrieval_repo_detect` uses, or a `graph.db` under the settings home's\n`project-rag/indexes/<repo-name>/root/` for the enclosing git repo. An MCP server\nbeing configured is not enough; a repo without an index adds nothing to the call.\n\nHot path: fires on every Grep/Glob, so the budget is file stats only — no git\nspawn, no staleness probe (the advisory names `project_staleness_check`\ninstead of computing it). Sentinels live in the indexed repo's git common dir\nunder `.coordinator-local/coordinator-sessions/<session_id>/`; when that cannot be resolved the\nop stays silent rather than firing on every call.\n\nKill-switch: env COORDINATOR_HOOK_PREUSE_SEARCH_DISPATCH_DISABLED=1.\n\nOp contract: `params` is the flat PreToolUse payload dict (`tool_name`,\n`tool_input`, `session_id`, `cwd`, `agent_id`, …).\n\nSpec backlink: state/cross-repo/inbox/2026-09-25-coordinator-content-repo-em-example-retrieval-repo-adoption-hooks.md",
       "module": "coordinator_core.hooks",
       "name": "hooks.preuse_search_dispatch",
       "op_class": "mutating",
@@ -5726,11 +5726,29 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"repo.setup\" handler. See module docstring; returns the verdict dict.\n\ncoordinator_core.ops.repo_setup -- the \"repo.setup\" op: onboard ONE git work tree and return a verdict.\n\nPurpose: the deterministic half of DoE's repo-setup mechanics (detection, CLAUDE.md and\ndocs/README.md render, directories, .gitignore block, hooks, git config, substrate seeds, tripwire\ncopies) as one in-process op. The reply is the contract verdict ``{created, already_existed, open,\nneeds_attention}`` (``repo_setup_contract.VERDICT_SCHEMA``).\n\nParams: ``root`` (required; absolute path of a git work tree), ``answers`` (optional; dict or JSON\nstring, validated by ``repo_setup_contract.validate_answers``).\n\nNegative-spec:\n  - Does NOT spawn claude or any LLM session; the op itself spawns nothing beyond what the reused\n    single-repo helpers do.\n  - Does NOT write outside ``root``; a root that resolves to the Claude home is refused.\n  - Does NOT call ``ensure_hooks_fleet``: hooks are installed through\n    ``ensure_prepare_commit_msg_hook(root=<target>)`` only.\n  - Does NOT clobber: every file step is create-if-absent (the .gitignore step appends missing lines).\n  - Does NOT ask questions: a judgement call left to the PM is an ``open`` item.\n  - Slow or interactive steps (exec-summary generator, fleet memo registration, strategic seeds,\n    widened spawn tripwire) are ``open`` items carrying the manual command, never run here.",
+      "description": "JSON-RPC \"repo.setup\" handler. See module docstring; returns the verdict dict.\n\ncoordinator_core.ops.repo_setup -- the \"repo.setup\" op: onboard ONE git work tree and return a verdict.\n\nPurpose: the deterministic half of DoE's repo-setup mechanics (detection, CLAUDE.md and\ndocs/README.md render, directories, .gitignore block, hooks, git config, substrate seeds, tripwire\ncopies) as one in-process op. The reply is the contract verdict ``{created, already_existed, open,\nneeds_attention}`` (``repo_setup_contract.VERDICT_SCHEMA``).\n\nParams: ``root`` (required; absolute path of a git work tree), ``answers`` (optional; dict or JSON\nstring, validated by ``repo_setup_contract.validate_answers``), ``dry_run`` (optional explicit bool,\ndefault false; true reports what would be created and writes nothing). Any other param is refused.\n\nNegative-spec:\n  - Does NOT spawn claude or any LLM session; the op itself spawns nothing beyond what the reused\n    single-repo helpers do.\n  - Does NOT write outside ``root``; a root that resolves to the Claude home is refused.\n  - Does NOT call ``ensure_hooks_fleet``: hooks are installed through\n    ``ensure_prepare_commit_msg_hook(root=<target>)`` only.\n  - Does NOT clobber: every file step is create-if-absent (the .gitignore step appends missing lines).\n  - Does NOT ask questions: a judgement call left to the PM is an ``open`` item.\n  - Slow or interactive steps (exec-summary generator, fleet memo registration, strategic seeds,\n    widened spawn tripwire) are ``open`` items carrying the manual command, never run here.",
       "module": "coordinator_core.ops.repo_setup",
       "name": "repo.setup",
       "op_class": "mutating",
       "params_schema": {
+        "additionalProperties": false,
+        "properties": {
+          "answers": {
+            "type": [
+              "object",
+              "string"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean"
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
         "type": "object"
       },
       "summary": "JSON-RPC \"repo.setup\" handler. See module docstring; returns the verdict dict.",
@@ -5965,6 +5983,17 @@
         "type": "object"
       },
       "summary": "coordinator_core.ops.review_stamp — mint/check the plan's `review_stamp` record.",
+      "timeout_s": 30.0
+    },
+    {
+      "description": "JSON-RPC \"roadmap.baton_backfill\" handler. See module docstring.\n\ncoordinator_core.ops.roadmap_baton_backfill — JSON-RPC \"roadmap.baton_backfill\" operation.\n\nPurpose: thin RPC wrapper over ``coordinator_core.roadmap.baton_backfill``. Stamps\n``deployment_state: shipped`` + ``shipped_in`` onto open roadmap batons whose linked plan's rows\nall landed (hand-commits of halted runs included), and lands them in one commit.\n\nWire params:\n    dry_run (bool, optional, default true) — propose only; the tree stays byte-identical.\n    batons  (list[str], optional)          — narrow to these baton ids, stub ids, stems or paths.\n    met_by  (object, optional)             — {plan_path: {row_id: sha}} crediting still-open rows\n                                              to named commits (abbreviated shas accepted); each sha\n                                              must be an ancestor of HEAD or the whole call refuses.\n\nReply: {\"dry_run\", \"proposals\": [{baton, plan, shipped_in, rows_coded}], \"stamped\": [...],\n        \"refused\": {...}, \"commit_sha\"}.\n\nNegative-spec:\n  - Never reads git history to find commits; hand-commit credit comes only from ``met_by``.\n  - Never edits an archived or already-terminal baton, and never rewrites a ``deliverable_id``.\n  - Writes nothing when any ``met_by`` row is refused or its ancestry cannot be read.",
+      "module": "coordinator_core.ops.roadmap_baton_backfill",
+      "name": "roadmap.baton_backfill",
+      "op_class": "mutating",
+      "params_schema": {
+        "type": "object"
+      },
+      "summary": "JSON-RPC \"roadmap.baton_backfill\" handler. See module docstring.",
       "timeout_s": 30.0
     },
     {
@@ -6815,7 +6844,7 @@
       "timeout_s": 30.0
     },
     {
-      "description": "JSON-RPC \"workflow.pending_revisions\": params `run_id`, `plan` (both required).\n\nReplies `{rows: [{id, text}], drift: [ids], plan, sizing}`: register rows the plan's\n`register_claims.rows` omit, minus rows a recorded out-of-scope ruling withholds, and the ids\nwhose pinned text drifted. Refuses `{\"error\": str}` for an unemitted run, a run with no bound\nsizing, a sizing with no readable plan edge, a `plan` that is not that edge, claims that name\nanother sizing or carry no `rows` list, and a sizing with no register: never an empty reply\nfor an unreadable input.",
+      "description": "JSON-RPC \"workflow.pending_revisions\": params `run_id`, `plan` (both required).\n\nReplies `{rows: [{id, text, kind?}], drift: [ids], plan, sizing}`: register rows the plan's\n`register_claims.rows` omit, minus rows a recorded out-of-scope ruling withholds, then the run's\nlive revise notes no spine row executes (`kind: \"note\"`, see `unexecuted_notes`), and the ids\nwhose pinned text drifted. Refuses `{\"error\": str}` for an unemitted run, a run with no bound\nsizing, a sizing with no readable plan edge, a `plan` that is not that edge, claims that name\nanother sizing or carry no `rows` list, and a sizing with no register: never an empty reply\nfor an unreadable input. When the plan is readable and notes are owed, they ride in `rows` even\nunder a register refusal, which is then carried as `register_refusal`.",
       "module": "coordinator_core.ops.dispatch_emit.revise_absorb",
       "name": "workflow.pending_revisions",
       "op_class": "compute_only",

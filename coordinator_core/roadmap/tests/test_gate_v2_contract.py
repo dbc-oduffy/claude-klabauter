@@ -28,6 +28,18 @@ def test_report_keys_equal_requirement_9():
     )
 
 
+def test_shipped_entry_keys_pin_basis_and_coded_sha(tmp_path):
+    from coordinator_core.roadmap.tests.test_gate_v2 import baton
+    from coordinator_core.roadmap.tests.test_gate_v2_rows_landed import _coded, _plan
+
+    (tmp_path / "state/handoffs").mkdir(parents=True)
+    baton(tmp_path, "a", governing_plan=_plan(tmp_path, "p", [_coded()]))
+    baton(tmp_path, "b", governing_plan=_plan(tmp_path, "q", ["open"], status="implemented"))
+    entries = {e["id"]: e for e in gate_v2.compute_gate_report(tmp_path)["shipped_unstamped"]}
+    assert set(entries["a"]) == {"id", "path", "plan_path", "plan_status", "basis", "coded_sha"}
+    assert set(entries["b"]) == {"id", "path", "plan_path", "plan_status", "basis"}
+
+
 def test_no_struck_field_in_either_key_set():
     assert not (_STRUCK & gate_v2.BATON_REPORT_KEYS)
     assert not (_STRUCK & gate_v2.REPORT_KEYS)

@@ -272,6 +272,7 @@ PROTECTED_LITERALS = (
     "project_rag_scripts/",
     '"project_rag_scripts"',
     '"project-rag"',
+    "project-rag/indexes/",
     '"project_rag"',
     "'project_rag'",
     '"project_rag_ue_addon"',

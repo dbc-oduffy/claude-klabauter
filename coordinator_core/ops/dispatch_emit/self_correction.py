@@ -151,10 +151,13 @@ def classify_reds(
     reverted: Iterable[Mapping[str, Any]] | None = None,
     passed_at_base: Iterable[str] | None = None,
     diff_named: Iterable[str] | None = None,
+    foreign_red: Iterable[str] | None = None,
 ) -> RedSplit:
     """Split failing node ids into the run's own and foreign reds.
 
-    Red at base is foreign even in the write set: an id in `pre_existing`, or (outside
+    An id in `foreign_red` (the re-verify's evidenced outside-the-footprint culprit; a dict
+    iterates its node ids) is foreign ahead of every owned rule except `reverted[].tests`, and is
+    never `unverified`. Red at base is foreign even in the write set: an id in `pre_existing`, or (outside
     `own_paths`) absent from a non-empty `passed_at_base`, unless `reverted[].tests` lists it or
     `diff_named` does (only `pre_existing` outranks `diff_named`). Otherwise owned: the id's file is
     in `own_paths`, or it is in `reverted[].tests`, or in `caused` and not in `foreign`, or in
@@ -169,11 +172,15 @@ def classify_reds(
     caused_s = None if caused is None else {_posix(i) for i in caused}
     foreign_s = {_posix(i) for i in foreign or ()}
     pre_s = {_posix(i) for i in pre_existing or ()}
+    fred_s = {_posix(i) for i in foreign_red or ()}
     reverted_s = None if reverted is None else {_posix(t) for r in reverted for t in (r.get("tests") or [])}
     owned, foreign_out, unverified = set(), set(), set()
     for raw in failing or ():
         nid = _posix(raw)
         in_reverted = reverted_s is not None and nid in reverted_s
+        if nid in fred_s and not in_reverted:
+            foreign_out.add(nid)
+            continue
         # A test the run itself added never ran at base, so absence from passed_at_base proves
         # nothing for an own-path id; only an explicit pre_existing entry does.
         red_at_base = not in_reverted and (
@@ -247,10 +254,12 @@ const classifyReds = (failing, ownPaths, opts) => {
   const revertedS = o.reverted == null ? null : new Set(o.reverted.flatMap((r) => (r.tests || []).map(px)));
   const baseS = new Set((o.passed_at_base || []).map(px));
   const diffS = new Set((o.diff_named || []).map(px));
+  const fredS = new Set((Array.isArray(o.foreign_red) ? o.foreign_red : Object.keys(o.foreign_red || {})).map(px));
   const owned = new Set(), foreign = new Set(), unverified = new Set();
   for (const raw of failing || []) {
     const id = px(raw);
     const inRev = revertedS !== null && revertedS.has(id);
+    if (fredS.has(id) && !inRev) { foreign.add(id); continue; }
     const redAtBase = !inRev && (preS.has(id) || (baseS.size > 0 && !baseS.has(id) && !diffS.has(id) && !own.has(id.split('::')[0])));
     if (redAtBase) {
       foreign.add(id);

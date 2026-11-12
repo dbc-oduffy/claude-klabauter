@@ -58,6 +58,24 @@ def test_spine_check_failed(calls, monkeypatch):
     assert "gates" not in calls
 
 
+def test_research_layout_finding_halts_spine_check_failed(calls, monkeypatch, tmp_path):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "psc_for_phase1_test", p1._ENGINE_ROOT / "coordinator" / "bin" / "plan-spine-check.py"
+    )
+    psc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(psc)
+    (tmp_path / "docs" / "research" / "topic").mkdir(parents=True)
+    rows = [{"id": "C1", "writes": ["docs/research/topic/2026-11-12-run/facts.md"]}]
+    found = psc.research_layout_findings(rows, tmp_path, today="2026-11-12")
+    report = {"verdict": "INVALID", "rows": psc._class_rows(found)}
+    monkeypatch.setattr(p1, "_check_plan", lambda *a: report)
+    h = _run()
+    assert h.halted_at == "execute" and "research-layout" in h.reason
+    assert "gates" not in calls
+
+
 def test_falsifier_finding_in_spine_report_defers_to_falsifier_owed(calls, monkeypatch):
     report = {"verdict": "INVALID", "rows": [{"at": p1._FALSIFIER_AT, "error": "x"}]}
     monkeypatch.setattr(p1, "_check_plan", lambda *a: report)

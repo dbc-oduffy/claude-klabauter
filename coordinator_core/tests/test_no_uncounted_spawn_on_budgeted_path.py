@@ -7901,6 +7901,9 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "codex_runner.start": 1,
     # Two reachable sites, reach-only, measured 2026-11-03 via `_measure_static_spawn_counts`.
     "dispatch.minted_run": 2,
+    # One reachable site, the shared `run_git` Popen, measured 2026-11-11 via
+    # `_measure_static_spawn_counts`; a ceiling, not execution evidence.
+    "roadmap.baton_backfill": 1,
 }
 _STATIC_SPAWN_COUNT_PINS__SUBJECT_CLASS = "op-name"
 

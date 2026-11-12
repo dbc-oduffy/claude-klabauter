@@ -148,11 +148,22 @@ def _arm(monkeypatch, tmp_path, refresh_ok: bool):
     publish._bootstrap_engine()
     from percolate import dest_refresh
 
-    def fake_refresh(root, **kwargs):
+    def fake_fetch(root, **kwargs):
         events.append("refresh")
-        return SimpleNamespace(ok=refresh_ok, reason="simulated stale candidate")
+        return SimpleNamespace(
+            ok=refresh_ok,
+            reason="simulated stale candidate",
+            repo_root=root,
+            behind=0,
+            pending_abort=False,
+            subsumed=(),
+        )
 
-    monkeypatch.setattr(dest_refresh, "refresh_dest_from_origin", fake_refresh)
+    monkeypatch.setattr(dest_refresh, "fetch_dest_upstream", fake_fetch)
+    monkeypatch.setattr(dest_refresh, "preflight_dest_refresh", lambda fetched: fetched)
+    monkeypatch.setattr(
+        dest_refresh, "fast_forward_dest", lambda fetched, **kw: SimpleNamespace(ok=True, reason="")
+    )
     return dest_root, events, fake_commit
 
 

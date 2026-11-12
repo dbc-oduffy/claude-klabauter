@@ -4893,18 +4893,40 @@ def _widened_seed(
 
 
 def _accepted_seed(
-    record_dir: Optional[Path], repo_root: Optional[str | Path], run_id: Optional[str]
+    record_dir: Optional[Path],
+    repo_root: Optional[str | Path],
+    run_id: Optional[str],
+    plan_text: Optional[str] = None,
 ) -> dict:
-    """``{chunk id: reason}`` from the run's ``accept_partial.jsonl``; empty when no record dir is
-    nameable or the record is absent."""
+    """``{chunk id: reason}`` from ``accept_partial.jsonl`` of the named run dir, else of ``run_id`` and
+    its ``resumed_from`` chain, merged over the halted run the plan's ``sizing_object`` resumes (a
+    refire's emit names no run). Empty when nothing is nameable. Reads only: no process spawn."""
     from coordinator_core.ops.dispatch_emit import run_accept_partial
 
+    seed: dict = {}
+    if repo_root is not None and plan_text and run_id is None and record_dir is None:
+        halted = _halted_run_of_plan(repo_root, plan_text)
+        if halted:
+            seed = run_accept_partial.read_chain(Path(repo_root), halted)
     run_dir = record_dir
     if run_dir is None and run_id and repo_root is not None:
         run_dir = Path(repo_root) / _record_dir_root() / run_id
     if run_dir is None:
-        return {}
-    return run_accept_partial.read([Path(run_dir)])
+        return seed
+    return {**seed, **run_accept_partial.read([Path(run_dir)])}
+
+
+def _halted_run_of_plan(repo_root: str | Path, plan_text: str) -> Optional[str]:
+    """The halted run id the plan's ``sizing_object`` refire resumes, else None."""
+    from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+    from coordinator_core.ops.dispatch_emit.halted_run import halted_run_to_resume
+
+    split = split_frontmatter(plan_text)
+    sizing_rel = read_fm_field_unquoted(split.fm_text, "sizing_object") if split else None
+    if not sizing_rel or sizing_rel == "null":
+        return None
+    halted = halted_run_to_resume(Path(repo_root), sizing_rel)
+    return halted if isinstance(halted, str) else None
 
 
 def _planned_partial_seed(plan_text: Optional[str]) -> dict:
@@ -4923,15 +4945,20 @@ def _planned_partial_seed(plan_text: Optional[str]) -> dict:
 def _held_halt_record_js() -> str:
     """JS lifting a bare held-dependents `_halted` into the typed halt whose `next_action` detail names the accept_partial revise form."""
     from coordinator_core.ops.dispatch_emit.ask_contract import ACCEPT_PARTIAL_FORM, HALT_DEPENDENTS_UNSTARTED
+    from coordinator_core.ops.dispatch_emit.halt_refire import NEEDS_DOWNSTREAM_PREFIX
 
     head, tail = ACCEPT_PARTIAL_FORM.format(run_id="@@").split("@@")
     form = f"{json.dumps(head)} + _runId + {json.dumps(tail)}"
     return (
         "  if (_haltedByHold && typeof _halted === 'string' && typeof _runId === 'string') {\n"
         "    const _heldReason = _halted;\n"
+        "    const _downHolders = Object.keys(_needsDownstream);\n"
         f"    _halted = {{ halted: {json.dumps(HALT_DEPENDENTS_UNSTARTED)}, reason: _heldReason, "
         "sizing: typeof _sizingRel === 'undefined' ? null : _sizingRel, run_id: _runId, "
-        f"next_action: _heldReason + '; to start them over a PARTIAL holder: ' + {form} + ', then re-fire', "
+        f"next_action: _downHolders.length ? {json.dumps(NEEDS_DOWNSTREAM_PREFIX)} + ' ' + _heldReason + "
+        "'. A refire reproduces the hold: perform what each holder needs, record it (plan.tasks.mutate verb em-discharge "
+        "for ' + _downHolders.join(', ') + '), then refire.' "
+        f": _heldReason + '; to start them over a PARTIAL holder: ' + {form} + ', then re-fire', "
         "toString() { return this.reason; } };\n"
         "  }"
     )
@@ -5022,6 +5049,7 @@ def _run_row_helper_js(
         "  const _finished = new Set();\n"
         "  const _reviews = [];\n"
         "  const _heldBy = {};\n"
+        "  const _needsDownstream = {};\n"
         f"  const {COMMIT_REFUSED_VAR} = {{}};\n"
         "  const _rowIdOf = new WeakMap();\n"
         f"  const _DEP_NON_DONE_RE = {_NON_DONE_STATUS_JS_RE};\n"
@@ -5071,8 +5099,10 @@ def _run_row_helper_js(
         "    if (!ids.length) return null;\n"
         "    const by = [...new Set(ids.map((i) => _heldBy[i]))];\n"
         "    const why = by.filter((h) => _chunkReason[h] && !(h in _heldBy)).map((h) => h + ': ' + _chunkReason[h]);\n"
+        "    const down = Object.keys(_needsDownstream).filter((h) => by.includes(h))"
+        ".map((h) => h + ' needs ' + _needsDownstream[h] + ', downstream of it: em-discharge ' + h);\n"
         "    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')' "
-        "+ (why.length ? '; ' + why.join('; ') : '');\n"
+        "+ (why.length ? '; ' + why.join('; ') : '') + (down.length ? '; ' + down.join('; ') : '');\n"
         "  }\n"
         f"  const _TR_VERDICT_RE = {_TEST_VERDICT_JS_RE};\n"
         "  function _trVerdictOf(t) {\n"
@@ -5094,10 +5124,16 @@ def _run_row_helper_js(
         "    seen.add(x);\n"
         "    return (_depIdsOf[x] || []).every((d) => typeof d === 'string' && _awaitSafe(d, id, seen));\n"
         "  }\n"
-        "  async function _owedDischarged(owed, id) {\n"
+        # A registered named row that waits on this dependent can never finish first: the holder is
+        # recorded so the halt routes to em-discharge instead of a refire that rebuilds the same hold.
+        "  async function _owedDischarged(owed, id, holder) {\n"
         "    const m = /^gate-blocker: needs-dependent: *([^ \\\\\"]+)/.exec(owed);\n"
         "    const x = m ? m[1].replace(/[.,;]$/, '') : '';\n"
-        "    if (!x || !_awaitSafe(x, id, new Set())) return false;\n"
+        "    if (!x) return false;\n"
+        "    if (!_awaitSafe(x, id, new Set())) {\n"
+        "      if (holder && x !== holder && x in _rowById) _needsDownstream[holder] = x;\n"
+        "      return false;\n"
+        "    }\n"
         "    const xr = await _rowById[x];\n"
         "    const xt = JSON.stringify(xr ?? null);\n"
         "    return xr != null && !_DEP_NON_DONE_RE.test(xt) && _DEP_ANY_STATUS_RE.test(xt);\n"
@@ -5109,7 +5145,7 @@ def _run_row_helper_js(
         "      const settled = typeof r === 'string' && r.startsWith('ROUTED-OUT:');\n"
         "      const _o = r != null ? _gateOwedOf(t) : null;\n"
         "      if (_o && _owedReleases(_o, id)) continue;\n"
-        "      if (_o && await _owedDischarged(_o, id)) continue;\n"
+        "      if (_o && await _owedDischarged(_o, id, _rowIdOf.get(deps[i]))) continue;\n"
         "      if (r != null && Object.hasOwn(_acceptPartial, _rowIdOf.get(deps[i])) && _DEP_PARTIAL_RE.test(t) && !_DEP_BLOCKED_RE.test(t)) continue;\n"
         "      if (r == null || _DEP_NON_DONE_RE.test(t) || "
         "(!settled && !_DEP_ANY_STATUS_RE.test(t) && _trVerdictOf(t) !== 'pass')) {\n"
@@ -6972,7 +7008,7 @@ def compose_script(
                 widened_seed=_widened_seed(widen_run_dir, repo_root, absorb_run_id),
                 accepted_seed={
                     **_planned_partial_seed(plan_text),
-                    **_accepted_seed(widen_run_dir, repo_root, absorb_run_id),
+                    **_accepted_seed(widen_run_dir, repo_root, absorb_run_id, plan_text),
                 },
             )
         )
@@ -8282,15 +8318,19 @@ def checkpoint_landed_state(repo_root: Path, plan: str) -> tuple:
     answer."""
     from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, plan_commit_row_ids
     from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER
 
     result = run_git(
         [
-            "log", "-n", "500", "--grep=^Checkpoint-Plan: ",
+            "log", "-n", "500", "--grep=^Checkpoint-Plan: ", f"--grep=^{HALT_PLAN_TRAILER}: ",
             "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Checkpoint-Gate-Owed,valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Checkpoint-Review-Base,valueonly,separator=%x1d)"
             "\x1f%(trailers:key=Checkpoint-Base,valueonly,separator=%x1d)"
-            f"\x1f%(trailers:key={STOP_RULE_TRAILER},valueonly,separator=%x1d)\x1e",
+            f"\x1f%(trailers:key={STOP_RULE_TRAILER},valueonly,separator=%x1d)"
+            f"\x1f%(trailers:key={HALT_PLAN_TRAILER},valueonly,separator=%x1d)"
+            "\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
+            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1e",
         ],
         cwd=str(repo_root),
     )
@@ -8304,7 +8344,16 @@ def checkpoint_landed_state(repo_root: Path, plan: str) -> tuple:
         trailer, _, rest = rest.partition("\x1f")
         owed_text, _, rest = rest.partition("\x1f")
         review_text, _, rest = rest.partition("\x1f")
-        base_text, _, stop_text = rest.partition("\x1f")
+        base_text, _, rest = rest.partition("\x1f")
+        stop_text, _, rest = rest.partition("\x1f")
+        halt_plan, _, rest = rest.partition("\x1f")
+        halted_by, _, chunks_text = rest.partition("\x1f")
+        # A ledger-check halt commit naming the plan lands its Lands-Chunks rows: a hand-landed or
+        # credited predecessor is seeded as landed, never re-held pending.
+        if any(v.strip() == "ledger-check" for v in halted_by.split("\x1d")) and any(
+            checkpoint_plan_matches(v, plan) for v in halt_plan.split("\x1d") if v.strip()
+        ):
+            ids.update(i for i in re.split(r"[,\s\x1d]+", chunks_text) if i)
         if any(checkpoint_plan_matches(v, plan) for v in trailer.split("\x1d") if v.strip()):
             stop_ids = {i for i in re.split(r"[,\s\x1d]+", stop_text) if i}
             ids.update(set(plan_commit_row_ids(subject)) - stop_ids)

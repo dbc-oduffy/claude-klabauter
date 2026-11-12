@@ -741,7 +741,10 @@ def drop_session_files(pid):
     sess = sessions_dir()
     for f in os.listdir(sess):
         if f.startswith(f"{pid}."):
-            os.remove(os.path.join(sess, f))
+            try:
+                os.remove(os.path.join(sess, f))
+            except FileNotFoundError:
+                pass  # the killed bridge removes its own file on exit
 
 
 def unmirror(pid):
@@ -754,7 +757,8 @@ def reap_orphaned_mirrors(remote, say, unbacked=False, keep=()):
 
     With `unbacked`, a mirror whose far row went unconfirmed (`mirror_unbacked`) is reaped too: the
     session registry lists a file by its live bridge pid, so an unlisted-but-present mirror still shows.
-    Pids in `keep` (the caller's own bridges) are never reaped.
+    Pids in `keep` (the caller's own bridges) are never reaped: pass it only after a poll that refreshed
+    their stamps. A failed poll passes none, so a link that stays down reaps the mirrors it can no longer vouch for.
     A bridge is killed only when its entry records a procStart it still matches: a recycled pid is never signalled."""
     try:
         files = os.listdir(sessions_dir())
@@ -1121,6 +1125,23 @@ def note_link(prev, ok, alias, reason, say, path):
     return state
 
 
+BACKOFF_CAP_SECONDS = 4 * POLL_SECONDS
+
+
+def backoff_seconds(failures):
+    """Sleep after `failures` consecutive failed polls: POLL_SECONDS doubling, capped at BACKOFF_CAP_SECONDS."""
+    return min(POLL_SECONDS * 2 ** max(failures - 1, 0), BACKOFF_CAP_SECONDS)
+
+
+def guarded(say, what, fn, *args, default=None, **kwargs):
+    """Call `fn`; a raise is logged and swallowed so no single step ends the supervisor loop."""
+    try:
+        return fn(*args, **kwargs)
+    except Exception as ex:
+        say(f"{what} failed: {type(ex).__name__}: {ex}")
+        return default
+
+
 def main(argv=None):
     cfg = parse_args(sys.argv[1:] if argv is None else argv)
     skip = set(cfg.skip)
@@ -1138,20 +1159,27 @@ def main(argv=None):
     bridges = {}
     link_path = link_state_path(cfg.remote)
     link = read_link_state(link_path)
+    failures = 0
     try:
-        reap_orphaned_mirrors(cfg.remote, say)
+        guarded(say, "startup reap", reap_orphaned_mirrors, cfg.remote, say)
         while True:
             try:
                 rows = mirrorable(fetch_roster(cfg.remote, cfg.key, cfg.tunnel_remote), skip, inbound_names())
-            except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as ex:
+            except Exception as ex:
+                failures += 1
                 say(f"roster failed: {ex}")
-                link = note_link(link, False, cfg.remote, str(ex), say, link_path)
-                time.sleep(POLL_SECONDS)
+                link = guarded(say, "link-state note", note_link, link, False, cfg.remote, str(ex), say,
+                               link_path, default=link)
+                guarded(say, "reap", reap_orphaned_mirrors, cfg.remote, say, unbacked=True)
+                time.sleep(backoff_seconds(failures))
                 continue
-            link = note_link(link, True, cfg.remote, "", say, link_path)
-            sync(bridges, rows, cfg, say)
-            reap_orphaned_mirrors(cfg.remote, say, unbacked=True, keep={b.pid for b in bridges.values()})
-            reap_unbacked_agy_faces(say)
+            failures = 0
+            link = guarded(say, "link-state note", note_link, link, True, cfg.remote, "", say, link_path,
+                           default=link)
+            guarded(say, "sync", sync, bridges, rows, cfg, say)
+            guarded(say, "reap", reap_orphaned_mirrors, cfg.remote, say, unbacked=True,
+                    keep={b.pid for b in bridges.values()})
+            guarded(say, "agy reap", reap_unbacked_agy_faces, say)
             time.sleep(POLL_SECONDS)
     finally:
         tree_kill_many([b.pid for b in bridges.values()])

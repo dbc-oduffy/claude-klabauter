@@ -7,7 +7,8 @@ copies) as one in-process op. The reply is the contract verdict ``{created, alre
 needs_attention}`` (``repo_setup_contract.VERDICT_SCHEMA``).
 
 Params: ``root`` (required; absolute path of a git work tree), ``answers`` (optional; dict or JSON
-string, validated by ``repo_setup_contract.validate_answers``).
+string, validated by ``repo_setup_contract.validate_answers``), ``dry_run`` (optional explicit bool,
+default false; true reports what would be created and writes nothing). Any other param is refused.
 
 Negative-spec:
   - Does NOT spawn claude or any LLM session; the op itself spawns nothing beyond what the reused
@@ -64,10 +65,11 @@ _HOOK_KEPT = frozenset({"already-current", "left-append-form", "left-legacy-appe
 class _Ctx:
     """One onboarding run: the target, the resolved answers, and the verdict being built."""
 
-    def __init__(self, root: Path, answers: dict, verdict: Verdict):
+    def __init__(self, root: Path, answers: dict, verdict: Verdict, dry_run: bool = False):
         self.root = root
         self.answers = answers
         self.v = verdict
+        self.dry_run = dry_run
         self.project_type = "general"
         self.subtypes: list = []
         self.cross_platform = False
@@ -76,7 +78,19 @@ class _Ctx:
     def rel(self, path: Path) -> str:
         return path.relative_to(self.root).as_posix()
 
+    def write_new(self, path: Path, text: str, executable: bool = False) -> None:
+        """The one file-write choke point: a dry run records nothing on disk."""
+        if not self.dry_run:
+            _write_new(path, text, executable)
+
+    def mkdir(self, path: Path) -> None:
+        if not self.dry_run:
+            path.mkdir(parents=True, exist_ok=True)
+            declare_write(path)
+
     def created(self, step: str, detail: str, path: Optional[Path] = None) -> None:
+        if self.dry_run:
+            detail = f"dry-run, not written: {detail}"
         self.v.created.append(make_item(step, detail, self.rel(path) if path else None))
 
     def existed(self, step: str, detail: str, path: Optional[Path] = None) -> None:
@@ -203,7 +217,7 @@ def _step_detect(ctx: _Ctx) -> None:
         f"cross_platform: {'true' if ctx.cross_platform else 'false'}\n"
         "---\n"
     )
-    _write_new(local, text)
+    ctx.write_new(local, text)
     ctx.created("detect", f"coordinator.local.md written (project_type {ctx.project_type})", local)
 
 
@@ -247,7 +261,7 @@ def _step_render_docs(ctx: _Ctx) -> None:
         if err is not None:
             ctx.attention("render", f"CLAUDE.md not rendered: {err}", claude_md)
         else:
-            _write_new(claude_md, rendered)
+            ctx.write_new(claude_md, rendered)
             ctx.rendered_claude_md = True
             ctx.created("render", "CLAUDE.md rendered", claude_md)
             ctx.open("render", "fill in CLAUDE.md Project Overview, Build & Test and Runtime conventions", claude_md)
@@ -259,7 +273,7 @@ def _step_render_docs(ctx: _Ctx) -> None:
             from datetime import date
 
             text = _read(tpl).replace("[PROJECT_NAME]", name).replace("[DATE]", date.today().isoformat())
-            _write_new(readme, text)
+            ctx.write_new(readme, text)
             ctx.created("render", "docs/README.md rendered", readme)
 
 
@@ -282,27 +296,29 @@ def _step_dirs(ctx: _Ctx) -> None:
         if d.is_dir():
             ctx.existed("dirs", f"{rel}/ present", d)
             continue
-        d.mkdir(parents=True, exist_ok=True)
-        declare_write(d)
+        ctx.mkdir(d)
         ctx.created("dirs", f"{rel}/ created", d)
     if author:
         plugin = _plugin_root()
         if plugin is None:
             ctx.attention("dirs", "engine-plane manifest root not resolvable; canonical scaffold skipped")
             return
-        from coordinator_core.install.scaffold_structure import scaffold_canonical_structure
-
-        result = scaffold_canonical_structure(ctx.root, plugin)
-        made = result.created_dirs + result.created_files + result.created_readmes + result.created_gitkeeps
-        if made:
-            ctx.created("dirs", f"canonical scaffold created {made} item(s)")
+        if ctx.dry_run:
+            ctx.created("dirs", "canonical scaffold would be applied")
         else:
-            ctx.existed("dirs", "canonical scaffold already present")
+            from coordinator_core.install.scaffold_structure import scaffold_canonical_structure
+
+            result = scaffold_canonical_structure(ctx.root, plugin)
+            made = result.created_dirs + result.created_files + result.created_readmes + result.created_gitkeeps
+            if made:
+                ctx.created("dirs", f"canonical scaffold created {made} item(s)")
+            else:
+                ctx.existed("dirs", "canonical scaffold already present")
     cache = ctx.root / "state" / "orientation_cache.md"
     if cache.exists():
         ctx.existed("dirs", "state/orientation_cache.md present", cache)
     else:
-        _write_new(cache, _ORIENTATION_CACHE)
+        ctx.write_new(cache, _ORIENTATION_CACHE)
         ctx.created("dirs", "state/orientation_cache.md seeded", cache)
 
 
@@ -316,7 +332,7 @@ def _step_gitignore(ctx: _Ctx) -> None:
     template_text = _read(tpl)
     wanted = [ln.strip() for ln in template_text.splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
     if not path.exists():
-        _write_new(path, template_text if template_text.endswith("\n") else template_text + "\n")
+        ctx.write_new(path, template_text if template_text.endswith("\n") else template_text + "\n")
         ctx.created("gitignore", ".gitignore written from the canonical block", path)
         return
     existing_text = _read(path)
@@ -325,9 +341,10 @@ def _step_gitignore(ctx: _Ctx) -> None:
     if missing:
         sep = "" if existing_text.endswith("\n") or not existing_text else "\n"
         block = sep + "\n# coordinator -- canonical block (repo-setup)\n" + "\n".join(missing) + "\n"
-        with open(path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(block)
-        declare_write(path)
+        if not ctx.dry_run:
+            with open(path, "a", encoding="utf-8", newline="\n") as fh:
+                fh.write(block)
+            declare_write(path)
         ctx.created("gitignore", f"appended {len(missing)} missing canonical line(s)", path)
     else:
         ctx.existed("gitignore", "canonical block present", path)
@@ -343,7 +360,7 @@ def _step_corpus_guard(ctx: _Ctx) -> None:
     from coordinator_core.git.corpus_guard_hook import STAMP, hook_body
 
     if not hook.exists():
-        _write_new(hook, hook_body(), executable=True)
+        ctx.write_new(hook, hook_body(), executable=True)
         ctx.created("pre-commit", "corpus-artifact guard hook installed", hook)
     elif STAMP in _read(hook):
         ctx.existed("pre-commit", "corpus-artifact guard hook present", hook)
@@ -352,6 +369,9 @@ def _step_corpus_guard(ctx: _Ctx) -> None:
 
 
 def _step_hook(ctx: _Ctx) -> None:
+    if ctx.dry_run:
+        ctx.created("prepare-commit-msg", "Session-Id trailer hook would be ensured", ctx.root / ".git" / "hooks" / "prepare-commit-msg")
+        return
     ghi = _git_hook_install()
     if ghi is None:
         ctx.attention("prepare-commit-msg", "git_hook_install not importable; hook not installed")
@@ -384,6 +404,9 @@ def _step_hook(ctx: _Ctx) -> None:
 
 
 def _step_git_config(ctx: _Ctx) -> None:
+    if ctx.dry_run:
+        ctx.created("git-config", "git maintenance config would be applied")
+        return
     from coordinator_core.install import git_perf_config
 
     lines = git_perf_config._apply_maintenance_keys(ctx.root)
@@ -402,9 +425,12 @@ def _step_git_config(ctx: _Ctx) -> None:
 
 
 def _step_vscode(ctx: _Ctx) -> None:
+    settings = ctx.root / ".vscode" / "settings.json"
+    if ctx.dry_run:
+        ctx.created("vscode", "read-only guard would be merged into settings.json", settings)
+        return
     from coordinator_core.ops import ensure_vscode_readonly as mod
 
-    settings = ctx.root / ".vscode" / "settings.json"
     made_dir = not settings.parent.exists()
     settings.parent.mkdir(parents=True, exist_ok=True)
     (rc, line), _, _ = _capture(mod._merge_settings, settings)
@@ -420,10 +446,19 @@ def _step_vscode(ctx: _Ctx) -> None:
 
 
 def _step_seeds(ctx: _Ctx) -> None:
+    ledger = ctx.root / "state" / "health-ledger.md"
+    if ctx.dry_run:
+        if ledger.is_file():
+            ctx.existed("seed-health-ledger", "state/health-ledger.md present", ledger)
+        else:
+            ctx.created("seed-health-ledger", "state/health-ledger.md would be seeded", ledger)
+        ctx.created("seed-test-cmd", "fast_test_cmd/full_test_cmd would be detected", ctx.root / "coordinator.local.md")
+        if (ctx.root / ".node-version").is_file() or (ctx.root / ".nvmrc").is_file():
+            ctx.open("seed-fnm-pin", f"install the pinned Node version with: setup-fnm-pin {ctx.root.as_posix()}")
+        return
     from coordinator_core.install import detect_test_cmd
     from coordinator_core.ops import setup_rag_decision, setup_seed_health_ledger
 
-    ledger = ctx.root / "state" / "health-ledger.md"
     if ledger.is_file():
         ctx.existed("seed-health-ledger", "state/health-ledger.md present", ledger)
     else:
@@ -511,7 +546,7 @@ def _step_tripwires(ctx: _Ctx) -> None:
         elif d.exists():
             kept.append(name)
         else:
-            _write_new(d, _read(s))
+            ctx.write_new(d, _read(s))
             copied.append(name)
     if copied:
         ctx.created("tripwires", f"copied {len(copied)} guard-regression test(s)", dest_dir / "guards")
@@ -552,9 +587,28 @@ def _refuse(step: str, detail: str, key: Optional[str] = None) -> dict:
     return Verdict(needs_attention=[make_item(step, detail, key=key)]).to_dict()
 
 
-@register_op("repo.setup")
+_PARAMS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "root": {"type": "string"},
+        "answers": {"type": ["object", "string"]},
+        "dry_run": {"type": "boolean"},
+    },
+    "required": ["root"],
+    "additionalProperties": False,
+}
+
+
+@register_op("repo.setup", params_schema=_PARAMS_SCHEMA)
 def handle(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "repo.setup" handler. See module docstring; returns the verdict dict."""
+    unknown = sorted(k for k in (params or {}) if not str(k).startswith("_") and k not in _PARAMS_SCHEMA["properties"])
+    if unknown:
+        accepted = ", ".join(sorted(_PARAMS_SCHEMA["properties"]))
+        return _refuse("params", f"unknown param {unknown[0]!r}; accepted keys: {accepted}", key=unknown[0])
+    dry_run = (params or {}).get("dry_run", False)
+    if not isinstance(dry_run, bool):
+        return _refuse("dry_run", "dry_run must be an explicit boolean (true or false)", key="dry_run")
     raw = (params or {}).get("root")
     if not isinstance(raw, str) or not raw.strip():
         return _refuse("root", "root is required: an absolute path of a git work tree", key="root")
@@ -575,7 +629,7 @@ def handle(params: dict, repo_root: Optional[Path] = None) -> dict:
     if items:
         return Verdict(needs_attention=items).to_dict()
 
-    ctx = _Ctx(root.resolve(), answers, Verdict())
+    ctx = _Ctx(root.resolve(), answers, Verdict(), dry_run)
     for step in _STEPS:
         try:
             step(ctx)

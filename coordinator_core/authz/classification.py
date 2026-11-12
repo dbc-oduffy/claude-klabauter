@@ -5327,6 +5327,26 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     # wave, never writing).
     "roadmap.blitz_land": OpClass.MUTATING,
 
+    # roadmap.baton_backfill — MUTATING: ops/roadmap_baton_backfill.py stamps
+    # `deployment_state: shipped` + `shipped_in` onto open roadmap batons whose linked
+    # plan's rows all landed, and codes met_by-credited plan rows; dry-run by default.
+    # DR-208 five-question affirmation (citing ops/roadmap_baton_backfill.py):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      blitz_land.close_dispatched rewrites each baton's frontmatter through
+    #      locked_rmw; plan rows flip open -> coded through locked_rmw; ceremony.commit_v2
+    #      lands the touched paths in one commit (apply mode only).
+    #   2. Writes into rag's relational store?                                 No.
+    #      Only state/handoffs/*.md and the linked plan files; dual-write ban satisfied.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      locked_rmw's write path opens each target for write.
+    #   4. Mutates shared mutable state outside its own module?                YES.
+    #      Baton and plan records are coordinator substrate shared across EM sessions.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      The stamped baton and coded rows are read by plan_gate, the sweeps and rag.
+    # Bounds: dry_run defaults true and writes nothing; apply refuses whole on any
+    # unprovable met_by sha; archived and already-terminal batons are never touched.
+    "roadmap.baton_backfill": OpClass.MUTATING,
+
     # roadmap.blitz_stage — MUTATING: ops/roadmap_blitz_stage.py scaffolds
     # roadmap-baton stubs under state/handoffs/ and freezes a gate report under
     # state/plan-blitz/. It commits nothing.

@@ -940,11 +940,31 @@ def live_records(repo_root: Path) -> Iterator[dict]:
             yield record
 
 
+def _predates_halt(repo_root: Path, record: dict) -> bool:
+    """True when `record` is the token its run minted before the run's `halted` marker was written:
+    the run stopped, so the token holds nothing. A refire's re-mint is newer than the marker and
+    holds. Only the listing hides it: `halt_admits`, `escrowed` and `readmit_reviewed` read the
+    record directly, so the refire still reclaims. Unknown (no marker, unreadable) is not halted."""
+    try:
+        from coordinator_core.ops.dispatch_emit import halted_run
+        from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+
+        directory = record_dir(Path(repo_root), record["run_id"])
+        marker = halted_run.read_strict(directory)
+        if not marker or marker.get("status") != halted_run.STATUS_HALTED:
+            return False
+        minted = record.get("minted_at")
+        return isinstance(minted, (int, float)) and (directory / halted_run.HALTED_FILE).stat().st_mtime >= minted
+    except Exception:  # noqa: BLE001 -- unknown: the token holds
+        return False
+
+
 def held_records(repo_root: Path) -> list[dict]:
     """Every record a run still holds: each fresh unclaimed one (`live_records`) plus every
     claimed one (a run mid terminal-commit). One directory listing each; no spawn. A claimed
-    record is not freshness-checked here."""
-    records = list(live_records(repo_root))
+    record is not freshness-checked here. An unclaimed record its run minted before halting
+    (`_predates_halt`) is not listed: a halted run holds nothing."""
+    records = [r for r in live_records(repo_root) if not _predates_halt(repo_root, r)]
     records.extend(r for r in _listed(repo_root, claimed=True) if isinstance(r.get("run_id"), str))
     return records
 

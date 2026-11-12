@@ -824,8 +824,8 @@ def _recorded_post_checkpoint(
 
 
 def _review_recorded_edits(inline_review: object) -> frozenset:
-    """Repo-relative paths the review's test-runner or reverify record lists as ``edited`` or
-    ``created``: files the run's review changed, including ones an earlier checkpoint of this run
+    """Repo-relative paths the review's test-runner or reverify record lists as ``edited``,
+    ``created`` or ``outside_declared``: files the run's review changed, including ones an earlier checkpoint of this run
     already committed and this fire's chunks no longer declare. Absolute and ``..`` paths are skipped."""
     found: set = set()
     if isinstance(inline_review, dict):
@@ -833,7 +833,9 @@ def _review_recorded_edits(inline_review: object) -> frozenset:
             block = inline_review.get(key)
             if not isinstance(block, dict):
                 continue
-            for field in ("edited", "created"):
+            # `outside_declared` is reverify's list of tracked files the review wrote outside the manifest;
+            # omitting it drops those fixes before `review_edits.partition` can land or surface them.
+            for field in ("edited", "created", "outside_declared"):
                 listed = block.get(field)
                 if not isinstance(listed, list):
                     continue

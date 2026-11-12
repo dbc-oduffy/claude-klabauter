@@ -327,15 +327,33 @@ def test_executor_row_discharged_with_commit_and_evidence(tmp_path):
         {"commit": "{head}", "evidence": "  "},
         {"commit": "{head}"},
         {"commit": "{tree}", "evidence": "ok"},
-        {"commit": "{head7}", "evidence": "ok"},
+        {"commit": "abc", "evidence": "ok"},
+        {"commit": "{tree7}", "evidence": "ok"},
     ],
 )
 def test_executor_row_refused_without_a_resolving_commit_and_evidence(tmp_path, extra):
     repo, plan = _plan(tmp_path)
-    subs = {"{head}": _rev(repo, "HEAD"), "{tree}": _rev(repo, "HEAD^{tree}"), "{head7}": _rev(repo, "HEAD")[:7]}
+    subs = {"{head}": _rev(repo, "HEAD"), "{tree}": _rev(repo, "HEAD^{tree}"), "{tree7}": _rev(repo, "HEAD^{tree}")[:7]}
     extra = {k: subs.get(v, v) for k, v in extra.items()}
     result = _call(repo, plan, id="X1", **extra)
     assert result["exit_code"] == 1 and result["applied"] is False, result
+    assert not evidence_sidecar_path(plan).exists()
+
+
+def test_abbreviated_commit_resolves_and_is_stored_in_full(tmp_path):
+    repo, plan = _plan(tmp_path)
+    sha = _rev(repo, "HEAD")
+    result = _call(repo, plan, id="X1", commit=sha[:10].upper(), evidence="ok")
+    assert result["exit_code"] == 0 and result["applied"] is True, result
+    assert read_em_discharges(plan)["X1"]["commit"] == sha
+
+
+def test_unresolvable_commit_refusal_does_not_claim_absence(tmp_path):
+    repo, plan = _plan(tmp_path)
+    result = _call(repo, plan, id="X1", commit="ab" * 20, evidence="ok")
+    assert result["exit_code"] == 1, result
+    assert "not a commit in this repo" not in result["error"]
+    assert "did not resolve" in result["error"]
     assert not evidence_sidecar_path(plan).exists()
 
 

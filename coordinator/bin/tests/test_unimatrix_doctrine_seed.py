@@ -156,6 +156,82 @@ def test_codex_reseed_prunes_removed_skill_but_keeps_foreign(tmp_path, skills_ro
     assert (dest / "mine" / "SKILL.md").read_text() == "user skill"
 
 
+@pytest.fixture
+def klabauter_mirror(tmp_path, monkeypatch):
+    """The installer copied beside its lib/ and seeder under tmp_path (outside every repo), with no global-doctrine sibling."""
+    import shutil
+    bin_dir = tmp_path / "mirror" / "bin"
+    bin_dir.mkdir(parents=True)
+    for name in ("unimatrix-install.py", "unimatrix-doctrine-seed.py"):
+        shutil.copy2(BIN / name, bin_dir / name)
+    shutil.copytree(BIN / "lib", bin_dir / "lib")
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_HOME", str(home))
+    monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    spec = importlib.util.spec_from_file_location("unimatrix_install_mirror", bin_dir / "unimatrix-install.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod, home
+
+
+def _seed_agy(mod, tmp_path):
+    import io
+    out = io.StringIO()
+    rp = tmp_path / "agy" / "GEMINI.md"
+    missing = mod._seed_standing_doctrine(out, False, True, None, rp, None, tmp_path / "agy" / "skills.json")
+    return missing, out.getvalue(), rp
+
+
+def _content_root(tmp_path):
+    doe = tmp_path / "doe"
+    (doe / "global-doctrine" / "rules").mkdir(parents=True)
+    (doe / "global-doctrine" / "CLAUDE.md").write_text("# Doctrine from the DoE root\n", encoding="utf-8")
+    (doe / "global-doctrine" / "rules" / "rules.md").write_text("- a rule\n", encoding="utf-8")
+    return doe
+
+
+def test_doctrine_installs_from_content_root_pointer_and_names_rung(tmp_path, klabauter_mirror):
+    mod, home = klabauter_mirror
+    doe = _content_root(tmp_path)
+    (home / ".claude" / ".coordinator-content-root").write_text(str(doe) + "\n", encoding="utf-8")
+    missing, text, rp = _seed_agy(mod, tmp_path)
+    assert missing == []
+    assert "DoE root pointer" in text and str(doe) in text
+    assert "Doctrine from the DoE root" in rp.read_text(encoding="utf-8")
+
+
+def test_doctrine_miss_names_the_pointer_files_read(tmp_path, klabauter_mirror):
+    mod, home = klabauter_mirror
+    missing, text, rp = _seed_agy(mod, tmp_path)
+    assert missing == ["agy coordinator doctrine"]
+    assert "beside this install" not in text
+    assert str(home / ".claude" / ".coordinator-content-root") in text
+    assert str(home / ".claude" / ".coordinator-content-root") in text
+    assert not rp.exists()
+
+
+def test_doctrine_miss_names_a_pointer_value_without_doctrine(tmp_path, klabauter_mirror):
+    mod, home = klabauter_mirror
+    empty = tmp_path / "empty-doe"
+    empty.mkdir()
+    (home / ".claude" / ".coordinator-content-root").write_text(str(empty), encoding="utf-8")
+    missing, text, _ = _seed_agy(mod, tmp_path)
+    assert missing == ["agy coordinator doctrine"]
+    assert str(empty) in text and "no global-doctrine/CLAUDE.md" in text
+
+
+def test_beside_install_rung_still_resolves_without_pointer(tmp_path, klabauter_mirror):
+    mod, _ = klabauter_mirror
+    plugin = tmp_path / "plug"
+    (plugin / "bin").mkdir(parents=True)
+    (plugin / "global-doctrine").mkdir()
+    (plugin / "global-doctrine" / "CLAUDE.md").write_text("x", encoding="utf-8")
+    root, rung, _ = mod.resolve_doctrine(plugin)
+    assert root == plugin.parent / "plug" and rung == "--plugin-root"
+
+
 def test_main_is_a_refusing_library_entrypoint(capsys):
     assert ds.main(["--any"]) == 2
     assert "library module" in capsys.readouterr().err

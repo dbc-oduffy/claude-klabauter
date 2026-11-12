@@ -59,8 +59,10 @@ BATON_REPORT_KEYS = frozenset({
 })
 
 # Nested shapes: counts{candidates,planning_open,execution_open,unschedulable};
-# shipped_unstamped[{id,path,plan_path,plan_status}] -- open batons whose linked plan is archived
-# or terminal: reported for the lander to ship, never candidates and never in a wave.
+# shipped_unstamped[{id,path,plan_path,plan_status,basis[,coded_sha]}] -- open batons whose linked
+# plan is archived or terminal (basis "plan_terminal") or whose plan rows all landed as coded
+# (basis "rows_landed", coded_sha the last coded row's ref or None): reported for the lander to
+# ship, never candidates and never in a wave.
 REPORT_KEYS = frozenset({
     "batons", "waves", "cycles", "unresolved_blockers", "untracked", "held",
     "counts", "unmatched_targets", "verdict", "shipped_unstamped",
@@ -358,6 +360,7 @@ class _Gate:
         self.resolved: Dict[str, Optional[_Rec]] = {}
         self.states: Dict[str, str] = {}
         self.disps: Dict[str, str] = {}
+        self.landed: Dict[str, Optional[dict]] = {}
         self.links: Dict[str, Tuple[Optional[dict], Optional[dict]]] = {}
         self.infos: Dict[str, _Info] = {}
         self._tracked: Any = False
@@ -645,7 +648,7 @@ def _disposition(g: _Gate, rec: Optional[_Rec]) -> str:
         plan, _amb = _link(g, rec)
         if plan is None:
             result = "unplanned"
-        elif plan["status"] in pg.PLAN_CODED_STATUSES:
+        elif plan["status"] in pg.PLAN_CODED_STATUSES or _plan_rows_landed(g, plan) is not None:
             result = "coded"
         elif _plan_approved(g, plan):
             result = "plan-approved"
@@ -771,11 +774,35 @@ def _candidates(g: _Gate):
     return by_state, matched
 
 
-def _shipped_plan(g: _Gate, rec: _Rec) -> Optional[dict]:
-    """The linked plan when it is archived or terminal (the baton shipped unstamped), else None."""
+def _plan_rows_landed(g: _Gate, plan: dict) -> Optional[dict]:
+    """``baton_rows_landed.rows_landed`` of a non-terminal linked plan's text, read once per plan
+    path (lazy import keeps the spine reader off the cold path); None for a terminal plan, an
+    unreadable file or a spine not fully landed."""
+    path = plan["path"]
+    if path.startswith("archive/") or plan["status"] in _SHIPPED_PLAN_STATUSES:
+        return None
+    if path not in g.landed:
+        from coordinator_core.roadmap.baton_rows_landed import rows_landed
+
+        try:
+            text = (g.root / path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            text = None
+        g.landed[path] = rows_landed(text) if text is not None else None
+    return g.landed[path]
+
+
+def _shipped(g: _Gate, rec: _Rec) -> Optional[Tuple[dict, str, Optional[str]]]:
+    """``(plan, basis, coded_sha)`` when the baton shipped unstamped: its linked plan is archived
+    or terminal (``plan_terminal``) or every row of its non-terminal plan landed (``rows_landed``)."""
     plan, _amb = _link(g, rec)
-    if plan is not None and (plan["path"].startswith("archive/") or plan["status"] in _SHIPPED_PLAN_STATUSES):
-        return plan
+    if plan is None:
+        return None
+    if plan["path"].startswith("archive/") or plan["status"] in _SHIPPED_PLAN_STATUSES:
+        return plan, "plan_terminal", None
+    landed = _plan_rows_landed(g, plan)
+    if landed is not None:
+        return plan, "rows_landed", landed["coded_sha"]
     return None
 
 
@@ -808,7 +835,7 @@ def _info(g: _Gate, rec: _Rec) -> _Info:
         if key not in g.sizing_routes:
             g.sizing_routes[key] = pg._sizing_route(g.root, resolved)
         waiting = g.sizing_routes[key] in _NO_PLAN_ROUTES
-    candidate = state == "candidate" and not waiting and _shipped_plan(g, rec) is None
+    candidate = state == "candidate" and not waiting and _shipped(g, rec) is None
     plan_approved = plan is not None and _plan_approved(g, plan)
     gp = _s(fm.get("governing_plan"))
     row = {
@@ -913,17 +940,23 @@ def _reaches_self(start: str, edges: Dict[str, Set[str]], within: Set[str]) -> b
 
 
 def _shipped_entries(g: _Gate, recs: List[_Rec]) -> List[dict]:
-    """``shipped_unstamped`` rows for the candidate-state ``recs`` whose linked plan is terminal."""
+    """``shipped_unstamped`` rows for the candidate-state ``recs`` whose linked plan is terminal or
+    whose plan rows all landed."""
     out = []
     for rec in recs:
-        plan = _shipped_plan(g, rec)
-        if plan is not None:
-            out.append({
+        hit = _shipped(g, rec)
+        if hit is not None:
+            plan, basis, coded_sha = hit
+            entry = {
                 "id": _baton_ids(g.fm(rec), rec.stem)[0],
                 "path": rec.rel,
                 "plan_path": plan["path"],
                 "plan_status": plan["status"],
-            })
+                "basis": basis,
+            }
+            if basis == "rows_landed":
+                entry["coded_sha"] = coded_sha
+            out.append(entry)
     return sorted(out, key=lambda e: e["path"])
 
 

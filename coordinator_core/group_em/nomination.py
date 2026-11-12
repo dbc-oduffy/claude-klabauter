@@ -55,6 +55,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 import time
 from dataclasses import dataclass
@@ -63,7 +64,13 @@ from pathlib import Path
 from typing import NamedTuple, Optional
 
 from coordinator_core._settings_home import settings_home
-from coordinator_core.group_em import atomic_record, human_entry, session_registry
+from coordinator_core.group_em import (
+    atomic_record,
+    box_registry,
+    human_entry,
+    remote_roster,
+    session_registry,
+)
 from coordinator_core.session import liveness as _liveness
 from coordinator_core.session.liveness import session_live
 
@@ -314,6 +321,61 @@ def box_holder(directory: Optional[Path] = None, now: Optional[float] = None) ->
         return None
     liveness = is_live(record)
     return {**record, "live": liveness.live, "live_reason": liveness.live_reason}
+
+
+_GEM_SESSION_NAME = re.compile(r"^group-em-[0-9a-z]+$", re.IGNORECASE)
+_ENDED_STATUSES = frozenset({"ended", "dead", "exited", "stopped"})
+
+
+def fleet_holder(
+    directory: Optional[Path] = None,
+    now: Optional[float] = None,
+    local_id: Optional[str] = None,
+) -> Optional[dict]:
+    """The one live Group EM across the fleet, else None. Additive to `box_holder`, which is
+    unchanged.
+
+    The local box holder answers when it is live (``box_id`` is this box). Otherwise the
+    remote-roster snapshots (file reads only, never a spawn) answer: a reachable box showing a
+    session named ``group-em-<token>`` that is not ended. The local ``holder.json`` is a cache
+    of this box's own claim and never vetoes a live remote Group EM. Several remote candidates:
+    the one matching the local holder's ``session_id`` wins, else the lowest ``(box_id, name)``.
+
+    Result keys: ``session_id``, ``peer_name``, ``live`` (True), ``live_reason``, ``box_id``,
+    ``remote`` (bool); a remote hit also carries ``address`` and ``status``."""
+    local = box_holder(directory, now)
+    if local is not None and local["live"]:
+        return {**local, "box_id": box_registry.local_box_id(), "remote": False}
+    base = directory if directory is not None else settings_home() / "state" / "group-em"
+    try:
+        snapshots = remote_roster.read_snapshot(base, now=now, local_id=local_id)
+    except Exception:
+        return None
+    local_sid = str((local or {}).get("session_id") or "")
+    hits = []
+    for box_id, entry in sorted(snapshots.items()):
+        if not entry.get("reachable"):
+            continue
+        for session in entry.get("sessions") or []:
+            sid, name = session.get("session_id"), session.get("name")
+            if not (isinstance(sid, str) and sid and isinstance(name, str)):
+                continue
+            if not _GEM_SESSION_NAME.match(name) or session.get("status") in _ENDED_STATUSES:
+                continue
+            hits.append((sid != local_sid, box_id, name, session))
+    if not hits:
+        return None
+    _, box_id, name, session = min(hits, key=lambda h: h[:3])
+    return {
+        "session_id": session["session_id"],
+        "peer_name": name,
+        "live": True,
+        "live_reason": "remote_roster",
+        "box_id": box_id,
+        "remote": True,
+        "address": session.get("address"),
+        "status": session.get("status"),
+    }
 
 
 def _newest_verified_repo_record(

@@ -2020,8 +2020,26 @@ def _record_self_reported_touches(result: object, sid_cwd: Optional[str]) -> obj
 
 _REGISTRY: Dict[str, Callable] = {}
 
-# Descriptive only: read by contract.op_contract, never by dispatch (no params pass-through).
+# Read by contract.op_contract and by undeclared_param_keys (strict schemas only).
 _PARAMS_SCHEMA: Dict[str, dict] = {}
+
+
+def undeclared_param_keys(name: str, params: dict) -> list:
+    """Return the sorted *params* keys that op *name*'s strict schema does not declare.
+
+    Empty unless the registered schema has a dict ``properties`` and
+    ``additionalProperties is False``. Keys starting with ``_`` (envelope
+    fields such as ``_origin_worktree``) are never reported.
+    """
+    schema = _PARAMS_SCHEMA.get(name)
+    if not isinstance(schema, dict):
+        return []
+    properties = schema.get("properties")
+    if not isinstance(properties, dict) or schema.get("additionalProperties") is not False:
+        return []
+    return sorted(
+        k for k in params if isinstance(k, str) and not k.startswith("_") and k not in properties
+    )
 
 
 def get_op_handler(name: str, msg: Any = None) -> Optional[Callable]:
@@ -2118,8 +2136,10 @@ def register_op(
     live for other partitions while sync work runs — do NOT add blocking I/O to async
     handlers without wrapping it in asyncio.to_thread at the call site (AC-3 Gap-3).
 
-    ``params_schema`` (optional JSON-Schema dict) is descriptive metadata for the op
-    contract; dispatch never reads it.
+    ``params_schema`` (optional JSON-Schema dict) is op-contract metadata. A strict
+    schema (dict ``properties`` and ``additionalProperties: false``) is enforced at
+    dispatch: an undeclared param key is refused with INVALID_PARAMS before the
+    handler runs.
     """
     def _decorator(fn: Callable) -> Callable:
         _REGISTRY[name] = fn
@@ -2573,6 +2593,22 @@ async def _dispatch_message_impl(msg: dict) -> dict:
             "error": {
                 "code": METHOD_NOT_FOUND,
                 "message": f"Method not found: {method!r}",
+            },
+        }
+
+    # The lookup above lazily registered the op's schema, so read it only now.
+    undeclared = undeclared_param_keys(method, params)
+    if undeclared:
+        accepted = sorted(_PARAMS_SCHEMA[method]["properties"])
+        return {
+            "jsonrpc": "2.0",
+            "id": id_,
+            "error": {
+                "code": INVALID_PARAMS,
+                "message": (
+                    f"undeclared param key(s) {undeclared} for {method}; "
+                    f"accepted: {accepted}"
+                ),
             },
         }
 

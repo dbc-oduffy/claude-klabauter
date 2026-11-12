@@ -1,5 +1,5 @@
-"""A new memory at the file cap lands as written and the oldest memory is evicted,
-whatever the new or the evicted memory's type; nothing is rerouted to state/lessons/."""
+"""A new memory at the file cap lands as written (with the RAM warning) and the oldest
+memory is evicted, whatever the new or the evicted memory's type; the evicted memory (not the new one) is kept as a lesson."""
 
 from __future__ import annotations
 
@@ -55,7 +55,9 @@ def test_new_memory_of_any_type_at_cap_is_allowed_and_oldest_evicted(store, mem_
 
     result = guard.check(_write(mem / "new.md", _body(mem_type, "new")))
 
-    assert result is None
+    hso = result["hookSpecificOutput"]
+    assert "permissionDecision" not in hso
+    assert guard.RAM_WARNING in hso["additionalContext"]
     assert not (mem / "m0.md").exists()
     assert (mem / "m1.md").exists()
     index = (mem / "MEMORY.md").read_text(encoding="utf-8")
@@ -66,10 +68,12 @@ def test_new_memory_of_any_type_at_cap_is_allowed_and_oldest_evicted(store, mem_
     assert log[0]["type"] == mem_type
     assert log[0]["path"].endswith("m0.md")
     assert log[0]["evicted_at"]
-    assert list(lessons.rglob("*")) == []
+    kept = [f for f in lessons.rglob("*.yaml") if "n-" + mem_type in f.read_text(encoding="utf-8")]
+    assert len(kept) == 1
+    assert not [f for f in lessons.rglob("*.yaml") if "name: n-%s\n---\nnew" % mem_type in f.read_text(encoding="utf-8")]
 
 
-def test_oversize_new_body_at_cap_is_denied_and_evicts_nothing(store):
+def test_oversize_new_body_at_cap_is_denied_and_still_evicts(store):
     mem, _lessons = store
     _seed(mem, "feedback")
 
@@ -77,15 +81,15 @@ def test_oversize_new_body_at_cap_is_denied_and_evicts_nothing(store):
 
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "Shorten it" in result["hookSpecificOutput"]["permissionDecisionReason"]
-    assert (mem / "m0.md").exists()
-    assert not (mem.parent / "memory-evictions.jsonl").exists()
+    assert not (mem / "m0.md").exists()
+    assert (mem.parent / "memory-evictions.jsonl").exists()
 
 
 def test_eviction_failure_is_a_deny_naming_the_oldest(store, monkeypatch):
     mem, _lessons = store
     _seed(mem, "user")
 
-    def boom(_d):
+    def boom(_d, **_who):
         raise OSError("locked")
 
     monkeypatch.setattr(guard, "evict_oldest", boom)

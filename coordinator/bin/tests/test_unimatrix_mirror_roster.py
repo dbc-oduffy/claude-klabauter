@@ -58,6 +58,12 @@ def stub_dns(monkeypatch):
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
 
 
+@pytest.fixture(autouse=True)
+def near_box_name(monkeypatch):
+    """This box sorts before every far box in these tests, so it owns the mirror unless a test says otherwise."""
+    monkeypatch.setattr(socket, "gethostname", lambda: "aaa-near")
+
+
 def test_endpoint_is_harness_shaped_on_every_platform():
     roster = load("roster")
     hexname = hashlib.md5(f"unimatrix-{FAR_SOCK}".encode()).hexdigest()
@@ -938,6 +944,7 @@ def test_mirror_all_starts_client_with_deliver_endpoint_and_kills_it_on_exit(tmp
 
     monkeypatch.setattr(mirror_all.R, "spawn", fake_spawn)
     monkeypatch.setattr(mirror_all.R, "tree_kill", killed.append)
+    monkeypatch.setitem(mirror_all._STATE, "mux_off", True)  # pins the per-name fallback client
     cfg = mirror_all.parse_args([str(tmp_path / "m.log"), "--remote", "farbox", "--key", "k"])
     clients = {}
     live = {"local-a": {"pid": 11, "name": "local-a", "messagingSocketPath": "ep11"}}
@@ -984,11 +991,67 @@ def test_mirror_all_restarts_a_client_whose_session_pid_changed(tmp_path, monkey
 
     monkeypatch.setattr(mirror_all.R, "spawn", fake_spawn)
     monkeypatch.setattr(mirror_all.R, "tree_kill", killed.append)
+    monkeypatch.setitem(mirror_all._STATE, "mux_off", True)  # pins the per-name fallback client
     cfg = mirror_all.parse_args([str(tmp_path / "m.log"), "--remote", "farbox"])
     clients = {}
     mirror_all.sync(clients, {"a": {"pid": 1, "messagingSocketPath": "e"}}, cfg, lambda m: None)
     mirror_all.sync(clients, {"a": {"pid": 2, "messagingSocketPath": "e"}}, cfg, lambda m: None)
     assert killed == [701] and clients["a"][0] == 2
+
+
+def _two_box_side(tmp_path, monkeypatch, me, far, mux_off):
+    """One side of a two-box fixture: (module, cfg, spawned commands) with hostname `me` dialling `far`."""
+    mirror_all = load("mirror-all")
+    started = []
+
+    def fake_spawn(cmd):
+        started.append(cmd)
+        return FakeProc(800 + len(started))
+
+    monkeypatch.setattr(mirror_all.R, "spawn", fake_spawn)
+    monkeypatch.setattr(mirror_all.R, "tree_kill", lambda pid: None)
+    monkeypatch.setattr(socket, "gethostname", lambda: me)
+    monkeypatch.setitem(mirror_all._STATE, "mux_off", mux_off)
+    cfg = mirror_all.parse_args([str(tmp_path / f"{me}.log"), "--remote", far, "--key", "k"])
+    return mirror_all, cfg, started
+
+
+LIVE = {"a": {"pid": 11, "name": "a", "messagingSocketPath": "ep11"}}
+
+
+@pytest.mark.parametrize("mux_off", [False, True], ids=["mux", "per-name"])
+def test_a_link_opened_from_both_sides_starts_exactly_one_mirror_on_the_owner(tmp_path, monkeypatch, mux_off):
+    lower, lower_cfg, lower_started = _two_box_side(tmp_path, monkeypatch, "alpha", "zulu", mux_off)
+    lower.sync({}, LIVE, lower_cfg, lambda m: None)
+    higher, higher_cfg, higher_started = _two_box_side(tmp_path, monkeypatch, "zulu", "alpha", mux_off)
+    higher.sync({}, LIVE, higher_cfg, lambda m: None)
+    assert len(lower_started) == 1 and higher_started == []
+
+
+@pytest.mark.parametrize("mux_off", [False, True], ids=["mux", "per-name"])
+def test_the_owner_starts_its_mirror_though_the_far_side_never_syncs(tmp_path, monkeypatch, mux_off):
+    owner, cfg, started = _two_box_side(tmp_path, monkeypatch, "alpha", "zulu", mux_off)
+    owner.sync({}, LIVE, cfg, lambda m: None)
+    assert len(started) == 1
+
+
+def test_the_non_owner_alone_starts_no_mirror_and_says_who_owns_it(tmp_path, monkeypatch):
+    side, cfg, started = _two_box_side(tmp_path, monkeypatch, "zulu", "alpha", False)
+    said = []
+    clients = {}
+    side.sync(clients, LIVE, cfg, said.append)
+    side.sync(clients, LIVE, cfg, said.append)
+    assert started == [] and clients == {}
+    assert said == ["alpha owns the zulu/alpha mirror; this side starts none"]
+
+
+def test_owner_is_decided_on_box_ids_not_alias_spelling(tmp_path, monkeypatch):
+    side, cfg, started = _two_box_side(tmp_path, monkeypatch, "Zulu.local", "u@Alpha-LAN.local", False)
+    side.sync({}, LIVE, cfg, lambda m: None)
+    assert started == []
+    side, cfg, started = _two_box_side(tmp_path, monkeypatch, "Alpha.local", "u@zulu-lan.local", False)
+    side.sync({}, LIVE, cfg, lambda m: None)
+    assert len(started) == 1
 
 
 def test_reshape_repoints_entry_key_and_stops_the_old_bridge(sessions, monkeypatch):
@@ -1208,6 +1271,7 @@ def _sync_rig(tmp_path, monkeypatch, rcs):
 
     monkeypatch.setattr(mirror_all.R, "spawn", fake_spawn)
     monkeypatch.setattr(mirror_all.R, "tree_kill", lambda pid: None)
+    monkeypatch.setitem(mirror_all._STATE, "mux_off", True)  # pins the per-name fallback client
     monkeypatch.setattr(mirror_all, "_now", lambda: clock[0])
     cfg = mirror_all.parse_args([str(tmp_path / "m.log"), "--remote", "farbox", "--key", "k"])
     return mirror_all, started, clock, cfg

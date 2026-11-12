@@ -27,9 +27,14 @@ the truncation incident exposed. No cap on batch/file count is applied by
 this op — NO SILENT CAPS; a caller-supplied ``manifest`` of any size is
 translated whole.
 
-Negative-spec: performs no scan, no cohort computation, no disk read/write of
-its own (pure dict-in/dict-out translation over a caller-supplied manifest),
-no LLM call, and does NOT add the consumer-side integrity assertion itself —
+Each batch also carries an additive ``relevantGuides`` list (distill.guide_index: the top
+guides by term overlap with the batch's files, each with a heading outline); the handler reads
+the guides and batch files for it, and translate_to_workflow_input stays pure over the list it is
+handed.
+
+Negative-spec: performs no scan, no cohort computation, no disk write of
+its own (translation over a caller-supplied manifest; the handler's only read is the guide
+index above), no LLM call, and does NOT add the consumer-side integrity assertion itself —
 that assertion is DoE's distill-harvest.workflow.js's own change to make
 against this op's batch_count/total_file_count fields; this op only makes the
 declared counts available to be checked against.
@@ -44,6 +49,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from coordinator_core.distill.guide_index import relevant_guides_for_batches
 from coordinator_core.distill.manifest_schema import check_schema_version
 from coordinator_core.ipc import register_op
 from coordinator_core.ops.distill_scope import wiki_slugs_as_dict
@@ -77,6 +83,7 @@ def translate_to_workflow_input(
     *,
     repo_root: str,
     format_hints: dict[str, Any] | None = None,
+    relevant_guides: list[list[dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     check_schema_version(manifest)
     hints = dict(format_hints) if format_hints is not None else {}
@@ -84,14 +91,15 @@ def translate_to_workflow_input(
     producer_batches: list[list[str]] = manifest["batches"]
     batches_out: list[dict[str, Any]] = []
     for idx, files in enumerate(producer_batches, start=1):
-        batches_out.append(
-            {
-                "batchId": f"batch-{idx}",
-                "files": list(files),
-                "description": f"Batch {idx} of {len(producer_batches)} ({len(files)} files)",
-                "formatHints": dict(hints),
-            }
-        )
+        batch: dict[str, Any] = {
+            "batchId": f"batch-{idx}",
+            "files": list(files),
+            "description": f"Batch {idx} of {len(producer_batches)} ({len(files)} files)",
+            "formatHints": dict(hints),
+        }
+        if relevant_guides is not None:
+            batch["relevantGuides"] = _fit_guides(batch, relevant_guides[idx - 1])
+        batches_out.append(batch)
 
     wiki_slugs = wiki_slugs_as_dict(manifest)
     return {
@@ -116,6 +124,32 @@ SLUG_SHARD_MAX_BYTES = 12_000
 
 def _compact(obj: Any) -> str:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
+
+
+def _fit_guides(batch: dict[str, Any], guides: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """`guides` (best first) trimmed from the tail until the batch's compact JSON fits the relay
+    cap; the hint yields so that a batch which fit without it is never refused because of it.
+    Whichever of full guides or path-only guides (outline dropped) keeps more entries wins; the
+    batch is measured as it stands, so digests attached beforehand are priced in."""
+
+    def trimmed(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        kept = list(candidates)
+        while kept and len(_compact({**batch, "relevantGuides": kept, "file_count": len(batch["files"])}).encode()) > SLUG_SHARD_MAX_BYTES:
+            kept.pop()
+        return kept
+
+    full = trimmed(guides)
+    if len(full) == len(guides):
+        return full
+    path_only = trimmed([{k: v for k, v in g.items() if k != "outline"} for g in guides])
+    return path_only if len(path_only) > len(full) else full
+
+
+def attach_relevant_guides(payload: dict[str, Any], guides: list[list[dict[str, Any]]]) -> None:
+    """Set each batch's ``relevantGuides`` from ``guides`` (one best-first list per batch), fitted
+    to the relay cap. Call after digests are attached: they share the batch file's budget."""
+    for batch, batch_guides in zip(payload["batches"], guides, strict=True):
+        batch["relevantGuides"] = _fit_guides(batch, batch_guides)
 
 
 def _slug_shards(slugs: dict[str, Any]) -> list[dict[str, Any]]:
@@ -224,6 +258,8 @@ def validate_workflow_input(payload: dict[str, Any]) -> list[str]:
             errors.append(f"batches[{idx}].files must be a list")
         if "formatHints" in batch and not isinstance(batch["formatHints"], dict):
             errors.append(f"batches[{idx}].formatHints must be a dict")
+        if "relevantGuides" in batch and not isinstance(batch["relevantGuides"], list):
+            errors.append(f"batches[{idx}].relevantGuides must be a list")
 
     if isinstance(payload.get("batch_count"), int) and payload["batch_count"] != len(batches):
         errors.append(
@@ -273,10 +309,14 @@ def _handler(params: dict, repo_root: Any = None) -> dict:
     if not repo_root_param:
         raise ValueError("distill.workflow_input requires a non-empty 'repo_root' param")
 
+    wiki_slugs = wiki_slugs_as_dict(manifest)
     payload = translate_to_workflow_input(
         manifest,
         repo_root=repo_root_param,
         format_hints=params.get("format_hints"),
+        relevant_guides=relevant_guides_for_batches(
+            repo_root_param, manifest["batches"], wiki_slugs
+        ),
     )
     errors = validate_workflow_input(payload)
     if errors:

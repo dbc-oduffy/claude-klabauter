@@ -402,8 +402,11 @@ def rows_landed_at_head(repo_root: Path, plan_rel: str, wanted: frozenset) -> fr
 
 def rows_delivered_at_head(repo_root: Path, plan_rel: str, row_writes: Mapping[str, tuple]) -> frozenset:
     """The rows of ``plan_rel`` whose every ``writes`` path differs at HEAD from the commit that
-    introduced the plan (a path absent there counts as differing): delivery evidence for a
-    hand-landing or ``record_halted_run_landed`` commit, which carries no checkpoint trailer.
+    introduced the plan (a path absent there counts as differing), or that was created before
+    that commit (present in its parent, absent further back inside the walk window) and is
+    present at HEAD: delivery evidence for a hand-landing or ``record_halted_run_landed``
+    commit, which carries no checkpoint trailer. A path that merely pre-exists the window is
+    not creation evidence, so an edit-only row over an old file stays held.
 
     ``row_writes`` is ``{row id: writes paths}``; a row with no writes is never delivered.
     In-process, one tree pass for all rows. Fails closed (empty) on an unborn HEAD, a plan
@@ -461,11 +464,24 @@ def rows_delivered_at_head(repo_root: Path, plan_rel: str, row_writes: Mapping[s
         if not closed:
             return frozenset()
 
-    def _changed(path: str) -> bool:
-        at_head, at_base = series[path][0][1], series[path][base_idx][1]
-        return at_head is not ABSENT and at_head is not None and at_head != at_base
+    def _present(value) -> bool:
+        return value is not ABSENT and value is not None
 
-    return frozenset(rid for rid, ps in wanted.items() if all(_changed(p) for p in ps))
+    def _delivered(path: str) -> bool:
+        values = [v for _s, v in series[path]]
+        if not _present(values[0]):
+            return False
+        if values[0] != values[base_idx]:
+            return True
+        # Created before the plan's parent commit: present there, absent further back in the window.
+        parent_idx = base_idx + 1
+        return (
+            parent_idx < len(values)
+            and _present(values[parent_idx])
+            and any(v is ABSENT for v in values[parent_idx + 1:])
+        )
+
+    return frozenset(rid for rid, ps in wanted.items() if all(_delivered(p) for p in ps))
 
 
 def inventory_family_landed(

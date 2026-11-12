@@ -3994,10 +3994,13 @@ def _terminal_commit_inner(
                     found[p] = rid_
             return {p: o for p, o in found.items() if o != sibling_run_id}
 
+        from coordinator_core.ops.dispatch_emit import halted_withheld_index as _hwi
+
+        own_hold = _hwi._parse(_hwi._run_file(worktree_root, sibling_run_id)) if sibling_run_id else None  # one file, not the run listing
         shipped_refused, shipped_reply_field = shipped_gate(
             worktree_root, ask_note_text, landing_paths=all_paths,
             deleted_paths=deleted_paths, withheld_paths=shipped_withheld,
-            own_paths=declared_writes, row_of=stranded_rows, owners=_claim_owners, run_id=sibling_run_id,
+            own_paths=declared_writes | set(own_hold.paths if own_hold else ()), row_of=stranded_rows, owners=_claim_owners, run_id=sibling_run_id,
             widened=widened,
         )
         if shipped_refused is not None:

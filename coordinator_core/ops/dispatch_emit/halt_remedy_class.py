@@ -49,6 +49,7 @@ HALT_REMEDY: dict[str, tuple[str, Optional[str]]] = {
     "review-reverify-indeterminate": (MECHANICAL, "landing-runs-targeted-retest"),
     "indeterminate": (MECHANICAL, "landing-runs-targeted-retest"),
     "test-verdict-names-no-failure": (MECHANICAL, "landing-runs-targeted-retest"),
+    "tests_not_run": (MECHANICAL, "landing-runs-targeted-retest"),
     # Mechanical: the remedy is computed into halted_by.next_action, so the run executes it.
     "REGISTER-ROWS-UNCLAIMED": (MECHANICAL, "replan-claim-omitted-rows"),
     "arm-no-replan-leg": (MECHANICAL, "replan-claim-omitted-rows"),

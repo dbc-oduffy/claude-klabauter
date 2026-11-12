@@ -1271,14 +1271,31 @@ def em_discharge_closes(row: dict, entry: object) -> bool:
     )
 
 
-def _commit_resolves(common_dir: Path, commit: str) -> bool:
-    from coordinator_core.git.git_objects import read_object_header
+_HEX_PREFIX = re.compile(r"[0-9a-f]{4,39}")
 
-    try:
-        header = read_object_header(common_dir, commit)
-    except Exception:
-        return False
-    return header is not None and header[0] == "commit"
+
+def _commit_resolves(common_dir: Path, commit: str) -> Optional[str]:
+    """The full 40-hex sha of ``commit`` when it names a commit, else None.
+
+    A full sha is checked by object read (no spawn); an abbreviation costs one
+    ``git rev-parse --verify <sha>^{commit}``. An ambiguous or unknown prefix
+    and a non-commit object all read as None.
+    """
+    if _FULL_SHA.fullmatch(commit):
+        from coordinator_core.git.git_objects import read_object_header
+
+        try:
+            header = read_object_header(common_dir, commit)
+        except Exception:
+            return None
+        return commit if header is not None and header[0] == "commit" else None
+    if not _HEX_PREFIX.fullmatch(commit):
+        return None
+    from coordinator_core.git.run import run_git
+
+    result = run_git(["-C", str(common_dir), "rev-parse", "--verify", "--quiet", f"{commit}^{{commit}}"])
+    resolved = result.stdout.strip().lower()
+    return resolved if result.returncode == 0 and _FULL_SHA.fullmatch(resolved) else None
 
 
 def _em_discharge(
@@ -1292,7 +1309,7 @@ def _em_discharge(
 ) -> dict:
     """Apply the em-discharge verb: record that the EM performed em-performed row ``row_id``
     (declared ``performer: em``, or derived by ``em_only_act``), or that an executor row is
-    satisfied by ``commit`` (a full 40-hex sha resolving to a commit) and ``evidence``.
+    satisfied by ``commit`` (a full or abbreviated hex sha resolving to one commit, stored in full) and ``evidence``.
 
     Writes only the evidence sidecar; the row's disposition and the plan body are untouched.
     A second discharge of the same row is a no-op, never an overwrite.
@@ -1348,11 +1365,14 @@ def _em_discharge(
         return _err(f"em-discharge: row {row_id!r} is execution_mode: operator; the operator releases it")
     if (row.get("disposition") or "open") != "open":
         return _err(f"em-discharge: row {row_id!r} disposition is {row.get('disposition')!r}, not open")
-    if executor_row and not (_FULL_SHA.fullmatch(commit_s) and _commit_resolves(repo_root, commit_s)):
-        return _err(
-            f"em-discharge: 'commit' {commit_s!r} is not a commit in this repo "
-            "(give the full 40-hex sha)"
-        )
+    if executor_row:
+        resolved = _commit_resolves(repo_root, commit_s)
+        if resolved is None:
+            return _err(
+                f"em-discharge: 'commit' {commit_s!r} did not resolve to a single commit "
+                "(unknown, ambiguous or not a commit); give a hex sha of at least 4 digits"
+            )
+        commit_s = resolved
 
     import datetime
 

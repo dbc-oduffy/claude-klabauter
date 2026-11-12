@@ -328,6 +328,7 @@ const _isBaselineRed = (id, err) =>
   const _finished = new Set();
   const _reviews = [];
   const _heldBy = {};
+  const _needsDownstream = {};
   const _commitRefused = {};
   const _rowIdOf = new WeakMap();
   const _DEP_NON_DONE_RE = /(?:^"?|\n|\\n)\s*[*_`]{0,2}(?:PARTIAL|BLOCKED)[*_`]{0,2}:|(?:^"?|\n|\\n)[ \t>#-]*[*_`]{0,2}[Ss]tatus[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(?:PARTIAL|BLOCKED)\b|<exit-status>(?:PARTIAL|BLOCKED)<\/exit-status>/;
@@ -374,7 +375,8 @@ const _isBaselineRed = (id, err) =>
     if (!ids.length) return null;
     const by = [...new Set(ids.map((i) => _heldBy[i]))];
     const why = by.filter((h) => _chunkReason[h] && !(h in _heldBy)).map((h) => h + ': ' + _chunkReason[h]);
-    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')' + (why.length ? '; ' + why.join('; ') : '');
+    const down = Object.keys(_needsDownstream).filter((h) => by.includes(h)).map((h) => h + ' needs ' + _needsDownstream[h] + ', downstream of it: em-discharge ' + h);
+    return 'dependents unstarted: ' + ids.join(', ') + ' (held by ' + by.join(', ') + ')' + (why.length ? '; ' + why.join('; ') : '') + (down.length ? '; ' + down.join('; ') : '');
   }
   const _TR_VERDICT_RE = /(?:^"?|\n|\\n)[ \t>#-]*[*_`]{0,2}test_verdict[*_`]{0,2}[ \t]*:[ \t]*[*_`]{0,2}[ \t]*(pass|fail|not_run)\b|"test_verdict"\s*:\s*"(pass|fail|not_run)"/;
   function _trVerdictOf(t) {
@@ -393,10 +395,14 @@ const _isBaselineRed = (id, err) =>
     seen.add(x);
     return (_depIdsOf[x] || []).every((d) => typeof d === 'string' && _awaitSafe(d, id, seen));
   }
-  async function _owedDischarged(owed, id) {
+  async function _owedDischarged(owed, id, holder) {
     const m = /^gate-blocker: needs-dependent: *([^ \\"]+)/.exec(owed);
     const x = m ? m[1].replace(/[.,;]$/, '') : '';
-    if (!x || !_awaitSafe(x, id, new Set())) return false;
+    if (!x) return false;
+    if (!_awaitSafe(x, id, new Set())) {
+      if (holder && x !== holder && x in _rowById) _needsDownstream[holder] = x;
+      return false;
+    }
     const xr = await _rowById[x];
     const xt = JSON.stringify(xr ?? null);
     return xr != null && !_DEP_NON_DONE_RE.test(xt) && _DEP_ANY_STATUS_RE.test(xt);
@@ -408,7 +414,7 @@ const _isBaselineRed = (id, err) =>
       const settled = typeof r === 'string' && r.startsWith('ROUTED-OUT:');
       const _o = r != null ? _gateOwedOf(t) : null;
       if (_o && _owedReleases(_o, id)) continue;
-      if (_o && await _owedDischarged(_o, id)) continue;
+      if (_o && await _owedDischarged(_o, id, _rowIdOf.get(deps[i]))) continue;
       if (r != null && Object.hasOwn(_acceptPartial, _rowIdOf.get(deps[i])) && _DEP_PARTIAL_RE.test(t) && !_DEP_BLOCKED_RE.test(t)) continue;
       if (r == null || _DEP_NON_DONE_RE.test(t) || (!settled && !_DEP_ANY_STATUS_RE.test(t) && _trVerdictOf(t) !== 'pass')) {
         return _rowIdOf.get(deps[i]) || '?';
@@ -644,7 +650,8 @@ const _isBaselineRed = (id, err) =>
 
   if (_haltedByHold && typeof _halted === 'string' && typeof _runId === 'string') {
     const _heldReason = _halted;
-    _halted = { halted: "dependents_unstarted", reason: _heldReason, sizing: typeof _sizingRel === 'undefined' ? null : _sizingRel, run_id: _runId, next_action: _heldReason + '; to start them over a PARTIAL holder: ' + "workflow.revise run_id=" + _runId + " accept_partial=[{chunk, reason}]" + ', then re-fire', toString() { return this.reason; } };
+    const _downHolders = Object.keys(_needsDownstream);
+    _halted = { halted: "dependents_unstarted", reason: _heldReason, sizing: typeof _sizingRel === 'undefined' ? null : _sizingRel, run_id: _runId, next_action: _downHolders.length ? "Held rows need a row downstream of them:" + ' ' + _heldReason + '. A refire reproduces the hold: perform what each holder needs, record it (plan.tasks.mutate verb em-discharge for ' + _downHolders.join(', ') + '), then refire.' : _heldReason + '; to start them over a PARTIAL holder: ' + "workflow.revise run_id=" + _runId + " accept_partial=[{chunk, reason}]" + ', then re-fire', toString() { return this.reason; } };
   }
 
   const _orphaned = (r, label, asTest) => {

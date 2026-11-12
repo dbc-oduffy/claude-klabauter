@@ -170,6 +170,7 @@ class WaveRow(NamedTuple):
     change_kind: Optional[str] = None
     appends: tuple = ()
     memo_send: Optional[Mapping] = None
+    stage_role: Optional[str] = None
 
 
 class WaveCycleError(ValueError):
@@ -828,6 +829,7 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
                 change_kind=row.change_kind,
                 appends=getattr(row, "appends", ()),
                 memo_send=getattr(row, "memo_send", None),
+                stage_role=getattr(row, "stage_role", None),
             )
             for row in wave
         ]

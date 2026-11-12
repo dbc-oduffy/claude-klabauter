@@ -112,6 +112,8 @@ class TreeEviction:
         self.head_blobs, self.origin, self.unowned = head_blobs, origin, unowned
         self.run_id = run_id
         self.refused: dict = {}
+        self.record_paths: list = []
+        self.paths: Optional[list] = None
 
     @property
     def evicted(self) -> list:
@@ -129,6 +131,10 @@ class TreeEviction:
             run_id=self.run_id, refused=self.refused,
         )
         self.unowned = {**self.unowned, **self.refused}
+        if self.paths is not None:
+            for rel in self.record_paths:
+                if not (self.root / rel).exists() and rel in self.paths:
+                    self.paths.remove(rel)
 
 
 def plan_tree_eviction(
@@ -167,8 +173,12 @@ def plan_tree_eviction(
     origin = {p: withheld[p] for p in prints if p in withheld}
     for p in prints:
         withheld[p] = EVICTED_NOT_IMPORTABLE
+    appended: list = []
     for rel in (f"{record_dir_rel}/{halt_tree_evict.EVICTED_FILE}",
                 *(f"{record_dir_rel}/{halt_tree_evict.BLOBS_DIR}/{sha}" for sha in prints.values())):
         if rel not in paths:
             paths.append(rel)
-    return TreeEviction(root, record_dir_rel, head_blobs, origin, unowned, run_id)
+            appended.append(rel)
+    eviction = TreeEviction(root, record_dir_rel, head_blobs, origin, unowned, run_id)
+    eviction.record_paths, eviction.paths = appended, paths
+    return eviction

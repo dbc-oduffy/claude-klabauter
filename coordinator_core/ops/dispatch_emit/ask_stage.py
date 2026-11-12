@@ -26,7 +26,13 @@ from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.testing.suite_run_record import read_head_sha
 from coordinator_core.ops._path_guard import contained_path, safe_id
-from coordinator_core.ops.dispatch_emit import ask_stage_receipt, design_route, reply_sidecar, stage_family
+from coordinator_core.ops.dispatch_emit import (
+    ask_stage_receipt,
+    design_route,
+    reply_sidecar,
+    stage_family,
+    stage_family_binding,
+)
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     ASK_TEXT_FILE,
     HALT_PARKED,
@@ -853,7 +859,7 @@ def _group_rows(
     they stay solo; a one-member group leaves `group` empty. Row order is unchanged."""
     units = []
     for r in rows:
-        solo = r.agent_type == REVIEWER_AGENT_TYPE or (raw_by_id.get(r.id) or {}).get("needs_slot") is True
+        solo = r.agent_type == REVIEWER_AGENT_TYPE or r.family or (raw_by_id.get(r.id) or {}).get("needs_slot") is True
         key = f"solo:{r.id}" if solo else f"{r.wave}|{','.join(sorted(r.deps))}|{r.agent_type}|{r.model}|{r.effort or ''}"
         units.append(Unit(r.id, key, sizes.get(r.id, 0)))
     groups = propose_groups(sorted(units, key=lambda u: u.key))
@@ -1504,13 +1510,39 @@ def stage(
         sizing_family = stage_family.resolve((run_sizing or {}).get("family"))
     except ValueError as exc:
         raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
+    binding = None
+    try:
+        if stage_family_binding.opted_in(run_sizing or {}):
+            if (run_sizing or {}).get("family"):
+                raise AskStageError(
+                    f"sizing {run_sizing_rel or ''} names both family and stage_family_binding; keep one"
+                )
+            binding = stage_family_binding.load()
+    except (ValueError, stage_family_binding.BindingError) as exc:
+        if isinstance(exc, AskStageError):
+            raise
+        raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
     with leg("briefs"):
         for wave_no, wave in enumerate(waves):
             for row in wave:
                 agent_type = _row_agent_type(row)
                 row_family = "claude"
+                role_family = ""
                 if sizing_family != "claude" and not row.agent_type and agent_type == _EXECUTOR_AGENT_TYPE:
                     agent_type, row_family = stage_family.RUNNER_AGENT, sizing_family
+                elif (
+                    binding is not None
+                    and row.stage_role
+                    and not row.agent_type
+                    and agent_type == _EXECUTOR_AGENT_TYPE
+                ):
+                    bound = binding.roles.get(row.stage_role)
+                    if bound is None:
+                        raise AskStageError(
+                            f"row {row.id}: stage_role {row.stage_role!r} has no family in the stage-family binding"
+                        )
+                    if bound != stage_family.FALLBACK:
+                        agent_type, role_family = stage_family.RUNNER_AGENT, bound
                 if row.agent_model and agent_type in _AGENT_MODELS:
                     row = row._replace(agent_model=None)  # a pinned type takes its pin; the override is dropped
                 _model_opt(agent_type, row.agent_model)  # raises on bad model grammar of an unpinned override
@@ -1524,6 +1556,9 @@ def stage(
                 )
                 if kept_from:
                     kept_ids.add(row.id)
+                    if role_family:
+                        agent_type, role_family = _EXECUTOR_AGENT_TYPE, ""
+                        model = resolve_agent_model(agent_type, None)
                 prior = None if kept_from else _set_aside_prior_report(root, report_rel)
                 if kept_from:
                     text = _kept_brief(kept_from)
@@ -1556,6 +1591,18 @@ def stage(
                             line = _persisted_return_line(root, resume_snap.kept_run, dep)
                             if line:
                                 text = text.rstrip() + "\n\n" + line
+                fallback_rel = fallback_agent = ""
+                if role_family and not kept_from:
+                    fallback_file = run_dir / "briefs" / f"{row.id}.fallback.md"
+                    _write(fallback_file, text)
+                    fallback_rel, fallback_agent = _rel(root, fallback_file), _EXECUTOR_AGENT_TYPE
+                    text = (
+                        stage_family.runner_brief(
+                            role_family, row.stage_role, _rel(root, brief), f"scratch/family-stage/{row.id}"
+                        )
+                        + "\n"
+                        + text
+                    )
                 _write(brief, text)
                 brief_sizes[row.id] = len(text.encode("utf-8"))
                 paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
@@ -1575,6 +1622,10 @@ def stage(
                         register_rows=tuple(str(r) for r in (raw_by_id.get(row.id) or {}).get("register_rows") or ()),
                         kept_from=kept_from,
                         adopts_stranded=_adopts_stranded(raw_by_id.get(row.id)),
+                        family=role_family if fallback_rel else "",
+                        stage_role=row.stage_role if fallback_rel else "",
+                        fallback_brief_path=fallback_rel,
+                        fallback_agent_type=fallback_agent,
                     )
                 )
                 chunks.append(

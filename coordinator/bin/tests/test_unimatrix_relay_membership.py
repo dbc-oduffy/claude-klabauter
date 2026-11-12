@@ -74,6 +74,43 @@ def body(env, which):
     return env["keys"][which][1].split()[1]
 
 
+def _interp(line):
+    return line.split('command="')[1].split(" ")[0]
+
+
+def test_relay_line_on_darwin_names_homebrew_python_before_the_system_one(monkeypatch):
+    brew = "/opt/homebrew/bin/python3"
+    monkeypatch.setattr(R.sys, "platform", "darwin")
+    monkeypatch.setattr(R.os.path, "isfile", lambda p: p == brew or Path(p).is_file())
+    monkeypatch.setattr(R.os, "access", lambda p, m: True)
+    assert _interp(R.relay_line("AAAA", "alpha", pin_value=None)) == brew
+
+
+def test_relay_line_names_the_pin_over_homebrew(monkeypatch):
+    monkeypatch.setattr(R.sys, "platform", "darwin")
+    monkeypatch.setattr(R.os.path, "isfile", lambda p: True)
+    monkeypatch.setattr(R.os, "access", lambda p, m: True)
+    assert _interp(R.relay_line("AAAA", "alpha", pin_value="/pinned/python3")) == "/pinned/python3"
+
+
+def test_relay_line_reads_the_machine_pin_when_none_is_passed(monkeypatch):
+    monkeypatch.setattr(R, "_pin_value", lambda: "/machine/python3")
+    assert _interp(R.relay_line("AAAA", "alpha")) == "/machine/python3"
+
+
+def test_relay_line_without_lib_beside_it_uses_the_literal_homebrew_tuple(monkeypatch, tmp_path):
+    src = tmp_path / "unimatrix-relay.py"
+    src.write_bytes((BIN / "unimatrix-relay.py").read_bytes())
+    spec = importlib.util.spec_from_file_location("relay_nolib_t", src)
+    solo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(solo)
+    monkeypatch.setattr(solo.sys, "platform", "darwin")
+    monkeypatch.setattr(solo.os.path, "isfile", lambda p: p == "/usr/local/bin/python3")
+    monkeypatch.setattr(solo.os, "access", lambda p, m: True)
+    assert _interp(solo.relay_line("AAAA", "alpha", pin_value=None)) == "/usr/local/bin/python3"
+    assert _interp(solo.relay_line("AAAA", "alpha", pin_value="/p")) == "/p"
+
+
 def test_parse_accepts_only_get_and_put():
     assert R.parse_mode("membership get") == ("membership", "get")
     assert R.parse_mode("membership put") == ("membership", "put")

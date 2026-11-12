@@ -67,12 +67,21 @@ def env(tmp_path, monkeypatch):
     return repo, transcript, call
 
 
-def test_zero_rag_calls_is_rag_corpus_down(env):
+def test_zero_rag_calls_is_rag_not_used_not_down(env):
     _repo, transcript, call = env
     transcript([_tool_use("m1", "Read")])
     out = call()
+    assert out["verdict"] == "rag_not_used"
+    assert out["branch"] == "zero_rag_calls"
+    assert "message" not in out
+
+
+def test_zero_rag_calls_with_engine_queryable_false_is_down(env):
+    _repo, transcript, call = env
+    transcript([_tool_use("m1", "Read")])
+    out = call(engine_queryable=False)
     assert out["verdict"] == "rag_corpus_down"
-    assert out["message"] == rag_use.RESTORE_MESSAGE
+    assert out["branch"] == "engine_queryable_false"
 
 
 def test_one_successful_rag_call_is_ok(env):
@@ -139,14 +148,28 @@ def test_refused_connection_stays_rag_corpus_down(env):
     ])
     out = call()
     assert out["verdict"] == "rag_corpus_down"
+    assert out["branch"] == "all_calls_refused"
     assert out["message"] == rag_use.RESTORE_MESSAGE
 
 
-def test_unreadable_transcript_on_ue_rag_repo_is_down(env):
+def test_unreadable_transcript_is_transcript_unreadable_never_down(env):
     _repo, _transcript, call = env
-    assert call()["verdict"] == "rag_corpus_down"
-    assert call(label="no-such-leg")["verdict"] == "rag_corpus_down"
-    assert call(session_id="absent-session")["verdict"] == "rag_corpus_down"
+    no_transcript = call()
+    assert no_transcript["verdict"] == "transcript_unreadable"
+    assert no_transcript["branch"] == "transcript_missing"
+    assert "message" not in no_transcript
+    assert call(label="no-such-leg")["branch"] == "agent_not_located"
+    assert call(session_id="absent-session")["branch"] == "session_dir_not_located"
+    assert call(run_id="")["branch"] == "params_missing"
+    for out in (call(), call(label="no-such-leg"), call(session_id="absent-session")):
+        assert out["verdict"] == "transcript_unreadable"
+
+
+def test_unreadable_transcript_with_engine_queryable_false_is_down(env):
+    _repo, _transcript, call = env
+    out = call(label="no-such-leg", engine_queryable=False)
+    assert out["verdict"] == "rag_corpus_down"
+    assert out["branch"] == "engine_queryable_false"
 
 
 def test_non_ue_or_rag_absent_repo_is_not_applicable(env, tmp_path):
@@ -194,4 +217,9 @@ def test_only_final_text_is_read_and_rag_down_outranks_unbacked(env):
     ])
     assert call()["verdict"] == "ok"
     transcript([_tool_use("m1", "Read"), _text("m2", "[rag: project_cpp_symbol Ghost]")])
+    assert call()["verdict"] == "citation_unbacked"
+    transcript([
+        _tool_use("m1", "mcp__project-rag__project_symbol"), _tool_error_kind("m1", "connection refused"),
+        _text("m2", "[rag: project_cpp_symbol Ghost]"),
+    ])
     assert call()["verdict"] == "rag_corpus_down"

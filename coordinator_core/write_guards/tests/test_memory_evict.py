@@ -10,6 +10,15 @@ import pytest
 from coordinator_core.write_guards._memory_evict import evict_oldest
 
 
+@pytest.fixture(autouse=True)
+def _isolated_lessons(monkeypatch, tmp_path):
+    """Pin the lessons root so no test writes into the real repo's state/lessons."""
+    root = tmp_path / "lessons-root"
+    root.mkdir()
+    monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(root))
+    return root
+
+
 def _seed(mem, names_types):
     mem.mkdir()
     rows = []
@@ -34,9 +43,40 @@ def test_evicts_oldest_row_and_logs(tmp_path, typ):
     lines = (tmp_path / "memory-evictions.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     logged = json.loads(lines[0])
-    assert set(logged) == {"path", "name", "type", "evicted_at"}
+    assert set(logged) == {"path", "name", "type", "evicted_at", "lesson"}
     assert logged == rec
     assert logged["path"].endswith("a.md")
+
+
+def test_evicted_body_lands_as_a_lesson_before_unlink(tmp_path, _isolated_lessons):
+    mem = tmp_path / "memory"
+    _seed(mem, [("a.md", "feedback"), ("b.md", "user")])
+    body = (mem / "a.md").read_text(encoding="utf-8")
+    rec = evict_oldest(mem)
+    lesson = rec["lesson"]
+    assert lesson.startswith(str(_isolated_lessons)) or lesson.startswith(
+        str(_isolated_lessons.resolve())
+    )
+    text = open(lesson, encoding="utf-8").read()
+    assert "evicted-from-memory" in text and "type: feedback" in text and "body" in text
+    assert body.splitlines()[1] in text
+
+
+def test_failed_lesson_write_keeps_the_memory_and_logs_nothing(tmp_path, monkeypatch):
+    from coordinator_core.write_guards import _memory_evict
+
+    mem = tmp_path / "memory"
+    _seed(mem, [("a.md", "user"), ("b.md", "user")])
+
+    def boom(*a, **k):
+        raise OSError("no lessons root")
+
+    monkeypatch.setattr(_memory_evict, "_write_lesson", boom)
+    with pytest.raises(OSError):
+        evict_oldest(mem)
+    assert (mem / "a.md").exists()
+    assert "a.md" in (mem / "MEMORY.md").read_text(encoding="utf-8")
+    assert not (tmp_path / "memory-evictions.jsonl").exists()
 
 
 def test_unknown_type_without_frontmatter(tmp_path):

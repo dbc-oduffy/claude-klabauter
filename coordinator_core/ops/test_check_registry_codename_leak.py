@@ -362,5 +362,74 @@ def test_extra_positional_after_no_exempt_exits_two(tmp_path, capsys):
     assert rc == 2
 
 
+_REGISTRY_PATCH = "coordinator_core.ops.check_registry_codename_leak._merged_flat_registry"
+
+
+def _tree_with(tmp_path, text):
+    d = tmp_path / "tree"
+    d.mkdir()
+    (d / "notes.md").write_text(text)
+    return d
+
+
+def _no_override_env():
+    env = _env()
+    env.pop("COORDINATOR_CODENAME_REGISTRY_KEYS", None)
+    return env
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "\\".join(["users", "x", "AppData", "Local", "Temp", "claude", "scratchpad", "probe"]),
+        "/".join(["some-repo", "scratch", "tmp.abc123", "my_pkg"]),
+    ],
+)
+def test_scratch_rooted_key_derives_no_codename(tmp_path, monkeypatch, capsys, value):
+    monkeypatch.setattr(_REGISTRY_PATCH, lambda: {"repos.zolithane_probe": value})
+    d = _tree_with(tmp_path, "see zolithane_probe and zolithane-probe here\n")
+    assert _resolve_registry_keys(_no_override_env()) == []
+    assert main([str(d)], env=_no_override_env()) == 0
+
+
+def test_os_temp_root_key_derives_no_codename(tmp_path, monkeypatch):
+    import tempfile
+
+    monkeypatch.setattr(
+        _REGISTRY_PATCH,
+        lambda: {"repos.zolithane": os.path.join(tempfile.gettempdir(), "x", "y")},
+    )
+    assert _resolve_registry_keys(_no_override_env()) == []
+
+
+@pytest.mark.parametrize("slug", ["probe", "demo", "test"])
+def test_common_word_slug_not_flagged(tmp_path, monkeypatch, slug):
+    monkeypatch.setattr(_REGISTRY_PATCH, lambda: {f"repos.{slug}": "/srv/real/place"})
+    d = _tree_with(tmp_path, f"claude-klabauter-doctor-{slug}.py\n")
+    assert main([str(d)], env=_no_override_env()) == 0
+
+
+def test_common_word_key_not_resolved_for_percolate_callers(monkeypatch):
+    monkeypatch.setattr(
+        _REGISTRY_PATCH,
+        lambda: {"repos.probe": "/srv/real/place", "repos.project_zolithane": "/srv/real/z"},
+    )
+    assert _resolve_registry_keys(_no_override_env()) == ["repos.project_zolithane"]
+
+
+def test_common_word_slug_not_flagged_via_env_override(tmp_path):
+    d = _tree_with(tmp_path, "doctor-probe\n")
+    assert main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.probe")) == 0
+
+
+def test_real_private_key_at_real_path_still_flags(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(
+        _REGISTRY_PATCH, lambda: {"repos.project_zolithane": "/srv/real/place"}
+    )
+    d = _tree_with(tmp_path, "leak: project_zolithane\n")
+    assert _resolve_registry_keys(_no_override_env()) == ["repos.project_zolithane"]
+    assert main([str(d)], env=_no_override_env()) == 1
+
+
 if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))

@@ -183,11 +183,30 @@ def _derive_executor_info(file_path: str) -> tuple[str, bool]:
     return "generic-executor", True
 
 
+def _enclosing_repo_root(abs_path: str) -> str | None:
+    """Nearest ancestor of `abs_path` holding `.git`, by stat walk (no git spawn); None when there is none."""
+    d = os.path.dirname(abs_path)
+    while True:
+        try:
+            if os.path.exists(os.path.join(d, ".git")):
+                return d
+        except OSError:
+            return None
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
 def _is_scratch_or_tmp(file_path: str) -> bool:
+    """`scratch` is a component of the path below the enclosing repo root (the whole path when no repo
+    encloses it), or the path is under the temp dir. A `scratch` directory above the repo root exempts nothing."""
     import tempfile
 
     abs_path = os.path.abspath(file_path)
-    if "scratch" in abs_path.replace("\\", "/").split("/"):
+    root = _enclosing_repo_root(abs_path)
+    below = os.path.relpath(abs_path, root) if root else abs_path
+    if "scratch" in below.replace("\\", "/").split("/"):
         return True
     tmp = os.path.normcase(os.path.abspath(tempfile.gettempdir()))
     return (os.path.normcase(abs_path) + os.sep).startswith(tmp + os.sep)

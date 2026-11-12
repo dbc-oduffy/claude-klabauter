@@ -10,6 +10,11 @@ Usage:
 --remote does not answer. A dropped ssh ends this client; its supervisor restarts it and the
 choice is made again.
 
+  unimatrix-inbox.py mux <log> --names-file <json> --remote <alias> [--tunnel-remote <alias>] [--key <path>]
+
+holds every name in the names file (name -> {pid, endpoint}) on one far `inbox-mux` relay,
+adding and dropping names as the file changes. Exits 4 when the far relay lacks `inbox-mux`.
+
 Ordinary inbox registrations stay local to the receiving box. Explicit --reply-inbox
 uses the relay's reply-inbox mode to advertise a temporary transport return endpoint
 to its directly connected boxes. It lasts only while this client's SSH stays open;
@@ -35,6 +40,8 @@ import socket
 import subprocess
 import sys
 import threading
+import time
+import traceback
 from pathlib import Path
 
 IS_WIN = sys.platform == "win32"
@@ -200,8 +207,19 @@ def entry_refusal(entry, a):
 
 def main(argv=None):
     global log
-    a = parse_args(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["mux"]:
+        return mux_main(argv[1:])
+    a = parse_args(argv)
     log = open(a.log, "a", encoding="utf-8", buffering=1)
+    try:
+        _run(a)
+    except Exception:
+        log.write(f"inbox failed:\n{traceback.format_exc()}")
+        raise
+
+
+def _run(a):
     with open(os.path.join(os.path.expanduser(SESSIONS), f"{a.pid}.json"), encoding="utf-8") as fh:
         entry = fh.read().strip()
     refusal = entry_refusal(json.loads(entry), a)
@@ -231,26 +249,192 @@ def main(argv=None):
         if frame.get("type") == "auth":
             auth = line  # belongs to the frame on the next line
             continue
-        if a.deliver_endpoint:
-            line = localize(frame, line, str(a.remote).rpartition("@")[2])
-            log.write(f"<< {a.deliver_endpoint} {line!r}\n")
-            try:
-                write_local(a.deliver_endpoint, auth + line)
-            except Exception as e:
-                log.write(f"deliver failed: {e}\n")
-            auth = b""
-            continue
-        port = inject_port(frame, str(a.remote).rpartition("@")[2])
-        log.write(f"<< :{port} {line!r}\n")
-        try:
-            with socket.create_connection((LOOPBACK, port)) as s:
-                s.sendall(auth + line)
-        except OSError as e:
-            log.write(f"handoff failed: {e}\n")
-        auth = b""
+        auth = deliver_frame(frame, line, auth, a.deliver_endpoint, str(a.remote).rpartition("@")[2])
     rc = p.wait()
     far_err.join(timeout=2)
     log.write(f"inbox ended rc={rc}\n")
+    if rc:
+        sys.exit(rc)
+
+
+def deliver_frame(frame, line, auth, deliver_endpoint, box):
+    """Hand one far frame (with its preceding `auth` line) to the local session; return the next `auth`."""
+    if deliver_endpoint:
+        line = localize(frame, line, box)
+        log.write(f"<< {deliver_endpoint} {line!r}\n")
+        try:
+            write_local(deliver_endpoint, auth + line)
+        except Exception as e:
+            log.write(f"deliver failed: {e}\n")
+        return b""
+    port = inject_port(frame, box)
+    log.write(f"<< :{port} {line!r}\n")
+    try:
+        with socket.create_connection((LOOPBACK, port)) as s:
+            s.sendall(auth + line)
+    except OSError as e:
+        log.write(f"handoff failed: {e}\n")
+    return b""
+
+
+MUX_UNSUPPORTED_RC = 4  # unimatrix-mirror-all.py matches this exit code: the far relay lacks inbox-mux
+MUX_POLL_SECONDS = 2
+MUX_PARK_SECONDS = 600  # a name the far box refused is retried this much later
+MUX_UNREADABLE_RETRY_SECONDS = 30  # a name whose entry or key cannot be read or carried is retried this much later
+
+
+def parse_mux_args(argv):
+    p = argparse.ArgumentParser(prog="unimatrix-inbox.py mux")
+    p.add_argument("log")
+    p.add_argument("--names-file", required=True,
+                   help="JSON name -> {pid, endpoint}: the mirrors to hold, rewritten by the supervisor")
+    p.add_argument("--remote", required=True)
+    p.add_argument("--tunnel-remote", default=None)
+    p.add_argument("--key", default=None)
+    a = p.parse_args(argv)
+    a.key = a.key or default_key()
+    a.tunnel_remote = a.tunnel_remote or os.environ.get("UNIMATRIX_TUNNEL_REMOTE") or None
+    return a
+
+
+def mux_add_frame(name, pid, endpoint):
+    """The `add` frame for one session, or None (logged) when its entry cannot be carried under `name`."""
+    base = os.path.expanduser(SESSIONS)
+    try:
+        with open(os.path.join(base, f"{pid}.json"), encoding="utf-8") as fh:
+            entry = fh.read().strip()
+        (key_path,) = glob.glob(os.path.join(base, f"{pid}.*.key"))
+        with open(key_path, encoding="utf-8") as fh:
+            key = fh.read().strip()
+        refusal = entry_refusal(json.loads(entry), argparse.Namespace(name=name, deliver_endpoint=endpoint))
+    except (OSError, ValueError, TypeError):
+        log.write(f"mux: {name} pid {pid} unreadable; skipped\n")
+        return None
+    if refusal:
+        log.write(f"mux: {name} refused: {refusal}\n")
+        return None
+    return {"op": "add", "name": name, "entry": json.loads(entry), "key": key}
+
+
+class MuxFeed:
+    """The mux stream's stdin side: reconciles the names file into add/drop frames, one at a time."""
+
+    def __init__(self, stdin, names_file, clock=None):
+        self.stdin, self.names_file = stdin, names_file
+        self.clock = clock or time.monotonic
+        self.sent = {}    # name -> (pid, endpoint) last added
+        self.parked = {}  # name -> clock time the far refusal ends
+        self.lock = threading.Lock()
+
+    def _send(self, frame):
+        self.stdin.write(json.dumps(frame).encode() + b"\n")
+        self.stdin.flush()
+
+    def refuse(self, name, error):
+        """The far box refused `name`: forget it and retry after MUX_PARK_SECONDS."""
+        with self.lock:
+            self.sent.pop(name, None)
+            self.parked[name] = self.clock() + MUX_PARK_SECONDS
+
+    def reconcile(self):
+        """Send the add/drop frames that bring the far relay to the names file; False when the pipe is gone."""
+        try:
+            with open(self.names_file, encoding="utf-8") as fh:
+                want = json.load(fh)
+        except (OSError, ValueError):
+            return True
+        if not isinstance(want, dict):
+            return True
+        now = self.clock()
+        try:
+            with self.lock:
+                for name in [n for n in self.sent if n not in want]:
+                    self._send({"op": "drop", "name": name})
+                    del self.sent[name]
+                for name, v in want.items():
+                    if not isinstance(v, dict) or self.parked.get(name, 0) > now:
+                        continue
+                    ident = (v.get("pid"), v.get("endpoint"))
+                    if self.sent.get(name) == ident:
+                        continue
+                    frame = mux_add_frame(name, *ident)
+                    if frame:
+                        self._send(frame)
+                        self.sent[name] = ident
+                    else:
+                        self.parked[name] = now + MUX_UNREADABLE_RETRY_SECONDS
+        except (OSError, ValueError):
+            return False
+        return True
+
+
+def mux_main(argv):
+    global log
+    a = parse_mux_args(argv)
+    log = open(a.log, "a", encoding="utf-8", buffering=1)
+    try:
+        _mux_run(a)
+    except Exception:
+        log.write(f"inbox mux failed:\n{traceback.format_exc()}")
+        raise
+
+
+def _mux_run(a):
+    remote = pick_remote(a.remote, a.tunnel_remote)
+    p = _box_mux().for_remote(remote, key=a.key).subscribe("inbox-mux", b"")
+    usage = []
+
+    def watch_stderr():
+        for raw in p.stderr:
+            text = raw.decode("utf-8", "replace").rstrip()
+            if text:
+                log.write(f"far: {text}\n")
+                if text.startswith("usage:"):
+                    usage.append(text)
+
+    far_err = threading.Thread(target=watch_stderr, daemon=True)
+    far_err.start()
+    log.write(f"inbox mux up, ssh pid {p.pid}\n")
+    feed, stop = MuxFeed(p.stdin, a.names_file), threading.Event()
+
+    def pump():
+        while not stop.is_set() and feed.reconcile():
+            stop.wait(MUX_POLL_SECONDS)
+
+    threading.Thread(target=pump, daemon=True).start()
+    box, auths, frames = str(a.remote).rpartition("@")[2], {}, 0
+    for line in p.stdout:
+        if not line.strip():
+            continue
+        try:
+            wrapped = json.loads(line)
+            name = wrapped["name"]
+        except (ValueError, KeyError, TypeError):
+            log.write(f"unparsed {line!r}\n")
+            continue
+        frames += 1
+        if "error" in wrapped:
+            log.write(f"far refused {name}: {wrapped['error']}\n")
+            feed.refuse(name, wrapped["error"])
+            continue
+        frame = wrapped.get("frame")
+        if not isinstance(frame, dict):
+            log.write(f"unparsed {frame!r}\n")
+            continue
+        text = json.dumps(frame).encode() + b"\n"
+        if frame.get("type") == "auth":
+            auths[name] = text
+            continue
+        endpoint = (feed.sent.get(name) or (None, None))[1]
+        if endpoint is None:
+            continue  # dropped while the frame was in flight
+        auths[name] = deliver_frame(frame, text, auths.get(name, b""), endpoint, box)
+    rc = p.wait()
+    stop.set()
+    far_err.join(timeout=2)
+    log.write(f"inbox mux ended rc={rc}\n")
+    if rc and usage and not frames:
+        sys.exit(MUX_UNSUPPORTED_RC)
     if rc:
         sys.exit(rc)
 

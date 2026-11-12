@@ -39,7 +39,8 @@ plus created paths) and all withheld by a readable foreign halt record; an unrea
 in-footprint cause file, or no cause files leaves the node ``unattributed``. ``foreign_red``
 (``{node id: [culprit paths]}``) carries the remaining nodes whose every cause file is outside the
 footprint and dirty versus HEAD, whether or not a halt record holds it (unreadable record excepted): the
-failure is shared-tree contamination, evidence rather than a blocker. Absent ``cause_files``
+failure is shared-tree contamination, evidence rather than a blocker; a node green at the run base
+(``failing_at_base`` supplied) classes there only when every such cause file is untracked. Absent ``cause_files``
 they are derived (``_derive_cause_files``); a bare file name resolving nowhere falls back to the sole
 dirty tracked path of that basename. A failing node id's
 test file implicates itself when edited or created, and every edited ``.py`` module it imports, plus
@@ -688,15 +689,25 @@ def _derive_cause_files(
     return out
 
 
+def _untracked(repo_root: Path, rels: List[str]) -> Set[str]:
+    """Existing files among ``rels`` that HEAD lacks. An unreadable HEAD answers nothing (fail closed)."""
+    if not rels or not _head_readable(repo_root):
+        return set()
+    head = git_state.head_blobs(repo_root, rels)
+    return {rel for rel in rels if rel not in head and (repo_root / rel).is_file()}
+
+
 def _sibling_owned(
     repo_root: Path, candidates: List[str], cause_files: Optional[Dict[str, List[str]]],
-    footprint: Set[str], run_id: str, plan_path: str,
-) -> List[str]:
+    footprint: Set[str], run_id: str, plan_path: str, untracked_only: Optional[Set[str]] = None,
+) -> Tuple[List[str], Dict[str, List[str]]]:
     """``(sibling_owned, foreign_red)``. ``sibling_owned``: unattributed nodes whose every caller-named
     cause file lies outside ``footprint`` and is withheld by a readable foreign halt record.
     ``foreign_red``: ``{node: [culprit paths]}`` for the rest whose every cause file lies outside
     ``footprint`` and is dirty versus HEAD (so HEAD passes) and none is held by an unreadable record.
-    No cause files, an in-footprint one, or a clean one leaves the node blocking."""
+    No cause files, an in-footprint one, or a clean one leaves the node blocking. A node in
+    ``untracked_only`` (green at the run base) classes only when every cause file is untracked: the base
+    export never held such a file, so green there says nothing about a tracked-dirty one."""
     if not cause_files:
         return [], {}
     causes: Dict[str, List[str]] = {}
@@ -705,6 +716,9 @@ def _sibling_owned(
         paths = sorted({_rel(p, repo_root) for p in raw if isinstance(p, str) and p.strip()}) if raw else []
         if paths and not footprint.intersection(paths):
             causes[node] = paths
+    if untracked_only and causes:
+        untracked = _untracked(repo_root, sorted({p for n, ps in causes.items() if n in untracked_only for p in ps}))
+        causes = {n: ps for n, ps in causes.items() if n not in untracked_only or set(ps) <= untracked}
     if not causes:
         return [], {}
     from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
@@ -959,10 +973,12 @@ def review_reverify(
         if targets and targets <= fenced and node not in unattributed and node not in already:
             unattributed.append(node)
     unattributed.extend(n for n in not_base_red if n not in unattributed)
-    candidates = [n for n in unattributed if n not in not_base_red and n not in base_green]
+    candidates = [n for n in unattributed if n not in not_base_red]
     if cause_files is None and candidates:
         cause_files = _derive_cause_files(repo_root, candidates, failing_output)
-    sibling_owned, foreign_red = _sibling_owned(repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path)
+    sibling_owned, foreign_red = _sibling_owned(
+        repo_root, candidates, cause_files, {*rels, *created}, run_id, plan_path, untracked_only=base_green,
+    )
     if sibling_owned or foreign_red:
         unattributed = [n for n in unattributed if n not in sibling_owned and n not in foreign_red]
     unmeasured: List[str] = []
@@ -1043,7 +1059,7 @@ def review_reverify(
         "foreign_red": foreign_red,
         "kept": kept,
         "foreign": foreign_ids,
-        "passed_at_base": sorted(base_green),
+        "passed_at_base": sorted(base_green - set(foreign_red)),
         "index_residue": index_residue,
         "record": _rel(str(record_path), repo_root),
         "error": None,

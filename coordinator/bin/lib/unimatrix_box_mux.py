@@ -1,4 +1,4 @@
-"""One ssh carrier per far box, addressed by member host name and pinned with HostKeyAlias.
+"""One ssh carrier per far box, addressed by member host name (else the IP as given) and pinned with HostKeyAlias.
 
 `channel(box, key=, host=)` is the only way the roster poll, the bridge relay and the inbox reach a
 far box. POSIX rides one ssh ControlMaster per box (the roster's `mux_options`). Windows OpenSSH has
@@ -29,14 +29,6 @@ RESTART_FLOOR_SECONDS = 20.0
 BROKER_START_WAIT_SECONDS = 8.0
 _IP_HOSTS = {}
 IP_HOSTS_TTL_SECONDS = 300.0
-
-
-class IpLiteralRemote(OSError):
-    """The remote is an IP literal with no membership host name; carries the offending `box`."""
-
-    def __init__(self, box):
-        self.box = box
-        super().__init__(f"far box {box!r} is an IP literal with no member host name; address it by host name")
 
 
 def _no_window():
@@ -100,21 +92,23 @@ def member_ip_hosts():
 
 
 def box_of(host):
-    """The box id of a host name: first dot label, no trailing `-lan`, lowercase."""
-    label = str(host).rpartition("@")[2].partition(".")[0].lower()
+    """The box id of a host: an IP literal is its own id (`:` -> `-`, file-name safe); else first dot label, no trailing `-lan`, lowercase."""
+    h = str(host).rpartition("@")[2]
+    if is_ip_literal(h):
+        return h.strip("[]").lower().replace(":", "-")
+    label = h.partition(".")[0].lower()
     return label[:-4] if label.endswith("-lan") else label
 
 
 def resolve_remote(remote, ip_hosts=None):
-    """(ssh target, box id) for `remote`; an IP literal is replaced by its member host name.
+    """(ssh target, box id) for `remote`; an IP literal is replaced by its member host name when membership maps it.
 
-    Raises IpLiteralRemote when the IP names no member."""
+    An unmapped IP stays as dialled, its box id the IP itself (so HostKeyAlias=<ip>): no membership, no refusal."""
     user, _, host = str(remote).rpartition("@")
     if is_ip_literal(host):
         named = (ip_hosts if ip_hosts is not None else member_ip_hosts()).get(host.strip("[]").lower())
-        if not named or is_ip_literal(named):
-            raise IpLiteralRemote(host.strip("[]"))
-        host = named
+        if named and not is_ip_literal(named):
+            host = named
     return (f"{user}@{host}" if user else host), box_of(host)
 
 
@@ -243,11 +237,9 @@ def channel(box, *, key, host, home=None, extra=(), direct=False, mux_options=No
             spawn_broker=None):
     """The channel to far `box`, dialled at member host name `host`; never connects at construction.
 
-    `host` must not be an IP literal (IpLiteralRemote). POSIX, `direct=True`, or a non-Windows `win`
-    gives a ControlMaster-backed DirectChannel; Windows gives the broker-backed channel, which under a
-    test home refuses to start a broker for a box or key the C1 guard calls real."""
-    if is_ip_literal(str(host).rpartition("@")[2]):
-        raise IpLiteralRemote(str(host).rpartition("@")[2].strip("[]"))
+    POSIX, `direct=True`, or a non-Windows `win` gives a ControlMaster-backed DirectChannel; Windows
+    gives the broker-backed channel, which under a test home refuses to start a broker for a box or
+    key the C1 guard calls real."""
     if direct or not (IS_WIN if win is None else win):
         if mux_options is None:
             mux_options = lambda h: _roster().mux_options(h)

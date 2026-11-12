@@ -81,3 +81,12 @@ def test_review_writes_delegates_lazily(tmp_path, monkeypatch):
     import coordinator_core.ops.dispatch_emit as pkg
     monkeypatch.setattr(pkg, "review_edit_source", mod, raising=False)
     assert re_.review_writes(tmp_path, "s1", 5.0) == {"f.py": "s1:5.0"}
+
+
+def test_recorded_edits_include_outside_declared_and_nothing_unrecorded():
+    from coordinator_core.ops.dispatch_emit import terminal_commit_review as tcr
+
+    review = {"reverify": {"outside_declared": ["web/contracts.test.ts"], "edited": []}}
+    got = tcr._review_recorded_edits(review)
+    assert "web/contracts.test.ts" in got
+    assert "web/other.ts" not in got

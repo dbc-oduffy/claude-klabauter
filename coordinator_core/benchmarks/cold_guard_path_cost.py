@@ -94,7 +94,7 @@ def block_server_spawn(runtime: Path) -> None:
 
     `door.c :: door_maybe_spawn_server` returns at `door_ensure_dir_recursive_w` before any process is created."""
     runtime.mkdir(parents=True, exist_ok=True)
-    (runtime / RUNTIME_BLOCKER).write_text("blocks respawn-on-miss under the measured job\n", encoding="utf-8")
+    (runtime / RUNTIME_BLOCKER).write_text("blocks respawn-on-miss under the measured job\n", encoding="utf-8", newline="\n")
 
 
 def net_cost(gross: dict, floor: dict) -> dict:
@@ -224,7 +224,7 @@ def run(repo_root: Path, door: Path, k: int, samples: int, measure: Measure = me
         payload = hook_payload(repo_root)
         payload_path, wrapper_path, out_path = parent / "payload.json", parent / "wrapper.py", parent / "out.bin"
         payload_path.write_bytes(payload)
-        wrapper_path.write_text(WRAPPER_SOURCE, encoding="utf-8")
+        wrapper_path.write_text(WRAPPER_SOURCE, encoding="utf-8", newline="\n")
         env = door_environment(root, runtime, settings)
         cwd = str(repo_root)
         py = sys.executable

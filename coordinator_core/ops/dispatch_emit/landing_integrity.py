@@ -82,6 +82,8 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (  # noqa:
     named_failures,
     recorded_targeted_set,
     retest_remedy,
+    reverify_failing_nodes,
+    reverify_passed_clean,
     reverify_record,
     reverify_red_findings,
     reverify_verdict,
@@ -655,7 +657,10 @@ def _landing_test_gate(
                 return [_ran_zero_finding(params, _renamed_detail(worktree_root, params, run_id))], "failed"
             if check_now == NOT_RUN_CHECK:
                 return [], NOT_RUN_CHECK
-        nodes = list(dict.fromkeys([*_failed_nodes(params, verdict), *_recorded_failed_nodes(worktree_root, run_id)]))
+        nodes = list(dict.fromkeys([
+            *_failed_nodes(params, verdict), *_recorded_failed_nodes(worktree_root, run_id),
+            *reverify_failing_nodes(params),
+        ]))
         if nodes and failed_targeted_tests(verdict)[1] == ZERO_FAIL_CHECK:
             verdict = {**verdict, "tests_failed": None}
         files = list(dict.fromkeys(f for f in (_node_file(n) for n in nodes) if f))
@@ -671,6 +676,10 @@ def _landing_test_gate(
         if not files:
             if _explicit_empty_failed_tests(params) and _retest_record_status(worktree_root, run_id) == "pass":
                 return [], "pre-existing-only"
+            # A measured clean re-verify outranks an unattributed carried fail (a stale or zero-run retest
+            # record measured nothing); a failing re-verify names its nodes above and still refuses.
+            if not nodes and reverify_passed_clean(params):
+                return [], "pass-on-retest"
             return [Finding(findings[0].path, findings[0].reason,
                             f"{findings[0].detail}; or pass params.{FAILED_TESTS_PARAM} (failing node ids)"
                             f"{_stale_retest_note(worktree_root, run_id)}")], check

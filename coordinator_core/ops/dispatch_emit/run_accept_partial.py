@@ -55,6 +55,15 @@ def record(dir_: Path, entries: list[dict], at: str) -> Path:
     return sink
 
 
+def read_chain(root: Path, run_id: str) -> dict[str, str]:
+    """``{chunk: reason}`` for ``run_id`` and its ``resumed_from`` predecessors; the nearest run wins per chunk."""
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.landing_integrity import _resumed_chain
+
+    chain = [run_id, *_resumed_chain(Path(root), run_id)]
+    return read([record_dir(Path(root), rid) for rid in reversed(chain)])
+
+
 def read(record_dirs: Iterable[Path]) -> dict[str, str]:
     """``{chunk: reason}`` across the dirs; later line wins per chunk; never raises."""
     merged: dict[str, str] = {}

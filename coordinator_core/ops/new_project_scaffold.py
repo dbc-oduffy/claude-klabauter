@@ -147,9 +147,36 @@ def _find_render_tree(root: str) -> Optional[str]:
     return None
 
 
+_SCRATCH_DIR_NAMES = frozenset({"scratch", "scratchpad"})
+
+
+def _is_scratch_target(target_abs: str) -> bool:
+    """True when ``target_abs`` is under the system temp dir or has a ``scratch``/``scratchpad`` path component.
+
+    Such a target is throwaway: a live ``repos.*`` key for it feeds the registry-derived leak pattern.
+    The read side is ``check_registry_codename_leak._is_throwaway_path``; keep the two predicates in step.
+    """
+    parts = {p.lower() for p in Path(target_abs).parts}
+    if parts & _SCRATCH_DIR_NAMES:
+        return True
+    try:
+        tmp = os.path.normcase(os.path.realpath(tempfile.gettempdir()))
+        resolved = os.path.normcase(os.path.realpath(target_abs))
+    except OSError:
+        return False
+    return (resolved + os.sep).startswith(tmp.rstrip(os.sep) + os.sep)
+
+
 def _register_repo(project_name: str, target: str) -> int:
     slug = project_name.lower().replace("-", "_")
     target_abs = os.path.abspath(target)
+
+    if _is_scratch_target(target_abs):
+        print(
+            f"{_PROG}: not registering repos.{slug}: {target_abs} is under a temp or scratch location",
+            file=sys.stderr,
+        )
+        return 0
 
     ml_bin = _resolve_machine_local()
     if ml_bin is None:

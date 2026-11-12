@@ -101,6 +101,46 @@ def test_refired_emit_seeds_the_accepted_chunk_and_releases_its_dependent(repo):
     assert "Y" in out["calls"] and "Y" not in out["heldBy"]
 
 
+PLAN_TEXT = "---\ntitle: t\nsizing_object: " + "state/sizings/2026-10-01-reuse.yaml" + "\n---\n# plan\n"
+HALTED = "warp-2026-10-01-reuse-20261112T000000-aaaaaa"
+
+
+def _halted_run(repo, run_id, resumed_from=None):
+    from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+    from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+
+    rl.start(repo, run_id)
+    rl.bind(repo, run_id, "state/sizings/2026-10-01-reuse.yaml", ask_text="the ask")
+    write_halt_marker(record_dir(repo, run_id), halted="dependents_unstarted", sizing_rel="state/sizings/2026-10-01-reuse.yaml")
+    return run_id
+
+
+def test_the_seed_reads_the_halted_run_the_plan_sizing_resumes(repo):
+    _halted_run(repo, HALTED)
+    rl.revise(repo, HALTED, accept_partial=[ENTRY])
+    assert emit._accepted_seed(None, repo, None) == {}
+    assert emit._accepted_seed(None, repo, None, plan_text=PLAN_TEXT) == {"X": ENTRY["reason"]}
+
+
+def test_the_seed_follows_the_resumed_from_chain_nearest_wins(repo):
+    older = "warp-2026-10-01-reuse-20261111T000000-bbbbbb"
+    _halted_run(repo, older)
+    rl.revise(repo, older, accept_partial=[ENTRY, {"chunk": "W", "reason": "old reason"}])
+    _halted_run(repo, HALTED)
+    from coordinator_core.ops.dispatch_emit import requirements_ledger as _rl
+
+    run = _rl.read_run(_rl.run_dir(repo, HALTED))
+    run[_rl.RESUMED_FROM_FIELD] = older
+    (_rl.run_dir(repo, HALTED) / "run.json").write_text(json.dumps(run), encoding="utf-8")
+    rl.revise(repo, HALTED, accept_partial=[{"chunk": "W", "reason": "new reason"}])
+    assert emit._accepted_seed(None, repo, None, plan_text=PLAN_TEXT) == {"X": ENTRY["reason"], "W": "new reason"}
+
+
+def test_a_plan_without_a_sizing_or_a_halted_run_seeds_nothing(repo):
+    assert emit._accepted_seed(None, repo, None, plan_text=PLAN_TEXT) == {}
+    assert emit._accepted_seed(None, repo, None, plan_text="# no frontmatter") == {}
+
+
 def test_a_partial_not_named_still_holds_its_dependent(repo):
     _bound(repo, "run-one", ask="first ask")
     rl.revise(repo, "run-one", accept_partial=[ENTRY])
@@ -136,7 +176,7 @@ def test_the_shipped_held_halt_names_the_accept_partial_form_and_keeps_the_reaso
         pytest.skip("node is not installed")
     refire = hr.refire_next_action_js(json.dumps("fire"), "_halted.next_action", "_halted.halted", "'why'")
     script = (
-        "const _runId = 'ask-9', _sizingRel = 's.yaml';\n"
+        "const _runId = 'ask-9', _sizingRel = 's.yaml', _needsDownstream = {};\n"
         "let _halted = 'dependents unstarted: Z (held by W)', _haltedByHold = true;\n"
         + emit._held_halt_record_js() + "\n" + refire + "\n_refireNextAction();\n"
         "console.log(JSON.stringify({ h: _halted, text: String(_halted) }));"

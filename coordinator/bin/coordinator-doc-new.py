@@ -729,7 +729,7 @@ def _machine_local_impl() -> str:
     arbitrary-code-execution vector if a caller can control the env. Invalid values fall
     back to the default impl with a stderr warning rather than executing the supplied path.
 
-    Settings-home first (DR-210 Amendment 2026-07-24: "resolves nothing
+    Settings-home first (DR-210: the engine "resolves nothing
     through ~/.claude/bin") once past the (unchanged) MACHINE_LOCAL_IMPL
     validation above — falls back to the retired compat mirror only when the
     settings-home candidate is absent on disk.
@@ -753,7 +753,7 @@ def _machine_local_impl() -> str:
 
 def _load_machine_local_kernel():
     """Load `_machine_local.py`'s module object by its own resolved path
-    (`_machine_local_impl()` -- settings-home first, DR-210 Amendment) and
+    (`_machine_local_impl()` -- settings-home first, DR-210) and
     return it, in-process, no interpreter spawn.
 
     Spec: docs/plans/2026-09-11-a-python-process-does-not-spawn-a-python-process.md

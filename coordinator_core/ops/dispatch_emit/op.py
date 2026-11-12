@@ -1557,6 +1557,7 @@ def _research_route_setup(
     """
     from coordinator_core.ops import research_shape
     from coordinator_core.ops.dispatch_emit import research_emit
+    from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
     from coordinator_core.ops.dispatch_emit.ask_gate import no_research_block_message
     from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
     from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
@@ -1590,10 +1591,16 @@ def _research_route_setup(
     else:
         questions = [str(q) for q in lists.get("questions") or ()]
     sizing_rel = ""
+    stage_family_opted_in = False
     if from_sizing:
         root = _sizing_root(params, repo_root, str(from_sizing))
         brief_rel = sizing_rel = normalize_sizing_rel(root, str(from_sizing))
-        research = load_sizing(root, brief_rel).get("research")
+        loaded_sizing = load_sizing(root, brief_rel)
+        try:
+            stage_family_opted_in = _stage_family_binding.opted_in(loaded_sizing)
+        except ValueError as exc:
+            raise PipelineEmitRefused([str(exc)]) from exc
+        research = loaded_sizing.get("research")
         if not isinstance(research, dict) or not research:
             raise PipelineEmitRefused([no_research_block_message(brief_rel)])
         if group:
@@ -1664,6 +1671,15 @@ def _research_route_setup(
         root, scratch_rel, brief_rel, [str(c) for c in params.get("context") or ()]
     )
     members_brief = research_emit.bind_output_paths(root, scratch_rel, members_brief)
+    if "notebooklm" in shape["pipelines"]:
+        members_brief = research_emit.bind_notebooks_roster(
+            root, scratch_rel, members_brief,
+            research_emit.notebooks_roster(
+                [t for t in research.get("targets") or () if isinstance(t, dict)],
+                [str(n) for n in lists.get("notebooks") or ()],
+                [q["text"] if isinstance(q, dict) else q for q in questions],
+            ),
+        )
     if shape.get("primary") == research_emit.REPO_PIPELINE:
         members_brief = _append_code_rank_line(root, scratch_rel, members_brief)
     content_root = _pipeline_content_root()
@@ -1853,6 +1869,7 @@ def _research_route_setup(
         "websearch_budget_warning": websearch_warning,
         "next_action": {"op": "research.close", "params": close_params},
         "legs": research_emit.halt_legs([m.pipeline for m, _, _ in segments]),
+        "stage_family_opted_in": stage_family_opted_in,
     }
     pipeline_ctx = {"root": root, "run_id": run_id, "resume_missing": False, "inputs": segments[0][1]}
     return research_ctx, pipeline_ctx, params
@@ -3106,14 +3123,25 @@ def _dispatch_emit_body(
         receipt_extras = {**emission.receipt_extras, **(receipt_extras or {})}
         receipt_plan_path = None
     elif research_ctx is not None:
+        from coordinator_core.ops.dispatch_emit import pipeline_stage_roles
+        from coordinator_core.ops.dispatch_emit import stage_family_binding as _stage_family_binding
         from coordinator_core.ops.dispatch_emit.pipeline_compose import compose_chain_parts
 
+        family_kwargs: dict = {}
+        if research_ctx.get("stage_family_opted_in"):
+            try:
+                family_kwargs["stage_families"] = pipeline_stage_roles.stage_families(
+                    research_ctx["segments"], _stage_family_binding.load()
+                )
+            except ValueError as exc:
+                raise PipelineEmitRefused([str(exc)]) from exc
         chain_parts = compose_chain_parts(
             research_ctx["segments"],
             run_id=research_ctx["run_id"],
             agent_type_host=agent_type_host,
             next_action=research_ctx["next_action"],
             legs=research_ctx["legs"],
+            **family_kwargs,
             **({**fanout_kwargs, "fanout_group": "split"} if research_ctx.get("scouts_per_question") else fanout_kwargs),
         )
         script = chain_parts[0].script
@@ -3122,6 +3150,7 @@ def _dispatch_emit_body(
             "run_id": research_ctx["run_id"],
             "brief": research_ctx["brief"],
             **research_ctx["shape"],
+            **({"stage_families": {f"{p}.{s}": f for (p, s), f in family_kwargs["stage_families"].items()}} if family_kwargs else {}),
         }
         receipt_plan_path = None
     elif pipeline_ctx is not None:

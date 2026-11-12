@@ -509,8 +509,8 @@ def test_shim_passes_a_full_agy_pretooluse_payload_whole_on_every_os(plugin, tmp
                         lambda cmd, **kw: real_run([sys.executable, str(stub), *cmd[1:]], timeout=30, **kw))
     payload = json.dumps({
         "hook_event_name": "PreToolUse", "conversationId": "0cf351a3-6538-4a9b-814c-52b1b75a596c",
-        "cwd": "C:/dev/coordinator-content-repo", "tool_name": "run_command",  # abs-path-ok: synthetic agy cwd fixture
-        "tool_input": {"CommandLine": "coordinator-invoke --help", "Cwd": "C:/dev/coordinator-content-repo", "Blocking": True},  # abs-path-ok: synthetic agy cwd fixture
+        "cwd": "work/repo", "tool_name": "run_command",
+        "tool_input": {"CommandLine": "coordinator-invoke --help", "Cwd": "work/repo", "Blocking": True},
         "transcript": [{"role": "user", "content": [{"type": "text", "text": "x" * 512, "meta": {"n": i}}]}
                        for i in range(500)],
     })
@@ -549,10 +549,10 @@ def test_door_stderr_surfaces_without_quiet_and_not_with_it(plugin, tmp_path):
 
 _REAL_RUN = subprocess.run
 AGY_EVENT = {
-    "cwd": "C:\\dev\\coordinator-content-repo", "workspacePaths": ["C:\\dev\\coordinator-content-repo"], "hookEventName": "PreToolUse",  # abs-path-ok: synthetic agy cwd fixture
+    "cwd": "work\\repo", "workspacePaths": ["work\\repo"], "hookEventName": "PreToolUse",
     "conversationId": "bdf34fcf-e5e4-4186-a45f-3eaac72afe97",
     "toolCall": {"name": "run_command", "args": {"CommandLine": "coordinator-invoke engine_ask.submit --repo X",
-                                                 "Cwd": "C:\\dev\\coordinator-content-repo", "Blocking": True}},  # abs-path-ok: synthetic agy cwd fixture
+                                                 "Cwd": "work\\repo", "Blocking": True}},
 }
 
 
@@ -578,7 +578,7 @@ def test_shim_translates_real_agy_coordinator_invoke_payload_and_prints_explicit
     rc, out, err, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n")
     assert rc == 0 and json.loads(out) == {"decision": "allow"} and err == ""
     assert door_in == {
-        "hook_event_name": "PreToolUse", "session_id": AGY_EVENT["conversationId"], "cwd": "C:\\dev\\coordinator-content-repo",  # abs-path-ok: synthetic agy cwd fixture
+        "hook_event_name": "PreToolUse", "session_id": AGY_EVENT["conversationId"], "cwd": "work\\repo",
         "tool_name": "Bash", "tool_input": {"command": "coordinator-invoke engine_ask.submit --repo X"},
     }
 
@@ -635,7 +635,7 @@ def test_shim_pretooluse_reply_still_carries_a_decision(plugin, tmp_path, monkey
 
 
 def test_shim_keeps_a_claude_shaped_payload_and_its_empty_verdict_unchanged(plugin, tmp_path, monkeypatch, capfd):
-    ev = {"tool_name": "Bash", "tool_input": {"command": "coordinator-invoke x"}, "cwd": "C:\\coordinator-content-repo"}  # abs-path-ok: synthetic Claude-shaped cwd fixture
+    ev = {"tool_name": "Bash", "tool_input": {"command": "coordinator-invoke x"}, "cwd": "work\\repo"}
     rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n", event=ev)
     assert rc == 0 and out == "{}" and door_in == ev
 

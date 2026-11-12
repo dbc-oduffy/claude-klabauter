@@ -66,9 +66,17 @@ def _session_entries():
 RELAY_SETTLE_SECONDS = 15
 
 
+def _mirror_name(name):
+    """The live mirror entry's own name when `name` is that name or its far name, else ''.
+
+    The bridge keys its deliveries.jsonl row on the mirror's own name, never the bare far name."""
+    return next((e["name"] for e in _session_entries()
+                 if e.get("unimatrixRemote") and name in (e.get("name"), e.get("unimatrixFarName"))), "")
+
+
 def _is_mirror(name):
-    """True when `name` is a live mirror entry here: its router receipt only means the bridge took the frame."""
-    return any(e.get("name") == name and e.get("unimatrixRemote") for e in _session_entries())
+    """True when `name` is a live mirror here: its router receipt only means the bridge took the frame."""
+    return bool(_mirror_name(name))
 
 
 def relay_outcome(name, since, wait=RELAY_SETTLE_SECONDS, sleep=time.sleep, now=time.time):
@@ -159,6 +167,9 @@ def main(argv=None):
     r = _router()
     started = time.time() - 1  # one second of slack: the bridge stamps `at` on its own clock read, after ours
     ctl = r.endpoint_path(r.ROUTER_ENDPOINT_SEED, a.endpoint_dir)
+    # Resolved before the send: a misrouted mirror is unmirrored by the roster sync while the bridge
+    # records its FAILED row, so a lookup after the router's reply finds no mirror and reads success.
+    to_mirror, to_mirror_name = (_is_mirror(a.to), _mirror_name(a.to)) if a.to and not a.list else (False, "")
     if a.list:
         req = {"op": "list", "as_target": own_target(), "as": a.as_name or "cli"}
     elif a.to and a.text:
@@ -177,7 +188,8 @@ def main(argv=None):
               file=sys.stderr)
         return 1
     if not resp.get("ok"):
-        print(resp.get("error", "failed"), file=sys.stderr)
+        prefix = "" if a.list else f"undelivered: {a.to}: "
+        print(prefix + resp.get("error", "failed"), file=sys.stderr)
         if resp.get("peers"):
             print("agents: " + ", ".join(resp["peers"]), file=sys.stderr)
         return 1
@@ -195,7 +207,7 @@ def main(argv=None):
     elif resp.get("reply"):
         print(resp["reply"])
     elif resp.get("written") is True or resp.get("msg_id"):
-        outcome = relay_outcome(a.to, started) if _is_mirror(a.to) else {"ok": True}
+        outcome = relay_outcome(to_mirror_name or a.to, started) if to_mirror else {"ok": True}
         if outcome is None:
             print(f"unconfirmed: the relay recorded no outcome for {a.to} within {RELAY_SETTLE_SECONDS}s; "
                   "check before resending", file=sys.stderr)

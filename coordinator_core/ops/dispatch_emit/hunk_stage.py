@@ -82,11 +82,17 @@ def _changed(a: List[bytes], b: List[bytes]) -> List[_Op]:
 def _map(ops: List[_Op], pos: int, end: bool) -> int:
     """A left-side position carried through the full opcodes ``ops`` to the right side; inside a
     changed block a start maps to the block's start and an end to its end. A start on a changed
-    block's end edge, or an end on its start edge, lies outside the block and maps past or before it."""
-    for tag, i1, i2, j1, j2 in ops:
+    block's end edge, or an end on its start edge, lies outside the block and maps past or before it.
+    A pure insertion at ``pos`` lies before a start there and after an end there."""
+    for idx, (tag, i1, i2, j1, j2) in enumerate(ops):
         if i1 <= pos <= i2:
             if tag == "equal":
+                nxt = ops[idx + 1] if idx + 1 < len(ops) else None
+                if not end and pos == i2 and nxt and nxt[0] == "insert" and nxt[1] == pos:
+                    continue
                 return j1 + (pos - i1)
+            if i1 == i2:
+                return j1 if end else j2
             if i1 < i2:
                 if pos == i2 and not end:
                     return j2
@@ -187,6 +193,8 @@ def split(
     full_h_ob = _changed(head_lines, own_base)
     for _, _, _, j1, j2 in full_h_ob:
         wr = (_map(full_ob_w, j1, False), _map(full_ob_w, j2, True))
+        if wr[0] > wr[1]:
+            wr = (wr[1], wr[1])
         owner = next(
             (r for r, _, fr in predating if any(_touch(wr, f) for f in fr)), None
         )

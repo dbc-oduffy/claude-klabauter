@@ -2,6 +2,7 @@
 import importlib.util
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -115,6 +116,9 @@ def box(tmp_path, monkeypatch):
 
     def main(**kw):
         out = io.StringIO()
+        kw.setdefault("launchctl_list", lambda: "")
+        kw.setdefault("relay_ps", lambda: "")
+        kw.setdefault("environ", {"PATH": ""})
         rc = dr.main([], run=b.net.run, resolve=b.net.resolve, connect=b.net.connect, authorized_keys=b.ak,
                      self_names=kw.pop("self_names", {"me"}), out=out, roster=roster, autolink=al, **kw)
         return rc, out.getvalue()
@@ -375,6 +379,7 @@ def test_far_boxes_alias_is_not_checked_when_a_snapshot_is_stored_and_still_is_w
     rc, out = box.main()
     assert "ghost: far_boxes alias does not resolve" in out  # no snapshot: autolink dials it, so it is checked
     snap = box.adopt("me", "machine-a")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
     box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
     box.seed_live("kim@machine-a.local")
     rc, out = box.main()
@@ -422,3 +427,276 @@ def test_peer_check_names_an_unloadable_encrypted_key_without_dialling(box, verd
     ctx = {"run": no_dial, "roster": box.al._roster(), "autolink": AL}
     probs = box.dr.peer_lists_us(ctx, {"epoch": 1}, {"me"})("peer", "/k", "alpha")
     assert len(probs) == 1 and needle in probs[0] and probs[0].startswith("alpha:")
+
+
+def _lstart(epoch):
+    import time
+    t = time.localtime(epoch)
+    months = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+    return f"Mon {months[t.tm_mon - 1]} {t.tm_mday:2d} {t.tm_hour:02d}:{t.tm_min:02d}:{t.tm_sec:02d} {t.tm_year}"
+
+
+def _ps(box, *rows, script="unimatrix-relay.py"):
+    lines = [f"{pid} {ppid} {_lstart(epoch)} /usr/bin/python3 {BIN / script}" for pid, ppid, epoch in rows]
+    return "\n".join(lines + [f"999 1 {_lstart(1_000_000_000)} /usr/sbin/sshd-session -R"])
+
+
+LAUNCHCTL_BOTH = "-\t0\tcom.unimatrix.autolink\n-\t0\tcom.coordinator.unimatrix-autolink\n123\t0\tcom.apple.Finder\n"
+
+
+def test_both_autolink_labels_loaded_is_one_problem_and_one_label_is_silent(box):
+    rc, out = box.main(platform="darwin", launchctl_list=lambda: LAUNCHCTL_BOTH)
+    assert "problem: two autolink labels are loaded in launchd" in out
+    assert "remedy: run unimatrix-install.py --install" in out
+    for one in ("-\t0\tcom.unimatrix.autolink\n", "-\t0\tcom.coordinator.unimatrix-autolink\n", ""):
+        assert "two autolink labels" not in box.main(platform="darwin", launchctl_list=lambda one=one: one)[1]
+
+
+def test_launchctl_is_not_consulted_off_macos(box):
+    def boom():
+        raise AssertionError("launchctl ran")
+
+    assert "two autolink labels" not in box.main(platform="linux", launchctl_list=boom)[1]
+
+
+def test_orphaned_and_replaced_code_relay_sessions_are_each_named_and_a_live_one_is_not(box, monkeypatch):
+    stamp = (BIN / "unimatrix-relay.py").stat().st_ctime
+    box.live.add(100)
+    ps = _ps(box, (201, 1, stamp + 500), (202, 100, stamp - 90_000), (203, 100, stamp + 500))
+    rc, out = box.main(platform="linux", relay_ps=lambda: ps)
+    lines = [ln for ln in out.splitlines() if "relay session" in ln]
+    assert len(lines) == 2
+    assert "pid 201" in lines[0] and "orphaned" in lines[0] and "unimatrix-install.py --install" in lines[0]
+    assert "pid 202" in lines[1] and "replaced" in lines[1]
+    assert "pid 203" not in out
+
+
+def test_relay_sessions_are_not_read_on_windows(box):
+    def boom():
+        raise AssertionError("ps ran")
+
+    assert "relay session" not in box.main(platform="win32", relay_ps=boom)[1]
+
+
+def _forced(box, interp):
+    box.ak.write_text(f'restrict,command="{interp} /x/unimatrix/unimatrix-relay.py" ssh-ed25519 '
+                      f'{box.relay[1].split()[1]} unimatrix\n')
+
+
+def test_a_forced_interpreter_other_than_autolinks_pinned_one_is_a_split(box, tmp_path):
+    pinned = box.al.pinned_python(box.al._roster())
+    other = tmp_path / "pyenv" / "python3"
+    _forced(box, other)
+    split = [ln for ln in box.main(platform="linux")[1].splitlines() if "interpreter split" in ln]
+    assert len(split) == 1 and str(other) in split[0] and str(pinned) in split[0]
+    assert "unimatrix-install.py --install" in split[0]
+
+
+def test_a_forced_interpreter_equal_to_the_pinned_one_or_a_bare_name_is_no_split(box):
+    _forced(box, box.al.pinned_python(box.al._roster()))
+    assert "interpreter split" not in box.main(platform="linux")[1]
+    _forced(box, "python3")
+    assert "interpreter split" not in box.main(platform="linux")[1]
+
+
+def test_a_forced_interpreter_path_with_a_space_is_parsed_whole(box, tmp_path):
+    spaced = tmp_path / "py env" / "python3"
+    box.ak.write_text('restrict,command="\\"%s\\" \\"/x/unimatrix-relay.py\\"" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIabcdefgh unimatrix\n' % spaced)
+    assert box.dr.forced_interpreters(box.ak) == [str(spaced)]
+
+
+def _pwsh_path(tmp_path, *, alias_first):
+    alias = tmp_path / "WindowsApps"
+    real = tmp_path / "ProgramFiles" / "PowerShell" / "7"
+    for d in (alias, real):
+        d.mkdir(parents=True)
+        (d / "pwsh.exe").write_text("")
+    order = [alias, real] if alias_first else [real, alias]
+    return {"PATH": os.pathsep.join(map(str, order))}, alias
+
+
+def test_alias_first_pwsh_on_windows_is_one_problem_naming_the_alias_and_the_remedy(box, tmp_path):
+    environ, alias = _pwsh_path(tmp_path, alias_first=True)
+    rc, out = box.main(platform="win32", environ=environ)
+    lines = [l for l in out.splitlines() if "pwsh" in l]
+    assert rc == 1 and len(lines) == 1
+    assert str(alias / "pwsh.exe") in lines[0] and "PowerShell\\7" in lines[0]
+
+
+def test_real_pwsh_first_on_windows_is_no_problem(box, tmp_path):
+    environ, _ = _pwsh_path(tmp_path, alias_first=False)
+    assert "pwsh" not in box.main(platform="win32", environ=environ)[1]
+
+
+@pytest.mark.parametrize("plat", ["linux", "darwin"])
+def test_alias_first_pwsh_is_not_checked_off_windows(box, tmp_path, plat):
+    environ, _ = _pwsh_path(tmp_path, alias_first=True)
+    assert "pwsh" not in box.main(platform=plat, environ=environ)[1]
+
+
+def test_a_clean_box_prints_none_of_the_three(box):
+    _forced(box, box.al.pinned_python(box.al._roster()))
+    out = box.main(platform="darwin", launchctl_list=lambda: "-\t0\tcom.unimatrix.autolink\n", relay_ps=lambda: "")[1]
+    assert not any(k in out for k in ("two autolink labels", "relay session", "interpreter split"))
+
+
+def _asym(out):
+    return [ln for ln in out.splitlines() if "asymmetric:" in ln]
+
+
+def test_pair_this_box_can_start_but_the_peer_cannot_is_asymmetric_and_exits_nonzero(box):
+    snap = box.adopt("me", "machine-a")
+    box.ak.write_text("")  # no forced line carries machine-a's relay key: machine-a cannot start a link to us
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert rc == 1
+    assert _asym(out) == ["problem: asymmetric: machine-a -> me missing"]
+
+
+def test_pair_the_peer_can_start_but_this_box_cannot_is_asymmetric(box):
+    snap = box.adopt("me", "machine-a")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.net.roster_rc = {"kim@machine-a.local": 255}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert rc == 1
+    assert _asym(out) == ["problem: asymmetric: me -> machine-a missing"]
+
+
+def test_absent_outbound_relay_key_is_asymmetric(box):
+    snap = box.adopt("me", "machine-a")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    gone = str(box.tmp / "no-such-key")
+    box.al.resolve_key = lambda *a, **k: gone
+    rc, out = box.main()
+    assert rc == 1 and _asym(out) == ["problem: asymmetric: me -> machine-a missing"]
+
+
+def test_pair_startable_from_both_sides_names_no_asymmetry(box):
+    snap = box.adopt("me", "machine-a")
+    box.ak.write_text(box.relay_line(box.relay[1]) + "\n")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    rc, out = box.main()
+    assert rc == 0 and _asym(out) == []
+
+
+def test_inbound_authorized_keys_is_not_judged_on_windows(box):
+    box.adopt("me", "machine-a")
+    box.ak.write_text("")
+    assert _asym(box.main(platform="win32")[1]) == []
+
+
+def test_default_cli_on_a_one_sided_fixture_prints_asymmetric_and_exits_nonzero(box, tmp_path):
+    box.adopt("me", "machine-a")
+    box.ak.write_text("")
+    r = subprocess.run([sys.executable, str(BIN / "unimatrix-doctor.py")], capture_output=True, text=True,
+                       env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(box.home), "HOME": str(tmp_path / "h"),
+                            "USERPROFILE": str(tmp_path / "h")}, cwd=str(tmp_path))
+    assert r.returncode == 1 and "asymmetric: " in r.stdout
+
+
+def test_replaced_code_is_judged_against_the_installed_copy_not_the_checkout(box):
+    box.sdir.mkdir(parents=True, exist_ok=True)
+    installed = box.sdir / "unimatrix-relay.py"
+    installed.write_text("x")
+    stamp = installed.stat().st_ctime
+    box.live.add(100)
+    older = _ps(box, (301, 100, stamp - 90_000))
+    newer = _ps(box, (302, 100, stamp + 500))
+    assert "pid 301" in box.main(platform="linux", relay_ps=lambda: older)[1]
+    assert "relay session" not in box.main(platform="linux", relay_ps=lambda: newer)[1]
+
+
+MIRROR = "machine-b-em-on-machine-a"
+SID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+DIGEST = "ab" * 32
+
+
+class FarRelay:
+    """Injected channel: answers the `receipts` command like the far relay (or like an old one)."""
+
+    def __init__(self, rows=(), old=False, rc=0):
+        self.rows, self.old, self.rc, self.commands = list(rows), old, rc, []
+
+    def __call__(self, remote, key):
+        self.remote = remote
+        return self
+
+    def run(self, command, data=b"", timeout=30):
+        self.commands.append(command)
+        if self.old:
+            return subprocess.CompletedProcess([], 1, b"", b"usage: roster | specs | send <pid> | ...")
+        out = json.dumps({"ok": True, "rows": self.rows}).encode() + b"\n"
+        return subprocess.CompletedProcess([], self.rc, out if not self.rc else b"", b"" if not self.rc else b"ssh: down")
+
+
+def _confirm(box, far, delivery=None, entry=True):
+    sessions = box.tmp / "sessions"
+    sessions.mkdir(exist_ok=True)
+    if entry:
+        (sessions / "1.json").write_text(json.dumps(
+            {"name": MIRROR, "sessionId": SID, "unimatrixMirror": True, "unimatrixRemote": "kim@machine-a.local"}))
+    deliveries = box.tmp / "deliveries.jsonl"
+    deliveries.unlink(missing_ok=True)
+    if delivery is not None:
+        row = {"ts": "t", "at": 10_000.0, "target": f"{MIRROR} (pid 9, session {SID})", "ok": True, "ms": 5}
+        row.update(delivery)
+        deliveries.write_text(json.dumps(row) + "\n")
+    box.al.resolve_key = lambda *a, **k: "key"
+    out = io.StringIO()
+    rc = box.dr.main(["confirm", MIRROR], run=box.net.run, out=out, roster=box.al._roster(), autolink=box.al,
+                     sessions_dir=sessions, deliveries=deliveries, channel=far)
+    return rc, out.getvalue()
+
+
+def test_confirm_prints_confirmed_when_the_far_relay_holds_the_digest(box):
+    far = FarRelay(rows=[{"session": SID, "digest": DIGEST}])
+    rc, out = _confirm(box, far, {"digest": DIGEST})
+    assert rc == 0 and out.startswith("CONFIRMED")
+    # since = the delivery's `at` minus 300 s, for the two boxes' unsynchronised clocks
+    assert far.commands == [f"receipts {SID} 9700"] and far.remote == "kim@machine-a.local"
+
+
+def test_confirm_prints_unconfirmed_when_the_far_relay_lacks_the_digest(box):
+    rc, out = _confirm(box, FarRelay(rows=[{"session": SID, "digest": "cd" * 32}]), {"digest": DIGEST})
+    assert rc == 1 and out.startswith("UNCONFIRMED") and "no receipt" in out
+
+
+def test_confirm_names_a_row_without_a_digest_as_a_pre_receipt_bridge(box):
+    far = FarRelay(rows=[{"session": SID, "digest": DIGEST}])
+    rc, out = _confirm(box, far, {})
+    assert rc == 1 and out.startswith("UNCONFIRMED") and "digest" in out and far.commands == []
+
+
+def test_confirm_does_not_confirm_a_failed_delivery(box):
+    far = FarRelay(rows=[{"session": SID, "digest": DIGEST}])
+    rc, out = _confirm(box, far, {"ok": False, "error": "boom", "digest": DIGEST})
+    assert rc == 1 and "failed" in out and far.commands == []
+
+
+def test_confirm_on_an_old_far_relay_says_to_upgrade_and_exits_nonzero(box):
+    rc, out = _confirm(box, FarRelay(old=True), {"digest": DIGEST})
+    assert rc == 1 and out.startswith("UNCONFIRMED: the far relay lacks receipts; upgrade it")
+
+
+def test_confirm_with_an_unreachable_far_relay_is_unconfirmed(box):
+    rc, out = _confirm(box, FarRelay(rc=255), {"digest": DIGEST})
+    assert rc == 1 and out.startswith("UNCONFIRMED") and "did not answer" in out
+
+
+def test_confirm_with_no_mirror_or_no_delivery_is_unconfirmed(box):
+    assert _confirm(box, FarRelay(), {"digest": DIGEST}, entry=False)[1].startswith("UNCONFIRMED: no mirror")
+    assert _confirm(box, FarRelay(), None)[1].startswith("UNCONFIRMED: no delivery")
+
+
+def test_confirm_at_default_arguments_on_an_empty_box_exits_nonzero(box, tmp_path):
+    r = subprocess.run([sys.executable, str(BIN / "unimatrix-doctor.py"), "confirm", MIRROR], capture_output=True,
+                       text=True, env={**os.environ, "COORDINATOR_SETTINGS_HOME": str(box.home),
+                                       "HOME": str(tmp_path / "h"), "USERPROFILE": str(tmp_path / "h")},
+                       cwd=str(tmp_path))
+    assert r.returncode == 1 and r.stdout.startswith("UNCONFIRMED: no mirror")

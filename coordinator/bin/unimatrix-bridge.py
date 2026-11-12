@@ -284,6 +284,32 @@ def delivery_status(limit=10):
             for r in rows[-limit:]]
 
 
+def _roster_wrote_name(addressed, far_name, remote, entry_box=None):
+    """True when `addressed` is a mirror name unimatrix-roster could have written for `far_name` on `remote`.
+
+    Trap: mirrors unimatrix-roster.py labelled(), box_label(), mirror_name() (a dotted far name not
+    already carrying this box is hyphenated first) and mirror_entry_name() (the legacy
+    codex/agy `<vendor>-<repo>-<hash10>-on-<box>` alias); the bridge does not import the roster at
+    load, so change those and this together. Any other name is a misroute."""
+    if not isinstance(addressed, str):
+        return False
+    box = str(remote).rpartition("@")[2]
+    base = far_name
+    if "." in base and not base.endswith("." + box):
+        base = base.replace(".", "-")
+    bare = base.partition(".")[0]
+    if addressed in {far_name, base, bare, f"{bare}.{box}"}:
+        return True
+    legacy = re.fullmatch(r"(codex|agy)-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})", far_name, re.I)
+    if not legacy:
+        return False
+    vendor, target = legacy.groups()
+    alias_box = re.sub(r"[^A-Za-z0-9_-]+", "-", str(entry_box or box)).strip("-").lower() or "unknown"
+    short = hashlib.sha256(target.lower().encode()).hexdigest()[:10]
+    alias = rf"{re.escape(vendor.lower())}-[A-Za-z0-9_-]+-{short}-on-{re.escape(alias_box)}"
+    return re.fullmatch(alias + rf"(\.{re.escape(box)})?", addressed) is not None
+
+
 def relay_send(conn):
     # The relay forwards one message line and authenticates for its local recipient;
     # the near recipient's auth header must not cross the box boundary.
@@ -321,7 +347,7 @@ def relay_send(conn):
             _record_outcome(line, target, ts, 0, "mirror lacks far session id; re-mirror")
         return
     addressed = mine.get("name")
-    if addressed != far_name:
+    if not _roster_wrote_name(addressed, far_name, cfg.remote, mine.get("box")):
         error = f"addressed {addressed}, endpoint is {far_name}; re-mirror"
         log.write(f"relay refused: {error}\n")
         for line in lines:
@@ -405,11 +431,14 @@ def _batch_replies(stdout):
 
 
 def _record_outcome(line, target, ts, ms, error):
+    """Record one line's outcome; `digest` is the sha256 the far relay's receipt row carries for the same line."""
+    row = {"ts": ts, "at": time.time(), "target": target, "ok": not error, "ms": ms,
+           "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest()}
     if error:
-        record_delivery({"ts": ts, "at": time.time(), "target": target, "ok": False, "error": error, "ms": ms})
+        row["error"] = error
+    record_delivery(row)
+    if error:
         notify_sender(line, target, error)
-    else:
-        record_delivery({"ts": ts, "at": time.time(), "target": target, "ok": True, "ms": ms})
 
 
 def pump_local_to_sock(conn, s):

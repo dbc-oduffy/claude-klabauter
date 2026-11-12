@@ -63,7 +63,7 @@ batched — they are cohort annotations only) are sorted by an embedded
 first, deterministically, never by filesystem mtime — mtime is stable run-over-run
 on an unmodified tree but is NOT stable across a fresh clone/checkout, and AC1's
 determinism test compares two runs, not two checkouts) then by path, and chunked
-into fixed-size batches (default 30, the ~20-50-file target band's midpoint).
+into batches packed under SCAN_BATCH_BYTE_BUDGET (``batch_size`` is the hard file-count cap).
 
 Negative-spec: performs no LLM call, no nugget extraction, no wiki-guide synthesis,
 no reality-check-scout judgment, no contradiction adjudication, no PM disposal
@@ -80,13 +80,14 @@ import json
 import os
 import re
 import tempfile
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from coordinator_core.distill import harvest_debt as _harvest_debt
 from coordinator_core.distill import manifest_schema as _schema
 from coordinator_core.distill import ripe_filter as _ripe_filter
+from coordinator_core.distill import scan_digest as _scan_digest
 from coordinator_core.distill.sidecar_sweep import sweep_sidecars
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
 from coordinator_core.ipc import register_op
@@ -107,6 +108,11 @@ __all__ = [
     "VALID_COHORT_MODES",
     "PM_RULING_2026_08_06_COHORT_SPECS",
     "compute_scope",
+    "pack_batches",
+    "attach_digests",
+    "SCAN_BATCH_BYTE_BUDGET",
+    "DEFAULT_BATCH_MAX_FILES",
+    "SCAN_BATCH_ENTRY_BUDGET",
     "write_scope_manifest",
     "render_summary",
 ]
@@ -342,6 +348,71 @@ def _date_sort_key(rel_path: str) -> tuple[str, str]:
     return (date_prefix, rel_path)
 
 
+#: Worktree-relative directory holding one subdirectory per distill run.
+RUN_DIR_REL = "state/scratch/artifact-distillation"
+
+#: How much input one Haiku scan agent is given: ~100K tokens at bytes/4, half
+#: of a 200K-token context, leaving the rest for the prompt, guide list and output.
+SCAN_BATCH_BYTE_BUDGET: int = 400_000
+
+#: Bytes of per-file entry (path, plus digest path when digested) one batch may carry: a
+#: batch file is relayed whole and must stay under distill_workflow_input.SLUG_SHARD_MAX_BYTES
+#: (12,000), leaving headroom for its envelope, formatHints and relevantGuides.
+SCAN_BATCH_ENTRY_BUDGET: int = 9_000
+
+#: Hard upper file count per batch; the byte budget is the normal limiter.
+DEFAULT_BATCH_MAX_FILES: int = 100
+
+
+def _file_bytes_under(worktree_root: Path) -> Callable[[str], int]:
+    """Size function: on-disk bytes of a worktree-relative path (0 when unreadable)."""
+
+    def size_of(rel_path: str) -> int:
+        try:
+            return (worktree_root / rel_path).stat().st_size
+        except OSError:
+            return 0
+
+    return size_of
+
+
+def pack_batches(
+    paths: list[str],
+    *,
+    size_of: Callable[[str], int],
+    byte_budget: int,
+    max_files: int,
+    entry_cost_of: Callable[[str], int] | None = None,
+    entry_budget: int = SCAN_BATCH_ENTRY_BUDGET,
+) -> list[list[str]]:
+    """Greedy in-order packing: close the current batch when adding the next path
+    would exceed ``byte_budget``, ``max_files``, or (when ``entry_cost_of`` is given)
+    ``entry_budget`` bytes of per-file batch-JSON entry. A path over budget gets a
+    batch of its own — never dropped. Order is preserved, so output is as
+    chronological as ``paths``."""
+    cap = max(1, max_files)
+    batches: list[list[str]] = []
+    current: list[str] = []
+    current_bytes = 0
+    current_entry = 0
+    for path in paths:
+        size = max(0, size_of(path))
+        entry = max(0, entry_cost_of(path)) if entry_cost_of is not None else 0
+        if current and (
+            len(current) >= cap
+            or current_bytes + size > byte_budget
+            or current_entry + entry > entry_budget
+        ):
+            batches.append(current)
+            current, current_bytes, current_entry = [], 0, 0
+        current.append(path)
+        current_bytes += size
+        current_entry += entry
+    if current:
+        batches.append(current)
+    return batches
+
+
 @dataclass(frozen=True)
 class ScopeResult:
     """Result of compute_scope: the fully-assembled scope-manifest dict (C9 shape)
@@ -350,6 +421,7 @@ class ScopeResult:
 
     manifest: dict[str, Any]
     counts: dict[str, int]
+    digests: dict[str, str] = field(default_factory=dict)
 
 
 def compute_scope(
@@ -361,8 +433,11 @@ def compute_scope(
     memos_dir: str | None = None,
     log_path: str = "state/distillation-log.md",
     wiki_dirs: list[str] | None = None,
-    batch_size: int = 30,
+    batch_size: int = DEFAULT_BATCH_MAX_FILES,
     cohort_specs: list[CohortSpec] | None = None,
+    byte_budget: int = SCAN_BATCH_BYTE_BUDGET,
+    size_of: Callable[[str], int] | None = None,
+    write_digests: bool = False,
 ) -> ScopeResult:
     """Compute the full scope-manifest for one distill.scope run.
 
@@ -382,6 +457,12 @@ def compute_scope(
     core, which is never a cohort_specs row. A "check-only" mode row is
     scanned and reported under ``cohorts[name]`` but never enters
     ``scannable``/``batches`` — it needs a deletability check, not a harvest.
+
+    Batches are packed chronologically under ``byte_budget`` (``size_of(rel_path)``
+    bytes per file, default the on-disk size) with ``batch_size`` as a hard file-count
+    cap; see ``pack_batches``. With ``write_digests`` each scannable file's scan digest is
+    written under the run directory first, batches are packed by digest bytes, and
+    ``ScopeResult.digests`` maps each digested path to its worktree-relative digest path.
 
     Fails loud (propagates DistillationLogMissingError) when log_path is absent,
     per harvest_debt.compute_harvest_debt's own contract — an absent log is never
@@ -446,7 +527,22 @@ def compute_scope(
     for name in harvest_mode_names:
         scannable_set |= set(data_driven_cohorts[name])
     scannable = sorted(scannable_set, key=_date_sort_key)
-    batches = [scannable[i : i + batch_size] for i in range(0, len(scannable), max(1, batch_size))]
+    digests: dict[str, str] = {}
+    digest_bytes: dict[str, int] = {}
+    if write_digests:
+        written = _scan_digest.write_digests(worktree_root, f"{RUN_DIR_REL}/{run_id}", scannable)
+        digests = {rel: path for rel, (path, _n) in written.items()}
+        digest_bytes = {rel: n for rel, (_p, n) in written.items()}
+    on_disk = _file_bytes_under(worktree_root)
+    batches = pack_batches(
+        scannable,
+        size_of=size_of
+        if size_of is not None
+        else lambda rel: digest_bytes[rel] if rel in digest_bytes else on_disk(rel),
+        byte_budget=byte_budget,
+        max_files=batch_size,
+        entry_cost_of=lambda rel: len(rel) + 4 + (len(rel) + len(digests[rel]) + 8 if rel in digests else 0),
+    )
 
     cohorts = {
         "harvest": harvest_cohort,
@@ -484,7 +580,7 @@ def compute_scope(
     }
     counts.update({name: len(paths) for name, paths in data_driven_cohorts.items()})
 
-    return ScopeResult(manifest=manifest, counts=counts)
+    return ScopeResult(manifest=manifest, counts=counts, digests=digests)
 
 
 def wiki_slugs_as_dict(manifest: dict[str, Any]) -> dict[str, str]:
@@ -555,8 +651,17 @@ def workflow_input(manifest: dict[str, Any], worktree_root: Path) -> dict[str, A
     return translate_to_workflow_input(manifest, repo_root=worktree_root.as_posix())
 
 
+def attach_digests(payload: dict[str, Any], digests: dict[str, str]) -> None:
+    """Add ``digests`` ({original path: digest path}) to each batch that has digested files.
+    ``files`` is untouched: the original path stays the join key for nuggets and fates."""
+    for batch in payload["batches"]:
+        mapped = {f: digests[f] for f in batch["files"] if f in digests}
+        if mapped:
+            batch["digests"] = mapped
+
+
 def _write_run_file(worktree_root: Path, run_id: str, name: str, obj: dict[str, Any]) -> Path:
-    run_dir = worktree_root / "state" / "scratch" / "artifact-distillation" / run_id
+    run_dir = worktree_root / RUN_DIR_REL / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     target = run_dir / name
     body = json.dumps(obj, indent=2).encode("utf-8")
@@ -624,7 +729,8 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
         specs_dir, handoffs_dir, memos_dir, log_path (str, optional) — worktree-relative
             overrides for the four scanned trees / the canonical log.
         wiki_dirs (list[str], optional) — override the auto-detected wiki tree list.
-        batch_size (int, optional, default 30) — chronological batch chunk size.
+        batch_size (int, optional, default DEFAULT_BATCH_MAX_FILES) — hard cap on files
+            per batch; batches are otherwise packed under SCAN_BATCH_BYTE_BUDGET.
         cohort_specs (str "pm_ruling_2026_08_06", or list[dict], optional) — the
             2026-08-06 PM-ruling data-driven cohort set (see CohortSpec). The
             literal string "pm_ruling_2026_08_06" selects
@@ -690,12 +796,22 @@ def _handler(params: dict, repo_root: Path | None = None) -> dict:
                 f"row dicts; got {type(raw_specs).__name__}"
             )
 
-    result = compute_scope(worktree_root, **kwargs)
+    result = compute_scope(worktree_root, write_digests=True, **kwargs)
     written_path = write_scope_manifest(worktree_root, result.manifest)
-    from coordinator_core.ops.distill_workflow_input import shard_workflow_input
+    from coordinator_core.distill.guide_index import relevant_guides_for_batches
+    from coordinator_core.ops.distill_workflow_input import attach_relevant_guides, shard_workflow_input
 
     # Shards first, manifest last: a manifest on disk names only shards already written.
-    shard_manifest, shards = shard_workflow_input(workflow_input(result.manifest, worktree_root))
+    payload = workflow_input(result.manifest, worktree_root)
+    attach_digests(payload, result.digests)
+    # After digests: both share each batch file's 12KB budget.
+    attach_relevant_guides(
+        payload,
+        relevant_guides_for_batches(
+            worktree_root, result.manifest["batches"], wiki_slugs_as_dict(result.manifest)
+        ),
+    )
+    shard_manifest, shards = shard_workflow_input(payload)
     for shard_name, shard_body in shards.items():
         _write_run_file(worktree_root, run_id, shard_name, shard_body)
     workflow_path = _write_run_file(worktree_root, run_id, "workflow-input.json", shard_manifest)

@@ -515,9 +515,11 @@ def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path,monk
     assert resolve_env[0]['PATH']!=contract['env']['PATH']
     for key,value in contract['env'].items():
         if key=='PATH':
-            # The final-env shaper may insert PowerShell 7 ahead of a WindowsApps pwsh; private-bin stays first.
+            # The final-env shaper may put PowerShell 7 first and drop WindowsApps pwsh alias dirs; private-bin stays first.
+            from coordinator_core.codex_runner.sandbox_preflight import is_windowsapps_path
             assert wire['env'][key].split(os.pathsep)[0]==contract['private_bin']
-            assert set(value.split(os.pathsep))<=set(wire['env'][key].split(os.pathsep))
+            kept={e for e in value.split(os.pathsep) if not(is_windowsapps_path(e) and os.path.isfile(os.path.join(e.strip('"'),'pwsh.exe')))}
+            assert kept<=set(wire['env'][key].split(os.pathsep))
         else:assert wire['env'][key]==value
     assert 'COORDINATOR_SESSION_ID' not in wire['env'] and 'CODEX_THREAD_ID' not in wire['env']
     assert wire['env']['COORDINATOR_PARENT_SESSION_ID']==kwargs['parent_session_id']
@@ -601,12 +603,12 @@ def _headless_shape_rig(tmp_path, monkeypatch, *, ps7):
     return repo, seen, str(pf / "PowerShell" / "7"), str(apps)
 
 
-def test_headless_codex_spawn_env_has_ps7_ahead_of_windowsapps_and_writable_temp(tmp_path, monkeypatch):
+def test_headless_codex_spawn_env_has_ps7_first_windowsapps_dropped_and_writable_temp(tmp_path, monkeypatch):
     repo, seen, ps7, apps = _headless_shape_rig(tmp_path, monkeypatch, ps7=True)
     with pytest.raises(_Spawned):
         headless_agents.run_agent("x", {}, repo_root=repo, artifact_dir=tmp_path / "agent")
     env = seen["env"]
-    assert env["PATH"].split(os.pathsep)[:2] == [ps7, apps]
+    assert env["PATH"].split(os.pathsep) == [ps7]
     expected = repo.resolve() / "scratch" / "codex-tmp"
     assert expected.is_dir() and env["TEMP"] == env["TMP"] == str(expected)
 

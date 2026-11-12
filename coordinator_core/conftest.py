@@ -486,6 +486,14 @@ def _forwarder_selfheal_off(monkeypatch):
     monkeypatch.setenv("COORDINATOR_FORWARDER_SELFHEAL_OFF", "1")
 
 
+def _per_test_dir(request, tmp_path_factory, name: str) -> Path:
+    # Trap: an autouse mktemp outlives its test, and a session that ends red or killed keeps
+    # every one (pytest prunes only on all-pass) -- ~240 KB/test, 75 GB on C: across runs.
+    path = tmp_path_factory.mktemp(name)
+    request.addfinalizer(lambda: shutil.rmtree(path, ignore_errors=True))
+    return path
+
+
 @pytest.fixture(autouse=True)
 def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     """Redirect every home-resolution env var into a per-test throwaway dir.
@@ -521,7 +529,7 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
     # above the `real_home` return.
     monkeypatch.setenv(
         "MACHINE_LOCAL_PATHS_ENGINE_DATA_ROOT",
-        str(tmp_path_factory.mktemp("engine-data-root")),
+        str(_per_test_dir(request, tmp_path_factory, "engine-data-root")),
     )
 
     if request.node.get_closest_marker("real_home"):
@@ -539,7 +547,7 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
 
         monkeypatch.setenv(_settings_home_mod.FORBID_REAL_SETTINGS_HOME_ENV, _REAL_SETTINGS_HOME)
 
-    quarantine = tmp_path_factory.mktemp("home-quarantine")
+    quarantine = _per_test_dir(request, tmp_path_factory, "home-quarantine")
     monkeypatch.setenv("HOME", str(quarantine))
     monkeypatch.setenv("USERPROFILE", str(quarantine))
     # HOMEDRIVE+HOMEPATH are expanduser's second Windows tier; leaving them set
@@ -810,7 +818,7 @@ def _reset_foreign_repo_probe_memo():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_advisory_dedupe_gitdir(monkeypatch, tmp_path_factory):
+def _isolate_advisory_dedupe_gitdir(request, monkeypatch, tmp_path_factory):
     """Point the per-session advisory dedupe store at a per-test directory.
 
     Tests dispatch with a fixed fake ``cwd`` and session id; when that ``cwd``
@@ -824,7 +832,7 @@ def _isolate_advisory_dedupe_gitdir(monkeypatch, tmp_path_factory):
     dispatch = sys.modules.get("coordinator_core.bash_guards.dispatch")
     if dispatch is None:
         return
-    store = tmp_path_factory.mktemp("advisory_dedupe_gitdir")
+    store = _per_test_dir(request, tmp_path_factory, "advisory_dedupe_gitdir")
     monkeypatch.setattr(dispatch, "_resolve_gitdir_for_dedupe", lambda cwd: store)
 
 

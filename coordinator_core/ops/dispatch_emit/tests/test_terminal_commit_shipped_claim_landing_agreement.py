@@ -91,7 +91,7 @@ def test_a_claim_on_this_runs_own_halted_hold_is_not_peer_owned(repo):  # noqa: 
 
     out = _call(repo)
 
-    assert out["committed"] is False
+    assert out["committed"] is False, out
     assert out["refused"] == shipped_claims.SHIPPED_CLAIM_REFUSED
     assert "peer_owned" not in out["shipped_claims"]
 
@@ -137,14 +137,21 @@ def test_a_claim_on_an_em_withheld_declared_file_refuses_naming_the_withhold_rea
 
 
 def test_a_plain_unbacked_claim_still_refuses_naming_source_and_reason(repo):  # noqa: F811
+    request = CommitRequest(
+        chunks=(ChunkCommit(id="C1", title="t", paths=("a.py", "ghost.py")),),
+        deliverable_id="dlv-alpha-aaaaaa", plan_path="docs/plans/p.md",
+    )
+    _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
     _write(repo, "a.py", "a = 1\n")
     _write(repo, "ghost.py", "x = 1\n")
+    _write(repo, ".gitignore", "scratch/\n.coordinator-local/\nghost.py\n")  # declared yet ignored: never lands
     _write(repo, NOTE, _note("ghost.py"))
     token = run_token.mint(repo, RUN, "run.mjs")
 
     out = _call(repo, token=token)
 
-    assert out["committed"] is False
+    assert out["committed"] is False, out
     assert out["refused"] == shipped_claims.SHIPPED_CLAIM_REFUSED
     assert "What shipped" in out["error"] and "ghost.py" in out["error"]
-    assert "no row of this run declares it" in out["error"]
+    assert "absent at HEAD, and not in the landing" in out["error"]
+    assert shipped_claims.NOT_DECLARED not in out["error"]

@@ -298,7 +298,7 @@ def test_blobs_that_could_not_be_written_are_not_recorded_and_are_reported(repo,
     real_write_object = git_objects.write_object
 
     def boom(gitdir, kind, payload, *a, **k):
-        if payload.endswith(b" reviewed\n"):
+        if kind == b"blob" and payload.rstrip().endswith(b" reviewed"):
             raise OSError("disk full")
         return real_write_object(gitdir, kind, payload, *a, **k)
 

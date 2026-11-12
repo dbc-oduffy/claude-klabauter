@@ -41,28 +41,30 @@ def _review(reverify):
 
 
 def test_red_reverify_on_a_landed_importer_is_refused_naming_the_test_file(repo):
-    head = _land(repo)
+    """Ruling 594963 R1 (``review-reverify-failed`` is a provenance kind): the red lists as an advisory
+    naming the test file instead of refusing the commit."""
+    _land(repo)
 
     out = _fire(repo, "mod.py", inline_review=_review(_reverify("fail")))
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
-    assert out["integrity"][0]["path"] == TEST_FILE
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
+    assert out["advisory"][0]["path"] == TEST_FILE
     assert out["reverify_check"] == "fail"
-    assert _git(["rev-parse", "HEAD"], repo) == head
 
 
 def test_red_reverify_from_a_subdirectory_suite_is_refused(repo):
+    """Ruling 594963 R1: a subdirectory suite's red is listed as an advisory, not refused."""
     (repo / "lab" / "tests").mkdir(parents=True)
     (repo / "lab" / "mod.py").write_text("x = 1\n", encoding="utf-8")
     (repo / "lab" / TEST_FILE).write_text("import mod\n\n\ndef test_x():\n    assert mod.x\n", encoding="utf-8")
-    head = _git(["rev-parse", "HEAD"], repo)
 
     out = _fire(repo, "lab/mod.py", inline_review=_review(_reverify("fail")))
 
-    assert out["committed"] is False
-    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
-    assert _git(["rev-parse", "HEAD"], repo) == head
+    assert out["committed"] is True, out
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
 
 
 def test_green_after_revert_commits(repo):
@@ -116,12 +118,16 @@ def test_retest_that_ran_the_red_file_clears_the_refusal(repo):
 
 
 def test_retest_that_never_ran_the_red_file_does_not_clear_it(repo):
+    """Ruling 594963 R1: the red is not cleared; it stays in the advisory list."""
     out = _gate_with_retest(repo, ["tests/test_elsewhere.py::test_z"])
 
-    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
 
 
 def test_retest_record_naming_no_files_does_not_clear_it(repo):
+    """Ruling 594963 R1: an empty retest record leaves the red in the advisory list."""
     out = _gate_with_retest(repo, [])
 
-    assert out["refused"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED
+    assert "refused" not in out
+    assert out["advisory"][0]["reason"] == landing_targeted_tests.REVIEW_REVERIFY_FAILED

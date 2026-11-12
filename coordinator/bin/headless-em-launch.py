@@ -13,8 +13,9 @@ the grant for (session id, family), and hands the child COORDINATOR_SESSION_ID p
 
 This is the only caller of write_headless_em_grant. It refuses when the calling env carries a worker
 marker, so a worker cannot mint itself an EM grant; agent-worker-launch.py never writes one.
---prepare-only prints {argv, session_id, environment} as JSON (the environment holds the token) and
-execs nothing; Windows non-prepare launches are refused because exec must not sit under python.exe.
+--prepare-only prints {argv, session_id, environment} as JSON (the environment holds the token, and for
+codex on Windows a shaped PATH: real pwsh dir first, Store alias dirs dropped) and execs nothing;
+Windows non-prepare launches are refused because exec must not sit under python.exe.
 """
 import argparse
 import json
@@ -86,6 +87,14 @@ def launch(family, extra, *, session_id=None, which=shutil.which, execv=os.execv
         return REFUSED
     cmd = [cli, *extra]
     child = {SESSION_ENV: sid, HEADLESS_EM_TOKEN_ENV: token}
+    if family == "codex" and platform == "win32":
+        from coordinator_core.codex_runner.codex_spawn_env import place_installed_pwsh
+        path_key = next((k for k in environ if k.upper() == "PATH"), None)
+        if path_key is not None:
+            inherited = environ[path_key]
+            shaped = place_installed_pwsh({"PATH": inherited}, environ, windows=True)["PATH"]
+            if shaped != inherited:
+                child["PATH"] = shaped
     if prepare_only:
         print(json.dumps({"argv": cmd, "session_id": sid, "environment": child}))
         return 0
