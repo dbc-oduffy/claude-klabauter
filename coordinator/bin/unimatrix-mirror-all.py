@@ -17,7 +17,9 @@ import json
 import os
 import re
 import signal
+import socket
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -101,7 +103,9 @@ ABSENT_POLLS_BEFORE_UNMIRROR = 2  # a router or engine respawn re-registers a se
 # polls a session was missing) are per session name.
 # `up_since` is the monotonic time a client was spawned (or first seen alive).
 STABLE_SECONDS = 300  # a client must stay up this long before its death count resets
-_STATE = {"unsupported": False, "fails": {}, "retry_at": {}, "absent": {}, "up_since": {}}
+# `rc` is each name's last client exit code; `state_sig` is what the mirror-state file last recorded.
+_STATE = {"unsupported": False, "fails": {}, "retry_at": {}, "absent": {}, "up_since": {},
+          "rc": {}, "state_sig": None}
 
 
 def backoff_seconds(fails):
@@ -112,19 +116,31 @@ def backoff_seconds(fails):
 FAR_OWNER_REFUSALS = ("belongs to a live local session", "already mirrored by live relay")
 
 
+HOST_REFUSAL = "hosted on macOS/Linux boxes only"  # the relay's inbox refusal text; the rc it arrives under varies
+
+
+def _client_log_tail(log_dir, name):
+    try:
+        with open(os.path.join(log_dir, f"unimatrix-inbox-{name}.log"), "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, fh.tell() - 4096))
+            return fh.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 def refused_by_far_owner(log_dir, name):
     """True when the client's last attempt was refused because the far box already holds `name`.
 
     The far box's pull supervisor owns such a name: one owner per name, so this push side parks it
     instead of redialing every poll and flipping the owner."""
-    try:
-        with open(os.path.join(log_dir, f"unimatrix-inbox-{name}.log"), "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            fh.seek(max(0, fh.tell() - 4096))
-            tail = fh.read().decode("utf-8", "replace")
-    except OSError:
-        return False
+    tail = _client_log_tail(log_dir, name)
     return any(m in tail for m in FAR_OWNER_REFUSALS)
+
+
+def refused_by_far_host(log_dir, name):
+    """True when the client's last attempt was told the far box hosts no mirrors, whatever the exit code."""
+    return HOST_REFUSAL in _client_log_tail(log_dir, name)
 
 
 def sync(clients, live, cfg, say):
@@ -144,10 +160,12 @@ def sync(clients, live, cfg, say):
                 if _now() - up_since.setdefault(name, _now()) >= STABLE_SECONDS:
                     fails.pop(name, None)  # up for STABLE_SECONDS: the next death starts the backoff over
                 continue
-            if rc == UNSUPPORTED_HOST_RC:
+            if rc == UNSUPPORTED_HOST_RC or refused_by_far_host(log_dir, name):
                 _STATE["unsupported"] = True
-                say(f"far box hosts no mirror inboxes (rc={rc}); no client is dialed again")
+                _STATE["rc"][name] = rc
+                say(f"far box does not host mirror inboxes (rc={rc}); mirroring to it is off, state recorded")
                 break
+            _STATE["rc"][name] = rc
             if name not in retry_at:
                 if refused_by_far_owner(log_dir, name):
                     wait = BACKOFF_CAP_SECONDS
@@ -180,6 +198,108 @@ def sync(clients, live, cfg, say):
         say(f"unmirror {name}")
     for name in [n for n in absent if n not in clients]:
         del absent[name]
+    write_mirror_state(log_dir, clients, live)
+    publish_stale(clients, live, cfg, say)
+
+
+STALE_RENEW_SECONDS = 600
+DEAD_MARK_SECONDS = 2 * BACKOFF_CAP_SECONDS
+_PUBLISHED = {}  # name -> (state, until epoch) last sent to the far box
+
+
+def _box_mux():
+    path = HERE / "lib" / "unimatrix_box_mux.py"
+    mod = sys.modules.get("unimatrix_box_mux")
+    if mod is None:
+        spec = importlib.util.spec_from_file_location("unimatrix_box_mux", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["unimatrix_box_mux"] = mod
+        spec.loader.exec_module(mod)
+    return mod
+
+
+def _send_stale_mark(cfg, command):
+    remote = _roster().pick_remote(cfg.remote, getattr(cfg, "tunnel_remote", None))
+    return _box_mux().for_remote(remote, key=cfg.key, extra=["-o", "ConnectTimeout=10"]).run(command, b"", timeout=15)
+
+
+def publish_stale(clients, live, cfg, say, send=None):
+    """Tell the far box about each dead or backed-off mirror so a sender there lists it as stale.
+
+    The mirror-state file describes this box; the far box's senders cannot read it. One relay call
+    per name when its state changes or its mark is within STALE_RENEW_SECONDS of expiring, run off
+    the poll loop. A refused host is not published: the far box hosts no mirrors to mark."""
+    if not getattr(cfg, "remote", None):
+        return
+    now = time.time()
+    due = []
+    for name, v in mirror_states(clients, live).items():
+        if v["state"] not in ("backoff", "dead"):
+            _PUBLISHED.pop(name, None)
+            continue
+        until = max(v["retry_at_epoch"] if v["state"] == "backoff" else int(now) + DEAD_MARK_SECONDS,
+                    int(now) + 60)
+        sent = _PUBLISHED.get(name)
+        keep = STALE_RENEW_SECONDS if v["state"] == "dead" else 0
+        if sent and sent[0] == v["state"] and sent[1] - now > keep:
+            continue
+        _PUBLISHED[name] = (v["state"], until)
+        due.append(f"mirror-stale {name} {v['state']} {until} "
+                   f"{re.sub(r'[^a-z0-9-]', '-', socket.gethostname().lower()) or 'unknown'}")
+    if due:
+        (send or _start_publish)(cfg, due, say)
+
+
+def _start_publish(cfg, commands, say):
+    def run():
+        for command in commands:
+            try:
+                r = _send_stale_mark(cfg, command)
+                if r.returncode != 0:
+                    say(f"far box refused stale mark ({command.split()[1]}): rc={r.returncode}")
+            except Exception as e:
+                say(f"far box stale mark failed ({command.split()[1]}): {type(e).__name__}")
+    threading.Thread(target=run, daemon=True).start()
+
+
+MIRROR_STATE_FILE = "unimatrix-mirror-state.json"
+
+
+def mirror_states(clients, live):
+    """name -> {state, rc, retry_at_epoch} for every live session and every client still held.
+
+    State is host-refused (far box cannot host mirrors, never retried), up (client running),
+    backoff (client dead, a respawn is scheduled) or dead (client dead, nothing scheduled)."""
+    wall_offset = time.time() - _now()
+    out = {}
+    for name in set(live) | set(clients):
+        c = clients.get(name)
+        rc = _STATE["rc"].get(name)
+        retry = _STATE["retry_at"].get(name)
+        if _STATE["unsupported"]:
+            state = "host-refused"
+        elif c and c[1].poll() is None:
+            state = "up"
+        elif retry is not None:
+            state = "backoff"
+        else:
+            state = "dead"
+        out[name] = {"state": state, "rc": rc,
+                     "retry_at_epoch": int(retry + wall_offset) if state == "backoff" else None}
+    return out
+
+
+def write_mirror_state(log_dir, clients, live):
+    """Atomically rewrite the mirror-state file when a name's state, rc or retry time changed."""
+    states = mirror_states(clients, live)
+    sig = {n: (v["state"], v["rc"], _STATE["retry_at"].get(n)) for n, v in states.items()}
+    if sig == _STATE["state_sig"]:
+        return
+    try:
+        _roster().write_json_atomic(os.path.join(log_dir, MIRROR_STATE_FILE), states)
+    except OSError:
+        return
+    _STATE["state_sig"] = sig
 
 
 _ROUTER_MODULE = None

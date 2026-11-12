@@ -139,6 +139,39 @@ def classify_link(remote, name, host, ctx, detail):
            f"{'' if log is not None else ' (log unreadable)'}; {REMEDY_UPSTREAM}"
 
 
+def local_relay_sha():
+    """Same digest the relay reports as `relay_sha`: sha256 of unimatrix-relay.py, CRLF folded, first 12 hex."""
+    import hashlib
+    try:
+        return hashlib.sha256((HERE / RELAY_SCRIPT).read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:12]
+    except OSError:
+        return None
+
+
+def relay_drift(name, roster_out):
+    """Problem lines when the far relay's `roster` rows carry a relay_sha other than this box's.
+
+    A far box with no live session prints no rows and says nothing; a row without relay_sha is a relay
+    older than the field."""
+    rows = []
+    for ln in (roster_out or b"").decode("utf-8", "replace").splitlines():
+        try:
+            row = json.loads(ln)
+        except ValueError:
+            continue
+        if isinstance(row, dict):
+            rows.append(row)
+    local = local_relay_sha()
+    if not rows or local is None:
+        return []
+    far = {r.get("relay_sha") for r in rows}
+    if far == {local}:
+        return []
+    shown = ", ".join(sorted(str(s) for s in far if s)) or "none reported (relay predates relay_sha)"
+    return [f"{name}: relay version drift: far relay {shown}, this box {local}; "
+            f"remedy: reinstall unimatrix-relay.py on both boxes (publish, then install)"]
+
+
 def check_target(remote, name, host, key, ctx, peer_epoch_check):
     """Problem lines for one link target. `remote` is the dialled token, `name` the box or alias, `host` the DNS name."""
     al, roster, run = ctx["autolink"], ctx["roster"], ctx["run"]
@@ -156,7 +189,16 @@ def check_target(remote, name, host, key, ctx, peer_epoch_check):
     if not Path(key).is_file():
         probs.append(f"{name}: no relay key (looked for {key})")
     else:
-        why = al.probe(roster, remote, key, run=run, remote=remote)
+        seen_out = []
+
+        def capture(cmd, **kw):
+            r = run(cmd, **kw)
+            seen_out.append(r.stdout)
+            return r
+
+        why = al.probe(roster, remote, key, run=capture, remote=remote)
+        if why is None:
+            probs.extend(relay_drift(name, seen_out[-1] if seen_out else b""))
         if why and PRE_BANNER_RE.search(why):
             return probs + [classify_link(remote, name, host, ctx, why)]
         if why:

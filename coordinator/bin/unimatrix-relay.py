@@ -35,6 +35,9 @@ Modes, read from SSH_ORIGINAL_COMMAND:
                     same lifetime and wire format as inbox, but explicitly advertise
                     this temporary transport endpoint to directly connected boxes.
                     Downstream mirrors are never re-exported.
+  mirror-stale <name> <backoff|dead> <until-epoch> <box>
+                    mark the sending box's mirror of <name> stale until that epoch; the router's
+                    agent listing shows it as stale. `inbox <name>` clears the mark.
   source            print this file, so far boxes can vendor the current relay.
   grant <grantee> <note> <ttl> <repo>
                     read the issuer's signed grant envelope (one JSON line on stdin) and hand
@@ -95,6 +98,28 @@ MIRROR_FIELDS = {"cwd", "entrypoint", "kind", "nameSince", "nameSource", "peerFe
                  "updatedAt", "version"}
 
 
+STALE_STATES = ("backoff", "dead")
+STALE_SUFFIX = ".stale.json"
+
+
+def stale_marker_path(name):
+    return f"{SOCKS}/unimatrix-{name}{STALE_SUFFIX}"
+
+
+def mark_stale(name, state, until, box):
+    """Record that the sending box's mirror of `name` is down until epoch `until`.
+
+    The far router's agent listing reads this marker, so a sender here sees the name as stale
+    instead of not at all. `inbox` clears it when the mirror registers again."""
+    os.makedirs(SOCKS, mode=0o700, exist_ok=True)
+    path = stale_marker_path(name)
+    tmp = f"{path}.tmp{os.getpid()}"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"name": name, "state": state, "until": until, "box": box}, fh)
+    os.replace(tmp, path)
+    return {"ok": True}
+
+
 def parse_mode(original_command):
     """Map an SSH_ORIGINAL_COMMAND string to (mode, arg) or None when it is not allowed."""
     cmd = (original_command or "").split()
@@ -120,6 +145,9 @@ def parse_mode(original_command):
     if (len(cmd) == 2 and cmd[0] in ("inbox", "reply-inbox") and valid_inbox_name(cmd[1])
             and original_command == f"{cmd[0]} {cmd[1]}"):
         return cmd[0], cmd[1]
+    if (len(cmd) == 5 and cmd[0] == "mirror-stale" and valid_inbox_name(cmd[1]) and cmd[2] in STALE_STATES
+            and cmd[3].isdigit() and valid_inbox_name(cmd[4])):
+        return "mirror-stale", (cmd[1], cmd[2], int(cmd[3]), cmd[4])
     if cmd == ["membership", "get"] or cmd == ["membership", "put"]:
         return "membership", cmd[1]
     if cmd and cmd[0] == "grant":
@@ -317,8 +345,17 @@ def codex_export_refused(d, cache):
     return not cache["codex"].thread_addressable(target, cache["home"], cache["index"])
 
 
+def relay_sha():
+    """First 12 hex of the sha256 of this script with CRLF folded to LF (so a Windows checkout and a
+    macOS one of the same revision agree); None when the file is unreadable. `unimatrix doctor` compares it across boxes."""
+    try:
+        return hashlib.sha256(Path(__file__).read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:12]
+    except OSError:
+        return None
+
+
 def roster():
-    fields = engine_fields()
+    fields = {**engine_fields(), "relay_sha": relay_sha()}
     helpers = load_roster()
     codex_cache = {}
     rows = []
@@ -659,6 +696,10 @@ def inbox(name, export_reply=False):
         sys.exit(UNSUPPORTED_HOST_RC)
     client = client_address()
     drop_stale(check_name_free(name, client))
+    try:
+        os.unlink(stale_marker_path(name))
+    except OSError:
+        pass
     entry = mirror_entry(json.loads(sys.stdin.readline()), name)
     key_body = sys.stdin.readline().rstrip("\n")
     pid = os.getpid()
@@ -1179,7 +1220,9 @@ def main():
         reply = grant(arg, sys.stdin.readline())
         print(json.dumps(reply))
         sys.exit(0 if reply.get("ok") is True else 1)
-    if mode == "roster":
+    if mode == "mirror-stale":
+        print(json.dumps(mark_stale(*arg)))
+    elif mode == "roster":
         roster()
     elif mode == "specs":
         print(json.dumps(probe_specs()))

@@ -139,6 +139,7 @@ from coordinator_core.ops.ceremony.push_ceiling import (
 )
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_registry_repos
 from coordinator_core.ops.push_outstanding import push_outstanding, resolve_push_remote
+from coordinator_core.push_hold import read_compile_hold
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
 from coordinator_core.warm import engine_converge, telemetry
 from coordinator_core.warm.push_sweep_order import (
@@ -445,6 +446,31 @@ def _reap_named_ref_lock(root: Path, failures: Iterable[str]) -> bool:
     return False
 
 
+COMPILE_HOLD_LOG = "push-hold.log"
+COMPILE_HOLD_LOG_MAX_BYTES = 65536
+
+
+def _declined_by_compile_hold(root: Path) -> bool:
+    """True when the G-EM compile hold is set on `root`: the sweep pushes nothing and
+    appends one line to `<common-dir>/push-hold.log`. Zero spawns; never raises. Not a
+    push failure, so it never feeds the failure detector."""
+    try:
+        note = read_compile_hold(root)
+    except Exception:  # noqa: BLE001 -- an unreadable hold must not stop the sweep
+        return False
+    if note is None:
+        return False
+    try:
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} compile-hold: {root.name} push declined ({note})\n"
+        log_path = resolve_git_common_dir(root) / COMPILE_HOLD_LOG
+        if not log_path.exists() or log_path.stat().st_size < COMPILE_HOLD_LOG_MAX_BYTES:
+            with open(log_path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+    except OSError:
+        pass
+    return True
+
+
 # No `drain_pending_push` call in this module; see its docstring's DOES NOT
 # DRAIN section for why.
 def _sweep_one(repo_root: Union[str, Path]) -> str:
@@ -464,6 +490,8 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
     """
     root = Path(repo_root)
     if machine_profile() != "author":
+        return "skipped"
+    if _declined_by_compile_hold(root):
         return "skipped"
     branch = head_branch(root)
     sha = head_sha(root) if branch is not None else None

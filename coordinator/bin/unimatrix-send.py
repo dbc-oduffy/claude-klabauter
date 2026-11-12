@@ -157,7 +157,7 @@ def main(argv=None):
     p.add_argument("text", nargs="*")
     a = p.parse_args(argv)
     r = _router()
-    started = time.time() - 1
+    started = time.time() - 1  # one second of slack: the bridge stamps `at` on its own clock read, after ours
     ctl = r.endpoint_path(r.ROUTER_ENDPOINT_SEED, a.endpoint_dir)
     if a.list:
         req = {"op": "list", "as_target": own_target(), "as": a.as_name or "cli"}

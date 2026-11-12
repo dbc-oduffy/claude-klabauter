@@ -77,7 +77,12 @@ def condense_git_diagnostic(text: str, *, limit: int = _MAX_DIAGNOSTIC_CHARS) ->
 from coordinator_core.ipc import CEREMONY_BUDGET_SECS, DISPATCH_TIMEOUT_SECS
 from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.git.git_state import head_sha as head_sha_local
-from coordinator_core.git.machine_local_paths import machine_local_refusal, tree_machine_local_additions
+from coordinator_core import push_hold
+from coordinator_core.git.machine_local_paths import (
+    machine_local_refusal,
+    tree_machine_local_additions,
+    tree_prefix_changes,
+)
 from coordinator_core.ops.ceremony import git_native
 
 PUSH_MODE_SYNC = "sync"
@@ -872,6 +877,59 @@ def _head_already_reached_upstream(
     return False
 
 
+#: Tracked, regenerable test-run receipts: every scoped test run rewrites them,
+#: so a dirty copy is never work worth declining a merge over.
+_REGENERABLE_RECEIPT_PATHSPEC = ":(glob)state/test-runs/*-last.*"
+
+
+def _reset_regenerable_receipts_the_merge_changes(
+    worktree_root: Path, old_sha: str, new_sha: str
+) -> None:
+    """Reset to `old_sha` the `state/test-runs/*-last.*` paths that differ
+    between `old_sha` and `new_sha`, so `read-tree -m -u` can materialize
+    upstream's copy instead of refusing on the local rewrite.
+
+    Only receipts the merge changes are touched; every other dirty path is
+    left for read-tree to refuse on. Called only after a first read-tree
+    refusal, so the common path pays no extra spawn. Best-effort: a failed
+    probe or reset leaves the retried read-tree to decline as before.
+    """
+    changed = git_native._git(
+        [
+            "diff-tree", "-r", "--name-only", "-z", "--diff-filter=MD",
+            old_sha, new_sha, "--", _REGENERABLE_RECEIPT_PATHSPEC,
+        ],
+        cwd=worktree_root,
+    )
+    if not changed.ok:
+        return
+    paths = [p for p in changed.stdout.split("\0") if p]
+    if not paths:
+        return
+    git_native._git(
+        ["restore", f"--source={old_sha}", "--staged", "--worktree", "--", *paths],
+        cwd=worktree_root,
+    )
+
+
+def _ladder_merge_message(worktree_root: Path, subject: str, trigger_sha: str) -> str:
+    """`subject` plus `Push-Ladder-Trigger` and, when one resolves, `Session-Id` trailers. Zero spawn."""
+    from coordinator_core.git.commit_trailers import (
+        can_format_trailers_in_process,
+        format_trailers_in_process,
+    )
+    from coordinator_core.session import core as session_core
+
+    trailers = [f"Push-Ladder-Trigger: {trigger_sha}"]
+    sid = session_core.resolve_session_id(str(worktree_root))
+    if sid:
+        trailers.append(f"Session-Id: {sid}")
+    raw = subject.encode("utf-8", errors="surrogateescape")
+    if not can_format_trailers_in_process(raw):
+        return subject
+    return format_trailers_in_process(raw, trailers).decode("utf-8", errors="surrogateescape")
+
+
 def _rebase_onto_fetched_ref(
     worktree_root: Path, upstream_ref: str, branch: Optional[str] = None
 ) -> Tuple[int, str]:
@@ -914,6 +972,12 @@ def _rebase_onto_fetched_ref(
     """
     if not branch:
         return 1, "merge recovery cannot run: no branch resolved to move (detached HEAD)"
+    upstream_branch = upstream_ref.split("/", 1)[1] if "/" in upstream_ref else upstream_ref
+    if upstream_branch != branch:
+        return 1, (
+            "merge recovery declined, nothing touched: ladder-branch-mismatch: "
+            f"{upstream_ref} is not the upstream of {branch}"
+        )
     branch_ref = f"refs/heads/{branch}"
 
     old_sha = head_sha_local(worktree_root)
@@ -929,15 +993,27 @@ def _rebase_onto_fetched_ref(
         return merge_result.returncode or 1, f"git merge-tree: {reason}"
     tree_sha = first_line
 
-    refusal = machine_local_refusal(
-        tree_machine_local_additions(git_common_dir(worktree_root), old_sha, tree_sha)
-    )
+    common_dir = git_common_dir(worktree_root)
+    refusal = machine_local_refusal(tree_machine_local_additions(common_dir, old_sha, tree_sha))
     if refusal:
         return 1, "merge recovery declined, nothing touched: " + refusal
 
+    hold_refusal = None
+    if push_hold.read_compile_hold(worktree_root) is not None:
+        hold_refusal = push_hold.ladder_refusal(
+            worktree_root,
+            tree_prefix_changes(
+                common_dir, old_sha, tree_sha, push_hold.CONTROLLED_PREFIX, include_deletions=True
+            ),
+            tree_sha,
+        )
+    if hold_refusal:
+        return 1, "merge recovery declined, nothing touched: " + hold_refusal
+
     message = f"merge {upstream_ref} into {branch} (push ladder)"
+    commit_message = _ladder_merge_message(worktree_root, message, old_sha)
     commit_result = git_native.commit_tree_merge(
-        worktree_root, tree_sha, [old_sha, upstream_ref], message
+        worktree_root, tree_sha, [old_sha, upstream_ref], commit_message
     )
     new_sha = commit_result.stdout.strip()
     if not commit_result.ok or not new_sha:
@@ -945,6 +1021,10 @@ def _rebase_onto_fetched_ref(
         return commit_result.returncode or 1, f"git commit-tree: {reason}"
 
     read_tree_result = git_native.read_tree_merge_update(worktree_root, old_sha, new_sha)
+    if not read_tree_result.ok:
+        # A refused read-tree wrote nothing; pay the receipt probe only then.
+        _reset_regenerable_receipts_the_merge_changes(worktree_root, old_sha, new_sha)
+        read_tree_result = git_native.read_tree_merge_update(worktree_root, old_sha, new_sha)
     if not read_tree_result.ok:
         reason = condense_git_diagnostic(read_tree_result.stderr) or "read-tree refused"
         return read_tree_result.returncode or 1, (

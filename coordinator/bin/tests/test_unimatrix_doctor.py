@@ -35,6 +35,7 @@ class Net:
 
     def __init__(self):
         self.dead_dns, self.refuse, self.roster_rc = set(), set(), {}
+        self.roster_out = {}  # remote -> bytes the far `roster` prints
         self.alias_host = {}
         self.peer_snapshot = {}  # remote -> bytes returned by `membership get`
         self.cmds = []
@@ -63,7 +64,7 @@ class Net:
             blob = self.peer_snapshot.get(remote)
             return subprocess.CompletedProcess(cmd, 0 if blob else 1, blob or b"", b"")
         rc = self.roster_rc.get(remote, 0)
-        return subprocess.CompletedProcess(cmd, rc, b"", b"Permission denied" if rc else b"")
+        return subprocess.CompletedProcess(cmd, rc, self.roster_out.get(remote, b""), b"Permission denied" if rc else b"")
 
     def resolve(self, host, port):
         if host in self.dead_dns:
@@ -300,6 +301,39 @@ def test_peer_that_does_not_list_us_or_holds_another_epoch_is_flagged(box):
     box.net.peer_snapshot = {"kim@machine-a.local": m.canonical_bytes(behind) + b"\nAAAA\n"}
     rc, out = box.main()
     assert f"peer holds snapshot epoch {snap1['epoch'] - 1}, this box holds {snap1['epoch']}" in out
+
+
+def _drift_problems(box, row):
+    snap = box.adopt("me", "machine-a")
+    box.net.peer_snapshot = {"kim@machine-a.local": peer_blob(box, snap)}
+    box.seed_live("kim@machine-a.local")
+    box.net.roster_out = {"kim@machine-a.local": (json.dumps(row) + "\n").encode()}
+    rc, out = box.main()
+    return [ln for ln in out.splitlines() if "relay version drift" in ln], box.net.cmds
+
+
+def test_far_relay_sha_differing_from_local_is_named_on_the_same_roster_round_trip(box):
+    local = box.dr.local_relay_sha()
+    assert local
+    lines, cmds = _drift_problems(box, {"entry": {}, "relay_sha": "deadbeef0000"})
+    assert len(lines) == 1 and "machine-a" in lines[0] and "deadbeef0000" in lines[0] and local in lines[0]
+    assert sum(1 for c in cmds if c[:1] == ["ssh"] and c[-1] == "roster") == 1
+
+
+def test_far_relay_with_matching_sha_is_silent(box):
+    lines, _ = _drift_problems(box, {"entry": {}, "relay_sha": box.dr.local_relay_sha()})
+    assert lines == []
+
+
+def test_far_relay_row_without_relay_sha_is_drift_and_an_empty_roster_is_not(box):
+    lines, _ = _drift_problems(box, {"entry": {}})
+    assert len(lines) == 1 and "predates relay_sha" in lines[0]
+    assert box.dr.relay_drift("x", b"") == []
+
+
+def test_relay_roster_rows_carry_the_sha_doctor_compares(capsys, monkeypatch):
+    relay = load("unimatrix-relay")
+    assert relay.relay_sha() == load("unimatrix-doctor").local_relay_sha()
 
 
 def test_peer_without_a_snapshot_and_dead_supervisors_are_named(box):

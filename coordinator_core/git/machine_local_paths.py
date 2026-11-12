@@ -76,9 +76,9 @@ def _commit_tree(common_dir: Path, commit: str) -> Optional[str]:
     return None
 
 
-def _subtree_shas(common_dir: Path, root_tree: Optional[str]) -> list[str]:
+def _subtree_shas(common_dir: Path, root_tree: Optional[str], prefix: str = MACHINE_LOCAL_PREFIXES[0]) -> list[str]:
     """Tree shas matching the prefix's directory names case-insensitively; one per variant chain."""
-    parts = MACHINE_LOCAL_PREFIXES[0].strip("/").lower().split("/")
+    parts = prefix.strip("/").lower().split("/")
     level = [root_tree] if root_tree else []
     for part in parts:
         nxt = []
@@ -98,21 +98,35 @@ def _flatten(common_dir: Path, tree: str, prefix: str, out: dict) -> None:
             out[prefix + name] = (mode, sha)
 
 
-def _collect(common_dir: Path, root_tree: Optional[str]) -> dict:
+def _collect(common_dir: Path, root_tree: Optional[str], prefix: str = MACHINE_LOCAL_PREFIXES[0]) -> dict:
     out: dict = {}
-    for sha in _subtree_shas(common_dir, root_tree):
-        _flatten(common_dir, sha, MACHINE_LOCAL_PREFIXES[0], out)
+    for sha in _subtree_shas(common_dir, root_tree, prefix):
+        _flatten(common_dir, sha, prefix, out)
     return out
 
 
-def tree_machine_local_additions(common_dir: Path, base_commit: str, result_tree: str) -> list[str]:
-    """Prefix paths whose (mode, sha) in `result_tree` differ from, or are absent in, `base_commit`'s tree."""
-    result_shas = _subtree_shas(common_dir, result_tree)
-    if not result_shas:
-        return []
+def tree_prefix_changes(
+    common_dir: Path, base_commit: str, result_tree: str, prefix: str, *, include_deletions: bool = False
+) -> list[str]:
+    """`prefix` paths whose (mode, sha) in `result_tree` differ from, or are absent in, `base_commit`'s tree.
+
+    `prefix` is a `/`-terminated directory path. Equal subtree shas short-circuit to `[]`.
+    `include_deletions` also lists base paths absent from `result_tree`.
+    """
+    result_shas = _subtree_shas(common_dir, result_tree, prefix)
     base_tree = _commit_tree(common_dir, base_commit)
-    if sorted(result_shas) == sorted(_subtree_shas(common_dir, base_tree)):
+    if not result_shas and not include_deletions:
         return []
-    result = _collect(common_dir, result_tree)
-    base = _collect(common_dir, base_tree)
-    return sorted(p for p, v in result.items() if base.get(p) != v)
+    if sorted(result_shas) == sorted(_subtree_shas(common_dir, base_tree, prefix)):
+        return []
+    result = _collect(common_dir, result_tree, prefix)
+    base = _collect(common_dir, base_tree, prefix)
+    changed = {p for p, v in result.items() if base.get(p) != v}
+    if include_deletions:
+        changed |= base.keys() - result.keys()
+    return sorted(changed)
+
+
+def tree_machine_local_additions(common_dir: Path, base_commit: str, result_tree: str) -> list[str]:
+    """Machine-local prefix paths added or changed by `result_tree` against `base_commit`."""
+    return tree_prefix_changes(common_dir, base_commit, result_tree, MACHINE_LOCAL_PREFIXES[0])

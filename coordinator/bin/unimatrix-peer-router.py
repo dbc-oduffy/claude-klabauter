@@ -432,6 +432,24 @@ NOT_DELIVERED_PREFIXES = ("[unimatrix-peer-agy] not delivered", "[unimatrix-peer
                           "delivery failed:")
 
 
+_MIRROR_MARKERS = ("unimatrixRemote", "macSocketPath", "unimatrixMirror", "farPid")
+
+
+def _far_alias_is_stale(entry, name):
+    """True when `entry` is a Claude mirror claiming far name `name` but registered under another far session's name.
+
+    A mirror is named `<far name>.<box>`; one whose registered name derives from a different far
+    name holds a stale far-name mapping, and an address resolved through it would land on the
+    wrong session. Codex/agy mirrors keep their readable aliases and are exempt.
+    """
+    far, own = entry.get("unimatrixFarName"), entry.get("name")
+    if (name != far or name == own or entry.get("vendor") in ("codex", "agy")
+            or not any(entry.get(key) for key in _MIRROR_MARKERS)
+            or not isinstance(far, str) or not isinstance(own, str)):
+        return False
+    return own.partition(".")[0] not in (far.partition(".")[0], far.replace(".", "-"))
+
+
 def not_delivered(reply):
     """True when an adapter reply says the message never reached the peer."""
     return str(reply or "").lstrip().startswith(NOT_DELIVERED_PREFIXES)
@@ -1190,7 +1208,33 @@ class Router:
         rows = [{"name": n, "box": box, "vendor": self.peers[n]["vendor"],
                  **({"stale": True} if self.peer_stale(n) else {})} if n in self.peers
                 else contract.agent_row(entries[n], box) for n in sorted(names)]
+        for n, marker in sorted(self.stale_mirror_markers().items()):
+            if n != sender and n not in names:
+                names.add(n)
+                rows.append({"name": n, "box": marker["box"], "vendor": "claude", "stale": True})
         return sorted(names), rows
+
+    mirror_stale_dir = "/tmp/cc-socks"  # where the relay's `mirror-stale` mode writes its markers
+
+    def stale_mirror_markers(self):
+        """name -> marker for each unexpired mark a sending box left for its down mirror."""
+        out = {}
+        try:
+            files = os.listdir(self.mirror_stale_dir)
+        except OSError:
+            return out
+        for filename in files:
+            if not filename.endswith(".stale.json"):
+                continue
+            try:
+                with open(os.path.join(self.mirror_stale_dir, filename), encoding="utf-8") as fh:
+                    m = json.load(fh)
+            except (OSError, ValueError):
+                continue
+            if (isinstance(m, dict) and isinstance(m.get("name"), str) and isinstance(m.get("box"), str)
+                    and isinstance(m.get("until"), int) and m["until"] > time.time()):
+                out[m["name"]] = m
+        return out
 
     async def turn(self, peer, text, addressed=None):
         """One adapter turn for `peer` under its lock; a failure becomes the reply text.
@@ -1437,6 +1481,9 @@ class Router:
             if not ep or not isinstance(pid, int) or not _roster().pid_alive(pid):
                 continue
             if not self.external_codex_sendable(e):
+                refused_identity = True
+                continue
+            if _far_alias_is_stale(e, name):
                 refused_identity = True
                 continue
             owned_alias = owned_alias or name in _contract().projected_addresses(e)
