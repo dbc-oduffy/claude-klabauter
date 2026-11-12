@@ -964,7 +964,7 @@
     "coordinator/bin/publish-resolve-target.py": "40f0e91956f7a039b8bc9f0cc8cfdad5aceb6d7c",
     "coordinator/bin/publish-strip-inventory.cmd": "aefb208c57a959ea667f0564d73a85633d4c3583",
     "coordinator/bin/publish-strip-inventory.py": "ec3c81f36bc3533f16a7d09dadfe8c8a817c33a8",
-    "coordinator/bin/published-name-map.json": "0967ef424bce6791893e9a57bb952f80fd536e93",
+    "coordinator/bin/published-name-map.json": "da4b3fa2f0b25a3fa82c127708461f650e27a571",
     "coordinator/bin/push-hold.cmd": "7c295de7e219b2475216dab124bc306bacd64025",
     "coordinator/bin/push-hold.py": "3fc99518a3ae19e912ebf5c3b9076d513e28ea6d",
     "coordinator/bin/query-commit-closures.cmd": "2284445c76886198e1bc9a9bf05e85d618fc2dd6",
@@ -2362,6 +2362,7 @@
     "coordinator/lib/register-discovered-repos.cmd": "02c61a4213b3954ea9f64510c5048121b1e56336",
     "coordinator/lib/register-discovered-repos.py": "d0648be4878dd5f4ddcaa8d338a2ceecaf5d57c7",
     "coordinator/lib/release_currency.py": "131cb5eeaa3a685ab77d07f19320dc48c83289df",
+    "coordinator/lib/research_layout.py": "244f83fb25ff713aca2fce682f201c2aea119fe0",
     "coordinator/lib/resolve-claude-klabauter/_resolve_claude_klabauter.py": "90198d1c73321dc91e70e2fdfa14baf9a7c8e59c",
     "coordinator/lib/resolve-claude-klabauter/tests/test_class_api_returns_unresolved.py": "fd2c331837e3fe0a4bdd1018570ba34c98218faf",
     "coordinator/lib/resolve-claude-klabauter/tests/test_dispatch_prefers_stamped_engine.py": "7e736d84fc471d6af796dd7b99eb5cd283323f30",
@@ -2409,6 +2410,7 @@
     "coordinator/lib/tests/test_settings_home_cli.py": "ae7d06aeefedade595a23ea76e644f44bf0af918",
     "coordinator/lib/trusted-root-guard-cli.cmd": "8a47398a7a54ff4883f8e17ec8326c2cd4999ec9",
     "coordinator/lib/trusted-root-guard-cli.py": "213d00854fb28d0d6b2dba26f1d8e72a26f3779b",
+    "coordinator/lib/ue_review_signal.py": "0c718bed85c0473e2103dd141a0d5c3ba2ceaba6",
     "coordinator/lib/win_portability.py": "dd2e31f307d4f669be51f35780c246b7d68128b3",
     "coordinator/templates/unimatrix/peer-doctrine.md": "cb426cfa9afbb0ab7dbc58b27ccf3a5ea871f87d",
     "coordinator/tests/conftest.py": "35d4483ed010dff671ca7f67c02766b1c06a9136",
@@ -2425,7 +2427,7 @@
     "coordinator_core/_content_root_primitive.py": "f7fcd3083855a5e1dd53c09233fbfd64f8dffdf5",
     "coordinator_core/_data_root.py": "0c7c8524f25376ae49593f11334445539dc557f9",
     "coordinator_core/_engine_landing.py": "b360d1f5c192bf3eadbe02d863e5efb3c78b0075",
-    "coordinator_core/_engine_published_at": "d0583923f48112942f9dc4e51e088305548d8783",
+    "coordinator_core/_engine_published_at": "f8650c0d9de2acd8773c9a6b7c994c448dd83d68",
     "coordinator_core/_engine_stamp": "41b1da1b2891875f9c791b314607695ec9365595",
     "coordinator_core/_fleet_names.py": "e81fc4247611fe486697f4707b28a1a3a008f392",
     "coordinator_core/_hook_envelope.py": "7e70aa3f56bfcea2cc146eab698c57469159691b",
@@ -10970,7 +10972,7 @@
     "coordinator_core/warm/door/build_posix.py": "b9aab901163e811f01f288fd7ec9b0d2a4e35a51",
     "coordinator_core/warm/door/door.c": "53cd81c5c7b6f5770848e0283459a60dbb6d4f22",
     "coordinator_core/warm/door/door.exe": "2e2f2092a4e92f73ab06177de26af98f39498bdd",
-    "coordinator_core/warm/door/door.exe.provenance.json": "cddd5cc94f011dc1c3657f0c98d49cc59fd5e249",
+    "coordinator_core/warm/door/door.exe.provenance.json": "67aad38a0e1431cc093607fd2b4b3bbb4be9deb8",
     "coordinator_core/warm/door/door_core.c": "ea5d35cc5de0089292712feab451a9dc1808ea74",
     "coordinator_core/warm/door/door_core.h": "cebbea0ae1ecc22ea55077f69a101b7c6e045eea",
     "coordinator_core/warm/door/door_core_selftest.c": "3de66acf5943539e044699438c71a93aaac9dc5d",
@@ -11844,5 +11846,5 @@
     "scripts/unstick_claude.py": "183af177361fbb9487413aefa8dc487c8699c876"
   },
   "schema": 1,
-  "source_head": "38370760b0653d7a0737626a3c050bd058568231"
+  "source_head": "be4e8c0360f17e5210eff42b9f055dc043734e78"
 }
