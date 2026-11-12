@@ -447,12 +447,12 @@ def test_pin_key_naming_a_missing_interpreter_refuses_naming_the_key_and_spawns_
 
 
 def test_unset_pin_resolves_the_console_interpreter_not_a_pythonw_or_shim(env, monkeypatch):
-    monkeypatch.setattr(env.al, "console_python", lambda: "C:/py/python.exe")
-    assert env.al.pinned_python(env.roster) == "C:/py/python.exe"
+    monkeypatch.setattr(env.al, "console_python", lambda: "C:/py/python.exe")  # abs-path-ok: synthetic interpreter path fixture, never opened
+    assert env.al.pinned_python(env.roster) == "C:/py/python.exe"  # abs-path-ok: synthetic interpreter path fixture, never opened
     sp = Spawner()
     add_key(env)
     env.al.run(roster=env.roster, boxes=["machine-a"], spawn=sp, probe_fn=ok)
-    assert all(c[0] == "C:/py/python.exe" for c in sp.cmds)
+    assert all(c[0] == "C:/py/python.exe" for c in sp.cmds)  # abs-path-ok: synthetic interpreter path fixture, never opened
 
 
 def test_pin_value_is_read_from_the_machine_local_key(env):

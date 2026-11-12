@@ -1006,8 +1006,12 @@ def group_em_live() -> bool:
     """True when a live box-wide group-em holder exists; any failure reads as not live."""
     try:
         root = str(Path(__file__).resolve().parents[2])
-        if root not in sys.path:
-            sys.path.insert(0, root)
+        lib = str(Path(__file__).resolve().parent / "lib")
+        if lib not in sys.path:
+            sys.path.insert(0, lib)
+        import cc_invoke  # type: ignore
+
+        cc_invoke.place_engine_root_on_path(root)
         from coordinator_core.group_em import gem_home
 
         return gem_home.gem_holder() is not None

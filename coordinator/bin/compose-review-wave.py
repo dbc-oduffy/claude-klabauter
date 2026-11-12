@@ -663,7 +663,9 @@ def _run_waste_attribution(changed_paths: list[str], repo_root: Path) -> dict:
     # test-environment-discipline.md sec.4 records. cwd stays repo_root: the child
     # resolves repo-relative paths against it, and a scratch cwd would break
     # attribution rather than isolate anything.
-    with tempfile.TemporaryDirectory(prefix="waste-attr-") as scratch:
+    import cli_shared
+
+    with tempfile.TemporaryDirectory(prefix="waste-attr-", dir=cli_shared.managed_temp_root()) as scratch:
         child_env = dict(os.environ)
         child_env["HOME"] = scratch
         child_env["USERPROFILE"] = scratch

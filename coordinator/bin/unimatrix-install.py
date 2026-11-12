@@ -139,9 +139,16 @@ def resolve_claude():
     for d in dirs:
         for n in names:
             cand = d / n
-            if cand.is_file() and (sys.platform == "win32" or os.access(cand, os.X_OK)):
+            if cand.is_file() and _is_executable(cand):
                 return str(cand)
     return None
+
+
+def _is_executable(path):
+    """Windows has no exec bit: any file counts; POSIX asks the mode."""
+    if sys.platform == "win32":
+        return True
+    return os.access(path, os.X_OK)
 
 
 def probe_claude_version():
@@ -967,7 +974,7 @@ def _footer_write(path, text):
         with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
             stream.write(text)
         if path.exists():
-            os.chmod(temporary, path.stat().st_mode & 0o777)
+            shutil.copymode(path, temporary)
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):

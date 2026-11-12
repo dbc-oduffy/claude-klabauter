@@ -51,14 +51,13 @@ def _place_engine_on_path() -> str:
     lib = os.path.join(os.path.dirname(os.path.abspath(__file__)), "lib")
     if lib not in sys.path:
         sys.path.insert(0, lib)
+    from cc_invoke import place_engine_root_on_path
     from engine_bootstrap import _resolve_engine_root
 
     root = _resolve_engine_root(os.path.abspath(__file__))
     if not root:
         raise RuntimeError("engine root unresolved")
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    return root
+    return place_engine_root_on_path(root)
 
 
 def _create_remote(gem_home, home, report: dict) -> None:
