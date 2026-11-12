@@ -107,7 +107,9 @@ def isolated_settings_home(tmp_path_factory):
     mp = pytest.MonkeyPatch()
     live = Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
     iso = tmp_path_factory.mktemp("settings-home")
-    for name in ("registry.toml", "registry.local.toml"):
+    # The engine-root pointer is the only rung that resolves the engine for a test's subprocess in a mirror
+    # (no coordinator_core beside it, so self-location misses); without it cc_invoke reports every rung missed.
+    for name in ("registry.toml", "registry.local.toml", ".claude-klabauter-root"):
         src = live / "machine-local" / name
         if src.is_file():
             (iso / "machine-local").mkdir(exist_ok=True)
