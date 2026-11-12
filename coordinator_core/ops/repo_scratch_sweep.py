@@ -38,6 +38,8 @@ import stat
 import time
 from typing import Dict, List, Optional, Tuple
 
+from coordinator_core.session import record_homes
+
 DEFAULT_MAX_AGE_DAYS = 7
 DEFAULT_BATCH = 200
 
@@ -134,7 +136,7 @@ def _unlink_link(path: str) -> None:
 def _run_is_terminal(repo_root: str, run_id: str) -> bool:
     try:
         with open(
-            os.path.join(repo_root, "state", "warp", run_id, "run-stage.json"),
+            os.path.join(record_homes.home_dir(repo_root, "warp"), run_id, "run-stage.json"),
             encoding="utf-8",
         ) as fh:
             data = json.load(fh)

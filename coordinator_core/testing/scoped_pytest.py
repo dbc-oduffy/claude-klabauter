@@ -22,6 +22,7 @@ from typing import Any, Optional, Sequence
 
 import psutil
 
+from coordinator_core import temp_layout
 from coordinator_core.testing import nested_session_guard, spawn_depth, watch_parent
 
 ADMIT_KEY = "test-runner-pytest"
@@ -124,6 +125,21 @@ def _spawn(argv: list) -> tuple:
     return cr.spawn_in_capped_job(argv, popen_kwargs=kwargs)
 
 
+def with_per_run_basetemp(pytest_args: Sequence[str]) -> list:
+    """`pytest_args` unchanged when the caller passed `--basetemp`; else with a unique
+    `--basetemp <Temp>/coordinator/<repo>/pytest/<pid>-<hex>` appended, so concurrent runs never
+    share pytest's `pytest-of-<user>` dir and its `pytest-current` symlink."""
+    args = list(pytest_args)
+    if any(a == "--basetemp" or a.startswith("--basetemp=") for a in args):
+        return args
+    try:
+        root = temp_layout.pytest_basetemp_root(os.getcwd())
+    except ValueError:
+        root = temp_layout.fleet_temp_root() / "pytest"
+    root.mkdir(parents=True, exist_ok=True)
+    return [*args, "--basetemp", str(root / ("%d-%s" % (os.getpid(), os.urandom(3).hex())))]
+
+
 def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
     """Parse, allow-list, admit, spawn contained, then watch; see the module docstring for exit codes."""
     args = list(sys.argv[1:] if argv is None else argv)
@@ -157,7 +173,7 @@ def main(argv: Optional[Sequence[str]] = None, host: Any = None) -> int:
         return EXIT_ADMISSION_REFUSED
 
     chain = ancestor_chain()
-    proc, kill = _spawn([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *pytest_args])
+    proc, kill = _spawn([sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *with_per_run_basetemp(pytest_args)])
 
     gone = threading.Event()
 

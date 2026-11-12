@@ -194,6 +194,7 @@ def test_research_route_without_a_research_block_refuses_naming_the_block_remedy
     v = gate(repo, REL)
     assert v.halt["kind"] == "refusal"
     assert "sizing-assemble --research-class" in v.halt["reason"]
+    assert "sizing-assemble --amend-route" in v.halt["reason"]
     assert "emit-dispatch-workflow" not in v.halt["reason"]
 
 

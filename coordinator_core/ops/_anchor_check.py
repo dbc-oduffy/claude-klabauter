@@ -3,7 +3,7 @@ files the command names (any size), under the repo root it is handed.
 
 Grammar (shlex, posix): stage := grep FLAGS (PATTERN | (-e PATTERN)+) FILE, FLAGS = c (or n, which
 implies c) plus at most one of E or F (a line counts when any -e pattern matches);
-command := stage ("&&" stage)*; expect := N | >=N | <=N | >N | <N | "N then M [then K ...]".
+command := stage (("&&" | ";") stage)*; expect := N | >=N | <=N | >N | <N | "N then M [then K ...]".
 Anything else is NOT_EVALUABLE."""
 
 import re
@@ -12,7 +12,7 @@ from pathlib import Path, PurePosixPath
 from typing import List, Optional, Tuple
 
 GRAMMAR: str = (
-    'grep -c [-E|-F] (PATTERN | -e PATTERN ...) FILE [&& grep ...]; '
+    'grep -c [-E|-F] (PATTERN | -e PATTERN ...) FILE [&&|; grep ...]; '
     'expect N|>=N|<=N|>N|<N|"N then M"'
 )
 
@@ -65,7 +65,7 @@ def _parse_stages(command: str) -> List[Tuple[str, List[str], str]]:
         raise _NotEvaluable("empty command")
     stages: List[List[str]] = [[]]
     for tok in toks:
-        if tok == "&&":
+        if tok in ("&&", ";"):
             stages.append([])
         elif re.fullmatch(r"[&|;<>()]+", tok):
             raise _NotEvaluable(f"unsupported shell operator {tok!r}")
@@ -219,8 +219,9 @@ def evaluable(command: str) -> Optional[str]:
 def evaluate(command: str, expect: str, repo_root: Path) -> dict:
     """{"state": "MATCH" | "MISMATCH" | "NOT_EVALUABLE", "observed": str, "detail": str}.
     No spawn, no walk; reads only the files the command names, under repo_root.
-    observed is the printed counts, one per line; a stage counting 0 (or a missing file) ends
-    the chain as shell && does."""
+    observed is the printed counts, one per line. Every stage runs and reports its count, 0
+    included (grep's exit 1 on zero matches is a result, not a failure); a missing file ends
+    the chain."""
     try:
         stages = _parse_stages(command)
         wants = _parse_expect(expect)
@@ -234,11 +235,15 @@ def evaluate(command: str, expect: str, repo_root: Path) -> dict:
                 observed = "\n".join(str(c) for c in counts)
                 return _result("MISMATCH", observed, f"no such file: {path.name}")
             counts.append(n)
-            if n == 0:
-                break
     except _NotEvaluable as exc:
         return _result("NOT_EVALUABLE", "", str(exc))
     observed = "\n".join(str(c) for c in counts)
     if len(wants) == len(counts) and all(_holds(o, w, c) for (o, w), c in zip(wants, counts)):
         return _result("MATCH", observed, "")
-    return _result("MISMATCH", observed, f"expected {expect!r}")
+    detail = f"expected {expect!r}"
+    if len(wants) == len(counts):
+        for (o, w), c, (_, path) in zip(wants, counts, plan):
+            if not _holds(o, w, c):
+                detail += f"; {path.name} counted {c}"
+                break
+    return _result("MISMATCH", observed, detail)

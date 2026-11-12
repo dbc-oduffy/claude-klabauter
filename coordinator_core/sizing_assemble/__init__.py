@@ -2674,6 +2674,61 @@ def amend_research(root: Path, sizing: str, given: dict[str, Any]) -> dict[str, 
     return {"path": str(target), "status": "amended", "research": out["research"]}
 
 
+def amend_route(root: Path, sizing: str, route: str) -> dict[str, Any]:
+    """Re-route an existing sizing in place: `route` is replaced, nothing else on the record moves
+    except the `research:` block. Leaving `research` drops the block (a non-research route owns
+    none); entering `research` needs a recorded block (set it with `--amend-research` first).
+    Refuses an unknown route and a sizing already on `route`. Same lock and schema validation as
+    `amend_research`."""
+    import yaml
+
+    from coordinator_core.frontmatter.primitives import remove_fm_nested_field, replace_fm_field
+    from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
+    from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
+    from coordinator_core.ops._path_guard import contained_path
+
+    route = (route or "").strip()
+    if route not in ROUTE_ENUM:
+        raise SizingAssembleError(f"--route must be one of {'|'.join(ROUTE_ENUM)}, got {route!r}")
+    schema = Path(__file__).resolve().parent.parent / "frontmatter" / "schemas" / "sizing-object.schema.json"
+    candidate = Path(sizing) if Path(sizing).is_absolute() else root / sizing
+    target = contained_path(candidate, [root / "state" / "sizings"])
+    if target is None or not target.is_file():
+        raise SizingAssembleError(
+            f"{sizing!r} is not a sizing under {(root / 'state' / 'sizings').as_posix()}/ "
+            f"(read as {candidate.as_posix()})"
+        )
+    out: dict[str, Any] = {}
+
+    def mutate(old: str) -> str:
+        doc = yaml.safe_load(old) or {}
+        prior = doc.get("route") if isinstance(doc, dict) else None
+        if prior == route:
+            raise MutateAbort(f"{sizing} is already routed {route!r}")
+        has_block = isinstance(doc.get("research"), dict)
+        if route == "research" and not has_block:
+            raise MutateAbort(
+                f"{sizing} carries no research block; set one with --amend-research --research-* first"
+            )
+        text = replace_fm_field(old, "route", route)
+        dropped = route != "research" and has_block
+        if dropped:
+            text = remove_fm_nested_field(text, "research")
+        problems = validate_frontmatter(yaml.safe_load(text) or {}, schema)
+        if problems:
+            raise MutateAbort(f"schema validation failed: {format_validation_errors(problems)}")
+        out.update({"from": prior, "research_dropped": dropped})
+        return text
+
+    try:
+        locked_rmw(target, mutate, repo_root=root)
+    except MutateAbort as exc:
+        raise SizingAssembleError(str(exc.args[0]) if exc.args else "mutation aborted") from exc
+    except LockTimeout as exc:
+        raise SizingAssembleError(f"timed out waiting for file lock on {target}: {exc}") from exc
+    return {"path": str(target), "status": "amended", "route": route, **out}
+
+
 def amend_exit_criterion(root: Path, sizing: str, statement: str, ruling: str) -> dict[str, Any]:
     """Replace an accepted sizing's `exit_criterion.statement` under the APM ruling file `ruling`.
     `accepted` is kept; an APM entry {ruling_ref, statement, ...} is appended to `amendments`.
@@ -2810,6 +2865,8 @@ def _usage(prog: str, stream=None) -> int:
         "    [--relayed-ask-file <path> (register only that text; embedded PM turns go to unrelated_turns)]]\n"
         "or: --amend-research <state/sizings/x.yaml> --research-* ... (rewrites only the research block;\n"
         "    --clear-research-seeds drops every seed, --research-seed replaces them)\n"
+        "or: --amend-route <state/sizings/x.yaml> --route <route> (re-routes in place; leaving research\n"
+        "    drops the research block, entering it needs one)\n"
         "or: --amend-exit-criterion <state/sizings/x.yaml> --exit-criterion <str> --ruling <repo-relative path>\n"
         "    (replaces the accepted statement, records the APM ruling in exit_criterion.amendments)\n"
         "or: --xl-exit shape|roadmap|accept_multi_session --pm-quote <str>\n"
@@ -3030,6 +3087,8 @@ def main(argv: list[str]) -> int:
     pm_quote = None
     decided_on = None
     amend_research_path = None
+    amend_route_path = None
+    route_arg = None
     amend_exit_path = None
     ruling_path = None
     research_class = None
@@ -3106,6 +3165,12 @@ def main(argv: list[str]) -> int:
             i += 2
         elif tok == "--amend-research" and i + 1 < len(argv):
             amend_research_path = argv[i + 1]
+            i += 2
+        elif tok == "--amend-route" and i + 1 < len(argv):
+            amend_route_path = argv[i + 1]
+            i += 2
+        elif tok == "--route" and i + 1 < len(argv):
+            route_arg = argv[i + 1]
             i += 2
         elif tok == "--boundary-in-notch" and i + 1 < len(argv):
             boundary_in_notch = argv[i + 1]
@@ -3437,6 +3502,27 @@ def main(argv: list[str]) -> int:
             )
         except SizingAssembleError as exc:
             print(f"{prog}: --amend-exit-criterion refused: {exc}", file=sys.stderr)
+            return EXIT_BUSINESS_FAIL
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return EXIT_OK
+
+    if amend_route_path is not None:
+        other_modes = (
+            tshirt, write_path, amend_exit_path, amend_research_path, ruling_path, exit_criterion,
+            research_class, research_appetite, research_depth, research_primary,
+            research_destination, research_question_mode, design_route_flag,
+        )
+        other_lists = (
+            research_sources, research_targets, research_seeds, research_notebooklm_needs,
+            research_questions, research_question_targets,
+        )
+        if not route_arg or any(v is not None for v in other_modes) or any(other_lists) or clear_research_seeds:
+            print(f"{prog}: --amend-route takes only --route", file=sys.stderr)
+            return EXIT_USAGE
+        try:
+            result = amend_route(_cli_repo_root(amend_route_path), amend_route_path, route_arg)
+        except SizingAssembleError as exc:
+            print(f"{prog}: --amend-route refused: {exc}", file=sys.stderr)
             return EXIT_BUSINESS_FAIL
         print(json.dumps(result, indent=2, sort_keys=True))
         return EXIT_OK

@@ -39,8 +39,9 @@ def test_prep_in_wave_binds_slice_id_from_the_agents_own_prep_before_resolution(
     assert "joined with" not in block
 
 
-def _prep_rewrite(body):
-    return f"(r, n) => n === 1 ? {{ ...r, prep: {{ ...r.prep, slices: {body} }} }} : r"
+def _prep_rewrite(body, *, retry_at=None):
+    at = "n === 1" if retry_at is None else f"(n === 1 || n === {retry_at})"
+    return f"(r, n) => {at} ? {{ ...r, prep: {{ ...r.prep, slices: {body} }} }} : r"
 
 
 def test_a_prep_naming_the_whole_diffs_slices_beyond_its_dispatched_group_is_dropped_with_an_advisory():
@@ -52,7 +53,8 @@ def test_a_prep_naming_the_whole_diffs_slices_beyond_its_dispatched_group_is_dro
 
 
 def test_a_prep_naming_a_slice_id_no_run_slice_carries_halts():
-    patch = _prep_rewrite("r.prep.slices.map(s => ({ ...s, id: s.id + 'x' }))")
+    spawned = len(_run_in_wave(_FULL, 9)["spawned"])
+    patch = _prep_rewrite("r.prep.slices.map(s => ({ ...s, id: s.id + 'x' }))", retry_at=spawned)
     result = _run_in_wave(_FULL, 9, patch=patch)
     assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
 
@@ -133,13 +135,15 @@ def test_one_merged_group_of_two_real_slices_is_accepted_under_its_plus_joined_i
 
 
 def test_a_two_slice_group_reply_naming_an_unknown_id_still_halts():
-    patch = "(r, n) => n === 0 ? { ...r, prep: { ...r.prep, slices: [{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }] } } : r"
+    spawned = len(_run_in_wave(_TWO, 1)["spawned"])
+    patch = f"(r, n) => (n === 0 || n === {spawned}) ? {{ ...r, prep: {{ ...r.prep, slices: [{{ id: 'manifest-x-prep-1' }}, {{ id: 'manifest-x-prep-2' }}] }} }} : r"
     result = _run_in_wave(_TWO, 1, patch=patch)
     assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
 
 
 def test_an_id_no_run_slice_carries_still_halts_even_beside_a_member():
-    patch = _prep_rewrite("[r.prep.slices[0], { ...r.prep.slices[0], id: 'zz-nonexistent' }]")
+    spawned = len(_run_in_wave(_FULL, 9)["spawned"])
+    patch = _prep_rewrite("[r.prep.slices[0], { ...r.prep.slices[0], id: 'zz-nonexistent' }]", retry_at=spawned)
     result = _run_in_wave(_FULL, 9, patch=patch)
     assert result["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
 

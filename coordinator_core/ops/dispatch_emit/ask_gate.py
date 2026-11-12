@@ -306,6 +306,14 @@ class _NoInRunRemedy(Exception):
     """A refusal whose cause the gate cannot repair in-run: the halt then names it."""
 
 
+def no_research_block_message(sizing_rel: str) -> str:
+    """The refusal naming both remedies for a research-routed sizing that carries no research block."""
+    return (
+        f"sizing {sizing_rel} has no research block; set one with sizing-assemble --research-class, "
+        "or re-route with sizing-assemble --amend-route"
+    )
+
+
 def _refuse(reason: str, **extra: object) -> GateVerdict:
     """The `refusal` verdict for `reason`, after the bounded in-run tries; every gate refusal goes through here.
 
@@ -687,7 +695,7 @@ def _arm_verdict(
             fire=[fire_command(sizing_rel)],
         )
     if arm != ARM_ROADMAP and route == "research" and not (isinstance(research, dict) and research):
-        return _refuse(f"sizing {sizing_rel} has no research block; set one with sizing-assemble --research-class")
+        return _refuse(no_research_block_message(sizing_rel))
     if arm != ARM_ROADMAP and route in sa._ROOM_ENTRY:
         extra = {}
         if route == "pm-decision":

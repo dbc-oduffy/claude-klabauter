@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 from coordinator_core.ask_spool import notice
 
@@ -92,6 +93,14 @@ def test_postuse_leg_surfaces_notice(tmp_path):
     assert pad._ask_spool_notice_sync("s1", None) == ""
 
 
+def _pending(tmp_path, name, mtime):
+    path = os.path.join(str(tmp_path), ".coordinator-local", "ask-spool", name + ".json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    os.utime(path, (mtime, mtime))
+
+
 def test_server_triggers_drain_once_per_repo(tmp_path, monkeypatch):
     from coordinator_core.warm import server
 
@@ -102,6 +111,46 @@ def test_server_triggers_drain_once_per_repo(tmp_path, monkeypatch):
     state.maybe_drain(tmp_path)
     state.maybe_drain(tmp_path)
     assert calls == [tmp_path]
+
+
+def test_server_redrains_when_entry_spooled_after_last_drain(tmp_path, monkeypatch):
+    from coordinator_core.warm import server
+
+    calls = []
+    monkeypatch.setattr(server, "_run_ask_spool_drain", lambda root: calls.append(root))
+    monkeypatch.setattr(server, "_spawn_background", lambda fn, *a: fn(*a))
+    clock = [100.0]
+    monkeypatch.setattr(server.time, "time", lambda: clock[0])
+    state = server._DrainTrigger()
+    _pending(tmp_path, "old", 1.0)
+    state.maybe_drain(tmp_path)
+    state.maybe_drain(tmp_path)
+    assert calls == [tmp_path]
+    _pending(tmp_path, "late", 150.0)
+    clock[0] = 200.0
+    state.maybe_drain(tmp_path)
+    assert calls == [tmp_path, tmp_path]
+    state.maybe_drain(tmp_path)
+    assert calls == [tmp_path, tmp_path]
+
+
+def test_server_never_runs_two_drains_of_one_repo_concurrently(tmp_path, monkeypatch):
+    from coordinator_core.warm import server
+
+    calls = []
+    held = []
+    monkeypatch.setattr(server, "_run_ask_spool_drain", lambda root: calls.append(root))
+    monkeypatch.setattr(server, "_spawn_background", lambda fn, *a: held.append((fn, a)))
+    state = server._DrainTrigger()
+    state.maybe_drain(tmp_path)
+    _pending(tmp_path, "late", time.time() + 5)
+    state.maybe_drain(tmp_path)
+    assert len(held) == 1
+    fn, args = held[0]
+    fn(*args)
+    assert calls == [tmp_path]
+    state.maybe_drain(tmp_path)
+    assert len(held) == 2
 
 
 def test_coalesced_and_withdrawn_notices_render_their_lines(tmp_path):

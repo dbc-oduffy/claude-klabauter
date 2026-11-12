@@ -78,10 +78,29 @@ def test_two_stage_chain_then(root):
     assert _state(root, "grep -c foo a.txt && grep -c one b.txt", "3") == "MISMATCH"
 
 
-def test_zero_count_stops_chain(root):
-    r = evaluate("grep -c nomatch a.txt && grep -c one b.txt", "0", root)
-    assert r["state"] == "MATCH" and r["observed"] == "0"
-    assert _state(root, "grep -c nomatch a.txt && grep -c one b.txt", "0 then 1") == "MISMATCH"
+def test_zero_count_does_not_stop_chain(root):
+    r = evaluate("grep -c nomatch a.txt && grep -c one b.txt", "0 then 1", root)
+    assert r["state"] == "MATCH" and r["observed"] == "0\n1"
+    assert _state(root, "grep -c nomatch a.txt && grep -c one b.txt", "0") == "MISMATCH"
+
+
+@pytest.mark.parametrize("sep", ["&&", ";"])
+def test_three_file_absence_premise(root, sep):
+    (root / "z1.txt").write_text("x\n", encoding="utf-8")
+    cmd = f"grep -c nomatch a.txt {sep} grep -c nomatch b.txt {sep} grep -c nomatch z1.txt"
+    r = evaluate(cmd, "0 then 0 then 0", root)
+    assert r["state"] == "MATCH" and r["observed"] == "0\n0\n0"
+    bad = f"grep -c nomatch a.txt {sep} grep -c one b.txt {sep} grep -c nomatch z1.txt"
+    r = evaluate(bad, "0 then 0 then 0", root)
+    assert r["state"] == "MISMATCH" and r["observed"] == "0\n1\n0"
+    assert "b.txt" in r["detail"] and "a.txt" not in r["detail"]
+    assert evaluate(bad, "0 then 1 then 0", root)["state"] == "MATCH"
+
+
+@pytest.mark.parametrize("sep", ["&&", ";"])
+def test_absence_premise_names_missing_file(root, sep):
+    r = evaluate(f"grep -c nomatch a.txt {sep} grep -c nomatch gone.txt", "0 then 0", root)
+    assert r["state"] == "MISMATCH" and "gone.txt" in r["detail"]
 
 
 @pytest.mark.parametrize(

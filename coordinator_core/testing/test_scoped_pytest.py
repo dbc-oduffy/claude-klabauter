@@ -286,6 +286,41 @@ def test_other_selection_inside_a_test_is_spawned_with_child_env(monkeypatch, tm
     assert seen["env"]["COORDINATOR_PYTEST_DEPTH"] == "1"
 
 
+def _spawned_argv(monkeypatch, tmp_path, pytest_args):
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def fake_spawn(argv):
+        seen["argv"] = argv
+        return types.SimpleNamespace(wait=lambda: 0, poll=lambda: 0), lambda: None
+
+    monkeypatch.setattr(sp, "_spawn", fake_spawn)
+    monkeypatch.setattr(sp, "ancestor_chain", lambda: [])
+    host, _ = _host(avail_gib=99)
+    assert sp.main(["--allow", "test_a.py", "--", *pytest_args], host=host) == 0
+    return seen["argv"]
+
+
+def test_default_run_gets_unique_per_run_basetemp_under_temp(monkeypatch, tmp_path):
+    from coordinator_core import temp_layout
+
+    first = _spawned_argv(monkeypatch, tmp_path, ["test_a.py"])
+    second = _spawned_argv(monkeypatch, tmp_path, ["test_a.py"])
+    bases = [Path(a[a.index("--basetemp") + 1]) for a in (first, second)]
+    assert bases[0] != bases[1]
+    for base in bases:
+        assert base.parent == temp_layout.pytest_basetemp_root(tmp_path)
+        assert "pytest-of-" not in str(base)
+        assert "scratch" not in base.parts
+
+
+@pytest.mark.parametrize("given", [["--basetemp", "X"], ["--basetemp=X"]])
+def test_caller_basetemp_is_passed_through_and_none_added(monkeypatch, tmp_path, given):
+    argv = _spawned_argv(monkeypatch, tmp_path, [*given, "test_a.py"])
+    assert [a for a in argv if a.startswith("--basetemp")] == [given[0]]
+    assert argv[-len(given) - 1:] == [*given, "test_a.py"]
+
+
 def test_spawn_target_resolves_unpatched_on_contained_run():
     """The launcher's call target must exist on the real module and accept the kwarg it passes;
     the monkeypatched tests below would only say so by accident."""

@@ -12,8 +12,9 @@ _IDS = [s["id"] for s in _TWO["slices"]]
 _JOINED = "+".join(_IDS)
 
 
-def _reply_slices(body):
-    return f"(r, n) => n === 0 ? {{ ...r, prep: {{ ...r.prep, slices: {body} }} }} : r"
+def _reply_slices(body, *, retry_at=None):
+    at = "n === 0" if retry_at is None else f"(n === 0 || n === {retry_at})"
+    return f"(r, n) => {at} ? {{ ...r, prep: {{ ...r.prep, slices: {body} }} }} : r"
 
 
 def _accepted(body):
@@ -41,10 +42,12 @@ def test_a_reply_naming_the_plus_joined_id_as_a_string_is_accepted():
 
 
 def test_an_id_outside_the_merged_group_still_halts():
-    patch = _reply_slices("[{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }]")
+    spawned = len(_run_in_wave(_TWO, 1)["spawned"])
+    patch = _reply_slices("[{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }]", retry_at=spawned)
     assert _run_in_wave(_TWO, 1, patch=patch)["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)
 
 
 def test_a_joined_id_naming_a_non_member_still_halts():
-    patch = _reply_slices(f"[{{ id: {_IDS[0] + '+zz-nonexistent'!r} }}]")
+    spawned = len(_run_in_wave(_TWO, 1)["spawned"])
+    patch = _reply_slices(f"[{{ id: {_IDS[0] + '+zz-nonexistent'!r} }}]", retry_at=spawned)
     assert _run_in_wave(_TWO, 1, patch=patch)["halted"].startswith(er.SLICE_ID_UNKNOWN_HALT)

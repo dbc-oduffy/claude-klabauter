@@ -1557,6 +1557,7 @@ def _research_route_setup(
     """
     from coordinator_core.ops import research_shape
     from coordinator_core.ops.dispatch_emit import research_emit
+    from coordinator_core.ops.dispatch_emit.ask_gate import no_research_block_message
     from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest, validate
     from coordinator_core.ops.dispatch_emit.sizing_fire import load_sizing
 
@@ -1594,7 +1595,7 @@ def _research_route_setup(
         brief_rel = sizing_rel = normalize_sizing_rel(root, str(from_sizing))
         research = load_sizing(root, brief_rel).get("research")
         if not isinstance(research, dict) or not research:
-            raise PipelineEmitRefused([f"sizing {brief_rel} has no research block; set one with sizing-assemble --research-class"])
+            raise PipelineEmitRefused([no_research_block_message(brief_rel)])
         if group:
             kept, taken = [], False
             for t in research.get("targets") or ():
@@ -1867,6 +1868,7 @@ def _emit_per_group(params: dict, repo_root: Optional[Path], from_sizing: object
     """
     from coordinator_core.ops import research_shape
     from coordinator_core.ops.dispatch_emit import research_emit
+    from coordinator_core.ops.dispatch_emit.ask_gate import no_research_block_message
     from coordinator_core.ops.dispatch_emit.research_groups import (
         GROUP_RUNS_CLOSE_PARAM, GROUPS_PARAM, GROUPS_REPLY_KEY, PER_GROUP_PARAM, groups_for, per_group_refusals,
     )
@@ -1885,7 +1887,7 @@ def _emit_per_group(params: dict, repo_root: Optional[Path], from_sizing: object
     sizing_rel = normalize_sizing_rel(root, str(from_sizing))
     research = load_sizing(root, sizing_rel).get("research")
     if not isinstance(research, dict) or not research:
-        raise PipelineEmitRefused([f"sizing {sizing_rel} has no research block; set one with sizing-assemble --research-class"])
+        raise PipelineEmitRefused([no_research_block_message(sizing_rel)])
     selected = tuple(params.get(GROUPS_PARAM) or ())
     reasons = per_group_refusals(_shape_or_refuse(research), research, selected)
     if reasons:

@@ -722,3 +722,17 @@ def test_record_file_write_lands_on_a_healthy_dir(tmp_path):
     target = tmp_path / "a" / "b" / "ask.txt"
     emit_op._write_record_file_bounded(target, "x\ny")
     assert target.read_bytes() == b"x\ny"
+
+
+def test_dispatch_emit_research_route_without_block_names_amend_route(repo):
+    rel = _write_sizing(repo)
+    with pytest.raises(PipelineEmitRefused) as excinfo:
+        _dispatch_emit({"from_sizing": rel}, repo)
+    assert "sizing-assemble --amend-route" in str(excinfo.value)
+
+
+def test_dispatch_emit_per_group_without_block_names_amend_route(repo):
+    rel = _write_sizing(repo)
+    with pytest.raises(PipelineEmitRefused) as excinfo:
+        _dispatch_emit({"from_sizing": rel, "per_group": True}, repo)
+    assert "sizing-assemble --amend-route" in str(excinfo.value)

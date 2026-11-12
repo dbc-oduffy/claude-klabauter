@@ -184,6 +184,7 @@ def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch, 
         "const _busyPrefix = 'review.prep busy:';\n"
         "const _busyReplies = [];\n"
         "const _malformed = [];\n"
+        "const _foreignAdvisories = [];\n"
         f"{fragment}\n"
         "process.stdout.write(JSON.stringify({ halted: _halted && _halted.halted, n: _reviewPrep.slices.length }));\n"
     )

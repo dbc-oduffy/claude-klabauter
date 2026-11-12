@@ -1463,6 +1463,41 @@ def test_a_wave_review_with_a_slice_id_naming_no_real_slice_halts(bad_id):
     assert result["wave"] is None and result["integration"] is None
 
 
+def _bad_group_zero(slices_js, *, also_retry_at=None):
+    at = "n === 0" if also_retry_at is None else f"(n === 0 || n === {also_retry_at})"
+    return f"(r, n) => {at} ? {{ ...r, prep: {{ ...r.prep, slices: {slices_js} }} }} : r"
+
+
+@pytest.mark.parametrize(
+    "slices_js",
+    [
+        "[{ id: 'prep-1..prep-6' }]",
+        "[{ id: 's0..s4' }]",
+        "[{ id: 's0+zz-nonexistent' }]",
+        "[{ id: 'manifest-x-prep-1' }, { id: 'manifest-x-prep-2' }]",
+    ],
+)
+def test_an_out_of_group_range_or_joined_prep_is_redispatched_once_and_rebound_to_its_group(slices_js):
+    spawned = len(_run_in_wave(_FULL, 9)["spawned"])
+    result = _run_in_wave(_FULL, 9, patch=_bad_group_zero(slices_js))
+    assert "halted" not in result and "error" not in result
+    assert len(result["spawned"]) == spawned + 1
+    assert result["wave"][0]["slice_id"] == "s0+s1"
+
+
+def test_a_prep_still_out_of_group_after_its_one_redispatch_halts():
+    spawned = len(_run_in_wave(_FULL, 9)["spawned"])
+    result = _run_in_wave(_FULL, 9, patch=_bad_group_zero("[{ id: 'prep-1..prep-6' }]", also_retry_at=spawned))
+    assert result["halted"].startswith(SLICE_ID_UNKNOWN_HALT)
+    assert "prep-1..prep-6" in result["halted"]
+
+
+def test_the_wave_group_clause_forbids_ranges_and_foreign_ids():
+    from coordinator_core.ops.review_mint.execute_review import _WAVE_GROUP_CLAUSE
+
+    assert "never a range" in _WAVE_GROUP_CLAUSE and "outside your group" in _WAVE_GROUP_CLAUSE
+
+
 def test_a_bound_wave_review_with_a_truncated_slice_id_is_rebound_from_its_prep_and_does_not_halt():
     patch = "(r, n) => n === 0 ? { ...r, review: { ...r.review, slice_id: 's0+s' } } : r"
     result = _run_in_wave(_FULL, 9, patch=patch)

@@ -3942,19 +3942,51 @@ def _run_ask_spool_drain(repo_root: Any) -> None:
 
 
 class _DrainTrigger:
-    """Starts one background ask-spool drain per served repo, after its first request."""
+    """Starts a background ask-spool drain per served repo on its first request, and again
+    whenever a pending spool entry is newer than that repo's last drain start. One drain per
+    repo at a time; the re-arm check is a directory scan, no spawn."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._seen: "set[str]" = set()
+        self._last_start: "dict[str, float]" = {}
+        self._running: "set[str]" = set()
+
+    @staticmethod
+    def _newest_pending(repo_root: Any) -> float:
+        from coordinator_core.ask_spool import record
+
+        newest = 0.0
+        try:
+            with os.scandir(record.spool_dir(str(repo_root))) as it:
+                for entry in it:
+                    if not entry.name.endswith(record.PENDING_SUFFIX):
+                        continue
+                    try:
+                        newest = max(newest, entry.stat().st_mtime)
+                    except OSError:
+                        continue
+        except OSError:
+            return 0.0
+        return newest
 
     def maybe_drain(self, repo_root: Any) -> None:
         key = str(repo_root)
         with self._lock:
-            if key in self._seen:
+            if key in self._running:
                 return
-            self._seen.add(key)
-        _spawn_background(_run_ask_spool_drain, repo_root)
+            last = self._last_start.get(key)
+            if last is not None and self._newest_pending(repo_root) <= last:
+                return
+            self._running.add(key)
+            self._last_start[key] = time.time()
+        _spawn_background(self._drain, key, repo_root)
+
+    def _drain(self, key: str, repo_root: Any) -> None:
+        try:
+            _run_ask_spool_drain(repo_root)
+        finally:
+            with self._lock:
+                self._running.discard(key)
 
 
 class _ServerContext:
