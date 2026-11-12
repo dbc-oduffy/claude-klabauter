@@ -255,10 +255,13 @@ def check_plan(path: Path, for_execution: bool = False) -> dict:
     if goal_finding is not None:
         report["rows"].append(goal_finding)
         report["verdict"] = "INVALID"
-    gate_findings = _prep_gate_findings(path, text) + _extra_findings(path, text)
+    extra_found, extra_error_rows = _extra_class_findings(path, text)
+    gate_findings = _prep_gate_findings(path, text) + (extra_error_rows or _class_rows(extra_found))
     if gate_findings and report["verdict"] not in ("UNREADABLE",):
         report["rows"].extend(gate_findings)
         report["verdict"] = "INVALID"
+    if extra_found and report["verdict"] != "UNREADABLE":
+        report["prep_gate_classes"] = [{"class": f["class"], "detail": f["detail"]} for f in extra_found]
     return report
 
 
@@ -945,7 +948,8 @@ def agent_type_findings(raw_rows: list, defs: dict, resolve_agent_model, malform
             detail = f"row {rid}: agent_type {agent_type!r} has no agent definition"
         elif defs:
             try:
-                resolve_agent_model(agent_type, row.get("agent_model"))
+                override = row.get("agent_model") if row.get("agent_model") is not None else row.get("model")
+                resolve_agent_model(agent_type, override)
             except malformed_error as exc:
                 detail = f"row {rid}: {str(exc).splitlines()[0]}"
             else:
@@ -971,17 +975,21 @@ def _agent_contract_findings(raw_rows: list) -> list:
         return []
 
 
-def _extra_findings(path: Path, text: str) -> list:
-    """Structural rows for the micro-chunk, depends-on-plan-status, contributed-signal, research-layout,
-    absolute-path, contradictory-read and agent-type classes. Terminal (already-ran) plans owe nothing
-    and yield none."""
+#: Classes whose detail carries the fix wording and is never truncated in the rendered row.
+_UNTRIMMED_CLASSES = frozenset({"agent-type-undispatchable"})
+
+
+def _extra_class_findings(path: Path, text: str) -> tuple:
+    """`(found, error_rows)`: the `{class, detail}` findings for the micro-chunk, depends-on-plan-status,
+    contributed-signal, research-layout, absolute-path, contradictory-read and agent-type classes, or the
+    advisory row for an engine fault. Terminal (already-ran) plans owe nothing and yield none."""
     _ensure_engine_on_path()
     from coordinator_core.roadmap import prep_gate
 
     root = _repo_root_of(path) or path.resolve().parent
     try:
         if prep_gate.gate_plan(root, path.resolve(), text=text).get("terminal"):
-            return []
+            return [], []
         fm = prep_gate.plan_frontmatter(text)
         raw_rows = prep_gate.raw_spine_rows(text)
         found = _agent_contract_findings(raw_rows)
@@ -991,7 +999,7 @@ def _extra_findings(path: Path, text: str) -> list:
         found.extend(depends_on_plan_status_findings(text, raw_rows, root, prep_gate))
         found.extend(abs_path_findings(text))
     except Exception as exc:  # noqa: BLE001 - an engine fault is reported, never a crash
-        return [
+        return [], [
             {
                 "row": "-",
                 "error": f"PREP-GATE-ENGINE-ERROR: {type(exc).__name__}: {exc}"[:300],
@@ -999,10 +1007,25 @@ def _extra_findings(path: Path, text: str) -> list:
                 "class": "advisory",
             }
         ]
+    return found, []
+
+
+def _class_rows(found: list) -> list:
     return [
-        {"row": "-", "error": f"{f['class']}: {_trim(f['detail'])}", "at": f["class"], "class": "structural"}
+        {
+            "row": "-",
+            "error": f"{f['class']}: {f['detail'] if f['class'] in _UNTRIMMED_CLASSES else _trim(f['detail'])}",
+            "at": f["class"],
+            "class": "structural",
+        }
         for f in found
     ]
+
+
+def _extra_findings(path: Path, text: str) -> list:
+    """Structural `at:<class>` rows for `_extra_class_findings`."""
+    found, error_rows = _extra_class_findings(path, text)
+    return error_rows or _class_rows(found)
 
 
 def _check_spine(path: Path, text: str, for_execution: bool) -> dict:

@@ -290,7 +290,16 @@ def main(
         gov_fn = (lambda: governor) if governor is not None else host.load_governor
         consumers_fn = lambda top: _top_consumers_gov(gov_fn(), top)
 
-    status = _try(status_fn)
+    status_error: list = []
+
+    def _read_status():
+        try:
+            return status_fn()
+        except Exception as exc:
+            status_error.append(str(exc))
+            raise
+
+    status = _try(_read_status)
     counts_fn = lambda: _process_counts(table_fn, names_fn or _psutil_image_names)
     snap = build_snapshot(status, nonpaged_fn, cache_host_fn, consumers_fn, args.top, counts_fn)
     code = 0
@@ -312,7 +321,8 @@ def main(
         }
     if args.admit_peak is not None:
         if status is None:
-            print(f"{PROG}: cannot read memory status for admission", file=sys.stderr)
+            detail = f": {status_error[0]}" if status_error and status_error[0] else ""
+            print(f"{PROG}: cannot read memory status for admission{detail}", file=sys.stderr)
             return 1
         peak = int(args.admit_peak * host.GIB)
         limit = int(args.commit_limit_gib * host.GIB) if args.commit_limit_gib is not None else status.commit_limit

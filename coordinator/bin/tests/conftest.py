@@ -54,6 +54,30 @@ def _published_module_absent(name):
         raise
 
 
+@pytest.fixture(autouse=True)
+def _isolate_settings_home(request, tmp_path_factory):
+    """Ships with these tests so every checkout and mirror isolates them; overrides the repo-root
+    fixture of the same name. Body: unimatrix_test_home.isolated_settings_home. Opt out with
+    @pytest.mark.real_home."""
+    if request.node.get_closest_marker("real_home"):
+        yield
+        return
+    from unimatrix_test_home import isolated_settings_home
+
+    yield from isolated_settings_home(tmp_path_factory)
+
+
+@pytest.fixture(autouse=True)
+def _fail_on_live_registry_write(request, _isolate_settings_home):
+    """Overrides coordinator/bin/conftest.py's tripwire of the same name only to pull the
+    isolation up before it: the tripwire must snapshot and compare the isolated home, and the
+    shared `monkeypatch` (set up after it) must unwind its settings-home edits before isolation
+    undoes."""
+    from coordinator_core.testing.registry_sandbox import fail_on_live_registry_write_fixture
+
+    yield from fail_on_live_registry_write_fixture(request)
+
+
 _DESKTOP_NOTIFIERS = frozenset({"osascript", "notify-send"})
 
 

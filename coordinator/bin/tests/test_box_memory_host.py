@@ -138,6 +138,45 @@ def test_memory_status_darwin_unreadable_available_raises():
         )
 
 
+def _without_coordinator_core(monkeypatch):
+    # setitem-then-delitem makes undo delete a key absent at the start, so a module imported from a
+    # fake tree never outlives the test.
+    for name in ("coordinator_core", "coordinator_core.telemetry", "coordinator_core.telemetry.host_sampler"):
+        if name not in sys.modules:
+            monkeypatch.setitem(sys.modules, name, None)
+    for name in [n for n in sys.modules if n == "coordinator_core" or n.startswith("coordinator_core.")]:
+        monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(
+        sys, "path", [p for p in sys.path if not (Path(p) / "coordinator_core" / "__init__.py").exists()]
+    )
+    sys.path_importer_cache.clear()
+
+
+def test_host_sampler_bootstraps_the_checkout_root(monkeypatch, tmp_path):
+    pkg = tmp_path / "coordinator_core" / "telemetry"
+    pkg.mkdir(parents=True)
+    (tmp_path / "coordinator_core" / "__init__.py").write_text("")
+    (pkg / "__init__.py").write_text("")
+    (pkg / "host_sampler.py").write_text("def avail_mb():\n    return (1234, 4096)\n")
+    _without_coordinator_core(monkeypatch)
+    assert host._host_sampler(tmp_path).avail_mb() == (1234, 4096)
+    assert str(tmp_path) in sys.path
+
+
+def test_host_sampler_names_the_missing_module(monkeypatch, tmp_path):
+    _without_coordinator_core(monkeypatch)
+    with pytest.raises(OSError, match="coordinator_core.telemetry.host_sampler"):
+        host._host_sampler(tmp_path)
+
+
+def test_memory_status_darwin_default_reader_names_missing_module(monkeypatch, tmp_path):
+    _without_coordinator_core(monkeypatch)
+    real = host._host_sampler
+    monkeypatch.setattr(host, "_host_sampler", lambda: real(tmp_path))
+    with pytest.raises(OSError, match="coordinator_core"):
+        host.memory_status_darwin(vm_fn=lambda: GIB, swap_fn=lambda: (0, 0))
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 only")
 def test_read_memory_status_win32():
     st = host.read_memory_status()

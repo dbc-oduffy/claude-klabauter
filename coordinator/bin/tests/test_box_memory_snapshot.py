@@ -297,6 +297,16 @@ def test_admit_without_readable_status_exits_1(capsys):
     assert "cannot read memory status" in capsys.readouterr().err
 
 
+def test_admit_refusal_names_the_reader_failure(capsys):
+    def boom():
+        raise OSError("cannot import coordinator_core.telemetry.host_sampler")
+
+    assert _run(["--admit-peak", "1"], status_fn=boom) == 1
+    err = capsys.readouterr().err
+    assert "cannot read memory status for admission" in err
+    assert "coordinator_core.telemetry.host_sampler" in err
+
+
 def test_unsupported_host(capsys):
     rc = mod.main([], platform="linux")
     err = capsys.readouterr().err

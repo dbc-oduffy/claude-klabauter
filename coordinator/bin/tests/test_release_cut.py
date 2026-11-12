@@ -163,6 +163,8 @@ def test_no_repo_root_outside_repo_refuses(tmp_path, monkeypatch, capsys):
     outside = tmp_path / "outside"
     outside.mkdir()
     monkeypatch.chdir(outside)
+    # A --basetemp inside a checkout puts tmp_path inside a repo; pin the walk's no-repo answer.
+    monkeypatch.setattr("coordinator_core.git.repo_root.show_toplevel", lambda cwd=None: None)
     assert rc.main([str(m)]) == 1
     assert "not inside a git repo; pass --repo-root" in capsys.readouterr().err
 

@@ -1058,6 +1058,9 @@ def test_degraded_line_names_the_resolver_failure_reason(monkeypatch, tmp_path):
         encoding="utf-8")
     monkeypatch.setattr(ui, "resolve_engine_root", _REAL_RESOLVE)
     monkeypatch.setattr(ui, "PLUGIN_ROOT", tmp_path / "std-doctrine" / "coordinator")
+    # _seed() caches the doctrine-seed module from _BIN_DIR; load the real one before _BIN_DIR points at
+    # fakebin, or this test passes only when an earlier test happened to load it.
+    ui._seed()
     monkeypatch.setattr(ui, "_BIN_DIR", bin_dir)
     home, rc, out = _default_install(monkeypatch, tmp_path)
     assert rc == 7 and "governance DEGRADED: engine root unresolved (resolver failed: no engine root)" in out

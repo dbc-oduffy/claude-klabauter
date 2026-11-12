@@ -128,13 +128,13 @@ def _names(pf):
 
 def test_hook_registers_thread_under_its_engine_name(tmp_path):
     pf = tmp_path / "unimatrix" / "peers.json"
-    reg = _bind(tmp_path, T1, "coordinator-content-repo-codex-box-50")
+    reg = _bind(tmp_path, T1, "proj-codex-box-50")
     work = tmp_path / "My Proj"
     work.mkdir()
     out = hook.run({"session_id": T1, "cwd": str(work)}, peers_file=pf, registry_dir=reg)
     rows = contract.load_peers(pf)
     assert len(rows) == 1 and rows[0]["vendor"] == "codex" and rows[0]["target"] == T1
-    assert rows[0]["name"] == "coordinator-content-repo-codex-box-50"
+    assert rows[0]["name"] == "proj-codex-box-50"
     assert rows[0]["name"] in out["systemMessage"] and T1 in out["systemMessage"]
 
 

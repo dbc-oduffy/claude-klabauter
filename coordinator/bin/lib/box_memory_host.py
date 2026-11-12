@@ -12,6 +12,7 @@ Family exit codes: 0 ok, 1 operational failure, 2 usage, 3 not elevated, 4 admis
 from __future__ import annotations
 
 import contextlib
+import importlib
 import importlib.util
 import struct
 import sys
@@ -178,6 +179,26 @@ class MemoryStatus:
     commit_limit: int
 
 
+def _host_sampler(repo_root: Path | None = None) -> types.ModuleType:
+    """Import `coordinator_core.telemetry.host_sampler`, falling back to this checkout's root.
+
+    A bare system interpreter has no installed coordinator_core; the checkout root (resolved from
+    this file) is tried before giving up. Raises OSError naming the missing module.
+    """
+    name = "coordinator_core.telemetry.host_sampler"
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError:
+        pass
+    root = repo_root if repo_root is not None else Path(__file__).resolve().parents[3]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    try:
+        return importlib.import_module(name)
+    except ModuleNotFoundError as exc:
+        raise OSError(f"cannot import {name} (missing module {exc.name!r}; looked in {root})") from exc
+
+
 def memory_status_darwin(avail_mb_fn=None, vm_fn=None, swap_fn=None) -> MemoryStatus:
     """macOS memory status; raises OSError when available memory is unreadable.
 
@@ -189,9 +210,7 @@ def memory_status_darwin(avail_mb_fn=None, vm_fn=None, swap_fn=None) -> MemorySt
     process by design.
     """
     if avail_mb_fn is None:
-        from coordinator_core.telemetry import host_sampler
-
-        avail_mb_fn = host_sampler.avail_mb
+        avail_mb_fn = _host_sampler().avail_mb
     if vm_fn is None or swap_fn is None:
         import psutil
 
@@ -234,9 +253,7 @@ def read_memory_status() -> MemoryStatus:
     stat.dwLength = ctypes.sizeof(_MEMORYSTATUSEX)
     if not ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
         raise ctypes.WinError()
-    from coordinator_core.telemetry import host_sampler
-
-    avail_mb, _total_mb = host_sampler.avail_mb()
+    avail_mb, _total_mb = _host_sampler().avail_mb()
     if avail_mb is None:
         raise OSError("available physical memory unreadable")
     return MemoryStatus(

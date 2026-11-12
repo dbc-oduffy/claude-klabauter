@@ -110,6 +110,8 @@ markers = [
     "slow: marks tests as slow (deselect with -m 'not slow')",
     "real_home: opt out of conftest.py's home-directory quarantine (live-tree parity oracles only; read-only)",
     "allow_environ_leak: opt out of conftest.py's os.environ leak detector (tests that deliberately assert on process-wide env mutation ONLY)",
+    "complete: complete-tier only; excluded from the fast tier, run by the full tier",
+    "spawns_process: test spawns a real OS process (git/bash/python/node)",
     "cadence: heavy suite, runs at cadence gates, not per-commit",
     "pending_fix: subject repo, known-broken path assumption -- excluded from tiers until fixed",
     "designed_red: red by design; failure output is a worklist; never gate on it",

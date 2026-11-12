@@ -91,3 +91,35 @@ def refuse_real(kind: str, value, env=None) -> None:
             return
         raise TestHomeRefusal(kind, value)
     raise ValueError(f"unknown test-home kind {kind!r}; expected one of {KINDS}")
+
+
+def isolated_settings_home(tmp_path_factory):
+    """Generator for an autouse pytest fixture: a private settings home that reaches nothing real.
+
+    The one body behind every conftest that isolates (repo root, and coordinator/bin/tests, which ships
+    to klabauter and its mirrors). Copies registry.toml and a unimatrix-stripped registry.local.toml
+    from the live home, then sets COORDINATOR_SETTINGS_HOME, the test-home marker and AGY_BRAIN_DIR.
+    A private MonkeyPatch, never the shared `monkeypatch` fixture: sharing it would defer a test's own
+    delenv/setenv undo past every containment check's teardown.
+    """
+    import pytest  # noqa: PLC0415 (only a pytest caller reaches this)
+
+    mp = pytest.MonkeyPatch()
+    live = Path(os.environ.get("COORDINATOR_SETTINGS_HOME") or Path.home() / ".coordinator-claude-settings")
+    iso = tmp_path_factory.mktemp("settings-home")
+    for name in ("registry.toml", "registry.local.toml"):
+        src = live / "machine-local" / name
+        if src.is_file():
+            (iso / "machine-local").mkdir(exist_ok=True)
+            data = src.read_bytes()
+            if name == "registry.local.toml":
+                data = strip_unimatrix_keys(data.decode("utf-8")).encode("utf-8")
+            (iso / "machine-local" / name).write_bytes(data)
+    mp.setenv("COORDINATOR_SETTINGS_HOME", str(iso))
+    mp.setenv(MARKER_ENV, "1")
+    # default_presence_dir() is Path(AGY_BRAIN_DIR).parent / "presence"; unset it falls back to ~/.gemini.
+    mp.setenv("AGY_BRAIN_DIR", str(iso / "agy" / "brain"))
+    try:
+        yield iso
+    finally:
+        mp.undo()
