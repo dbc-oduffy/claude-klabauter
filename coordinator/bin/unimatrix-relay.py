@@ -694,13 +694,18 @@ def inbox(name, export_reply=False):
     if endpoint_kind() == "pipe":
         print("inbox: mirror sessions are hosted on macOS/Linux boxes only", file=sys.stderr)
         sys.exit(UNSUPPORTED_HOST_RC)
+    raw = json.loads(sys.stdin.readline())
+    if not isinstance(raw, dict):
+        sys.exit("inbox: refused: entry is not a JSON object")
+    if raw.get("name") not in (None, name):
+        sys.exit(f"inbox: refused: entry names {raw.get('name')!r} not {name!r}")
     client = client_address()
     drop_stale(check_name_free(name, client))
     try:
         os.unlink(stale_marker_path(name))
     except OSError:
         pass
-    entry = mirror_entry(json.loads(sys.stdin.readline()), name)
+    entry = mirror_entry(raw, name)
     key_body = sys.stdin.readline().rstrip("\n")
     pid = os.getpid()
     os.makedirs(SOCKS, mode=0o700, exist_ok=True)

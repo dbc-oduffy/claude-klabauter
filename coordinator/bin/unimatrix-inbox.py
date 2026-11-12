@@ -187,12 +187,27 @@ def log_far_stderr(stream):
             log.write(f"far: {text}\n")
 
 
+def entry_refusal(entry, a):
+    """Why this leg must not carry `entry`'s frames under `a.name`/`a.deliver_endpoint`, else None."""
+    if not isinstance(entry, dict):
+        return "entry is not a JSON object"
+    if entry.get("name") not in (None, a.name):
+        return f"entry names {entry.get('name')!r} not {a.name!r}"
+    if a.deliver_endpoint and entry.get("messagingSocketPath") != a.deliver_endpoint:
+        return f"entry endpoint {entry.get('messagingSocketPath')!r} is not deliver endpoint {a.deliver_endpoint!r}"
+    return None
+
+
 def main(argv=None):
     global log
     a = parse_args(sys.argv[1:] if argv is None else argv)
     log = open(a.log, "a", encoding="utf-8", buffering=1)
     with open(os.path.join(os.path.expanduser(SESSIONS), f"{a.pid}.json"), encoding="utf-8") as fh:
         entry = fh.read().strip()
+    refusal = entry_refusal(json.loads(entry), a)
+    if refusal:
+        log.write(f"refused: {refusal}\n")
+        sys.exit(f"inbox: refused: {refusal}")
     (key_path,) = glob.glob(os.path.join(os.path.expanduser(SESSIONS), f"{a.pid}.*.key"))
     with open(key_path, encoding="utf-8") as fh:
         key = fh.read().strip()
